@@ -307,6 +307,11 @@ def test_the_gain_is_the_same_on_both_sides_of_the_latch():
     # timestamp matters, since omitting it skips the ramp entirely.
     t = Ticker()
     _run_until_latched(t, {**ENGAGED, **CONTACT_GOOD})
+    # Past the ramp: its progress is covered time over admitted ticks, so a
+    # later timestamp alone does not complete it, and mid-ramp the centre
+    # sits far enough from the session mean for one of the two scores to
+    # clamp.
+    t.run({**ENGAGED, **CONTACT_GOOD}, 4 * int(SignalProcessor.BASELINE_RAMP_SECONDS) + 8)
     p = t.processor
     mean = p._baseline_focus_mean
     ts = p._baseline_latched + timedelta(seconds=60)
@@ -633,11 +638,19 @@ def test_a_sample_clock_that_goes_backwards_does_not_freeze_the_ramp():
     """A device clock that rebases on reconnect. The clamp read a negative
     age as fraction 0 and held every later score at the ramp's start."""
     t = Ticker()
-    _run_until_latched(t, {**ENGAGED, **CONTACT_GOOD})
-    p = t.processor
-    settled = p._centre("focus", p._baseline_latched + timedelta(seconds=60))
-    assert settled == pytest.approx(p._baseline_focus_mean)
-    assert p._centre("focus", p._baseline_latched - timedelta(seconds=600)) == pytest.approx(settled)
+    bands = {**ENGAGED, **CONTACT_GOOD}
+    _run_until_latched(t, bands)
+    # Two seconds into the ramp, the clock rebases ten minutes back.
+    scores = [t.tick(bands)["focus_score"] for _ in range(8)]
+    t.now -= 600.0
+    scores += [t.tick(bands)["focus_score"] for _ in range(8)]
+    steps = [abs(b - a) for a, b in zip(scores, scores[1:])]
+    # Neither frozen (the ramp keeps moving) nor jumped (no step larger than
+    # the ramp's own per-tick move, ~3.3 points here).
+    assert max(steps) < 4.0
+    assert scores[-1] != pytest.approx(scores[7], abs=0.5)
+    ramped = t.run(bands, 4 * int(SignalProcessor.BASELINE_RAMP_SECONDS))
+    assert ramped["focus_score"] == pytest.approx(50.0, abs=1.0)
 
 
 def test_arming_restarts_the_label_engine_too():
@@ -663,3 +676,47 @@ def test_a_fourth_artifact_reason_survives_the_envelope():
     f = FeatureData(focus_score=50.0, calm_score=50.0, confidence=70.0,
                     signal_quality="degraded", artifact_reason="something_new")
     assert f.artifact_reason == "something_new"
+
+
+# -- sixth review: session ends on push, and what the medians remember ----------
+
+def test_end_session_forgets_the_pending_run_where_a_gap_keeps_it():
+    """A stop followed by a start inside the 5 s ageing window let the last
+    student's run count toward the next one's first label."""
+    eng, clock = _engine()
+    eng.infer_state(_feat("neutral"))
+    for _ in range(3):
+        clock[0] += 0.25
+        eng.infer_state(_feat("focused"))
+    eng.end_session()
+    assert eng.last_label == "no_signal" and eng._pending_label is None
+    clock[0] += 0.25
+    assert eng.infer_state(_feat("focused")).label == "no_signal", "a first reading, not a fourth"
+
+
+def test_stop_and_the_push_session_end_both_reach_clear_session_and_end_session():
+    """push/stop is the only session end push has -- the stream stays up --
+    and it reached neither the processor nor the engine."""
+    import inspect
+    from src.app import main as sidecar_main
+    from src.app.services.stream_manager import DeviceSession, StreamManager
+    stop_src = inspect.getsource(DeviceSession.stop)
+    assert "processor.clear_session()" in stop_src and "adaptation.end_session()" in stop_src
+    end_src = inspect.getsource(StreamManager.end_session)
+    assert "processor.clear_session()" in end_src and "adaptation.end_session()" in end_src
+    assert "stream_manager.end_session()" in inspect.getsource(sidecar_main.push_stop)
+
+
+def test_the_artifact_medians_expire_by_wall_clock_not_by_count():
+    """Kept across a reset, a count-bounded median outlived a ten-minute
+    gap and judged the first forty ticks after a refit against the strap
+    as it was before."""
+    t = Ticker()
+    t.run({**RELAXED, **CONTACT_GOOD}, 40, spread=20.0)
+    t.processor.reset()
+    t.now += 600.0
+    # The refit sits at four times the old spread: against the old median
+    # every tick is a spread jump; against nothing, none is.
+    held = sum(t.tick({**RELAXED, **CONTACT_GOOD}, spread=80.0)["artifact_reason"] == "spread_jump"
+               for _ in range(8))
+    assert held == 0

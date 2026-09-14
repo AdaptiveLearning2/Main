@@ -241,3 +241,17 @@ def test_a_garbage_raw_confidence_is_skipped_not_believed(monkeypatch, bad):
     without = decider.get_session_signal_state(SESSION, USER)
     assert with_garbage.label == without.label
     assert with_garbage.label != "focused", "a bool must not read as full confidence"
+
+
+def test_engagement_is_served_from_focus_never_from_the_stored_column():
+    """The stored `engagement`/`avg_engagement` was the confidence before
+    Phase 1 and a copy of focus after it, with nothing marking which. No
+    reader surfaces it."""
+    import main as backend_main
+    shaped = backend_main._shape_summary({"focus": 0.8, "stress": 0.3, "engagement": 0.2,
+                                          "cognitive_samples": 5})
+    assert shaped["engagement"] == pytest.approx(0.8)
+    import inspect
+    src = inspect.getsource(backend_main)
+    assert 'r.get("engagement")' not in src and 't.get("avg_engagement")' not in src
+    assert 'cog_roll.get("avg_engagement")' not in src

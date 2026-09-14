@@ -51,6 +51,14 @@ class AdaptationEngine:
         self._pending_count = 0
         self._pending_ts = None
 
+    def end_session(self) -> None:
+        """The session is over: a fresh engine reporting no signal. Unlike
+        reset_for_signal_loss, the pending run does not survive -- it ages
+        out at 5 s, and a stop followed by a start inside that window let
+        the last student's run count toward the next one's first label."""
+        self.restart()
+        self.last_label = "no_signal"
+
     def reset_for_signal_loss(self) -> None:
         """After a data gap, the next label is not held under the cooldown --
         there is no prior state worth holding -- but it still needs

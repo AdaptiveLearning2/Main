@@ -137,8 +137,12 @@ class SignalProcessor:
     #     on another) so it is gated relative to its own running median,
     #     where an artifact roughly doubles it.
     # Running medians are over the usable ticks of the last
-    # ARTIFACT_HISTORY ticks (~20 s at 4 Hz) and no gate fires until
-    # ARTIFACT_MIN_HISTORY of them exist.
+    # ARTIFACT_HISTORY_SECONDS of wall clock (ARTIFACT_HISTORY entries is
+    # a backstop, like the contact histories') and no gate fires until
+    # ARTIFACT_MIN_HISTORY of them exist. Time-bounded, not count-bounded:
+    # the histories survive a signal-loss reset, and a count-bounded median
+    # outlived a ten-minute gap and judged the first forty ticks after a
+    # refit against the strap as it was before.
     #
     # Tuned by replaying both captures over a grid (EEG_REFERENCE.md,
     # "Artifact gate"): per-tick SDK bands are noisy enough that no setting
@@ -150,6 +154,7 @@ class SignalProcessor:
     EMG_GAMMA_EXCESS = 0.5
     SPREAD_JUMP_FACTOR = 3.5
     ARTIFACT_HISTORY = 80
+    ARTIFACT_HISTORY_SECONDS = 20.0
     ARTIFACT_MIN_HISTORY = 8
 
     # Time constant of the exponential smoothing on each raw log ratio,
@@ -196,8 +201,10 @@ class SignalProcessor:
         # Artifact gate state: running histories of delta and per-frame
         # spread over admitted ticks, the count of ticks the gate rejected,
         # and the scores held from the last admitted tick.
-        self._delta_history: deque[float] = deque(maxlen=self.ARTIFACT_HISTORY)
-        self._spread_history: deque[float] = deque(maxlen=self.ARTIFACT_HISTORY)
+        # (monotonic_seconds, value) pairs, pruned by elapsed time like the
+        # contact histories; see _artifact_values.
+        self._delta_history: deque[tuple[float, float]] = deque(maxlen=self.ARTIFACT_HISTORY)
+        self._spread_history: deque[tuple[float, float]] = deque(maxlen=self.ARTIFACT_HISTORY)
         self._samples_artifact = 0
         self._held_ratios: tuple[float, float] | None = None
         # Smoothed raw log ratios and the timestamp they were last advanced
@@ -216,6 +223,9 @@ class SignalProcessor:
         self._baseline_last_ts: datetime | None = None
         self._baseline_coverage = 0.0
         self._baseline_latched: datetime | None = None
+        # Post-latch ramp progress in covered seconds; see _advance_ramp.
+        self._ramp_elapsed = 0.0
+        self._ramp_last_ts: datetime | None = None
         # Whether ticks are being gathered for a (re)latch, and the centre
         # each score was using when the current baseline latched -- the ramp
         # runs from there, which is the population midpoint for the first
@@ -232,10 +242,13 @@ class SignalProcessor:
         captures showed the opening 45 s of a stream to be the strap being
         adjusted on two electrodes with the muscle bands high: a baseline
         taken there put every later score near zero. Nothing before arming
-        reaches the signal tables, so the only baseline that is ever recorded
-        against is the one gathered after this call. The scores do not step:
-        whatever centre was in use stays in use until the new latch, then
-        ramps.
+        reaches the signal tables. The scores do not step: whatever centre
+        was in use stays in use until the new latch, then ramps -- which
+        means the first ~45 s of a recording *are* scored and recorded
+        against the pre-arm centre (the population midpoint on a first
+        latch, the previous centre on a restart), and a constant input
+        reads differently either side of the new latch by however far the
+        two centres sit apart. That window is the cost of not stepping.
         """
         self._baseline_focus.clear()
         self._baseline_calm.clear()
@@ -263,6 +276,8 @@ class SignalProcessor:
         self._baseline_calm_mean = None
         self._baseline_ready = False
         self._baseline_latched = None
+        self._ramp_elapsed = 0.0
+        self._ramp_last_ts = None
         self._centre_from = {"focus": None, "calm": None}
 
     def reset(self) -> None:
@@ -283,9 +298,10 @@ class SignalProcessor:
         # contact histories are: reset() runs on every no-sample tick, and
         # cleared there the delta and spread gates never reached
         # ARTIFACT_MIN_HISTORY on flapping contact -- 19 of 20 blinks held
-        # with no resets, 0 of 20 with a reset every fifth tick. The
-        # medians are of the last ARTIFACT_HISTORY usable ticks, so they
-        # refresh on their own. The held and rejected counts are session
+        # with no resets, 0 of 20 with a reset every fifth tick. They are
+        # pruned by wall clock (ARTIFACT_HISTORY_SECONDS), so nothing from
+        # before a long gap is still the reference after it. The held and
+        # rejected counts are session
         # totals and are not zeroed here either; clear_session() is where
         # a session ends.
         self._held_ratios = None
@@ -478,6 +494,8 @@ class SignalProcessor:
             self._baseline_calm_mean = fmean(self._baseline_calm)
             self._baseline_ready = True
             self._baseline_latched = ts
+            self._ramp_elapsed = 0.0
+            self._ramp_last_ts = ts
             self._baseline_collecting = False
 
     def _score_against_baseline(self, raw: float, which: str, ts: datetime | None = None) -> float:
@@ -515,15 +533,23 @@ class SignalProcessor:
             start = midpoint
         if ts is None or self._baseline_latched is None:
             return baseline
-        since_latch = (ts - self._baseline_latched).total_seconds()
-        # A sample clock that went backwards -- a device that rebases on
-        # reconnect -- is not a tick before the latch. Left to the clamp, a
-        # negative age read as fraction 0 and held every later score at the
-        # ramp's start for the rest of the session.
-        if since_latch < 0.0:
-            return baseline
-        fraction = self._clamp01(since_latch / self.BASELINE_RAMP_SECONDS)
+        # The ramp's progress is covered time accumulated by _advance_ramp,
+        # not the age of the latch: a sample clock that goes backwards --
+        # a device that rebases on reconnect -- then neither freezes the
+        # ramp at its start (the clamp's reading of a negative age) nor
+        # completes it in one tick (the step the ramp exists to prevent).
+        fraction = self._clamp01(self._ramp_elapsed / self.BASELINE_RAMP_SECONDS)
         return start + fraction * (baseline - start)
+
+    def _advance_ramp(self, ts: datetime) -> None:
+        """Move the post-latch ramp on by the covered time since the last
+        admitted tick, capped like the baseline's coverage."""
+        if self._baseline_latched is None:
+            return
+        if self._ramp_last_ts is not None:
+            dt = (ts - self._ramp_last_ts).total_seconds()
+            self._ramp_elapsed += min(max(dt, 0.0), self.BASELINE_TICK_CAP_SECONDS)
+        self._ramp_last_ts = ts
 
     def _smooth_ratios(self, focus_raw: float, calm_raw: float, ts: datetime) -> tuple[float, float]:
         """Advance the smoothed log ratios to this admitted tick and return them.
@@ -543,7 +569,8 @@ class SignalProcessor:
         self._ema_ts = ts
         return self._ema_focus, self._ema_calm
 
-    def _artifact_reason(self, bands: dict[str, Any], frame_spread: float | None) -> str | None:
+    def _artifact_reason(self, bands: dict[str, Any], frame_spread: float | None,
+                         now: float) -> str | None:
         """Why this tick is an artifact, or None if it is not.
 
         Judged against the running medians of admitted ticks, so a bound is
@@ -567,15 +594,25 @@ class SignalProcessor:
         # Bels are logs, and the medians are of log values, so "N times the
         # running median" is log10(N) above it -- delta near 0 Bels at rest
         # would make a ratio of the raw numbers meaningless.
-        if (delta is not None and len(self._delta_history) >= self.ARTIFACT_MIN_HISTORY
-                and delta - median(self._delta_history) > log10(self.DELTA_JUMP_FACTOR)):
+        deltas = self._artifact_values(self._delta_history, now)
+        if (delta is not None and len(deltas) >= self.ARTIFACT_MIN_HISTORY
+                and delta - median(deltas) > log10(self.DELTA_JUMP_FACTOR)):
             return "delta_jump"
         if gamma - beta > self.EMG_GAMMA_EXCESS:
             return "emg_gamma"
-        if (frame_spread is not None and len(self._spread_history) >= self.ARTIFACT_MIN_HISTORY
-                and frame_spread > self.SPREAD_JUMP_FACTOR * max(median(self._spread_history), 1.0)):
+        spreads = self._artifact_values(self._spread_history, now)
+        if (frame_spread is not None and len(spreads) >= self.ARTIFACT_MIN_HISTORY
+                and frame_spread > self.SPREAD_JUMP_FACTOR * max(median(spreads), 1.0)):
             return "spread_jump"
         return None
+
+    def _artifact_values(self, history: deque, now: float) -> list[float]:
+        """Prune an artifact history to ARTIFACT_HISTORY_SECONDS and return
+        its values."""
+        cutoff = now - self.ARTIFACT_HISTORY_SECONDS
+        while history and history[0][0] < cutoff:
+            history.popleft()
+        return [v for _, v in history]
 
     @staticmethod
     def _good_channel_values(sample: EegSample, meta: dict[str, Any] | None) -> list[float]:
@@ -661,7 +698,8 @@ class SignalProcessor:
 
         frame_values = self._good_channel_values(sample, bands)
         frame_spread = (max(frame_values) - min(frame_values)) if len(frame_values) >= 2 else None
-        artifact_reason = self._artifact_reason(bands, frame_spread) if using_band_features else None
+        artifact_reason = (self._artifact_reason(bands, frame_spread, now)
+                           if using_band_features else None)
         if artifact_reason is not None:
             self._samples_artifact += 1
         # A tick is admitted -- to the window, the baseline and the spectral
@@ -721,11 +759,11 @@ class SignalProcessor:
                 # default does not catch an explicit None, and an unguarded
                 # float() here would fail the whole tick.
                 try:
-                    self._delta_history.append(float(bands.get("delta")))
+                    self._delta_history.append((now, float(bands.get("delta"))))
                 except (TypeError, ValueError):
                     pass
                 if frame_spread is not None:
-                    self._spread_history.append(frame_spread)
+                    self._spread_history.append((now, frame_spread))
             # The spectral terms take full weight. They used to be blended
             # 75/25 with the amplitude terms "for continuity", and the
             # amplitude terms are not brain activity: mean raw level is ADC
@@ -737,6 +775,7 @@ class SignalProcessor:
             if admit:
                 focus_smooth, calm_smooth = self._smooth_ratios(
                     band_focus_raw, band_calm_raw, sample.timestamp)
+                self._advance_ramp(sample.timestamp)
                 focus_ratio = self._score_against_baseline(focus_smooth, "focus", sample.timestamp)
                 calm_ratio = self._score_against_baseline(calm_smooth, "calm", sample.timestamp)
                 self._held_ratios = (focus_ratio, calm_ratio)

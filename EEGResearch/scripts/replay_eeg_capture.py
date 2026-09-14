@@ -116,7 +116,11 @@ def replay(rows: list[dict[str, Any]], *, window_size: int = 20,
     for row in rows:
         clock_now[0] = (_parse_t(row["t"]) - t0).total_seconds()
         if arm_at is not None and not armed and row.get("segment") == arm_at:
+            # Both halves of StreamManager.arm_baseline, or the harness the
+            # Phase 1 numbers come from carries the pairing-period label
+            # across the arm where the live path does not.
             processor.restart_baseline()
+            adaptation.restart()
             armed = True
         replayed = dict(row)
         if is_gap(row):

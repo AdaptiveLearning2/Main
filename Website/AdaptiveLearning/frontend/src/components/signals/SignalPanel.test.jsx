@@ -34,7 +34,9 @@ describe('WeeklySignalReport', () => {
     // With the scaling bug these read 1%, 0%, 1%.
     expect(metric('Avg Focus').getByText('72%')).toBeInTheDocument()
     expect(metric('Avg Stress').getByText('31%')).toBeInTheDocument()
-    expect(metric('Engagement').getByText('64%')).toBeInTheDocument()
+    // No Engagement tile: it is the focus index under another name, and
+    // Avg Focus is on this grid.
+    expect(screen.queryByText('Engagement', VISIBLE)).not.toBeInTheDocument()
   })
 
   it('renders each highlight as a percentage in its own tile', () => {
@@ -200,7 +202,7 @@ describe('LiveSignalSummary', () => {
     }} />)
     expect(metric('Focus').getByText('Calibrating')).toBeInTheDocument()
     expect(metric('Stress').getByText('Calibrating')).toBeInTheDocument()
-    expect(metric('Engagement').getByText('Calibrating')).toBeInTheDocument()
+    expect(screen.queryByText('Engagement', VISIBLE)).not.toBeInTheDocument()
   })
 
   it('says Off since <date> when EEG consent was withdrawn', () => {
@@ -212,7 +214,7 @@ describe('LiveSignalSummary', () => {
       eeg_revoked_at: '2026-08-05T09:00:00Z',
       sample_counts: { cognitive: 0 },
     }} />)
-    for (const tile of ['Focus', 'Stress', 'Engagement']) {
+    for (const tile of ['Focus', 'Stress']) {
       expect(metric(tile).getByText((t) => /^Off since /.test(t) && t.includes('Aug')))
         .toBeInTheDocument()
     }

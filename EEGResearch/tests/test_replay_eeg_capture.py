@@ -179,3 +179,18 @@ def test_arm_at_an_unknown_segment_is_refused_not_ignored(tmp_path, capsys):
             fh.write(json.dumps(r) + "\n")
     assert replay.main([str(path), "--window-size", "8", "--arm-at", "lesson"]) == 2
     assert "no such segment" in capsys.readouterr().err
+
+
+def test_arm_at_restarts_the_label_engine_as_the_live_arm_does():
+    """StreamManager.arm_baseline restarts both; a replay restarting only
+    the baseline carried the pairing-period label across the arm."""
+    import inspect
+    src = inspect.getsource(replay.replay)
+    assert "processor.restart_baseline()" in src and "adaptation.restart()" in src
+    # And it shows: a cooldown-held focused label at the arm point is gone
+    # on the arm row itself.
+    rows = _synthetic_capture(n=60, aroused_at=lambda i: i < 20)
+    for r in rows[16:20]:
+        r["label"] = "focused"
+    out = replay.replay(rows, window_size=8, arm_at="arithmetic")
+    assert out[20]["label"] != "focused"

@@ -1393,7 +1393,13 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
     return {
         "focus": row.get("focus"),
         "stress": row.get("stress"),
-        "engagement": row.get("engagement"),
+        # `engagement` is served from `focus` everywhere a stored value is
+        # read back. The two are one number since Phase 1 of the EEG
+        # accuracy work; before it the stored `engagement` was the
+        # confidence (strap fit), and no flag marks which regime a row is
+        # from -- so the stored column is never surfaced, and the series a
+        # reader sees is the focus index throughout.
+        "engagement": row.get("focus"),
         "face_attention": row.get("face_attention"),
         # Absolute units, unlike every other figure here (0..1 ratios) --
         # the frontend's `toPct()` must not be applied to them.
@@ -1522,13 +1528,14 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
       * `avg_rmssd_ms` -- roughly one trusted window in five is gated out of
         RMSSD (see CLAUDE.md on `rmssd_rejected_by`) while the heart count
         counts trusted rows.
-      * `avg_stress` and `avg_engagement` -- `trusted_sample_count` for the
-        cognitive channel is `count(*) FILTER (WHERE focus IS NOT NULL)`, and
-        `map_eeg_to_cognitive` derives the three from `focus_score`,
-        `calm_score` and `confidence` independently. Only `contact_poor` nulls
-        all three together; an ordinary row can carry focus without calm.
+      * `avg_stress` -- `trusted_sample_count` for the cognitive channel is
+        `count(*) FILTER (WHERE focus IS NOT NULL)`, and `map_eeg_to_cognitive`
+        derives focus and stress from `focus_score` and `calm_score`
+        independently. Only `contact_poor` nulls both together; an ordinary
+        row can carry focus without calm.
 
-    `avg_focus` and `avg_heart_rate_bpm` are exact. In every case the error is
+    `avg_focus`, `avg_heart_rate_bpm` and `engagement` (served from
+    `avg_focus`, see `_shape_summary`) are exact. In every case the error is
     between days, never within one, and correcting it needs a per-column count
     the schema does not have and a backfill that deleted rows cannot supply.
     """
@@ -1588,7 +1595,9 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
 
     COLUMNS = {
         "cognitive": (("focus", "avg_focus"), ("stress", "avg_stress"),
-                      ("engagement", "avg_engagement")),
+                      # From `avg_focus`, never the stored `avg_engagement`:
+                      # see `_shape_summary` on why the stored column is not read.
+                      ("engagement", "avg_focus")),
         "heart": (("heart_rate_bpm", "avg_heart_rate_bpm"),
                   ("rmssd_ms", "avg_rmssd_ms")),
     }
@@ -1882,8 +1891,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                       _avg([r.get("focus") for r in day_cog]) if cog_whole else None),
             "stress": (cog_roll.get("avg_stress") if cog_roll else
                        _avg([r.get("stress") for r in day_cog]) if cog_whole else None),
-            "engagement": (cog_roll.get("avg_engagement") if cog_roll else
-                           _avg([r.get("engagement") for r in day_cog]) if cog_whole else None),
+            # From focus, not the stored engagement -- see `_shape_summary`.
+            "engagement": (cog_roll.get("avg_focus") if cog_roll else
+                           _avg([r.get("focus") for r in day_cog]) if cog_whole else None),
             "attention": _avg([r.get("attention") for r in day_face]) if face_whole else None,
             # None, not 0: a day the cap couldn't reach didn't have zero
             # sessions. `sessions_retrieved` tells the two apart.
@@ -1939,7 +1949,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         if cog_roll:
             n = cog_roll.get("trusted_sample_count") or 0
             for key, col in (("focus", "avg_focus"), ("stress", "avg_stress"),
-                             ("engagement", "avg_engagement")):
+                             ("engagement", "avg_focus")):  # see `_shape_summary`
                 value = cog_roll.get(col)
                 if value is not None and n:
                     rolled_totals[key][0] += float(value) * n
@@ -2100,8 +2110,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         "averages": {
             "focus": avg_focus,
             "stress": avg_stress,
+            # From focus, not the stored engagement -- see `_shape_summary`.
             "engagement": _round2(_week("engagement",
-                                        [r.get("engagement") for r in cog])),
+                                        [r.get("focus") for r in cog])),
             "face_attention": avg_attention,
         },
         "highlights": {
@@ -4991,7 +5002,7 @@ def _cohort_student_row(sid: str, totals: dict | None, channels: ReportChannels,
     return {
         "focus": t.get("avg_focus"),
         "stress": t.get("avg_stress"),
-        "engagement": t.get("avg_engagement"),
+        "engagement": t.get("avg_focus"),  # see `_shape_summary`
         "heart_rate_bpm": t.get("avg_heart_rate_bpm"),
         "rmssd_ms": t.get("avg_rmssd_ms"),
         # A null average beside a zero count is "nothing recorded"; beside a

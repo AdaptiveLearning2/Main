@@ -218,8 +218,8 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
                     icon={Brain} tone="emerald" />
         <MiniMetric label="Stress" value={valueOrReason(pct(cog.stress), eegReason(report))}
                     icon={Zap} tone="rose" />
-        <MiniMetric label="Engagement" value={valueOrReason(pct(cog.engagement), eegReason(report))}
-                    icon={Activity} tone="indigo" />
+        {/* No Engagement tile: it is the focus index under another name
+            (signal_mapping.py), and Focus is the tile before last. */}
         {/* No attention tile. `face_signals.attention` has no producer, so
             the tile could only ever say "Calibrating" -- reads as warming up
             rather than a measurement that will never arrive. Blocked on a
@@ -431,7 +431,8 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
         <MiniMetric label="Avg Focus" value={pct(avg.focus)} icon={Brain} tone="emerald" />
         <MiniMetric label="Avg Stress" value={pct(avg.stress)} icon={Zap} tone="rose" />
-        <MiniMetric label="Engagement" value={pct(avg.engagement)} icon={Activity} tone="indigo" />
+        {/* No Engagement tile: it is the focus index under another name
+            (signal_mapping.py), and Avg Focus is two tiles up. */}
         {/* sessions_recorded, not sample_counts.sessions -- the latter is rows
             under the session row cap, so a heavy week showed the cap value
             instead of the real count. Falls back for older payloads.

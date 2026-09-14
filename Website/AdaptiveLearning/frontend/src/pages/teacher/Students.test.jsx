@@ -136,7 +136,10 @@ describe('signal averages', () => {
     await expandAda()
     await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
     expect(tile('Stress Level').getByText('40%')).toBeInTheDocument()
-    expect(tile('Engagement').getByText('60%')).toBeInTheDocument()
+    // No Engagement tile: it is the focus index under another name, and
+    // Focus Score is in the same grid. The fixture's differing value is a
+    // payload the mapper can no longer produce, so only absence is checkable.
+    expect(screen.queryByText('Engagement')).not.toBeInTheDocument()
     expect(tile('Dominant Emotion').getByText('happy')).toBeInTheDocument()
   })
 
@@ -394,7 +397,7 @@ it('actually hides the sensor tiles on screen when the switch is flipped, and le
   render(<Students />)
   await expandAda()
 
-  for (const label of ['Stress Level', 'Focus Score', 'Engagement',
+  for (const label of ['Stress Level', 'Focus Score',
                         'Dominant Emotion', 'Avg Heart Rate', 'Avg HRV',
                         'Total Accuracy', 'Current Streak']) {
     expect(screen.getByText(label)).toBeInTheDocument()
@@ -402,7 +405,7 @@ it('actually hides the sensor tiles on screen when the switch is flipped, and le
 
   await userEvent.click(screen.getByRole('switch'))
 
-  for (const label of ['Stress Level', 'Focus Score', 'Engagement',
+  for (const label of ['Stress Level', 'Focus Score',
                         'Dominant Emotion', 'Avg Heart Rate', 'Avg HRV']) {
     expect(screen.queryByText(label)).not.toBeInTheDocument()
   }

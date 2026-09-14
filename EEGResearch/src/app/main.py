@@ -199,6 +199,13 @@ async def push_stop(_: str = Depends(require_learner_token)) -> JSONResponse:
         return JSONResponse({"status": "not_configured"})
     stream_manager.set_payload_consumer(None)
     await push_client.stop()
+    # The stream stays up (the headband stays paired), so this is the only
+    # session end push has. Without it the next student inherited the
+    # baseline, the histories and the counters. Best effort, like the arm.
+    try:
+        stream_manager.end_session()
+    except UnknownDeviceError:
+        logger.warning("push/stop: no default device to end the session on")
     return JSONResponse({"status": "stopped"})
 
 

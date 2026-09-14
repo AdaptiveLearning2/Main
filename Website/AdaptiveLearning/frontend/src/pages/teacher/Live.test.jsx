@@ -199,3 +199,13 @@ it('formats ages in seconds under a minute and minutes after', () => {
   expect(formatAge(185_000)).toBe('3m ago')
   expect(formatAge(null)).toBeNull()
 })
+
+it('does not draw engagement beside focus', async () => {
+  // One number under two names (signal_mapping.py): no gauge, no sparkline
+  // column, and the page copy does not promise it either.
+  const ts = new Date().toISOString()
+  renderLive([student({ latest_cognitive: { ts, focus: 0.6, engagement: 0.6, stress: 0.3 } })])
+  await screen.findByText(/Headband on/)
+  expect(screen.queryByText('Engagement')).not.toBeInTheDocument()
+  expect(screen.queryByText(/engagement/i)).not.toBeInTheDocument()
+})

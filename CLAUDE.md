@@ -1491,17 +1491,24 @@ What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about ea
   against the previous one's baseline. Arming restarts the label engine beside the baseline, or the
   lesson opens on a label formed during pairing.
 - **`engagement` is never drawn beside `focus`.** They are one number, so a second line, gauge,
-  archived series or prompt sentence reads as two measurements agreeing. The column stays; the
-  session review, class trend, teacher Live view, archived SVG and strategies prompt show focus
-  alone. **`raw.confidence` is dropped on a `contact_poor` row** along with the measurement
+  tile, archived series or prompt sentence reads as two measurements agreeing. The column stays;
+  the session review, class trend, teacher Live view, archived SVG, strategies prompt, the
+  teacher's student list and both `SignalPanel` tiles show focus alone, and each of the three
+  charts has a test asserting the absence in its screen-reader table, since the sentence omits an
+  empty series on its own. **Every reader serves `engagement` from the focus average, never from
+  the stored `avg_engagement`** (`_shape_summary` in `main.py` says why): the stored column was the
+  confidence before Phase 1 and a copy of focus after it, with no flag saying which, and the rollup
+  outlives the raw rows — so the stored value is never surfaced and the series a reader sees is the
+  focus index throughout. **`raw.confidence` is dropped on a `contact_poor` row** along with the measurement
   columns — kept, four poor rows beside one good one averaged focus 0.8 against confidence 0.36
   and dropped the EEG channel — and the decider validates the value, not just the container,
   since `raw` is client-supplied JSON on the push path: a string 500'd every question and `true`
   claimed 1.0. `replay_eeg_capture.is_gap` reads `signal_quality`, never the label, which the
   engine holds at `no_signal` on real ticks after a gap; `--arm-at` an absent segment is refused.
 - **`engagement` is the focus index** (`signal_mapping.py`, beta/(alpha+theta), Pope's engagement),
-  not the confidence — every Engagement tile was showing strap fit. `avg_engagement` in the rollup
-  and term trend is discontinuous across the date Phase 1 merged.
+  not the confidence — every Engagement tile was showing strap fit. The stored `avg_engagement`
+  is therefore two different quantities either side of the date Phase 1 merged, which is why no
+  reader serves it (rule below).
 - **Delta doubles on a blink**, gamma exceeds beta by 0.5 Bels on a clench and never at rest, an
   artifact doubles the raw spread. A tick that trips one **holds** the previous scores and enters
   neither the window nor the baseline — held is a third state beside rejected and low, with
@@ -2125,11 +2132,12 @@ wrong answer — it weights a 4-sample day like a 4000-sample one.
 **Three of the five averages carry the same approximation**, because the rollup stores one count per
 channel and any column whose nulls do not follow that count's is weighted slightly wrongly.
 `avg_rmssd_ms` — about one trusted window in five is gated out of RMSSD while the heart count counts
-trusted rows. `avg_stress` and `avg_engagement` — the cognitive `trusted_sample_count` is
-`count(*) FILTER (WHERE focus IS NOT NULL)`, and `map_eeg_to_cognitive` derives the three from
-`focus_score`, `calm_score` and `confidence` **independently**; only `contact_poor` nulls all three
-together, so an ordinary row can carry focus without calm. `avg_focus` and `avg_heart_rate_bpm` are
-exact. The error is between days, never within one, and closing it needs a per-column count the
+trusted rows. `avg_stress` — the cognitive `trusted_sample_count` is
+`count(*) FILTER (WHERE focus IS NOT NULL)`, and `map_eeg_to_cognitive` derives focus and stress
+from `focus_score` and `calm_score` **independently**; only `contact_poor` nulls both together, so
+an ordinary row can carry focus without calm. `avg_focus`, `avg_heart_rate_bpm` and `engagement`
+(served from `avg_focus`, see the Phase 1 section) are exact. The error is between days, never
+within one, and closing it needs a per-column count the
 schema lacks plus a backfill that deleted rows cannot supply.
 
 **A week with nothing recorded is a gap, not a missing bar** — dropped, a fortnight off school renders

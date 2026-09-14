@@ -294,7 +294,7 @@ class DeviceSession:
             # no-sample tick), and through here it kept it for the next
             # student on a shared station.
             self.processor.clear_session()
-            self.adaptation.reset_for_signal_loss()
+            self.adaptation.end_session()
             self._reset_heart()
             self.latest_payload = self._no_signal_payload()
             # The stream is over, so "last good reading" describes a session
@@ -604,6 +604,16 @@ class StreamManager:
         session = self.session(device_id)
         session.processor.restart_baseline()
         session.adaptation.restart()
+
+    def end_session(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
+        """A recording session has ended without the stream stopping --
+        push/stop, where the headband stays paired. Forgets the baseline,
+        the histories, the counters and the label state, exactly as a
+        stream stop does; through push there was no session end at all,
+        and the next student on a shared station inherited everything."""
+        session = self.session(device_id)
+        session.processor.clear_session()
+        session.adaptation.end_session()
 
     async def start(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
         await self.session(device_id).start()

@@ -698,3 +698,20 @@ describe('ClassSignalRoster', () => {
     expect(screen.getByText(/turn off "hide sensor data"/i)).toBeInTheDocument()
   })
 })
+
+describe('ClassSignalTrend does not draw engagement beside focus', () => {
+  it('gives the table no Engagement column', () => {
+    // One number under two names (signal_mapping.py). Asserted on the
+    // table, not the aria-label: the sentence omits an empty series on its
+    // own, so re-adding the column would pass a sentence check green.
+    const day = (d) => ({
+      day: d, channel: 'cognitive', avg_focus: 0.6, avg_stress: 0.3,
+      avg_engagement: 0.6, sample_count: 100, trusted_sample_count: 100, student_count: 3,
+    })
+    render(<ClassSignalTrend data={{
+      retrieved: true, days: 30, timezone: 'UTC', series: [day('2026-06-10'), day('2026-06-11')],
+    }} />)
+    expect(screen.getByRole('columnheader', { name: 'Focus' })).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: /engagement/i })).not.toBeInTheDocument()
+  })
+})

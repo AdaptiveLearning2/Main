@@ -331,7 +331,7 @@ export default function Live() {
           </h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1 text-sm flex items-center gap-2">
             <Activity size={14} className="text-emerald-500 animate-pulse" />
-            Real-time focus, stress, engagement and emotion across your class.
+            Real-time focus, stress and emotion across your class.
           </p>
         </div>
 

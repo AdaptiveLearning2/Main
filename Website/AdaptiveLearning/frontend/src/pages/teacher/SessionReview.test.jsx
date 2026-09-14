@@ -425,3 +425,21 @@ describe('the correct-answer marker', () => {
     expect(screen.getByText('(correct answer)').closest('li')).toHaveTextContent('1')
   })
 })
+
+describe('engagement is not drawn beside focus', () => {
+  it('gives the timeline table no Engagement column', async () => {
+    // The two are one number (signal_mapping.py). The sentence omits an
+    // empty series on its own, so the table is the only surface that shows
+    // whether the column is gone; nothing else would fail on its return.
+    apiFetch.mockResolvedValue({
+      cognitive: [
+        { ts: '2026-08-10T09:00:00Z', focus: 0.6, engagement: 0.6, stress: 0.4 },
+        { ts: '2026-08-10T09:01:00Z', focus: 0.7, engagement: 0.7, stress: 0.4 },
+      ],
+      face: [], heart: [], answers: [],
+    })
+    renderAt()
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Focus' })).toBeInTheDocument())
+    expect(screen.queryByRole('columnheader', { name: /engagement/i })).not.toBeInTheDocument()
+  })
+})

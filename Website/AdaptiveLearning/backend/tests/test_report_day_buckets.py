@@ -277,7 +277,9 @@ def test_the_weeks_headline_figures_include_summarised_days(monkeypatch,
     report = main._weekly_signal_report(STUDENT)
 
     assert report["averages"]["focus"] == 0.4
-    assert report["averages"]["engagement"] == 0.6
+    # From avg_focus, not the stored avg_engagement (0.6): the stored column
+    # is two different quantities either side of Phase 1 and is never served.
+    assert report["averages"]["engagement"] == 0.4
     assert report["highlights"]["heart_rate_bpm"] == 80.0
     assert report["highlights"]["dominant_emotion"] == "happy"
     assert report["heart_sources"] == ["muse_optics"], (

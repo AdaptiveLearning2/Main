@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../../lib/supabase'
-import { Users, Search, ChevronDown, Flame, Brain, Smile, Target, TrendingUp, Zap, Heart, Activity } from 'lucide-react'
+import { Users, Search, ChevronDown, Flame, Smile, Target, TrendingUp, Zap, Heart, Activity } from 'lucide-react'
 import HideSensorDataToggle from '../../components/common/HideSensorDataToggle'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 import { apiFetch } from '../../lib/api'
@@ -79,7 +79,6 @@ async function getStudentStats(studentId)
     bestStreak: statsRetrieved ? (userStats?.best_streak ?? 0) : null,
     focusScore: asPct(signals.focus),
     stressLevel: asPct(signals.stress),
-    engagement: asPct(signals.engagement),
     dominantEmotion: signals.dominant_emotion ?? null,
     signalCount: signals.cognitive_samples ?? 0,
     faceSignalCount: signals.face_samples ?? 0,
@@ -360,13 +359,8 @@ export default function Students() {
                             {/* Gated by "Hide sensor data" -- a display preference, doesn't change what was fetched. */}
                             {!hideSensors && (
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
-                              <MiniStat
-                                icon={<Brain size={16} />}
-                                label="Engagement"
-                                value={stats.engagement ?? '—'}
-                                sub={eegSub(stats.signalCount, stats.signalsFailed)}
-                                color="indigo"
-                              />
+                              {/* No Engagement tile: it is the focus index under another
+                                  name (signal_mapping.py), and Focus Score is in this grid. */}
                               {/* "Off" means the viewer turned off facial reporting; different from no reading. */}
                               <MiniStat
                                 icon={<Smile size={16} />}

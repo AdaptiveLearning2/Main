@@ -18,7 +18,10 @@ export function isMixedScale(scale) {
 // The widest range across several labelled rows (weeks or days), or null when
 // none carries a label -- unlabelled is unknown, not scale 1.
 export function combineScales(rows) {
-  const ranges = (rows || []).map(r => r?.score_scale).filter(s => s && typeof s.min === 'number')
+  // Both ends must be numbers: filtered on `min` alone, a half-populated row
+  // yielded a NaN maximum that `isMixedScale` accepted as a change.
+  const ranges = (rows || []).map(r => r?.score_scale)
+    .filter(s => s && typeof s.min === 'number' && typeof s.max === 'number')
   if (!ranges.length) return null
   return {
     min: Math.min(...ranges.map(s => s.min)),

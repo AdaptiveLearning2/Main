@@ -168,6 +168,7 @@ def flatten_state(envelope: dict[str, Any], *, segment: str, t: str) -> dict[str
         # there cannot be missing here.
         "contact_ratio": features.get("contact_ratio"),
         "samples_artifact": features.get("samples_artifact"),
+        "samples_no_delta": features.get("samples_no_delta"),
         "artifact_reason": features.get("artifact_reason"),
         "focus_log_ratio_smoothed": features.get("focus_log_ratio_smoothed"),
         "calm_log_ratio_smoothed": features.get("calm_log_ratio_smoothed"),

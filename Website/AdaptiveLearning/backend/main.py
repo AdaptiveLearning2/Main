@@ -1342,6 +1342,8 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                              heart_revoked_at=heart_revoked_at,
                              eeg_enabled=eeg_enabled,
                              eeg_revoked_at=eeg_revoked_at)
+    # The scale label rides beside the averages; see `_shape_summary`.
+    summary["score_scale"] = _scale_ranges_many([student_id], days).get(str(student_id))
     # Set here, not in `_shape_summary`, which the batch RPC also uses -- adding
     # it there would put an always-null `dominant_emotion` on every child in a
     # batch, claiming "no emotion" for a field never requested.
@@ -1349,7 +1351,7 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
     return summary
 
 
-_EMPTY_SUMMARY = {"consent_retrieved": True,
+_EMPTY_SUMMARY = {"consent_retrieved": True, "score_scale": None,
                   "focus": None, "stress": None, "engagement": None,
                   "face_attention": None, "heart_rate_bpm": None,
                   "rmssd_ms": None, "sessions": 0,
@@ -1400,6 +1402,11 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
         # from -- so the stored column is never surfaced, and the series a
         # reader sees is the focus index throughout.
         "engagement": row.get("focus"),
+        # Stamped by the caller from the rollup (`_scale_ranges_many`): the
+        # summary RPCs aggregate per-sample rows and carry no scale, and a
+        # summary collapses a window into one number, where unlike a series
+        # there is no step to see -- so it has to say so.
+        "score_scale": None,
         "face_attention": row.get("face_attention"),
         # Absolute units, unlike every other figure here (0..1 ratios) --
         # the frontend's `toPct()` must not be applied to them.
@@ -1465,6 +1472,8 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
     if isinstance(rows, dict):
         rows = [rows]
     out = {}
+    # One rollup read for the whole roster, like the summary RPC itself.
+    scales = _scale_ranges_many([str(s) for s in student_ids], days)
     for r in rows:
         sid = r.get("student_id")
         if not sid:
@@ -1477,6 +1486,7 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
             heart_revoked_at=ch.heart_revoked_at if ch else None,
             eeg_enabled=ch.eeg if ch else True,
             eeg_revoked_at=ch.eeg_revoked_at if ch else None)
+        out[str(sid)]["score_scale"] = scales.get(str(sid))
     return out
 
 
@@ -5159,24 +5169,51 @@ def _merge_cohort_trend(parts: list[list]) -> list:
     } for _, b in sorted(merged.items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1])))]
 
 
-def _cohort_scale_range(roster: list[str], days: int) -> dict | None:
-    """The score-scale range across the roster's cognitive rollup rows in the
-    window, or None when nothing recorded one. The cohort RPCs do not carry
-    the columns, so this is one extra read of the rollup -- the same rows
-    they aggregate -- rather than two more migrations."""
-    if not roster:
+def _combine_ranges(ranges) -> dict | None:
+    """The widest of several `{"min", "max"}` ranges, or None if none."""
+    present = [r for r in ranges if r]
+    if not present:
         return None
+    return {"min": min(r["min"] for r in present), "max": max(r["max"] for r in present)}
+
+
+def _scale_ranges_many(user_ids: list[str], days: int) -> dict[str, dict | None]:
+    """`{user_id: {"min", "max"} | None}` over each student's cognitive rollup
+    rows in the window. One read for the whole list, since the summary RPCs
+    and the cohort RPCs carry no scale and the rollup is the only copy that
+    outlives the raw rows.
+
+    **A stated exception to consent bucketing.** `_cohort_signals` buckets
+    the roster by consent flag pair before every read, so a student who
+    declined a sensor is never read under a classmate's permission. This read
+    is not bucketed, and that is deliberate rather than an oversight: it
+    selects no reading -- only which scale a day's cognitive rows were on --
+    and the cognitive channel has no read filter to apply (`ReportChannels.
+    eeg` is a display fact, not a gate; the summary RPCs have no
+    `p_include_cognitive` either). Fails open to an empty map: the label
+    decides a caption, never what is recorded or shown.
+    """
+    if not user_ids:
+        return {}
     try:
         today = date.fromisoformat(_school_day(_utc_now(), _school_timezone()))
         since = today - timedelta(days=days - 1)
         rows = (supabase.table("signal_daily_rollup")
-                .select("channel, score_scale_min, score_scale_max")
-                .in_("user_id", roster).eq("channel", "cognitive")
+                .select("user_id, channel, score_scale_min, score_scale_max")
+                .in_("user_id", list(user_ids)).eq("channel", "cognitive")
                 .gte("day", since.isoformat()).execute().data or [])
     except Exception as e:                                     # noqa: BLE001
-        print(f"[cohort_signals] scale read failed: {e}")
-        return None
-    return _scale_range(rows)
+        print(f"[score_scale] rollup read failed: {e}")
+        return {}
+    by_user: dict[str, list] = {}
+    for r in rows:
+        by_user.setdefault(str(r.get("user_id")), []).append(r)
+    return {str(uid): _scale_range(by_user.get(str(uid), [])) for uid in user_ids}
+
+
+def _cohort_scale_range(roster: list[str], days: int) -> dict | None:
+    """The range across the whole roster; see `_scale_ranges_many`."""
+    return _combine_ranges(_scale_ranges_many(roster, days).values())
 
 
 def _cohort_signals(class_id: str, days: int) -> dict:
@@ -5245,6 +5282,12 @@ def _cohort_signals(class_id: str, days: int) -> dict:
     # still a class of six, and gating on the smaller number would expose the
     # pair exactly when they are most identifiable.
     per_student = None
+    # One rollup read labels both halves: the chart's window and each roster
+    # row. A teacher told the chart is not comparable must not then be handed
+    # a per-student ranking of the same numbers -- outlier flag included --
+    # with no caveat. See `_scale_ranges_many` on why this read is not
+    # consent-bucketed.
+    scale_by_user = _scale_ranges_many(roster, days) if trend_retrieved else {}
     if len(roster) >= _COHORT_MIN_STUDENTS:
         profiles = _profiles_many(roster)
         # Every student on the roster gets a row, including those the RPC
@@ -5254,9 +5297,10 @@ def _cohort_signals(class_id: str, days: int) -> dict:
         per_student = [{
             "student_id": sid,
             "display_name": (profiles.get(sid) or {}).get("display_name") or "Student",
-            "summary": _cohort_student_row(sid, summaries.get(sid),
-                                           channels_by_student[sid],
-                                           summaries_retrieved),
+            "summary": {**_cohort_student_row(sid, summaries.get(sid),
+                                              channels_by_student[sid],
+                                              summaries_retrieved),
+                        "score_scale": scale_by_user.get(sid)},
         } for sid in roster]
 
     return {
@@ -5268,7 +5312,7 @@ def _cohort_signals(class_id: str, days: int) -> dict:
         # Which score scale(s) the series' focus and stress sit on, from the
         # rollup rows -- see `_scale_range`. Mixed means the series straddles
         # the change and is not one series.
-        "score_scale": _cohort_scale_range(roster, days) if trend_retrieved else None,
+        "score_scale": _combine_ranges(scale_by_user.values()) if trend_retrieved else None,
         "summaries_retrieved": summaries_retrieved,
         "per_student": per_student,
         "min_students": _COHORT_MIN_STUDENTS,

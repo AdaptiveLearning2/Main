@@ -229,6 +229,9 @@ class SignalProcessor:
         self._delta_history: deque[tuple[float, float]] = deque(maxlen=self.ARTIFACT_HISTORY)
         self._spread_history: deque[tuple[float, float]] = deque(maxlen=self.ARTIFACT_HISTORY)
         self._samples_artifact = 0
+        # Usable ticks whose delta could not be read (absent, non-numeric or
+        # NaN), so the blink gate had no reference for them. A session total.
+        self._samples_no_delta = 0
         self._held_ratios: tuple[float, float] | None = None
         # Smoothed raw log ratios and the timestamp they were last advanced
         # to. None until the first admitted tick, which seeds them.
@@ -300,6 +303,7 @@ class SignalProcessor:
         self._spread_history.clear()
         self._samples_rejected = 0
         self._samples_artifact = 0
+        self._samples_no_delta = 0
         self.restart_baseline()
         self._baseline_focus_mean = None
         self._baseline_calm_mean = None
@@ -778,7 +782,13 @@ class SignalProcessor:
         using_band_features = band_focus_raw is not None and band_calm_raw is not None
 
         frame_values = self._good_channel_values(sample, bands)
-        frame_spread = (max(frame_values) - min(frame_values)) if len(frame_values) >= 2 else None
+        # No spread at all when any channel is non-finite: max()/min() over a
+        # list holding NaN answer whichever element they happened to compare
+        # first, so the result is a number that is not the spread, and it
+        # would pass the isfinite guard below and enter the median.
+        frame_spread = ((max(frame_values) - min(frame_values))
+                        if len(frame_values) >= 2 and all(isfinite(v) for v in frame_values)
+                        else None)
         # Bands present but unusable (NaN, inf, garbage) are a held tick
         # with their own reason -- neither scored on the amplitude fallback
         # nor an exception the stream manager reads as a dead headband.
@@ -818,7 +828,15 @@ class SignalProcessor:
                 delta_value = None
             if delta_value is not None and isfinite(delta_value):
                 self._delta_history.append((now, delta_value))
-            if frame_spread is not None:
+            elif bands:
+                # Counted: a NaN or missing delta is the right trade against
+                # holding the tick, but silently it read as a flawless
+                # recording while the blink gate never armed.
+                self._samples_no_delta += 1
+            # The same guard as delta: one NaN channel poisons the median and
+            # a 900 uV jolt is admitted as clean. This runs on every usable
+            # tick now, band or not, so the raw channels are the only input.
+            if frame_spread is not None and isfinite(frame_spread):
                 self._spread_history.append((now, frame_spread))
 
         if self.window and not admit:
@@ -951,6 +969,10 @@ class SignalProcessor:
             # still carries the previous scores and its own contact verdict.
             "samples_artifact": self._samples_artifact,
             "artifact_reason": artifact_reason,
+            # Usable ticks the blink gate had no delta for. A recording that
+            # reads flawless with this climbing is one whose blink detector
+            # never armed.
+            "samples_no_delta": self._samples_no_delta,
             # Raw, pre-baseline log ratios -- diagnostics for the accuracy
             # capture (HANDOFF.md Phase 0). None on a frame with no usable
             # bands, distinct from a real ratio of 0.

@@ -1530,9 +1530,21 @@ What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about ea
   weekly summary that collapses both scales into one number. **Never a date**: the rollout is per
   sidecar process, as each student's machine restarts, so no calendar constant labels it, and
   `_scale_range` keeps "no row recorded one" (rolled before the column) apart from scale 1.
-  `ScaleNote` renders the caption on the three surfaces when the range straddles the change, since
-  a series on two scales is not one series and the chart cannot show where the step is. The replay
-  figures quoted above (37/60, 78/27, 50/42) were taken on the old scale.
+  `ScaleNote` renders the caption on the term trend, the class trend (only beside a drawn line),
+  the class roster (class range or any one student's, since the outlier flag is computed on those
+  numbers) and the weekly summary tiles, when the range straddles the change — a series on two
+  scales is not one series and the chart cannot show where the step is; each wiring has a test
+  with a mixed fixture, since the null branch passes with the element deleted. The rollup reads
+  `raw.score_scale` through `score_scale_of(jsonb)`, never a hard cast: `raw` is client-supplied
+  on the push path, and a cast raised out of the cognitive INSERT, the first of three, so one
+  posted sample aborted a student-day's rollup, which the close swallows and the expiry job then
+  refuses for ever — a student exempting their own rows from retention with one request.
+  `scripts/assert_signal_rls.sql` exercises that arithmetic against a real stack, garbage value
+  included, because it is the only place the function runs. The rollup read behind the labels is
+  the one stated exception to the cohort endpoint's consent bucketing: it selects no reading. The
+  replay figures quoted above (37/60, 78/27, 50/42) were taken on the old scale. `samples_no_delta`
+  counts the usable ticks the blink gate had no delta for, so a recording whose detector never
+  armed does not read as flawless.
   A NaN or infinite value in a **ratio** band, or a **partial** band dict, is a **held tick** with
   `artifact_reason: malformed_bands` and confidence at the floor: as an exception it read as a
   dead headband, as "no bands" it was scored on the amplitude fallback above the gate, and a

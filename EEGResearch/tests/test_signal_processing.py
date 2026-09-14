@@ -931,3 +931,27 @@ def test_the_push_client_accounts_for_samples_the_backend_could_not_read():
     src = inspect.getsource(PushClient)
     assert 'body.get("malformed", 0)' in src
     assert '"malformed": dict(self._malformed)' in src
+
+
+def test_a_nan_channel_spread_never_reaches_the_spread_median():
+    """Moving the append to every usable tick widened this from band ticks
+    to all of them: one NaN channel poisoned the median and a 900 uV jolt
+    was admitted as clean."""
+    t = Ticker()
+    t.run({**RELAXED, **CONTACT_GOOD}, 20, spread=20.0)
+    n = len(t.processor._spread_history)
+    t.tick({**RELAXED, **CONTACT_GOOD}, spread=float("nan"))
+    assert len(t.processor._spread_history) == n
+    assert t.tick({**RELAXED, **CONTACT_GOOD}, spread=900.0)["artifact_reason"] == "spread_jump"
+
+
+def test_ticks_the_blink_gate_had_no_delta_for_are_counted():
+    """Right trade against holding the tick, but silent it read as a
+    flawless recording while the detector never armed."""
+    t = Ticker()
+    _warm(t)
+    for bands in ({**RELAXED, "delta": float("nan")}, {k: v for k, v in RELAXED.items() if k != "delta"}):
+        f = t.tick({**bands, **CONTACT_GOOD})
+    assert f["samples_no_delta"] == 2 and f["samples_artifact"] == 0
+    t.processor.clear_session()
+    assert t.tick({**RELAXED, **CONTACT_GOOD})["samples_no_delta"] == 0

@@ -313,7 +313,13 @@ def test_the_score_scale_comes_from_the_rollup_rows_never_a_date():
     # cohort trend for its window, and the weekly summary that collapses
     # both scales into one number.
     assert '"score_scale": _scale_range(b["scale_rows"])' in inspect.getsource(backend_main._signal_trend)
-    assert '"score_scale": _cohort_scale_range(roster, days)' in inspect.getsource(backend_main._cohort_signals)
+    assert '"score_scale": _combine_ranges(scale_by_user.values())' in inspect.getsource(backend_main._cohort_signals)
+    assert '"score_scale": scale_by_user.get(sid)' in inspect.getsource(backend_main._cohort_signals), \
+        "the roster rows are labelled beside the chart, outlier flag included"
+    assert 'summary["score_scale"] = _scale_ranges_many' in inspect.getsource(backend_main._signal_summary)
+    assert 'out[str(sid)]["score_scale"] = scales.get(str(sid))' in inspect.getsource(backend_main._signal_summaries)
+    assert backend_main._combine_ranges([{"min": 1, "max": 1}, None, {"min": 2, "max": 2}]) == {"min": 1, "max": 2}
+    assert backend_main._combine_ranges([None]) is None
     assert '"score_scale": _scale_range(rollup_by.values())' in inspect.getsource(backend_main._weekly_signal_report)
     # And never on a heart or emotion bucket row, which no re-anchoring touched.
     part = [{"day": "2026-09-07", "channel": "heart", "avg_heart_rate_bpm": 70.0,

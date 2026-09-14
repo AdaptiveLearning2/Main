@@ -754,3 +754,25 @@ describe('SignalTrend', () => {
     expect(screen.getByText('Focus')).toBeInTheDocument()
   })
 })
+
+describe('the score-scale caption', () => {
+  it('captions the term trend when its weeks straddle the change', () => {
+    const weeks = [
+      { week_start: '2026-05-25', focus: 0.62, stress: 0.30, days_with_data: 4, score_scale: { min: 1, max: 1 } },
+      { week_start: '2026-06-01', focus: 0.71, stress: 0.26, days_with_data: 5, score_scale: { min: 2, max: 2 } },
+    ]
+    const { rerender } = render(<SignalTrend trend={{ weeks, retrieved: true }} />)
+    expect(screen.getByRole('note')).toHaveTextContent(/not comparable/)
+    rerender(<SignalTrend trend={{ weeks: weeks.map(w => ({ ...w, score_scale: { min: 2, max: 2 } })), retrieved: true }} />)
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+
+  it('captions the weekly averages when they collapse two scales into one number', () => {
+    const { rerender } = render(<WeeklySignalReport report={{
+      ...report, averages: { ...report.averages, score_scale: { min: 1, max: 2 } },
+    }} />)
+    expect(screen.getByRole('note')).toHaveTextContent(/not comparable/)
+    rerender(<WeeklySignalReport report={report} />)
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+})

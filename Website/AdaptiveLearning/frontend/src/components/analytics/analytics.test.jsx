@@ -715,3 +715,49 @@ describe('ClassSignalTrend does not draw engagement beside focus', () => {
     expect(screen.queryByRole('columnheader', { name: /engagement/i })).not.toBeInTheDocument()
   })
 })
+
+describe('the score-scale caption on the class panels', () => {
+  const cog = (d, over) => ({
+    day: d, channel: 'cognitive', avg_focus: 0.6, avg_stress: 0.3,
+    sample_count: 100, trusted_sample_count: 100, student_count: 3, ...over,
+  })
+  const trend = (score_scale, over) => ({
+    retrieved: true, days: 30, timezone: 'UTC', score_scale,
+    series: [cog('2026-06-10'), cog('2026-06-11')], ...over,
+  })
+
+  it('captions the class trend only when its window straddles the change', () => {
+    const { rerender } = render(<ClassSignalTrend data={trend({ min: 1, max: 2 })} />)
+    expect(screen.getByRole('note')).toHaveTextContent(/not comparable/)
+    rerender(<ClassSignalTrend data={trend({ min: 2, max: 2 })} />)
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+
+  it('does not caption series the chart does not draw', () => {
+    // A week of poor contact: the rollup rows exist, carry a scale range,
+    // and produced no average. The note would name lines nobody can see.
+    render(<ClassSignalTrend data={trend({ min: 1, max: 2 }, {
+      series: [cog('2026-06-10', { avg_focus: null, avg_stress: null })],
+    })} />)
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+
+  it('captions the roster when the class or any one student straddles the change', () => {
+    const student = (id, score_scale) => ({
+      student_id: id, display_name: id,
+      summary: { focus: 0.6, stress: 0.3, cognitive_samples: 10, days_recorded: 2,
+                 heart_included: false, emotion_included: false, eeg_enabled: true,
+                 consent_retrieved: true, retrieved: true, score_scale },
+    })
+    const data = (score_scale, students) => ({
+      retrieved: true, summaries_retrieved: true, class_size: 5, min_students: 5,
+      score_scale, per_student: students,
+    })
+    const { rerender } = render(<ClassSignalRoster data={data({ min: 2, max: 2 },
+      [student('a', { min: 2, max: 2 }), student('b', { min: 1, max: 2 })])} />)
+    expect(screen.getByRole('note')).toHaveTextContent(/not comparable/)
+    rerender(<ClassSignalRoster data={data({ min: 2, max: 2 },
+      [student('a', { min: 2, max: 2 }), student('b', null)])} />)
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+})

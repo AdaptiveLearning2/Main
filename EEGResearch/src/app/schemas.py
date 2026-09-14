@@ -38,6 +38,9 @@ class FeatureData(BaseModel):
     # Artifact gate: ticks held this session (delta jump, EMG gamma, spread
     # jump), and why this tick was held -- None when it was scored.
     samples_artifact: int | None = None
+    # Usable ticks whose delta could not be read, so the blink gate had no
+    # reference for them. Distinct from an artifact count of zero.
+    samples_no_delta: int | None = None
     # A plain str, not a Literal of the three reasons: the processor writes
     # them as unshared string literals, and a fourth would have made every
     # /api/v1/state call 500 -- a harder failure than the silent key drop

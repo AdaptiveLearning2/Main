@@ -24,6 +24,29 @@ ALTER TABLE "public"."signal_daily_rollup"
     ADD COLUMN IF NOT EXISTS "score_scale_min" smallint,
     ADD COLUMN IF NOT EXISTS "score_scale_max" smallint;
 
+-- The score scale a per-sample row's `raw` claims, as a smallint, or NULL for
+-- anything that is not a number in range. Its own function so the rule is
+-- written once and testable on its own; IMMUTABLE and STRICT so the planner
+-- can fold it. Never raises: `raw` is client-supplied on the push path.
+CREATE OR REPLACE FUNCTION "public"."score_scale_of"("raw" jsonb)
+RETURNS smallint
+LANGUAGE sql
+IMMUTABLE STRICT
+SET "search_path" TO 'public'
+AS $$
+    SELECT CASE
+        WHEN jsonb_typeof("raw"->'score_scale') = 'number'
+             AND ("raw"->>'score_scale')::numeric BETWEEN 1 AND 32767
+        THEN round(("raw"->>'score_scale')::numeric)::smallint
+        ELSE NULL
+    END;
+$$;
+
+REVOKE ALL ON FUNCTION "public"."score_scale_of"(jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION "public"."score_scale_of"(jsonb) FROM "anon";
+REVOKE ALL ON FUNCTION "public"."score_scale_of"(jsonb) FROM "authenticated";
+GRANT EXECUTE ON FUNCTION "public"."score_scale_of"(jsonb) TO "service_role";
+
 CREATE OR REPLACE FUNCTION "public"."rollup_signal_day"(
     "p_user_id" "uuid",
     "p_day" date,
@@ -52,8 +75,18 @@ BEGIN
     SELECT p_user_id, p_day, 'cognitive',
            avg(focus), avg(stress), avg(engagement),
            count(*), count(*) FILTER (WHERE focus IS NOT NULL),
-           min(coalesce((raw->>'score_scale')::smallint, 1)) FILTER (WHERE focus IS NOT NULL),
-           max(coalesce((raw->>'score_scale')::smallint, 1)) FILTER (WHERE focus IS NOT NULL),
+           -- `raw` is client-supplied JSON on the push path and the flat
+           -- ingest shape stores it verbatim, so the value is never hard-cast:
+           -- a non-numeric `score_scale` raised out of this INSERT, the
+           -- first of three, and one posted sample aborted the whole
+           -- student-day's rollup -- which the close swallows and the expiry
+           -- job then refuses for ever. Absent is scale 1 (predates the
+           -- key); anything that is not a number in range is NULL, which the
+           -- aggregate skips, so garbage can neither abort nor mislabel.
+           min(CASE WHEN raw ? 'score_scale' THEN public.score_scale_of(raw) ELSE 1 END)
+               FILTER (WHERE focus IS NOT NULL),
+           max(CASE WHEN raw ? 'score_scale' THEN public.score_scale_of(raw) ELSE 1 END)
+               FILTER (WHERE focus IS NOT NULL),
            now()
     FROM cognitive_signals
     WHERE user_id = p_user_id AND ts >= day_start AND ts < day_end

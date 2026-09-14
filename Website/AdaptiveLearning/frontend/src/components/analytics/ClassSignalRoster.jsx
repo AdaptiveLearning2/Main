@@ -1,5 +1,7 @@
 import { offLabel, pct } from '../signals/SignalPanel'
 import Panel from './Panel'
+import ScaleNote from '../signals/ScaleNote'
+import { combineScales } from '../../lib/scoreScale'
 
 /**
  * Per-student signal averages for a class, against the class average.
@@ -93,6 +95,9 @@ function isOutlier(value, mean) {
 
 export default function ClassSignalRoster({ data, loading, onRetry, hideSensors = false }) {
   const rows = data?.per_student || []
+  // The class range, or any one student's: a ranking of numbers on two
+  // scales -- outlier flag included -- needs the same caveat the chart gets.
+  const scale = combineScales([{ score_scale: data?.score_scale }, ...rows.map(r => r.summary)])
   const withheld = data?.per_student === null && data?.class_size > 0
   const focusMean = classMean(rows, 'focus')
 
@@ -122,6 +127,7 @@ export default function ClassSignalRoster({ data, loading, onRetry, hideSensors 
       className="lg:col-span-2"
     >
       <div className="overflow-x-auto">
+        <ScaleNote scale={scale} what="These per-student focus and stress figures" />
         <table className="w-full text-sm">
           <caption className="sr-only">
             Per-student signal averages for this class over the last {data?.days} days.

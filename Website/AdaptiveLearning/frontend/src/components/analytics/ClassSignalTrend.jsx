@@ -93,7 +93,13 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
       {/* The payload's score-scale range over the window; renders only when
           the range straddles the change, since then the days on either side
           are not comparable and the chart cannot show where the step is. */}
-      <ScaleNote scale={data?.score_scale} what="This class's focus and stress averages" />
+      {/* Only beside a drawn focus/stress line: the range comes from the
+          cognitive rollup rows whether or not a day produced an average, so
+          a week of poor contact would otherwise caption series the chart
+          does not draw. */}
+      {hasCognitive && (
+        <ScaleNote scale={data?.score_scale} what="This class's focus and stress averages" />
+      )}
       <div className="h-64">
         <AccessibleChart
           headline={headline} rows={rows} rowKey="label" rowLabel="Day"

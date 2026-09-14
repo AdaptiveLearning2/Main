@@ -48,6 +48,17 @@ def start_session(device_id: str = DEFAULT_DEVICE_ID) -> dict:
     return r.json()
 
 
+def arm_session(device_id: str = DEFAULT_DEVICE_ID) -> dict:
+    """Tells the EEG service recording has started, so it takes the
+    per-session baseline from now rather than from stream start."""
+    r = requests.post(
+        f"{EEG_API_URL}/api/v1/session/arm",
+        headers=_admin_headers(), params={"device_id": device_id}, timeout=3,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
 def stop_session(device_id: str = DEFAULT_DEVICE_ID) -> dict:
     r = requests.post(
         f"{EEG_API_URL}/api/v1/session/stop",

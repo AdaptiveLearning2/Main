@@ -113,3 +113,13 @@ def test_main_reads_a_file_and_prints_a_summary(tmp_path, capsys):
     assert replay.main([str(path), "--diff", "--window-size", "8"]) == 0
     printed = capsys.readouterr().out
     assert "eyes_open_rest" in printed and "rec/new" in printed
+
+
+def test_arm_at_restarts_the_baseline_at_that_segment():
+    rows = _synthetic_capture(n=60)
+    plain = replay.replay(rows, window_size=8)
+    armed = replay.replay(rows, window_size=8, arm_at="arithmetic")
+    # Same rows, same code: only the baseline's start moved, and it is the
+    # segment boundary that separates the two.
+    assert [r["focus_log_ratio"] for r in plain] == [r["focus_log_ratio"] for r in armed]
+    assert plain[:20] == armed[:20]

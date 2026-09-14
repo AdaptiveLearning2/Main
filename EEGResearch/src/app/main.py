@@ -101,6 +101,25 @@ async def start_session(
     return JSONResponse({"status": "running"})
 
 
+@app.post("/api/v1/session/arm")
+async def arm_session(
+    device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_local_controller)
+) -> JSONResponse:
+    """Recording starts now: take the per-session baseline from here.
+
+    The stream is up from Connect and its opening stretch is the strap being
+    adjusted; the backend poller calls this when `record` flips to true on
+    the first question, so the baseline the signal tables are scored against
+    is gathered after that and not during pairing. Idempotent, and safe on a
+    device that is not streaming: it only clears what would be gathered.
+    """
+    try:
+        stream_manager.arm_baseline(device_id)
+    except UnknownDeviceError:
+        raise _unknown_device(device_id)
+    return JSONResponse({"status": "armed"})
+
+
 @app.post("/api/v1/session/stop")
 async def stop_session(
     device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_local_controller)
@@ -150,8 +169,15 @@ async def push_start(body: PushStartBody, _: str = Depends(require_learner_token
                     "polls it instead, and pushing as well would write every sample "
                     "twice. Nothing is wrong with the sensors."),
         )
+    # Under push the browser is the controller and this call is its "first
+    # question": a new session id arms the baseline the way the poller's
+    # /session/arm does under pull. A repeat with the same id is a token
+    # refresh and must not restart it mid-lesson.
+    new_session = body.session_id != push_client.session_id
     await push_client.start(body.session_id, body.access_token)
     stream_manager.set_payload_consumer(push_client.submit_payload)
+    if new_session:
+        stream_manager.arm_baseline()
     return JSONResponse({"status": "pushing", "session_id": body.session_id})
 
 

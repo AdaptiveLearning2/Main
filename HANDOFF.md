@@ -24,24 +24,16 @@ Phase 1 test was mutation-checked (the step reverted, the test fails). `CLAUDE.m
 Captures (not in the repo): `C:\eeg_captures\2026-09-13_{a,b}.jsonl`, with pre-Phase-1 replays
 saved beside them as `replay_before_{a,b}.jsonl` for `--against`.
 
-## Open decision, blocking 1.7
+10. The baseline is taken from the first question: `POST /api/v1/session/arm` on the sidecar,
+    called by the poller on `record: true` and by `push/start` on a new session id.
 
-Replayed on run b after 1.6, focus reads 0–14 on every rest segment. The baseline still latches
-during the settling period: the strap being adjusted is degraded contact with beta and gamma high
-from muscle, and 45 s of it accrue inside the 3-minute `between` stretch. A fixed baseline taken
-there makes every later segment read as low focus. Options, for the user:
-
-- start collecting on `record: true` (first question) instead of at stream start — a product
-  change (the poller would have to tell the sidecar), and Connect-to-first-question is short;
-- a rolling reference (rejected once, on the grounds that a sustained state decays to 50);
-- keep fixed and accept that the reference is whatever the opening 45 s were.
-
-Nothing in 1.1–1.7b depends on this; it only decides what `focused`/`stressed` thresholds (1.7)
-could be set against, and 1.7 is also blocked on Phase 2 (below).
+Decided 2026-09-13 after the replay showed a contact-gated baseline still latching in the
+settling period (focus 0–14 for the rest of run b). Replayed armed at the first protocol
+segment, run b reads eyes-closed 37/60, eyes-open 78/27, arithmetic 50/42.
 
 ## Next
 
-1. Open the PR for `eeg-accuracy-phase1` once the decision above is made and reflected.
+1. Open the PR for `eeg-accuracy-phase1`.
 2. **Phase 2 hardware run**: sidecar stopped, `capture_eeg_reference.py --source bridge`, 2 min
    eyes closed + 2 min eyes open, prepared contact. Then `eeg_spectrum.py` (Welch, 2 s epochs, 1/f
    slope fit, per-region bands) behind `EEG_SPECTRUM_SOURCE=sdk|local`, default `sdk`. That is the

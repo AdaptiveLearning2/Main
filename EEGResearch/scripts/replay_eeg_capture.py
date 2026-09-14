@@ -69,8 +69,16 @@ def _parse_t(value: str) -> datetime:
     return datetime.fromisoformat(value)
 
 
-def replay(rows: list[dict[str, Any]], *, window_size: int = 20) -> list[dict[str, Any]]:
-    """Return one row per input row with the scored fields recomputed."""
+def replay(rows: list[dict[str, Any]], *, window_size: int = 20,
+           arm_at: str | None = None) -> list[dict[str, Any]]:
+    """Return one row per input row with the scored fields recomputed.
+
+    `arm_at` names the segment whose first row stands in for the first
+    question: the processor's baseline is restarted there, as the backend
+    poller does on `record: true`. Without it the baseline is taken from the
+    first rows, i.e. from Connect, which is what a capture that starts
+    during pairing records.
+    """
     if not rows:
         return []
     t0 = _parse_t(rows[0]["t"])
@@ -78,8 +86,12 @@ def replay(rows: list[dict[str, Any]], *, window_size: int = 20) -> list[dict[st
     processor = SignalProcessor(window_size=window_size, clock=lambda: clock_now[0])
     adaptation = AdaptationEngine(clock=lambda: clock_now[0])
     out: list[dict[str, Any]] = []
+    armed = False
     for row in rows:
         clock_now[0] = (_parse_t(row["t"]) - t0).total_seconds()
+        if arm_at is not None and not armed and row.get("segment") == arm_at:
+            processor.restart_baseline()
+            armed = True
         replayed = dict(row)
         if row.get("status") != "ok" or row.get("tp9") is None:
             processor.reset()
@@ -140,11 +152,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--against", metavar="PATH",
                     help="diff against a previous --save instead of the recorded columns")
     ap.add_argument("--window-size", type=int, default=20)
+    ap.add_argument("--arm-at", metavar="SEGMENT",
+                    help="restart the baseline at this segment's first row, as the first question does")
     args = ap.parse_args(argv)
 
     capture = _capture_module()
     rows = capture.read_rows(args.path)
-    replayed = replay(rows, window_size=args.window_size)
+    replayed = replay(rows, window_size=args.window_size, arm_at=args.arm_at)
     capture.print_summary(capture.summarize(replayed))
     if args.save:
         capture.refuse_if_inside_repo(pathlib.Path(args.save))

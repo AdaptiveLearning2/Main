@@ -366,3 +366,44 @@ def test_a_change_of_mind_mid_run_restarts_the_count():
     for _ in range(3):
         eng.infer_state(_feat("stressed"))
     assert eng.infer_state(_feat("focused")).label == "neutral"
+
+
+# -- the baseline restarts when recording is armed ------------------------------
+
+def test_restart_baseline_gathers_a_fresh_reference_from_the_next_ticks():
+    """The stream is up from Connect; arming recording on the first question
+    restarts the baseline so the reference is not the strap being adjusted."""
+    t = Ticker()
+    settling = {**ENGAGED, **CONTACT_GOOD}  # muscle-high opening stretch
+    _run_until_latched(t, settling)
+    first_mean = t.processor._baseline_focus_mean
+    t.processor.restart_baseline()
+    assert t.processor._baseline_ready, "the old centre stays in use until the new one latches"
+    resting = {**RELAXED, **CONTACT_GOOD}
+    n = 0
+    while t.processor._baseline_focus_mean == first_mean:
+        t.tick(resting)
+        n += 1
+        assert n < 400
+    assert t.processor._baseline_focus_mean != first_mean
+    settled = t.run(resting, 4 * int(SignalProcessor.BASELINE_RAMP_SECONDS) + 8)
+    assert settled["focus_score"] == pytest.approx(50.0, abs=1.0)
+
+
+def test_a_restart_ramps_from_the_centre_in_use_without_a_step():
+    t = Ticker()
+    _run_until_latched(t, {**ENGAGED, **CONTACT_GOOD})
+    t.processor.restart_baseline()
+    scores = []
+    for _ in range(4 * int(SignalProcessor.BASELINE_SECONDS + SignalProcessor.BASELINE_RAMP_SECONDS) + 20):
+        scores.append(t.tick({**RELAXED, **CONTACT_GOOD})["focus_score"])
+    # The first ten seconds are the smoother tracking the change of spectrum,
+    # which is a real move; what must not step is the latch, ~45 s in.
+    settled = scores[40:]
+    steps = [abs(b - a) for a, b in zip(settled, settled[1:])]
+    # The two spectra here sit further apart than the whole scale, so the
+    # ramp moves the centre by ~130 points over its 40 ticks: ~3.3 a tick,
+    # against the 130 a single step would be.
+    assert max(steps) < 4.0
+    assert scores[-1] == pytest.approx(50.0, abs=1.0)
+    assert scores[40] < 10.0, "before the new latch the old centre still applies"

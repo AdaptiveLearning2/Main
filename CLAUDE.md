@@ -1493,12 +1493,20 @@ What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about ea
   leave the smoothed value alone. 92% of a step in 10 s, under the decider's cadence.
 - **The baseline is 45 s of at-least-degraded contact, fixed for the session by decision, on one
   scale with a 10 s ramp at the latch.** It was the first 60 usable ticks with no contact condition,
-  and on both captures that fell entirely inside the loose-strap settling period. **Open:** even
-  gated it still latches in the settling period on the capture, because that period *is* degraded
-  contact — the strap is being adjusted on 2 electrodes, with beta and gamma high from muscle. The
-  processor lives from stream start (a sidecar session start does not reset it), so in the product
-  the baseline is taken at Connect. The alternatives are a rolling reference (rejected once: a
-  sustained state decays to 50) or starting collection on `record: true` rather than on the stream.
+  and on both captures that fell entirely inside the loose-strap settling period. Gating on contact
+  was not enough: that period *is* degraded contact — the strap being adjusted on 2 electrodes with
+  beta and gamma high from muscle — and replayed on the capture the whole session still read focus
+  0–14. **So the baseline is taken from the first question, not from Connect.** The processor lives
+  from stream start (a sidecar session start does not reset it); `eeg_poller` now calls
+  `POST /api/v1/session/arm` when `record` flips true, which is `SignalProcessor.restart_baseline()`
+  — discard what was gathered, gather afresh, keep the old centre in use until the new one latches
+  and ramp to it. Under push, a `push/start` with a *new* session id does the same (a repeat with
+  the same id is a token refresh and leaves it alone). Best effort from the poller and logged on
+  failure: a sidecar too old to know the route must not cost the session its rows. Replayed armed at
+  the first protocol segment, run b reads eyes-closed 37/60 (focus/calm), eyes-open 78/27,
+  arithmetic 50/42 — the right directions, centred where the lesson began. A rolling reference was
+  considered and rejected: a sustained state would decay to 50. `replay_eeg_capture.py --arm-at
+  SEGMENT` stands in for the first question.
 - **A label needs four consecutive readings** before the 3 s cooldown protects it. 90 of 133
   `focused` readings on the captures were the cooldown holding one spurious tick.
 

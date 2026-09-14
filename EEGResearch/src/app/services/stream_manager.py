@@ -591,6 +591,12 @@ class StreamManager:
             raise UnknownDeviceError(device_id)
         return session
 
+    def arm_baseline(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
+        """Recording has been armed for this device: gather the per-session
+        baseline from now, not from stream start. See
+        SignalProcessor.restart_baseline."""
+        self.session(device_id).processor.restart_baseline()
+
     async def start(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
         await self.session(device_id).start()
 

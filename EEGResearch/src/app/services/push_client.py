@@ -117,6 +117,13 @@ class PushClient:
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    @property
+    def session_id(self) -> str | None:
+        """The session being pushed for, or None. Read by the push/start
+        route to tell a new session (arm the baseline) from a token refresh
+        (leave it alone)."""
+        return self._session_id
+
     async def start(self, session_id: str, token: str) -> None:
         """Begin pushing for one session, with that student's bearer token.
 

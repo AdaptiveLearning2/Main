@@ -623,6 +623,23 @@ def set_consent_reason_check(fn) -> None:
     _consent_reason_check = fn
 
 
+def _arm_sidecar_baseline(device_id: str) -> None:
+    """Tell the sidecar recording has started, so its per-session baseline is
+    gathered from the first question rather than from Connect -- the opening
+    stretch of a stream is the strap being adjusted, and a baseline taken
+    there scored whole sessions near zero on the reference captures.
+
+    Best effort, never raising: the rows are already being written, and a
+    sidecar too old to know the route must not stop them. It logs, because a
+    session scored against its pairing period is otherwise invisible.
+    """
+    try:
+        eeg_client.arm_session(device_id)
+    except Exception as e:  # noqa: BLE001 -- the recording must not depend on this
+        print(f"!!! [eeg-poller] could not arm the sidecar baseline (device={device_id}): "
+              f"{type(e).__name__}: {e} -- scores will be relative to stream start", flush=True)
+
+
 def start(supabase, user_id: str, session_id: str, device_id: str,
           record: bool = True) -> dict:
     """Start this session's poller, or arm/disarm one already running.
@@ -661,6 +678,8 @@ def start(supabase, user_id: str, session_id: str, device_id: str,
             if p.recording != record:
                 print(f"=== already running for this session; recording -> {record}", flush=True)
                 p.recording = record
+                if record:
+                    _arm_sidecar_baseline(device_id)
             else:
                 print(f"=== already running for this session", flush=True)
             return {"running": True, "already": True, "recording": record}
@@ -693,6 +712,8 @@ def start(supabase, user_id: str, session_id: str, device_id: str,
         p.recording = record
         p.start()
         _active[session_id] = p
+        if record:
+            _arm_sidecar_baseline(device_id)
         # The reservation's job ends here: ownership has moved to something
         # stronger, so leaving the entry around just wastes a dict slot until
         # it expires.

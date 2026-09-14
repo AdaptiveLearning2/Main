@@ -200,6 +200,31 @@ class SignalProcessor:
         self._baseline_ready = False
         self._baseline_started: datetime | None = None
         self._baseline_latched: datetime | None = None
+        # Whether ticks are being gathered for a (re)latch, and the centre
+        # each score was using when the current baseline latched -- the ramp
+        # runs from there, which is the population midpoint for the first
+        # latch and the previous session mean for a restart.
+        self._baseline_collecting = True
+        self._centre_from: dict[str, float | None] = {"focus": None, "calm": None}
+
+    def restart_baseline(self) -> None:
+        """Discard the baseline and gather a fresh one from the next admitted
+        ticks, ramping to it from the centre in effect now.
+
+        Called when recording is armed -- the first question -- rather than
+        at stream start. The processor lives from Connect, and both reference
+        captures showed the opening 45 s of a stream to be the strap being
+        adjusted on two electrodes with the muscle bands high: a baseline
+        taken there put every later score near zero. Nothing before arming
+        reaches the signal tables, so the only baseline that is ever recorded
+        against is the one gathered after this call. The scores do not step:
+        whatever centre was in use stays in use until the new latch, then
+        ramps.
+        """
+        self._baseline_focus.clear()
+        self._baseline_calm.clear()
+        self._baseline_started = None
+        self._baseline_collecting = True
 
     def reset(self) -> None:
         """Drop all buffered samples (e.g. after a signal-loss gap) so the next
@@ -227,6 +252,8 @@ class SignalProcessor:
         self._baseline_ready = False
         self._baseline_started = None
         self._baseline_latched = None
+        self._baseline_collecting = True
+        self._centre_from = {"focus": None, "calm": None}
 
     @staticmethod
     def _clamp01(value: float) -> float:
@@ -379,7 +406,7 @@ class SignalProcessor:
         as representative. A learner who starts already engaged makes that
         engagement their zero point.
         """
-        if self._baseline_ready:
+        if not self._baseline_collecting:
             return
         if contact is not None and contact < self.CONTACT_DEGRADED:
             return
@@ -389,10 +416,14 @@ class SignalProcessor:
         self._baseline_calm.append(calm_raw)
         elapsed = (ts - self._baseline_started).total_seconds()
         if elapsed >= self.BASELINE_SECONDS and len(self._baseline_focus) >= self.BASELINE_MIN_SAMPLES:
+            # The ramp starts from wherever each score's centre is right now,
+            # so a restart mid-session is as step-free as the first latch.
+            self._centre_from = {which: self._centre(which, ts) for which in ("focus", "calm")}
             self._baseline_focus_mean = fmean(self._baseline_focus)
             self._baseline_calm_mean = fmean(self._baseline_calm)
             self._baseline_ready = True
             self._baseline_latched = ts
+            self._baseline_collecting = False
 
     def _score_against_baseline(self, raw: float, which: str, ts: datetime | None = None) -> float:
         """Map a log-ratio to 0..1, centred on this session's baseline once
@@ -404,24 +435,34 @@ class SignalProcessor:
         BASELINE_RAMP_SECONDS after the latch, so the crossing is not a step
         either.
         """
-        if which == "focus":
-            baseline = self._baseline_focus_mean
-            lo, hi = self.FOCUS_LOG_RATIO_MIN, self.FOCUS_LOG_RATIO_MAX
-        else:
-            baseline = self._baseline_calm_mean
-            lo, hi = self.CALM_LOG_RATIO_MIN, self.CALM_LOG_RATIO_MAX
+        lo, hi = self._bounds(which)
         span = hi - lo
         if span <= 0:
             return 0.5
-        centre = (lo + hi) / 2.0
-        if self._baseline_ready and baseline is not None:
-            if ts is None or self._baseline_latched is None:
-                fraction = 1.0
-            else:
-                fraction = self._clamp01(
-                    (ts - self._baseline_latched).total_seconds() / self.BASELINE_RAMP_SECONDS)
-            centre += fraction * (baseline - centre)
-        return self._clamp01(0.5 + (raw - centre) / span)
+        return self._clamp01(0.5 + (raw - self._centre(which, ts)) / span)
+
+    def _bounds(self, which: str) -> tuple[float, float]:
+        if which == "focus":
+            return self.FOCUS_LOG_RATIO_MIN, self.FOCUS_LOG_RATIO_MAX
+        return self.CALM_LOG_RATIO_MIN, self.CALM_LOG_RATIO_MAX
+
+    def _centre(self, which: str, ts: datetime | None) -> float:
+        """The value that scores 0.5 for `which` at `ts`: the population
+        midpoint until a baseline latches, then a ramp from the centre in use
+        at the latch to the session mean."""
+        lo, hi = self._bounds(which)
+        midpoint = (lo + hi) / 2.0
+        baseline = self._baseline_focus_mean if which == "focus" else self._baseline_calm_mean
+        if not self._baseline_ready or baseline is None:
+            return midpoint
+        start = self._centre_from.get(which)
+        if start is None:
+            start = midpoint
+        if ts is None or self._baseline_latched is None:
+            return baseline
+        fraction = self._clamp01(
+            (ts - self._baseline_latched).total_seconds() / self.BASELINE_RAMP_SECONDS)
+        return start + fraction * (baseline - start)
 
     def _smooth_ratios(self, focus_raw: float, calm_raw: float, ts: datetime) -> tuple[float, float]:
         """Advance the smoothed log ratios to this admitted tick and return them.

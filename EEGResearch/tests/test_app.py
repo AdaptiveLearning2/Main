@@ -1451,3 +1451,19 @@ def test_two_sim_devices_run_independently():
     assert b_signal_quality != "no_signal"
     assert manager_a.device_id == "dev-a"
     assert manager_b.device_id == "dev-b"
+
+
+def test_session_arm_restarts_the_baseline_and_is_admin_only_under_pull():
+    client = TestClient(app)
+    settings = get_settings()
+    admin_headers = {"Authorization": f"Bearer {settings.admin_token}"}
+    learner_headers = {"Authorization": f"Bearer {settings.api_token}"}
+    processor = stream_manager.session().processor
+    processor._baseline_focus.extend([0.1, 0.2, 0.3])
+    processor._baseline_collecting = False
+    r = client.post("/api/v1/session/arm", headers=admin_headers)
+    assert r.status_code == 200 and r.json() == {"status": "armed"}
+    assert processor._baseline_focus == [] and processor._baseline_collecting is True
+    assert client.post("/api/v1/session/arm", params={"device_id": "nope"}, headers=admin_headers).status_code == 404
+    # Under pull the backend is the controller; the learner token gains nothing.
+    assert client.post("/api/v1/session/arm", headers=learner_headers).status_code in (401, 403)

@@ -52,6 +52,12 @@ class FeatureData(BaseModel):
     # The exponentially smoothed ratios the scores were scaled from.
     focus_log_ratio_smoothed: float | None = None
     calm_log_ratio_smoothed: float | None = None
+    # Which spectrum calm was scored from ("sdk" | "local"), the local
+    # spectrum's 1/f-relative temporal alpha residual (carried on both
+    # sources for comparison), and whether its 4 s buffer was full.
+    calm_source: str | None = None
+    calm_alpha_residual: float | None = None
+    spectrum_ready: bool | None = None
 
 
 class StateData(BaseModel):

@@ -1607,18 +1607,42 @@ What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about ea
 - **A label needs four consecutive readings** before the 3 s cooldown protects it. 90 of 133
   `focused` readings on the captures were the cooldown holding one spurious tick.
 
-**What the captures did not settle, and Phase 1 deliberately did not touch:** the ratios
-themselves. Eyes-closed alpha rose 0.02 Bels; beta and gamma fell 0.1–0.2 instead, and gamma drifts
-monotonically over a session (+0.25 → −0.55 over 12 min), so `calm` tracks muscle tone relaxing,
-not an alpha rhythm. Arithmetic aloud raised beta by 0.08 *with gamma by 0.10* — speech EMG — and
-`focused` was reached on 0 ticks. Whether an alpha peak exists under the aperiodic slope needs the
-raw 256 Hz stream and our own Welch spectrum with 1/f correction (Phase 2, `--source bridge`), and
-the next protocol must use *silent* arithmetic. No `focused` threshold can be set from a ratio that
-did not move with the task, so `EEG_FOCUSED_*` / `EEG_STRESSED_*` in `adaptation.py` and
-`signal_fusion.py` are unchanged and still unmeasured. The `engaged student is not stressed` test
-now pins only the ordering, because on the spectrum alone an engaged eyes-open profile sits below
-the stressed line against the population bounds — that is the true state, previously hidden by the
-strap term.
+**What the sidecar captures did not settle, Phase 1 deliberately did not touch:** the ratios
+themselves. Eyes-closed alpha rose 0.02 Bels in the SDK bands; beta and gamma fell 0.1–0.2 instead,
+and gamma drifts monotonically over a session (+0.25 → −0.55 over 12 min), so `calm` on the SDK
+ratio tracks muscle tone relaxing. Arithmetic aloud raised beta by 0.08 *with gamma by 0.10* —
+speech EMG — and `focused` was reached on 0 ticks. `EEG_FOCUSED_*` / `EEG_STRESSED_*` in
+`adaptation.py` and `signal_fusion.py` are rescaled to the widened bounds and still unmeasured.
+The `engaged student is not stressed` test pins only the ordering, because on the spectrum alone an
+engaged eyes-open profile sits below the stressed line against the population bounds.
+
+**Phase 2 settled the alpha question with the raw stream (2026-09-14, `--source bridge`, sidecar
+stopped, 256.4 frames/s over 556 s).** Eyes closed, **TP9 and TP10 carry a 10 Hz peak 4.6× above
+the 1/f fit** that is absent eyes open; the frontal pair does not, and AF7 was the noisy channel, so
+the SDK's four-channel average could not see it. The measure is `services/eeg_spectrum.py`: Welch
+over 2 s Hann windows on a 4 s buffer, per channel, a 1/f slope fit over 2–40 Hz **with 7–13 Hz
+excluded** (fit through the band and the peak becomes slope), and calm is the mean log10 residual
+over 8–12 Hz at the temporal pair. Closed against open separates at **AUC 0.92 at 4 s epochs**,
+0.97 at 8 s — the same 4 s the ratio smoothing uses. `EEG_SPECTRUM_SOURCE=local` scores calm from
+it on its own population scale (`CALM_ALPHA_RESIDUAL_*`, midpoint 0); **the default stays `sdk` by
+decision** — one adult, three runs — and the local figure rides on every payload as
+`calm_alpha_residual` either way, so a session on `sdk` still records what `local` would have read.
+On `local`, a tick before the buffer fills **holds** calm rather than borrowing the SDK ratio: the
+two are different numbers on different scales and one baseline cannot hold both. A signal-loss
+reset empties the buffer, since whatever spans a gap is two recordings. The estimator is fed from
+the drain in `DeviceSession._loop` — every sample, since the bridge takes one TCP client and only
+`samples[-1]` is scored. `scripts/replay_raw_capture.py` replays a bridge capture through it and
+prints per-segment medians; armed at eyes-open the capture reads calm 64 closed / 39 open / 38
+arithmetic. **The SDK alpha band did move on this run** (+0.24 Bels closed) because contact held at
+3 of 4; it is not blind to alpha, it is unreliable at the contact the product gets.
+
+**Focus has no marker in this data, and `focus` stays the SDK ratio, documented as unmeasured.**
+Silent arithmetic raised neither beta (AUC 0.38–0.43 against eyes open, i.e. *lower*) nor gamma;
+the only task effect was alpha suppression, AUC 0.56 at 4 s. The beta ratio has now failed aloud,
+silently, on the SDK bands and on the raw spectrum. The 1/f slope itself separates closed from open
+(−1.24 against −2.75) more than any band does, which is why a raw band ratio mostly measures the
+slope. Blinking produces a spurious 8 Hz "alpha" from the blink harmonic; the delta gate is what
+keeps those epochs out of a baseline. Numbers and method: `EEG_REFERENCE.md`, raw-stream section.
 
 `SignalProcessor` and `AdaptationEngine` take an injectable `clock` for the replay; a diagnostic key
 added to `update()`'s dict still has to be declared on `schemas.FeatureData` or the envelope drops it.

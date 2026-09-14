@@ -17,6 +17,7 @@ from src.app.services.optics_processing import (
     build_heart_record,
 )
 from src.app.services.ppg_processing import HeartRateTracker
+from src.app.services.eeg_spectrum import SpectrumEstimator
 from src.app.services.signal_processing import SignalProcessor
 
 logger = logging.getLogger(__name__)
@@ -62,7 +63,13 @@ class DeviceSession:
             port=device_config.port,
             camera_index=device_config.camera_index,
         )
-        self.processor = SignalProcessor()
+        # Where calm reads its spectrum; "sdk" unless EEG_SPECTRUM_SOURCE
+        # says "local" (services/eeg_spectrum.py). The estimator runs either
+        # way, so the payload can carry the local figure for comparison
+        # while the SDK one is still what the score uses.
+        self.processor = SignalProcessor(
+            calm_source=(settings.eeg_spectrum_source or "sdk").lower().strip())
+        self.spectrum = SpectrumEstimator()
         self.adaptation = AdaptationEngine()
         # Heart rate off the headband's optical channels. Held per session
         # because continuity -- the only check that catches an octave error --
@@ -305,6 +312,7 @@ class DeviceSession:
             # no-sample tick), and through here it kept it for the next
             # student on a shared station.
             self.processor.clear_session()
+            self.spectrum.reset()
             self.adaptation.end_session()
             self._reset_heart()
             self.latest_payload = self._no_signal_payload()
@@ -393,6 +401,8 @@ class DeviceSession:
                     self.device_id, type(exc).__name__, exc,
                 )
                 self.processor.reset()
+                # The raw buffer too: whatever spans a gap is two recordings.
+                self.spectrum.reset()
                 self.adaptation.reset_for_signal_loss()
                 # Not `_reset_heart()`: this path runs on every tick with no EEG
                 # sample, which flapping contact does repeatedly, and restarting
@@ -434,7 +444,12 @@ class DeviceSession:
                 # re-processing every buffered sample, just the newest one.
                 sample = samples[-1]
                 self._note_preset(raw_meta)
-                features = self.processor.update(sample, raw_meta)
+                # Every drained sample goes to the spectrum estimator -- this
+                # is the one consumer of the raw stream, and it belongs here
+                # rather than on a second socket the bridge does not offer.
+                # The processor still scores one sample per tick.
+                spectrum = self.spectrum.push(samples, raw_meta)
+                features = self.processor.update(sample, raw_meta, spectrum=spectrum)
                 features["batch_size"] = len(samples)
                 state = self.adaptation.infer_state(features)
                 self.latest_payload = {
@@ -627,6 +642,7 @@ class StreamManager:
         and the next student on a shared station inherited everything."""
         session = self.session(device_id)
         session.processor.clear_session()
+        session.spectrum.reset()
         session.adaptation.end_session()
         # And the heart channel: its continuity anchor is the previous
         # student's, and inherited it confirms the next one's first window

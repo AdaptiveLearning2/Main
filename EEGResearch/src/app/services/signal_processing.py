@@ -64,6 +64,14 @@ class SignalProcessor:
     FOCUS_LOG_RATIO_MAX = 0.693  # ln(2.00)
     CALM_LOG_RATIO_MIN = -1.833  # ln(0.16)
     CALM_LOG_RATIO_MAX = 0.693  # ln(2.00)
+    # Population scale for calm on the local spectrum: the 1/f-relative alpha
+    # residual (log10) at the temporal pair. On the raw capture 4 s epochs
+    # ran -0.33..+0.54 (10th to 90th percentile, eyes open to eyes closed),
+    # medians -0.16 open and +0.32 closed; the bounds bracket that with the
+    # midpoint at 0 -- "no alpha above the background" scores 0.5 before the
+    # baseline latches. One adult; a multi-subject capture should tighten.
+    CALM_ALPHA_RESIDUAL_MIN = -0.6
+    CALM_ALPHA_RESIDUAL_MAX = 0.6
     EPSILON = 1e-6
 
     # The per-session baseline: how long, in seconds of the sample clock, the
@@ -193,12 +201,19 @@ class SignalProcessor:
     RATIO_SMOOTHING_SECONDS = 4.0
     NOMINAL_TICK_SECONDS = 0.25
 
-    def __init__(self, window_size: int = 20, clock: Callable[[], float] = monotonic) -> None:
+    def __init__(self, window_size: int = 20, clock: Callable[[], float] = monotonic,
+                 calm_source: str = "sdk") -> None:
         # Wall clock for the time-based smoothing windows. Injectable so a
         # recorded capture can be replayed at its own pace (scripts/
         # replay_eeg_capture.py): against the real monotonic() a replay runs
         # in milliseconds and every time window collapses to one tick.
         self._clock = clock
+        # "sdk": calm is the bridge's alpha/(beta+gamma) log-ratio. "local":
+        # calm is the 1/f-relative alpha residual at the temporal pair from
+        # services/eeg_spectrum.py, handed in per tick as `spectrum`. Focus
+        # is the SDK ratio on both, since no spectral marker of effort has
+        # been found (EEG_REFERENCE.md, raw-stream capture).
+        self.calm_source = "local" if calm_source == "local" else "sdk"
         # Holds the good-channel values per admitted sample, not the raw
         # EegSample: which electrodes were trustworthy is a property of the
         # moment the sample arrived, so the mask must be applied on the way in,
@@ -565,13 +580,18 @@ class SignalProcessor:
             self._baseline_coverage += min(since_last, self.BASELINE_TICK_CAP_SECONDS)
         self._baseline_last_ts = ts
         self._baseline_focus.append(focus_raw)
-        self._baseline_calm.append(calm_raw)
+        if calm_raw is not None:
+            # None on the local calm source while its buffer fills; the
+            # calm mean is over the ticks that had one.
+            self._baseline_calm.append(calm_raw)
         if self._baseline_coverage >= self.BASELINE_SECONDS:
             # The ramp starts from wherever each score's centre is right now,
             # so a restart mid-session is as step-free as the first latch.
             self._centre_from = {which: self._centre(which, ts) for which in ("focus", "calm")}
             self._baseline_focus_mean = fmean(self._baseline_focus)
-            self._baseline_calm_mean = fmean(self._baseline_calm)
+            # None if no tick had a calm value (a local source whose buffer
+            # never filled): calm then keeps centring on the midpoint.
+            self._baseline_calm_mean = fmean(self._baseline_calm) if self._baseline_calm else None
             self._baseline_ready = True
             self._baseline_latched = ts
             self._ramp_elapsed = 0.0
@@ -597,6 +617,8 @@ class SignalProcessor:
     def _bounds(self, which: str) -> tuple[float, float]:
         if which == "focus":
             return self.FOCUS_LOG_RATIO_MIN, self.FOCUS_LOG_RATIO_MAX
+        if self.calm_source == "local":
+            return self.CALM_ALPHA_RESIDUAL_MIN, self.CALM_ALPHA_RESIDUAL_MAX
         return self.CALM_LOG_RATIO_MIN, self.CALM_LOG_RATIO_MAX
 
     def _centre(self, which: str, ts: datetime | None) -> float:
@@ -643,7 +665,7 @@ class SignalProcessor:
         Seeded by the first admitted tick rather than by zero, so a session
         does not open with a ramp from a value nobody measured.
         """
-        if self._ema_focus is None or self._ema_calm is None or self._ema_ts is None:
+        if self._ema_focus is None or self._ema_ts is None:
             self._ema_focus, self._ema_calm, self._ema_ts = focus_raw, calm_raw, ts
             return focus_raw, calm_raw
         dt = (ts - self._ema_ts).total_seconds()
@@ -651,7 +673,12 @@ class SignalProcessor:
             dt = self.NOMINAL_TICK_SECONDS
         weight = 1.0 - exp(-dt / self.RATIO_SMOOTHING_SECONDS)
         self._ema_focus += weight * (focus_raw - self._ema_focus)
-        self._ema_calm += weight * (calm_raw - self._ema_calm)
+        # Calm can be absent for a tick on the local source (buffer filling
+        # after a start or a gap); the smoothed value stays where it was and
+        # is seeded by the first tick that has one.
+        if calm_raw is not None:
+            self._ema_calm = (calm_raw if self._ema_calm is None
+                              else self._ema_calm + weight * (calm_raw - self._ema_calm))
         self._ema_ts = ts
         return self._ema_focus, self._ema_calm
 
@@ -776,7 +803,8 @@ class SignalProcessor:
         except (TypeError, ValueError):
             return True
 
-    def update(self, sample: EegSample, bands: dict[str, Any] | None = None) -> dict[str, float]:
+    def update(self, sample: EegSample, bands: dict[str, Any] | None = None,
+               spectrum: dict[str, Any] | None = None) -> dict[str, float]:
         # Never let filtering empty the window -- the feature maths below needs
         # at least one sample, and a run of bad frames should hold the last good
         # reading rather than fail.
@@ -784,7 +812,21 @@ class SignalProcessor:
         now = self._clock()
         contact = self._contact_ratio(bands, now)
         band_focus_raw, band_calm_raw = self._extract_band_log_ratios(bands)
-        using_band_features = band_focus_raw is not None and band_calm_raw is not None
+        sdk_calm_raw = band_calm_raw
+        spectrum_ready = bool(spectrum and spectrum.get("ready"))
+        alpha_residual = spectrum.get("alpha_residual_temporal") if spectrum_ready else None
+        if self.calm_source == "local":
+            # Calm is the 1/f-relative temporal alpha residual, on its own
+            # scale (CALM_ALPHA_RESIDUAL_*). Until the 4 s buffer fills after
+            # a start or a gap there is no calm this tick: it is *held*, not
+            # taken from the SDK ratio, since the two are different numbers
+            # on different scales and one baseline cannot hold both.
+            band_calm_raw = alpha_residual
+        # Focus needs the SDK ratio; calm may be absent for a tick on the
+        # local source (see above) without taking the whole tick down the
+        # amplitude fallback.
+        using_band_features = band_focus_raw is not None and (
+            band_calm_raw is not None or self.calm_source == "local")
 
         frame_values = self._good_channel_values(sample, bands)
         # No spread at all when any channel is non-finite: max()/min() over a
@@ -903,7 +945,12 @@ class SignalProcessor:
                     band_focus_raw, band_calm_raw, sample.timestamp)
                 self._advance_ramp(sample.timestamp)
                 focus_ratio = self._score_against_baseline(focus_smooth, "focus", sample.timestamp)
-                calm_ratio = self._score_against_baseline(calm_smooth, "calm", sample.timestamp)
+                if calm_smooth is not None:
+                    calm_ratio = self._score_against_baseline(calm_smooth, "calm", sample.timestamp)
+                else:
+                    # Local source, buffer not yet full: hold the last calm,
+                    # or the midpoint if there is none. Focus is scored.
+                    calm_ratio = self._held_ratios[1] if self._held_ratios else 0.5
                 self._held_ratios = (focus_ratio, calm_ratio)
             elif self._held_ratios is not None:
                 # Hold the last admitted scores: a blink is not a change in
@@ -914,7 +961,8 @@ class SignalProcessor:
                 # Nothing admitted yet this session: score the raw tick, so a
                 # session that opens on a bad frame still has a number.
                 focus_ratio = self._score_against_baseline(band_focus_raw, "focus", sample.timestamp)
-                calm_ratio = self._score_against_baseline(band_calm_raw, "calm", sample.timestamp)
+                calm_ratio = (self._score_against_baseline(band_calm_raw, "calm", sample.timestamp)
+                              if band_calm_raw is not None else 0.5)
         elif malformed:
             # Hold, as for any artifact; with nothing held yet, the midpoint.
             focus_ratio, calm_ratio = self._held_ratios or (0.5, 0.5)
@@ -991,7 +1039,15 @@ class SignalProcessor:
             # capture (HANDOFF.md Phase 0). None on a frame with no usable
             # bands, distinct from a real ratio of 0.
             "focus_log_ratio": band_focus_raw,
-            "calm_log_ratio": band_calm_raw,
+            # Always the SDK ratio, whichever source calm is scored from, so
+            # the two can be compared on one row.
+            "calm_log_ratio": sdk_calm_raw,
+            # The local spectrum's calm figure and whether the score used it.
+            # Carried on both sources, so a session on "sdk" still records
+            # what "local" would have read.
+            "calm_source": self.calm_source,
+            "calm_alpha_residual": alpha_residual,
+            "spectrum_ready": spectrum_ready,
             # The smoothed ratios the scores were actually scaled from.
             # None beside a None raw ratio: a tick with no bands has no
             # smoothed value either, and reporting the last one made an

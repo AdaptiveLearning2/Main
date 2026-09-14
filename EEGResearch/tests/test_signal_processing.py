@@ -969,3 +969,72 @@ def test_ticks_the_spread_gate_had_no_spread_for_are_counted():
     assert one_electrode["samples_no_spread"] == 1
     t.processor.clear_session()
     assert t.tick({**RELAXED, **CONTACT_GOOD})["samples_no_spread"] == 0
+
+
+# -- Phase 2: calm from the local spectrum, behind EEG_SPECTRUM_SOURCE ----------
+
+def _spectrum(residual, ready=True):
+    return {"ready": ready, "alpha_residual_temporal": residual, "slope_temporal": -2.0,
+            "channels_used": 2}
+
+
+def test_on_the_sdk_source_the_spectrum_is_carried_and_not_scored():
+    """The default. The local figure rides on the payload for comparison;
+    calm is the SDK ratio exactly as before."""
+    plain = Ticker().run({**RELAXED, **CONTACT_GOOD}, 30)
+    t = Ticker()
+    for _ in range(30):
+        f = t.processor.update(t.sample(), {**RELAXED, **CONTACT_GOOD}, spectrum=_spectrum(-0.5))
+        t.now += t.dt
+    assert f["calm_source"] == "sdk" and f["spectrum_ready"] is True
+    assert f["calm_alpha_residual"] == -0.5
+    assert f["calm_score"] == pytest.approx(plain["calm_score"])
+    assert f["calm_log_ratio"] == pytest.approx(plain["calm_log_ratio"])
+
+
+def test_on_the_local_source_calm_is_the_alpha_residual_and_focus_stays_the_ratio():
+    """Eyes closed on the capture: a temporal alpha residual of +0.3 against
+    -0.16 open. On the local source that is what calm reads, on its own
+    scale; focus is untouched, since no spectral marker of effort exists."""
+    def run(residual):
+        t = Ticker()
+        t.processor = SignalProcessor(clock=lambda: t.now, calm_source="local")
+        for _ in range(30):
+            f = t.processor.update(t.sample(), {**RELAXED, **CONTACT_GOOD}, spectrum=_spectrum(residual))
+            t.now += t.dt
+        return f
+    closed, open_ = run(0.32), run(-0.16)
+    sdk = Ticker().run({**RELAXED, **CONTACT_GOOD}, 30)
+    assert closed["calm_source"] == "local"
+    assert closed["calm_score"] > 60.0 > 50.0 > open_["calm_score"]
+    assert closed["focus_score"] == pytest.approx(sdk["focus_score"])
+    assert closed["calm_log_ratio"] == pytest.approx(sdk["calm_log_ratio"]), "the SDK ratio is still reported"
+
+
+def test_on_the_local_source_calm_is_held_until_the_buffer_fills_and_the_baseline_takes_only_ticks_that_had_one():
+    """No calm this tick is not the SDK ratio for this tick: the two are
+    different numbers on different scales, and one baseline cannot hold
+    both. Focus proceeds; calm holds, or sits at the midpoint."""
+    t = Ticker()
+    t.processor = SignalProcessor(clock=lambda: t.now, calm_source="local")
+    warming = None
+    for _ in range(16):  # 4 s of buffer filling
+        warming = t.processor.update(t.sample(), {**RELAXED, **CONTACT_GOOD}, spectrum=_spectrum(None, ready=False))
+        t.now += t.dt
+    assert warming["calm_score"] == pytest.approx(50.0) and warming["spectrum_ready"] is False
+    assert 0.0 <= warming["focus_score"] <= 100.0
+    assert len(t.processor._baseline_calm) == 0 and len(t.processor._baseline_focus) == 16
+    for _ in range(4):
+        f = t.processor.update(t.sample(), {**RELAXED, **CONTACT_GOOD}, spectrum=_spectrum(0.32))
+        t.now += t.dt
+    assert f["calm_score"] > 50.0
+    assert len(t.processor._baseline_calm) == 4
+    held = t.processor.update(t.sample(), {**RELAXED, **CONTACT_GOOD}, spectrum=_spectrum(None, ready=False))
+    assert held["calm_score"] == pytest.approx(f["calm_score"]), "held, not the SDK ratio"
+
+
+def test_the_local_calm_scale_brackets_the_capture():
+    lo, hi = SignalProcessor.CALM_ALPHA_RESIDUAL_MIN, SignalProcessor.CALM_ALPHA_RESIDUAL_MAX
+    for v in (-0.33, -0.16, 0.32, 0.54):  # 10th..90th percentile, 4 s epochs
+        assert lo < v < hi
+    assert (lo + hi) / 2.0 == pytest.approx(0.0)

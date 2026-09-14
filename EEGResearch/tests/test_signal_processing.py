@@ -874,16 +874,20 @@ def test_a_nan_band_serialises_out_of_the_state_endpoint():
     assert bands.model_dump()["delta"] is None
 
 
-def test_a_nan_in_delta_is_malformed_and_never_reaches_the_median():
-    """The four ratio bands were readable, so the guard was never consulted
-    and NaN reached the delta history, where it has no ordering."""
+def test_a_nan_in_delta_costs_the_blink_gate_its_reference_and_nothing_else():
+    """Treating it as malformed held every tick of a session with four
+    perfect ratio bands, pinned focus at the midpoint and never latched the
+    baseline. NaN has no ordering, so it must not reach the median either."""
     t = Ticker()
-    _warm(t)
+    before = _warm(t)
     n = len(t.processor._delta_history)
-    f = t.tick({**RELAXED, "delta": float("nan"), **CONTACT_GOOD})
-    assert f["artifact_reason"] == "malformed_bands"
+    f = t.tick({**ENGAGED, "delta": float("nan"), **CONTACT_GOOD})
+    assert f["artifact_reason"] is None
+    assert f["focus_score"] != pytest.approx(before["focus_score"]), "scored, not held"
     assert len(t.processor._delta_history) == n
-    assert all(isinstance(v, float) and v == v for _, v in t.processor._delta_history)
+    assert all(v == v for _, v in t.processor._delta_history)
+    t.run({**ENGAGED, "delta": float("nan"), **CONTACT_GOOD}, 400)
+    assert t.processor._baseline_ready
 
 
 def test_a_partial_band_dict_is_malformed_not_zero_bels():
@@ -896,3 +900,34 @@ def test_a_partial_band_dict_is_malformed_not_zero_bels():
     assert f["focus_score"] == pytest.approx(before["focus_score"])
     # And a bridge with no ratio bands at all is still the fallback, not malformed.
     assert Ticker().run(CONTACT_GOOD, 5)["artifact_reason"] is None
+
+
+def test_malformed_ticks_do_not_starve_the_spread_gate():
+    """The spread comes from the raw channels, so a malformed band tick still
+    feeds it; kept inside the band branch, twenty-five seconds of malformed
+    ticks let a genuine jolt after them through as clean."""
+    t = Ticker()
+    t.run({**RELAXED, **CONTACT_GOOD}, 8, spread=20.0)
+    partial = {k: v for k, v in RELAXED.items() if k != "alpha"}
+    t.run({**partial, **CONTACT_GOOD}, 100, spread=20.0)  # 25 s malformed
+    assert t.tick({**RELAXED, **CONTACT_GOOD}, spread=90.0)["artifact_reason"] == "spread_jump"
+
+
+def test_an_absent_band_is_published_as_null_not_zero():
+    """The zero default survived the nullable change, so a missing band went
+    out as a measurement of 0 Bels on the tick the processor refused."""
+    from src.app.services.stream_manager import _finite_or_none
+    assert _finite_or_none(None) is None
+    import inspect
+    from src.app.services.stream_manager import DeviceSession
+    src = inspect.getsource(DeviceSession.snapshot)
+    assert 'raw_meta.get(name)' in src and 'raw_meta.get(name, 0.0)' not in src
+
+
+def test_the_push_client_accounts_for_samples_the_backend_could_not_read():
+    """A count with no reader turned a loud 422 into a silent 200."""
+    import inspect
+    from src.app.services.push_client import PushClient
+    src = inspect.getsource(PushClient)
+    assert 'body.get("malformed", 0)' in src
+    assert '"malformed": dict(self._malformed)' in src

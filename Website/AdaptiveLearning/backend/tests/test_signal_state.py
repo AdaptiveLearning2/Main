@@ -296,15 +296,26 @@ def test_every_cognitive_row_records_the_score_scale_it_was_measured_on():
     assert row["raw"]["score_scale"] == signal_mapping.SCORE_SCALE_VERSION == 2
 
 
-def test_rollup_backed_series_carry_the_score_scale_by_date():
-    """`raw.score_scale` is per sample and the rollup has no raw, so the
-    trend and cohort rows are labelled by the change date."""
-    import main as backend_main
-    assert backend_main._score_scale_for("2026-09-13") == 1
-    assert backend_main._score_scale_for("2026-09-14") == 2
-    part = [{"day": "2026-09-07", "channel": "cognitive", "avg_focus": 0.8,
-             "avg_stress": 0.3, "sample_count": 10, "trusted_sample_count": 10,
-             "student_count": 2}]
-    assert backend_main._merge_cohort_trend([part])[0]["score_scale"] == 1
+def test_the_score_scale_comes_from_the_rollup_rows_never_a_date():
+    """The rollout is per sidecar process, as each student's machine
+    restarts, so no calendar constant labels it; `20260917000000` has the
+    rollup record the range seen each day."""
     import inspect
-    assert '"score_scale": _score_scale_for(b["week_start"])' in inspect.getsource(backend_main._signal_trend)
+    import main as backend_main
+    assert not hasattr(backend_main, "_SCORE_SCALE_2_SINCE")
+    rows = [{"channel": "cognitive", "score_scale_min": 1, "score_scale_max": 1},
+            {"channel": "cognitive", "score_scale_min": 2, "score_scale_max": 2},
+            {"channel": "heart", "score_scale_min": None, "score_scale_max": None}]
+    assert backend_main._scale_range(rows) == {"min": 1, "max": 2}
+    assert backend_main._scale_range(rows[:1]) == {"min": 1, "max": 1}
+    assert backend_main._scale_range([{"channel": "cognitive"}]) is None, "unrecorded is not scale 1"
+    # Carried by every rollup-backed surface: the term trend per week, the
+    # cohort trend for its window, and the weekly summary that collapses
+    # both scales into one number.
+    assert '"score_scale": _scale_range(b["scale_rows"])' in inspect.getsource(backend_main._signal_trend)
+    assert '"score_scale": _cohort_scale_range(roster, days)' in inspect.getsource(backend_main._cohort_signals)
+    assert '"score_scale": _scale_range(rollup_by.values())' in inspect.getsource(backend_main._weekly_signal_report)
+    # And never on a heart or emotion bucket row, which no re-anchoring touched.
+    part = [{"day": "2026-09-07", "channel": "heart", "avg_heart_rate_bpm": 70.0,
+             "sample_count": 10, "trusted_sample_count": 10, "student_count": 2}]
+    assert "score_scale" not in backend_main._merge_cohort_trend([part])[0]

@@ -1524,14 +1524,24 @@ What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about ea
   midpoint deliberately moved down 0.49 Bels (the capture sat below the old one); only calm's is
   held. **This re-anchors every stored focus and stress value across 2026-09-14** — 14 to 30
   points pre-latch, ~38% of gain after — so `signal_mapping` writes `raw.score_scale` (2) on every
-  row and rows without the key predate it; the rollup carries no `raw`, so the term trend and the
-  cohort trend label each week and day with a `score_scale` derived from `_SCORE_SCALE_2_SINCE`
-  in `main.py`. The replay figures quoted above (37/60, 78/27, 50/42) were taken on the old scale.
-  A NaN or infinite band value, a NaN delta, or a **partial** band dict is a **held tick** with
+  cognitive row and rows without the key predate it. **The rollup records the range seen each day**
+  (`score_scale_min`/`score_scale_max`, `20260917000000`), and every rollup-backed payload carries
+  `score_scale: {min, max}` for its window — the term trend per week, the cohort trend, and the
+  weekly summary that collapses both scales into one number. **Never a date**: the rollout is per
+  sidecar process, as each student's machine restarts, so no calendar constant labels it, and
+  `_scale_range` keeps "no row recorded one" (rolled before the column) apart from scale 1.
+  `ScaleNote` renders the caption on the three surfaces when the range straddles the change, since
+  a series on two scales is not one series and the chart cannot show where the step is. The replay
+  figures quoted above (37/60, 78/27, 50/42) were taken on the old scale.
+  A NaN or infinite value in a **ratio** band, or a **partial** band dict, is a **held tick** with
   `artifact_reason: malformed_bands` and confidence at the floor: as an exception it read as a
   dead headband, as "no bands" it was scored on the amplitude fallback above the gate, and a
-  missing band defaulted to 0 Bels and scored. The snapshot serialises such a band as `null`
-  (`BandData` fields are optional) or `/api/v1/state` 500'd on exactly that tick, and the mapper
+  missing band defaulted to 0 Bels and scored. A NaN **delta** is not malformed — it feeds only the
+  blink gate, and holding on it pinned a session with four perfect ratio bands at the midpoint; it
+  costs that gate its reference for the tick and nothing else. The artifact histories are fed by
+  every usable tick whatever the bands say, since the spread comes from the raw channels. The
+  snapshot serialises a non-finite *or absent* band as `null` (`BandData` fields are optional) or
+  `/api/v1/state` 500'd on exactly that tick, and the mapper
   stores the row with its measurement columns nulled and the reason in `raw` — a held score is
   the previous tick's, not a measurement. A push batch validates each sample on its own and
   reports `malformed`, since a typed list 422'd every valid sample beside one bad one. A stalled sample clock

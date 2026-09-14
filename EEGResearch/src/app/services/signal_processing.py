@@ -412,16 +412,14 @@ class SignalProcessor:
                     return True
             except (TypeError, ValueError):
                 return True
-        # delta is read by the artifact gate, not the ratios. Absent or
-        # non-numeric it costs the gate its reference for the tick and
-        # nothing else (an older bridge reports none); a *number* that is
-        # NaN or infinite is malformed, since NaN has no ordering and its
-        # effect on the running median depends on where it happens to sort.
-        try:
-            delta = float(bands["delta"])
-        except (KeyError, TypeError, ValueError):
-            return False
-        return not isfinite(delta)
+        # delta is deliberately not consulted: it feeds only the blink gate,
+        # and a tick whose four ratio bands are perfect is a measurement
+        # whatever delta says. Treating a NaN delta as malformed held every
+        # tick of a session, pinned focus at the midpoint and never latched
+        # the baseline. A non-finite delta costs the gate its reference for
+        # that tick and nothing else -- the history append and the gate
+        # both check isfinite themselves.
+        return False
 
     def _smoothed(self, history: deque, now: float, value: float) -> float:
         """Append a contact reading and average it over a fixed time window.
@@ -665,6 +663,10 @@ class SignalProcessor:
             delta = float(bands.get("delta"))
         except (TypeError, ValueError):
             delta = None
+        if delta is not None and not isfinite(delta):
+            # NaN compares false against everything, so the gate would fall
+            # through silently; say so by treating it as no delta.
+            delta = None
         try:
             beta = float(bands.get("beta", 0.0))
             gamma = float(bands.get("gamma", 0.0))
@@ -795,6 +797,30 @@ class SignalProcessor:
         # does not reject it.
         admit = usable and artifact_reason is None
 
+        if usable:
+            # The gate's reference is every usable tick, held ones included.
+            # Feeding it only the ticks it admitted lets it ratchet: the
+            # median settles low, anything above it is held, held ticks
+            # never raise the median -- measured on the reference capture
+            # that held a third of resting ticks. Outside the band branch,
+            # because the spread comes from the raw channels: kept inside
+            # it, twenty-five seconds of malformed ticks starved the spread
+            # gate and a genuine jolt after them was admitted as clean.
+            #
+            # delta is not among the bands the ratios read, so a tick can
+            # have usable band features and no delta -- `.get` with a
+            # default does not catch an explicit None, and an unguarded
+            # float() here would fail the whole tick. NaN is skipped for the
+            # same reason the gate skips it: it has no ordering.
+            try:
+                delta_value = float((bands or {}).get("delta"))
+            except (TypeError, ValueError):
+                delta_value = None
+            if delta_value is not None and isfinite(delta_value):
+                self._delta_history.append((now, delta_value))
+            if frame_spread is not None:
+                self._spread_history.append((now, frame_spread))
+
         if self.window and not admit:
             if not usable:
                 self._samples_rejected += 1
@@ -835,25 +861,6 @@ class SignalProcessor:
             if admit:
                 self._collect_baseline(band_focus_raw, band_calm_raw, sample.timestamp, contact)
                 self._ratio_history.append(band_focus_raw)
-            if usable:
-                # The gate's reference is every usable tick, held ones
-                # included. Feeding it only the ticks it admitted lets it
-                # ratchet: the median settles low, anything above it is
-                # held, held ticks never raise the median. Measured on the
-                # reference capture that held a third of resting ticks.
-                #
-                # delta is not among the bands the ratios read, so a tick can
-                # have usable band features and no delta -- `.get` with a
-                # default does not catch an explicit None, and an unguarded
-                # float() here would fail the whole tick.
-                try:
-                    delta_value = float(bands.get("delta"))
-                except (TypeError, ValueError):
-                    delta_value = None
-                if delta_value is not None and isfinite(delta_value):
-                    self._delta_history.append((now, delta_value))
-                if frame_spread is not None:
-                    self._spread_history.append((now, frame_spread))
             # The spectral terms take full weight. They used to be blended
             # 75/25 with the amplitude terms "for continuity", and the
             # amplitude terms are not brain activity: mean raw level is ADC

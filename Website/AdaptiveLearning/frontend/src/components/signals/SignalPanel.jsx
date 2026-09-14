@@ -1,4 +1,6 @@
 import { Activity, Brain, Heart, Radio, Sparkles, Zap } from 'lucide-react'
+import ScaleNote from './ScaleNote'
+import { combineScales } from '../../lib/scoreScale'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   PieChart, Pie, Cell, Legend,
@@ -298,6 +300,10 @@ export function SignalTrend({ trend, title = 'Term Trend' }) {
 
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
+      {/* Each week carries the score-scale range its rollup rows recorded;
+          a term straddling the change is two series, and only words can say
+          where the step is. Renders nothing otherwise. */}
+      <ScaleNote scale={combineScales(weeks)} what="The focus and stress lines below" />
       <div className="mb-4">
         <h3 className="font-black text-gray-900 dark:text-white">{title}</h3>
         <p className="text-xs text-gray-600 dark:text-gray-400">
@@ -426,6 +432,9 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       <div className="mb-4">
         <h3 className="font-black text-gray-900 dark:text-white">{title}</h3>
         <p className="text-xs text-gray-600 dark:text-gray-400">Averages are based on the last {report?.days || 7} days of available samples.</p>
+        {/* A summary collapses both score scales into one number, where
+            unlike a series there is no step to see -- so it has to say so. */}
+        <ScaleNote scale={avg.score_scale} what="The focus and stress averages below" />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">

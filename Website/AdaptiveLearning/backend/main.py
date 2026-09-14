@@ -1486,18 +1486,29 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
 _TREND_MAX_WEEKS = 26
 
 
-# The school day on which the sidecar's population bounds -- the scale every
-# focus and stress value is measured on -- were widened (signal_mapping.
-# SCORE_SCALE_VERSION 2). Per-sample rows carry `raw.score_scale`; the rollup
-# carries no `raw`, so a rollup-backed series is labelled by date, and this is
-# the only way the step reaches the surfaces it shows on.
-_SCORE_SCALE_2_SINCE = date(2026, 9, 14)
+def _scale_range(rollup_rows) -> dict | None:
+    """`{"min", "max"}` of the score scale over cognitive rollup rows, or None
+    when no row recorded one.
 
-
-def _score_scale_for(day_or_iso) -> int:
-    """Which score scale a rollup-backed day or week belongs to."""
-    day = day_or_iso if isinstance(day_or_iso, date) else date.fromisoformat(str(day_or_iso)[:10])
-    return 2 if day >= _SCORE_SCALE_2_SINCE else 1
+    The sidecar's population bounds -- the scale every focus and stress value
+    is measured on -- were widened (signal_mapping.SCORE_SCALE_VERSION 2),
+    which re-anchors every stored value. Per-sample rows carry
+    `raw.score_scale`; `20260917000000` has the rollup record the range seen
+    each day, since it is the copy that outlives the raw rows. The range comes
+    from the rows and never from a date: the rollout is per sidecar process,
+    as each student's machine restarts, so no calendar constant labels it.
+    A range whose ends differ straddles the change, and a series carrying two
+    scales is not one series -- readers say so rather than averaging across.
+    None (no row recorded a scale: rolled up before the column existed) is
+    kept apart from scale 1, which is a recorded fact.
+    """
+    lows = [r.get("score_scale_min") for r in rollup_rows
+            if r.get("channel") == "cognitive" and r.get("score_scale_min") is not None]
+    highs = [r.get("score_scale_max") for r in rollup_rows
+             if r.get("channel") == "cognitive" and r.get("score_scale_max") is not None]
+    if not lows or not highs:
+        return None
+    return {"min": int(min(lows)), "max": int(max(highs))}
 
 
 def _week_start(day: date) -> date:
@@ -1605,6 +1616,8 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
             "days_with_data": set(),
             "heart_sources": set(),
             "emotion_counts": {},
+            # The cognitive rollup rows themselves, for `_scale_range`.
+            "scale_rows": [],
         }
 
     COLUMNS = {
@@ -1635,6 +1648,7 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
         b["days_with_data"].add(day.isoformat())
         if channel == "cognitive":
             b["cognitive_samples"] += n
+            b["scale_rows"].append(r)
         elif channel == "heart":
             b["heart_samples"] += n
             for s in (r.get("heart_sources") or []):
@@ -1662,9 +1676,9 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
         b = buckets[monday]
         out.append({
             "week_start": b["week_start"],
-            # A week straddling the change is labelled by its Monday; the
-            # step inside it is one the label cannot resolve.
-            "score_scale": _score_scale_for(b["week_start"]),
+            # From the rollup rows, never a date -- see `_scale_range`. A
+            # week whose min and max differ straddles the change.
+            "score_scale": _scale_range(b["scale_rows"]),
             **{k: _mean(v) for k, v in b["sums"].items()},
             "cognitive_samples": b["cognitive_samples"],
             "heart_samples": b["heart_samples"],
@@ -2131,6 +2145,11 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             "engagement": _round2(_week("engagement",
                                         [r.get("focus") for r in cog])),
             "face_attention": avg_attention,
+            # Which score scale(s) the focus and stress averages above were
+            # measured on, from the rollup rows of the window. A summary
+            # collapses both scales into one number, where unlike a series
+            # there is no step to see -- so it has to say so.
+            "score_scale": _scale_range(rollup_by.values()) if rollup_ok else None,
         },
         "highlights": {
             "highest_stress": round(highest_stress, 2) if highest_stress is not None else None,
@@ -5128,7 +5147,6 @@ def _merge_cohort_trend(parts: list[list]) -> list:
     return [{
         "day": b["day"],
         "channel": b["channel"],
-        "score_scale": _score_scale_for(b["day"]),
         **{k: _mean(v) for k, v in b["sums"].items()},
         # From focus, not the stored column -- see `_shape_summary`. The
         # roster half of this endpoint was corrected first and this half was
@@ -5139,6 +5157,26 @@ def _merge_cohort_trend(parts: list[list]) -> list:
         "trusted_sample_count": b["trusted_sample_count"],
         "student_count": b["student_count"],
     } for _, b in sorted(merged.items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1])))]
+
+
+def _cohort_scale_range(roster: list[str], days: int) -> dict | None:
+    """The score-scale range across the roster's cognitive rollup rows in the
+    window, or None when nothing recorded one. The cohort RPCs do not carry
+    the columns, so this is one extra read of the rollup -- the same rows
+    they aggregate -- rather than two more migrations."""
+    if not roster:
+        return None
+    try:
+        today = date.fromisoformat(_school_day(_utc_now(), _school_timezone()))
+        since = today - timedelta(days=days - 1)
+        rows = (supabase.table("signal_daily_rollup")
+                .select("channel, score_scale_min, score_scale_max")
+                .in_("user_id", roster).eq("channel", "cognitive")
+                .gte("day", since.isoformat()).execute().data or [])
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[cohort_signals] scale read failed: {e}")
+        return None
+    return _scale_range(rows)
 
 
 def _cohort_signals(class_id: str, days: int) -> dict:
@@ -5227,6 +5265,10 @@ def _cohort_signals(class_id: str, days: int) -> dict:
         "days": days,
         "series": series,
         "retrieved": trend_retrieved,
+        # Which score scale(s) the series' focus and stress sit on, from the
+        # rollup rows -- see `_scale_range`. Mixed means the series straddles
+        # the change and is not one series.
+        "score_scale": _cohort_scale_range(roster, days) if trend_retrieved else None,
         "summaries_retrieved": summaries_retrieved,
         "per_student": per_student,
         "min_students": _COHORT_MIN_STUDENTS,

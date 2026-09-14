@@ -3,6 +3,7 @@ import ChartTooltip from '../charts/ChartTooltip'
 import AccessibleChart from '../charts/AccessibleChart'
 import { asPercent } from '../charts/describeSeries'
 import Panel from './Panel'
+import ScaleNote from '../signals/ScaleNote'
 
 /**
  * The class's signal averages per school day.
@@ -89,6 +90,10 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
         : 'No signals recorded for this class in this range yet.'}
       className="lg:col-span-2"
     >
+      {/* The payload's score-scale range over the window; renders only when
+          the range straddles the change, since then the days on either side
+          are not comparable and the chart cannot show where the step is. */}
+      <ScaleNote scale={data?.score_scale} what="This class's focus and stress averages" />
       <div className="h-64">
         <AccessibleChart
           headline={headline} rows={rows} rowKey="label" rowLabel="Day"

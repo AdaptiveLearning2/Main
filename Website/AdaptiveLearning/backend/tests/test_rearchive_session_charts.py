@@ -180,3 +180,21 @@ def test_a_capped_run_reports_its_cursor_and_the_tool_resumes_from_it(monkeypatc
     import rearchive_session_charts as tool
     src = inspect.getsource(tool.main)
     assert 'query.gt("ended_at", args.after)' in src and "--after" in src
+
+
+def test_the_cursor_does_not_pass_a_session_whose_read_failed(monkeypatch):
+    """Recorded before the read, a session whose read failed was passed
+    over by the resume and dropped from the backfill for good."""
+    def fetch(_c, sid):
+        if sid == "s0":
+            raise RuntimeError("db down")
+        return COG, [], HEART
+
+    monkeypatch.setattr(chart_archive, "_fetch", fetch)
+    _spy_archive(monkeypatch)
+    rows = [{**_session(f"s{i}"), "ended_at": f"2026-09-0{i + 1}T10:00:00+00:00"} for i in range(2)]
+    report = chart_archive.rearchive_sessions(object(), rows, dry_run=False, max_read_failures=5)
+    assert report["last_ended_at"] == "2026-09-02T10:00:00+00:00"
+    only_failed = chart_archive.rearchive_sessions(object(), rows[:1], dry_run=False,
+                                                   max_read_failures=5)
+    assert only_failed["last_ended_at"] is None

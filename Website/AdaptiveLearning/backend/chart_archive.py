@@ -550,15 +550,13 @@ def rearchive_sessions(client, sessions: list[dict], *, dry_run: bool = True,
             report["hit_cap"] = True
             break
         report["considered"] += 1
-        # The cursor: a run that hits the cap resumes with `--after` this,
-        # or every run repeats the same oldest batch and a backfill larger
-        # than the cap never finishes. Nothing on the row marks it done.
-        report["last_ended_at"] = row.get("ended_at")
         session_id, user_id = row.get("id"), row.get("user_id")
         recorded = row.get("chart_paths") or {}
         wanted = {name for name in chart_render.CHART_NAMES if recorded.get(name)}
         if not wanted or not session_id or not user_id:
             report["skipped_unarchived"] += 1
+            # Handled: nothing to read, so the cursor may pass it.
+            report["last_ended_at"] = row.get("ended_at")
             continue
         try:
             cognitive, face, heart = _fetch(client, session_id)
@@ -574,6 +572,12 @@ def rearchive_sessions(client, sessions: list[dict], *, dry_run: bool = True,
                                      "a failed read is indistinguishable from an expired session")
                 break
             continue
+        # The cursor: a run that hits the cap resumes with `--after` this,
+        # or every run repeats the same oldest batch and a backfill larger
+        # than the cap never finishes. Set only once the read succeeded --
+        # recorded before it, a session whose read failed was passed over by
+        # the resume and dropped from the backfill for good.
+        report["last_ended_at"] = row.get("ended_at")
         present = {name for name, rows in CHART_SOURCES.items()
                    if {"cognitive": cognitive, "face": face, "heart": heart}[rows]}
         if not wanted <= present:

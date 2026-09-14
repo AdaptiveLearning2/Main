@@ -527,8 +527,11 @@ class DeviceSession:
                 # A band the bridge reported as NaN, infinite or unparseable
                 # is None here: the state model refuses non-finite floats,
                 # and the processor has already held the tick for it.
+                # No zero default: an absent band is null too, not a
+                # measurement of 0 Bels published on the very tick the
+                # processor refused to score for its absence.
                 out["bands"] = {
-                    name: _finite_or_none(raw_meta.get(name, 0.0))
+                    name: _finite_or_none(raw_meta.get(name))
                     for name in ("delta", "theta", "alpha", "beta", "gamma")
                 }
         return out

@@ -201,3 +201,47 @@ What it does not settle: any spectral marker of effort. `focus` as a beta ratio 
 aloud (speech EMG) and silently (no beta rise), on the SDK bands and on the raw spectrum. The
 only candidate left in this data is alpha suppression, which is small and slow. Still one adult,
 now three runs; nothing here is a validation set for children.
+
+### Caveats on the AUCs, the slope, and the local stressed line
+
+Re-derive everything above with `scripts/analyze_raw_capture.py` on the capture; it prints the
+segment table and both separation tables.
+
+**The epochs are not independent.** Each segment is one continuous block sliced into adjacent
+epochs, so an AUC over them describes this recording and is not an estimate with a confidence
+interval. It rises as the epoch count falls, and the 1.00 at 16 s is computed on seven epochs per
+class, which means only that seven adjacent epochs happened to order. Compare epoch lengths by
+their medians; read the AUC as "how cleanly did this one recording separate".
+
+**The 1/f slope separates the two states more than the alpha residual does**, and is scored
+beside it for that reason:
+
+| epoch | AUC alpha residual | AUC slope |
+| --- | --- | --- |
+| 2 s | 0.78 | 0.87 |
+| 4 s | 0.92 | 0.94 |
+| 8 s | 0.97 | 1.00 |
+
+Calm is built on the residual, not the slope, by decision: the residual has a physiological name
+and a mechanism (an alpha rhythm), while whether the slope's shift is neural or the blink rate is
+not something one capture can say — blinks steepen it to −3.5 in the blinking segment. The slope
+rides on every payload as `spectrum_slope`, unscored, so the comparison can be made on real
+sessions. Arithmetic against eyes open: alpha AUC 0.40–0.44 (suppressed, weakly), slope 0.48–0.55.
+
+**The local stressed line is 0.25**, set from the capture replayed through
+`scripts/replay_raw_capture.py --arm-at eyes_open_rest` (the first-question state). Per-tick calm on
+the local source, and the share of ticks under each candidate line:
+
+| segment | median calm | < 0.377 (the SDK line) | < 0.30 | < 0.25 | < 0.20 |
+| --- | --- | --- | --- | --- | --- |
+| eyes closed | 64 | 7% | 4% | 3% | 0% |
+| eyes open, rest | 39 | 41% | 24% | 8% | 1% |
+| arithmetic, silent | 38 | 48% | 12% | 0% | 0% |
+| eyes open, rest 2 | 53 | 0% | 0% | 0% | 0% |
+| fidget | 31 | 62% | 43% | 0% | 0% |
+
+The SDK line inherited onto the local span (derived as 0.311 Bels below centre on the SDK span, it
+sits 0.148 below centre on a span half the size) called silent arithmetic stressed on nearly half
+its ticks. At 0.25 a resting eyes-open tick crosses it 8% of the time before the four-tick
+persistence rule, arithmetic 0%, and the fidget — an artifact, not stress — 0%. One adult; a line
+for children is a capture away.

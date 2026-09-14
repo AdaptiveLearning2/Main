@@ -842,7 +842,9 @@ def test_the_label_lines_are_the_same_bels_as_before_and_match_the_backend():
     import inspect
     from src.app.services.adaptation import AdaptationEngine
     src = inspect.getsource(AdaptationEngine.infer_state)
-    assert "focus_ratio >= 0.624" in src and "calm_ratio < 0.377" in src
+    from src.app.services.adaptation import STRESSED_CALM_MAX
+    assert "focus_ratio >= 0.624" in src and "calm_ratio < stressed_line" in src
+    assert STRESSED_CALM_MAX["sdk"] == 0.377
     f_span = SignalProcessor.FOCUS_LOG_RATIO_MAX - SignalProcessor.FOCUS_LOG_RATIO_MIN
     c_span = SignalProcessor.CALM_LOG_RATIO_MAX - SignalProcessor.CALM_LOG_RATIO_MIN
     assert (0.624 - 0.5) * f_span == pytest.approx(0.322, abs=0.002)
@@ -974,8 +976,9 @@ def test_ticks_the_spread_gate_had_no_spread_for_are_counted():
 # -- Phase 2: calm from the local spectrum, behind EEG_SPECTRUM_SOURCE ----------
 
 def _spectrum(residual, ready=True):
-    return {"ready": ready, "alpha_residual_temporal": residual, "slope_temporal": -2.0,
-            "channels_used": 2}
+    return {"ready": ready, "reason": None if ready else "filling",
+            "alpha_residual_temporal": residual, "slope_temporal": -2.0,
+            "channels_used": 2 if ready else 0}
 
 
 def test_on_the_sdk_source_the_spectrum_is_carried_and_not_scored():

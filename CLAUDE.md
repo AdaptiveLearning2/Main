@@ -1642,7 +1642,31 @@ the only task effect was alpha suppression, AUC 0.56 at 4 s. The beta ratio has 
 silently, on the SDK bands and on the raw spectrum. The 1/f slope itself separates closed from open
 (−1.24 against −2.75) more than any band does, which is why a raw band ratio mostly measures the
 slope. Blinking produces a spurious 8 Hz "alpha" from the blink harmonic; the delta gate is what
-keeps those epochs out of a baseline. Numbers and method: `EEG_REFERENCE.md`, raw-stream section.
+keeps those epochs out of a baseline. Numbers and method: `EEG_REFERENCE.md`, raw-stream section,
+re-derivable with `scripts/analyze_raw_capture.py`; its AUCs are over adjacent epochs of one block
+each, so they describe that recording and are not estimates, and the 1/f slope separates better
+than the residual (0.94 against 0.92 at 4 s) but is carried unscored as `spectrum_slope`.
+
+**What the local calm may claim, after review.** The estimator is fed only by a headband
+(`device_config.kind == "muse"`) and refuses a buffer whose timestamp span is not a 256 Hz stream's:
+the simulator's one sample per tick filled it with 256 s analysed as four and published a residual
+with nothing behind it. An artifact tick **poisons** the buffer until its samples have left — the
+gate holds one tick, the window kept the blink for four seconds of estimates, and one blink moved
+the residual further than the whole closed-to-open effect. **The stressed line is per calm source**,
+`STRESSED_CALM_MAX` in `adaptation.py` and `EEG_STRESSED_CALM_MAX_BY_SOURCE` in `signal_fusion.py`,
+pinned equal by a test on each side: 0.377 was 0.311 Bels below centre on the SDK span and 0.148 on
+the local one, where silent arithmetic then read stressed; the local line is 0.25, set from the
+capture armed at eyes open (8% of resting eyes-open ticks, 0% arithmetic, 0% fidget). The decider
+reads `raw.calm_source` off the rows and a window holding both sources has no calm opinion. **Calm
+latches on its own coverage** over the ticks that had a value (45 covered seconds at one second a
+tick at most, so at least 45 samples with no separate floor), with its own ramp, and keeps
+collecting after focus has latched: latched with focus, one calm sample was the session's calm
+centre for good. `calm_measured` is false on a placeholder — the opening
+fill, and after every gap, both write the same 50 a genuine residual of zero produces — and the
+engine labels neither stressed nor focused on one; `calm_held_seconds` says how long a local calm
+has been carried, and past `CALM_HOLD_MAX_SECONDS` the mapper nulls `stress`. The row records
+`calm_source`, and **the local source is score scale 3** (`SCORE_SCALE_BY_CALM_SOURCE`), so two
+sidecars on one class cannot write calm on two scales under one version.
 
 `SignalProcessor` and `AdaptationEngine` take an injectable `clock` for the replay; a diagnostic key
 added to `update()`'s dict still has to be declared on `schemas.FeatureData` or the envelope drops it.

@@ -407,8 +407,23 @@ def get_session_signal_state(session_id, user_id=None):
     calm       = (1.0 - fmean(stress_vals)) if stress_vals else None
     confidence = fmean(confidence_vals) if confidence_vals else None
 
+    # Which spectrum the rows' calm came from, since the stressed line
+    # differs by source. Read from `raw` and validated like the confidence
+    # above; rows without the key predate it and are "sdk". A window whose
+    # rows disagree -- two sidecars on one class, one flipped to local --
+    # holds calm values on two scales, so its calm is no opinion.
+    sources = {
+        (r["raw"].get("calm_source") if isinstance(r.get("raw"), dict) else None) or "sdk"
+        for r in eeg_rows if r.get("stress") is not None
+    }
+    sources = {s for s in sources if s in signal_fusion.EEG_STRESSED_CALM_MAX_BY_SOURCE}
+    if len(sources) > 1:
+        calm = None
+    calm_source = next(iter(sources)) if len(sources) == 1 else "sdk"
+
     eeg = signal_fusion.eeg_channel(focus, calm, confidence,
-                                    revoked=not consent["eeg"])
+                                    revoked=not consent["eeg"],
+                                    calm_source=calm_source)
 
     # Scoped to permitted sources in the query, so a declined sensor's rows
     # are never fetched.

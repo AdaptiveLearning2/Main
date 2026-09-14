@@ -277,6 +277,24 @@ class SignalProcessor:
         # Post-latch ramp progress in covered seconds; see _advance_ramp.
         self._ramp_elapsed = 0.0
         self._ramp_last_ts: datetime | None = None
+        # Calm latches on its own coverage -- the ticks that *had* a calm
+        # value -- with its own latch time and ramp. On the SDK source every
+        # admitted tick has one and the two latch together; on the local
+        # source the buffer fills after focus's clock has started, and a
+        # calm latched with focus had one sample as the session's calm
+        # centre for good, since collection stopped with it.
+        self._calm_collecting = True
+        self._calm_ready = False
+        self._calm_coverage = 0.0
+        self._calm_last_ts: datetime | None = None
+        self._calm_latched: datetime | None = None
+        self._calm_ramp_elapsed = 0.0
+        self._calm_ramp_last_ts: datetime | None = None
+        # Whether any calm has been scored since the last gap (a placeholder
+        # at the midpoint is not a measurement), and the sample time of the
+        # last fresh local estimate, for how long a calm has been carried.
+        self._calm_ever = False
+        self._calm_fresh_ts: datetime | None = None
         # Whether ticks are being gathered for a (re)latch, and the centre
         # each score was using when the current baseline latched -- the ramp
         # runs from there, which is the population midpoint for the first
@@ -307,6 +325,9 @@ class SignalProcessor:
         self._baseline_last_ts = None
         self._baseline_coverage = 0.0
         self._baseline_collecting = True
+        self._calm_collecting = True
+        self._calm_coverage = 0.0
+        self._calm_last_ts = None
 
     def clear_session(self) -> None:
         """A session has ended: forget everything about it, the baseline and
@@ -331,6 +352,10 @@ class SignalProcessor:
         self._baseline_latched = None
         self._ramp_elapsed = 0.0
         self._ramp_last_ts = None
+        self._calm_ready = False
+        self._calm_latched = None
+        self._calm_ramp_elapsed = 0.0
+        self._calm_ramp_last_ts = None
         self._centre_from = {"focus": None, "calm": None}
 
     def reset(self) -> None:
@@ -358,6 +383,10 @@ class SignalProcessor:
         # totals and are not zeroed here either; clear_session() is where
         # a session ends.
         self._held_ratios = None
+        # After a gap no calm has been measured yet: on the local source the
+        # buffer refills for 4 s and the placeholder must say it is one.
+        self._calm_ever = False
+        self._calm_fresh_ts = None
         self._ema_focus = None
         self._ema_calm = None
         self._ema_ts = None
@@ -563,40 +592,57 @@ class SignalProcessor:
         as representative. A learner who starts already engaged makes that
         engagement their zero point.
         """
-        if not self._baseline_collecting:
-            return
         if contact is not None and contact < self.CONTACT_DEGRADED:
             return
-        if self._baseline_started is None:
-            self._baseline_started = ts
-            self._baseline_coverage = 0.0
-        else:
-            since_last = (ts - self._baseline_last_ts).total_seconds()
-            if since_last <= 0.0:
-                # A stalled or backwards sample clock: one nominal tick, as
-                # the smoother counts it, or the baseline never latches and
-                # the lists grow for as long as the bridge keeps delivering.
-                since_last = self.NOMINAL_TICK_SECONDS
-            self._baseline_coverage += min(since_last, self.BASELINE_TICK_CAP_SECONDS)
-        self._baseline_last_ts = ts
-        self._baseline_focus.append(focus_raw)
-        if calm_raw is not None:
-            # None on the local calm source while its buffer fills; the
-            # calm mean is over the ticks that had one.
+        if self._baseline_collecting:
+            if self._baseline_started is None:
+                self._baseline_started = ts
+                self._baseline_coverage = 0.0
+            else:
+                self._baseline_coverage += self._covered(ts, self._baseline_last_ts)
+            self._baseline_last_ts = ts
+            self._baseline_focus.append(focus_raw)
+            if self._baseline_coverage >= self.BASELINE_SECONDS:
+                # The ramp starts from wherever the score's centre is right
+                # now, so a restart mid-session is as step-free as the first
+                # latch.
+                self._centre_from["focus"] = self._centre("focus", ts)
+                self._baseline_focus_mean = fmean(self._baseline_focus)
+                self._baseline_ready = True
+                self._baseline_latched = ts
+                self._ramp_elapsed = 0.0
+                self._ramp_last_ts = ts
+                self._baseline_collecting = False
+        # Calm on its own clock, over the ticks that had a calm value: None
+        # on the local source while its buffer fills, or after a gap. It
+        # keeps collecting after focus has latched until it has the same
+        # covered seconds of its own -- which at one second a tick at most
+        # is at least 45 samples, so no separate floor -- because a calm
+        # latched with focus had one sample as the session's calm centre,
+        # and collection stopping with focus made that permanent.
+        if self._calm_collecting and calm_raw is not None:
+            if self._calm_last_ts is not None:
+                self._calm_coverage += self._covered(ts, self._calm_last_ts)
+            self._calm_last_ts = ts
             self._baseline_calm.append(calm_raw)
-        if self._baseline_coverage >= self.BASELINE_SECONDS:
-            # The ramp starts from wherever each score's centre is right now,
-            # so a restart mid-session is as step-free as the first latch.
-            self._centre_from = {which: self._centre(which, ts) for which in ("focus", "calm")}
-            self._baseline_focus_mean = fmean(self._baseline_focus)
-            # None if no tick had a calm value (a local source whose buffer
-            # never filled): calm then keeps centring on the midpoint.
-            self._baseline_calm_mean = fmean(self._baseline_calm) if self._baseline_calm else None
-            self._baseline_ready = True
-            self._baseline_latched = ts
-            self._ramp_elapsed = 0.0
-            self._ramp_last_ts = ts
-            self._baseline_collecting = False
+            if self._calm_coverage >= self.BASELINE_SECONDS:
+                self._centre_from["calm"] = self._centre("calm", ts)
+                self._baseline_calm_mean = fmean(self._baseline_calm)
+                self._calm_ready = True
+                self._calm_latched = ts
+                self._calm_ramp_elapsed = 0.0
+                self._calm_ramp_last_ts = ts
+                self._calm_collecting = False
+
+    def _covered(self, ts: datetime, last: datetime) -> float:
+        """Covered seconds between two admitted ticks, capped per tick. A
+        stalled or backwards sample clock counts as one nominal tick, as the
+        smoother counts it, or the baseline never latches and the lists grow
+        for as long as the bridge keeps delivering."""
+        since_last = (ts - last).total_seconds()
+        if since_last <= 0.0:
+            since_last = self.NOMINAL_TICK_SECONDS
+        return min(since_last, self.BASELINE_TICK_CAP_SECONDS)
 
     def _score_against_baseline(self, raw: float, which: str, ts: datetime | None = None) -> float:
         """Map a log-ratio to 0..1, centred on this session's baseline once
@@ -627,37 +673,41 @@ class SignalProcessor:
         at the latch to the session mean."""
         lo, hi = self._bounds(which)
         midpoint = (lo + hi) / 2.0
-        baseline = self._baseline_focus_mean if which == "focus" else self._baseline_calm_mean
-        if not self._baseline_ready or baseline is None:
+        if which == "focus":
+            baseline, ready, latched, elapsed = (self._baseline_focus_mean, self._baseline_ready,
+                                                self._baseline_latched, self._ramp_elapsed)
+        else:
+            baseline, ready, latched, elapsed = (self._baseline_calm_mean, self._calm_ready,
+                                                self._calm_latched, self._calm_ramp_elapsed)
+        if not ready or baseline is None:
             return midpoint
         start = self._centre_from.get(which)
         if start is None:
             start = midpoint
-        if ts is None or self._baseline_latched is None:
+        if ts is None or latched is None:
             return baseline
         # The ramp's progress is covered time accumulated by _advance_ramp,
         # not the age of the latch: a sample clock that goes backwards --
         # a device that rebases on reconnect -- then neither freezes the
         # ramp at its start (the clamp's reading of a negative age) nor
         # completes it in one tick (the step the ramp exists to prevent).
-        fraction = self._clamp01(self._ramp_elapsed / self.BASELINE_RAMP_SECONDS)
+        fraction = self._clamp01(elapsed / self.BASELINE_RAMP_SECONDS)
         return start + fraction * (baseline - start)
 
     def _advance_ramp(self, ts: datetime) -> None:
         """Move the post-latch ramp on by the covered time since the last
         admitted tick, capped like the baseline's coverage."""
-        if self._baseline_latched is None:
-            return
-        if self._ramp_last_ts is not None:
-            dt = (ts - self._ramp_last_ts).total_seconds()
-            if dt <= 0.0:
-                # A stalled or backwards clock is one nominal tick here as
-                # in the coverage, or a frozen clock latches a baseline the
-                # ramp never applies: latched, a real mean, every score
-                # still on the midpoint.
-                dt = self.NOMINAL_TICK_SECONDS
-            self._ramp_elapsed += min(dt, self.BASELINE_TICK_CAP_SECONDS)
-        self._ramp_last_ts = ts
+        # A stalled or backwards clock is one nominal tick here as in the
+        # coverage (_covered), or a frozen clock latches a baseline the ramp
+        # never applies: latched, a real mean, every score on the midpoint.
+        if self._baseline_latched is not None:
+            if self._ramp_last_ts is not None:
+                self._ramp_elapsed += self._covered(ts, self._ramp_last_ts)
+            self._ramp_last_ts = ts
+        if self._calm_latched is not None:
+            if self._calm_ramp_last_ts is not None:
+                self._calm_ramp_elapsed += self._covered(ts, self._calm_ramp_last_ts)
+            self._calm_ramp_last_ts = ts
 
     def _smooth_ratios(self, focus_raw: float, calm_raw: float, ts: datetime) -> tuple[float, float]:
         """Advance the smoothed log ratios to this admitted tick and return them.
@@ -822,6 +872,8 @@ class SignalProcessor:
             # taken from the SDK ratio, since the two are different numbers
             # on different scales and one baseline cannot hold both.
             band_calm_raw = alpha_residual
+            if spectrum_ready:
+                self._calm_fresh_ts = sample.timestamp
         # Focus needs the SDK ratio; calm may be absent for a tick on the
         # local source (see above) without taking the whole tick down the
         # amplitude fallback.
@@ -947,6 +999,7 @@ class SignalProcessor:
                 focus_ratio = self._score_against_baseline(focus_smooth, "focus", sample.timestamp)
                 if calm_smooth is not None:
                     calm_ratio = self._score_against_baseline(calm_smooth, "calm", sample.timestamp)
+                    self._calm_ever = True
                 else:
                     # Local source and no tick has had a calm value yet (the
                     # smoother carries the last one across a tick without,
@@ -972,6 +1025,19 @@ class SignalProcessor:
             focus_ratio = focus_amp_ratio
             # Neutral rather than 1.0: no spread data is absence of evidence.
             calm_ratio = 0.5 if calm_amp_ratio is None else calm_amp_ratio
+
+        # Whether calm_ratio is a measurement at all. A placeholder at the
+        # midpoint -- the local buffer filling at the start or after a gap,
+        # a malformed tick with nothing held -- is the same 0.5 a genuine
+        # residual of zero produces, and the row has to tell them apart.
+        calm_measured = (self._calm_ever
+                         or (using_band_features and band_calm_raw is not None)
+                         or (not using_band_features and not malformed))
+        # How long a local calm has been carried since the last fresh
+        # estimate; None on the SDK source, where every tick has its own.
+        calm_held_seconds = None
+        if self.calm_source == "local" and self._calm_fresh_ts is not None:
+            calm_held_seconds = round(max(0.0, (sample.timestamp - self._calm_fresh_ts).total_seconds()), 2)
 
         warmup_factor = len(self.window) / self.window.maxlen
         if using_band_features:
@@ -1050,6 +1116,13 @@ class SignalProcessor:
             "calm_source": self.calm_source,
             "calm_alpha_residual": alpha_residual,
             "spectrum_ready": spectrum_ready,
+            "spectrum_reason": (spectrum or {}).get("reason") if not spectrum_ready else None,
+            # Carried for comparison, not scored: whether the slope's
+            # separation is neural or the blink rate is not something one
+            # capture can say.
+            "spectrum_slope": (spectrum or {}).get("slope_temporal") if spectrum_ready else None,
+            "calm_measured": calm_measured,
+            "calm_held_seconds": calm_held_seconds,
             # The smoothed ratios the scores were actually scaled from.
             # None beside a None raw ratio: a tick with no bands has no
             # smoothed value either, and reporting the last one made an

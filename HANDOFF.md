@@ -50,9 +50,9 @@ relative temporal alpha residual when `EEG_SPECTRUM_SOURCE=local`; default `sdk`
    only. Until then the local source stays dark. If the temporal alpha separation holds on a second
    person, flip `EEG_SPECTRUM_SOURCE` to `local` by default — that changes what every stored calm
    value means, so it lands with a `score_scale` bump in `signal_mapping.py`.
-3. Step 1.7 on the local calm: armed at eyes-open the capture reads calm 39 open with the stressed
-   line at 37.7, so ~40% of resting eyes-open ticks read `stressed`. The line needs setting from a
-   capture, not inheriting. `focused` remains unreachable by design until a marker exists.
+3. Step 1.7, half done: the local stressed line is 0.25, set from the capture (EEG_REFERENCE.md,
+   "the local stressed line"), per source in both packages. It is one adult's; re-set it from the
+   second wearer's capture. `focused` remains unreachable by design until a marker exists.
 4. Phase 3: frontend `Confidence` label on the debug readout → *Signal quality*; re-read the fusion
    asymmetry test after 1.7.
 5. `rearchive_session_charts.py --before 2026-09-14 --apply` once the rollup migration shows on

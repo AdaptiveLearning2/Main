@@ -448,8 +448,21 @@ class DeviceSession:
                 # is the one consumer of the raw stream, and it belongs here
                 # rather than on a second socket the bridge does not offer.
                 # The processor still scores one sample per tick.
-                spectrum = self.spectrum.push(samples, raw_meta)
+                # Only a headband delivers the raw stream. The simulator
+                # produces one sample per tick, and fed to a buffer windowed
+                # by count at 256 Hz that was 256 s analysed as four -- a
+                # plausible residual with nothing behind it, scored under
+                # the local source. The estimator also checks the stamps'
+                # span itself; this is the first line.
+                if self.device_config.kind == "muse":
+                    spectrum = self.spectrum.push(samples, raw_meta)
+                else:
+                    spectrum = self.spectrum.latest()
                 features = self.processor.update(sample, raw_meta, spectrum=spectrum)
+                if features.get("artifact_reason"):
+                    # The gate held this tick; the window still holds the
+                    # blink. No estimate until those samples have left it.
+                    self.spectrum.poison()
                 features["batch_size"] = len(samples)
                 state = self.adaptation.infer_state(features)
                 self.latest_payload = {

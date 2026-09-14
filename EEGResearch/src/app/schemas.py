@@ -58,6 +58,15 @@ class FeatureData(BaseModel):
     calm_source: str | None = None
     calm_alpha_residual: float | None = None
     spectrum_ready: bool | None = None
+    # Why the spectrum was not ready (filling, sample_rate, artifact,
+    # no_channel), and its 1/f slope, carried for comparison and not scored.
+    spectrum_reason: str | None = None
+    spectrum_slope: float | None = None
+    # Whether this tick's calm is a measurement at all -- a placeholder at
+    # the midpoint before any estimate is not -- and how long a local calm
+    # has been carried since the last fresh estimate.
+    calm_measured: bool | None = None
+    calm_held_seconds: float | None = None
 
 
 class StateData(BaseModel):

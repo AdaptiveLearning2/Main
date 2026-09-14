@@ -76,6 +76,15 @@ def _raw(payload: dict, **derived: Any) -> dict:
 # Bumped whenever the sidecar's population bounds -- the scale every score is
 # measured on -- change. Written into `raw.score_scale` on each row.
 SCORE_SCALE_VERSION = 2
+# The local calm source (the sidecar's own spectrum) is a different number on
+# a different span, so it is its own scale: two sidecars on one class, one
+# flipped to local, would otherwise write incomparable calm values into one
+# rollup under one version. An unknown source takes the SDK scale.
+SCORE_SCALE_BY_CALM_SOURCE = {"sdk": SCORE_SCALE_VERSION, "local": 3}
+# A local calm carried past this many seconds without a fresh estimate is
+# stale rather than held: the row keeps focus and records why, and `stress`
+# is nulled so the rollup does not average a number nothing measured.
+CALM_HOLD_MAX_SECONDS = 10.0
 
 _MEASUREMENT_COLUMNS = ("focus", "stress", "engagement",
                         "alpha", "beta", "theta", "delta", "gamma")
@@ -167,6 +176,16 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
             # Why this tick was held, when it was: a held score is the
             # previous tick's, and a row must be able to say so.
             artifact_reason=f.get("artifact_reason"),
+            # Which spectrum calm came from, whether it was measured this
+            # session at all (a placeholder at the midpoint is not), and how
+            # long a local calm has been carried without a fresh estimate.
+            # The decider picks the stressed line by source, and two
+            # sidecars on one class writing calm on two scales into one
+            # rollup is the gap the score-scale version exists to close --
+            # so the version is per source too (SCORE_SCALE_BY_CALM_SOURCE).
+            calm_source=f.get("calm_source"),
+            calm_measured=f.get("calm_measured"),
+            calm_held_seconds=f.get("calm_held_seconds"),
             ingestion=eeg.get("ingestion"),
             # The EEG signal-quality number, 0..1. No column carries it --
             # `engagement` did until it became the focus index -- and it is
@@ -181,9 +200,18 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
             # pre-latch, ~38% of gain after -- and no column records that.
             # Rows without the key predate it. The rollup carries no `raw`,
             # so there the boundary is the date in CLAUDE.md.
-            score_scale=SCORE_SCALE_VERSION,
+            score_scale=SCORE_SCALE_BY_CALM_SOURCE.get(f.get("calm_source") or "sdk",
+                                                       SCORE_SCALE_VERSION),
         ),
     }
+    held = f.get("calm_held_seconds")
+    if f.get("calm_measured") is False or (
+            isinstance(held, (int, float)) and held > CALM_HOLD_MAX_SECONDS):
+        # A placeholder calm (never measured this session) or a stale one
+        # (carried too long without a fresh estimate) is not a stress
+        # reading. Focus stays; `raw` says why. Measured: 150 s of unready
+        # ticks all reported one calm, with nothing on the row saying so.
+        row["stress"] = None
     if verdict == "contact_poor":
         # Every consumer of these columns must handle null: the teacher live
         # view renders "-", and LLM_topic_decider filters `is not None` and

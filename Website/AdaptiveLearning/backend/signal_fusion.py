@@ -62,6 +62,13 @@ EEG_MIN_CONFIDENCE = 0.45
 EEG_FOCUSED_FOCUS_MIN = 0.624
 EEG_FOCUSED_CALM_MIN = 0.5
 EEG_STRESSED_CALM_MAX = 0.377
+# The stressed line per calm source. The SDK ratio and the sidecar's local
+# alpha residual are different numbers on different spans, so one line cannot
+# serve both: derived as 0.311 Bels below centre on the SDK span, 0.377 sat
+# 0.148 below centre on the local one and silent arithmetic read stressed.
+# "local" is set from the reference capture (EEG_REFERENCE.md). Must equal
+# the sidecar's adaptation.STRESSED_CALM_MAX; a test on each side pins both.
+EEG_STRESSED_CALM_MAX_BY_SOURCE = {"sdk": EEG_STRESSED_CALM_MAX, "local": 0.25}
 
 # Facial thresholds. Unvalidated on this user group -- see the module
 # docstring. Only ever used to withhold an increase.
@@ -122,21 +129,27 @@ def eeg_channel(
     confidence: float | None,
     *,
     revoked: bool = False,
+    calm_source: str = "sdk",
 ) -> ChannelState:
-    """The EEG channel's label, by the thresholds already in production."""
+    """The EEG channel's label, by the thresholds already in production.
+
+    `calm_source` picks the stressed line (EEG_STRESSED_CALM_MAX_BY_SOURCE);
+    an unknown source takes the SDK line, which is the one every row
+    predating the field was scored on."""
     if revoked:
         return ChannelState(None, "eeg revoked", cause="revoked")
     if focus is None or calm is None or confidence is None:
         return ChannelState(None, "no eeg samples", cause="no_samples")
+    stressed_line = EEG_STRESSED_CALM_MAX_BY_SOURCE.get(calm_source, EEG_STRESSED_CALM_MAX)
     if confidence < EEG_MIN_CONFIDENCE:
         # Poor electrode contact, not a calm student.
         return ChannelState(None, f"eeg confidence {confidence:.2f} below "
                                   f"{EEG_MIN_CONFIDENCE}", cause="low_confidence")
     if focus >= EEG_FOCUSED_FOCUS_MIN and calm >= EEG_FOCUSED_CALM_MIN:
         return ChannelState("focused", "eeg focused and calm")
-    if calm < EEG_STRESSED_CALM_MAX:
+    if calm < stressed_line:
         return ChannelState("stressed", f"eeg calm {calm:.2f} below "
-                                        f"{EEG_STRESSED_CALM_MAX}")
+                                        f"{stressed_line} ({calm_source})")
     return ChannelState("neutral", "eeg neutral")
 
 

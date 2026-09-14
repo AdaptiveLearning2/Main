@@ -124,4 +124,4 @@ def test_the_buffer_is_by_sample_count_and_bounded():
     n = int(EPOCH_SECONDS * SAMPLE_RATE_HZ)
     samples = samples_from({c: pink(3 * n, i) for i, c in enumerate(CHANNELS)})
     est.push(samples, GOOD)
-    assert all(len(est._buf[c]) == n for c in CHANNELS)
+    assert all(len(est._buf[c]) == n for c in est._buf)

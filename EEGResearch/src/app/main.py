@@ -173,8 +173,11 @@ async def push_start(body: PushStartBody, _: str = Depends(require_learner_token
     # question": a new session id arms the baseline the way the poller's
     # /session/arm does under pull. A repeat with the same id is a token
     # refresh and must not restart it mid-lesson.
-    new_session = body.session_id != push_client.session_id
-    await push_client.start(body.session_id, body.access_token)
+    # Whether this is a new session is decided inside start(), under the
+    # lock that owns the session id -- compared here first, two concurrent
+    # starts could both see "new" and one would restart the baseline
+    # mid-lesson.
+    new_session = await push_client.start(body.session_id, body.access_token)
     stream_manager.set_payload_consumer(push_client.submit_payload)
     if new_session:
         # Best effort, after push has started: on a registry with no default

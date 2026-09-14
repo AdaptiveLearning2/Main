@@ -33,9 +33,10 @@ def _module():
 replay = _module()
 
 
-def _synthetic_capture(n: int = 40, tick_s: float = 0.25) -> list[dict]:
+def _synthetic_capture(n: int = 40, tick_s: float = 0.25, aroused_at=None) -> list[dict]:
     """Rows in the capture's shape, scored by the shipped path on a clock that
-    advances with the rows, as the sidecar's would."""
+    advances with the rows, as the sidecar's would. `aroused_at(i)` picks
+    the spectrum per row; the default alternates in 20-row blocks."""
     t0 = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
     clock = [0.0]
     processor = SignalProcessor(window_size=8, clock=lambda: clock[0])
@@ -47,7 +48,7 @@ def _synthetic_capture(n: int = 40, tick_s: float = 0.25) -> list[dict]:
         # A slow swing between a relaxed and an aroused spectrum, in blocks
         # longer than the label cooldown, so the labels move and the cooldown
         # has work to do.
-        aroused = (i // 20) % 2 == 1
+        aroused = aroused_at(i) if aroused_at else (i // 20) % 2 == 1
         bands = {"delta": 0.4, "theta": 0.1,
                  "alpha": -0.5 if aroused else 0.5,
                  "beta": 0.8 if aroused else 0.1,
@@ -116,13 +117,20 @@ def test_main_reads_a_file_and_prints_a_summary(tmp_path, capsys):
 
 
 def test_arm_at_restarts_the_baseline_at_that_segment():
-    rows = _synthetic_capture(n=60)
+    """A settling stretch (relaxed, 5 s) then a lesson (aroused, 95 s).
+    Armed at the lesson's first row the baseline is the lesson's own
+    spectrum and the late scores sit at 50; taken from row 0 it includes
+    the settling stretch and they do not. Long enough for both to latch
+    and ramp (45 s + 10 s from their respective starts)."""
+    rows = _synthetic_capture(n=400, aroused_at=lambda i: i >= 20)
     plain = replay.replay(rows, window_size=8)
     armed = replay.replay(rows, window_size=8, arm_at="arithmetic")
-    # Same rows, same code: only the baseline's start moved, and it is the
-    # segment boundary that separates the two.
+    assert plain[:20] == armed[:20], "nothing before the arm point may differ"
     assert [r["focus_log_ratio"] for r in plain] == [r["focus_log_ratio"] for r in armed]
-    assert plain[:20] == armed[:20]
+    late_plain = [r["focus_score"] for r in plain[300:]]
+    late_armed = [r["focus_score"] for r in armed[300:]]
+    assert late_armed[-1] == pytest.approx(50.0, abs=1.0)
+    assert abs(late_plain[-1] - late_armed[-1]) > 2.0
 
 
 def test_a_real_gap_is_an_ok_row_with_the_no_signal_payload():

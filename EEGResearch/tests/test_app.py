@@ -545,11 +545,16 @@ def test_all_zero_bands_still_ignored_but_negative_bands_are_kept():
     assert focus_lr is not None
 
 
-def test_engaged_student_is_not_scored_as_stressed():
-    """Alpha is suppressed during focused mental effort, so an engaged
-    learner's calm score must still clear the AdaptationEngine "stressed"
-    threshold (calm_ratio < 0.35) -- otherwise concentrating on a problem gets
-    misread as distress and eases difficulty."""
+def test_an_engaged_eyes_open_profile_reads_below_the_stressed_line_on_the_spectrum_alone():
+    """Alpha is suppressed during focused mental effort, so on the spectral
+    ratio alone, against the population bounds, an engaged eyes-open
+    profile scores calm *below* the AdaptationEngine "stressed" line
+    (calm_ratio < 0.35). Until Phase 1 step 1.1 it cleared the line only
+    because a quarter of the score was the raw-channel spread -- the strap,
+    not the spectrum. This pins the true state so that step 1.7, which sets
+    the line and the bounds from the reference capture, changes a test that
+    says why rather than one that hid it. The aroused profile must still
+    read lower: the ordering is the part that has to hold now."""
     processor = SignalProcessor(window_size=4)
     engaged = {"theta": -0.10, "alpha": 0.10, "beta": 0.45, "gamma": 0.05}
     features = None
@@ -562,15 +567,10 @@ def test_engaged_student_is_not_scored_as_stressed():
             ),
             engaged,
         )
-    # Until Phase 1 step 1.1 this cleared 35 only because a quarter of the
-    # score was the raw-channel spread term -- the strap, not the spectrum.
-    # On the spectral ratio alone, against the population bounds, an
-    # engaged eyes-open profile sits below the stressed line; whether the
-    # line or the bounds move is step 1.7, on the reference capture
-    # (tests/fixtures/EEG_REFERENCE.md). What this pins meanwhile is the
-    # ordering: engaged reads calmer than aroused.
-    assert features["calm_score"] > 15.0
-    # ...while a genuinely aroused/stressed profile drops below it.
+    assert features["calm_score"] < 35.0, (
+        "an engaged eyes-open profile now clears the stressed line -- if step "
+        "1.7 moved the line or the bounds, retitle this test to say so")
+    # ...and a genuinely aroused/stressed profile reads lower still.
     stressed_processor = SignalProcessor(window_size=4)
     stressed = {"theta": -0.05, "alpha": -0.20, "beta": 0.60, "gamma": 0.35}
     stressed_features = None
@@ -789,7 +789,12 @@ def test_baseline_ignores_the_frames_the_window_rejects():
     window's worth.
     """
     good = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1], "hsi": [1, 1, 1, 1]}
-    bad = {**_ENGAGED_BANDS, "is_good": [0, 0, 0, 0], "hsi": [4, 4, 4, 4]}
+    # The rejected frames carry a very different spectrum, not just a
+    # different amplitude: with the same band values as the good frames,
+    # admitting them would leave the mean unchanged and this test would
+    # pass with both guards deleted.
+    bad = {"theta": 2.0, "alpha": 2.0, "beta": -2.0, "gamma": -2.0, "delta": 0.4,
+           "is_good": [0, 0, 0, 0], "hsi": [4, 4, 4, 4]}
 
     clean = SignalProcessor(window_size=8)
     n_clean = _until_baseline(clean, lambda i: (740.0, good))

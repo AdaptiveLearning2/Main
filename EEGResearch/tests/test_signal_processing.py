@@ -159,13 +159,17 @@ def test_a_spread_jump_is_relative_to_the_sessions_own_spread():
 
 
 def test_held_ticks_enter_neither_the_baseline_nor_the_window():
-    t = Ticker()
+    # A window wider than the warm-up, so its length can still grow: at
+    # maxlen a deque's length is the same whether or not a tick was added.
+    t = Ticker(window_size=40)
     _warm(t)
     n_base = len(t.processor._baseline_focus)
     n_win = len(t.processor.window)
-    t.tick({**ENGAGED, "delta": 1.5, **CONTACT_GOOD})
+    assert n_win < 40
+    t.tick({**ENGAGED, "delta": 1.5, **CONTACT_GOOD}, level=900.0)
     assert len(t.processor._baseline_focus) == n_base
     assert len(t.processor.window) == n_win
+    assert all(v[0] != 900.0 for v in t.processor.window)
 
 
 def test_no_verdict_before_the_history_exists():
@@ -293,12 +297,23 @@ def test_a_steady_signal_crosses_the_latch_without_a_step():
 def test_the_gain_is_the_same_on_both_sides_of_the_latch():
     """A raw excursion of the same size scores the same distance whether or
     not the baseline has latched -- the old path doubled the gain at latch."""
-    p = SignalProcessor()
-    before = p._score_against_baseline(0.3, "focus") - p._score_against_baseline(0.0, "focus")
-    p._baseline_ready = True
-    p._baseline_focus_mean = -0.5
-    after = p._score_against_baseline(-0.2, "focus") - p._score_against_baseline(-0.5, "focus")
+    # Before: a fresh processor on the population path.
+    fresh = Ticker()
+    ts0 = fresh.sample().timestamp
+    p0 = fresh.processor
+    before = (p0._score_against_baseline(0.3, "focus", ts0)
+              - p0._score_against_baseline(0.0, "focus", ts0))
+    # After: a baseline the collector produced, well past its ramp -- the
+    # timestamp matters, since omitting it skips the ramp entirely.
+    t = Ticker()
+    _run_until_latched(t, {**ENGAGED, **CONTACT_GOOD})
+    p = t.processor
+    mean = p._baseline_focus_mean
+    ts = p._baseline_latched + timedelta(seconds=60)
+    after = (p._score_against_baseline(mean + 0.3, "focus", ts)
+             - p._score_against_baseline(mean, "focus", ts))
     assert before == pytest.approx(after)
+    assert before == pytest.approx(0.3 / (SignalProcessor.FOCUS_LOG_RATIO_MAX - SignalProcessor.FOCUS_LOG_RATIO_MIN))
 
 
 # -- 1.7b a label needs persistence before the cooldown protects it ------------
@@ -335,13 +350,16 @@ def test_a_single_tick_excursion_never_changes_the_label():
 
 def test_four_consecutive_ticks_commit_the_label_and_the_cooldown_then_holds_it():
     eng, clock = _engine()
+    # Pinned, not read: driven from the attribute this went vacuous at the
+    # pre-change value of 1.
+    assert eng.persist_ticks == 4
     clock[0] = 10.0
     eng.infer_state(_feat("neutral"))
     labels = []
-    for _ in range(eng.persist_ticks):
+    for _ in range(4):
         labels.append(eng.infer_state(_feat("focused")).label)
         clock[0] += 0.25
-    assert labels[:-1] == ["neutral"] * (eng.persist_ticks - 1) and labels[-1] == "focused"
+    assert labels == ["neutral", "neutral", "neutral", "focused"]
     # Now a run of neutral ticks inside the cooldown: persistence is met
     # after four, but the cooldown still holds focused until it lapses.
     held = [eng.infer_state(_feat("neutral")) for _ in range(eng.persist_ticks + 2)]
@@ -351,11 +369,34 @@ def test_four_consecutive_ticks_commit_the_label_and_the_cooldown_then_holds_it(
     assert eng.infer_state(_feat("neutral")).label == "neutral"
 
 
-def test_the_first_reading_after_signal_loss_applies_at_once():
+def test_after_signal_loss_a_label_still_needs_persistence_but_not_the_cooldown():
+    """The stream manager resets on every no-sample tick, so flapping
+    contact would otherwise commit whatever single tick follows each gap."""
     eng, clock = _engine()
+    eng.cooldown_seconds = 1000.0
     eng.infer_state(_feat("neutral"))
     eng.reset_for_signal_loss()
+    first_three = [eng.infer_state(_feat("stressed")) for _ in range(3)]
+    assert [s.label for s in first_three] == ["no_signal"] * 3
+    assert all("persistence" in s.reason for s in first_three)
+    # The fourth commits, with no cooldown standing in the way.
     assert eng.infer_state(_feat("stressed")).label == "stressed"
+
+
+def test_losing_signal_quality_applies_at_once_and_regaining_it_needs_persistence():
+    """insufficient_signal is a statement about the signal, not the
+    student. Made to compete for persistence, a confidence oscillating
+    across the gate froze the last content label for the session."""
+    eng, clock = _engine()
+    eng.infer_state(_feat("neutral"))
+    weak = {**_feat("neutral"), "confidence": 30.0}
+    assert eng.infer_state(weak).label == "insufficient_signal"
+    for _ in range(10):
+        assert eng.infer_state(_feat("neutral")).label == "insufficient_signal"
+        assert eng.infer_state(weak).label == "insufficient_signal"
+    for _ in range(3):
+        assert eng.infer_state(_feat("neutral")).label == "insufficient_signal"
+    assert eng.infer_state(_feat("neutral")).label == "neutral"
 
 
 def test_a_change_of_mind_mid_run_restarts_the_count():

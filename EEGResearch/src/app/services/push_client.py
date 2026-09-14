@@ -124,7 +124,7 @@ class PushClient:
         (leave it alone)."""
         return self._session_id
 
-    async def start(self, session_id: str, token: str) -> None:
+    async def start(self, session_id: str, token: str) -> bool:
         """Begin pushing for one session, with that student's bearer token.
 
         Called again with the same session id, this only replaces the token --
@@ -134,9 +134,14 @@ class PushClient:
         Called with a different session id, the old queue is discarded without
         being sent -- those samples belong to a session the new token may not
         own, so posting them would misfile readings under the wrong session.
+
+        Returns whether this was a new session, decided under the lifecycle
+        lock that owns the session id: a caller comparing ids before calling
+        can race a concurrent start and restart the baseline mid-lesson.
         """
         async with self._lifecycle:
-            if session_id != self._session_id:
+            new_session = session_id != self._session_id
+            if new_session:
                 await self._stop_locked(flush=False)
             self._session_id = session_id
             self._token = token
@@ -146,6 +151,7 @@ class PushClient:
             self._last_error = None
             if not self.running:
                 self._task = asyncio.create_task(self._loop())
+            return new_session
 
     async def stop(self, *, flush: bool = True) -> None:
         """Stop pushing and forget the token.

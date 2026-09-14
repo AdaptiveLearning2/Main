@@ -96,6 +96,11 @@ class PushClient:
         # Rows the backend already had. Recorded, but not by this attempt, so
         # neither `_sent` nor `_dropped` is true of them.
         self._duplicates: dict[str, int] = {channel: 0 for channel in _CHANNELS}
+        # Samples the backend refused one by one as unreadable. Neither
+        # recorded nor dropped locally, so they get their own bucket: the
+        # endpoint stopped 422-ing a whole batch over one such sample, and a
+        # count with no reader turned that loud failure into a silent one.
+        self._malformed: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         self._task: asyncio.Task | None = None
         # Serialises start/stop: both await, so two starts for the same new
         # session could interleave and leave a running loop with no token.
@@ -117,7 +122,14 @@ class PushClient:
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    async def start(self, session_id: str, token: str) -> None:
+    @property
+    def session_id(self) -> str | None:
+        """The session being pushed for, or None. Read by the push/start
+        route to tell a new session (arm the baseline) from a token refresh
+        (leave it alone)."""
+        return self._session_id
+
+    async def start(self, session_id: str, token: str) -> bool:
         """Begin pushing for one session, with that student's bearer token.
 
         Called again with the same session id, this only replaces the token --
@@ -127,9 +139,14 @@ class PushClient:
         Called with a different session id, the old queue is discarded without
         being sent -- those samples belong to a session the new token may not
         own, so posting them would misfile readings under the wrong session.
+
+        Returns whether this was a new session, decided under the lifecycle
+        lock that owns the session id: a caller comparing ids before calling
+        can race a concurrent start and restart the baseline mid-lesson.
         """
         async with self._lifecycle:
-            if session_id != self._session_id:
+            new_session = session_id != self._session_id
+            if new_session:
                 await self._stop_locked(flush=False)
             self._session_id = session_id
             self._token = token
@@ -139,6 +156,7 @@ class PushClient:
             self._last_error = None
             if not self.running:
                 self._task = asyncio.create_task(self._loop())
+            return new_session
 
     async def stop(self, *, flush: bool = True) -> None:
         """Stop pushing and forget the token.
@@ -214,6 +232,7 @@ class PushClient:
         self._dropped = {channel: 0 for channel in _CHANNELS}
         self._unaccounted = {channel: 0 for channel in _CHANNELS}
         self._duplicates = {channel: 0 for channel in _CHANNELS}
+        self._malformed = {channel: 0 for channel in _CHANNELS}
 
     # ── producing ────────────────────────────────────────────────────────────
 
@@ -502,6 +521,9 @@ class PushClient:
             # refused. Defaults to 0, so an older backend that does not report
             # it reads as "none" rather than breaking the receipt.
             duplicates = int(body.get("duplicates", 0))
+            # Refused one by one as unreadable (NaN, a non-dict entry).
+            # Defaults to 0 for a backend predating the count.
+            malformed = int(body.get("malformed", 0))
             reason = body.get("reason", "unspecified")
         except Exception as exc:  # noqa: BLE001 - see above
             # Counted as delivered-but-unknown, not not-delivered: the write
@@ -520,6 +542,10 @@ class PushClient:
         # which is the arithmetic the dedupe keys exist to stop, reappearing in
         # the client's own tally.
         self._duplicates[channel] += duplicates
+        self._malformed[channel] += malformed
+        if malformed:
+            logger.warning("push: backend could not read %d %s sample(s); "
+                           "they are lost, not retried", malformed, channel)
         if dropped:
             logger.info("push: backend dropped %d %s sample(s): %s",
                         dropped, channel, reason)
@@ -552,6 +578,9 @@ class PushClient:
             # nothing -- the two are both "0 new rows" and mean opposite
             # things about whether the channel is working.
             "duplicates": dict(self._duplicates),
+            # Refused by the backend as unreadable, sample by sample. Lost,
+            # and neither `recorded` nor `dropped_locally` says so.
+            "malformed": dict(self._malformed),
             "backoff_seconds": self._backoff,
             "last_error": self._last_error,
         }

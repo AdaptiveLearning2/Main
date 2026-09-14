@@ -82,7 +82,8 @@ FREE = "free"
 # first: they are what Phase 0 exists to look at.
 SUMMARY_FIELDS = (
     "focus_log_ratio", "calm_log_ratio",
-    "focus_score", "calm_score", "confidence",
+    "focus_log_ratio_smoothed", "calm_log_ratio_smoothed",
+    "focus_score", "calm_score", "confidence", "contact_ratio",
     "alpha", "beta", "theta", "gamma", "delta",
 )
 
@@ -160,6 +161,18 @@ def flatten_state(envelope: dict[str, Any], *, segment: str, t: str) -> dict[str
         "quality_basis": features.get("quality_basis"),
         "samples_rejected": features.get("samples_rejected"),
         "batch_size": features.get("batch_size"),
+        # Phase 1 diagnostics: the smoothed contact behind the quality
+        # verdict, the artifact gate's count and reason, and the smoothed
+        # ratios the scores were scaled from. tests/test_capture_eeg_reference
+        # derives the full list from schemas.FeatureData so a field added
+        # there cannot be missing here.
+        "contact_ratio": features.get("contact_ratio"),
+        "samples_artifact": features.get("samples_artifact"),
+        "samples_no_delta": features.get("samples_no_delta"),
+        "samples_no_spread": features.get("samples_no_spread"),
+        "artifact_reason": features.get("artifact_reason"),
+        "focus_log_ratio_smoothed": features.get("focus_log_ratio_smoothed"),
+        "calm_log_ratio_smoothed": features.get("calm_log_ratio_smoothed"),
         "label": state.get("label"),
         "reason": state.get("reason"),
     }
@@ -385,8 +398,11 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         out["segments"][seg] = {
             "rows": s["rows"], "labels": s["labels"], "quality": s["quality"], "fields": fields,
         }
-    # What the baseline latched on: BASELINE_SAMPLES (60) usable ticks, so
-    # the first 60 rows with a ratio say what the wearer was doing then.
+    # What the baseline latched on. Under the pre-Phase-1 processor that was
+    # the first 60 usable ticks, so the first 60 rows with a ratio say what
+    # the wearer was doing then; it is now 45 s of at-least-degraded
+    # contact, which the replay harness reports directly. Kept as the
+    # capture's own approximation.
     usable = [r for r in rows if isinstance(r.get("focus_log_ratio"), (int, float))]
     first = usable[:60]
     latch: dict[str, int] = {}

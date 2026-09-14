@@ -21,6 +21,12 @@ def _clean_state(monkeypatch):
     monkeypatch.setattr(eeg_client, "start_session", lambda device_id=eeg_client.DEFAULT_DEVICE_ID: {"ok": True})
     monkeypatch.setattr(eeg_client, "stop_session", lambda device_id=eeg_client.DEFAULT_DEVICE_ID: {"ok": True})
     monkeypatch.setattr(eeg_client, "get_state", lambda device_id=eeg_client.DEFAULT_DEVICE_ID, timeout=2.0: None)
+    # Records every arm so a test can assert when the sidecar was told
+    # recording started; a real call here would hit the network.
+    eeg_client_arms = []
+    monkeypatch.setattr(eeg_client, "arm_session",
+                        lambda device_id=eeg_client.DEFAULT_DEVICE_ID: eeg_client_arms.append(device_id) or {"status": "armed"})
+    monkeypatch.setattr(eeg_client, "_test_arms", eeg_client_arms, raising=False)
     monkeypatch.setattr(eeg_poller, "POLL_INTERVAL", 0.01)
     eeg_poller._active.clear()
     eeg_poller._reservations.clear()
@@ -380,3 +386,57 @@ def test_is_alive_after_poller_finishes_does_not_raise():
     while p.is_alive() and time.monotonic() < deadline:
         p.join(timeout=0.05)
     assert p.is_alive() is False, "poller thread did not exit after stop()"
+
+
+# ── arming the sidecar's baseline ───────────────────────────────────────────
+
+def test_arming_recording_tells_the_sidecar_to_take_its_baseline_from_now(monkeypatch):
+    """The stream is up from Connect and its opening stretch is the strap
+    being adjusted; the baseline the rows are scored against must start on
+    the first question, which is when `record` flips to true."""
+    db = _FakeSupabase()
+    eeg_poller.start(db, "user-a", "session-1", "station-a", record=False)
+    assert eeg_client._test_arms == [], "Connect alone must not arm the baseline"
+    eeg_poller.start(db, "user-a", "session-1", "station-a", record=True)
+    assert eeg_client._test_arms == ["station-a"]
+    # A repeat with record already true is not a new question.
+    eeg_poller.start(db, "user-a", "session-1", "station-a", record=True)
+    assert eeg_client._test_arms == ["station-a"]
+
+
+def test_a_poller_started_recording_arms_on_start(monkeypatch):
+    db = _FakeSupabase()
+    eeg_poller.start(db, "user-a", "session-1", "station-a")
+    assert eeg_client._test_arms == ["station-a"]
+
+
+def test_a_sidecar_that_cannot_be_armed_does_not_stop_recording(monkeypatch, capsys):
+    """Best effort: an older sidecar without the route must not cost the
+    session its rows. It is logged, because a session scored against its
+    pairing period is otherwise invisible."""
+    def refuse(device_id=eeg_client.DEFAULT_DEVICE_ID):
+        raise RuntimeError("404 Not Found")
+    monkeypatch.setattr(eeg_client, "arm_session", refuse)
+    db = _FakeSupabase()
+    out = eeg_poller.start(db, "user-a", "session-1", "station-a", record=True)
+    assert out["running"] is True and out["recording"] is True
+    assert "could not arm the sidecar baseline" in capsys.readouterr().out
+
+
+def test_the_sidecar_arm_runs_outside_the_poller_lock(monkeypatch):
+    """The arm is a blocking POST. Every other taker of _lock does dictionary
+    work, and stop_all takes it from shutdown; a socket wait under it
+    stalls them all."""
+    held_during_arm = []
+
+    def arm(device_id=eeg_client.DEFAULT_DEVICE_ID):
+        got = eeg_poller._lock.acquire(blocking=False)
+        held_during_arm.append(not got)
+        if got:
+            eeg_poller._lock.release()
+        return {"status": "armed"}
+    monkeypatch.setattr(eeg_client, "arm_session", arm)
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a", record=False)
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a", record=True)
+    eeg_poller.start(_FakeSupabase(), "user-b", "session-2", "station-b")
+    assert held_during_arm == [False, False]

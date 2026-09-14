@@ -101,6 +101,25 @@ async def start_session(
     return JSONResponse({"status": "running"})
 
 
+@app.post("/api/v1/session/arm")
+async def arm_session(
+    device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_local_controller)
+) -> JSONResponse:
+    """Recording starts now: take the per-session baseline from here.
+
+    The stream is up from Connect and its opening stretch is the strap being
+    adjusted; the backend poller calls this when `record` flips to true on
+    the first question, so the baseline the signal tables are scored against
+    is gathered after that and not during pairing. Idempotent, and safe on a
+    device that is not streaming: it only clears what would be gathered.
+    """
+    try:
+        stream_manager.arm_baseline(device_id)
+    except UnknownDeviceError:
+        raise _unknown_device(device_id)
+    return JSONResponse({"status": "armed"})
+
+
 @app.post("/api/v1/session/stop")
 async def stop_session(
     device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_local_controller)
@@ -150,8 +169,26 @@ async def push_start(body: PushStartBody, _: str = Depends(require_learner_token
                     "polls it instead, and pushing as well would write every sample "
                     "twice. Nothing is wrong with the sensors."),
         )
-    await push_client.start(body.session_id, body.access_token)
+    # Under push the browser is the controller and this call is its "first
+    # question": a new session id arms the baseline the way the poller's
+    # /session/arm does under pull. A repeat with the same id is a token
+    # refresh and must not restart it mid-lesson.
+    # Whether this is a new session is decided inside start(), under the
+    # lock that owns the session id -- compared here first, two concurrent
+    # starts could both see "new" and one would restart the baseline
+    # mid-lesson.
+    new_session = await push_client.start(body.session_id, body.access_token)
     stream_manager.set_payload_consumer(push_client.submit_payload)
+    if new_session:
+        # Best effort, after push has started: on a registry with no default
+        # device this must not turn a working push into a 500 the browser
+        # reads as failure. The poller's arm is best effort for the same
+        # reason.
+        try:
+            stream_manager.arm_baseline()
+        except UnknownDeviceError:
+            logger.warning("push/start: no default device to arm the baseline on; "
+                           "scores stay relative to stream start")
     return JSONResponse({"status": "pushing", "session_id": body.session_id})
 
 
@@ -161,8 +198,22 @@ async def push_stop(_: str = Depends(require_learner_token)) -> JSONResponse:
     if push_client is None:
         return JSONResponse({"status": "not_configured"})
     stream_manager.set_payload_consumer(None)
+    # Only a session that was pushing has ended. The page fires this from
+    # pagehide and the route takes just the learner token, so unconditional
+    # it wiped a live armed session's baseline under pull (focus stepped
+    # 44.9 -> 61.5 on unchanged input) and nothing re-arms.
+    was_pushing = push_client.session_id is not None
     await push_client.stop()
-    return JSONResponse({"status": "stopped"})
+    if was_pushing:
+        # The stream stays up (the headband stays paired), so this is the
+        # only session end push has. Without it the next student inherited
+        # the baseline, the histories and the counters. Best effort, like
+        # the arm.
+        try:
+            stream_manager.end_session()
+        except UnknownDeviceError:
+            logger.warning("push/stop: no default device to end the session on")
+    return JSONResponse({"status": "stopped", "ended_session": was_pushing})
 
 
 @app.get("/api/v1/push/status")

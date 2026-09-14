@@ -4,7 +4,7 @@ import pytest
 from statistics import fmean
 from fastapi.testclient import TestClient
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from src.app.config import DeviceConfig, get_settings, parse_eeg_devices
 from src.app.main import app, stream_manager
@@ -143,6 +143,10 @@ def test_session_lifecycle_and_state():
 
 def test_adaptation_cooldown_holds_previous_state():
     engine = AdaptationEngine()
+    # A label needs persist_ticks consecutive readings before the cooldown
+    # or the scale is what's under test; that rule has its own tests in
+    # test_signal_processing.py, so it is switched off here.
+    engine.persist_ticks = 1
     engine.cooldown_seconds = 1000.0
     first = engine.infer_state({"focus_score": 0.9, "calm_score": 0.8, "confidence": 0.9})
     second = engine.infer_state({"focus_score": 0.1, "calm_score": 0.2, "confidence": 0.9})
@@ -153,6 +157,10 @@ def test_adaptation_cooldown_holds_previous_state():
 
 def test_adaptation_accepts_percentage_confidence_scale():
     engine = AdaptationEngine()
+    # A label needs persist_ticks consecutive readings before the cooldown
+    # or the scale is what's under test; that rule has its own tests in
+    # test_signal_processing.py, so it is switched off here.
+    engine.persist_ticks = 1
     engine.cooldown_seconds = 0.0
     low = engine.infer_state({"focus_score": 0.6, "calm_score": 0.6, "confidence": 30.0})
     assert low.label == "insufficient_signal"
@@ -162,6 +170,10 @@ def test_adaptation_accepts_percentage_confidence_scale():
 
 def test_adaptation_accepts_percentage_focus_and_calm_scales():
     engine = AdaptationEngine()
+    # A label needs persist_ticks consecutive readings before the cooldown
+    # or the scale is what's under test; that rule has its own tests in
+    # test_signal_processing.py, so it is switched off here.
+    engine.persist_ticks = 1
     engine.cooldown_seconds = 0.0
     focused = engine.infer_state({"focus_score": 80.0, "calm_score": 70.0, "confidence": 90.0})
     assert focused.label == "focused"
@@ -394,21 +406,31 @@ def test_signal_processor_muse_range_produces_non_saturated_features():
 
 
 def test_signal_processor_uses_band_features_when_available():
+    # The ratios are smoothed over ~4 s before scaling (Phase 1 step 1.5),
+    # so each profile is held for long enough to settle, on advancing
+    # timestamps.
     processor = SignalProcessor(window_size=4)
-    now = datetime.now(timezone.utc)
-    sample = EegSample(
-        timestamp=now,
-        channel_tp9=700.0,
-        channel_af7=705.0,
-        channel_af8=695.0,
-        channel_tp10=702.0,
-    )
-    low_focus = processor.update(sample, {"alpha": 1.5, "beta": 0.2, "theta": 1.0, "gamma": 0.3})
-    high_focus = processor.update(sample, {"alpha": 0.5, "beta": 1.6, "theta": 0.4, "gamma": 0.2})
+    t0 = datetime.now(timezone.utc)
+    tick = [0]
+
+    def hold(bands):
+        features = None
+        for _ in range(60):
+            sample = EegSample(
+                timestamp=t0 + timedelta(seconds=0.25 * tick[0]),
+                channel_tp9=700.0, channel_af7=705.0,
+                channel_af8=695.0, channel_tp10=702.0,
+            )
+            tick[0] += 1
+            features = processor.update(sample, bands)
+        return features
+
+    low_focus = hold({"alpha": 1.5, "beta": 0.2, "theta": 1.0, "gamma": 0.3})
+    high_focus = hold({"alpha": 0.5, "beta": 1.6, "theta": 0.4, "gamma": 0.2})
     assert high_focus["focus_score"] > low_focus["focus_score"]
 
-    low_calm = processor.update(sample, {"alpha": 0.2, "beta": 1.2, "theta": 0.3, "gamma": 0.9})
-    high_calm = processor.update(sample, {"alpha": 1.6, "beta": 0.3, "theta": 0.5, "gamma": 0.2})
+    low_calm = hold({"alpha": 0.2, "beta": 1.2, "theta": 0.3, "gamma": 0.9})
+    high_calm = hold({"alpha": 1.6, "beta": 0.3, "theta": 0.5, "gamma": 0.2})
     assert high_calm["calm_score"] > low_calm["calm_score"]
 
 
@@ -523,11 +545,16 @@ def test_all_zero_bands_still_ignored_but_negative_bands_are_kept():
     assert focus_lr is not None
 
 
-def test_engaged_student_is_not_scored_as_stressed():
-    """Alpha is suppressed during focused mental effort, so an engaged
-    learner's calm score must still clear the AdaptationEngine "stressed"
-    threshold (calm_ratio < 0.35) -- otherwise concentrating on a problem gets
-    misread as distress and eases difficulty."""
+def test_an_engaged_eyes_open_profile_reads_below_the_stressed_line_on_the_spectrum_alone():
+    """Alpha is suppressed during focused mental effort, so on the spectral
+    ratio alone, against the population bounds, an engaged eyes-open
+    profile scores calm *below* the AdaptationEngine "stressed" line
+    (calm_ratio < 0.35). Until Phase 1 step 1.1 it cleared the line only
+    because a quarter of the score was the raw-channel spread -- the strap,
+    not the spectrum. This pins the true state so that step 1.7, which sets
+    the line and the bounds from the reference capture, changes a test that
+    says why rather than one that hid it. The aroused profile must still
+    read lower: the ordering is the part that has to hold now."""
     processor = SignalProcessor(window_size=4)
     engaged = {"theta": -0.10, "alpha": 0.10, "beta": 0.45, "gamma": 0.05}
     features = None
@@ -540,8 +567,10 @@ def test_engaged_student_is_not_scored_as_stressed():
             ),
             engaged,
         )
-    assert features["calm_score"] > 35.0
-    # ...while a genuinely aroused/stressed profile still drops below it.
+    assert features["calm_score"] < 35.0, (
+        "an engaged eyes-open profile now clears the stressed line -- if step "
+        "1.7 moved the line or the bounds, retitle this test to say so")
+    # ...and a genuinely aroused/stressed profile reads lower still.
     stressed_processor = SignalProcessor(window_size=4)
     stressed = {"theta": -0.05, "alpha": -0.20, "beta": 0.60, "gamma": 0.35}
     stressed_features = None
@@ -695,12 +724,28 @@ def test_a_single_hsi_blip_does_not_drop_quality_to_poor():
     assert blip["signal_quality"] == "good"
 
 
-def _sample(level=740.0):
+def _sample(level=740.0, at=None):
     return EegSample(
-        timestamp=datetime.now(timezone.utc),
+        timestamp=at or datetime.now(timezone.utc),
         channel_tp9=level, channel_af7=level + 20,
         channel_af8=level + 15, channel_tp10=level + 5,
     )
+
+
+_T0 = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
+
+
+def _until_baseline(processor, bands_for_tick, *, hz=4.0, limit=400):
+    """Feed ticks on advancing timestamps until the baseline latches. The
+    baseline is time-based (BASELINE_SECONDS on the sample clock), so a loop
+    on datetime.now() would never get there."""
+    for i in range(limit):
+        if processor._baseline_ready:
+            return i
+        at = _T0 + timedelta(seconds=i / hz)
+        level, bands = bands_for_tick(i)
+        processor.update(_sample(level, at=at), bands)
+    raise AssertionError("baseline never latched")
 
 
 def test_unusable_samples_are_kept_out_of_the_rolling_window():
@@ -739,33 +784,35 @@ def test_samples_without_contact_data_are_never_discarded():
 
 def test_baseline_ignores_the_frames_the_window_rejects():
     """The baseline must reject the same frames the window rejects. It
-    latches after BASELINE_SAMPLES and is never revisited, so an artifact
-    during warm-up would shift every score for the rest of the session, not
-    just one window's worth.
+    latches once and is never revisited, so an artifact during warm-up
+    would shift every score for the rest of the session, not just one
+    window's worth.
     """
     good = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1], "hsi": [1, 1, 1, 1]}
-    bad = {**_ENGAGED_BANDS, "is_good": [0, 0, 0, 0], "hsi": [4, 4, 4, 4]}
+    # The rejected frames carry a very different spectrum, not just a
+    # different amplitude: with the same band values as the good frames,
+    # admitting them would leave the mean unchanged and this test would
+    # pass with both guards deleted.
+    bad = {"theta": 2.0, "alpha": 2.0, "beta": -2.0, "gamma": -2.0, "delta": 0.4,
+           "is_good": [0, 0, 0, 0], "hsi": [4, 4, 4, 4]}
 
     clean = SignalProcessor(window_size=8)
-    while not clean._baseline_ready:
-        clean.update(_sample(), good)
+    n_clean = _until_baseline(clean, lambda i: (740.0, good))
 
     polluted = SignalProcessor(window_size=8)
-    i = 0
-    while not polluted._baseline_ready:
-        # Every third frame is a fully invalid artifact at a wildly different
-        # amplitude -- the same kind the window already refuses.
-        polluted.update(_sample(5000.0) if i % 3 == 2 else _sample(),
-                        bad if i % 3 == 2 else good)
-        i += 1
+    # Every third frame is a fully invalid artifact at a wildly different
+    # amplitude -- the same kind the window already refuses.
+    n_polluted = _until_baseline(
+        polluted, lambda i: (5000.0, bad) if i % 3 == 2 else (740.0, good))
 
     assert polluted._samples_rejected > 0, "test must actually exercise rejection"
     assert polluted._baseline_focus_mean == pytest.approx(clean._baseline_focus_mean, abs=1e-9)
     assert polluted._baseline_calm_mean == pytest.approx(clean._baseline_calm_mean, abs=1e-9)
 
     # The observable consequence: an identical good frame must score the same.
-    c = clean.update(_sample(), good)
-    p = polluted.update(_sample(), good)
+    at = _T0 + timedelta(seconds=max(n_clean, n_polluted) / 4.0)
+    c = clean.update(_sample(at=at), good)
+    p = polluted.update(_sample(at=at), good)
     assert p["focus_score"] == pytest.approx(c["focus_score"], abs=0.01)
     assert p["calm_score"] == pytest.approx(c["calm_score"], abs=0.01)
 
@@ -774,8 +821,9 @@ def test_amplitude_path_excludes_electrodes_the_headband_flagged():
     """_sample_is_usable only rejects a frame when *every* electrode is bad,
     so ear contacts failing while the frontals read cleanly still reach the
     amplitude math. mean_spread is max-min across channels, so one railing
-    electrode would dominate it -- the amplitude term is 25% of the blended
-    scores and 32% of the confidence weight."""
+    electrode would dominate it. Since step 1.1 the amplitude terms only
+    score the no-bands fallback, so this runs without band powers -- with
+    them present the ears cannot reach the scores at all."""
     def ears(tp9, tp10):
         # Identical clean frontals; only the flagged ear electrodes differ.
         return EegSample(
@@ -783,8 +831,8 @@ def test_amplitude_path_excludes_electrodes_the_headband_flagged():
             channel_tp9=tp9, channel_af7=720.0, channel_af8=715.0, channel_tp10=tp10,
         )
 
-    flagged_meta = {**_ENGAGED_BANDS, "is_good": [0, 1, 1, 0], "hsi": [4, 1, 1, 4]}
-    unflagged_meta = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1], "hsi": [1, 1, 1, 1]}
+    flagged_meta = {"is_good": [0, 1, 1, 0], "hsi": [4, 1, 1, 4]}
+    unflagged_meta = {"is_good": [1, 1, 1, 1], "hsi": [1, 1, 1, 1]}
 
     def run(sample, meta):
         processor = SignalProcessor(window_size=8)
@@ -893,14 +941,15 @@ def test_scores_center_on_baseline_once_it_is_established():
     to place that individual."""
     processor = SignalProcessor(window_size=8)
     steady = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]}
-    features = None
-    for _ in range(SignalProcessor.BASELINE_SAMPLES + 5):
-        features = processor.update(_sample(), steady)
+    n = _until_baseline(processor, lambda i: (740.0, steady))
     assert processor._baseline_ready is True
-    # Band term is centered at 0.5; blended with the amplitude term, the
-    # final score stays near mid-scale rather than pinned to an extreme.
-    assert 25.0 < features["focus_score"] < 75.0
-    assert 25.0 < features["calm_score"] < 75.0
+    # Past the ramp after the latch, a steady signal at its own level reads
+    # mid-scale rather than wherever the population bounds put it.
+    features = None
+    for i in range(n, n + 4 * int(SignalProcessor.BASELINE_RAMP_SECONDS) + 8):
+        features = processor.update(_sample(at=_T0 + timedelta(seconds=i / 4.0)), steady)
+    assert features["focus_score"] == pytest.approx(50.0, abs=1.0)
+    assert features["calm_score"] == pytest.approx(50.0, abs=1.0)
 
 
 def test_baseline_falls_back_to_population_bounds_before_it_is_ready():
@@ -911,15 +960,22 @@ def test_baseline_falls_back_to_population_bounds_before_it_is_ready():
     assert 0.0 <= features["focus_score"] <= 100.0
 
 
-def test_reset_clears_the_session_baseline():
+def test_reset_keeps_the_session_baseline_and_only_arming_replaces_it():
+    """The stream manager calls reset() on every tick with no sample, which
+    flapping contact does repeatedly. Clearing the baseline there made a
+    strap slipping at minute 20 the session's new zero point, through a
+    path nothing arms. The baseline belongs to the session."""
     processor = SignalProcessor(window_size=8)
     steady = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]}
-    for _ in range(SignalProcessor.BASELINE_SAMPLES + 1):
-        processor.update(_sample(), steady)
+    _until_baseline(processor, lambda i: (740.0, steady))
     assert processor._baseline_ready is True
+    mean = processor._baseline_focus_mean
     processor.reset()
-    assert processor._baseline_ready is False
-    assert processor._baseline_focus_mean is None
+    assert processor._baseline_ready is True
+    assert processor._baseline_focus_mean == mean
+    assert len(processor.window) == 0
+    processor.restart_baseline()
+    assert processor._baseline_collecting is True and len(processor._baseline_focus) == 0
 
 
 def test_signal_processor_reset_clears_window():
@@ -940,6 +996,10 @@ def test_signal_processor_reset_clears_window():
 
 def test_adaptation_reset_for_signal_loss_bypasses_cooldown():
     engine = AdaptationEngine()
+    # A label needs persist_ticks consecutive readings before the cooldown
+    # or the scale is what's under test; that rule has its own tests in
+    # test_signal_processing.py, so it is switched off here.
+    engine.persist_ticks = 1
     engine.cooldown_seconds = 1000.0
     focused = engine.infer_state({"focus_score": 90.0, "calm_score": 80.0, "confidence": 90.0})
     assert focused.label == "focused"
@@ -1404,3 +1464,19 @@ def test_two_sim_devices_run_independently():
     assert b_signal_quality != "no_signal"
     assert manager_a.device_id == "dev-a"
     assert manager_b.device_id == "dev-b"
+
+
+def test_session_arm_restarts_the_baseline_and_is_admin_only_under_pull():
+    client = TestClient(app)
+    settings = get_settings()
+    admin_headers = {"Authorization": f"Bearer {settings.admin_token}"}
+    learner_headers = {"Authorization": f"Bearer {settings.api_token}"}
+    processor = stream_manager.session().processor
+    processor._baseline_focus.extend([0.1, 0.2, 0.3])
+    processor._baseline_collecting = False
+    r = client.post("/api/v1/session/arm", headers=admin_headers)
+    assert r.status_code == 200 and r.json() == {"status": "armed"}
+    assert len(processor._baseline_focus) == 0 and processor._baseline_collecting is True
+    assert client.post("/api/v1/session/arm", params={"device_id": "nope"}, headers=admin_headers).status_code == 404
+    # Under pull the backend is the controller; the learner token gains nothing.
+    assert client.post("/api/v1/session/arm", headers=learner_headers).status_code in (401, 403)

@@ -103,7 +103,10 @@ def build_session_charts(cognitive, face, heart) -> dict:
     """
     charts = {}
 
-    cog_points = _line_points(cognitive, ("focus", "engagement", "stress"))
+    # No `engagement`: it is the focus index under another name
+    # (signal_mapping.py), and this picture is permanent -- a second line of
+    # the same number would be baked into the archive as two measurements.
+    cog_points = _line_points(cognitive, ("focus", "stress"))
     charts["cognitive_timeline"] = (
         chart_render.line_svg(cog_points, "Cognitive signals") if cognitive else None
     )
@@ -158,12 +161,20 @@ def _fetch(client, session_id: str):
     return rows("cognitive_signals"), rows("face_signals"), rows("heart_signals")
 
 
-def archive_session(client, session_id: str, user_id: str) -> dict:
+def archive_session(client, session_id: str, user_id: str, *,
+                    only: set[str] | None = None,
+                    existing_paths: dict | None = None) -> dict:
     """Render, upload, and record the paths on the session row.
 
     Returns the `chart_paths` map it wrote, for tests and for a caller that
     wants this synchronously. Raises on a failure it couldn't contain; `_run`
     below turns that into a log line.
+
+    `only` restricts the re-render to those charts; the others keep their
+    entry from `existing_paths`. For `rearchive_sessions`: a chart an erasure
+    nulled must stay null, since the rows it drew on may still exist (a
+    camera erasure removes the two heart charts and leaves the headband's
+    heart rows), and re-rendering it would put back what a parent erased.
     """
     cognitive, face, heart = _fetch(client, session_id)
     charts = build_session_charts(cognitive, face, heart)
@@ -171,6 +182,9 @@ def archive_session(client, session_id: str, user_id: str) -> dict:
     paths: dict[str, str | None] = {}
     storage = client.storage.from_(BUCKET)
     for name in chart_render.CHART_NAMES:
+        if only is not None and name not in only:
+            paths[name] = (existing_paths or {}).get(name)
+            continue
         svg = charts.get(name)
         if not svg:
             paths[name] = None
@@ -491,3 +505,102 @@ def schedule(client, session_id: str, user_id: str) -> None:
         _pool().submit(_run, client, session_id, user_id)
     except Exception as e:
         print(f"[charts] {session_id[:8]}: could not queue archive: {e}")
+
+
+# ── regenerating archives already written ───────────────────────────────────
+
+def rearchive_sessions(client, sessions: list[dict], *, dry_run: bool = True,
+                       max_rerenders: int = 200, max_read_failures: int = 5) -> dict:
+    """Re-render and re-upload the charts of sessions already archived.
+
+    For a change to what a chart draws -- the `engagement` series was dropped
+    from the cognitive timeline, and every archive written before that keeps
+    it permanently, as a trace of electrode contact quality labelled as a
+    measurement. Archives are written once at close and nothing revisits
+    them, so this is the only path by which such a change reaches them.
+
+    **A session whose per-sample rows have expired is skipped, never
+    re-rendered.** `archive_session` draws from the raw tables, and after
+    `expire_signal_rows` those are empty: re-running it would upload four
+    empty charts over the only remaining picture of the session and null the
+    paths. That guard is the whole reason this is a function with a report
+    rather than a loop in a script. Sessions with no `chart_paths` are left
+    alone too -- the archive never ran on them and this is not the close
+    path. Dry run by default.
+
+    Three more guards, each for a way this job rewrites something it must
+    not. **Per chart, not per session**: expiry is per channel, so a session
+    whose heart rows are gone and cognitive rows remain is skipped outright
+    -- re-rendering it would null the heart paths and orphan those objects,
+    the last copy. **Only charts with a recorded path are re-rendered**: an
+    erasure nulls a chart's path and may leave the rows it drew on (a camera
+    erasure removes both heart charts, the headband's rows stay), so a
+    re-render from the rows would put back what a parent erased. **A failed
+    read refuses** rather than skipping: a read that fails looks exactly
+    like a session with no rows, which is the skip case, and past
+    `max_read_failures` the run stops and says so. `max_rerenders` bounds
+    how many live sessions' objects one run overwrites.
+    """
+    report = {"dry_run": dry_run, "considered": 0, "rerendered": 0,
+              "skipped_expired": 0, "skipped_unarchived": 0, "failed": 0,
+              "read_failures": 0, "refused": None, "hit_cap": False,
+              "last_ended_at": None, "would_rerender": []}
+    for row in sessions:
+        if len(report["would_rerender"]) + report["rerendered"] >= max_rerenders:
+            report["hit_cap"] = True
+            break
+        report["considered"] += 1
+        session_id, user_id = row.get("id"), row.get("user_id")
+        recorded = row.get("chart_paths") or {}
+        wanted = {name for name in chart_render.CHART_NAMES if recorded.get(name)}
+        if not wanted or not session_id or not user_id:
+            report["skipped_unarchived"] += 1
+            # Handled: nothing to read, so the cursor may pass it.
+            report["last_ended_at"] = row.get("ended_at")
+            continue
+        try:
+            cognitive, face, heart = _fetch(client, session_id)
+        except Exception as exc:  # noqa: BLE001 -- counted, and refused past the cap
+            print(f"[rearchive] {session_id}: read failed: {exc}")
+            report["read_failures"] += 1
+            # At the cap, not past it: checked only at the top of the next
+            # iteration with `>`, five failures in five sessions returned
+            # `refused` unset and exit 0 -- exactly what a run with no work
+            # returns.
+            if report["read_failures"] >= max_read_failures:
+                report["refused"] = (f"{report['read_failures']} session reads failed; "
+                                     "a failed read is indistinguishable from an expired session")
+                break
+            continue
+        present = {name for name, rows in CHART_SOURCES.items()
+                   if {"cognitive": cognitive, "face": face, "heart": heart}[rows]}
+        # The cursor: a run that hits the cap resumes with `--after` this, or
+        # every run repeats the same oldest batch and a backfill larger than
+        # the cap never finishes. Set only once the session is *handled* --
+        # skipped by decision, listed by a dry run, or re-rendered. Set before
+        # the read, a failed read was passed over by the resume; set after the
+        # read but before the render, a failed render was passed over the
+        # same way. A session this run did not finish stays ahead of the cursor.
+        if not wanted <= present:
+            report["skipped_expired"] += 1
+            report["last_ended_at"] = row.get("ended_at")
+            continue
+        if dry_run:
+            report["would_rerender"].append(session_id)
+            report["last_ended_at"] = row.get("ended_at")
+            continue
+        try:
+            archive_session(client, session_id, user_id, only=wanted, existing_paths=recorded)
+            report["rerendered"] += 1
+            report["last_ended_at"] = row.get("ended_at")
+        except Exception as exc:  # noqa: BLE001 -- one failure must not stop the run
+            print(f"[rearchive] {session_id}: {exc}")
+            report["failed"] += 1
+    return report
+
+
+# Which per-sample table each chart draws on. `stress_pie` is the heart
+# table's `stress_category`, not the cognitive `stress` column -- see
+# build_session_charts.
+CHART_SOURCES = {"cognitive_timeline": "cognitive", "heart_rate": "heart",
+                 "stress_pie": "heart", "emotion_pie": "face"}

@@ -8,7 +8,7 @@ from datetime import datetime, date, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from supabase import create_client
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import LLM_topic_decider
 import chart_archive
@@ -1342,6 +1342,8 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                              heart_revoked_at=heart_revoked_at,
                              eeg_enabled=eeg_enabled,
                              eeg_revoked_at=eeg_revoked_at)
+    # The scale label rides beside the averages; see `_shape_summary`.
+    summary["score_scale"] = _scale_ranges_many([student_id], days).get(str(student_id))
     # Set here, not in `_shape_summary`, which the batch RPC also uses -- adding
     # it there would put an always-null `dominant_emotion` on every child in a
     # batch, claiming "no emotion" for a field never requested.
@@ -1349,7 +1351,7 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
     return summary
 
 
-_EMPTY_SUMMARY = {"consent_retrieved": True,
+_EMPTY_SUMMARY = {"consent_retrieved": True, "score_scale": None,
                   "focus": None, "stress": None, "engagement": None,
                   "face_attention": None, "heart_rate_bpm": None,
                   "rmssd_ms": None, "sessions": 0,
@@ -1393,7 +1395,18 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
     return {
         "focus": row.get("focus"),
         "stress": row.get("stress"),
-        "engagement": row.get("engagement"),
+        # `engagement` is served from `focus` everywhere a stored value is
+        # read back. The two are one number since Phase 1 of the EEG
+        # accuracy work; before it the stored `engagement` was the
+        # confidence (strap fit), and no flag marks which regime a row is
+        # from -- so the stored column is never surfaced, and the series a
+        # reader sees is the focus index throughout.
+        "engagement": row.get("focus"),
+        # Stamped by the caller from the rollup (`_scale_ranges_many`): the
+        # summary RPCs aggregate per-sample rows and carry no scale, and a
+        # summary collapses a window into one number, where unlike a series
+        # there is no step to see -- so it has to say so.
+        "score_scale": None,
         "face_attention": row.get("face_attention"),
         # Absolute units, unlike every other figure here (0..1 ratios) --
         # the frontend's `toPct()` must not be applied to them.
@@ -1459,6 +1472,8 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
     if isinstance(rows, dict):
         rows = [rows]
     out = {}
+    # One rollup read for the whole roster, like the summary RPC itself.
+    scales = _scale_ranges_many([str(s) for s in student_ids], days)
     for r in rows:
         sid = r.get("student_id")
         if not sid:
@@ -1471,6 +1486,7 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
             heart_revoked_at=ch.heart_revoked_at if ch else None,
             eeg_enabled=ch.eeg if ch else True,
             eeg_revoked_at=ch.eeg_revoked_at if ch else None)
+        out[str(sid)]["score_scale"] = scales.get(str(sid))
     return out
 
 
@@ -1478,6 +1494,31 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
 # the read is one query whatever the range, but the payload is per week and a
 # caller asking for 500 would build a chart nobody can read.
 _TREND_MAX_WEEKS = 26
+
+
+def _scale_range(rollup_rows) -> dict | None:
+    """`{"min", "max"}` of the score scale over cognitive rollup rows, or None
+    when no row recorded one.
+
+    The sidecar's population bounds -- the scale every focus and stress value
+    is measured on -- were widened (signal_mapping.SCORE_SCALE_VERSION 2),
+    which re-anchors every stored value. Per-sample rows carry
+    `raw.score_scale`; `20260917000000` has the rollup record the range seen
+    each day, since it is the copy that outlives the raw rows. The range comes
+    from the rows and never from a date: the rollout is per sidecar process,
+    as each student's machine restarts, so no calendar constant labels it.
+    A range whose ends differ straddles the change, and a series carrying two
+    scales is not one series -- readers say so rather than averaging across.
+    None (no row recorded a scale: rolled up before the column existed) is
+    kept apart from scale 1, which is a recorded fact.
+    """
+    lows = [r.get("score_scale_min") for r in rollup_rows
+            if r.get("channel") == "cognitive" and r.get("score_scale_min") is not None]
+    highs = [r.get("score_scale_max") for r in rollup_rows
+             if r.get("channel") == "cognitive" and r.get("score_scale_max") is not None]
+    if not lows or not highs:
+        return None
+    return {"min": int(min(lows)), "max": int(max(highs))}
 
 
 def _week_start(day: date) -> date:
@@ -1522,13 +1563,14 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
       * `avg_rmssd_ms` -- roughly one trusted window in five is gated out of
         RMSSD (see CLAUDE.md on `rmssd_rejected_by`) while the heart count
         counts trusted rows.
-      * `avg_stress` and `avg_engagement` -- `trusted_sample_count` for the
-        cognitive channel is `count(*) FILTER (WHERE focus IS NOT NULL)`, and
-        `map_eeg_to_cognitive` derives the three from `focus_score`,
-        `calm_score` and `confidence` independently. Only `contact_poor` nulls
-        all three together; an ordinary row can carry focus without calm.
+      * `avg_stress` -- `trusted_sample_count` for the cognitive channel is
+        `count(*) FILTER (WHERE focus IS NOT NULL)`, and `map_eeg_to_cognitive`
+        derives focus and stress from `focus_score` and `calm_score`
+        independently. Only `contact_poor` nulls both together; an ordinary
+        row can carry focus without calm.
 
-    `avg_focus` and `avg_heart_rate_bpm` are exact. In every case the error is
+    `avg_focus`, `avg_heart_rate_bpm` and `engagement` (served from
+    `avg_focus`, see `_shape_summary`) are exact. In every case the error is
     between days, never within one, and correcting it needs a per-column count
     the schema does not have and a backfill that deleted rows cannot supply.
     """
@@ -1584,11 +1626,15 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
             "days_with_data": set(),
             "heart_sources": set(),
             "emotion_counts": {},
+            # The cognitive rollup rows themselves, for `_scale_range`.
+            "scale_rows": [],
         }
 
     COLUMNS = {
         "cognitive": (("focus", "avg_focus"), ("stress", "avg_stress"),
-                      ("engagement", "avg_engagement")),
+                      # From `avg_focus`, never the stored `avg_engagement`:
+                      # see `_shape_summary` on why the stored column is not read.
+                      ("engagement", "avg_focus")),
         "heart": (("heart_rate_bpm", "avg_heart_rate_bpm"),
                   ("rmssd_ms", "avg_rmssd_ms")),
     }
@@ -1612,6 +1658,7 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
         b["days_with_data"].add(day.isoformat())
         if channel == "cognitive":
             b["cognitive_samples"] += n
+            b["scale_rows"].append(r)
         elif channel == "heart":
             b["heart_samples"] += n
             for s in (r.get("heart_sources") or []):
@@ -1639,6 +1686,9 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
         b = buckets[monday]
         out.append({
             "week_start": b["week_start"],
+            # From the rollup rows, never a date -- see `_scale_range`. A
+            # week whose min and max differ straddles the change.
+            "score_scale": _scale_range(b["scale_rows"]),
             **{k: _mean(v) for k, v in b["sums"].items()},
             "cognitive_samples": b["cognitive_samples"],
             "heart_samples": b["heart_samples"],
@@ -1882,8 +1932,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                       _avg([r.get("focus") for r in day_cog]) if cog_whole else None),
             "stress": (cog_roll.get("avg_stress") if cog_roll else
                        _avg([r.get("stress") for r in day_cog]) if cog_whole else None),
-            "engagement": (cog_roll.get("avg_engagement") if cog_roll else
-                           _avg([r.get("engagement") for r in day_cog]) if cog_whole else None),
+            # From focus, not the stored engagement -- see `_shape_summary`.
+            "engagement": (cog_roll.get("avg_focus") if cog_roll else
+                           _avg([r.get("focus") for r in day_cog]) if cog_whole else None),
             "attention": _avg([r.get("attention") for r in day_face]) if face_whole else None,
             # None, not 0: a day the cap couldn't reach didn't have zero
             # sessions. `sessions_retrieved` tells the two apart.
@@ -1939,7 +1990,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         if cog_roll:
             n = cog_roll.get("trusted_sample_count") or 0
             for key, col in (("focus", "avg_focus"), ("stress", "avg_stress"),
-                             ("engagement", "avg_engagement")):
+                             ("engagement", "avg_focus")):  # see `_shape_summary`
                 value = cog_roll.get(col)
                 if value is not None and n:
                     rolled_totals[key][0] += float(value) * n
@@ -2100,9 +2151,15 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         "averages": {
             "focus": avg_focus,
             "stress": avg_stress,
+            # From focus, not the stored engagement -- see `_shape_summary`.
             "engagement": _round2(_week("engagement",
-                                        [r.get("engagement") for r in cog])),
+                                        [r.get("focus") for r in cog])),
             "face_attention": avg_attention,
+            # Which score scale(s) the focus and stress averages above were
+            # measured on, from the rollup rows of the window. A summary
+            # collapses both scales into one number, where unlike a series
+            # there is no step to see -- so it has to say so.
+            "score_scale": _scale_range(rollup_by.values()) if rollup_ok else None,
         },
         "highlights": {
             "highest_stress": round(highest_stress, 2) if highest_stress is not None else None,
@@ -4002,7 +4059,8 @@ def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> s
         f"Weekly summary (last {report.get('days', 7)} days):\n"
         f"- average focus {_pct(averages.get('focus'))}\n"
         f"- average stress {_pct(averages.get('stress'))}\n"
-        f"- average engagement {_pct(averages.get('engagement'))}\n"
+        # No engagement line: it is the focus index under another name
+        # (signal_mapping.py), and restated it reads as a second fact.
         f"- weakest attempted topic: {topic_line}\n"
         f"- practice sessions recorded: {(report.get('sample_counts') or {}).get('sessions', 0)}\n\n"
         "For reference, here is a safe baseline answer:\n"
@@ -4990,7 +5048,7 @@ def _cohort_student_row(sid: str, totals: dict | None, channels: ReportChannels,
     return {
         "focus": t.get("avg_focus"),
         "stress": t.get("avg_stress"),
-        "engagement": t.get("avg_engagement"),
+        "engagement": t.get("avg_focus"),  # see `_shape_summary`
         "heart_rate_bpm": t.get("avg_heart_rate_bpm"),
         "rmssd_ms": t.get("avg_rmssd_ms"),
         # A null average beside a zero count is "nothing recorded"; beside a
@@ -5047,7 +5105,10 @@ def _class_signal_trend(student_ids: list[str], days: int,
 # Named once because the merge below has to re-weight every one of them the
 # same way, and a list that drifted from the RPC's columns would silently drop
 # a series from the chart.
-_COHORT_TREND_METRICS = ("avg_focus", "avg_stress", "avg_engagement",
+# No `avg_engagement`: it is served from `avg_focus` after the merge (see
+# `_merge_cohort_trend`), so fetching and weighting the stored column would
+# be work whose result is discarded.
+_COHORT_TREND_METRICS = ("avg_focus", "avg_stress",
                          "avg_heart_rate_bpm", "avg_rmssd_ms")
 
 
@@ -5097,10 +5158,62 @@ def _merge_cohort_trend(parts: list[list]) -> list:
         "day": b["day"],
         "channel": b["channel"],
         **{k: _mean(v) for k, v in b["sums"].items()},
+        # From focus, not the stored column -- see `_shape_summary`. The
+        # roster half of this endpoint was corrected first and this half was
+        # not, so the class trend blended strap fit and the focus index
+        # across the merge date.
+        "avg_engagement": _mean(b["sums"]["avg_focus"]),
         "sample_count": b["sample_count"],
         "trusted_sample_count": b["trusted_sample_count"],
         "student_count": b["student_count"],
     } for _, b in sorted(merged.items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1])))]
+
+
+def _combine_ranges(ranges) -> dict | None:
+    """The widest of several `{"min", "max"}` ranges, or None if none."""
+    present = [r for r in ranges if r]
+    if not present:
+        return None
+    return {"min": min(r["min"] for r in present), "max": max(r["max"] for r in present)}
+
+
+def _scale_ranges_many(user_ids: list[str], days: int) -> dict[str, dict | None]:
+    """`{user_id: {"min", "max"} | None}` over each student's cognitive rollup
+    rows in the window. One read for the whole list, since the summary RPCs
+    and the cohort RPCs carry no scale and the rollup is the only copy that
+    outlives the raw rows.
+
+    **A stated exception to consent bucketing.** `_cohort_signals` buckets
+    the roster by consent flag pair before every read, so a student who
+    declined a sensor is never read under a classmate's permission. This read
+    is not bucketed, and that is deliberate rather than an oversight: it
+    selects no reading -- only which scale a day's cognitive rows were on --
+    and the cognitive channel has no read filter to apply (`ReportChannels.
+    eeg` is a display fact, not a gate; the summary RPCs have no
+    `p_include_cognitive` either). Fails open to an empty map: the label
+    decides a caption, never what is recorded or shown.
+    """
+    if not user_ids:
+        return {}
+    try:
+        today = date.fromisoformat(_school_day(_utc_now(), _school_timezone()))
+        since = today - timedelta(days=days - 1)
+        rows = (supabase.table("signal_daily_rollup")
+                .select("user_id, channel, score_scale_min, score_scale_max")
+                .in_("user_id", list(user_ids)).eq("channel", "cognitive")
+                .gte("day", since.isoformat()).execute().data or [])
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[score_scale] rollup read failed: {e}")
+        return {}
+    by_user: dict[str, list] = {}
+    for r in rows:
+        by_user.setdefault(str(r.get("user_id")), []).append(r)
+    return {str(uid): _scale_range(by_user.get(str(uid), [])) for uid in user_ids}
+
+
+def _cohort_scale_range(roster: list[str], days: int) -> dict | None:
+    """The range across the whole roster; see `_scale_ranges_many`."""
+    return _combine_ranges(_scale_ranges_many(roster, days).values())
 
 
 def _cohort_signals(class_id: str, days: int) -> dict:
@@ -5169,6 +5282,12 @@ def _cohort_signals(class_id: str, days: int) -> dict:
     # still a class of six, and gating on the smaller number would expose the
     # pair exactly when they are most identifiable.
     per_student = None
+    # One rollup read labels both halves: the chart's window and each roster
+    # row. A teacher told the chart is not comparable must not then be handed
+    # a per-student ranking of the same numbers -- outlier flag included --
+    # with no caveat. See `_scale_ranges_many` on why this read is not
+    # consent-bucketed.
+    scale_by_user = _scale_ranges_many(roster, days) if trend_retrieved else {}
     if len(roster) >= _COHORT_MIN_STUDENTS:
         profiles = _profiles_many(roster)
         # Every student on the roster gets a row, including those the RPC
@@ -5178,9 +5297,10 @@ def _cohort_signals(class_id: str, days: int) -> dict:
         per_student = [{
             "student_id": sid,
             "display_name": (profiles.get(sid) or {}).get("display_name") or "Student",
-            "summary": _cohort_student_row(sid, summaries.get(sid),
-                                           channels_by_student[sid],
-                                           summaries_retrieved),
+            "summary": {**_cohort_student_row(sid, summaries.get(sid),
+                                              channels_by_student[sid],
+                                              summaries_retrieved),
+                        "score_scale": scale_by_user.get(sid)},
         } for sid in roster]
 
     return {
@@ -5189,6 +5309,10 @@ def _cohort_signals(class_id: str, days: int) -> dict:
         "days": days,
         "series": series,
         "retrieved": trend_retrieved,
+        # Which score scale(s) the series' focus and stress sit on, from the
+        # rollup rows -- see `_scale_range`. Mixed means the series straddles
+        # the change and is not one series.
+        "score_scale": _combine_ranges(scale_by_user.values()) if trend_retrieved else None,
         "summaries_retrieved": summaries_retrieved,
         "per_student": per_student,
         "min_students": _COHORT_MIN_STUDENTS,
@@ -5900,7 +6024,11 @@ class CognitiveBatch(BaseModel):
     # Bounded like the other two ingest batches. Under push the writer is an
     # untrusted local process on a student's machine, so this endpoint is the
     # trust boundary and needs the cap.
-    samples:    list[CognitiveSample] = Field(max_length=_INGEST_MAX_BATCH)
+    # `Any`, validated per sample in the endpoint, not `list[CognitiveSample]`:
+    # as a typed list one malformed value 422'd the whole batch, and the push
+    # client's retry then lost every valid sample travelling with it once the
+    # queue evicted them. A bad sample is now dropped and counted on its own.
+    samples:    list[Any] = Field(max_length=_INGEST_MAX_BATCH)
 
 class FaceSample(BaseModel):
     ts:                  str | None = None
@@ -6135,7 +6263,11 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
             "session_id": payload.session_id,
             "user_id":    user["id"],
             "ts":         s.ts or _utc_now().isoformat(),
-            "focus":      s.focus, "stress": s.stress, "engagement": s.engagement,
+            # `engagement` is the focus index (signal_mapping.py), on this
+            # path as on the mapped one; the client's own value is accepted
+            # by the model and ignored, so a hand-posted batch cannot store
+            # a row where the two differ.
+            "focus":      s.focus, "stress": s.stress, "engagement": s.focus,
             "alpha":      s.alpha, "beta":   s.beta,   "theta":      s.theta,
             "delta":      s.delta, "gamma":  s.gamma,  "raw":        s.raw,
         }
@@ -6143,7 +6275,16 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     # `None` from the mapper means a disconnected headband reporting zeroed
     # scores, not a real reading of zero. Dropped and counted, so a caller
     # can tell "sent 50, recorded 0" from "sent nothing".
-    rows = [r for r in (_row(s) for s in payload.samples) if r is not None]
+    # Each sample validated on its own: a malformed one is dropped and
+    # counted, never allowed to fail the batch (see CognitiveBatch.samples).
+    samples: list[CognitiveSample] = []
+    malformed = 0
+    for raw_sample in payload.samples:
+        try:
+            samples.append(CognitiveSample.model_validate(raw_sample))
+        except Exception:  # noqa: BLE001 -- pydantic's ValidationError, plus a non-dict entry
+            malformed += 1
+    rows = [r for r in (_row(s) for s in samples) if r is not None]
     # Upsert on `cog_session_ts_key` (20260914000000), matching the heart
     # endpoint below. A replayed batch is then a no-op rather than a second
     # copy of every sample -- and a deployment left on `pull` whose sidecar
@@ -6168,7 +6309,8 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     # not the same as saying it: three states share the value 0 here, and a
     # reader with two numbers has to know which subtraction means which.
     return {"ok": True, "inserted": inserted,
-            "dropped": len(payload.samples) - len(rows),
+            "dropped": len(samples) - len(rows),
+            "malformed": malformed,
             "duplicates": len(rows) - inserted}
 
 @app.post("/api/signals/face")

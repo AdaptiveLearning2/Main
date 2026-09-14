@@ -1451,6 +1451,178 @@ All three ingest endpoints are rate-limited and length-bounded. `/api/signals/co
 until the push client existed, which was survivable only while its sole writer was the in-process
 poller.
 
+## EEG focus, calm and confidence: measured on a person once, and most of it failed
+
+Until 2026-09-13 the three EEG scores had never been compared against a wearer doing a known
+thing — the simulator solves its bands *from* the scoring formulas, so every green test on that
+path was the formula agreeing with itself. Two labelled captures (eyes closed, eyes open, silent
+rest, arithmetic, clench, blink, fidget; one adult, MuseS) are scored in
+`EEGResearch/tests/fixtures/EEG_REFERENCE.md`; the recordings stay outside the repo. Replay a
+capture through the shipped path with `scripts/replay_eeg_capture.py` — **and score a change as
+replay-against-replay (`--save`, then `--against`)**, never recorded-against-replay: the live
+sidecar had state from before the capture began, so a recording carries the inputs but not the
+prior state, and the round-trip test holds only from a fresh processor.
+
+What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about each:
+
+- **Degraded contact is the ordinary state.** Even prepared and at rest, 2–3 of 4 electrodes;
+  every active segment drops below 2, and the wearer confirmed extended `good` is not achievable.
+  `degraded` (2 of 4, contact ratio ≥ 0.4) is the regime every score must work in and `poor` is
+  the fault. **Nothing gates on `good`.**
+- **The amplitude terms were the strap.** Rest spread was 147 µV on one fitting and 23 µV on
+  another for the same person at the same task, and a quarter of every focus and calm score was
+  that. Removed; the raw-level path now serves only a bridge that reports no band powers.
+- **Confidence is a signal-quality number, and calm is not in it.** It was 32% calm, so a stressed
+  student was the one most likely to be discarded as `insufficient_signal`; on hardware it never
+  left 40–98 and crossed the 0.45 gate on 2 ticks in ~5000. It is now warm-up, contact, spectral
+  stability and band presence, with a contact term that is 0 below the degraded line and **steps
+  to 0.5 on it** — no linear weighting puts every `poor` reading under the gate while keeping
+  `degraded` above it, since the two meet at 0.4, and a ramp from zero at 0.4 put two-of-four
+  electrodes at exactly 0.50 on a constant spectrum and under the gate on any jitter. With the step
+  the degraded regime clears the gate at zero spectral stability. `contact_ratio` rides on the
+  payload. Three gap rules follow from the stream manager resetting on every no-sample tick: the
+  baseline latches on *covered* seconds (a gap counts as one), `reset()` keeps the time-windowed
+  contact histories (a blip after a gap is smoothed against what preceded it), and the label's
+  pending run survives a reset and ages out at 5 s instead — cleared, contact flapping every other
+  tick never reached four readings and read `no_signal` throughout. The artifact gate's running
+  medians and the two session counters survive a reset for the same reason (cleared every fifth
+  tick, 0 of 20 blinks were held). **`stop()` calls `clear_session()`, not `reset()`**: a stop is
+  the end of a session, and through `reset()` the next student on a shared station was scored
+  against the previous one's baseline. Arming restarts the label engine beside the baseline, or the
+  lesson opens on a label formed during pairing.
+- **`engagement` is never drawn beside `focus`.** They are one number, so a second line, gauge,
+  tile, archived series or prompt sentence reads as two measurements agreeing. The column stays;
+  the session review, class trend, teacher Live view, archived SVG, strategies prompt, the
+  teacher's student list and both `SignalPanel` tiles show focus alone, and each of the three
+  charts has a test asserting the absence in its screen-reader table, since the sentence omits an
+  empty series on its own. **Every reader serves `engagement` from the focus average, never from
+  the stored `avg_engagement`** (`_shape_summary` in `main.py` says why): the stored column was the
+  confidence before Phase 1 and a copy of focus after it, with no flag saying which, and the rollup
+  outlives the raw rows — so the stored value is never surfaced and the series a reader sees is the
+  focus index throughout. **`raw.confidence` is dropped on a `contact_poor` row** along with the measurement
+  columns — kept, four poor rows beside one good one averaged focus 0.8 against confidence 0.36
+  and dropped the EEG channel — and the decider validates the value, not just the container,
+  since `raw` is client-supplied JSON on the push path: a string 500'd every question and `true`
+  claimed 1.0. `replay_eeg_capture.is_gap` reads `signal_quality`, never the label, which the
+  engine holds at `no_signal` on real ticks after a gap; `--arm-at` an absent segment is refused.
+  The flat ingest shape stores `engagement` as the posted `focus` too, so no path can write a row
+  where the two differ; `_raw()` removes the client's value under a key the backend derived as
+  `None`, or a posted `raw.confidence` stood for a tick the sidecar reported none on. **Archives
+  written before the series was dropped keep it**, since nothing revisits an archive after close:
+  `rearchive_session_charts.py --apply` re-renders them, and skips any session whose raw rows have
+  expired, because there the archive is the last copy and re-rendering would replace it with nothing.
+- **The population bounds were widened against the capture** (2026-09-14): its focus log-ratios
+  ran −1.53..−0.21 per segment and the floor was ln(0.40) = −0.92, above three of the four
+  labelled segments, so eyes-closed replayed as focus 0 on every pre-latch tick. Now ln(0.15) to
+  ln(2.00) for focus and ln(0.16) to ln(2.00) for calm — calm widened at **both** ends so its
+  midpoint, the pre-latch centre, stays at −0.57; raising the ceiling alone put the strap-settling
+  segment under the stressed line and eased difficulty on the opening questions. **The label lines
+  moved with the spans**: `focused` is focus ≥ 0.624 and `stressed` calm < 0.376, in both
+  `adaptation.py` and `signal_fusion.py`, so the Bels of movement each label needs are what they
+  were (0.322 above, 0.312 below); left at 0.7/0.35 the widening made `focused` 61% harder on a
+  capture where it was reached on zero ticks. Both remain unmeasured against a task. Focus's
+  midpoint deliberately moved down 0.49 Bels (the capture sat below the old one); only calm's is
+  held. **This re-anchors every stored focus and stress value across 2026-09-14** — 14 to 30
+  points pre-latch, ~38% of gain after — so `signal_mapping` writes `raw.score_scale` (2) on every
+  cognitive row and rows without the key predate it. **The rollup records the range seen each day**
+  (`score_scale_min`/`score_scale_max`, `20260917000000`), and every rollup-backed payload carries
+  `score_scale: {min, max}` for its window — the term trend per week, the cohort trend, and the
+  weekly summary that collapses both scales into one number. **Never a date**: the rollout is per
+  sidecar process, as each student's machine restarts, so no calendar constant labels it, and
+  `_scale_range` keeps "no row recorded one" (rolled before the column) apart from scale 1.
+  `ScaleNote` renders the caption on the term trend, the class trend (only beside a drawn line),
+  the class roster (class range or any one student's, since the outlier flag is computed on those
+  numbers) and the weekly summary tiles, when the range straddles the change — a series on two
+  scales is not one series and the chart cannot show where the step is; each wiring has a test
+  with a mixed fixture, since the null branch passes with the element deleted. The rollup reads
+  `raw.score_scale` through `score_scale_of(jsonb)`, never a hard cast: `raw` is client-supplied
+  on the push path, and a cast raised out of the cognitive INSERT, the first of three, so one
+  posted sample aborted a student-day's rollup, which the close swallows and the expiry job then
+  refuses for ever — a student exempting their own rows from retention with one request.
+  `scripts/assert_signal_rls.sql` exercises that arithmetic against a real stack, garbage value
+  included, because it is the only place the function runs. The rollup read behind the labels is
+  the one stated exception to the cohort endpoint's consent bucketing: it selects no reading. The
+  replay figures quoted above (37/60, 78/27, 50/42) were taken on the old scale. `samples_no_delta`
+  and `samples_no_spread` count the usable ticks the blink and spread gates had no reference for
+  (an unreadable delta; a non-finite channel on a multi-electrode frame), so a recording whose
+  detector never armed does not read as flawless. The rearchive cursor advances only past a
+  session the run *finished* — skipped by decision, listed by a dry run, or re-rendered — since set
+  before the render a failed render was passed over by the resume exactly as a failed read was.
+  A NaN or infinite value in a **ratio** band, or a **partial** band dict, is a **held tick** with
+  `artifact_reason: malformed_bands` and confidence at the floor: as an exception it read as a
+  dead headband, as "no bands" it was scored on the amplitude fallback above the gate, and a
+  missing band defaulted to 0 Bels and scored. A NaN **delta** is not malformed — it feeds only the
+  blink gate, and holding on it pinned a session with four perfect ratio bands at the midpoint; it
+  costs that gate its reference for the tick and nothing else. The artifact histories are fed by
+  every usable tick whatever the bands say, since the spread comes from the raw channels. The
+  snapshot serialises a non-finite *or absent* band as `null` (`BandData` fields are optional) or
+  `/api/v1/state` 500'd on exactly that tick, and the mapper
+  stores the row with its measurement columns nulled and the reason in `raw` — a held score is
+  the previous tick's, not a measurement. A push batch validates each sample on its own and
+  reports `malformed`, since a typed list 422'd every valid sample beside one bad one. A stalled sample clock
+  counts as a nominal tick for the baseline's coverage *and the ramp* (coverage alone latched a
+  baseline the ramp never applied), and the baseline lists are capped. The push session end resets
+  the heart tracker and clears the adapter's optical buffer without dropping the link, or the next
+  student's first window straddles the previous one's samples — and it runs only if push was
+  actually running, since the page fires `push/stop` from pagehide under pull too and unconditional
+  it wiped a live armed session's baseline.
+- **`engagement` is the focus index** (`signal_mapping.py`, beta/(alpha+theta), Pope's engagement),
+  not the confidence — every Engagement tile was showing strap fit. The stored `avg_engagement`
+  is therefore two different quantities either side of the date Phase 1 merged, which is why no
+  reader serves it (rule below).
+- **Delta doubles on a blink**, gamma exceeds beta by 0.5 Bels on a clench and never at rest, an
+  artifact doubles the raw spread. A tick that trips one **holds** the previous scores and enters
+  neither the window nor the baseline — held is a third state beside rejected and low, with
+  `artifact_reason` and `samples_artifact` saying so. Bounds are relative to running medians of
+  **every usable tick**: referenced on admitted ticks only, the gate ratcheted and held a third of
+  resting ticks. Per-tick SDK bands are noisy enough that no bound separates artifact from rest by
+  better than ~3:1 (grid in `EEG_REFERENCE.md`); 3.0× delta / 3.5× spread hold 12% of rest and 39%
+  of artifact ticks, and a false hold is one 250 ms tick of the previous score.
+- **The ratios are smoothed over 4 s** on the sample clock before scaling; held and rejected ticks
+  leave the smoothed value alone. 92% of a step in 10 s, under the decider's cadence.
+- **The baseline is 45 s of at-least-degraded contact, fixed for the session by decision, on one
+  scale with a 10 s ramp at the latch.** It was the first 60 usable ticks with no contact condition,
+  and on both captures that fell entirely inside the loose-strap settling period. Gating on contact
+  was not enough: that period *is* degraded contact — the strap being adjusted on 2 electrodes with
+  beta and gamma high from muscle — and replayed on the capture the whole session still read focus
+  0–14. **So the baseline is taken from the first question, not from Connect.** The processor lives
+  from stream start (a sidecar session start does not reset it); `eeg_poller` now calls
+  `POST /api/v1/session/arm` when `record` flips true, which is `SignalProcessor.restart_baseline()`
+  — discard what was gathered, gather afresh, keep the old centre in use until the new one latches
+  and ramp to it. Under push, a `push/start` with a *new* session id does the same (a repeat with
+  the same id is a token refresh and leaves it alone). Best effort from the poller and logged on
+  failure: a sidecar too old to know the route must not cost the session its rows. Replayed armed at
+  the first protocol segment, run b reads eyes-closed 37/60 (focus/calm), eyes-open 78/27,
+  arithmetic 50/42 — the right directions, centred where the lesson began. A rolling reference was
+  considered and rejected: a sustained state would decay to 50. `replay_eeg_capture.py --arm-at
+  SEGMENT` stands in for the first question. **`reset()` keeps the baseline.** The stream manager
+  calls it on every tick with no sample, which flapping contact does repeatedly, so clearing it there
+  made a strap slipping at minute 20 the session's new zero point through a path nothing arms — the
+  failure the arm exists to prevent. Only `restart_baseline()` replaces it.
+- **The confidence rides in `raw.confidence` on `cognitive_signals`, and the fusion gate reads it
+  there.** No column carries it; `engagement` did, and once `engagement` became the focus index the
+  decider was still averaging it into the `eeg_channel` gate — a focus threshold, so a disengaged
+  student on good contact lost the whole EEG channel, ease-off included, while a focused one on a
+  bad strap passed. The decider selects `focus, stress, raw` and never `engagement` for that.
+- **A label needs four consecutive readings** before the 3 s cooldown protects it. 90 of 133
+  `focused` readings on the captures were the cooldown holding one spurious tick.
+
+**What the captures did not settle, and Phase 1 deliberately did not touch:** the ratios
+themselves. Eyes-closed alpha rose 0.02 Bels; beta and gamma fell 0.1–0.2 instead, and gamma drifts
+monotonically over a session (+0.25 → −0.55 over 12 min), so `calm` tracks muscle tone relaxing,
+not an alpha rhythm. Arithmetic aloud raised beta by 0.08 *with gamma by 0.10* — speech EMG — and
+`focused` was reached on 0 ticks. Whether an alpha peak exists under the aperiodic slope needs the
+raw 256 Hz stream and our own Welch spectrum with 1/f correction (Phase 2, `--source bridge`), and
+the next protocol must use *silent* arithmetic. No `focused` threshold can be set from a ratio that
+did not move with the task, so `EEG_FOCUSED_*` / `EEG_STRESSED_*` in `adaptation.py` and
+`signal_fusion.py` are unchanged and still unmeasured. The `engaged student is not stressed` test
+now pins only the ordering, because on the spectrum alone an engaged eyes-open profile sits below
+the stressed line against the population bounds — that is the true state, previously hidden by the
+strap term.
+
+`SignalProcessor` and `AdaptationEngine` take an injectable `clock` for the replay; a diagnostic key
+added to `update()`'s dict still has to be declared on `schemas.FeatureData` or the envelope drops it.
+
 ## Two columns are called stress and only one measures it
 
 `cognitive_signals.stress` is `1.0 - calm`, written by `signal_mapping.py:97`. There is no `calm`
@@ -2021,11 +2193,12 @@ wrong answer — it weights a 4-sample day like a 4000-sample one.
 **Three of the five averages carry the same approximation**, because the rollup stores one count per
 channel and any column whose nulls do not follow that count's is weighted slightly wrongly.
 `avg_rmssd_ms` — about one trusted window in five is gated out of RMSSD while the heart count counts
-trusted rows. `avg_stress` and `avg_engagement` — the cognitive `trusted_sample_count` is
-`count(*) FILTER (WHERE focus IS NOT NULL)`, and `map_eeg_to_cognitive` derives the three from
-`focus_score`, `calm_score` and `confidence` **independently**; only `contact_poor` nulls all three
-together, so an ordinary row can carry focus without calm. `avg_focus` and `avg_heart_rate_bpm` are
-exact. The error is between days, never within one, and closing it needs a per-column count the
+trusted rows. `avg_stress` — the cognitive `trusted_sample_count` is
+`count(*) FILTER (WHERE focus IS NOT NULL)`, and `map_eeg_to_cognitive` derives focus and stress
+from `focus_score` and `calm_score` **independently**; only `contact_poor` nulls both together, so
+an ordinary row can carry focus without calm. `avg_focus`, `avg_heart_rate_bpm` and `engagement`
+(served from `avg_focus`, see the Phase 1 section) are exact. The error is between days, never
+within one, and closing it needs a per-column count the
 schema lacks plus a backfill that deleted rows cannot supply.
 
 **A week with nothing recorded is a gap, not a missing bar** — dropped, a fortnight off school renders

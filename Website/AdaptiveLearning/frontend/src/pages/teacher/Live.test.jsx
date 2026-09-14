@@ -9,6 +9,8 @@
  * the headband badge level with it, and adds the age of the reading.
  */
 import { it, expect, beforeEach, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -198,4 +200,23 @@ it('formats ages in seconds under a minute and minutes after', () => {
   expect(formatAge(60_000)).toBe('1m ago')
   expect(formatAge(185_000)).toBe('3m ago')
   expect(formatAge(null)).toBeNull()
+})
+
+it('does not draw engagement beside focus', async () => {
+  // One number under two names (signal_mapping.py): no gauge, no sparkline
+  // column, and the page copy does not promise it either. The sparkline
+  // passes no rowKey, so it renders no screen-reader table to assert on, and
+  // jsdom draws recharts at 0x0 -- a rendered check passed with both the
+  // column and the line put back. The source is the only surface that shows
+  // them, the same limit AccessibleChart.test.jsx states.
+  const ts = new Date().toISOString()
+  renderLive([student({ latest_cognitive: { ts, focus: 0.6, engagement: 0.6, stress: 0.3 } })])
+  await screen.findByText(/Headband on/)
+  expect(screen.queryByText(/engagement/i)).not.toBeInTheDocument()
+  // process.cwd(), not import.meta.url: under jsdom the module URL is not a
+  // file: URL, which is how AccessibleChart.test.jsx reaches the sources too.
+  const src = readFileSync(join(process.cwd(), 'src/pages/teacher/Live.jsx'), 'utf8')
+  expect(src).not.toMatch(/dataKey="engagement"/)
+  expect(src).not.toMatch(/key: 'engagement'/)
+  expect(src).not.toMatch(/label="Engagement"/)
 })

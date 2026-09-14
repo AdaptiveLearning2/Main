@@ -3,6 +3,7 @@ import ChartTooltip from '../charts/ChartTooltip'
 import AccessibleChart from '../charts/AccessibleChart'
 import { asPercent } from '../charts/describeSeries'
 import Panel from './Panel'
+import ScaleNote from '../signals/ScaleNote'
 
 /**
  * The class's signal averages per school day.
@@ -27,7 +28,6 @@ function foldByDay(series) {
     if (r.channel === 'cognitive') {
       row.avg_focus = r.avg_focus
       row.avg_stress = r.avg_stress
-      row.avg_engagement = r.avg_engagement
     } else if (r.channel === 'heart') {
       row.avg_heart_rate_bpm = r.avg_heart_rate_bpm
       row.avg_rmssd_ms = r.avg_rmssd_ms
@@ -64,7 +64,8 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
     ...(hasCognitive ? [
       { key: 'avg_focus', label: 'Focus', unit: '%', scale: asPercent },
       { key: 'avg_stress', label: 'Stress', unit: '%', scale: asPercent },
-      { key: 'avg_engagement', label: 'Engagement', unit: '%', scale: asPercent },
+      // No `avg_engagement`: engagement is the focus index under another
+      // name (signal_mapping.py), so a second line would plot one number twice.
     ] : []),
     ...(hasHeart ? [{ key: 'avg_heart_rate_bpm', label: 'Heart rate', unit: ' bpm' }] : []),
   ]
@@ -89,6 +90,16 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
         : 'No signals recorded for this class in this range yet.'}
       className="lg:col-span-2"
     >
+      {/* The payload's score-scale range over the window; renders only when
+          the range straddles the change, since then the days on either side
+          are not comparable and the chart cannot show where the step is. */}
+      {/* Only beside a drawn focus/stress line: the range comes from the
+          cognitive rollup rows whether or not a day produced an average, so
+          a week of poor contact would otherwise caption series the chart
+          does not draw. */}
+      {hasCognitive && (
+        <ScaleNote scale={data?.score_scale} what="This class's focus and stress averages" />
+      )}
       <div className="h-64">
         <AccessibleChart
           headline={headline} rows={rows} rowKey="label" rowLabel="Day"
@@ -114,8 +125,6 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
                 stroke="#7c3aed" strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
               <Line yAxisId="ratio" type="monotone" dataKey="avg_stress" name="Stress"
                 stroke="#e11d48" strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
-              <Line yAxisId="ratio" type="monotone" dataKey="avg_engagement" name="Engagement"
-                stroke="#0891b2" strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
             </>}
             {hasHeart && (
               <Line yAxisId="bpm" type="monotone" dataKey="avg_heart_rate_bpm" name="Heart rate"

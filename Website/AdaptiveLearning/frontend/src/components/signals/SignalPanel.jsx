@@ -1,4 +1,6 @@
 import { Activity, Brain, Heart, Radio, Sparkles, Zap } from 'lucide-react'
+import ScaleNote from './ScaleNote'
+import { combineScales } from '../../lib/scoreScale'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   PieChart, Pie, Cell, Legend,
@@ -218,8 +220,8 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
                     icon={Brain} tone="emerald" />
         <MiniMetric label="Stress" value={valueOrReason(pct(cog.stress), eegReason(report))}
                     icon={Zap} tone="rose" />
-        <MiniMetric label="Engagement" value={valueOrReason(pct(cog.engagement), eegReason(report))}
-                    icon={Activity} tone="indigo" />
+        {/* No Engagement tile: it is the focus index under another name
+            (signal_mapping.py), and Focus is the tile before last. */}
         {/* No attention tile. `face_signals.attention` has no producer, so
             the tile could only ever say "Calibrating" -- reads as warming up
             rather than a measurement that will never arrive. Blocked on a
@@ -298,6 +300,10 @@ export function SignalTrend({ trend, title = 'Term Trend' }) {
 
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
+      {/* Each week carries the score-scale range its rollup rows recorded;
+          a term straddling the change is two series, and only words can say
+          where the step is. Renders nothing otherwise. */}
+      <ScaleNote scale={combineScales(weeks)} what="The focus and stress lines below" />
       <div className="mb-4">
         <h3 className="font-black text-gray-900 dark:text-white">{title}</h3>
         <p className="text-xs text-gray-600 dark:text-gray-400">
@@ -426,12 +432,16 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       <div className="mb-4">
         <h3 className="font-black text-gray-900 dark:text-white">{title}</h3>
         <p className="text-xs text-gray-600 dark:text-gray-400">Averages are based on the last {report?.days || 7} days of available samples.</p>
+        {/* A summary collapses both score scales into one number, where
+            unlike a series there is no step to see -- so it has to say so. */}
+        <ScaleNote scale={avg.score_scale} what="The focus and stress averages below" />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
         <MiniMetric label="Avg Focus" value={pct(avg.focus)} icon={Brain} tone="emerald" />
         <MiniMetric label="Avg Stress" value={pct(avg.stress)} icon={Zap} tone="rose" />
-        <MiniMetric label="Engagement" value={pct(avg.engagement)} icon={Activity} tone="indigo" />
+        {/* No Engagement tile: it is the focus index under another name
+            (signal_mapping.py), and Avg Focus is two tiles up. */}
         {/* sessions_recorded, not sample_counts.sessions -- the latter is rows
             under the session row cap, so a heavy week showed the cap value
             instead of the real count. Falls back for older payloads.
@@ -484,11 +494,11 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
                     which rendered them identically and made the chart unreadable.
                     Matches the MiniMetric tones above. */}
                 {/* #6366f1, matching SessionReview.jsx. It was #10b981 here,
-                    which is the colour that file uses for *engagement* -- so one
-                    green line meant focus on this panel and engagement on session
-                    review, and a parent reading both was shown one colour for two
-                    things. The archived SVGs re-render the session charts, so
-                    those are the reference and this is the side that moved. */}
+                    which that file used for a different series at the time --
+                    so one green line meant two things across the two pages.
+                    The archived SVGs re-render the session charts, so those are
+                    the reference and this is the side that moved; a test in
+                    the backend pins the two palettes equal on shared series. */}
                 {/* Dots, not `dot={false}`. This chart holds at most seven
                     points, one per day, and a student who practised on a single
                     day gives every series exactly one -- which draws no segment

@@ -501,9 +501,11 @@ def test_derived_fields_win_over_a_client_supplied_key(store):
     _consent(store, headband_optical_enabled=True)
 
     _post_heart([_heart(raw={"rejected_by": "client says none"})])
-    # The sample carries no rejected_by, so the derived value is absent and the
-    # client's survives -- but a real one would take precedence.
-    assert store["heart_signals"][0]["raw"]["rejected_by"] == "client says none"
+    # The sample carries no rejected_by, so the derived value is None -- and
+    # the client's value under that key goes with it rather than surviving.
+    # Letting it stand let a posted `raw.confidence` speak for a tick the
+    # sidecar reported none on, straight into the fusion gate.
+    assert "rejected_by" not in store["heart_signals"][0]["raw"]
 
 
 def test_gaze_survives_the_face_mapper(store):

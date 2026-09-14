@@ -32,6 +32,26 @@ class FeatureData(BaseModel):
     # (HANDOFF.md Phase 0). None on a frame with no usable bands.
     focus_log_ratio: float | None = None
     calm_log_ratio: float | None = None
+    # Smoothed 0..1 electrode contact behind signal_quality and confidence;
+    # None when the bridge reports no contact data.
+    contact_ratio: float | None = None
+    # Artifact gate: ticks held this session (delta jump, EMG gamma, spread
+    # jump), and why this tick was held -- None when it was scored.
+    samples_artifact: int | None = None
+    # Usable ticks whose delta could not be read, so the blink gate had no
+    # reference for them. Distinct from an artifact count of zero.
+    samples_no_delta: int | None = None
+    # Its sibling for the spread gate: usable multi-electrode ticks whose
+    # spread could not be taken (a non-finite channel).
+    samples_no_spread: int | None = None
+    # A plain str, not a Literal of the three reasons: the processor writes
+    # them as unshared string literals, and a fourth would have made every
+    # /api/v1/state call 500 -- a harder failure than the silent key drop
+    # this model exists to guard against.
+    artifact_reason: str | None = None
+    # The exponentially smoothed ratios the scores were scaled from.
+    focus_log_ratio_smoothed: float | None = None
+    calm_log_ratio_smoothed: float | None = None
 
 
 class StateData(BaseModel):
@@ -43,11 +63,15 @@ class StateData(BaseModel):
 
 
 class BandData(BaseModel):
-    delta: float
-    theta: float
-    alpha: float
-    beta: float
-    gamma: float
+    # None for a band the bridge reported as NaN or infinite: the renderer
+    # refuses non-finite floats, so a malformed band made /api/v1/state 500
+    # on exactly the tick the processor had correctly held -- under pull the
+    # poller then recorded nothing, indistinguishable from a sidecar down.
+    delta: float | None
+    theta: float | None
+    alpha: float | None
+    beta: float | None
+    gamma: float | None
 
 
 class InterpretedEegData(BaseModel):

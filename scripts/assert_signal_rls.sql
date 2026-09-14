@@ -1308,5 +1308,54 @@ BEGIN
     END IF;
 END $$;
 
+-- ── the rollup records the score scale, and a posted value cannot abort it ──
+--
+-- `raw` is client-supplied JSON on the push path and the flat ingest shape
+-- stores it verbatim. A hard cast in the cognitive INSERT -- the first of
+-- three -- let one posted sample abort a whole student-day's rollup, which
+-- the close swallows and the expiry job then refuses for ever: a student
+-- could exempt their own rows from the retention guarantee with one request.
+-- This is the only place the arithmetic actually runs.
+DO $$
+DECLARE
+    owner_id uuid;
+    sess     uuid;
+    lo       smallint;
+    hi       smallint;
+    n        int;
+BEGIN
+    SELECT i.owner_id, i.sess_id INTO owner_id, sess FROM _ids i;
+    DELETE FROM cognitive_signals WHERE user_id = owner_id;
+    DELETE FROM signal_daily_rollup WHERE user_id = owner_id;
+
+    -- Four rows on one day: no key (predates the label: scale 1), scale 2, a
+    -- string, and a null measurement carrying scale 3 that must not count.
+    INSERT INTO cognitive_signals (session_id, user_id, ts, focus, raw) VALUES
+        (sess, owner_id, '2026-03-12T18:00:01Z', 0.5, '{}'::jsonb),
+        (sess, owner_id, '2026-03-12T18:00:02Z', 0.5, '{"score_scale": 2}'::jsonb),
+        (sess, owner_id, '2026-03-12T18:00:03Z', 0.5, '{"score_scale": "oops"}'::jsonb),
+        (sess, owner_id, '2026-03-12T18:00:04Z', NULL, '{"score_scale": 3}'::jsonb);
+
+    PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-12', 'UTC');
+
+    SELECT count(*) INTO n FROM signal_daily_rollup
+     WHERE user_id = owner_id AND channel = 'cognitive';
+    IF n <> 1 THEN
+        RAISE EXCEPTION 'a posted score_scale aborted the cognitive rollup (% rows)', n;
+    END IF;
+    SELECT score_scale_min, score_scale_max INTO lo, hi FROM signal_daily_rollup
+     WHERE user_id = owner_id AND channel = 'cognitive';
+    IF lo IS DISTINCT FROM 1 OR hi IS DISTINCT FROM 2 THEN
+        RAISE EXCEPTION 'score scale range is %..%, expected 1..2: absent is 1, '
+                        'garbage is skipped, a nulled measurement does not count', lo, hi;
+    END IF;
+
+    IF public.score_scale_of('{"score_scale": "oops"}'::jsonb) IS NOT NULL
+       OR public.score_scale_of('{"score_scale": 99999}'::jsonb) IS NOT NULL
+       OR public.score_scale_of('{"score_scale": 2}'::jsonb) <> 2 THEN
+        RAISE EXCEPTION 'score_scale_of does not skip what it cannot store';
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

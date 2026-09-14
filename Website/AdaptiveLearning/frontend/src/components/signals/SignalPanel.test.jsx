@@ -34,7 +34,9 @@ describe('WeeklySignalReport', () => {
     // With the scaling bug these read 1%, 0%, 1%.
     expect(metric('Avg Focus').getByText('72%')).toBeInTheDocument()
     expect(metric('Avg Stress').getByText('31%')).toBeInTheDocument()
-    expect(metric('Engagement').getByText('64%')).toBeInTheDocument()
+    // No Engagement tile: it is the focus index under another name, and
+    // Avg Focus is on this grid.
+    expect(screen.queryByText('Engagement', VISIBLE)).not.toBeInTheDocument()
   })
 
   it('renders each highlight as a percentage in its own tile', () => {
@@ -200,7 +202,7 @@ describe('LiveSignalSummary', () => {
     }} />)
     expect(metric('Focus').getByText('Calibrating')).toBeInTheDocument()
     expect(metric('Stress').getByText('Calibrating')).toBeInTheDocument()
-    expect(metric('Engagement').getByText('Calibrating')).toBeInTheDocument()
+    expect(screen.queryByText('Engagement', VISIBLE)).not.toBeInTheDocument()
   })
 
   it('says Off since <date> when EEG consent was withdrawn', () => {
@@ -212,7 +214,7 @@ describe('LiveSignalSummary', () => {
       eeg_revoked_at: '2026-08-05T09:00:00Z',
       sample_counts: { cognitive: 0 },
     }} />)
-    for (const tile of ['Focus', 'Stress', 'Engagement']) {
+    for (const tile of ['Focus', 'Stress']) {
       expect(metric(tile).getByText((t) => /^Off since /.test(t) && t.includes('Aug')))
         .toBeInTheDocument()
     }
@@ -750,5 +752,27 @@ describe('SignalTrend', () => {
 
     expect(screen.queryByText('Heart rate')).not.toBeInTheDocument()
     expect(screen.getByText('Focus')).toBeInTheDocument()
+  })
+})
+
+describe('the score-scale caption', () => {
+  it('captions the term trend when its weeks straddle the change', () => {
+    const weeks = [
+      { week_start: '2026-05-25', focus: 0.62, stress: 0.30, days_with_data: 4, score_scale: { min: 1, max: 1 } },
+      { week_start: '2026-06-01', focus: 0.71, stress: 0.26, days_with_data: 5, score_scale: { min: 2, max: 2 } },
+    ]
+    const { rerender } = render(<SignalTrend trend={{ weeks, retrieved: true }} />)
+    expect(screen.getByRole('note')).toHaveTextContent(/not comparable/)
+    rerender(<SignalTrend trend={{ weeks: weeks.map(w => ({ ...w, score_scale: { min: 2, max: 2 } })), retrieved: true }} />)
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+
+  it('captions the weekly averages when they collapse two scales into one number', () => {
+    const { rerender } = render(<WeeklySignalReport report={{
+      ...report, averages: { ...report.averages, score_scale: { min: 1, max: 2 } },
+    }} />)
+    expect(screen.getByRole('note')).toHaveTextContent(/not comparable/)
+    rerender(<WeeklySignalReport report={report} />)
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
   })
 })

@@ -56,15 +56,27 @@ def _raw(payload: dict, **derived: Any) -> dict:
 
     Derived keys win on a collision: they describe what this backend observed,
     and a client should not be able to overwrite that by choosing a key name.
-    Nulls are dropped so an absent field doesn't read as a recorded null.
+    That holds when the derived value is None too -- the client's value under
+    that key is removed, not kept. Filtering the None out and leaving the
+    client's in place let a posted `raw.confidence` stand for a tick the
+    sidecar reported none on, straight into the fusion gate. Nulls are still
+    not written, so an absent field doesn't read as a recorded null.
     """
     merged = dict(payload.get("raw") or {})
-    merged.update({k: v for k, v in derived.items() if v is not None})
+    for key, value in derived.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
     return merged
 
 
 # The eight measurement columns. Nulled together: they all come from the same
 # electrodes in the same window, so a row can't vouch for some and not others.
+# Bumped whenever the sidecar's population bounds -- the scale every score is
+# measured on -- change. Written into `raw.score_scale` on each row.
+SCORE_SCALE_VERSION = 2
+
 _MEASUREMENT_COLUMNS = ("focus", "stress", "engagement",
                         "alpha", "beta", "theta", "delta", "gamma")
 
@@ -122,7 +134,14 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
         "user_id": user_id,
         "ts": eeg.get("timestamp"),
         "focus": focus,
-        "engagement": confidence,
+        # `engagement` is the focus index -- beta/(alpha+theta), which is
+        # what the literature calls engagement (Pope et al.) and what
+        # `focus_score` already is. It was `confidence` until Phase 1 of the
+        # EEG accuracy work, and confidence is a signal-quality number, so
+        # every Engagement tile was showing how well the strap fitted.
+        # `avg_engagement` in the daily rollup and the term trend is
+        # discontinuous across the date that landed; see CLAUDE.md.
+        "engagement": focus,
         # `stress` is `1.0 - calm`, and there is no `calm` column -- so this
         # column *is* the calm score, stored inverted. It is not a measurement
         # of stress and must never be averaged with `heart_signals.stress_score`,
@@ -145,7 +164,24 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
             # where the legacy heuristic just said "poor", so a null-measurement
             # row can still be explained later.
             quality_basis=f.get("quality_basis"),
+            # Why this tick was held, when it was: a held score is the
+            # previous tick's, and a row must be able to say so.
+            artifact_reason=f.get("artifact_reason"),
             ingestion=eeg.get("ingestion"),
+            # The EEG signal-quality number, 0..1. No column carries it --
+            # `engagement` did until it became the focus index -- and it is
+            # what `signal_fusion.eeg_channel` gates on, so it rides in `raw`
+            # for `LLM_topic_decider` to read back. Dropping it made the
+            # fusion gate a focus threshold: a disengaged student on good
+            # contact lost the whole EEG channel, ease-off included.
+            confidence=confidence,
+            # Which population scale the scores were measured on. The
+            # sidecar's bounds were widened on 2026-09-14 (scale 2), which
+            # re-anchors every focus and stress value -- 14 to 30 points
+            # pre-latch, ~38% of gain after -- and no column records that.
+            # Rows without the key predate it. The rollup carries no `raw`,
+            # so there the boundary is the date in CLAUDE.md.
+            score_scale=SCORE_SCALE_VERSION,
         ),
     }
     if verdict == "contact_poor":
@@ -154,6 +190,23 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
         # bails when nothing usable is left.
         for column in _MEASUREMENT_COLUMNS:
             row[column] = None
+        # The confidence goes with them. It rode in `engagement` when that
+        # was among the nulled columns; moved to `raw` it survived, so a
+        # poor-contact row with no focus still contributed a confidence
+        # capped under the gate -- four such rows beside one good one
+        # averaged focus 0.8 against confidence 0.36 and dropped the whole
+        # EEG channel, ease-off included. An unmeasured row has no opinion.
+        row["raw"].pop("confidence", None)
+    if f.get("artifact_reason") == "malformed_bands":
+        # A tick whose bands could not be read carries a *held* score, or
+        # the midpoint if nothing was held -- not a measurement. Contact is
+        # fine on such a tick, so the quality verdict is `ok` and nothing
+        # above nulls it; stored, the rollup averaged a value never measured
+        # and counted it as trusted. Same shape as contact_poor: keep the
+        # row, null what was not measured, keep the reason in `raw`.
+        for column in _MEASUREMENT_COLUMNS:
+            row[column] = None
+        row["raw"].pop("confidence", None)
     return row
 
 

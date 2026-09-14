@@ -382,17 +382,30 @@ def get_session_signal_state(session_id, user_id=None):
 
     consent = _consent_flags(user_id)
 
-    eeg_rows = _latest("cognitive_signals", "focus, stress, engagement",
+    eeg_rows = _latest("cognitive_signals", "focus, stress, raw",
                        session_id, EEG_BIAS_WINDOW) if consent["eeg"] else []
-    focus_vals      = [r["focus"]      for r in eeg_rows if r.get("focus")      is not None]
-    stress_vals     = [r["stress"]     for r in eeg_rows if r.get("stress")     is not None]
-    engagement_vals = [r["engagement"] for r in eeg_rows if r.get("engagement") is not None]
+    focus_vals  = [r["focus"]  for r in eeg_rows if r.get("focus")  is not None]
+    stress_vals = [r["stress"] for r in eeg_rows if r.get("stress") is not None]
+    # The EEG signal-quality number lives in `raw.confidence`; no column
+    # carries it. `engagement` used to, and reading it here after it became
+    # the focus index turned this gate into a focus threshold.
+    # `raw` is client-supplied JSON on the push path, stored unvalidated, so
+    # the value is checked and not just the container: a string here 500'd
+    # every question until the row aged out, and `true` claimed 1.0. Only a
+    # real number in 0..1 counts (bool is an int to isinstance).
+    confidence_vals = [
+        r["raw"]["confidence"] for r in eeg_rows
+        if isinstance(r.get("raw"), dict)
+        and isinstance(r["raw"].get("confidence"), (int, float))
+        and not isinstance(r["raw"].get("confidence"), bool)
+        and 0.0 <= r["raw"]["confidence"] <= 1.0
+    ]
 
     focus      = fmean(focus_vals)      if focus_vals      else None
     # cognitive_signals.stress is 1.0 - calm, so this just inverts it back.
     # It is not an independent measurement, unlike heart_signals.stress_score.
     calm       = (1.0 - fmean(stress_vals)) if stress_vals else None
-    confidence = fmean(engagement_vals) if engagement_vals else None
+    confidence = fmean(confidence_vals) if confidence_vals else None
 
     eeg = signal_fusion.eeg_channel(focus, calm, confidence,
                                     revoked=not consent["eeg"])

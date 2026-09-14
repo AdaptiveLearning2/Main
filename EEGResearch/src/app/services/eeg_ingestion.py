@@ -235,6 +235,14 @@ class SimulatedMuseIngestionAdapter:
     state via SignalProcessor's calibrated log-ratio bounds, exercising the
     same spectral-ratio path a real headset would.
 
+    It is a test double, not evidence: its bands are solved *from* the
+    processor's formulas, so a green test on this path is the formula
+    agreeing with itself. What the formulas do on a person is in
+    tests/fixtures/EEG_REFERENCE.md, and a change to them is scored with
+    scripts/replay_eeg_capture.py against a recording, never here. It
+    imports the processor's bounds directly, so it retargets silently when
+    those change -- update it only where a test needs a knob.
+
     Band powers are emitted in BELS, matching libMuse's ABSOLUTE packets and
     what SignalProcessor expects (see get_ingestion_meta) -- keep the two in
     sync if either changes.
@@ -735,6 +743,17 @@ class TcpMuseBridgeAdapter:
             # represent the join.
             self._optics.clear()
         self._reader_stop.clear()
+
+    def clear_optics(self) -> None:
+        """Drop the buffered optical samples without touching the link.
+
+        For a session end that keeps the headband paired (push/stop): the
+        next student's first heart window must not straddle the previous
+        student's samples, and disconnecting to achieve that would cost a
+        12 s re-pair.
+        """
+        with self._optics_lock:
+            self._optics.clear()
 
     def drain_samples(self, max_batch: int) -> list[EegSample]:
         """Return every queued sample, up to max_batch. Blocks only when the

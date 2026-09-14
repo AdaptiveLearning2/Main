@@ -53,7 +53,8 @@ function Gauge({ label, value, color = 'bg-violet-500' }) {
 // summary is the reading.
 const SPARK_COLUMNS = [
   { key: 'focus',      label: 'Focus',      unit: '%',    scale: asPercent },
-  { key: 'engagement', label: 'Engagement', unit: '%',    scale: asPercent },
+  // No `engagement`: it is the focus index under another name
+  // (signal_mapping.py), so a second series would draw one number twice.
   { key: 'stress',     label: 'Stress',     unit: '%',    scale: asPercent },
   { key: 'bpm',        label: 'Heart rate', unit: ' bpm' },
 ]
@@ -130,7 +131,6 @@ function StudentCard({ student, history, now }) {
 
       <div className="space-y-3 mb-4">
         <Gauge label="Focus"      value={cog?.focus}      color="bg-indigo-500" />
-        <Gauge label="Engagement" value={cog?.engagement} color="bg-emerald-500" />
         <Gauge label="Stress"     value={cog?.stress}     color="bg-rose-500" />
       </div>
 
@@ -167,7 +167,6 @@ function StudentCard({ student, history, now }) {
             <YAxis yAxisId="ratio" hide domain={[0, 1]} />
             <YAxis yAxisId="bpm" hide domain={['auto', 'auto']} />
             <Line yAxisId="ratio" type="monotone" dataKey="focus"      stroke="#6366f1" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-            <Line yAxisId="ratio" type="monotone" dataKey="engagement" stroke="#10b981" strokeWidth={1.5} dot={false} isAnimationActive={false} />
             <Line yAxisId="ratio" type="monotone" dataKey="stress"     stroke="#f43f5e" strokeWidth={1.5} dot={false} isAnimationActive={false} />
             <Line yAxisId="bpm"   type="monotone" dataKey="bpm"        stroke="#a855f7" strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
           </LineChart>
@@ -209,7 +208,7 @@ export default function Live() {
   const [error, setError]         = useState(null)
   // Separate from classes.length === 0, so loading doesn't briefly show "no classes yet".
   const [loadingClasses, setLoadingClasses] = useState(true)
-  const historyRef = useRef({}) // user_id -> [{focus, engagement, stress}]
+  const historyRef = useRef({}) // user_id -> [{focus, stress, bpm}]
   // One clock for every card's "Xs ago", ticking whether or not a poll
   // landed -- a reading's age grows while the endpoint is failing too, and
   // that is exactly when a teacher needs to see it.
@@ -272,7 +271,6 @@ export default function Live() {
           // rejected -- recharts leaves a gap for null instead of drawing a fake reading.
           const point = {
             focus:      c?.focus ?? null,
-            engagement: c?.engagement ?? null,
             stress:     c?.stress ?? null,
             bpm:        typeof h?.heart_rate_bpm === 'number' ? h.heart_rate_bpm : null,
           }
@@ -332,7 +330,7 @@ export default function Live() {
           </h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1 text-sm flex items-center gap-2">
             <Activity size={14} className="text-emerald-500 animate-pulse" />
-            Real-time focus, stress, engagement and emotion across your class.
+            Real-time focus, stress and emotion across your class.
           </p>
         </div>
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import threading
 import time
 from datetime import datetime, timezone
@@ -28,6 +29,16 @@ CONTRACT_VERSION = "1.3.0"
 
 class UnknownDeviceError(KeyError):
     """Raised when a device_id doesn't match any device in the registry."""
+
+
+def _finite_or_none(value) -> float | None:
+    """A float, or None when the value is NaN, infinite or not a number.
+    For the snapshot's band block; see BandData."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
 
 
 class DeviceSession:
@@ -288,8 +299,13 @@ class DeviceSession:
             # (a duplicate stop, or one racing ahead of start()) so a session
             # that never started reports "idle" rather than a fabricated
             # zero reading.
-            self.processor.reset()
-            self.adaptation.reset_for_signal_loss()
+            #
+            # clear_session(), not reset(): a stop is the end of a session,
+            # not a gap in one. reset() keeps the baseline (rightly, for a
+            # no-sample tick), and through here it kept it for the next
+            # student on a shared station.
+            self.processor.clear_session()
+            self.adaptation.end_session()
             self._reset_heart()
             self.latest_payload = self._no_signal_payload()
             # The stream is over, so "last good reading" describes a session
@@ -407,13 +423,13 @@ class DeviceSession:
             try:
                 # Feed only the freshest drained sample through the processor.
                 # SignalProcessor's rolling window and per-session baseline
-                # (window_size, BASELINE_SAMPLES) are calibrated in ticks, not
-                # raw samples -- they assume one processor.update() call per
-                # tick. Calling update() once per drained sample would break
-                # that: a single tick can carry dozens of samples at the
-                # bridge's native rate, so the baseline would latch after one
-                # tick instead of ~15s, and the window would span
-                # milliseconds instead of ~5s. Draining the queue every tick
+                # (window_size, the artifact histories) are calibrated in
+                # ticks, not raw samples -- they assume one processor.update()
+                # call per tick. Calling update() once per drained sample
+                # would break that: a single tick can carry dozens of samples
+                # at the bridge's native rate, so the window would span
+                # milliseconds instead of ~5s. (The baseline and the ratio
+                # smoothing are on the sample clock and would survive it.) Draining the queue every tick
                 # already prevents an unbounded backlog; it doesn't require
                 # re-processing every buffered sample, just the newest one.
                 sample = samples[-1]
@@ -508,12 +524,15 @@ class DeviceSession:
                 # already zeroed for the same no-signal condition.
                 out["bands"] = {"delta": 0.0, "theta": 0.0, "alpha": 0.0, "beta": 0.0, "gamma": 0.0}
             else:
+                # A band the bridge reported as NaN, infinite or unparseable
+                # is None here: the state model refuses non-finite floats,
+                # and the processor has already held the tick for it.
+                # No zero default: an absent band is null too, not a
+                # measurement of 0 Bels published on the very tick the
+                # processor refused to score for its absence.
                 out["bands"] = {
-                    "delta": float(raw_meta.get("delta", 0.0)),
-                    "theta": float(raw_meta.get("theta", 0.0)),
-                    "alpha": float(raw_meta.get("alpha", 0.0)),
-                    "beta": float(raw_meta.get("beta", 0.0)),
-                    "gamma": float(raw_meta.get("gamma", 0.0)),
+                    name: _finite_or_none(raw_meta.get(name))
+                    for name in ("delta", "theta", "alpha", "beta", "gamma")
                 }
         return out
 
@@ -590,6 +609,35 @@ class StreamManager:
         if session is None:
             raise UnknownDeviceError(device_id)
         return session
+
+    def arm_baseline(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
+        """Recording has been armed for this device: gather the per-session
+        baseline from now, not from stream start. See
+        SignalProcessor.restart_baseline. The label engine restarts with it,
+        or the lesson opens on a label formed during pairing."""
+        session = self.session(device_id)
+        session.processor.restart_baseline()
+        session.adaptation.restart()
+
+    def end_session(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
+        """A recording session has ended without the stream stopping --
+        push/stop, where the headband stays paired. Forgets the baseline,
+        the histories, the counters and the label state, exactly as a
+        stream stop does; through push there was no session end at all,
+        and the next student on a shared station inherited everything."""
+        session = self.session(device_id)
+        session.processor.clear_session()
+        session.adaptation.end_session()
+        # And the heart channel: its continuity anchor is the previous
+        # student's, and inherited it confirms the next one's first window
+        # at once -- the population the anchor exists to distrust.
+        session._reset_heart()
+        # The adapter's optical buffer too, without dropping the link: the
+        # tracker reset alone left the previous student's 25 s of samples
+        # for the next one's first window to straddle.
+        clear = getattr(session.adapter, "clear_optics", None)
+        if callable(clear):
+            clear()
 
     async def start(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
         await self.session(device_id).start()

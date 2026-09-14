@@ -407,3 +407,18 @@ def test_a_restart_ramps_from_the_centre_in_use_without_a_step():
     assert max(steps) < 4.0
     assert scores[-1] == pytest.approx(50.0, abs=1.0)
     assert scores[40] < 10.0, "before the new latch the old centre still applies"
+
+
+def test_a_tick_with_no_delta_still_scores_and_does_not_feed_the_gate():
+    """delta is not among the bands the ratios read, so band features can be
+    usable with delta absent or null. That must cost the delta gate its
+    reference for that tick, not the tick."""
+    t = Ticker()
+    _warm(t, 12)
+    for bands in ({**RELAXED, "delta": None, **CONTACT_GOOD},
+                  {k: v for k, v in {**RELAXED, **CONTACT_GOOD}.items() if k != "delta"},
+                  {**RELAXED, "delta": "n/a", **CONTACT_GOOD}):
+        f = t.tick(bands)
+        assert 0.0 <= f["focus_score"] <= 100.0
+        assert f["artifact_reason"] is None
+    assert len(t.processor._delta_history) == 12

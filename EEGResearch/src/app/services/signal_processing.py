@@ -649,7 +649,15 @@ class SignalProcessor:
                 # ratchet: the median settles low, anything above it is
                 # held, held ticks never raise the median. Measured on the
                 # reference capture that held a third of resting ticks.
-                self._delta_history.append(float(bands.get("delta", 0.0)))
+                #
+                # delta is not among the bands the ratios read, so a tick can
+                # have usable band features and no delta -- `.get` with a
+                # default does not catch an explicit None, and an unguarded
+                # float() here would fail the whole tick.
+                try:
+                    self._delta_history.append(float(bands.get("delta")))
+                except (TypeError, ValueError):
+                    pass
                 if frame_spread is not None:
                     self._spread_history.append(frame_spread)
             # The spectral terms take full weight. They used to be blended

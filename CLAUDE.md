@@ -24,6 +24,41 @@ Two backends, deliberately: the website backend never reads a headband directly,
 gates on `eeg_client.is_alive()` first, so the whole EEG stack is optional at runtime. Don't add a
 hard dependency on port 8001 to a path that must work without hardware.
 
+## Canary: is this session still working properly?
+
+Long sessions degrade before they fail, and the agent cannot feel it from the inside. So before
+the first edit of every task and every review round, write one line to the user, built from
+fresh tool output and not from memory:
+
+```
+CANARY: <branch> <short hash of HEAD> | tree: clean|dirty(<n> files) | last suites: sidecar <n> / backend <n> / frontend <n>
+```
+
+`git status --short` and `git log --oneline -1` supply the first two; the suite counts are the
+last run *in this session*, or `none` if there has not been one. Then check it against the
+previous canary. **Any of these means stop, re-read this section and `git status`, and say so
+before touching a file:**
+
+- The tree is dirty and you cannot name, from the conversation, what each modified file holds.
+  (Seen 2026-09-14: a mapper file turned up modified with a round-2 *mutant* text, after a
+  clean push. Do not build on an unexplained diff; restore it from HEAD by copy and report it.)
+- A suite count went down, or a count is quoted that no tool call in this session produced.
+- The working directory reported by the harness is not the repo root. (`cd` inside a compound
+  command moves it for later calls; the symptom is `vitest` finding no config, or `ls` failing
+  on a path that exists.)
+- You are about to edit a file whose relevant region you have not read in this context, or to
+  restore a file with `git checkout --` (use a copy; see the mutation-check rule).
+- You are about to assert on source text where the behaviour is testable, or to skip the
+  mutation check on a new test, or to run it before committing.
+- A heredoc append failed and you are about to retry it the same way (use the Write tool).
+- You cannot restate, without looking, the three standing rules: fusion asymmetry is
+  untouchable; held / rejected / low are three states and zeros are never written for an
+  absence; `stress` is `1 − calm`.
+
+A canary that cannot be written from tool output is itself the signal. Ask for `/compact` or a
+fresh session rather than continuing on inference; the cost of a wrong edit here is a wrong
+number on a child's record, not a retry.
+
 ## Running and testing
 
 Whole stack, Windows (Ollama, EEG sidecar, backend, frontend, each in its own window):

@@ -172,15 +172,31 @@ uvicorn src.app.main:app --host 127.0.0.1 --port 8001 --reload
 npm run dev
 ```
 
-Tests — all five jobs run in CI (`.github/workflows/ci.yml`) on PRs and pushes to `main`:
+Tests — CI (`.github/workflows/ci.yml`) runs **six** jobs on PRs and pushes to `main`:
+`EEGResearch tests`, `Native bridge build`, `Website backend tests`, `Database grants`,
+`Database migrations`, `Frontend tests, build & lint` (the `Supabase Preview` check on a PR is the
+integration's, not CI's, and is always skipped). Counted by name, so a seventh on the PR page is
+new or undocumented rather than a stale number. Locally, **all three suites from the repo root**,
+each under its own venv and with the env the suite needs — an earlier version of this section gave
+`python -m pytest tests/ -q`, and there is no `tests/` at the root, so from here it reported "no
+tests ran" and read as a clean run:
 
 ```bash
-python -m pytest tests/ -q
+EEG_SOURCE=sim API_TOKEN=t ADMIN_TOKEN=a EEGResearch/.venv/Scripts/python.exe -m pytest EEGResearch/tests -q
 ```
 
 ```bash
-npm test
+SUPABASE_URL=http://localhost:54321 SUPABASE_SERVICE_ROLE_KEY=x .venv/Scripts/python.exe -m pytest Website/AdaptiveLearning/backend/tests -q
 ```
+
+```bash
+cd Website/AdaptiveLearning/frontend && npm test
+```
+
+Not from `EEGResearch`, where a `tests/` directory does exist: `Settings` loads `.env` relative to
+the cwd, and a locally edited `EEGResearch/.env` then overrides field defaults and produces a dozen
+`test_face_*` failures that read as a code regression (the paragraph below on the Python 3.14
+rebuild says why).
 
 Backend tests need `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`; they never reach a real
 database, but the client validates the URL at import, so `SUPABASE_URL` must be URL-shaped

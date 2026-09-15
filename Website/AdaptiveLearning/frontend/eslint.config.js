@@ -6,7 +6,11 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // `coverage/` too: it is gitignored generated output, and linting it made
+  // the local problem count depend on whether coverage had ever been run on
+  // that checkout -- which is the number CLAUDE.md's backlog rule compares
+  // against.
+  globalIgnores(['dist', 'coverage']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [

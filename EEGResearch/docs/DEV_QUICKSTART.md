@@ -38,9 +38,12 @@ Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8001/api/v1/state" -Headers
 ```
 
 ```powershell
-$hAdmin = @{ Authorization = "Bearer $env:ADMIN_TOKEN" }
-Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8001/api/v1/metrics" -Headers $hAdmin | ConvertTo-Json -Depth 4
+Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8001/api/v1/muse/status" -Headers $hLearner | ConvertTo-Json -Depth 4
 ```
+
+(An earlier version of this file curled `/api/v1/metrics`, which does not exist. `muse/status`
+takes the learner token and answers under the simulator too: `muse_connected: false` with the
+ingestion health fields.)
 
 Expected `state` envelope:
 
@@ -50,8 +53,15 @@ Expected `state` envelope:
 
 ## 4) Run tests
 
+From the **repo root**, not from `EEGResearch` — `Settings` loads `.env` relative to the cwd, and
+the `.env` you just edited would override field defaults for every test that constructs
+`Settings()`, producing `test_face_*` failures that read as a code regression (CLAUDE.md, *Running
+and testing*):
+
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+cd C:\AdaptiveLearning
+$env:EEG_SOURCE = "sim"; $env:API_TOKEN = "t"; $env:ADMIN_TOKEN = "a"
+EEGResearch\.venv\Scripts\python.exe -m pytest EEGResearch\tests -q
 ```
 
 ## 5) Stop everything

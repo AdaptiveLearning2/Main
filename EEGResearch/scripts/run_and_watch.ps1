@@ -1,7 +1,10 @@
 param(
     [string]$HostName = "127.0.0.1",
     [ValidateRange(1, 65535)]
-    [int]$Port = 8000,
+    # 8001 is the sidecar's port (8000 is the website backend's); the default
+    # was 8000 and the quickstart that runs this said 8001, so its first
+    # verification step failed on a port nothing was listening on.
+    [int]$Port = 8001,
     [string]$LearnerToken = $env:API_TOKEN,
     [string]$AdminToken = $env:ADMIN_TOKEN,
     [ValidateRange(100, 600000)]

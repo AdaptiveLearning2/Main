@@ -6,7 +6,11 @@ EEGResearch runs on **port 8001**. The full stack is launched from `C:\AdaptiveL
 
 - Verify `.env` has non-default `API_TOKEN` and `ADMIN_TOKEN`.
 - Confirm host is local/internal only.
-- Run `pytest` and ensure all tests pass.
+- Run the sidecar suite from the repo root and ensure all tests pass (bare `pytest` picks
+  whichever interpreter is on `PATH`, and running from `EEGResearch` lets a local `.env` override
+  test defaults — see `docs/DEV_QUICKSTART.md` §4):
+  `EEGResearch\.venv\Scripts\python.exe -m pytest EEGResearch\tests -q` with `EEG_SOURCE=sim`,
+  `API_TOKEN` and `ADMIN_TOKEN` set.
 - Muse S headband is charged and not connected to another app (phone app closed, GettingData32 closed).
 - If switching from the Python bridge to the C++ bridge: power cycle the headband first to clear BLE state.
 
@@ -17,7 +21,11 @@ cd C:\AdaptiveLearning
 .\start.ps1 -Muse
 ```
 
-This launches (in order): Ollama, C++ Muse bridge (:8765), EEGResearch (:8001), website backend (:8000), frontend (:5173).
+This launches (in order): Ollama (skipped when `backend/.env` sets `LLM_PROVIDER=claude`, which
+needs `ANTHROPIC_API_KEY` there instead), C++ Muse bridge (:8765), EEGResearch (:8001), website
+backend (:8000), frontend (:5173). Add `-Optics` for headband heart rate; `-LocalCalm` scores calm
+from the sidecar's own spectrum and is off by decision (`DEVELOPER_SETUP_WINDOWS.md` lists every
+flag).
 
 ## Connecting the Headband
 

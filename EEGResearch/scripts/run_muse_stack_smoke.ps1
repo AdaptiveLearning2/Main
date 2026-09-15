@@ -26,17 +26,20 @@
 
 .EXAMPLE
     # CI-style: pytest + hit a server you started elsewhere with EEG_SOURCE=muse:
-    .\scripts\run_muse_stack_smoke.ps1 -BaseUrl "http://127.0.0.1:8000"
+    .\scripts\run_muse_stack_smoke.ps1 -BaseUrl "http://127.0.0.1:8001"
 #>
 param(
-    [string]$BaseUrl = "http://127.0.0.1:8000",
+    # 8001 is the sidecar (8000 is the website backend): every default here
+    # said 8000, so -StartServer bound the sidecar on the website's port and
+    # without it the probe missed the run_simulator.ps1 it tells you to start.
+    [string]$BaseUrl = "http://127.0.0.1:8001",
     [string]$LearnerToken = $env:API_TOKEN,
     [string]$AdminToken = $env:ADMIN_TOKEN,
     [string]$MuseName = "",
     [ValidateSet("Release", "Debug")]
     [string]$BridgeConfiguration = "Release",
     [string]$BridgeExe = "",
-    [int]$ApiPort = 8000,
+    [int]$ApiPort = 8001,
     [int]$HealthWaitSeconds = 45,
     [int]$StatePollAttempts = 30,
     [int]$StatePollDelayMs = 500,
@@ -101,7 +104,7 @@ function Wait-ApiHealthy {
         [int]$TimeoutSec,
         [System.Diagnostics.Process]$ChildProcess = $null,
         [string]$StderrLogPath = $null,
-        [int]$BindPort = 8000
+        [int]$BindPort = 8001
     )
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $nextProgress = (Get-Date)

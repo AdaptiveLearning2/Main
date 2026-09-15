@@ -7,8 +7,10 @@ from this work. This file is what is in flight and what to do next.
 ## Where things stand
 
 Phase 1 merged as #181 (`0594ff4`), Phase 2 as #182 (`1dad99c`, 2026-09-15). Both rollup
-migrations (`20260917000000`, `20260918000000`) list on remote. Sidecar 699, backend 1842,
-frontend 712 at the last run on the Phase 2 head; every test in both phases mutation-checked.
+migrations (`20260917000000`, `20260918000000`) list on remote. Phase 3's relabel merged as #184
+(`7f73c8e`). At that head: sidecar 699, backend 1842, frontend 714 across 62 files, all passing;
+every test in all three phases mutation-checked. (An earlier line here said frontend 712: that was
+the *pass* count from a run with one load-induced failure, not the total. Record the total.)
 
 Captures (not in the repo): `C:\eeg_captures\2026-09-13_{a,b}.jsonl` (sidecar source, with
 `replay_before_{a,b}.jsonl` for `--against`) and `2026-09-14_raw.jsonl` (bridge source, 142,604

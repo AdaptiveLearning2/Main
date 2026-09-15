@@ -1,7 +1,7 @@
 param(
     [string]$HostName = "127.0.0.1",
     [ValidateRange(1, 65535)]
-    [int]$Port = 8000,
+    [int]$Port = 8001,  # the sidecar; 8000 is the website backend
     [string]$LearnerToken = $env:API_TOKEN,
     [ValidateRange(100, 600000)]
     [int]$IntervalMs = 5000

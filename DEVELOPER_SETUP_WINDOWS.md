@@ -45,7 +45,7 @@ Supabase (PostgreSQL + Auth)
 
 | Tool | Notes |
 |------|-------|
-| Visual Studio 2022 | Workload: **Desktop development with C++** |
+| Visual Studio 2022 or 2026 | Workload: **Desktop development with C++**. `scripts/run_native_bridge.ps1` defaults to the `Visual Studio 18 2026` CMake generator; on 2022 pass `-Generator "Visual Studio 17 2022"`, or CMake reports a missing generator that reads like a broken toolchain. |
 | Windows SDK | Installed via VS Installer (10.0.22621.0 or newer) |
 | Muse S headband | Athena hardware, firmware 3.1.x |
 | Bluetooth adapter | Built-in or USB dongle |
@@ -109,8 +109,28 @@ cd C:\AdaptiveLearning
 .\start.ps1
 ```
 
+Every flag the launcher takes (each is documented with its reason in CLAUDE.md, *Running and
+testing*):
+
+| Flag | What it does |
+|---|---|
+| `-Muse` | Real headband: builds the native bridge if needed and sets `EEG_SOURCE=muse`. Without it, the simulator. |
+| `-Camera` / `-CameraIndex N` | Webcam device (FER+ emotion); switches ingestion to push mode. |
+| `-Gaze` | Gaze and head-pose landmarks; implies `-Camera`. Needs `pip install -e ".[face,gaze]"` run **from `EEGResearch`** and fetches the landmark model at setup. |
+| `-NoEmotion` | Turns FER+ off; only valid with `-Gaze` (gaze-only is a real, cheaper deployment). |
+| `-Optics` / `-OpticsPreset 103N` | Headband optical channels for heart rate; refused without `-Muse`. Stay on the default rung — see the bandwidth cliff in CLAUDE.md. |
+| `-LocalCalm` | Score calm from the sidecar's own spectrum (`EEG_SPECTRUM_SOURCE=local`); refused without `-Muse`; off by decision until a second wearer's capture. |
+
+Every key these flags control is written to the `.env` files on **both** branches of each flag,
+so a value from a previous run cannot survive into one that did not ask for it. `start.sh` takes
+the same flags in `--kebab-case` (`--optics` is Windows-only in effect).
+
 This will:
-1. Start Ollama and pull `llama3.1:8b` if not already downloaded (takes a few minutes on first run)
+1. Start Ollama and pull `llama3.1:8b` if not already downloaded (takes a few minutes on first run).
+   Skipped when `Website\AdaptiveLearning\backend\.env` sets `LLM_PROVIDER=claude`: every model
+   call goes through `llm_client.py`, and that provider needs `ANTHROPIC_API_KEY` (plus the
+   optional `CLAUDE_*` group — model, max tokens, retries — documented in CLAUDE.md under *Every
+   model call goes through `llm_client`*). The default is Ollama so a fresh checkout bills nothing.
 2. Create Python venvs and install dependencies automatically if missing
 3. Install frontend `node_modules` if missing
 4. Launch a terminal window for each service
@@ -189,7 +209,7 @@ C:\AdaptiveLearning\
 │   │   └── services\
 │   │       ├── eeg_ingestion.py       ← TCP bridge adapter + simulator
 │   │       ├── signal_processing.py  ← focus/calm/confidence from EEG
-│   │       ├── adaptation.py          ← maps features → question policy
+│   │       ├── adaptation.py          ← features → learner-state label (diagnostic; difficulty is chosen by the website backend)
 │   │       └── stream_manager.py      ← orchestrates the pipeline
 │   ├── native_bridge\                 ← C++ bridge source + binary
 │   ├── docs\                          ← dev quickstart, pilot runbook
@@ -199,7 +219,7 @@ C:\AdaptiveLearning\
     ├── backend\                       ← website FastAPI backend
     │   ├── main.py                    ← question generation, sessions, auth
     │   ├── eeg_client.py              ← calls EEGResearch :8001
-    │   ├── LLM_*_generation.py        ← Ollama question generators (10 topics)
+    │   ├── LLM_*_generation.py        ← question generators (17 topics; Ollama or Claude via llm_client.py)
     │   └── .env                       ← Supabase keys, port
     └── frontend\                      ← React + Vite
         ├── src\pages\student\

@@ -35,7 +35,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.app.services.eeg_spectrum import (  # noqa: E402
-    ALPHA_HZ, SAMPLE_RATE_HZ, TEMPORAL, alpha_residual, welch_log_psd,
+    ALPHA_HZ, SAMPLE_RATE_HZ, TEMPORAL, alpha_residual, one_over_f_fit, welch_log_psd,
 )
 
 CHANNELS = ("tp9", "af7", "af8", "tp10")
@@ -86,10 +86,8 @@ def segment_table(segs, order, good):
                 acc = 10 ** lp if acc is None else acc + 10 ** lp
             log_psd = np.log10(acc / len(chans))
             r_alpha, slope = alpha_residual(f, log_psd)
-            from src.app.services.eeg_spectrum import FIT_EXCLUDE_HZ, FIT_HI_HZ, FIT_LO_HZ
-            lo, hi = FIT_EXCLUDE_HZ
-            mask = (f >= FIT_LO_HZ) & (f <= FIT_HI_HZ) & ~((f >= lo) & (f <= hi))
-            slope, intercept = np.polyfit(np.log10(f[mask]), log_psd[mask], 1)
+            # The same fit the residual came from, for the other bands.
+            slope, intercept = one_over_f_fit(f, log_psd)
             th = band_residual(f, log_psd, 4, 7, slope, intercept)
             be = band_residual(f, log_psd, 13, 30, slope, intercept)
             ga = band_residual(f, log_psd, 30, 44, slope, intercept)

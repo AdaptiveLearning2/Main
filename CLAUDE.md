@@ -1632,8 +1632,11 @@ two are different numbers on different scales and one baseline cannot hold both.
 reset empties the buffer, since whatever spans a gap is two recordings. The estimator is fed from
 the drain in `DeviceSession._loop` — every sample, since the bridge takes one TCP client and only
 `samples[-1]` is scored. `scripts/replay_raw_capture.py` replays a bridge capture through it and
-prints per-segment medians; armed at eyes-open the capture reads calm 64 closed / 39 open / 38
-arithmetic. **The SDK alpha band did move on this run** (+0.24 Bels closed) because contact held at
+prints per-segment medians, applying the same artifact poison `DeviceSession._loop` applies
+(the reference medians quoted before that were derived without it and do not reproduce: **with
+the gate the local calm is fresh on 13–21% of task ticks and held past the 10 s cap on 41% of
+resting ones**, since 12–22% of ticks are artifacts and each costs the next 4 s — see
+`EEG_REFERENCE.md`, "derived before the artifact poison"). **The SDK alpha band did move on this run** (+0.24 Bels closed) because contact held at
 3 of 4; it is not blind to alpha, it is unreliable at the contact the product gets.
 
 **Focus has no marker in this data, and `focus` stays the SDK ratio, documented as unmeasured.**
@@ -1656,7 +1659,10 @@ the residual further than the whole closed-to-open effect. **The stressed line i
 `STRESSED_CALM_MAX` in `adaptation.py` and `EEG_STRESSED_CALM_MAX_BY_SOURCE` in `signal_fusion.py`,
 pinned equal by a test on each side: 0.377 was 0.311 Bels below centre on the SDK span and 0.148 on
 the local one, where silent arithmetic then read stressed; the local line is 0.25, set from the
-capture armed at eyes open (8% of resting eyes-open ticks, 0% arithmetic, 0% fidget). The decider
+capture armed at eyes open (8% of resting eyes-open ticks, 0% arithmetic, 0% fidget) — **a table
+derived before the artifact poison, which does not reproduce under it**; the line stands only
+until the poison length and the pre-latch calm centre are decided against the second wearer's
+capture (`EEG_REFERENCE.md`). The decider
 reads `raw.calm_source` off the rows and a window holding both sources has no calm opinion. **Calm
 latches on its own coverage** over the ticks that had a value (45 covered seconds at one second a
 tick at most, so at least 45 samples with no separate floor), with its own ramp, and keeps

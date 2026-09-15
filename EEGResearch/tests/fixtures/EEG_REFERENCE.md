@@ -245,3 +245,39 @@ sits 0.148 below centre on a span half the size) called silent arithmetic stress
 its ticks. At 0.25 a resting eyes-open tick crosses it 8% of the time before the four-tick
 persistence rule, arithmetic 0%, and the fidget — an artifact, not stress — 0%. One adult; a line
 for children is a capture away.
+
+**That table was derived before the artifact poison, and does not reproduce under it.** The
+replay now applies the same rule as `DeviceSession._loop`: an artifact tick (other than
+`malformed_bands`) poisons the 4 s buffer until its samples have left. Re-run with the gate
+(`replay_raw_capture.py --arm-at eyes_open_rest`, 2026-09-14), per segment:
+
+| segment | ticks | fresh estimate | artifact tick | poisoned | calm held > 10 s | median calm |
+| --- | --- | --- | --- | --- | --- | --- |
+| eyes closed | 481 | 47% | 12% | 46% | 11% | 74 |
+| eyes open, rest | 481 | 13% | 17% | 75% | 41% | 15 |
+| arithmetic, silent | 481 | 21% | 14% | 60% | 15% | 13 |
+| eyes open, rest 2 | 240 | 18% | 22% | 75% | 11% | 51 |
+| fidget | 121 | 3% | 44% | 96% | 64% | 64 |
+
+Two things follow, and neither is a property of the alpha measure itself:
+
+- **The gate withholds the local calm most of the time on this wearer.** The artifact rate is
+  12–22% of ticks at rest and a task, and each artifact costs the next four seconds, so a fresh
+  estimate arrives on 13–21% of ticks in the task segments and `calm_held_seconds` passes the
+  10 s hold cap (`CALM_HOLD_MAX_SECONDS`, after which the mapper nulls `stress`) on 41% of
+  resting eyes-open ticks. The residual on the ticks that *are* fresh separates as before (closed
+  +0.35, open −0.07, arithmetic −0.10).
+- **The eyes-open medians are scored against the eyes-closed centre.** `restart_baseline()` at
+  the arm keeps the old calm centre in use until the new one latches, and the new latch needs 45
+  covered seconds of fresh estimates — which the gate stretches past the whole 120 s segment
+  (coverage reached 31 s by its end). So every eyes-open tick is scored against an alpha level
+  set eyes closed, which is why the medians read 15 and 13 rather than the 39 and 38 above. A
+  lesson does not follow two minutes of eyes closed, so this is the protocol's shape, but it
+  means the medians here say nothing about the line.
+
+**The 0.25 line's stated derivation therefore no longer stands**, and the shares in the table
+above are the ones to re-derive once two decisions are made: how long an artifact should poison
+(the full 4 s buffer, or the 2 s Welch epoch it landed in), and what the calm centre should be
+before its own latch on the local source. Both belong with the second wearer's capture. Until
+then the line is one adult's number from a table that predates the gate, `EEG_SPECTRUM_SOURCE`
+stays `sdk` by default, and nothing recorded depends on it.

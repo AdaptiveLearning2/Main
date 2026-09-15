@@ -91,13 +91,22 @@ def welch_log_psd(x: np.ndarray, fs: float = SAMPLE_RATE_HZ,
     return f, np.log10(np.maximum(psd, 1e-30))
 
 
-def alpha_residual(f: np.ndarray, log_psd: np.ndarray) -> tuple[float, float]:
-    """(alpha residual, 1/f slope): mean log10 power over ALPHA_HZ above a
-    straight-line fit of log10 power against log10 frequency over the fit
-    range with FIT_EXCLUDE_HZ left out."""
+def one_over_f_fit(f: np.ndarray, log_psd: np.ndarray) -> tuple[float, float]:
+    """(slope, intercept) of a straight-line fit of log10 power against log10
+    frequency over FIT_LO_HZ..FIT_HI_HZ with FIT_EXCLUDE_HZ left out. The one
+    place the fit is written: the analysis script needs the intercept for
+    the other bands, and a second copy of the mask let the shipped fit and
+    the reference table describe two different fits."""
     lo, hi = FIT_EXCLUDE_HZ
     mask = (f >= FIT_LO_HZ) & (f <= FIT_HI_HZ) & ~((f >= lo) & (f <= hi))
     slope, intercept = np.polyfit(np.log10(f[mask]), log_psd[mask], 1)
+    return float(slope), float(intercept)
+
+
+def alpha_residual(f: np.ndarray, log_psd: np.ndarray) -> tuple[float, float]:
+    """(alpha residual, 1/f slope): mean log10 power over ALPHA_HZ above
+    one_over_f_fit."""
+    slope, intercept = one_over_f_fit(f, log_psd)
     fitted = intercept + slope * np.log10(np.maximum(f, 1e-9))
     band = (f >= ALPHA_HZ[0]) & (f < ALPHA_HZ[1])
     return float(np.mean(log_psd[band] - fitted[band])), float(slope)

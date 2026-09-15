@@ -67,6 +67,11 @@ def replay(path: str, hz: float = 4.0, arm_at: str | None = None) -> dict[str, d
         spectrum = est.push(pending, meta)
         last, pending = pending[-1], []
         f = proc.update(last, meta, spectrum=spectrum)
+        if f.get("artifact_reason") not in (None, "malformed_bands"):
+            # As DeviceSession._loop does: the gate held this tick and the
+            # window still holds the blink. Without it a blink contaminated
+            # four seconds of estimates here that the sidecar withholds.
+            est.poison()
         state = eng.infer_state(f)
         bucket = out.setdefault(seg, {"alpha": [], "calm": [], "focus": [], "labels": {}, "n": 0})
         bucket["n"] += 1

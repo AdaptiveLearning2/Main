@@ -1407,6 +1407,20 @@ BEGIN
         RAISE EXCEPTION 'a row with a NULL raw reads scale % (expected 1: it predates the label)', lo;
     END IF;
 
+    -- Pre-label rows beside held local rows: the focus average mixed scale
+    -- 1 and scale 2, so the range is 1..2 and the caption fires. Excluding
+    -- the held rows whenever any other row was present read 1..1.
+    DELETE FROM cognitive_signals WHERE user_id = owner_id;
+    INSERT INTO cognitive_signals (session_id, user_id, ts, focus, stress, raw) VALUES
+        (sess, owner_id, '2026-03-12T18:00:01Z', 0.5, 0.4,  NULL),
+        (sess, owner_id, '2026-03-12T18:00:02Z', 0.5, NULL, '{"score_scale": 3}'::jsonb);
+    PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-12', 'UTC');
+    SELECT score_scale_min, score_scale_max INTO lo, hi FROM signal_daily_rollup
+     WHERE user_id = owner_id AND channel = 'cognitive';
+    IF lo IS DISTINCT FROM 1 OR hi IS DISTINCT FROM 2 THEN
+        RAISE EXCEPTION 'pre-label rows beside held local rows read %..%, expected 1..2', lo, hi;
+    END IF;
+
     IF public.score_scale_of('{"score_scale": "oops"}'::jsonb) IS NOT NULL
        OR public.score_scale_of('{"score_scale": 99999}'::jsonb) IS NOT NULL
        OR public.score_scale_of('{"score_scale": 2}'::jsonb) <> 2 THEN

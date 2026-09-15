@@ -107,6 +107,14 @@ def test_the_rollup_writes_the_stress_count_and_the_rpcs_weight_on_it():
         assert "class_signal_student_totals(ARRAY[owner_id]" in fh.read()
 
 
+def test_the_hold_cap_matches_the_sidecar():
+    """The engine stops labelling from a carried calm at the same second the
+    mapper stops storing its stress. Pinned as a literal on both sides,
+    like the stressed line."""
+    import signal_mapping
+    assert signal_mapping.CALM_HOLD_MAX_SECONDS == 10.0
+
+
 def test_the_two_keys_that_gate_stress_are_validated_like_the_source():
     """`calm_measured: "false"` is not False and `calm_held_seconds: "150"`
     fails the isinstance check; both recorded the stress a real value would

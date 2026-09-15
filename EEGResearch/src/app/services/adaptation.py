@@ -11,6 +11,13 @@ from src.app.models import LearnerState
 # centre of the SDK ratio's span; "local" is set from the reference capture
 # (EEG_REFERENCE.md, local calm line). Both remain one adult's numbers.
 STRESSED_CALM_MAX = {"sdk": 0.377, "local": 0.25}
+# How long a local calm may be carried without a fresh estimate and still
+# be a reading. Must equal signal_mapping.CALM_HOLD_MAX_SECONDS on the
+# website side, which nulls `stress` past it; a test on each side pins both.
+# Without it the sidecar went on labelling from a calm the backend had just
+# declined to record -- the ordinary case, not an edge: calm was held past
+# the cap on 41% of resting ticks on the reference capture.
+CALM_HOLD_MAX_SECONDS = 10.0
 
 
 class AdaptationEngine:
@@ -103,10 +110,14 @@ class AdaptationEngine:
         # still filling, or a gap just reset it -- is a placeholder at the
         # midpoint, and a placeholder cannot be stressed or focused.
         calm_measured = features.get("calm_measured", True) is not False
+        held = features.get("calm_held_seconds")
+        calm_stale = isinstance(held, (int, float)) and held > CALM_HOLD_MAX_SECONDS
         if confidence_ratio < 0.45:
             target = LearnerState("insufficient_signal", confidence, focus, calm, "Low confidence")
         elif not calm_measured:
             target = LearnerState("neutral", confidence, focus, calm, "Calm not yet measured")
+        elif calm_stale:
+            target = LearnerState("neutral", confidence, focus, calm, "Calm carried too long")
         # The lines are rescaled with the population spans in
         # signal_processing.py so the *Bels* of movement each label needs
         # are what they were: focused was 0.20 of a 1.609 span (0.322 Bels

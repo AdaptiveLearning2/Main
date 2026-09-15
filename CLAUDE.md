@@ -1670,7 +1670,10 @@ collecting after focus has latched: latched with focus, one calm sample was the 
 centre for good. `calm_measured` is false on a placeholder — the opening
 fill, and after every gap, both write the same 50 a genuine residual of zero produces — and the
 engine labels neither stressed nor focused on one; `calm_held_seconds` says how long a local calm
-has been carried, and past `CALM_HOLD_MAX_SECONDS` the mapper nulls `stress`. The row records
+has been carried, and past `CALM_HOLD_MAX_SECONDS` the mapper nulls `stress` **and the engine
+labels neutral** — the constant lives in both `adaptation.py` and `signal_mapping.py`, pinned
+equal by a test on each side like the stressed line, or the sidecar asserts a learner state from
+a calm the backend has just declined to record. The row records
 `calm_source`, and **the local source is score scale 3** (`SCORE_SCALE_BY_CALM_SOURCE`), so two
 sidecars on one class cannot write calm on two scales under one version. **Scale 3 is a different
 unit, not a later version**: it moves stress and not focus, and it runs on one student's headband

@@ -85,7 +85,7 @@ def segment_table(segs, order, good):
                 f, lp = welch_log_psd(segs[s][c])
                 acc = 10 ** lp if acc is None else acc + 10 ** lp
             log_psd = np.log10(acc / len(chans))
-            r_alpha, slope = alpha_residual(f, log_psd)
+            r_alpha, _ = alpha_residual(f, log_psd)
             # The same fit the residual came from, for the other bands.
             slope, intercept = one_over_f_fit(f, log_psd)
             th = band_residual(f, log_psd, 4, 7, slope, intercept)

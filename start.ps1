@@ -23,7 +23,14 @@
     [switch]$Optics,
     # Which rung: 1031/1032 are 16 CH, 1033/1034 8 CH, 1035/1036 4 CH, odd being
     # low power. Empty leaves the bridge on its own default (1035, the bottom).
-    [string]$OpticsPreset = ""
+    [string]$OpticsPreset = "",
+    # Score calm from the sidecar's own spectrum (EEG_SPECTRUM_SOURCE=local)
+    # instead of the SDK band ratio. Off by decision until a second wearer
+    # confirms the alpha separation (CLAUDE.md, Phase 2). The key is written
+    # on every run either way, so this flag is the only way to select it --
+    # a hand-edited .env would otherwise be reverted by the next plain run,
+    # or survive into one nobody chose it for.
+    [switch]$LocalCalm
 )
 
 $ErrorActionPreference = "Stop"
@@ -76,6 +83,15 @@ if ($Optics -and -not $Muse) {
     Write-Host "  Add -Muse, or drop -Optics." -ForegroundColor Yellow
     exit 1
 }
+# Same shape: the spectrum estimator is fed only by a headband, so under the
+# simulator the local calm is a placeholder for the whole session and the run
+# looks exactly like the flag not working.
+if ($LocalCalm -and -not $Muse) {
+    Write-Host "-LocalCalm needs -Muse: the simulator delivers no raw stream to score calm from." -ForegroundColor Red
+    Write-Host "  Add -Muse, or drop -LocalCalm." -ForegroundColor Yellow
+    exit 1
+}
+$spectrumSource = if ($LocalCalm) { "local" } else { "sdk" }
 if ($OpticsPreset -and -not $Optics) {
     Write-Host "-OpticsPreset does nothing without -Optics." -ForegroundColor Red
     Write-Host "  Add -Optics, or drop -OpticsPreset." -ForegroundColor Yellow
@@ -398,10 +414,10 @@ if ($Camera) {
     # page says "streaming" is exactly what explicit modes exist to prevent.
     Set-EnvKey $eegEnv "PUSH_ENABLED" "true"
     Set-EnvKey $eegEnv "BACKEND_URL" "http://127.0.0.1:8000"
-    # The calm source is sdk by decision (CLAUDE.md, Phase 2); written on
-    # both branches like every key above, or a hand-edited `local` survives
-    # into a later plain run and records rows on a scale nobody chose.
-    Set-EnvKey $eegEnv "EEG_SPECTRUM_SOURCE" "sdk"
+    # Written on both branches like every key above, from the -LocalCalm
+    # flag, or a hand-edited `local` survives into a later plain run and
+    # records rows on a scale nobody chose.
+    Set-EnvKey $eegEnv "EEG_SPECTRUM_SOURCE" $spectrumSource
     Set-EnvKey $backendEnv "INGEST_MODE" "push"
     # The page talks to the sidecar directly under push, and it authenticates
     # with the sidecar's own API_TOKEN. Copied here rather than left to a
@@ -446,7 +462,7 @@ if ($Camera) {
     # and rollup paths are exercised against.
     Set-EnvKey $eegEnv "PUSH_ENABLED" "false"
     Set-EnvKey $backendEnv "INGEST_MODE" "pull"
-    Set-EnvKey $eegEnv "EEG_SPECTRUM_SOURCE" "sdk"
+    Set-EnvKey $eegEnv "EEG_SPECTRUM_SOURCE" $spectrumSource
 
     # Remove only the camera entry this script writes, leaving any other devices
     # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written

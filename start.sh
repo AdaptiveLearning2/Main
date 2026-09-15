@@ -9,6 +9,7 @@
 #   ./start.sh --gaze              (gaze landmarks too; implies --camera)
 #   ./start.sh --gaze --no-emotion (gaze only -- no 35 MB FER+ model)
 #   ./start.sh --muse --optics     (headband PPG -> heart rate; Windows only)
+#   ./start.sh --muse --local-calm (calm from the sidecar's own spectrum; off by decision)
 
 MUSE=false
 CAMERA=false
@@ -17,6 +18,7 @@ GAZE=false
 NO_EMOTION=false
 OPTICS=false
 OPTICS_PRESET=""
+LOCAL_CALM=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --muse)       MUSE=true; shift ;;
@@ -26,6 +28,7 @@ while [[ $# -gt 0 ]]; do
         --no-emotion) NO_EMOTION=true; shift ;;
         --optics)     OPTICS=true; shift ;;
         --preset)     OPTICS_PRESET="$2"; shift 2 ;;
+        --local-calm) LOCAL_CALM=true; shift ;;
         *)            echo "unknown option: $1"; exit 1 ;;
     esac
 done
@@ -68,6 +71,14 @@ if [ "$OPTICS" = true ] && [ "$MUSE" != true ]; then
     echo "  Add --muse, or drop --optics."
     exit 1
 fi
+# Same shape: the spectrum estimator is fed only by a headband, so under the
+# simulator the local calm is a placeholder for the whole session.
+if [ "$LOCAL_CALM" = true ] && [ "$MUSE" != true ]; then
+    echo "--local-calm needs --muse: the simulator delivers no raw stream to score calm from."
+    echo "  Add --muse, or drop --local-calm."
+    exit 1
+fi
+if [ "$LOCAL_CALM" = true ]; then SPECTRUM_SOURCE="local"; else SPECTRUM_SOURCE="sdk"; fi
 if [ -n "$OPTICS_PRESET" ] && [ "$OPTICS" != true ]; then
     echo "--preset does nothing without --optics."
     echo "  Add --optics, or drop --preset."
@@ -323,9 +334,9 @@ ensure_model('$LANDMARK_MODEL')
     # Push, for the same reason as start.ps1: the camera's only writer is
     # /api/signals/face, so a camera under pull records nothing.
     set_env_key "$EEG_ENV" "PUSH_ENABLED" "true"
-    # The calm source is sdk by decision (CLAUDE.md, Phase 2); written on both
-    # branches so a hand-edited `local` cannot survive into a later plain run.
-    set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "sdk"
+    # Written on both branches from the --local-calm flag, so a hand-edited
+    # `local` cannot survive into a later plain run.
+    set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "$SPECTRUM_SOURCE"
     set_env_key "$EEG_ENV" "BACKEND_URL" "http://127.0.0.1:8000"
     set_env_key "$BACKEND_ENV" "INGEST_MODE" "push"
     # Same as start.ps1: without this the browser sends no Authorization header
@@ -353,7 +364,7 @@ else
     # later headband-only one.
     set_env_key "$EEG_ENV" "PUSH_ENABLED" "false"
     set_env_key "$BACKEND_ENV" "INGEST_MODE" "pull"
-    set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "sdk"
+    set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "$SPECTRUM_SOURCE"
 
     # Remove only the camera entry this script writes, leaving any other devices
     # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written

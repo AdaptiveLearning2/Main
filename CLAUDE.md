@@ -73,6 +73,13 @@ next to the exe, and flips `EEG_SOURCE` in `EEGResearch/.env`. Without it you ge
 landmark channel and implies `-Camera`, and `-NoEmotion` turns FER+ off — gaze needs no 35 MB model,
 so gaze-only is a real and much cheaper deployment. Each model-backed flag provisions its model at
 setup rather than on the first frame of a lesson, and `-NoEmotion` skips the FER+ fetch entirely.
+`-LocalCalm` scores calm from the sidecar's own spectrum (`EEG_SPECTRUM_SOURCE=local`, off by
+decision until a second wearer; `start.sh --local-calm`) and is refused without `-Muse` for the
+reason `-Optics` is: the estimator is fed only by a headband, so under the simulator the local calm
+is a placeholder all session and the run looks like the flag not working. **The key is written on
+both branches from the flag**, like `INGEST_MODE` and the `FACE_*` keys, so a hand-edited `local`
+neither survives into a plain run nor is silently reverted by one — the flag is the only way to
+select it.
 `-Optics` turns the headband's optical channels on (`-OpticsPreset 103N` picks the rung) and is
 refused without `-Muse`, rather than promoted the way `-Gaze` promotes `-Camera`: the alternative to
 a headband is the simulator, which models no optical channel, so guessing would produce a run that

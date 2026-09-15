@@ -1670,9 +1670,15 @@ sidecars on one class cannot write calm on two scales under one version. **Scale
 unit, not a later version**: it moves stress and not focus, and it runs on one student's headband
 beside a classmate's on scale 2 at the same time, so `ScaleNote` (via `describeScaleChange`) names
 which figures a range moves and whether the split is a step in time (1→2) or two sources side by
-side (any range reaching 3). **A scale-3 row whose stress is NULL rolls up as scale 2** — it
-contributed only a focus, which is on scale 2 — or a local day of placeholder calms drew the
-two-source caption beside an sdk day for a window where the local source wrote no stress at all.
+side (any range reaching 3). **A scale-3 row whose stress is NULL is left out of the day's range
+while any row with a scored stress is present**, and only a day with no scored stress at all falls
+back to reading such rows as scale 2 (they contributed only a focus, which is on scale 2). Mapping
+them to 2 unconditionally made every local session read 2..3 on its own, since its first ticks hold
+calm while the buffer fills, and one child on one headband drew the two-source caption; not
+mapping them at all drew it beside an sdk day for a window where the local source scored no stress.
+A row with a NULL `raw` is scale 1 like a row with no key: `raw ? 'score_scale'` is NULL on a NULL
+raw, so the null test comes first. A rejected `calm_measured`/`calm_held_seconds` is named in
+`raw.calm_invalid`, or the nulled stress reads as an older sidecar that never sent the key.
 **`calm_source`, `calm_measured` and `calm_held_seconds` are client-supplied on the push path and
 are validated by type in the mapper** (string; bool; finite non-negative number), the decider
 type-checks the source again before it is a set element, and a value present in the wrong type

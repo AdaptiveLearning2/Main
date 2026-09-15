@@ -119,5 +119,9 @@ def test_the_two_keys_that_gate_stress_are_validated_like_the_source():
     r = _row(calm_source="local", calm_measured=1, calm_held_seconds=[1])
     assert r["stress"] is None
     assert "calm_measured" not in r["raw"] and "calm_held_seconds" not in r["raw"]
+    assert r["raw"]["calm_invalid"] == ["calm_measured", "calm_held_seconds"], \
+        "a rejected key is recorded, or it reads as an older sidecar that sent none"
+    assert _row(calm_source="local", calm_measured="false")["raw"]["calm_invalid"] == ["calm_measured"]
+    assert "calm_invalid" not in _row(calm_source="local", calm_measured=True)["raw"]
     assert _row(calm_source="local", calm_measured=True, calm_held_seconds=2)["stress"] == pytest.approx(0.5)
     assert _row(calm_source="local")["stress"] == pytest.approx(0.5), "absent is an older sidecar"

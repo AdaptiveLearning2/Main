@@ -54,20 +54,31 @@ BEGIN
            -- Scale 3 is scale 2 with calm from the local spectrum: it moves
            -- stress and not focus. A row on it whose stress is NULL (a
            -- placeholder or a held calm) contributed only a focus, which is
-           -- on scale 2 -- so a day of such rows must not report scale 3, or
-           -- the two-source caption fires beside an sdk day for a window
-           -- where the local source contributed no stress value at all.
-           min(CASE WHEN NOT (raw ? 'score_scale') THEN 1
-                    WHEN public.score_scale_of(raw) = 3 AND stress IS NULL THEN 2
-                    ELSE public.score_scale_of(raw) END)
-               FILTER (WHERE focus IS NOT NULL),
-           max(CASE WHEN NOT (raw ? 'score_scale') THEN 1
-                    WHEN public.score_scale_of(raw) = 3 AND stress IS NULL THEN 2
-                    ELSE public.score_scale_of(raw) END)
-               FILTER (WHERE focus IS NOT NULL),
+           -- on scale 2. Such rows are *left out* of the range while any row
+           -- with a scored stress is present -- mapped to 2 instead, every
+           -- local session read 2..3 on its own, since its first ticks hold
+           -- calm while the buffer fills, and one child on one headband was
+           -- told their figures mixed two sources. Only a day with no scored
+           -- stress at all falls back to the focus-only reading (scale 3
+           -- read as 2), so it does not draw the two-source caption beside
+           -- an sdk day for a window where the local source scored no stress.
+           COALESCE(min(sc) FILTER (WHERE focus IS NOT NULL
+                                      AND (sc IS DISTINCT FROM 3 OR stress IS NOT NULL)),
+                    min(CASE WHEN sc = 3 AND stress IS NULL THEN 2 ELSE sc END)
+                        FILTER (WHERE focus IS NOT NULL)),
+           COALESCE(max(sc) FILTER (WHERE focus IS NOT NULL
+                                      AND (sc IS DISTINCT FROM 3 OR stress IS NOT NULL)),
+                    max(CASE WHEN sc = 3 AND stress IS NULL THEN 2 ELSE sc END)
+                        FILTER (WHERE focus IS NOT NULL)),
            now()
-    FROM cognitive_signals
-    WHERE user_id = p_user_id AND ts >= day_start AND ts < day_end
+    FROM (SELECT focus, stress, engagement,
+                 -- A row with no key, and a row with no `raw` at all,
+                 -- predates the label: scale 1. `raw ? 'score_scale'` is
+                 -- NULL on a NULL raw, so the null test comes first.
+                 CASE WHEN raw IS NULL OR NOT (raw ? 'score_scale') THEN 1
+                      ELSE public.score_scale_of(raw) END AS sc
+            FROM cognitive_signals
+           WHERE user_id = p_user_id AND ts >= day_start AND ts < day_end) x
     HAVING count(*) > 0
     ON CONFLICT (user_id, day, channel) DO UPDATE SET
         avg_focus = EXCLUDED.avg_focus,

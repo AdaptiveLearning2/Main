@@ -199,6 +199,11 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
             calm_source=calm_source,
             calm_measured=calm_measured if calm_measured_ok else None,
             calm_held_seconds=held if held_ok else None,
+            # Which of the two was rejected, or the nulled stress reads as
+            # an older sidecar that never sent the key.
+            calm_invalid=([k for k, ok in (("calm_measured", calm_measured_ok),
+                                           ("calm_held_seconds", held_ok)) if not ok]
+                          or None),
             ingestion=eeg.get("ingestion"),
             # The EEG signal-quality number, 0..1. No column carries it --
             # `engagement` did until it became the focus index -- and it is

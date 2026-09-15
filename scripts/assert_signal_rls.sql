@@ -1383,6 +1383,30 @@ BEGIN
         RAISE EXCEPTION 'a scale-3 row with a stress reported scale %', hi;
     END IF;
 
+    -- The ordinary local session: held calm (no stress) while the buffer
+    -- fills, then scored calm. One source, so 3..3 -- mapped to 2 instead,
+    -- every local session read 2..3 on its own and drew the two-source
+    -- caption. A row with a NULL raw predates the label and anchors at 1.
+    DELETE FROM cognitive_signals WHERE user_id = owner_id;
+    INSERT INTO cognitive_signals (session_id, user_id, ts, focus, stress, raw) VALUES
+        (sess, owner_id, '2026-03-12T18:00:01Z', 0.5, NULL, '{"score_scale": 3}'::jsonb),
+        (sess, owner_id, '2026-03-12T18:00:02Z', 0.5, 0.4,  '{"score_scale": 3}'::jsonb);
+    PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-12', 'UTC');
+    SELECT score_scale_min, score_scale_max INTO lo, hi FROM signal_daily_rollup
+     WHERE user_id = owner_id AND channel = 'cognitive';
+    IF lo IS DISTINCT FROM 3 OR hi IS DISTINCT FROM 3 THEN
+        RAISE EXCEPTION 'a local session with a held then a scored calm reads %..%, '
+                        'expected 3..3', lo, hi;
+    END IF;
+    UPDATE cognitive_signals SET raw = NULL
+     WHERE user_id = owner_id AND ts = '2026-03-12T18:00:01Z';
+    PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-12', 'UTC');
+    SELECT score_scale_min INTO lo FROM signal_daily_rollup
+     WHERE user_id = owner_id AND channel = 'cognitive';
+    IF lo IS DISTINCT FROM 1 THEN
+        RAISE EXCEPTION 'a row with a NULL raw reads scale % (expected 1: it predates the label)', lo;
+    END IF;
+
     IF public.score_scale_of('{"score_scale": "oops"}'::jsonb) IS NOT NULL
        OR public.score_scale_of('{"score_scale": 99999}'::jsonb) IS NOT NULL
        OR public.score_scale_of('{"score_scale": 2}'::jsonb) <> 2 THEN

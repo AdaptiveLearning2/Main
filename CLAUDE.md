@@ -264,9 +264,14 @@ cmake -S . -B build_on -DENABLE_LIBMUSE=ON -DLIBMUSE_SDK_DIR=../libmuse_windows_
 It compiles what CI cannot: enum values, SDK signatures and the guarded packet handling. It still
 proves nothing about a real headband.
 
-`npm run lint` is non-blocking in CI against a backlog of **11** pre-existing errors, none of them
+`npm run lint` is non-blocking in CI against a backlog of **14** pre-existing errors (re-counted
+2026-09-15 with `npx eslint . -f json`: 7 `react-refresh/only-export-components`, 5 `no-undef` on
+`process`/`global` in test files, 1 `no-empty`, 1 `react-hooks/rules-of-hooks`), none of them
 `no-unused-vars` or `react-hooks/set-state-in-effect`. Don't add to it, and don't make it blocking
-until the backlog is gone.
+until the backlog is gone. The count is the check, so keep it current: an earlier line here said
+11, and against 11 a reviewer concludes the change in front of them added three errors it did not.
+`coverage/` is ignored by the config for the same reason — linted, the local number depended on
+whether coverage had ever been run on that checkout.
 
 **`set-state-in-effect` is cleared, and the two shapes that cleared it are worth reusing.** Where the
 state is a reset driven by a prop changing — an acknowledgement cleared when enforcement resumes, a

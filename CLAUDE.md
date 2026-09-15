@@ -885,7 +885,8 @@ in the same change — not before.
 numpy so CI can test it. `face_landmarks.py` is the other half — MediaPipe Face Mesh (Apache 2.0,
 models downloadable without an agreement, the constraint that blocked RhythmMamba) mapped onto those
 names, and the only file that knows a mesh index from a face part, so swapping detector rewrites it
-and nothing else. **Neither is wired into the capture loop yet.**
+and nothing else. Both are wired into the capture loop (`_sample_gaze` in `face_ingestion.py`),
+as the section above says; an earlier line here said otherwise.
 
 **MediaPipe 1.0.0 removed `mp.solutions` — the entire legacy Solutions API.** `mp.solutions.face_mesh`
 raises `AttributeError: module 'mediapipe' has no attribute 'solutions'`, which reads like a broken
@@ -1005,7 +1006,8 @@ Explicit grants to a named role survive a revoke aimed at the `PUBLIC` pseudo-ro
 Verified against `pg_proc.proacl` on a local instance — without the named revokes the ACL comes
 back as `{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,...}`.
 
-`scripts/check_function_grants.py` enforces this, as the `Function grants` CI job. It matches by
+`scripts/check_function_grants.py` enforces this, inside the `Database grants` CI job (which runs
+both grant scripts; there is no separate function-grants job). It matches by
 function **name**, not signature, so it catches a forgotten revoke block but not a migration that
 adds an overload and revokes only the old signature — review still has to. Deliberate exceptions go
 in its `ALLOWLIST` with a reason.
@@ -1583,7 +1585,7 @@ What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about ea
   ln(2.00) for focus and ln(0.16) to ln(2.00) for calm — calm widened at **both** ends so its
   midpoint, the pre-latch centre, stays at −0.57; raising the ceiling alone put the strap-settling
   segment under the stressed line and eased difficulty on the opening questions. **The label lines
-  moved with the spans**: `focused` is focus ≥ 0.624 and `stressed` calm < 0.376, in both
+  moved with the spans**: `focused` is focus ≥ 0.624 and `stressed` calm < 0.377, in both
   `adaptation.py` and `signal_fusion.py`, so the Bels of movement each label needs are what they
   were (0.322 above, 0.312 below); left at 0.7/0.35 the widening made `focused` 61% harder on a
   capture where it was reached on zero ticks. Both remain unmeasured against a task. Focus's
@@ -2067,15 +2069,15 @@ entitling them to the values, and asking for less is a stronger version of that 
 filtering afterwards: the test asserts on the *select*, which is the only place the difference shows.
 
 It shares `_LIVE_WINDOW_SEC`/`_STALE_AFTER_SEC` with `class_live` — two sets of numbers would let one
-page call a session live while the other called it stale — but **not `_latest_session_signals`, and
-not its pool.** That helper fetches whole rows and blocks on four futures it submits to
-`_live_signals_pool`; this endpoint is platform-wide where `class_live` is one class, so sharing four
-workers with every teacher's live monitor would starve the page a lesson is actually watched on. The
-sharper reason is that fanning this endpoint's outer loop into that pool **deadlocks**: the waiters
-and the work they wait on end up in one four-slot queue, so four sessions occupy every worker while
-their own reads sit behind them. `_admin_live_pool` is separate, and nothing submitted to it waits on
-anything else in it. A test asserts the two pools are not the same object, because consolidating them
-looks like tidying.
+page call a session live while the other called it stale — but **not its row reads.** `class_live`
+reads the newest row per channel for the whole roster in **one** `latest_signals_for_sessions` RPC
+(`_latest_signals_many`), and that helper's own comment says why it must stay one call: an earlier
+version fanned a per-session read out into a shared four-worker pool, and fanning this endpoint's
+outer loop into the same pool **deadlocked** — the waiters and the work they wait on ended up in one
+queue, so four sessions occupied every worker while their own reads sat behind them. That pool and
+the test asserting it was distinct from `_admin_live_pool` are gone with the fan-out; do not
+reintroduce either. `_admin_live_pool` (8 workers) still exists for this endpoint's per-session
+work, and nothing submitted to it waits on anything else in it.
 
 Five states per channel, and they are not a scale: flowing, quiet, stale, **never-reported**, and
 **unreadable** (`seen: null`). The last two are the ones to keep apart — a session that never had
@@ -2226,7 +2228,8 @@ intact and nothing saying why is the silent quiet week arriving through the stat
 **Never read the raw `*_enabled` flags to decide whether to record.** `_permitted_heart_sources`
 takes a `_may_record` result and reads its composed `record_*` flags; hand it a bare `_consent`
 dict and it returns no sources at all, which is the safe direction for that mistake.
-`test_every_recording_site_gates_on_the_window` lists the six sites and fails if one calls
+`test_every_recording_site_gates_on_the_window` derives the seven sites (three ingest endpoints,
+the poller's three consent callbacks, `eeg_start`) and fails if one calls
 `_consent(` directly — the same exhaustiveness pattern as `_MODE_AWARE`, and for the same reason.
 
 **The window gates recording only. Don't put it in `_consent()`.** That helper is read by the
@@ -2234,7 +2237,7 @@ reporting surfaces, the consent screen and the poller status, none of which shou
 because term ended: gating there would report every channel off on the last day of school, so a
 parent could not read the history that survives until the delete job runs — and it would read as a
 withdrawal, a claim about a decision nobody made. `_may_record()` composes the two and is what the
-six recording sites call (the poller's two checks, the three `/api/signals/*` endpoints, and
+seven recording sites call (the poller's three checks — EEG, its reason, and heart — the three `/api/signals/*` endpoints, and
 `/api/eeg/start`); `_consent()` stays pure and its raw flags ride along beside the `record_*` ones
 so a caller can still tell "they agreed but the year is over" from "they said no".
 
@@ -2551,7 +2554,7 @@ they were started.
 `_sweep_abandoned_sessions` is the third, run from a background thread started in `_lifespan`.
 **It is a backend thread, not a `pg_cron` job, and that is not a preference.** Closing a session
 credits lifetime totals, writes the daily rollup, archives four charts to storage and raises the
-alerts; SQL can do none of it. A cron job stamping `ended_at` would be a fourth close site that
+alerts; SQL can do none of it. A cron job stamping `ended_at` would be a fifth close site that
 skipped all of it — the exact thing `conftest.close_sites()` exists to catch. That helper picks the
 sweeper up automatically, so it is already covered by every close-site guard.
 
@@ -2678,8 +2681,9 @@ goes to a two-worker pool and `schedule()` swallows even a submit failure. That 
 only place a failure can surface, and it *has* to surface: the window in which an archive can still
 be rebuilt closes on `ends_on`.
 
-**Three close sites** — `/end`, the stale-session sweep in `start_session`, and `class_live` — and
-they all go through **`_close_session()`**. Don't hand-write a fourth: the sequence was copied into
+**Four close sites** — `/end`, the stale-session sweep in `start_session`, `class_live`, and the
+background `_sweep_abandoned_sessions` thread (`conftest.close_sites()` finds all four) — and
+they all go through **`_close_session()`**. Don't hand-write a fifth: the sequence was copied into
 each site and every copy drifted separately, none of them raising anything. The sweep credited a
 `correct_answers` it had never selected (absent column → `None` → `or 0` → an honest-looking zero),
 so every session of a student who shut the tab added its questions and *no* correct answers to their
@@ -2887,9 +2891,9 @@ resumed sensor by noticing data reappear is not consent.
 
 Tests: `backend/tests/test_consent.py`.
 
-`frontend/src/lib/facePref.js` still exists and is unrelated — a viewer-side localStorage read
-filter over the reporting surfaces, not consent. It is replaced by this table in a later change;
-until then the two coexist and mean different things.
+`frontend/src/lib/facePref.js`, the viewer-side localStorage read filter that used to sit beside
+this, is deleted — this table replaced it, and the teacher's `viewPrefs.js` (below) is the only
+client-side filter left and is not a consent control.
 
 ## Reporting — a failed read must not look like a quiet week
 
@@ -3200,7 +3204,9 @@ to import `ollama` directly — the ten `LLM_*_generation.py` topic files, three
 `LLM_topic_decider.py`, and `main._llm_strategies`. So a provider switch was fourteen edits, and the
 bounds below had nowhere to live at all.
 
-**Twelve of those remain.** Two of the three in `LLM_topic_decider.py` belonged to
+**Twelve of those remained at the time; the count moves with the topic list** (nineteen
+`generate_text(` sites today across seventeen generators, the decider and the strategies pass —
+count them rather than trusting a number here). Two of the three in `LLM_topic_decider.py` belonged to
 `parallel_topic_and_difficulty_calculation`, which spent *two* model calls on what the live path
 does in one and was reachable from nothing — `main.py` has only ever called
 `LLM_single_prompt_topic_and_difficulty_decider`. Deleted along with its sole caller
@@ -3254,7 +3260,7 @@ the hottest path in the product and had none:
 | Process-wide concurrency | `GENERATION_MAX_CONCURRENCY` (8) | `_prefetch_active` bounds *per user*, so the peak was however many children pressed start at once |
 | Per-student volume | `GENERATION_RATE_LIMIT` / `_WINDOW` (60/min) | The queue bounds calls *in flight*, not calls *over time* |
 | Spend | `GENERATION_DAILY_CALL_LIMIT` (2500/24h, Claude only) | Nothing bounded it; free against a local model |
-| Waiting callers | `GENERATION_MAX_WAITERS` (12) | See below — this was the fourth bound, and it was missing |
+| Waiting callers | `GENERATION_MAX_WAITERS` (30; was 12 until the load test below) | See below — this was the fourth bound, and it was missing |
 
 **The spend ceiling counts calls, and a question served is two of them** — the topic-and-difficulty
 decision and the generation. It was 5000, justified as "eightfold headroom" on ~600 generations a
@@ -3438,7 +3444,8 @@ like `math_topics`/`questions`; written only via the dashboard, since it's refer
 backend never mutates.
 
 `lesson_plan_context.append_lesson_context(prompt, topic_name, grade_band)` is the one-line call
-site wired into all ten `LLM_*_generation.py` topic files, right after the grade-magnitude block.
+site wired into every `LLM_*_generation.py` topic file (seventeen today; "ten" elsewhere in this
+file is the original set before the young and grade-9 topics), right after the grade-magnitude block.
 It returns `None` on a missing row, a blank row, a failed read, or missing Supabase credentials --
 same fail-open direction as the reporting helpers: this is prompt grounding, not a consent or
 access gate, so any failure should degrade to the existing difficulty/grade heuristics rather than
@@ -3486,8 +3493,9 @@ available everywhere.
 oversight.** The same audit flagged 10 of 10 at grades 4 and 5 in all six cells. They stay because
 raising them is a question about what grades 4-5 are offered at all — with `angle_relationships`
 gone they would drop to five topics — rather than a defect to fix in passing.
-`test_mean_median_mode_are_knowingly_early` is where that decision lives, so changing it means
-changing a test that says why.
+That decision was later reversed — they moved from 4 to 6 (see *A band's tiers are written for its
+ceiling* below), and `test_mean_median_mode_wait_for_the_grade_that_teaches_them` is where the
+current decision lives, so changing it means changing a test that says why.
 
 **A grade is read numerically, through `grade_levels`, and an unreadable one counts as the
 youngest.** `profiles.grade_level` is free text; only the frontend dropdown keeps it to "1st grade"
@@ -3499,7 +3507,7 @@ alone still leaves advanced material reaching a child. `grade_levels.grade_numbe
 a named label (`Kindergarten`, `Highschool`, `College`), rejects a number outside 0-13 so
 `"2026 cohort"` cannot become grade 2026, and answers `None` when it genuinely cannot tell — which
 every caller treats as the youngest, the same withholding-is-cheap asymmetry `signal_fusion`
-documents. `_grade_band` in all ten generation files now delegates to it rather than carrying a
+documents. `_grade_band` in every generation file now delegates to it rather than carrying a
 tenth copy of the string match. `_safe_topic(topic, grade)` checks
 the LLM's own selection against it (the prompt asks for the right thing but an 8B model doesn't
 reliably comply, same reasoning as the deterministic EEG-bias clamp in
@@ -3517,8 +3525,10 @@ grade only changed how big the constants in that equation were. Replaced with
 addition/subtraction primary, no algebraic notation), not just smaller versions of the same
 structure every other grade gets.
 
-**Seven of the ten topics use that table; `geometry`, `angle_relationships` and `probability`
-deliberately do not, and the difference is not an unfinished migration.** In those three, difficulty
+**Eleven of the seventeen topics use that table; `geometry`, `angle_relationships` and
+`probability` deliberately do not (nor do `quadratics`, `functions` and `spread`, whose difficulty
+is in coefficients chosen in code — see their section), and the difference is not an unfinished
+migration.** In those three, difficulty
 already selects a *scenario* (`DIFFICULTY_SCENARIOS` → a circle-area question, a triangle-sum
 question), so the question's structure is chosen by picking which question to ask rather than by
 describing it in prose. They keep `GRADE_COMPLEXITY[band]` for magnitude alone. Giving them a
@@ -3591,7 +3601,7 @@ instances were found by reading generated output. **Check a band's scenarios aga
 they claim to match, not against whether they look simple**: area of a triangle looks as elementary
 as area of a rectangle and is three grades apart.
 
-**Most of the ten topics are still defense-in-depth for "early" band, not primary content**, since
+**Most of the original ten topics are still defense-in-depth for "early" band, not primary content**, since
 `_allowed_topics()` above keeps `algebra`/`probability`/`rationals`/`mean`/`median`/`mode`/
 `angle_relationships` from ever reaching a grade 1-3 session in the first place. Their "early"
 tables exist only to fail safely if that gate is ever bypassed -- write real curriculum depth into
@@ -3663,11 +3673,12 @@ leak — `grade_appropriateness` is where a code-level check belongs if it does.
 Grade 4 went **66% → 43%** on a regenerated set, and then **43% → 0%** when `mean`/`median`/`mode`
 were raised from 4 to 6 (6.SP.5c). Grade 5 is 0% and grade 6 was already.
 
-**That last step cost breadth, and the cost is the point of recording it**: grades 4-5 now offer four
-topics — `ordering`, `geometry`, `expressions`, `rationals` — where they offered eight before the
-audit. That is grades 1-3's list plus one. It is a deliberate trade of coverage for accuracy, pinned
-by `test_the_cost_of_that_decision_is_four_topics_for_grades_four_and_five` so a later widening has
-to be a choice rather than a drift.
+**That last step cost breadth, and the cost is the point of recording it**: grades 4-5 offered four
+topics after the audit — `ordering`, `geometry`, `expressions`, `rationals` — where they offered
+eight before it, and **five** since `patterns` was extended to grade 5 (4.OA.5, 5.OA.3). It is a
+deliberate trade of coverage for accuracy, pinned by
+`test_the_cost_of_that_decision_is_four_topics_for_grades_four_and_five` (which asserts the five,
+its name predating `patterns`) so a later widening has to be a choice rather than a drift.
 
 Grades 1-2 had the same shape for geometry and were fixed by **adding a scenario rather than
 removing the topic**. The easiest scenario was `rectangle_area` (3.MD.7), so a strict reading left
@@ -3910,8 +3921,9 @@ a tier that would otherwise have reached for multiplication (3.OA).
 is defining attributes of shapes and partitioning into halves and fourths: nothing that produces a
 number a solver can score. The tempting fix — *"3 triangles and 4 squares, how many shapes?"* — is
 addition wearing a geometry label, and counting it would keep the topic list long while teaching
-1.OA. So `TOPIC_MIN_GRADE["geometry"]` is 2, and **grade 1 has two topics, `ordering` and
-`expressions`**. That is the honest size of what this system can ask a 6-year-old.
+1.OA. So `TOPIC_MIN_GRADE["geometry"]` is 2, and grade 1's list is `ordering` and `expressions`
+plus the four young topics above (`missing_number`, `patterns`, `graphs`, `shape_fractions`):
+**six**, none of them geometry. That is the honest size of what this system can ask a 6-year-old.
 
 **An unreadable grade lands there too.** It used to resolve to the early band's ceiling of 3 — two
 grades of content granted to a student nobody could identify — and now matches `_allowed_topics` and
@@ -4115,7 +4127,8 @@ the two new topics included. So **adding topics at grade 9 cannot move grades 11
 for content above grade 9 can, which is the wall `spread` runs into as well. Read a grade-9
 improvement as exactly that, and do not expect the upper grades to follow.
 
-The other fourteen topics carry no ceiling, so a grade-9 student is still offered them and still
+The other thirteen topics (seventeen, less the four capped young ones) carry no ceiling, so a
+grade-9 student is still offered them and still
 draws grade-8 content most of the time.
 
 **Capping them was considered and rejected, on arithmetic rather than taste** (2026-09-02). Since
@@ -4174,7 +4187,8 @@ with `solution` unbound. Measured after: grades 4-5 whole on 6 of 6, grades 6+ f
 something and nothing verifies it complied. That is the same shape as every rule this codebase has
 already had to move into code, so `find_violation(question_text, topic, grade_band)` runs inside
 each generation retry loop: a violation retries, and exhausting the retries raises, which
-`_prefetch_worker` already catches. Nine topics are wired in.
+`_prefetch_worker` already catches. Thirteen of the seventeen topics are wired in; `algebra`,
+`quadratics`, `functions` and `spread` are the exemptions explained below.
 
 **It tests one thing — algebraic variable notation reaching a band that must not see it** — and the
 narrowness is the design. A check with a real false-positive rate is worse than no check: it burns
@@ -4256,7 +4270,9 @@ never gets scheduled and a signal handler never runs. Only an external kill work
 sympy import per call, which is a minority addition to a ~1-3s model call and is paid only where an
 expression, equation or scenario is solved.
 
-**All ten topics are wired, and getting there took four rounds of finding the next unwired one.**
+**All eleven topics that touch sympy are wired (the six that never parse model text with it —
+the young topics and the high-school solvers — need no worker), and getting there took four
+rounds of finding the next unwired one.**
 `expressions` bounded while `algebra` still parsed in the request thread; then `algebra` bounded
 while `geometry` still ran `preprocess_variables` — `sympify` over the model's raw values —
 in-process, with a docstring claiming otherwise; then the remaining seven, which had never been
@@ -4304,7 +4320,7 @@ history is worth keeping because the conclusion inverted along the way.
 
 While the budget was wall-clock over a child dominated by sympy startup, any other load on the
 machine could exhaust it: reproduced with the frontend suite running alongside the backend one, and
-again with CPU hogs — **8 of 8 solves killed at 3.0s**. Ten of the fourteen topics reach the worker,
+again with CPU hogs — **8 of 8 solves killed at 3.0s**. Eleven of the seventeen topics reach the worker,
 and since a timeout raises rather than returning `None`, every one was a **503 on the first
 attempt**. Retrying was then the only thing that separated the two meanings of "timeout", because
 nothing in-process could tell them apart.
@@ -4434,8 +4450,8 @@ assertion wearing an invariant's clothes, the same rule as
 `test_time_spent_queueing_comes_out_of_the_budget_it_was_promised` above. Assert what the probe
 actually guarantees: the *effective* budget clears the floor.
 
-**Most topics need only the parse bounded, not the whole solve.** `safe_sympify_values` covers six of
-the ten: they parse the model's numbers and then do ordinary arithmetic, which cannot hang. Only
+**Most topics need only the parse bounded, not the whole solve.** `safe_sympify_values` covers five
+of the eleven: they parse the model's numbers and then do ordinary arithmetic, which cannot hang. Only
 `geometry` and `angle_relationships` needed their solvers moved, because both keep sympy *expressions*
 past the parse — geometry solves for a missing side, and `algebra_complementary` substitutes a solved
 `x` back into two angle expressions. Reach for the value parser first; move a solver only when
@@ -4529,8 +4545,8 @@ never checked.
 empty completion — which is the exact case the three attempts exist to absorb, so a `.replace` or a
 `.strip()` above the guard raises `AttributeError` straight out of the loop and the retry never
 happens. `LLM_median_generation` had those two lines the other way round;
-`tests/test_generation_retry_loop.py` is parametrised over all ten topics so the next copy cannot be
-a one-off.
+`tests/test_generation_retry_loop.py` is parametrised over every `LLM_*_generation.py` file by glob
+(seventeen today) so the next copy cannot be a one-off.
 
 **Measure how often a fail-open check *engages*, never just how often it fires.** A check that never
 finds anything to compare reports a perfect false-positive rate while doing nothing, and reads as
@@ -4566,9 +4582,9 @@ wired reads as one that is working, which is exactly how the probability gap abo
 `lesson_plan_context` returns `None` for an unseeded cell, a blank row, a failed read, and missing
 credentials — all four degrade identically to the difficulty/grade heuristics, which is right, but
 they were also indistinguishable in the log. They are very different problems: a content gap
-somebody has to write, a half-finished edit, an outage, and a misconfigured process. `lookup_reason()`
-names them (`NO_ROW` / `BLANK_ROW` / `READ_FAILED` / `NO_CREDENTIALS` / `FOUND`) and each logs its
-own line. Nothing in generation branches on it — every non-`FOUND` reason degrades the same way —
+somebody has to write, a half-finished edit, an outage, and a misconfigured process. `_lookup()`
+returns `(text, reason)` and names them (`NO_ROW` / `BLANK_ROW` / `READ_FAILED` / `NO_CREDENTIALS`
+/ `FOUND`), and each logs its own line. Nothing in generation branches on it — every non-`FOUND` reason degrades the same way —
 so this is diagnostics, deliberately.
 
 **`READ_FAILED` and `NO_CREDENTIALS` are not cached**, unlike the other three: caching an outage

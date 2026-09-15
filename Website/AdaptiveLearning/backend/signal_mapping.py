@@ -197,6 +197,15 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
             # rollup is the gap the score-scale version exists to close --
             # so the version is per source too (SCORE_SCALE_BY_CALM_SOURCE).
             calm_source=calm_source,
+            # Whether each score was centred on the session's baseline or
+            # still on the population midpoint. Client-supplied: a bool or
+            # nothing. Pre-latch used to be a 45 s opening window; the local
+            # calm's latch can take the whole session, and a midpoint-scored
+            # calm was indistinguishable on the row from a centred one.
+            focus_centred=(f.get("focus_centred")
+                           if isinstance(f.get("focus_centred"), bool) else None),
+            calm_centred=(f.get("calm_centred")
+                          if isinstance(f.get("calm_centred"), bool) else None),
             calm_measured=calm_measured if calm_measured_ok else None,
             calm_held_seconds=held if held_ok else None,
             # Which of the two was rejected, or the nulled stress reads as

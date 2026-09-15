@@ -107,6 +107,14 @@ def test_the_rollup_writes_the_stress_count_and_the_rpcs_weight_on_it():
         assert "class_signal_student_totals(ARRAY[owner_id]" in fh.read()
 
 
+def test_the_row_says_whether_each_score_was_centred_on_the_session():
+    r = _row(calm_source="local", focus_centred=True, calm_centred=False)
+    assert r["raw"]["focus_centred"] is True and r["raw"]["calm_centred"] is False
+    r = _row(calm_source="local", focus_centred="yes", calm_centred=1)
+    assert "focus_centred" not in r["raw"] and "calm_centred" not in r["raw"]
+    assert "calm_centred" not in _row()["raw"], "an older sidecar sends neither"
+
+
 def test_the_hold_cap_matches_the_sidecar():
     """The engine stops labelling from a carried calm at the same second the
     mapper stops storing its stress. Pinned as a literal on both sides,

@@ -1123,6 +1123,15 @@ class SignalProcessor:
             "spectrum_slope": (spectrum or {}).get("slope_temporal") if spectrum_ready else None,
             "calm_measured": calm_measured,
             "calm_held_seconds": calm_held_seconds,
+            # Whether each score is centred on this session's own baseline
+            # yet, or still on the population midpoint. Pre-latch was a
+            # 45-second opening window; on the local source it can last the
+            # whole session, since the calm latch needs 45 covered seconds
+            # of ticks that carried a calm and a poisoned tick carries none
+            # (never, at 22% artifact ticks), and a midpoint-scored calm
+            # looked identical on the row to a session-centred one.
+            "focus_centred": self._baseline_ready,
+            "calm_centred": self._calm_ready if self.calm_source == "local" else self._baseline_ready,
             # The smoothed ratios the scores were actually scaled from.
             # None beside a None raw ratio: a tick with no bands has no
             # smoothed value either, and reporting the last one made an

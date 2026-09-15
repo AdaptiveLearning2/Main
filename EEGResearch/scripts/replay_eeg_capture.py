@@ -57,6 +57,7 @@ REPLAYED_KEYS = (
     "contact_ratio", "samples_artifact", "artifact_reason", "samples_no_delta",
     "samples_no_spread", "calm_source", "calm_alpha_residual", "spectrum_ready",
     "spectrum_reason", "spectrum_slope", "calm_measured", "calm_held_seconds",
+    "focus_centred", "calm_centred",
     "focus_log_ratio_smoothed", "calm_log_ratio_smoothed",
 )
 

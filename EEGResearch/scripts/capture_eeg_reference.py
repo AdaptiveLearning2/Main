@@ -177,6 +177,8 @@ def flatten_state(envelope: dict[str, Any], *, segment: str, t: str) -> dict[str
         "spectrum_slope": features.get("spectrum_slope"),
         "calm_measured": features.get("calm_measured"),
         "calm_held_seconds": features.get("calm_held_seconds"),
+        "focus_centred": features.get("focus_centred"),
+        "calm_centred": features.get("calm_centred"),
         "artifact_reason": features.get("artifact_reason"),
         "focus_log_ratio_smoothed": features.get("focus_log_ratio_smoothed"),
         "calm_log_ratio_smoothed": features.get("calm_log_ratio_smoothed"),

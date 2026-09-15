@@ -67,6 +67,11 @@ class FeatureData(BaseModel):
     # has been carried since the last fresh estimate.
     calm_measured: bool | None = None
     calm_held_seconds: float | None = None
+    # Whether each score is centred on the session's own baseline yet or
+    # still on the population midpoint (the calm latch can take a whole
+    # session on the local source).
+    focus_centred: bool | None = None
+    calm_centred: bool | None = None
 
 
 class StateData(BaseModel):

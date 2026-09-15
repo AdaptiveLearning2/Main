@@ -1673,7 +1673,12 @@ engine labels neither stressed nor focused on one; `calm_held_seconds` says how 
 has been carried, and past `CALM_HOLD_MAX_SECONDS` the mapper nulls `stress` **and the engine
 labels neutral** — the constant lives in both `adaptation.py` and `signal_mapping.py`, pinned
 equal by a test on each side like the stressed line, or the sidecar asserts a learner state from
-a calm the backend has just declined to record. The row records
+a calm the backend has just declined to record. **`focus_centred` and `calm_centred` say whether
+each score is on the session's own baseline yet or still on the population midpoint**, and ride in
+`raw`: pre-latch was a 45-second opening window, but the local calm latch needs 45 covered seconds
+of ticks that *carried* a calm and a poisoned tick carries none, so at the reference capture's
+12–22% artifact rate it takes 170 s to never, and a midpoint-scored calm was indistinguishable on
+the row from a centred one. The row records
 `calm_source`, and **the local source is score scale 3** (`SCORE_SCALE_BY_CALM_SOURCE`), so two
 sidecars on one class cannot write calm on two scales under one version. **Scale 3 is a different
 unit, not a later version**: it moves stress and not focus, and it runs on one student's headband

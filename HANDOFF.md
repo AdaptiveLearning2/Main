@@ -53,8 +53,8 @@ relative temporal alpha residual when `EEG_SPECTRUM_SOURCE=local`; default `sdk`
 3. Step 1.7, half done: the local stressed line is 0.25, set from the capture (EEG_REFERENCE.md,
    "the local stressed line"), per source in both packages. It is one adult's, **and the table it
    came from predates the artifact poison and does not reproduce under it** (the replay applies
-   the poison since PR #182's last review round: fresh estimates on 13–21% of task ticks, calm
-   held past the 10 s cap on 41% of resting ones, eyes-open medians scored against the carried
+   the poison since PR #182's last review round: fresh estimates on 18–21% of eyes-open and task
+   ticks, calm held past the 10 s cap on 40% of resting ones, eyes-open medians scored against the carried
    eyes-closed centre). Two decisions before re-setting it from the second wearer: how long an
    artifact poisons (the full 4 s buffer or the 2 s epoch it landed in), and the local calm's
    centre before its own latch. `focused` remains unreachable by design until a marker exists.

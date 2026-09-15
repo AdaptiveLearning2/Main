@@ -225,8 +225,10 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
             # sidecar's bounds were widened on 2026-09-14 (scale 2), which
             # re-anchors every focus and stress value -- 14 to 30 points
             # pre-latch, ~38% of gain after -- and no column records that.
-            # Rows without the key predate it. The rollup carries no `raw`,
-            # so there the boundary is the date in CLAUDE.md.
+            # Rows without the key predate it. The rollup reads it off each
+            # row through score_scale_of(raw) and records the range seen
+            # each day (score_scale_min/max) -- never a date, since the
+            # rollout is per sidecar process.
             score_scale=SCORE_SCALE_BY_CALM_SOURCE.get(calm_source or "sdk",
                                                        SCORE_SCALE_VERSION),
         ),

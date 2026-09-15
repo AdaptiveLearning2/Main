@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.app.models import EegSample  # noqa: E402
-from src.app.services.adaptation import AdaptationEngine  # noqa: E402
+from src.app.services.adaptation import CALM_HOLD_MAX_SECONDS, AdaptationEngine  # noqa: E402
 from src.app.services.eeg_spectrum import SAMPLE_RATE_HZ, SpectrumEstimator, poisons_buffer  # noqa: E402
 from src.app.services.signal_processing import SignalProcessor  # noqa: E402
 
@@ -73,8 +73,16 @@ def replay(path: str, hz: float = 4.0, arm_at: str | None = None) -> dict[str, d
             # four seconds of estimates here that the sidecar withholds.
             est.poison()
         state = eng.infer_state(f)
-        bucket = out.setdefault(seg, {"alpha": [], "calm": [], "focus": [], "labels": {}, "n": 0})
+        bucket = out.setdefault(seg, {"alpha": [], "calm": [], "focus": [], "labels": {}, "n": 0,
+                                      "fresh": 0, "artifact": 0, "poisoned": 0, "stale": 0})
         bucket["n"] += 1
+        # Availability under the gate: how often the local calm was a fresh
+        # estimate, held by an artifact tick, withheld by the poison, and
+        # carried past the hold cap (the mapper nulls stress there).
+        bucket["fresh"] += bool(f["spectrum_ready"])
+        bucket["artifact"] += poisons_buffer(f.get("artifact_reason"))
+        bucket["poisoned"] += f.get("spectrum_reason") == "artifact"
+        bucket["stale"] += (f.get("calm_held_seconds") or 0) > CALM_HOLD_MAX_SECONDS
         if f["calm_alpha_residual"] is not None:
             bucket["alpha"].append(f["calm_alpha_residual"])
         bucket["calm"].append(f["calm_score"])
@@ -90,11 +98,17 @@ def main(argv=None) -> int:
     ap.add_argument("--arm-at", metavar="SEGMENT", help="restart the baseline at this segment")
     args = ap.parse_args(argv)
     out = replay(args.path, hz=args.hz, arm_at=args.arm_at)
-    print(f"{'segment':20} {'ticks':>5} {'alpha resid':>11} {'calm':>6} {'focus':>6}  labels")
+    print(f"{'segment':20} {'ticks':>5} {'alpha resid':>11} {'calm':>6} {'focus':>6} | "
+          f"{'fresh':>5} {'artif':>5} {'poisn':>5} {'stale':>5} | labels")
     for seg, b in out.items():
         med = lambda xs: f"{statistics.median(xs):+.3f}" if xs else "   --"
+        pct = lambda k: f"{100 * b[k] / b['n']:4.0f}%"
         print(f"{seg:20} {b['n']:5d} {med(b['alpha']):>11} {statistics.median(b['calm']):6.1f} "
-              f"{statistics.median(b['focus']):6.1f}  {dict(sorted(b['labels'].items()))}")
+              f"{statistics.median(b['focus']):6.1f} | {pct('fresh')} {pct('artifact')} "
+              f"{pct('poisoned')} {pct('stale')} | {dict(sorted(b['labels'].items()))}")
+    print("fresh: a new estimate this tick; artif: held by the artifact gate (poisons the buffer); "
+          "poisn: no estimate because of an earlier artifact; stale: calm carried past "
+          f"{CALM_HOLD_MAX_SECONDS:.0f} s, where the backend nulls stress.")
     return 0
 
 

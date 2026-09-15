@@ -181,8 +181,8 @@ Findings:
    Four seconds is the shortest epoch that separates the two states reliably, and it is the
    smoothing constant Phase 1 already uses on the ratios.
 4. **Silent arithmetic does not raise beta either.** Beta residual arithmetic against eyes open:
-   AUC 0.38–0.43 at every epoch length, i.e. beta is *lower* under the task. Gamma 0.57–0.59,
-   nothing. The one task effect present is alpha suppression — arithmetic alpha residual −0.30
+   AUC 0.38–0.43 at every epoch length, i.e. beta is *lower* under the task. Gamma 0.55–0.59,
+   nothing. (Both columns are printed by `analyze_raw_capture.py`'s separation tables.) The one task effect present is alpha suppression — arithmetic alpha residual −0.30
    against eyes open −0.21 — and it is weak: AUC 0.56 at 4 s, 0.69 at 16 s. With speech ruled
    out, the beta-over-alpha-plus-theta ratio does not measure this task on this hardware.
 5. **The 1/f slope itself separates eyes closed from open** (−1.24 against −2.75) more than any
@@ -226,7 +226,9 @@ Calm is built on the residual, not the slope, by decision: the residual has a ph
 and a mechanism (an alpha rhythm), while whether the slope's shift is neural or the blink rate is
 not something one capture can say — blinks steepen it to −3.5 in the blinking segment. The slope
 rides on every payload as `spectrum_slope`, unscored, so the comparison can be made on real
-sessions. Arithmetic against eyes open: alpha AUC 0.40–0.44 (suppressed, weakly), slope 0.48–0.55.
+sessions. Arithmetic against eyes open, over 2/4/8/16 s epochs: alpha AUC 0.40, 0.44, 0.40, 0.31
+(suppressed, weakly; the 0.31 at 16 s is the 0.69 quoted for alpha suppression above, read the
+other way, on seven epochs), slope 0.50, 0.48, 0.55, 0.69.
 
 **The local stressed line is 0.25**, set from the capture replayed through
 `scripts/replay_raw_capture.py --arm-at eyes_open_rest` (the first-question state). Per-tick calm on
@@ -249,23 +251,24 @@ for children is a capture away.
 **That table was derived before the artifact poison, and does not reproduce under it.** The
 replay now applies the same rule as `DeviceSession._loop`: an artifact tick (other than
 `malformed_bands`) poisons the 4 s buffer until its samples have left. Re-run with the gate
-(`replay_raw_capture.py --arm-at eyes_open_rest`, 2026-09-14), per segment:
+(`replay_raw_capture.py --arm-at eyes_open_rest`, 2026-09-15; the script prints these four
+columns as `fresh / artif / poisn / stale`), per segment:
 
 | segment | ticks | fresh estimate | artifact tick | poisoned | calm held > 10 s | median calm |
 | --- | --- | --- | --- | --- | --- | --- |
-| eyes closed | 481 | 47% | 12% | 46% | 11% | 74 |
-| eyes open, rest | 481 | 13% | 17% | 75% | 41% | 15 |
-| arithmetic, silent | 481 | 21% | 14% | 60% | 15% | 13 |
-| eyes open, rest 2 | 240 | 18% | 22% | 75% | 11% | 51 |
+| eyes closed | 481 | 49% | 7% | 43% | 5% | 74 |
+| eyes open, rest | 481 | 18% | 19% | 70% | 40% | 15 |
+| arithmetic, silent | 481 | 19% | 15% | 63% | 19% | 13 |
+| eyes open, rest 2 | 240 | 21% | 10% | 69% | 14% | 51 |
 | fidget | 121 | 3% | 44% | 96% | 64% | 64 |
 
 Two things follow, and neither is a property of the alpha measure itself:
 
 - **The gate withholds the local calm most of the time on this wearer.** The artifact rate is
-  12–22% of ticks at rest and a task, and each artifact costs the next four seconds, so a fresh
-  estimate arrives on 13–21% of ticks in the task segments and `calm_held_seconds` passes the
-  10 s hold cap (`CALM_HOLD_MAX_SECONDS`, after which the mapper nulls `stress`) on 41% of
-  resting eyes-open ticks. The residual on the ticks that *are* fresh separates as before (closed
+  7–19% of ticks at rest and a task, and each artifact costs the next four seconds, so a fresh
+  estimate arrives on 18–21% of ticks in the eyes-open and task segments and `calm_held_seconds`
+  passes the 10 s hold cap (`CALM_HOLD_MAX_SECONDS`, after which the mapper nulls `stress` and the
+  engine labels neutral) on 40% of resting eyes-open ticks. The residual on the ticks that *are* fresh separates as before (closed
   +0.35, open −0.07, arithmetic −0.10).
 - **The eyes-open medians are scored against the eyes-closed centre.** `restart_baseline()` at
   the arm keeps the old calm centre in use until the new one latches, and the new latch needs 45

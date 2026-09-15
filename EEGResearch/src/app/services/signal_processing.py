@@ -37,7 +37,7 @@ class SignalProcessor:
     # would pin calm_band_ratio to 0 and make "not stressed" unreachable while
     # concentrating.
     #
-    # Calm spans ratio 0.20 (aroused/stressed) to 2.00 (clearly alpha-dominant,
+    # Calm spans ratio 0.16 (aroused/stressed) to 2.00 (clearly alpha-dominant,
     # relaxed); focus spans 0.15 (drowsy, theta/alpha heavy) to 2.00 (strongly
     # beta-dominant). Physiology-informed heuristics, widened once against
     # the reference capture (tests/fixtures/EEG_REFERENCE.md): its focus
@@ -1128,7 +1128,8 @@ class SignalProcessor:
             # 45-second opening window; on the local source it can last the
             # whole session, since the calm latch needs 45 covered seconds
             # of ticks that carried a calm and a poisoned tick carries none
-            # (never, at 22% artifact ticks), and a midpoint-scored calm
+            # (minutes at the reference capture's 7-19% artifact rate, and
+            # it can outlast a session), and a midpoint-scored calm
             # looked identical on the row to a session-centred one.
             # Each from the latch _centre() actually reads for that score.
             # Reporting focus's latch for calm on the sdk source was a proxy

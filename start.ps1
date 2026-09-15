@@ -398,6 +398,10 @@ if ($Camera) {
     # page says "streaming" is exactly what explicit modes exist to prevent.
     Set-EnvKey $eegEnv "PUSH_ENABLED" "true"
     Set-EnvKey $eegEnv "BACKEND_URL" "http://127.0.0.1:8000"
+    # The calm source is sdk by decision (CLAUDE.md, Phase 2); written on
+    # both branches like every key above, or a hand-edited `local` survives
+    # into a later plain run and records rows on a scale nobody chose.
+    Set-EnvKey $eegEnv "EEG_SPECTRUM_SOURCE" "sdk"
     Set-EnvKey $backendEnv "INGEST_MODE" "push"
     # The page talks to the sidecar directly under push, and it authenticates
     # with the sidecar's own API_TOKEN. Copied here rather than left to a
@@ -442,6 +446,7 @@ if ($Camera) {
     # and rollup paths are exercised against.
     Set-EnvKey $eegEnv "PUSH_ENABLED" "false"
     Set-EnvKey $backendEnv "INGEST_MODE" "pull"
+    Set-EnvKey $eegEnv "EEG_SPECTRUM_SOURCE" "sdk"
 
     # Remove only the camera entry this script writes, leaving any other devices
     # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written

@@ -96,8 +96,12 @@ def segment_table(segs, order, good):
                   f"{th:9.3f} {r_alpha:9.3f} {be:9.3f} {ga:10.3f} | {region}")
 
 
+EPOCH_COLUMNS = ("alpha", "slope", "beta", "gamma")
+
+
 def epochs(seg: dict[str, np.ndarray], seconds: float, chans=TEMPORAL) -> np.ndarray:
-    """Per adjacent epoch: (alpha residual, slope), averaged over `chans`."""
+    """Per adjacent epoch: (alpha residual, slope, beta residual, gamma
+    residual), averaged over `chans`, all against the one 1/f fit."""
     n = int(seconds * SAMPLE_RATE_HZ)
     out = []
     length = len(seg["tp9"])
@@ -105,7 +109,11 @@ def epochs(seg: dict[str, np.ndarray], seconds: float, chans=TEMPORAL) -> np.nda
         vals = []
         for c in chans:
             f, lp = welch_log_psd(seg[c][i:i + n], window_seconds=min(2.0, seconds))
-            vals.append(alpha_residual(f, lp))
+            r_alpha, slope = alpha_residual(f, lp)
+            _, intercept = one_over_f_fit(f, lp)
+            vals.append((r_alpha, slope,
+                         band_residual(f, lp, 13, 30, slope, intercept),
+                         band_residual(f, lp, 30, 44, slope, intercept)))
         out.append(np.mean(vals, axis=0))
     return np.asarray(out)
 
@@ -119,14 +127,16 @@ def separation_table(segs, a: str = "eyes_closed_rest", b: str = "eyes_open_rest
           "continuous block each: not independent samples, so the AUC describes this "
           "recording only and rises as the epoch count falls.")
     print(f"{'epoch':>6} {'n/class':>8} | {'alpha med A':>11} {'alpha med B':>11} {'AUC alpha':>9} | "
-          f"{'slope med A':>11} {'slope med B':>11} {'AUC slope':>9}")
+          f"{'slope med A':>11} {'slope med B':>11} {'AUC slope':>9} | {'AUC beta':>8} {'AUC gamma':>9}")
     for secs in (2, 4, 8, 16):
         ea, eb = epochs(segs[a], secs), epochs(segs[b], secs)
         if len(ea) < 2 or len(eb) < 2:
             continue
         print(f"{secs:5d}s {min(len(ea), len(eb)):8d} | {np.median(ea[:, 0]):+11.3f} {np.median(eb[:, 0]):+11.3f} "
               f"{auc(ea[:, 0], eb[:, 0]):9.3f} | {np.median(ea[:, 1]):+11.2f} {np.median(eb[:, 1]):+11.2f} "
-              f"{auc(ea[:, 1], eb[:, 1]):9.3f}")
+              f"{auc(ea[:, 1], eb[:, 1]):9.3f} | {auc(ea[:, 2], eb[:, 2]):8.3f} {auc(ea[:, 3], eb[:, 3]):9.3f}")
+    print("The slope separates too, and is carried on the payload unscored (spectrum_slope): "
+          "whether its shift is neural or the blink rate is not something one capture can say.")
 
 
 def main(argv=None) -> int:

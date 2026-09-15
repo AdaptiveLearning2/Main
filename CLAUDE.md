@@ -1669,8 +1669,8 @@ the drain in `DeviceSession._loop` — every sample, since the bridge takes one 
 `samples[-1]` is scored. `scripts/replay_raw_capture.py` replays a bridge capture through it and
 prints per-segment medians, applying the same artifact poison `DeviceSession._loop` applies
 (the reference medians quoted before that were derived without it and do not reproduce: **with
-the gate the local calm is fresh on 13–21% of task ticks and held past the 10 s cap on 41% of
-resting ones**, since 12–22% of ticks are artifacts and each costs the next 4 s — see
+the gate the local calm is fresh on 18–21% of eyes-open and task ticks and held past the 10 s cap
+on 40% of resting ones**, since 7–19% of ticks are artifacts and each costs the next 4 s — see
 `EEG_REFERENCE.md`, "derived before the artifact poison"). **The SDK alpha band did move on this run** (+0.24 Bels closed) because contact held at
 3 of 4; it is not blind to alpha, it is unreliable at the contact the product gets.
 
@@ -1712,7 +1712,7 @@ a calm the backend has just declined to record. **`focus_centred` and `calm_cent
 each score is on the session's own baseline yet or still on the population midpoint**, and ride in
 `raw`: pre-latch was a 45-second opening window, but the local calm latch needs 45 covered seconds
 of ticks that *carried* a calm and a poisoned tick carries none, so at the reference capture's
-12–22% artifact rate it takes 170 s to never, and a midpoint-scored calm was indistinguishable on
+7–19% artifact rate it takes minutes and can outlast a session, and a midpoint-scored calm was indistinguishable on
 the row from a centred one. The row records
 `calm_source`, and **the local source is score scale 3** (`SCORE_SCALE_BY_CALM_SOURCE`), so two
 sidecars on one class cannot write calm on two scales under one version. **Scale 3 is a different

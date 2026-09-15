@@ -36,8 +36,9 @@ default `sdk` by decision. Focus stays the SDK ratio, documented as unmeasured.
 3. Step 1.7, half done: the local stressed line is 0.25, one adult's, from a table that predates
    the poison. Re-set it from the second wearer once 2 is decided, per source in both packages.
    `focused` remains unreachable by design until a marker exists.
-4. Phase 3: frontend `Confidence` label on the debug readout -> *Signal quality*; re-read the
-   fusion asymmetry test after 3.
+4. Phase 3, half done: the debug readout's `Confidence` bar is *Signal quality score* (2026-09-15,
+   the verdict tile above it already said *Signal Quality*). Still to do: re-read the fusion
+   asymmetry test after 3.
 5. `rearchive_session_charts.py --before 2026-09-14` (dry run), then `--apply`, against production
    storage: re-renders archives that still draw the engagement series, skipping sessions whose raw
    rows have expired. Unblocked -- the migration is on remote -- and not yet run.

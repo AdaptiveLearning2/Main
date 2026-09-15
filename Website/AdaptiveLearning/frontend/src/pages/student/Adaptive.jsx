@@ -2035,7 +2035,14 @@ export default function Adaptive() {
                         {bar(untrusted ? null : feat.calm_score, 'bg-emerald-500')}
                       </div>
                       <div>
-                        <p className="text-gray-400 mb-1">Confidence <span className="text-white">{untrusted ? '—' : pct(feat.confidence)}</span></p>
+                        {/* The payload key is still `confidence`, but since
+                            Phase 1 the number is warm-up, contact, spectral
+                            stability and band presence -- a signal-quality
+                            score, with calm no longer in it. "Confidence"
+                            read as confidence in the scores beside it. It is
+                            the 0..100 behind the Signal Quality verdict in
+                            the row above, hence "score". */}
+                        <p className="text-gray-400 mb-1">Signal quality score <span className="text-white">{untrusted ? '—' : pct(feat.confidence)}</span></p>
                         {bar(untrusted ? null : feat.confidence, 'bg-violet-500')}
                       </div>
                       <div>

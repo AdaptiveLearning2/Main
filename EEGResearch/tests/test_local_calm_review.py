@@ -37,7 +37,7 @@ def test_the_simulator_never_feeds_the_spectrum_and_an_artifact_poisons_it():
     src = inspect.getsource(DeviceSession._loop)
     assert 'if self.device_config.kind == "muse":' in src
     assert "self.spectrum.push(samples, raw_meta)" in src
-    assert "self.spectrum.poison()" in src
+    # The poison itself is driven behaviourally in test_poison_behaviour.py.
 
 
 def test_calm_latches_on_its_own_coverage_and_keeps_collecting_after_focus_has():

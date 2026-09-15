@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.app.models import EegSample  # noqa: E402
 from src.app.services.adaptation import AdaptationEngine  # noqa: E402
-from src.app.services.eeg_spectrum import SAMPLE_RATE_HZ, SpectrumEstimator  # noqa: E402
+from src.app.services.eeg_spectrum import SAMPLE_RATE_HZ, SpectrumEstimator, poisons_buffer  # noqa: E402
 from src.app.services.signal_processing import SignalProcessor  # noqa: E402
 
 BANDS = ("delta", "theta", "alpha", "beta", "gamma")
@@ -67,7 +67,7 @@ def replay(path: str, hz: float = 4.0, arm_at: str | None = None) -> dict[str, d
         spectrum = est.push(pending, meta)
         last, pending = pending[-1], []
         f = proc.update(last, meta, spectrum=spectrum)
-        if f.get("artifact_reason") not in (None, "malformed_bands"):
+        if poisons_buffer(f.get("artifact_reason")):
             # As DeviceSession._loop does: the gate held this tick and the
             # window still holds the blink. Without it a blink contaminated
             # four seconds of estimates here that the sidecar withholds.

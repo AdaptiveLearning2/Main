@@ -112,6 +112,15 @@ def alpha_residual(f: np.ndarray, log_psd: np.ndarray) -> tuple[float, float]:
     return float(np.mean(log_psd[band] - fitted[band])), float(slope)
 
 
+def poisons_buffer(artifact_reason: str | None) -> bool:
+    """Whether a tick the artifact gate held should poison the raw buffer.
+    Any raw-sample artifact does (a blink, a clench, a jolt); malformed_bands
+    is a fault in the SDK's band dict, not in the samples, and poisoning on
+    it cost 3.9 s of estimates the buffer could have given. One decision,
+    read by the stream manager and by the replay."""
+    return artifact_reason not in (None, "malformed_bands")
+
+
 class SpectrumEstimator:
     """Rolling 4 s buffer per temporal channel; `latest()` is the estimate.
 

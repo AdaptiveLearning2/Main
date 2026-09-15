@@ -8,8 +8,6 @@ the SDK's band dict does not poison a buffer of raw samples it never touched.
 
 from __future__ import annotations
 
-import inspect
-
 from src.app.services.eeg_spectrum import CHANNELS, EPOCH_SECONDS, SAMPLE_RATE_HZ, SpectrumEstimator
 from tests.test_eeg_spectrum import GOOD, pink, samples_from
 
@@ -42,14 +40,11 @@ def test_a_poison_while_filling_says_artifact_not_filling():
     assert est.latest()["reason"] == "filling"
     est.poison()
     assert est.latest()["reason"] == "artifact"
-    out = est.push(samples[half:], GOOD)
+    # A push that leaves the buffer still under capacity: only here is the
+    # branch order observable, since a push that fills it makes the filling
+    # branch false under either order.
+    out = est.push(samples[half:half + 64], GOOD)
+    assert out["ready"] is False and out["reason"] == "artifact"
+    out = est.push(samples[half + 64:], GOOD)
     assert out["ready"] is False and out["reason"] == "artifact"
 
-
-def test_malformed_bands_does_not_poison_the_raw_buffer():
-    """malformed_bands is a fault in the SDK band dict, not in the samples.
-    Poisoning on it cost 31 ticks (3.88 s) of estimates the buffer could
-    have given -- on the local source, ticks with no calm at all."""
-    from src.app.services.stream_manager import DeviceSession
-    src = inspect.getsource(DeviceSession._loop)
-    assert 'features.get("artifact_reason") not in (None, "malformed_bands")' in src

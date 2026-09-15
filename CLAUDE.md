@@ -35,7 +35,10 @@ CANARY: <branch> <short hash of HEAD> | tree: clean|dirty(<n> files) | last suit
 ```
 
 `git status --short` and `git log --oneline -1` supply the first two; the suite counts are the
-last run *in this session*, or `none` if there has not been one. Then check it against the
+last run *in this session*, or `none` if there has not been one. **Record the total, not the pass
+count**: a run reporting `712 passed, 1 failed` is a 713-test suite, and the one failure is usually
+the documented real-timer flake. Written as 712 in a handoff, a genuinely deleted test later reads
+as agreeing with the record. Then check it against the
 previous canary. **Any of these means stop, re-read this section and `git status`, and say so
 before touching a file:**
 

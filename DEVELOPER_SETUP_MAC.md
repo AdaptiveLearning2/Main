@@ -96,8 +96,18 @@ chmod +x start.sh
 ./start.sh
 ```
 
+Flags, at parity with `start.ps1` (reasons in CLAUDE.md, *Running and testing*): `--muse`,
+`--camera` / `--index N`, `--gaze` (implies `--camera`; needs `pip install -e ".[face,gaze]"` run
+from `EEGResearch`), `--no-emotion` (only with `--gaze`), `--optics` / `--preset 103N` (refused
+without `--muse`; the bridge itself is Windows-only), and `--local-calm` (calm from the sidecar's
+own spectrum; refused without `--muse`; off by decision). Each key is written on both branches of
+its flag so a stale value cannot survive a plain run.
+
 This will:
-1. Start Ollama and pull `llama3.1:8b` if not already downloaded (takes a few minutes on first run)
+1. Start Ollama and pull `llama3.1:8b` if not already downloaded (takes a few minutes on first run).
+   Skipped when `Website/AdaptiveLearning/backend/.env` sets `LLM_PROVIDER=claude`, which needs
+   `ANTHROPIC_API_KEY` there instead (the `CLAUDE_*` group is in CLAUDE.md under *Every model call
+   goes through `llm_client`*). The default is Ollama so a fresh checkout bills nothing.
 2. Create Python venvs and install dependencies automatically if missing
 3. Install frontend `node_modules` if missing
 4. Open a Terminal.app window for each service
@@ -137,7 +147,7 @@ curl -H "Authorization: Bearer $(grep '^API_TOKEN=' EEGResearch/.env | cut -d= -
 │   │   └── services/
 │   │       ├── eeg_ingestion.py       ← TCP bridge adapter + simulator
 │   │       ├── signal_processing.py  ← focus/calm/confidence from EEG
-│   │       ├── adaptation.py          ← maps features → question policy
+│   │       ├── adaptation.py          ← features → learner-state label (diagnostic; difficulty is chosen by the website backend)
 │   │       └── stream_manager.py      ← orchestrates the pipeline
 │   ├── docs/                          ← dev quickstart, pilot runbook
 │   └── .env                           ← EEGResearch config
@@ -146,7 +156,7 @@ curl -H "Authorization: Bearer $(grep '^API_TOKEN=' EEGResearch/.env | cut -d= -
     ├── backend/                       ← website FastAPI backend
     │   ├── main.py                    ← question generation, sessions, auth
     │   ├── eeg_client.py              ← calls EEGResearch :8001
-    │   ├── LLM_*_generation.py        ← Ollama question generators (10 topics)
+    │   ├── LLM_*_generation.py        ← question generators (17 topics; Ollama or Claude via llm_client.py)
     │   └── .env                       ← Supabase keys, port
     └── frontend/                      ← React + Vite
         ├── src/pages/student/

@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     )
     eeg_sample_hz: int = Field(default=4, alias="EEG_SAMPLE_HZ")
     eeg_source: str = Field(default="sim", alias="EEG_SOURCE")
+    # Where `calm` reads its spectrum: "sdk" (the bridge's band powers) or
+    # "local" (our own Welch spectrum on the raw stream, 1/f-relative alpha
+    # at the temporal pair -- services/eeg_spectrum.py). Ships dark on
+    # purpose: one adult, three runs is not a validation set, and flipping
+    # it changes what every stored calm value means. See EEG_REFERENCE.md.
+    eeg_spectrum_source: str = Field(default="sdk", alias="EEG_SPECTRUM_SOURCE")
     muse_bridge_host: str = Field(default="127.0.0.1", alias="MUSE_BRIDGE_HOST")
     muse_bridge_port: int = Field(default=8765, alias="MUSE_BRIDGE_PORT")
     muse_bridge_timeout_seconds: int = Field(default=5, alias="MUSE_BRIDGE_TIMEOUT_SECONDS")

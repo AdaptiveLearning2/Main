@@ -31,17 +31,37 @@ Decided 2026-09-13 after the replay showed a contact-gated baseline still latchi
 settling period (focus 0–14 for the rest of run b). Replayed armed at the first protocol
 segment, run b reads eyes-closed 37/60, eyes-open 78/27, arithmetic 50/42.
 
+## Phase 2 (branch `eeg-accuracy-phase2`)
+
+Phase 1 merged as #181 (`0594ff4`). The raw-stream capture was done 2026-09-14 with silent
+arithmetic: `C:\eeg_captures\2026-09-14_raw.jsonl`, 142,604 frames at 256.4/s. Findings and method
+are in `EEGResearch/tests/fixtures/EEG_REFERENCE.md` (raw-stream section) and the CLAUDE.md Phase 2
+paragraph. In one line: alpha is real at TP9/TP10 (10 Hz, 4.6× above 1/f, AUC 0.92 at 4 s), and
+nothing in the spectrum measures effort.
+
+Built: `services/eeg_spectrum.py` (`SpectrumEstimator`), fed from the drain, calm from the 1/f-
+relative temporal alpha residual when `EEG_SPECTRUM_SOURCE=local`; default `sdk` by decision.
+`scripts/replay_raw_capture.py` replays a bridge capture through it. Focus stays the SDK ratio.
+
 ## Next
 
-1. Open the PR for `eeg-accuracy-phase1`.
-2. **Phase 2 hardware run**: sidecar stopped, `capture_eeg_reference.py --source bridge`, 2 min
-   eyes closed + 2 min eyes open, prepared contact. Then `eeg_spectrum.py` (Welch, 2 s epochs, 1/f
-   slope fit, per-region bands) behind `EEG_SPECTRUM_SOURCE=sdk|local`, default `sdk`. That is the
-   only way to learn whether an alpha peak exists under the slope on this headband.
-3. Protocol v2 capture with **silent** arithmetic; then 1.7 (thresholds, and whether `focused`
-   needs calm at all) from that replay.
+1. Open the PR for `eeg-accuracy-phase2`.
+2. **A second wearer** (ideally a child, with consent) on the raw capture, eyes closed / eyes open
+   only. Until then the local source stays dark. If the temporal alpha separation holds on a second
+   person, flip `EEG_SPECTRUM_SOURCE` to `local` by default — that changes what every stored calm
+   value means, so it lands with a `score_scale` bump in `signal_mapping.py`.
+3. Step 1.7, half done: the local stressed line is 0.25, set from the capture (EEG_REFERENCE.md,
+   "the local stressed line"), per source in both packages. It is one adult's, **and the table it
+   came from predates the artifact poison and does not reproduce under it** (the replay applies
+   the poison since PR #182's last review round: fresh estimates on 18–21% of eyes-open and task
+   ticks, calm held past the 10 s cap on 40% of resting ones, eyes-open medians scored against the carried
+   eyes-closed centre). Two decisions before re-setting it from the second wearer: how long an
+   artifact poisons (the full 4 s buffer or the 2 s epoch it landed in), and the local calm's
+   centre before its own latch. `focused` remains unreachable by design until a marker exists.
 4. Phase 3: frontend `Confidence` label on the debug readout → *Signal quality*; re-read the fusion
    asymmetry test after 1.7.
+5. `rearchive_session_charts.py --before 2026-09-14 --apply` once the rollup migration shows on
+   `npx supabase migration list --linked`.
 
 ## Two things noticed on the way, not fixed
 

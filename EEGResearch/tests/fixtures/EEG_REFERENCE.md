@@ -131,3 +131,156 @@ task is silent. Both are Phase 2 questions. No threshold for `focused` can be se
 these captures, because the ratio it would gate on did not move with the task.
 
 One adult, one day, two runs. Nothing here is a validation set for children.
+
+## Raw-stream capture, 2026-09-14 (Phase 2 question)
+
+Same adult, same MuseS on `PRESET_21`, electrodes wetted and the strap tightened, contact
+confirmed at 4 of 4 before the start. Paired through the normal stack, then the sidecar stopped
+so `capture_eeg_reference.py --source bridge` held the bridge's one TCP slot and recorded every
+frame the SDK sent: 142,604 frames over 556 s, **256.4 frames/s**, one sample of the four
+channels per frame, no inter-frame gap over 106 ms. Same protocol as the two sidecar captures,
+arithmetic done **silently** this time. `C:\eeg_captures\2026-09-14_raw.jsonl`, not in the repo.
+
+Method: Welch PSD, 2 s windows with 50% overlap, per channel, DC removed per segment. The 1/f
+slope is fit on log10 power against log10 frequency over 2–40 Hz **excluding 7–13 Hz**, and
+every band figure below is the residual above that fit (log10), so a band reads as "power above
+what the aperiodic background predicts" rather than as raw power that the slope dominates.
+Temporal is TP9+TP10 averaged, frontal AF7+AF8.
+
+| segment | good ch | slope (temporal) | alpha 8–12 residual, temporal | peak in 7–13 Hz | frontal alpha residual |
+| --- | --- | --- | --- | --- | --- |
+| eyes closed | 3.0 | −1.24 | **+0.203** | **10.0 Hz, +0.66** (4.6×) | −0.371 |
+| eyes open | 2.3 | −2.75 | −0.212 | none (7.0 Hz, +0.01) | −0.143 |
+| arithmetic, silent | 2.3 | −2.55 | −0.297 | none | −0.470 |
+| eyes open 2 | 3.0 | −2.66 | −0.122 | none | −0.432 |
+| jaw clench | 0.6 | −0.49 | −0.637 | none | −0.484 |
+| blinking | 1.4 | −3.46 | +0.185 | 8.0 Hz, +0.52 | −0.276 |
+
+Findings:
+
+1. **There is a real alpha rhythm, and it is at the temporal pair.** Eyes closed, TP9 and TP10
+   each carry a 10 Hz peak 4.6× above the 1/f fit that is absent eyes open. AF8 sees it too
+   (AUC 0.93 at 8 s); AF7 does not and is the noisy channel of this run (range −83…+1797 µV
+   against ±250 on the others). The frontal *average* therefore hides it. Any live alpha feature
+   must be per-region, not the four-channel average the SDK bands are.
+2. **The SDK's alpha band did move this time** — +0.288 Bels closed against +0.049 open, where
+   run b had shown +0.02. The difference is contact: this run held 3.0 good electrodes eyes
+   closed, run b 2.7 with a looser strap. So the SDK band is not blind to alpha, it is
+   *unreliable* at the contact the product actually gets, and the 1/f-relative measure on the
+   temporal pair is the robust form of the same signal.
+3. **Per-epoch separation, temporal pair, 1/f-relative alpha, closed against open** — the
+   operating characteristic a live score would run on:
+
+   | epoch | n per class | closed median | open median | AUC |
+   | --- | --- | --- | --- | --- |
+   | 2 s | 60 | +0.37 | −0.01 | 0.78 |
+   | 4 s | 30 | +0.32 | −0.16 | **0.92** |
+   | 8 s | 15 | +0.34 | −0.20 | 0.97 |
+   | 16 s | 7 | +0.30 | −0.22 | 1.00 |
+
+   Four seconds is the shortest epoch that separates the two states reliably, and it is the
+   smoothing constant Phase 1 already uses on the ratios.
+4. **Silent arithmetic does not raise beta either.** Beta residual arithmetic against eyes open:
+   AUC 0.38–0.43 at every epoch length, i.e. beta is *lower* under the task. Gamma 0.55–0.59,
+   nothing. (Both columns are printed by `analyze_raw_capture.py`'s separation tables.) The one task effect present is alpha suppression — arithmetic alpha residual −0.30
+   against eyes open −0.21 — and it is weak: AUC 0.56 at 4 s, 0.69 at 16 s. With speech ruled
+   out, the beta-over-alpha-plus-theta ratio does not measure this task on this hardware.
+5. **The 1/f slope itself separates eyes closed from open** (−1.24 against −2.75) more than any
+   band does, which is why a band ratio taken on raw power mostly measures the slope. Whether
+   that slope difference is neural or the blink rate is not something this capture can say.
+6. **Gamma drifts through the session** here too (−0.12 → −0.82 log10 over minutes 1–7, then
+   +0.71 on the fidget), confirming the run b finding that `calm` on the SDK ratio was tracking
+   muscle tone relaxing.
+7. Blinking shows an "alpha" residual (+0.19, peak 8 Hz) that is the blink harmonic, not alpha:
+   the 1/f fit steepens to −3.5 under the blink's low-frequency power and the 8 Hz peak is its
+   spread. The Phase 1 delta gate is what keeps such epochs out of a baseline.
+
+What this settles: alpha is recoverable on this headband at the product's contact level, from
+the temporal pair, 1/f-relative, at 4 s epochs — that is the measurement `calm` should be.
+What it does not settle: any spectral marker of effort. `focus` as a beta ratio has now failed
+aloud (speech EMG) and silently (no beta rise), on the SDK bands and on the raw spectrum. The
+only candidate left in this data is alpha suppression, which is small and slow. Still one adult,
+now three runs; nothing here is a validation set for children.
+
+### Caveats on the AUCs, the slope, and the local stressed line
+
+Re-derive everything above with `scripts/analyze_raw_capture.py` on the capture; it prints the
+segment table and both separation tables.
+
+**The epochs are not independent.** Each segment is one continuous block sliced into adjacent
+epochs, so an AUC over them describes this recording and is not an estimate with a confidence
+interval. It rises as the epoch count falls, and the 1.00 at 16 s is computed on seven epochs per
+class, which means only that seven adjacent epochs happened to order. Compare epoch lengths by
+their medians; read the AUC as "how cleanly did this one recording separate".
+
+**The 1/f slope separates the two states more than the alpha residual does**, and is scored
+beside it for that reason:
+
+| epoch | AUC alpha residual | AUC slope |
+| --- | --- | --- |
+| 2 s | 0.78 | 0.87 |
+| 4 s | 0.92 | 0.94 |
+| 8 s | 0.97 | 1.00 |
+
+Calm is built on the residual, not the slope, by decision: the residual has a physiological name
+and a mechanism (an alpha rhythm), while whether the slope's shift is neural or the blink rate is
+not something one capture can say — blinks steepen it to −3.5 in the blinking segment. The slope
+rides on every payload as `spectrum_slope`, unscored, so the comparison can be made on real
+sessions. Arithmetic against eyes open, over 2/4/8/16 s epochs: alpha AUC 0.40, 0.44, 0.40, 0.31
+(suppressed, weakly; the 0.31 at 16 s is the 0.69 quoted for alpha suppression above, read the
+other way, on seven epochs), slope 0.50, 0.48, 0.55, 0.69.
+
+**The local stressed line is 0.25**, set from the capture replayed through
+`scripts/replay_raw_capture.py --arm-at eyes_open_rest` (the first-question state). Per-tick calm on
+the local source, and the share of ticks under each candidate line:
+
+| segment | median calm | < 0.377 (the SDK line) | < 0.30 | < 0.25 | < 0.20 |
+| --- | --- | --- | --- | --- | --- |
+| eyes closed | 64 | 7% | 4% | 3% | 0% |
+| eyes open, rest | 39 | 41% | 24% | 8% | 1% |
+| arithmetic, silent | 38 | 48% | 12% | 0% | 0% |
+| eyes open, rest 2 | 53 | 0% | 0% | 0% | 0% |
+| fidget | 31 | 62% | 43% | 0% | 0% |
+
+The SDK line inherited onto the local span (derived as 0.311 Bels below centre on the SDK span, it
+sits 0.148 below centre on a span half the size) called silent arithmetic stressed on nearly half
+its ticks. At 0.25 a resting eyes-open tick crosses it 8% of the time before the four-tick
+persistence rule, arithmetic 0%, and the fidget — an artifact, not stress — 0%. One adult; a line
+for children is a capture away.
+
+**That table was derived before the artifact poison, and does not reproduce under it.** The
+replay now applies the same rule as `DeviceSession._loop`: an artifact tick (other than
+`malformed_bands`) poisons the 4 s buffer until its samples have left. Re-run with the gate
+(`replay_raw_capture.py --arm-at eyes_open_rest`, 2026-09-15; the script prints these four
+columns as `fresh / artif / poisn / stale`), per segment:
+
+| segment | ticks | fresh estimate | artifact tick | poisoned | calm held > 10 s | median calm |
+| --- | --- | --- | --- | --- | --- | --- |
+| eyes closed | 481 | 49% | 7% | 43% | 5% | 74 |
+| eyes open, rest | 481 | 18% | 19% | 70% | 40% | 15 |
+| arithmetic, silent | 481 | 19% | 15% | 63% | 19% | 13 |
+| eyes open, rest 2 | 240 | 21% | 10% | 69% | 14% | 51 |
+| fidget | 121 | 3% | 44% | 96% | 64% | 64 |
+
+Two things follow, and neither is a property of the alpha measure itself:
+
+- **The gate withholds the local calm most of the time on this wearer.** The artifact rate is
+  7–19% of ticks at rest and a task, and each artifact costs the next four seconds, so a fresh
+  estimate arrives on 18–21% of ticks in the eyes-open and task segments and `calm_held_seconds`
+  passes the 10 s hold cap (`CALM_HOLD_MAX_SECONDS`, after which the mapper nulls `stress` and the
+  engine labels neutral) on 40% of resting eyes-open ticks. The residual on the ticks that *are* fresh separates as before (closed
+  +0.35, open −0.07, arithmetic −0.10).
+- **The eyes-open medians are scored against the eyes-closed centre.** `restart_baseline()` at
+  the arm keeps the old calm centre in use until the new one latches, and the new latch needs 45
+  covered seconds of fresh estimates — which the gate stretches past the whole 120 s segment
+  (coverage reached 31 s by its end). So every eyes-open tick is scored against an alpha level
+  set eyes closed, which is why the medians read 15 and 13 rather than the 39 and 38 above. A
+  lesson does not follow two minutes of eyes closed, so this is the protocol's shape, but it
+  means the medians here say nothing about the line.
+
+**The 0.25 line's stated derivation therefore no longer stands**, and the shares in the table
+above are the ones to re-derive once two decisions are made: how long an artifact should poison
+(the full 4 s buffer, or the 2 s Welch epoch it landed in), and what the calm centre should be
+before its own latch on the local source. Both belong with the second wearer's capture. Until
+then the line is one adult's number from a table that predates the gate, `EEG_SPECTRUM_SOURCE`
+stays `sdk` by default, and nothing recorded depends on it.

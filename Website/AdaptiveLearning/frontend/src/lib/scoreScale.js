@@ -28,3 +28,18 @@ export function combineScales(rows) {
     max: Math.max(...ranges.map(s => s.max)),
   }
 }
+
+// Scale 3 is not a later version of scale 2: it is the sidecar scoring calm
+// from its own spectrum (`calm_source: local`), which moves stress and not
+// focus, and it can run on one student's headband beside a classmate's on
+// scale 2 at the same time. So a range is described by what it changes and
+// whether the change is a step in time or two sources side by side.
+export const LOCAL_CALM_SCALE = 3
+
+export function describeScaleChange(scale) {
+  if (!isMixedScale(scale)) return null
+  const versionStep = scale.min < 2 && scale.max >= 2
+  const sourceSplit = scale.max >= LOCAL_CALM_SCALE
+  const affected = versionStep ? 'focus and stress' : 'stress'
+  return { affected, versionStep, sourceSplit }
+}

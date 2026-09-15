@@ -24,6 +24,41 @@ Two backends, deliberately: the website backend never reads a headband directly,
 gates on `eeg_client.is_alive()` first, so the whole EEG stack is optional at runtime. Don't add a
 hard dependency on port 8001 to a path that must work without hardware.
 
+## Canary: is this session still working properly?
+
+Long sessions degrade before they fail, and the agent cannot feel it from the inside. So before
+the first edit of every task and every review round, write one line to the user, built from
+fresh tool output and not from memory:
+
+```
+CANARY: <branch> <short hash of HEAD> | tree: clean|dirty(<n> files) | last suites: sidecar <n> / backend <n> / frontend <n>
+```
+
+`git status --short` and `git log --oneline -1` supply the first two; the suite counts are the
+last run *in this session*, or `none` if there has not been one. Then check it against the
+previous canary. **Any of these means stop, re-read this section and `git status`, and say so
+before touching a file:**
+
+- The tree is dirty and you cannot name, from the conversation, what each modified file holds.
+  (Seen 2026-09-14: a mapper file turned up modified with a round-2 *mutant* text, after a
+  clean push. Do not build on an unexplained diff; restore it from HEAD by copy and report it.)
+- A suite count went down, or a count is quoted that no tool call in this session produced.
+- The working directory reported by the harness is not the repo root. (`cd` inside a compound
+  command moves it for later calls; the symptom is `vitest` finding no config, or `ls` failing
+  on a path that exists.)
+- You are about to edit a file whose relevant region you have not read in this context, or to
+  restore a file with `git checkout --` (use a copy; see the mutation-check rule).
+- You are about to assert on source text where the behaviour is testable, or to skip the
+  mutation check on a new test, or to run it before committing.
+- A heredoc append failed and you are about to retry it the same way (use the Write tool).
+- You cannot restate, without looking, the three standing rules: fusion asymmetry is
+  untouchable; held / rejected / low are three states and zeros are never written for an
+  absence; `stress` is `1 − calm`.
+
+A canary that cannot be written from tool output is itself the signal. Ask for `/compact` or a
+fresh session rather than continuing on inference; the cost of a wrong edit here is a wrong
+number on a child's record, not a retry.
+
 ## Running and testing
 
 Whole stack, Windows (Ollama, EEG sidecar, backend, frontend, each in its own window):
@@ -38,6 +73,13 @@ next to the exe, and flips `EEG_SOURCE` in `EEGResearch/.env`. Without it you ge
 landmark channel and implies `-Camera`, and `-NoEmotion` turns FER+ off — gaze needs no 35 MB model,
 so gaze-only is a real and much cheaper deployment. Each model-backed flag provisions its model at
 setup rather than on the first frame of a lesson, and `-NoEmotion` skips the FER+ fetch entirely.
+`-LocalCalm` scores calm from the sidecar's own spectrum (`EEG_SPECTRUM_SOURCE=local`, off by
+decision until a second wearer; `start.sh --local-calm`) and is refused without `-Muse` for the
+reason `-Optics` is: the estimator is fed only by a headband, so under the simulator the local calm
+is a placeholder all session and the run looks like the flag not working. **The key is written on
+both branches from the flag**, like `INGEST_MODE` and the `FACE_*` keys, so a hand-edited `local`
+neither survives into a plain run nor is silently reverted by one — the flag is the only way to
+select it.
 `-Optics` turns the headband's optical channels on (`-OpticsPreset 103N` picks the rung) and is
 refused without `-Muse`, rather than promoted the way `-Gaze` promotes `-Camera`: the alternative to
 a headband is the simulator, which models no optical channel, so guessing would produce a run that
@@ -1607,18 +1649,106 @@ What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about ea
 - **A label needs four consecutive readings** before the 3 s cooldown protects it. 90 of 133
   `focused` readings on the captures were the cooldown holding one spurious tick.
 
-**What the captures did not settle, and Phase 1 deliberately did not touch:** the ratios
-themselves. Eyes-closed alpha rose 0.02 Bels; beta and gamma fell 0.1–0.2 instead, and gamma drifts
-monotonically over a session (+0.25 → −0.55 over 12 min), so `calm` tracks muscle tone relaxing,
-not an alpha rhythm. Arithmetic aloud raised beta by 0.08 *with gamma by 0.10* — speech EMG — and
-`focused` was reached on 0 ticks. Whether an alpha peak exists under the aperiodic slope needs the
-raw 256 Hz stream and our own Welch spectrum with 1/f correction (Phase 2, `--source bridge`), and
-the next protocol must use *silent* arithmetic. No `focused` threshold can be set from a ratio that
-did not move with the task, so `EEG_FOCUSED_*` / `EEG_STRESSED_*` in `adaptation.py` and
-`signal_fusion.py` are unchanged and still unmeasured. The `engaged student is not stressed` test
-now pins only the ordering, because on the spectrum alone an engaged eyes-open profile sits below
-the stressed line against the population bounds — that is the true state, previously hidden by the
-strap term.
+**What the sidecar captures did not settle, Phase 1 deliberately did not touch:** the ratios
+themselves. Eyes-closed alpha rose 0.02 Bels in the SDK bands; beta and gamma fell 0.1–0.2 instead,
+and gamma drifts monotonically over a session (+0.25 → −0.55 over 12 min), so `calm` on the SDK
+ratio tracks muscle tone relaxing. Arithmetic aloud raised beta by 0.08 *with gamma by 0.10* —
+speech EMG — and `focused` was reached on 0 ticks. `EEG_FOCUSED_*` / `EEG_STRESSED_*` in
+`adaptation.py` and `signal_fusion.py` are rescaled to the widened bounds and still unmeasured.
+The `engaged student is not stressed` test pins only the ordering, because on the spectrum alone an
+engaged eyes-open profile sits below the stressed line against the population bounds.
+
+**Phase 2 settled the alpha question with the raw stream (2026-09-14, `--source bridge`, sidecar
+stopped, 256.4 frames/s over 556 s).** Eyes closed, **TP9 and TP10 carry a 10 Hz peak 4.6× above
+the 1/f fit** that is absent eyes open; the frontal pair does not, and AF7 was the noisy channel, so
+the SDK's four-channel average could not see it. The measure is `services/eeg_spectrum.py`: Welch
+over 2 s Hann windows on a 4 s buffer, per channel, a 1/f slope fit over 2–40 Hz **with 7–13 Hz
+excluded** (fit through the band and the peak becomes slope), and calm is the mean log10 residual
+over 8–12 Hz at the temporal pair. Closed against open separates at **AUC 0.92 at 4 s epochs**,
+0.97 at 8 s — the same 4 s the ratio smoothing uses. `EEG_SPECTRUM_SOURCE=local` scores calm from
+it on its own population scale (`CALM_ALPHA_RESIDUAL_*`, midpoint 0); **the default stays `sdk` by
+decision** — one adult, three runs — and the local figure rides on every payload as
+`calm_alpha_residual` either way, so a session on `sdk` still records what `local` would have read.
+On `local`, a tick before the buffer fills **holds** calm rather than borrowing the SDK ratio: the
+two are different numbers on different scales and one baseline cannot hold both. A signal-loss
+reset empties the buffer, since whatever spans a gap is two recordings. The estimator is fed from
+the drain in `DeviceSession._loop` — every sample, since the bridge takes one TCP client and only
+`samples[-1]` is scored. `scripts/replay_raw_capture.py` replays a bridge capture through it and
+prints per-segment medians, applying the same artifact poison `DeviceSession._loop` applies
+(the reference medians quoted before that were derived without it and do not reproduce: **with
+the gate the local calm is fresh on 18–21% of eyes-open and task ticks and held past the 10 s cap
+on 40% of resting ones**, since 7–19% of ticks are artifacts and each costs the next 4 s — see
+`EEG_REFERENCE.md`, "derived before the artifact poison"). **The SDK alpha band did move on this run** (+0.24 Bels closed) because contact held at
+3 of 4; it is not blind to alpha, it is unreliable at the contact the product gets.
+
+**Focus has no marker in this data, and `focus` stays the SDK ratio, documented as unmeasured.**
+Silent arithmetic raised neither beta (AUC 0.38–0.43 against eyes open, i.e. *lower*) nor gamma;
+the only task effect was alpha suppression, AUC 0.56 at 4 s. The beta ratio has now failed aloud,
+silently, on the SDK bands and on the raw spectrum. The 1/f slope itself separates closed from open
+(−1.24 against −2.75) more than any band does, which is why a raw band ratio mostly measures the
+slope. Blinking produces a spurious 8 Hz "alpha" from the blink harmonic; the delta gate is what
+keeps those epochs out of a baseline. Numbers and method: `EEG_REFERENCE.md`, raw-stream section,
+re-derivable with `scripts/analyze_raw_capture.py`; its AUCs are over adjacent epochs of one block
+each, so they describe that recording and are not estimates, and the 1/f slope separates better
+than the residual (0.94 against 0.92 at 4 s) but is carried unscored as `spectrum_slope`.
+
+**What the local calm may claim, after review.** The estimator is fed only by a headband
+(`device_config.kind == "muse"`) and refuses a buffer whose timestamp span is not a 256 Hz stream's:
+the simulator's one sample per tick filled it with 256 s analysed as four and published a residual
+with nothing behind it. An artifact tick **poisons** the buffer until its samples have left — the
+gate holds one tick, the window kept the blink for four seconds of estimates, and one blink moved
+the residual further than the whole closed-to-open effect. **The stressed line is per calm source**,
+`STRESSED_CALM_MAX` in `adaptation.py` and `EEG_STRESSED_CALM_MAX_BY_SOURCE` in `signal_fusion.py`,
+pinned equal by a test on each side: 0.377 was 0.311 Bels below centre on the SDK span and 0.148 on
+the local one, where silent arithmetic then read stressed; the local line is 0.25, set from the
+capture armed at eyes open (8% of resting eyes-open ticks, 0% arithmetic, 0% fidget) — **a table
+derived before the artifact poison, which does not reproduce under it**; the line stands only
+until the poison length and the pre-latch calm centre are decided against the second wearer's
+capture (`EEG_REFERENCE.md`). The decider
+reads `raw.calm_source` off the rows and a window holding both sources has no calm opinion. **Calm
+latches on its own coverage** over the ticks that had a value (45 covered seconds at one second a
+tick at most, so at least 45 samples with no separate floor), with its own ramp, and keeps
+collecting after focus has latched: latched with focus, one calm sample was the session's calm
+centre for good. `calm_measured` is false on a placeholder — the opening
+fill, and after every gap, both write the same 50 a genuine residual of zero produces — and the
+engine labels neither stressed nor focused on one; `calm_held_seconds` says how long a local calm
+has been carried, and past `CALM_HOLD_MAX_SECONDS` the mapper nulls `stress` **and the engine
+labels neutral** — the constant lives in both `adaptation.py` and `signal_mapping.py`, pinned
+equal by a test on each side like the stressed line, or the sidecar asserts a learner state from
+a calm the backend has just declined to record. **`focus_centred` and `calm_centred` say whether
+each score is on the session's own baseline yet or still on the population midpoint**, and ride in
+`raw`: pre-latch was a 45-second opening window, but the local calm latch needs 45 covered seconds
+of ticks that *carried* a calm and a poisoned tick carries none, so at the reference capture's
+7–19% artifact rate it takes minutes and can outlast a session, and a midpoint-scored calm was indistinguishable on
+the row from a centred one. The row records
+`calm_source`, and **the local source is score scale 3** (`SCORE_SCALE_BY_CALM_SOURCE`), so two
+sidecars on one class cannot write calm on two scales under one version. **Scale 3 is a different
+unit, not a later version**: it moves stress and not focus, and it runs on one student's headband
+beside a classmate's on scale 2 at the same time, so `ScaleNote` (via `describeScaleChange`) names
+which figures a range moves and whether the split is a step in time (1→2) or two sources side by
+side (any range reaching 3). **A scale-3 row whose stress is NULL is left out of the day's range
+while any row with a scored stress is present**, and only a day with no scored stress at all falls
+back to reading such rows as scale 2 (they contributed only a focus, which is on scale 2). Mapping
+them to 2 unconditionally made every local session read 2..3 on its own, since its first ticks hold
+calm while the buffer fills, and one child on one headband drew the two-source caption; not
+mapping them at all drew it beside an sdk day for a window where the local source scored no stress.
+A row with a NULL `raw` is scale 1 like a row with no key: `raw ? 'score_scale'` is NULL on a NULL
+raw, so the null test comes first. A rejected `calm_measured`/`calm_held_seconds` is named in
+`raw.calm_invalid`, or the nulled stress reads as an older sidecar that never sent the key.
+**`calm_source`, `calm_measured` and `calm_held_seconds` are client-supplied on the push path and
+are validated by type in the mapper** (string; bool; finite non-negative number), the decider
+type-checks the source again before it is a set element, and a value present in the wrong type
+*withholds* stress rather than recording it: `"false"` is not `False` and `"150"` fails an
+isinstance check, and both read as a measured, fresh calm — the number the hold rule exists to
+withhold. A posted list as the source 500'd the ingest and then every question until it aged out. **A window whose calm is
+withdrawn — two scales, or every stress nulled by the hold rule — keeps its EEG channel**:
+`eeg_channel` reads focus and confidence, applies the contact gate, and answers `neutral` with
+cause `no_calm`; withdrawing the whole channel on `calm is None` lost the read with it. On the
+sidecar, `malformed_bands` does **not** poison the spectrum buffer (a fault in the SDK band dict,
+not the raw samples; poisoning cost 3.9 s of estimates), the rate check compares the span between
+two stamps against the sample *positions* between them (push admits an unstamped sample; counting
+stamps refused a real 256 Hz buffer with half of them absent), and a poison while the buffer is
+still filling reports `artifact`, not `filling`.
 
 `SignalProcessor` and `AdaptationEngine` take an injectable `clock` for the replay; a diagnostic key
 added to `update()`'s dict still has to be declared on `schemas.FeatureData` or the envelope drops it.
@@ -2190,16 +2320,18 @@ skips nulls, so both stored averages already have the trusted count as their den
 by `sample_count` would divide by rows the average never saw. A mean of daily means is the other
 wrong answer — it weights a 4-sample day like a 4000-sample one.
 
-**Three of the five averages carry the same approximation**, because the rollup stores one count per
-channel and any column whose nulls do not follow that count's is weighted slightly wrongly.
-`avg_rmssd_ms` — about one trusted window in five is gated out of RMSSD while the heart count counts
-trusted rows. `avg_stress` — the cognitive `trusted_sample_count` is
-`count(*) FILTER (WHERE focus IS NOT NULL)`, and `map_eeg_to_cognitive` derives focus and stress
-from `focus_score` and `calm_score` **independently**; only `contact_poor` nulls both together, so
-an ordinary row can carry focus without calm. `avg_focus`, `avg_heart_rate_bpm` and `engagement`
-(served from `avg_focus`, see the Phase 1 section) are exact. The error is between days, never
-within one, and closing it needs a per-column count the
-schema lacks plus a backfill that deleted rows cannot supply.
+**`avg_rmssd_ms` carries an approximation**, because the rollup stores one count per channel and a
+column whose nulls do not follow that count's is weighted slightly wrongly: about one trusted window
+in five is gated out of RMSSD while the heart count counts trusted rows. **`avg_stress` carried the
+same one until `20260918000000`** — the cognitive `trusted_sample_count` is
+`count(*) FILTER (WHERE focus IS NOT NULL)`, focus and stress are derived independently, and the
+local calm's hold rule made stress-absent-focus-present the *ordinary* row: a day of 4000 focus rows
+with 200 fresh calms weighed its stress as 4000 and read 0.32 against 0.70. The rollup now records
+`stress_sample_count`, and every reader weights stress on it through `_stress_weight` in `main.py`
+and `COALESCE(stress_sample_count, trusted_sample_count)` in the two cohort RPCs — the fallback is
+per row, for rows rolled before the column, and is the old approximation on exactly the rows it
+always applied to. `avg_focus`, `avg_heart_rate_bpm` and `engagement` (served from `avg_focus`, see
+the Phase 1 section) are exact. The error is between days, never within one.
 
 **A week with nothing recorded is a gap, not a missing bar** — dropped, a fortnight off school renders
 as the weeks either side sitting adjacent. Weeks are whole and Monday-anchored for the same class of

@@ -52,6 +52,26 @@ class FeatureData(BaseModel):
     # The exponentially smoothed ratios the scores were scaled from.
     focus_log_ratio_smoothed: float | None = None
     calm_log_ratio_smoothed: float | None = None
+    # Which spectrum calm was scored from ("sdk" | "local"), the local
+    # spectrum's 1/f-relative temporal alpha residual (carried on both
+    # sources for comparison), and whether its 4 s buffer was full.
+    calm_source: str | None = None
+    calm_alpha_residual: float | None = None
+    spectrum_ready: bool | None = None
+    # Why the spectrum was not ready (filling, sample_rate, artifact,
+    # no_channel), and its 1/f slope, carried for comparison and not scored.
+    spectrum_reason: str | None = None
+    spectrum_slope: float | None = None
+    # Whether this tick's calm is a measurement at all -- a placeholder at
+    # the midpoint before any estimate is not -- and how long a local calm
+    # has been carried since the last fresh estimate.
+    calm_measured: bool | None = None
+    calm_held_seconds: float | None = None
+    # Whether each score is centred on the session's own baseline yet or
+    # still on the population midpoint (the calm latch can take a whole
+    # session on the local source).
+    focus_centred: bool | None = None
+    calm_centred: bool | None = None
 
 
 class StateData(BaseModel):

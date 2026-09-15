@@ -22,4 +22,22 @@ describe('ScaleNote', () => {
     expect(isMixedScale(combineScales([{ score_scale: { min: 1 } }, { score_scale: { min: 1, max: 1 } }]))).toBe(false)
     expect(isMixedScale(combineScales([{ score_scale: { min: 2, max: 2 } }]))).toBe(false)
   })
+
+  it('names a version step for 1..2 and does not disclaim focus for 2..3', () => {
+    const { rerender } = render(<ScaleNote scale={{ min: 1, max: 2 }} what="These" />)
+    expect(screen.getByRole('note')).toHaveTextContent(/focus and stress scores/)
+    expect(screen.getByRole('note')).toHaveTextContent(/before and after/)
+    // Scale 3 is the local calm source: it moves stress, not focus, and it
+    // runs beside scale 2 rather than after it.
+    rerender(<ScaleNote scale={{ min: 2, max: 3 }} what="These" />)
+    expect(screen.getByRole('note')).not.toHaveTextContent(/focus/)
+    expect(screen.getByRole('note')).not.toHaveTextContent(/before and after/)
+    expect(screen.getByRole('note')).toHaveTextContent(/two different ways/)
+    expect(screen.getByRole('note')).toHaveTextContent(/not comparable/)
+    rerender(<ScaleNote scale={{ min: 1, max: 3 }} what="These" />)
+    expect(screen.getByRole('note')).toHaveTextContent(/focus and stress scores/)
+    expect(screen.getByRole('note')).toHaveTextContent(/two different ways/)
+    rerender(<ScaleNote scale={{ min: 3, max: 3 }} what="These" />)
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
 })

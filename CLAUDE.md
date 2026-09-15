@@ -1591,8 +1591,9 @@ What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about ea
   capture where it was reached on zero ticks. Both remain unmeasured against a task. Focus's
   midpoint deliberately moved down 0.49 Bels (the capture sat below the old one); only calm's is
   held. **This re-anchors every stored focus and stress value across 2026-09-14** — 14 to 30
-  points pre-latch, ~38% of gain after — so `signal_mapping` writes `raw.score_scale` (2) on every
-  cognitive row and rows without the key predate it. **The rollup records the range seen each day**
+  points pre-latch, ~38% of gain after — so `signal_mapping` writes `raw.score_scale` on every
+  cognitive row (2 on the sdk calm source, 3 on the local one, per `SCORE_SCALE_BY_CALM_SOURCE`;
+  see Phase 2 below) and rows without the key predate it. **The rollup records the range seen each day**
   (`score_scale_min`/`score_scale_max`, `20260917000000`), and every rollup-backed payload carries
   `score_scale: {min, max}` for its window — the term trend per week, the cohort trend, and the
   weekly summary that collapses both scales into one number. **Never a date**: the rollout is per
@@ -1781,7 +1782,8 @@ added to `update()`'s dict still has to be declared on `schemas.FeatureData` or 
 
 ## Two columns are called stress and only one measures it
 
-`cognitive_signals.stress` is `1.0 - calm`, written by `signal_mapping.py:97`. There is no `calm`
+`cognitive_signals.stress` is `1.0 - calm`, written in `signal_mapping.map_eeg_to_cognitive` (the
+`"stress"` key of the row; a line number here went stale within a month). There is no `calm`
 column, so this *is* the EEG calm score, stored inverted. No independent quantity exists behind it,
 and `infer_state` never reads it — it uses `calm_score` directly, the same number the other way up.
 
@@ -3091,7 +3093,8 @@ passes at 7.93 and gray-600 would be unreadable. Its `gray-500` was raised *to* 
 opposite direction to the rest of the app. Check for an unprefixed dark background before assuming a
 grey is too light.
 
-`text-[10px]` (31 uses) is **not** a contrast failure — WCAG sets no minimum font size — so it was
+`text-[10px]` (36 uses at the 2026-09-15 count; 31 when the sweep was done) is **not** a contrast
+failure — WCAG sets no minimum font size — so it was
 left alone. What mattered was the combination, and the tiny badges that were also sub-AA are fixed.
 
 ### The three consent notices share `NoticeBanner`, and a tone is a whole class name
@@ -3615,8 +3618,11 @@ heuristics. `lesson_plans_young_topics.sql` is the third, covering the four topi
 `missing_number`, `graphs` and `shape_fractions` stop at grade 3 and exist only in `early`, and
 `patterns` stops at 5, so its `middle` row is written for grades 4-5 rather than for the band
 ceiling of 6 the other seed files' `middle` rows target. **A capped topic's band text is not the
-band's text.** 31 rows in total. All three are dashboard-run scripts rather than migrations, because
-a migration would re-apply their text over any later dashboard edit on every rebuild.
+band's text.** Two more files came with the grade-9 topics: `lesson_plans_hs_topics.sql`
+(`quadratics` and `functions`, `advanced` only, two rows) and `lesson_plans_spread_topic.sql` (one
+row). **34 rows across five files** (12 + 14 + 5 + 2 + 1; count the INSERT tuples rather than
+trusting this). All five are dashboard-run scripts rather than migrations, because a migration
+would re-apply their text over any later dashboard edit on every rebuild.
 
 **A lesson plan must describe question shapes the generator can actually emit, and the limits are
 tighter than the grade band.** Objectives are prompt text, so anything they invite, the model will

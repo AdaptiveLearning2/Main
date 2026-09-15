@@ -131,7 +131,7 @@ def _grade_band(grade):
     return grade_levels.grade_band(grade)
 
 
-# What each band scales. Unlike the seven topics with a `COMPLEXITY_BY_GRADE`
+# What each band scales. Unlike the eleven topics with a `COMPLEXITY_BY_GRADE`
 # table, difficulty here selects the *scenario* above -- so, exactly as in
 # geometry and probability, this table scales magnitude only and stating the
 # difficulty rule twice is what it avoids.

@@ -32,3 +32,18 @@ def test_on_the_sdk_source_both_scores_centre_together():
     assert f["focus_centred"] is False and f["calm_centred"] is False
     f = t.run(BANDS, 4 * int(SignalProcessor.BASELINE_SECONDS) + 8)
     assert f["focus_centred"] is True and f["calm_centred"] is True
+
+
+def test_calm_centred_is_the_calm_latch_on_every_source():
+    """`_centre("calm")` reads `_calm_ready` on both sources, so the flag
+    reports that and never focus's latch as a proxy: with the calm latch
+    withheld on the sdk source, the row must say calm is not centred while
+    the scorer is still returning the population midpoint."""
+    t = Ticker()
+    t.run(BANDS, 4 * int(SignalProcessor.BASELINE_SECONDS) + 8)
+    p = t.processor
+    assert p._baseline_ready and p._calm_ready
+    p._calm_ready = False
+    f = t.run(BANDS, 1)
+    assert f["focus_centred"] is True
+    assert f["calm_centred"] is False, "the flag the scorer read, not the sibling's"

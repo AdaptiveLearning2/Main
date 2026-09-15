@@ -140,6 +140,16 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
     # Client-supplied on the push path. Only a string names a source; a
     # dict or list here was a dict key and 500'd the ingest request.
     calm_source = f.get("calm_source") if isinstance(f.get("calm_source"), str) else None
+    # The two keys that gate the stress column, validated the same way. A
+    # value that is present and not what the sidecar sends is *withheld*,
+    # not recorded: "false" is not False, and "150" is not 150, and both
+    # read as a measured, fresh calm -- the number the hold rule exists to
+    # withhold. Absent is an older sidecar and means measured.
+    calm_measured = f.get("calm_measured")
+    calm_measured_ok = calm_measured is None or isinstance(calm_measured, bool)
+    held = f.get("calm_held_seconds")
+    held_ok = held is None or (isinstance(held, (int, float)) and not isinstance(held, bool)
+                               and math.isfinite(held) and held >= 0)
 
     row = {
         "session_id": session_id,
@@ -187,8 +197,8 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
             # rollup is the gap the score-scale version exists to close --
             # so the version is per source too (SCORE_SCALE_BY_CALM_SOURCE).
             calm_source=calm_source,
-            calm_measured=f.get("calm_measured"),
-            calm_held_seconds=f.get("calm_held_seconds"),
+            calm_measured=calm_measured if calm_measured_ok else None,
+            calm_held_seconds=held if held_ok else None,
             ingestion=eeg.get("ingestion"),
             # The EEG signal-quality number, 0..1. No column carries it --
             # `engagement` did until it became the focus index -- and it is
@@ -207,9 +217,8 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
                                                        SCORE_SCALE_VERSION),
         ),
     }
-    held = f.get("calm_held_seconds")
-    if f.get("calm_measured") is False or (
-            isinstance(held, (int, float)) and held > CALM_HOLD_MAX_SECONDS):
+    if (calm_measured is False or not calm_measured_ok or not held_ok
+            or (held is not None and held > CALM_HOLD_MAX_SECONDS)):
         # A placeholder calm (never measured this session) or a stale one
         # (carried too long without a fresh estimate) is not a stress
         # reading. Focus stays; `raw` says why. Measured: 150 s of unready

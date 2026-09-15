@@ -1571,14 +1571,15 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
     Postgres `avg()` skips nulls, so both denominators are the trusted count.
     Weighting by `sample_count` would divide by rows the average never saw.
 
-    Three of the five averages carry an approximation, and it is the same one:
-    the rollup stores a single count per channel, so any column whose nulls do
-    not follow that count's is weighted slightly wrongly.
+    `avg_rmssd_ms` carries an approximation: the rollup stores a single count
+    per channel, and roughly one trusted window in five is gated out of RMSSD
+    (see CLAUDE.md on `rmssd_rejected_by`) while the heart count counts
+    trusted rows.
 
-      * `avg_rmssd_ms` -- roughly one trusted window in five is gated out of
-        RMSSD (see CLAUDE.md on `rmssd_rejected_by`) while the heart count
-        counts trusted rows.
-      * `avg_stress` -- `trusted_sample_count` for the cognitive channel is
+      * `avg_stress` carried the same one until `stress_sample_count`
+        (20260918000000); it is now weighted through `_stress_weight`, with
+        the focus count as the per-row fallback for rows rolled before that
+        column. `trusted_sample_count` for the cognitive channel is
         `count(*) FILTER (WHERE focus IS NOT NULL)`, and `map_eeg_to_cognitive`
         derives focus and stress from `focus_score` and `calm_score`
         independently. Only `contact_poor` nulls both together; an ordinary
@@ -1586,8 +1587,7 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
 
     `avg_focus`, `avg_heart_rate_bpm` and `engagement` (served from
     `avg_focus`, see `_shape_summary`) are exact. In every case the error is
-    between days, never within one, and correcting it needs a per-column count
-    the schema does not have and a backfill that deleted rows cannot supply.
+    between days, never within one.
     """
     tz = _school_timezone()
     school_today = _utc_now().astimezone(tz).date()

@@ -97,4 +97,27 @@ def test_the_rollup_writes_the_stress_count_and_the_rpcs_weight_on_it():
     with open(MIGRATION, encoding="utf-8") as fh:
         sql = fh.read()
     assert "count(*) FILTER (WHERE stress IS NOT NULL)" in sql
-    assert sql.count('COALESCE("r"."stress_sample_count", "r"."trusted_sample_count")') >= 4
+    # Two per RPC's avg_stress (numerator and denominator) and one for the
+    # trend's summed count. The arithmetic itself is asserted against a real
+    # stack in scripts/assert_signal_rls.sql; this only pins that no copy of
+    # the weight silently reverts to the focus count.
+    assert sql.count('COALESCE("r"."stress_sample_count", "r"."trusted_sample_count")') == 5
+    rls = os.path.join(os.path.dirname(MIGRATION), "..", "..", "scripts", "assert_signal_rls.sql")
+    with open(rls, encoding="utf-8") as fh:
+        assert "class_signal_student_totals(ARRAY[owner_id]" in fh.read()
+
+
+def test_the_two_keys_that_gate_stress_are_validated_like_the_source():
+    """`calm_measured: "false"` is not False and `calm_held_seconds: "150"`
+    fails the isinstance check; both recorded the stress a real value would
+    have withheld. A value that is present and not the sidecar's type is
+    withheld, not recorded."""
+    assert _row(calm_source="local", calm_measured="false")["stress"] is None
+    assert _row(calm_source="local", calm_held_seconds="150")["stress"] is None
+    assert _row(calm_source="local", calm_held_seconds=float("nan"))["stress"] is None
+    assert _row(calm_source="local", calm_held_seconds=True)["stress"] is None
+    r = _row(calm_source="local", calm_measured=1, calm_held_seconds=[1])
+    assert r["stress"] is None
+    assert "calm_measured" not in r["raw"] and "calm_held_seconds" not in r["raw"]
+    assert _row(calm_source="local", calm_measured=True, calm_held_seconds=2)["stress"] == pytest.approx(0.5)
+    assert _row(calm_source="local")["stress"] == pytest.approx(0.5), "absent is an older sidecar"

@@ -189,7 +189,14 @@ class SpectrumEstimator:
         # stamps there are: push() admits an unstamped sample, and counting
         # stamps refused a genuine 256 Hz buffer with half of them absent.
         expected = (idx[-1] - idx[0]) / self.sample_rate_hz
-        return abs(span - expected) <= RATE_TOLERANCE * expected
+        # The bar is a fraction of the *buffer's* duration, not of the gap
+        # between the two stamps: scaled with that gap it collapsed to a
+        # millisecond when the surviving stamps sat in one BLE burst, or
+        # when two adjacent samples shared a delivery stamp, and refused a
+        # genuine 256 Hz buffer as sample_rate. The simulator's one sample
+        # per tick still spans minutes against a 4 s bar.
+        bar = RATE_TOLERANCE * len(self._ts) / self.sample_rate_hz
+        return abs(span - expected) <= bar
 
     def _seated(self, meta: dict[str, Any]) -> dict[str, bool]:
         """Per channel, whether the tick's contact data vouches for it. With

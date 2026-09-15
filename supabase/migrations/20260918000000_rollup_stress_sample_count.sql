@@ -51,9 +51,19 @@ BEGIN
            avg(focus), avg(stress), avg(engagement),
            count(*), count(*) FILTER (WHERE focus IS NOT NULL),
            count(*) FILTER (WHERE stress IS NOT NULL),
-           min(CASE WHEN raw ? 'score_scale' THEN public.score_scale_of(raw) ELSE 1 END)
+           -- Scale 3 is scale 2 with calm from the local spectrum: it moves
+           -- stress and not focus. A row on it whose stress is NULL (a
+           -- placeholder or a held calm) contributed only a focus, which is
+           -- on scale 2 -- so a day of such rows must not report scale 3, or
+           -- the two-source caption fires beside an sdk day for a window
+           -- where the local source contributed no stress value at all.
+           min(CASE WHEN NOT (raw ? 'score_scale') THEN 1
+                    WHEN public.score_scale_of(raw) = 3 AND stress IS NULL THEN 2
+                    ELSE public.score_scale_of(raw) END)
                FILTER (WHERE focus IS NOT NULL),
-           max(CASE WHEN raw ? 'score_scale' THEN public.score_scale_of(raw) ELSE 1 END)
+           max(CASE WHEN NOT (raw ? 'score_scale') THEN 1
+                    WHEN public.score_scale_of(raw) = 3 AND stress IS NULL THEN 2
+                    ELSE public.score_scale_of(raw) END)
                FILTER (WHERE focus IS NOT NULL),
            now()
     FROM cognitive_signals

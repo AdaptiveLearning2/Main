@@ -1352,20 +1352,79 @@ BEGIN
 
     -- Stress is counted on its own column (20260918000000): a held calm
     -- nulls stress and keeps focus, so the focus count is not its weight.
-    -- Four rows carry a focus; give two of them a stress.
+    -- Three rows carry a focus (the fourth is the nulled measurement); give
+    -- two of them a stress.
     UPDATE cognitive_signals SET stress = 0.4
      WHERE user_id = owner_id AND ts IN ('2026-03-12T18:00:01Z', '2026-03-12T18:00:02Z');
     PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-12', 'UTC');
     SELECT stress_sample_count INTO n FROM signal_daily_rollup
      WHERE user_id = owner_id AND channel = 'cognitive';
     IF n IS DISTINCT FROM 2 THEN
-        RAISE EXCEPTION 'stress_sample_count is %, expected 2 of 4 rows', n;
+        RAISE EXCEPTION 'stress_sample_count is %, expected 2 of the 3 rows with a focus', n;
+    END IF;
+
+    -- A scale-3 row with no stress contributed only a focus, which is on
+    -- scale 2: the day must not report the local scale for it. With a
+    -- stress, it is scale 3.
+    INSERT INTO cognitive_signals (session_id, user_id, ts, focus, raw) VALUES
+        (sess, owner_id, '2026-03-12T18:00:05Z', 0.5, '{"score_scale": 3}'::jsonb);
+    PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-12', 'UTC');
+    SELECT score_scale_max INTO hi FROM signal_daily_rollup
+     WHERE user_id = owner_id AND channel = 'cognitive';
+    IF hi IS DISTINCT FROM 2 THEN
+        RAISE EXCEPTION 'a scale-3 row with no stress reported scale %', hi;
+    END IF;
+    UPDATE cognitive_signals SET stress = 0.4
+     WHERE user_id = owner_id AND ts = '2026-03-12T18:00:05Z';
+    PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-12', 'UTC');
+    SELECT score_scale_max INTO hi FROM signal_daily_rollup
+     WHERE user_id = owner_id AND channel = 'cognitive';
+    IF hi IS DISTINCT FROM 3 THEN
+        RAISE EXCEPTION 'a scale-3 row with a stress reported scale %', hi;
     END IF;
 
     IF public.score_scale_of('{"score_scale": "oops"}'::jsonb) IS NOT NULL
        OR public.score_scale_of('{"score_scale": 99999}'::jsonb) IS NOT NULL
        OR public.score_scale_of('{"score_scale": 2}'::jsonb) <> 2 THEN
         RAISE EXCEPTION 'score_scale_of does not skip what it cannot store';
+    END IF;
+END $$;
+
+-- ── the cohort RPCs weight stress on its own count, with the fallback ──────
+--
+-- The only place that COALESCE runs. Two rollup rows for one student:
+-- today's carries a stress count (200 of 4000 focus rows), yesterday's
+-- predates the column (NULL, falling back to its 200 focus rows). Weighted
+-- on the stress counts, 0.7 and 0.3 average 0.5; on the focus counts, 0.68.
+DO $$
+DECLARE
+    owner_id uuid;
+    other_id uuid;
+    v        double precision;
+    n        bigint;
+BEGIN
+    SELECT i.owner_id, i.other_id INTO owner_id, other_id FROM _ids i;
+    DELETE FROM signal_daily_rollup WHERE user_id IN (owner_id, other_id);
+    INSERT INTO signal_daily_rollup
+        (user_id, day, channel, avg_focus, avg_stress, sample_count,
+         trusted_sample_count, stress_sample_count)
+    VALUES (owner_id, current_date,     'cognitive', 0.5, 0.7, 4000, 4000, 200),
+           (owner_id, current_date - 1, 'cognitive', 0.5, 0.3,  200,  200, NULL),
+           -- A classmate on the same day, for the daily trend.
+           (other_id, current_date,     'cognitive', 0.5, 0.3,  200,  200, NULL);
+
+    SELECT t.avg_stress INTO v
+      FROM public.class_signal_student_totals(ARRAY[owner_id], 14, true, true, 'UTC') t;
+    IF v IS NULL OR abs(v - 0.5) > 1e-6 THEN
+        RAISE EXCEPTION 'student totals weighted stress as % (expected 0.5 on the stress '
+                        'counts; 0.68 is the focus-count answer)', v;
+    END IF;
+
+    SELECT t.avg_stress, t.stress_sample_count INTO v, n
+      FROM public.class_signal_daily_trend(ARRAY[owner_id, other_id], 14, true, true, 'UTC') t
+     WHERE t.day = current_date AND t.channel = 'cognitive';
+    IF v IS NULL OR abs(v - 0.5) > 1e-6 OR n IS DISTINCT FROM 400 THEN
+        RAISE EXCEPTION 'daily trend weighted stress as % over % (expected 0.5 over 400)', v, n;
     END IF;
 END $$;
 

@@ -138,7 +138,12 @@ def test_no_combination_of_added_channels_makes_a_session_harder():
                         for e in ("happy", "sad", "anger", "neutral", "surprise")
                         for c in (0.2, 0.9)]
 
-    for eeg in (FOCUSED, STRESSED, NEUTRAL_EEG, eeg_channel(None, None, None)):
+    # The last is read with calm withdrawn (cause no_calm): focus and contact
+    # present, no stress on the rows. It is neutral today; a later edit that
+    # reads eeg.label into the withhold term has to stay under this property.
+    for eeg in (FOCUSED, STRESSED, NEUTRAL_EEG, eeg_channel(None, None, None),
+                eeg_channel(0.9, None, 0.9)):
+        assert eeg.cause != "no_calm" or eeg.label == "neutral"
         baseline = fuse(eeg).label
         for heart, face in itertools.product(hearts, faces):
             got = fuse(eeg, heart, face).label

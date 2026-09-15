@@ -1670,9 +1670,15 @@ sidecars on one class cannot write calm on two scales under one version. **Scale
 unit, not a later version**: it moves stress and not focus, and it runs on one student's headband
 beside a classmate's on scale 2 at the same time, so `ScaleNote` (via `describeScaleChange`) names
 which figures a range moves and whether the split is a step in time (1→2) or two sources side by
-side (any range reaching 3). **`calm_source` is client-supplied on the push path and is only ever
-a string** — the mapper and the decider type-check it before it is a dict key or a set element, or
-a posted list 500'd the ingest and then every question until it aged out. **A window whose calm is
+side (any range reaching 3). **A scale-3 row whose stress is NULL rolls up as scale 2** — it
+contributed only a focus, which is on scale 2 — or a local day of placeholder calms drew the
+two-source caption beside an sdk day for a window where the local source wrote no stress at all.
+**`calm_source`, `calm_measured` and `calm_held_seconds` are client-supplied on the push path and
+are validated by type in the mapper** (string; bool; finite non-negative number), the decider
+type-checks the source again before it is a set element, and a value present in the wrong type
+*withholds* stress rather than recording it: `"false"` is not `False` and `"150"` fails an
+isinstance check, and both read as a measured, fresh calm — the number the hold rule exists to
+withhold. A posted list as the source 500'd the ingest and then every question until it aged out. **A window whose calm is
 withdrawn — two scales, or every stress nulled by the hold rule — keeps its EEG channel**:
 `eeg_channel` reads focus and confidence, applies the contact gate, and answers `neutral` with
 cause `no_calm`; withdrawing the whole channel on `calm is None` lost the read with it. On the

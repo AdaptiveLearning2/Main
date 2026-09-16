@@ -610,6 +610,23 @@ resolved and every test timed out at the 5 s default. Each of those tests costs 
 seconds and says so with a 60 s timeout. `Overview.test.jsx`'s fake-clock pattern works for a
 300 ms debounce; it did not survive this component.
 
+### The simulator pairs like a headband, and streams whether or not it is paired
+
+`SimulatedMuseIngestionAdapter` answers the bridge's three commands: `refresh` lists one device
+(`MuseS-SIM0`, named so no status line or bug report can mistake it for hardware), `connect`
+pairs it, `disconnect` clears both, and the pairing fields (`muse_connected`, `muse_devices`,
+`active_muse_name`, `connection_state`, `eeg_age_ms`) follow that state. Until 2026-09-16 it
+reported nothing discoverable and `send_bridge_command` raised, so under `EEG_SOURCE=sim` the
+page's Connect button always ended at "no device" while the poller recorded underneath it — a
+sim run could never exercise the pairing sequence, the adopt path or a drop. **`eeg_age_ms` is
+measured from the last sample read since the pairing, and is null on a fresh link**, the way
+the bridge zeroes its packet clock on CONNECTED: the page's `linkSettling` / `linkAlive` split
+holds on the simulator too. Two things are deliberately unlike hardware: the sample stream runs
+whether or not anything is paired (a plain `start.ps1` run streams without a click, as before),
+and the pairing survives a stream stop, as the bridge holds a link across a session end. A
+device whose adapter has no `send_bridge_command` — the camera — still answers
+`ok: false, commands require EEG_SOURCE=muse`.
+
 ### Samples are stored during a session, not while a headband merely sits paired
 
 Under pull, Connect has to start the poller — it is what starts the sidecar's device stream, and

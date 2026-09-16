@@ -125,19 +125,27 @@ update_device_registry() {
         return 0
     fi
     current="$(grep '^EEG_DEVICES=' "$path" | tail -1 | cut -d= -f2-)"
-    kept=""
     IFS=',' read -ra entries <<< "$current"
+    # Whether a *named* station already sits on the headband's own address.
+    # The registry parser refuses two muse devices on one host:port -- the
+    # sidecar does not boot -- so a `default:` there, rewritten or added,
+    # would take the sidecar down after a run the user asked for. sim has no
+    # process behind it, so two sim entries collide on nothing (config.py
+    # exempts them for the same reason). Same rule as start.ps1.
+    for entry in "${entries[@]}"; do
+        case "$entry" in
+            ""|*:face|*:face@*|default:*) ;;
+            *) [ "${headband#*:}" != sim ] && [ "${entry#*:}" = "${headband#*:}" ] && addr_taken=true ;;
+        esac
+    done
+    kept=""
     for entry in "${entries[@]}"; do
         case "$entry" in
             ""|*:face|*:face@*) ;;
-            default:*) kept="${kept:+$kept,}$headband"; has_default=true ;;
-            *) kept="${kept:+$kept,}$entry"
-               # A named station on the headband's own address: the bridge
-               # takes one TCP client, so a `default:` beside it would be a
-               # permanent phantom device (same rule as start.ps1).
-               # sim has no process behind it, so two sim entries collide
-               # on nothing (config.py exempts them for the same reason).
-               [ "${headband#*:}" != sim ] && [ "${entry#*:}" = "${headband#*:}" ] && addr_taken=true ;;
+            default:*) if [ "$addr_taken" != true ]; then
+                           kept="${kept:+$kept,}$headband"; has_default=true
+                       fi ;;
+            *) kept="${kept:+$kept,}$entry" ;;
         esac
     done
     if [ -n "$camera" ]; then

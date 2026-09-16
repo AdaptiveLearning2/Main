@@ -159,19 +159,23 @@ function Update-DeviceRegistry {
         return
     }
     $current = ($line -split '=', 2)[1]
-    $kept = @($current -split ',' | Where-Object { $_ -and ($_ -notmatch ':face(@|$)') } | ForEach-Object {
-        if ($_ -match '^default:') { $headband } else { $_ }
+    $entries = @($current -split ',' | Where-Object { $_ -and ($_ -notmatch ':face(@|$)') })
+    # Whether a *named* station already sits on the headband's own address
+    # (`muse@8765`). The registry parser refuses two muse devices on one
+    # host:port -- `parse_eeg_devices` raises and the sidecar does not boot --
+    # so a `default:` on that address, whether rewritten or added, would take
+    # the whole sidecar down after a run the user asked for. A registry that
+    # names its stations has named its headband; the `default:` entry is
+    # dropped (rewrite) or not added (camera branch). sim has no process
+    # behind it, so two sim entries collide on nothing (config.py exempts
+    # them for the same reason).
+    $addr = ($headband -split ':', 2)[1]
+    $taken = ($addr -ne 'sim') -and (@($entries | Where-Object {
+        ($_ -notmatch '^default:') -and (($_ -split ':', 2)[1] -eq $addr) }).Count -gt 0)
+    $kept = @($entries | ForEach-Object {
+        if ($_ -match '^default:') { if (-not $taken) { $headband } } else { $_ }
     })
     if ($camera) {
-        # Ensure a headband entry -- unless a named station already sits on
-        # the headband's own address (`muse@8765`). The bridge takes one TCP
-        # client, so a second entry on its port is a permanent phantom device
-        # reporting no signal, and `default:` is the one readers treat as
-        # primary. A registry that names its stations has named its headband.
-        # sim has no process behind it, so two sim entries collide on nothing
-        # (config.py exempts them for the same reason).
-        $addr = ($headband -split ':', 2)[1]
-        $taken = ($addr -ne 'sim') -and (@($kept | Where-Object { ($_ -split ':', 2)[1] -eq $addr }).Count -gt 0)
         if (-not ($kept -match '^default:') -and -not $taken) { $kept = @($headband) + $kept }
         $kept += $camera
     }

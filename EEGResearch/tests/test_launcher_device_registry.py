@@ -34,6 +34,12 @@ CASES = [
      "EEG_DEVICES=default:sim,station2:muse@8766"),
     # No registry line: none is added (the sidecar synthesises one from EEG_SOURCE).
     (None, "default:sim", None),
+    # A plain -Muse run over a registry whose named station already holds the
+    # bridge address: the default: entry is dropped, not rewritten onto it --
+    # two muse devices on one host:port make parse_eeg_devices raise and the
+    # sidecar does not boot.
+    ("EEG_DEVICES=default:sim,station1:muse@8765", "default:muse@8765",
+     "EEG_DEVICES=station1:muse@8765"),
 ]
 
 
@@ -49,10 +55,16 @@ CAMERA_CASES = [
     # A fresh file with no registry line gets the pair the run needs.
     (None, "default:sim", "camera:face@0", "EEG_DEVICES=default:sim,camera:face@0"),
     # A named station already on the headband's bridge port: no `default:` is
-    # added beside it. The bridge takes one TCP client, so a second entry on
-    # its port would be a permanent phantom device reporting no signal.
+    # added beside it. parse_eeg_devices refuses two muse devices on one
+    # host:port, so the sidecar would not boot.
     ("EEG_DEVICES=station1:muse@8765,station2:muse@8766", "default:muse@8765", "camera:face@0",
      "EEG_DEVICES=station1:muse@8765,station2:muse@8766,camera:face@0"),
+    # ...and the same on the rewrite path: an existing default: is dropped
+    # rather than rewritten onto the station's address. Reachable from an
+    # ordinary sequence -- a plain run writes default:sim, the user hand-adds
+    # station1:muse@8765, then runs -Muse -Camera.
+    ("EEG_DEVICES=default:sim,station1:muse@8765", "default:muse@8765", "camera:face@0",
+     "EEG_DEVICES=station1:muse@8765,camera:face@0"),
     # ...but a station on a different port does not stand in for the headband.
     ("EEG_DEVICES=station2:muse@8766", "default:muse@8765", "camera:face@0",
      "EEG_DEVICES=default:muse@8765,station2:muse@8766,camera:face@0"),

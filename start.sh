@@ -118,7 +118,7 @@ update_device_registry() {
     # With `$3` (a camera entry, on the --camera branch) it is appended and a
     # `default:` entry is ensured -- composed onto the existing list, which
     # the camera branch used to overwrite outright.
-    local path="$1" headband="$2" camera="${3:-}" current kept entry has_default=false addr_taken=false
+    local path="$1" headband="$2" camera="${3:-}" current kept entry has_default=false
     [ -f "$path" ] || return 0
     if ! grep -q '^EEG_DEVICES=' "$path"; then
         [ -n "$camera" ] && set_env_key "$path" "EEG_DEVICES" "$headband,$camera"
@@ -126,35 +126,39 @@ update_device_registry() {
     fi
     current="$(grep '^EEG_DEVICES=' "$path" | tail -1 | cut -d= -f2-)"
     IFS=',' read -ra entries <<< "$current"
-    # Whether a *named* station already sits on the headband's own address.
-    # The registry parser refuses two muse devices on one host:port -- the
-    # sidecar does not boot -- so a `default:` there, rewritten or added,
-    # would take the sidecar down after a run the user asked for. sim has no
-    # process behind it, so two sim entries collide on nothing (config.py
-    # exempts them for the same reason). Same rule as start.ps1.
+    # A *named* station already on the headband's own address is a conflict
+    # this function cannot resolve: it writes nothing and returns 1 for the
+    # caller to refuse the run. The parser refuses two muse devices on one
+    # host:port (the sidecar does not boot), and the backend drives the
+    # `default` device on every lifecycle call, so dropping `default:` traded
+    # a sidecar that would not start for a stack that 404s on Connect. sim
+    # has no process behind it, so two sim entries collide on nothing. Same
+    # rule as start.ps1.
     for entry in "${entries[@]}"; do
         case "$entry" in
             ""|*:face|*:face@*|default:*) ;;
-            *) [ "${headband#*:}" != sim ] && [ "${entry#*:}" = "${headband#*:}" ] && addr_taken=true ;;
+            *) if [ "${headband#*:}" != sim ] && [ "${entry#*:}" = "${headband#*:}" ]; then
+                   echo "EEG_DEVICES names $entry on the bridge address this run's headband needs (${headband#*:})."
+                   echo "  The backend drives the 'default' device, and two muse devices cannot share a bridge port."
+                   echo "  Give that station its own port, remove it, or run without --muse. EEGResearch/.env was not changed."
+                   return 1
+               fi ;;
         esac
     done
     kept=""
     for entry in "${entries[@]}"; do
         case "$entry" in
             ""|*:face|*:face@*) ;;
-            default:*) if [ "$addr_taken" != true ]; then
-                           kept="${kept:+$kept,}$headband"; has_default=true
-                       fi ;;
+            default:*) kept="${kept:+$kept,}$headband"; has_default=true ;;
             *) kept="${kept:+$kept,}$entry" ;;
         esac
     done
     if [ -n "$camera" ]; then
-        if [ "$has_default" != true ] && [ "$addr_taken" != true ]; then
-            kept="$headband${kept:+,$kept}"
-        fi
+        [ "$has_default" = true ] || kept="$headband${kept:+,$kept}"
         kept="${kept:+$kept,}$camera"
     fi
     set_env_key "$path" "EEG_DEVICES" "$kept"
+    return 0
 }
 
 set_env_key() {
@@ -366,7 +370,7 @@ ensure_model('$LANDMARK_MODEL')
 
     # macOS has no libMuse, so the headband half is always sim here. Composed
     # onto the existing registry, not written over it.
-    update_device_registry "$EEG_ENV" "default:sim" "camera:face@$CAMERA_INDEX"
+    update_device_registry "$EEG_ENV" "default:sim" "camera:face@$CAMERA_INDEX" || exit 1
     set_env_key "$EEG_ENV" "FACE_ENABLED" "true"
     set_env_key "$EEG_ENV" "FACE_CAMERA_INDEX" "$CAMERA_INDEX"
     # Every FACE_* key on both branches, FACE_EMOTION_ENABLED included: its
@@ -425,7 +429,7 @@ else
 
     # Drop the camera entry and re-point the headband entry; macOS has no
     # libMuse, so the headband half is always sim here.
-    update_device_registry "$EEG_ENV" "default:sim"
+    update_device_registry "$EEG_ENV" "default:sim" || exit 1
 fi
 
 # 2. Ollama

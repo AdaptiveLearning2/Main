@@ -122,8 +122,15 @@ The registry wins over `EEG_SOURCE` for the device it names, and a `-Muse -Camer
 started the sidecar looking for a bridge that was not running: `eeg_source: muse` on the payload,
 `no_signal` throughout, found by the simulator smoke run of 2026-09-16. `Update-DeviceRegistry`
 (`update_device_registry` in `start.sh`) now rewrites a `default:` entry to what this run asked for
-and only if one is present; other stations survive. `test_launcher_device_registry.py` drives both
-functions, extracted from the scripts, against a temp `.env`.
+and only if one is present; other stations survive, and the `-Camera` branch composes its entry
+through the same function rather than overwriting the key. **A named station already on the
+headband's bridge address refuses the run**, with nothing written: the parser refuses two muse
+devices on one host:port (the sidecar does not boot), and the website backend drives the `default`
+device on every lifecycle call (`eeg_client.DEFAULT_DEVICE_ID`), so dropping the `default:` entry
+instead — the first fix — traded a sidecar that would not start for a stack that started clean and
+404'd on Connect. Only the user can say whether that station moves to its own port or goes. sim
+entries are exempt, since nothing runs behind them. `test_launcher_device_registry.py` drives both
+functions, extracted from the scripts, against a temp `.env`, refusals included.
 
 **Guard every read of a `.env` in `start.ps1` with `Test-Path`.** `Set-EnvKey` returns silently when
 the file is missing, so nothing before the read notices, and `Select-String -Path` on a missing file

@@ -21,6 +21,10 @@ ROOT = Path(__file__).resolve().parents[2]
 POWERSHELL = shutil.which("powershell")
 BASH = shutil.which("bash")
 
+# Expected value meaning: the function refused, returned false / non-zero,
+# and left the file exactly as it was.
+REFUSED = "REFUSED"
+
 CASES = [
     # (line in .env, headband for this run, expected line after) -- None = no line
     ("EEG_DEVICES=default:muse@8765", "default:sim", "EEG_DEVICES=default:sim"),
@@ -35,11 +39,12 @@ CASES = [
     # No registry line: none is added (the sidecar synthesises one from EEG_SOURCE).
     (None, "default:sim", None),
     # A plain -Muse run over a registry whose named station already holds the
-    # bridge address: the default: entry is dropped, not rewritten onto it --
-    # two muse devices on one host:port make parse_eeg_devices raise and the
-    # sidecar does not boot.
-    ("EEG_DEVICES=default:sim,station1:muse@8765", "default:muse@8765",
-     "EEG_DEVICES=station1:muse@8765"),
+    # bridge address: the run is refused and the file is untouched. Two muse
+    # devices on one host:port make parse_eeg_devices raise and the sidecar
+    # does not boot; dropping the default: entry instead left the backend,
+    # which drives the `default` device on every lifecycle call, with a stack
+    # that started clean and 404'd on Connect.
+    ("EEG_DEVICES=default:sim,station1:muse@8765", "default:muse@8765", REFUSED),
 ]
 
 
@@ -54,17 +59,13 @@ CAMERA_CASES = [
      "EEG_DEVICES=default:sim,station2:muse@8766,camera:face@2"),
     # A fresh file with no registry line gets the pair the run needs.
     (None, "default:sim", "camera:face@0", "EEG_DEVICES=default:sim,camera:face@0"),
-    # A named station already on the headband's bridge port: no `default:` is
-    # added beside it. parse_eeg_devices refuses two muse devices on one
-    # host:port, so the sidecar would not boot.
-    ("EEG_DEVICES=station1:muse@8765,station2:muse@8766", "default:muse@8765", "camera:face@0",
-     "EEG_DEVICES=station1:muse@8765,station2:muse@8766,camera:face@0"),
-    # ...and the same on the rewrite path: an existing default: is dropped
-    # rather than rewritten onto the station's address. Reachable from an
-    # ordinary sequence -- a plain run writes default:sim, the user hand-adds
-    # station1:muse@8765, then runs -Muse -Camera.
-    ("EEG_DEVICES=default:sim,station1:muse@8765", "default:muse@8765", "camera:face@0",
-     "EEG_DEVICES=station1:muse@8765,camera:face@0"),
+    # A named station already on the headband's bridge port, with or without
+    # an existing default: entry: the run is refused and the file untouched.
+    # The second is reachable from an ordinary sequence -- a plain run writes
+    # default:sim, the user hand-adds station1:muse@8765, then runs
+    # -Muse -Camera.
+    ("EEG_DEVICES=station1:muse@8765,station2:muse@8766", "default:muse@8765", "camera:face@0", REFUSED),
+    ("EEG_DEVICES=default:sim,station1:muse@8765", "default:muse@8765", "camera:face@0", REFUSED),
     # ...but a station on a different port does not stand in for the headband.
     ("EEG_DEVICES=station2:muse@8766", "default:muse@8765", "camera:face@0",
      "EEG_DEVICES=default:muse@8765,station2:muse@8766,camera:face@0"),
@@ -92,31 +93,43 @@ def _extract(text: str, start: str) -> str:
     return m.group(0)
 
 
-def _run_ps1(tmp_path: Path, env: Path, headband: str, camera: str | None) -> None:
+def _run_ps1(tmp_path: Path, env: Path, headband: str, camera: str | None) -> bool:
+    """True if the function accepted the registry, False if it refused."""
     src = (ROOT / "start.ps1").read_text(encoding="utf-8")
     fns = _extract(src, "function Update-DeviceRegistry {") + "\n" + _extract(src, "function Set-EnvKey {")
     script = tmp_path / "t.ps1"
     args = f"'{env}' '{headband}'" + (f" '{camera}'" if camera else "")
-    script.write_text(fns + f"\nUpdate-DeviceRegistry {args}\n", encoding="utf-8")
-    subprocess.run([POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
-                   check=True, capture_output=True, text=True)
+    script.write_text(fns + f"\nif (-not (Update-DeviceRegistry {args})) {{ exit 3 }}\n", encoding="utf-8")
+    r = subprocess.run([POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+                       capture_output=True, text=True)
+    assert r.returncode in (0, 3), r.stderr
+    return r.returncode == 0
+
+
+def _check(env: Path, before: str, accepted: bool, expected) -> None:
+    if expected == REFUSED:
+        assert not accepted, "a conflicting registry must be refused"
+        assert env.read_text(encoding="utf-8") == before, "a refused run writes nothing"
+        return
+    assert accepted
+    assert _registry_line(env) == expected
+    assert "EEG_SOURCE=sim" in env.read_text(encoding="utf-8"), "other keys untouched"
 
 
 @pytest.mark.skipif(sys.platform != "win32" or POWERSHELL is None, reason="start.ps1 is Windows")
 @pytest.mark.parametrize("line,headband,expected", CASES)
 def test_start_ps1_repoints_the_default_entry(tmp_path, line, headband, expected):
     env = _env(tmp_path, line)
-    _run_ps1(tmp_path, env, headband, None)
-    assert _registry_line(env) == expected
-    assert "EEG_SOURCE=sim" in env.read_text(encoding="utf-8"), "other keys untouched"
+    before = env.read_text(encoding="utf-8")
+    _check(env, before, _run_ps1(tmp_path, env, headband, None), expected)
 
 
 @pytest.mark.skipif(sys.platform != "win32" or POWERSHELL is None, reason="start.ps1 is Windows")
 @pytest.mark.parametrize("line,headband,camera,expected", CAMERA_CASES)
 def test_start_ps1_camera_branch_composes_onto_the_registry(tmp_path, line, headband, camera, expected):
     env = _env(tmp_path, line)
-    _run_ps1(tmp_path, env, headband, camera)
-    assert _registry_line(env) == expected
+    before = env.read_text(encoding="utf-8")
+    _check(env, before, _run_ps1(tmp_path, env, headband, camera), expected)
 
 
 def _sh_functions() -> str:
@@ -141,25 +154,27 @@ def _sh_functions() -> str:
     return _extract(src, "update_device_registry() {") + "\n" + shim
 
 
-def _run_sh(tmp_path: Path, env: Path, headband: str, camera: str | None) -> None:
+def _run_sh(tmp_path: Path, env: Path, headband: str, camera: str | None) -> bool:
+    """True if the function accepted the registry, False if it refused."""
     script = tmp_path / "t.sh"
     args = f"'{env.as_posix()}' '{headband}'" + (f" '{camera}'" if camera else "")
-    script.write_text(_sh_functions() + f"\nupdate_device_registry {args}\n", encoding="utf-8")
-    subprocess.run([BASH, str(script)], check=True, capture_output=True, text=True)
+    script.write_text(_sh_functions() + f"\nupdate_device_registry {args} || exit 3\n", encoding="utf-8")
+    r = subprocess.run([BASH, str(script)], capture_output=True, text=True)
+    assert r.returncode in (0, 3), r.stderr
+    return r.returncode == 0
 
 
 @pytest.mark.skipif(BASH is None, reason="needs bash")
 @pytest.mark.parametrize("line,headband,expected", CASES)
 def test_start_sh_repoints_the_default_entry(tmp_path, line, headband, expected):
     env = _env(tmp_path, line)
-    _run_sh(tmp_path, env, headband, None)
-    assert _registry_line(env) == expected
-    assert "EEG_SOURCE=sim" in env.read_text(encoding="utf-8"), "other keys untouched"
+    before = env.read_text(encoding="utf-8")
+    _check(env, before, _run_sh(tmp_path, env, headband, None), expected)
 
 
 @pytest.mark.skipif(BASH is None, reason="needs bash")
 @pytest.mark.parametrize("line,headband,camera,expected", CAMERA_CASES)
 def test_start_sh_camera_branch_composes_onto_the_registry(tmp_path, line, headband, camera, expected):
     env = _env(tmp_path, line)
-    _run_sh(tmp_path, env, headband, camera)
-    assert _registry_line(env) == expected
+    before = env.read_text(encoding="utf-8")
+    _check(env, before, _run_sh(tmp_path, env, headband, camera), expected)

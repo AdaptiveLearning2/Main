@@ -149,37 +149,44 @@ function Update-DeviceRegistry {
     # was careful to preserve was reduced to one station and a camera by the
     # next -Camera run.
     param([string]$path, [string]$headband, [string]$camera = "")
-    if (!(Test-Path $path)) { return }
+    if (!(Test-Path $path)) { return $true }
     # Select-Object -Last 1: Where-Object yields an array if EEG_DEVICES
     # somehow appears twice, and -split on an array would misparse. The last
     # occurrence is what a dotenv reader would take.
     $line = @(Get-Content $path) | Where-Object { $_ -match '^EEG_DEVICES=' } | Select-Object -Last 1
     if (!$line) {
         if ($camera) { Set-EnvKey $path "EEG_DEVICES" "$headband,$camera" }
-        return
+        return $true
     }
     $current = ($line -split '=', 2)[1]
     $entries = @($current -split ',' | Where-Object { $_ -and ($_ -notmatch ':face(@|$)') })
-    # Whether a *named* station already sits on the headband's own address
-    # (`muse@8765`). The registry parser refuses two muse devices on one
-    # host:port -- `parse_eeg_devices` raises and the sidecar does not boot --
-    # so a `default:` on that address, whether rewritten or added, would take
-    # the whole sidecar down after a run the user asked for. A registry that
-    # names its stations has named its headband; the `default:` entry is
-    # dropped (rewrite) or not added (camera branch). sim has no process
-    # behind it, so two sim entries collide on nothing (config.py exempts
-    # them for the same reason).
+    # A *named* station already on the headband's own address (`muse@8765`)
+    # is a conflict this function cannot resolve, so it writes nothing and
+    # returns $false for the caller to refuse the run. The registry parser
+    # refuses two muse devices on one host:port -- `parse_eeg_devices` raises
+    # and the sidecar does not boot -- and the website backend addresses
+    # `default` on every lifecycle call (eeg_client.DEFAULT_DEVICE_ID), so
+    # dropping the `default:` entry instead traded a sidecar that would not
+    # start for a stack that starts clean and 404s on Connect. Only the user
+    # can say whether the station should move to its own port or go. sim has
+    # no process behind it, so two sim entries collide on nothing (config.py
+    # exempts them for the same reason).
     $addr = ($headband -split ':', 2)[1]
-    $taken = ($addr -ne 'sim') -and (@($entries | Where-Object {
-        ($_ -notmatch '^default:') -and (($_ -split ':', 2)[1] -eq $addr) }).Count -gt 0)
-    $kept = @($entries | ForEach-Object {
-        if ($_ -match '^default:') { if (-not $taken) { $headband } } else { $_ }
-    })
+    $clash = @($entries | Where-Object {
+        ($_ -notmatch '^default:') -and ($addr -ne 'sim') -and (($_ -split ':', 2)[1] -eq $addr) })
+    if ($clash.Count -gt 0) {
+        Write-Host "EEG_DEVICES names $($clash[0]) on the bridge address this run's headband needs ($addr)." -ForegroundColor Red
+        Write-Host "  The backend drives the 'default' device, and two muse devices cannot share a bridge port." -ForegroundColor Yellow
+        Write-Host "  Give that station its own port, remove it, or run without -Muse. EEGResearch\.env was not changed." -ForegroundColor Yellow
+        return $false
+    }
+    $kept = @($entries | ForEach-Object { if ($_ -match '^default:') { $headband } else { $_ } })
     if ($camera) {
-        if (-not ($kept -match '^default:') -and -not $taken) { $kept = @($headband) + $kept }
+        if (-not ($kept -match '^default:')) { $kept = @($headband) + $kept }
         $kept += $camera
     }
     Set-EnvKey $path "EEG_DEVICES" ($kept -join ',')
+    return $true
 }
 
 function Set-EnvKey {
@@ -442,8 +449,8 @@ if ($Camera) {
 
     $headband = if ($Muse) { "default:muse@8765" } else { "default:sim" }
     # Composed onto the existing registry, not written over it -- see
-    # Update-DeviceRegistry.
-    Update-DeviceRegistry $eegEnv $headband "camera:face@$CameraIndex"
+    # Update-DeviceRegistry, which refuses a registry it cannot compose onto.
+    if (-not (Update-DeviceRegistry $eegEnv $headband "camera:face@$CameraIndex")) { exit 1 }
     Set-EnvKey $eegEnv "FACE_ENABLED" "true"
     Set-EnvKey $eegEnv "FACE_CAMERA_INDEX" "$CameraIndex"
     # Written on both branches, never left to whatever a previous run set. A
@@ -523,7 +530,7 @@ if ($Camera) {
 
     # Drop the camera entry and re-point the headband entry at what this run
     # asked for; see Update-DeviceRegistry for why both halves are needed.
-    Update-DeviceRegistry $eegEnv $(if ($Muse) { "default:muse@8765" } else { "default:sim" })
+    if (-not (Update-DeviceRegistry $eegEnv $(if ($Muse) { "default:muse@8765" } else { "default:sim" }))) { exit 1 }
 }
 
 # 3. EEGResearch backend

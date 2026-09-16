@@ -127,6 +127,34 @@ $model       = "llama3.1:8b"
 $emotionModel = Join-Path $eegDir "models\emotion-ferplus-8.onnx"
 $landmarkModel = Join-Path $eegDir "models\face_landmarker.task"
 
+function Update-DeviceRegistry {
+    # Tidy EEG_DEVICES for a run without the camera: drop the camera entry
+    # this script writes, and rewrite the `default:` headband entry to what
+    # *this* run asked for. Everything else is left alone -- blanking the key
+    # would destroy a hand-written multi-headband registry in a file the docs
+    # tell people to edit -- and a `default:` entry is only rewritten if one
+    # is there: a registry that deliberately omits it is not given one.
+    #
+    # The headband half matters as much as the camera half. A `-Muse -Camera`
+    # run wrote `default:muse@8765,camera:face@N`; stripping only the camera
+    # entry left `default:muse@8765` in place, and the registry wins over
+    # EEG_SOURCE for that device -- so every plain run after it started the
+    # sidecar looking for a bridge that was not running (EEG_SOURCE=sim in the
+    # same file, `eeg_source: muse` on the payload, no_signal throughout).
+    param([string]$path, [string]$headband)
+    if (!(Test-Path $path)) { return }
+    # Select-Object -Last 1: Where-Object yields an array if EEG_DEVICES
+    # somehow appears twice, and -split on an array would misparse. The last
+    # occurrence is what a dotenv reader would take.
+    $line = @(Get-Content $path) | Where-Object { $_ -match '^EEG_DEVICES=' } | Select-Object -Last 1
+    if (!$line) { return }
+    $current = ($line -split '=', 2)[1]
+    $kept = @($current -split ',' | Where-Object { $_ -and ($_ -notmatch ':face(@|$)') } | ForEach-Object {
+        if ($_ -match '^default:') { $headband } else { $_ }
+    })
+    Set-EnvKey $path "EEG_DEVICES" ($kept -join ',')
+}
+
 function Set-EnvKey {
     # Rewrite a key in a .env, or append it if absent. Appending matters: a
     # first-time checkout has no FACE_* lines at all, and a -replace against a
@@ -464,22 +492,9 @@ if ($Camera) {
     Set-EnvKey $backendEnv "INGEST_MODE" "pull"
     Set-EnvKey $eegEnv "EEG_SPECTRUM_SOURCE" $spectrumSource
 
-    # Remove only the camera entry this script writes, leaving any other devices
-    # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written
-    # multi-headband registry -- "station1:muse@8765,station2:muse@8766" -- in a
-    # file the docs tell people to edit. A stale camera entry still has to go, or
-    # a later plain run keeps opening the webcam.
-    if (Test-Path $eegEnv) {
-        # Select-Object -Last 1: Where-Object yields an array if EEG_DEVICES
-        # somehow appears twice, and -split on an array would misparse. The last
-        # occurrence is what a dotenv reader would take.
-        $line = @(Get-Content $eegEnv) | Where-Object { $_ -match '^EEG_DEVICES=' } | Select-Object -Last 1
-        if ($line) {
-            $current = ($line -split '=', 2)[1]
-            $kept = @($current -split ',' | Where-Object { $_ -and ($_ -notmatch ':face(@|$)') })
-            Set-EnvKey $eegEnv "EEG_DEVICES" ($kept -join ',')
-        }
-    }
+    # Drop the camera entry and re-point the headband entry at what this run
+    # asked for; see Update-DeviceRegistry for why both halves are needed.
+    Update-DeviceRegistry $eegEnv $(if ($Muse) { "default:muse@8765" } else { "default:sim" })
 }
 
 # 3. EEGResearch backend

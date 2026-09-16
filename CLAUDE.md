@@ -109,6 +109,17 @@ combination is a better place to say so than a sidecar that starts and then will
 `start.sh` is the mac equivalent and is kept at flag parity (`--gaze`, `--no-emotion`, the same two
 guards); per-machine setup lives in `DEVELOPER_SETUP_{MAC,WINDOWS}.md`.
 
+**A plain run re-points the `default:` headband entry in `EEG_DEVICES`, not just the camera one.**
+The registry wins over `EEG_SOURCE` for the device it names, and a `-Muse -Camera` run writes
+`default:muse@8765,camera:face@N`. The cleanup on a later plain run stripped only the camera entry
+— rightly, since blanking the key would destroy a hand-written multi-headband list — and left
+`default:muse@8765` standing beside `EEG_SOURCE=sim` in the same file, so every plain run after it
+started the sidecar looking for a bridge that was not running: `eeg_source: muse` on the payload,
+`no_signal` throughout, found by the simulator smoke run of 2026-09-16. `Update-DeviceRegistry`
+(`update_device_registry` in `start.sh`) now rewrites a `default:` entry to what this run asked for
+and only if one is present; other stations survive. `test_launcher_device_registry.py` drives both
+functions, extracted from the scripts, against a temp `.env`.
+
 **Guard every read of a `.env` in `start.ps1` with `Test-Path`.** `Set-EnvKey` returns silently when
 the file is missing, so nothing before the read notices, and `Select-String -Path` on a missing file
 is a *terminating* error under this file's `$ErrorActionPreference` — a first-ever `-Camera` run on

@@ -105,6 +105,28 @@ FRONTEND_DIR="$ROOT/Website/AdaptiveLearning/frontend"
 TMP_DIR="/tmp/adaptivelearning"
 mkdir -p "$TMP_DIR"
 
+update_device_registry() {
+    # Tidy EEG_DEVICES for a run without the camera: drop the camera entry
+    # this script writes and rewrite a `default:` headband entry to `$2`.
+    # Everything else is left alone (a hand-written multi-headband registry
+    # must survive), and a `default:` entry is only rewritten if one exists.
+    # Same function and reason as start.ps1's Update-DeviceRegistry: a
+    # stale `default:` entry wins over EEG_SOURCE for that device.
+    local path="$1" headband="$2" current kept entry
+    [ -f "$path" ] && grep -q '^EEG_DEVICES=' "$path" || return 0
+    current="$(grep '^EEG_DEVICES=' "$path" | tail -1 | cut -d= -f2-)"
+    kept=""
+    IFS=',' read -ra entries <<< "$current"
+    for entry in "${entries[@]}"; do
+        case "$entry" in
+            ""|*:face|*:face@*) ;;
+            default:*) kept="${kept:+$kept,}$headband" ;;
+            *) kept="${kept:+$kept,}$entry" ;;
+        esac
+    done
+    set_env_key "$path" "EEG_DEVICES" "$kept"
+}
+
 set_env_key() {
     # Rewrite a key in a .env, or append it if absent. Appending matters: a
     # first-time checkout has no FACE_* lines at all, and sed against a missing
@@ -366,23 +388,9 @@ else
     set_env_key "$BACKEND_ENV" "INGEST_MODE" "pull"
     set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "$SPECTRUM_SOURCE"
 
-    # Remove only the camera entry this script writes, leaving any other devices
-    # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written
-    # multi-headband registry -- "station1:muse@8765,station2:muse@8766" -- in a
-    # file the docs tell people to edit. A stale camera entry still has to go, or
-    # a later plain run keeps opening the webcam.
-    if [ -f "$EEG_ENV" ] && grep -q '^EEG_DEVICES=' "$EEG_ENV"; then
-        current="$(grep '^EEG_DEVICES=' "$EEG_ENV" | head -1 | cut -d= -f2-)"
-        kept=""
-        IFS=',' read -ra entries <<< "$current"
-        for entry in "${entries[@]}"; do
-            case "$entry" in
-                ""|*:face|*:face@*) ;;
-                *) kept="${kept:+$kept,}$entry" ;;
-            esac
-        done
-        set_env_key "$EEG_ENV" "EEG_DEVICES" "$kept"
-    fi
+    # Drop the camera entry and re-point the headband entry; macOS has no
+    # libMuse, so the headband half is always sim here.
+    update_device_registry "$EEG_ENV" "default:sim"
 fi
 
 # 2. Ollama

@@ -77,9 +77,14 @@ landmark channel and implies `-Camera`, and `-NoEmotion` turns FER+ off — gaze
 so gaze-only is a real and much cheaper deployment. Each model-backed flag provisions its model at
 setup rather than on the first frame of a lesson, and `-NoEmotion` skips the FER+ fetch entirely.
 `-LocalCalm` scores calm from the sidecar's own spectrum (`EEG_SPECTRUM_SOURCE=local`, off by
-decision until a second wearer; `start.sh --local-calm`) and is refused without `-Muse` for the
-reason `-Optics` is: the estimator is fed only by a headband, so under the simulator the local calm
-is a placeholder all session and the run looks like the flag not working. **The key is written on
+decision until a second wearer) and is refused without `-Muse` for the reason `-Optics` is: the
+estimator is fed only by a headband, so under the simulator the local calm is a placeholder all
+session and the run looks like the flag not working. **`start.sh --local-calm` is refused
+outright**, because that launcher always runs the simulator (libMuse is Windows-only and it forces
+`EEG_SOURCE=sim` even with `--muse`); a guard on the `--muse` flag cleared while the run got sim.
+**The `-Camera` branch composes its camera entry onto `EEG_DEVICES`** through the same
+`Update-DeviceRegistry` a plain run uses, rather than overwriting the key: written outright, a
+two-station registry a plain run had preserved was reduced to one station and a camera. **The key is written on
 both branches from the flag**, like `INGEST_MODE` and the `FACE_*` keys, so a hand-edited `local`
 neither survives into a plain run nor is silently reverted by one — the flag is the only way to
 select it.
@@ -108,6 +113,31 @@ a third of the camera's configuration in a Python default rather than in the `.e
 combination is a better place to say so than a sidecar that starts and then will not connect.
 `start.sh` is the mac equivalent and is kept at flag parity (`--gaze`, `--no-emotion`, the same two
 guards); per-machine setup lives in `DEVELOPER_SETUP_{MAC,WINDOWS}.md`.
+
+**A plain run re-points the `default:` headband entry in `EEG_DEVICES`, not just the camera one.**
+The registry wins over `EEG_SOURCE` for the device it names, and a `-Muse -Camera` run writes
+`default:muse@8765,camera:face@N`. The cleanup on a later plain run stripped only the camera entry
+— rightly, since blanking the key would destroy a hand-written multi-headband list — and left
+`default:muse@8765` standing beside `EEG_SOURCE=sim` in the same file, so every plain run after it
+started the sidecar looking for a bridge that was not running: `eeg_source: muse` on the payload,
+`no_signal` throughout, found by the simulator smoke run of 2026-09-16. `Update-DeviceRegistry`
+(`update_device_registry` in `start.sh`) now rewrites a `default:` entry to what this run asked for
+and only if one is present; other stations survive, and the `-Camera` branch composes its entry
+through the same function rather than overwriting the key. **A named station already on the
+headband's bridge address refuses the run**, with nothing written: the parser refuses two muse
+devices on one host:port (the sidecar does not boot), and the website backend drives the `default`
+device on every lifecycle call (`eeg_client.DEFAULT_DEVICE_ID`), so dropping the `default:` entry
+instead — the first fix — traded a sidecar that would not start for a stack that started clean and
+404'd on Connect. Only the user can say whether that station moves to its own port or goes. sim
+entries are exempt, since nothing runs behind them. The check runs (`-DryRun` / `check`) **before
+any key in either `.env` is written**, so a refusal leaves both files as they were, and the
+composed value is **applied after the camera model provisioning**: applied early, a failed
+download exited with a camera entry in the registry and `FACE_ENABLED` still false, a camera device
+with every channel off. The run summary reads the key back rather than rebuilding it from two
+variables, since the value is composed onto whatever stations the file already named.
+`test_launcher_device_registry.py` drives both functions, extracted from the scripts, against a
+temp `.env`, refusals and dry runs included, and pins the check-before-write, apply-after-
+provisioning order.
 
 **Guard every read of a `.env` in `start.ps1` with `Test-Path`.** `Set-EnvKey` returns silently when
 the file is missing, so nothing before the read notices, and `Select-String -Path` on a missing file

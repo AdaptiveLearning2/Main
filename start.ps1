@@ -127,6 +127,77 @@ $model       = "llama3.1:8b"
 $emotionModel = Join-Path $eegDir "models\emotion-ferplus-8.onnx"
 $landmarkModel = Join-Path $eegDir "models\face_landmarker.task"
 
+function Update-DeviceRegistry {
+    # Tidy EEG_DEVICES for a run without the camera: drop the camera entry
+    # this script writes, and rewrite the `default:` headband entry to what
+    # *this* run asked for. Everything else is left alone -- blanking the key
+    # would destroy a hand-written multi-headband registry in a file the docs
+    # tell people to edit -- and a `default:` entry is only rewritten if one
+    # is there: a registry that deliberately omits it is not given one.
+    #
+    # The headband half matters as much as the camera half. A `-Muse -Camera`
+    # run wrote `default:muse@8765,camera:face@N`; stripping only the camera
+    # entry left `default:muse@8765` in place, and the registry wins over
+    # EEG_SOURCE for that device -- so every plain run after it started the
+    # sidecar looking for a bridge that was not running (EEG_SOURCE=sim in the
+    # same file, `eeg_source: muse` on the payload, no_signal throughout).
+    #
+    # With `-camera` given (the -Camera branch), the camera entry is appended
+    # and a `default:` entry is ensured, since that run needs both -- but
+    # still *composed* onto the existing list. The camera branch used to
+    # overwrite the key outright, so a two-station registry that a plain run
+    # was careful to preserve was reduced to one station and a camera by the
+    # next -Camera run.
+    #
+    # -DryRun validates and writes nothing. The launcher calls it that way
+    # before any key is written, so a refusal leaves both .env files exactly
+    # as they were, and applies the composed value only after the camera
+    # model provisioning has succeeded -- applied early, a failed download
+    # exited with a camera entry in the registry and FACE_ENABLED still
+    # false, a camera device with every channel off, which the sidecar
+    # refuses to construct.
+    param([string]$path, [string]$headband, [string]$camera = "", [switch]$DryRun)
+    if (!(Test-Path $path)) { return $true }
+    # Select-Object -Last 1: Where-Object yields an array if EEG_DEVICES
+    # somehow appears twice, and -split on an array would misparse. The last
+    # occurrence is what a dotenv reader would take.
+    $line = @(Get-Content $path) | Where-Object { $_ -match '^EEG_DEVICES=' } | Select-Object -Last 1
+    if (!$line) {
+        if ($camera -and -not $DryRun) { Set-EnvKey $path "EEG_DEVICES" "$headband,$camera" }
+        return $true
+    }
+    $current = ($line -split '=', 2)[1]
+    $entries = @($current -split ',' | Where-Object { $_ -and ($_ -notmatch ':face(@|$)') })
+    # A *named* station already on the headband's own address (`muse@8765`)
+    # is a conflict this function cannot resolve, so it writes nothing and
+    # returns $false for the caller to refuse the run. The registry parser
+    # refuses two muse devices on one host:port -- `parse_eeg_devices` raises
+    # and the sidecar does not boot -- and the website backend addresses
+    # `default` on every lifecycle call (eeg_client.DEFAULT_DEVICE_ID), so
+    # dropping the `default:` entry instead traded a sidecar that would not
+    # start for a stack that starts clean and 404s on Connect. Only the user
+    # can say whether the station should move to its own port or go. sim has
+    # no process behind it, so two sim entries collide on nothing (config.py
+    # exempts them for the same reason).
+    $addr = ($headband -split ':', 2)[1]
+    $clash = @($entries | Where-Object {
+        ($_ -notmatch '^default:') -and ($addr -ne 'sim') -and (($_ -split ':', 2)[1] -eq $addr) })
+    if ($clash.Count -gt 0) {
+        Write-Host "EEG_DEVICES names $($clash[0]) on the bridge address this run's headband needs ($addr)." -ForegroundColor Red
+        Write-Host "  The backend drives the 'default' device, and two muse devices cannot share a bridge port." -ForegroundColor Yellow
+        Write-Host "  Give that station its own port, remove it, or run without -Muse. Neither .env was changed." -ForegroundColor Yellow
+        return $false
+    }
+    if ($DryRun) { return $true }
+    $kept = @($entries | ForEach-Object { if ($_ -match '^default:') { $headband } else { $_ } })
+    if ($camera) {
+        if (-not ($kept -match '^default:')) { $kept = @($headband) + $kept }
+        $kept += $camera
+    }
+    Set-EnvKey $path "EEG_DEVICES" ($kept -join ',')
+    return $true
+}
+
 function Set-EnvKey {
     # Rewrite a key in a .env, or append it if absent. Appending matters: a
     # first-time checkout has no FACE_* lines at all, and a -replace against a
@@ -241,6 +312,16 @@ if ($llmProvider -eq "claude") {
 $eegEnv = Join-Path $eegDir ".env"
 $backendEnv = Join-Path $backendDir ".env"
 $frontendEnv = Join-Path $frontendDir ".env"
+
+# The device registry is *validated* first, before any key in either .env is
+# written, so a refusal leaves both files exactly as they were -- placed after
+# the other writes it refused with EEG_SOURCE=muse already standing beside the
+# registry it was refusing. The composed value is applied later, on each
+# branch, once provisioning has succeeded (see Update-DeviceRegistry).
+$headband = if ($Muse) { "default:muse@8765" } else { "default:sim" }
+$cameraEntry = if ($Camera) { "camera:face@$CameraIndex" } else { "" }
+if (-not (Update-DeviceRegistry $eegEnv $headband $cameraEntry -DryRun)) { exit 1 }
+
 if ($Muse) {
     Write-Host "[2/5] Native Muse Bridge" -ForegroundColor Cyan
 
@@ -385,8 +466,10 @@ if ($Camera) {
     }
     Pop-Location
 
-    $headband = if ($Muse) { "default:muse@8765" } else { "default:sim" }
-    Set-EnvKey $eegEnv "EEG_DEVICES" "$headband,camera:face@$CameraIndex"
+    # Validated before any write at the top of step 2; applied here, after the
+    # model provisioning above has succeeded, and composed onto the existing
+    # registry rather than written over it -- see Update-DeviceRegistry.
+    $null = Update-DeviceRegistry $eegEnv $headband $cameraEntry
     Set-EnvKey $eegEnv "FACE_ENABLED" "true"
     Set-EnvKey $eegEnv "FACE_CAMERA_INDEX" "$CameraIndex"
     # Written on both branches, never left to whatever a previous run set. A
@@ -401,7 +484,10 @@ if ($Camera) {
     # would have had to know that to get the right answer.
     Set-EnvKey $eegEnv "FACE_EMOTION_ENABLED" $(if ($NoEmotion) { "false" } else { "true" })
     Set-EnvKey $eegEnv "FACE_LANDMARK_MODEL_PATH" "$landmarkModel"
-    Write-Host "  EEG_DEVICES = $headband,camera:face@$CameraIndex" -ForegroundColor Gray
+    # Read back rather than rebuilt: the registry is composed onto whatever
+    # stations the file already named, so two variables cannot say what it
+    # holds.
+    Write-Host "  $(@(Get-Content $eegEnv) | Where-Object { $_ -match '^EEG_DEVICES=' } | Select-Object -Last 1)" -ForegroundColor Gray
 
     # The camera only records under push, so -Camera selects it. `face_signals`
     # has exactly one writer -- /api/signals/face, which the sidecar POSTs to --
@@ -464,22 +550,10 @@ if ($Camera) {
     Set-EnvKey $backendEnv "INGEST_MODE" "pull"
     Set-EnvKey $eegEnv "EEG_SPECTRUM_SOURCE" $spectrumSource
 
-    # Remove only the camera entry this script writes, leaving any other devices
-    # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written
-    # multi-headband registry -- "station1:muse@8765,station2:muse@8766" -- in a
-    # file the docs tell people to edit. A stale camera entry still has to go, or
-    # a later plain run keeps opening the webcam.
-    if (Test-Path $eegEnv) {
-        # Select-Object -Last 1: Where-Object yields an array if EEG_DEVICES
-        # somehow appears twice, and -split on an array would misparse. The last
-        # occurrence is what a dotenv reader would take.
-        $line = @(Get-Content $eegEnv) | Where-Object { $_ -match '^EEG_DEVICES=' } | Select-Object -Last 1
-        if ($line) {
-            $current = ($line -split '=', 2)[1]
-            $kept = @($current -split ',' | Where-Object { $_ -and ($_ -notmatch ':face(@|$)') })
-            Set-EnvKey $eegEnv "EEG_DEVICES" ($kept -join ',')
-        }
-    }
+    # Validated before any write at the top of step 2; applied here: the
+    # camera entry dropped and the headband entry re-pointed -- see
+    # Update-DeviceRegistry for why both halves are needed.
+    $null = Update-DeviceRegistry $eegEnv $headband
 }
 
 # 3. EEGResearch backend

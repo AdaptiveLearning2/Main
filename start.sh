@@ -9,7 +9,7 @@
 #   ./start.sh --gaze              (gaze landmarks too; implies --camera)
 #   ./start.sh --gaze --no-emotion (gaze only -- no 35 MB FER+ model)
 #   ./start.sh --muse --optics     (headband PPG -> heart rate; Windows only)
-#   ./start.sh --muse --local-calm (calm from the sidecar's own spectrum; off by decision)
+#   --local-calm is refused here: this launcher always runs the simulator (use start.ps1 -Muse -LocalCalm)
 
 MUSE=false
 CAMERA=false
@@ -71,14 +71,17 @@ if [ "$OPTICS" = true ] && [ "$MUSE" != true ]; then
     echo "  Add --muse, or drop --optics."
     exit 1
 fi
-# Same shape: the spectrum estimator is fed only by a headband, so under the
-# simulator the local calm is a placeholder for the whole session.
-if [ "$LOCAL_CALM" = true ] && [ "$MUSE" != true ]; then
-    echo "--local-calm needs --muse: the simulator delivers no raw stream to score calm from."
-    echo "  Add --muse, or drop --local-calm."
+# The spectrum estimator is fed only by a headband, so under the simulator the
+# local calm is a placeholder for the whole session. On macOS the run *always*
+# gets the simulator -- libMuse is Windows-only and this script forces
+# EEG_SOURCE=sim below even with --muse -- so the guard tests the device the
+# run will actually get, not the flag: a --muse --local-calm run cleared the
+# flag-shaped guard, wrote EEG_SPECTRUM_SOURCE=local, and ran against sim.
+if [ "$LOCAL_CALM" = true ]; then
+    echo "--local-calm needs a headband, and libMuse is Windows-only: this launcher always runs the simulator."
+    echo "  Use start.ps1 -Muse -LocalCalm on Windows, or drop --local-calm."
     exit 1
 fi
-if [ "$LOCAL_CALM" = true ]; then SPECTRUM_SOURCE="local"; else SPECTRUM_SOURCE="sdk"; fi
 if [ -n "$OPTICS_PRESET" ] && [ "$OPTICS" != true ]; then
     echo "--preset does nothing without --optics."
     echo "  Add --optics, or drop --preset."
@@ -104,6 +107,64 @@ BACKEND_DIR="$ROOT/Website/AdaptiveLearning/backend"
 FRONTEND_DIR="$ROOT/Website/AdaptiveLearning/frontend"
 TMP_DIR="/tmp/adaptivelearning"
 mkdir -p "$TMP_DIR"
+
+update_device_registry() {
+    # Tidy EEG_DEVICES for a run without the camera: drop the camera entry
+    # this script writes and rewrite a `default:` headband entry to `$2`.
+    # Everything else is left alone (a hand-written multi-headband registry
+    # must survive), and a `default:` entry is only rewritten if one exists.
+    # Same function and reason as start.ps1's Update-DeviceRegistry: a
+    # stale `default:` entry wins over EEG_SOURCE for that device.
+    # With `$3` (a camera entry, on the --camera branch) it is appended and a
+    # `default:` entry is ensured -- composed onto the existing list, which
+    # the camera branch used to overwrite outright.
+    # `$4` = "check": validate and write nothing. Called that way before any
+    # key is written (a refusal leaves both .env files as they were), and
+    # applied later on each branch once provisioning has succeeded -- same
+    # split, same reason, as start.ps1's -DryRun.
+    local path="$1" headband="$2" camera="${3:-}" mode="${4:-apply}" current kept entry has_default=false
+    [ -f "$path" ] || return 0
+    if ! grep -q '^EEG_DEVICES=' "$path"; then
+        [ -n "$camera" ] && [ "$mode" != check ] && set_env_key "$path" "EEG_DEVICES" "$headband,$camera"
+        return 0
+    fi
+    current="$(grep '^EEG_DEVICES=' "$path" | tail -1 | cut -d= -f2-)"
+    IFS=',' read -ra entries <<< "$current"
+    # A *named* station already on the headband's own address is a conflict
+    # this function cannot resolve: it writes nothing and returns 1 for the
+    # caller to refuse the run. The parser refuses two muse devices on one
+    # host:port (the sidecar does not boot), and the backend drives the
+    # `default` device on every lifecycle call, so dropping `default:` traded
+    # a sidecar that would not start for a stack that 404s on Connect. sim
+    # has no process behind it, so two sim entries collide on nothing. Same
+    # rule as start.ps1.
+    for entry in "${entries[@]}"; do
+        case "$entry" in
+            ""|*:face|*:face@*|default:*) ;;
+            *) if [ "${headband#*:}" != sim ] && [ "${entry#*:}" = "${headband#*:}" ]; then
+                   echo "EEG_DEVICES names $entry on the bridge address this run's headband needs (${headband#*:})."
+                   echo "  The backend drives the 'default' device, and two muse devices cannot share a bridge port."
+                   echo "  Give that station its own port, remove it, or run without --muse. Neither .env was changed."
+                   return 1
+               fi ;;
+        esac
+    done
+    [ "$mode" = check ] && return 0
+    kept=""
+    for entry in "${entries[@]}"; do
+        case "$entry" in
+            ""|*:face|*:face@*) ;;
+            default:*) kept="${kept:+$kept,}$headband"; has_default=true ;;
+            *) kept="${kept:+$kept,}$entry" ;;
+        esac
+    done
+    if [ -n "$camera" ]; then
+        [ "$has_default" = true ] || kept="$headband${kept:+,$kept}"
+        kept="${kept:+$kept,}$camera"
+    fi
+    set_env_key "$path" "EEG_DEVICES" "$kept"
+    return 0
+}
 
 set_env_key() {
     # Rewrite a key in a .env, or append it if absent. Appending matters: a
@@ -221,6 +282,16 @@ echo -e "${GRAY}[1/5] Skipping native bridge (simulator mode on macOS)${NC}"
 EEG_ENV="$EEG_DIR/.env"
 BACKEND_ENV="$BACKEND_DIR/.env"
 FRONTEND_ENV="$FRONTEND_DIR/.env"
+
+# The device registry is *validated* first, before any key in either .env is
+# written, so a refusal leaves both files as they were; the composed value is
+# applied later on each branch, after provisioning (same split as start.ps1;
+# the mac headband is always sim, so a refusal cannot happen here, but the
+# order is what keeps the two scripts' claims true).
+_camera_entry=""
+[ "$CAMERA" = true ] && _camera_entry="camera:face@$CAMERA_INDEX"
+update_device_registry "$EEG_ENV" "default:sim" "$_camera_entry" check || exit 1
+
 if [ -f "$EEG_ENV" ]; then
     if grep -q "^EEG_SOURCE=muse" "$EEG_ENV" 2>/dev/null; then
         sed -i '' 's/^EEG_SOURCE=muse/EEG_SOURCE=sim/' "$EEG_ENV"
@@ -312,8 +383,10 @@ ensure_model('$LANDMARK_MODEL')
         fi
     fi
 
-    # macOS has no libMuse, so the headband half is always sim here.
-    set_env_key "$EEG_ENV" "EEG_DEVICES" "default:sim,camera:face@$CAMERA_INDEX"
+    # Validated before any write, above the EEG_SOURCE rewrite; applied here,
+    # after the model provisioning above has succeeded, and composed onto the
+    # existing registry -- see update_device_registry.
+    update_device_registry "$EEG_ENV" "default:sim" "$_camera_entry"
     set_env_key "$EEG_ENV" "FACE_ENABLED" "true"
     set_env_key "$EEG_ENV" "FACE_CAMERA_INDEX" "$CAMERA_INDEX"
     # Every FACE_* key on both branches, FACE_EMOTION_ENABLED included: its
@@ -336,7 +409,9 @@ ensure_model('$LANDMARK_MODEL')
     set_env_key "$EEG_ENV" "PUSH_ENABLED" "true"
     # Written on both branches from the --local-calm flag, so a hand-edited
     # `local` cannot survive into a later plain run.
-    set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "$SPECTRUM_SOURCE"
+    # Always sdk: this launcher runs the simulator and refuses --local-calm
+    # above, so there is no run in which it could select the local source.
+    set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "sdk"
     set_env_key "$EEG_ENV" "BACKEND_URL" "http://127.0.0.1:8000"
     set_env_key "$BACKEND_ENV" "INGEST_MODE" "push"
     # Same as start.ps1: without this the browser sends no Authorization header
@@ -353,7 +428,9 @@ ensure_model('$LANDMARK_MODEL')
         echo -e "  ${YELLOW}No API_TOKEN in $EEG_ENV yet -- VITE_EEG_LOCAL_TOKEN not set.${NC}"
         echo -e "  ${YELLOW}The browser will 401 against the sidecar. Re-run this script once it has started.${NC}"
     fi
-    echo -e "  ${GRAY}EEG_DEVICES = default:sim,camera:face@$CAMERA_INDEX${NC}"
+    # Read back rather than rebuilt: the registry is composed onto whatever
+    # stations the file already named.
+    echo -e "  ${GRAY}$(grep '^EEG_DEVICES=' "$EEG_ENV" | tail -1)${NC}"
 else
     set_env_key "$EEG_ENV" "FACE_ENABLED" "false"
     set_env_key "$EEG_ENV" "FACE_GAZE_ENABLED" "false"
@@ -364,25 +441,13 @@ else
     # later headband-only one.
     set_env_key "$EEG_ENV" "PUSH_ENABLED" "false"
     set_env_key "$BACKEND_ENV" "INGEST_MODE" "pull"
-    set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "$SPECTRUM_SOURCE"
+    # Always sdk: this launcher runs the simulator and refuses --local-calm
+    # above, so there is no run in which it could select the local source.
+    set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "sdk"
 
-    # Remove only the camera entry this script writes, leaving any other devices
-    # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written
-    # multi-headband registry -- "station1:muse@8765,station2:muse@8766" -- in a
-    # file the docs tell people to edit. A stale camera entry still has to go, or
-    # a later plain run keeps opening the webcam.
-    if [ -f "$EEG_ENV" ] && grep -q '^EEG_DEVICES=' "$EEG_ENV"; then
-        current="$(grep '^EEG_DEVICES=' "$EEG_ENV" | head -1 | cut -d= -f2-)"
-        kept=""
-        IFS=',' read -ra entries <<< "$current"
-        for entry in "${entries[@]}"; do
-            case "$entry" in
-                ""|*:face|*:face@*) ;;
-                *) kept="${kept:+$kept,}$entry" ;;
-            esac
-        done
-        set_env_key "$EEG_ENV" "EEG_DEVICES" "$kept"
-    fi
+    # Validated before any write, above the EEG_SOURCE rewrite; applied here:
+    # the camera entry dropped and the headband entry re-pointed.
+    update_device_registry "$EEG_ENV" "default:sim"
 fi
 
 # 2. Ollama

@@ -118,10 +118,14 @@ update_device_registry() {
     # With `$3` (a camera entry, on the --camera branch) it is appended and a
     # `default:` entry is ensured -- composed onto the existing list, which
     # the camera branch used to overwrite outright.
-    local path="$1" headband="$2" camera="${3:-}" current kept entry has_default=false
+    # `$4` = "check": validate and write nothing. Called that way before any
+    # key is written (a refusal leaves both .env files as they were), and
+    # applied later on each branch once provisioning has succeeded -- same
+    # split, same reason, as start.ps1's -DryRun.
+    local path="$1" headband="$2" camera="${3:-}" mode="${4:-apply}" current kept entry has_default=false
     [ -f "$path" ] || return 0
     if ! grep -q '^EEG_DEVICES=' "$path"; then
-        [ -n "$camera" ] && set_env_key "$path" "EEG_DEVICES" "$headband,$camera"
+        [ -n "$camera" ] && [ "$mode" != check ] && set_env_key "$path" "EEG_DEVICES" "$headband,$camera"
         return 0
     fi
     current="$(grep '^EEG_DEVICES=' "$path" | tail -1 | cut -d= -f2-)"
@@ -145,6 +149,7 @@ update_device_registry() {
                fi ;;
         esac
     done
+    [ "$mode" = check ] && return 0
     kept=""
     for entry in "${entries[@]}"; do
         case "$entry" in
@@ -278,13 +283,14 @@ EEG_ENV="$EEG_DIR/.env"
 BACKEND_ENV="$BACKEND_DIR/.env"
 FRONTEND_ENV="$FRONTEND_DIR/.env"
 
-# The device registry first, before any key in either .env is written, so a
-# refusal leaves both files as they were (same order as start.ps1; the mac
-# headband is always sim, so a refusal cannot happen here, but the order is
-# what keeps the two scripts' claims true).
+# The device registry is *validated* first, before any key in either .env is
+# written, so a refusal leaves both files as they were; the composed value is
+# applied later on each branch, after provisioning (same split as start.ps1;
+# the mac headband is always sim, so a refusal cannot happen here, but the
+# order is what keeps the two scripts' claims true).
 _camera_entry=""
 [ "$CAMERA" = true ] && _camera_entry="camera:face@$CAMERA_INDEX"
-update_device_registry "$EEG_ENV" "default:sim" "$_camera_entry" || exit 1
+update_device_registry "$EEG_ENV" "default:sim" "$_camera_entry" check || exit 1
 
 if [ -f "$EEG_ENV" ]; then
     if grep -q "^EEG_SOURCE=muse" "$EEG_ENV" 2>/dev/null; then
@@ -377,8 +383,10 @@ ensure_model('$LANDMARK_MODEL')
         fi
     fi
 
-    # EEG_DEVICES was composed (camera entry included) before any write,
-    # above the EEG_SOURCE rewrite -- see update_device_registry.
+    # Validated before any write, above the EEG_SOURCE rewrite; applied here,
+    # after the model provisioning above has succeeded, and composed onto the
+    # existing registry -- see update_device_registry.
+    update_device_registry "$EEG_ENV" "default:sim" "$_camera_entry"
     set_env_key "$EEG_ENV" "FACE_ENABLED" "true"
     set_env_key "$EEG_ENV" "FACE_CAMERA_INDEX" "$CAMERA_INDEX"
     # Every FACE_* key on both branches, FACE_EMOTION_ENABLED included: its
@@ -420,7 +428,9 @@ ensure_model('$LANDMARK_MODEL')
         echo -e "  ${YELLOW}No API_TOKEN in $EEG_ENV yet -- VITE_EEG_LOCAL_TOKEN not set.${NC}"
         echo -e "  ${YELLOW}The browser will 401 against the sidecar. Re-run this script once it has started.${NC}"
     fi
-    echo -e "  ${GRAY}EEG_DEVICES = default:sim,camera:face@$CAMERA_INDEX${NC}"
+    # Read back rather than rebuilt: the registry is composed onto whatever
+    # stations the file already named.
+    echo -e "  ${GRAY}$(grep '^EEG_DEVICES=' "$EEG_ENV" | tail -1)${NC}"
 else
     set_env_key "$EEG_ENV" "FACE_ENABLED" "false"
     set_env_key "$EEG_ENV" "FACE_GAZE_ENABLED" "false"
@@ -435,8 +445,9 @@ else
     # above, so there is no run in which it could select the local source.
     set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "sdk"
 
-    # EEG_DEVICES (camera entry dropped, headband re-pointed) was handled
-    # before any write, above the EEG_SOURCE rewrite.
+    # Validated before any write, above the EEG_SOURCE rewrite; applied here:
+    # the camera entry dropped and the headband entry re-pointed.
+    update_device_registry "$EEG_ENV" "default:sim"
 fi
 
 # 2. Ollama

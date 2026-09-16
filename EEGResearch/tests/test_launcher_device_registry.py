@@ -93,28 +93,74 @@ def _first_line(text: str, pattern: str) -> int:
     raise AssertionError(pattern)
 
 
-def test_the_registry_is_settled_before_either_env_is_written():
-    """A refusal says neither .env was changed, and that is only true if the
-    registry call comes before every write. Placed after them, a refused
-    -Muse run left EEG_SOURCE=muse standing beside the registry it had just
-    refused -- the state the check exists to prevent."""
-    ps1 = (ROOT / "start.ps1").read_text(encoding="utf-8")
-    body = ps1[ps1.index("function Set-EnvKey {"):]          # past the function definitions
-    body = body[body.index("\n}\n") + 3:]
-    call = _first_line(body, r"Update-DeviceRegistry \$eegEnv")
-    writes = [_first_line(body, p) for p in (
-        r"Set-EnvKey \$eegEnv", r"Set-Content \$eegEnv", r"Set-EnvKey \$backendEnv")]
-    assert call < min(writes), (call, writes)
-    assert ps1.count("Update-DeviceRegistry $eegEnv") == 1, "one call, ahead of everything"
+def _body_after_functions(text: str, last_fn: str) -> str:
+    body = text[text.index(last_fn):]
+    return body[body.index("\n}\n") + 3:]
 
-    sh = (ROOT / "start.sh").read_text(encoding="utf-8")
-    body = sh[sh.index("set_env_key() {"):]
-    body = body[body.index("\n}\n") + 3:]
-    call = _first_line(body, r'update_device_registry "\$EEG_ENV"')
-    writes = [_first_line(body, p) for p in (
+
+def test_the_registry_is_validated_before_any_write_and_applied_after_provisioning():
+    """Two properties, one call each. A refusal says neither .env was changed,
+    which is only true if the check precedes every write -- placed after
+    them, a refused -Muse run left EEG_SOURCE=muse beside the registry it had
+    just refused. And the *write* must follow the camera model provisioning:
+    applied early, a failed download exited with a camera entry in the
+    registry and FACE_ENABLED still false, a camera device with every channel
+    off, which the sidecar refuses to construct."""
+    ps1 = _body_after_functions((ROOT / "start.ps1").read_text(encoding="utf-8"), "function Set-EnvKey {")
+    check = _first_line(ps1, r"Update-DeviceRegistry \$eegEnv .*-DryRun")
+    writes = [_first_line(ps1, p) for p in (
+        r"Set-EnvKey \$eegEnv", r"Set-Content \$eegEnv", r"Set-EnvKey \$backendEnv")]
+    assert check < min(writes), (check, writes)
+    lines = ps1.splitlines()
+    applies = [i for i, l in enumerate(lines, 1)
+               if re.search(r"Update-DeviceRegistry \$eegEnv", l) and "-DryRun" not in l]
+    assert len(applies) == 2, "one apply per branch"
+    face_on = _first_line(ps1, r'Set-EnvKey \$eegEnv "FACE_ENABLED" "true"')
+    camera_apply = min(applies)
+    assert camera_apply < face_on
+    exits_between = [i for i in range(check, camera_apply) if re.search(r"^\s*exit 1", lines[i - 1])]
+    assert exits_between, "the provisioning exits lie between the check and the apply"
+    assert all(i < camera_apply for i in exits_between)
+
+    sh = _body_after_functions((ROOT / "start.sh").read_text(encoding="utf-8"), "set_env_key() {")
+    check = _first_line(sh, r'update_device_registry "\$EEG_ENV" .* check')
+    writes = [_first_line(sh, p) for p in (
         r'set_env_key "\$EEG_ENV"', r"sed -i .*EEG_ENV", r'set_env_key "\$BACKEND_ENV"')]
-    assert call < min(writes), (call, writes)
-    assert sh.count('update_device_registry "$EEG_ENV"') == 1
+    assert check < min(writes), (check, writes)
+    lines = sh.splitlines()
+    applies = [i for i, l in enumerate(lines, 1)
+               if re.search(r'update_device_registry "\$EEG_ENV"', l) and " check" not in l]
+    assert len(applies) == 2
+    face_on = _first_line(sh, r'set_env_key "\$EEG_ENV" "FACE_ENABLED" "true"')
+    camera_apply = min(applies)
+    assert camera_apply < face_on
+    exits_between = [i for i in range(check, camera_apply) if re.search(r"^\s*exit 1", lines[i - 1])]
+    assert exits_between and all(i < camera_apply for i in exits_between)
+
+    # And the summary reads the key back: rebuilt from two variables it
+    # printed default:muse@8765,camera:face@0 for a registry that also held
+    # station2:muse@8766.
+    assert "EEG_DEVICES = $headband" not in ps1 and "EEG_DEVICES = default:sim,camera" not in sh
+
+
+@pytest.mark.skipif(sys.platform != "win32" or POWERSHELL is None, reason="start.ps1 is Windows")
+@pytest.mark.parametrize("line,headband,camera,expected", CAMERA_CASES + [(l, h, None, e) for l, h, e in CASES])
+def test_start_ps1_dry_run_refuses_the_same_cases_and_never_writes(tmp_path, line, headband, camera, expected):
+    env = _env(tmp_path, line)
+    before = env.read_text(encoding="utf-8")
+    accepted = _run_ps1(tmp_path, env, headband, camera, dry_run=True)
+    assert accepted == (expected != REFUSED)
+    assert env.read_text(encoding="utf-8") == before, "a dry run writes nothing either way"
+
+
+@pytest.mark.skipif(BASH is None, reason="needs bash")
+@pytest.mark.parametrize("line,headband,camera,expected", CAMERA_CASES + [(l, h, None, e) for l, h, e in CASES])
+def test_start_sh_check_refuses_the_same_cases_and_never_writes(tmp_path, line, headband, camera, expected):
+    env = _env(tmp_path, line)
+    before = env.read_text(encoding="utf-8")
+    accepted = _run_sh(tmp_path, env, headband, camera, dry_run=True)
+    assert accepted == (expected != REFUSED)
+    assert env.read_text(encoding="utf-8") == before
 
 
 def _extract(text: str, start: str) -> str:
@@ -124,12 +170,12 @@ def _extract(text: str, start: str) -> str:
     return m.group(0)
 
 
-def _run_ps1(tmp_path: Path, env: Path, headband: str, camera: str | None) -> bool:
+def _run_ps1(tmp_path: Path, env: Path, headband: str, camera: str | None, dry_run: bool = False) -> bool:
     """True if the function accepted the registry, False if it refused."""
     src = (ROOT / "start.ps1").read_text(encoding="utf-8")
     fns = _extract(src, "function Update-DeviceRegistry {") + "\n" + _extract(src, "function Set-EnvKey {")
     script = tmp_path / "t.ps1"
-    args = f"'{env}' '{headband}'" + (f" '{camera}'" if camera else "")
+    args = f"'{env}' '{headband}'" + (f" '{camera}'" if camera else "") + (" -DryRun" if dry_run else "")
     script.write_text(fns + f"\nif (-not (Update-DeviceRegistry {args})) {{ exit 3 }}\n", encoding="utf-8")
     r = subprocess.run([POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
                        capture_output=True, text=True)
@@ -185,10 +231,10 @@ def _sh_functions() -> str:
     return _extract(src, "update_device_registry() {") + "\n" + shim
 
 
-def _run_sh(tmp_path: Path, env: Path, headband: str, camera: str | None) -> bool:
+def _run_sh(tmp_path: Path, env: Path, headband: str, camera: str | None, dry_run: bool = False) -> bool:
     """True if the function accepted the registry, False if it refused."""
     script = tmp_path / "t.sh"
-    args = f"'{env.as_posix()}' '{headband}'" + (f" '{camera}'" if camera else "")
+    args = f"'{env.as_posix()}' '{headband}' '{camera or ''}'" + (" check" if dry_run else "")
     script.write_text(_sh_functions() + f"\nupdate_device_registry {args} || exit 3\n", encoding="utf-8")
     r = subprocess.run([BASH, str(script)], capture_output=True, text=True)
     assert r.returncode in (0, 3), r.stderr

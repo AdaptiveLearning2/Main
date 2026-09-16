@@ -129,8 +129,15 @@ devices on one host:port (the sidecar does not boot), and the website backend dr
 device on every lifecycle call (`eeg_client.DEFAULT_DEVICE_ID`), so dropping the `default:` entry
 instead — the first fix — traded a sidecar that would not start for a stack that started clean and
 404'd on Connect. Only the user can say whether that station moves to its own port or goes. sim
-entries are exempt, since nothing runs behind them. `test_launcher_device_registry.py` drives both
-functions, extracted from the scripts, against a temp `.env`, refusals included.
+entries are exempt, since nothing runs behind them. The check runs (`-DryRun` / `check`) **before
+any key in either `.env` is written**, so a refusal leaves both files as they were, and the
+composed value is **applied after the camera model provisioning**: applied early, a failed
+download exited with a camera entry in the registry and `FACE_ENABLED` still false, a camera device
+with every channel off. The run summary reads the key back rather than rebuilding it from two
+variables, since the value is composed onto whatever stations the file already named.
+`test_launcher_device_registry.py` drives both functions, extracted from the scripts, against a
+temp `.env`, refusals and dry runs included, and pins the check-before-write, apply-after-
+provisioning order.
 
 **Guard every read of a `.env` in `start.ps1` with `Test-Path`.** `Set-EnvKey` returns silently when
 the file is missing, so nothing before the read notices, and `Select-String -Path` on a missing file

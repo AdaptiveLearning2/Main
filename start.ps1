@@ -177,7 +177,7 @@ function Update-DeviceRegistry {
     if ($clash.Count -gt 0) {
         Write-Host "EEG_DEVICES names $($clash[0]) on the bridge address this run's headband needs ($addr)." -ForegroundColor Red
         Write-Host "  The backend drives the 'default' device, and two muse devices cannot share a bridge port." -ForegroundColor Yellow
-        Write-Host "  Give that station its own port, remove it, or run without -Muse. EEGResearch\.env was not changed." -ForegroundColor Yellow
+        Write-Host "  Give that station its own port, remove it, or run without -Muse. Neither .env was changed." -ForegroundColor Yellow
         return $false
     }
     $kept = @($entries | ForEach-Object { if ($_ -match '^default:') { $headband } else { $_ } })
@@ -303,6 +303,15 @@ if ($llmProvider -eq "claude") {
 $eegEnv = Join-Path $eegDir ".env"
 $backendEnv = Join-Path $backendDir ".env"
 $frontendEnv = Join-Path $frontendDir ".env"
+
+# The device registry first, before any key in either .env is written, so a
+# refusal leaves both files exactly as they were. Placed after the other
+# writes it refused with EEG_SOURCE=muse already standing beside the
+# registry it was refusing -- the state this whole check exists to prevent.
+$headband = if ($Muse) { "default:muse@8765" } else { "default:sim" }
+$cameraEntry = if ($Camera) { "camera:face@$CameraIndex" } else { "" }
+if (-not (Update-DeviceRegistry $eegEnv $headband $cameraEntry)) { exit 1 }
+
 if ($Muse) {
     Write-Host "[2/5] Native Muse Bridge" -ForegroundColor Cyan
 
@@ -447,10 +456,8 @@ if ($Camera) {
     }
     Pop-Location
 
-    $headband = if ($Muse) { "default:muse@8765" } else { "default:sim" }
-    # Composed onto the existing registry, not written over it -- see
-    # Update-DeviceRegistry, which refuses a registry it cannot compose onto.
-    if (-not (Update-DeviceRegistry $eegEnv $headband "camera:face@$CameraIndex")) { exit 1 }
+    # EEG_DEVICES was composed (camera entry included) before any write, at
+    # the top of step 2 -- see Update-DeviceRegistry.
     Set-EnvKey $eegEnv "FACE_ENABLED" "true"
     Set-EnvKey $eegEnv "FACE_CAMERA_INDEX" "$CameraIndex"
     # Written on both branches, never left to whatever a previous run set. A
@@ -528,9 +535,9 @@ if ($Camera) {
     Set-EnvKey $backendEnv "INGEST_MODE" "pull"
     Set-EnvKey $eegEnv "EEG_SPECTRUM_SOURCE" $spectrumSource
 
-    # Drop the camera entry and re-point the headband entry at what this run
-    # asked for; see Update-DeviceRegistry for why both halves are needed.
-    if (-not (Update-DeviceRegistry $eegEnv $(if ($Muse) { "default:muse@8765" } else { "default:sim" }))) { exit 1 }
+    # EEG_DEVICES (camera entry dropped, headband entry re-pointed) was
+    # handled before any write, at the top of step 2 -- see
+    # Update-DeviceRegistry for why both halves are needed.
 }
 
 # 3. EEGResearch backend

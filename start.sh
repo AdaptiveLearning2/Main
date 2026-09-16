@@ -140,7 +140,7 @@ update_device_registry() {
             *) if [ "${headband#*:}" != sim ] && [ "${entry#*:}" = "${headband#*:}" ]; then
                    echo "EEG_DEVICES names $entry on the bridge address this run's headband needs (${headband#*:})."
                    echo "  The backend drives the 'default' device, and two muse devices cannot share a bridge port."
-                   echo "  Give that station its own port, remove it, or run without --muse. EEGResearch/.env was not changed."
+                   echo "  Give that station its own port, remove it, or run without --muse. Neither .env was changed."
                    return 1
                fi ;;
         esac
@@ -277,6 +277,15 @@ echo -e "${GRAY}[1/5] Skipping native bridge (simulator mode on macOS)${NC}"
 EEG_ENV="$EEG_DIR/.env"
 BACKEND_ENV="$BACKEND_DIR/.env"
 FRONTEND_ENV="$FRONTEND_DIR/.env"
+
+# The device registry first, before any key in either .env is written, so a
+# refusal leaves both files as they were (same order as start.ps1; the mac
+# headband is always sim, so a refusal cannot happen here, but the order is
+# what keeps the two scripts' claims true).
+_camera_entry=""
+[ "$CAMERA" = true ] && _camera_entry="camera:face@$CAMERA_INDEX"
+update_device_registry "$EEG_ENV" "default:sim" "$_camera_entry" || exit 1
+
 if [ -f "$EEG_ENV" ]; then
     if grep -q "^EEG_SOURCE=muse" "$EEG_ENV" 2>/dev/null; then
         sed -i '' 's/^EEG_SOURCE=muse/EEG_SOURCE=sim/' "$EEG_ENV"
@@ -368,9 +377,8 @@ ensure_model('$LANDMARK_MODEL')
         fi
     fi
 
-    # macOS has no libMuse, so the headband half is always sim here. Composed
-    # onto the existing registry, not written over it.
-    update_device_registry "$EEG_ENV" "default:sim" "camera:face@$CAMERA_INDEX" || exit 1
+    # EEG_DEVICES was composed (camera entry included) before any write,
+    # above the EEG_SOURCE rewrite -- see update_device_registry.
     set_env_key "$EEG_ENV" "FACE_ENABLED" "true"
     set_env_key "$EEG_ENV" "FACE_CAMERA_INDEX" "$CAMERA_INDEX"
     # Every FACE_* key on both branches, FACE_EMOTION_ENABLED included: its
@@ -427,9 +435,8 @@ else
     # above, so there is no run in which it could select the local source.
     set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "sdk"
 
-    # Drop the camera entry and re-point the headband entry; macOS has no
-    # libMuse, so the headband half is always sim here.
-    update_device_registry "$EEG_ENV" "default:sim" || exit 1
+    # EEG_DEVICES (camera entry dropped, headband re-pointed) was handled
+    # before any write, above the EEG_SOURCE rewrite.
 fi
 
 # 2. Ollama

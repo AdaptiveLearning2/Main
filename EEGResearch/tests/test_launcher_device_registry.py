@@ -86,6 +86,37 @@ def _registry_line(p: Path) -> str | None:
     return lines[-1] if lines else None
 
 
+def _first_line(text: str, pattern: str) -> int:
+    for i, line in enumerate(text.splitlines(), 1):
+        if re.search(pattern, line):
+            return i
+    raise AssertionError(pattern)
+
+
+def test_the_registry_is_settled_before_either_env_is_written():
+    """A refusal says neither .env was changed, and that is only true if the
+    registry call comes before every write. Placed after them, a refused
+    -Muse run left EEG_SOURCE=muse standing beside the registry it had just
+    refused -- the state the check exists to prevent."""
+    ps1 = (ROOT / "start.ps1").read_text(encoding="utf-8")
+    body = ps1[ps1.index("function Set-EnvKey {"):]          # past the function definitions
+    body = body[body.index("\n}\n") + 3:]
+    call = _first_line(body, r"Update-DeviceRegistry \$eegEnv")
+    writes = [_first_line(body, p) for p in (
+        r"Set-EnvKey \$eegEnv", r"Set-Content \$eegEnv", r"Set-EnvKey \$backendEnv")]
+    assert call < min(writes), (call, writes)
+    assert ps1.count("Update-DeviceRegistry $eegEnv") == 1, "one call, ahead of everything"
+
+    sh = (ROOT / "start.sh").read_text(encoding="utf-8")
+    body = sh[sh.index("set_env_key() {"):]
+    body = body[body.index("\n}\n") + 3:]
+    call = _first_line(body, r'update_device_registry "\$EEG_ENV"')
+    writes = [_first_line(body, p) for p in (
+        r'set_env_key "\$EEG_ENV"', r"sed -i .*EEG_ENV", r'set_env_key "\$BACKEND_ENV"')]
+    assert call < min(writes), (call, writes)
+    assert sh.count('update_device_registry "$EEG_ENV"') == 1
+
+
 def _extract(text: str, start: str) -> str:
     """The function body from `start` to the first `}` at column 0."""
     m = re.search(re.escape(start) + r".*?^\}", text, re.S | re.M)

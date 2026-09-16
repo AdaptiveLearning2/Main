@@ -71,11 +71,15 @@ if [ "$OPTICS" = true ] && [ "$MUSE" != true ]; then
     echo "  Add --muse, or drop --optics."
     exit 1
 fi
-# Same shape: the spectrum estimator is fed only by a headband, so under the
-# simulator the local calm is a placeholder for the whole session.
-if [ "$LOCAL_CALM" = true ] && [ "$MUSE" != true ]; then
-    echo "--local-calm needs --muse: the simulator delivers no raw stream to score calm from."
-    echo "  Add --muse, or drop --local-calm."
+# The spectrum estimator is fed only by a headband, so under the simulator the
+# local calm is a placeholder for the whole session. On macOS the run *always*
+# gets the simulator -- libMuse is Windows-only and this script forces
+# EEG_SOURCE=sim below even with --muse -- so the guard tests the device the
+# run will actually get, not the flag: a --muse --local-calm run cleared the
+# flag-shaped guard, wrote EEG_SPECTRUM_SOURCE=local, and ran against sim.
+if [ "$LOCAL_CALM" = true ]; then
+    echo "--local-calm needs a headband, and libMuse is Windows-only: this launcher always runs the simulator."
+    echo "  Use start.ps1 -Muse -LocalCalm on Windows, or drop --local-calm."
     exit 1
 fi
 if [ "$LOCAL_CALM" = true ]; then SPECTRUM_SOURCE="local"; else SPECTRUM_SOURCE="sdk"; fi
@@ -112,18 +116,29 @@ update_device_registry() {
     # must survive), and a `default:` entry is only rewritten if one exists.
     # Same function and reason as start.ps1's Update-DeviceRegistry: a
     # stale `default:` entry wins over EEG_SOURCE for that device.
-    local path="$1" headband="$2" current kept entry
-    [ -f "$path" ] && grep -q '^EEG_DEVICES=' "$path" || return 0
+    # With `$3` (a camera entry, on the --camera branch) it is appended and a
+    # `default:` entry is ensured -- composed onto the existing list, which
+    # the camera branch used to overwrite outright.
+    local path="$1" headband="$2" camera="${3:-}" current kept entry has_default=false
+    [ -f "$path" ] || return 0
+    if ! grep -q '^EEG_DEVICES=' "$path"; then
+        [ -n "$camera" ] && set_env_key "$path" "EEG_DEVICES" "$headband,$camera"
+        return 0
+    fi
     current="$(grep '^EEG_DEVICES=' "$path" | tail -1 | cut -d= -f2-)"
     kept=""
     IFS=',' read -ra entries <<< "$current"
     for entry in "${entries[@]}"; do
         case "$entry" in
             ""|*:face|*:face@*) ;;
-            default:*) kept="${kept:+$kept,}$headband" ;;
+            default:*) kept="${kept:+$kept,}$headband"; has_default=true ;;
             *) kept="${kept:+$kept,}$entry" ;;
         esac
     done
+    if [ -n "$camera" ]; then
+        [ "$has_default" = true ] || kept="$headband${kept:+,$kept}"
+        kept="${kept:+$kept,}$camera"
+    fi
     set_env_key "$path" "EEG_DEVICES" "$kept"
 }
 
@@ -334,8 +349,9 @@ ensure_model('$LANDMARK_MODEL')
         fi
     fi
 
-    # macOS has no libMuse, so the headband half is always sim here.
-    set_env_key "$EEG_ENV" "EEG_DEVICES" "default:sim,camera:face@$CAMERA_INDEX"
+    # macOS has no libMuse, so the headband half is always sim here. Composed
+    # onto the existing registry, not written over it.
+    update_device_registry "$EEG_ENV" "default:sim" "camera:face@$CAMERA_INDEX"
     set_env_key "$EEG_ENV" "FACE_ENABLED" "true"
     set_env_key "$EEG_ENV" "FACE_CAMERA_INDEX" "$CAMERA_INDEX"
     # Every FACE_* key on both branches, FACE_EMOTION_ENABLED included: its

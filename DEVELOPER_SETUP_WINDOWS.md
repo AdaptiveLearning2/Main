@@ -123,7 +123,9 @@ testing*):
 
 Every key these flags control is written to the `.env` files on **both** branches of each flag,
 so a value from a previous run cannot survive into one that did not ask for it. `start.sh` takes
-the same flags in `--kebab-case` (`--optics` is Windows-only in effect).
+the same flags in `--kebab-case` (`--optics` is Windows-only in effect, and `--local-calm` is
+refused there, since that launcher always runs the simulator). `-Camera` composes its entry onto
+`EEG_DEVICES` rather than overwriting a hand-written multi-station list.
 
 This will:
 1. Start Ollama and pull `llama3.1:8b` if not already downloaded (takes a few minutes on first run).

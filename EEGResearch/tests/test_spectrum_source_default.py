@@ -29,4 +29,8 @@ def test_both_launchers_write_the_key_on_both_branches_from_a_flag():
     assert '$spectrumSource = if ($LocalCalm) { "local" } else { "sdk" }' in ps1
     assert "[switch]$LocalCalm" in ps1 and "$LocalCalm -and -not $Muse" in ps1
     assert sh.count('set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "$SPECTRUM_SOURCE"') == 2
-    assert '--local-calm) LOCAL_CALM=true' in sh and '"$LOCAL_CALM" = true ] && [ "$MUSE" != true ]' in sh
+    # macOS always runs the simulator (the script forces EEG_SOURCE=sim even
+    # with --muse), so its guard refuses --local-calm outright rather than
+    # testing a flag the run does not honour.
+    assert '--local-calm) LOCAL_CALM=true' in sh and 'if [ "$LOCAL_CALM" = true ]; then' in sh
+    assert '"$LOCAL_CALM" = true ] && [ "$MUSE"' not in sh

@@ -99,9 +99,12 @@ chmod +x start.sh
 Flags, at parity with `start.ps1` (reasons in CLAUDE.md, *Running and testing*): `--muse`,
 `--camera` / `--index N`, `--gaze` (implies `--camera`; needs `pip install -e ".[face,gaze]"` run
 from `EEGResearch`), `--no-emotion` (only with `--gaze`), `--optics` / `--preset 103N` (refused
-without `--muse`; the bridge itself is Windows-only), and `--local-calm` (calm from the sidecar's
-own spectrum; refused without `--muse`; off by decision). Each key is written on both branches of
-its flag so a stale value cannot survive a plain run.
+without `--muse`; the bridge itself is Windows-only), and `--local-calm`, which this launcher
+**refuses outright**: it always runs the simulator (it forces `EEG_SOURCE=sim` even with
+`--muse`), and the local calm source needs a headband's raw stream. Use `start.ps1 -Muse
+-LocalCalm` on Windows. Each key is written on both branches of its flag so a stale value cannot
+survive a plain run, and `--camera` composes its entry onto `EEG_DEVICES` rather than overwriting a
+hand-written multi-station list.
 
 This will:
 1. Start Ollama and pull `llama3.1:8b` if not already downloaded (takes a few minutes on first run).

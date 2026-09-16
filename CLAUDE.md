@@ -77,9 +77,14 @@ landmark channel and implies `-Camera`, and `-NoEmotion` turns FER+ off — gaze
 so gaze-only is a real and much cheaper deployment. Each model-backed flag provisions its model at
 setup rather than on the first frame of a lesson, and `-NoEmotion` skips the FER+ fetch entirely.
 `-LocalCalm` scores calm from the sidecar's own spectrum (`EEG_SPECTRUM_SOURCE=local`, off by
-decision until a second wearer; `start.sh --local-calm`) and is refused without `-Muse` for the
-reason `-Optics` is: the estimator is fed only by a headband, so under the simulator the local calm
-is a placeholder all session and the run looks like the flag not working. **The key is written on
+decision until a second wearer) and is refused without `-Muse` for the reason `-Optics` is: the
+estimator is fed only by a headband, so under the simulator the local calm is a placeholder all
+session and the run looks like the flag not working. **`start.sh --local-calm` is refused
+outright**, because that launcher always runs the simulator (libMuse is Windows-only and it forces
+`EEG_SOURCE=sim` even with `--muse`); a guard on the `--muse` flag cleared while the run got sim.
+**The `-Camera` branch composes its camera entry onto `EEG_DEVICES`** through the same
+`Update-DeviceRegistry` a plain run uses, rather than overwriting the key: written outright, a
+two-station registry a plain run had preserved was reduced to one station and a camera. **The key is written on
 both branches from the flag**, like `INGEST_MODE` and the `FACE_*` keys, so a hand-edited `local`
 neither survives into a plain run nor is silently reverted by one — the flag is the only way to
 select it.

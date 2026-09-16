@@ -141,17 +141,31 @@ function Update-DeviceRegistry {
     # EEG_SOURCE for that device -- so every plain run after it started the
     # sidecar looking for a bridge that was not running (EEG_SOURCE=sim in the
     # same file, `eeg_source: muse` on the payload, no_signal throughout).
-    param([string]$path, [string]$headband)
+    #
+    # With `-camera` given (the -Camera branch), the camera entry is appended
+    # and a `default:` entry is ensured, since that run needs both -- but
+    # still *composed* onto the existing list. The camera branch used to
+    # overwrite the key outright, so a two-station registry that a plain run
+    # was careful to preserve was reduced to one station and a camera by the
+    # next -Camera run.
+    param([string]$path, [string]$headband, [string]$camera = "")
     if (!(Test-Path $path)) { return }
     # Select-Object -Last 1: Where-Object yields an array if EEG_DEVICES
     # somehow appears twice, and -split on an array would misparse. The last
     # occurrence is what a dotenv reader would take.
     $line = @(Get-Content $path) | Where-Object { $_ -match '^EEG_DEVICES=' } | Select-Object -Last 1
-    if (!$line) { return }
+    if (!$line) {
+        if ($camera) { Set-EnvKey $path "EEG_DEVICES" "$headband,$camera" }
+        return
+    }
     $current = ($line -split '=', 2)[1]
     $kept = @($current -split ',' | Where-Object { $_ -and ($_ -notmatch ':face(@|$)') } | ForEach-Object {
         if ($_ -match '^default:') { $headband } else { $_ }
     })
+    if ($camera) {
+        if (-not ($kept -match '^default:')) { $kept = @($headband) + $kept }
+        $kept += $camera
+    }
     Set-EnvKey $path "EEG_DEVICES" ($kept -join ',')
 }
 
@@ -414,7 +428,9 @@ if ($Camera) {
     Pop-Location
 
     $headband = if ($Muse) { "default:muse@8765" } else { "default:sim" }
-    Set-EnvKey $eegEnv "EEG_DEVICES" "$headband,camera:face@$CameraIndex"
+    # Composed onto the existing registry, not written over it -- see
+    # Update-DeviceRegistry.
+    Update-DeviceRegistry $eegEnv $headband "camera:face@$CameraIndex"
     Set-EnvKey $eegEnv "FACE_ENABLED" "true"
     Set-EnvKey $eegEnv "FACE_CAMERA_INDEX" "$CameraIndex"
     # Written on both branches, never left to whatever a previous run set. A

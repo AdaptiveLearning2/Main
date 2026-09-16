@@ -9,7 +9,7 @@
 #   ./start.sh --gaze              (gaze landmarks too; implies --camera)
 #   ./start.sh --gaze --no-emotion (gaze only -- no 35 MB FER+ model)
 #   ./start.sh --muse --optics     (headband PPG -> heart rate; Windows only)
-#   ./start.sh --muse --local-calm (calm from the sidecar's own spectrum; off by decision)
+#   --local-calm is refused here: this launcher always runs the simulator (use start.ps1 -Muse -LocalCalm)
 
 MUSE=false
 CAMERA=false
@@ -82,7 +82,6 @@ if [ "$LOCAL_CALM" = true ]; then
     echo "  Use start.ps1 -Muse -LocalCalm on Windows, or drop --local-calm."
     exit 1
 fi
-if [ "$LOCAL_CALM" = true ]; then SPECTRUM_SOURCE="local"; else SPECTRUM_SOURCE="sdk"; fi
 if [ -n "$OPTICS_PRESET" ] && [ "$OPTICS" != true ]; then
     echo "--preset does nothing without --optics."
     echo "  Add --optics, or drop --preset."
@@ -119,7 +118,7 @@ update_device_registry() {
     # With `$3` (a camera entry, on the --camera branch) it is appended and a
     # `default:` entry is ensured -- composed onto the existing list, which
     # the camera branch used to overwrite outright.
-    local path="$1" headband="$2" camera="${3:-}" current kept entry has_default=false
+    local path="$1" headband="$2" camera="${3:-}" current kept entry has_default=false addr_taken=false
     [ -f "$path" ] || return 0
     if ! grep -q '^EEG_DEVICES=' "$path"; then
         [ -n "$camera" ] && set_env_key "$path" "EEG_DEVICES" "$headband,$camera"
@@ -132,11 +131,19 @@ update_device_registry() {
         case "$entry" in
             ""|*:face|*:face@*) ;;
             default:*) kept="${kept:+$kept,}$headband"; has_default=true ;;
-            *) kept="${kept:+$kept,}$entry" ;;
+            *) kept="${kept:+$kept,}$entry"
+               # A named station on the headband's own address: the bridge
+               # takes one TCP client, so a `default:` beside it would be a
+               # permanent phantom device (same rule as start.ps1).
+               # sim has no process behind it, so two sim entries collide
+               # on nothing (config.py exempts them for the same reason).
+               [ "${headband#*:}" != sim ] && [ "${entry#*:}" = "${headband#*:}" ] && addr_taken=true ;;
         esac
     done
     if [ -n "$camera" ]; then
-        [ "$has_default" = true ] || kept="$headband${kept:+,$kept}"
+        if [ "$has_default" != true ] && [ "$addr_taken" != true ]; then
+            kept="$headband${kept:+,$kept}"
+        fi
         kept="${kept:+$kept,}$camera"
     fi
     set_env_key "$path" "EEG_DEVICES" "$kept"
@@ -374,7 +381,9 @@ ensure_model('$LANDMARK_MODEL')
     set_env_key "$EEG_ENV" "PUSH_ENABLED" "true"
     # Written on both branches from the --local-calm flag, so a hand-edited
     # `local` cannot survive into a later plain run.
-    set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "$SPECTRUM_SOURCE"
+    # Always sdk: this launcher runs the simulator and refuses --local-calm
+    # above, so there is no run in which it could select the local source.
+    set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "sdk"
     set_env_key "$EEG_ENV" "BACKEND_URL" "http://127.0.0.1:8000"
     set_env_key "$BACKEND_ENV" "INGEST_MODE" "push"
     # Same as start.ps1: without this the browser sends no Authorization header
@@ -402,7 +411,9 @@ else
     # later headband-only one.
     set_env_key "$EEG_ENV" "PUSH_ENABLED" "false"
     set_env_key "$BACKEND_ENV" "INGEST_MODE" "pull"
-    set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "$SPECTRUM_SOURCE"
+    # Always sdk: this launcher runs the simulator and refuses --local-calm
+    # above, so there is no run in which it could select the local source.
+    set_env_key "$EEG_ENV" "EEG_SPECTRUM_SOURCE" "sdk"
 
     # Drop the camera entry and re-point the headband entry; macOS has no
     # libMuse, so the headband half is always sim here.

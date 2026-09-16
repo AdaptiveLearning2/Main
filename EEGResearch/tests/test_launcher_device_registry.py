@@ -48,6 +48,17 @@ CAMERA_CASES = [
      "EEG_DEVICES=default:sim,station2:muse@8766,camera:face@2"),
     # A fresh file with no registry line gets the pair the run needs.
     (None, "default:sim", "camera:face@0", "EEG_DEVICES=default:sim,camera:face@0"),
+    # A named station already on the headband's bridge port: no `default:` is
+    # added beside it. The bridge takes one TCP client, so a second entry on
+    # its port would be a permanent phantom device reporting no signal.
+    ("EEG_DEVICES=station1:muse@8765,station2:muse@8766", "default:muse@8765", "camera:face@0",
+     "EEG_DEVICES=station1:muse@8765,station2:muse@8766,camera:face@0"),
+    # ...but a station on a different port does not stand in for the headband.
+    ("EEG_DEVICES=station2:muse@8766", "default:muse@8765", "camera:face@0",
+     "EEG_DEVICES=default:muse@8765,station2:muse@8766,camera:face@0"),
+    # ...and two sim entries collide on nothing: there is no process behind sim.
+    ("EEG_DEVICES=station1:sim", "default:sim", "camera:face@0",
+     "EEG_DEVICES=default:sim,station1:sim,camera:face@0"),
 ]
 
 

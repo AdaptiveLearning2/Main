@@ -163,7 +163,16 @@ function Update-DeviceRegistry {
         if ($_ -match '^default:') { $headband } else { $_ }
     })
     if ($camera) {
-        if (-not ($kept -match '^default:')) { $kept = @($headband) + $kept }
+        # Ensure a headband entry -- unless a named station already sits on
+        # the headband's own address (`muse@8765`). The bridge takes one TCP
+        # client, so a second entry on its port is a permanent phantom device
+        # reporting no signal, and `default:` is the one readers treat as
+        # primary. A registry that names its stations has named its headband.
+        # sim has no process behind it, so two sim entries collide on nothing
+        # (config.py exempts them for the same reason).
+        $addr = ($headband -split ':', 2)[1]
+        $taken = ($addr -ne 'sim') -and (@($kept | Where-Object { ($_ -split ':', 2)[1] -eq $addr }).Count -gt 0)
+        if (-not ($kept -match '^default:') -and -not $taken) { $kept = @($headband) + $kept }
         $kept += $camera
     }
     Set-EnvKey $path "EEG_DEVICES" ($kept -join ',')

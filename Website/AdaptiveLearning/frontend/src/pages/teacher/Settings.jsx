@@ -13,7 +13,7 @@ import { supabase } from '../../lib/supabase'
 const TABS = ['General', 'Security', 'Appearance']
 
 export default function TeacherSettings() {
-  const { user, signOut }       = useAuth()
+  const { user, displayName: accountName, refreshProfile, signOut } = useAuth()
   const { dark, toggleTheme }   = useTheme()
   const navigate                = useNavigate()
   const [tab, setTab]           = useState('General')
@@ -45,6 +45,9 @@ export default function TeacherSettings() {
         method: 'PUT',
         body: { display_name: displayName.trim() },
       })
+      // The sidebar and the teacher dashboard greeting read the shared name,
+      // which this save has just made stale.
+      refreshProfile()
       toast.success('Saved.')
     } catch (e) {
       console.error('[settings] display name not saved', e)
@@ -113,7 +116,7 @@ export default function TeacherSettings() {
                   {user?.email?.[0]?.toUpperCase()}
                 </div>
                 <div>
-                  <p className="font-black text-gray-900 dark:text-white">{user?.email?.split('@')[0]}</p>
+                  <p className="font-black text-gray-900 dark:text-white">{displayName || accountName}</p>
                   <p className="text-sm text-gray-500 dark:text-gray-400">{user?.email}</p>
                   <span className="text-xs font-bold text-violet-600 bg-violet-100 dark:bg-violet-900/30 px-2 py-0.5 rounded-full mt-1 inline-block">📚 Teacher</span>
                 </div>

@@ -42,6 +42,20 @@ function RoleProbe() {
   return <div>{loading ? 'loading' : `role:${role}`}</div>
 }
 
+/** Renders the resolved display name, once loading is done. */
+function NameProbe() {
+  const { displayName, loading, refreshProfile } = useAuth()
+  return (
+    <div>
+      <span>{loading ? 'loading' : `name:${displayName}`}</span>
+      <button onClick={() => refreshProfile()}>refresh</button>
+    </div>
+  )
+}
+
+const NAMED = (metadata) => ({ user: { id: 'u1', email: 'ada.lovelace@school.org',
+                                       user_metadata: metadata || {} } })
+
 const SESSION = (metadataRole) => ({
   user: { id: 'u1', user_metadata: metadataRole ? { role: metadataRole } : {} },
 })
@@ -184,4 +198,69 @@ it('does not re-read the role when a token refresh replaces the session', async 
 
   await waitFor(() => expect(screen.getByText('role:teacher')).toBeInTheDocument())
   expect(apiFetch.mock.calls.length).toBe(before)
+})
+
+
+/**
+ * The name every greeting and sidebar renders. It used to be the email local
+ * part at nine call sites, so a student who set their name in Profile saw it
+ * there and "ada.lovelace" everywhere else -- and the two only agreed until
+ * that first edit, since sign-up seeds the stored name *from* the email. The
+ * value was already arriving in this payload and being discarded.
+ */
+it('names a user from their stored profile, not from their email', async () => {
+  getSession.mockResolvedValue({ data: { session: NAMED() } })
+  apiFetch.mockResolvedValue({ role: 'student', display_name: 'Ada' })
+  render(<AuthProvider><NameProbe /></AuthProvider>)
+
+  expect(await screen.findByText('name:Ada')).toBeInTheDocument()
+})
+
+it('falls back to the claim, then the email, when the profile has no name', async () => {
+  // The backend mirrors the stored name into user_metadata on every save, so
+  // the claim is a closer answer than an email prefix that was never a name.
+  getSession.mockResolvedValue({ data: { session: NAMED({ display_name: 'Ada L' }) } })
+  apiFetch.mockResolvedValue({ role: 'student', display_name: null })
+  const { unmount } = render(<AuthProvider><NameProbe /></AuthProvider>)
+  expect(await screen.findByText('name:Ada L')).toBeInTheDocument()
+  unmount()
+
+  getSession.mockResolvedValue({ data: { session: NAMED() } })
+  apiFetch.mockResolvedValue({ role: 'student' })
+  render(<AuthProvider><NameProbe /></AuthProvider>)
+  expect(await screen.findByText('name:ada.lovelace')).toBeInTheDocument()
+})
+
+it('treats a blank stored name as no name at all', async () => {
+  // A row whose display_name is whitespace would otherwise render a greeting
+  // addressed to nobody.
+  getSession.mockResolvedValue({ data: { session: NAMED() } })
+  apiFetch.mockResolvedValue({ role: 'student', display_name: '   ' })
+  render(<AuthProvider><NameProbe /></AuthProvider>)
+
+  expect(await screen.findByText('name:ada.lovelace')).toBeInTheDocument()
+})
+
+it('keeps a name on a failed read rather than showing none', async () => {
+  // Same direction as the role: an API blip is not a reason to forget who
+  // someone is.
+  getSession.mockResolvedValue({ data: { session: NAMED({ display_name: 'Ada L' }) } })
+  apiFetch.mockRejectedValue(new Error('offline'))
+  render(<AuthProvider><NameProbe /></AuthProvider>)
+
+  expect(await screen.findByText('name:Ada L')).toBeInTheDocument()
+})
+
+it('re-reads the name after a save, instead of waiting for a reload', async () => {
+  // The save is what makes every other surface stale, so `refreshProfile` is
+  // what Profile calls once it succeeds.
+  getSession.mockResolvedValue({ data: { session: NAMED() } })
+  apiFetch.mockResolvedValue({ role: 'student', display_name: 'Ada' })
+  render(<AuthProvider><NameProbe /></AuthProvider>)
+  await screen.findByText('name:Ada')
+
+  apiFetch.mockResolvedValue({ role: 'student', display_name: 'Ada Lovelace' })
+  await userEvent.click(screen.getByText('refresh'))
+
+  expect(await screen.findByText('name:Ada Lovelace')).toBeInTheDocument()
 })

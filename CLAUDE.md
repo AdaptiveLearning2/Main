@@ -2368,6 +2368,27 @@ the only one of, and both were keyed on the value that does not know about `admi
 The claim survives only as that fallback, and nothing that matters may be gated on it — same
 reasoning as `AdminGuard` being a UI convenience over a backend check.
 
+**The *name* was the same bug, and it outlived the role fix.** Nine surfaces — all four sidebars, the
+student, parent and teacher dashboard greetings, teacher Settings and Profile's fallback — derived a
+name from `user.email.split('@')[0]`, while `profiles.display_name` was read on one page. The two
+agree until the first edit and then never again, because sign-up seeds the stored name *from* the
+email prefix, so nothing looks wrong until someone renames themselves. `AuthContext` was already
+fetching the row for `role` and discarding the name; it now keeps it and exposes `displayName`
+(stored name → the `user_metadata` claim → email prefix → null), so no surface derives a name of its
+own. **A save has to call `refreshProfile()`**, from both Profile and teacher Settings: the write is
+what makes every other surface stale, and without it a renamed student is greeted by the old name
+until a reload — the same staleness one value along. A blank stored name is `null`, not a name, or
+the greeting addresses nobody.
+
+Two traps met doing it. **`teacher/Settings.jsx` already had a `displayName`** — its edit field — so
+destructuring the context's under that name is a *parse error*, and a parse error deletes that file's
+tests from the run rather than failing them: the suite went quietly from 727 to 720 with zero
+failures. A totals check that counts assertions only cannot see it; count the **files** too, or read
+the per-file status. And `Settings.test.jsx`'s `useAuth` double had no `refreshProfile`, so the page
+threw where the double was thin rather than where a bug was — the mirror of the
+`_FakeMessages.create(**kwargs)` rule, and the same fix: make the double carry what the real thing
+carries.
+
 Tests: `backend/tests/test_role_gates.py`, which asserts both halves — that the code reads the right
 column, and that a migration takes the write away.
 

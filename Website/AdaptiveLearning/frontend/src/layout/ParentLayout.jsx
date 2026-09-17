@@ -16,7 +16,7 @@ const NAV = [
 ]
 
 function SidebarContent({ collapsed, mobile, onClose }) {
-  const { user, signOut } = useAuth()
+  const { user, displayName, signOut } = useAuth()
   const { dark, toggleTheme } = useTheme()
   const navigate = useNavigate()
   const initials = user?.email?.[0]?.toUpperCase() || '?'
@@ -38,7 +38,7 @@ function SidebarContent({ collapsed, mobile, onClose }) {
           <div className="bg-emerald-50 dark:bg-emerald-900/30 border border-emerald-100 dark:border-emerald-800 rounded-xl px-3 py-2 flex items-center gap-2">
             <div className="w-7 h-7 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0">{initials}</div>
             <div className="min-w-0">
-              <p className="text-xs font-bold text-gray-900 dark:text-white truncate">{user?.email?.split('@')[0]}</p>
+              <p className="text-xs font-bold text-gray-900 dark:text-white truncate">{displayName}</p>
               <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">👪 Parent</p>
             </div>
           </div>

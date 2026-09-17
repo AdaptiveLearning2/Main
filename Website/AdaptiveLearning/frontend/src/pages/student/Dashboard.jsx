@@ -38,7 +38,7 @@ function greeting() {
 }
 
 export default function StudentDashboard() {
-  const { user } = useAuth()
+  const { user, displayName } = useAuth()
   // Use `navigate`, not `window.location.href` -- assigning to href would
   // trigger a full page reload instead of an in-app navigation.
   const navigate = useNavigate()
@@ -95,7 +95,7 @@ export default function StudentDashboard() {
   }, [user?.id])
 
   const acc  = stats?.total_questions > 0 ? Math.round((stats.total_correct / stats.total_questions) * 100) : 0
-  const name = user?.email?.split('@')[0] || 'there'
+  const name = displayName || 'there'
   // `stats === null` after loading means the read failed, not that the
   // student has no record (that would be real zeros).
   const statsFailed = !loading && stats === null

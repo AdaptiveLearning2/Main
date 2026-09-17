@@ -18,7 +18,7 @@ const NAV = [
 ]
 
 function SidebarContent({ collapsed, mobile, onClose }) {
-  const { user, signOut } = useAuth()
+  const { user, displayName, signOut } = useAuth()
   const { dark, toggleTheme } = useTheme()
   const navigate = useNavigate()
   const initials = user?.email?.[0]?.toUpperCase() || '?'
@@ -44,7 +44,7 @@ function SidebarContent({ collapsed, mobile, onClose }) {
               {initials}
             </div>
             <div className="min-w-0">
-              <p className="text-xs font-bold text-gray-900 dark:text-white truncate">{user?.email?.split('@')[0]}</p>
+              <p className="text-xs font-bold text-gray-900 dark:text-white truncate">{displayName}</p>
               <p className="text-[10px] text-slate-600 dark:text-slate-400 font-semibold">Administrator</p>
             </div>
           </div>

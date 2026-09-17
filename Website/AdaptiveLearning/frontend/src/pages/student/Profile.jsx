@@ -22,7 +22,7 @@ const TABS  = ['Overview', 'Account', 'Preferences', 'Devices']
 const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 
 export default function Profile() {
-  const { user, signOut } = useAuth()
+  const { user, displayName, refreshProfile, signOut } = useAuth()
   const [tab, setTab]       = useState('Overview')
   const [stats, setStats]   = useState(null)
   const [sessions, setSessions] = useState([])
@@ -86,6 +86,7 @@ export default function Profile() {
         body: { display_name: editName.trim() || null, grade_level: editGrade || null }
       })
       setProfile(updated)
+      refreshProfile()
       toast.success('Profile saved')
     } catch (e) {
       toast.error(e.message || 'Could not save profile')
@@ -102,7 +103,7 @@ export default function Profile() {
   }
 
   const acc      = stats?.total_questions > 0 ? Math.round((stats.total_correct / stats.total_questions) * 100) : 0
-  const initials = (profile?.display_name || user?.email || '?')[0].toUpperCase()
+  const initials = (profile?.display_name || displayName || user?.email || '?')[0].toUpperCase()
   const joined   = user?.created_at ? new Date(user.created_at).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) : 'Unknown'
 
 
@@ -122,7 +123,7 @@ export default function Profile() {
               {initials}
             </div>
             <h2 className="text-xl font-black">
-              {profile?.display_name || user?.email?.split('@')[0] || 'Student'}
+              {profile?.display_name || displayName || 'Student'}
             </h2>
             <p className="text-indigo-200 text-sm mt-1 break-all">{user?.email}</p>
             {profile?.grade_level && (

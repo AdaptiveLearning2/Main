@@ -28,11 +28,11 @@ function signalsRetrieved(summary) {
 }
 
 export default function ParentDashboard() {
-  const { user } = useAuth()
+  const { displayName } = useAuth()
   const [children, setChildren]   = useState([])
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState(false)
-  const name = user?.email?.split('@')[0] || 'there'
+  const name = displayName || 'there'
 
   useEffect(() => {
     let cancelled = false

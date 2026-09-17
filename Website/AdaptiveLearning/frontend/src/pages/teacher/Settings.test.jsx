@@ -12,8 +12,13 @@ vi.mock('sonner', () => ({
   toast: { error: (...a) => toastError(...a), success: (...a) => toastSuccess(...a) },
 }))
 
+const refreshProfile = vi.fn()
 vi.mock('../../context/AuthContext', () => ({
-  useAuth: () => ({ user: { id: 't-1', email: 'teacher@example.com' }, signOut: vi.fn() }),
+  // `refreshProfile` is part of the context, so the double has to carry it:
+  // the page calls it after a save, and a double thinner than the real thing
+  // fails there rather than where the bug would be.
+  useAuth: () => ({ user: { id: 't-1', email: 'teacher@example.com' },
+                    displayName: 'Ms Patel', refreshProfile, signOut: vi.fn() }),
 }))
 vi.mock('../../context/ThemeContext', () => ({
   useTheme: () => ({ dark: false, toggleTheme: vi.fn() }),
@@ -60,6 +65,10 @@ describe('the display name', () => {
       }))
     })
     expect(toastSuccess).toHaveBeenCalled()
+    // The sidebar and the dashboard greeting read the shared name, which this
+    // save has just made stale -- without this they keep the old one until a
+    // reload, which is the staleness this whole change removes.
+    expect(refreshProfile).toHaveBeenCalled()
   })
 
   it('says so when the save fails, rather than claiming success', async () => {

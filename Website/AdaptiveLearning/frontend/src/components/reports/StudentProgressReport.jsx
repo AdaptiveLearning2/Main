@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, BookOpen, Target, Flame, TrendingUp } from 'lucide-react'
-import { WeeklySignalReport, SignalTrend, LiveSignalSummary, StrategyPanel } from '../signals/SignalPanel'
+import { WeeklySignalReport, SignalTrend, LiveSignalSummary, StrategyPanel, ChartSummaryPanel } from '../signals/SignalPanel'
 import { apiFetch } from '../../lib/api'
 import FocusAccuracy from '../analytics/FocusAccuracy'
 import { useLatestRequest } from '../../hooks/useLatestRequest'
@@ -33,6 +33,11 @@ const TOPIC_ICONS = ICONS
  * @param {boolean}  [showStrategies] render the at-home strategies panel. On
  *   both routes: the endpoint behind it is gated on relationship rather than
  *   role, so a teacher could always reach it.
+ * @param {boolean}  [showChartSummary] render the chart-explaining summary
+ *   panel. Its own prop rather than sharing `showStrategies`: they are two
+ *   endpoints with two model passes and two spend ceilings, and the teacher
+ *   route puts this one behind the sensor-data switch while the parent route
+ *   does not.
  * @param {string}   [viewerRole] 'parent' (default) or 'teacher' -- frames the
  *   panel's copy for whoever is reading. The advice itself is identical; see
  *   `StrategyPanel` for why the heading stays "At-Home" either way.
@@ -53,6 +58,7 @@ export default function StudentProgressReport({
   emptyTopicText = 'No topic data yet.',
   nameFetch,
   showStrategies = false,
+  showChartSummary = false,
   showSignals = true,
   viewerRole = 'parent',
 }) {
@@ -79,6 +85,17 @@ export default function StudentProgressReport({
   // Guards against a stale generation response overwriting a newer one.
   // Same helper as Sessions.jsx's roster read -- see hooks/useLatestRequest.
   const beginStrategyRequest = useLatestRequest()
+
+  // The chart summary keeps its own state and its own in-flight guard rather
+  // than sharing the strategies panel's: they are two buttons a reader can
+  // press in either order, and one set of state would let the second answer
+  // land in the first panel.
+  const [chartSummary, setChartSummary]             = useState(null)
+  const [chartSummarySource, setChartSummarySource] = useState(null)
+  const [chartSummaryRetrieved, setChartSummaryRetrieved] = useState(null)
+  const [chartSummaryError, setChartSummaryError]   = useState(null)
+  const [chartSummaryLoading, setChartSummaryLoading] = useState(false)
+  const beginChartSummaryRequest = useLatestRequest()
 
   // Academic stats and the name. Not re-run when the facial toggle flips --
   // none of this depends on it.
@@ -193,6 +210,41 @@ export default function StudentProgressReport({
     }
   }
 
+  async function generateChartSummary() {
+    const isCurrent = beginChartSummaryRequest()
+    setChartSummaryLoading(true)
+    setChartSummaryError(null)
+    try {
+      // An empty body for the same reason as the strategies call above:
+      // FastAPI 422s a bodyless POST even when every field defaults.
+      const res = await apiFetch(`/api/students/${studentId}/chart-summary`, {
+        method: 'POST',
+        body: {},
+      })
+      if (!isCurrent()) return
+      setChartSummary(res.summary || [])
+      setChartSummarySource(res.source || null)
+      // Read as three named flags rather than passed through whole, so the
+      // panel branches on fields it declares instead of on the payload's
+      // shape. Undefined where a field is absent, which the panel reads as
+      // "not a claim either way" -- see its `=== false` note.
+      setChartSummaryRetrieved({
+        signals: res.basis?.signals_retrieved,
+        trend: res.basis?.trend_retrieved,
+        stats: res.basis?.stats_retrieved,
+        topics: res.basis?.topics_retrieved,
+      })
+    } catch (err) {
+      if (!isCurrent()) return
+      setChartSummary(null)
+      setChartSummarySource(null)
+      setChartSummaryRetrieved(null)
+      setChartSummaryError(err.message || 'Could not generate a summary right now.')
+    } finally {
+      if (isCurrent()) setChartSummaryLoading(false)
+    }
+  }
+
   const acc = stats?.total_questions > 0 ? Math.round((stats.total_correct / stats.total_questions) * 100) : 0
 
   return (
@@ -267,6 +319,21 @@ export default function StudentProgressReport({
               failing says nothing about the other. */}
           {showSignals && focusAccuracy && (
             <FocusAccuracy data={focusAccuracy} />
+          )}
+
+          {/* Above the strategies panel: this describes what the charts
+              directly above it show, and the advice below it is what to do
+              about that. */}
+          {showChartSummary && (
+            <ChartSummaryPanel
+              summary={chartSummary}
+              source={chartSummarySource}
+              retrieved={chartSummaryRetrieved}
+              loading={chartSummaryLoading}
+              error={chartSummaryError}
+              onGenerate={generateChartSummary}
+              viewerRole={viewerRole}
+            />
           )}
 
           {showStrategies && (

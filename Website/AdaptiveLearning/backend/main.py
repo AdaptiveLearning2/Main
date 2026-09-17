@@ -77,18 +77,27 @@ async def _lifespan(app: FastAPI):
         try:
             stop_stale_sweeper()
         finally:
-            # Nested finally so each shutdown step runs even if an earlier one
-            # raises.
-            try:
-                _shutdown_strategy_pool()
-            finally:
+            # A loop rather than nested try/finally blocks, one per pool. The
+            # requirement is that every step runs even if an earlier one
+            # raises, and hand-nesting expresses that at one more level of
+            # indentation per pool -- five deep before this comment was
+            # written, and a sixth was added at the wrong depth on the first
+            # attempt. The last failure is re-raised so a broken shutdown is
+            # still loud; the rest are printed, since swallowing them would
+            # hide a pool that never drained.
+            failure = None
+            for shutdown in (_shutdown_strategy_pool,
+                             _shutdown_chart_summary_pool,
+                             _shutdown_admin_live_pool,
+                             _shutdown_prefetch_pool,
+                             chart_archive.shutdown_pool):
                 try:
-                    _shutdown_admin_live_pool()
-                finally:
-                    try:
-                        _shutdown_prefetch_pool()
-                    finally:
-                        chart_archive.shutdown_pool()
+                    shutdown()
+                except Exception as e:  # noqa: BLE001 - every step must still run
+                    print(f"[lifespan:shutdown] {shutdown.__name__}: {e}")
+                    failure = e
+            if failure is not None:
+                raise failure
 
 
 app = FastAPI(title="AdaptiveLearning API", lifespan=_lifespan)
@@ -417,6 +426,14 @@ def _resolve_window(row: dict) -> dict:
 # switch.
 _FEATURE_FLAG_DEFAULTS = {
     "strategy_llm_enabled": True,
+    # The chart-explaining summary's model pass, mirroring the flag above.
+    # On by default for the same reason: off, every response reads
+    # `source: "rule-based"`, which is indistinguishable from a model that was
+    # tried and always failed -- and the flag is admin-only, so a deployment
+    # with no admin would never discover the difference. The deterministic
+    # summary is always the fallback, so this only decides whether a model
+    # gets a chance to phrase it.
+    "chart_summary_llm_enabled": True,
     "recording_eeg_enabled": True,
     "recording_heart_enabled": True,
     "recording_camera_enabled": True,
@@ -1183,6 +1200,26 @@ def _not_recording_reason(gate: dict, declined: str,
 
 
 def _topic_breakdown(student_id: str):
+    """The student's per-topic accuracy. An empty list on a failed read.
+
+    Most callers cannot act on the difference and degrade the same way either
+    way -- the strategies endpoint falls back to generic advice. A caller that
+    turns the empty list into an *assertion* ("no topic has been attempted
+    yet") must use `_topic_breakdown_with_state` instead, or a database outage
+    becomes a claim about the child.
+    """
+    return _topic_breakdown_with_state(student_id)[0]
+
+
+def _topic_breakdown_with_state(student_id: str) -> tuple[list[dict], bool]:
+    """The rows, and whether the read actually happened.
+
+    Split out rather than added as a parameter so the flag cannot be dropped
+    by a caller that did not know to ask for it: the plain name returns rows
+    and the two-value name returns the state, and neither can be mistaken for
+    the other at the call site.
+    """
+    retrieved = True
     try:
         rows = supabase.table("user_math_performance") \
             .select("*, math_topics(topic_name)") \
@@ -1190,6 +1227,7 @@ def _topic_breakdown(student_id: str):
     except Exception as e:
         print(f"[topic_breakdown] {e}")
         rows = []
+        retrieved = False
     out = []
     for r in rows:
         attempted = r.get("attempted_questions") or 0
@@ -1203,7 +1241,7 @@ def _topic_breakdown(student_id: str):
             "stress": r.get("stress"),
             "updated_at": r.get("updated_at"),
         })
-    return out
+    return out, retrieved
 
 
 class ReportChannels(NamedTuple):
@@ -3935,16 +3973,27 @@ def _weakest_topic(topics: list[dict]):
     return min(attempted, key=lambda t: t.get("accuracy") or 0)
 
 
-def _weakest_topic_summary(topics: list[dict]) -> dict | None:
-    """Just the fields the strategies response is about."""
-    weakest = _weakest_topic(topics)
-    if not weakest:
+def _topic_summary(row: dict | None) -> dict | None:
+    """Just the three fields a topic-naming response is about.
+
+    Named fields rather than the whole `_topic_breakdown` row, which also
+    carries `topic_id`, a `stress` reading and `updated_at` that are not part
+    of what these responses should promise -- a stress reading in particular
+    is a signal, and it would reach a surface that never asked for one and
+    never gated on consent for it.
+    """
+    if not row:
         return None
     return {
-        "topic_name": weakest.get("topic_name"),
-        "accuracy": weakest.get("accuracy"),
-        "attempted_questions": weakest.get("attempted_questions"),
+        "topic_name": row.get("topic_name"),
+        "accuracy": row.get("accuracy"),
+        "attempted_questions": row.get("attempted_questions"),
     }
+
+
+def _weakest_topic_summary(topics: list[dict]) -> dict | None:
+    """Just the fields the strategies response is about."""
+    return _topic_summary(_weakest_topic(topics))
 
 
 def _strategy_basis(student_id: str, days: int, include_face: bool) -> dict:
@@ -4094,6 +4143,11 @@ def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> s
 
 def _parse_strategy_lines(raw: str) -> list[str]:
     """The list items of a model reply, in order.
+
+    Shared with the chart-summary pass below, which asks for the same numbered
+    list of one-sentence items. Kept under this name rather than renamed
+    because the name is where it was first needed, not a claim of ownership --
+    what it parses is a list, and nothing in it is about strategies.
 
     Only lines with an actual list marker count -- taking every non-empty line
     would turn a lead-in like "Here are five strategies:" into strategy #1,
@@ -4343,6 +4397,714 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
             # tips as being about this session specifically rather than the
             # student's live-session week.
             "practice_session_id": payload.practice_session_id,
+        },
+    }
+
+
+# ─── chart-explaining summary ────────────────────────────────────────────
+#
+# Plain sentences describing what a student's report charts already show. The
+# third model-backed caller in this file, and deliberately built to the same
+# shape as the strategies pass above rather than a new one: a deterministic
+# answer that is always available, an admin feature flag deciding whether a
+# model gets a chance to rephrase it, and the four bounds CLAUDE.md requires
+# of every model-backed endpoint.
+#
+# The four bounds are a fourth copy of the block above (pool, waiter
+# semaphore, per-caller rate limit, wall-clock budget). Consolidating the
+# four -- ingest, generation, strategies and this -- into one limiter is the
+# obvious follow-up and is deliberately not done here: the other three are
+# reached into by name from their tests (`main._strategy_hits`,
+# `main._STRATEGY_LLM_POOL`), so a shared implementation is its own change
+# with its own review, not a rider on a new endpoint.
+
+CHART_SUMMARY_LLM_MODEL = os.getenv("CHART_SUMMARY_LLM_MODEL", "llama3.1:8b")
+# Same floor and the same reason as STRATEGY_LLM_TIMEOUT: at zero the call
+# times out before a model could answer, silently disabling the pass while the
+# flag still says it is on.
+CHART_SUMMARY_LLM_TIMEOUT = _env_number("CHART_SUMMARY_LLM_TIMEOUT", 20.0, float, minimum=1.0)
+
+_CHART_SUMMARY_LLM_POOL: ThreadPoolExecutor | None = None
+_chart_summary_pool_lock = threading.Lock()
+
+
+def _chart_summary_pool() -> ThreadPoolExecutor:
+    """The model-call pool, created on first use. See `_strategy_pool`."""
+    global _CHART_SUMMARY_LLM_POOL
+    with _chart_summary_pool_lock:
+        if _CHART_SUMMARY_LLM_POOL is None:
+            _CHART_SUMMARY_LLM_POOL = ThreadPoolExecutor(
+                max_workers=2, thread_name_prefix="chart-summary-llm")
+        return _CHART_SUMMARY_LLM_POOL
+
+
+def _shutdown_chart_summary_pool():
+    """Drop the queue on the way out. Called from _lifespan.
+
+    Same `wait=False, cancel_futures=True` as `_shutdown_strategy_pool`, for
+    the same reason: a worker may be stuck in a socket read against a stalled
+    provider and nothing is waiting on that answer once the process is going
+    down. Resets the global so a reload in the same process builds a fresh
+    pool rather than reusing a shut-down one.
+    """
+    global _CHART_SUMMARY_LLM_POOL
+    with _chart_summary_pool_lock:
+        pool, _CHART_SUMMARY_LLM_POOL = _CHART_SUMMARY_LLM_POOL, None
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+# How many callers may be *waiting* on the model at once, process-wide. Bounds
+# anyio threadpool slots rather than worker threads -- see the equivalent note
+# above `_STRATEGY_LLM_MAX_WAITERS`. Floored at 1, or the semaphore admits
+# nobody and the model pass is off whatever the flag says.
+_CHART_SUMMARY_MAX_WAITERS = _env_number("CHART_SUMMARY_MAX_WAITERS", 4, int, minimum=1)
+_chart_summary_waiters = threading.BoundedSemaphore(_CHART_SUMMARY_MAX_WAITERS)
+
+_CHART_SUMMARY_RATE_LIMIT  = _env_number("CHART_SUMMARY_RATE_LIMIT", 10, int, minimum=1)
+_CHART_SUMMARY_RATE_WINDOW = _env_number("CHART_SUMMARY_RATE_WINDOW", 60.0, float, minimum=1.0)
+_chart_summary_hits: dict[str, list[float]] = {}
+_chart_summary_hits_lock = threading.Lock()
+# Seeded from monotonic() itself, not 0.0 -- see `_strategy_sweep_at`.
+_chart_summary_sweep_at = time.monotonic()
+_CHART_SUMMARY_SWEEP_EVERY = 60.0
+_CHART_SUMMARY_SWEEP_ABOVE = 1024
+
+
+def _rate_limit_chart_summary(user_id: str):
+    """Raise 429 if this caller has already had its allowance this window."""
+    global _chart_summary_sweep_at
+    now = time.monotonic()
+    with _chart_summary_hits_lock:
+        if (len(_chart_summary_hits) > _CHART_SUMMARY_SWEEP_ABOVE
+                and now - _chart_summary_sweep_at >= _CHART_SUMMARY_SWEEP_EVERY):
+            _chart_summary_sweep_at = now
+            for uid in [u for u, ts in _chart_summary_hits.items()
+                        if all(now - t >= _CHART_SUMMARY_RATE_WINDOW for t in ts)]:
+                del _chart_summary_hits[uid]
+
+        hits = [t for t in _chart_summary_hits.get(user_id, ())
+                if now - t < _CHART_SUMMARY_RATE_WINDOW]
+        if len(hits) >= _CHART_SUMMARY_RATE_LIMIT:
+            _chart_summary_hits[user_id] = hits
+            retry_after = max(1, int(_CHART_SUMMARY_RATE_WINDOW - (now - min(hits))) + 1)
+            raise HTTPException(
+                429,
+                "Too many summary requests. Try again shortly.",
+                headers={"Retry-After": str(retry_after)},
+            )
+        hits.append(now)
+        _chart_summary_hits[user_id] = hits
+
+
+# A week-over-week move smaller than this is "steady". On the 0..1 ratios the
+# signal tables store, so five points of focus. Below it the difference is
+# inside what a change of strap fit moves (see CLAUDE.md on contact), and a
+# summary that calls that a trend is asserting more than the data carries.
+_CHART_SUMMARY_TREND_MIN_DELTA = 0.05
+
+# A floor as well as a ceiling, and the same reasoning as `_STRATEGY_MIN_CHARS`
+# one section up: a reply of three-word fragments is well-formed and is not a
+# summary.
+_CHART_SUMMARY_MAX_CHARS = 320
+_CHART_SUMMARY_MIN_CHARS = 25
+
+# Every numeral in a model reply must be one this endpoint supplied. See
+# `_validated_chart_summary`.
+_NUMERAL = re.compile(r"\d+(?:\.\d+)?")
+# A thousands separator inside a number, removed before the numerals are read.
+# Without this a model writing "1,240 questions" for a figure we supplied as
+# 1240 is read as the two numbers 1 and 240, neither of which is allowed, and
+# a correct reply is rejected for formatting.
+_THOUSANDS_SEP = re.compile(r"(?<=\d),(?=\d)")
+
+
+def _trend_direction(weeks: list[dict], key: str) -> dict:
+    """Which way one series moved across the weeks that have a reading.
+
+    Always a dict, and `direction` is None below two weeks with a reading: a
+    single point is a value, not a direction, and a summary that called it one
+    would report the student's first recorded week as a trend.
+
+    It returns `weeks_with_data` in that case too, which is the whole reason
+    it is a dict rather than None. Zero weeks and one week are different
+    facts, and returning None for both made a student part way through their
+    very first session -- raw rows, so a focus average, but no rollup row yet,
+    so no week at all -- read as "only one week has readings for it so far".
+
+    Anchored on the first and last weeks that *have* a reading rather than the
+    first and last weeks in the range: a term with a fortnight off school ends
+    in two null weeks, and reading the last bucket would answer "no trend" for
+    a series that moved.
+    """
+    points = [w.get(key) for w in (weeks or [])
+              if isinstance(w.get(key), (int, float))]
+    if len(points) < 2:
+        return {"direction": None, "first": None, "last": None,
+                "weeks_with_data": len(points)}
+    first, last = float(points[0]), float(points[-1])
+    delta = last - first
+    if abs(delta) < _CHART_SUMMARY_TREND_MIN_DELTA:
+        direction = "steady"
+    else:
+        direction = "up" if delta > 0 else "down"
+    return {"direction": direction, "first": round(first, 4),
+            "last": round(last, 4), "weeks_with_data": len(points)}
+
+
+def _chart_summary_basis(student_id: str, days: int, weeks: int,
+                         include_face: bool) -> dict:
+    """Every figure this endpoint may state, and why a missing one is missing.
+
+    One consent read (`_reportable_channels`) feeding both the weekly
+    aggregate and the term trend, so the two cannot disagree about which
+    channels were permitted for the same student in one response.
+
+    Deliberately assembled from the same three sources the report page already
+    draws -- the weekly summary aggregate, the rollup-backed trend, and the
+    academic totals -- rather than a fourth query of its own. A summary that
+    read different numbers from the charts it explains would be worse than no
+    summary.
+    """
+    channels = _reportable_channels(student_id, include_face)
+    summary = _signal_summary(student_id, days, include_heart=channels.heart,
+                              include_emotion=channels.emotion,
+                              consent_retrieved=channels.consent_retrieved,
+                              eeg_enabled=channels.eeg,
+                              eeg_revoked_at=channels.eeg_revoked_at)
+    trend = _signal_trend(student_id, weeks,
+                          include_heart=channels.heart,
+                          include_emotion=channels.emotion,
+                          consent_retrieved=channels.consent_retrieved,
+                          emotion_revoked_at=channels.emotion_revoked_at,
+                          heart_revoked_at=channels.heart_revoked_at)
+    stats = _stats_including_open_session(student_id)
+    topics, topics_retrieved = _topic_breakdown_with_state(student_id)
+    attempted = [t for t in topics if (t.get("attempted_questions") or 0) > 0]
+
+    total = stats.get("total_questions") or 0
+    correct = stats.get("total_correct") or 0
+    return {
+        "days": days,
+        "weeks": weeks,
+        "face_included": summary["face_included"],
+        # Named `signals_retrieved` rather than `retrieved` for the reason
+        # `_strategy_basis` gives: this dict is report-shaped for shared
+        # consumers and a real report's `retrieved` is a dict of three
+        # per-table booleans.
+        "signals_retrieved": summary["retrieved"],
+        "trend_retrieved": trend.get("retrieved", True),
+        "stats_retrieved": stats.get("retrieved", True),
+        # The fourth flag, and the one that was missing. `_topic_breakdown`
+        # swallows its exception and answers `[]`, which most callers degrade
+        # on identically -- the strategies endpoint falls back to generic
+        # advice. Here the empty list becomes an *assertion* ("no topic has
+        # been attempted yet"), so an outage would be reported as a fact about
+        # the child.
+        "topics_retrieved": topics_retrieved,
+        "consent_retrieved": channels.consent_retrieved,
+        "channels": {
+            # No `emotion` entry: the only facial figure a report renders is
+            # the dominant expression label, which is not a number, and
+            # `face_attention` has no producer. A channel with nothing to
+            # state is left out rather than described as absent.
+            "eeg":   {"enabled": channels.eeg,   "revoked_at": channels.eeg_revoked_at,
+                      "samples": summary["cognitive_samples"]},
+            "heart": {"enabled": channels.heart, "revoked_at": channels.heart_revoked_at,
+                      "samples": summary["heart_samples"]},
+        },
+        "averages": {
+            "focus": summary["focus"],
+            "stress": summary["stress"],
+            # No `engagement`. It is the focus index under another name
+            # (signal_mapping.py), so a summary naming both would describe one
+            # measurement as two agreeing ones -- the rule CLAUDE.md states
+            # for every chart, gauge and prompt sentence in this product.
+            "heart_rate_bpm": summary["heart_rate_bpm"],
+        },
+        # Focus and stress only. `_CHART_SUMMARY_TREND_MIN_DELTA` is written
+        # for the 0..1 ratios those two are stored on; against heart rate, an
+        # absolute figure in bpm, the same number is a twentieth of a beat and
+        # would call every week's noise a trend. A heart-rate trend needs its
+        # own threshold in its own units, which is a decision about what
+        # counts as a change in a child's resting rate and not one to make in
+        # passing here.
+        "trend": {
+            "focus": _trend_direction(trend.get("weeks") or [], "focus"),
+            "stress": _trend_direction(trend.get("weeks") or [], "stress"),
+        },
+        "academic": {
+            "sessions": summary["sessions"],
+            "total_questions": total,
+            "total_correct": correct,
+            "accuracy": round(correct / total * 100) if total else None,
+        },
+        "topics": {
+            "weakest": _weakest_topic_summary(topics),
+            # Highest-accuracy *attempted* topic, for the same reason
+            # `_weakest_topic` excludes unattempted ones: `_topic_breakdown`
+            # reports an untouched topic at 0%, which would make it the
+            # weakest, and the one below it the strongest by default.
+            "strongest": _topic_summary(
+                max(attempted, key=lambda t: t.get("accuracy") or 0)
+                if attempted else None),
+            "attempted_count": len(attempted),
+        },
+    }
+
+
+def _pct_int(value) -> int | None:
+    """A 0..1 ratio as whole percent, or None. The chart axes round the same way."""
+    return None if value is None else round(float(value) * 100)
+
+
+def _numerals(text: str) -> list[float]:
+    """Every number in a piece of text, thousands separators absorbed."""
+    return [float(t) for t in _NUMERAL.findall(_THOUSANDS_SEP.sub("", text or ""))]
+
+
+def _chart_summary_figures(baseline: list[str]) -> set[float]:
+    """Every number the model's reply is allowed to contain.
+
+    Read out of the deterministic sentences themselves, not enumerated from
+    the basis fields. Those sentences are exactly what the prompt hands the
+    model, so this set is "the numbers we supplied" by construction and cannot
+    drift from them -- the failure `AccessibleChart` documents for a chart and
+    its screen-reader table, avoided by deriving both from one source rather
+    than writing the list twice.
+
+    Enumerating the basis instead was the first shape and was wrong in two
+    ways that a reader would not predict: the sentence prints a rounded heart
+    rate where the basis holds a fractional one, and a revocation date puts a
+    day number on screen that no basis field carries. Both rejected correct
+    replies. Reading the text closes the whole class.
+
+    This is what makes the model pass's numeric fidelity checkable at all. It
+    does *not* check that each number was attached to the right measurement --
+    see `_validated_chart_summary`.
+    """
+    return {n for line in baseline for n in _numerals(line)}
+
+
+# What each channel is called in a sentence a parent or teacher reads. The EEG
+# channel is named by its two readings rather than as "EEG", which names the
+# sensor and not what the chart shows.
+_CHART_SUMMARY_CHANNEL_NAMES = {"eeg": "Focus and stress", "heart": "Heart rate"}
+
+
+def _channel_absence(channel: str, basis: dict) -> str | None:
+    """Why a channel has no figure to state, or None if it has one.
+
+    The four states, in the order CLAUDE.md fixes for `cellLabel` on the
+    cohort roster, and for the same reason: a known revocation is a fact we
+    hold, and reporting an outage instead discards it for something we do not
+    know. Consent being unreadable comes first because it is the one state in
+    which no claim about the student's decision has been earned.
+    """
+    info = (basis.get("channels") or {}).get(channel) or {}
+    name = _CHART_SUMMARY_CHANNEL_NAMES.get(channel, channel)
+    if not basis.get("consent_retrieved", True):
+        return (f"{name} is not described here: whether this sensor was "
+                "permitted could not be read, so nothing is claimed about it.")
+    if not info.get("enabled"):
+        revoked = _local_date_text(info.get("revoked_at"))
+        return (f"{name} was not recorded because the sensor was turned off"
+                + (f" on {revoked}." if revoked else "."))
+    if not basis.get("signals_retrieved", True):
+        return f"{name} could not be read this time, so no figure is given for it."
+    if not info.get("samples"):
+        return (f"{name} was permitted but nothing was recorded, so there is "
+                "no reading to describe.")
+    return None
+
+
+_MONTHS = ("January", "February", "March", "April", "May", "June", "July",
+           "August", "September", "October", "November", "December")
+
+
+def _local_date_text(stamp: str | None) -> str | None:
+    """A stored timestamp as a plain date in the school's timezone, or None.
+
+    The school's timezone, not UTC, for the reason every other date on these
+    surfaces uses it: a late-afternoon revocation west of the meridian is
+    stored on the next UTC day and would be reported as a day the family did
+    not choose.
+
+    Formatted by hand rather than with `strftime`, because the directive for
+    an unpadded day differs by platform (`%-d` on glibc, `%#d` on Windows) and
+    the wrong one is not an error -- it is the literal text in the output.
+    """
+    if not stamp:
+        return None
+    parsed = _parse_ts(stamp)
+    if not parsed:
+        return None
+    local = parsed.astimezone(_school_timezone())
+    return f"{local.day} {_MONTHS[local.month - 1]}"
+
+
+_TREND_WORDS = {"up": "risen", "down": "fallen", "steady": "held steady"}
+
+
+def _plural(count, noun: str) -> str:
+    """`noun` agreeing with `count`. Only the regular -s form is needed here."""
+    return noun if count == 1 else noun + "s"
+
+
+def _topic_prose(name, capitalise: bool = False) -> str:
+    """A stored topic name as prose: `angle_relationships` -> `angle relationships`.
+
+    `capitalise` raises only the first letter rather than calling `.capitalize()`,
+    which lowercases the rest -- harmless on today's topic names and wrong the
+    moment one carries a proper noun.
+    """
+    text = str(name or "an unnamed topic").replace("_", " ")
+    return text[:1].upper() + text[1:] if capitalise else text
+
+
+def _rule_based_chart_summary(basis: dict) -> list[str]:
+    """The deterministic summary. Always computed, always the fallback.
+
+    Every sentence states a number this endpoint computed or says plainly why
+    there is none -- never "no data" for something that was never recorded,
+    and never a figure for a channel whose read failed.
+    """
+    averages = basis.get("averages") or {}
+    academic = basis.get("academic") or {}
+    topics = basis.get("topics") or {}
+    trend = basis.get("trend") or {}
+    out: list[str] = []
+
+    days = basis.get("days")
+    # Two sentences, not one. The totals are lifetime (`user_stats`) and the
+    # session count is the last `days` (the same aggregate the weekly panels
+    # read), so a single sentence joining them reads as a lifetime accuracy
+    # earned over one week.
+    if not basis.get("stats_retrieved", True):
+        out.append("This student's practice totals could not be read, so the "
+                   "activity figures beside the charts are not described here.")
+    elif academic.get("accuracy") is None:
+        out.append("No questions have been answered yet, so there is nothing "
+                   "for the charts to compare against.")
+    else:
+        out.append(
+            f"Across all of their practice so far, {academic.get('total_correct')} "
+            f"of {academic.get('total_questions')} questions have been answered "
+            f"correctly -- an accuracy of {academic.get('accuracy')}%.")
+    if not basis.get("signals_retrieved", True):
+        # `sessions` comes from the same aggregate as the averages, so a
+        # failed read leaves it at 0. Printing that would report a quiet week
+        # for a query that never ran -- the exact failure the three-state rule
+        # exists for, arriving through a field nobody thinks of as a signal.
+        out.append("How many sessions were recorded could not be read, so the "
+                   f"last {days} days are not described here.")
+    else:
+        sessions = academic.get("sessions") or 0
+        out.append(f"{sessions} {_plural(sessions, 'session')} "
+                   f"{'was' if sessions == 1 else 'were'} recorded in the last "
+                   f"{days} {_plural(days, 'day')}, which is the period the "
+                   "weekly charts cover.")
+
+    for channel, key, label in (("eeg", "focus", "Average focus"),
+                                ("eeg", "stress", "Average stress")):
+        absent = _channel_absence(channel, basis)
+        value = _pct_int(averages.get(key))
+        if absent:
+            # One sentence per channel, not per reading: the EEG channel's two
+            # readings are off together, so saying it twice would read as two
+            # separate faults.
+            if absent not in out:
+                out.append(absent)
+            continue
+        if value is None:
+            out.append(f"{label} has no usable reading for this period, even though "
+                       "the headband recorded -- the readings were rejected rather "
+                       "than missing.")
+            continue
+        move = trend.get(key) or {}
+        weeks_seen = move.get("weeks_with_data") or 0
+        if move.get("direction"):
+            out.append(
+                f"{label} is {value}%, and across the weeks with readings it has "
+                f"{_TREND_WORDS[move['direction']]} from "
+                f"{_pct_int(move['first'])}% to {_pct_int(move['last'])}%.")
+        elif not basis.get("trend_retrieved", True):
+            # The trend is its own read of its own table, so it fails on its
+            # own. Without this, a failed read is empty and reads exactly like
+            # a student in their first week -- a claim about how long they
+            # have been practising, made by a query that never ran.
+            out.append(f"{label} is {value}%. The term trend could not be read, "
+                       "so no direction is given for it.")
+        elif weeks_seen:
+            out.append(f"{label} is {value}%. Only one week has readings for it "
+                       "so far, so there is no direction to report yet.")
+        else:
+            # Zero weeks with a reading, and the sentence says only that.
+            #
+            # A first session is one way to get here -- the average comes from
+            # raw rows, the trend from the rollup, and the rollup row is not
+            # written until the session closes -- but it is not the only one:
+            # the rollup writer can have failed on every day in range, or
+            # every rolled day can carry a null for this series. The read
+            # succeeded either way, so nothing here can tell them apart.
+            #
+            # An earlier version of this named the first cause ("from this
+            # session's own readings") and contradicted the session count two
+            # sentences above it whenever one of the others was the real one.
+            # Where a branch exists precisely because the code cannot
+            # establish a cause, the sentence may not supply one.
+            out.append(f"{label} is {value}%. No week has a reading for it yet, "
+                       "so the term chart cannot show a direction.")
+
+    heart_absent = _channel_absence("heart", basis)
+    bpm = averages.get("heart_rate_bpm")
+    if heart_absent:
+        out.append(heart_absent)
+    elif bpm is None:
+        out.append("Heart rate windows were recorded but none passed the quality "
+                   "checks, so no average is shown.")
+    else:
+        out.append(f"Average heart rate is {round(float(bpm))} bpm.")
+
+    weakest, strongest = topics.get("weakest"), topics.get("strongest")
+    if not basis.get("topics_retrieved", True):
+        # First, ahead of every shape below: `_topic_breakdown` answers `[]` on
+        # a failed read, so without this the outage arrives as "no topic has
+        # been attempted yet" -- an outage reported as a fact about the child.
+        out.append("The topic figures could not be read, so how this student is "
+                   "doing on each topic is not described here.")
+    elif weakest and strongest and weakest.get("topic_name") != strongest.get("topic_name"):
+        out.append(
+            f"{_topic_prose(strongest.get('topic_name'), True)} is the strongest attempted "
+            f"topic at {strongest.get('accuracy')}%, and "
+            f"{_topic_prose(weakest.get('topic_name'))} the weakest at "
+            f"{weakest.get('accuracy')}%.")
+    elif weakest:
+        out.append(f"Only {_topic_prose(weakest.get('topic_name'))} has been attempted "
+                   f"so far, at {weakest.get('accuracy')}%.")
+    else:
+        out.append("No topic has been attempted yet, so the topic chart has "
+                   "nothing to compare.")
+    # Not truncated. Every branch above appends exactly one sentence, so the
+    # length is bounded by construction -- a slice here would silently drop
+    # the topic sentence on the day a channel gained a state.
+    return out
+
+
+def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
+    """Prompt text built from the deterministic summary and nothing else.
+
+    The model is handed the finished sentences and asked to rephrase them, not
+    handed the raw aggregates and asked to interpret them. That is the whole
+    reason a numeric check is possible: every number it may use is already in
+    front of it, so one that is not is an invention rather than a different
+    reading of the same data.
+
+    Carries no student id or name, like `_strategy_prompt`: the shape of the
+    week, not a record that identifies a child.
+    """
+    return (
+        "You are rewriting a summary of a maths practice report for the adult "
+        "who is reading it -- a parent or a teacher.\n"
+        "These are classroom learning indicators, not medical measurements. Do "
+        "not diagnose, do not name any condition, and do not give medical "
+        "advice.\n"
+        "Rewrite the numbered points below in plainer, warmer English, one "
+        "sentence each, keeping the same order and the same meaning.\n"
+        "Do not add any number, percentage or figure that is not already in "
+        "these points, do not move a number from one point to another, and do "
+        "not draw a conclusion the points do not state.\n"
+        f"Return exactly {len(baseline)} points as a numbered list, no preamble.\n\n"
+        + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(baseline))
+    )
+
+
+def _validated_chart_summary(raw: str, allowed: set[float],
+                             expected_lines: int) -> list[str] | None:
+    """Model output, or None if it fails any check.
+
+    None means the caller keeps the deterministic summary. No partial
+    acceptance, for the reason `_validated_strategies` gives: a reply that
+    breaks one rule has shown it is not following the prompt.
+
+    The numeric check is the one this endpoint has and the strategies pass
+    does not. It is a containment check: every numeral in the reply must be a
+    figure the basis computed. It catches an invented percentage, a rounded
+    figure, and a number carried over from the model's own training -- the
+    failures that would put a wrong measurement in front of a parent.
+
+    **It does not check that a number is attached to the right measurement.**
+    A reply that swaps the focus and stress figures uses only allowed numbers
+    and passes. That is the residual hallucination risk on this endpoint and
+    it is not closed here; nothing short of parsing the reply back into
+    measurements would close it, and a parser strict enough to do that is a
+    second implementation of the sentences it is parsing.
+    """
+    if _CLINICAL_TERMS.search(raw or ""):
+        return None
+    lines = _parse_strategy_lines(raw)
+    # Exactly the baseline's length, not a range. Each point covers one thing
+    # the report shows, so a reply with fewer has dropped one -- silently, and
+    # most likely the channel-absence sentence, which is the one point whose
+    # whole job is to say that something is missing.
+    if len(lines) != expected_lines:
+        return None
+    if any(not _CHART_SUMMARY_MIN_CHARS <= len(line) <= _CHART_SUMMARY_MAX_CHARS
+           for line in lines):
+        return None
+    # The parsed lines, not the raw reply: the list markers the parser strips
+    # are numerals, and checking before the strip would reject every reply for
+    # carrying its own numbering.
+    for line in lines:
+        for number in _numerals(line):
+            if number not in allowed:
+                print(f"[chart_summary:llm] rejected: {number} is not a figure we supplied")
+                return None
+    return lines
+
+
+def _llm_chart_summary(prompt: str, baseline: list[str],
+                       timeout: float | None = None) -> list[str] | None:
+    """One model attempt, or None on any failure.
+
+    Temperature 0.2, below the strategies pass's 0.4: this is a rephrasing of
+    sentences whose content is fixed, where variety is entirely the wrong
+    instinct.
+
+    `timeout` is what remains of the caller's budget after any time spent
+    queued, not the full budget again -- see `_llm_strategies`.
+
+    Catches everything, `GenerationUnavailable` included: the deterministic
+    summary is always available, so a ceiling here costs plainer wording
+    rather than an error.
+    """
+    try:
+        raw = llm_client.generate_text(
+            prompt,
+            ollama_model=CHART_SUMMARY_LLM_MODEL,
+            temperature=0.2, top_p=None, top_k=None,
+            claude_temperature=0.2,
+            max_tokens=1024,
+            timeout=CHART_SUMMARY_LLM_TIMEOUT if timeout is None else timeout,
+        )
+    except Exception as e:
+        print(f"[chart_summary:llm] {e}")
+        return None
+    return _validated_chart_summary(raw or "", _chart_summary_figures(baseline),
+                                    len(baseline))
+
+
+def _llm_chart_summary_bounded(prompt: str, baseline: list[str]) -> list[str] | None:
+    """`_llm_chart_summary` under a deadline the caller feels, if admitted.
+
+    Non-blocking acquire: a caller who cannot get in must not queue on the
+    semaphore either, which would reintroduce the same wait one lock deeper.
+    """
+    if not _chart_summary_waiters.acquire(blocking=False):
+        print(f"[chart_summary:llm] at capacity "
+              f"({_CHART_SUMMARY_MAX_WAITERS} in flight); using the rule-based summary")
+        return None
+    try:
+        return _llm_chart_summary_admitted(prompt, baseline)
+    finally:
+        _chart_summary_waiters.release()
+
+
+def _llm_chart_summary_admitted(prompt: str, baseline: list[str]) -> list[str] | None:
+    """The wait itself. One deadline shared by the queueing and the work.
+
+    Split out so the semaphore's release is a plain `finally` around one call,
+    and budgeted the way `_llm_strategies_admitted` is: a submission that
+    queued behind a busy worker must not then start a fresh timeout of its
+    own, which would keep the pool saturated for nearly twice the budget.
+    """
+    deadline = time.monotonic() + CHART_SUMMARY_LLM_TIMEOUT
+
+    def _run():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        return _llm_chart_summary(prompt, baseline, remaining)
+
+    future = None
+    try:
+        future = _chart_summary_pool().submit(_run)
+        return future.result(timeout=CHART_SUMMARY_LLM_TIMEOUT)
+    except FutureTimeoutError:
+        # Cancel rather than drop the reference: bounding the workers does not
+        # bound the queue behind them, so a sustained outage would otherwise
+        # pile up abandoned prompts that all still run once it recovers.
+        future.cancel()
+        print(f"[chart_summary:llm] abandoned after {CHART_SUMMARY_LLM_TIMEOUT}s")
+        return None
+    except Exception as e:
+        print(f"[chart_summary:llm] {e}")
+        return None
+
+
+class ChartSummaryRequest(BaseModel):
+    include_face: bool = True
+    days: int = 7
+    weeks: int = 8
+
+
+@app.post("/api/students/{student_id}/chart-summary")
+def student_chart_summary(student_id: str, request: Request, payload: ChartSummaryRequest):
+    """Plain sentences describing what this student's report charts show.
+
+    Role-neutral like the report it reads: gated on relationship, not role, so
+    the teacher and parent pages mount the same panel.
+
+    Always answers. The deterministic sentences are the response unless the
+    optional model pass is enabled and its rephrasing passes
+    `_validated_chart_summary`; `source` says which happened.
+
+    The access check runs before the rate limit, so a caller with no
+    relationship to the student gets 403 rather than a 429 masking it.
+    """
+    viewer = get_user(request)
+    _verify_can_view_student(viewer, student_id)
+    _rate_limit_chart_summary(viewer["id"])
+
+    days = max(1, min(payload.days, 30))
+    weeks = max(2, min(payload.weeks, _TREND_MAX_WEEKS))
+    basis = _chart_summary_basis(student_id, days, weeks, payload.include_face)
+
+    summary = _rule_based_chart_summary(basis)
+    source = "rule-based"
+
+    if _feature_flags()["chart_summary_llm_enabled"]["enabled"]:
+        refined = _llm_chart_summary_bounded(_chart_summary_prompt(basis, summary), summary)
+        if refined:
+            summary, source = refined, "model-phrased"
+        else:
+            # Distinct from the plain rule-based case, as on the strategies
+            # endpoint: "the model was asked and its answer was rejected" is
+            # worth showing.
+            source = "rule-based (model output rejected)"
+
+    return {
+        "student_id": student_id,
+        "generated_at": _utc_now().isoformat(),
+        "summary": summary,
+        "source": source,
+        "basis": {
+            "days": days,
+            "weeks": weeks,
+            "face_included": basis["face_included"],
+            # Four separate reads behind one response, so four flags. A
+            # panel that said "could not load" for any one of them would hide
+            # the three that did load, and one that said nothing would present
+            # a partial summary as a complete one.
+            "signals_retrieved": basis["signals_retrieved"],
+            "trend_retrieved": basis["trend_retrieved"],
+            "stats_retrieved": basis["stats_retrieved"],
+            "topics_retrieved": basis["topics_retrieved"],
+            "consent_retrieved": basis["consent_retrieved"],
+            "averages": basis["averages"],
+            "trend": basis["trend"],
+            "academic": basis["academic"],
+            "topics": basis["topics"],
         },
     }
 

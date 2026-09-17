@@ -760,3 +760,96 @@ export function StrategyPanel({ strategies, source, signalsRetrieved, loading, e
     </div>
   )
 }
+
+
+/**
+ * Plain sentences describing what the charts above already show, from
+ * `POST /api/students/{id}/chart-summary`.
+ *
+ * On demand, never auto-fetched. The endpoint is the second heaviest thing a
+ * click can trigger here, and a report page that generated one on mount would
+ * spend a model call per student on every teacher who opened a roster —
+ * thirty of them for a summary nobody asked to read.
+ *
+ * `source` says whether the sentences are the deterministic ones or a model's
+ * rephrasing of them, and it is shown for the same reason the strategies panel
+ * shows its own: which happened changes how much the wording is worth trusting.
+ *
+ * `retrieved` is four separate flags rather than one, because four separate
+ * reads sit behind one response (the weekly aggregate, the term trend, the
+ * academic totals, the topic figures). Collapsed into one, a summary missing
+ * only its trend sentence would be presented either as entirely fine or as
+ * entirely broken.
+ * The sentences themselves already say which part is missing; the banner's job
+ * is only to stop the subtitle claiming the summary describes the whole report.
+ *
+ * `viewerRole` frames the subtitle, exactly as on `StrategyPanel` and with the
+ * same rule: it changes the framing and nothing about the content, and an
+ * unrecognised role reads as a parent.
+ */
+export function ChartSummaryPanel({ summary, source, retrieved, loading, error, onGenerate,
+                                    viewerRole = 'parent' }) {
+  const forTeacher = viewerRole === 'teacher'
+  // `=== false` on each, never falsiness: these are absent on a payload from
+  // before the field existed, and `!undefined` would report an outage for
+  // every such response.
+  const missing = [
+    retrieved?.signals === false && 'this week’s signal averages',
+    retrieved?.trend === false && 'the term trend',
+    retrieved?.stats === false && 'the practice totals',
+    retrieved?.topics === false && 'the topic figures',
+  ].filter(Boolean)
+
+  return (
+    <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
+        <div>
+          <h3 className="font-black text-gray-900 dark:text-white flex items-center gap-2">
+            <Activity size={18} className="text-sky-500" /> What These Charts Show
+          </h3>
+          <p className="text-xs text-gray-600 mt-1 dark:text-gray-400">
+            {forTeacher
+              ? <>A written read-out of the report above, for this student. Learning indicators only — not medical or behavioural advice.</>
+              : <>A written read-out of the report above. Learning indicators only — not medical or behavioural advice.</>}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onGenerate}
+          disabled={loading}
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white text-sm font-bold shadow transition"
+        >
+          <Activity size={16} /> {loading ? 'Generating…' : 'Generate summary'}
+        </button>
+      </div>
+
+      {error ? (
+        <p className="text-sm text-gray-500 dark:text-gray-400">{error}</p>
+      ) : loading ? (
+        <div className="space-y-2">{[1, 2, 3].map(i => <div key={i} className="h-12 rounded-xl bg-slate-50 dark:bg-gray-800 animate-pulse" />)}</div>
+      ) : !summary?.length ? (
+        <p className="text-sm text-gray-600 dark:text-gray-400">No summary generated yet.</p>
+      ) : (
+        <div className="space-y-3">
+          {/* Above the sentences, not after them: it changes how they should
+              be read, so it cannot come once they have been read. */}
+          {missing.length > 0 && (
+            <p className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+              Part of this report couldn’t be loaded ({missing.join(', ')}), so the summary below describes
+              less than the charts do. Try again shortly.
+            </p>
+          )}
+          {/* Index key: replaced wholesale each generation, never reordered,
+              and two sentences are not guaranteed to differ. */}
+          {summary.map((s, i) => (
+            <div key={i} className="flex gap-3 rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
+              <span className="w-6 h-6 rounded-lg bg-sky-600 text-white flex items-center justify-center text-xs font-black shrink-0">{i + 1}</span>
+              <p className="text-sm text-gray-700 dark:text-gray-200">{s}</p>
+            </div>
+          ))}
+          {source && <p className="text-[11px] text-gray-600 dark:text-gray-400">Source: {source}</p>}
+        </div>
+      )}
+    </div>
+  )
+}

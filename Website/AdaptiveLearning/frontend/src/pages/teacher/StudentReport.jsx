@@ -50,6 +50,14 @@ export default function StudentReport() {
       // endpoint for a signal-free list would change the advice rather than
       // hide it.
       showStrategies={!hideSensors}
+      // Behind the same switch, and for a stronger version of the same
+      // reason: the strategies list mentions sensor readings in passing,
+      // where this panel's whole job is to state them -- "Average focus is
+      // 63%, and across the weeks with readings it has risen from 55% to
+      // 63%". Left unconditional it would put the numbers the switch just
+      // removed back on the page as sentences, under a heading naming the
+      // charts that are no longer there.
+      showChartSummary={!hideSensors}
       viewerRole="teacher"
     />
     </>

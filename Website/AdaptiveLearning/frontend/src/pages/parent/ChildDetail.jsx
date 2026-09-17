@@ -28,6 +28,9 @@ export default function ChildDetail() {
       emptyTopicText="No topic data yet — your child hasn't used AI Adaptive mode."
       nameFetch={nameFetch}
       showStrategies
+      // Not behind a sensor-data switch here, because the parent surface has
+      // none -- see StudentReport.jsx for why the teacher's is gated.
+      showChartSummary
     />
   )
 }

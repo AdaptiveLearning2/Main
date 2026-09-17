@@ -3482,6 +3482,80 @@ badge *entirely*, so a describe rendering that badge sees nothing if an earlier 
 account describe collapses the sidebar in its **first** test, so the two after it fail without the
 clear rather than passing on whatever ordering happened to hold.
 
+## The chart summary states numbers, so what it may say is checked against what we gave it
+
+`POST /api/students/{id}/chart-summary` describes a student's report charts in plain sentences.
+Built to the shape the section above fixes — a deterministic answer that is always available, the
+`chart_summary_llm_enabled` flag deciding whether a model gets a chance to rephrase it, and the four
+bounds (`CHART_SUMMARY_LLM_TIMEOUT`, a 2-worker pool, `CHART_SUMMARY_MAX_WAITERS`,
+`CHART_SUMMARY_RATE_LIMIT`/`_WINDOW`). **That is now the fourth copy of the bounds block** —
+ingest, generation, strategies, this — and consolidating the four is a standalone change rather
+than a rider on a new endpoint, because the other three are reached into by name from their tests
+(`main._strategy_hits`, `main._STRATEGY_LLM_POOL`).
+
+**The model is handed the finished sentences, not the aggregates.** It is asked to rephrase, never
+to interpret, and that is what makes numeric fidelity checkable at all: every number it may use is
+already in front of it, so one that is not is an invention. `_validated_chart_summary` rejects the
+whole reply on any numeral that is not in the allowed set.
+
+**The allowed set is read out of the deterministic sentences, never enumerated from the basis
+fields.** Enumerating was the first shape and rejected *correct* replies in two ways a reader would
+not predict: the sentence prints a rounded heart rate where the basis holds a fractional one, and a
+revocation date puts a day number on screen that no basis field carries. Reading the text the prompt
+actually sends closes the whole class, and makes drift between the two impossible — the same reason
+`AccessibleChart` drives its sentence and its table from one `columns` spec.
+
+**What it does not check is that a number is attached to the right measurement.** A reply that swaps
+the focus and stress figures uses only allowed numbers and passes. That is the residual
+hallucination risk on this endpoint and it is not closed; closing it means parsing the reply back
+into measurements, which is a second implementation of the sentences being parsed.
+
+**The reply must have exactly the baseline's number of points.** A range let a reply drop one
+silently, and the likeliest one to go is the channel-absence sentence — the single point whose whole
+job is to say that something is missing.
+
+Four reads sit behind one response (the weekly aggregate, the rollup-backed trend, the academic
+totals, the topic figures) and **each reports its own `retrieved`**. Collapsed into one, a summary
+missing only its trend sentence is presented either as entirely fine or as entirely broken. Three
+consequences that were bugs first: `sessions` comes from the *signal* aggregate, so a failed signal
+read leaves it at 0 and printing it reports a quiet week for a query that never ran; an empty trend
+is indistinguishable from a student's first week, so a failed trend read must not say "only one week
+so far"; and `_topic_breakdown` swallows its exception and answers `[]`, which most callers degrade
+on identically — the strategies endpoint falls back to generic advice — but which here becomes the
+*assertion* "no topic has been attempted yet". **`_topic_breakdown_with_state` is the form that
+reports the read**, split out rather than added as a parameter so a caller that did not know to ask
+for the flag cannot drop it; reach for it wherever an empty list would become a claim.
+
+**Zero weeks and one week are different facts, and `_trend_direction` returns a dict for both.** It
+answered `None` for each, so a student part way through their very first session — raw rows, so a
+focus average, but no rollup row yet, so no week at all — was told that one week had readings. The
+rollup row is not written until the session closes, so that state is ordinary rather than an error.
+A helper that computes a count and returns it only on the success path cannot be asked the question
+the count answers.
+
+**But the sentence for it names no cause, and the first version did.** A first session is one way to
+reach zero weeks; a rollup writer that failed on every day in range is another, and so is a set of
+rolled days all carrying null for that series. The read succeeded in all three, so nothing there can
+tell them apart — and *"from this session's own readings"* contradicted the session count two
+sentences above it whenever one of the others was the real one. **Where a branch exists precisely
+because the code cannot establish a cause, its sentence may not supply one**; state the observable
+("no week has a reading for it yet") and stop. The same trap as reporting a failed read as a quiet
+week, one step further out: there the claim is about the data, here it is about the explanation.
+
+Channel absence is ordered as `cellLabel` is on the cohort roster and for the same reason: consent
+unreadable, then a known revocation, then a failed read, then nothing recorded. The revocation and
+its date come from a *different query* from the signals, so reporting the outage instead discards a
+fact we hold for one we do not. `engagement` is never named — it is the focus index, and a sentence
+naming both describes one measurement as two agreeing ones. The heart channel gets **no trend**:
+`_CHART_SUMMARY_TREND_MIN_DELTA` is written for the 0..1 ratios focus and stress are stored on, and
+against bpm the same number is a twentieth of a beat.
+
+`ChartSummaryPanel` mounts on both report routes, **on demand and never auto-fetched** — a teacher
+opening a class of thirty would otherwise spend a model call per page for a summary nobody asked to
+read. On the teacher route it is behind *"Hide sensor data"* with the charts, for a stronger version
+of the reason the strategies panel is: that list mentions sensor readings in passing, where this
+panel's whole job is to state them.
+
 ## Every model call goes through `llm_client`, and the provider is a setting
 
 `backend/llm_client.py` is the only place either model provider is reached. Fourteen call sites used

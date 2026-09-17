@@ -147,3 +147,27 @@ it('starts each test showing sensor data, whatever an earlier test switched off'
   expect(screen.getByRole('switch', { name: /hide sensor data/i })).toHaveAttribute('aria-checked', 'false')
   expect(screen.getByRole('button', { name: /generate strategies/i })).toBeInTheDocument()
 })
+
+/**
+ * The chart summary is mounted here too, and behind the same switch as the
+ * charts -- a stronger version of the reason the strategies panel is. The
+ * strategies list mentions sensor readings in passing; this panel's whole job
+ * is to state them ("Average focus is 63%, and across the weeks with readings
+ * it has risen from 55% to 63%"). Left unconditional, "Hide sensor data" would
+ * take the tiles off screen and put the same numbers back as sentences, under
+ * a heading naming charts that are no longer there.
+ *
+ * The button's absence is the assertion, not the heading, for the reason the
+ * strategies test above gives.
+ */
+it('hides the chart summary behind the sensor switch, button included', async () => {
+  renderWithState({ name: 'Ada', classId: 'class-1', className: 'Algebra' })
+  await screen.findByText('Recent Sessions')
+  expect(screen.getByRole('button', { name: /generate summary/i })).toBeInTheDocument()
+  expect(apiFetch.mock.calls.some(([u]) => String(u).includes('/chart-summary'))).toBe(false)
+
+  await userEvent.click(screen.getByRole('switch', { name: /hide sensor data/i }))
+
+  expect(screen.queryByRole('button', { name: /generate summary/i })).not.toBeInTheDocument()
+  expect(screen.queryByText(/what these charts show/i)).not.toBeInTheDocument()
+})

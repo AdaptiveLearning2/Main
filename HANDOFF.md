@@ -21,6 +21,16 @@ Run in this session at `18f5a2e`. **Record totals, not pass counts** (CLAUDE.md'
 CANARY baseline: main 18f5a2e | tree: clean | last suites: sidecar 826 / backend 1854 (1850 + 4 skipped) / frontend 714 (62 files)
 ```
 
+After Phase 1 (1a #191, 1b #192, 1c open), measured on the 1c branch:
+
+```
+CANARY: chart-summary-endpoint | tree: clean | last suites: sidecar not run / backend 1898 (1897 + 1 skipped) / frontend 760 (62 files)
+```
+
+**The sidecar was not run and its count is carried, not measured** -- nothing in Phase 1 touched
+`EEGResearch`. Re-measure it rather than quoting 826 as if this session produced it. The backend's
+skip count fell from 4 to 1 and the frontend gained 45 tests over three PRs; neither is a deletion.
+
 ---
 
 # Common Core standards on questions. DONE.
@@ -78,73 +88,28 @@ earlier shapes each lost a page state); a synthesised heart rate must be opt-in 
 request thread, because `record_answer` is a sync endpoint on anyio's ~40-slot pool and `requests`
 applies its timeout to connect and read separately.
 
-## Phase 1 — product features. NOT STARTED.
+## Phase 1 — product features. DONE.
 
-Three independent pieces. 1a and 1b are small and unblock Phase 4; 1c is the large one. **Do them as
-separate PRs** — 1c alone is comparable in size to all of Phase 0.
+Three independent pieces, shipped as three PRs. Every durable rule is in CLAUDE.md; the outline is
+here only because these landed in this session.
 
-### 1a. Practice question-count picker (frontend only)
+| Step | Shipped as | What it is |
+| --- | --- | --- |
+| 1a Practice question-count picker | **#191** | `PracticeSetup` offers 5/10/15/20 and hands the number down through `onStart(session, count)` to `PracticeTest`'s `questionCount` prop. Frontend only; nothing is sent to the backend, matching Adaptive's question goal. No "No limit", and the picker is hidden in flashcard mode. CLAUDE.md: *A practice test's length is a prop*. |
+| 1b Strategies panel on the teacher report | **#192** | `viewerRole` frames the same advice for a teacher; the endpoint was already gated on relationship, not role. The heading stays "At-Home" because the prompt and the rule-based fallback both are. Behind *"Hide sensor data"*, because the advice is sensor data in prose. |
+| 1c Chart-explaining summary | this branch | `POST /api/students/{id}/chart-summary`, the deterministic sentences plus an optional model rephrasing under `chart_summary_llm_enabled` and the four bounds. `ChartSummaryPanel` on both report routes, on demand. CLAUDE.md: *The chart summary states numbers*. |
 
-Phase 4 needs practice sessions of exactly 10, and the count is currently a module constant.
+**Three things about 1c a later change should not undo.** The model is handed the finished sentences
+rather than the aggregates, which is the only reason numeric fidelity is checkable at all; the
+allowed figures are read *out of those sentences*, never enumerated from the basis fields (enumerating
+rejected correct replies over a rounded heart rate and over a revocation date); and the three reads
+behind one response each report their own `retrieved`, because `sessions` comes from the signal
+aggregate and an empty trend is indistinguishable from a student's first week.
 
-1. `frontend/src/pages/student/PracticeTest.jsx:10` — replace `const QUESTION_COUNT = 10` with a
-   `questionCount` prop defaulting to 10, used at both call sites (`:177` the auto-end check, `:204`
-   the "Question N of M" label). The default matters: `PracticeFlashcards.jsx` references the name in
-   a comment only, so flashcards need no change.
-2. `frontend/src/components/practice/PracticeSetup.jsx` — add `questionCount` state (default 10) and
-   a `[5, 10, 15, 20]` button row styled like Adaptive's picker (the "How many questions?" block in
-   `pages/student/Adaptive.jsx`, currently around `:1706` — the plan's `:1195` reference is stale, so
-   search for the label rather than the line). **No "No limit" option**: Adaptive's goal is a goal,
-   not a cap, and offers one; Practice has no manual-finish affordance, so it must always auto-end.
-   Pass it through `onStart(session, questionCount)`.
-3. `frontend/src/pages/student/Practice.jsx` — thread it through `handleStart` into state and down to
-   `<PracticeTest>`.
-4. Frontend-only, deliberately: nothing is sent to the backend, matching how Adaptive's question goal
-   is purely local state.
-5. Update `PracticeSetup.test.jsx`, `Practice.test.jsx` and any `PracticeTest` test asserting the old
-   fixed count. Add one asserting a non-default count ends the session at that count.
-
-### 1b. Strategies panel on the teacher side (frontend only)
-
-1. `frontend/src/pages/teacher/StudentReport.jsx` — pass `showStrategies={true}` to
-   `StudentProgressReport`, as `parent/ChildDetail.jsx` already does.
-2. The panel's copy is written for "someone supporting a child at home"
-   (`components/reports/StudentProgressReport.jsx:33-34`). Add a `role` prop (or reuse a role source
-   already on both pages) so `StrategyPanel` frames the same advice for a teacher reading about one
-   student in a class. **Do not duplicate the component**, and do not change
-   `_llm_strategies`/`_validated_strategies` — same rules, same model pass, different frame.
-3. Update `StudentProgressReport.test.jsx`; add a teacher-side test asserting the panel renders there.
-
-### 1c. Chart-explaining summary (new model-backed endpoint)
-
-`POST /api/students/{id}/chart-summary`, shaped like the strategies pass. **CLAUDE.md requires four
-bounds of every model-backed endpoint** (*The strategies model pass is optional and bounded*), and
-this is the third such caller, so copy that shape rather than inventing one:
-
-- **Access**: `_verify_can_view_student` — no new access-control path.
-- **Deterministic baseline, always available**: a templated sentence from the aggregates the page
-  already fetches (weekly signal report averages, `signal-trend` direction, topic-performance
-  extremes, session count and accuracy). It must never depend on the model being up.
-- **Feature flag**: `chart_summary_llm_enabled`, mirroring `strategy_llm_enabled` — and note the trap
-  CLAUDE.md records: tests whose point is the rule-based path must pin the flag **off explicitly**,
-  because the autouse fixture reads live from `_FEATURE_FLAG_DEFAULTS`.
-- **Four bounds**: `CHART_SUMMARY_LLM_TIMEOUT`, a 2-worker pool, `CHART_SUMMARY_MAX_WAITERS`,
-  `CHART_SUMMARY_RATE_LIMIT`/`_WINDOW` per user id. Named like the `STRATEGY_*` group in
-  `backend/.env`.
-- **Consent-aware**: reuse `_reportable_channels` and the three-state reporting rule, so a withheld or
-  unreadable channel is *described* ("heart rate wasn't recorded this week because the headband was
-  off") rather than silently omitted or fabricated.
-- **`engagement` is the focus index** and is never named beside `focus`. The summary describes one
-  measurement, not two.
-- **Frontend**: a `ChartSummaryPanel` beside `StrategyPanel`, with an on-demand "Generate Summary"
-  button. **Not auto-fetched** — an auto-fetch on every report page across 30 students spends model
-  calls nobody reads. Mount it on both the teacher and parent report pages.
-- **Known limitation to carry into the Phase 6 report**: the model is handed the exact computed
-  numbers and asked only to phrase them, output is length-bounded and validated like strategies' —
-  but numeric fidelity is not fully enforceable. Report it as a limitation rather than treating it as
-  solved.
-- Tests: access control, all four bounds, consent gating, `source` field on the fallback-vs-model
-  path, feature-flag default; frontend tests for the panel and both mounts.
+**The residual limitation Phase 6 has to report**: the numeric check is a containment check. A reply
+that swaps the focus and stress figures uses only allowed numbers and passes. Closing that means
+parsing the reply back into measurements, which is a second implementation of the sentences being
+parsed, so it is stated rather than solved.
 
 ## Phase 2 — operational setup. NOT STARTED.
 

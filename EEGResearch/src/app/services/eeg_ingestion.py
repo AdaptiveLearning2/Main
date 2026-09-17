@@ -274,7 +274,7 @@ class SimulatedMuseIngestionAdapter:
     # involved: the bridge's names are `MuseS-XXXX` from the BLE advert.
     SIM_DEVICE_NAME = "MuseS-SIM0"
 
-    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, clock: Callable[[], float] = time.monotonic, seed: int | None = None) -> None:
         self.connected = False
         self._focus_state = 0.5
         self._calm_state = 0.5
@@ -313,6 +313,15 @@ class SimulatedMuseIngestionAdapter:
         # reading and is reported as 0.0, never None.
         self._battery_level: float | None = None
         self._battery_drawn_at: float | None = None
+        # Per-electrode contact streaks (see _contact_fields); every streak
+        # has expired at construction, so the first report draws them all.
+        self._rng = random.Random(seed)
+        self._contact_state: list[float] = [1.0] * self.CONTACT_ELECTRODES
+        self._contact_until: list[float] = [float("-inf")] * self.CONTACT_ELECTRODES
+        # Starts loose with an expired phase, so the first report draws a
+        # seated phase and its electrodes rather than opening on a fault.
+        self._strap_phase = "loose"
+        self._strap_until = float("-inf")
 
     # The bridge reports no packet for a few seconds after every CONNECTED
     # (a preset switch interrupts streaming); PRESET_SETTLE_SECONDS on the
@@ -449,12 +458,70 @@ class SimulatedMuseIngestionAdapter:
             "alpha": round(alpha, 3),
             "beta": round(beta, 3),
             "gamma": round(gamma, 3),
-            # Good contact on all four channels, so the simulator exercises the
-            # same signal-quality path as real hardware.
-            "hsi": [1.0, 1.0, 1.0, 1.0],
-            "is_good": [1.0, 1.0, 1.0, 1.0],
-            "band_channels_used": 4,
+            **self._contact_fields(),
             "notch_filtered": False,
+        }
+
+    # --- electrode contact -------------------------------------------------
+    #
+    # On hardware, degraded contact (2 of 4 electrodes) is the ordinary
+    # state and poor is the fault (EEG_REFERENCE.md); a simulator reporting
+    # hsi [1,1,1,1] for ever never reaches the contact gate, the confidence
+    # step at the degraded line, or a contact_poor row. Two layers, both on
+    # the clock (not per read, so the poll rate does not set the pace):
+    #
+    # * the strap alternates between seated and loose episodes; electrodes
+    #   go poor *together* when it is loose, which is what a strap does and
+    #   what independent per-electrode draws cannot produce -- with them,
+    #   three-of-four poor (the whole-headband `poor` verdict) was ~1% of
+    #   ticks whatever the per-electrode weights;
+    # * inside an episode each electrode runs its own streaks -- a state in
+    #   HSI terms (1 good, 2 mediocre, 4 poor) held for a drawn duration,
+    #   then redrawn with the episode's weights.
+    #
+    # `is_good` follows hsi (seated is good or mediocre), so the processor's
+    # min of the two never reads a contradiction. Through `_contact_ratio`'s
+    # 5 s smoothing and its lines (>= 0.8 good, >= 0.4 degraded) this lands
+    # the verdict mostly on degraded with poor as an occasional minority --
+    # pinned by a test that drives the processor over simulated hours.
+    # Streaks are long against the 5 s smoothing so one is a verdict, not a
+    # blip smoothed away. The raw channels are untouched: contact changes
+    # what the bridge *reports* about the electrodes, not the samples, so
+    # the artifact gate sees the same signal as before.
+    CONTACT_ELECTRODES = 4
+    # (hsi state, draw weight) per strap phase.
+    CONTACT_WEIGHTS = {
+        "seated": ((1.0, 0.50), (2.0, 0.35), (4.0, 0.15)),
+        "loose": ((1.0, 0.15), (2.0, 0.30), (4.0, 0.55)),
+    }
+    CONTACT_STREAK_SECONDS = {1.0: (20.0, 90.0), 2.0: (15.0, 60.0), 4.0: (10.0, 45.0)}
+    STRAP_PHASE_SECONDS = {"seated": (90.0, 300.0), "loose": (20.0, 60.0)}
+
+    def _contact_fields(self) -> dict[str, Any]:
+        now = self._clock()
+        with self._pair_lock:
+            if now >= self._strap_until:
+                self._strap_phase = "loose" if self._strap_phase == "seated" else "seated"
+                lo, hi = self.STRAP_PHASE_SECONDS[self._strap_phase]
+                self._strap_until = now + self._rng.uniform(lo, hi)
+                # A strap moving re-seats every electrode at once.
+                self._contact_until = [float("-inf")] * self.CONTACT_ELECTRODES
+            weights = self.CONTACT_WEIGHTS[self._strap_phase]
+            for i in range(self.CONTACT_ELECTRODES):
+                if now >= self._contact_until[i]:
+                    state = self._rng.choices(
+                        [s for s, _ in weights], weights=[w for _, w in weights]
+                    )[0]
+                    lo, hi = self.CONTACT_STREAK_SECONDS[state]
+                    self._contact_state[i] = state
+                    self._contact_until[i] = now + self._rng.uniform(lo, hi)
+            hsi = list(self._contact_state)
+        is_good = [1.0 if v <= 2.0 else 0.0 for v in hsi]
+        return {
+            "hsi": hsi,
+            "is_good": is_good,
+            # The bridge averages bands over the channels it trusts.
+            "band_channels_used": max(1, int(sum(is_good))),
         }
 
     def send_bridge_command(self, payload: dict[str, Any]) -> None:

@@ -665,6 +665,22 @@ and the pairing survives a stream stop, as the bridge holds a link across a sess
 device whose adapter has no `send_bridge_command` — the camera — still answers
 `ok: false, commands require EEG_SOURCE=muse`.
 
+**Its electrode contact varies, on the clock, in two layers.** It was `hsi [1,1,1,1]` for ever,
+so a sim run never reached the contact gate, the confidence step at the degraded line or a
+`contact_poor` row — while on hardware degraded is the ordinary state and poor the fault. The strap
+alternates seated (90–300 s) and loose (20–60 s) episodes, and inside an episode each electrode
+holds an HSI state (1/2/4) for a drawn streak and is redrawn with the episode's weights
+(`CONTACT_WEIGHTS`, `CONTACT_STREAK_SECONDS`, `STRAP_PHASE_SECONDS`). **The strap layer is what
+makes `poor` reachable**: with independent per-electrode draws, three-of-four poor was ~1% of ticks
+at any weights, since electrodes going poor *together* is what a loose strap does. Measured through
+`SignalProcessor._contact_ratio` (its 5 s smoothing and lines, not the raw hsi) over two simulated
+hours: good ~30%, degraded ~55%, poor ~14%, pinned by a test with loose bounds. `is_good` follows
+hsi (≤ 2 seated) so the processor's min of the two never reads a contradiction, and
+`band_channels_used` counts the seated ones. Streaks are long against the 5 s smoothing, so one is
+a verdict rather than a blip. **The raw channels are untouched**: contact changes what the bridge
+reports about the electrodes, not the samples, so the artifact gate sees the same signal. The
+adapter takes a `seed` for reproducible runs; unseeded simulators differ.
+
 ### Samples are stored during a session, not while a headband merely sits paired
 
 Under pull, Connect has to start the poller — it is what starts the sidecar's device stream, and

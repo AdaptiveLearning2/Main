@@ -304,3 +304,89 @@ def test_different_simulators_draw_different_charges():
         adapter, clock = _adapter()
         seen.add(_paired_for(adapter, clock, adapter.BATTERY_FIRST_REPORT_SECONDS))
     assert len(seen) > 1
+
+
+# --- electrode contact -------------------------------------------------------
+
+from src.app.services.signal_processing import SignalProcessor  # noqa: E402
+
+
+def _contact_shares(seed, hours=1.0, hz=4.0):
+    """Drive SignalProcessor._contact_ratio -- smoothing, thresholds and all
+    -- over a simulated run, and return the share of ticks in each verdict."""
+    clock = _Clock()
+    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=seed)
+    processor = SignalProcessor(clock=clock)
+    counts = {"good": 0, "degraded": 0, "poor": 0}
+    ticks = int(hours * 3600 * hz)
+    for _ in range(ticks):
+        clock.now += 1.0 / hz
+        ratio = processor._contact_ratio(adapter.get_ingestion_meta(), clock.now)
+        if ratio >= SignalProcessor.CONTACT_GOOD:
+            counts["good"] += 1
+        elif ratio >= SignalProcessor.CONTACT_DEGRADED:
+            counts["degraded"] += 1
+        else:
+            counts["poor"] += 1
+    return {k: v / ticks for k, v in counts.items()}
+
+
+def test_contact_is_mostly_degraded_with_poor_as_an_occasional_minority():
+    # Degraded is the ordinary state on hardware and poor is the fault
+    # (EEG_REFERENCE.md); a simulator pinned at hsi [1,1,1,1] never reached
+    # the contact gate at all. Measured through the processor's own
+    # smoothing and lines, not the raw hsi.
+    for seed in (1, 2, 3):
+        shares = _contact_shares(seed)
+        assert 0.35 <= shares["degraded"] <= 0.75, shares
+        assert 0.02 <= shares["poor"] <= 0.25, shares
+        assert shares["good"] >= 0.10, shares
+
+
+def test_contact_streaks_are_held_on_the_clock_not_redrawn_per_read():
+    clock = _Clock()
+    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=7)
+    first = adapter.get_ingestion_meta()["hsi"]
+    # Many reads inside the shortest possible streak: nothing changes.
+    for _ in range(40):
+        clock.now += 0.1
+        assert adapter.get_ingestion_meta()["hsi"] == first
+    # Well past the longest streak: at least one electrode has been redrawn.
+    clock.now += 200.0
+    adapter.get_ingestion_meta()
+    seen = {tuple(adapter.get_ingestion_meta()["hsi"])}
+    for _ in range(20):
+        clock.now += 100.0
+        seen.add(tuple(adapter.get_ingestion_meta()["hsi"]))
+    assert len(seen) > 1
+
+
+def test_is_good_follows_hsi_and_band_channels_count_the_seated_ones():
+    clock = _Clock()
+    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=11)
+    saw_poor = False
+    for _ in range(600):
+        clock.now += 5.0
+        meta = adapter.get_ingestion_meta()
+        assert set(meta["hsi"]) <= {1.0, 2.0, 4.0}
+        assert meta["is_good"] == [1.0 if v <= 2.0 else 0.0 for v in meta["hsi"]]
+        assert meta["band_channels_used"] == max(1, int(sum(meta["is_good"])))
+        saw_poor = saw_poor or 4.0 in meta["hsi"]
+    assert saw_poor
+
+
+def test_contact_is_reproducible_under_a_seed_and_varies_without_one():
+    a = _contact_shares(5, hours=0.25)
+    b = _contact_shares(5, hours=0.25)
+    assert a == b
+    clock = _Clock()
+    x = SimulatedMuseIngestionAdapter(clock=clock)
+    y = SimulatedMuseIngestionAdapter(clock=clock)
+    seqs = []
+    for adapter in (x, y):
+        seq = []
+        for _ in range(30):
+            clock.now += 50.0
+            seq.append(tuple(adapter.get_ingestion_meta()["hsi"]))
+        seqs.append(seq)
+    assert seqs[0] != seqs[1]

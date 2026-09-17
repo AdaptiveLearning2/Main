@@ -7,8 +7,8 @@ rule into CLAUDE.md and delete the step.
 
 **Scope: this session's work only.** Two things shipped — the Common Core standard on questions
 (#180) and Phase 0 of the classroom simulation (#187, #190) — and the simulation's Phases 1–6 are
-open. Other threads against this repo (the EEG-accuracy work, the launcher registry) are not
-tracked here, and anything of theirs that this depends on is in CLAUDE.md rather than in this file.
+open. Other sessions' threads against this repo are not tracked here; anything of theirs that this
+work depends on is in CLAUDE.md, which is where a reader should go for it.
 
 The plan is `~/.claude/plans/we-will-be-doing-encapsulated-magpie.md`, with its Phase 0 superseded
 by `~/.claude/plans/nested-singing-scroll.md`.

@@ -10,7 +10,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, TextIO
+from typing import Any, Callable, TextIO
 
 import numpy as np
 
@@ -252,6 +252,11 @@ class SimulatedMuseIngestionAdapter:
     beta > alpha while high calm needs the opposite. That makes the
     "focused" label's focus>=70% AND calm>=50% hard to satisfy at once by
     construction -- a property of the real formula, not a simulator bug.
+
+    It also pairs like a headband (see send_bridge_command): a scan finds
+    SIM_DEVICE_NAME, connect holds it, and the pairing fields on
+    get_ingestion_meta follow, so the page's Connect button runs to
+    completion on a sim run instead of stopping at "no device".
     """
 
     # Keeps the hidden state continuous tick-to-tick instead of resetting.
@@ -264,18 +269,85 @@ class SimulatedMuseIngestionAdapter:
     # 1.0 so beta doesn't overwhelm alpha's contribution to calm at high focus.
     _FOCUS_BAND_GAIN = 0.4
 
-    def __init__(self) -> None:
+    # The one device a scan finds. Named so a person reading a status line,
+    # a session's `active_muse_name` or a bug report knows no headband was
+    # involved: the bridge's names are `MuseS-XXXX` from the BLE advert.
+    SIM_DEVICE_NAME = "MuseS-SIM0"
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self.connected = False
         self._focus_state = 0.5
         self._calm_state = 0.5
+        self._clock = clock
+        # The pairing state machine the bridge keeps for a real headband --
+        # refresh discovers, connect pairs, disconnect clears both -- so the
+        # page's Connect button runs the same seven steps it runs on hardware
+        # (scan, wait for `muse_devices`, connect, poll `muse_connected`)
+        # instead of failing at "no device". Distinct from `connected`, which
+        # is the sidecar's sample stream: the simulator emits samples whether
+        # or not anything is paired, and pairing survives a stream stop the
+        # way the bridge holds a link across a session end.
+        self._pair_lock = threading.Lock()
+        self._discovered: list[str] = []
+        self._paired_name: str | None = None
+        # monotonic() of the pairing and of the last delivered packet, for
+        # `eeg_age_ms`. On hardware that age is the bridge's packet clock:
+        # zeroed on CONNECTED, then the time since the last BLE packet, which
+        # climbs when the headband goes silent while libMuse still says
+        # CONNECTED -- the state `linkAlive` and the bridge watchdog exist
+        # for. The simulator has no BLE, so **the sidecar's sample stream
+        # stands in for the packets, deliberately**: a running stream keeps
+        # the age near zero (stamped on every read and on stream start), a
+        # stopped one lets it climb from the last read, which is the drop.
+        # Modelled from the pairing alone (one earlier version) the age
+        # wrapped inside 0-3 ms for ever and no drop was reachable.
+        self._paired_at: float | None = None
+        self._last_packet_at: float | None = None
+
+    # The bridge reports no packet for a few seconds after every CONNECTED
+    # (a preset switch interrupts streaming); PRESET_SETTLE_SECONDS on the
+    # stream manager is the sidecar's allowance for the same window, and the
+    # page's SETTLE_GRACE_MS (10 s) sits above both. Null, not 0, throughout.
+    PAIR_SETTLE_SECONDS = 5.0
 
     def connect(self) -> None:
         self.connected = True
         self._focus_state = random.uniform(0.4, 0.6)
         self._calm_state = random.uniform(0.4, 0.6)
+        with self._pair_lock:
+            # Stream up means packets flowing: under pull, Connect starts the
+            # stream and reads the status before the first 4 Hz tick, so a
+            # re-paired link must not read as silent for one tick.
+            self._last_packet_at = self._clock()
 
     def disconnect(self) -> None:
         self.connected = False
+
+    def _pairing_fields(self) -> dict[str, Any]:
+        with self._pair_lock:
+            paired = self._paired_name
+            discovered = list(self._discovered)
+            paired_at = self._paired_at
+            last_packet = self._last_packet_at
+        # `_paired_at` is set and cleared with `_paired_name`, so it alone
+        # says whether a link exists.
+        age: int | None = None
+        if paired_at is not None:
+            now = self._clock()
+            if now - paired_at >= self.PAIR_SETTLE_SECONDS:
+                # Packets are expected from the end of the settle; from then
+                # on the age is the time since the last delivered one.
+                settled_at = paired_at + self.PAIR_SETTLE_SECONDS
+                origin = max(settled_at, last_packet if last_packet is not None else settled_at)
+                age = max(0, int((now - origin) * 1000.0))
+        return {
+            "muse_connected": paired is not None,
+            "muse_discovered": bool(discovered),
+            "connection_state": 1 if paired is not None else 3,
+            "muse_devices": discovered,
+            "active_muse_name": paired or "",
+            "eeg_age_ms": age,
+        }
 
     @staticmethod
     def _drift(value: float, step: float) -> float:
@@ -293,6 +365,9 @@ class SimulatedMuseIngestionAdapter:
             raise RuntimeError("Muse adapter not connected")
         self._focus_state = self._drift(self._focus_state, self._DRIFT_STEP)
         self._calm_state = self._drift(self._calm_state, self._DRIFT_STEP)
+        with self._pair_lock:
+            # A delivered packet: what keeps a paired link's age near zero.
+            self._last_packet_at = self._clock()
         base = self._BASE_LEVEL + (self._focus_state - 0.5) * self._LEVEL_SPAN
         # Lower calm -> wider cross-channel spread (more erratic signal).
         spread_scale = 1.6 - self._calm_state
@@ -333,15 +408,10 @@ class SimulatedMuseIngestionAdapter:
         )
         return {
             "bridge_mode": "python_sim",
-            # Stay false/empty regardless of self.connected: these represent a
-            # real Muse BLE pairing, which the frontend's pairing wizard checks
-            # to confirm actual hardware -- the simulator has no device to report.
-            "muse_connected": False,
-            "muse_discovered": False,
+            # The pairing fields follow the commands the page sent, not
+            # `self.connected` (the sample stream): see _pairing_fields.
+            **self._pairing_fields(),
             "bluetooth_enabled": True,
-            "connection_state": -1,
-            "muse_devices": [],
-            "active_muse_name": "",
             "firmware_version": "sim-1.0",
             # None, never a plausible-looking number -- the simulator has no
             # battery, and a made-up percentage is a reading a student could
@@ -363,8 +433,39 @@ class SimulatedMuseIngestionAdapter:
             "notch_filtered": False,
         }
 
-    def send_bridge_command(self, _payload: dict[str, Any]) -> None:
-        raise RuntimeError("Muse bridge commands require EEG_SOURCE=muse (TCP bridge)")
+    def send_bridge_command(self, payload: dict[str, Any]) -> None:
+        """Run the bridge's three commands against the simulated device.
+
+        Same vocabulary as muse_native_bridge (`refresh` / `connect` with a
+        `name` / `disconnect`), and the same refusals -- a connect names a
+        device the last scan did not list, or names nothing -- raised here
+        where the bridge writes them to its own stderr, since
+        `send_muse_bridge_command` turns a RuntimeError into the route's
+        `{"ok": False, "error"}` and a silent no-op would leave the page
+        polling ten seconds for a pairing that was never going to happen.
+        """
+        cmd = payload.get("cmd")
+        with self._pair_lock:
+            if cmd == "refresh":
+                self._discovered = [self.SIM_DEVICE_NAME]
+            elif cmd == "connect":
+                name = str(payload.get("name") or "").strip()
+                if not name:
+                    raise RuntimeError('connect command missing "name"')
+                if name not in self._discovered:
+                    raise RuntimeError(f"connect failed (device not in list): {name}")
+                self._paired_name = name
+                # Every connect zeroes the packet clock, a repeat included;
+                # a packet stamped before it is below the settle floor and
+                # so never counts, which is why nothing clears it here.
+                self._paired_at = self._clock()
+            elif cmd == "disconnect":
+                self._discovered = []
+                self._paired_name = None
+                self._paired_at = None
+                self._last_packet_at = None
+            else:
+                raise RuntimeError(f"unknown bridge cmd: {cmd!r}")
 
 
 @dataclass(frozen=True)

@@ -89,15 +89,24 @@ def test_state_endpoint_serializes_no_signal_payload():
         default_session.latest_payload = previous_payload
 
 
-def test_muse_refresh_returns_ok_false_when_not_tcp_muse():
+def test_muse_refresh_returns_ok_false_when_the_adapter_has_no_command_channel():
+    # The simulator now answers these commands (tests/test_sim_device.py);
+    # what still refuses is a device with nothing to command -- a camera.
     client = TestClient(app)
     settings = get_settings()
     admin_headers = {"Authorization": f"Bearer {settings.admin_token}"}
-    r = client.post("/api/v1/muse/refresh", headers=admin_headers)
+    session = stream_manager.session()
+    real = session.adapter
+    session.adapter = object()
+    try:
+        r = client.post("/api/v1/muse/refresh", headers=admin_headers)
+    finally:
+        session.adapter = real
     assert r.status_code == 200
     payload = r.json()
     assert payload["status"] == "ok"
     assert payload["data"]["ok"] is False
+    assert "commands require" in payload["data"]["error"]
 
 
 def test_session_lifecycle_and_state():

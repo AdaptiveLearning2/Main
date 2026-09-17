@@ -113,10 +113,10 @@ export default function TeacherSettings() {
               <h3 className="font-black text-gray-900 dark:text-white mb-5">Account Information</h3>
               <div className="flex items-center gap-4 mb-6">
                 <div className="w-16 h-16 bg-gradient-to-br from-violet-500 to-purple-600 rounded-2xl flex items-center justify-center text-white text-2xl font-black shadow-lg">
-                  {user?.email?.[0]?.toUpperCase()}
+                  {(accountName || '?')[0].toUpperCase()}
                 </div>
                 <div>
-                  <p className="font-black text-gray-900 dark:text-white">{displayName || accountName}</p>
+                  <p className="font-black text-gray-900 dark:text-white">{accountName}</p>
                   <p className="text-sm text-gray-500 dark:text-gray-400">{user?.email}</p>
                   <span className="text-xs font-bold text-violet-600 bg-violet-100 dark:bg-violet-900/30 px-2 py-0.5 rounded-full mt-1 inline-block">📚 Teacher</span>
                 </div>

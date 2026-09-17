@@ -453,8 +453,12 @@ it('searches the name on screen, not only the email behind it', async () => {
 })
 
 it('falls back to the email prefix for a student with no name set', async () => {
-  // Real state: `handle_new_user` seeds display_name from the email, but a
-  // row can be cleared back to null through Profile.
+  // Not reachable through the UI: `PUT /api/profile/me` drops null fields
+  // (`if v is not None`), so clearing the field saves nothing, and
+  // `handle_new_user` seeds the column from the email rather than leaving it
+  // empty. The column is nullable and the dashboard SQL editor is a real
+  // writer here, so the fallback still has to hold -- but it is a row nobody
+  // can produce from the app.
   results.class_memberships = {
     data: [{
       student_id: 'stu-1',

@@ -137,3 +137,23 @@ describe('the tabs', () => {
     expect(screen.queryByRole('button', { name: /notifications/i })).not.toBeInTheDocument()
   })
 })
+
+/**
+ * The Account card sits directly above the Display Name input, which is close
+ * enough that a card bound to the input's state reads as a live preview. It
+ * is not one: it names the account, so it must show what is *saved*. Bound to
+ * the draft it kept asserting a name the account did not have after a save
+ * that failed.
+ */
+it('shows the saved name on the account card while the field is being edited', async () => {
+  draw()
+  await screen.findByDisplayValue('Ms Patel')
+
+  const field = screen.getByLabelText(/display name/i)
+  await userEvent.clear(field)
+  await userEvent.type(field, 'Ms Khan')
+
+  // Typed, not saved: the field carries the draft, the card does not.
+  expect(screen.getByDisplayValue('Ms Khan')).toBeInTheDocument()
+  expect(screen.queryByText('Ms Khan')).not.toBeInTheDocument()
+})

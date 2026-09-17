@@ -102,6 +102,13 @@ describe('at-home strategies', () => {
 
 
 
+  it('frames the panel for whoever is reading the report', async () => {
+    // Two components apart: the page decides the audience, the panel words it.
+    renderReport({ showStrategies: true, viewerRole: 'teacher' })
+    await screen.findByText('Recent Sessions')
+    expect(screen.getByText(/written for a family to use at home/i)).toBeInTheDocument()
+  })
+
   it('POSTs a JSON body, not an empty request', async () => {
     // FastAPI requires a body even though every field defaults -- a bodyless
     // POST 422s. apiFetch is mocked, so this only asserts the call carries a

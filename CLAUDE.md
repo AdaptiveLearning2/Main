@@ -3379,6 +3379,18 @@ Model output is untrusted text: it's parsed, length-bounded, stripped of markdow
 markers, and run through a clinical-term filter, and anything failing validation falls back to the
 rules. Extend `_validated_strategies` rather than rendering raw output.
 
+**The panel is on the teacher report as well as the parent one, and the copy is the only thing that
+differs.** The endpoint is gated on relationship rather than role — its own docstring says so — so a
+teacher could always ask for this advice and, until then, had no way to see it. `viewerRole`
+('parent' by default, and for any value the panel does not recognise) picks the framing;
+`_llm_strategies` and `_validated_strategies` are untouched, so both readers get the same list.
+**The heading stays "At-Home" on both.** The prompt says *"you are helping a parent support their
+child's maths practice at home"* and the rule-based fallback says *"ask your child to explain one
+solved problem out loud"* — so a classroom-sounding label would claim the model had been asked for
+something it was not. The teacher frame says whose advice it is instead, which is the useful thing
+to know when deciding what to do with it. It stays **on demand**: nothing is fetched until the
+button is pressed, or a class of thirty report pages would spend a model call each.
+
 ## Every model call goes through `llm_client`, and the provider is a setting
 
 `backend/llm_client.py` is the only place either model provider is reached. Fourteen call sites used

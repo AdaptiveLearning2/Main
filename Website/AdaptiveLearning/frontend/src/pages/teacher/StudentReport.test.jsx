@@ -79,3 +79,22 @@ it('shows an error state, not an empty report, when the core load fails', async 
   // ...but the back link stays so the teacher can still leave.
   expect(screen.getByRole('link', { name: /back to algebra/i })).toHaveAttribute('href', '/teacher/classes/class-1')
 })
+
+/**
+ * The strategies panel was parent-only, on the reasoning that its advice is
+ * written for someone at home. But the endpoint behind it is gated on
+ * relationship rather than role -- its own docstring says so -- so a teacher
+ * of this student could always ask for the advice and had no way to see it.
+ *
+ * On demand, not on mount: the panel fetches nothing until the button is
+ * pressed, which is what keeps it from spending a model call per report page
+ * across a class of thirty.
+ */
+it('offers the strategies panel, framed for a teacher and generating nothing on its own', async () => {
+  renderWithState({ name: 'Ada', classId: 'class-1', className: 'Algebra' })
+  await screen.findByText('Recent Sessions')
+
+  expect(screen.getByRole('button', { name: /generate strategies/i })).toBeInTheDocument()
+  expect(screen.getByText(/written for a family to use at home/i)).toBeInTheDocument()
+  expect(apiFetch.mock.calls.some(([u]) => String(u).includes('/learning-strategies'))).toBe(false)
+})

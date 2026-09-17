@@ -35,6 +35,11 @@ export default function StudentReport() {
       backHoverClass="hover:text-violet-600"
       emptyTopicText="No topic data yet — this student hasn't used AI Adaptive mode."
       showSignals={!hideSensors}
+      // The same panel the parent gets, framed for a teacher. The endpoint was
+      // already role-neutral -- gated on relationship, not role -- so this was
+      // a surface a teacher could reach and could not see.
+      showStrategies
+      viewerRole="teacher"
     />
     </>
   )

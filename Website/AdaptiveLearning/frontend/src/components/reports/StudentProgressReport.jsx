@@ -30,8 +30,12 @@ const TOPIC_ICONS = ICONS
  *   Promise<string|null>. When provided it owns the name (the parent's children
  *   list, which survives a weekly-report failure); when omitted the name comes
  *   from the weekly-report's student_name.
- * @param {boolean}  [showStrategies] render the at-home strategies panel. Parent
- *   route only -- the copy is written for someone supporting a child at home.
+ * @param {boolean}  [showStrategies] render the at-home strategies panel. On
+ *   both routes: the endpoint behind it is gated on relationship rather than
+ *   role, so a teacher could always reach it.
+ * @param {string}   [viewerRole] 'parent' (default) or 'teacher' -- frames the
+ *   panel's copy for whoever is reading. The advice itself is identical; see
+ *   `StrategyPanel` for why the heading stays "At-Home" either way.
  */
 /**
  * `showSignals` is the teacher's *"Hide sensor data"* view preference, passed
@@ -50,6 +54,7 @@ export default function StudentProgressReport({
   nameFetch,
   showStrategies = false,
   showSignals = true,
+  viewerRole = 'parent',
 }) {
   const [stats, setStats]         = useState(null)
   const [sessions, setSessions]   = useState([])
@@ -272,6 +277,7 @@ export default function StudentProgressReport({
               loading={strategyLoading}
               error={strategyError}
               onGenerate={generateStrategies}
+              viewerRole={viewerRole}
             />
           )}
 

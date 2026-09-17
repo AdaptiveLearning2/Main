@@ -684,8 +684,25 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
  * but the subtitle would otherwise claim it's built from this week. `false`
  * retracts that claim; undefined means a pre-field payload from a working read.
  */
-export function StrategyPanel({ strategies, source, signalsRetrieved, loading, error, onGenerate }) {
+/**
+ * `viewerRole` frames the same advice for whoever is reading it, and the frame
+ * is the only thing it changes -- `_llm_strategies` and `_validated_strategies`
+ * are untouched, so a teacher and a parent asking about one student get the
+ * same list.
+ *
+ * Which is exactly why the heading stays "At-Home". The prompt behind this
+ * says "you are helping a parent support their child's maths practice at
+ * home" and the rule-based fallback says "ask your child to explain one solved
+ * problem out loud", so relabelling it for a teacher would claim the model had
+ * been asked for classroom advice when it had not. The teacher frame says whose
+ * advice it is instead, which is the useful thing to know when deciding what to
+ * do with it. An unrecognised role reads as a parent, the audience the copy was
+ * written for.
+ */
+export function StrategyPanel({ strategies, source, signalsRetrieved, loading, error, onGenerate,
+                                viewerRole = 'parent' }) {
   const signalsMissing = signalsRetrieved === false
+  const forTeacher = viewerRole === 'teacher'
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
       <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
@@ -698,7 +715,9 @@ export function StrategyPanel({ strategies, source, signalsRetrieved, loading, e
           <p className="text-xs text-gray-600 mt-1 dark:text-gray-400">
             {signalsMissing
               ? <>General practice suggestions — this week&apos;s signal data could not be read. Learning indicators only — not medical or behavioural advice.</>
-              : <>Practice suggestions built from this week&apos;s report. Learning indicators only — not medical or behavioural advice.</>}
+              : forTeacher
+                ? <>Practice suggestions built from this week&apos;s report, written for a family to use at home — share them rather than read them as classroom advice. Learning indicators only — not medical or behavioural advice.</>
+                : <>Practice suggestions built from this week&apos;s report. Learning indicators only — not medical or behavioural advice.</>}
           </p>
         </div>
         <button
@@ -723,7 +742,8 @@ export function StrategyPanel({ strategies, source, signalsRetrieved, loading, e
               items should be read, so it shouldn't come after them. */}
           {signalsMissing && (
             <p className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
-              This week&apos;s signal data couldn&apos;t be loaded, so these are general suggestions rather than ones based on your child&apos;s report. Try again shortly.
+              This week&apos;s signal data couldn&apos;t be loaded, so these are general suggestions rather than ones based on
+              {forTeacher ? ' this student’s' : ' your child’s'} report. Try again shortly.
             </p>
           )}
           {/* Index key: replaced wholesale each generation, never reordered,

@@ -35,6 +35,22 @@ export default function StudentReport() {
       backHoverClass="hover:text-violet-600"
       emptyTopicText="No topic data yet — this student hasn't used AI Adaptive mode."
       showSignals={!hideSensors}
+      // The same panel the parent gets, framed for a teacher. The endpoint was
+      // already role-neutral -- gated on relationship, not role -- so this was
+      // a surface a teacher could reach and could not see.
+      //
+      // Behind the same switch as the charts, because the advice *is* sensor
+      // data in prose: the rule-based list says "stress indicators ran high
+      // this week" and "focus indicators were low this week", and the model
+      // pass is handed the same averages. Left unconditional, Hide sensor data
+      // took the tiles off screen and left a button that writes the numbers
+      // back out as sentences. Hiding the whole panel rather than filtering
+      // its lines is deliberate: the advice mixes topic accuracy with signal
+      // readings and nothing downstream can separate them, and asking the
+      // endpoint for a signal-free list would change the advice rather than
+      // hide it.
+      showStrategies={!hideSensors}
+      viewerRole="teacher"
     />
     </>
   )

@@ -345,6 +345,43 @@ describe('StrategyPanel', () => {
     expect(screen.queryByText(/so these are general suggestions/i)).not.toBeInTheDocument()
   })
 
+  /**
+   * The teacher frame changes who the advice is described as being for, and
+   * nothing else. The heading deliberately keeps "At-Home": the prompt behind
+   * this asks for at-home strategies and the rule-based fallback says "ask
+   * your child", so a classroom-sounding label would claim the model had been
+   * asked for something it had not.
+   */
+  it('tells a teacher whose advice this is, without relabelling it as classroom advice', () => {
+    render(<StrategyPanel strategies={strategies} source="rule-based"
+                          signalsRetrieved={true} viewerRole="teacher" onGenerate={() => {}} />)
+    expect(screen.getByRole('heading', { name: /at-home learning strategies/i })).toBeInTheDocument()
+    expect(screen.getByText(/written for a family to use at home/i)).toBeInTheDocument()
+    expect(screen.getByText(/share them rather than read them as classroom advice/i)).toBeInTheDocument()
+  })
+
+  it('says "this student" to a teacher where it says "your child" to a parent', () => {
+    const { unmount } = render(
+      <StrategyPanel strategies={strategies} source="rule-based"
+                     signalsRetrieved={false} viewerRole="teacher" onGenerate={() => {}} />)
+    expect(screen.getByText(/rather than ones based on this student.s report/i)).toBeInTheDocument()
+    unmount()
+
+    render(<StrategyPanel strategies={strategies} source="rule-based"
+                          signalsRetrieved={false} viewerRole="parent" onGenerate={() => {}} />)
+    expect(screen.getByText(/rather than ones based on your child.s report/i)).toBeInTheDocument()
+  })
+
+  it('reads an absent or unrecognised role as the parent it was written for', () => {
+    // The advice is parent-framed by construction, so that is the safe
+    // default for a caller that says nothing -- and for one that says
+    // something this component does not know.
+    render(<StrategyPanel strategies={strategies} source="rule-based"
+                          signalsRetrieved={true} viewerRole="admin" onGenerate={() => {}} />)
+    expect(screen.queryByText(/written for a family to use at home/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/built from this week's report/i)).toBeInTheDocument()
+  })
+
   it('treats a payload predating the field as a working read', () => {
     // Absent on older responses, from a working read -- undefined must not
     // read as a failure.

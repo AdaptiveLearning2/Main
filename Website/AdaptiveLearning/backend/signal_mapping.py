@@ -322,6 +322,12 @@ def map_heart_to_heart_signal(payload: dict, session_id: str, user_id: str) -> d
                     sample_rate_hz=heart.get("sample_rate_hz"),
                     largest_gap_s=heart.get("largest_gap_s"),
                     channel_count=heart.get("channel_count"),
+                    # The simulator's mark. `source` stays `muse_optics`
+                    # because consent is enforced per sensor and the
+                    # synthesised pulse stands in for that sensor; this is
+                    # what lets a reader tell a stored rate nothing measured
+                    # from one a headband did. Absent on hardware rows.
+                    synthetic=(True if heart.get("synthetic") is True else None),
                     # RMSSD has its own gate, separate from `rejected_by`
                     # above: a row can have a good heart rate and no RMSSD
                     # (about one window in five does), and these say which of

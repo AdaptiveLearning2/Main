@@ -288,7 +288,8 @@ class SimulatedMuseIngestionAdapter:
     # involved: the bridge's names are `MuseS-XXXX` from the BLE advert.
     SIM_DEVICE_NAME = "MuseS-SIM0"
 
-    def __init__(self, clock: Callable[[], float] = time.monotonic, seed: int | None = None) -> None:
+    def __init__(self, clock: Callable[[], float] = time.monotonic, seed: int | None = None,
+                 sim_optics: bool = False) -> None:
         self.connected = False
         self._focus_state = 0.5
         self._calm_state = 0.5
@@ -329,7 +330,15 @@ class SimulatedMuseIngestionAdapter:
         self._battery_drawn_at: float | None = None
         # Per-electrode contact streaks (see _contact_fields); every streak
         # has expired at construction, so the first report draws them all.
+        # Every draw the simulator makes comes from these two, so a `seed`
+        # replays a run: contact, battery, the resting rate, the drift and
+        # the channel noise from `_rng`; the optical noise from its own
+        # generator, so building an optics window (which happens on the
+        # heart cadence, not the tick) cannot shift the contact sequence.
         self._rng = random.Random(seed)
+        self._optics_rng = np.random.default_rng(seed)
+        # Opt-in, like MUSE_ENABLE_OPTICS on hardware (EEG_SIM_OPTICS).
+        self.optics_enabled = bool(sim_optics)
         self._contact_state: list[float] = [1.0] * self.CONTACT_ELECTRODES
         self._contact_until: list[float] = [float("-inf")] * self.CONTACT_ELECTRODES
         # Starts loose with an expired phase, so the first report draws a
@@ -364,8 +373,8 @@ class SimulatedMuseIngestionAdapter:
 
     def connect(self) -> None:
         self.connected = True
-        self._focus_state = random.uniform(0.4, 0.6)
-        self._calm_state = random.uniform(0.4, 0.6)
+        self._focus_state = self._rng.uniform(0.4, 0.6)
+        self._calm_state = self._rng.uniform(0.4, 0.6)
         with self._pair_lock:
             # Stream up means packets flowing: under pull, Connect starts the
             # stream and reads the status before the first 4 Hz tick, so a
@@ -414,11 +423,10 @@ class SimulatedMuseIngestionAdapter:
             "battery_percent": battery,
         }
 
-    @staticmethod
-    def _drift(value: float, step: float) -> float:
+    def _drift(self, value: float, step: float) -> float:
         # Reflect off the [0, 1] boundaries instead of clamping, so the walk
         # doesn't stick near an edge over a long session.
-        value += random.uniform(-step, step)
+        value += self._rng.uniform(-step, step)
         if value < 0.0:
             value = -value
         elif value > 1.0:
@@ -441,10 +449,10 @@ class SimulatedMuseIngestionAdapter:
         spread_scale = 1.6 - calm
         return EegSample(
             timestamp=datetime.now(tz=timezone.utc),
-            channel_tp9=base + random.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
-            channel_af7=base + random.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
-            channel_af8=base + random.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
-            channel_tp10=base + random.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
+            channel_tp9=base + self._rng.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
+            channel_af7=base + self._rng.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
+            channel_af8=base + self._rng.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
+            channel_tp10=base + self._rng.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
         )
 
     def get_ingestion_meta(self) -> dict[str, Any]:
@@ -482,9 +490,9 @@ class SimulatedMuseIngestionAdapter:
             **self._pairing_fields(),
             "bluetooth_enabled": True,
             "firmware_version": "sim-1.0",
-            # The simulated headband carries an optical channel (see
-            # optics_window), on the bottom rung's four channels.
-            "optical_supported": True,
+            # The simulated headband carries an optical channel only when
+            # asked (EEG_SIM_OPTICS; see optics_window).
+            "optical_supported": self.optics_enabled,
             # `battery_percent` rides in the pairing fields: a simulated
             # charge, drawn on connect and drained on the clock, so the badge
             # beside Disconnect and the null-for-the-first-minute rule get
@@ -649,6 +657,15 @@ class SimulatedMuseIngestionAdapter:
     # adapter clears its buffer. Reported at the headband's 64 Hz on the
     # bottom optics rung's four channels, complete and gap-free: the
     # sample-loss gates have real captures to exercise them.
+    #
+    # Two things keep a synthesised rate from passing as a measured one.
+    # It is opt-in (`EEG_SIM_OPTICS`, off by default), so a plain run
+    # stores no heart rate at all -- exactly a headband with
+    # MUSE_ENABLE_OPTICS off, every window refused as `no_samples`. And the
+    # window is marked `synthetic`, which `build_heart_record` puts on the
+    # record and the backend's mapper writes into the row's `raw`, so the
+    # rows a classroom run stores can be separated by every reader that
+    # cares, and outlive nothing unlabelled.
     OPTICS_FS = 64.0
     OPTICS_CHANNELS = 4
     HEART_REST_BPM_RANGE = (62.0, 84.0)
@@ -681,7 +698,7 @@ class SimulatedMuseIngestionAdapter:
         """The most recent `seconds` of simulated optical samples, on the
         same record TcpMuseBridgeAdapter.optics_window returns."""
         width = self.OPTICS_CHANNELS
-        start = self._optics_start()
+        start = self._optics_start() if self.optics_enabled else None
         now = self._clock()
         if start is None:
             return OpticsWindow(np.empty((0, width)), None, None, None, 0.0, None, width)
@@ -694,11 +711,10 @@ class SimulatedMuseIngestionAdapter:
         f_hz = self._heart_bpm(now) / 60.0
         phase = 2.0 * math.pi * f_hz * t
         pulse = np.sin(phase) + self.HEART_HARMONIC * np.sin(2.0 * phase)
-        rng = np.random.default_rng(self._rng.getrandbits(32))
-        noise = self.HEART_NOISE * rng.standard_normal((n, width))
+        noise = self.HEART_NOISE * self._optics_rng.standard_normal((n, width))
         channels = 1000.0 + 50.0 * (pulse[:, None] + noise)
         span_s = float((n - 1) / fs)
-        return OpticsWindow(channels, fs, fs, 1.0, span_s, 1.0 / fs, width)
+        return OpticsWindow(channels, fs, fs, 1.0, span_s, 1.0 / fs, width, synthetic=True)
 
     def clear_optics(self) -> None:
         """Drop the optical history without touching the link -- what the
@@ -736,7 +752,7 @@ class SimulatedMuseIngestionAdapter:
                 if self._battery_level is None:
                     # A fresh pairing draws a charge; a repeat connect keeps
                     # the one already draining (same headband).
-                    self._battery_level = random.uniform(*self.BATTERY_START_RANGE)
+                    self._battery_level = self._rng.uniform(*self.BATTERY_START_RANGE)
                     self._battery_drawn_at = self._paired_at
             elif cmd == "disconnect":
                 self._discovered = []
@@ -795,6 +811,10 @@ class OpticsWindow:
     # never having existed -- otherwise a corrupt sample index reads the same
     # as `no_samples`, and the two want opposite responses.
     unusable_reason: str | None = None
+    # True when the samples were synthesised (the simulator). Carried onto
+    # the heart record and from there into the row's `raw`, so a stored
+    # rate can always be told from a measured one.
+    synthetic: bool = False
 
 
 class TcpMuseBridgeAdapter:
@@ -1195,7 +1215,7 @@ def build_ingestion_adapter(
             timeout_seconds=settings.muse_bridge_timeout_seconds,
         )
     if source == "sim":
-        return SimulatedMuseIngestionAdapter()
+        return SimulatedMuseIngestionAdapter(sim_optics=settings.eeg_sim_optics)
     if source == "face":
         # Imported here, not at module scope, so the sidecar still boots on a
         # machine without the `face` extra installed. Everything above this

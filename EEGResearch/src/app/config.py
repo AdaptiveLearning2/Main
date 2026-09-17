@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # purpose: one adult, three runs is not a validation set, and flipping
     # it changes what every stored calm value means. See EEG_REFERENCE.md.
     eeg_spectrum_source: str = Field(default="sdk", alias="EEG_SPECTRUM_SOURCE")
+    # The simulator's synthesised pulse. Off by default, like MUSE_ENABLE_OPTICS
+    # on hardware: a plain run must not store a made-up heart rate. Read only
+    # under EEG_SOURCE=sim; the classroom simulation sets it.
+    eeg_sim_optics: bool = Field(default=False, alias="EEG_SIM_OPTICS")
     muse_bridge_host: str = Field(default="127.0.0.1", alias="MUSE_BRIDGE_HOST")
     muse_bridge_port: int = Field(default=8765, alias="MUSE_BRIDGE_PORT")
     muse_bridge_timeout_seconds: int = Field(default=5, alias="MUSE_BRIDGE_TIMEOUT_SECONDS")

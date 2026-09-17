@@ -514,10 +514,9 @@ def test_the_focus_bias_is_bounded_too():
 def test_the_bias_reaches_the_raw_channels_the_artifact_gate_reads(monkeypatch):
     # The spread the processor's artifact gate measures scales with the
     # *effective* calm: a stressed student's raw signal is the erratic one.
-    from src.app.services import eeg_ingestion as mod
-    monkeypatch.setattr(mod.random, "uniform", lambda a, b: b)
     clock = _Clock()
     adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=1)
+    monkeypatch.setattr(adapter._rng, "uniform", lambda a, b: b)
     adapter.connect()
     adapter._focus_state = adapter._calm_state = 0.5
 
@@ -543,9 +542,9 @@ from src.app.services.optics_processing import RATE_WINDOW_SECONDS, EMIT_EVERY_S
 from src.app.services.ppg_processing import HeartRateTracker  # noqa: E402
 
 
-def _streaming_paired(seed=3):
+def _streaming_paired(seed=3, sim_optics=True):
     clock = _Clock()
-    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=seed)
+    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=seed, sim_optics=sim_optics)
     adapter.connect()
     _pair(adapter)
     return adapter, clock
@@ -562,7 +561,7 @@ def _windows(adapter, clock, count, step=EMIT_EVERY_SECONDS):
 
 def test_no_optics_without_a_paired_streaming_device():
     clock = _Clock()
-    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=3)
+    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=3, sim_optics=True)
     tracker = HeartRateTracker()
     assert build_heart_record(adapter.optics_window(RATE_WINDOW_SECONDS), tracker, 10)["rejected_by"] == "no_samples"
     adapter.connect()
@@ -655,3 +654,66 @@ def test_each_optical_channel_carries_its_own_noise():
     for a in range(channels.shape[1]):
         for b in range(a + 1, channels.shape[1]):
             assert float(np.std(channels[:, a] - channels[:, b])) > 0.0
+
+
+# --- review on #190 ------------------------------------------------------------
+
+
+def test_the_pulse_is_opt_in_and_a_plain_simulator_stores_no_heart_rate():
+    # Like MUSE_ENABLE_OPTICS on hardware: off, every window is refused as
+    # no_samples, so no rate is ever recorded from a made-up pulse by default.
+    adapter, clock = _streaming_paired(sim_optics=False)
+    assert adapter.get_ingestion_meta()["optical_supported"] is False
+    clock.now += 60.0
+    record = build_heart_record(adapter.optics_window(RATE_WINDOW_SECONDS), HeartRateTracker(), 10)
+    assert record["bpm"] is None and record["rejected_by"] == "no_samples"
+    assert "synthetic" not in record
+
+
+def test_a_synthesised_window_marks_its_record_and_a_real_one_does_not():
+    import numpy as np
+    from src.app.services.eeg_ingestion import OpticsWindow
+    adapter, clock = _streaming_paired()
+    records = _windows(adapter, clock, 4)
+    assert all(r["synthetic"] is True for r in records)
+    real = OpticsWindow(np.zeros((1600, 4)), 64.0, 64.0, 1.0, 25.0, 0.02, 4)
+    assert "synthetic" not in build_heart_record(real, HeartRateTracker(), 10)
+
+
+def test_the_setting_reaches_the_adapter(monkeypatch):
+    from src.app.services.eeg_ingestion import build_ingestion_adapter
+    settings = get_settings()
+    monkeypatch.setattr(settings, "eeg_sim_optics", True)
+    assert build_ingestion_adapter(settings, kind="sim").optics_enabled is True
+    monkeypatch.setattr(settings, "eeg_sim_optics", False)
+    assert build_ingestion_adapter(settings, kind="sim").optics_enabled is False
+
+
+def _run(seed, with_optics_windows):
+    clock = _Clock()
+    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=seed, sim_optics=True)
+    adapter.connect()
+    _pair(adapter)
+    trace = []
+    for i in range(400):
+        clock.now += 0.25
+        s = adapter.read_sample()
+        meta = adapter.get_ingestion_meta()
+        trace.append((round(s.channel_tp9, 6), tuple(meta["hsi"]), meta["battery_percent"]))
+        if with_optics_windows and i % 40 == 0:
+            adapter.optics_window(RATE_WINDOW_SECONDS)
+    return trace, adapter._heart_rest_bpm
+
+
+def test_a_seed_replays_every_draw_the_simulator_makes():
+    a, rest_a = _run(9, False)
+    b, rest_b = _run(9, False)
+    assert a == b and rest_a == rest_b
+    c, _ = _run(10, False)
+    assert c != a
+
+
+def test_building_optics_windows_does_not_shift_the_contact_or_sample_sequence():
+    a, _ = _run(9, False)
+    b, _ = _run(9, True)
+    assert a == b

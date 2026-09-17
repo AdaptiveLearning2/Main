@@ -679,11 +679,24 @@ hsi (≤ 2 seated) so the processor's min of the two never reads a contradiction
 `band_channels_used` counts the seated ones. Streaks are long against the 5 s smoothing, so one is
 a verdict rather than a blip. **The raw channels are untouched**: contact changes what the bridge
 reports about the electrodes, not the samples, so the artifact gate sees the same signal. The
-adapter takes a `seed` for reproducible runs; unseeded simulators differ.
+adapter takes a `seed`, and **every draw it makes comes from its own generators** — contact,
+battery, the resting heart rate, the state drift and the channel noise from one `random.Random`,
+the optical noise from its own numpy generator, so building an optics window (on the heart
+cadence, not the tick) cannot shift the contact sequence. A draw from the module-level `random`
+anywhere in the class breaks the replay, and a test replays a run to catch it. Unseeded simulators
+differ.
 
 **Its cognitive state answers the lesson.** `record_answer` ends with a best-effort
 `eeg_poller.notify_answer`, which under pull only, and only for a session with a live poller,
-POSTs `/api/v1/session/answer` on the sidecar through `eeg_client.report_answer`;
+POSTs `/api/v1/session/answer` on the sidecar through `eeg_client.report_answer` — **on a
+one-worker notify pool, never the request thread**: `record_answer` is a sync endpoint on anyio's
+~40-slot pool and `requests` applies its timeout to connect and read separately, so a sidecar that
+accepts and then stalls would hold a slot ~6 s per answer on the hottest path with the ingest
+endpoints queuing behind it. Pending deliveries are capped (`NOTIFY_MAX_PENDING`); past the cap
+a notification is dropped with a log line, so a stalled sidecar costs notifications, never
+threads. `stop_all` shuts the pool down and joins it, for the reason the pollers are joined (it
+prints on failure). The call returns the delivery's future, and nothing on the request path waits
+on it;
 `stream_manager.report_answer` hands it to the adapter's `report_answer` if it has one and answers
 `applied: false` otherwise, so **a real headband ignores it and nothing feeds back into scoring on
 hardware**. The simulator nudges its hidden focus and calm per answer (a miss pulls calm towards
@@ -697,8 +710,17 @@ focus, and the sim's bands share alpha and beta by construction); that is the pi
 not the bias's. The backend sends `correct` only — the answer payload carries no difficulty — and
 the sidecar route is admin-only under pull, like `/session/arm`.
 
-**It carries a synthesised pulse, fed through the unmodified heart path.** `optics_window` builds
-the last 25 s on demand from the clock — a pulse at a resting rate drawn per simulator
+**It carries a synthesised pulse, fed through the unmodified heart path — opt-in, and marked.**
+Off by default (`EEG_SIM_OPTICS=false`, read only under `sim`), for the reason `MUSE_ENABLE_OPTICS`
+is off on hardware: a plain `./start.ps1` must not store a made-up heart rate, and off, every
+window is refused as `no_samples` exactly as a headband without optics is. The classroom
+simulation sets it. On, the window is `synthetic`, `build_heart_record` puts that on the record
+(only when true, so hardware records keep their shape) and `signal_mapping` writes it into the
+row's `raw` — the source stays `muse_optics`, because consent is enforced per sensor and the pulse
+stands in for that sensor, so `raw.synthetic` is what separates a stored rate nothing measured
+from one a headband did, in the rollup and everything downstream of it. A client cannot mark a
+row by posting the key: the mapper derives it from the block and only `True` survives.
+`optics_window` builds the last 25 s on demand from the clock — a pulse at a resting rate drawn per simulator
 (`HEART_REST_BPM_RANGE`, 62–84) with a slow drift, raised by misses through the same decaying task
 bias (`HEART_TASK_NUDGE`, bounded by `HEART_TASK_BOUND`), a second harmonic so a spectral argmax
 cannot read double, and independent noise per channel so the beat consensus has four opinions of

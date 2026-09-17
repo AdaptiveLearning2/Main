@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import concurrent.futures
 import threading
 import time
 from typing import Dict
@@ -640,29 +641,72 @@ def _arm_sidecar_baseline(device_id: str) -> None:
               f"{type(e).__name__}: {e} -- scores will be relative to stream start", flush=True)
 
 
-def notify_answer(session_id: str, correct: bool, difficulty: str | None = None) -> bool:
+# The answer notification runs off the request thread. `record_answer` is a
+# sync endpoint on anyio's ~40-slot pool, and `requests` applies its timeout
+# to connect and read separately, so a sidecar that accepts and then stalls
+# would hold a slot for ~6 s per answer on the hottest path in the product,
+# with the ingest endpoints queuing behind it -- for a call hardware answers
+# `applied: false` to. One worker, bounded pending: a stalled sidecar costs
+# dropped notifications (logged), never threads. Lazily built and shut down
+# by stop_all, which joins it like the pollers -- it prints on failure.
+NOTIFY_MAX_PENDING = 8
+_notify_pool: concurrent.futures.ThreadPoolExecutor | None = None
+_notify_pending = 0
+
+
+def _deliver_answer(device_id: str, correct: bool, difficulty: str | None) -> bool:
+    """The sidecar call itself, on the notify worker. Best effort, never
+    raising: the answer row is already written and is the real record; an
+    older sidecar without the route costs nothing but a log line."""
+    global _notify_pending
+    try:
+        eeg_client.report_answer(device_id, correct=correct, difficulty=difficulty)
+    except Exception as e:  # noqa: BLE001 -- the recording must not depend on this
+        print(f"[eeg-poller] could not report the answer to the sidecar "
+              f"(device={device_id}): {type(e).__name__}: {e}", flush=True)
+        return False
+    finally:
+        with _lock:
+            _notify_pending -= 1
+    return True
+
+
+def notify_answer(session_id: str, correct: bool,
+                  difficulty: str | None = None) -> "concurrent.futures.Future[bool] | None":
     """Tell the sidecar behind this session's poller that an answer was
     recorded. Under pull only -- under push the sidecar is on the student's
     machine and this backend has no route to it -- and only for a session
     with a live poller, since the device is what the sidecar is asked about.
 
-    Best effort, never raising: the answer row is already written and is
-    the real record; an older sidecar without the route costs nothing but
-    a log line. Returns whether a call was made, for the caller's log.
+    Returns the delivery's future, or None when nothing was sent (push, no
+    poller, or the notify queue is full). Callers on the request path must
+    not wait on it.
     """
+    global _notify_pool, _notify_pending
     if INGEST_MODE == "push":
-        return False
+        return None
     with _lock:
         poller = _active.get(session_id)
-    if poller is None:
-        return False
+        if poller is None:
+            return None
+        if _notify_pending >= NOTIFY_MAX_PENDING:
+            print(f"[eeg-poller] answer notification dropped: {_notify_pending} pending "
+                  f"(device={poller.device_id})", flush=True)
+            return None
+        _notify_pending += 1
+        if _notify_pool is None:
+            _notify_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="eeg-notify")
+        pool = _notify_pool
+        device_id = poller.device_id
     try:
-        eeg_client.report_answer(poller.device_id, correct=correct, difficulty=difficulty)
-    except Exception as e:  # noqa: BLE001 -- the recording must not depend on this
-        print(f"[eeg-poller] could not report the answer to the sidecar "
-              f"(device={poller.device_id}): {type(e).__name__}: {e}", flush=True)
-        return False
-    return True
+        return pool.submit(_deliver_answer, device_id, correct, difficulty)
+    except RuntimeError:
+        # Shut down between the check and the submit: a request landing
+        # mid-shutdown. Undo the count; nothing was sent.
+        with _lock:
+            _notify_pending -= 1
+        return None
 
 
 def start(supabase, user_id: str, session_id: str, device_id: str,
@@ -857,12 +901,20 @@ def stop_all(timeout: float = 5.0) -> int:
     Returns how many pollers were signalled, for a caller that wants to log
     it; both call sites here ignore it.
     """
+    global _notify_pool, _notify_pending
     pollers = live_pollers()
     for p in pollers:
         p.stop()
     deadline = time.monotonic() + timeout
     for p in pollers:
         p.join(timeout=max(0.0, deadline - time.monotonic()))
+    with _lock:
+        pool, _notify_pool = _notify_pool, None
+        _notify_pending = 0
+    if pool is not None:
+        # Joined for the reason the pollers are: the worker prints on a
+        # failed delivery, and a print during interpreter shutdown is fatal.
+        pool.shutdown(wait=True)
     with _lock:
         # Anything registered between live_pollers() above and this clear is
         # dropped while still running -- that needs a request to start a

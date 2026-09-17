@@ -41,9 +41,14 @@ default `sdk` by decision. Focus stays the SDK ratio, documented as unmeasured.
 4. Phase 3, half done: the debug readout's `Confidence` bar is *Signal quality score* (2026-09-15,
    the verdict tile above it already said *Signal Quality*). Still to do: re-read the fusion
    asymmetry test after 3.
-5. `rearchive_session_charts.py --before 2026-09-14` (dry run), then `--apply`, against production
-   storage: re-renders archives that still draw the engagement series, skipping sessions whose raw
-   rows have expired. Unblocked -- the migration is on remote -- and not yet run.
+5. ~~`rearchive_session_charts.py --before 2026-09-14` against production~~ — **done 2026-09-16,
+   a no-op**: the dry run reached `ibjsmvzkpmsvkruewien.supabase.co` and considered 0 sessions.
+   The query takes sessions closed before that date that already carry a chart archive, and
+   production has none: the backend has never been deployed, so no session has ever been closed
+   against the production database and the archives the item existed to repair were only ever
+   written to local stacks (a local run of the same query found 23). Nothing to apply. The
+   script reads the credentials from the shell, never from a `.env`; the key was set through
+   `Get-Credential` so it never reached scrollback.
 
 ## Two things noticed on the way, not fixed
 

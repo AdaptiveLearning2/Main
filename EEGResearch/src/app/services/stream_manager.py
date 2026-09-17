@@ -69,7 +69,7 @@ class DeviceSession:
         # while the SDK one is still what the score uses.
         self.processor = SignalProcessor(
             calm_source=(settings.eeg_spectrum_source or "sdk").lower().strip(),
-            calm_centre_on_arm=(settings.eeg_calm_centre_on_arm or "keep").lower().strip())
+            calm_centre_on_arm=settings.eeg_calm_centre_on_arm)  # validated in config.py
         self.spectrum = SpectrumEstimator(poison_seconds=settings.eeg_spectrum_poison_seconds)
         self.adaptation = AdaptationEngine()
         # Heart rate off the headband's optical channels. Held per session

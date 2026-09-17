@@ -152,12 +152,9 @@ class SpectrumEstimator:
         # 0 or a value under one sample made poison() a no-op, so a blink
         # contaminated four seconds of estimates with nothing saying so, and
         # nan/inf raised here, inside StreamManager() at import, taking the
-        # whole sidecar down over a tuning knob.
-        requested = epoch_seconds if poison_seconds is None else poison_seconds
-        try:
-            requested = float(requested)
-        except (TypeError, ValueError):
-            requested = float("nan")
+        # whole sidecar down over a tuning knob. A non-numeric .env value
+        # never reaches here: config.py's validator falls back before it.
+        requested = float(epoch_seconds if poison_seconds is None else poison_seconds)
         samples = int(round(requested * sample_rate_hz)) if isfinite(requested) else 0
         if samples < 1:
             logging.getLogger(__name__).warning(

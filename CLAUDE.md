@@ -1764,9 +1764,13 @@ until the poison length and the pre-latch calm centre are decided against the se
 capture (`EEG_REFERENCE.md`). **Both alternatives exist as settings with the shipped behaviour as
 default** — `EEG_SPECTRUM_POISON_SECONDS` (4.0, the buffer; 2.0, the Welch window) and
 `EEG_CALM_CENTRE_ON_ARM` (`keep`; `midpoint`, the local calm only — focus keeps the no-step arm,
-and so does the sdk calm, which latches beside focus and never needed it; the poison length is
-floored at one sample and required finite by the estimator, which warns and falls back to the
-buffer, since 0 made the poison a silent no-op and `nan` failed the sidecar at import) — and
+and so does the sdk calm, which latches beside focus and never needed it). **Both are read at
+import, inside `StreamManager()`, so neither may refuse the boot**: `config.py` validators warn
+and fall back (a non-numeric poison length to 4.0, a misspelt centre to `keep`, case and
+whitespace forgiven), and the estimator floors a numeric poison at one sample, since 0 made the
+poison a silent no-op and `nan` or `midpont` each took the sidecar down over a tuning knob —
+the `MUSE_OPTICS_PRESET` precedent. `SignalProcessor` itself still raises on an unknown centre,
+because a direct caller is code. And
 `replay_raw_capture.py --matrix` scores all four on a capture in one run, so the decision is made
 against numbers rather than by editing code twice. On the first wearer, `midpoint` is what makes the
 eyes-open segment read as eyes open (the arm had carried the eyes-closed centre) and 2 s is what

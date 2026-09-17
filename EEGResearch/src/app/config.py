@@ -1,7 +1,12 @@
 from dataclasses import dataclass
 from functools import lru_cache
-from pydantic import Field
+import logging
+from math import isfinite
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_log = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -33,14 +38,39 @@ class Settings(BaseSettings):
     # second wearer's capture can be replayed and a session run under either
     # alternative without a code change. Defaults are the shipped behaviour.
     # How long an artifact tick withholds spectrum estimates, in seconds:
-    # 4.0 is the whole buffer, 2.0 the Welch window it landed in. Not
-    # bounded here -- SpectrumEstimator warns and falls back to the buffer
-    # on a non-finite value or one under a sample, since it knows the rate.
+    # 4.0 is the whole buffer, 2.0 the Welch window it landed in. A value
+    # that is not a finite number falls back to 4.0 with a warning (below);
+    # SpectrumEstimator floors a numeric one at a sample, since it knows the
+    # rate. Both settings are read at import, inside StreamManager(), so a
+    # typo in either must not refuse the sidecar boot over a tuning knob --
+    # the MUSE_OPTICS_PRESET precedent.
     eeg_spectrum_poison_seconds: float = Field(default=4.0, alias="EEG_SPECTRUM_POISON_SECONDS")
     # What the local calm is centred on between the arm and its new latch:
     # "keep" the centre in use, or the population "midpoint". Inert on the
-    # sdk source, whose calm latches beside focus.
+    # sdk source, whose calm latches beside focus. Case and whitespace are
+    # forgiven; a misspelling falls back to "keep" with a warning.
     eeg_calm_centre_on_arm: str = Field(default="keep", alias="EEG_CALM_CENTRE_ON_ARM")
+
+    @field_validator("eeg_spectrum_poison_seconds", mode="before")
+    @classmethod
+    def _poison_seconds_is_a_finite_number(cls, value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = float("nan")
+        if not isfinite(number):
+            _log.warning("EEG_SPECTRUM_POISON_SECONDS=%r is not a finite number; using 4.0", value)
+            return 4.0
+        return number
+
+    @field_validator("eeg_calm_centre_on_arm", mode="before")
+    @classmethod
+    def _calm_centre_on_arm_is_known(cls, value):
+        text = str(value or "keep").lower().strip() or "keep"
+        if text not in ("keep", "midpoint"):
+            _log.warning("EEG_CALM_CENTRE_ON_ARM=%r is not 'keep' or 'midpoint'; using 'keep'", value)
+            return "keep"
+        return text
     muse_bridge_host: str = Field(default="127.0.0.1", alias="MUSE_BRIDGE_HOST")
     muse_bridge_port: int = Field(default=8765, alias="MUSE_BRIDGE_PORT")
     muse_bridge_timeout_seconds: int = Field(default=5, alias="MUSE_BRIDGE_TIMEOUT_SECONDS")

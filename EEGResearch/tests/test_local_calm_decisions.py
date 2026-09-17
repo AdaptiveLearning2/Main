@@ -119,7 +119,7 @@ def test_the_replay_scores_both_poison_lengths(tmp_path):
     assert short["poisoned"] < full["poisoned"], "a shorter poison withholds fewer ticks"
 
 
-@pytest.mark.parametrize("bad", [0, -1, 0.001, float("nan"), float("inf"), "four"])
+@pytest.mark.parametrize("bad", [0, -1, 0.001, float("nan"), float("inf")])
 def test_an_unusable_poison_length_falls_back_to_the_buffer_with_a_warning(bad, caplog):
     """0 and anything under a sample made poison() a no-op, so a blink
     contaminated four seconds of estimates with nothing saying so; nan and
@@ -143,7 +143,7 @@ def test_an_unusable_poison_length_falls_back_to_the_buffer_with_a_warning(bad, 
 def test_the_settings_survive_an_unusable_poison_length_end_to_end():
     """The value reaches the estimator through Settings and DeviceSession
     without raising -- the path that ran at import and took the sidecar down."""
-    for value in ("nan", "inf", "0"):
+    for value in ("nan", "inf", "0", "abc", ""):
         s = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a", EEG_SPECTRUM_POISON_SECONDS=value)
         session = DeviceSession("station1", s, DeviceConfig(device_id="station1", kind="sim",
                                                               host="127.0.0.1", port=8765))
@@ -163,3 +163,38 @@ def test_midpoint_on_arm_is_inert_on_the_sdk_source():
     assert t.processor._calm_ready and t.processor._baseline_calm_mean == pytest.approx(before)
     f = t.run(BANDS, 1)
     assert f["calm_centred"] is True
+
+
+def test_a_misspelt_centre_setting_boots_the_sidecar_on_keep_with_a_warning(caplog):
+    """EEG_CALM_CENTRE_ON_ARM=midpont raised ValueError inside StreamManager()
+    at import: no server, over a knob whose fallback is the shipped default.
+    Case and whitespace are forgiven; a misspelling warns and means keep."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="src.app.config"):
+        s = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a", EEG_CALM_CENTRE_ON_ARM="midpont")
+    assert s.eeg_calm_centre_on_arm == "keep"
+    assert any("EEG_CALM_CENTRE_ON_ARM" in r.message for r in caplog.records)
+    session = DeviceSession("station1", s, DeviceConfig(device_id="station1", kind="sim",
+                                                          host="127.0.0.1", port=8765))
+    assert session.processor.calm_centre_on_arm == "keep"
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="src.app.config"):
+        for raw, want in ((" MIDPOINT ", "midpoint"), ("", "keep"), ("Keep", "keep")):
+            assert Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a",
+                            EEG_CALM_CENTRE_ON_ARM=raw).eeg_calm_centre_on_arm == want
+    assert not caplog.records
+    with pytest.raises(ValueError):
+        SignalProcessor(calm_centre_on_arm="midpont"), "a direct caller is code, and code is wrong"
+
+
+def test_a_non_numeric_poison_length_warns_at_settings_not_at_import(caplog):
+    import logging
+    with caplog.at_level(logging.WARNING, logger="src.app.config"):
+        s = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a", EEG_SPECTRUM_POISON_SECONDS="abc")
+    assert s.eeg_spectrum_poison_seconds == 4.0
+    assert any("EEG_SPECTRUM_POISON_SECONDS" in r.message for r in caplog.records)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="src.app.config"):
+        assert Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a",
+                        EEG_SPECTRUM_POISON_SECONDS="2").eeg_spectrum_poison_seconds == 2.0
+    assert not caplog.records

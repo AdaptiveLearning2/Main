@@ -39,6 +39,7 @@ landed on.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from math import isfinite
 from typing import Any
@@ -136,9 +137,34 @@ class SpectrumEstimator:
     """
 
     def __init__(self, sample_rate_hz: float = SAMPLE_RATE_HZ,
-                 epoch_seconds: float = EPOCH_SECONDS) -> None:
+                 epoch_seconds: float = EPOCH_SECONDS,
+                 poison_seconds: float | None = None) -> None:
         self.sample_rate_hz = sample_rate_hz
         self.capacity = int(round(epoch_seconds * sample_rate_hz))
+        # How long an artifact tick withholds estimates: the full buffer
+        # (default -- every sample the blink landed among has left) or a
+        # shorter span, e.g. the 2 s Welch window, which readmits the buffer
+        # while its older half still holds the blink. One of the two open
+        # decisions for the second wearer's capture (HANDOFF.md); the replay
+        # scores both. EEG_SPECTRUM_POISON_SECONDS selects it in production.
+        # Floored at one sample and required finite, falling back to the
+        # buffer with a warning otherwise (the MUSE_OPTICS_PRESET precedent):
+        # 0 or a value under one sample made poison() a no-op, so a blink
+        # contaminated four seconds of estimates with nothing saying so, and
+        # nan/inf raised here, inside StreamManager() at import, taking the
+        # whole sidecar down over a tuning knob. A non-numeric .env value
+        # never reaches here: config.py's validator falls back before it.
+        requested = float(epoch_seconds if poison_seconds is None else poison_seconds)
+        samples = int(round(requested * sample_rate_hz)) if isfinite(requested) else 0
+        if samples < 1:
+            logging.getLogger(__name__).warning(
+                "EEG_SPECTRUM_POISON_SECONDS=%r is not a usable poison length "
+                "(needs a finite value of at least one sample); using the buffer, %.1f s",
+                poison_seconds, epoch_seconds)
+            requested = float(epoch_seconds)
+            samples = int(round(requested * sample_rate_hz))
+        self.poison_seconds = requested
+        self.poison_samples = samples
         self._buf: dict[str, list[float]] = {c: [] for c in TEMPORAL}
         self._ts: list[datetime] = []
         # Samples pushed so far, and the count at which the most recent
@@ -166,7 +192,7 @@ class SpectrumEstimator:
         no estimate until every sample now in the buffer has left it. The
         artifact gate holds one tick; the window would otherwise carry the
         blink for four seconds of estimates."""
-        self._clean_after = self._pushed + self.capacity
+        self._clean_after = self._pushed + self.poison_samples
         # Whatever the buffer was doing -- ready, or still filling -- the
         # reason an estimate is absent from here on is the artifact; a poison
         # while filling reported "filling" for up to 8 s.

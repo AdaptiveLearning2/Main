@@ -1,7 +1,12 @@
 from dataclasses import dataclass
 from functools import lru_cache
-from pydantic import Field
+import logging
+from math import isfinite
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_log = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -29,6 +34,55 @@ class Settings(BaseSettings):
     # purpose: one adult, three runs is not a validation set, and flipping
     # it changes what every stored calm value means. See EEG_REFERENCE.md.
     eeg_spectrum_source: str = Field(default="sdk", alias="EEG_SPECTRUM_SOURCE")
+    # The two open decisions on the local calm (HANDOFF.md), exposed so the
+    # second wearer's capture can be replayed and a session run under either
+    # alternative without a code change. Defaults are the shipped behaviour.
+    # How long an artifact tick withholds spectrum estimates, in seconds:
+    # 4.0 is the whole buffer, 2.0 the Welch window it landed in. A value
+    # that is not a finite number falls back to 4.0 with a warning (below);
+    # SpectrumEstimator floors a numeric one at a sample, since it knows the
+    # rate. Both settings are read at import, inside StreamManager(), so a
+    # typo in either must not refuse the sidecar boot over a tuning knob --
+    # the MUSE_OPTICS_PRESET precedent.
+    eeg_spectrum_poison_seconds: float = Field(default=4.0, alias="EEG_SPECTRUM_POISON_SECONDS")
+    # What the local calm is centred on between the arm and its new latch:
+    # "keep" the centre in use, or the population "midpoint". Inert on the
+    # sdk source, whose calm latches beside focus. Case and whitespace are
+    # forgiven; a misspelling falls back to "keep" with a warning.
+    eeg_calm_centre_on_arm: str = Field(default="keep", alias="EEG_CALM_CENTRE_ON_ARM")
+
+    @field_validator("eeg_spectrum_source", mode="before")
+    @classmethod
+    def _spectrum_source_is_known(cls, value):
+        # This one decides what unit every stored calm value is in, so a
+        # typo silently meaning sdk (locl -> sdk, scale 2, the 0.377 line)
+        # would spoil exactly the local-calm capture it was set for.
+        text = str(value or "sdk").lower().strip() or "sdk"
+        if text not in ("sdk", "local"):
+            _log.warning("EEG_SPECTRUM_SOURCE=%r is not 'sdk' or 'local'; using 'sdk'", value)
+            return "sdk"
+        return text
+
+    @field_validator("eeg_spectrum_poison_seconds", mode="before")
+    @classmethod
+    def _poison_seconds_is_a_finite_number(cls, value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = float("nan")
+        if not isfinite(number):
+            _log.warning("EEG_SPECTRUM_POISON_SECONDS=%r is not a finite number; using 4.0", value)
+            return 4.0
+        return number
+
+    @field_validator("eeg_calm_centre_on_arm", mode="before")
+    @classmethod
+    def _calm_centre_on_arm_is_known(cls, value):
+        text = str(value or "keep").lower().strip() or "keep"
+        if text not in ("keep", "midpoint"):
+            _log.warning("EEG_CALM_CENTRE_ON_ARM=%r is not 'keep' or 'midpoint'; using 'keep'", value)
+            return "keep"
+        return text
     muse_bridge_host: str = Field(default="127.0.0.1", alias="MUSE_BRIDGE_HOST")
     muse_bridge_port: int = Field(default=8765, alias="MUSE_BRIDGE_PORT")
     muse_bridge_timeout_seconds: int = Field(default=5, alias="MUSE_BRIDGE_TIMEOUT_SECONDS")

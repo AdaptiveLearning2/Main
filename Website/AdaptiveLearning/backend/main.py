@@ -1200,6 +1200,26 @@ def _not_recording_reason(gate: dict, declined: str,
 
 
 def _topic_breakdown(student_id: str):
+    """The student's per-topic accuracy. An empty list on a failed read.
+
+    Most callers cannot act on the difference and degrade the same way either
+    way -- the strategies endpoint falls back to generic advice. A caller that
+    turns the empty list into an *assertion* ("no topic has been attempted
+    yet") must use `_topic_breakdown_with_state` instead, or a database outage
+    becomes a claim about the child.
+    """
+    return _topic_breakdown_with_state(student_id)[0]
+
+
+def _topic_breakdown_with_state(student_id: str) -> tuple[list[dict], bool]:
+    """The rows, and whether the read actually happened.
+
+    Split out rather than added as a parameter so the flag cannot be dropped
+    by a caller that did not know to ask for it: the plain name returns rows
+    and the two-value name returns the state, and neither can be mistaken for
+    the other at the call site.
+    """
+    retrieved = True
     try:
         rows = supabase.table("user_math_performance") \
             .select("*, math_topics(topic_name)") \
@@ -1207,6 +1227,7 @@ def _topic_breakdown(student_id: str):
     except Exception as e:
         print(f"[topic_breakdown] {e}")
         rows = []
+        retrieved = False
     out = []
     for r in rows:
         attempted = r.get("attempted_questions") or 0
@@ -1220,7 +1241,7 @@ def _topic_breakdown(student_id: str):
             "stress": r.get("stress"),
             "updated_at": r.get("updated_at"),
         })
-    return out
+    return out, retrieved
 
 
 class ReportChannels(NamedTuple):
@@ -4498,22 +4519,29 @@ _NUMERAL = re.compile(r"\d+(?:\.\d+)?")
 _THOUSANDS_SEP = re.compile(r"(?<=\d),(?=\d)")
 
 
-def _trend_direction(weeks: list[dict], key: str) -> dict | None:
-    """Which way one series moved across the weeks that have data, or None.
+def _trend_direction(weeks: list[dict], key: str) -> dict:
+    """Which way one series moved across the weeks that have a reading.
 
-    None below two weeks with a reading: a single point is a value, not a
-    direction, and a summary that called it one would report the student's
-    first recorded week as a trend.
+    Always a dict, and `direction` is None below two weeks with a reading: a
+    single point is a value, not a direction, and a summary that called it one
+    would report the student's first recorded week as a trend.
+
+    It returns `weeks_with_data` in that case too, which is the whole reason
+    it is a dict rather than None. Zero weeks and one week are different
+    facts, and returning None for both made a student part way through their
+    very first session -- raw rows, so a focus average, but no rollup row yet,
+    so no week at all -- read as "only one week has readings for it so far".
 
     Anchored on the first and last weeks that *have* a reading rather than the
-    first and last weeks in the range -- a term with a fortnight off school
-    ends in two null weeks, and reading the last bucket would answer "no
-    trend" for a series that moved.
+    first and last weeks in the range: a term with a fortnight off school ends
+    in two null weeks, and reading the last bucket would answer "no trend" for
+    a series that moved.
     """
     points = [w.get(key) for w in (weeks or [])
               if isinstance(w.get(key), (int, float))]
     if len(points) < 2:
-        return None
+        return {"direction": None, "first": None, "last": None,
+                "weeks_with_data": len(points)}
     first, last = float(points[0]), float(points[-1])
     delta = last - first
     if abs(delta) < _CHART_SUMMARY_TREND_MIN_DELTA:
@@ -4551,7 +4579,7 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
                           emotion_revoked_at=channels.emotion_revoked_at,
                           heart_revoked_at=channels.heart_revoked_at)
     stats = _stats_including_open_session(student_id)
-    topics = _topic_breakdown(student_id)
+    topics, topics_retrieved = _topic_breakdown_with_state(student_id)
     attempted = [t for t in topics if (t.get("attempted_questions") or 0) > 0]
 
     total = stats.get("total_questions") or 0
@@ -4567,6 +4595,13 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
         "signals_retrieved": summary["retrieved"],
         "trend_retrieved": trend.get("retrieved", True),
         "stats_retrieved": stats.get("retrieved", True),
+        # The fourth flag, and the one that was missing. `_topic_breakdown`
+        # swallows its exception and answers `[]`, which most callers degrade
+        # on identically -- the strategies endpoint falls back to generic
+        # advice. Here the empty list becomes an *assertion* ("no topic has
+        # been attempted yet"), so an outage would be reported as a fact about
+        # the child.
+        "topics_retrieved": topics_retrieved,
         "consent_retrieved": channels.consent_retrieved,
         "channels": {
             # No `emotion` entry: the only facial figure a report renders is
@@ -4711,6 +4746,11 @@ def _local_date_text(stamp: str | None) -> str | None:
 _TREND_WORDS = {"up": "risen", "down": "fallen", "steady": "held steady"}
 
 
+def _plural(count, noun: str) -> str:
+    """`noun` agreeing with `count`. Only the regular -s form is needed here."""
+    return noun if count == 1 else noun + "s"
+
+
 def _topic_prose(name, capitalise: bool = False) -> str:
     """A stored topic name as prose: `angle_relationships` -> `angle relationships`.
 
@@ -4759,8 +4799,11 @@ def _rule_based_chart_summary(basis: dict) -> list[str]:
         out.append("How many sessions were recorded could not be read, so the "
                    f"last {days} days are not described here.")
     else:
-        out.append(f"{academic.get('sessions')} sessions were recorded in the last "
-                   f"{days} days, which is the period the weekly charts cover.")
+        sessions = academic.get("sessions") or 0
+        out.append(f"{sessions} {_plural(sessions, 'session')} "
+                   f"{'was' if sessions == 1 else 'were'} recorded in the last "
+                   f"{days} {_plural(days, 'day')}, which is the period the "
+                   "weekly charts cover.")
 
     for channel, key, label in (("eeg", "focus", "Average focus"),
                                 ("eeg", "stress", "Average stress")):
@@ -4778,8 +4821,9 @@ def _rule_based_chart_summary(basis: dict) -> list[str]:
                        "the headband recorded -- the readings were rejected rather "
                        "than missing.")
             continue
-        move = trend.get(key)
-        if move:
+        move = trend.get(key) or {}
+        weeks_seen = move.get("weeks_with_data") or 0
+        if move.get("direction"):
             out.append(
                 f"{label} is {value}%, and across the weeks with readings it has "
                 f"{_TREND_WORDS[move['direction']]} from "
@@ -4791,9 +4835,15 @@ def _rule_based_chart_summary(basis: dict) -> list[str]:
             # have been practising, made by a query that never ran.
             out.append(f"{label} is {value}%. The term trend could not be read, "
                        "so no direction is given for it.")
-        else:
+        elif weeks_seen:
             out.append(f"{label} is {value}%. Only one week has readings for it "
                        "so far, so there is no direction to report yet.")
+        else:
+            # Zero weeks, not one. Ordinary at the start of a first session:
+            # the average comes from raw rows, the trend from the rollup, and
+            # the rollup row is not written until the session closes.
+            out.append(f"{label} is {value}%, from this session's own readings. "
+                       "The term chart has no week to plot yet.")
 
     heart_absent = _channel_absence("heart", basis)
     bpm = averages.get("heart_rate_bpm")
@@ -4806,7 +4856,13 @@ def _rule_based_chart_summary(basis: dict) -> list[str]:
         out.append(f"Average heart rate is {round(float(bpm))} bpm.")
 
     weakest, strongest = topics.get("weakest"), topics.get("strongest")
-    if weakest and strongest and weakest.get("topic_name") != strongest.get("topic_name"):
+    if not basis.get("topics_retrieved", True):
+        # First, ahead of every shape below: `_topic_breakdown` answers `[]` on
+        # a failed read, so without this the outage arrives as "no topic has
+        # been attempted yet" -- an outage reported as a fact about the child.
+        out.append("The topic figures could not be read, so how this student is "
+                   "doing on each topic is not described here.")
+    elif weakest and strongest and weakest.get("topic_name") != strongest.get("topic_name"):
         out.append(
             f"{_topic_prose(strongest.get('topic_name'), True)} is the strongest attempted "
             f"topic at {strongest.get('accuracy')}%, and "
@@ -5025,13 +5081,14 @@ def student_chart_summary(student_id: str, request: Request, payload: ChartSumma
             "days": days,
             "weeks": weeks,
             "face_included": basis["face_included"],
-            # Three separate reads behind one response, so three flags. A
+            # Four separate reads behind one response, so four flags. A
             # panel that said "could not load" for any one of them would hide
-            # the two that did load, and one that said nothing would present
+            # the three that did load, and one that said nothing would present
             # a partial summary as a complete one.
             "signals_retrieved": basis["signals_retrieved"],
             "trend_retrieved": basis["trend_retrieved"],
             "stats_retrieved": basis["stats_retrieved"],
+            "topics_retrieved": basis["topics_retrieved"],
             "consent_retrieved": basis["consent_retrieved"],
             "averages": basis["averages"],
             "trend": basis["trend"],

@@ -232,6 +232,7 @@ export default function StudentProgressReport({
         signals: res.basis?.signals_retrieved,
         trend: res.basis?.trend_retrieved,
         stats: res.basis?.stats_retrieved,
+        topics: res.basis?.topics_retrieved,
       })
     } catch (err) {
       if (!isCurrent()) return

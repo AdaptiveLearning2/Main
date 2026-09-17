@@ -3493,13 +3493,24 @@ into measurements, which is a second implementation of the sentences being parse
 silently, and the likeliest one to go is the channel-absence sentence — the single point whose whole
 job is to say that something is missing.
 
-Three reads sit behind one response (the weekly aggregate, the rollup-backed trend, the academic
-totals) and **each reports its own `retrieved`**. Collapsed into one, a summary missing only its
-trend sentence is presented either as entirely fine or as entirely broken. Two consequences that
-were bugs first: `sessions` comes from the *signal* aggregate, so a failed signal read leaves it at
-0 and printing it reports a quiet week for a query that never ran; and an empty trend is
-indistinguishable from a student's first week, so a failed trend read must not say "only one week so
-far" — a claim about how long a child has been practising, made by a query that never ran.
+Four reads sit behind one response (the weekly aggregate, the rollup-backed trend, the academic
+totals, the topic figures) and **each reports its own `retrieved`**. Collapsed into one, a summary
+missing only its trend sentence is presented either as entirely fine or as entirely broken. Three
+consequences that were bugs first: `sessions` comes from the *signal* aggregate, so a failed signal
+read leaves it at 0 and printing it reports a quiet week for a query that never ran; an empty trend
+is indistinguishable from a student's first week, so a failed trend read must not say "only one week
+so far"; and `_topic_breakdown` swallows its exception and answers `[]`, which most callers degrade
+on identically — the strategies endpoint falls back to generic advice — but which here becomes the
+*assertion* "no topic has been attempted yet". **`_topic_breakdown_with_state` is the form that
+reports the read**, split out rather than added as a parameter so a caller that did not know to ask
+for the flag cannot drop it; reach for it wherever an empty list would become a claim.
+
+**Zero weeks and one week are different facts, and `_trend_direction` returns a dict for both.** It
+answered `None` for each, so a student part way through their very first session — raw rows, so a
+focus average, but no rollup row yet, so no week at all — was told that one week had readings. The
+rollup row is not written until the session closes, so that state is ordinary rather than an error.
+A helper that computes a count and returns it only on the success path cannot be asked the question
+the count answers.
 
 Channel absence is ordered as `cellLabel` is on the cohort roster and for the same reason: consent
 unreadable, then a known revocation, then a failed read, then nothing recorded. The revocation and

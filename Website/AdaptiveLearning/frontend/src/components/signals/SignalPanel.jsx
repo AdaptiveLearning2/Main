@@ -775,10 +775,11 @@ export function StrategyPanel({ strategies, source, signalsRetrieved, loading, e
  * rephrasing of them, and it is shown for the same reason the strategies panel
  * shows its own: which happened changes how much the wording is worth trusting.
  *
- * `retrieved` is three separate flags rather than one, because three separate
+ * `retrieved` is four separate flags rather than one, because four separate
  * reads sit behind one response (the weekly aggregate, the term trend, the
- * academic totals). Collapsed into one, a summary missing only its trend
- * sentence would be presented either as entirely fine or as entirely broken.
+ * academic totals, the topic figures). Collapsed into one, a summary missing
+ * only its trend sentence would be presented either as entirely fine or as
+ * entirely broken.
  * The sentences themselves already say which part is missing; the banner's job
  * is only to stop the subtitle claiming the summary describes the whole report.
  *
@@ -796,6 +797,7 @@ export function ChartSummaryPanel({ summary, source, retrieved, loading, error, 
     retrieved?.signals === false && 'this week’s signal averages',
     retrieved?.trend === false && 'the term trend',
     retrieved?.stats === false && 'the practice totals',
+    retrieved?.topics === false && 'the topic figures',
   ].filter(Boolean)
 
   return (

@@ -235,6 +235,32 @@ describe('chart-explaining summary', () => {
     await screen.findByText('Focus is 63%.')
     expect(screen.getByText(/the term trend/i)).toBeInTheDocument()
     expect(screen.queryByText(/the practice totals/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/the topic figures/i)).not.toBeInTheDocument()
+  })
+
+  it('names a failed topics read, which is the fourth of the four', async () => {
+    // Added after review: `_topic_breakdown` swallows its exception and
+    // answers an empty list, and this is the first surface where that empty
+    // list becomes an assertion about the child rather than generic output.
+    apiFetch.mockImplementation((u) => {
+      if (String(u).includes('/chart-summary')) {
+        return Promise.resolve({
+          summary: ['Focus is 63%.'],
+          source: 'rule-based',
+          basis: { signals_retrieved: true, trend_retrieved: true,
+                   stats_retrieved: true, topics_retrieved: false },
+        })
+      }
+      return defaultFetch(u)
+    })
+
+    renderReport({ showChartSummary: true })
+    await screen.findByText('Recent Sessions')
+    await userEvent.click(screen.getByRole('button', { name: /generate summary/i }))
+
+    await screen.findByText('Focus is 63%.')
+    expect(screen.getByText(/the topic figures/i)).toBeInTheDocument()
+    expect(screen.queryByText(/the term trend/i)).not.toBeInTheDocument()
   })
 
   it('does not claim an outage for a payload that predates the flags', async () => {

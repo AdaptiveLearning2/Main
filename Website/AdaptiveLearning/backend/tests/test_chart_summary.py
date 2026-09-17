@@ -34,7 +34,8 @@ def _basis(**over):
     base = {
         "days": 7, "weeks": 8, "face_included": True,
         "signals_retrieved": True, "trend_retrieved": True,
-        "stats_retrieved": True, "consent_retrieved": True,
+        "stats_retrieved": True, "topics_retrieved": True,
+        "consent_retrieved": True,
         "channels": {
             "eeg":   {"enabled": True, "revoked_at": None, "samples": 400},
             "heart": {"enabled": True, "revoked_at": None, "samples": 120},
@@ -94,8 +95,19 @@ def _weeks(*values):
 
 
 def test_one_week_of_readings_is_a_value_not_a_direction():
-    assert main._trend_direction(_weeks(0.5), "focus") is None
-    assert main._trend_direction([], "focus") is None
+    assert main._trend_direction(_weeks(0.5), "focus")["direction"] is None
+    assert main._trend_direction([], "focus")["direction"] is None
+
+
+def test_no_weeks_and_one_week_are_told_apart():
+    """Returning None for both was the bug.
+
+    A student part way through their very first session has raw rows -- so a
+    focus average -- and no rollup row yet, so no week at all, and was told
+    that one week has readings.
+    """
+    assert main._trend_direction([], "focus")["weeks_with_data"] == 0
+    assert main._trend_direction(_weeks(0.5), "focus")["weeks_with_data"] == 1
 
 
 def test_a_move_smaller_than_the_threshold_is_steady():
@@ -386,7 +398,8 @@ def test_the_three_reads_behind_one_response_report_separately(endpoint, set_fla
     presented either as entirely fine or as entirely broken."""
     set_flag("chart_summary_llm_enabled", False)
     basis = endpoint()["basis"]
-    assert {"signals_retrieved", "trend_retrieved", "stats_retrieved"} <= set(basis)
+    assert {"signals_retrieved", "trend_retrieved",
+            "stats_retrieved", "topics_retrieved"} <= set(basis)
 
 
 # ── the four bounds ──────────────────────────────────────────────────────
@@ -409,7 +422,7 @@ def test_consent_is_read_once_and_passed_into_both_reads(monkeypatch):
                         lambda sid, weeks, **kw: trend_args.update(kw) or {"weeks": [], "retrieved": True})
     monkeypatch.setattr(main, "_stats_including_open_session",
                         lambda sid: {"total_questions": 0, "total_correct": 0, "retrieved": True})
-    monkeypatch.setattr(main, "_topic_breakdown", lambda sid: [])
+    monkeypatch.setattr(main, "_topic_breakdown_with_state", lambda sid: ([], True))
 
     main._chart_summary_basis("student-1", 7, 8, True)
     assert reads == ["student-1"], "one consent read, shared by both queries"
@@ -588,8 +601,79 @@ def test_a_named_topic_carries_three_fields_and_not_the_whole_row(monkeypatch):
                         lambda *a, **k: {"weeks": [], "retrieved": True})
     monkeypatch.setattr(main, "_stats_including_open_session",
                         lambda sid: {"total_questions": 0, "total_correct": 0, "retrieved": True})
-    monkeypatch.setattr(main, "_topic_breakdown", lambda sid: [row])
+    monkeypatch.setattr(main, "_topic_breakdown_with_state", lambda sid: ([row], True))
 
     topics = main._chart_summary_basis("student-1", 7, 8, True)["topics"]
     for named in (topics["weakest"], topics["strongest"]):
         assert set(named) == {"topic_name", "accuracy", "attempted_questions"}
+
+
+def test_a_failed_topics_read_is_not_reported_as_an_untouched_subject():
+    """`_topic_breakdown` swallows its exception and answers `[]`.
+
+    Most callers cannot act on the difference -- the strategies endpoint
+    degrades to generic advice either way -- but this is the first surface
+    where the empty list becomes an assertion, so the outage would arrive as
+    "no topic has been attempted yet": a claim about the child made by a query
+    that never ran.
+    """
+    basis = _basis(topics_retrieved=False)
+    basis["topics"] = {"weakest": None, "strongest": None, "attempted_count": 0}
+    lines = main._rule_based_chart_summary(basis)
+    assert not any("No topic has been attempted yet" in line for line in lines)
+    assert any("topic figures could not be read" in line for line in lines)
+
+
+def test_the_topics_flag_outranks_having_no_attempted_topic():
+    """Ordered ahead of every topic shape below it.
+
+    A failed read and a genuinely untouched subject both arrive as an empty
+    list, so the flag has to be consulted before the list's contents are.
+    """
+    basis = _basis(topics_retrieved=False)
+    lines = main._rule_based_chart_summary(basis)
+    assert any("topic figures could not be read" in line for line in lines)
+    assert not any("strongest attempted" in line for line in lines)
+
+
+def test_the_read_state_is_reported_by_the_two_value_form(monkeypatch):
+    """The plain name returns rows, the two-value name returns the state.
+
+    Split rather than parameterised so a caller that did not know to ask for
+    the flag cannot silently drop it.
+    """
+    class _Boom:
+        def table(self, _name):
+            raise RuntimeError("database unreachable")
+
+    monkeypatch.setattr(main, "supabase", _Boom())
+    rows, retrieved = main._topic_breakdown_with_state("student-1")
+    assert rows == [] and retrieved is False
+    # The plain form still answers with the rows alone, for its other callers.
+    assert main._topic_breakdown("student-1") == []
+
+
+def test_a_first_session_is_not_told_that_one_week_has_readings():
+    """The average comes from raw rows, the trend from the rollup, and the
+    rollup row is not written until the session closes -- so zero weeks is the
+    ordinary state at the start of a first session, not an error."""
+    basis = _basis(trend={"focus": main._trend_direction([], "focus"),
+                          "stress": main._trend_direction([], "stress")})
+    lines = main._rule_based_chart_summary(basis)
+    assert not any("Only one week" in line for line in lines)
+    assert any("no week to plot yet" in line for line in lines)
+
+
+def test_one_week_still_says_one_week():
+    """The fix must not collapse the two cases the other way."""
+    one = main._trend_direction(_weeks(0.5), "focus")
+    lines = main._rule_based_chart_summary(_basis(trend={"focus": one, "stress": one}))
+    assert any("Only one week has readings" in line for line in lines)
+
+
+def test_a_single_session_is_not_described_in_the_plural():
+    basis = _basis()
+    basis["academic"] = {**basis["academic"], "sessions": 1}
+    lines = main._rule_based_chart_summary(basis)
+    assert any("1 session was recorded" in line for line in lines)
+    assert not any("1 sessions" in line for line in lines)

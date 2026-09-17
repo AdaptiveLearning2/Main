@@ -1761,7 +1761,13 @@ the local one, where silent arithmetic then read stressed; the local line is 0.2
 capture armed at eyes open (8% of resting eyes-open ticks, 0% arithmetic, 0% fidget) — **a table
 derived before the artifact poison, which does not reproduce under it**; the line stands only
 until the poison length and the pre-latch calm centre are decided against the second wearer's
-capture (`EEG_REFERENCE.md`). The decider
+capture (`EEG_REFERENCE.md`). **Both alternatives exist as settings with the shipped behaviour as
+default** — `EEG_SPECTRUM_POISON_SECONDS` (4.0, the buffer; 2.0, the Welch window) and
+`EEG_CALM_CENTRE_ON_ARM` (`keep`; `midpoint`, calm only — focus keeps the no-step arm) — and
+`replay_raw_capture.py --matrix` scores all four on a capture in one run, so the decision is made
+against numbers rather than by editing code twice. On the first wearer, `midpoint` is what makes the
+eyes-open segment read as eyes open (the arm had carried the eyes-closed centre) and 2 s is what
+moves availability (EEG_REFERENCE.md, "both alternatives are built"). The decider
 reads `raw.calm_source` off the rows and a window holding both sources has no calm opinion. **Calm
 latches on its own coverage** over the ticks that had a value (45 covered seconds at one second a
 tick at most, so at least 45 samples with no separate floor), with its own ramp, and keeps

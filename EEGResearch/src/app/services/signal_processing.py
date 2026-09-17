@@ -202,7 +202,18 @@ class SignalProcessor:
     NOMINAL_TICK_SECONDS = 0.25
 
     def __init__(self, window_size: int = 20, clock: Callable[[], float] = monotonic,
-                 calm_source: str = "sdk") -> None:
+                 calm_source: str = "sdk", calm_centre_on_arm: str = "keep") -> None:
+        # What the calm score is centred on between the arm and the new
+        # calm latch: "keep" carries the centre in use (the pre-arm latch,
+        # which on the reference capture was eyes closed, so every
+        # eyes-open tick read stressed until a latch the poison stretched
+        # past the segment); "midpoint" drops to the population midpoint.
+        # Calm only -- focus keeps the no-step design restart_baseline
+        # documents. The other open decision for the second wearer's
+        # capture (HANDOFF.md); EEG_CALM_CENTRE_ON_ARM selects it.
+        if calm_centre_on_arm not in ("keep", "midpoint"):
+            raise ValueError(f"calm_centre_on_arm must be 'keep' or 'midpoint', got {calm_centre_on_arm!r}")
+        self.calm_centre_on_arm = calm_centre_on_arm
         # Wall clock for the time-based smoothing windows. Injectable so a
         # recorded capture can be replayed at its own pace (scripts/
         # replay_eeg_capture.py): against the real monotonic() a replay runs
@@ -328,6 +339,13 @@ class SignalProcessor:
         self._calm_collecting = True
         self._calm_coverage = 0.0
         self._calm_last_ts = None
+        if self.calm_centre_on_arm == "midpoint":
+            # Forget the pre-arm calm centre: the population midpoint until
+            # the new latch, and calm_centred reads false meanwhile.
+            self._calm_ready = False
+            self._baseline_calm_mean = None
+            self._calm_latched = None
+            self._centre_from["calm"] = None
 
     def clear_session(self) -> None:
         """A session has ended: forget everything about it, the baseline and

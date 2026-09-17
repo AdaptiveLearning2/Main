@@ -29,6 +29,15 @@ class Settings(BaseSettings):
     # purpose: one adult, three runs is not a validation set, and flipping
     # it changes what every stored calm value means. See EEG_REFERENCE.md.
     eeg_spectrum_source: str = Field(default="sdk", alias="EEG_SPECTRUM_SOURCE")
+    # The two open decisions on the local calm (HANDOFF.md), exposed so the
+    # second wearer's capture can be replayed and a session run under either
+    # alternative without a code change. Defaults are the shipped behaviour.
+    # How long an artifact tick withholds spectrum estimates, in seconds:
+    # 4.0 is the whole buffer, 2.0 the Welch window it landed in.
+    eeg_spectrum_poison_seconds: float = Field(default=4.0, alias="EEG_SPECTRUM_POISON_SECONDS")
+    # What calm is centred on between the arm and its new latch: "keep" the
+    # centre in use, or the population "midpoint".
+    eeg_calm_centre_on_arm: str = Field(default="keep", alias="EEG_CALM_CENTRE_ON_ARM")
     muse_bridge_host: str = Field(default="127.0.0.1", alias="MUSE_BRIDGE_HOST")
     muse_bridge_port: int = Field(default=8765, alias="MUSE_BRIDGE_PORT")
     muse_bridge_timeout_seconds: int = Field(default=5, alias="MUSE_BRIDGE_TIMEOUT_SECONDS")

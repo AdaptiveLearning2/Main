@@ -42,10 +42,15 @@ def read_frames(path: str):
                 yield m
 
 
-def replay(path: str, hz: float = 4.0, arm_at: str | None = None) -> dict[str, dict]:
-    est = SpectrumEstimator()
+def replay(path: str, hz: float = 4.0, arm_at: str | None = None,
+           poison_seconds: float | None = None, calm_centre_on_arm: str = "keep") -> dict[str, dict]:
+    """Replay under one setting of the two open decisions: how long an
+    artifact poisons the buffer, and what calm is centred on between the arm
+    and its new latch. Defaults are the shipped behaviour."""
+    est = SpectrumEstimator(poison_seconds=poison_seconds)
     clock = [0.0]
-    proc = SignalProcessor(calm_source="local", clock=lambda: clock[0])
+    proc = SignalProcessor(calm_source="local", clock=lambda: clock[0],
+                           calm_centre_on_arm=calm_centre_on_arm)
     eng = AdaptationEngine(clock=lambda: clock[0])
     per_tick = max(1, int(round(SAMPLE_RATE_HZ / hz)))
     pending: list[EegSample] = []
@@ -96,20 +101,46 @@ def main(argv=None) -> int:
     ap.add_argument("path")
     ap.add_argument("--hz", type=float, default=4.0)
     ap.add_argument("--arm-at", metavar="SEGMENT", help="restart the baseline at this segment")
+    ap.add_argument("--poison-seconds", type=float, default=None,
+                    help="how long an artifact withholds estimates (default: the 4 s buffer)")
+    ap.add_argument("--calm-centre-on-arm", choices=("keep", "midpoint"), default="keep",
+                    help="what calm is centred on between the arm and its new latch")
+    ap.add_argument("--matrix", action="store_true",
+                    help="run every combination of the two decisions (4 s / 2 s poison x keep / "
+                         "midpoint centre) and print each")
     args = ap.parse_args(argv)
-    out = replay(args.path, hz=args.hz, arm_at=args.arm_at)
+    settings = ([(p, c) for p in (None, 2.0) for c in ("keep", "midpoint")] if args.matrix
+                else [(args.poison_seconds, args.calm_centre_on_arm)])
+    for poison, centre in settings:
+        out = replay(args.path, hz=args.hz, arm_at=args.arm_at,
+                     poison_seconds=poison, calm_centre_on_arm=centre)
+        print(f"\n=== poison {poison if poison is not None else 4.0:.0f} s, calm centre on arm: {centre}")
+        print_report(out)
+    return 0
+
+
+LINES = (0.377, 0.30, 0.25, 0.20)
+
+
+def print_report(out: dict[str, dict]) -> None:
     print(f"{'segment':20} {'ticks':>5} {'alpha resid':>11} {'calm':>6} {'focus':>6} | "
-          f"{'fresh':>5} {'artif':>5} {'poisn':>5} {'stale':>5} | labels")
+          f"{'fresh':>5} {'artif':>5} {'poisn':>5} {'stale':>5} | "
+          + " ".join(f"{'<' + str(l).lstrip('0'):>6}" for l in LINES) + " | labels")
     for seg, b in out.items():
         med = lambda xs: f"{statistics.median(xs):+.3f}" if xs else "   --"
         pct = lambda k: f"{100 * b[k] / b['n']:4.0f}%"
+        calm = [c / 100 for c in b["calm"]]
+        # Share of ticks under each candidate stressed line: the table the
+        # local line is set from, so it is printed by the same run as the
+        # availability it depends on.
+        under = " ".join(f"{100 * sum(c < l for c in calm) / len(calm):5.0f}%" for l in LINES)
         print(f"{seg:20} {b['n']:5d} {med(b['alpha']):>11} {statistics.median(b['calm']):6.1f} "
               f"{statistics.median(b['focus']):6.1f} | {pct('fresh')} {pct('artifact')} "
-              f"{pct('poisoned')} {pct('stale')} | {dict(sorted(b['labels'].items()))}")
+              f"{pct('poisoned')} {pct('stale')} | {under} | {dict(sorted(b['labels'].items()))}")
     print("fresh: a new estimate this tick; artif: held by the artifact gate (poisons the buffer); "
           "poisn: no estimate because of an earlier artifact; stale: calm carried past "
-          f"{CALM_HOLD_MAX_SECONDS:.0f} s, where the backend nulls stress.")
-    return 0
+          f"{CALM_HOLD_MAX_SECONDS:.0f} s, where the backend nulls stress; <x: share of ticks "
+          "under that candidate stressed line.")
 
 
 if __name__ == "__main__":

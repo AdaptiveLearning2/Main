@@ -136,9 +136,18 @@ class SpectrumEstimator:
     """
 
     def __init__(self, sample_rate_hz: float = SAMPLE_RATE_HZ,
-                 epoch_seconds: float = EPOCH_SECONDS) -> None:
+                 epoch_seconds: float = EPOCH_SECONDS,
+                 poison_seconds: float | None = None) -> None:
         self.sample_rate_hz = sample_rate_hz
         self.capacity = int(round(epoch_seconds * sample_rate_hz))
+        # How long an artifact tick withholds estimates: the full buffer
+        # (default -- every sample the blink landed among has left) or a
+        # shorter span, e.g. the 2 s Welch window, which readmits the buffer
+        # while its older half still holds the blink. One of the two open
+        # decisions for the second wearer's capture (HANDOFF.md); the replay
+        # scores both. EEG_SPECTRUM_POISON_SECONDS selects it in production.
+        self.poison_seconds = epoch_seconds if poison_seconds is None else float(poison_seconds)
+        self.poison_samples = int(round(self.poison_seconds * sample_rate_hz))
         self._buf: dict[str, list[float]] = {c: [] for c in TEMPORAL}
         self._ts: list[datetime] = []
         # Samples pushed so far, and the count at which the most recent
@@ -166,7 +175,7 @@ class SpectrumEstimator:
         no estimate until every sample now in the buffer has left it. The
         artifact gate holds one tick; the window would otherwise carry the
         blink for four seconds of estimates."""
-        self._clean_after = self._pushed + self.capacity
+        self._clean_after = self._pushed + self.poison_samples
         # Whatever the buffer was doing -- ready, or still filling -- the
         # reason an estimate is absent from here on is the artifact; a poison
         # while filling reported "filling" for up to 8 s.

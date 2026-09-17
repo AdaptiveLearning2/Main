@@ -8,8 +8,9 @@ import QuestionFigure from '../../components/questions/QuestionFigure'
 import CCSSBadge from '../../components/questions/CCSSBadge'
 
 /** Flashcard mode: self-paced, card-flip, no timer and no score. "Done" ends
- * the session at any point -- there is no fixed deck size the way a
- * QUESTION_COUNT test has one.
+ * the session at any point -- there is no fixed deck size the way a test has
+ * one, which is also why `PracticeSetup` hides its question-count picker in
+ * this mode.
  *
  * @param session   the started practice session
  * @param onFinish  called with `{questions_answered, correct_answers: 0}`

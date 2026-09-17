@@ -79,3 +79,41 @@ it('picking a topic that becomes allowed does not resurrect a stale disabled sta
     body: expect.objectContaining({ topics: ['ordering', 'algebra'], grade: '8th Grade' }),
   }))
 })
+
+it('starts a test at 10 questions unless another count is picked', async () => {
+  const { onStart } = draw()
+  await userEvent.click(await screen.findByRole('button', { name: /ordering/i }))
+  await userEvent.click(screen.getByRole('button', { name: /start practice/i }))
+
+  expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ id: 'sess-1' }), 10)
+})
+
+it('passes the picked question count to onStart, and sends nothing extra to the backend', async () => {
+  const { onStart } = draw()
+  await userEvent.click(await screen.findByRole('button', { name: /ordering/i }))
+  await userEvent.click(screen.getByRole('button', { name: '20 questions' }))
+  await userEvent.click(screen.getByRole('button', { name: /start practice/i }))
+
+  expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ id: 'sess-1' }), 20)
+  // The count is a client-side stopping rule: the backend serves one question
+  // per request and has no view on how many are coming, so a `questionCount`
+  // in this body would be a field nothing reads.
+  const [, opts] = apiFetch.mock.calls.find(([path]) => path === '/api/practice-sessions/start')
+  expect(opts.body).not.toHaveProperty('questionCount')
+  expect(opts.body).not.toHaveProperty('question_count')
+})
+
+/**
+ * Flashcards end on "Done", at any point -- there is no deck size. A count
+ * picker on screen while Flashcards is selected would name a limit that does
+ * not exist.
+ */
+it('hides the question count in flashcard mode', async () => {
+  draw()
+  await screen.findByRole('button', { name: /ordering/i })
+  expect(screen.getByRole('button', { name: '10 questions' })).toBeInTheDocument()
+
+  await userEvent.click(screen.getByRole('button', { name: /flashcards/i }))
+  expect(screen.queryByRole('button', { name: '10 questions' })).not.toBeInTheDocument()
+  expect(screen.queryByText(/how many questions/i)).not.toBeInTheDocument()
+})

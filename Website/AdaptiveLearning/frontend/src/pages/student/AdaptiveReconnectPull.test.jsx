@@ -130,6 +130,60 @@ it('brings the stream up at Connect and records only from the first question', a
   await waitFor(() => expect(bridge.recorders[0].start).toHaveBeenCalledWith({ record: true }))
 }, 30_000)
 
+/**
+ * The same split, one surface over: the *duration* clock also starts at the
+ * first question, not at Connect.
+ *
+ * Under pull, `toggleHeadband` creates the session before anything has been
+ * asked -- the poller's reservation is scoped by session_id -- and the clock
+ * used to start on `sessionId`. So the 12 s scan, seating the electrodes and
+ * any reconnect were all charged against the student's planned duration: a
+ * student who spent four minutes on the strap was four minutes into a fifteen
+ * minute session before the first question.
+ *
+ * Real timers and two 22 s waits, for the reason `AdaptiveQuestionGoal`
+ * documents: the reminder is checked on a 20 s interval, and the tick the
+ * clock *starts* on reads ~0 elapsed, so `0.001` minutes is only up on the
+ * one after it. A shorter wait here passes against the bug -- the unfixed
+ * build starts the clock at Connect and raises the banner 20 s later, which
+ * is after a 1.5 s settle, not before it.
+ */
+it('starts the duration clock at the first question, not at Connect', async () => {
+  mockApi({
+    'GET /api/generate-question?user_id=u1&bias=0&grade=4th+Grade&session_id=sess-1': () => ({
+      question_text: 'What is 2 + 2?', answer_options: ['3', '4'], correct_answer: '4',
+      subject: 'expressions', difficulty: 'easy',
+    }),
+    'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '4th Grade',
+                                    session_duration_minutes: 0.001 }),
+    'GET /api/classes': () => [],
+    'GET /api/performance/student/u1': () => [],
+    'POST /api/sessions/start': () => ({ id: `sess-${++bridge.sessions}` }),
+    'POST /api/eeg/muse/disconnect': () => ({ ok: true }),
+    'POST /api/eeg/muse/refresh': () => ({ ok: true }),
+    'POST /api/eeg/muse/connect': () => { bridge.ingestion = { ...bridge.ingestion, muse_connected: true }; return { ok: true } },
+  })
+  render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+  await waitFor(() => expect(apiFetch.mock.calls.some(c => c[0] === '/api/eeg/muse/connect')).toBe(true),
+                { timeout: 10000 })
+
+  // Paired, streaming, and past a tick -- but no question has been asked, so
+  // there is no session length to be part way through.
+  await new Promise(r => setTimeout(r, 22000))
+  expect(screen.queryByText(/That is your 0\.001 minutes/)).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: /generate question/i }))
+  await screen.findByText(/What is 2 \+ 2\?/)
+  // And it does start there: without this half, a clock that never started at
+  // all would satisfy the assertion above.
+  await new Promise(r => setTimeout(r, 22000))
+  expect(screen.getByText(/That is your 0\.001 minutes/)).toBeInTheDocument()
+}, 90_000)
+
 it('stops the finished session\'s recorder before starting the next one\'s', async () => {
   // Each recorder registers a `beforeunload` listener at construction that
   // only its `stop()` removes. `armRecording` is the one place a live

@@ -2045,7 +2045,17 @@ from the client library instead of a 422 naming the field. The CHECK is a **rang
 durations the UI offers, so a fifth button is not a migration.
 
 **Duration is advisory.** The page asks between questions; nothing ends on a timer. A session closed
-mid-question discards an answer a child was part way through giving. `Adaptive.jsx` now has a
+mid-question discards an answer a child was part way through giving. **And its clock starts at the first
+question, not at Connect.** Under pull, `toggleHeadband` creates the session before anything has been
+asked — the poller's reservation is scoped by `session_id` — so a clock keyed on `sessionId` charged
+the 12 s scan, seating the electrodes and every reconnect against the student's planned duration: four
+minutes on the strap put them four minutes into a fifteen minute session before the first question.
+`fetchQuestion` starts it, beside `armRecording` and for the same reason — a paired headband is not a
+lesson, and the window that counts is first question → Finish. Push never had it, since
+`toggleHeadband` skips session creation there. The test costs two 22 s waits and they are not padding:
+the reminder is checked on a 20 s interval and the tick the clock *starts* on reads ~0 elapsed, so a
+short settle passes against the bug — the unfixed page raises the banner 20 s after Connect, which is
+after a 1.5 s wait, not before it. `Adaptive.jsx` now has a
 `finishSession` — before this it never called `/end` at all, so an adaptive session stayed open until
 the stale sweep on the student's *next* start, which is also when its rollup and chart archive were
 written.
@@ -2057,6 +2067,18 @@ landed before it renders: derived from a failed `/api/sessions`, it tells a chil
 they did not skip. Its "today" is the **browser's local day**, deliberately not `_school_day` — that
 helper buckets recorded data against the school's timezone, and this is a nudge about the student's
 own afternoon.
+
+### A practice test's length is a prop, and flashcards have none
+
+`PracticeSetup` offers 5/10/15/20 and hands the number to `Practice` through `onStart(session,
+count)`, which passes it to `PracticeTest` as `questionCount` (default 10, the value it was a module
+constant at). **Nothing is sent to the backend** — generation is one question per request, so the
+count is only ever a client-side stopping rule, exactly like Adaptive's question goal.
+
+Two differences from that goal, and both are deliberate. There is **no "No limit"**: Adaptive's
+number raises a dismissable banner beside a Finish button, and a test has no manual-finish
+affordance, so it must always auto-end. And the picker is **hidden in flashcard mode** — a deck ends
+on "Done", at any point, so a count there would name a limit that does not exist.
 
 ## An answer is recorded by the backend, and the topic comes from the question
 

@@ -123,3 +123,17 @@ describe('test mode', () => {
 // exercised directly against a finished session in PracticeResults.test.jsx,
 // rather than driving a full ten-question test through this page just to
 // reach it.
+
+/**
+ * The count is chosen on the setup screen and consumed by `PracticeTest`, two
+ * components apart. Each end is covered by its own file; this pins the wiring
+ * between them, which is the part a prop rename would silently break.
+ */
+it('carries the picked question count from setup through to the test', async () => {
+  draw()
+  await userEvent.click(await screen.findByRole('button', { name: /ordering/i }))
+  await userEvent.click(screen.getByRole('button', { name: '15 questions' }))
+  await userEvent.click(screen.getByRole('button', { name: /start practice/i }))
+
+  expect(await screen.findByText(/question 1 of 15/i)).toBeInTheDocument()
+})

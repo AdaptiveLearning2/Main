@@ -384,9 +384,17 @@ export default function Adaptive() {
     delete window.AL_currentSessionId
   }, [])
 
-  // Clock starts when the session starts, not when the page opened --
-  // otherwise idle time on the setup screen would count against the
-  // student's planned duration.
+  // Per-session clock state, cleared when the session goes away. The clock is
+  // *started* in `fetchQuestion`, not here: under pull, Connect creates the
+  // session before a single question has been asked (`toggleHeadband` needs
+  // one, because the poller's reservation is scoped by session_id), so
+  // starting it on `sessionId` charged the 12 s scan, the contact fiddling
+  // and any reconnect against the student's planned duration -- a student who
+  // spent four minutes seating a headband was four minutes into a fifteen
+  // minute session before the first question. The same split `armRecording`
+  // already makes for recording: a paired headband is not a lesson, and the
+  // window that counts is first question -> Finish. Push never had this, since
+  // `toggleHeadband` skips session creation there.
   useEffect(() => {
     if (!sessionId) {
       setSessionStartedAt(null)
@@ -403,9 +411,7 @@ export default function Adaptive() {
       // number they chose is their answer for the sitting, not for one
       // session.
       setGoalDismissed(false)
-      return
     }
-    setSessionStartedAt(prev => prev ?? Date.now())
   }, [sessionId])
 
   useEffect(() => {
@@ -1316,6 +1322,11 @@ export default function Adaptive() {
       // Not awaited into the question: a poller that will not arm is a
       // recording problem, not a reason to withhold a question.
       armRecording(activeSessionId).catch(e => console.error('[headband]', e))
+      // The duration clock starts on the first question, beside the arm and
+      // for the same reason -- see the reset effect above. `?? Date.now()`
+      // so every later question leaves it alone; the effect on `sessionId`
+      // is the only thing that clears it.
+      setSessionStartedAt(prev => prev ?? Date.now())
 
       const params = new URLSearchParams({ user_id: user.id, bias: String(bias) })
       if (mode === 'class' && classId) params.set('class_id', classId)

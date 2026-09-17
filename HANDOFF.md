@@ -1,17 +1,17 @@
 # Handoff
 
 Rewritten 2026-09-16 at `18f5a2e`, after the classroom simulation's Phase 0 merged. **`CLAUDE.md`
-is what is kept current** — every durable rule from both tracks below lives there, and this file is
-only what is *in flight*: what is done, what is next, and how to do it. When a step here lands,
-move its rule into CLAUDE.md and delete the step.
+is what is kept current** — every durable rule from this work lives there, and this file is only
+what is *in flight*: what is done, what is next, and how to do it. When a step here lands, move its
+rule into CLAUDE.md and delete the step.
 
-Two tracks are open. They share the simulator and the EEG pipeline, so a change in one can move the
-other, but they are separately owned:
+The plan is `~/.claude/plans/we-will-be-doing-encapsulated-magpie.md`, with its Phase 0 superseded
+by `~/.claude/plans/nested-singing-scroll.md`. Phase 0 is merged (#187, #190); Phases 1–6 are open.
 
-| Track | Plan file | State |
-| --- | --- | --- |
-| **A. Classroom simulation** (this session's work) | `~/.claude/plans/we-will-be-doing-encapsulated-magpie.md`, with Phase 0 superseded by `~/.claude/plans/nested-singing-scroll.md` | Phase 0 done (#187, #190). Phases 1–6 open. |
-| **B. EEG accuracy** (the user's own thread) | `~/.claude/plans/create-an-actual-plan-dapper-wilkinson.md` | Phases 1–3 merged (#181, #182, #184), plus #189. Blocked on a second wearer. |
+The EEG-accuracy thread that used to share this file is tracked separately by the user, in
+`~/.claude/plans/create-an-actual-plan-dapper-wilkinson.md`. Its merged work (#181, #182, #184,
+#189) is what the simulator and the scoring pipeline below sit on, and its rules are in CLAUDE.md
+under *EEG focus, calm and confidence*.
 
 ## Suite counts at this head
 
@@ -23,7 +23,7 @@ CANARY baseline: main 18f5a2e | tree: clean | last suites: sidecar 826 / backend
 
 ---
 
-# Track A — Classroom simulation
+# The classroom simulation
 
 The goal: 1 teacher, 1 class (6th grade), 30 students, 30 parents linked 1:1, parent-enabled EEG +
 `headband_optical` consent (camera off), each student doing 20 practice questions (two sessions of
@@ -243,45 +243,6 @@ Driven by hand in a browser, not scripted — scripting defeats the point.
   results; the chart-summary feature's hallucination-risk limitation; and open questions.
 - The Playwright run log (accounts created, sessions completed, failed steps) feeds the metrics
   section directly.
-
----
-
-# Track B — EEG accuracy
-
-Owned separately by the user. Phase 1 merged as #181 (`0594ff4`), Phase 2 as #182 (`1dad99c`), the
-Phase 3 relabel as #184 (`7f73c8e`), and the settings work as **#189 (`a6255e4`)**. Both rollup
-migrations (`20260917000000`, `20260918000000`) list on remote. Everything durable is in CLAUDE.md
-under *EEG focus, calm and confidence*.
-
-Captures (not in the repo): `C:\eeg_captures\2026-09-13_{a,b}.jsonl` (sidecar source, with
-`replay_before_{a,b}.jsonl` for `--against`) and `2026-09-14_raw.jsonl` (bridge source, 142,604
-frames at 256.4/s). Findings: `EEGResearch/tests/fixtures/EEG_REFERENCE.md`. In one line: alpha is
-real at TP9/TP10 (10 Hz, 4.6× above 1/f, AUC 0.92 at 4 s), nothing in the spectrum measures effort,
-and the artifact poison withholds the local calm most of the time on this wearer.
-
-Shipped and dark: `services/eeg_spectrum.py`, calm from the 1/f-relative temporal alpha residual
-under `EEG_SPECTRUM_SOURCE=local` (`start.ps1 -Muse -LocalCalm`); default `sdk` by decision. Focus
-stays the SDK ratio, documented as unmeasured.
-
-## Open
-
-1. **A second wearer** (ideally a child, with consent), raw capture, eyes closed / eyes open only:
-   `capture_eeg_reference.py --source bridge` with the sidecar stopped. Until then the local source
-   stays dark. If the temporal alpha separation holds on a second person, flipping
-   `EEG_SPECTRUM_SOURCE` to `local` by default changes what every stored calm value means, so it
-   lands with a `score_scale` bump in `signal_mapping.py`.
-2. **Two decisions on that capture**, both already built as settings with the shipped behaviour as
-   default: `EEG_SPECTRUM_POISON_SECONDS` (4.0 the buffer / 2.0 the Welch window) and
-   `EEG_CALM_CENTRE_ON_ARM` (`keep` / `midpoint`). `replay_raw_capture.py --matrix` scores all four
-   combinations in one run. On the first wearer, `midpoint` is what fixes the eyes-open medians and
-   2 s is what moves availability. **Run the matrix on the second capture, then choose.**
-3. **The local stressed line is 0.25**, one adult's, from a table that predates the artifact poison.
-   Re-set it from the second wearer once 2 is decided, per source, in both packages.
-4. **Phase 3, half done**: the debug readout's `Confidence` bar is now *Signal quality score*. Still
-   to do: re-read the fusion asymmetry test after that relabel.
-5. ~~`rearchive_session_charts.py --before 2026-09-14` against production~~ — **done, a no-op**: the
-   backend has never been deployed, so no session has ever been closed against the production
-   database and there are no archives to repair (a local run of the same query found 23).
 
 ---
 

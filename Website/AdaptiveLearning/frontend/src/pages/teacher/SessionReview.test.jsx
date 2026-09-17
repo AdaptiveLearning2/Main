@@ -527,5 +527,13 @@ describe('choosing which measurements the timeline draws', () => {
     // empty-selection path.
     expect(screen.getByRole('columnheader', { name: /heart rate/i })).toBeInTheDocument()
     expect(screen.queryByText(/vertical lines = answer events/i)).not.toBeInTheDocument()
+
+    // **What this does not check**: that the markers themselves are gated.
+    // Removing `axisShown('ratio')` from the `ReferenceLine` map leaves this
+    // test green — Recharts renders nothing measurable under jsdom, which is
+    // the same blind spot this file already states for chart internals. So the
+    // caption is verified and the gate beneath it is not; it is there because
+    // a `ReferenceLine` naming an axis that was never mounted is a Recharts
+    // error, and only a browser can show that.
   })
 })

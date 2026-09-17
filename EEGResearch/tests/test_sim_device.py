@@ -535,3 +535,123 @@ def test_the_bias_reaches_the_raw_channels_the_artifact_gate_reads(monkeypatch):
     assert calm1 < calm0
     assert stressed_dev == pytest.approx(adapter._CHANNEL_NOISE * (1.6 - calm1))
     assert stressed_dev > calm_dev
+
+
+# --- simulated pulse ----------------------------------------------------------
+
+from src.app.services.optics_processing import RATE_WINDOW_SECONDS, EMIT_EVERY_SECONDS, build_heart_record  # noqa: E402
+from src.app.services.ppg_processing import HeartRateTracker  # noqa: E402
+
+
+def _streaming_paired(seed=3):
+    clock = _Clock()
+    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=seed)
+    adapter.connect()
+    _pair(adapter)
+    return adapter, clock
+
+
+def _windows(adapter, clock, count, step=EMIT_EVERY_SECONDS):
+    tracker = HeartRateTracker()
+    out = []
+    for i in range(count):
+        clock.now += step
+        out.append(build_heart_record(adapter.optics_window(RATE_WINDOW_SECONDS), tracker, step))
+    return out
+
+
+def test_no_optics_without_a_paired_streaming_device():
+    clock = _Clock()
+    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=3)
+    tracker = HeartRateTracker()
+    assert build_heart_record(adapter.optics_window(RATE_WINDOW_SECONDS), tracker, 10)["rejected_by"] == "no_samples"
+    adapter.connect()
+    clock.now += 60.0
+    assert build_heart_record(adapter.optics_window(RATE_WINDOW_SECONDS), tracker, 10)["rejected_by"] == "no_samples"
+    _pair(adapter)
+    clock.now += 5.0
+    # Paired and streaming, but under the 25 s window: warming up, not absent.
+    assert build_heart_record(adapter.optics_window(RATE_WINDOW_SECONDS), tracker, 10)["rejected_by"] == "warming_up"
+
+
+def test_the_pulse_goes_through_the_real_heart_path_anchor_hold_included():
+    adapter, clock = _streaming_paired()
+    records = _windows(adapter, clock, 6)
+    # The first full window is withheld until a second agrees (the
+    # unconfirmed-anchor rule), never published outright.
+    first_full = next(r for r in records if r["rejected_by"] != "warming_up")
+    assert first_full["bpm"] is None and first_full["rejected_by"] == "unconfirmed_anchor"
+    accepted = [r for r in records if r["bpm"] is not None]
+    assert accepted, records
+    for r in accepted:
+        assert r["source"] == "muse_optics" and r["trusted"] is True
+        assert abs(r["bpm"] - adapter._heart_bpm(clock.now)) < 4.0
+        assert r["sample_rate_hz"] == adapter.OPTICS_FS and r["channel_count"] == adapter.OPTICS_CHANNELS
+
+
+def test_rmssd_is_derived_on_the_same_window_when_beats_agree():
+    adapter, clock = _streaming_paired()
+    records = _windows(adapter, clock, 8)
+    with_rate = [r for r in records if r["bpm"] is not None]
+    assert with_rate
+    # Either a value or a named refusal on every accepted window -- the
+    # enrichment's own field, never the rate's.
+    for r in with_rate:
+        assert (r["rmssd_ms"] is not None) != (r["rmssd_rejected_by"] is not None)
+    assert any(r["rmssd_ms"] is not None for r in with_rate), [r["rmssd_rejected_by"] for r in with_rate]
+
+
+def test_misses_raise_the_rate_and_it_settles_back():
+    adapter, clock = _streaming_paired()
+    rest = adapter._heart_bpm(clock.now)
+    for _ in range(8):
+        adapter.report_answer(False, "hard")
+    raised = adapter._heart_bpm(clock.now)
+    assert rest < raised <= rest + adapter.HEART_TASK_BOUND[1] + 0.01
+    clock.now += 10 * adapter.TASK_BIAS_DECAY_SECONDS
+    settled = adapter._heart_bpm(clock.now)
+    assert abs(settled - adapter._heart_bpm(clock.now)) < 1e-9
+    assert settled < raised
+
+
+def test_a_stream_stop_or_a_disconnect_clears_the_optical_history():
+    adapter, clock = _streaming_paired()
+    clock.now += 40.0
+    assert adapter.optics_window(RATE_WINDOW_SECONDS).span_seconds > 20.0
+    adapter.disconnect()
+    assert len(adapter.optics_window(RATE_WINDOW_SECONDS).channels) == 0
+    adapter.connect()
+    clock.now += 5.0
+    assert adapter.optics_window(RATE_WINDOW_SECONDS).span_seconds < 6.0
+    clock.now += 40.0
+    adapter.clear_optics()
+    clock.now += 3.0
+    assert adapter.optics_window(RATE_WINDOW_SECONDS).span_seconds < 4.0
+    adapter.send_bridge_command({"cmd": "disconnect"})
+    assert len(adapter.optics_window(RATE_WINDOW_SECONDS).channels) == 0
+
+
+def test_the_device_session_holds_a_heart_block_from_the_simulator():
+    from src.app.config import DeviceConfig
+    from src.app.services.stream_manager import DeviceSession
+    settings = get_settings()
+    session = DeviceSession("sim-heart", settings, DeviceConfig(device_id="sim-heart", kind="sim", host="", port=0))
+    adapter, clock = _streaming_paired()
+    session.adapter = adapter
+    clock.now += 30.0
+    block = session._optical_heart_block()
+    assert block is not None and block["source"] == "muse_optics"
+    assert block["rejected_by"] in ("unconfirmed_anchor", None)
+
+
+def test_each_optical_channel_carries_its_own_noise():
+    # Four opinions of one heart: the beat consensus and the agreement term
+    # of the confidence are only meaningful when the channels differ.
+    import numpy as np
+    adapter, clock = _streaming_paired()
+    clock.now += 30.0
+    channels = adapter.optics_window(RATE_WINDOW_SECONDS).channels
+    assert channels.shape[1] == adapter.OPTICS_CHANNELS
+    for a in range(channels.shape[1]):
+        for b in range(a + 1, channels.shape[1]):
+            assert float(np.std(channels[:, a] - channels[:, b])) > 0.0

@@ -697,6 +697,19 @@ focus, and the sim's bands share alpha and beta by construction); that is the pi
 not the bias's. The backend sends `correct` only — the answer payload carries no difficulty — and
 the sidecar route is admin-only under pull, like `/session/arm`.
 
+**It carries a synthesised pulse, fed through the unmodified heart path.** `optics_window` builds
+the last 25 s on demand from the clock — a pulse at a resting rate drawn per simulator
+(`HEART_REST_BPM_RANGE`, 62–84) with a slow drift, raised by misses through the same decaying task
+bias (`HEART_TASK_NUDGE`, bounded by `HEART_TASK_BOUND`), a second harmonic so a spectral argmax
+cannot read double, and independent noise per channel so the beat consensus has four opinions of
+one heart — at 64 Hz on the bottom optics rung's four channels, complete and gap-free (the
+sample-loss gates have real captures). History exists while the stream is up *and* a device is
+paired, from whichever began later, and is cleared with the stream, the link or `clear_optics`,
+as the bridge adapter clears its buffer. So a sim run sees `warming_up` for the first window,
+`unconfirmed_anchor` on the first full one, then a trusted rate within a few bpm of the simulator's
+own, RMSSD present or refused by name, and `optical_supported: true` on the meta. Nothing
+downstream is told it is synthetic beyond `bridge_mode: python_sim`.
+
 ### Samples are stored during a session, not while a headband merely sits paired
 
 Under pull, Connect has to start the poller — it is what starts the sidecar's device stream, and
@@ -1395,8 +1408,12 @@ The headband is the primary heart source (the camera is emotion-only), and it re
   ~40 consecutive ticks. `map_heart_to_heart_signal` prefers `heart["ts"]` over the tick's, the push
   client dedupes per `(device, source)`, and the poller upserts on
   `heart_session_source_ts_key`. The camera's block has no `ts` and still takes the tick's.
-- **`EEG_SOURCE=sim` produces no heart block at all** — the simulator does not model an optical
-  channel, and a simulated pulse would be a number on a parent's chart with nothing behind it.
+- **`EEG_SOURCE=sim` produces a heart block since 2026-09-16.** It did not — the simulator modelled
+  no optical channel, and a simulated pulse would be a number on a parent's chart with nothing
+  behind it — and the classroom simulation needs the heart path exercised end to end, so
+  `SimulatedMuseIngestionAdapter.optics_window` now synthesises one and it goes through this
+  same, unmodified `build_heart_record`. See *The simulator pairs like a headband* for what it
+  models; `bridge_mode: python_sim` on the payload is the only mark of it.
 
 **A payload key needs a field on `InterpretedEegData` or `/api/v1/state` deletes it.** `Envelope.data`
 is typed `InterpretedEegData | CameraData | None`, so the sidecar's snapshot is serialised through a

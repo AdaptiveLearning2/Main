@@ -146,9 +146,9 @@ class DeviceSession:
         window_fn = getattr(self.adapter, "optics_window", None)
         if window_fn is None:
             # Not a headband, or a headband whose adapter can't buffer
-            # optics. The simulator is included deliberately: it doesn't
-            # model an optical channel, and a simulated pulse would be a
-            # number on a parent's chart with nothing behind it.
+            # optics. The simulator has one since 2026-09-16 (it synthesises
+            # a pulse for the classroom simulation, fed through this same
+            # path); the camera is what lands here now.
             return None
 
         now = time.monotonic()

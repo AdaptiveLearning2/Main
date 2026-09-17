@@ -198,3 +198,24 @@ def test_a_non_numeric_poison_length_warns_at_settings_not_at_import(caplog):
         assert Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a",
                         EEG_SPECTRUM_POISON_SECONDS="2").eeg_spectrum_poison_seconds == 2.0
     assert not caplog.records
+
+
+def test_a_misspelt_spectrum_source_warns_rather_than_silently_meaning_sdk(caplog):
+    """locl and sdkk both booted and recorded sdk calm on scale 2 under the
+    0.377 line, indistinguishable from a deliberate sdk run -- on the one
+    setting that decides what unit every stored calm value is in."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="src.app.config"):
+        s = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a", EEG_SPECTRUM_SOURCE="locl")
+    assert s.eeg_spectrum_source == "sdk"
+    assert any("EEG_SPECTRUM_SOURCE" in r.message for r in caplog.records)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="src.app.config"):
+        for raw, want in ((" LOCAL ", "local"), ("", "sdk"), ("Sdk", "sdk")):
+            assert Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a",
+                            EEG_SPECTRUM_SOURCE=raw).eeg_spectrum_source == want
+    assert not caplog.records
+    s = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a", EEG_SPECTRUM_SOURCE=" LOCAL ")
+    session = DeviceSession("station1", s, DeviceConfig(device_id="station1", kind="sim",
+                                                          host="127.0.0.1", port=8765))
+    assert session.processor.calm_source == "local"

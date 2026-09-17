@@ -1766,7 +1766,7 @@ default** — `EEG_SPECTRUM_POISON_SECONDS` (4.0, the buffer; 2.0, the Welch win
 `EEG_CALM_CENTRE_ON_ARM` (`keep`; `midpoint`, the local calm only — focus keeps the no-step arm,
 and so does the sdk calm, which latches beside focus and never needed it). **Both are read at
 import, inside `StreamManager()`, so neither may refuse the boot**: `config.py` validators warn
-and fall back (a non-numeric poison length to 4.0, a misspelt centre to `keep`, case and
+and fall back (a non-numeric poison length to 4.0, a misspelt centre to `keep`, a misspelt spectrum source to `sdk`, case and
 whitespace forgiven), and the estimator floors a numeric poison at one sample, since 0 made the
 poison a silent no-op and `nan` or `midpont` each took the sidecar down over a tuning knob —
 the `MUSE_OPTICS_PRESET` precedent. `SignalProcessor` itself still raises on an unknown centre,

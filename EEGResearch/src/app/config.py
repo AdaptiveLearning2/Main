@@ -51,6 +51,18 @@ class Settings(BaseSettings):
     # forgiven; a misspelling falls back to "keep" with a warning.
     eeg_calm_centre_on_arm: str = Field(default="keep", alias="EEG_CALM_CENTRE_ON_ARM")
 
+    @field_validator("eeg_spectrum_source", mode="before")
+    @classmethod
+    def _spectrum_source_is_known(cls, value):
+        # This one decides what unit every stored calm value is in, so a
+        # typo silently meaning sdk (locl -> sdk, scale 2, the 0.377 line)
+        # would spoil exactly the local-calm capture it was set for.
+        text = str(value or "sdk").lower().strip() or "sdk"
+        if text not in ("sdk", "local"):
+            _log.warning("EEG_SPECTRUM_SOURCE=%r is not 'sdk' or 'local'; using 'sdk'", value)
+            return "sdk"
+        return text
+
     @field_validator("eeg_spectrum_poison_seconds", mode="before")
     @classmethod
     def _poison_seconds_is_a_finite_number(cls, value):

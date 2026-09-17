@@ -440,3 +440,50 @@ def test_the_sidecar_arm_runs_outside_the_poller_lock(monkeypatch):
     eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a", record=True)
     eeg_poller.start(_FakeSupabase(), "user-b", "session-2", "station-b")
     assert held_during_arm == [False, False]
+
+
+# --- notify_answer -----------------------------------------------------------
+
+
+def _record_reports(monkeypatch):
+    seen = []
+
+    def report(device_id=eeg_client.DEFAULT_DEVICE_ID, *, correct, difficulty=None):
+        seen.append((device_id, correct, difficulty))
+        return {"status": "ok", "data": {"ok": True, "applied": True}}
+
+    monkeypatch.setattr(eeg_client, "report_answer", report, raising=False)
+    return seen
+
+
+def test_an_answer_reaches_the_sidecar_behind_the_sessions_poller(monkeypatch):
+    seen = _record_reports(monkeypatch)
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    assert eeg_poller.notify_answer("session-1", True) is True
+    assert eeg_poller.notify_answer("session-1", False, "hard") is True
+    assert seen == [("station-a", True, None), ("station-a", False, "hard")]
+
+
+def test_a_session_with_no_poller_reports_nothing(monkeypatch):
+    seen = _record_reports(monkeypatch)
+    assert eeg_poller.notify_answer("session-9", True) is False
+    assert seen == []
+
+
+def test_under_push_the_backend_never_reaches_for_the_sidecar(monkeypatch):
+    seen = _record_reports(monkeypatch)
+    # A poller that exists (started under pull) is not enough: the mode is
+    # what says whether this backend can reach the sidecar at all.
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    monkeypatch.setattr(eeg_poller, "INGEST_MODE", "push")
+    assert eeg_poller.notify_answer("session-1", True) is False
+    assert seen == []
+
+
+def test_a_sidecar_that_refuses_the_answer_costs_a_log_line_not_the_answer(monkeypatch, capsys):
+    def refuse(device_id=eeg_client.DEFAULT_DEVICE_ID, *, correct, difficulty=None):
+        raise RuntimeError("404 Not Found")
+    monkeypatch.setattr(eeg_client, "report_answer", refuse, raising=False)
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    assert eeg_poller.notify_answer("session-1", True) is False
+    assert "could not report the answer" in capsys.readouterr().out

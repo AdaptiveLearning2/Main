@@ -322,6 +322,13 @@ class SimulatedMuseIngestionAdapter:
         # seated phase and its electrodes rather than opening on a fault.
         self._strap_phase = "loose"
         self._strap_until = float("-inf")
+        # Task-responsive bias on the hidden states (see report_answer):
+        # a bounded offset that decays on the clock, applied to the state
+        # *before* the bands are solved from it, so it reaches the processor
+        # through the same smoothing and gates a real change would.
+        self._task_focus = 0.0
+        self._task_calm = 0.0
+        self._task_at: float | None = None
 
     # The bridge reports no packet for a few seconds after every CONNECTED
     # (a preset switch interrupts streaming); PRESET_SETTLE_SECONDS on the
@@ -401,9 +408,12 @@ class SimulatedMuseIngestionAdapter:
         with self._pair_lock:
             # A delivered packet: what keeps a paired link's age near zero.
             self._last_packet_at = self._clock()
-        base = self._BASE_LEVEL + (self._focus_state - 0.5) * self._LEVEL_SPAN
+        focus, calm = self._effective_states()
+        base = self._BASE_LEVEL + (focus - 0.5) * self._LEVEL_SPAN
         # Lower calm -> wider cross-channel spread (more erratic signal).
-        spread_scale = 1.6 - self._calm_state
+        # Bounded 0.6..1.6, a 2.7x range, under the processor's 3.5x spread
+        # jump: no task bias, however abrupt, reads as an artifact.
+        spread_scale = 1.6 - calm
         return EegSample(
             timestamp=datetime.now(tz=timezone.utc),
             channel_tp9=base + random.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
@@ -426,12 +436,13 @@ class SimulatedMuseIngestionAdapter:
         # alpha/theta/gamma are picked first; beta is solved IN LOG SPACE to
         # hit the target focus log-ratio exactly, so focus_score tracks
         # focus_state while calm tapers as focus rises.
-        alpha = 0.10 + self._calm_state * 0.45
+        focus, calm = self._effective_states()
+        alpha = 0.10 + calm * 0.45
         theta = 0.10
         gamma = 0.05
         target_focus_log_ratio = self._FOCUS_BAND_GAIN * (
             SignalProcessor.FOCUS_LOG_RATIO_MIN
-            + self._focus_state * (SignalProcessor.FOCUS_LOG_RATIO_MAX - SignalProcessor.FOCUS_LOG_RATIO_MIN)
+            + focus * (SignalProcessor.FOCUS_LOG_RATIO_MAX - SignalProcessor.FOCUS_LOG_RATIO_MIN)
         )
         # focus = ln(beta_p) - ln(alpha_p + theta_p), so
         #   beta_p = exp(target) * (alpha_p + theta_p)
@@ -523,6 +534,64 @@ class SimulatedMuseIngestionAdapter:
             # The bridge averages bands over the channels it trusts.
             "band_channels_used": max(1, int(sum(is_good))),
         }
+
+    # --- task-responsive cognitive state -------------------------------------
+    #
+    # A student's answers move their state, and a simulator whose focus and
+    # calm walk at random regardless never lets the difficulty engine's
+    # `stressed` ease-off fire for a reason. Each recorded answer nudges the
+    # hidden states: a miss pulls calm down (towards the stressed line,
+    # harder on a hard question) and focus a little; a correct answer nudges
+    # focus up and calm slightly. The nudges accumulate into a bounded
+    # offset that decays on the clock, so a run of misses reaches the
+    # stressed line and a quiet stretch drifts back. Applied to the hidden
+    # state before the bands are solved, so the processor sees it through
+    # its own 4 s smoothing and artifact gate: alpha moves with calm within
+    # its usual span, delta and gamma are constants, and the raw spread is
+    # bounded (see read_sample) under the 3.5x jump line. `focused` still
+    # cannot fire -- it needs calm >= 0.5 with high focus, and the sim's
+    # bands share alpha and beta by construction -- which is the pipeline's
+    # own property, not the bias's.
+    TASK_BIAS_BOUND = 0.25
+    TASK_BIAS_DECAY_SECONDS = 90.0
+    TASK_NUDGE = {
+        # (focus, calm) per answer outcome; a hard miss is scaled up.
+        "correct": (0.05, 0.02),
+        "wrong": (-0.03, -0.08),
+    }
+    TASK_HARD_MISS_SCALE = 1.5
+
+    def report_answer(self, correct: bool, difficulty: str | None = None) -> None:
+        """A recorded answer: nudge the hidden states (see the block above)."""
+        now = self._clock()
+        with self._pair_lock:
+            self._decay_task_bias_locked(now)
+            d_focus, d_calm = self.TASK_NUDGE["correct" if correct else "wrong"]
+            if not correct and (difficulty or "").lower() == "hard":
+                d_focus *= self.TASK_HARD_MISS_SCALE
+                d_calm *= self.TASK_HARD_MISS_SCALE
+            b = self.TASK_BIAS_BOUND
+            self._task_focus = max(-b, min(b, self._task_focus + d_focus))
+            self._task_calm = max(-b, min(b, self._task_calm + d_calm))
+            self._task_at = now
+
+    def _decay_task_bias_locked(self, now: float) -> None:
+        if self._task_at is None:
+            return
+        dt = max(0.0, now - self._task_at)
+        if dt > 0.0:
+            factor = math.exp(-dt / self.TASK_BIAS_DECAY_SECONDS)
+            self._task_focus *= factor
+            self._task_calm *= factor
+            self._task_at = now
+
+    def _effective_states(self) -> tuple[float, float]:
+        """The hidden states with the task bias applied, clamped to 0..1."""
+        with self._pair_lock:
+            self._decay_task_bias_locked(self._clock())
+            focus = self._focus_state + self._task_focus
+            calm = self._calm_state + self._task_calm
+        return max(0.0, min(1.0, focus)), max(0.0, min(1.0, calm))
 
     def send_bridge_command(self, payload: dict[str, Any]) -> None:
         """Run the bridge's three commands against the simulated device.

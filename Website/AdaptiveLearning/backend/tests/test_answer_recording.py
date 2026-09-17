@@ -786,3 +786,33 @@ def test_the_close_reads_every_column_it_credits():
         "no explicit `sessions` select was scanned inside a function that closes "
         "a session -- either the selects moved, or the pattern above stopped "
         "matching how they are written")
+
+
+def test_the_answer_endpoint_tells_the_sidecar_after_the_writes(monkeypatch):
+    """Phase 0.4 of the classroom simulation: the simulator moves its
+    signals with the lesson. Best effort and last -- a sidecar that raises
+    must not cost the answer its 200."""
+    order = []
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
+    monkeypatch.setattr(main, "supabase", _Client())
+    monkeypatch.setattr(main, "_record_topic_attempt",
+                        lambda uid, qid, correct: order.append("topic") or "algebra")
+    monkeypatch.setattr(main.eeg_poller, "notify_answer",
+                        lambda sid, correct, difficulty=None: order.append(("notify", sid, correct)))
+    out = main.record_answer(
+        session_id="s-1",
+        payload=main.AnswerPayload(question_id=QUESTION, selected_index=2, correct=False),
+        request=None,
+    )
+    assert out == {"ok": True, "topic": "algebra"}
+    assert order == ["topic", ("notify", "s-1", False)]
+
+    def boom(*_a, **_k):
+        raise RuntimeError("sidecar down")
+    monkeypatch.setattr(main.eeg_poller, "notify_answer", boom)
+    out = main.record_answer(
+        session_id="s-1",
+        payload=main.AnswerPayload(question_id=QUESTION, selected_index=2, correct=True),
+        request=None,
+    )
+    assert out["ok"] is True

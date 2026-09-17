@@ -640,6 +640,31 @@ def _arm_sidecar_baseline(device_id: str) -> None:
               f"{type(e).__name__}: {e} -- scores will be relative to stream start", flush=True)
 
 
+def notify_answer(session_id: str, correct: bool, difficulty: str | None = None) -> bool:
+    """Tell the sidecar behind this session's poller that an answer was
+    recorded. Under pull only -- under push the sidecar is on the student's
+    machine and this backend has no route to it -- and only for a session
+    with a live poller, since the device is what the sidecar is asked about.
+
+    Best effort, never raising: the answer row is already written and is
+    the real record; an older sidecar without the route costs nothing but
+    a log line. Returns whether a call was made, for the caller's log.
+    """
+    if INGEST_MODE == "push":
+        return False
+    with _lock:
+        poller = _active.get(session_id)
+    if poller is None:
+        return False
+    try:
+        eeg_client.report_answer(poller.device_id, correct=correct, difficulty=difficulty)
+    except Exception as e:  # noqa: BLE001 -- the recording must not depend on this
+        print(f"[eeg-poller] could not report the answer to the sidecar "
+              f"(device={poller.device_id}): {type(e).__name__}: {e}", flush=True)
+        return False
+    return True
+
+
 def start(supabase, user_id: str, session_id: str, device_id: str,
           record: bool = True) -> dict:
     """Start this session's poller, or arm/disarm one already running.

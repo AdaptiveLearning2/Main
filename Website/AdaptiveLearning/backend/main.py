@@ -2850,6 +2850,13 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
     # Accuracy panel without re-reading the whole performance table. `None`
     # means nothing was attributed, not an error.
     topic = _record_topic_attempt(user["id"], payload.question_id, payload.correct)
+    # Last, and best effort: the simulator moves its signals with the
+    # lesson (Phase 0.4 of the classroom simulation); hardware ignores it.
+    # After the writes, so nothing about the sidecar can cost the answer.
+    try:
+        eeg_poller.notify_answer(session_id, bool(payload.correct))
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[answer] could not notify the sidecar for {session_id}: {e}")
     return {"ok": True, "topic": topic}
 
 

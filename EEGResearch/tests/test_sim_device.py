@@ -390,3 +390,148 @@ def test_contact_is_reproducible_under_a_seed_and_varies_without_one():
             seq.append(tuple(adapter.get_ingestion_meta()["hsi"]))
         seqs.append(seq)
     assert seqs[0] != seqs[1]
+
+
+# --- task-responsive state ---------------------------------------------------
+
+
+def _states(adapter):
+    return adapter._effective_states()
+
+
+def test_a_run_of_misses_pulls_calm_down_and_a_run_of_correct_answers_lifts_focus():
+    clock = _Clock()
+    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=1)
+    adapter._focus_state = adapter._calm_state = 0.5
+    f0, c0 = _states(adapter)
+    for _ in range(3):
+        adapter.report_answer(False)
+    f1, c1 = _states(adapter)
+    assert c1 < c0 and f1 < f0
+    for _ in range(6):
+        adapter.report_answer(True)
+    f2, c2 = _states(adapter)
+    assert f2 > f1 and c2 > c1
+
+
+def test_the_bias_is_bounded_and_a_hard_miss_counts_for_more():
+    clock = _Clock()
+    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=1)
+    adapter._focus_state = adapter._calm_state = 0.5
+    for _ in range(50):
+        adapter.report_answer(False)
+    _, calm = _states(adapter)
+    assert calm == pytest.approx(0.5 - adapter.TASK_BIAS_BOUND)
+    easy = SimulatedMuseIngestionAdapter(clock=clock, seed=1)
+    hard = SimulatedMuseIngestionAdapter(clock=clock, seed=1)
+    easy._calm_state = hard._calm_state = 0.5
+    easy.report_answer(False, "easy")
+    hard.report_answer(False, "hard")
+    assert _states(hard)[1] < _states(easy)[1]
+
+
+def test_the_bias_decays_on_the_clock_towards_the_undisturbed_state():
+    clock = _Clock()
+    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=1)
+    adapter._focus_state = adapter._calm_state = 0.5
+    for _ in range(4):
+        adapter.report_answer(False)
+    _, c_after = _states(adapter)
+    clock.now += adapter.TASK_BIAS_DECAY_SECONDS
+    _, c_later = _states(adapter)
+    clock.now += 10 * adapter.TASK_BIAS_DECAY_SECONDS
+    _, c_long = _states(adapter)
+    assert c_after < c_later < c_long
+    assert c_long == pytest.approx(0.5, abs=0.001)
+
+
+def test_the_bias_reaches_the_bands_the_processor_reads():
+    # The point of the bias is that the processor sees it through its own
+    # path -- so alpha (calm) on the meta moves, not only a hidden number.
+    clock = _Clock()
+    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=1)
+    adapter._focus_state = adapter._calm_state = 0.5
+    before = adapter.get_ingestion_meta()["alpha"]
+    for _ in range(4):
+        adapter.report_answer(False)
+    assert adapter.get_ingestion_meta()["alpha"] < before
+
+
+def test_no_task_bias_can_look_like_an_artifact_to_the_processor():
+    # The raw spread scales with 1.6 - calm over calm in 0..1, a 2.67x
+    # range end to end, under SPREAD_JUMP_FACTOR; delta and gamma are
+    # constants, so the delta and EMG gates have nothing to trip on either.
+    clock = _Clock()
+    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=1)
+    adapter.connect()
+    widest = 1.6 - 0.0
+    narrowest = 1.6 - 1.0
+    assert widest / narrowest < SignalProcessor.SPREAD_JUMP_FACTOR
+    metas = []
+    adapter._focus_state = adapter._calm_state = 0.9
+    metas.append(adapter.get_ingestion_meta())
+    for _ in range(50):
+        adapter.report_answer(False, "hard")
+    metas.append(adapter.get_ingestion_meta())
+    assert metas[0]["delta"] == metas[1]["delta"]
+    assert metas[0]["gamma"] == metas[1]["gamma"]
+
+
+def test_the_answer_route_reaches_the_simulator_and_hardware_ignores_it():
+    client = TestClient(app)
+    settings = get_settings()
+    admin = {"Authorization": f"Bearer {settings.admin_token}"}
+    learner = {"Authorization": f"Bearer {settings.api_token}"}
+    session = stream_manager.session()
+    adapter = session.adapter
+    assert isinstance(adapter, SimulatedMuseIngestionAdapter)
+    before = adapter._task_calm
+    r = client.post("/api/v1/session/answer", json={"correct": False}, headers=admin)
+    assert r.status_code == 200 and r.json()["data"] == {"ok": True, "applied": True}
+    assert adapter._task_calm < before
+    # Under pull the learner token gains nothing, as for /session/arm.
+    assert client.post("/api/v1/session/answer", json={"correct": True}, headers=learner).status_code in (401, 403)
+    assert client.post("/api/v1/session/answer", json={"correct": True, "device_id": "nope"}, headers=admin).status_code == 404
+    real = session.adapter
+    session.adapter = object()  # a hardware adapter has no report_answer
+    try:
+        r = client.post("/api/v1/session/answer", json={"correct": True}, headers=admin)
+    finally:
+        session.adapter = real
+    assert r.status_code == 200 and r.json()["data"] == {"ok": True, "applied": False}
+
+
+def test_the_focus_bias_is_bounded_too():
+    clock = _Clock()
+    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=1)
+    adapter._focus_state = adapter._calm_state = 0.5
+    for _ in range(50):
+        adapter.report_answer(True)
+    focus, _ = _states(adapter)
+    assert focus == pytest.approx(0.5 + adapter.TASK_BIAS_BOUND)
+
+
+def test_the_bias_reaches_the_raw_channels_the_artifact_gate_reads(monkeypatch):
+    # The spread the processor's artifact gate measures scales with the
+    # *effective* calm: a stressed student's raw signal is the erratic one.
+    from src.app.services import eeg_ingestion as mod
+    monkeypatch.setattr(mod.random, "uniform", lambda a, b: b)
+    clock = _Clock()
+    adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=1)
+    adapter.connect()
+    adapter._focus_state = adapter._calm_state = 0.5
+
+    def deviation():
+        adapter._focus_state = adapter._calm_state = 0.5
+        s = adapter.read_sample()
+        focus, calm = adapter._effective_states()
+        base = adapter._BASE_LEVEL + (focus - 0.5) * adapter._LEVEL_SPAN
+        return s.channel_tp9 - base, calm
+
+    calm_dev, calm0 = deviation()
+    for _ in range(50):
+        adapter.report_answer(False, "hard")
+    stressed_dev, calm1 = deviation()
+    assert calm1 < calm0
+    assert stressed_dev == pytest.approx(adapter._CHANNEL_NOISE * (1.6 - calm1))
+    assert stressed_dev > calm_dev

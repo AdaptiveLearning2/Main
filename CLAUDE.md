@@ -681,6 +681,22 @@ a verdict rather than a blip. **The raw channels are untouched**: contact change
 reports about the electrodes, not the samples, so the artifact gate sees the same signal. The
 adapter takes a `seed` for reproducible runs; unseeded simulators differ.
 
+**Its cognitive state answers the lesson.** `record_answer` ends with a best-effort
+`eeg_poller.notify_answer`, which under pull only, and only for a session with a live poller,
+POSTs `/api/v1/session/answer` on the sidecar through `eeg_client.report_answer`;
+`stream_manager.report_answer` hands it to the adapter's `report_answer` if it has one and answers
+`applied: false` otherwise, so **a real headband ignores it and nothing feeds back into scoring on
+hardware**. The simulator nudges its hidden focus and calm per answer (a miss pulls calm towards
+the stressed line, more on a hard question; a correct answer lifts focus) into a bounded offset
+(`TASK_BIAS_BOUND`) that decays on the clock (`TASK_BIAS_DECAY_SECONDS`), applied to the state
+*before* the bands and the raw channels are solved from it, so the processor meets it through its
+own 4 s smoothing and artifact gate. It cannot trip that gate: delta and gamma are constants, alpha
+moves inside its usual span, and the raw spread scales 0.6–1.6 with calm, a 2.7× range under the
+3.5× jump line — pinned by a test. `focused` still cannot fire on a sim run (calm ≥ 0.5 with high
+focus, and the sim's bands share alpha and beta by construction); that is the pipeline's property,
+not the bias's. The backend sends `correct` only — the answer payload carries no difficulty — and
+the sidecar route is admin-only under pull, like `/session/arm`.
+
 ### Samples are stored during a session, not while a headband merely sits paired
 
 Under pull, Connect has to start the poller — it is what starts the sidecar's device stream, and

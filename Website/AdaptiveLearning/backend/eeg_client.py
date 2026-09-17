@@ -59,6 +59,20 @@ def arm_session(device_id: str = DEFAULT_DEVICE_ID) -> dict:
     return r.json()
 
 
+def report_answer(device_id: str = DEFAULT_DEVICE_ID, *, correct: bool,
+                  difficulty: str | None = None) -> dict:
+    """Tells the EEG service an answer was recorded for the student on this
+    device. The simulator moves its signals with it; hardware ignores it."""
+    r = requests.post(
+        f"{EEG_API_URL}/api/v1/session/answer",
+        headers=_admin_headers(),
+        json={"device_id": device_id, "correct": bool(correct), "difficulty": difficulty},
+        timeout=3,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
 def stop_session(device_id: str = DEFAULT_DEVICE_ID) -> dict:
     r = requests.post(
         f"{EEG_API_URL}/api/v1/session/stop",

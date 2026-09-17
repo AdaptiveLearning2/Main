@@ -638,6 +638,20 @@ class StreamManager:
             raise UnknownDeviceError(device_id)
         return session
 
+    def report_answer(self, device_id: str = DEFAULT_DEVICE_ID, *, correct: bool,
+                      difficulty: str | None = None) -> dict[str, Any]:
+        """A recorded answer for the student on this device. Only the
+        simulator does anything with it (it nudges its hidden state so a
+        sim run's signals respond to the lesson); a real headband's adapter
+        has no such method and the answer is acknowledged and ignored --
+        `applied` says which, so a caller can tell a sim run from hardware."""
+        adapter = self.session(device_id).adapter
+        report = getattr(adapter, "report_answer", None)
+        if report is None or not callable(report):
+            return {"ok": True, "applied": False}
+        report(bool(correct), difficulty)
+        return {"ok": True, "applied": True}
+
     def arm_baseline(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
         """Recording has been armed for this device: gather the per-session
         baseline from now, not from stream start. See

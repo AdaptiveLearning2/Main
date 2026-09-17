@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { vi } from 'vitest'
 import StudentReport from './StudentReport'
@@ -97,4 +98,30 @@ it('offers the strategies panel, framed for a teacher and generating nothing on 
   expect(screen.getByRole('button', { name: /generate strategies/i })).toBeInTheDocument()
   expect(screen.getByText(/written for a family to use at home/i)).toBeInTheDocument()
   expect(apiFetch.mock.calls.some(([u]) => String(u).includes('/learning-strategies'))).toBe(false)
+})
+
+/**
+ * The strategies panel goes behind "Hide sensor data" with the charts, because
+ * the advice *is* sensor data in prose: the rule-based list says "stress
+ * indicators ran high this week" and "focus indicators were low this week",
+ * and the model pass is handed the same averages. Unconditional, the switch
+ * took the tiles off screen and left a button that writes those numbers back
+ * out as sentences.
+ *
+ * The button's absence is the assertion, not the panel's heading -- hiding the
+ * heading while leaving a live Generate button would satisfy a heading check
+ * and none of the point.
+ */
+it('hides the strategies panel behind the sensor switch, button included', async () => {
+  renderWithState({ name: 'Ada', classId: 'class-1', className: 'Algebra' })
+  await screen.findByText('Recent Sessions')
+  expect(screen.getByRole('button', { name: /generate strategies/i })).toBeInTheDocument()
+
+  await userEvent.click(screen.getByRole('switch', { name: /hide sensor data/i }))
+
+  expect(screen.queryByRole('button', { name: /generate strategies/i })).not.toBeInTheDocument()
+  expect(screen.queryByText(/at-home learning strategies/i)).not.toBeInTheDocument()
+  // Academic content is untouched -- the switch hides sensor data, and these
+  // measure answers.
+  expect(screen.getByText('Recent Sessions')).toBeInTheDocument()
 })

@@ -3389,7 +3389,15 @@ child's maths practice at home"* and the rule-based fallback says *"ask your chi
 solved problem out loud"* — so a classroom-sounding label would claim the model had been asked for
 something it was not. The teacher frame says whose advice it is instead, which is the useful thing
 to know when deciding what to do with it. It stays **on demand**: nothing is fetched until the
-button is pressed, or a class of thirty report pages would spend a model call each.
+button is pressed, or a class of thirty report pages would spend a model call each. On the teacher page it is
+**behind "Hide sensor data" with the charts**, because the advice *is* sensor data in prose — the
+rule-based list says *"stress indicators ran high this week"* and *"focus indicators were low this
+week"*, and the model pass is handed the same averages. Unconditional, the switch took the tiles off
+screen and left a button that writes those numbers back out as sentences. The whole panel goes rather
+than its individual lines: the advice mixes topic accuracy with signal readings and nothing
+downstream can separate them, and asking the endpoint for a signal-free list would change the advice
+rather than hide it. Assert on the **Generate button's** absence, not the heading — hiding a heading
+over a live button satisfies a heading check and none of the point.
 
 ## Every model call goes through `llm_client`, and the provider is a setting
 

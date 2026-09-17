@@ -184,6 +184,27 @@ describe('sidebar collapse is per layout', () => {
  * wrong person's account.
  */
 describe.each(LAYOUTS)('%s account block', (_name, Layout, path) => {
+  // Every describe in this file that renders a sidebar clears storage, and
+  // this block needs it more than most: the account badge is hidden entirely
+  // when the sidebar is collapsed, `al_sidebar_collapsed:<scope>` persists,
+  // and two tests above click Collapse sidebar. Without this, whether these
+  // tests can see what they assert on depends on which scope an earlier test
+  // happened to leave collapsed.
+  beforeEach(() => { localStorage.clear() })
+
+  // First, so the two below run against the state it leaves behind: collapsing
+  // persists, so without the `beforeEach` above they would render a collapsed
+  // sidebar and find no account block at all. A guard against leaked state is
+  // only a guard if something stands downstream of the leak.
+  it('is hidden entirely when the sidebar is collapsed', async () => {
+    authName = 'Ada Lovelace'
+    renderLayout(Layout, path)
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
+    expect(screen.queryByText('Ada Lovelace')).not.toBeInTheDocument()
+  })
+
   it('takes the avatar letter from the name beside it', async () => {
     authName = 'Ada Lovelace'
     renderLayout(Layout, path)

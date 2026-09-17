@@ -21,6 +21,8 @@
  * choice between that measurement and an empty chart.
  */
 export default function SeriesFilter({ series, hidden, onToggle, label = 'Measurements shown' }) {
+  // Below two there is nothing to choose between: one series can only be
+  // itself or an empty chart. Two *is* a choice, so two chips render.
   if (!series || series.length < 2) return null
 
   return (
@@ -58,9 +60,16 @@ export default function SeriesFilter({ series, hidden, onToggle, label = 'Measur
               // Hollow when off, so the chip still reads as "this one is not
               // being drawn" without colour being the only signal — the
               // `aria-checked` above is what actually carries it.
+              // `s.colour`, the key every call site writes. It read `s.color`
+              // here and painted `undefined` in both states -- an invisible
+              // dot, and the "cannot drift from the line" property this prop
+              // exists for was inoperative. Nothing caught it: an inline
+              // style is not in the accessibility tree and jsdom has no
+              // stylesheet, so only a test reading the style attribute can
+              // see it. There is one now.
               style={on
-                ? { backgroundColor: s.color }
-                : { boxShadow: `inset 0 0 0 2px ${s.color}`, opacity: 0.5 }}
+                ? { backgroundColor: s.colour }
+                : { boxShadow: `inset 0 0 0 2px ${s.colour}`, opacity: 0.5 }}
             />
             {s.label}
           </button>

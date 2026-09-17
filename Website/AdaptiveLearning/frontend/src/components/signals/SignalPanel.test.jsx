@@ -927,6 +927,40 @@ describe('choosing which measurements a chart draws', () => {
     expect(screen.queryByRole('columnheader', { name: /stress/i })).not.toBeInTheDocument()
   })
 
+  it('paints each swatch with the colour its own line is stroked with', () => {
+    // The gap that let the real bug through. The component read `s.color`
+    // while every call site writes `colour`, so the dot painted `undefined`
+    // in both states -- invisible, and the "cannot drift from the line"
+    // property the prop exists for was inoperative.
+    //
+    // Nothing else could catch it: the swatch is `aria-hidden`, so it is not
+    // in the accessibility tree, and jsdom has no stylesheet, so only reading
+    // the inline style sees anything at all. Asserted per chip rather than on
+    // one known hex, so a series added without a colour fails here too.
+    render(<SignalTrend trend={trend} />)
+
+    for (const name of [/^focus$/i, /stress/i, /heart rate/i]) {
+      const swatch = screen.getByRole('switch', { name }).querySelector('[aria-hidden="true"]')
+      expect(swatch.getAttribute('style')).toMatch(/#[0-9a-f]{6}|rgb\(/i)
+      expect(swatch.getAttribute('style')).not.toMatch(/undefined/)
+    }
+    // And it is the palette value, not merely some colour: this is the one
+    // the heart line is stroked with on both this chart and SessionReview.
+    expect(screen.getByRole('switch', { name: /heart rate/i })
+      .querySelector('[aria-hidden="true"]')).toHaveStyle({ backgroundColor: '#a855f7' })
+  })
+
+  it('keeps the swatch colour when the measurement is switched off', async () => {
+    // Hollow rather than gone -- the chip still has to say which line it names.
+    render(<SignalTrend trend={trend} />)
+    await userEvent.click(screen.getByRole('switch', { name: /heart rate/i }))
+
+    const swatch = screen.getByRole('switch', { name: /heart rate/i })
+      .querySelector('[aria-hidden="true"]')
+    expect(swatch.getAttribute('style')).toContain('a855f7')
+    expect(swatch.getAttribute('style')).not.toMatch(/undefined/)
+  })
+
   it('offers the same control on the daily chart', async () => {
     render(<WeeklySignalReport report={report} />)
 

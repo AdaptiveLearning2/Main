@@ -3281,10 +3281,15 @@ session with no headband emitted "Heart rate: not recorded" on every row. The
 first fix was applied where it was found rather than swept for siblings. Check
 what the chart plots, and under what condition, before copying a spec across.
 
-**A teacher can hide a series, so the one-list rule is now structural rather than remembered.**
-`SeriesFilter` + `useSeriesFilter` put toggles above the three teacher line charts — focus, EEG
-stress, heart rate and RMSSD on `SessionReview`'s timeline; focus, stress and heart rate on
-`SignalPanel`'s daily and term charts — in any combination. Each chart declares **one list per
+**A reader can hide a series, so the one-list rule is now structural rather than remembered.**
+`SeriesFilter` + `useSeriesFilter` put toggles above three line charts — focus, EEG stress, heart
+rate and RMSSD on `SessionReview`'s timeline; focus, stress and heart rate on `SignalPanel`'s daily
+and term charts — in any combination. **The last two reach a parent as well as a teacher**, because
+`StudentProgressReport` is shared by `teacher/StudentReport` and `parent/ChildDetail`: anything
+added to those panels lands on both routes, and describing them as teacher surfaces was wrong in the
+first version of this paragraph. That is fine here — the control draws less, never more, so it is
+decluttering rather than a boundary, the same standing as `viewPrefs.js` — but it is the question to
+ask of the next thing added there, and `viewerRole` is how a panel differs between the two. Each chart declares **one list per
 series** (`key`, `label`, `unit`, `scale`, `colour`, `axis`, `name`) and derives the `<Line>`s, the
 `columns` spec and the chips from it. That is the point rather than tidiness: "a column must name a
 series the chart draws" was a thing to remember while the only gate was `hasHeart`, and it becomes a

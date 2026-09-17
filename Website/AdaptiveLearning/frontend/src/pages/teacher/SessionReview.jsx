@@ -523,8 +523,9 @@ function SessionReviewBody({ sessionId }) {
         ) : (
           <>
           {/* Above the chart, because it says what the chart is about to show.
-              Renders nothing when only the two cognitive series exist and
-              neither can be meaningfully hidden -- see SeriesFilter. */}
+              Renders nothing below two series, which here means a session with
+              no heart readings still gets both cognitive chips -- two is a
+              choice. */}
           <SeriesFilter series={TIMELINE_SERIES} hidden={hiddenSeries} onToggle={toggleSeries} />
           {shownSeries.length === 0 ? (
             /* Every measurement turned off. Said in words with a way back,
@@ -608,7 +609,12 @@ function SessionReviewBody({ sessionId }) {
           )}
           </>
         )}
-        {hasChart && shownSeries.length > 0 && answers.length > 0 && (
+        {/* Gated on the same condition as the markers themselves, not on
+            `shownSeries.length`: they are drawn against the ratio axis, so
+            hiding Focus and EEG stress with Heart rate still on takes the
+            lines away and would otherwise leave this legend standing over a
+            chart with none. */}
+        {hasChart && axisShown('ratio') && answers.length > 0 && (
           <p className="text-[11px] text-gray-600 mt-2 dark:text-gray-400">
             Vertical lines = answer events · <span className="text-emerald-500">green</span> correct ·{' '}
             <span className="text-rose-500">red</span> incorrect

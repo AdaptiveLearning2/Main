@@ -463,7 +463,11 @@ describe('choosing which measurements the timeline draws', () => {
       { ts: '2026-08-10T09:00:00Z', heart_rate_bpm: 72, rmssd_ms: 41, source: 'muse_optics' },
       { ts: '2026-08-10T09:01:00Z', heart_rate_bpm: 75, rmssd_ms: 38, source: 'muse_optics' },
     ],
-    face: [], answers: [],
+    face: [],
+    answers: [{
+      answered_at: '2026-08-10T09:00:30Z', question_id: 'q-1',
+      selected_index: 0, correct: true, questions: null,
+    }],
   }
 
   it('hides RMSSD on its own, leaving heart rate drawn', async () => {
@@ -504,5 +508,24 @@ describe('choosing which measurements the timeline draws', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /show all/i }))
     expect(screen.getByRole('columnheader', { name: /rmssd/i })).toBeInTheDocument()
+  })
+
+  it('takes the answer-marker legend away with the markers themselves', async () => {
+    // The markers are drawn against the ratio axis, so they go when Focus and
+    // EEG stress are both hidden -- even with Heart rate still on, which keeps
+    // a chart on screen and keeps `shownSeries` non-empty. Gated on that
+    // instead, the page claimed "Vertical lines = answer events" over a chart
+    // with none.
+    apiFetch.mockResolvedValue(WITH_HEART)
+    renderAt()
+    await waitFor(() => expect(screen.getByText(/vertical lines = answer events/i)).toBeInTheDocument())
+
+    await userEvent.click(screen.getByRole('switch', { name: /^focus$/i }))
+    await userEvent.click(screen.getByRole('switch', { name: /eeg stress/i }))
+
+    // The chart is still there -- heart rate is drawn -- so this is not the
+    // empty-selection path.
+    expect(screen.getByRole('columnheader', { name: /heart rate/i })).toBeInTheDocument()
+    expect(screen.queryByText(/vertical lines = answer events/i)).not.toBeInTheDocument()
   })
 })

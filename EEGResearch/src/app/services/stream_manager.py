@@ -68,8 +68,9 @@ class DeviceSession:
         # way, so the payload can carry the local figure for comparison
         # while the SDK one is still what the score uses.
         self.processor = SignalProcessor(
-            calm_source=(settings.eeg_spectrum_source or "sdk").lower().strip())
-        self.spectrum = SpectrumEstimator()
+            calm_source=settings.eeg_spectrum_source,  # validated in config.py
+            calm_centre_on_arm=settings.eeg_calm_centre_on_arm)  # validated in config.py
+        self.spectrum = SpectrumEstimator(poison_seconds=settings.eeg_spectrum_poison_seconds)
         self.adaptation = AdaptationEngine()
         # Heart rate off the headband's optical channels. Held per session
         # because continuity -- the only check that catches an octave error --

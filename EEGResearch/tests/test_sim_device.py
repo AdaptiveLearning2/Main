@@ -717,3 +717,18 @@ def test_building_optics_windows_does_not_shift_the_contact_or_sample_sequence()
     a, _ = _run(9, False)
     b, _ = _run(9, True)
     assert a == b
+
+
+def test_a_misspelt_eeg_sim_optics_warns_and_means_off(monkeypatch, caplog):
+    # Read at import inside StreamManager(), like the local-calm settings:
+    # a typo must not refuse the sidecar boot, and off is the safe side.
+    import logging
+    from src.app.config import Settings
+    monkeypatch.setenv("API_TOKEN", "t")
+    monkeypatch.setenv("ADMIN_TOKEN", "a")
+    with caplog.at_level(logging.WARNING):
+        assert Settings(EEG_SIM_OPTICS="ture").eeg_sim_optics is False
+    assert "EEG_SIM_OPTICS" in caplog.text
+    assert Settings(EEG_SIM_OPTICS="true").eeg_sim_optics is True
+    assert Settings(EEG_SIM_OPTICS=" Yes ").eeg_sim_optics is True
+    assert Settings(EEG_SIM_OPTICS="0").eeg_sim_optics is False

@@ -284,3 +284,29 @@ above are the ones to re-derive once two decisions are made: how long an artifac
 before its own latch on the local source. Both belong with the second wearer's capture. Until
 then the line is one adult's number from a table that predates the gate, `EEG_SPECTRUM_SOURCE`
 stays `sdk` by default, and nothing recorded depends on it.
+
+**Both alternatives are built and scored on this capture** (2026-09-16, `replay_raw_capture.py
+--arm-at eyes_open_rest --matrix`; `EEG_SPECTRUM_POISON_SECONDS` and `EEG_CALM_CENTRE_ON_ARM`
+select them in a live session). Per segment: fresh / stale share, median calm, share under 0.25:
+
+| poison · centre on arm | eyes closed | eyes open, rest | arithmetic | eyes open 2 |
+| --- | --- | --- | --- | --- |
+| 4 s · keep (shipped) | 49% / 5% · 74 · 0% | 18% / 40% · 15 · 63% | 19% / 19% · 13 · 54% | 21% / 14% · 51 · 0% |
+| 4 s · midpoint | 49% / 5% · 74 · 0% | 18% / 40% · 46 · 0% | 19% / 19% · 43 · 0% | 21% / 14% · 51 · 0% |
+| 2 s · keep | 62% / 1% · 66 · 4% | 25% / 19% · 22 · 55% | 26% / 13% · 39 · 0% | 40% / 0% · 50 · 0% |
+| 2 s · midpoint | 62% / 1% · 66 · 4% | 25% / 19% · 44 · 0% | 26% / 13% · 39 · 0% | 40% / 0% · 50 · 0% |
+
+What this one capture says, to be read against the second before either is chosen:
+
+- **The centre decision is what fixes the eyes-open medians.** Under `keep`, every eyes-open and
+  arithmetic tick is scored against the eyes-closed centre the arm carried over, and 55–63% of
+  resting eyes-open ticks fall under 0.25. Under `midpoint` those read 44–46 with 0% under the
+  line, and closed still reads 66–74 with 0–4%. That is the separation the line was set to
+  express, and it is the arm point's doing, not the alpha measure's.
+- **The poison decision is what changes availability.** 2 s raises fresh estimates on the task
+  segments from 18–21% to 25–40% and cuts the resting stale share from 40% to 19%, at the cost of
+  readmitting the buffer while its older half still holds the blink: closed drops 74 → 66 and 4%
+  of its ticks cross 0.25, where 4 s gave 0%.
+- Under `2 s · midpoint`, the line at 0.25 reads 0% on every eyes-open and task segment and 4%
+  eyes closed on this wearer; under `4 s · midpoint`, 0% everywhere. Neither is a decision yet:
+  one adult, and the second wearer is what the matrix is for.

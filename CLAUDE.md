@@ -728,9 +728,10 @@ puts it on the block the shared mapper derives from — so a client cannot mark 
 by posting the key in `raw`, on either path, and only a derived `True` survives. The first cut
 marked the poller path only; a camera run (`-Camera` selects push) stored the unmarked row the
 mark exists to prevent — the zeroed-rows rule again: anything of this kind belongs in the mapper.
-`EEG_SIM_OPTICS` is a plain pydantic `bool`, so a typo (`ture`) is a `bool_parsing` error inside
-`StreamManager()` at import; it wants the tolerant treatment #189 gives the other boot settings
-once both land.
+`EEG_SIM_OPTICS` takes the same tolerant validator #189 gives the other boot settings, for the same
+reason: it is read at import inside `StreamManager()`, so a typo (`ture`) must warn and mean off
+rather than refuse the sidecar boot — and off is the safe side here, since nothing synthesised is
+then stored by mistake. As a plain pydantic `bool` it was a `bool_parsing` error at import.
 `optics_window` builds the last 25 s on demand from the clock — a pulse at a resting rate drawn per simulator
 (`HEART_REST_BPM_RANGE`, 62–84) with a slow drift, raised by misses through the same decaying task
 bias (`HEART_TASK_NUDGE`, bounded by `HEART_TASK_BOUND`), a second harmonic so a spectral argmax
@@ -1874,7 +1875,20 @@ the local one, where silent arithmetic then read stressed; the local line is 0.2
 capture armed at eyes open (8% of resting eyes-open ticks, 0% arithmetic, 0% fidget) — **a table
 derived before the artifact poison, which does not reproduce under it**; the line stands only
 until the poison length and the pre-latch calm centre are decided against the second wearer's
-capture (`EEG_REFERENCE.md`). The decider
+capture (`EEG_REFERENCE.md`). **Both alternatives exist as settings with the shipped behaviour as
+default** — `EEG_SPECTRUM_POISON_SECONDS` (4.0, the buffer; 2.0, the Welch window) and
+`EEG_CALM_CENTRE_ON_ARM` (`keep`; `midpoint`, the local calm only — focus keeps the no-step arm,
+and so does the sdk calm, which latches beside focus and never needed it). **Both are read at
+import, inside `StreamManager()`, so neither may refuse the boot**: `config.py` validators warn
+and fall back (a non-numeric poison length to 4.0, a misspelt centre to `keep`, a misspelt spectrum source to `sdk`, case and
+whitespace forgiven), and the estimator floors a numeric poison at one sample, since 0 made the
+poison a silent no-op and `nan` or `midpont` each took the sidecar down over a tuning knob —
+the `MUSE_OPTICS_PRESET` precedent. `SignalProcessor` itself still raises on an unknown centre,
+because a direct caller is code. And
+`replay_raw_capture.py --matrix` scores all four on a capture in one run, so the decision is made
+against numbers rather than by editing code twice. On the first wearer, `midpoint` is what makes the
+eyes-open segment read as eyes open (the arm had carried the eyes-closed centre) and 2 s is what
+moves availability (EEG_REFERENCE.md, "both alternatives are built"). The decider
 reads `raw.calm_source` off the rows and a window holding both sources has no calm opinion. **Calm
 latches on its own coverage** over the ticks that had a value (45 covered seconds at one second a
 tick at most, so at least 45 samples with no separate floor), with its own ramp, and keeps

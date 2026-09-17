@@ -677,3 +677,26 @@ def test_a_single_session_is_not_described_in_the_plural():
     lines = main._rule_based_chart_summary(basis)
     assert any("1 session was recorded" in line for line in lines)
     assert not any("1 sessions" in line for line in lines)
+
+
+def test_the_basis_carries_the_read_state_it_was_given(monkeypatch):
+    """The wiring, not just the field's presence.
+
+    Every other test here builds a basis by hand, so none of them exercises
+    the path from `_topic_breakdown_with_state` into the payload -- and
+    hardcoding the field to True survived the whole suite. Found by mutation.
+    """
+    monkeypatch.setattr(main, "_reportable_channels",
+                        lambda sid, inc=True: main.ReportChannels(
+                            heart=False, emotion=False, consent_retrieved=True))
+    monkeypatch.setattr(main, "_signal_summary", lambda *a, **k: main._EMPTY_SUMMARY)
+    monkeypatch.setattr(main, "_signal_trend",
+                        lambda *a, **k: {"weeks": [], "retrieved": True})
+    monkeypatch.setattr(main, "_stats_including_open_session",
+                        lambda sid: {"total_questions": 0, "total_correct": 0, "retrieved": True})
+
+    monkeypatch.setattr(main, "_topic_breakdown_with_state", lambda sid: ([], False))
+    assert main._chart_summary_basis("s", 7, 8, True)["topics_retrieved"] is False
+
+    monkeypatch.setattr(main, "_topic_breakdown_with_state", lambda sid: ([], True))
+    assert main._chart_summary_basis("s", 7, 8, True)["topics_retrieved"] is True

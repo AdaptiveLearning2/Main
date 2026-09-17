@@ -22,10 +22,13 @@ const NAV = [
 ]
 
 function SidebarContent({ collapsed, mobile, onClose }) {
-  const { user, signOut } = useAuth()
+  const { displayName, signOut } = useAuth()
   const { dark, toggleTheme } = useTheme()
   const navigate = useNavigate()
-  const initials = user?.email?.[0]?.toUpperCase() || '?'
+  // From the name beside it, not the email: those are two different
+  // strings now, so deriving them separately lets the letter and the
+  // label disagree -- "A" over "ada.lovelace", or "k" over "Ada".
+  const initials = (displayName || '?')[0].toUpperCase()
 
   return (
     <div className="flex flex-col h-full">
@@ -48,7 +51,7 @@ function SidebarContent({ collapsed, mobile, onClose }) {
               {initials}
             </div>
             <div className="min-w-0">
-              <p className="text-xs font-bold text-gray-900 dark:text-white truncate">{user?.email?.split('@')[0]}</p>
+              <p className="text-xs font-bold text-gray-900 dark:text-white truncate">{displayName}</p>
               <p className="text-[10px] text-violet-600 dark:text-violet-400 font-semibold">📚 Teacher</p>
             </div>
           </div>

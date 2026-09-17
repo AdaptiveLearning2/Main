@@ -6,8 +6,12 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom'
 // The layouts render a sidebar and an `<Outlet/>` and read auth/theme
 // context, both stubbed here so this file tests only the markup.
 vi.mock('../context/AuthContext', () => ({
-  useAuth: () => ({ user: { email: 'someone@example.com' }, signOut: vi.fn() }),
+  useAuth: () => ({ user: { email: 'someone@example.com' },
+                    displayName: authName, signOut: vi.fn() }),
 }))
+// Set per test. The provider resolves it from `profiles.display_name`; the
+// layouts render what they are given rather than deriving a name themselves.
+let authName = 'Ada Lovelace'
 vi.mock('../context/ThemeContext', () => ({
   useTheme: () => ({ dark: false, toggleTheme: vi.fn() }),
 }))
@@ -169,5 +173,52 @@ describe('sidebar collapse is per layout', () => {
     }
     const keys = Object.keys(localStorage).filter(k => k.startsWith('al_sidebar_collapsed'))
     expect(new Set(keys).size).toBe(LAYOUTS.length)
+  })
+})
+
+/**
+ * The avatar letter and the name under it are one fact shown twice, so they
+ * are derived from one value. They were not: the name came from the resolved
+ * profile name and the letter from `user.email[0]`, which renders "s" over
+ * "Ada Lovelace" for someone@example.com -- a mismatch that reads as the
+ * wrong person's account.
+ */
+describe.each(LAYOUTS)('%s account block', (_name, Layout, path) => {
+  // Every describe in this file that renders a sidebar clears storage, and
+  // this block needs it more than most: the account badge is hidden entirely
+  // when the sidebar is collapsed, `al_sidebar_collapsed:<scope>` persists,
+  // and two tests above click Collapse sidebar. Without this, whether these
+  // tests can see what they assert on depends on which scope an earlier test
+  // happened to leave collapsed.
+  beforeEach(() => { localStorage.clear() })
+
+  // First, so the two below run against the state it leaves behind: collapsing
+  // persists, so without the `beforeEach` above they would render a collapsed
+  // sidebar and find no account block at all. A guard against leaked state is
+  // only a guard if something stands downstream of the leak.
+  it('is hidden entirely when the sidebar is collapsed', async () => {
+    authName = 'Ada Lovelace'
+    renderLayout(Layout, path)
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
+    expect(screen.queryByText('Ada Lovelace')).not.toBeInTheDocument()
+  })
+
+  it('takes the avatar letter from the name beside it', async () => {
+    authName = 'Ada Lovelace'
+    renderLayout(Layout, path)
+
+    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
+    expect(screen.getByText('A')).toBeInTheDocument()
+    // 's', from someone@example.com, is what the email-derived letter gave.
+    expect(screen.queryByText('S')).not.toBeInTheDocument()
+  })
+
+  it('shows a placeholder rather than a letter of nothing', async () => {
+    authName = null
+    renderLayout(Layout, path)
+
+    expect(screen.getByText('?')).toBeInTheDocument()
   })
 })

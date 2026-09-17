@@ -179,8 +179,11 @@ export default function Students() {
     //   .catch(() => setLoading(false))
   }, [])
 
+  // Both fields, not the first that exists: a teacher searching the name on
+  // screen found nothing, because the only searchable value was the email.
   const filtered = students.filter(s =>
-    (s.email || s.username || s.id || '').toLowerCase().includes(search.toLowerCase())
+    `${s.display_name || ''} ${s.email || ''} ${s.id || ''}`
+      .toLowerCase().includes(search.toLowerCase())
   )
 
   async function toggleExpand(studentId){
@@ -266,8 +269,9 @@ export default function Students() {
             <span className="text-xs font-bold uppercase tracking-widest text-gray-600 text-right dark:text-gray-400">Role</span>
           </div>
           {filtered.map((s, i) => {
-            const initial = (s.email || s.username || s.id || '?')[0].toUpperCase()
-            const name    = s.username || s.email?.split('@')[0] || s.id?.slice(0, 8)
+            const name    = s.display_name || s.email?.split('@')[0] || s.id?.slice(0, 8)
+            // From the name being shown, so the letter and the label agree.
+            const initial = (name || '?')[0].toUpperCase()
             const joined  = s.created_at ? new Date(s.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'
             const isOpen = expandedId === s.id
             const isLoadingStats = !!statsLoading[s.id]

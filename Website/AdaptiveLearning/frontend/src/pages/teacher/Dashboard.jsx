@@ -15,13 +15,13 @@ import StatCard from '../../components/ui/StatCard'
 const REFRESH_MS = 60_000
 
 export default function TeacherDashboard() {
-  const { user } = useAuth()
+  const { displayName } = useAuth()
   const [questions, setQuestions] = useState([])
   // null means "not read yet", so a failed load doesn't render as an empty question bank.
   const [questionCount, setQuestionCount] = useState(null)
   const [loading, setLoading]     = useState(true)
   const [questionsFailed, setQuestionsFailed] = useState(false)
-  const name = user?.email?.split('@')[0] || 'there'
+  const name = displayName || 'there'
 
   const [classes, setClasses] = useState([])
   const [classAverages, setClassAverages] = useState({}) // class_id -> { avgAccuracy, avgStreak }

@@ -14,8 +14,13 @@ vi.mock('react-router-dom', async () => ({
 }))
 
 vi.mock('../../context/AuthContext', () => ({
-  useAuth: () => ({ user: { id: 'stu-1', email: 'kid@example.com' } }),
+  useAuth: () => ({ user: { id: 'stu-1', email: 'kid@example.com' },
+                    displayName: authName }),
 }))
+// Set per test. The provider resolves this from `profiles.display_name`; this
+// page only has to render what it is given rather than deriving a name of its
+// own, which is what it used to do from the email.
+let authName = 'Ada Lovelace'
 
 // Mocked because these banners fetch on mount but aren't under test here.
 vi.mock('../../components/consent/ParentRestoredBanner', () => ({ default: () => null }))
@@ -146,4 +151,26 @@ describe('the topic tiles', () => {
     expect(source).toContain("from '../../lib/topics'")
     expect(TOPICS.filter(t => !TOPIC_ICONS[t])).toEqual([])
   })
+})
+
+/**
+ * The greeting renders the name the provider resolved from the database, not
+ * the email local part it used to split itself. Nine surfaces did that, so a
+ * student who set their name in Profile saw it there and "kid" everywhere
+ * else -- and only after their first edit, since sign-up seeds the stored
+ * name from the email prefix and the two agree until then.
+ */
+it('greets the student by their stored name, never by their email', async () => {
+  authName = 'Ada Lovelace'
+  draw()
+  expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
+  expect(screen.queryByText('kid')).not.toBeInTheDocument()
+})
+
+it('greets a nameless account without addressing it as nobody', async () => {
+  // `displayName` is null only for an account with no stored name, no claim
+  // and no email; the greeting still has to read as a sentence.
+  authName = null
+  draw()
+  expect(await screen.findByText(/there/)).toBeInTheDocument()
 })

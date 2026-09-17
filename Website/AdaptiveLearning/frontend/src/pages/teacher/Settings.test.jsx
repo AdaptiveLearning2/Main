@@ -12,8 +12,13 @@ vi.mock('sonner', () => ({
   toast: { error: (...a) => toastError(...a), success: (...a) => toastSuccess(...a) },
 }))
 
+const refreshProfile = vi.fn()
 vi.mock('../../context/AuthContext', () => ({
-  useAuth: () => ({ user: { id: 't-1', email: 'teacher@example.com' }, signOut: vi.fn() }),
+  // `refreshProfile` is part of the context, so the double has to carry it:
+  // the page calls it after a save, and a double thinner than the real thing
+  // fails there rather than where the bug would be.
+  useAuth: () => ({ user: { id: 't-1', email: 'teacher@example.com' },
+                    displayName: 'Ms Patel', refreshProfile, signOut: vi.fn() }),
 }))
 vi.mock('../../context/ThemeContext', () => ({
   useTheme: () => ({ dark: false, toggleTheme: vi.fn() }),
@@ -60,6 +65,10 @@ describe('the display name', () => {
       }))
     })
     expect(toastSuccess).toHaveBeenCalled()
+    // The sidebar and the dashboard greeting read the shared name, which this
+    // save has just made stale -- without this they keep the old one until a
+    // reload, which is the staleness this whole change removes.
+    expect(refreshProfile).toHaveBeenCalled()
   })
 
   it('says so when the save fails, rather than claiming success', async () => {
@@ -127,4 +136,24 @@ describe('the tabs', () => {
 
     expect(screen.queryByRole('button', { name: /notifications/i })).not.toBeInTheDocument()
   })
+})
+
+/**
+ * The Account card sits directly above the Display Name input, which is close
+ * enough that a card bound to the input's state reads as a live preview. It
+ * is not one: it names the account, so it must show what is *saved*. Bound to
+ * the draft it kept asserting a name the account did not have after a save
+ * that failed.
+ */
+it('shows the saved name on the account card while the field is being edited', async () => {
+  draw()
+  await screen.findByDisplayValue('Ms Patel')
+
+  const field = screen.getByLabelText(/display name/i)
+  await userEvent.clear(field)
+  await userEvent.type(field, 'Ms Khan')
+
+  // Typed, not saved: the field carries the draft, the card does not.
+  expect(screen.getByDisplayValue('Ms Khan')).toBeInTheDocument()
+  expect(screen.queryByText('Ms Khan')).not.toBeInTheDocument()
 })

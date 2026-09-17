@@ -65,10 +65,15 @@ vi.mock('../../lib/supabase', () => {
 const { __fromCalls: fromCalls, __results: results } = await import('../../lib/supabase')
 const { __apiCalls: apiCalls, __apiState: apiState } = await import('../../lib/api')
 
+// `profiles!inner(*)`, so these are real `profiles` columns: id, display_name,
+// email, role, grade_level. There is no `username` -- this fixture invented
+// one, matching a read in the page that invented the same one, so neither
+// could ever fail against the other.
 const MEMBERSHIPS = {
   data: [{
     student_id: 'stu-1',
-    profiles: { id: 'stu-1', email: 'ada@example.com', username: 'ada' },
+    profiles: { id: 'stu-1', email: 'ada@example.com', display_name: 'Ada Lovelace',
+                role: 'student', grade_level: '6th Grade' },
     classes: { teacher_id: 'teacher-1' },
   }],
   error: null,
@@ -414,4 +419,56 @@ it('actually hides the sensor tiles on screen when the switch is flipped, and le
   expect(screen.getByText('Current Streak')).toBeInTheDocument()
   // Client-side only: hiding these tiles must not have asked the server again.
   expect(summaryCalls()).toHaveLength(1)
+})
+
+/**
+ * The roster showed an email prefix for every student, whatever they had
+ * called themselves. The read is `profiles!inner(*)` and `profiles` has
+ * `display_name`, `email`, `role`, `grade_level` and `id` -- there is no
+ * `username`, so the branch the page reached for first never fired and the
+ * fallback was the whole behaviour.
+ *
+ * It survived because this file's own fixture invented the same column: a
+ * fixture written from the same misreading as the code cannot fail against it.
+ */
+it('names a student by their profile name, not by their email', async () => {
+  render(<Students />)
+
+  expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
+  expect(screen.queryByText('ada')).not.toBeInTheDocument()
+})
+
+it('searches the name on screen, not only the email behind it', async () => {
+  // A teacher typing what the row says found nothing, because the only
+  // searchable value was the address.
+  render(<Students />)
+  await screen.findByText('Ada Lovelace')
+
+  await userEvent.type(screen.getByPlaceholderText(/search students/i), 'Lovelace')
+  expect(screen.getByText('Ada Lovelace')).toBeInTheDocument()
+
+  await userEvent.clear(screen.getByPlaceholderText(/search students/i))
+  await userEvent.type(screen.getByPlaceholderText(/search students/i), 'nobody')
+  expect(screen.queryByText('Ada Lovelace')).not.toBeInTheDocument()
+})
+
+it('falls back to the email prefix for a student with no name set', async () => {
+  // Not reachable through the UI: `PUT /api/profile/me` drops null fields
+  // (`if v is not None`), so clearing the field saves nothing, and
+  // `handle_new_user` seeds the column from the email rather than leaving it
+  // empty. The column is nullable and the dashboard SQL editor is a real
+  // writer here, so the fallback still has to hold -- but it is a row nobody
+  // can produce from the app.
+  results.class_memberships = {
+    data: [{
+      student_id: 'stu-1',
+      profiles: { id: 'stu-1', email: 'ada@example.com', display_name: null,
+                  role: 'student', grade_level: '6th Grade' },
+      classes: { teacher_id: 'teacher-1' },
+    }],
+    error: null,
+  }
+  render(<Students />)
+
+  expect(await screen.findByText('ada')).toBeInTheDocument()
 })

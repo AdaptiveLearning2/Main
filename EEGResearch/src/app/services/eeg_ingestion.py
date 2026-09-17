@@ -290,11 +290,23 @@ class SimulatedMuseIngestionAdapter:
         self._pair_lock = threading.Lock()
         self._discovered: list[str] = []
         self._paired_name: str | None = None
-        # monotonic() of the last sample read while paired, or None before
-        # the first one -- what the bridge's `eeg_age_ms` measures. Null, not
-        # 0, on a fresh link: the page reads "connected with no packet yet" as
-        # settling, and adoption refuses it, exactly as on hardware.
-        self._last_sample_at: float | None = None
+        # monotonic() of the pairing, for `eeg_age_ms`. On hardware that age
+        # is the bridge's packet clock, driven by BLE whether or not the
+        # sidecar is reading -- so it is modelled from the pairing, never
+        # from `read_sample`: stamped by the consumer's reads it grew without
+        # bound across a stream stop (adoption unreachable) and reset within
+        # one tick of a connect (settling unobservable). Null, not 0, for
+        # PAIR_SETTLE_SECONDS after a connect, the way the bridge zeroes its
+        # packet clock on CONNECTED and a preset switch keeps it null.
+        self._paired_at: float | None = None
+
+    # The bridge reports no packet for a few seconds after every CONNECTED
+    # (a preset switch interrupts streaming); PRESET_SETTLE_SECONDS on the
+    # stream manager is the sidecar's allowance for the same window, and the
+    # page's SETTLE_GRACE_MS (10 s) sits above both.
+    PAIR_SETTLE_SECONDS = 5.0
+    # 256 Hz: a paired headband's packet age is never more than one interval.
+    _PACKET_INTERVAL_MS = 4
 
     def connect(self) -> None:
         self.connected = True
@@ -308,11 +320,17 @@ class SimulatedMuseIngestionAdapter:
         with self._pair_lock:
             paired = self._paired_name
             discovered = list(self._discovered)
-            last = self._last_sample_at
-        if paired is None or last is None:
-            age: int | None = None
-        else:
-            age = max(0, int((self._clock() - last) * 1000.0))
+            paired_at = self._paired_at
+        # `_paired_at` is set and cleared with `_paired_name`, so it alone
+        # says whether a link exists.
+        age: int | None = None
+        if paired_at is not None:
+            since_pair = self._clock() - paired_at
+            if since_pair >= self.PAIR_SETTLE_SECONDS:
+                # Packets keep arriving whether or not anything reads them,
+                # so the age is where the clock sits inside the current
+                # packet interval -- independent of the sample stream.
+                age = int(since_pair * 1000.0) % self._PACKET_INTERVAL_MS
         return {
             "muse_connected": paired is not None,
             "muse_discovered": bool(discovered),
@@ -338,10 +356,6 @@ class SimulatedMuseIngestionAdapter:
             raise RuntimeError("Muse adapter not connected")
         self._focus_state = self._drift(self._focus_state, self._DRIFT_STEP)
         self._calm_state = self._drift(self._calm_state, self._DRIFT_STEP)
-        with self._pair_lock:
-            # Stamped whether or not anything is paired; `connect` clears it,
-            # so a link's age never counts samples from before the pairing.
-            self._last_sample_at = self._clock()
         base = self._BASE_LEVEL + (self._focus_state - 0.5) * self._LEVEL_SPAN
         # Lower calm -> wider cross-channel spread (more erratic signal).
         spread_scale = 1.6 - self._calm_state
@@ -429,11 +443,12 @@ class SimulatedMuseIngestionAdapter:
                 if name not in self._discovered:
                     raise RuntimeError(f"connect failed (device not in list): {name}")
                 self._paired_name = name
-                self._last_sample_at = None
+                # Every connect zeroes the packet clock, a repeat included.
+                self._paired_at = self._clock()
             elif cmd == "disconnect":
                 self._discovered = []
                 self._paired_name = None
-                self._last_sample_at = None
+                self._paired_at = None
             else:
                 raise RuntimeError(f"unknown bridge cmd: {cmd!r}")
 

@@ -101,36 +101,50 @@ def test_disconnect_clears_the_pairing_and_the_scan():
     assert meta["eeg_age_ms"] is None
 
 
-def test_eeg_age_is_null_on_a_fresh_link_then_measures_from_the_last_sample():
-    # The bridge zeroes its packet clock on CONNECTED and reports no age until
-    # the first packet; the page calls that "settling" and refuses to adopt it.
+def test_eeg_age_is_null_while_a_fresh_link_settles_then_reads_as_a_packet_clock():
+    # The bridge zeroes its packet clock on CONNECTED and a preset switch
+    # keeps it null for seconds; the page calls that "settling" and refuses
+    # to adopt it. Once packets flow the age is under one 256 Hz interval.
     adapter, clock = _adapter()
-    adapter.connect()
     _pair(adapter)
     assert adapter.get_ingestion_meta()["eeg_age_ms"] is None
-    adapter.read_sample()
-    assert adapter.get_ingestion_meta()["eeg_age_ms"] == 0
-    clock.now += 4.0
-    # Past the page's 3 s adoption bound: a link with no recent sample is not
-    # alive by the page's one rule, sim or hardware.
-    assert adapter.get_ingestion_meta()["eeg_age_ms"] == 4000
+    clock.now += adapter.PAIR_SETTLE_SECONDS - 0.5
+    assert adapter.get_ingestion_meta()["eeg_age_ms"] is None
+    clock.now += 0.5
+    age = adapter.get_ingestion_meta()["eeg_age_ms"]
+    assert age is not None and 0 <= age < adapter._PACKET_INTERVAL_MS
 
 
-def test_samples_read_before_pairing_do_not_age_the_new_link():
+def test_the_packet_clock_runs_without_the_sidecar_reading_a_sample():
+    # On hardware the bridge's clock is driven by BLE packets, so a paired
+    # headband stays adoptable (age under 3 s) across a stream stop. Stamped
+    # from read_sample the age grew unbounded and adoption was unreachable.
     adapter, clock = _adapter()
     adapter.connect()
-    adapter.read_sample()
-    clock.now += 60.0
     _pair(adapter)
+    adapter.disconnect()
+    clock.now += 600.0
+    age = adapter.get_ingestion_meta()["eeg_age_ms"]
+    assert age is not None and age < 3000
+
+
+def test_reading_samples_does_not_shorten_the_settle_window():
+    # The sidecar's 4 Hz reads must not end the settle within one tick, or
+    # the page's linkSettling state is never observable on the simulator.
+    adapter, clock = _adapter()
+    adapter.connect()
+    _pair(adapter)
+    for _ in range(8):
+        clock.now += 0.25
+        adapter.read_sample()
     assert adapter.get_ingestion_meta()["eeg_age_ms"] is None
 
 
 def test_a_repeat_connect_zeroes_the_packet_clock_like_the_bridge():
     adapter, clock = _adapter()
-    adapter.connect()
     _pair(adapter)
-    adapter.read_sample()
-    clock.now += 2.0
+    clock.now += adapter.PAIR_SETTLE_SECONDS + 1.0
+    assert adapter.get_ingestion_meta()["eeg_age_ms"] is not None
     adapter.send_bridge_command({"cmd": "connect", "name": adapter.SIM_DEVICE_NAME})
     assert adapter.get_ingestion_meta()["eeg_age_ms"] is None
 

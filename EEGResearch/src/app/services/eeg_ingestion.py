@@ -290,28 +290,35 @@ class SimulatedMuseIngestionAdapter:
         self._pair_lock = threading.Lock()
         self._discovered: list[str] = []
         self._paired_name: str | None = None
-        # monotonic() of the pairing, for `eeg_age_ms`. On hardware that age
-        # is the bridge's packet clock, driven by BLE whether or not the
-        # sidecar is reading -- so it is modelled from the pairing, never
-        # from `read_sample`: stamped by the consumer's reads it grew without
-        # bound across a stream stop (adoption unreachable) and reset within
-        # one tick of a connect (settling unobservable). Null, not 0, for
-        # PAIR_SETTLE_SECONDS after a connect, the way the bridge zeroes its
-        # packet clock on CONNECTED and a preset switch keeps it null.
+        # monotonic() of the pairing and of the last delivered packet, for
+        # `eeg_age_ms`. On hardware that age is the bridge's packet clock:
+        # zeroed on CONNECTED, then the time since the last BLE packet, which
+        # climbs when the headband goes silent while libMuse still says
+        # CONNECTED -- the state `linkAlive` and the bridge watchdog exist
+        # for. The simulator has no BLE, so **the sidecar's sample stream
+        # stands in for the packets, deliberately**: a running stream keeps
+        # the age near zero (stamped on every read and on stream start), a
+        # stopped one lets it climb from the last read, which is the drop.
+        # Modelled from the pairing alone (one earlier version) the age
+        # wrapped inside 0-3 ms for ever and no drop was reachable.
         self._paired_at: float | None = None
+        self._last_packet_at: float | None = None
 
     # The bridge reports no packet for a few seconds after every CONNECTED
     # (a preset switch interrupts streaming); PRESET_SETTLE_SECONDS on the
     # stream manager is the sidecar's allowance for the same window, and the
-    # page's SETTLE_GRACE_MS (10 s) sits above both.
+    # page's SETTLE_GRACE_MS (10 s) sits above both. Null, not 0, throughout.
     PAIR_SETTLE_SECONDS = 5.0
-    # 256 Hz: a paired headband's packet age is never more than one interval.
-    _PACKET_INTERVAL_MS = 4
 
     def connect(self) -> None:
         self.connected = True
         self._focus_state = random.uniform(0.4, 0.6)
         self._calm_state = random.uniform(0.4, 0.6)
+        with self._pair_lock:
+            # Stream up means packets flowing: under pull, Connect starts the
+            # stream and reads the status before the first 4 Hz tick, so a
+            # re-paired link must not read as silent for one tick.
+            self._last_packet_at = self._clock()
 
     def disconnect(self) -> None:
         self.connected = False
@@ -321,16 +328,18 @@ class SimulatedMuseIngestionAdapter:
             paired = self._paired_name
             discovered = list(self._discovered)
             paired_at = self._paired_at
+            last_packet = self._last_packet_at
         # `_paired_at` is set and cleared with `_paired_name`, so it alone
         # says whether a link exists.
         age: int | None = None
         if paired_at is not None:
-            since_pair = self._clock() - paired_at
-            if since_pair >= self.PAIR_SETTLE_SECONDS:
-                # Packets keep arriving whether or not anything reads them,
-                # so the age is where the clock sits inside the current
-                # packet interval -- independent of the sample stream.
-                age = int(since_pair * 1000.0) % self._PACKET_INTERVAL_MS
+            now = self._clock()
+            if now - paired_at >= self.PAIR_SETTLE_SECONDS:
+                # Packets are expected from the end of the settle; from then
+                # on the age is the time since the last delivered one.
+                settled_at = paired_at + self.PAIR_SETTLE_SECONDS
+                origin = max(settled_at, last_packet if last_packet is not None else settled_at)
+                age = max(0, int((now - origin) * 1000.0))
         return {
             "muse_connected": paired is not None,
             "muse_discovered": bool(discovered),
@@ -356,6 +365,9 @@ class SimulatedMuseIngestionAdapter:
             raise RuntimeError("Muse adapter not connected")
         self._focus_state = self._drift(self._focus_state, self._DRIFT_STEP)
         self._calm_state = self._drift(self._calm_state, self._DRIFT_STEP)
+        with self._pair_lock:
+            # A delivered packet: what keeps a paired link's age near zero.
+            self._last_packet_at = self._clock()
         base = self._BASE_LEVEL + (self._focus_state - 0.5) * self._LEVEL_SPAN
         # Lower calm -> wider cross-channel spread (more erratic signal).
         spread_scale = 1.6 - self._calm_state
@@ -443,12 +455,15 @@ class SimulatedMuseIngestionAdapter:
                 if name not in self._discovered:
                     raise RuntimeError(f"connect failed (device not in list): {name}")
                 self._paired_name = name
-                # Every connect zeroes the packet clock, a repeat included.
+                # Every connect zeroes the packet clock, a repeat included;
+                # a packet stamped before it is below the settle floor and
+                # so never counts, which is why nothing clears it here.
                 self._paired_at = self._clock()
             elif cmd == "disconnect":
                 self._discovered = []
                 self._paired_name = None
                 self._paired_at = None
+                self._last_packet_at = None
             else:
                 raise RuntimeError(f"unknown bridge cmd: {cmd!r}")
 

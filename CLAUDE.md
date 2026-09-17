@@ -619,13 +619,17 @@ pairs it, `disconnect` clears both, and the pairing fields (`muse_connected`, `m
 reported nothing discoverable and `send_bridge_command` raised, so under `EEG_SOURCE=sim` the
 page's Connect button always ended at "no device" while the poller recorded underneath it — a
 sim run could never exercise the pairing sequence, the adopt path or a drop. **`eeg_age_ms` is a
-packet clock modelled from the pairing, never from the sidecar's reads**: null for
+packet clock, and the sidecar's sample stream stands in for the packets, deliberately**: null for
 `PAIR_SETTLE_SECONDS` (5 s) after every connect, the way the bridge zeroes its clock on CONNECTED
-and a preset switch keeps it null, then under one 256 Hz interval for as long as the link stands,
-whether or not anything calls `read_sample`. Stamped from the reads instead (the first version),
-the age grew without bound across a stream stop, so Connect could never adopt a paired link, and
-the settle ended within one 4 Hz tick, so `linkSettling` was never observable. Both page states
-are reachable on the simulator now. Two things are deliberately unlike hardware: the sample stream runs
+and a preset switch keeps it null; then the time since the last delivered sample, stamped on every
+`read_sample` and on stream start, so a running stream keeps it under one 4 Hz tick and a
+*stopped* stream lets it climb. That climb is the drop — CONNECTED-but-silent, the state
+`linkAlive` and the bridge watchdog exist for — and it is the only way to reach it on a
+simulator with no BLE. Two earlier shapes each lost a page state: stamped from reads alone the
+settle ended within one tick (`linkSettling` unobservable); modelled from the pairing alone the
+age wrapped inside 0–3 ms for ever (no drop reachable). The stream-start stamp is what keeps
+adoption reachable: under pull, Connect starts the stream and reads the status before the first
+tick. Two things are deliberately unlike hardware: the sample stream runs
 whether or not anything is paired (a plain `start.ps1` run streams without a click, as before),
 and the pairing survives a stream stop, as the bridge holds a link across a session end. A
 device whose adapter has no `send_bridge_command` — the camera — still answers

@@ -101,31 +101,72 @@ def test_disconnect_clears_the_pairing_and_the_scan():
     assert meta["eeg_age_ms"] is None
 
 
-def test_eeg_age_is_null_while_a_fresh_link_settles_then_reads_as_a_packet_clock():
+def test_eeg_age_is_null_while_a_fresh_link_settles_then_counts_from_the_last_packet():
     # The bridge zeroes its packet clock on CONNECTED and a preset switch
     # keeps it null for seconds; the page calls that "settling" and refuses
-    # to adopt it. Once packets flow the age is under one 256 Hz interval.
-    adapter, clock = _adapter()
-    _pair(adapter)
-    assert adapter.get_ingestion_meta()["eeg_age_ms"] is None
-    clock.now += adapter.PAIR_SETTLE_SECONDS - 0.5
-    assert adapter.get_ingestion_meta()["eeg_age_ms"] is None
-    clock.now += 0.5
-    age = adapter.get_ingestion_meta()["eeg_age_ms"]
-    assert age is not None and 0 <= age < adapter._PACKET_INTERVAL_MS
-
-
-def test_the_packet_clock_runs_without_the_sidecar_reading_a_sample():
-    # On hardware the bridge's clock is driven by BLE packets, so a paired
-    # headband stays adoptable (age under 3 s) across a stream stop. Stamped
-    # from read_sample the age grew unbounded and adoption was unreachable.
+    # to adopt it. Once the stream delivers, the age is time since the last
+    # read -- under 3 s at the sidecar's 4 Hz, so the link is alive.
     adapter, clock = _adapter()
     adapter.connect()
     _pair(adapter)
+    assert adapter.get_ingestion_meta()["eeg_age_ms"] is None
+    clock.now += adapter.PAIR_SETTLE_SECONDS - 0.5
+    adapter.read_sample()
+    assert adapter.get_ingestion_meta()["eeg_age_ms"] is None
+    clock.now += 0.5
+    adapter.read_sample()
+    clock.now += 0.25
+    assert adapter.get_ingestion_meta()["eeg_age_ms"] == 250
+
+
+def test_a_silent_stream_lets_the_age_climb_which_is_the_drop():
+    # CONNECTED-but-silent is the hardware state linkAlive and the bridge
+    # watchdog exist for; on the simulator the stopped stream is what stands
+    # in for the headband going quiet. Modelled from the pairing alone the
+    # age wrapped inside 0-3 ms for ever and this state was unreachable.
+    adapter, clock = _adapter()
+    adapter.connect()
+    _pair(adapter)
+    clock.now += adapter.PAIR_SETTLE_SECONDS
+    adapter.read_sample()
+    adapter.disconnect()
+    clock.now += 60.0
+    meta = adapter.get_ingestion_meta()
+    assert meta["muse_connected"] is True
+    assert meta["eeg_age_ms"] == 60_000
+
+
+def test_a_delivered_packet_moves_the_age_origin_forward():
+    adapter, clock = _adapter()
+    adapter.connect()
+    _pair(adapter)
+    clock.now += adapter.PAIR_SETTLE_SECONDS + 10.0
+    assert adapter.get_ingestion_meta()["eeg_age_ms"] == 10_000
+    adapter.read_sample()
+    clock.now += 0.25
+    assert adapter.get_ingestion_meta()["eeg_age_ms"] == 250
+
+
+def test_a_link_that_never_delivered_counts_from_the_end_of_the_settle():
+    adapter, clock = _adapter()
+    _pair(adapter)
+    clock.now += adapter.PAIR_SETTLE_SECONDS + 2.0
+    assert adapter.get_ingestion_meta()["eeg_age_ms"] == 2000
+
+
+def test_restarting_the_stream_revives_the_link_before_the_first_read():
+    # Under pull, Connect starts the stream and reads the status before the
+    # first 4 Hz tick; a re-paired link must be adoptable at that moment.
+    adapter, clock = _adapter()
+    adapter.connect()
+    _pair(adapter)
+    clock.now += adapter.PAIR_SETTLE_SECONDS
+    adapter.read_sample()
     adapter.disconnect()
     clock.now += 600.0
-    age = adapter.get_ingestion_meta()["eeg_age_ms"]
-    assert age is not None and age < 3000
+    assert adapter.get_ingestion_meta()["eeg_age_ms"] >= 3000
+    adapter.connect()
+    assert adapter.get_ingestion_meta()["eeg_age_ms"] == 0
 
 
 def test_reading_samples_does_not_shorten_the_settle_window():
@@ -142,8 +183,10 @@ def test_reading_samples_does_not_shorten_the_settle_window():
 
 def test_a_repeat_connect_zeroes_the_packet_clock_like_the_bridge():
     adapter, clock = _adapter()
+    adapter.connect()
     _pair(adapter)
     clock.now += adapter.PAIR_SETTLE_SECONDS + 1.0
+    adapter.read_sample()
     assert adapter.get_ingestion_meta()["eeg_age_ms"] is not None
     adapter.send_bridge_command({"cmd": "connect", "name": adapter.SIM_DEVICE_NAME})
     assert adapter.get_ingestion_meta()["eeg_age_ms"] is None

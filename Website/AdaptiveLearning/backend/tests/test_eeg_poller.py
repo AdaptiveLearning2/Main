@@ -440,3 +440,132 @@ def test_the_sidecar_arm_runs_outside_the_poller_lock(monkeypatch):
     eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a", record=True)
     eeg_poller.start(_FakeSupabase(), "user-b", "session-2", "station-b")
     assert held_during_arm == [False, False]
+
+
+# --- notify_answer -----------------------------------------------------------
+
+
+def _record_reports(monkeypatch):
+    seen = []
+
+    def report(device_id=eeg_client.DEFAULT_DEVICE_ID, *, correct, difficulty=None):
+        seen.append((device_id, correct, difficulty))
+        return {"status": "ok", "data": {"ok": True, "applied": True}}
+
+    monkeypatch.setattr(eeg_client, "report_answer", report, raising=False)
+    return seen
+
+
+def test_an_answer_reaches_the_sidecar_behind_the_sessions_poller(monkeypatch):
+    seen = _record_reports(monkeypatch)
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    futures = [eeg_poller.notify_answer("session-1", True),
+               eeg_poller.notify_answer("session-1", False, "hard")]
+    assert all(f is not None for f in futures)
+    assert [f.result(timeout=5) for f in futures] == [True, True]
+    assert seen == [("station-a", True, None), ("station-a", False, "hard")]
+
+
+def test_the_answer_is_delivered_off_the_calling_thread(monkeypatch):
+    """`record_answer` is a sync endpoint on anyio's ~40-slot pool, and
+    `requests` applies its timeout to connect and read separately -- a
+    stalled sidecar would hold a slot ~6 s per answer. So the call is made
+    on the notify worker and the caller gets a future it must not wait on."""
+    import threading
+    threads = []
+
+    def report(device_id=eeg_client.DEFAULT_DEVICE_ID, *, correct, difficulty=None):
+        threads.append(threading.current_thread().name)
+        return {}
+    monkeypatch.setattr(eeg_client, "report_answer", report, raising=False)
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    eeg_poller.notify_answer("session-1", True).result(timeout=5)
+    assert threads and threads[0] != threading.current_thread().name
+    assert threads[0].startswith("eeg-notify")
+
+
+def test_a_stalled_sidecar_costs_dropped_notifications_not_threads(monkeypatch, capsys):
+    import threading
+    release = threading.Event()
+    started = threading.Event()
+
+    def stall(device_id=eeg_client.DEFAULT_DEVICE_ID, *, correct, difficulty=None):
+        started.set()
+        release.wait(timeout=10)
+        return {}
+    monkeypatch.setattr(eeg_client, "report_answer", stall, raising=False)
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    first = eeg_poller.notify_answer("session-1", True)
+    assert started.wait(timeout=5)
+    # One in flight plus the queue's worth: everything past the cap is
+    # refused at once, on the calling thread, and says so.
+    accepted = [eeg_poller.notify_answer("session-1", True)
+                for _ in range(eeg_poller.NOTIFY_MAX_PENDING + 3)]
+    assert sum(f is not None for f in accepted) == eeg_poller.NOTIFY_MAX_PENDING - 1
+    assert "answer notification dropped" in capsys.readouterr().out
+    release.set()
+    first.result(timeout=5)
+    for f in accepted:
+        if f is not None:
+            f.result(timeout=5)
+    # Drained, the cap is available again.
+    assert eeg_poller.notify_answer("session-1", True) is not None
+
+
+def test_a_session_with_no_poller_reports_nothing(monkeypatch):
+    seen = _record_reports(monkeypatch)
+    assert eeg_poller.notify_answer("session-9", True) is None
+    assert seen == []
+
+
+def test_under_push_the_backend_never_reaches_for_the_sidecar(monkeypatch):
+    seen = _record_reports(monkeypatch)
+    # A poller that exists (started under pull) is not enough: the mode is
+    # what says whether this backend can reach the sidecar at all.
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    monkeypatch.setattr(eeg_poller, "INGEST_MODE", "push")
+    assert eeg_poller.notify_answer("session-1", True) is None
+    assert seen == []
+
+
+def test_a_sidecar_that_refuses_the_answer_costs_a_log_line_not_the_answer(monkeypatch, capsys):
+    def refuse(device_id=eeg_client.DEFAULT_DEVICE_ID, *, correct, difficulty=None):
+        raise RuntimeError("404 Not Found")
+    monkeypatch.setattr(eeg_client, "report_answer", refuse, raising=False)
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    future = eeg_poller.notify_answer("session-1", True)
+    assert future is not None and future.result(timeout=5) is False
+    assert "could not report the answer" in capsys.readouterr().out
+
+
+def test_stop_all_joins_the_notify_worker(monkeypatch):
+    _record_reports(monkeypatch)
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    eeg_poller.notify_answer("session-1", True).result(timeout=5)
+    assert eeg_poller._notify_pool is not None
+    eeg_poller.stop_all()
+    assert eeg_poller._notify_pool is None and eeg_poller._notify_pending == 0
+    # Joined, not merely forgotten: an idle worker left blocked on its queue
+    # is the print-at-shutdown hazard the pollers are joined for.
+    import threading
+    assert not any(t.name.startswith("eeg-notify") and t.is_alive() for t in threading.enumerate())
+
+
+def test_stop_all_leaves_the_notify_counter_at_zero_with_a_delivery_in_flight(monkeypatch):
+    """Zeroed before the join, the in-flight delivery's `finally` took the
+    counter to -1 and the NOTIFY_MAX_PENDING bound gained a slot for the life
+    of the process -- in tests, where conftest calls stop_all after every
+    test, an order-dependent bound."""
+    import threading
+    release = threading.Event()
+
+    def stall(device_id=eeg_client.DEFAULT_DEVICE_ID, *, correct, difficulty=None):
+        release.wait(timeout=10)
+        return {}
+    monkeypatch.setattr(eeg_client, "report_answer", stall, raising=False)
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    assert eeg_poller.notify_answer("session-1", True) is not None
+    assert eeg_poller._notify_pending == 1
+    threading.Timer(0.2, release.set).start()
+    eeg_poller.stop_all()
+    assert eeg_poller._notify_pending == 0

@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # purpose: one adult, three runs is not a validation set, and flipping
     # it changes what every stored calm value means. See EEG_REFERENCE.md.
     eeg_spectrum_source: str = Field(default="sdk", alias="EEG_SPECTRUM_SOURCE")
+    # The simulator's synthesised pulse. Off by default, like MUSE_ENABLE_OPTICS
+    # on hardware: a plain run must not store a made-up heart rate. Read only
+    # under EEG_SOURCE=sim; the classroom simulation sets it.
+    eeg_sim_optics: bool = Field(default=False, alias="EEG_SIM_OPTICS")
     # The two open decisions on the local calm (HANDOFF.md), exposed so the
     # second wearer's capture can be replayed and a session run under either
     # alternative without a code change. Defaults are the shipped behaviour.
@@ -83,6 +87,22 @@ class Settings(BaseSettings):
             _log.warning("EEG_CALM_CENTRE_ON_ARM=%r is not 'keep' or 'midpoint'; using 'keep'", value)
             return "keep"
         return text
+
+    @field_validator("eeg_sim_optics", mode="before")
+    @classmethod
+    def _sim_optics_is_a_bool(cls, value):
+        # Read at import inside StreamManager() like the three above, so a
+        # typo (`ture`) must warn and mean off, not refuse the boot -- and
+        # off is the safe side: nothing synthesised gets stored by mistake.
+        if isinstance(value, bool):
+            return value
+        text = str(value if value is not None else "false").lower().strip()
+        if text in ("1", "true", "yes", "on"):
+            return True
+        if text in ("", "0", "false", "no", "off"):
+            return False
+        _log.warning("EEG_SIM_OPTICS=%r is not a boolean; using false", value)
+        return False
     muse_bridge_host: str = Field(default="127.0.0.1", alias="MUSE_BRIDGE_HOST")
     muse_bridge_port: int = Field(default=8765, alias="MUSE_BRIDGE_PORT")
     muse_bridge_timeout_seconds: int = Field(default=5, alias="MUSE_BRIDGE_TIMEOUT_SECONDS")

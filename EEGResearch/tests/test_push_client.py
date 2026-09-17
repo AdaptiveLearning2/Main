@@ -778,3 +778,27 @@ async def test_two_devices_do_not_suppress_each_others_readings(client):
         })
 
     assert client.status()["queued"]["heart"] == 2
+
+
+@pytest.mark.anyio
+async def test_the_synthetic_mark_travels_top_level_not_inside_raw(client):
+    """The backend's shared mapper derives `raw.synthetic` from the sample,
+    and strips the key from a client-posted `raw`; sending it top-level is
+    what makes the push path store the same mark the poller does."""
+    await _started(client)
+    client.submit_payload({
+        "timestamp": "2026-08-10T10:00:00Z", "device_id": "station1",
+        "features": {},
+        "heart": {"source": "muse_optics", "bpm": 68.2, "synthetic": True,
+                  "ts": "2026-08-10T10:00:00+00:00"},
+    })
+    sample = client._queues["heart"][0]
+    assert sample["synthetic"] is True
+    assert "synthetic" not in sample["raw"]
+    client.submit_payload({
+        "timestamp": "2026-08-10T10:00:10Z", "device_id": "station1",
+        "features": {},
+        "heart": {"source": "muse_optics", "bpm": 68.5,
+                  "ts": "2026-08-10T10:00:10+00:00"},
+    })
+    assert client._queues["heart"][1]["synthetic"] is None

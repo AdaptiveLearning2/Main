@@ -565,3 +565,20 @@ def test_head_pose_survives_the_round_trip(store):
     row = store["face_signals"][-1]
     assert (row["head_yaw"], row["head_pitch"], row["head_roll"]) == (12.5, -3.25, 7.75)
     assert (row["gaze_x"], row["gaze_y"]) == (0.1, -0.2)
+
+
+def test_the_synthetic_mark_is_derived_from_the_sample_never_from_the_posted_raw(store):
+    """The simulator's pulse (EEG_SIM_OPTICS) is marked on the push path the
+    way the poller marks it: a top-level field the shared mapper turns into
+    `raw.synthetic`. A client cannot mark or unmark a row through `raw`."""
+    _consent(store, headband_optical_enabled=True)
+
+    out = _post_heart([
+        _heart(ts="2026-08-09T10:00:00Z", synthetic=True),
+        _heart(ts="2026-08-09T10:00:01Z"),
+        _heart(ts="2026-08-09T10:00:02Z", raw={"synthetic": True}),
+    ])
+
+    assert out["inserted"] == 3
+    marks = [row["raw"].get("synthetic") for row in store["heart_signals"]]
+    assert marks == [True, None, None]

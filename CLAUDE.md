@@ -665,6 +665,85 @@ and the pairing survives a stream stop, as the bridge holds a link across a sess
 device whose adapter has no `send_bridge_command` — the camera — still answers
 `ok: false, commands require EEG_SOURCE=muse`.
 
+**Its electrode contact varies, on the clock, in two layers.** It was `hsi [1,1,1,1]` for ever,
+so a sim run never reached the contact gate, the confidence step at the degraded line or a
+`contact_poor` row — while on hardware degraded is the ordinary state and poor the fault. The strap
+alternates seated (90–300 s) and loose (20–60 s) episodes, and inside an episode each electrode
+holds an HSI state (1/2/4) for a drawn streak and is redrawn with the episode's weights
+(`CONTACT_WEIGHTS`, `CONTACT_STREAK_SECONDS`, `STRAP_PHASE_SECONDS`). **The strap layer is what
+makes `poor` reachable**: with independent per-electrode draws, three-of-four poor was ~1% of ticks
+at any weights, since electrodes going poor *together* is what a loose strap does. Measured through
+`SignalProcessor._contact_ratio` (its 5 s smoothing and lines, not the raw hsi) over two simulated
+hours: good ~30%, degraded ~55%, poor ~14%, pinned by a test with loose bounds. `is_good` follows
+hsi (≤ 2 seated) so the processor's min of the two never reads a contradiction, and
+`band_channels_used` counts the seated ones. Streaks are long against the 5 s smoothing, so one is
+a verdict rather than a blip. **The raw channels are untouched**: contact changes what the bridge
+reports about the electrodes, not the samples, so the artifact gate sees the same signal. The
+adapter takes a `seed`, and **every draw it makes comes from its own generators** — contact,
+battery, the resting heart rate, the state drift and the channel noise from one `random.Random`,
+the optical noise from its own numpy generator, so building an optics window (on the heart
+cadence, not the tick) cannot shift the contact sequence. A draw from the module-level `random`
+anywhere in the class breaks the replay, and a test replays a run to catch it. Unseeded simulators
+differ.
+
+**Its cognitive state answers the lesson.** `record_answer` ends with a best-effort
+`eeg_poller.notify_answer`, which under pull only, and only for a session with a live poller,
+POSTs `/api/v1/session/answer` on the sidecar through `eeg_client.report_answer` — **on a
+one-worker notify pool, never the request thread**: `record_answer` is a sync endpoint on anyio's
+~40-slot pool and `requests` applies its timeout to connect and read separately, so a sidecar that
+accepts and then stalls would hold a slot ~6 s per answer on the hottest path with the ingest
+endpoints queuing behind it. Pending deliveries are capped (`NOTIFY_MAX_PENDING`); past the cap
+a notification is dropped with a log line, so a stalled sidecar costs notifications, never
+threads. `stop_all` shuts the pool down and joins it, for the reason the pollers are joined (it
+prints on failure), **and never resets the pending counter**: every submit is balanced by its
+delivery's `finally`, so after the join it is 0 on its own, and zeroing it *before* the join left
+it at −1 — one extra slot under the cap for the life of the process, and in the test process,
+where `conftest` calls `stop_all` after every test, an order-dependent bound. The call returns the
+delivery's future, and nothing on the request path waits on it;
+`stream_manager.report_answer` hands it to the adapter's `report_answer` if it has one and answers
+`applied: false` otherwise, so **a real headband ignores it and nothing feeds back into scoring on
+hardware**. The simulator nudges its hidden focus and calm per answer (a miss pulls calm towards
+the stressed line, more on a hard question; a correct answer lifts focus) into a bounded offset
+(`TASK_BIAS_BOUND`) that decays on the clock (`TASK_BIAS_DECAY_SECONDS`), applied to the state
+*before* the bands and the raw channels are solved from it, so the processor meets it through its
+own 4 s smoothing and artifact gate. It cannot trip that gate: delta and gamma are constants, alpha
+moves inside its usual span, and the raw spread scales 0.6–1.6 with calm, a 2.7× range under the
+3.5× jump line — pinned by a test. `focused` still cannot fire on a sim run (calm ≥ 0.5 with high
+focus, and the sim's bands share alpha and beta by construction); that is the pipeline's property,
+not the bias's. The backend sends `correct` only — the answer payload carries no difficulty — and
+the sidecar route is admin-only under pull, like `/session/arm`.
+
+**It carries a synthesised pulse, fed through the unmodified heart path — opt-in, and marked.**
+Off by default (`EEG_SIM_OPTICS=false`, read only under `sim`), for the reason `MUSE_ENABLE_OPTICS`
+is off on hardware: a plain `./start.ps1` must not store a made-up heart rate, and off, every
+window is refused as `no_samples` exactly as a headband without optics is. The classroom
+simulation sets it. On, the window is `synthetic`, `build_heart_record` puts that on the record
+(only when true, so hardware records keep their shape) and `signal_mapping` writes it into the
+row's `raw` — the source stays `muse_optics`, because consent is enforced per sensor and the pulse
+stands in for that sensor, so `raw.synthetic` is what separates a stored rate nothing measured
+from one a headband did, in the rollup and everything downstream of it. **Both ingestion paths
+carry it the same way**: `push_client` sends it as a top-level field of the heart sample (never
+inside the `raw` it hand-builds), `HeartSample.synthetic` receives it, and `/api/signals/heart`
+puts it on the block the shared mapper derives from — so a client cannot mark or unmark a row
+by posting the key in `raw`, on either path, and only a derived `True` survives. The first cut
+marked the poller path only; a camera run (`-Camera` selects push) stored the unmarked row the
+mark exists to prevent — the zeroed-rows rule again: anything of this kind belongs in the mapper.
+`EEG_SIM_OPTICS` takes the same tolerant validator #189 gives the other boot settings, for the same
+reason: it is read at import inside `StreamManager()`, so a typo (`ture`) must warn and mean off
+rather than refuse the sidecar boot — and off is the safe side here, since nothing synthesised is
+then stored by mistake. As a plain pydantic `bool` it was a `bool_parsing` error at import.
+`optics_window` builds the last 25 s on demand from the clock — a pulse at a resting rate drawn per simulator
+(`HEART_REST_BPM_RANGE`, 62–84) with a slow drift, raised by misses through the same decaying task
+bias (`HEART_TASK_NUDGE`, bounded by `HEART_TASK_BOUND`), a second harmonic so a spectral argmax
+cannot read double, and independent noise per channel so the beat consensus has four opinions of
+one heart — at 64 Hz on the bottom optics rung's four channels, complete and gap-free (the
+sample-loss gates have real captures). History exists while the stream is up *and* a device is
+paired, from whichever began later, and is cleared with the stream, the link or `clear_optics`,
+as the bridge adapter clears its buffer. So a sim run sees `warming_up` for the first window,
+`unconfirmed_anchor` on the first full one, then a trusted rate within a few bpm of the simulator's
+own, RMSSD present or refused by name, and `optical_supported: true` on the meta. Nothing
+downstream is told it is synthetic beyond `bridge_mode: python_sim`.
+
 ### Samples are stored during a session, not while a headband merely sits paired
 
 Under pull, Connect has to start the poller — it is what starts the sidecar's device stream, and
@@ -697,8 +776,14 @@ fault, and it is why the badge renders nothing rather than `--%`: a permanent em
 broken sensor. The three-state rule applies with unusual force here because **0% is a real and
 alarming reading** — `pct || null` anywhere on this path erases exactly the value the badge exists
 for, so the checks are `typeof pct === 'number'` and `!= null`. The bridge stores −1 for "not
-reported" and `main.cpp` turns that into JSON null; `EEG_SOURCE=sim` reports null too, on the same
-grounds as it emitting no heart block.
+reported" and `main.cpp` turns that into JSON null. **`EEG_SOURCE=sim` reports a simulated charge
+since 2026-09-16** (it was null, on the grounds that a made-up percentage is a number a student
+acts on; the classroom simulation needs the badge exercised): null for
+`BATTERY_FIRST_REPORT_SECONDS` (50 s) after every connect, then a level drawn once per simulator
+from `BATTERY_START_RANGE` (55–100) draining at `BATTERY_DRAIN_PCT_PER_HOUR` (10) on the clock,
+not the stream — a BLE event, like the real one — floored at a reported `0.0`, never `None`. The
+charge survives a disconnect (one headband; the *report* goes null with the link) and a repeat
+connect goes null again for the first-report window, as the bridge's stored value does.
 
 Cleared on disconnect in both places — `reset_device_fields_locked` and the page's own state. A
 charge percentage left standing describes the headband that just went away, and it is the one
@@ -1357,8 +1442,12 @@ The headband is the primary heart source (the camera is emotion-only), and it re
   ~40 consecutive ticks. `map_heart_to_heart_signal` prefers `heart["ts"]` over the tick's, the push
   client dedupes per `(device, source)`, and the poller upserts on
   `heart_session_source_ts_key`. The camera's block has no `ts` and still takes the tick's.
-- **`EEG_SOURCE=sim` produces no heart block at all** — the simulator does not model an optical
-  channel, and a simulated pulse would be a number on a parent's chart with nothing behind it.
+- **`EEG_SOURCE=sim` produces a heart block since 2026-09-16.** It did not — the simulator modelled
+  no optical channel, and a simulated pulse would be a number on a parent's chart with nothing
+  behind it — and the classroom simulation needs the heart path exercised end to end, so
+  `SimulatedMuseIngestionAdapter.optics_window` now synthesises one and it goes through this
+  same, unmodified `build_heart_record`. See *The simulator pairs like a headband* for what it
+  models; `bridge_mode: python_sim` on the payload is the only mark of it.
 
 **A payload key needs a field on `InterpretedEegData` or `/api/v1/state` deletes it.** `Envelope.data`
 is typed `InterpretedEegData | CameraData | None`, so the sidecar's snapshot is serialised through a

@@ -47,11 +47,23 @@ def _flat_window(samples=1600):
 
 
 def test_a_device_without_optics_produces_no_block():
-    """Includes the simulator deliberately: it models no optical channel, and
-    a simulated pulse would be a number on a parent's chart with nothing
-    behind it."""
-    assert _session().adapter.__class__.__name__ != "TcpMuseBridgeAdapter"
-    assert _session()._optical_heart_block() is None
+    """An adapter with no `optics_window` -- the camera's shape -- yields no
+    heart block at all, rather than a block that says `no_samples`. The
+    simulator used to be here deliberately; since 2026-09-16 it synthesises
+    a pulse for the classroom simulation (tests/test_sim_device.py), so a
+    sim-kind session does produce one."""
+    class _NoOptics:
+        def disconnect(self):
+            pass
+
+    session = _session()
+    session.adapter = _NoOptics()
+    assert session._optical_heart_block() is None
+    # The simulator, unpaired, still answers through the real path: a block
+    # refused as no_samples, which is a different fact from no block.
+    fresh = _session()
+    assert fresh.adapter.__class__.__name__ == "SimulatedMuseIngestionAdapter"
+    assert fresh._optical_heart_block()["rejected_by"] == "no_samples"
 
 
 def test_the_block_is_computed_once_and_then_held():

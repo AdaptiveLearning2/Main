@@ -137,6 +137,12 @@ def build_heart_record(window: OpticsWindow, tracker: HeartRateTracker,
         "rmssd_rejected_by": None,
     }
 
+    if window.synthetic:
+        # Only ever set by the simulator. Present only when true, so a
+        # hardware record keeps its exact shape; the backend's mapper copies
+        # it into the row's `raw` for the same reason it is here at all.
+        record["synthetic"] = True
+
     if len(window.channels) == 0:
         # Prefer the window's own reason over the generic `no_samples`, which
         # implies the headband produced nothing -- a discarded window is

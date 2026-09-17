@@ -371,6 +371,11 @@ class PushClient:
                 "stress_score": heart.get("stress_score"),
                 "stress_category": heart.get("stress_category"),
                 "trusted": heart.get("trusted"),
+                # The simulator's mark, sent top-level so the backend's
+                # shared mapper derives `raw.synthetic` for this path exactly
+                # as it does for the poller's -- not written into `raw` here,
+                # where the endpoint would strip it as a client-posted key.
+                "synthetic": heart.get("synthetic"),
                 "raw": {"device_id": device_id,
                         "confidence": heart.get("confidence"),
                         "rejected_by": heart.get("rejected_by"),

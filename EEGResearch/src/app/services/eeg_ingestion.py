@@ -253,10 +253,24 @@ class SimulatedMuseIngestionAdapter:
     "focused" label's focus>=70% AND calm>=50% hard to satisfy at once by
     construction -- a property of the real formula, not a simulator bug.
 
-    It also pairs like a headband (see send_bridge_command): a scan finds
-    SIM_DEVICE_NAME, connect holds it, and the pairing fields on
-    get_ingestion_meta follow, so the page's Connect button runs to
-    completion on a sim run instead of stopping at "no device".
+    Since 2026-09-16 it also models the device around the signal, so a
+    classroom-scale run on the simulator exercises the same paths a
+    headband does (CLAUDE.md, "The simulator pairs like a headband"):
+
+    * pairing -- refresh finds SIM_DEVICE_NAME, connect holds it, and
+      `eeg_age_ms` is a packet clock for which the sample stream stands in,
+      so a stopped stream is the drop (send_bridge_command, _pairing_fields);
+    * a battery, null for the first 50 s of a link then a slow drain;
+    * electrode contact that varies on the clock, a strap that loosens over
+      electrodes that streak, so degraded is ordinary and poor reachable
+      (_contact_fields);
+    * a cognitive state that answers the lesson through report_answer, a
+      bounded, decaying bias applied before the bands are solved;
+    * a synthesised pulse on optics_window, fed through the unmodified
+      heart path.
+
+    Every clock-driven part takes the injected `clock`, and `seed` makes a
+    run reproducible.
     """
 
     # Keeps the hidden state continuous tick-to-tick instead of resetting.
@@ -274,7 +288,8 @@ class SimulatedMuseIngestionAdapter:
     # involved: the bridge's names are `MuseS-XXXX` from the BLE advert.
     SIM_DEVICE_NAME = "MuseS-SIM0"
 
-    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, clock: Callable[[], float] = time.monotonic, seed: int | None = None,
+                 sim_optics: bool = False) -> None:
         self.connected = False
         self._focus_state = 0.5
         self._calm_state = 0.5
@@ -303,25 +318,76 @@ class SimulatedMuseIngestionAdapter:
         # wrapped inside 0-3 ms for ever and no drop was reachable.
         self._paired_at: float | None = None
         self._last_packet_at: float | None = None
+        # Charge at the moment it was drawn, and when. libMuse fires BATTERY
+        # on its own schedule, so the bridge reports null for most of the
+        # first minute of every link and a percentage after; the simulator
+        # draws a level on the first connect, drains it slowly on the clock
+        # (a BLE event, not a sample -- independent of the stream), keeps it
+        # across connects (one headband, one charge), and reports null while
+        # nothing is paired, like `reset_device_fields_locked`. 0 is a real
+        # reading and is reported as 0.0, never None.
+        self._battery_level: float | None = None
+        self._battery_drawn_at: float | None = None
+        # Per-electrode contact streaks (see _contact_fields); every streak
+        # has expired at construction, so the first report draws them all.
+        # Every draw the simulator makes comes from these two, so a `seed`
+        # replays a run: contact, battery, the resting rate, the drift and
+        # the channel noise from `_rng`; the optical noise from its own
+        # generator, so building an optics window (which happens on the
+        # heart cadence, not the tick) cannot shift the contact sequence.
+        self._rng = random.Random(seed)
+        self._optics_rng = np.random.default_rng(seed)
+        # Opt-in, like MUSE_ENABLE_OPTICS on hardware (EEG_SIM_OPTICS).
+        self.optics_enabled = bool(sim_optics)
+        self._contact_state: list[float] = [1.0] * self.CONTACT_ELECTRODES
+        self._contact_until: list[float] = [float("-inf")] * self.CONTACT_ELECTRODES
+        # Starts loose with an expired phase, so the first report draws a
+        # seated phase and its electrodes rather than opening on a fault.
+        self._strap_phase = "loose"
+        self._strap_until = float("-inf")
+        # Task-responsive bias on the hidden states (see report_answer):
+        # a bounded offset that decays on the clock, applied to the state
+        # *before* the bands are solved from it, so it reaches the processor
+        # through the same smoothing and gates a real change would.
+        self._task_focus = 0.0
+        self._task_calm = 0.0
+        self._task_bpm = 0.0
+        self._task_at: float | None = None
+        # Optical history (see optics_window): the simulated heart's resting
+        # rate, and the clocks that bound the history it can report.
+        self._heart_rest_bpm = self._rng.uniform(*self.HEART_REST_BPM_RANGE)
+        self._stream_started_at: float | None = None
+        self._optics_cleared_at: float = float("-inf")
 
     # The bridge reports no packet for a few seconds after every CONNECTED
     # (a preset switch interrupts streaming); PRESET_SETTLE_SECONDS on the
     # stream manager is the sidecar's allowance for the same window, and the
     # page's SETTLE_GRACE_MS (10 s) sits above both. Null, not 0, throughout.
     PAIR_SETTLE_SECONDS = 5.0
+    # Null until the first BATTERY packet, "most of the first minute" on
+    # hardware (CLAUDE.md, Battery is device telemetry).
+    BATTERY_FIRST_REPORT_SECONDS = 50.0
+    # A Muse S lasts roughly ten hours; a lesson sees a few points of drain.
+    BATTERY_DRAIN_PCT_PER_HOUR = 10.0
+    BATTERY_START_RANGE = (55.0, 100.0)
 
     def connect(self) -> None:
         self.connected = True
-        self._focus_state = random.uniform(0.4, 0.6)
-        self._calm_state = random.uniform(0.4, 0.6)
+        self._focus_state = self._rng.uniform(0.4, 0.6)
+        self._calm_state = self._rng.uniform(0.4, 0.6)
         with self._pair_lock:
             # Stream up means packets flowing: under pull, Connect starts the
             # stream and reads the status before the first 4 Hz tick, so a
             # re-paired link must not read as silent for one tick.
             self._last_packet_at = self._clock()
+            self._stream_started_at = self._clock()
 
     def disconnect(self) -> None:
         self.connected = False
+        with self._pair_lock:
+            # Like the bridge adapter: whatever spans a stream stop is two
+            # recordings, so the optical history does not survive it.
+            self._stream_started_at = None
 
     def _pairing_fields(self) -> dict[str, Any]:
         with self._pair_lock:
@@ -329,9 +395,12 @@ class SimulatedMuseIngestionAdapter:
             discovered = list(self._discovered)
             paired_at = self._paired_at
             last_packet = self._last_packet_at
+            level = self._battery_level
+            drawn_at = self._battery_drawn_at
         # `_paired_at` is set and cleared with `_paired_name`, so it alone
         # says whether a link exists.
         age: int | None = None
+        battery: float | None = None
         if paired_at is not None:
             now = self._clock()
             if now - paired_at >= self.PAIR_SETTLE_SECONDS:
@@ -340,6 +409,10 @@ class SimulatedMuseIngestionAdapter:
                 settled_at = paired_at + self.PAIR_SETTLE_SECONDS
                 origin = max(settled_at, last_packet if last_packet is not None else settled_at)
                 age = max(0, int((now - origin) * 1000.0))
+            if (now - paired_at >= self.BATTERY_FIRST_REPORT_SECONDS
+                    and level is not None and drawn_at is not None):
+                drained = self.BATTERY_DRAIN_PCT_PER_HOUR * (now - drawn_at) / 3600.0
+                battery = round(max(0.0, level - drained), 1)
         return {
             "muse_connected": paired is not None,
             "muse_discovered": bool(discovered),
@@ -347,13 +420,13 @@ class SimulatedMuseIngestionAdapter:
             "muse_devices": discovered,
             "active_muse_name": paired or "",
             "eeg_age_ms": age,
+            "battery_percent": battery,
         }
 
-    @staticmethod
-    def _drift(value: float, step: float) -> float:
+    def _drift(self, value: float, step: float) -> float:
         # Reflect off the [0, 1] boundaries instead of clamping, so the walk
         # doesn't stick near an edge over a long session.
-        value += random.uniform(-step, step)
+        value += self._rng.uniform(-step, step)
         if value < 0.0:
             value = -value
         elif value > 1.0:
@@ -368,15 +441,18 @@ class SimulatedMuseIngestionAdapter:
         with self._pair_lock:
             # A delivered packet: what keeps a paired link's age near zero.
             self._last_packet_at = self._clock()
-        base = self._BASE_LEVEL + (self._focus_state - 0.5) * self._LEVEL_SPAN
+        focus, calm = self._effective_states()
+        base = self._BASE_LEVEL + (focus - 0.5) * self._LEVEL_SPAN
         # Lower calm -> wider cross-channel spread (more erratic signal).
-        spread_scale = 1.6 - self._calm_state
+        # Bounded 0.6..1.6, a 2.7x range, under the processor's 3.5x spread
+        # jump: no task bias, however abrupt, reads as an artifact.
+        spread_scale = 1.6 - calm
         return EegSample(
             timestamp=datetime.now(tz=timezone.utc),
-            channel_tp9=base + random.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
-            channel_af7=base + random.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
-            channel_af8=base + random.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
-            channel_tp10=base + random.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
+            channel_tp9=base + self._rng.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
+            channel_af7=base + self._rng.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
+            channel_af8=base + self._rng.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
+            channel_tp10=base + self._rng.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
         )
 
     def get_ingestion_meta(self) -> dict[str, Any]:
@@ -393,12 +469,13 @@ class SimulatedMuseIngestionAdapter:
         # alpha/theta/gamma are picked first; beta is solved IN LOG SPACE to
         # hit the target focus log-ratio exactly, so focus_score tracks
         # focus_state while calm tapers as focus rises.
-        alpha = 0.10 + self._calm_state * 0.45
+        focus, calm = self._effective_states()
+        alpha = 0.10 + calm * 0.45
         theta = 0.10
         gamma = 0.05
         target_focus_log_ratio = self._FOCUS_BAND_GAIN * (
             SignalProcessor.FOCUS_LOG_RATIO_MIN
-            + self._focus_state * (SignalProcessor.FOCUS_LOG_RATIO_MAX - SignalProcessor.FOCUS_LOG_RATIO_MIN)
+            + focus * (SignalProcessor.FOCUS_LOG_RATIO_MAX - SignalProcessor.FOCUS_LOG_RATIO_MIN)
         )
         # focus = ln(beta_p) - ln(alpha_p + theta_p), so
         #   beta_p = exp(target) * (alpha_p + theta_p)
@@ -413,10 +490,13 @@ class SimulatedMuseIngestionAdapter:
             **self._pairing_fields(),
             "bluetooth_enabled": True,
             "firmware_version": "sim-1.0",
-            # None, never a plausible-looking number -- the simulator has no
-            # battery, and a made-up percentage is a reading a student could
-            # act on.
-            "battery_percent": None,
+            # The simulated headband carries an optical channel only when
+            # asked (EEG_SIM_OPTICS; see optics_window).
+            "optical_supported": self.optics_enabled,
+            # `battery_percent` rides in the pairing fields: a simulated
+            # charge, drawn on connect and drained on the clock, so the badge
+            # beside Disconnect and the null-for-the-first-minute rule get
+            # exercised on a sim run.
             # Also Bels. delta isn't used by either log-ratio but is persisted
             # to cognitive_signals alongside the others, so it needs the same
             # scale or stored sim rows are inconsistent.
@@ -425,13 +505,223 @@ class SimulatedMuseIngestionAdapter:
             "alpha": round(alpha, 3),
             "beta": round(beta, 3),
             "gamma": round(gamma, 3),
-            # Good contact on all four channels, so the simulator exercises the
-            # same signal-quality path as real hardware.
-            "hsi": [1.0, 1.0, 1.0, 1.0],
-            "is_good": [1.0, 1.0, 1.0, 1.0],
-            "band_channels_used": 4,
+            **self._contact_fields(),
             "notch_filtered": False,
         }
+
+    # --- electrode contact -------------------------------------------------
+    #
+    # On hardware, degraded contact (2 of 4 electrodes) is the ordinary
+    # state and poor is the fault (EEG_REFERENCE.md); a simulator reporting
+    # hsi [1,1,1,1] for ever never reaches the contact gate, the confidence
+    # step at the degraded line, or a contact_poor row. Two layers, both on
+    # the clock (not per read, so the poll rate does not set the pace):
+    #
+    # * the strap alternates between seated and loose episodes; electrodes
+    #   go poor *together* when it is loose, which is what a strap does and
+    #   what independent per-electrode draws cannot produce -- with them,
+    #   three-of-four poor (the whole-headband `poor` verdict) was ~1% of
+    #   ticks whatever the per-electrode weights;
+    # * inside an episode each electrode runs its own streaks -- a state in
+    #   HSI terms (1 good, 2 mediocre, 4 poor) held for a drawn duration,
+    #   then redrawn with the episode's weights.
+    #
+    # `is_good` follows hsi (seated is good or mediocre), so the processor's
+    # min of the two never reads a contradiction. Through `_contact_ratio`'s
+    # 5 s smoothing and its lines (>= 0.8 good, >= 0.4 degraded) this lands
+    # the verdict mostly on degraded with poor as an occasional minority --
+    # pinned by a test that drives the processor over simulated hours.
+    # Streaks are long against the 5 s smoothing so one is a verdict, not a
+    # blip smoothed away. The raw channels are untouched: contact changes
+    # what the bridge *reports* about the electrodes, not the samples, so
+    # the artifact gate sees the same signal as before.
+    CONTACT_ELECTRODES = 4
+    # (hsi state, draw weight) per strap phase.
+    CONTACT_WEIGHTS = {
+        "seated": ((1.0, 0.50), (2.0, 0.35), (4.0, 0.15)),
+        "loose": ((1.0, 0.15), (2.0, 0.30), (4.0, 0.55)),
+    }
+    CONTACT_STREAK_SECONDS = {1.0: (20.0, 90.0), 2.0: (15.0, 60.0), 4.0: (10.0, 45.0)}
+    STRAP_PHASE_SECONDS = {"seated": (90.0, 300.0), "loose": (20.0, 60.0)}
+
+    def _contact_fields(self) -> dict[str, Any]:
+        now = self._clock()
+        with self._pair_lock:
+            if now >= self._strap_until:
+                self._strap_phase = "loose" if self._strap_phase == "seated" else "seated"
+                lo, hi = self.STRAP_PHASE_SECONDS[self._strap_phase]
+                self._strap_until = now + self._rng.uniform(lo, hi)
+                # A strap moving re-seats every electrode at once.
+                self._contact_until = [float("-inf")] * self.CONTACT_ELECTRODES
+            weights = self.CONTACT_WEIGHTS[self._strap_phase]
+            for i in range(self.CONTACT_ELECTRODES):
+                if now >= self._contact_until[i]:
+                    state = self._rng.choices(
+                        [s for s, _ in weights], weights=[w for _, w in weights]
+                    )[0]
+                    lo, hi = self.CONTACT_STREAK_SECONDS[state]
+                    self._contact_state[i] = state
+                    self._contact_until[i] = now + self._rng.uniform(lo, hi)
+            hsi = list(self._contact_state)
+        is_good = [1.0 if v <= 2.0 else 0.0 for v in hsi]
+        return {
+            "hsi": hsi,
+            "is_good": is_good,
+            # The bridge averages bands over the channels it trusts.
+            "band_channels_used": max(1, int(sum(is_good))),
+        }
+
+    # --- task-responsive cognitive state -------------------------------------
+    #
+    # A student's answers move their state, and a simulator whose focus and
+    # calm walk at random regardless never lets the difficulty engine's
+    # `stressed` ease-off fire for a reason. Each recorded answer nudges the
+    # hidden states: a miss pulls calm down (towards the stressed line,
+    # harder on a hard question) and focus a little; a correct answer nudges
+    # focus up and calm slightly. The nudges accumulate into a bounded
+    # offset that decays on the clock, so a run of misses reaches the
+    # stressed line and a quiet stretch drifts back. Applied to the hidden
+    # state before the bands are solved, so the processor sees it through
+    # its own 4 s smoothing and artifact gate: alpha moves with calm within
+    # its usual span, delta and gamma are constants, and the raw spread is
+    # bounded (see read_sample) under the 3.5x jump line. `focused` still
+    # cannot fire -- it needs calm >= 0.5 with high focus, and the sim's
+    # bands share alpha and beta by construction -- which is the pipeline's
+    # own property, not the bias's.
+    TASK_BIAS_BOUND = 0.25
+    TASK_BIAS_DECAY_SECONDS = 90.0
+    TASK_NUDGE = {
+        # (focus, calm) per answer outcome; a hard miss is scaled up.
+        "correct": (0.05, 0.02),
+        "wrong": (-0.03, -0.08),
+    }
+    TASK_HARD_MISS_SCALE = 1.5
+
+    def report_answer(self, correct: bool, difficulty: str | None = None) -> None:
+        """A recorded answer: nudge the hidden states (see the block above)."""
+        now = self._clock()
+        with self._pair_lock:
+            self._decay_task_bias_locked(now)
+            d_focus, d_calm = self.TASK_NUDGE["correct" if correct else "wrong"]
+            if not correct and (difficulty or "").lower() == "hard":
+                d_focus *= self.TASK_HARD_MISS_SCALE
+                d_calm *= self.TASK_HARD_MISS_SCALE
+            b = self.TASK_BIAS_BOUND
+            self._task_focus = max(-b, min(b, self._task_focus + d_focus))
+            self._task_calm = max(-b, min(b, self._task_calm + d_calm))
+            d_bpm = self.HEART_TASK_NUDGE["correct" if correct else "wrong"]
+            if not correct and (difficulty or "").lower() == "hard":
+                d_bpm *= self.TASK_HARD_MISS_SCALE
+            lo, hi = self.HEART_TASK_BOUND
+            self._task_bpm = max(lo, min(hi, self._task_bpm + d_bpm))
+            self._task_at = now
+
+    def _decay_task_bias_locked(self, now: float) -> None:
+        if self._task_at is None:
+            return
+        dt = max(0.0, now - self._task_at)
+        if dt > 0.0:
+            factor = math.exp(-dt / self.TASK_BIAS_DECAY_SECONDS)
+            self._task_focus *= factor
+            self._task_calm *= factor
+            self._task_bpm *= factor
+            self._task_at = now
+
+    def _effective_states(self) -> tuple[float, float]:
+        """The hidden states with the task bias applied, clamped to 0..1."""
+        with self._pair_lock:
+            self._decay_task_bias_locked(self._clock())
+            focus = self._focus_state + self._task_focus
+            calm = self._calm_state + self._task_calm
+        return max(0.0, min(1.0, focus)), max(0.0, min(1.0, calm))
+
+    # --- optical channel: a simulated pulse -----------------------------------
+    #
+    # The simulator used to model no optical channel, so `EEG_SOURCE=sim`
+    # produced no heart block: "a simulated pulse would be a number on a
+    # parent's chart with nothing behind it". For the classroom simulation
+    # the heart path has to be exercised end to end -- the 25 s window, the
+    # unconfirmed-anchor hold, RMSSD's own refusals, the poller's consent
+    # gate and the badges -- so this synthesises one and feeds it through
+    # the *unmodified* `optics_processing.build_heart_record`, the same
+    # code a headband's samples go through. Nothing downstream is told it
+    # is synthetic beyond `bridge_mode: python_sim` on the payload.
+    #
+    # The window is built on demand from the clock: a pulse at the current
+    # rate (a resting rate per simulator with a slow drift, raised by the
+    # task bias -- misses push it up), a second harmonic so a spectral
+    # argmax cannot read double, independent noise per channel so the
+    # beat consensus has four opinions of one heart. History exists while
+    # the stream is up *and* a device is paired, from whichever began
+    # later, and is cleared with the stream or the link, as the bridge
+    # adapter clears its buffer. Reported at the headband's 64 Hz on the
+    # bottom optics rung's four channels, complete and gap-free: the
+    # sample-loss gates have real captures to exercise them.
+    #
+    # Two things keep a synthesised rate from passing as a measured one.
+    # It is opt-in (`EEG_SIM_OPTICS`, off by default), so a plain run
+    # stores no heart rate at all -- exactly a headband with
+    # MUSE_ENABLE_OPTICS off, every window refused as `no_samples`. And the
+    # window is marked `synthetic`, which `build_heart_record` puts on the
+    # record and the backend's mapper writes into the row's `raw`, so the
+    # rows a classroom run stores can be separated by every reader that
+    # cares, and outlive nothing unlabelled.
+    OPTICS_FS = 64.0
+    OPTICS_CHANNELS = 4
+    HEART_REST_BPM_RANGE = (62.0, 84.0)
+    HEART_DRIFT_BPM = 2.5
+    HEART_DRIFT_PERIOD_SECONDS = 240.0
+    HEART_HARMONIC = 0.3
+    HEART_NOISE = 0.08
+    # Per-answer nudge to the rate in bpm, bounded, decaying with the task
+    # bias: a miss raises it, a correct answer settles it a little.
+    HEART_TASK_NUDGE = {"correct": -0.5, "wrong": 2.0}
+    HEART_TASK_BOUND = (-5.0, 15.0)
+
+    def _optics_start(self) -> float | None:
+        """When the current optical history began, or None without one."""
+        with self._pair_lock:
+            # `_stream_started_at` is set on connect and cleared on
+            # disconnect, so it alone says whether the stream is up.
+            if self._paired_at is None or self._stream_started_at is None:
+                return None
+            return max(self._paired_at, self._stream_started_at, self._optics_cleared_at)
+
+    def _heart_bpm(self, now: float) -> float:
+        with self._pair_lock:
+            self._decay_task_bias_locked(now)
+            task = self._task_bpm
+        drift = self.HEART_DRIFT_BPM * math.sin(2.0 * math.pi * now / self.HEART_DRIFT_PERIOD_SECONDS)
+        return self._heart_rest_bpm + drift + task
+
+    def optics_window(self, seconds: float) -> OpticsWindow:
+        """The most recent `seconds` of simulated optical samples, on the
+        same record TcpMuseBridgeAdapter.optics_window returns."""
+        width = self.OPTICS_CHANNELS
+        start = self._optics_start() if self.optics_enabled else None
+        now = self._clock()
+        if start is None:
+            return OpticsWindow(np.empty((0, width)), None, None, None, 0.0, None, width)
+        span = min(float(seconds), max(0.0, now - start))
+        n = int(span * self.OPTICS_FS)
+        if n < 2:
+            return OpticsWindow(np.empty((0, width)), None, None, None, 0.0, None, width)
+        fs = self.OPTICS_FS
+        t = np.arange(n) / fs + (now - span)
+        f_hz = self._heart_bpm(now) / 60.0
+        phase = 2.0 * math.pi * f_hz * t
+        pulse = np.sin(phase) + self.HEART_HARMONIC * np.sin(2.0 * phase)
+        noise = self.HEART_NOISE * self._optics_rng.standard_normal((n, width))
+        channels = 1000.0 + 50.0 * (pulse[:, None] + noise)
+        span_s = float((n - 1) / fs)
+        return OpticsWindow(channels, fs, fs, 1.0, span_s, 1.0 / fs, width, synthetic=True)
+
+    def clear_optics(self) -> None:
+        """Drop the optical history without touching the link -- what the
+        push session end asks of the bridge adapter, so the next student's
+        first window cannot straddle the previous one's samples."""
+        with self._pair_lock:
+            self._optics_cleared_at = self._clock()
 
     def send_bridge_command(self, payload: dict[str, Any]) -> None:
         """Run the bridge's three commands against the simulated device.
@@ -459,11 +749,19 @@ class SimulatedMuseIngestionAdapter:
                 # a packet stamped before it is below the settle floor and
                 # so never counts, which is why nothing clears it here.
                 self._paired_at = self._clock()
+                if self._battery_level is None:
+                    # A fresh pairing draws a charge; a repeat connect keeps
+                    # the one already draining (same headband).
+                    self._battery_level = self._rng.uniform(*self.BATTERY_START_RANGE)
+                    self._battery_drawn_at = self._paired_at
             elif cmd == "disconnect":
                 self._discovered = []
                 self._paired_name = None
                 self._paired_at = None
                 self._last_packet_at = None
+                # The charge is not cleared: the report goes null with the
+                # link (nothing to read it from), but the one simulated
+                # headband keeps draining, so a re-pair resumes its level.
             else:
                 raise RuntimeError(f"unknown bridge cmd: {cmd!r}")
 
@@ -513,6 +811,10 @@ class OpticsWindow:
     # never having existed -- otherwise a corrupt sample index reads the same
     # as `no_samples`, and the two want opposite responses.
     unusable_reason: str | None = None
+    # True when the samples were synthesised (the simulator). Carried onto
+    # the heart record and from there into the row's `raw`, so a stored
+    # rate can always be told from a measured one.
+    synthetic: bool = False
 
 
 class TcpMuseBridgeAdapter:
@@ -913,7 +1215,7 @@ def build_ingestion_adapter(
             timeout_seconds=settings.muse_bridge_timeout_seconds,
         )
     if source == "sim":
-        return SimulatedMuseIngestionAdapter()
+        return SimulatedMuseIngestionAdapter(sim_optics=settings.eeg_sim_optics)
     if source == "face":
         # Imported here, not at module scope, so the sidecar still boots on a
         # machine without the `face` extra installed. Everything above this

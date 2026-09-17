@@ -235,6 +235,28 @@ class MuseConnectBody(BaseModel):
     device_id: str = StreamManager.DEFAULT_DEVICE_ID
 
 
+class AnswerBody(BaseModel):
+    correct: bool
+    difficulty: str | None = None
+    device_id: str = StreamManager.DEFAULT_DEVICE_ID
+
+
+@app.post("/api/v1/session/answer")
+async def session_answer(body: AnswerBody, _: str = Depends(require_local_controller)) -> JSONResponse:
+    """The backend recorded an answer for the student on this device.
+
+    Best effort from the backend, like /session/arm: it lets the simulator
+    move its hidden state with the lesson, so a sim run's signals respond to
+    what the student does. A real headband ignores it (`applied: false`) --
+    nothing here feeds back into scoring on hardware.
+    """
+    try:
+        out = stream_manager.report_answer(body.device_id, correct=body.correct, difficulty=body.difficulty)
+    except UnknownDeviceError:
+        raise _unknown_device(body.device_id)
+    return JSONResponse({"status": "ok", "data": out})
+
+
 @app.get("/api/v1/muse/status")
 async def muse_status(
     device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_learner_token)

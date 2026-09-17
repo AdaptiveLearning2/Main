@@ -1048,3 +1048,27 @@ def test_one_malformed_sample_does_not_fail_the_batch(monkeypatch):
     ]), None)
     assert [w["ts"] for w in written] == ["2026-08-10T10:00:00Z", "2026-08-10T10:00:02Z"]
     assert out["malformed"] == 2 and out["inserted"] == 2
+
+
+def test_a_synthesised_heart_reading_is_marked_in_raw_and_a_measured_one_is_not():
+    """The simulator's pulse goes through the real heart path and is stored
+    under `muse_optics` (consent is per sensor, and the pulse stands in for
+    that sensor), so the mark is what separates a rate nothing measured from
+    one a headband did. Absent, not false, on hardware rows."""
+    synthetic = signal_mapping.map_heart_to_heart_signal({
+        "timestamp": "2026-08-09T10:00:00Z",
+        "heart": {"source": "muse_optics", "bpm": 72.4, "trusted": True, "synthetic": True},
+    }, "s", "u")
+    assert synthetic["raw"]["synthetic"] is True
+    measured = signal_mapping.map_heart_to_heart_signal({
+        "timestamp": "2026-08-09T10:00:00Z",
+        "heart": {"source": "muse_optics", "bpm": 72.4, "trusted": True},
+    }, "s", "u")
+    assert "synthetic" not in measured["raw"]
+    # A client cannot mark a row synthetic by posting the key in its own raw
+    # under a block that does not carry it: derived wins, and None removes.
+    posted = signal_mapping.map_heart_to_heart_signal({
+        "timestamp": "2026-08-09T10:00:00Z", "raw": {"synthetic": True},
+        "heart": {"source": "muse_optics", "bpm": 72.4, "trusted": True, "synthetic": "yes"},
+    }, "s", "u")
+    assert "synthetic" not in posted["raw"]

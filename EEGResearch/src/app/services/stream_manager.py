@@ -147,9 +147,9 @@ class DeviceSession:
         window_fn = getattr(self.adapter, "optics_window", None)
         if window_fn is None:
             # Not a headband, or a headband whose adapter can't buffer
-            # optics. The simulator is included deliberately: it doesn't
-            # model an optical channel, and a simulated pulse would be a
-            # number on a parent's chart with nothing behind it.
+            # optics. The simulator has one since 2026-09-16 (it synthesises
+            # a pulse for the classroom simulation, fed through this same
+            # path); the camera is what lands here now.
             return None
 
         now = time.monotonic()
@@ -638,6 +638,20 @@ class StreamManager:
         if session is None:
             raise UnknownDeviceError(device_id)
         return session
+
+    def report_answer(self, device_id: str = DEFAULT_DEVICE_ID, *, correct: bool,
+                      difficulty: str | None = None) -> dict[str, Any]:
+        """A recorded answer for the student on this device. Only the
+        simulator does anything with it (it nudges its hidden state so a
+        sim run's signals respond to the lesson); a real headband's adapter
+        has no such method and the answer is acknowledged and ignored --
+        `applied` says which, so a caller can tell a sim run from hardware."""
+        adapter = self.session(device_id).adapter
+        report = getattr(adapter, "report_answer", None)
+        if report is None or not callable(report):
+            return {"ok": True, "applied": False}
+        report(bool(correct), difficulty)
+        return {"ok": True, "applied": True}
 
     def arm_baseline(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
         """Recording has been armed for this device: gather the per-session

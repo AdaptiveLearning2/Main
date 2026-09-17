@@ -549,3 +549,23 @@ def test_stop_all_joins_the_notify_worker(monkeypatch):
     # is the print-at-shutdown hazard the pollers are joined for.
     import threading
     assert not any(t.name.startswith("eeg-notify") and t.is_alive() for t in threading.enumerate())
+
+
+def test_stop_all_leaves_the_notify_counter_at_zero_with_a_delivery_in_flight(monkeypatch):
+    """Zeroed before the join, the in-flight delivery's `finally` took the
+    counter to -1 and the NOTIFY_MAX_PENDING bound gained a slot for the life
+    of the process -- in tests, where conftest calls stop_all after every
+    test, an order-dependent bound."""
+    import threading
+    release = threading.Event()
+
+    def stall(device_id=eeg_client.DEFAULT_DEVICE_ID, *, correct, difficulty=None):
+        release.wait(timeout=10)
+        return {}
+    monkeypatch.setattr(eeg_client, "report_answer", stall, raising=False)
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    assert eeg_poller.notify_answer("session-1", True) is not None
+    assert eeg_poller._notify_pending == 1
+    threading.Timer(0.2, release.set).start()
+    eeg_poller.stop_all()
+    assert eeg_poller._notify_pending == 0

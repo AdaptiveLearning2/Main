@@ -6105,6 +6105,11 @@ class HeartSample(BaseModel):
     stress_score:       float | None = None
     stress_category:    str   | None = None
     trusted:            bool  | None = None
+    # The simulator's mark on a synthesised pulse (EEG_SIM_OPTICS). A top-level
+    # field, not a key the client puts in `raw`: the mapper derives `raw.synthetic`
+    # from the block, so both ingestion paths write the same mark the same way
+    # and a value posted inside `raw` is stripped. Absent on hardware rows.
+    synthetic:          bool  | None = None
     raw:                dict  | None = None
 
     @field_validator("heart_rate_bpm", "rmssd_ms", "beat_coverage",
@@ -6437,7 +6442,8 @@ def ingest_heart(payload: HeartBatch, request: Request):
                        "sqi": s.sqi,
                        "stress_score": s.stress_score,
                        "stress_category": s.stress_category,
-                       "trusted": s.trusted},
+                       "trusted": s.trusted,
+                       "synthetic": s.synthetic},
              "raw": s.raw},
             payload.session_id, user["id"])
         for s in kept

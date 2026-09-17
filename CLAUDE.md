@@ -695,8 +695,11 @@ accepts and then stalls would hold a slot ~6 s per answer on the hottest path wi
 endpoints queuing behind it. Pending deliveries are capped (`NOTIFY_MAX_PENDING`); past the cap
 a notification is dropped with a log line, so a stalled sidecar costs notifications, never
 threads. `stop_all` shuts the pool down and joins it, for the reason the pollers are joined (it
-prints on failure). The call returns the delivery's future, and nothing on the request path waits
-on it;
+prints on failure), **and never resets the pending counter**: every submit is balanced by its
+delivery's `finally`, so after the join it is 0 on its own, and zeroing it *before* the join left
+it at −1 — one extra slot under the cap for the life of the process, and in the test process,
+where `conftest` calls `stop_all` after every test, an order-dependent bound. The call returns the
+delivery's future, and nothing on the request path waits on it;
 `stream_manager.report_answer` hands it to the adapter's `report_answer` if it has one and answers
 `applied: false` otherwise, so **a real headband ignores it and nothing feeds back into scoring on
 hardware**. The simulator nudges its hidden focus and calm per answer (a miss pulls calm towards
@@ -718,8 +721,16 @@ simulation sets it. On, the window is `synthetic`, `build_heart_record` puts tha
 (only when true, so hardware records keep their shape) and `signal_mapping` writes it into the
 row's `raw` — the source stays `muse_optics`, because consent is enforced per sensor and the pulse
 stands in for that sensor, so `raw.synthetic` is what separates a stored rate nothing measured
-from one a headband did, in the rollup and everything downstream of it. A client cannot mark a
-row by posting the key: the mapper derives it from the block and only `True` survives.
+from one a headband did, in the rollup and everything downstream of it. **Both ingestion paths
+carry it the same way**: `push_client` sends it as a top-level field of the heart sample (never
+inside the `raw` it hand-builds), `HeartSample.synthetic` receives it, and `/api/signals/heart`
+puts it on the block the shared mapper derives from — so a client cannot mark or unmark a row
+by posting the key in `raw`, on either path, and only a derived `True` survives. The first cut
+marked the poller path only; a camera run (`-Camera` selects push) stored the unmarked row the
+mark exists to prevent — the zeroed-rows rule again: anything of this kind belongs in the mapper.
+`EEG_SIM_OPTICS` is a plain pydantic `bool`, so a typo (`ture`) is a `bool_parsing` error inside
+`StreamManager()` at import; it wants the tolerant treatment #189 gives the other boot settings
+once both land.
 `optics_window` builds the last 25 s on demand from the clock — a pulse at a resting rate drawn per simulator
 (`HEART_REST_BPM_RANGE`, 62–84) with a slow drift, raised by misses through the same decaying task
 bias (`HEART_TASK_NUDGE`, bounded by `HEART_TASK_BOUND`), a second harmonic so a spectral argmax

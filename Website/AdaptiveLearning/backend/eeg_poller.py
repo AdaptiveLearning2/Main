@@ -901,7 +901,7 @@ def stop_all(timeout: float = 5.0) -> int:
     Returns how many pollers were signalled, for a caller that wants to log
     it; both call sites here ignore it.
     """
-    global _notify_pool, _notify_pending
+    global _notify_pool
     pollers = live_pollers()
     for p in pollers:
         p.stop()
@@ -910,11 +910,15 @@ def stop_all(timeout: float = 5.0) -> int:
         p.join(timeout=max(0.0, deadline - time.monotonic()))
     with _lock:
         pool, _notify_pool = _notify_pool, None
-        _notify_pending = 0
     if pool is not None:
         # Joined for the reason the pollers are: the worker prints on a
         # failed delivery, and a print during interpreter shutdown is fatal.
         pool.shutdown(wait=True)
+    # No reset of `_notify_pending` here: every submit is balanced by its
+    # delivery's `finally` (or the submit-failure branch), so after the join
+    # it is 0 on its own. Zeroing it *before* the join left the counter at
+    # -1 -- one extra slot under NOTIFY_MAX_PENDING for the life of the
+    # process, and in the test process an order-dependent bound.
     with _lock:
         # Anything registered between live_pollers() above and this clear is
         # dropped while still running -- that needs a request to start a

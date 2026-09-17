@@ -640,6 +640,25 @@ resolved and every test timed out at the 5 s default. Each of those tests costs 
 seconds and says so with a 60 s timeout. `Overview.test.jsx`'s fake-clock pattern works for a
 300 ms debounce; it did not survive this component.
 
+**So `asyncUtilTimeout` is 5000 in `src/test/setup.js`, not Testing Library's 1000.** That default is
+a figure chosen for pure components; a query for something that legitimately arrives on the *second*
+5 s poll is racing a budget unrelated to what it waits for, and it only ever passed because the
+machine was idle. Under the load of the full 62-file run the same query misses by a few hundred
+milliseconds — measured as intermittent `AdaptiveCameraLifecycle` failures on three separate full
+runs, always at a default-budget query and never at the one beside it already passing
+`{ timeout: 9000 }` for the same element. Raising it costs nothing on a passing assertion, since
+`waitFor` returns as soon as the condition holds; it only makes a genuinely failing query slower to
+report.
+
+**A timeout does not fix an assertion anchored to elapsed time, and one test here was.** The contact
+hint set a poor reading, slept 6 s, and asserted the hint was absent "because at 6 s exactly one 5 s
+poll has landed" — true only if the interval happened to be in the right part of its cycle. Land two
+inside that window and the hint is correctly on screen and the assertion fails against working code.
+It now waits for the *read count* to advance by one and asserts against that, which gives it a whole
+poll of slack instead of none. Same rule as
+`test_time_spent_queueing_comes_out_of_the_budget_it_was_promised` on the backend: prefer a recorded
+event over an elapsed-time threshold whenever a test synchronises on something it does not drive.
+
 ### The simulator pairs like a headband, and streams whether or not it is paired
 
 `SimulatedMuseIngestionAdapter` answers the bridge's three commands: `refresh` lists one device

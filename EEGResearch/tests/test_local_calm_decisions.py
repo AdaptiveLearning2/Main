@@ -117,3 +117,49 @@ def test_the_replay_scores_both_poison_lengths(tmp_path):
     short = replay(str(path), hz=4.0, poison_seconds=2.0)["a"]
     assert full["artifact"] == short["artifact"] > 0
     assert short["poisoned"] < full["poisoned"], "a shorter poison withholds fewer ticks"
+
+
+@pytest.mark.parametrize("bad", [0, -1, 0.001, float("nan"), float("inf"), "four"])
+def test_an_unusable_poison_length_falls_back_to_the_buffer_with_a_warning(bad, caplog):
+    """0 and anything under a sample made poison() a no-op, so a blink
+    contaminated four seconds of estimates with nothing saying so; nan and
+    inf raised inside StreamManager() at import and took the sidecar down."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="src.app.services.eeg_spectrum"):
+        est = SpectrumEstimator(poison_seconds=bad)
+    assert est.poison_seconds == EPOCH_SECONDS and est.poison_samples == _n()
+    assert any("EEG_SPECTRUM_POISON_SECONDS" in r.message for r in caplog.records)
+    n = _n()
+    samples = samples_from({c: pink(2 * n, i) for i, c in enumerate(CHANNELS)})
+    assert est.push(samples[:n], GOOD)["ready"] is True
+    est.poison()
+    assert est.push(samples[n:n + 64], GOOD)["reason"] == "artifact", "the poison is not a no-op"
+    with caplog.at_level(logging.WARNING, logger="src.app.services.eeg_spectrum"):
+        caplog.clear()
+        assert SpectrumEstimator(poison_seconds=1 / SAMPLE_RATE_HZ).poison_samples == 1
+    assert not caplog.records, "one sample is the floor and is usable"
+
+
+def test_the_settings_survive_an_unusable_poison_length_end_to_end():
+    """The value reaches the estimator through Settings and DeviceSession
+    without raising -- the path that ran at import and took the sidecar down."""
+    for value in ("nan", "inf", "0"):
+        s = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a", EEG_SPECTRUM_POISON_SECONDS=value)
+        session = DeviceSession("station1", s, DeviceConfig(device_id="station1", kind="sim",
+                                                              host="127.0.0.1", port=8765))
+        assert session.spectrum.poison_seconds == EPOCH_SECONDS
+
+
+def test_midpoint_on_arm_is_inert_on_the_sdk_source():
+    """On sdk, calm latches beside focus in 45 s, so the arm keeps its
+    centre and ramps to the new one exactly as focus does; the setting was
+    written for the local latch the poison starves."""
+    t = Ticker()
+    t.processor = SignalProcessor(clock=lambda: t.now, calm_source="sdk", calm_centre_on_arm="midpoint")
+    t.run(BANDS, 4 * int(SignalProcessor.BASELINE_SECONDS) + 8)
+    assert t.processor._calm_ready and t.processor._baseline_calm_mean is not None
+    before = t.processor._baseline_calm_mean
+    t.processor.restart_baseline()
+    assert t.processor._calm_ready and t.processor._baseline_calm_mean == pytest.approx(before)
+    f = t.run(BANDS, 1)
+    assert f["calm_centred"] is True

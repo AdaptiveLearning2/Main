@@ -39,6 +39,7 @@ landed on.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from math import isfinite
 from typing import Any
@@ -146,8 +147,27 @@ class SpectrumEstimator:
         # while its older half still holds the blink. One of the two open
         # decisions for the second wearer's capture (HANDOFF.md); the replay
         # scores both. EEG_SPECTRUM_POISON_SECONDS selects it in production.
-        self.poison_seconds = epoch_seconds if poison_seconds is None else float(poison_seconds)
-        self.poison_samples = int(round(self.poison_seconds * sample_rate_hz))
+        # Floored at one sample and required finite, falling back to the
+        # buffer with a warning otherwise (the MUSE_OPTICS_PRESET precedent):
+        # 0 or a value under one sample made poison() a no-op, so a blink
+        # contaminated four seconds of estimates with nothing saying so, and
+        # nan/inf raised here, inside StreamManager() at import, taking the
+        # whole sidecar down over a tuning knob.
+        requested = epoch_seconds if poison_seconds is None else poison_seconds
+        try:
+            requested = float(requested)
+        except (TypeError, ValueError):
+            requested = float("nan")
+        samples = int(round(requested * sample_rate_hz)) if isfinite(requested) else 0
+        if samples < 1:
+            logging.getLogger(__name__).warning(
+                "EEG_SPECTRUM_POISON_SECONDS=%r is not a usable poison length "
+                "(needs a finite value of at least one sample); using the buffer, %.1f s",
+                poison_seconds, epoch_seconds)
+            requested = float(epoch_seconds)
+            samples = int(round(requested * sample_rate_hz))
+        self.poison_seconds = requested
+        self.poison_samples = samples
         self._buf: dict[str, list[float]] = {c: [] for c in TEMPORAL}
         self._ts: list[datetime] = []
         # Samples pushed so far, and the count at which the most recent

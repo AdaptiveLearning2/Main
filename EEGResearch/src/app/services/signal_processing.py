@@ -208,9 +208,11 @@ class SignalProcessor:
         # which on the reference capture was eyes closed, so every
         # eyes-open tick read stressed until a latch the poison stretched
         # past the segment); "midpoint" drops to the population midpoint.
-        # Calm only -- focus keeps the no-step design restart_baseline
-        # documents. The other open decision for the second wearer's
-        # capture (HANDOFF.md); EEG_CALM_CENTRE_ON_ARM selects it.
+        # The local calm only -- focus keeps the no-step design
+        # restart_baseline documents, and so does the sdk calm, which
+        # latches beside focus and never needed it. The other open decision
+        # for the second wearer's capture (HANDOFF.md);
+        # EEG_CALM_CENTRE_ON_ARM selects it.
         if calm_centre_on_arm not in ("keep", "midpoint"):
             raise ValueError(f"calm_centre_on_arm must be 'keep' or 'midpoint', got {calm_centre_on_arm!r}")
         self.calm_centre_on_arm = calm_centre_on_arm
@@ -339,9 +341,14 @@ class SignalProcessor:
         self._calm_collecting = True
         self._calm_coverage = 0.0
         self._calm_last_ts = None
-        if self.calm_centre_on_arm == "midpoint":
+        if self.calm_centre_on_arm == "midpoint" and self.calm_source == "local":
             # Forget the pre-arm calm centre: the population midpoint until
-            # the new latch, and calm_centred reads false meanwhile.
+            # the new latch, and calm_centred reads false meanwhile. Local
+            # source only: the setting exists because the poison starves the
+            # local latch, so the carried centre can be an eyes-closed one
+            # held for minutes. On sdk, calm latches with focus in 45 s, and
+            # dropping the centre there buys nothing and costs exactly the
+            # no-step arm this method documents.
             self._calm_ready = False
             self._baseline_calm_mean = None
             self._calm_latched = None

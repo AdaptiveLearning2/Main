@@ -1882,6 +1882,27 @@ re-derivable with `scripts/analyze_raw_capture.py`; its AUCs are over adjacent e
 each, so they describe that recording and are not estimates, and the 1/f slope separates better
 than the residual (0.94 against 0.92 at 4 s) but is carried unscored as `spectrum_slope`.
 
+**Its label and its surfaces are held as they are until the second wearer's capture — decided
+2026-09-17, so don't relabel it in passing.** Three things were weighed and rejected. A *rename* has
+nowhere true to go: the honest names (`beta/(alpha+theta)`, "EEG index") make no claim a reader can
+check, which invites them to invent one, and the readable alternative — engagement — is the same
+claim in a word this file already strips from every surface. That is the opposite case to the
+`Confidence` bar, which was correctly relabelled *Signal quality score* because there the number was
+well understood and only its name was wrong. A *caveat under the tile* is the anti-pattern
+`FacialRecognitionToggle` was retired for: needing a standing disclaimer means the label
+overpromised. And *removal*, the treatment `attention` got, is the real option — with the teacher's
+focus-versus-accuracy panel first, since a correlation coefficient is the strongest claim in the
+product about what this number means — but it cannot be done to focus alone: the **sdk calm sits in
+the same evidential position** (eyes-closed alpha moved 0.02 Bels; beta and gamma fell instead, so it
+tracks muscle tone relaxing), and `stress` is that number inverted. So this is one decision about the
+EEG family's family-facing surfaces, gated on the same capture as the calm decisions plus a marker
+for effort that three attempts have not found — not a wording change. What keeps it defensible
+meanwhile is that focus reaches fusion through **one** door, the `focused` label (focus ≥ 0.624
+*and* calm ≥ 0.5), which can only ever push difficulty **up** and is vetoable by heart and face; it
+has no ease-off role and is close to unreachable at the contact the product gets, so it is nearly
+inert in the live decision. Nothing on a parent's or teacher's screen calls it effort, and it must
+not start.
+
 **What the local calm may claim, after review.** The estimator is fed only by a headband
 (`device_config.kind == "muse"`) and refuses a buffer whose timestamp span is not a 256 Hz stream's:
 the simulator's one sample per tick filled it with 256 s analysed as four and published a residual

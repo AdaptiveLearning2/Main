@@ -209,3 +209,36 @@ it('ignores a second click on Next while the first is still advancing', async ()
   })
   expect(await screen.findByText(/question 2 of 10/i)).toBeInTheDocument()
 })
+
+/**
+ * `questionCount` was a module constant, so nothing could run a test of any
+ * other length. The count has to drive both the stopping rule and the
+ * "See Results" label: a test that ended at 2 while the button still read
+ * "Next" on question 2 would strand the student on a question with no way
+ * forward.
+ */
+it('ends at a non-default question count, and labels the last question accordingly', async () => {
+  const onFinish = vi.fn()
+  render(<PracticeTest session={SESSION} onFinish={onFinish} questionCount={2} />)
+
+  await screen.findByText('What is 2 + 2?')
+  expect(screen.getByText(/question 1 of 2/i)).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: /4/ }))
+
+  mockApi({
+    'GET /api/practice-sessions/sess-1/question': () => QUESTION_TWO,
+    'POST /api/practice-sessions/sess-1/answer': () => ({ ok: true, topic: 'ordering' }),
+  })
+  await userEvent.click(await screen.findByRole('button', { name: /next/i }))
+
+  await screen.findByText('What is 3 + 3?')
+  expect(screen.getByText(/question 2 of 2/i)).toBeInTheDocument()
+  expect(onFinish).not.toHaveBeenCalled()
+
+  await userEvent.click(screen.getByRole('button', { name: /6/ }))
+  await userEvent.click(await screen.findByRole('button', { name: /see results/i }))
+
+  await vi.waitFor(() => expect(onFinish).toHaveBeenCalledWith({
+    questions_answered: 2, correct_answers: 2,
+  }))
+})

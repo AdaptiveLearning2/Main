@@ -15,9 +15,15 @@ import PracticeFlashcards from './PracticeFlashcards'
 export default function Practice() {
   const [session, setSession] = useState(null)
   const [result, setResult] = useState(null)
+  // How many questions a Test runs for, chosen on the setup screen. Held here
+  // rather than sent to the backend: generation is one question per request,
+  // so the count is only ever a client-side stopping rule -- the same shape as
+  // Adaptive's question goal. Flashcards ignore it; they have no deck size.
+  const [questionCount, setQuestionCount] = useState(10)
 
-  const handleStart = useCallback((s) => {
+  const handleStart = useCallback((s, count = 10) => {
     setSession(s)
+    setQuestionCount(count)
     setResult(null)
   }, [])
 
@@ -40,5 +46,5 @@ export default function Practice() {
 
   return session.mode === 'flashcard'
     ? <PracticeFlashcards session={session} onFinish={handleFinish} />
-    : <PracticeTest session={session} onFinish={handleFinish} />
+    : <PracticeTest session={session} onFinish={handleFinish} questionCount={questionCount} />
 }

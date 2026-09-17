@@ -7,18 +7,20 @@ import QuestionCard from '../../components/practice/QuestionCard'
 import { normalizeQuestion, normalizeValue } from '../../lib/practiceQuestion'
 
 const TIMER = 60
-const QUESTION_COUNT = 10
 
 /** Test mode: sequential, timed, scored -- adapted from the old Practice.jsx,
  * but pulling one AI-generated question at a time from
  * `GET /api/practice-sessions/{id}/question` instead of a static 10-question
  * read, since generation is now on-demand.
  *
- * @param session   the started practice session
- * @param onFinish  called with `{questions_answered, correct_answers}` once
- *                   QUESTION_COUNT questions have been answered
+ * @param session        the started practice session
+ * @param onFinish       called with `{questions_answered, correct_answers}`
+ *                        once `questionCount` questions have been answered
+ * @param questionCount  how many questions this test runs for. Defaults to 10
+ *                        -- the value it was a module constant at -- so a
+ *                        caller that doesn't pass one is unchanged.
  */
-export default function PracticeTest({ session, onFinish }) {
+export default function PracticeTest({ session, onFinish, questionCount = 10 }) {
   const [question, setQuestion] = useState(null)
   const [rawId, setRawId] = useState(null)
   const [index, setIndex] = useState(0)
@@ -174,7 +176,7 @@ export default function PracticeTest({ session, onFinish }) {
     // never awaits `postAnswer`) -- wait for it so `onFinish`/`/end` can't
     // race an `/answer` that would otherwise land after the session closed.
     if (pendingAnswerRef.current) await pendingAnswerRef.current
-    if (index + 1 >= QUESTION_COUNT) {
+    if (index + 1 >= questionCount) {
       onFinish({ questions_answered: tallyRef.current.answered, correct_answers: tallyRef.current.score })
     } else {
       setIndex(i => i + 1)
@@ -201,14 +203,14 @@ export default function PracticeTest({ session, onFinish }) {
     <div className="max-w-2xl mx-auto px-4 py-8">
       <div className="mb-6">
         <div className="flex items-center justify-between text-sm mb-2">
-          <span className="text-gray-500 dark:text-gray-400">Question {index + 1} of {QUESTION_COUNT}</span>
+          <span className="text-gray-500 dark:text-gray-400">Question {index + 1} of {questionCount}</span>
           <span className={`font-bold tabular-nums ${timeLeft <= 10 ? 'text-rose-500 animate-pulse' : 'text-gray-700 dark:text-gray-300'}`}>
             ⏱ {timeLeft}s
           </span>
         </div>
         <div className="h-2 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden mb-1">
           <div className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full transition-all duration-300"
-            style={{ width: `${(index / QUESTION_COUNT) * 100}%` }} />
+            style={{ width: `${(index / questionCount) * 100}%` }} />
         </div>
         <div className="h-1 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
           <div className={`h-full rounded-full transition-all duration-1000 ${timeLeft > 20 ? 'bg-green-500' : timeLeft > 10 ? 'bg-amber-500' : 'bg-rose-500'}`}
@@ -222,7 +224,7 @@ export default function PracticeTest({ session, onFinish }) {
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-6 flex justify-end">
           <button onClick={handleNext} disabled={advancing}
             className="px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-xl font-bold hover:from-indigo-700 hover:to-violet-700 transition shadow disabled:opacity-60 disabled:cursor-not-allowed">
-            {index + 1 >= QUESTION_COUNT ? 'See Results →' : 'Next →'}
+            {index + 1 >= questionCount ? 'See Results →' : 'Next →'}
           </button>
         </motion.div>
       )}

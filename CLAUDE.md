@@ -2058,6 +2058,18 @@ they did not skip. Its "today" is the **browser's local day**, deliberately not 
 helper buckets recorded data against the school's timezone, and this is a nudge about the student's
 own afternoon.
 
+### A practice test's length is a prop, and flashcards have none
+
+`PracticeSetup` offers 5/10/15/20 and hands the number to `Practice` through `onStart(session,
+count)`, which passes it to `PracticeTest` as `questionCount` (default 10, the value it was a module
+constant at). **Nothing is sent to the backend** — generation is one question per request, so the
+count is only ever a client-side stopping rule, exactly like Adaptive's question goal.
+
+Two differences from that goal, and both are deliberate. There is **no "No limit"**: Adaptive's
+number raises a dismissable banner beside a Finish button, and a test has no manual-finish
+affordance, so it must always auto-end. And the picker is **hidden in flashcard mode** — a deck ends
+on "Done", at any point, so a count there would name a limit that does not exist.
+
 ## An answer is recorded by the backend, and the topic comes from the question
 
 `Adaptive.jsx` had no `/api/sessions/{id}/answer` call at all — only `Practice.jsx` did — so every

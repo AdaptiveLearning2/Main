@@ -7,6 +7,11 @@ import PracticeHistory from './PracticeHistory'
 import { TOPIC_ICONS } from '../../lib/topics'
 
 const DIFFICULTIES = ['easy', 'medium', 'hard']
+// The same rungs Adaptive's question-goal picker offers, deliberately without
+// its "No limit": that page's number is a goal that raises a dismissable
+// banner, and it has a Finish button. A test has no manual-finish affordance,
+// so it must always auto-end and the count is a real cap.
+const QUESTION_COUNTS = [5, 10, 15, 20]
 const GRADES = ['1st Grade', '2nd Grade', '3rd Grade', '4th Grade', '5th Grade',
   '6th Grade', '7th Grade', '8th Grade', 'Highschool', 'College']
 // Same topic->icon map Adaptive.jsx keeps for its own picker -- read-only
@@ -17,7 +22,11 @@ const ICONS = TOPIC_ICONS
 /** The Quizlet-style picker: topic(s), difficulty, grade, and Test vs
  * Flashcard mode, then `POST /api/practice-sessions/start`.
  *
- * @param onStart  called with the started session row
+ * @param onStart  called with `(session, questionCount)` -- the started
+ *                  session row, and how many questions a Test should run for.
+ *                  The count is frontend-only, like Adaptive's question goal:
+ *                  nothing is sent to the backend, which serves one question
+ *                  per request and has no view on how many are coming.
  */
 export default function PracticeSetup({ onStart }) {
   const [topics, setTopics] = useState([])
@@ -25,6 +34,7 @@ export default function PracticeSetup({ onStart }) {
   const [selectedTopics, setSelectedTopics] = useState([])
   const [difficulty, setDifficulty] = useState('medium')
   const [mode, setMode] = useState('test')
+  const [questionCount, setQuestionCount] = useState(10)
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
@@ -79,7 +89,7 @@ export default function PracticeSetup({ onStart }) {
         method: 'POST',
         body: { mode, topics: selectedTopics, difficulty, grade },
       })
-      onStart(session)
+      onStart(session, questionCount)
     } catch (e) {
       console.error('Failed to start a practice session:', e)
       toast.error('Could not start that practice session.')
@@ -177,6 +187,27 @@ export default function PracticeSetup({ onStart }) {
             </button>
           </div>
         </div>
+
+        {/* Test only. Flashcards have no deck size -- "Done" ends them at any
+            point -- so offering a count there would name a limit that does
+            not exist. */}
+        {mode === 'test' && (
+          <div>
+            <h3 className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3">How many questions?</h3>
+            <div className="flex gap-2">
+              {QUESTION_COUNTS.map(n => (
+                <button key={n} type="button" onClick={() => setQuestionCount(n)}
+                  aria-label={`${n} questions`} aria-pressed={questionCount === n}
+                  className={`flex-1 py-2 rounded-xl text-sm font-bold transition border-2
+                    ${questionCount === n ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300'
+                      : 'border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:border-indigo-300'}`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <button onClick={handleStart} disabled={!selectedTopics.length || starting}
           className="w-full py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-xl font-bold hover:from-indigo-700 hover:to-violet-700 transition shadow disabled:opacity-40 disabled:cursor-not-allowed">

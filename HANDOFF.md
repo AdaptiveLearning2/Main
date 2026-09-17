@@ -24,7 +24,7 @@ CANARY baseline: main 18f5a2e | tree: clean | last suites: sidecar 826 / backend
 After Phase 1 (1a #191, 1b #192, 1c open), measured on the 1c branch:
 
 ```
-CANARY: chart-summary-endpoint | tree: clean | last suites: sidecar not run / backend 1897 (1896 + 1 skipped) / frontend 760 (62 files)
+CANARY: chart-summary-endpoint | tree: clean | last suites: sidecar not run / backend 1898 (1897 + 1 skipped) / frontend 760 (62 files)
 ```
 
 **The sidecar was not run and its count is carried, not measured** -- nothing in Phase 1 touched

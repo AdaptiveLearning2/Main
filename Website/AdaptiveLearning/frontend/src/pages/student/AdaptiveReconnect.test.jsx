@@ -410,11 +410,26 @@ it('shows a contact hint only after two poor readings in a row, and clears it on
   await connect()
   const hint = /Adjust the headband/
 
+  // Anchored on readings served, not on seconds elapsed. This used to set the
+  // poor state, `sleep(6000)`, and assert the hint was absent "because at 6s
+  // exactly one 5s poll has landed" -- true only if the interval happened to
+  // be in the right part of its cycle when the state changed. Land two inside
+  // that window and the hint is correctly on screen and the assertion fails
+  // against working code, which is what made this file flaky under the load
+  // of a full run.
+  //
+  // Counting reads gives the assertion ~5s of slack instead of none: `waitFor`
+  // notices the first poor read within its 50ms polling interval, and the
+  // second is a whole poll away. The short settle after it is for the render,
+  // not for the poll -- the state is set when the read resolves and painted a
+  // microtask later.
+  const readsBefore = museState.mock.calls.length
   bridge.ingestion = { ...CONNECTED, hsi: [4, 4, 4, 4], is_good: [0, 0, 0, 0] }
-  // One poor frame is a head turn. The poll is 5s, so at 6s exactly one
-  // poor reading has landed and nothing should show yet.
-  await sleep(6000)
+  await waitFor(() => expect(museState.mock.calls.length).toBe(readsBefore + 1), POLL)
+  await sleep(250)
   expect(screen.queryByText(hint)).not.toBeInTheDocument()
+
+  // The second consecutive poor reading is what raises it.
   await screen.findByText(hint, {}, POLL)
 
   bridge.ingestion = { ...CONNECTED, hsi: [1, 1, 1, 1], is_good: [1, 1, 1, 1] }

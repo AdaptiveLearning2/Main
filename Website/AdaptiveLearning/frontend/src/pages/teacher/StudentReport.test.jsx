@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { vi } from 'vitest'
 import StudentReport from './StudentReport'
+import { clearViewPrefs } from '../../lib/viewPrefs'
 
 // Tests the "back" link and heading built from router state, including the
 // direct-visit case where no state exists (refresh / bookmark / deep link).
@@ -14,6 +15,12 @@ const { apiFetch } = await import('../../lib/api')
 const SID = 'stu-1'
 
 beforeEach(() => {
+  // This page owns a *persisted* preference: the sensor switch writes to
+  // localStorage, which jsdom keeps for the whole file. Without this, every
+  // test declared after one that flips the switch renders with sensors
+  // already hidden -- silently, and only for the tests written later, so it
+  // reads as one of them being broken rather than as leaked state.
+  clearViewPrefs()
   apiFetch.mockReset()
   // Resolve by URL, not call order, so fixtures can't get silently swapped.
   apiFetch.mockImplementation((url) => {
@@ -124,4 +131,19 @@ it('hides the strategies panel behind the sensor switch, button included', async
   // Academic content is untouched -- the switch hides sensor data, and these
   // measure answers.
   expect(screen.getByText('Recent Sessions')).toBeInTheDocument()
+})
+
+/**
+ * Declared after the test that flips the switch, and that position is the
+ * whole point: the preference is persisted, so without the `clearViewPrefs()`
+ * in `beforeEach` this renders with sensors already hidden and fails. A guard
+ * against leaked state is only a guard if something is standing downstream of
+ * the leak.
+ */
+it('starts each test showing sensor data, whatever an earlier test switched off', async () => {
+  renderWithState({ name: 'Ada', classId: 'class-1', className: 'Algebra' })
+  await screen.findByText('Recent Sessions')
+
+  expect(screen.getByRole('switch', { name: /hide sensor data/i })).toHaveAttribute('aria-checked', 'false')
+  expect(screen.getByRole('button', { name: /generate strategies/i })).toBeInTheDocument()
 })

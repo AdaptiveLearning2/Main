@@ -3397,7 +3397,13 @@ screen and left a button that writes those numbers back out as sentences. The wh
 than its individual lines: the advice mixes topic accuracy with signal readings and nothing
 downstream can separate them, and asking the endpoint for a signal-free list would change the advice
 rather than hide it. Assert on the **Generate button's** absence, not the heading — hiding a heading
-over a live button satisfies a heading check and none of the point.
+over a live button satisfies a heading check and none of the point. **And a test that flips that
+switch has to clear it**: `writeHideSensorData` persists to `localStorage`, which jsdom keeps for the
+whole file, so every test declared *after* one that hides sensors renders with them already hidden —
+silently, and only for the tests written later, which reads as one of them being broken rather than
+as leaked state. `clearViewPrefs()` in `beforeEach` is the guard, and it needs a test standing
+**downstream of the leak** to have teeth: with the switching test last in the file, removing the
+guard breaks nothing. `StudentReport.test.jsx` keeps one after it asserting the switch starts off.
 
 ## Every model call goes through `llm_client`, and the provider is a setting
 

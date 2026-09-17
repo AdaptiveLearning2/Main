@@ -5,13 +5,13 @@ is what is kept current** — every durable rule from this work lives there, and
 what is *in flight*: what is done, what is next, and how to do it. When a step here lands, move its
 rule into CLAUDE.md and delete the step.
 
-The plan is `~/.claude/plans/we-will-be-doing-encapsulated-magpie.md`, with its Phase 0 superseded
-by `~/.claude/plans/nested-singing-scroll.md`. Phase 0 is merged (#187, #190); Phases 1–6 are open.
+**Scope: this session's work only.** Two things shipped — the Common Core standard on questions
+(#180) and Phase 0 of the classroom simulation (#187, #190) — and the simulation's Phases 1–6 are
+open. Other threads against this repo (the EEG-accuracy work, the launcher registry) are not
+tracked here, and anything of theirs that this depends on is in CLAUDE.md rather than in this file.
 
-The EEG-accuracy thread that used to share this file is tracked separately by the user, in
-`~/.claude/plans/create-an-actual-plan-dapper-wilkinson.md`. Its merged work (#181, #182, #184,
-#189) is what the simulator and the scoring pipeline below sit on, and its rules are in CLAUDE.md
-under *EEG focus, calm and confidence*.
+The plan is `~/.claude/plans/we-will-be-doing-encapsulated-magpie.md`, with its Phase 0 superseded
+by `~/.claude/plans/nested-singing-scroll.md`.
 
 ## Suite counts at this head
 
@@ -20,6 +20,30 @@ Run in this session at `18f5a2e`. **Record totals, not pass counts** (CLAUDE.md'
 ```
 CANARY baseline: main 18f5a2e | tree: clean | last suites: sidecar 826 / backend 1854 (1850 + 4 skipped) / frontend 714 (62 files)
 ```
+
+---
+
+# Common Core standards on questions. DONE.
+
+Merged as **#180** (`fc1018e`). A question now carries the CCSS code it follows, and five surfaces
+render it. It is the first stored field derived from the *student's grade*, which is what makes the
+dedupe rule at the end of this list a real decision rather than a detail. Fully documented in
+CLAUDE.md under *A question carries its Common Core code*; in outline:
+
+- `backend/ccss_standards.py` — `ccss_for(topic, grade, scenario)` over grade-keyed ladders.
+  Resolved **by grade, not band** (a band spans three grades and the standard changes inside it) and
+  **by scenario first** (`triangle_sum` is 8.G.5 inside a grade-7 topic).
+- All 17 `LLM_*_generation.py` files attach it to their return dict;
+  `20260916000000_question_ccss_standard.sql` adds the nullable, no-default column.
+- `CCSSBadge.jsx` on the same five question-rendering surfaces `QuestionFigure` reaches, with the
+  same source-scan exhaustiveness test.
+- **`add_question_to_supabase` dedupes on text *and* standard**, so one text generated at grade 6
+  and again at grade 8 is two rows rather than one whose badge contradicts what the second student
+  saw. The accepted cost is a visible duplicate in the teacher's bank.
+
+Nothing here is open. It is listed because it shipped in this session and its migration is on
+remote; Phase 2 below carries the one operational consequence (a local stack that has not run
+`npx supabase migration up` 500s on every generated question).
 
 ---
 

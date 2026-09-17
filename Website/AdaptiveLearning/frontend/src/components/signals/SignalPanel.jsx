@@ -8,6 +8,8 @@ import {
 import ChartTooltip from '../charts/ChartTooltip'
 import { sliceSpec } from '../charts/describeSeries'
 import AccessibleChart from '../charts/AccessibleChart'
+import SeriesFilter from '../charts/SeriesFilter'
+import { useSeriesFilter } from '../../hooks/useSeriesFilter'
 
 // One string cannot answer for three channels, so this is a function of
 // *which* channel and *why* it has no value: withdrawn, sensor absent, or
@@ -279,16 +281,30 @@ export function SignalTrend({ trend, title = 'Term Trend' }) {
     label: w.week_start ? w.week_start.slice(5) : '',
   }))
 
-  // Mirrors the drawn series and nothing else — the sr-only table is the text
-  // alternative for *this picture*, so a column naming something no sighted
-  // reader can see is a different report, not an equivalent one. `focus` and
-  // `stress` are scaled on the way in above, hence no `scale` here; heart rate
-  // is left in bpm and says so in its unit.
-  const COLUMNS = [
-    { key: 'focus',  label: 'Focus',  unit: '%' },
-    { key: 'stress', label: 'Stress', unit: '%' },
-    ...(heartShown ? [{ key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' }] : []),
+  // One list per series; the lines, the columns and the toggles above the chart
+  // are all derived from it. The sr-only table is the text alternative for
+  // *this picture*, so a column naming something no sighted reader can see is a
+  // different report — which is why the columns follow what is shown rather
+  // than what exists. `focus` and `stress` are scaled on the way in above,
+  // hence no `scale` here; heart rate is left in bpm and says so in its unit.
+  //
+  // `colour` lives here because the toggle draws a swatch with it: one
+  // constant, so the chip and the line it names cannot disagree.
+  const SERIES = [
+    { key: 'focus',  label: 'Focus',  unit: '%', colour: '#6366f1', axis: 'pct', name: 'Focus' },
+    { key: 'stress', label: 'Stress', unit: '%', colour: '#f43f5e', axis: 'pct', name: 'Stress' },
+    ...(heartShown
+      ? [{ key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm',
+           colour: '#a855f7', axis: 'bpm', name: 'Heart Rate (bpm)' }]
+      : []),
   ]
+
+  const { hidden, toggle, showAll, shownOf } = useSeriesFilter()
+  const shown = shownOf(SERIES)
+  const COLUMNS = shown.map(({ key, label, unit }) => ({ key, label, unit }))
+  // An axis with no line draws an empty scale; a line naming an axis that was
+  // not mounted throws. Both follow what is shown.
+  const axisShown = (axis) => shown.some((x) => x.axis === axis)
 
   // Coverage belongs in the sentence, not in a column, for the reason above.
   // It has to be said somewhere: the rollup keeps per-day counts precisely so a
@@ -312,6 +328,12 @@ export function SignalTrend({ trend, title = 'Term Trend' }) {
         </p>
       </div>
 
+      {/* Above the chart, because it says what the chart is about to show, and
+          outside the height-fixed box so the chips can wrap without eating it. */}
+      {!failed && chartData.length > 0 && (
+        <SeriesFilter series={SERIES} hidden={hidden} onToggle={toggle}
+                      label="Measurements shown on the term trend" />
+      )}
       <div className="h-56 rounded-2xl bg-slate-50 dark:bg-gray-800 p-3">
         {failed || chartData.length === 0 ? (
           <div className="h-full flex items-center justify-center text-sm text-gray-600 text-center px-4 dark:text-gray-400">
@@ -320,6 +342,18 @@ export function SignalTrend({ trend, title = 'Term Trend' }) {
             {failed
               ? 'The term trend could not be loaded.'
               : 'No signal history yet.'}
+          </div>
+        ) : shown.length === 0 ? (
+          /* Every measurement turned off. Said in words with a way back rather
+             than the last toggle refusing to move, and distinct from both
+             messages above: "no history" and "could not load" are claims about
+             the data, this is a claim about the view. */
+          <div className="h-full flex flex-col items-center justify-center gap-3">
+            <p className="text-sm text-gray-600 dark:text-gray-400">No measurements selected.</p>
+            <button type="button" onClick={showAll}
+                    className="px-3 py-2.5 min-h-[44px] rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-xs font-bold text-gray-900 dark:text-white hover:bg-slate-50 dark:hover:bg-gray-800 transition">
+              Show all
+            </button>
           </div>
         ) : (
           <AccessibleChart headline={headline} rows={chartData}
@@ -330,20 +364,23 @@ export function SignalTrend({ trend, title = 'Term Trend' }) {
               {/* Two axes and explicit ids, same as the daily chart: adding a
                   second axis without giving the first one an id silently binds
                   every existing series to the new one. */}
-              <YAxis yAxisId="pct" domain={[0, 100]} fontSize={11} tickLine={false} />
-              {heartShown && (
+              {axisShown('pct') && <YAxis yAxisId="pct" domain={[0, 100]} fontSize={11} tickLine={false} />}
+              {axisShown('bpm') && (
                 <YAxis yAxisId="bpm" orientation="right" domain={['auto', 'auto']}
                        fontSize={11} tickLine={false} unit=" bpm" />
               )}
               <ChartTooltip />
               {/* Dots for the same reason as the daily chart: a student with
                   one recorded week gives every series a single point, which
-                  draws no segment and renders as an empty chart without one. */}
-              <Line yAxisId="pct" type="monotone" dataKey="focus" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} name="Focus" connectNulls={false} />
-              <Line yAxisId="pct" type="monotone" dataKey="stress" stroke="#f43f5e" strokeWidth={2} dot={{ r: 3 }} name="Stress" connectNulls={false} />
-              {/* Omitted rather than drawn as an all-null line: an empty legend
-                  entry reads as a measurement that flatlined. */}
-              {heartShown && <Line yAxisId="bpm" type="monotone" dataKey="heart_rate_bpm" stroke="#a855f7" strokeWidth={2} dot={{ r: 3 }} name="Heart Rate (bpm)" connectNulls={false} />}
+                  draws no segment and renders as an empty chart without one.
+                  A series with no readings is still omitted upstream rather
+                  than drawn as an all-null line, since an empty legend entry
+                  reads as a measurement that flatlined. */}
+              {shown.map((x) => (
+                <Line key={x.key} yAxisId={x.axis} type="monotone" dataKey={x.key}
+                      stroke={x.colour} strokeWidth={2} dot={{ r: 3 }} name={x.name}
+                      connectNulls={false} />
+              ))}
             </LineChart>
           </AccessibleChart>
         )}
@@ -421,11 +458,28 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
   //
   // No `scale` on the two that remain — unlike SessionReview and Live, these
   // really are scaled on the way in, and each is named in the map above.
-  const TREND_COLUMNS = [
-    { key: 'focus',  label: 'Focus',  unit: '%' },
-    { key: 'stress', label: 'Stress', unit: '%' },
-    ...(heartShown ? [{ key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' }] : []),
+  // One list per series; the lines, the columns and the toggles above the chart
+  // all come from it, so a column can never outlive the line it describes.
+  // `focus` and `stress` are scaled into the chart data above, hence no
+  // `scale` here. `colour` lives here because the toggle draws a swatch with
+  // it — one constant, so the chip and its line cannot disagree.
+  //
+  // The palette matches SessionReview.jsx on the shared series; a backend test
+  // pins the two equal, since the archived SVGs re-render the session charts
+  // and one green line meaning two things across two pages is what that fixed.
+  const TREND_SERIES = [
+    { key: 'focus',  label: 'Focus',  unit: '%', colour: '#6366f1', axis: 'pct', name: 'Focus' },
+    { key: 'stress', label: 'Stress', unit: '%', colour: '#f43f5e', axis: 'pct', name: 'Stress' },
+    ...(heartShown
+      ? [{ key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm',
+           colour: '#a855f7', axis: 'bpm', name: 'Heart Rate (bpm)' }]
+      : []),
   ]
+
+  const { hidden, toggle, showAll, shownOf } = useSeriesFilter()
+  const shown = shownOf(TREND_SERIES)
+  const TREND_COLUMNS = shown.map(({ key, label, unit }) => ({ key, label, unit }))
+  const axisShown = (axis) => shown.some((x) => x.axis === axis)
 
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
@@ -457,6 +511,10 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         />
       </div>
 
+      {chartData.length > 0 && (
+        <SeriesFilter series={TREND_SERIES} hidden={hidden} onToggle={toggle}
+                      label="Measurements shown on the daily trend" />
+      )}
       <div className="h-56 rounded-2xl bg-slate-50 dark:bg-gray-800 p-3">
         {chartData.length === 0 ? (
           <div className="h-full flex items-center justify-center text-sm text-gray-600 text-center px-4 dark:text-gray-400">
@@ -465,6 +523,16 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
             {anyFailed
               ? 'Weekly signal data could not be loaded.'
               : 'No weekly signal data available yet.'}
+          </div>
+        ) : shown.length === 0 ? (
+          /* Every measurement turned off -- a claim about the view, distinct
+             from the two above it, which are claims about the data. */
+          <div className="h-full flex flex-col items-center justify-center gap-3">
+            <p className="text-sm text-gray-600 dark:text-gray-400">No measurements selected.</p>
+            <button type="button" onClick={showAll}
+                    className="px-3 py-2.5 min-h-[44px] rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-xs font-bold text-gray-900 dark:text-white hover:bg-slate-50 dark:hover:bg-gray-800 transition">
+              Show all
+            </button>
           </div>
         ) : (
           // `role="img"` + a summary, because Recharts emits bare `<svg>`: with
@@ -484,8 +552,8 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
                     floor or, if scaled to match, be drawn at 7200%. Explicit ids
                     on both -- adding a second axis without giving the first one
                     an id silently binds every existing series to the new axis. */}
-                <YAxis yAxisId="pct" domain={[0, 100]} fontSize={11} tickLine={false} />
-                {heartShown && (
+                {axisShown('pct') && <YAxis yAxisId="pct" domain={[0, 100]} fontSize={11} tickLine={false} />}
+                {axisShown('bpm') && (
                   <YAxis yAxisId="bpm" orientation="right" domain={['auto', 'auto']}
                          fontSize={11} tickLine={false} unit=" bpm" />
                 )}
@@ -505,15 +573,15 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
                     and, without a dot, renders as a completely empty chart. That
                     is the normal case for a new student in their first week, so
                     the graph was blank precisely when it was first looked at. */}
-                <Line yAxisId="pct" type="monotone" dataKey="focus" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} name="Focus" />
-                <Line yAxisId="pct" type="monotone" dataKey="stress" stroke="#f43f5e" strokeWidth={2} dot={{ r: 3 }} name="Stress" />
-                {/* Omitted entirely with facial reporting off, rather than drawn
-                    as an all-null series -- an empty legend entry reads as a
-                    measurement that flatlined. */}
-                {/* Same reasoning as the facial series: omitted rather than drawn
-                    as an all-null line, because an empty legend entry reads as a
-                    measurement that flatlined. */}
-                {heartShown && <Line yAxisId="bpm" type="monotone" dataKey="heart_rate_bpm" stroke="#a855f7" strokeWidth={2} dot={{ r: 3 }} name="Heart Rate (bpm)" />}
+                {/* A channel that recorded nothing is omitted from the list
+                    above rather than drawn as an all-null line, because an
+                    empty legend entry reads as a measurement that flatlined.
+                    A channel a teacher switched off is a different thing and
+                    says so in the toggles. */}
+                {shown.map((x) => (
+                  <Line key={x.key} yAxisId={x.axis} type="monotone" dataKey={x.key}
+                        stroke={x.colour} strokeWidth={2} dot={{ r: 3 }} name={x.name} />
+                ))}
               </LineChart>
           </AccessibleChart>
         )}

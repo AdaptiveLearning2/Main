@@ -8,6 +8,8 @@ import {
 } from 'recharts'
 import ChartTooltip from '../../components/charts/ChartTooltip'
 import AccessibleChart from '../../components/charts/AccessibleChart'
+import SeriesFilter from '../../components/charts/SeriesFilter'
+import { useSeriesFilter } from '../../hooks/useSeriesFilter'
 import { asPercent, sliceSpec } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
 import QuestionFigure from '../../components/questions/QuestionFigure'
@@ -168,6 +170,14 @@ function SessionReviewBody({ sessionId }) {
   // the answers/tiles/accuracy above it, which don't depend on it.
   const [archive, setArchive] = useState(null)
   const [archiveErr, setArchiveErr] = useState(false)
+  // Up here with the other hooks, not beside the chart: `hasHeart` is derived
+  // from loaded rows well below this component's `loading` and `err` early
+  // returns, so a hook that needed the series list would be called
+  // conditionally. React counts hooks by call order, so the first render that
+  // returns early leaves every later one misaligned — it threw on all 28 tests
+  // in this file. The hook holds the hidden keys and nothing else.
+  const { hidden: hiddenSeries, toggle: toggleSeries,
+          showAll: showAllSeries, shownOf } = useSeriesFilter()
 
   useEffect(() => {
     let killed = false
@@ -364,14 +374,48 @@ function SessionReviewBody({ sessionId }) {
   // headband, which is noise in the one surface that cannot be skimmed past.
   // Same class as the `engagement` column removed from `SignalPanel`, one file
   // over: that fix was applied where it was found rather than generalised.
-  const TIMELINE_COLUMNS = [
-    { key: 'focus',      label: 'Focus',      unit: '%', scale: asPercent },
-    { key: 'stress',     label: 'EEG stress', unit: '%', scale: asPercent },
+  // One list per series, and the lines, the columns and the toggles above the
+  // chart are all derived from it. The rule this file already followed — a
+  // column must name a series the chart actually draws — stops being something
+  // to remember once a teacher can turn a line off: any wired-by-hand column
+  // would go on announcing "RMSSD: not recorded" for a series they chose to
+  // hide, on every row of the one surface that cannot be skimmed past.
+  //
+  // `colour` is here rather than at the `<Line>` because the toggle draws a
+  // swatch with it; one constant, so the chip and the line cannot disagree.
+  // `axis` likewise: which axes to mount is now a question about the *shown*
+  // series, and Recharts throws if a line names an axis that is not there.
+  const TIMELINE_SERIES = [
+    { key: 'focus',  label: 'Focus',      unit: '%', scale: asPercent,
+      colour: '#6366f1', axis: 'ratio', name: 'Focus',      dot: false },
+    // "EEG stress", not bare "stress": distinct from the heart-derived
+    // stress_category pie below, and the two must never share a label.
+    { key: 'stress', label: 'EEG stress', unit: '%', scale: asPercent,
+      colour: '#f43f5e', axis: 'ratio', name: 'EEG stress', dot: false },
     ...(hasHeart ? [
-      { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' },
-      { key: 'rmssd_ms',       label: 'RMSSD',      unit: ' ms' },
+      // `dot` on, unlike the cognitive lines: heart readings are sparse (one
+      // held window per ~10s against thousands of cognitive samples), so an
+      // isolated point needs a dot to be visible at all.
+      { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm',
+        colour: '#a855f7', axis: 'abs', name: 'Heart rate (bpm)', dot: { r: 2 } },
+      { key: 'rmssd_ms',       label: 'RMSSD',      unit: ' ms',
+        colour: '#f59e0b', axis: 'abs', name: 'RMSSD (ms)',       dot: { r: 2 } },
     ] : []),
   ]
+
+  const shownSeries = shownOf(TIMELINE_SERIES)
+
+  // `engagement` is not among them and must not be: it is the focus index
+  // under another name (signal_mapping.py), and two lines of one number read
+  // as two measurements agreeing.
+  const TIMELINE_COLUMNS = shownSeries.map(
+    ({ key, label, unit, scale }) => ({ key, label, unit, scale }),
+  )
+
+  // An axis with no line on it draws an empty scale down the side of the
+  // chart; a line naming an axis that was not mounted throws. Both are decided
+  // by what is shown, not by what exists.
+  const axisShown = (axis) => shownSeries.some((s) => s.axis === axis)
 
   const hasChart = series.length >= 2
 
@@ -477,6 +521,28 @@ function SessionReviewBody({ sessionId }) {
             )}
           </div>
         ) : (
+          <>
+          {/* Above the chart, because it says what the chart is about to show.
+              Renders nothing when only the two cognitive series exist and
+              neither can be meaningfully hidden -- see SeriesFilter. */}
+          <SeriesFilter series={TIMELINE_SERIES} hidden={hiddenSeries} onToggle={toggleSeries} />
+          {shownSeries.length === 0 ? (
+            /* Every measurement turned off. Said in words with a way back,
+               rather than the last toggle refusing to move: a control that
+               silently does nothing is harder to understand than an empty
+               chart that explains itself. The chart is not rendered at all
+               here, so no empty axis is drawn and the screen-reader table has
+               no columns to describe. */
+            <div className="h-72 flex flex-col items-center justify-center gap-3 rounded-xl bg-slate-50 dark:bg-gray-800">
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                No measurements selected.
+              </p>
+              <button type="button" onClick={showAllSeries}
+                      className="px-3 py-2.5 min-h-[44px] rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-xs font-bold text-gray-900 dark:text-white hover:bg-slate-50 dark:hover:bg-gray-800 transition">
+                Show all
+              </button>
+            </div>
+          ) : (
           <AccessibleChart className="h-72"
             headline={`Session replay over ${series.length} readings.`}
             rows={series} rowKey="t" rowLabel="Seconds in"
@@ -492,9 +558,11 @@ function SessionReviewBody({ sessionId }) {
                   fontSize={10}
                   minTickGap={50}
                 />
-                {/* Two axes with explicit ids: bpm/RMSSD don't belong on the 0-1 ratio scale. */}
-                <YAxis yAxisId="ratio" domain={[0, 1]} fontSize={10} />
-                {hasHeart && (
+                {/* Two axes with explicit ids: bpm/RMSSD don't belong on the 0-1 ratio scale.
+                    Each mounts only while a *shown* series uses it, so hiding
+                    both heart lines takes the right-hand scale with them. */}
+                {axisShown('ratio') && <YAxis yAxisId="ratio" domain={[0, 1]} fontSize={10} />}
+                {axisShown('abs') && (
                   <YAxis yAxisId="abs" orientation="right" domain={['auto', 'auto']}
                          fontSize={10} />
                 )}
@@ -503,32 +571,25 @@ function SessionReviewBody({ sessionId }) {
                   formatter={(v) => (typeof v === 'number' ? v.toFixed(2) : v)}
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Line yAxisId="ratio" type="monotone" dataKey="focus"      stroke="#6366f1" dot={false} connectNulls isAnimationActive={false} />
-                {/* "EEG stress" not bare "stress": distinct from the heart-derived stress_category pie below, must never share a label. */}
-                <Line yAxisId="ratio" type="monotone" dataKey="stress" name="EEG stress" stroke="#f43f5e" dot={false} connectNulls isAnimationActive={false} />
+                {/* Drawn from the one series list, in its order, so a line can
+                    never outlive the column that describes it. */}
+                {shownSeries.map((s) => (
+                  <Line key={s.key} yAxisId={s.axis} type="monotone" dataKey={s.key}
+                        name={s.name} stroke={s.colour} dot={s.dot}
+                        connectNulls isAnimationActive={false} />
+                ))}
 
-                {/* `dot` on, unlike the cognitive lines: heart readings are sparse
-                    (one held window per ~10s vs thousands of cognitive samples),
-                    so an isolated point needs a dot to be visible at all. */}
-                {hasHeart && (
-                  <Line yAxisId="abs" type="monotone" dataKey="heart_rate_bpm" name="Heart rate (bpm)"
-                        stroke="#a855f7" dot={{ r: 2 }} connectNulls isAnimationActive={false} />
-                )}
-                {hasHeart && (
-                  <Line yAxisId="abs" type="monotone" dataKey="rmssd_ms" name="RMSSD (ms)"
-                        stroke="#f59e0b" dot={{ r: 2 }} connectNulls isAnimationActive={false} />
-                )}
-
-                {/* Marks where the heart sensor changed. Gated on hasHeart (not
-                    just failovers.length) since the "abs" axis these reference
-                    only mounts when hasHeart is true. */}
-                {hasHeart && failovers.map((f, i) => (
+                {/* Marks where the heart sensor changed. Gated on the "abs"
+                    axis being mounted, not on hasHeart: these reference it, so
+                    hiding both heart lines would leave them pointing at an
+                    axis that is no longer there. */}
+                {axisShown('abs') && failovers.map((f, i) => (
                   <ReferenceLine key={`fo-${i}`} yAxisId="abs" x={f.t}
                                  stroke="#a855f7" strokeOpacity={0.5} />
                 ))}
 
                 {/* Answer markers as vertical reference lines. */}
-                {answers.map((a, i) => {
+                {axisShown('ratio') && answers.map((a, i) => {
                   const x = new Date(a.answered_at).getTime()
                   if (!Number.isFinite(x) || x < tMin || x > tMax) return null
                   return (
@@ -544,8 +605,10 @@ function SessionReviewBody({ sessionId }) {
                 })}
               </LineChart>
           </AccessibleChart>
+          )}
+          </>
         )}
-        {hasChart && answers.length > 0 && (
+        {hasChart && shownSeries.length > 0 && answers.length > 0 && (
           <p className="text-[11px] text-gray-600 mt-2 dark:text-gray-400">
             Vertical lines = answer events · <span className="text-emerald-500">green</span> correct ·{' '}
             <span className="text-rose-500">red</span> incorrect

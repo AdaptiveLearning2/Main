@@ -443,3 +443,66 @@ describe('engagement is not drawn beside focus', () => {
     expect(screen.queryByRole('columnheader', { name: /engagement/i })).not.toBeInTheDocument()
   })
 })
+
+describe('choosing which measurements the timeline draws', () => {
+  /**
+   * This is the chart that carries all four — focus, EEG stress, heart rate
+   * and RMSSD — so it is where a combination is worth anything. The rule under
+   * test is the one this file already followed by hand: a column must name a
+   * series the chart actually draws. Hiding a line makes that a thing a
+   * teacher does, so the column has to follow, or the sr-only table keeps
+   * saying "RMSSD: not recorded" on every row of a session that recorded it
+   * fine and was simply not being shown.
+   */
+  const WITH_HEART = {
+    cognitive: [
+      { ts: '2026-08-10T09:00:00Z', focus: 0.6, engagement: 0.6, stress: 0.4 },
+      { ts: '2026-08-10T09:01:00Z', focus: 0.7, engagement: 0.7, stress: 0.3 },
+    ],
+    heart: [
+      { ts: '2026-08-10T09:00:00Z', heart_rate_bpm: 72, rmssd_ms: 41, source: 'muse_optics' },
+      { ts: '2026-08-10T09:01:00Z', heart_rate_bpm: 75, rmssd_ms: 38, source: 'muse_optics' },
+    ],
+    face: [], answers: [],
+  }
+
+  it('hides RMSSD on its own, leaving heart rate drawn', async () => {
+    apiFetch.mockResolvedValue(WITH_HEART)
+    renderAt()
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: /rmssd/i })).toBeInTheDocument())
+
+    await userEvent.click(screen.getByRole('switch', { name: /rmssd/i }))
+
+    expect(screen.queryByRole('columnheader', { name: /rmssd/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /heart rate/i })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Focus' })).toBeInTheDocument()
+  })
+
+  it('offers no toggle for a measurement this session never recorded', async () => {
+    // A control whose only outcome is the one already on screen is worse than
+    // its absence.
+    apiFetch.mockResolvedValue({ ...WITH_HEART, heart: [] })
+    renderAt()
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Focus' })).toBeInTheDocument())
+
+    expect(screen.queryByRole('switch', { name: /rmssd/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: /heart rate/i })).not.toBeInTheDocument()
+  })
+
+  it('explains an empty timeline and offers a way back', async () => {
+    apiFetch.mockResolvedValue(WITH_HEART)
+    renderAt()
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Focus' })).toBeInTheDocument())
+
+    for (const name of [/^focus$/i, /eeg stress/i, /heart rate/i, /rmssd/i]) {
+      await userEvent.click(screen.getByRole('switch', { name }))
+    }
+
+    expect(screen.getByText(/no measurements selected/i)).toBeInTheDocument()
+    // Not an empty chart with an empty table beside it.
+    expect(screen.queryByRole('table', { name: /session replay/i })).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /show all/i }))
+    expect(screen.getByRole('columnheader', { name: /rmssd/i })).toBeInTheDocument()
+  })
+})

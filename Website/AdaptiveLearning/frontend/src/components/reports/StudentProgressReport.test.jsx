@@ -38,6 +38,7 @@ function defaultFetch(url) {
   if (u.includes('/weekly-report'))         return Promise.resolve(emptyReport)
   if (u.includes('/signal-trend'))          return Promise.resolve(emptyTrend)
   if (u.includes('/learning-strategies'))   return Promise.resolve({ strategies: ['Review fractions'], source: 'rule-based' })
+  if (u.includes('/chart-summary'))         return Promise.resolve({ summary: ['Focus is 63%.'], source: 'rule-based', basis: {} })
   return Promise.resolve([]) // sessions + performance
 }
 
@@ -180,4 +181,95 @@ it('a failed trend does not blank the weekly report, or the other way round', as
 
   expect(await screen.findByText(/term trend could not be loaded/i)).toBeInTheDocument()
   expect(screen.getByText(/Weekly EEG & Face Report/i)).toBeInTheDocument()
+})
+
+describe('chart-explaining summary', () => {
+  it('is absent unless the route asks for it', async () => {
+    renderReport()
+    await screen.findByText('Recent Sessions')
+    expect(screen.queryByRole('button', { name: /generate summary/i })).not.toBeInTheDocument()
+  })
+
+  it('fetches nothing until the button is pressed', async () => {
+    // An auto-fetch on mount spends a model call per report page -- thirty of
+    // them for a teacher opening a class, for a summary nobody asked to read.
+    renderReport({ showChartSummary: true })
+    await screen.findByText('Recent Sessions')
+    expect(urlsFor('/chart-summary')).toHaveLength(0)
+
+    await userEvent.click(screen.getByRole('button', { name: /generate summary/i }))
+    await screen.findByText('Focus is 63%.')
+    expect(urlsFor('/chart-summary')).toHaveLength(1)
+  })
+
+  it('POSTs a JSON body, not an empty request', async () => {
+    // FastAPI 422s a bodyless POST even though every field defaults.
+    renderReport({ showChartSummary: true })
+    await screen.findByText('Recent Sessions')
+    await userEvent.click(screen.getByRole('button', { name: /generate summary/i }))
+
+    await waitFor(() => expect(urlsFor('/chart-summary')).toHaveLength(1))
+    const [, opts] = apiFetch.mock.calls.find(c => String(c[0]).includes('/chart-summary'))
+    expect(opts.body).toBeTruthy()
+  })
+
+  it('names which part of the report failed to load, not just that something did', async () => {
+    // Three reads sit behind one response. Collapsed into one flag, a summary
+    // missing only its trend sentence reads as either entirely fine or
+    // entirely broken.
+    apiFetch.mockImplementation((u) => {
+      if (String(u).includes('/chart-summary')) {
+        return Promise.resolve({
+          summary: ['Focus is 63%.'],
+          source: 'rule-based',
+          basis: { signals_retrieved: true, trend_retrieved: false, stats_retrieved: true },
+        })
+      }
+      return defaultFetch(u)
+    })
+
+    renderReport({ showChartSummary: true })
+    await screen.findByText('Recent Sessions')
+    await userEvent.click(screen.getByRole('button', { name: /generate summary/i }))
+
+    await screen.findByText('Focus is 63%.')
+    expect(screen.getByText(/the term trend/i)).toBeInTheDocument()
+    expect(screen.queryByText(/the practice totals/i)).not.toBeInTheDocument()
+  })
+
+  it('does not claim an outage for a payload that predates the flags', async () => {
+    // Absent is not false. `!undefined` would report a failure for every
+    // response written before these fields existed.
+    renderReport({ showChartSummary: true })
+    await screen.findByText('Recent Sessions')
+    await userEvent.click(screen.getByRole('button', { name: /generate summary/i }))
+
+    await screen.findByText('Focus is 63%.')
+    expect(screen.queryByText(/couldn’t be loaded/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps its own state, so the two panels cannot overwrite each other', async () => {
+    // Two buttons a reader can press in either order. One set of state would
+    // let the second answer land in the first panel.
+    renderReport({ showChartSummary: true, showStrategies: true })
+    await screen.findByText('Recent Sessions')
+
+    await userEvent.click(screen.getByRole('button', { name: /generate summary/i }))
+    await screen.findByText('Focus is 63%.')
+    await userEvent.click(screen.getByRole('button', { name: /generate strategies/i }))
+    await screen.findByText('Review fractions')
+
+    expect(screen.getByText('Focus is 63%.')).toBeInTheDocument()
+  })
+
+  it('surfaces a failure instead of silently showing nothing', async () => {
+    apiFetch.mockImplementation((u) => {
+      if (String(u).includes('/chart-summary')) return Promise.reject(new Error('Backend unavailable'))
+      return defaultFetch(u)
+    })
+    renderReport({ showChartSummary: true })
+    await screen.findByText('Recent Sessions')
+    await userEvent.click(screen.getByRole('button', { name: /generate summary/i }))
+    expect(await screen.findByText('Backend unavailable')).toBeInTheDocument()
+  })
 })

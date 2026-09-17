@@ -3411,6 +3411,32 @@ Model output is untrusted text: it's parsed, length-bounded, stripped of markdow
 markers, and run through a clinical-term filter, and anything failing validation falls back to the
 rules. Extend `_validated_strategies` rather than rendering raw output.
 
+**The panel is on the teacher report as well as the parent one, and the copy is the only thing that
+differs.** The endpoint is gated on relationship rather than role — its own docstring says so — so a
+teacher could always ask for this advice and, until then, had no way to see it. `viewerRole`
+('parent' by default, and for any value the panel does not recognise) picks the framing;
+`_llm_strategies` and `_validated_strategies` are untouched, so both readers get the same list.
+**The heading stays "At-Home" on both.** The prompt says *"you are helping a parent support their
+child's maths practice at home"* and the rule-based fallback says *"ask your child to explain one
+solved problem out loud"* — so a classroom-sounding label would claim the model had been asked for
+something it was not. The teacher frame says whose advice it is instead, which is the useful thing
+to know when deciding what to do with it. It stays **on demand**: nothing is fetched until the
+button is pressed, or a class of thirty report pages would spend a model call each. On the teacher page it is
+**behind "Hide sensor data" with the charts**, because the advice *is* sensor data in prose — the
+rule-based list says *"stress indicators ran high this week"* and *"focus indicators were low this
+week"*, and the model pass is handed the same averages. Unconditional, the switch took the tiles off
+screen and left a button that writes those numbers back out as sentences. The whole panel goes rather
+than its individual lines: the advice mixes topic accuracy with signal readings and nothing
+downstream can separate them, and asking the endpoint for a signal-free list would change the advice
+rather than hide it. Assert on the **Generate button's** absence, not the heading — hiding a heading
+over a live button satisfies a heading check and none of the point. **And a test that flips that
+switch has to clear it**: `writeHideSensorData` persists to `localStorage`, which jsdom keeps for the
+whole file, so every test declared *after* one that hides sensors renders with them already hidden —
+silently, and only for the tests written later, which reads as one of them being broken rather than
+as leaked state. `clearViewPrefs()` in `beforeEach` is the guard, and it needs a test standing
+**downstream of the leak** to have teeth: with the switching test last in the file, removing the
+guard breaks nothing. `StudentReport.test.jsx` keeps one after it asserting the switch starts off.
+
 ## Every model call goes through `llm_client`, and the provider is a setting
 
 `backend/llm_client.py` is the only place either model provider is reached. Fourteen call sites used

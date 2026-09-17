@@ -3435,7 +3435,12 @@ whole file, so every test declared *after* one that hides sensors renders with t
 silently, and only for the tests written later, which reads as one of them being broken rather than
 as leaked state. `clearViewPrefs()` in `beforeEach` is the guard, and it needs a test standing
 **downstream of the leak** to have teeth: with the switching test last in the file, removing the
-guard breaks nothing. `StudentReport.test.jsx` keeps one after it asserting the switch starts off.
+guard breaks nothing. `StudentReport.test.jsx` keeps one after it asserting the switch starts off. The same trap caught a
+second file: `al_sidebar_collapsed:<scope>` persists too, and a collapsed sidebar hides the account
+badge *entirely*, so a describe rendering that badge sees nothing if an earlier test collapsed one.
+`layoutAccessibility.test.jsx` clears storage in every sidebar describe for that reason — and its
+account describe collapses the sidebar in its **first** test, so the two after it fail without the
+clear rather than passing on whatever ordering happened to hold.
 
 ## Every model call goes through `llm_client`, and the provider is a setting
 

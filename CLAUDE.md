@@ -3512,6 +3512,15 @@ rollup row is not written until the session closes, so that state is ordinary ra
 A helper that computes a count and returns it only on the success path cannot be asked the question
 the count answers.
 
+**But the sentence for it names no cause, and the first version did.** A first session is one way to
+reach zero weeks; a rollup writer that failed on every day in range is another, and so is a set of
+rolled days all carrying null for that series. The read succeeded in all three, so nothing there can
+tell them apart — and *"from this session's own readings"* contradicted the session count two
+sentences above it whenever one of the others was the real one. **Where a branch exists precisely
+because the code cannot establish a cause, its sentence may not supply one**; state the observable
+("no week has a reading for it yet") and stop. The same trap as reporting a failed read as a quiet
+week, one step further out: there the claim is about the data, here it is about the explanation.
+
 Channel absence is ordered as `cellLabel` is on the cohort roster and for the same reason: consent
 unreadable, then a known revocation, then a failed read, then nothing recorded. The revocation and
 its date come from a *different query* from the signals, so reporting the outage instead discards a

@@ -653,15 +653,37 @@ def test_the_read_state_is_reported_by_the_two_value_form(monkeypatch):
     assert main._topic_breakdown("student-1") == []
 
 
-def test_a_first_session_is_not_told_that_one_week_has_readings():
+def test_zero_weeks_is_not_reported_as_one_week():
     """The average comes from raw rows, the trend from the rollup, and the
-    rollup row is not written until the session closes -- so zero weeks is the
-    ordinary state at the start of a first session, not an error."""
+    rollup row is not written until the session closes -- so zero weeks is an
+    ordinary state, not an error."""
     basis = _basis(trend={"focus": main._trend_direction([], "focus"),
                           "stress": main._trend_direction([], "stress")})
     lines = main._rule_based_chart_summary(basis)
     assert not any("Only one week" in line for line in lines)
-    assert any("no week to plot yet" in line for line in lines)
+    assert any("No week has a reading for it yet" in line for line in lines)
+
+
+def test_the_zero_week_sentence_names_no_cause():
+    """A first session is one way to reach it. A rollup writer that failed on
+    every day in range, and a set of rolled days all carrying null for this
+    series, are two others -- and the read succeeded in all three, so nothing
+    here can tell them apart.
+
+    Naming the first contradicted the session count two sentences above
+    whenever one of the others was the real one, which is what this asserts
+    against: the summary already says twelve sessions were recorded.
+    """
+    basis = _basis(trend={"focus": main._trend_direction([], "focus"),
+                          "stress": main._trend_direction([], "stress")})
+    assert basis["academic"]["sessions"] > 1, "the fixture has to contradict it"
+    lines = main._rule_based_chart_summary(basis)
+
+    joined = " ".join(lines)
+    assert "this session's own readings" not in joined
+    for claim in ("first session", "hasn't finished", "has not finished",
+                  "not been written", "just started"):
+        assert claim not in joined, f"the sentence explains itself with {claim!r}"
 
 
 def test_one_week_still_says_one_week():

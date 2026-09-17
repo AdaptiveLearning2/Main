@@ -4839,11 +4839,22 @@ def _rule_based_chart_summary(basis: dict) -> list[str]:
             out.append(f"{label} is {value}%. Only one week has readings for it "
                        "so far, so there is no direction to report yet.")
         else:
-            # Zero weeks, not one. Ordinary at the start of a first session:
-            # the average comes from raw rows, the trend from the rollup, and
-            # the rollup row is not written until the session closes.
-            out.append(f"{label} is {value}%, from this session's own readings. "
-                       "The term chart has no week to plot yet.")
+            # Zero weeks with a reading, and the sentence says only that.
+            #
+            # A first session is one way to get here -- the average comes from
+            # raw rows, the trend from the rollup, and the rollup row is not
+            # written until the session closes -- but it is not the only one:
+            # the rollup writer can have failed on every day in range, or
+            # every rolled day can carry a null for this series. The read
+            # succeeded either way, so nothing here can tell them apart.
+            #
+            # An earlier version of this named the first cause ("from this
+            # session's own readings") and contradicted the session count two
+            # sentences above it whenever one of the others was the real one.
+            # Where a branch exists precisely because the code cannot
+            # establish a cause, the sentence may not supply one.
+            out.append(f"{label} is {value}%. No week has a reading for it yet, "
+                       "so the term chart cannot show a direction.")
 
     heart_absent = _channel_absence("heart", basis)
     bpm = averages.get("heart_rate_bpm")

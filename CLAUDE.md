@@ -3281,6 +3281,45 @@ session with no headband emitted "Heart rate: not recorded" on every row. The
 first fix was applied where it was found rather than swept for siblings. Check
 what the chart plots, and under what condition, before copying a spec across.
 
+**A teacher can hide a series, so the one-list rule is now structural rather than remembered.**
+`SeriesFilter` + `useSeriesFilter` put toggles above the three teacher line charts — focus, EEG
+stress, heart rate and RMSSD on `SessionReview`'s timeline; focus, stress and heart rate on
+`SignalPanel`'s daily and term charts — in any combination. Each chart declares **one list per
+series** (`key`, `label`, `unit`, `scale`, `colour`, `axis`, `name`) and derives the `<Line>`s, the
+`columns` spec and the chips from it. That is the point rather than tidiness: "a column must name a
+series the chart draws" was a thing to remember while the only gate was `hasHeart`, and it becomes a
+thing a teacher does at will — a hand-wired column goes on announcing *"RMSSD: not recorded"* on
+every row of a session that recorded it fine and was simply not being shown. Four things follow:
+
+- **The colour is read from the same entry the line is stroked with**, and applied inline rather
+  than as a Tailwind class — the chip cannot drift from what it names, and a `bg-${…}` would ship no
+  rule at all (the whole-class-name trap above).
+- **An axis mounts only while a *shown* series uses it**, and anything referencing an axis —
+  `SessionReview`'s answer markers and its failover lines — is gated the same way. Recharts throws
+  on a line naming an axis that is not there, and draws an empty scale for one with no lines.
+- **Everything off says so and offers *Show all*, rather than the last toggle refusing to move.** A
+  control that silently does nothing is harder to understand than an empty chart that explains
+  itself, and the message is distinct from "no history yet" and "could not be loaded" beside it:
+  those are claims about the data, this is a claim about the view. The chart is not rendered at all
+  there, so there is no empty axis and no column-less table.
+- **No toggle for a series that cannot be drawn** — a control whose only outcome is the state
+  already on screen.
+
+**The hook stores what is *hidden*, and takes no series list.** Both halves are load-bearing.
+Storing the hidden keys is what draws a series that becomes available *later*: these charts gain
+series as data resolves, and a shown-set snapshotted at mount leaves the newcomer switched off with
+nothing on screen explaining why. Taking no list is what keeps it callable above `SessionReview`'s
+`loading` and `err` early returns — `hasHeart` is derived from loaded rows far below them, so a hook
+needing the list was a conditional hook call and threw on all 28 tests in that file. The selection is
+per mount and deliberately not persisted; `viewPrefs.js` persists a standing page preference, this is
+a look at one chart, and persisted view state leaks into every test declared after one that flips it.
+
+**Test it on `columnheader`, never on the summary sentence** — `describeSeries` drops a series with
+no readings on its own, so an aria-label assertion passes whether or not the column is gated. And a
+`getByText('Focus')` that used to be unambiguous now matches the chip *and* the table header; that
+is what broke the existing heart-off test, and the fix was to assert the role rather than loosen the
+query.
+
 **A categorical chart is `sliceSpec(label, rows, noun, {nameKey, valueKey,
 rowLabel})`, spread into the component.** It returns the sentence, the rows and
 the columns together so the noun is written once — it names what the values

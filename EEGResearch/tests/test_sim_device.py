@@ -237,3 +237,70 @@ def test_the_muse_routes_pair_the_simulator_end_to_end():
         assert r.status_code == 200 and r.json()["data"] == {"ok": True}
     ing = client.get("/api/v1/muse/status", headers=learner).json()["data"]["ingestion"]
     assert ing["muse_connected"] is False and ing["muse_devices"] == []
+
+
+# --- battery ---------------------------------------------------------------
+
+
+def _paired_for(adapter, clock, seconds):
+    _pair(adapter)
+    clock.now += seconds
+    return adapter.get_ingestion_meta()["battery_percent"]
+
+
+def test_battery_is_null_before_the_first_report_and_a_charge_after():
+    # libMuse fires BATTERY on its own schedule, so the bridge reports null
+    # for most of the first minute; the badge renders nothing rather than a
+    # broken-looking empty slot. Null, never 0, which is a real reading.
+    adapter, clock = _adapter()
+    assert _paired_for(adapter, clock, adapter.BATTERY_FIRST_REPORT_SECONDS - 1.0) is None
+    clock.now += 1.0
+    pct = adapter.get_ingestion_meta()["battery_percent"]
+    lo, hi = adapter.BATTERY_START_RANGE
+    assert isinstance(pct, float) and lo <= pct <= hi
+
+
+def test_battery_drains_on_the_clock_whether_or_not_anything_reads():
+    adapter, clock = _adapter()
+    first = _paired_for(adapter, clock, adapter.BATTERY_FIRST_REPORT_SECONDS)
+    clock.now += 3600.0
+    assert adapter.get_ingestion_meta()["battery_percent"] == pytest.approx(
+        first - adapter.BATTERY_DRAIN_PCT_PER_HOUR, abs=0.2)
+
+
+def test_battery_floors_at_zero_and_reports_it_as_a_number():
+    adapter, clock = _adapter()
+    _paired_for(adapter, clock, adapter.BATTERY_FIRST_REPORT_SECONDS)
+    clock.now += 100.0 * 3600.0
+    assert adapter.get_ingestion_meta()["battery_percent"] == 0.0
+
+
+def test_unpaired_and_disconnected_links_report_no_battery_and_a_repair_resumes_it():
+    adapter, clock = _adapter()
+    assert adapter.get_ingestion_meta()["battery_percent"] is None
+    first = _paired_for(adapter, clock, adapter.BATTERY_FIRST_REPORT_SECONDS)
+    adapter.send_bridge_command({"cmd": "disconnect"})
+    assert adapter.get_ingestion_meta()["battery_percent"] is None
+    # One simulated headband: its charge keeps draining while unpaired.
+    again = _paired_for(adapter, clock, adapter.BATTERY_FIRST_REPORT_SECONDS)
+    assert again is not None and 0 <= first - again < 1.0
+
+
+def test_a_repeat_connect_goes_null_again_but_keeps_the_same_charge():
+    # The bridge's stored value is reset on every connect until the next
+    # BATTERY packet; the headband underneath has not been swapped.
+    adapter, clock = _adapter()
+    first = _paired_for(adapter, clock, adapter.BATTERY_FIRST_REPORT_SECONDS)
+    adapter.send_bridge_command({"cmd": "connect", "name": adapter.SIM_DEVICE_NAME})
+    assert adapter.get_ingestion_meta()["battery_percent"] is None
+    clock.now += adapter.BATTERY_FIRST_REPORT_SECONDS
+    again = adapter.get_ingestion_meta()["battery_percent"]
+    assert again is not None and 0 <= first - again < 1.0
+
+
+def test_different_simulators_draw_different_charges():
+    seen = set()
+    for _ in range(12):
+        adapter, clock = _adapter()
+        seen.add(_paired_for(adapter, clock, adapter.BATTERY_FIRST_REPORT_SECONDS))
+    assert len(seen) > 1

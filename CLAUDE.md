@@ -697,8 +697,14 @@ fault, and it is why the badge renders nothing rather than `--%`: a permanent em
 broken sensor. The three-state rule applies with unusual force here because **0% is a real and
 alarming reading** — `pct || null` anywhere on this path erases exactly the value the badge exists
 for, so the checks are `typeof pct === 'number'` and `!= null`. The bridge stores −1 for "not
-reported" and `main.cpp` turns that into JSON null; `EEG_SOURCE=sim` reports null too, on the same
-grounds as it emitting no heart block.
+reported" and `main.cpp` turns that into JSON null. **`EEG_SOURCE=sim` reports a simulated charge
+since 2026-09-16** (it was null, on the grounds that a made-up percentage is a number a student
+acts on; the classroom simulation needs the badge exercised): null for
+`BATTERY_FIRST_REPORT_SECONDS` (50 s) after every connect, then a level drawn once per simulator
+from `BATTERY_START_RANGE` (55–100) draining at `BATTERY_DRAIN_PCT_PER_HOUR` (10) on the clock,
+not the stream — a BLE event, like the real one — floored at a reported `0.0`, never `None`. The
+charge survives a disconnect (one headband; the *report* goes null with the link) and a repeat
+connect goes null again for the first-report window, as the bridge's stored value does.
 
 Cleared on disconnect in both places — `reset_device_fields_locked` and the page's own state. A
 charge percentage left standing describes the headband that just went away, and it is the one

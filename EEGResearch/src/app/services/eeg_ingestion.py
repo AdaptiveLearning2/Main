@@ -303,12 +303,28 @@ class SimulatedMuseIngestionAdapter:
         # wrapped inside 0-3 ms for ever and no drop was reachable.
         self._paired_at: float | None = None
         self._last_packet_at: float | None = None
+        # Charge at the moment it was drawn, and when. libMuse fires BATTERY
+        # on its own schedule, so the bridge reports null for most of the
+        # first minute of every link and a percentage after; the simulator
+        # draws a level on the first connect, drains it slowly on the clock
+        # (a BLE event, not a sample -- independent of the stream), keeps it
+        # across connects (one headband, one charge), and reports null while
+        # nothing is paired, like `reset_device_fields_locked`. 0 is a real
+        # reading and is reported as 0.0, never None.
+        self._battery_level: float | None = None
+        self._battery_drawn_at: float | None = None
 
     # The bridge reports no packet for a few seconds after every CONNECTED
     # (a preset switch interrupts streaming); PRESET_SETTLE_SECONDS on the
     # stream manager is the sidecar's allowance for the same window, and the
     # page's SETTLE_GRACE_MS (10 s) sits above both. Null, not 0, throughout.
     PAIR_SETTLE_SECONDS = 5.0
+    # Null until the first BATTERY packet, "most of the first minute" on
+    # hardware (CLAUDE.md, Battery is device telemetry).
+    BATTERY_FIRST_REPORT_SECONDS = 50.0
+    # A Muse S lasts roughly ten hours; a lesson sees a few points of drain.
+    BATTERY_DRAIN_PCT_PER_HOUR = 10.0
+    BATTERY_START_RANGE = (55.0, 100.0)
 
     def connect(self) -> None:
         self.connected = True
@@ -329,9 +345,12 @@ class SimulatedMuseIngestionAdapter:
             discovered = list(self._discovered)
             paired_at = self._paired_at
             last_packet = self._last_packet_at
+            level = self._battery_level
+            drawn_at = self._battery_drawn_at
         # `_paired_at` is set and cleared with `_paired_name`, so it alone
         # says whether a link exists.
         age: int | None = None
+        battery: float | None = None
         if paired_at is not None:
             now = self._clock()
             if now - paired_at >= self.PAIR_SETTLE_SECONDS:
@@ -340,6 +359,10 @@ class SimulatedMuseIngestionAdapter:
                 settled_at = paired_at + self.PAIR_SETTLE_SECONDS
                 origin = max(settled_at, last_packet if last_packet is not None else settled_at)
                 age = max(0, int((now - origin) * 1000.0))
+            if (now - paired_at >= self.BATTERY_FIRST_REPORT_SECONDS
+                    and level is not None and drawn_at is not None):
+                drained = self.BATTERY_DRAIN_PCT_PER_HOUR * (now - drawn_at) / 3600.0
+                battery = round(max(0.0, level - drained), 1)
         return {
             "muse_connected": paired is not None,
             "muse_discovered": bool(discovered),
@@ -347,6 +370,7 @@ class SimulatedMuseIngestionAdapter:
             "muse_devices": discovered,
             "active_muse_name": paired or "",
             "eeg_age_ms": age,
+            "battery_percent": battery,
         }
 
     @staticmethod
@@ -413,10 +437,10 @@ class SimulatedMuseIngestionAdapter:
             **self._pairing_fields(),
             "bluetooth_enabled": True,
             "firmware_version": "sim-1.0",
-            # None, never a plausible-looking number -- the simulator has no
-            # battery, and a made-up percentage is a reading a student could
-            # act on.
-            "battery_percent": None,
+            # `battery_percent` rides in the pairing fields: a simulated
+            # charge, drawn on connect and drained on the clock, so the badge
+            # beside Disconnect and the null-for-the-first-minute rule get
+            # exercised on a sim run.
             # Also Bels. delta isn't used by either log-ratio but is persisted
             # to cognitive_signals alongside the others, so it needs the same
             # scale or stored sim rows are inconsistent.
@@ -459,11 +483,19 @@ class SimulatedMuseIngestionAdapter:
                 # a packet stamped before it is below the settle floor and
                 # so never counts, which is why nothing clears it here.
                 self._paired_at = self._clock()
+                if self._battery_level is None:
+                    # A fresh pairing draws a charge; a repeat connect keeps
+                    # the one already draining (same headband).
+                    self._battery_level = random.uniform(*self.BATTERY_START_RANGE)
+                    self._battery_drawn_at = self._paired_at
             elif cmd == "disconnect":
                 self._discovered = []
                 self._paired_name = None
                 self._paired_at = None
                 self._last_packet_at = None
+                # The charge is not cleared: the report goes null with the
+                # link (nothing to read it from), but the one simulated
+                # headband keeps draining, so a re-pair resumes its level.
             else:
                 raise RuntimeError(f"unknown bridge cmd: {cmd!r}")
 

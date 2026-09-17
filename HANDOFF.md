@@ -111,31 +111,67 @@ that swaps the focus and stress figures uses only allowed numbers and passes. Cl
 parsing the reply back into measurements, which is a second implementation of the sentences being
 parsed, so it is stated rather than solved.
 
-## Phase 2 — operational setup. NOT STARTED.
+## Phase 2 — operational setup. CONFIG DONE; STACK NOT STARTED.
 
-Three things, and **two of them are traps this session found**:
+The two `.env` edits are made and both pre-flight checks pass. **Nothing here is committed** —
+both files are gitignored, so this section is the only record and Phase 6 reverts from it.
 
-1. **`GENERATION_DAILY_CALL_LIMIT` is 200 in `backend/.env`, not the 2500 default.** Someone lowered
-   it. The run is ~1,800–2,000 model calls (two per question served), so at 200 it will refuse within
-   the first two students. Raise it to ~5000 for headroom **and write down the original value**;
-   Phase 6 reverts it.
-2. **`EEG_SIM_OPTICS` is absent from `EEGResearch/.env` and defaults to `false`**, so the simulated
-   pulse is off and the run records **no heart rate at all** — every window refused as `no_samples`,
-   exactly like a headband with `MUSE_ENABLE_OPTICS` off. That is the correct default and was a review
-   finding, not an oversight. **Decide deliberately**: setting it gives the run a heart channel whose
-   rows carry `raw.synthetic: true`; leaving it unset gives a cognitive-only run. Whichever is chosen,
-   say so in the Phase 6 report, because it changes what the parent-facing heart tiles show.
-3. Confirm `LLM_PROVIDER=claude` and a working `ANTHROPIC_API_KEY` (both already true). Start the
-   stack with `./start.ps1` — no `-Muse`, no `-Camera`, so `EEG_SOURCE=sim` and `INGEST_MODE=pull`.
-   Confirm backend (8000), sidecar (8001) and frontend (5173) are healthy before going on.
+| What | Original | Now |
+| --- | --- | --- |
+| `backend/.env` `GENERATION_DAILY_CALL_LIMIT` | `200` | `5000` |
+| `EEGResearch/.env` `EEG_SIM_OPTICS` | absent (= false) | `true` |
 
-**Also check before starting**, both from the previous handoff and still live:
+Both edits carry a `Phase 6 reverts this` comment in the file itself, so the record survives losing
+this document.
 
-- `start.ps1 -Preview` writes `FACE_DEBUG_PREVIEW_ENABLED` to `EEGResearch/.env`; a checkout without
-  the camera-preview branch refuses to boot on it (pydantic `extra_forbidden`). Delete the line if
-  present.
-- `add_question_to_supabase`'s dedupe lookup raises on a missing `ccss_standard` column and turns
-  every generated question into a 500 until `npx supabase migration up` has been run locally.
+**`EEG_SIM_OPTICS=true` was a decision, not a default**, taken 2026-09-17: the run gets a heart
+channel, so the heart tiles, RMSSD, the heart series and the chart summary's heart sentence all have
+data to verify in Phase 5b. Every row carries `raw.synthetic: true` through both ingestion paths.
+**Phase 6 must state that every heart figure in the report is synthesised** — that is the cost of
+the choice, and the alternative was leaving the whole heart path unexercised.
+
+**The "someone lowered it" note about the call limit was wrong.** `200` is a deliberate dev ceiling
+with its reason written beside it — a bound that stops a runaway loop on a laptop making its first
+billed calls. Its comment did claim `llm_client`'s default is 5000 where the code says 2500;
+corrected in passing. The arithmetic for the raise: 30 students × ~40 questions × 2 calls ≈ 2,400.
+
+Both pre-flight checks from the previous handoff are **clear, with nothing to do**:
+
+- No `FACE_DEBUG_PREVIEW_ENABLED` line in `EEGResearch/.env`.
+- The local database is migrated through `20260918000000`; `questions.ccss_standard`,
+  `questions.figure` and `signal_daily_rollup.stress_sample_count` all exist, so
+  `add_question_to_supabase` will not 500.
+
+### What is left, and the one thing to verify when it runs
+
+Start the stack — **no `-Muse`, no `-Camera`**:
+
+```
+./start.ps1
+```
+
+Then confirm backend (8000), sidecar (8001) and frontend (5173) are healthy.
+
+**This machine is currently configured for a `-Muse -Camera` run, and that is the exact state the
+2026-09-16 failure was found in.** `EEGResearch/.env` holds `EEG_SOURCE=muse`,
+`EEG_DEVICES=default:muse@8765,camera:face@0`, `FACE_ENABLED=true`, `PUSH_ENABLED=true`, and
+`backend/.env` holds `INGEST_MODE=push`. A plain run is documented to convert all of it —
+`Update-DeviceRegistry` rewrites the `default:` entry and strips the camera one, and `INGEST_MODE`
+is written on both branches from the flag — and `test_launcher_device_registry.py` passes 61/61 on
+this checkout. **Verify the result rather than trusting it**, because the symptom of the old bug is
+silent: a `default:muse@8765` left standing beside `EEG_SOURCE=sim` makes the sidecar look for a
+bridge that is not running, and the run reads `eeg_source: muse` with `no_signal` throughout while
+every window looks ordinary. After launching, read back:
+
+- `EEGResearch/.env` — `EEG_SOURCE=sim`, no `muse@8765` in `EEG_DEVICES`, no `camera:` entry,
+  `FACE_ENABLED=false`, `PUSH_ENABLED=false`, and **`EEG_SIM_OPTICS=true` still present**.
+- `backend/.env` — `INGEST_MODE=pull`.
+- The sidecar's `/api/v1/state` — `eeg_source: sim`, and a `heart` block once a session is armed.
+
+`ANTHROPIC_BASE_URL` is set in the Windows environment to `https://api.anthropic.com`, which is
+correct. CLAUDE.md flags a *stale* value here as a trap that costs rounds to find; this one is fine,
+but it is set explicitly, so if generation ever fails with `WinError 10061` that is the first place
+to look.
 
 ## Phase 3 — scripted account creation. NOT STARTED.
 

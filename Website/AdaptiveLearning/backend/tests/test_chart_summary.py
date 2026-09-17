@@ -254,7 +254,14 @@ def test_a_failed_signal_read_never_reports_a_quiet_week():
     """`sessions` comes from the same aggregate as the averages, so a failed
     read leaves it at 0. Printing that reports a quiet week for a query that
     never ran."""
-    lines = main._rule_based_chart_summary(_basis(signals_retrieved=False))
+    # `sessions: 0` is part of the fixture, not decoration: a failed read
+    # leaves the field at its default, and a test that kept the happy path's
+    # 12 asserts that "0 sessions" is absent from a summary that was never
+    # going to say it -- vacuous against the exact bug. Found by mutation:
+    # removing the guard left the earlier version of this test green.
+    basis = _basis(signals_retrieved=False)
+    basis["academic"] = {**basis["academic"], "sessions": 0}
+    lines = main._rule_based_chart_summary(basis)
     assert not any("0 sessions" in line for line in lines)
     assert any("could not be read" in line for line in lines)
 
@@ -497,27 +504,48 @@ def test_an_abandoned_call_is_cancelled_rather_than_left_queued():
     """Bounding the workers does not bound the queue behind them.
 
     Left uncancelled, a sustained outage accumulates prompts nobody is waiting
-    for and runs every one of them once the provider recovers.
-    """
-    release = threading.Event()
-    started = []
+    for, and every one of them is still holding a slot in the pool's work
+    queue when the provider recovers.
 
-    def _work(prompt, *_a, **_k):
-        started.append(prompt)
+    Asserted on the future's own state, not on whether the work ran. The
+    obvious version of this test -- occupy the worker, let the wait time out,
+    then check the prompt never reached the model -- passes with
+    `future.cancel()` deleted, and that is not a weak assertion but a true
+    one about a second mechanism: the wait and the work share one deadline, so
+    an item that starts after the wait timed out finds `remaining <= 0` and
+    returns without opening a socket. The call is prevented either way. What
+    cancelling adds is that the item leaves the queue, which is the thing the
+    outage was piling up. Found by mutation.
+    """
+    submitted = []
+    release = threading.Event()
+
+    def _work(*_a, **_k):
         release.wait(timeout=10)
         return None
+
+    class _Recording:
+        """The real pool, with every future it hands out kept."""
+        def __init__(self, pool):
+            self._pool = pool
+
+        def submit(self, fn, *a, **kw):
+            future = self._pool.submit(fn, *a, **kw)
+            submitted.append(future)
+            return future
 
     pool = ThreadPoolExecutor(max_workers=1)
     original_pool, original_llm = main._CHART_SUMMARY_LLM_POOL, main._llm_chart_summary
     original_timeout = main.CHART_SUMMARY_LLM_TIMEOUT
-    main._CHART_SUMMARY_LLM_POOL = pool
+    main._CHART_SUMMARY_LLM_POOL = _Recording(pool)
     main._llm_chart_summary = _work
     main.CHART_SUMMARY_LLM_TIMEOUT = 0.05
     try:
-        blocker = pool.submit(_work, "occupying")
-        while not started:
-            time.sleep(0.01)
+        blocker = pool.submit(_work)
         assert main._llm_chart_summary_bounded("queued", ["x"]) is None
+        assert submitted, "nothing was submitted, so nothing was under test"
+        assert submitted[0].cancelled(), \
+            "the abandoned work is still sitting in the pool's queue"
         release.set()
         blocker.result(timeout=10)
     finally:
@@ -526,9 +554,6 @@ def test_an_abandoned_call_is_cancelled_rather_than_left_queued():
         main._CHART_SUMMARY_LLM_POOL = original_pool
         main._llm_chart_summary = original_llm
         main.CHART_SUMMARY_LLM_TIMEOUT = original_timeout
-
-    assert "queued" not in started, \
-        "the abandoned prompt still ran once a worker freed up"
 
 
 def test_the_pool_is_shut_down_on_the_way_out():

@@ -249,8 +249,10 @@ describe('chart-explaining summary', () => {
   })
 
   it('keeps its own state, so the two panels cannot overwrite each other', async () => {
-    // Two buttons a reader can press in either order. One set of state would
-    // let the second answer land in the first panel.
+    // Two buttons a reader can press in either order, so both directions are
+    // pressed here. Checking only one leaves the other handler free to clear
+    // the panel it does not own, which is exactly the shape shared state
+    // would produce.
     renderReport({ showChartSummary: true, showStrategies: true })
     await screen.findByText('Recent Sessions')
 
@@ -258,8 +260,11 @@ describe('chart-explaining summary', () => {
     await screen.findByText('Focus is 63%.')
     await userEvent.click(screen.getByRole('button', { name: /generate strategies/i }))
     await screen.findByText('Review fractions')
-
     expect(screen.getByText('Focus is 63%.')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /generate summary/i }))
+    await waitFor(() => expect(urlsFor('/chart-summary')).toHaveLength(2))
+    expect(screen.getByText('Review fractions')).toBeInTheDocument()
   })
 
   it('surfaces a failure instead of silently showing nothing', async () => {

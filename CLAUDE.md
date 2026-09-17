@@ -2389,6 +2389,17 @@ threw where the double was thin rather than where a bug was — the mirror of th
 `_FakeMessages.create(**kwargs)` rule, and the same fix: make the double carry what the real thing
 carries.
 
+**The teacher's roster had the same defect on its own read**, and it is the worked example of the
+fixture rule. `Students.jsx` is the one page that reads `profiles` straight through Supabase
+(`profiles!inner(*)`), and it named each row `s.username || s.email.split('@')[0]` — **`profiles`
+has no `username` column**, in any migration, so the first branch never fired and every row showed
+an email prefix whatever the student was called. The search box had the same gap pointing the other
+way: it matched email and id only, so a teacher typing the name on screen found nothing. It survived
+because `Students.test.jsx`'s own fixture invented `username: 'ada'` — *a fixture written from the
+same misreading as the code cannot fail against it*, the rule this file already states for the
+roster `<select>`, arrived at a second time. Build a roster fixture from the columns the table
+actually has.
+
 Tests: `backend/tests/test_role_gates.py`, which asserts both halves — that the code reads the right
 column, and that a migration takes the write away.
 

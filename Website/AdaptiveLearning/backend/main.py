@@ -3952,16 +3952,27 @@ def _weakest_topic(topics: list[dict]):
     return min(attempted, key=lambda t: t.get("accuracy") or 0)
 
 
-def _weakest_topic_summary(topics: list[dict]) -> dict | None:
-    """Just the fields the strategies response is about."""
-    weakest = _weakest_topic(topics)
-    if not weakest:
+def _topic_summary(row: dict | None) -> dict | None:
+    """Just the three fields a topic-naming response is about.
+
+    Named fields rather than the whole `_topic_breakdown` row, which also
+    carries `topic_id`, a `stress` reading and `updated_at` that are not part
+    of what these responses should promise -- a stress reading in particular
+    is a signal, and it would reach a surface that never asked for one and
+    never gated on consent for it.
+    """
+    if not row:
         return None
     return {
-        "topic_name": weakest.get("topic_name"),
-        "accuracy": weakest.get("accuracy"),
-        "attempted_questions": weakest.get("attempted_questions"),
+        "topic_name": row.get("topic_name"),
+        "accuracy": row.get("accuracy"),
+        "attempted_questions": row.get("attempted_questions"),
     }
+
+
+def _weakest_topic_summary(topics: list[dict]) -> dict | None:
+    """Just the fields the strategies response is about."""
+    return _topic_summary(_weakest_topic(topics))
 
 
 def _strategy_basis(student_id: str, days: int, include_face: bool) -> dict:
@@ -4599,8 +4610,9 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
             # `_weakest_topic` excludes unattempted ones: `_topic_breakdown`
             # reports an untouched topic at 0%, which would make it the
             # weakest, and the one below it the strongest by default.
-            "strongest": (max(attempted, key=lambda t: t.get("accuracy") or 0)
-                          if attempted else None),
+            "strongest": _topic_summary(
+                max(attempted, key=lambda t: t.get("accuracy") or 0)
+                if attempted else None),
             "attempted_count": len(attempted),
         },
     }

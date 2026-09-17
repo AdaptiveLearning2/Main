@@ -570,3 +570,26 @@ def test_the_pool_is_shut_down_on_the_way_out():
     finally:
         main._shutdown_chart_summary_pool()
         main._CHART_SUMMARY_LLM_POOL = original
+
+
+def test_a_named_topic_carries_three_fields_and_not_the_whole_row(monkeypatch):
+    """`_topic_breakdown` rows carry a `stress` reading, and this response
+    never asked for one -- a signal reaching a surface that did not gate on
+    consent for it. The same rule the strategies basis already follows for the
+    weakest topic, applied to the strongest one beside it."""
+    row = {"topic_id": "t1", "topic_name": "ordering", "accuracy": 91,
+           "attempted_questions": 30, "correct_questions": 27,
+           "stress": 0.8, "updated_at": "2026-09-01"}
+    monkeypatch.setattr(main, "_reportable_channels",
+                        lambda sid, inc=True: main.ReportChannels(
+                            heart=False, emotion=False, consent_retrieved=True))
+    monkeypatch.setattr(main, "_signal_summary", lambda *a, **k: main._EMPTY_SUMMARY)
+    monkeypatch.setattr(main, "_signal_trend",
+                        lambda *a, **k: {"weeks": [], "retrieved": True})
+    monkeypatch.setattr(main, "_stats_including_open_session",
+                        lambda sid: {"total_questions": 0, "total_correct": 0, "retrieved": True})
+    monkeypatch.setattr(main, "_topic_breakdown", lambda sid: [row])
+
+    topics = main._chart_summary_basis("student-1", 7, 8, True)["topics"]
+    for named in (topics["weakest"], topics["strongest"]):
+        assert set(named) == {"topic_name", "accuracy", "attempted_questions"}

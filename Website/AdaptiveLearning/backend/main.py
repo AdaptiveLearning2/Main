@@ -101,14 +101,260 @@ async def _lifespan(app: FastAPI):
                 raise failure
 
 
-app = FastAPI(title="AdaptiveLearning API", lifespan=_lifespan)
+# ─── the network edge ─────────────────────────────────────────────────────
+#
+# Everything in this block mirrors `EEGResearch/src/app/main.py`, which has had
+# an origin allowlist and a security-headers middleware since it was written.
+# This backend had neither: `allow_origins=["*"]` with `allow_credentials=True`,
+# which Starlette serves by *reflecting* whatever Origin asked, and no response
+# header of any kind.
 
+def _env_list(name: str, default):
+    """A comma-separated setting, falling back to `default` when unset.
+
+    Same tolerant shape as `_env_number`: read at import, so an empty or
+    whitespace-only value is the unset case rather than a list of one empty
+    string -- which as an allowed origin would match nothing and take the
+    frontend down at the edge.
+    """
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return list(default)
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+# There is no production deployment yet (no hosting config in this repo), so
+# the default is the local frontend and `ENV` is development unless a
+# deployment says otherwise. A production deploy that forgets `ALLOWED_ORIGINS`
+# gets a CORS refusal on the first page load -- loud, immediate and the safe
+# direction, unlike the wildcard it replaces.
+# `ENV` decides one thing: whether the interactive docs are published. Both
+# sides are named, because `== "production"` is silent in the one direction
+# that matters -- `ENV=prod`, or any other near miss, leaves /docs, /redoc and
+# /openapi.json serving a map of the API to the internet, and nothing in the
+# boot log says so while every other setting here announces its fallback.
+#
+# An unrecognised value is therefore treated as production, which is the
+# opposite fallback direction from `_env_number`: there the safe side is the
+# feature's own default, here it is publishing less. Unset stays development,
+# since that is the ordinary local state and must not need a variable set to
+# work.
+_PRODUCTION_ENVS  = {"production", "prod"}
+_DEVELOPMENT_ENVS = {"development", "dev", "local", "test", "ci"}
+
+
+def _is_production(raw):
+    name = (raw or "").strip().lower()
+    if not name:
+        return "development", False
+    if name in _PRODUCTION_ENVS:
+        return name, True
+    if name in _DEVELOPMENT_ENVS:
+        return name, False
+    print(f"[config] ENV={raw!r} is not a name this app knows; "
+          f"treating it as production and leaving the API docs unpublished")
+    return name, True
+
+
+ENV, IS_PRODUCTION = _is_production(os.getenv("ENV"))
+ALLOWED_ORIGINS = _env_list(
+    "ALLOWED_ORIGINS", ("http://localhost:5173", "http://127.0.0.1:5173"))
+
+# The interactive docs enumerate every endpoint and its request shape. Useful
+# locally and in CI, and a map of the attack surface in production. Kept on by
+# name rather than by absence, so the paths the CSP below has to exempt are the
+# same paths that get switched off.
+_DOCS_PATHS = ("/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect")
+
+app = FastAPI(
+    title="AdaptiveLearning API",
+    lifespan=_lifespan,
+    docs_url=None if IS_PRODUCTION else "/docs",
+    redoc_url=None if IS_PRODUCTION else "/redoc",
+    openapi_url=None if IS_PRODUCTION else "/openapi.json",
+)
+
+
+# How much JSON an ordinary endpoint may be sent. Nothing here accepts an
+# upload -- the largest legitimate non-ingest body is a profile update -- so
+# this is generous by two orders of magnitude and still refuses a body sent to
+# occupy a worker.
+_MAX_BODY_BYTES = int(_env_number("MAX_BODY_BYTES", 256 * 1024, int, minimum=4096))
+
+# The three ingest endpoints are the exception, and a single global cap would
+# have broken them silently. Measured against a cognitive batch at the full
+# `INGEST_MAX_BATCH` of 500, with the fattest `raw.ingestion` block the sidecar
+# sends: ~637 KiB, i.e. two and a half times the cap above.
+#
+# So the ingest bound is *derived* from the batch bound rather than written as
+# its own number -- raising `INGEST_MAX_BATCH` must not start rejecting batches
+# at the edge for a reason nothing in the ingest code mentions. The per-sample
+# allowance is ~3x the measured sample, since `raw` is a free-form dict from a
+# process on a student's machine and its size is not ours to predict.
+_INGEST_MAX_SAMPLE_BYTES = int(
+    _env_number("INGEST_MAX_SAMPLE_BYTES", 4096, int, minimum=512))
+_INGEST_PATH_PREFIX = "/api/signals/"
+
+
+class MaxBodySizeMiddleware:
+    """Refuse an oversized request body, by declaration and by arrival.
+
+    Pure ASGI rather than `BaseHTTPMiddleware`, because that one reads the body
+    to hand it on and the whole point here is to *not* read it.
+
+    Both checks are needed and they catch different callers. `Content-Length`
+    is what every client in this product sends, and checking it refuses the
+    body before a byte is accepted. A client that chunks its upload sends no
+    `Content-Length` at all, so the declaration check passes it straight
+    through -- which is precisely the client this middleware exists for. The
+    wrapped `receive` counts what actually arrives and stops there.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    def _limit(self, path: str) -> int:
+        # `_INGEST_MAX_BATCH` is defined with the rest of the ingest settings,
+        # far below this. Read here at request time rather than captured at
+        # construction, so the two bounds cannot be set from different values
+        # of the same setting.
+        if path.startswith(_INGEST_PATH_PREFIX):
+            return _INGEST_MAX_BATCH * _INGEST_MAX_SAMPLE_BYTES
+        return _MAX_BODY_BYTES
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        limit = self._limit(scope.get("path", ""))
+
+        declared = None
+        for key, value in scope.get("headers", ()):
+            if key == b"content-length":
+                try:
+                    declared = int(value)
+                except ValueError:
+                    declared = None
+                break
+        if declared is not None and declared > limit:
+            return await self._refuse(send, limit)
+
+        received = 0
+        too_large = False
+
+        async def counting_receive():
+            nonlocal received, too_large
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    too_large = True
+                    # Hand the app an empty final chunk rather than the rest of
+                    # the body. It will fail its own parse and we replace that
+                    # response below; what matters is that nothing downstream
+                    # sees more bytes than the limit allows.
+                    return {"type": "http.request", "body": b"", "more_body": False}
+            return message
+
+        started = False
+
+        async def guarded_send(message):
+            nonlocal started
+            if message["type"] == "http.response.start":
+                if too_large:
+                    # The app answered from a truncated body. Its answer is
+                    # about the wrong request, so replace it -- a 422 about
+                    # malformed JSON would send someone looking at their
+                    # payload's contents rather than its size.
+                    return await self._refuse(send, limit)
+                started = True
+            elif too_large and not started:
+                return
+            await send(message)
+
+        await self.app(scope, counting_receive, guarded_send)
+
+    @staticmethod
+    async def _refuse(send, limit: int):
+        body = (b'{"detail":"Request body is too large (limit '
+                + str(limit).encode() + b' bytes)."}')
+        await send({"type": "http.response.start", "status": 413,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+
+# Added innermost so the two below still wrap its 413: a refusal a browser
+# cannot read because it carries no CORS header reaches the page as a generic
+# network error, which is the one thing worse than no message at all.
+app.add_middleware(MaxBodySizeMiddleware)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Every response here is either a child's data or the public question bank.
+    # Neither wants an intermediary holding a copy.
+    response.headers["Cache-Control"] = "no-store"
+    # This origin has no use for any of them. The camera carve-out the plan
+    # proposed belongs on the *frontend* origin, which is what actually opens a
+    # webcam -- writing `camera=(self)` here would permit a capability this
+    # server has no document to use it in.
+    response.headers["Permissions-Policy"] = \
+        "camera=(), microphone=(), geolocation=(), payment=()"
+    # `main.py` serves no HTML -- no StaticFiles, no template, no HTMLResponse
+    # -- so the honest policy for its own responses is that they are not a
+    # document at all. The plan's `default-src 'self'; connect-src ...` is a
+    # *frontend* policy: it describes what a page may fetch, and this server
+    # has no page. That one belongs with the Vite build's hosting config and
+    # is an open decision pending the hosting choice; nothing here substitutes
+    # for it.
+    #
+    # The exception is FastAPI's own docs, which are real HTML pulling Swagger
+    # from a CDN. They are off in production; under `default-src 'none'` they
+    # would render blank locally instead, which reads as broken tooling.
+    if not request.url.path.startswith(_DOCS_PATHS):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; frame-ancestors 'none'; "
+            "base-uri 'none'; form-action 'none'")
+    return response
+
+
+# Added last, so it is outermost and its headers reach the refusals above.
+#
+# `allow_credentials=False` because this app authenticates with a bearer token
+# in a header, which the browser never attaches on its own -- credentials here
+# would mean cookies, and there are none. It also has to be false for the
+# allowlist to mean anything: with credentials on and `["*"]`, Starlette
+# reflects the requesting Origin, so every origin was allowed.
+#
+# The header list is what `lib/api.js` and the sidecar's push client actually
+# send, and nothing else.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    # `Retry-After` is not a CORS-safelisted response header, so without this a
+    # browser hides it from the page even on an allowed origin -- and the
+    # frontend is a different origin from this API in every deployment,
+    # including local dev on :5173 against :8000.
+    #
+    # Seven refusals here set it (the generation 429 and 503, the ingest and
+    # strategy limiters), and `apiFetch` reads it to decide how long to wait
+    # and then jitters that delay -- which CLAUDE.md records as the
+    # load-bearing half, since an un-jittered retry reforms the burst one round
+    # later. Unexposed, `retryAfterMs` reads null, every refusal falls back to
+    # the fixed delay, and the arrival-rate measurement behind
+    # `GENERATION_MAX_WAITERS` describes behaviour no browser performs.
+    #
+    # Nothing else is exposed. This is a read permission, and the rest of these
+    # responses' headers are the page's business only by accident.
+    expose_headers=["Retry-After"],
 )
 
 

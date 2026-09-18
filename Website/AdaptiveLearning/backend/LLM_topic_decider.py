@@ -596,6 +596,14 @@ def calculate_topic_and_difficulty(user_id, grade):
 
 
 def question_generation(topic, difficulty, user_id, grade):
+    # The one dispatch point to all seventeen generators, and each of them
+    # interpolates `grade` straight into its prompt ("a {grade} student"). So
+    # this is where the client's string stops: past this line `grade` is one
+    # of `CANONICAL_GRADE_LABELS`' values, rebuilt from the number every gate
+    # below already reads, and nothing the caller wrote reaches a prompt.
+    # Sanitising in each generator instead would be seventeen places for the
+    # eighteenth to be forgotten. See grade_levels.grade_for_prompt.
+    grade = grade_levels.grade_for_prompt(grade)
     history = get_user_history(user_id)
     recent_global = list(history["global"])[-5:]
     recent_topic  = list(history[topic])[-5:] if topic in history else []
@@ -773,6 +781,14 @@ def question_generation(topic, difficulty, user_id, grade):
     return response
 
 def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=None, manual_bias=0):
+    # `Student Grade Level = {grade}` below is a line in an instruction the
+    # model is asked to follow, and `grade` arrives from
+    # `GET /api/generate-question?grade=` with nothing between it and here.
+    # Canonicalise first, for the reason question_generation does: the label
+    # is rebuilt from the parsed number, so `_safe_topic` and
+    # `randomize_selection` read the same grade they always did while the
+    # prompt can only ever see one of fourteen fixed strings.
+    grade = grade_levels.grade_for_prompt(grade)
     accuracy_response = get_user_performance(user_id)
 
     json_response = accuracy_response.data or []

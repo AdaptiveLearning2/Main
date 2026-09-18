@@ -443,6 +443,41 @@ def test_a_name_this_app_does_not_know_hides_the_docs_and_says_so(raw, capsys):
     assert "not a name this app knows" in capsys.readouterr().out
 
 
+def _env_example():
+    path = os.path.join(os.path.dirname(os.path.abspath(main.__file__)),
+                        ".env.example")
+    return open(path, encoding="utf-8").read()
+
+
+def test_the_example_file_ships_a_value_this_app_recognises(capsys):
+    """`.env.example` is the file a deployment is copied from.
+
+    A value there that the app warns about would put the `[config]` line in
+    front of every reader of a fresh checkout, which is how a warning stops
+    being read.
+    """
+    shipped = [line.split("=", 1)[1].strip()
+               for line in _env_example().splitlines()
+               if line.startswith("ENV=")]
+    assert shipped, "the example no longer documents ENV at all"
+    for value in shipped:
+        assert main._is_production(value)[1] is False
+        assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize(
+    "name", sorted(main._PRODUCTION_ENVS | main._DEVELOPMENT_ENVS))
+def test_every_name_the_app_recognises_is_written_down_where_a_deploy_looks(name):
+    """Coverage, not wording -- the comment is prose and a test cannot read it.
+
+    What it can catch is the drift that already happened here once: the block
+    described the fallback as keeping the docs *on* when the shipped rule turns
+    them off, in the file someone copies to configure a deployment. Adding a
+    recognised spelling without naming it here fails this.
+    """
+    assert name in _env_example()
+
+
 @pytest.mark.parametrize("raw", [None, "", "development", "production", "prod"])
 def test_a_name_this_app_knows_is_silent(raw, capsys):
     """A warning on every ordinary boot is a warning nobody reads, and the

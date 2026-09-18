@@ -3298,7 +3298,12 @@ every row of a session that recorded it fine and was simply not being shown. Fou
 
 - **The colour is read from the same entry the line is stroked with**, and applied inline rather
   than as a Tailwind class — the chip cannot drift from what it names, and a `bg-${…}` would ship no
-  rule at all (the whole-class-name trap above).
+  rule at all (the whole-class-name trap above). **The backend reads that list too**:
+  `test_chart_render.py` scrapes `colour` out of it to check the archived SVGs still use the palette
+  the app drew, so moving those colours breaks a *Python* test — which is how this landed, since it
+  used to scrape the `stroke` attributes the series list replaced. Its scraper refuses an empty
+  result, because a shape change it cannot read is otherwise a check that passes while seeing
+  nothing.
 - **An axis mounts only while a *shown* series uses it**, and anything referencing an axis —
   `SessionReview`'s answer markers and its failover lines — is gated the same way. Recharts throws
   on a line naming an axis that is not there, and draws an empty scale for one with no lines.

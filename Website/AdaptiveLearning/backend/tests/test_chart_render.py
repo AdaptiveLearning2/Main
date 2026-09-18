@@ -146,20 +146,30 @@ def test_the_archive_palette_matches_the_live_charts(name, mapping):
 
 
 def _jsx_line_strokes(path: Path) -> dict:
-    """`dataKey` -> `stroke` for every `<Line>` in a chart file.
+    """series `key` -> the colour its line is stroked with, for a chart file.
 
     These are not a `const NAME = {...}` object, so the map above can't reach
-    them -- they're inline attributes on Recharts elements, sometimes wrapped
-    across lines. That's why the drift test above missed this palette, and why
-    it matters for the line chart that depends on it.
+    them. They used to be inline `dataKey`/`stroke` attributes on the Recharts
+    elements -- that's why the drift test above missed this palette -- and
+    since the series filter landed they are `colour` on the per-chart series
+    list each `<Line>` is derived from, which is the same palette one step
+    earlier. Reading it there is what keeps the swatch on a teacher's toggle
+    inside the check too: chip, line and archive are now one value.
+
+    **It refuses an empty result rather than returning one**, which is a
+    better message and not a second catch: both callers below already fail on
+    an empty map -- one compares it against a populated `SERIES_COLOURS`, the
+    other asserts the two files have a series in common, and that is what went
+    red when the colours moved. What the guard adds is naming the file that
+    moved, rather than presenting a whole palette as having drifted at once.
     """
     source = path.read_text(encoding="utf-8")
-    found = {}
-    for element in re.findall(r"<Line [^>]*?/>", source, re.S):
-        key = re.search(r'dataKey="([^"]+)"', element)
-        stroke = re.search(r'stroke="(#[0-9a-fA-F]{3,8})"', element)
-        if key and stroke:
-            found[key.group(1)] = stroke.group(1)
+    found = dict(re.findall(
+        r"key:\s*'([^']+)'[^{}]*?colour:\s*'(#[0-9a-fA-F]{3,8})'", source, re.S))
+    assert found, (
+        f"no series colours found in {path.name} -- the frontend moved them "
+        "again, and this check reads as passing when it finds nothing"
+    )
     return found
 
 

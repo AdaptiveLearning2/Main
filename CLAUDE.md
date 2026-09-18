@@ -272,6 +272,14 @@ restates a whole payload to move one field tends to move two. `CHANNEL_REASONS` 
 `offLabel` four-state matrix, named for the state each input must produce rather than for its field
 values, since that mapping is the thing under test.
 
+**A fixture of one cannot tell identity from presence.** `Questions.test.jsx` asserts that closing
+the question modal returns focus to *the row that opened it*; against the file's one-question bank
+that row is also the first `<button>` in the document, so a `useDialog` restoring focus to
+`querySelector('button')` passed — the mutation check is what found it. The test registers a second
+question and clicks that one. Applies to any assertion naming *which* element, row or record
+something resolved to: give it a sibling to be wrong about, and keep the sibling local to that test
+rather than in the shared fixture, which the counting tests are written against.
+
 **Assert an ordering, not a duration, when a test synchronises on a thread.**
 `test_time_spent_queueing_comes_out_of_the_budget_it_was_promised` checked that a queued call had
 waited with `monotonic() - started >= 0.15`, against a `threading.Timer(0.15)` releasing the

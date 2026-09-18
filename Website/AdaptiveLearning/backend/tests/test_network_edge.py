@@ -33,7 +33,30 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import main  # noqa: E402
 
-client = TestClient(main.app)
+# Rebound before every test rather than built once at import.
+#
+# `test_consent_gates_polling` calls `importlib.reload(main)`, which builds a
+# *new* `FastAPI` object. A client captured at collection time would go on
+# serving the old app from that point while every assertion beside it read the
+# reloaded module -- two instances, agreeing only because nothing yet
+# configures them differently, so the first monkeypatched setting would make
+# this file pass or fail on test ordering. Same hazard as the request models in
+# `test_grade_prompt_injection`, and the same rule: resolve `main`'s attributes
+# when the test runs.
+#
+# Autouse and rebinding the global, rather than a `client` argument on each of
+# the seventeen tests below, so a test added later cannot opt out of the fresh
+# instance by forgetting to ask for it.
+client = None
+
+
+@pytest.fixture(autouse=True)
+def _client_for_the_live_module():
+    global client
+    client = TestClient(main.app)
+    yield
+    client = None
+
 
 # A public read with no auth and no body -- the cheapest route that proves a
 # response-wide behaviour without needing a signed-in user.
@@ -41,6 +64,18 @@ OPEN_PATH = "/api/topics"
 
 ALLOWED = "http://localhost:5173"
 FOREIGN = "https://evil.example"
+
+
+def test_the_client_serves_the_module_the_assertions_read():
+    """One instance, not two.
+
+    Trivially true in isolation and the whole point in a full-suite run: after
+    `test_consent_gates_polling` reloads `main`, a client captured at
+    collection time fails this while everything around it still passes, which
+    is exactly how a two-instance bug hides. Its teeth come from running with
+    the rest of the suite, so check it there.
+    """
+    assert client.app is main.app
 
 
 # ─── CORS ────────────────────────────────────────────────────────────────
@@ -95,6 +130,30 @@ def test_the_headers_the_clients_actually_send_are_allowed(header):
         "Origin": ALLOWED, "Access-Control-Request-Method": "POST",
         "Access-Control-Request-Headers": header})
     assert r.status_code == 200
+
+
+def test_retry_after_is_readable_by_the_page_it_was_sent_to():
+    """It is not a CORS-safelisted response header, so it needs naming.
+
+    Seven refusals here set `Retry-After`, and `apiFetch` reads it to size its
+    wait and then jitters it. Unexposed, the browser hides the header, every
+    refusal falls back to the fixed delay, and the arrival-rate measurement
+    behind `GENERATION_MAX_WAITERS` describes behaviour nothing performs. The
+    frontend is a different origin from this API in every deployment, local dev
+    included, so this is not an edge case.
+    """
+    r = client.get(OPEN_PATH, headers={"Origin": ALLOWED})
+    exposed = [h.strip() for h in
+               (r.headers.get("access-control-expose-headers") or "").split(",")]
+    assert "Retry-After" in exposed
+
+
+def test_the_exposure_list_is_that_one_header():
+    """Exposure is a read permission, granted per header for a reason."""
+    r = client.get(OPEN_PATH, headers={"Origin": ALLOWED})
+    exposed = [h.strip() for h in
+               r.headers["access-control-expose-headers"].split(",") if h.strip()]
+    assert exposed == ["Retry-After"]
 
 
 @pytest.mark.parametrize("raw,expected", [
@@ -350,3 +409,43 @@ def test_the_docs_are_on_outside_production():
     """The other half: switching them off everywhere costs the tooling."""
     assert main.IS_PRODUCTION is False
     assert client.get("/docs").status_code == 200
+
+
+@pytest.mark.parametrize("raw", ["production", "PRODUCTION", " Production "])
+def test_the_production_spellings_are_recognised(raw):
+    assert main._is_production(raw)[1] is True
+
+
+@pytest.mark.parametrize("raw", [None, "", "   ", "development", "dev", "local", "ci"])
+def test_the_development_spellings_and_the_unset_case_publish_the_docs(raw):
+    """Unset has to stay development: it is the ordinary local state, and
+    needing a variable set for the tooling to work is its own trap."""
+    assert main._is_production(raw)[1] is False
+
+
+@pytest.mark.parametrize("raw", ["prod", "PROD", "prod ", "production "])
+def test_a_shortened_production_name_is_not_a_near_miss(raw):
+    """`ENV=prod` under a plain `== "production"` publishes the API's whole
+    shape in production, silently. It is the likeliest typo of the lot."""
+    assert main._is_production(raw)[1] is True
+
+
+@pytest.mark.parametrize("raw", ["staging", "produciton", "Production!", "1", "yes"])
+def test_a_name_this_app_does_not_know_hides_the_docs_and_says_so(raw, capsys):
+    """The opposite fallback direction from `_env_number`, on purpose.
+
+    There the safe side is the feature's own default; here it is publishing
+    less. Guessing the other way turns one typo in a deploy config into a
+    published map of the API, and the log line is what separates that from a
+    value someone meant.
+    """
+    assert main._is_production(raw)[1] is True
+    assert "not a name this app knows" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("raw", [None, "", "development", "production", "prod"])
+def test_a_name_this_app_knows_is_silent(raw, capsys):
+    """A warning on every ordinary boot is a warning nobody reads, and the
+    line above only means something while it is rare."""
+    main._is_production(raw)
+    assert capsys.readouterr().out == ""

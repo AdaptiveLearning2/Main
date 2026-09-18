@@ -128,8 +128,35 @@ def _env_list(name: str, default):
 # deployment says otherwise. A production deploy that forgets `ALLOWED_ORIGINS`
 # gets a CORS refusal on the first page load -- loud, immediate and the safe
 # direction, unlike the wildcard it replaces.
-ENV             = (os.getenv("ENV") or "development").strip().lower()
-IS_PRODUCTION   = ENV == "production"
+# `ENV` decides one thing: whether the interactive docs are published. Both
+# sides are named, because `== "production"` is silent in the one direction
+# that matters -- `ENV=prod`, or any other near miss, leaves /docs, /redoc and
+# /openapi.json serving a map of the API to the internet, and nothing in the
+# boot log says so while every other setting here announces its fallback.
+#
+# An unrecognised value is therefore treated as production, which is the
+# opposite fallback direction from `_env_number`: there the safe side is the
+# feature's own default, here it is publishing less. Unset stays development,
+# since that is the ordinary local state and must not need a variable set to
+# work.
+_PRODUCTION_ENVS  = {"production", "prod"}
+_DEVELOPMENT_ENVS = {"development", "dev", "local", "test", "ci"}
+
+
+def _is_production(raw):
+    name = (raw or "").strip().lower()
+    if not name:
+        return "development", False
+    if name in _PRODUCTION_ENVS:
+        return name, True
+    if name in _DEVELOPMENT_ENVS:
+        return name, False
+    print(f"[config] ENV={raw!r} is not a name this app knows; "
+          f"treating it as production and leaving the API docs unpublished")
+    return name, True
+
+
+ENV, IS_PRODUCTION = _is_production(os.getenv("ENV"))
 ALLOWED_ORIGINS = _env_list(
     "ALLOWED_ORIGINS", ("http://localhost:5173", "http://127.0.0.1:5173"))
 
@@ -312,6 +339,22 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
+    # `Retry-After` is not a CORS-safelisted response header, so without this a
+    # browser hides it from the page even on an allowed origin -- and the
+    # frontend is a different origin from this API in every deployment,
+    # including local dev on :5173 against :8000.
+    #
+    # Seven refusals here set it (the generation 429 and 503, the ingest and
+    # strategy limiters), and `apiFetch` reads it to decide how long to wait
+    # and then jitters that delay -- which CLAUDE.md records as the
+    # load-bearing half, since an un-jittered retry reforms the burst one round
+    # later. Unexposed, `retryAfterMs` reads null, every refusal falls back to
+    # the fixed delay, and the arrival-rate measurement behind
+    # `GENERATION_MAX_WAITERS` describes behaviour no browser performs.
+    #
+    # Nothing else is exposed. This is a read permission, and the rest of these
+    # responses' headers are the page's business only by accident.
+    expose_headers=["Retry-After"],
 )
 
 

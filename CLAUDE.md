@@ -4,19 +4,59 @@ AdaptiveLearning is an EEG- and camera-assisted adaptive maths platform: student
 LLM-generated questions while a Muse headband and a webcam feed cognitive and facial signals into
 per-session records; teachers and parents read those back as live views and weekly reports.
 
-**Keep this file current.** This is the only thing loaded into every chat, so anything a future
-session must know before it starts — a changed convention, a new constraint, a gotcha that cost
-someone an afternoon — belongs here, as the rule and its reason. Update it in the same change that
-makes it true, not afterwards. Keep entries short; it is read in full every time.
+## What is here, and what is one file away
+
+This file is loaded in full into every session, so its size is a standing cost — about 40% of the
+window when it held everything. The two largest and most self-contained areas are now docs, read
+on demand:
+
+| Read | When you are touching |
+| --- | --- |
+| **`docs/signals.md`** | the EEG sidecar or native bridge, the Muse simulator, ingestion in either mode (`eeg_poller`, `push_client`, `/api/signals/*`, `signal_mapping`), the heart or optics path, the camera, gaze or FER+, or anything writing `cognitive_signals`, `heart_signals` or `face_signals` |
+| **`docs/question-generation.md`** | a `LLM_*_generation.py` generator or its prompt, `LLM_topic_decider`, `llm_client` or either provider, a schema in `question_schemas.py`, a solver (`safe_solve`, `geometry_solvers`, `angle_solvers`, `hs_solvers`), grade or topic gating, a lesson plan seed, question figures or CCSS codes, or the difficulty bias on `profiles` |
+
+**Those are trigger conditions, not a table of contents.** Match them against what you are about to
+do, before the first edit — the same move `_MODE_AWARE` and `close_sites()` make, and for the same
+reason: a rule nobody re-checked is how every stale claim in this file got there. What stays here is
+everything that binds regardless of area — the canary, the four numbered rules, `stress` is
+`1 − calm`, fusion asymmetry — plus Database, Privacy, and Reporting and UI.
+
+## How to edit this file
+
+It reached 5,000 lines once by accumulating incident reports; these rules are what stop that
+happening again, and they apply to the two docs as much as to this file.
+
+- **One entry = one rule, its reason, and where it is enforced.** A third paragraph means it
+  belongs in a doc beside the code, cited from here.
+- **Write the rule, not the incident.** No date stamps, no PR numbers, no account of what the rule
+  used to be. A correction *replaces* the entry it corrects and is never appended beside it.
+- **Measurements live in `EEGResearch/tests/fixtures/*.md` and `EEGResearch/docs/*.md`.** Here: the
+  verdict and the pointer. Keep a date only on a measurement, or on a decision deferred to a
+  future capture.
+- **File it under one of the four parts below, or under the doc whose triggers it matches.** An
+  entry that binds regardless of area belongs here, not in a doc — and if you have to think about
+  which, that is the test: would a session working in the other area need it?
+- **Re-check a count or a path before trusting it.** This file has been wrong about `main.py`'s
+  size and about seven script paths.
+- **Ceilings: 1,200 lines here, 1,200 in each doc.** Past one, a new entry means an older one is
+  merged, cut, or moved to a doc beside the code. Numbers, because "keep entries short" has already
+  failed once.
+
+The four parts here: **Orientation**, **Database**, **Privacy**, **Reporting and UI**.
+
+---
+
+# Orientation
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
-| `Website/AdaptiveLearning/backend` | FastAPI app (`main.py`, ~2.3k lines) — the product API on port 8000. Also the `LLM_*_generation.py` question generators and `LLM_topic_decider.py`, which reach a model through `llm_client.py` — a local Ollama by default, the Claude API when `LLM_PROVIDER` says so. |
+| `Website/AdaptiveLearning/backend` | FastAPI app (`main.py`, ~9k lines) — the product API on port 8000. Also the `LLM_*_generation.py` question generators and `LLM_topic_decider.py`, which reach a model through `llm_client.py` — a local Ollama by default, the Claude API when `LLM_PROVIDER` says so. |
 | `Website/AdaptiveLearning/frontend` | React 19 + Vite + Tailwind SPA on port 5173. Routed by role: `src/pages/{student,teacher,parent,auth}`, one layout each. `src/lib/api.js` wraps the backend; `src/lib/supabase.js` holds the anon client. |
 | `EEGResearch` | Separate FastAPI sidecar on port 8001 (`src/app`), packaged as `eeg-learning-platform`. Owns headband access and signal derivation; the website backend talks to it over HTTP only, via `backend/eeg_client.py`. |
 | `EEGResearch/native_bridge` | C++ bridge to the libMuse SDK, TCP on 8765. Windows-only (`winsock2`), and the interesting half is behind `ENABLE_LIBMUSE`. |
+| `EEGResearch/scripts` | The sidecar's capture, replay and run scripts. **Not** the root `scripts/`, which also exists and holds the database and load-test tooling — cite both by full path. |
 | `FacialRecg` | Vendored rPPG / facial-recognition reference code. |
 | `supabase/migrations` | The schema. Timestamp-prefixed, applied in order. |
 
@@ -38,13 +78,11 @@ CANARY: <branch> <short hash of HEAD> | tree: clean|dirty(<n> files) | last suit
 last run *in this session*, or `none` if there has not been one. **Record the total, not the pass
 count**: a run reporting `712 passed, 1 failed` is a 713-test suite, and the one failure is usually
 the documented real-timer flake. Written as 712 in a handoff, a genuinely deleted test later reads
-as agreeing with the record. Then check it against the
-previous canary. **Any of these means stop, re-read this section and `git status`, and say so
-before touching a file:**
+as agreeing with the record. Then check it against the previous canary. **Any of these means stop,
+re-read this section and `git status`, and say so before touching a file:**
 
-- The tree is dirty and you cannot name, from the conversation, what each modified file holds.
-  (Seen 2026-09-14: a mapper file turned up modified with a round-2 *mutant* text, after a
-  clean push. Do not build on an unexplained diff; restore it from HEAD by copy and report it.)
+- The tree is dirty and you cannot name, from the conversation, what each modified file holds. Do
+  not build on an unexplained diff; restore it from HEAD by copy and report it.
 - A suite count went down, or a count is quoted that no tool call in this session produced.
 - The working directory reported by the harness is not the repo root. (`cd` inside a compound
   command moves it for later calls; the symptom is `vitest` finding no config, or `ls` failing
@@ -62,6 +100,66 @@ A canary that cannot be written from tool output is itself the signal. Ask for `
 fresh session rather than continuing on inference; the cost of a wrong edit here is a wrong
 number on a child's record, not a retry.
 
+## Four rules the rest of this file keeps citing
+
+State them once here; sections below reference them rather than re-deriving them.
+
+1. **Three states, never two.** "No data", "not requested" and "not retrieved" are different
+   facts, and so are held / rejected / low, a revoked channel and an unread one, a failed read and
+   a quiet week. Any surface that renders an absence has to consult all of them.
+2. **An absence is never a zero.** A disconnected headband reports zeroed scores; averages include
+   zeros and exclude nulls, so a zero written for an absence becomes a measurement. `pct || null`
+   and `or 0` are where this enters.
+3. **Consent and access fail closed; reporting fails open.** A consent or role check that degrades
+   to permissive records data against a refusal. A dashboard that degrades to empty is fine — but
+   it must say `retrieved: false` rather than claim nothing happened.
+4. **A fixture written from the same misreading as the code cannot fail against it.** Build test
+   fixtures from what the endpoint or table actually returns, and assert on the *request* (which
+   table was read, which filter was applied), not only on the payload.
+
+## Two columns are called stress and only one measures it
+
+`cognitive_signals.stress` is `1.0 - calm`, written in `signal_mapping.map_eeg_to_cognitive`. There
+is no `calm` column, so this *is* the EEG calm score, stored inverted. No independent quantity exists
+behind it, and `infer_state` never reads it — it uses `calm_score` directly, the same number the other
+way up.
+
+`heart_signals.stress_score` is a measurement: autonomic arousal on a 0–100 scale, derived against the
+session's own baseline, with its own quality gate and its own `calibrating` state. It is defined **on
+heart rate alone** — RMSSD is an enrichment term, added when available and absent without changing
+what the score means, because a score whose definition shifts when an input drops out is unreadable
+across a session.
+
+So: **never average them, never sum them, and never render both under one "Stress" label.** One is a
+cognitive score with a sign flip; the other is a physiological measurement with a baseline. A tile fed
+by whichever happens to be present would change meaning when a headband disconnects — rule 1 in its
+worst form.
+
+## Fusion is asymmetric on purpose — easing off wins, pushing harder defers
+
+`Website/AdaptiveLearning/backend/signal_fusion.py` decides how hard the next question is, from
+whichever of EEG, heart and facial are consented and present. **To raise difficulty every channel with
+an opinion must agree; to lower it, any one trusted channel suffices.**
+
+Keep it that way. A wrong ease-off costs one easy question; a wrong push costs a struggling student a
+harder one, and the signals are least trustworthy exactly when a student is agitated. A brute-force
+test asserts the property directly: adding a channel can make sessions gentler and can never make them
+harder. **If that test fails, the change is wrong, not the test.**
+
+Facial is the weakest input by design — it can withhold an increase, and can neither cause one nor
+trigger an ease-off alone. FER+ is trained predominantly on adult faces and is least reliable on this
+product's users: children, and children with learning disabilities. Its labels deliberately use a
+different vocabulary (`negative`, never `stressed`) so no later edit can wire it into the ease-off
+branch by matching on a label name. `EMOTION_MIN_CONFIDENCE` is a guess, not a measurement.
+
+**Consent gates the read, not the result.** A revoked channel is never queried, and the tests assert on
+which tables were reached — rule 4: an empty result cannot distinguish "asked and got nothing" from
+"never asked". `_consent_flags` fails closed, like `_consent()` and unlike the reporting helpers.
+
+**Difficulty is chosen in the backend, not the sidecar.** `question_policy` was removed: the sidecar
+computed it every tick, it was persisted and displayed, and nothing read it to pick a question. Don't
+add it back — the sidecar cannot see correctness, topic history or grade level.
+
 ## Running and testing
 
 Whole stack, Windows (Ollama, EEG sidecar, backend, frontend, each in its own window):
@@ -70,125 +168,8 @@ Whole stack, Windows (Ollama, EEG sidecar, backend, frontend, each in its own wi
 ./start.ps1
 ```
 
-Add `-Muse` for the real headband — it builds the native bridge if needed, copies `libmuse.dll`
-next to the exe, and flips `EEG_SOURCE` in `EEGResearch/.env`. Without it you get `EEG_SOURCE=sim`.
-`-Camera` adds the webcam device (`-CameraIndex N` picks one), `-Gaze` additionally enables the
-landmark channel and implies `-Camera`, and `-NoEmotion` turns FER+ off — gaze needs no 35 MB model,
-so gaze-only is a real and much cheaper deployment. Each model-backed flag provisions its model at
-setup rather than on the first frame of a lesson, and `-NoEmotion` skips the FER+ fetch entirely.
-`-LocalCalm` scores calm from the sidecar's own spectrum (`EEG_SPECTRUM_SOURCE=local`, off by
-decision until a second wearer) and is refused without `-Muse` for the reason `-Optics` is: the
-estimator is fed only by a headband, so under the simulator the local calm is a placeholder all
-session and the run looks like the flag not working. **`start.sh --local-calm` is refused
-outright**, because that launcher always runs the simulator (libMuse is Windows-only and it forces
-`EEG_SOURCE=sim` even with `--muse`); a guard on the `--muse` flag cleared while the run got sim.
-**The `-Camera` branch composes its camera entry onto `EEG_DEVICES`** through the same
-`Update-DeviceRegistry` a plain run uses, rather than overwriting the key: written outright, a
-two-station registry a plain run had preserved was reduced to one station and a camera. **The key is written on
-both branches from the flag**, like `INGEST_MODE` and the `FACE_*` keys, so a hand-edited `local`
-neither survives into a plain run nor is silently reverted by one — the flag is the only way to
-select it.
-`-Optics` turns the headband's optical channels on (`-OpticsPreset 103N` picks the rung) and is
-refused without `-Muse`, rather than promoted the way `-Gaze` promotes `-Camera`: the alternative to
-a headband is the simulator, which models no optical channel, so guessing would produce a run that
-looks exactly like the flag not working. A preset outside `1031`–`1036` is refused too — the bridge
-falls back to `1035` and says so on its own stderr, in its own window, so the session would record
-on a rung nobody chose. `1031`/`1032` warn and proceed, since reproducing the cliff needs them.
-**Gaze needs `pip install -e ".[face,gaze]"`** — MediaPipe is its own extra, deliberately, since it
-is ~50 MB and a second ML runtime for a channel that is off by default. **`face` pins `opencv-contrib-python`, not
-`opencv-python`** — they install the same `cv2`, contrib being the superset, so having both means
-whichever landed last owns the import. That is what `.[face,gaze]` produced: mediapipe requires
-contrib, `face` required plain, and the resolver installed 4.14 of one beside 5.0 of the other,
-silently defeating the `<5` cap. One distribution, one version. The cap's stated reason —
-`cv2.data.haarcascades` and the CAP_PROP_* constants — is behaviour no test here covers, so
-`verify_landmarks.py` now cross-checks the Haar cascade against the mesh on the same frames: a Haar
-miss alone is ambiguous (lighting, framing), a Haar miss where the mesh saw a face is not. The scripts check for it
-whenever gaze is asked for, because `ensure_model` imports nothing heavy: without that check setup
-succeeds, writes `FACE_GAZE_ENABLED=true`, and the channel dies on the first frame of a lesson as
-`landmarker_unavailable`, indistinguishable from a missing model file.
-Every `FACE_*` key is written on **both** branches, `FACE_EMOTION_ENABLED` included: its config
-default is `true`, so leaving it unwritten made emotion silently on whenever the camera was and put
-a third of the camera's configuration in a Python default rather than in the `.env` a reader checks.
-`-Camera -NoEmotion` without `-Gaze` is refused — the adapter would refuse it too, and a flag
-combination is a better place to say so than a sidecar that starts and then will not connect.
-`start.sh` is the mac equivalent and is kept at flag parity (`--gaze`, `--no-emotion`, the same two
-guards); per-machine setup lives in `DEVELOPER_SETUP_{MAC,WINDOWS}.md`.
-
-**A plain run re-points the `default:` headband entry in `EEG_DEVICES`, not just the camera one.**
-The registry wins over `EEG_SOURCE` for the device it names, and a `-Muse -Camera` run writes
-`default:muse@8765,camera:face@N`. The cleanup on a later plain run stripped only the camera entry
-— rightly, since blanking the key would destroy a hand-written multi-headband list — and left
-`default:muse@8765` standing beside `EEG_SOURCE=sim` in the same file, so every plain run after it
-started the sidecar looking for a bridge that was not running: `eeg_source: muse` on the payload,
-`no_signal` throughout, found by the simulator smoke run of 2026-09-16. `Update-DeviceRegistry`
-(`update_device_registry` in `start.sh`) now rewrites a `default:` entry to what this run asked for
-and only if one is present; other stations survive, and the `-Camera` branch composes its entry
-through the same function rather than overwriting the key. **A named station already on the
-headband's bridge address refuses the run**, with nothing written: the parser refuses two muse
-devices on one host:port (the sidecar does not boot), and the website backend drives the `default`
-device on every lifecycle call (`eeg_client.DEFAULT_DEVICE_ID`), so dropping the `default:` entry
-instead — the first fix — traded a sidecar that would not start for a stack that started clean and
-404'd on Connect. Only the user can say whether that station moves to its own port or goes. sim
-entries are exempt, since nothing runs behind them. The check runs (`-DryRun` / `check`) **before
-any key in either `.env` is written**, so a refusal leaves both files as they were, and the
-composed value is **applied after the camera model provisioning**: applied early, a failed
-download exited with a camera entry in the registry and `FACE_ENABLED` still false, a camera device
-with every channel off. The run summary reads the key back rather than rebuilding it from two
-variables, since the value is composed onto whatever stations the file already named.
-`test_launcher_device_registry.py` drives both functions, extracted from the scripts, against a
-temp `.env`, refusals and dry runs included, and pins the check-before-write, apply-after-
-provisioning order.
-
-**Guard every read of a `.env` in `start.ps1` with `Test-Path`.** `Set-EnvKey` returns silently when
-the file is missing, so nothing before the read notices, and `Select-String -Path` on a missing file
-is a *terminating* error under this file's `$ErrorActionPreference` — a first-ever `-Camera` run on
-a fresh checkout aborted the whole launcher before anything had started. Guard the *match* too:
-`.Matches[0].Groups[1]` on a key that is not there indexes a null array, which fails the same way one
-step later. `start.sh` carries the same guard for parity.
-
-**Never redirect a native command's stderr in `start.ps1`.** PowerShell 5.1 wraps each stderr line
-from an exe in an ErrorRecord, and `$ErrorActionPreference = "Stop"` at the top of the file makes
-that *terminating* — so `python -c "import cv2" 2>$null` killed the script at the failing import,
-before the block that exists to explain it, and surfaced as a bare `NativeCommandError` naming
-neither the module nor the fix. Silence it inside Python instead
-(`import sys, os; sys.stderr = open(os.devnull, 'w'); import cv2`) and probe **one module per
-call**, so the error can say which import failed. Applies to every dependency check in that file.
-
-**Three venvs exist and `start.ps1` uses two of them.** `EEGResearch/.venv` is the sidecar's and
-`Website/AdaptiveLearning/backend/.venv` is the website backend's — that is the one
-`uvicorn main:app` runs under, so it is where `backend/requirements.txt` has to be installed. There
-is also a `.venv` at the repo root, with a different OpenCV, which is what `pytest` runs under.
-`pip install -e ".[face,gaze]"` has to run *from* `EEGResearch`, or pip resolves `.` to the repo
-root and reports "neither setup.py nor pyproject.toml found".
-
-**A package present in the root venv says nothing about the backend's.** The suite passing is not
-evidence the app can import something: `anthropic` was in the root venv and absent from
-`backend/.venv` for the whole of the Claude migration, so every test passed while a live
-`LLM_PROVIDER=claude` run would have died on the first generation with `ModuleNotFoundError` — and
-`llm_client` imports it lazily, so not at boot, but on the first question a student asked. Install a
-new runtime dependency into `backend/.venv` in the same change that pins it.
-
-**The sidecar and root venvs are rebuilt on Python 3.14.7** (2026-08-20; previously 3.12/3.13;
-`backend/.venv` is on 3.14.7 too but was not part of that measurement). Every direct
-dependency in both trees already ships a `cp314`/`win_amd64` wheel or a version-agnostic
-`py3-none-any` one — `mediapipe`, `opencv-contrib-python`/`opencv-python` (the `<5` pin still
-resolves), `onnxruntime`, `numpy`, `scipy`, `jax`/`jaxlib`, `h5py`, `av` all installed clean.
-`EEGResearch/.venv` (`pip install -e ".[dev,face,gaze]"`) passed all 557 tests; the root venv
-passed all 814 backend tests, and `keras`/`jax` load fine once `KERAS_BACKEND` is set the way
-`rppg/models.py` already sets it at import. **Run `pytest` from the repo root, not from
-`EEGResearch`** — `Settings` loads `.env` relative to cwd, and a locally edited
-`EEGResearch/.env` (e.g. `FACE_EMOTION_ENABLED=false` left over from a camera-off `start.ps1`
-run) silently overrides field defaults for any test that constructs `Settings()` without passing
-that key, which reads as a code regression and isn't one.
-
-One pre-existing gap, unrelated to the version bump: neither venv has ever carried `setuptools`
-(Python's `venv` module stopped bundling it), so `import rppg` / `import heartpy` fail on a
-missing `pkg_resources` if run directly against either persistent venv. Not a regression — the
-`open-rppg` measurements in `EEGResearch/docs/RPPG_DEPENDENCY_COST.md` were always done in a
-throwaway `pip install --target ... "setuptools<81"` env for exactly this reason, never against
-the root venv.
-
-Individually, from each directory:
+`start.sh` is the mac equivalent and is kept at flag parity; per-machine setup lives in
+`DEVELOPER_SETUP_{MAC,WINDOWS}.md`. Individually, from each directory:
 
 ```bash
 uvicorn main:app --reload --port 8000
@@ -202,14 +183,115 @@ uvicorn src.app.main:app --host 127.0.0.1 --port 8001 --reload
 npm run dev
 ```
 
-Tests — CI (`.github/workflows/ci.yml`) runs **six** jobs on PRs and pushes to `main`:
-`EEGResearch tests`, `Native bridge build`, `Website backend tests`, `Database grants`,
-`Database migrations`, `Frontend tests, build & lint` (the `Supabase Preview` check on a PR is the
-integration's, not CI's, and is always skipped). Counted by name, so a seventh on the PR page is
-new or undocumented rather than a stale number. Locally, **all three suites from the repo root**,
-each under its own venv and with the env the suite needs — an earlier version of this section gave
-`python -m pytest tests/ -q`, and there is no `tests/` at the root, so from here it reported "no
-tests ran" and read as a clean run:
+### Launcher flags
+
+| Flag | Effect |
+| --- | --- |
+| `-Muse` | Real headband: builds the native bridge if needed, copies `libmuse.dll` next to the exe, sets `EEG_SOURCE=muse`. Without it, `sim`. |
+| `-Camera` (`-CameraIndex N`) | Adds the webcam device and selects `INGEST_MODE=push`. |
+| `-Gaze` | Landmark channel; implies `-Camera`. |
+| `-NoEmotion` | FER+ off, and skips the 35 MB model fetch entirely. |
+| `-Optics` (`-OpticsPreset 103N`) | Headband optical channels. Refused without `-Muse`. |
+| `-LocalCalm` | `EEG_SPECTRUM_SOURCE=local`. Refused without `-Muse`, and refused outright by `start.sh`. |
+
+**Every model-backed flag provisions its model at setup, not on the first frame of a lesson** — a
+4 MB download in front of a student reads as a broken feature rather than an incomplete install.
+
+**`-Optics` and `-LocalCalm` are refused without `-Muse` rather than promoting it, the way `-Gaze`
+promotes `-Camera`.** The alternative to a headband is the simulator, which models no optical
+channel and whose local calm would be a placeholder all session — so guessing produces a run that
+looks exactly like the flag not working. `start.sh --local-calm` is refused outright because that
+launcher always forces `EEG_SOURCE=sim`. An `-OpticsPreset` outside `1031`–`1036` is refused too:
+the bridge falls back to `1035` on its own stderr, in its own window, so the session would record
+on a rung nobody chose. `1031`/`1032` warn and proceed, since reproducing the bandwidth cliff needs
+them. `-Camera -NoEmotion` without `-Gaze` is refused — the adapter would refuse it too, and a flag
+combination is a better place to say so than a sidecar that starts and then will not connect.
+
+**Gaze needs `pip install -e ".[face,gaze]"`** — MediaPipe is its own extra, deliberately: ~50 MB
+and a second ML runtime for a channel that is off by default. **`face` pins
+`opencv-contrib-python`, not `opencv-python`**; they install the same `cv2`, contrib being the
+superset, so having both means whichever landed last owns the import and the `<5` cap is silently
+defeated. One distribution, one version. The cap's stated reason (`cv2.data.haarcascades` and the
+`CAP_PROP_*` constants) is behaviour no test covers, so `EEGResearch/scripts/verify_landmarks.py`
+cross-checks the Haar cascade against the mesh on the same frames — a Haar miss alone is ambiguous,
+a Haar miss where the mesh saw a face is not. The scripts check for the landmarker whenever gaze is
+asked for, because `ensure_model` imports nothing heavy: without it, setup succeeds, writes
+`FACE_GAZE_ENABLED=true`, and the channel dies on the first frame as `landmarker_unavailable`.
+
+### The device registry is composed, never overwritten
+
+**A plain run re-points the `default:` headband entry in `EEG_DEVICES`, not just the camera one.**
+The registry wins over `EEG_SOURCE` for the device it names, so a `-Muse -Camera` run writes
+`default:muse@8765,camera:face@N`, and a cleanup that stripped only the camera entry left
+`default:muse@8765` beside `EEG_SOURCE=sim` — every later plain run started the sidecar looking for
+a bridge that was not running. `Update-DeviceRegistry` (`update_device_registry` in `start.sh`)
+rewrites a `default:` entry to what this run asked for, and only if one is present; other stations
+survive, and the `-Camera` branch composes its entry through the same function.
+
+**A named station already on the headband's bridge address refuses the run**, with nothing written.
+The parser refuses two muse devices on one host:port, and the website backend drives the `default`
+device on every lifecycle call (`eeg_client.DEFAULT_DEVICE_ID`) — so dropping the `default:` entry
+instead trades a sidecar that will not start for a stack that starts clean and 404s on Connect.
+Only the user can say whether that station moves or goes. `sim` entries are exempt.
+
+Order matters and is pinned by `EEGResearch/tests/test_launcher_device_registry.py`: the check
+(`-DryRun` / `check`) runs **before any key in either `.env` is written**, so a refusal leaves both
+files untouched; the composed value is applied **after** camera model provisioning, since applying
+it early left a failed download with a camera entry in the registry and `FACE_ENABLED` still false.
+The run summary reads the key back rather than rebuilding it from two variables.
+
+**Every `FACE_*` key and `INGEST_MODE` is written on *both* branches, from the flag.**
+`FACE_EMOTION_ENABLED` defaults to `true` in config, so leaving it unwritten made emotion silently
+on whenever the camera was, and put a third of the camera's configuration in a Python default
+rather than in the `.env` a reader checks. `INGEST_MODE` likewise: a stale `push` from a camera run
+would disable the poller on a later headband-only run.
+
+### Two `start.ps1` rules that cost whole runs
+
+**Guard every read of a `.env` with `Test-Path`.** `Set-EnvKey` returns silently when the file is
+missing, so nothing before the read notices, and `Select-String -Path` on a missing file is a
+*terminating* error under this file's `$ErrorActionPreference` — a first-ever `-Camera` run on a
+fresh checkout aborted the launcher before anything started. Guard the *match* too:
+`.Matches[0].Groups[1]` on an absent key indexes a null array and fails the same way one step later.
+`start.sh` carries the same guard.
+
+**Never redirect a native command's stderr.** PowerShell 5.1 wraps each stderr line from an exe in
+an ErrorRecord, which `$ErrorActionPreference = "Stop"` makes terminating — so
+`python -c "import cv2" 2>$null` killed the script at the failing import, before the block that
+exists to explain it, as a bare `NativeCommandError` naming neither module nor fix. Silence it
+inside Python instead (`import sys, os; sys.stderr = open(os.devnull, 'w'); import cv2`) and probe
+**one module per call**, so the error can say which import failed.
+
+### Three venvs, and `start.ps1` uses two
+
+`EEGResearch/.venv` is the sidecar's; `Website/AdaptiveLearning/backend/.venv` is the website
+backend's — that is what `uvicorn main:app` runs under, so it is where `backend/requirements.txt`
+has to be installed. A third `.venv` at the repo root, with a different OpenCV, is what `pytest`
+runs under. `pip install -e ".[face,gaze]"` has to run *from* `EEGResearch`, or pip resolves `.` to
+the repo root and reports "neither setup.py nor pyproject.toml found".
+
+**A package present in the root venv says nothing about the backend's.** The suite passing is not
+evidence the app can import something: `anthropic` was in the root venv and absent from
+`backend/.venv` for the whole Claude migration, so every test passed while a live
+`LLM_PROVIDER=claude` run would have died on the first question a student asked — `llm_client`
+imports it lazily, so not at boot. Install a new runtime dependency into `backend/.venv` in the
+same change that pins it.
+
+All three venvs are on Python 3.14.7; every direct dependency ships a `cp314`/`win_amd64` or
+version-agnostic wheel. One pre-existing gap: none has ever carried `setuptools`, so `import rppg`
+/ `import heartpy` fail on a missing `pkg_resources` against a persistent venv. (`keras`/`jax` load fine once
+`KERAS_BACKEND` is set the way `rppg/models.py` already sets it at import.) The `open-rppg`
+measurements were always done in a throwaway `pip install --target ... "setuptools<81"` env.
+
+### The suites
+
+CI (`.github/workflows/ci.yml`) runs **six** jobs on PRs and pushes to `main`: `EEGResearch tests`,
+`Native bridge build`, `Website backend tests`, `Database grants`, `Database migrations`,
+`Frontend tests, build & lint`. Counted by name, so a seventh on the PR page is new or undocumented
+rather than a stale number. (The `Supabase Preview` check is the integration's, not CI's, and is
+always skipped.)
+
+Locally, **all three from the repo root**, each under its own venv and with the env it needs:
 
 ```bash
 EEG_SOURCE=sim API_TOKEN=t ADMIN_TOKEN=a EEGResearch/.venv/Scripts/python.exe -m pytest EEGResearch/tests -q
@@ -223,18 +305,62 @@ SUPABASE_URL=http://localhost:54321 SUPABASE_SERVICE_ROLE_KEY=x .venv/Scripts/py
 cd Website/AdaptiveLearning/frontend && npm test
 ```
 
-Not from `EEGResearch`, where a `tests/` directory does exist: `Settings` loads `.env` relative to
-the cwd, and a locally edited `EEGResearch/.env` then overrides field defaults and produces a dozen
-`test_face_*` failures that read as a code regression (the paragraph below on the Python 3.14
-rebuild says why).
+**Not from `EEGResearch`**, where a `tests/` directory does exist: `Settings` loads `.env` relative
+to the cwd, so a locally edited `EEGResearch/.env` (e.g. `FACE_EMOTION_ENABLED=false` left from a
+camera-off run) overrides field defaults and produces a dozen `test_face_*` failures that read as a
+code regression. There is no `tests/` at the repo root, so `pytest tests/` from here reports "no
+tests ran" and reads as a clean run.
 
-Backend tests need `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`; they never reach a real
-database, but the client validates the URL at import, so `SUPABASE_URL` must be URL-shaped
-(`http://localhost:54321`) — a placeholder like `x` fails collection with "Invalid URL".
-`SUPABASE_SERVICE_ROLE_KEY` can be anything non-empty. EEGResearch tests need `EEG_SOURCE=sim`,
-`API_TOKEN`, `ADMIN_TOKEN`.
+Backend tests need `SUPABASE_URL` **URL-shaped** — the client validates it at import, so a
+placeholder like `x` fails collection with "Invalid URL" — and any non-empty
+`SUPABASE_SERVICE_ROLE_KEY`. They never reach a real database. EEGResearch tests need
+`EEG_SOURCE=sim`, `API_TOKEN`, `ADMIN_TOKEN`.
 
-### Frontend tests mock through `src/test/`, not through a hand-rolled `vi.fn()`
+The native bridge is compile-checked on `windows-latest` with `ENABLE_LIBMUSE=OFF`, which covers
+syntax and signatures but **not** the packet handling inside the guards. The SDK is vendored (and
+gitignored) at `EEGResearch/libmuse_windows_8.0.5`, so a real build is worth running on any change
+inside an `ENABLE_LIBMUSE` guard:
+
+```bash
+cmake -S . -B build_on -DENABLE_LIBMUSE=ON -DLIBMUSE_SDK_DIR=../libmuse_windows_8.0.5 && cmake --build build_on --config Release
+```
+
+It compiles enum values, SDK signatures and the guarded packet handling. It still proves nothing
+about a real headband.
+
+`npm run lint` is non-blocking against a backlog of **14** pre-existing errors (7
+`react-refresh/only-export-components`, 5 `no-undef` on `process`/`global` in tests, 1 `no-empty`,
+1 `react-hooks/rules-of-hooks`) — none of them `no-unused-vars` or
+`react-hooks/set-state-in-effect`. Don't add to it, and don't make it blocking until it is gone.
+**The count is the check, so keep it current**: against a stale 11, a reviewer concludes the change
+in front of them added three errors it did not. `coverage/` is ignored by the config for the same
+reason — linted, the number depended on whether coverage had ever been run on that checkout.
+
+Dependencies are pinned: `backend/requirements.txt` (runtime, direct deps only, cross-platform by
+design — no `pip freeze`), `requirements-dev.txt` adds pytest. EEGResearch uses `pyproject.toml`
+plus `requirements*.lock`.
+
+### Two test-writing rules that came from real flakes
+
+**Assert an ordering, not a duration, when a test synchronises on a thread.** Windows' default
+timer resolution is ~15.6 ms, so a `threading.Timer(0.15)` fires a hair early and an exact-boundary
+`monotonic() - started >= 0.15` fails *against a correct implementation* — measured at 2 failures in
+5 runs on a clean checkout, and 3 in 5 with an unrelated change present. Identical rates, but the
+second reads as a regression you just caused. The claim was never about duration: it was that the
+call could not proceed until the slot was free, which is an ordering. The releasing thread records
+`monotonic()` as it lets go and the test asserts the call returned *after* that — two readings of
+one clock with a real happens-before, exact at any resolution. CI is Linux and never failed the old
+form, so the whole cost landed on local runs. Same rule wherever a test waits on something it does
+not drive (`test_time_spent_queueing_comes_out_of_the_budget_it_was_promised`).
+
+**A daemon thread that prints must be joined before the process exits.** A print landing during
+interpreter shutdown, while the stdout `BufferedWriter` lock is held, is a fatal
+`_enter_buffered_busy` abort — exit code 134 *after* every test passed, which reads as unrelated
+flake. `eeg_poller.stop_all()` is the join, called from `main._lifespan` and from an autouse fixture
+in `backend/tests/conftest.py`. Loops in such threads wait on the stop event rather than
+`time.sleep`, so `stop()` is not a poll interval away from taking effect.
+
+### Frontend tests mock through `src/test/`, not a hand-rolled `vi.fn()`
 
 `src/test/mocks/apiFetch.js` and `src/test/mocks/supabase.js` are the shared doubles, reached by
 pointing the factory at the file so the mocked module and the handle driving it are one instance:
@@ -243,156 +369,220 @@ pointing the factory at the file so the mocked module and the handle driving it 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 ```
 
-**`apiFetch`'s double is a router, and an unmatched path throws.** Most pages here fetch two to four
-endpoints in parallel on mount, and the interesting tests need *one* to fail. `mockResolvedValueOnce`
-chains express that by call order — which is the order `Promise.all` happens to start them in — so a
-test written that way passes for a reason unrelated to what it claims and breaks when a page adds a
-fetch. `mockApi({...})` registers the happy path, `overrideApi(path, fn)` layers one failure over it.
-Throwing on an unrouted path is the load-bearing part: a silent `undefined` reaches a page as a
-successful read of nothing, which is the state most of this suite exists to tell apart from a
-failure, so a gap in a test's own setup would arrive dressed as the bug it was written to catch.
-**Method-scoped routes are tried before methodless ones**, whatever order they were written in;
-first-match-wins alone made `{'/api/x': …, 'PUT /api/x': …}` answer the write with the read, fixable
-only by reordering two object keys — not a rule anyone would infer. Reset with `resetApi()`, never
+**`apiFetch`'s double is a router, and an unmatched path throws.** Most pages fetch two to four
+endpoints in parallel on mount and the interesting tests need *one* to fail; `mockResolvedValueOnce`
+chains express that by the order `Promise.all` happens to start them in, so such a test passes for a
+reason unrelated to what it claims and breaks when a page adds a fetch. `mockApi({...})` registers
+the happy path, `overrideApi(path, fn)` layers one failure over it. Throwing on an unrouted path is
+load-bearing: a silent `undefined` reaches a page as a successful read of nothing, which is the
+state most of this suite exists to tell apart from a failure. **Method-scoped routes are tried
+before methodless ones**, whatever order they were written in — first-match-wins alone made
+`{'/api/x': …, 'PUT /api/x': …}` answer the write with the read. Reset with `resetApi()`, never
 `mockReset()`, which drops the implementation and every route with it.
 
 Mocking `lib/supabase` as a *module* also sidesteps its import-time throw on missing
-`VITE_SUPABASE_*`, which is the normal state under `vitest` — CI supplies those to the build step
-only. `fireAuthEvent(event, session)` is how the properties that only exist post-mount are reached:
-the `SIGNED_OUT` cleanup an expired refresh token triggers with nobody calling `signOut()`, and the
+`VITE_SUPABASE_*`, the normal state under `vitest` (CI supplies those to the build step only).
+`fireAuthEvent(event, session)` reaches the properties that only exist post-mount: the `SIGNED_OUT`
+cleanup an expired refresh token triggers with nobody calling `signOut()`, and the
 `TOKEN_REFRESHED` handling that must not await anything reading the session.
 
-**`lib/api.test.js` is the one place `apiFetch` runs for real**, with only `fetch` and `lib/supabase`
-mocked. Every other test replaces it wholesale, so nothing otherwise exercises the URL it builds,
-whether the bearer is attached, or how a non-2xx becomes an `Error` carrying `.status` — the
-behaviour all of those tests implicitly trust. Fixtures live beside the mocks in
-`src/test/fixtures/` as builders rather than constants (`buildWeeklyReport`, `buildConsentState`,
-`buildChartArchive`, …): every interesting case is one field off the happy path, and a test that
-restates a whole payload to move one field tends to move two. `CHANNEL_REASONS` there is the
-`offLabel` four-state matrix, named for the state each input must produce rather than for its field
-values, since that mapping is the thing under test.
+**`lib/api.test.js` is the one place `apiFetch` runs for real**, with only `fetch` and
+`lib/supabase` mocked. Every other test replaces it wholesale, so nothing otherwise exercises the
+URL it builds, whether the bearer is attached, or how a non-2xx becomes an `Error` carrying
+`.status`. Fixtures live in `src/test/fixtures/` as **builders**, not constants
+(`buildWeeklyReport`, `buildConsentState`, `buildChartArchive`, …): every interesting case is one
+field off the happy path, and a test that restates a whole payload to move one field tends to move
+two. `CHANNEL_REASONS` there is the `offLabel` four-state matrix, named for the state each input
+must produce rather than for its field values.
 
-**Assert an ordering, not a duration, when a test synchronises on a thread.**
-`test_time_spent_queueing_comes_out_of_the_budget_it_was_promised` checked that a queued call had
-waited with `monotonic() - started >= 0.15`, against a `threading.Timer(0.15)` releasing the
-semaphore. Windows' default timer resolution is ~15.6 ms, so the timer fires a hair early and the
-exact-boundary comparison fails **against a correct implementation** — measured 2026-08-25 at **2
-failures in 5 runs on a clean checkout**, and 3 in 5 with an unrelated change present. Identical
-rates, but the second reads as a regression you just caused, which is where the time goes.
+**`asyncUtilTimeout` is 5000 in `src/test/setup.js`, not Testing Library's 1000.** That default is
+chosen for pure components; a query for something that legitimately arrives on the *second* 5 s poll
+races a budget unrelated to what it waits for, and only passed because the machine was idle. Under
+the full run the same query misses by a few hundred milliseconds. Raising it costs nothing on a
+passing assertion, since `waitFor` returns as soon as the condition holds.
 
-The fix was to notice the assertion and the claim were different things. The claim is that the call
-could not proceed until the slot was free, which is an ordering: the releasing thread records
-`monotonic()` as it lets go, and the test asserts the call returned *after* that. Two readings of one
-clock with a real happens-before between them compare exactly, at any timer resolution. The teeth are
-unchanged and were re-checked both ways — a `generate_text` that never acquires returns before the
-timer fires, so the recorded release is missing and the assertion still fires.
+**A timeout does not fix an assertion anchored to elapsed time.** One contact-hint test slept 6 s
+and asserted "exactly one 5 s poll has landed" — true only if the interval was in the right part of
+its cycle; land two and the hint is correctly on screen and the assertion fails against working
+code. It now waits for the *read count* to advance by one, which gives it a whole poll of slack.
 
-CI is Linux and never failed the old form, so the whole cost of this landed on local runs. Prefer a
-recorded event over an elapsed-time threshold whenever a test waits on another thread.
+**`AdaptiveReconnect.test.jsx` runs on real timers, and every fake-clock version hung.** The pairing
+sequence is a chain of 1–1.5 s waits noticed by a 5 s poll; under `vi.useFakeTimers()` — with or
+without `shouldAdvanceTime` — `await act(async () => advanceTimersByTimeAsync(…))` never resolved.
+Each of those tests costs 10–20 real seconds and declares a 60 s timeout. `Overview.test.jsx`'s
+fake-clock pattern works for a 300 ms debounce and did not survive this component.
 
-**A daemon thread that prints must be joined before the process exits.** A print landing during
-interpreter shutdown, while the stdout `BufferedWriter` lock is already held, is a fatal
-`_enter_buffered_busy` abort — exit code 134 *after* every test passed, which reads as unrelated
-flake. `eeg_poller.stop_all()` is the join, called from `main._lifespan` on shutdown and from an
-autouse fixture in `backend/tests/conftest.py` after every test. Loops in such threads wait on the
-stop event rather than `time.sleep`, so `stop()` is not a poll interval away from taking effect.
+**Clear persisted view state in `beforeEach`.** `viewPrefs.js` and `al_sidebar_collapsed:<scope>`
+write to `localStorage`, which jsdom keeps for the whole file — so every test declared *after* one
+that flips a switch renders with it already flipped, silently, which reads as one of the later tests
+being broken. `StudentReport.test.jsx` and `layoutAccessibility.test.jsx` are where that bites —
+the latter's account describe collapses the sidebar in its **first** test, so the two after it fail without the
+clear. `clearViewPrefs()` is the guard, and it needs a test standing **downstream of the
+leak** to have teeth: with the switching test last in the file, removing the guard breaks nothing.
 
-The native bridge is compile-checked on `windows-latest` with `ENABLE_LIBMUSE=OFF`, which covers
-syntax and signatures but *not* the packet handling inside the guards — that still needs a manual
-Windows build with the SDK before release. The SDK is vendored (and gitignored) at
-`EEGResearch/libmuse_windows_8.0.5`, so that build is a local `cmake` away and worth running on any
-change inside an `ENABLE_LIBMUSE` guard:
+## Configuration
 
-```bash
-cmake -S . -B build_on -DENABLE_LIBMUSE=ON -DLIBMUSE_SDK_DIR=../libmuse_windows_8.0.5 && cmake --build build_on --config Release
+**Read numeric settings through `_env_number(name, default, cast, minimum=...)`, never
+`int(os.getenv(…))`.** These are read at import, so a typo would otherwise take every endpoint down
+over a tuning knob for one optional feature. It falls back on unparseable and non-finite values
+(`inf` passes a `minimum` check, `nan` fails every comparison, and both break call sites in ways
+that look like the feature being off) and clamps below the floor. **Give every one a floor:** a
+number is not automatically a usable setting. The sidecar's boot settings take the same tolerant
+treatment in `config.py` — a validator warns and falls back rather than refusing the boot.
+
+**Backend.** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `BACKEND_PORT`, `EEG_API_URL`,
+`EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MODE`, `INGEST_MAX_BATCH` /
+`INGEST_RATE_LIMIT` / `INGEST_RATE_WINDOW`, `SESSION_ABANDONED_AFTER_HOURS` /
+`STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep), `QUESTIONS_CACHE_TTL`,
+`QUESTION_QUEUE_SIZE`, the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` group under
+*The network edge*, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels*,
+and the `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` / `SOLVE_*` groups in `docs/question-generation.md`.
+
+`QUESTIONS_CACHE_TTL` (30 s) fronts `GET /api/questions` and is bounded at 256 entries, so a sweep
+of distinct `limit`/`subject`/`difficulty` combinations from that unauthenticated endpoint cannot
+grow it unboundedly. The ingest bounds matter because the sidecar posts with the *student's* token:
+that endpoint is a trust boundary, and neither the session check nor the consent check bounds volume.
+
+**Frontend.** `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`, `VITE_EEG_DEBUG`,
+`VITE_EEG_LOCAL_TOKEN`.
+
+**EEGResearch** reads `.env` through `src/app/config.py`: `API_TOKEN` and `ADMIN_TOKEN` required,
+`EEG_SOURCE` picks sim vs muse, `EEG_DEVICES` (`station1:muse@8765,...`) drives the multi-headband
+registry, `PUSH_ENABLED` / `BACKEND_URL` drive the push client, `ALLOWED_ORIGINS` must name the
+**frontend** origin (getting it wrong fails every local call on CORS while the sidecar looks
+healthy), `EEG_SIM_OPTICS`, `EEG_SPECTRUM_SOURCE`, `EEG_SPECTRUM_POISON_SECONDS`,
+`EEG_CALM_CENTRE_ON_ARM`, `FACE_*`.
+
+**The native bridge reads its own env directly, not through `config.py`**: `MUSE_BRIDGE_PORT`
+(8765), `MUSE_ENABLE_OPTICS` (off), `MUSE_OPTICS_PRESET` (`1035`), `MUSE_AUTO_RECONNECT`,
+`MUSE_LIVENESS_TIMEOUT_MS` (8000). **Set them with the launcher flag, never by editing a `.env`** —
+the bridge is a C++ process calling `getenv`, so a `MUSE_ENABLE_OPTICS` line in `EEGResearch/.env`
+is read by nothing. That is the version of this mistake that looks like it worked.
+---
+
+# Database
+
+## Postgres functions are world-executable by default
+
+**Every `CREATE FUNCTION` in `public` is EXECUTE-able by every logged-in user unless you explicitly
+revoke it, and the usual boilerplate revoke does not catch it.** Two things stack up: Postgres
+grants `EXECUTE` on new functions to `PUBLIC` automatically (unlike tables), and Supabase
+additionally ships `ALTER DEFAULT PRIVILEGES` granting `EXECUTE` to `anon` and `authenticated` **by
+name**. Explicit grants to a named role survive a revoke aimed at the `PUBLIC` pseudo-role, so
+`REVOKE ALL ... FROM PUBLIC` alone leaves both roles holding `EXECUTE`. Verified against
+`pg_proc.proacl`: without the named revokes the ACL comes back as
+`{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,...}`.
+
+`scripts/check_function_grants.py` enforces this inside the `Database grants` CI job (which runs
+both grant scripts). It matches by function **name**, not signature, so it catches a forgotten
+revoke block but not a migration that adds an overload and revokes only the old signature — review
+still has to. Deliberate exceptions go in its `ALLOWLIST` with a reason.
+
+**Don't try to fix this with `ALTER DEFAULT PRIVILEGES`.** Making `EXECUTE` deny-by-default is the
+obvious move and does not work: the `pg_default_acl` row records correctly and the named grants do
+disappear from new functions, but Postgres's `PUBLIC` grant (`=X`) survives and both roles can still
+execute. Reproduced with three throwaway functions, grantees combined and separated, and no event
+trigger re-granting. A default that silently fails to deny is worse than none.
+
+## The same trap applies to tables — `GRANT` does not narrow, only `REVOKE` does
+
+A new table arrives as `anon=arwdDxtm,authenticated=arwdDxtm` before your migration grants anything,
+so adding `GRANT SELECT` on top is a no-op that reads like a restriction.
+
+RLS covers most of it — with no policy for a command, that command is denied — but **RLS does not
+filter `TRUNCATE`**. As `anon`, `INSERT` is blocked and `TRUNCATE` succeeds. PostgREST does not
+expose `TRUNCATE`, so the anon key in the frontend bundle is not a path to it; it needs a direct
+Postgres connection. "Not reachable from the client we ship" is a weaker property than the one a
+narrow grant appears to claim. So revoke before granting:
+
+```sql
+REVOKE ALL ON TABLE "public"."my_table" FROM "anon";
+REVOKE ALL ON TABLE "public"."my_table" FROM "authenticated";
+GRANT SELECT ON TABLE "public"."my_table" TO "authenticated";
+GRANT ALL ON TABLE "public"."my_table" TO "service_role";
 ```
 
-It compiles what CI cannot: enum values, SDK signatures and the guarded packet handling. It still
-proves nothing about a real headband.
+Sequences need the same treatment. `scripts/check_table_grants.py` enforces it in the same CI job.
 
-`npm run lint` is non-blocking in CI against a backlog of **14** pre-existing errors (re-counted
-2026-09-15 with `npx eslint . -f json`: 7 `react-refresh/only-export-components`, 5 `no-undef` on
-`process`/`global` in test files, 1 `no-empty`, 1 `react-hooks/rules-of-hooks`), none of them
-`no-unused-vars` or `react-hooks/set-state-in-effect`. Don't add to it, and don't make it blocking
-until the backlog is gone. The count is the check, so keep it current: an earlier line here said
-11, and against 11 a reviewer concludes the change in front of them added three errors it did not.
-`coverage/` is ignored by the config for the same reason — linted, the local number depended on
-whether coverage had ever been run on that checkout.
+**What to grant back is per-table judgement, and the lint deliberately does not check it — so a
+judgement call can go stale as the write path moves, and nothing catches that.** `math_topics` and
+`questions` have `USING (true)` public-read policies, so `anon` keeps `SELECT` on those two and
+nothing else anywhere. Every other backend-written table gets `SELECT` for `authenticated` and
+nothing more.
 
-**`set-state-in-effect` is cleared, and the two shapes that cleared it are worth reusing.** Where the
-state is a reset driven by a prop changing — an acknowledgement cleared when enforcement resumes, a
-pulse started by a new timestamp — adjust it *during render* against a `useState` holding the
-previous value, which React re-runs before painting. Where it is a `loading` flag around a fetch,
-don't store one: keep the key the data in hand belongs to (`loadedFor`) and derive
-`loading = loadedFor !== id`, so switching session or class raises the skeleton on the render that
-changes the id and no previous subject's charts can be painted under this one's heading. A flag
-raised by a *user action* stays a flag — `Sessions.jsx` sets it in the class selector's `onChange`,
-which is an event handler and not an effect.
+`sessions` was one that had been missed: it kept `authenticated=arwd` next to a `FOR ALL` own
+policy, so a student could rewrite any column of their own sessions through PostgREST —
+`started_at`/`ended_at` drive the rollup's day bucketing and the expiry cutoff, and a DELETE there
+cascades all three signal tables. **RLS narrows which rows a command touches, never which commands
+exist**, so an own-row policy is not a substitute for withholding the grant.
 
-Both shapes have since bitten, and the corrections are the load-bearing half:
+`class_memberships`, `classes`, `profiles`, `parent_child_links`, `user_math_performance`,
+`user_stats` and `session_answers` were the next seven. This file used to say `Adaptive.jsx` upserts
+`user_math_performance` directly through PostgREST; that was true once, the write moved server-side,
+and this file was not updated. A repo-wide grep of `frontend/src` for
+`.insert(`/`.update(`/`.upsert(`/`.delete(` against the Supabase client returns **zero** matches
+today: every write in this app, `profiles` included, goes through the backend. **A stale "the
+frontend needs this" comment is exactly as dangerous as the missing revoke it excuses — re-verify
+the claim against the current write path before trusting an old grant rationale, this file's own
+included.**
 
-- **Derived `loading` needs a remount, not just a derivation.** `loading = loadedFor !== id` reads
-  *false* when you navigate A→B→A: B's request is cancelled on the way out without ever advancing
-  `loadedFor`, so returning to A finds it still saying `'A'`. `SessionReview.jsx` therefore keys the
-  body on the id (`<Body key={sessionId} …>`), which resets every piece of session-scoped state at
-  once — including the `err` that otherwise let a failure on A mask a B that loaded fine.
-  `ChildDetail.jsx` does the same, and this is now the pattern for any page whose whole state
-  belongs to one route param.
-- **The render-time adjustment compares against the previous *render*, and that is not always the
-  question.** `useValueChange` (`hooks/useValueChange.js`) is the extracted form and is right for
-  `Flags.jsx`. It was wrong for `FlowDot.jsx`, which needs the last value it *acted on*: the pulse
-  timer clears the live state, so a timestamp that goes transiently null and comes back unchanged
-  reads as a change and flashes "fresh data" for data that is not new. Keep the acted-on value in
-  its own state that nothing else clears. A hook parameter nobody reads is the tell.
-- **Deriving state does not remove the need to cancel.** Every fetch that can be superseded needs a
-  guard, and the slow ones are where it matters: `Sessions.jsx`'s roster read fans out per student,
-  so a class switch let the previous class's response land last and repaint the list under the new
-  class's name. It uses a generation ref rather than a cleanup flag, because the effect is not the
-  only caller — the retry button is the other, and a retry is exactly when someone changes class
-  rather than waiting.
+## When adding a function
 
-**`react/jsx-uses-vars` is the only rule from `eslint-plugin-react` that is on, and it has to stay
-on.** `no-unused-vars` cannot see JSX, so without it every identifier used *only* inside markup —
-`motion` from framer-motion, an `icon: Icon` prop rendered as `<Icon />` — is reported as an unused
-import. That was **40 of the 65** errors the backlog held, all false, and the noise is what hid the
-real ones: the same sweep found one genuinely dead `motion` import that had been sitting among 33
-identical false positives. The plugin's `recommended` config is deliberately *not* extended — it
-brings a large ruleset that would add to the backlog rather than clear it.
+```sql
+REVOKE ALL ON FUNCTION "public"."my_function"("uuid", integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION "public"."my_function"("uuid", integer) FROM "anon";
+REVOKE ALL ON FUNCTION "public"."my_function"("uuid", integer) FROM "authenticated";
+GRANT EXECUTE ON FUNCTION "public"."my_function"("uuid", integer) TO "service_role";
+```
 
-`ignoreRestSiblings: true` goes with it, for the destructure-to-omit idiom (`const { x, ...rest } =
-obj` to build an object *without* `x`, which is how the tests construct a payload predating a
-field). The binding is unused by design; deleting it to satisfy the rule would put the key back.
+- **Prefer `SECURITY INVOKER`** (the default). A `SECURITY DEFINER` function returning rows or
+  aggregates over student data is a ready-made way to read anyone's data; as invoker, RLS still
+  applies if it is ever reached by a lower-privileged role.
+- **If you need `SECURITY DEFINER`, pin `SET search_path`.** An unpinned definer function is the
+  classic privilege-escalation vector.
+- **End the migration with `NOTIFY pgrst, 'reload schema';`** so PostgREST picks up the new RPC.
+- **`CREATE INDEX CONCURRENTLY` is not available in migrations** — Supabase wraps each in a
+  transaction, and plain `CREATE INDEX` takes an `ACCESS EXCLUSIVE` lock while building. On a large
+  table, build it manually with `CONCURRENTLY` first; the `IF NOT EXISTS` then no-ops.
 
-With both, `no-unused-vars` is now **clean and therefore load-bearing** — a hit is real dead code,
-so fix it rather than adding it to the backlog.
+## When changing an existing function's signature
 
-Dependencies are pinned: `backend/requirements.txt` (runtime, direct deps only, cross-platform by
-design — no `pip freeze`), `requirements-dev.txt` pulls it in and adds pytest. EEGResearch uses
-`pyproject.toml` plus `requirements*.lock`.
+Adding a parameter creates a **new** function rather than replacing the old one, so the migration
+must `DROP FUNCTION` the previous signature explicitly — `CREATE OR REPLACE` alone leaves it behind
+as an overload that is still granted, still callable, and unaware of whatever the new parameter
+controls. Keeping both is not an option either: with named-argument RPC calls matching more than one
+signature, Postgres rejects the call as ambiguous. The new signature carries a fresh ACL, so repeat
+the revokes and the `service_role` grant against it.
 
-### `supabase/seed.sql` is gitignored, so a broken one is a local problem
+That leaves a window. Backend code calling the new signature against a database that has not run the
+migration gets PostgREST's `PGRST202`, which the callers here catch — so the failure is silent and
+the symptom is empty data rather than an error. **Apply the migration before rolling out the code
+that depends on it.**
 
-Each machine generates its own with `supabase db dump --local --data-only`; nothing ships it, and CI
-never runs it — the `Database migrations` job applies migrations to an empty stack and stops there.
+Where an in-between state would be visible to a user, a temporary retry against the old signature is
+a reasonable bridge — but only where doing so cannot violate what the caller asked for, and only if
+it is removed once the migration is applied everywhere. Left in, it is dead code that looks live,
+and it makes any *later* schema mismatch degrade to a quietly wrong answer instead of an error.
 
-**A regenerated seed collides with the migrations that seed `math_topics`.** `db reset` applies every
-migration *first*, and several of them now insert topics (`missing_number`, `patterns`, `graphs`,
-`shape_fractions`), taking ids from the sequence. A dump written with explicit ids — which is what
-`--data-only` produces — then hits `duplicate key value violates unique constraint
-"math_topics_pkey"` and the seed dies part way, leaving a database with four topics and no users.
-That reads as a corrupt checkout rather than as a seed that needs regenerating.
+## Do not "fix" the RLS helper functions
 
-Fix a local copy by inserting topics **by name** with `ON CONFLICT ("topic_name") DO NOTHING`, and by
-deriving the `setval` from `MAX(id)` rather than hardcoding it — a literal was right only while the
-seed was the sole writer, and winding the sequence back makes the *next* insert collide, which is the
-same failure one step later. Nothing references `math_topics.id`: `record_topic_attempt` joins on
-`topic_name`, and the one foreign key to it, `user_math_performance`, is not seeded.
+`is_member_of_class` and `is_teacher_of_class`
+(`supabase/migrations/20260709154104_teacher_read_policies_and_recursion_fix.sql`) are
+`SECURITY DEFINER` **and deliberately granted to `anon` and `authenticated`**. RLS policies evaluate
+them as the calling user, so revoking the grants breaks the policies they exist to serve. They are
+safe by construction — both are `auth.uid()`-scoped booleans with no parameter to pivot on (they
+answer "am *I* in this class", not "is user X"), and both pin `SET search_path TO 'public'`.
 
-`backend/tests/test_seed_sql.py` checks all three, and **skips when the file is absent** rather than
-failing on something the repo does not contain. It is a guard for whoever regenerates the file, not a
-gate.
+Audited against `pg_proc.proacl` on production and a local stack: five functions in `public`, and
+these two are the only ones granted to an application role. Re-audit with:
 
-### The Supabase CLI is a repo-local npm install
+```sql
+SELECT p.proname, p.proacl
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'public';
+```
+
+## The Supabase CLI is a repo-local npm install
 
 It is **not on `PATH`** — `which supabase` and `Get-Command supabase` both report it missing, which
 looks like "not installed" and isn't. It lives at
@@ -403,2685 +593,402 @@ differs on mac). Run it through npx from the repo root:
 npx supabase migration list --linked
 ```
 
-`supabase/.temp/project-ref` holds the linked project ref, which is what `--linked` resolves
-against.
+`supabase/.temp/project-ref` holds the linked project ref, which `--linked` resolves against.
 
-### Run `assert_signal_rls.sql` locally before merging a change to it
+## How a migration reaches production
 
-The CLI has no arbitrary-SQL command, but the local stack's Postgres is a container and `psql` is
-inside it. There is no need to wait for CI:
+**Merging to `main` applies the migration to production, a few minutes later.** The Supabase GitHub
+integration does it — configured in the Supabase dashboard, which is why nothing in
+`.github/workflows/` describes it. There is nothing to run by hand; `npx supabase db push` answers
+"Remote database is up to date". The **"Supabase Preview"** check on PRs comes from that same
+integration and verifies nothing: per-PR preview branches are switched off, so it reports `skipped`
+every time. Never read it as the migration having been exercised.
+
+**CI applies the migrations; it does not gate the merge.** The `Database migrations` job applies
+every migration to an empty local stack, so one that cannot apply goes red on the PR — but branch
+protection needs a paid plan on this private repo, so every job in `ci.yml` is advisory and a red PR
+still merges. Read the check before merging; it is the only thing between a laptop-only migration
+and production. It proves the SQL *applies*, not that the grants are right.
+
+**The delay is the trap.** It is minutes, not seconds, so a check run straight after the merge
+reports the migration as *not applied* — Local populated, Remote blank — and that is
+indistinguishable from an integration that never fired. Don't conclude anything from one look; re-run
+`npx supabase migration list --linked` before acting on a negative. It confirms only that the
+migration *ran*: the CLI has no arbitrary-SQL command, so verifying the resulting policies and ACLs
+means the dashboard SQL editor. The local `.env` files point at a local stack, so nothing in the
+working tree reaches production.
+
+## Run `assert_signal_rls.sql` locally before merging a change to it
+
+The local stack's Postgres is a container and `psql` is inside it, so there is no need to wait for CI:
 
 ```bash
 docker exec -i supabase_db_AdaptiveLearning psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f - < scripts/assert_signal_rls.sql
 ```
 
-Safe to run against a working database: the file is `BEGIN … ROLLBACK`, so its fixtures leave
-nothing. Exit 0 and a final `ROLLBACK` is a pass.
+Safe against a working database: the file is `BEGIN … ROLLBACK`. Exit 0 and a final `ROLLBACK` is a
+pass.
 
 **Do this for any change to that file, and for any migration that constrains a table it writes to.**
-CI was the only thing executing it, and CI is downstream of the merge — so a broken fixture is found
-after the decision to ship rather than before it. Two things were caught the first time this was run
-by hand, neither visible in a diff:
+CI is downstream of the merge, so a broken fixture is otherwise found after the decision to ship.
+Two things were caught the first time it was run by hand, neither visible in a diff:
 
-- **A new unique index made the file's own fixtures illegal.** `20260914000000` added
-  `cog_session_ts_key`, and the batching-loop fixture inserted five `cognitive_signals` rows sharing
-  one `(session_id, ts)` — a `unique_violation`, unhandled, under `ON_ERROR_STOP=1`, which fails the
-  whole job and every assertion below it. The migration's own comment warns that a unique index
-  "passes CI against an empty stack and fails against real data"; the production count that warning
-  prompted was run, and **the repo's own fixtures are also that data**. Check both.
+- **A new unique index made the file's own fixtures illegal.** A `cog_session_ts_key` migration met
+  a batching-loop fixture inserting five `cognitive_signals` rows sharing one `(session_id, ts)` — a
+  `unique_violation` under `ON_ERROR_STOP=1`, failing the whole job and every assertion below it.
+  The migration's own comment warns that a unique index "passes CI against an empty stack and fails
+  against real data"; **the repo's own fixtures are also that data.** Check both.
 - **A comment naming `$` `$` inside an anonymous code block closes the block**, and the syntax error
   surfaces hundreds of lines later. Nothing but execution finds that.
 
-It also revealed that an assertion added in the same change had never been executed at all — a `DO`
-block only CI ever ran, and only after merge.
-
-### How a migration reaches production
-
-**Merging to `main` applies the migration to production, a few minutes later.** The Supabase
-GitHub integration does it — it is configured in the Supabase dashboard, which is why nothing in
-`.github/workflows/` describes it. Confirmed on `20260801000000` and `20260803000000`; there is
-nothing to run by hand, and `npx supabase db push` answers "Remote database is up to date".
-
-The **"Supabase Preview"** check on PRs comes from that same integration and verifies nothing:
-per-PR preview branches are switched off in the project's integration settings, so it reports
-`skipped` every time. Never read it as the migration having been exercised.
-
-**CI applies the migrations; it does not gate the merge.** The `Database migrations` job applies
-every migration to an empty local Supabase stack, so one that cannot apply goes red on the PR.
-Nothing enforces that — branch protection and rulesets need a paid plan on this private repo, so
-every job in `ci.yml` is advisory and a red PR still merges. Read the check before merging; it is
-the only thing standing between a laptop-only migration and production. It proves the SQL
-*applies*, not that the grants below are right.
-
-**The delay is the trap.** It is minutes, not seconds, so a check run straight after the merge
-reports the migration as *not applied* — Local populated, Remote blank — and that is
-indistinguishable from an integration that never fired. Don't conclude anything from one look
-immediately after merging; re-check before acting on a negative:
-
-```bash
-npx supabase migration list --linked
-```
-
-A version in Local and absent from Remote has genuinely not landed only if it stays that way. That
-command is the answer to "did the migration land", and it is worth running before any deploy whose
-code depends on a new signature — see the deploy-ordering rule below.
-
-It confirms only that the migration *ran*. The CLI has no arbitrary-SQL command, so verifying the
-resulting schema — policies, ACLs — means the dashboard SQL editor. The local `.env` files point
-at a local stack, not production, so nothing in the working tree reaches the production database.
-
-## Configuration
-
-Backend: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `BACKEND_PORT`, `EEG_API_URL`,
-`EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MAX_BATCH` / `INGEST_RATE_LIMIT` /
-`INGEST_RATE_WINDOW`, `SESSION_ABANDONED_AFTER_HOURS` / `STALE_SWEEP_INTERVAL_SECONDS` (the
-abandoned-session sweep — the second is `0` to disable it), `QUESTIONS_CACHE_TTL` (30s default —
-the in-process cache in front of `GET /api/questions`, bounded at 256 entries so a sweep of
-distinct `limit`/`subject`/`difficulty` combinations from that unauthenticated endpoint can't grow
-it unboundedly), `QUESTION_QUEUE_SIZE` (0 — how many questions to pre-generate per student; named
-separately because it is not part of the `GENERATION_*` group and is a spend decision, see *Learning
-preferences* below), the `STRATEGY_LLM_*` /
-`STRATEGY_RATE_*` group below, and the
-`LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` group under *Every model call goes through
-`llm_client`*. The ingest bounds
-matter because the sidecar posts with the *student's* token: that endpoint is a trust boundary, and
-neither the session check nor the consent check bounds volume. Frontend: `VITE_SUPABASE_URL`,
-`VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`, `VITE_EEG_DEBUG`. EEGResearch reads `.env` through
-`src/app/config.py` — `API_TOKEN` and `ADMIN_TOKEN` required, `EEG_SOURCE` picks sim vs muse,
-`EEG_DEVICES` (`station1:muse@8765,...`) drives the multi-headband registry. The native bridge reads
-its own env directly, not through `config.py`: `MUSE_BRIDGE_PORT` (8765), `MUSE_ENABLE_OPTICS` (off)
-and `MUSE_OPTICS_PRESET` (`1035`).
-
-Read numeric settings through `_env_number(name, default, cast, minimum=...)`, never
-`int(os.getenv(…))`. These are read at import, so a typo would otherwise take every endpoint down
-over a tuning knob for one optional feature. It falls back on unparseable and non-finite values
-(`inf` passes a `minimum` check, `nan` fails every comparison, and both break call sites in ways that
-look like the feature being off) and clamps below the floor. **Give every one a floor:** a number is
-not automatically a usable setting.
-
-**`MUSE_ENABLE_OPTICS` stays off unless you are testing the heart channel.** On it, a 2025 Athena
-moves off `PRESET_21` onto an optics-carrying preset — a bandwidth trade with a sharp edge. Measured
-on hardware: 4 CH EEG at 256Hz alongside **16** CH optics at 64Hz drops the BLE link within ~20s
-*and* collapses electrode contact from `[1,1,1,1]` to `[4,4,4,4]`; 8 CH and 4 CH hold for minutes at
-~63 packets/s. `MUSE_OPTICS_PRESET` picks the rung — `1031`/`1032` 16 CH, `1033`/`1034` 8 CH,
-`1035`/`1036` 4 CH (odd = low power). The default sits at the bottom deliberately: the 16-channel
-failure took EEG down with it. An unrecognised value warns once and falls back.
-
-**Turn it on with `./start.ps1 -Muse -Optics`, not by editing a `.env`.** The bridge is a C++
-process that reads `getenv` directly and never loads `config.py`, so a `MUSE_ENABLE_OPTICS` line in
-`EEGResearch/.env` is read by nothing — the version of this mistake that looks like it worked. The
-flag sets the variable in the window that launches the exe. Same for `MUSE_OPTICS_PRESET`, and for
-`MUSE_BRIDGE_PORT` if it ever needs one.
-
-### A dropped BLE link is retried at every layer, and the bridge goes first
-
-Reconnection used to be entirely manual, at all four layers at once: the bridge's
-`update_connection_state` deliberately did nothing on DISCONNECTED, the sidecar retried its TCP
-socket every tick with no backoff, the backend poller waited a fixed interval whatever came back,
-and the student's page answered `muse_connected === false` by silently resetting to "Connect
-Headband" — and then *stopped polling*, because the poll was gated on `connected`. A headband that
-fell off mid-question cost the rest of the lesson's recording with nothing on screen saying so.
-
-**The bridge owns recovery, and reports it.** `service_auto_reconnect()` runs once per main-loop
-tick. A CONNECTED → not-CONNECTED edge arms a bounded sequence of `connect_named()` calls against
-`last_connected_name_` (2/4/8/16/30 s backoff, `MAX_RECONNECT_ATTEMPTS = 5`), launched on their own
-thread because `connect_named` blocks through `wait_for_disconnect` for up to 3 s. **The preset is
-not carried across and must not be**: `apply_model_preset()` re-derives it from `getenv` on every
-CONNECTED, so a reconnect lands on exactly the configuration the process was launched with — don't
-add reconnect-time preset logic. A liveness watchdog (`MUSE_LIVENESS_TIMEOUT_MS`, 8000; 0 disables)
-catches the failure `NOTCH_STALE_MS` cannot: EEG stops while libMuse still says CONNECTED. It
-measures from the later of the last packet and the connect itself, since a preset switch interrupts
-streaming for a moment after every connection. `MUSE_AUTO_RECONNECT=0` turns the whole thing off.
-Set both the way `MUSE_ENABLE_OPTICS` is set — in the window that launches the exe — for the same
-reason: the bridge reads `getenv`, never `.env`.
-
-Two things about the edge detection are load-bearing. `disconnect_muse()` sets `connected_ = false`
-*before* asking the SDK to disconnect, so the callback for a deliberate disconnect — a person's
-command, or `connect_named()`'s own cleanup — sees `was_connected == false` and arms nothing; that
-ordering is the whole mechanism, and there is no separate flag. And **every command a person sends
-cancels the sequence** (`cancel_auto_reconnect()` in `handle_bridge_command_line`), with a
-generation counter so an attempt already mid-`connect_named` undoes its own connect when it returns
-— otherwise a reconnect landing after a deliberate disconnect re-pairs a headband the student just
-released. Status lines carry `auto_reconnect`, `reconnecting`, `reconnect_attempt`,
-`reconnect_max_attempts`, `reconnect_exhausted` and `eeg_age_ms`, additively — `muse_connected`
-still means "up right now". **Compiled both ways (`build_off` and the `ENABLE_LIBMUSE=ON` build
-against the vendored SDK) and smoke-tested in synthetic mode; not yet exercised against a real
-headband**, which is the only test of whether libMuse's callbacks behave as assumed on a drop.
-
-**The sidecar and the poller back off; the page shows the bridge's progress and only then drives
-its own.** `TcpMuseBridgeAdapter` waits 0.5 → 5 s between TCP attempts (`connect_wait_remaining()`,
-reset on success), and `DeviceSession.health_fields()` — `last_good_ts`, `last_good_age_s`,
-`consecutive_errors`, `preset_mismatch` (only after `PRESET_SETTLE_SECONDS`, since the two presets
-legitimately disagree for a moment after every connect) — rides inside `ingestion` on both
-`/api/v1/state` and `/api/v1/muse/status`, deliberately not as top-level keys the envelope would
-drop. `eeg_poller._poll_wait` doubles the wait per empty read up to `POLL_BACKOFF_MAX_S` (5 s); the
-first miss costs nothing, since an idle stream at session start is ordinary, and the cap is small
-because the consent re-check shares the loop. `Adaptive.jsx` polls the bridge in **both** modes now
-— under pull `poller.running` never says the headband went away — claims a drop only from
-`phase: 'connected'` (under pull `connected` is the poller, true from `/api/eeg/start` and so
-before the scan has begun; keyed on it alone, every pairing read as a drop and this page sent a
-second connect over the first 2 s in — three clicks to pair, on hardware), keeps polling through
-the new `reconnecting` phase, shows the bridge's attempt count, and starts `startFrontendReconnect()` only
-on `reconnect_exhausted` or a bridge too old to report `reconnecting` at all. **"Stop trying" sends
-a bridge disconnect before the usual teardown**, because Disconnect's teardown stops the sidecar's
-stream without sending the bridge a command, and only a command cancels its attempts. The
-page-driven `pairOnce` takes the cancel token and checks it before the connect, so a cancel during
-the 12 s scan cannot be followed by a pairing; it also leaves the panel on `reconnecting` rather
-than stepping through scanning/connecting, where the button is disabled.
-
-Electrode contact reaches a student for the first time: `lib/contactQuality.js` is
-`signal_processing._signal_quality`'s contact half without the smoothing (the page debounces two
-poor polls instead), and the teacher's Live badge gained the age of the newest row and the same
-"weak signal" the heart badge had, from `lib/signalAge.js` — `STALE_AFTER_S` there mirrors the
-backend's `_LIVE_WINDOW_SEC` so the two surfaces agree on what counts as live.
-
-**Run against a real headband on 2026-09-03, and three things the synthetic tests could not
-show.** Out of range, the bridge's five attempts ran on schedule (2/4/8/16/30 s, each timing out at
-15 s) and exhausted at 2 m 16 s, the page took over, gave up, and the button came back. But at the
-*edge* of range every attempt reached CONNECTED within seconds, no EEG followed, and the watchdog
-dropped it 8 s later — and because the budget was reset on every CONNECTED, that flapped for as long
-as the headband stayed there, a toast pair every ten seconds. So **CONNECTED no longer resets the
-attempt count; a link held for `LINK_STABLE_MS` (30 s) does**, in `service_auto_reconnect()`, and
-five short-lived reconnects exhaust the budget like five failures. The page says "disconnected"
-once per `DROP_TOAST_MIN_MS` (60 s) and "reconnected" only for a drop it announced; the panel still
-tracks every one. And **the page's give-up path must tear down like Disconnect**, not reset state:
-under pull `connected` is the poller, which the loop never stopped, so three seconds after "could
-not be reconnected" the panel read STREAMING with a Disconnect button over a headband four minutes
-gone. `AdaptiveReconnectPull.test.jsx`'s recorder mock drives `poller.running` for that reason — a
-mock that always says running cannot see it.
-
-**Connect adopts a link the bridge already has — when EEG is flowing on it.** `pairOnce` reads the
-bridge first and, on `muse_connected: true` **with `eeg_age_ms` under `ADOPT_MAX_EEG_AGE_MS`** (3 s),
-goes straight to connected without the disconnect-then-scan. "Connected" alone is not evidence:
-libMuse keeps saying CONNECTED after EEG stops, which is why the bridge has a watchdog, and that
-disconnect is the page's only reachable bridge disconnect outside "Stop trying" — adopting a dead
-link would leave nothing able to clear it. An older bridge reports no age and falls through to
-the scan. **`linkAlive(ing)` is the page's one answer to "is this link alive"**, and all three
-readers use it — Connect's adoption, the reconnect loop's "came back on its own" check, and the
-telemetry poll's recovery — because the second and third had the same gap: after the bridge had
-exhausted its attempts (exactly where the hardware run recorded CONNECTED-but-silent links) the
-loop declared success on the word "connected" and reached the same unclearable state by another
-door. Test fixtures that mean "connected" must carry an `eeg_age_ms`. **But "not alive" is not
-"dead" on the recovery paths**: the bridge zeroes its packet clock on every CONNECTED and reports
-`eeg_age_ms: null` until the first packet, and a preset switch keeps that null for seconds — so
-every successful bridge reconnect briefly reads as connected-with-no-age, and a reader that called
-that dead started a page-driven reconnect whose first act is a bridge disconnect. `linkSettling`
-names that state, and the two recovery readers give it `SETTLE_GRACE_MS` (10 s, above
-`PRESET_SETTLE_SECONDS` and the 8 s watchdog, so with the watchdog on the bridge decides first) —
-one grace shared through `settlingSince`, not one per reader. Adoption keeps refusing it: it needs
-positive evidence, and "no packet yet" is not that. Seen on
-hardware: after both the bridge and the page had given up, the headband was switched back on and
-the bridge had it connected by the time Connect was clicked, and the click's own disconnect dropped
-that link 1.5 s in — "connects, then immediately disconnects". The disconnect exists for a headband
-left streaming from a *previous* session; one streaming to us now is not that. Consequence for
-tests: **a harness whose bridge starts connected is adopted without a scan**, so both reconnect
-harnesses start `muse_connected: false` and flip it from their connect mock.
-
-**`muse_native_bridge.exe` runs under `EEGResearch/scripts/run_bridge_supervised.ps1`**, which
-`start.ps1 -Muse` launches in the bridge's window. It restarts the exe on a non-zero exit, prints
-every exit with its time and code, and gives up once more than five exits land inside ten
-minutes — so a persistent failure (a missing `libmuse.dll`, port 8765 taken) stops with its cause
-on screen rather than looping. A clean exit (Ctrl+C in the window) is not restarted. It inherits
-`MUSE_ENABLE_OPTICS` and the rest from the window `start.ps1` set them in and reads none of them
-itself, so a restart lands on the configuration the session was launched with; nothing else has to
-change, because the sidecar's TCP adapter reconnects on its own once the bridge is listening and
-the page treats the restarted bridge's "not connected" as a drop and runs its reconnect.
-`EEGResearch/tests/test_bridge_supervisor.py` drives the loop against a stub `.cmd` (Windows
-only, skipped elsewhere — the script is PowerShell, like the bridge it wraps). It is deliberately
-**not** a Windows service or a scheduled task: moving the exe out of the launcher window is how
-those variables get lost. The debug panel's *Link* row tells a dead bridge from a dropped headband
-— `consecutive_errors` climbing with `eeg_age_ms` absent is the bridge gone, `eeg_age_ms` climbing
-with the bridge answering is the headband gone.
-
-**`AdaptiveReconnect.test.jsx` runs on real timers, and every fake-clock version of it hung.** The
-pairing sequence is a chain of 1–1.5 s waits noticed by a 5 s poll; under `vi.useFakeTimers()` —
-with or without `shouldAdvanceTime` — `await act(async () => advanceTimersByTimeAsync(…))` never
-resolved and every test timed out at the 5 s default. Each of those tests costs 10–20 real
-seconds and says so with a 60 s timeout. `Overview.test.jsx`'s fake-clock pattern works for a
-300 ms debounce; it did not survive this component.
-
-**So `asyncUtilTimeout` is 5000 in `src/test/setup.js`, not Testing Library's 1000.** That default is
-a figure chosen for pure components; a query for something that legitimately arrives on the *second*
-5 s poll is racing a budget unrelated to what it waits for, and it only ever passed because the
-machine was idle. Under the load of the full 62-file run the same query misses by a few hundred
-milliseconds — measured as intermittent `AdaptiveCameraLifecycle` failures on three separate full
-runs, always at a default-budget query and never at the one beside it already passing
-`{ timeout: 9000 }` for the same element. Raising it costs nothing on a passing assertion, since
-`waitFor` returns as soon as the condition holds; it only makes a genuinely failing query slower to
-report.
-
-**A timeout does not fix an assertion anchored to elapsed time, and one test here was.** The contact
-hint set a poor reading, slept 6 s, and asserted the hint was absent "because at 6 s exactly one 5 s
-poll has landed" — true only if the interval happened to be in the right part of its cycle. Land two
-inside that window and the hint is correctly on screen and the assertion fails against working code.
-It now waits for the *read count* to advance by one and asserts against that, which gives it a whole
-poll of slack instead of none. Same rule as
-`test_time_spent_queueing_comes_out_of_the_budget_it_was_promised` on the backend: prefer a recorded
-event over an elapsed-time threshold whenever a test synchronises on something it does not drive.
-
-### The simulator pairs like a headband, and streams whether or not it is paired
-
-`SimulatedMuseIngestionAdapter` answers the bridge's three commands: `refresh` lists one device
-(`MuseS-SIM0`, named so no status line or bug report can mistake it for hardware), `connect`
-pairs it, `disconnect` clears both, and the pairing fields (`muse_connected`, `muse_devices`,
-`active_muse_name`, `connection_state`, `eeg_age_ms`) follow that state. Until 2026-09-16 it
-reported nothing discoverable and `send_bridge_command` raised, so under `EEG_SOURCE=sim` the
-page's Connect button always ended at "no device" while the poller recorded underneath it — a
-sim run could never exercise the pairing sequence, the adopt path or a drop. **`eeg_age_ms` is a
-packet clock, and the sidecar's sample stream stands in for the packets, deliberately**: null for
-`PAIR_SETTLE_SECONDS` (5 s) after every connect, the way the bridge zeroes its clock on CONNECTED
-and a preset switch keeps it null; then the time since the last delivered sample, stamped on every
-`read_sample` and on stream start, so a running stream keeps it under one 4 Hz tick and a
-*stopped* stream lets it climb. That climb is the drop — CONNECTED-but-silent, the state
-`linkAlive` and the bridge watchdog exist for — and it is the only way to reach it on a
-simulator with no BLE. Two earlier shapes each lost a page state: stamped from reads alone the
-settle ended within one tick (`linkSettling` unobservable); modelled from the pairing alone the
-age wrapped inside 0–3 ms for ever (no drop reachable). The stream-start stamp is what keeps
-adoption reachable: under pull, Connect starts the stream and reads the status before the first
-tick. Two things are deliberately unlike hardware: the sample stream runs
-whether or not anything is paired (a plain `start.ps1` run streams without a click, as before),
-and the pairing survives a stream stop, as the bridge holds a link across a session end. A
-device whose adapter has no `send_bridge_command` — the camera — still answers
-`ok: false, commands require EEG_SOURCE=muse`.
-
-**Its electrode contact varies, on the clock, in two layers.** It was `hsi [1,1,1,1]` for ever,
-so a sim run never reached the contact gate, the confidence step at the degraded line or a
-`contact_poor` row — while on hardware degraded is the ordinary state and poor the fault. The strap
-alternates seated (90–300 s) and loose (20–60 s) episodes, and inside an episode each electrode
-holds an HSI state (1/2/4) for a drawn streak and is redrawn with the episode's weights
-(`CONTACT_WEIGHTS`, `CONTACT_STREAK_SECONDS`, `STRAP_PHASE_SECONDS`). **The strap layer is what
-makes `poor` reachable**: with independent per-electrode draws, three-of-four poor was ~1% of ticks
-at any weights, since electrodes going poor *together* is what a loose strap does. Measured through
-`SignalProcessor._contact_ratio` (its 5 s smoothing and lines, not the raw hsi) over two simulated
-hours: good ~30%, degraded ~55%, poor ~14%, pinned by a test with loose bounds. `is_good` follows
-hsi (≤ 2 seated) so the processor's min of the two never reads a contradiction, and
-`band_channels_used` counts the seated ones. Streaks are long against the 5 s smoothing, so one is
-a verdict rather than a blip. **The raw channels are untouched**: contact changes what the bridge
-reports about the electrodes, not the samples, so the artifact gate sees the same signal. The
-adapter takes a `seed`, and **every draw it makes comes from its own generators** — contact,
-battery, the resting heart rate, the state drift and the channel noise from one `random.Random`,
-the optical noise from its own numpy generator, so building an optics window (on the heart
-cadence, not the tick) cannot shift the contact sequence. A draw from the module-level `random`
-anywhere in the class breaks the replay, and a test replays a run to catch it. Unseeded simulators
-differ.
-
-**Its cognitive state answers the lesson.** `record_answer` ends with a best-effort
-`eeg_poller.notify_answer`, which under pull only, and only for a session with a live poller,
-POSTs `/api/v1/session/answer` on the sidecar through `eeg_client.report_answer` — **on a
-one-worker notify pool, never the request thread**: `record_answer` is a sync endpoint on anyio's
-~40-slot pool and `requests` applies its timeout to connect and read separately, so a sidecar that
-accepts and then stalls would hold a slot ~6 s per answer on the hottest path with the ingest
-endpoints queuing behind it. Pending deliveries are capped (`NOTIFY_MAX_PENDING`); past the cap
-a notification is dropped with a log line, so a stalled sidecar costs notifications, never
-threads. `stop_all` shuts the pool down and joins it, for the reason the pollers are joined (it
-prints on failure), **and never resets the pending counter**: every submit is balanced by its
-delivery's `finally`, so after the join it is 0 on its own, and zeroing it *before* the join left
-it at −1 — one extra slot under the cap for the life of the process, and in the test process,
-where `conftest` calls `stop_all` after every test, an order-dependent bound. The call returns the
-delivery's future, and nothing on the request path waits on it;
-`stream_manager.report_answer` hands it to the adapter's `report_answer` if it has one and answers
-`applied: false` otherwise, so **a real headband ignores it and nothing feeds back into scoring on
-hardware**. The simulator nudges its hidden focus and calm per answer (a miss pulls calm towards
-the stressed line, more on a hard question; a correct answer lifts focus) into a bounded offset
-(`TASK_BIAS_BOUND`) that decays on the clock (`TASK_BIAS_DECAY_SECONDS`), applied to the state
-*before* the bands and the raw channels are solved from it, so the processor meets it through its
-own 4 s smoothing and artifact gate. It cannot trip that gate: delta and gamma are constants, alpha
-moves inside its usual span, and the raw spread scales 0.6–1.6 with calm, a 2.7× range under the
-3.5× jump line — pinned by a test. `focused` still cannot fire on a sim run (calm ≥ 0.5 with high
-focus, and the sim's bands share alpha and beta by construction); that is the pipeline's property,
-not the bias's. The backend sends `correct` only — the answer payload carries no difficulty — and
-the sidecar route is admin-only under pull, like `/session/arm`.
-
-**It carries a synthesised pulse, fed through the unmodified heart path — opt-in, and marked.**
-Off by default (`EEG_SIM_OPTICS=false`, read only under `sim`), for the reason `MUSE_ENABLE_OPTICS`
-is off on hardware: a plain `./start.ps1` must not store a made-up heart rate, and off, every
-window is refused as `no_samples` exactly as a headband without optics is. The classroom
-simulation sets it. On, the window is `synthetic`, `build_heart_record` puts that on the record
-(only when true, so hardware records keep their shape) and `signal_mapping` writes it into the
-row's `raw` — the source stays `muse_optics`, because consent is enforced per sensor and the pulse
-stands in for that sensor, so `raw.synthetic` is what separates a stored rate nothing measured
-from one a headband did, in the rollup and everything downstream of it. **Both ingestion paths
-carry it the same way**: `push_client` sends it as a top-level field of the heart sample (never
-inside the `raw` it hand-builds), `HeartSample.synthetic` receives it, and `/api/signals/heart`
-puts it on the block the shared mapper derives from — so a client cannot mark or unmark a row
-by posting the key in `raw`, on either path, and only a derived `True` survives. The first cut
-marked the poller path only; a camera run (`-Camera` selects push) stored the unmarked row the
-mark exists to prevent — the zeroed-rows rule again: anything of this kind belongs in the mapper.
-`EEG_SIM_OPTICS` takes the same tolerant validator #189 gives the other boot settings, for the same
-reason: it is read at import inside `StreamManager()`, so a typo (`ture`) must warn and mean off
-rather than refuse the sidecar boot — and off is the safe side here, since nothing synthesised is
-then stored by mistake. As a plain pydantic `bool` it was a `bool_parsing` error at import.
-`optics_window` builds the last 25 s on demand from the clock — a pulse at a resting rate drawn per simulator
-(`HEART_REST_BPM_RANGE`, 62–84) with a slow drift, raised by misses through the same decaying task
-bias (`HEART_TASK_NUDGE`, bounded by `HEART_TASK_BOUND`), a second harmonic so a spectral argmax
-cannot read double, and independent noise per channel so the beat consensus has four opinions of
-one heart — at 64 Hz on the bottom optics rung's four channels, complete and gap-free (the
-sample-loss gates have real captures). History exists while the stream is up *and* a device is
-paired, from whichever began later, and is cleared with the stream, the link or `clear_optics`,
-as the bridge adapter clears its buffer. So a sim run sees `warming_up` for the first window,
-`unconfirmed_anchor` on the first full one, then a trusted rate within a few bpm of the simulator's
-own, RMSSD present or refused by name, and `optical_supported: true` on the meta. Nothing
-downstream is told it is synthetic beyond `bridge_mode: python_sim`.
-
-### Samples are stored during a session, not while a headband merely sits paired
-
-Under pull, Connect has to start the poller — it is what starts the sidecar's device stream, and
-it feeds contact and battery to the page — and the poller used to write from its first tick. So
-a student who paired and never started a question had rows on the teacher's Live view, and a
-"session" in History, for a lesson that never happened. Found on the first hardware run of #169.
-
-The poller now has two states. `POST /api/eeg/start` takes `record` (default `true`, so callers
-predating the flag are unchanged): Connect sends `record: false` — stream up, nothing written —
-and `Adaptive.jsx`'s `armRecording` sends `record: true` on the first question, which flips the
-*running* poller in place rather than restarting it. Ending the session stops the poller, as it
-always did, so the recording window is first question → Finish. After a Finish the next question
-is a new session, and `armRecording` replaces a recorder bound to the old one and starts a fresh
-poller; the headband stays paired at the bridge throughout. `status()` reports `recording` beside
-`running` because they are now different facts. Push needed none of this: `startPush` was already
-keyed on `sessionId`.
-
-**A poller that is up but not recording still moves `last_ts`**, so arming starts from the live
-tick rather than replaying a backlog — and so a paired, idle headband does not read as a sidecar
-that has stopped answering.
-
-### Battery is device telemetry, and null for the first stretch of every session
-
-`battery_percent` rides on the bridge's ingestion block through to the badge beside Disconnect on
-the student page. Registered on **every** preset, not just the optics ones — libMuse fires BATTERY
-on its own schedule rather than as part of a preset's stream, so it costs nothing on `PRESET_21`.
-
-**Null until the first packet arrives, which is most of the first minute.** That is normal, not a
-fault, and it is why the badge renders nothing rather than `--%`: a permanent empty slot reads as a
-broken sensor. The three-state rule applies with unusual force here because **0% is a real and
-alarming reading** — `pct || null` anywhere on this path erases exactly the value the badge exists
-for, so the checks are `typeof pct === 'number'` and `!= null`. The bridge stores −1 for "not
-reported" and `main.cpp` turns that into JSON null. **`EEG_SOURCE=sim` reports a simulated charge
-since 2026-09-16** (it was null, on the grounds that a made-up percentage is a number a student
-acts on; the classroom simulation needs the badge exercised): null for
-`BATTERY_FIRST_REPORT_SECONDS` (50 s) after every connect, then a level drawn once per simulator
-from `BATTERY_START_RANGE` (55–100) draining at `BATTERY_DRAIN_PCT_PER_HOUR` (10) on the clock,
-not the stream — a BLE event, like the real one — floored at a reported `0.0`, never `None`. The
-charge survives a disconnect (one headband; the *report* goes null with the link) and a repeat
-connect goes null again for the first-report window, as the bridge's stored value does.
-
-Cleared on disconnect in both places — `reset_device_fields_locked` and the page's own state. A
-charge percentage left standing describes the headband that just went away, and it is the one
-number here a student is asked to act on.
-
-### Headband BPM: cleared seated, fails under gait
-
-Two regimes with different mechanisms, and the rule is scoped to the right one.
-
-- **Seated — cleared.** Against a simultaneous watch ECG (2026-08-09): **14 of 16 windows accepted,
-  max error 2.1 bpm** against a true 70–72. That is a student at a desk, and it is good enough to
-  record and to act on.
-- **Desk fidgeting — degrades into refusal, not error.** 12 of 16 windows rejected at confidence
-  0.00–0.50; the 4 accepted were within 7.5 bpm. The *watch's own ECG* failed one of three attempts
-  with `Poor recording`, so a medical-grade contact sensor could not cope with movement the headband
-  survived while correctly reporting that it could not.
-- **Gait — confident error.** Through exercise `ppg_processing` reported 162–167 bpm at **confidence
-  1.00** for six consecutive windows against a watch-verified 104: step cadence. 166/104 = 1.60, no
-  harmonic relation, so no periodicity test sees it and four have been tried.
-
-Confidence discriminates in the second case and not the third because running supplies a *sustained
-clean rival oscillator* for the autocorrelation to lock onto, while fidgeting merely destroys the
-pulse. The accelerometer remains the only signal independent of the periodicity being confused, and
-is what a walking-around deployment would need — it is not a prerequisite for a maths lesson at a
-desk.
-
-Two limits worth keeping in view: the seated validation is one adult over three minutes, not a child
-over a lesson; and 7.5 bpm at high confidence is harmless for fusion (which can only ease difficulty)
-while being a real if modest error on a parent-facing chart. Evidence and the failed discriminators:
-`EEGResearch/tests/fixtures/README.md`.
-
-### Camera rPPG is validated-and-rejected. `FACE_HEART_ENABLED` stays off
-
-Against a simultaneous watch ECG (2026-08-08): **47.7 bpm at confidence 0.74 against a true 88**,
-over five minutes with the face found in 8988 of 8988 frames, autocorrelation peak 0.02 where a real
-pulse gives 0.3–0.7.
-
-**That scope was right, and it is now closed — including for the RLAP weights, so don't chase the
-licence.** The claim was only that the pulse is not recoverable *from the mean RGB of our three ROI
-boxes by POS*, since a learned model over per-pixel input has far more to work with. All of it was
-then run against ECG (2026-08-14) on a paced-breathing capture where the true rate rose **16 bpm**:
-
-| | moved, vs truth's +16 | r against the 5 strips |
-| --- | --- | --- |
-| POS | −8.9 | +0.36 (that is raw green) |
-| `RhythmMamba.pure` | −0.3 | +0.30 |
-| `RhythmMamba.rlap` | +1.4 | +0.37 |
-| `FacePhys.rlap` | +9.2 | +0.21 |
-
-**None tracks the rate, and the raw green channel scores as well as any of them** (n=5 needs |r|>0.88
-for significance; all four are noise). `FacePhys.rlap` is the package's best model on the largest
-dataset and reported **128.8 bpm for a true 89**. Correlate ungated — the confidence gate is
-inapplicable to a single channel, so letting it discard windows throws away the only test there is.
-The remaining suspect is the camera's own temporal denoising: **31.4% of consecutive frames carry
-bit-identical ROI means**, ~20 distinct frames per second inside a 30 fps stream. Testing that needs
-a camera exposing raw frames, not another model.
-
-**Between-half comparisons on a paced capture are confounded** — deep breathing moves the chest and
-head as well as the heart rate, so a model responding to breathing motion produces the same
-signature as one tracking a pulse. `FacePhys.rlap`'s +9.2 is exactly that shape, and it collapses to
-r = +0.21 within the half, where breathing is constant. Correlate against strips inside one
-breathing regime, never across the switch.
-
-**A narrow-range capture cannot validate this, and one nearly passed a broken method.** Over the half
-where the truth held near 68, RhythmMamba accepted 70/83 windows at a median error of **−5.9 bpm** —
-a shippable-looking number from a model that emits ~62 whatever the heart does. Score any future
-attempt against a *moving* truth: paced breathing (4 s in, 6 s out) swings the rate 10–20 bpm while
-the subject stays seated and still, which is what caught this. A capture whose rate never moves
-cannot tell a measurement from a constant.
-
-**Always compare against the best constant, never against zero.** `.rlap`'s errors are +6.0 at rest
-and −8.6 elevated, which reads as "works for resting and slightly elevated" and is instead what
-emitting ~75 produces when the truth sits either side of 75. Scored properly it has **MAE 8.5 against
-a best-constant 5.8** and **r = −0.14** — *a model that always answered "68" beats all four front
-ends*, and `.rlap` is worse than a flat 75 exactly in the elevated half (12.8 vs 9.2). Single-digit
-absolute error is not evidence of measurement when the truth barely leaves the predictor's output.
-
-**An illuminant that changes colour breaks POS at the premise, not at the noise floor.** A television
-in the room put chromaticity CV at 5.00% against 0.20% with it off, with a colour jump every ~0.6 s;
-POS projects onto a plane chosen for a *fixed* illuminant. Check chromaticity stability before
-blaming a result on the method. It is also not a lighting-level problem: in-band fluctuation on the
-clean capture is 0.533% of mean against a photon-noise floor of 0.03–0.12%, so more light lowers a
-floor nothing is limited by. Raw R/G/B of those means show the same as POS, so POS is not at fault.
-
-**Nor is the licence a blocker, and `.pure` is why.** Both `zizheng-guo/RhythmMamba` (Zou et al.,
-AAAI 2025) and `KegangWangCCNU/open-rppg` are MIT and ship pretrained weights; the `.rlap`/`.pure`
-suffix is the training protocol. The Data Usage Agreement is on the **RLAP dataset**, not the
-weights — you need it to train on or evaluate against RLAP, not to run inference. What is unresolved
-is whether that agreement reaches *derived* weights, and nobody here has read its terms. `.pure`
-weights avoid the question entirely, which is the cheaper path for a commercial product used by
-children.
-
-`RhythmMamba.pure.weights.h5` is published. **`FacePhys` is `.rlap`-only and is the package default**
-(`rppg.Model()` with no argument), so the model that comes for free is the one with no RLAP-free
-alternative — name the model explicitly. Every live selection in `FacialRecg/` pins `.pure`;
-`ubfc_rppg_exp_dataproc.py` is the deliberate exception, since it sweeps the whole grid and its
-committed report would otherwise be unreproducible. Nothing has been *run* since the switch —
-`open-rppg` has never been installed here — so treat `.pure` as licence-safe, not as measured.
-
-What actually stands in the way is engineering and evidence, and one of the three blockers now has
-a number. Measured 2026-08-12: `open-rppg` costs **~600 MB installed** beyond what the camera path
-already brings (jaxlib alone is 252 MB), `import rppg` takes 5.3s and loading `RhythmMamba.pure`
-another 27.5s — about **34s of start-up** on a student's laptop. It also imports `pkg_resources`,
-removed in setuptools 81, so adopting it means pinning a deprecated setuptools. `.pure` weights do
-load, so the licence-safe path is real rather than theoretical. The ONNX escape route — onnxruntime is already
-a dependency, so exporting the weights would drop nearly all of that — was tried and **does not
-currently work**: `jax2onnx` cannot convert `Fusion_Stem`'s channels-last 3D convolution, and the
-model hardcodes that layout. It fails *before* reaching the Mamba scan, so whether the scan exports
-is still unknown; don't read the conv error as the only obstacle. **The ONNX export works and the cost objection is gone**:
-`scripts/export_rhythmmamba_onnx.py` patches a vendored `open-rppg` (~20 lines: the JAX-only
-`.at[].set()` in `Block_mamba`, Mamba's grouped Conv1D, and `Frequencydomain_FFN`'s RFFT, none of
-which tf2onnx converts) and emits a 22 MB model that runs under **onnxruntime alone** — already a
-dependency — loading in 1.5 s against ~34 s, and matching **the unpatched package** at
-correlation 0.99985 — measured against a baseline captured *before* patching, because comparing the
-export to the patched model only proves it reproduced what it was exported from. Inference is 0.97 s
-per 160-frame window, about 6× real time on CPU. The `.onnx` is not committed: it derives
-from weights whose licence terms are the authors', and the script regenerates it. **This settles the
-cost, not the accuracy** — that still needs the video + ECG capture, and the POS rejection stands.
-`scripts/capture_face_video_ecg.py` is that capture: 128×128 face crops (what the model takes),
-lossless because every lossy codec discards exactly the variation rPPG reads, and it **refuses to
-write inside the repo** — this is the one artefact that must never be committable, and `git add -A`
-does not ask. `--delete` clears the frames and stamps the header, since a cleaned-up capture with no
-trace is indistinguishable from one nobody cleaned up. The `.npy` is **trimmed on close to the frames
-actually captured**: it is allocated for the worst case, `open_memmap` zero-fills, and an untrimmed
-tail reads back as black frames rather than as absent data — which a windowing script would feed to
-the model as a sharp non-physiological edge. Numbers and method: `EEGResearch/docs/RPPG_DEPENDENCY_COST.md`. The gate below still has to be designed and *measured*
-against a reference, which is unchanged and still needs a capture.
-
-**The part that generalises past this webcam: `ppg_processing`'s confidence does not apply to a
-single-channel source.** Its three terms were built for four contact channels — `agreement` is 1.00
-by construction against one waveform, `margin` is highest exactly when there is no rival structure to
-beat, and noise scored an snr of 0.314, inside the range the code documents as a clear pulse. The
-gate is not weak, it is **inapplicable**, and better hardware would not fix that.
-
-The camera ships **emotion-only**. POS is kept because it is correct and is the front half of any
-future attempt; do not read its passing tests as evidence it measures a heart rate. Full analysis:
-`EEGResearch/tests/fixtures/FACE_RPPG_ECG.md`.
-
-### `attention` has no producer; `gaze_x`/`gaze_y` now do
-
-**Gaze and head pose are wired** (Phase 11 step 2). `FaceCaptureAdapter` runs the face-mesh
-landmarker on its own `GAZE_INTERVAL_S` cadence — 5 Hz, not the frame rate, because it is a *second* detector doing its own
-face detection rather than reusing the Haar box — and `build_face_record` carries the reading.
-`FACE_GAZE_ENABLED` is **off by default**: it needs `models/face_landmarker.task`, which is not in the
-MediaPipe wheel. Turn it on with `./start.ps1 -Camera -Gaze` (or just `-Gaze`, which implies
-`-Camera`) — that fetches and checksums the model at setup, exactly as it already does for FER+,
-because a 4 MB download in front of a student's first lesson looks like a broken feature rather than
-an incomplete install. The sidecar deliberately **never** fetches it itself; `ensure_model` is a
-setup-time call and `FaceMeshLandmarker` only ever refuses.
-
-**The URL is pinned to `/1/`, not `/latest/`.** Google serves both and they are the same bytes today,
-but a checksum pinned against a moving URL fails on the next release *as a checksum mismatch* — which
-reads as a compromised download rather than an upstream version bump.
-
-The digest is re-checked when the landmarker loads, not only at setup: `ensure_model` protects the
-moment of install and nothing after it, and a truncated or hand-swapped `.task` would otherwise
-produce landmarks that are wrong rather than absent.
-
-**A missing model costs gaze, not the camera.** `connect()` tolerates a landmarker it cannot build,
-logs, and lets the channel report `rejected_by="landmarker_unavailable"`. That is deliberately unlike
-the emotion classifier beside it, which is allowed to refuse the whole device: emotion is the
-camera's primary measurement, gaze is an opt-in extra nothing yet renders, and taking heart and
-emotion down over a hand-edited `.env` is the wrong trade. The channel stays *enabled* while
-unavailable — reporting it as off would be a false claim about how the deployment is configured.
-
-Three things about that path are load-bearing:
-
-- **It samples before the Haar early-return.** A Haar miss says nothing about whether a mesh is
-  available, so returning early on one would make gaze silently depend on a detector it does not use —
-  and it would fail exactly on the faces that are hardest to find. `_sample_gaze` also never raises,
-  because it runs *before* the colour sample and an escaping exception would cost the heart channel
-  every frame.
-- **Emotion and gaze are two measurements, so they get two refusal fields.** `rejected_by` stays the
-  emotion refusal and `gaze_rejected_by` is its own, exactly like `rmssd_rejected_by` on the heart
-  block. Collapsed into one, a refused gaze on a well-classified face explains the wrong null.
-- **A reading is an emotion *or* a gaze.** `push_client` gated on `emotion is not None`, which was
-  right while emotion was the only measurement here; unwidened, a window where FER+ refused and the
-  landmarks did not is dropped. It still refuses when *both* refuse, or the all-null flood that gate
-  was added to stop comes back.
-
-**`gaze_x`/`gaze_y` are eye-in-head, so they need `head_yaw`/`head_pitch`/`head_roll` to mean
-anything about where a student is looking.** Point-of-regard is head pose plus eye offset; with only
-the second term, a student turned 30° away with centred eyes reads as `gaze_x ≈ 0`, identical to one
-facing the screen. `20260820000000` adds the three pose columns and `head_pose()` — already verified
-against a camera — fills them on the same landmark call. **A column here needs a field on
-`main.FaceSample` or it can never be stored**: `/api/signals/face` is the *only* writer of
-`face_signals` in either `INGEST_MODE` (the poller never writes it), and Pydantic drops undeclared
-keys silently — so the sidecar posts them, the endpoint discards them before the handler runs, and
-the column reads as "not measured" for ever. That happened to these three with every hop between the
-landmarker and the mapper wired and tested. `test_every_column_the_mapper_writes_can_be_supplied_by_the_endpoint`
-derives the check from the mapper so the next column cannot fail the same way. They refuse *independently* of gaze (near
-profile the fit refuses while the eyes are readable; a closed eye refuses gaze while the pose is
-fine), so `pose_rejected_by` is its own field beside `gaze_rejected_by`. Pose is deliberately **not**
-in the rollup: averaging an angle over a day is close to meaningless — ±40° of swinging averages the
-same 0 as never moving — so the useful aggregate is time-past-a-threshold, and that threshold belongs
-with whatever first renders it. Until then pose and gaze both expire with nothing summarising them.
-
-Gaze keys are **absent** when the channel is off, `None` + a reason when refused, a number when
-measured — the same three states as everything else here. 0.0 is a valid gaze (dead centre), so a
-refusal must never be recorded as one. A landmarker that raises stores
-`rejected_by="landmarker_failed"` rather than leaving the reading unset: unset reads as `no_reading`,
-which is the *warming-up* state, so a corrupt model would otherwise claim to be starting up for a
-whole session.
-
-**`face_signals` is the one signal table with two producers, so its counts are per *measurement*, not
-per row.** `rollup_signal_day`'s `'emotion'` channel takes `sample_count` as
-`count(*) FILTER (WHERE emotion IS NOT NULL)` (`20260819000000`) — unlike the cognitive and heart
-channels, which count every row in their table, because those tables have one producer each. A window
-where the landmarker read a gaze and FER+ refused is a real face row with no emotion in it, and
-counting it would make enabling gaze read as *emotion coverage improving* in the summary that
-outlives `expire_signal_rows`.
-
-Two halves that have to move together: `_weekly_signal_report`'s raw-day fallback counts the same
-thing, or `face_samples` means something different depending on whether the day has been rolled up
-yet. The row's *existence* still gates on `count(*) > 0` over all face rows — `expire_signal_rows`
-refuses a day with no rollup row, so a gaze-only day must still get one or its raw rows never expire.
-Asserted against a real stack in `scripts/assert_signal_rls.sql`, which is the only place this
-arithmetic runs: the backend suite drives `main.py` with a fake client, and CI applying the migration
-proves the SQL parses, not that it counts.
-
-**`attention` is still unproduced, and deliberately.** That is Phase 11 step 3, blocked on a labelled
-reference rather than on code: "attention" inferred from head direction is least valid for exactly
-this product's users, and unlike a FER+ label it renders as a percentage, which reads as objective.
-One adult is not a validation set for a construct whose failure mode is population-specific.
-
-**Every surface that rendered it has been removed** — the teacher's Live gauge, `SessionReview`'s
-ribbon field, the parent and teacher `face_attention` tiles, the weekly chart series and the LLM
-strategy prompt's sentence. The three-state logic meant none of them lied, but a tile that can only
-ever say `Calibrating` teaches a reader to ignore it, and it occupied space on the surfaces where
-trust matters most. `hasSignalSummary` on the parent dashboard dropped `face_attention` with them:
-that list tracks what the tiles can render, so leaving it in would admit a child whose only reading
-is attention to a card with no tile to show.
-
-**The column, the payload field and `face_geometry` all stay.** The measurement is still the plan;
-only the claims about it are gone. Fill it when there is a labelled reference, and put the UI back
-in the same change — not before.
-
-`face_geometry.py` is the arithmetic half: named landmarks in, head pose and iris offset out, pure
-numpy so CI can test it. `face_landmarks.py` is the other half — MediaPipe Face Mesh (Apache 2.0,
-models downloadable without an agreement, the constraint that blocked RhythmMamba) mapped onto those
-names, and the only file that knows a mesh index from a face part, so swapping detector rewrites it
-and nothing else. Both are wired into the capture loop (`_sample_gaze` in `face_ingestion.py`),
-as the section above says; an earlier line here said otherwise.
-
-**MediaPipe 1.0.0 removed `mp.solutions` — the entire legacy Solutions API.** `mp.solutions.face_mesh`
-raises `AttributeError: module 'mediapipe' has no attribute 'solutions'`, which reads like a broken
-install and is not one; the top level exposes only `Image`, `ImageFormat` and `tasks`. The Tasks API
-(`vision.FaceLandmarker`, `RunningMode.VIDEO`, `detect_for_video`) replaces it and still returns the
-478-point mesh, so `MEDIAPIPE_INDICES` is unaffected. Two consequences worth knowing before touching
-it: the model is **no longer in the wheel** — `_TasksMesh` loads `models/face_landmarker.task`
-(gitignored; override with `FACE_LANDMARK_MODEL_PATH`) and refuses with the fetch command when it is
-absent, since a silent download onto a student's laptop is not something to do by accident. And the
-Tasks call shape is adapted at *construction* rather than in `locate()`: `locate()` is the half with
-tests and its injected collaborator's shape is the legacy `process()`/`multi_face_landmarks` one, so
-porting the untested half to fit the tested half keeps every existing test on real code.
-
-**Its index table is unverified against hardware** — MediaPipe 1.0.0 ships no canonical mesh file
-and there is no camera in CI, so the mapping comes from published topology rather than measurement.
-A left/right swap would produce a *mirrored* gaze, which every aggregate reads as healthy. So the
-table is not trusted: `check_topology` re-derives what any real face satisfies (eyes above mouth,
-nose between the eyes, iris inside its own eye) and refuses a set that does not, turning a wrong
-index into a first-frame refusal. It cannot catch a mirror — a mirrored face satisfies every
-relation — so it needs the manual camera check. **Passed three times on 2026-08-12** (one adult,
-laptop webcam), across the `opencv-contrib-python` swap:
-
-| run | square on | eyes left | head left |
-| --- | --- | --- | --- |
-| first | `yaw 5.97 / pitch -13.76 / roll -4.40` | `gaze.x +0.442` | `yaw +32.97` |
-| after the opencv swap | `yaw 7.78 / pitch -6.69 / roll -3.61` | `gaze.x +0.457` | `yaw +41.26` |
-| with the emotion check | `yaw 7.74 / pitch -7.15 / roll -5.53` | `gaze.x +0.475` | `yaw +36.99` |
-
-That confirms the table's left/right, both sign conventions, and that the model handedness matches a
-real frame — the same three steps refused every frame an hour before the first run. Two things the
-later runs added, each the first of its kind:
-
-- **the detector cross-check** — 61 frames, mesh and Haar cascade both found a face on all 61. The
-  only time `face_roi.FaceLocator` has been exercised against a real face, and what clears the
-  opencv swap.
-- **the emotion path end to end** — crops accepted, FER+ classified, confidence 0.94–0.99. Every
-  other emotion test injects a fake ONNX session, so this is the first time the real model has run
-  on a real crop. **Plumbing only**: high confidence means it ran, not that it read the face right,
-  and FER+'s accuracy on this product's users is the weakness no self-check reaches.
-
-It says nothing about pitch/roll *accuracy* against a reference, and nothing about children. **Pitch
-at square on is posture, not a fixed offset** — −13.8, then −6.7 and −7.2 in the same setup within
-the hour. An earlier version of this note attributed it to camera height and the adult mean face,
-which would be roughly constant for one rig; the spread says the subject's head angle dominates. The
-20° tolerance absorbs it either way. `gaze.x` on the eyes-left step is the steadiest number here
-(+0.44, +0.46, +0.48), which is what makes it a usable signal rather than only a sign test. Re-run
-the check after any change to the index table or the canonical model:
-
-**Everything left of the camera is measured in image coordinates, and the frame is not mirrored**, so
-a subject's own left is the image *right*. Looking left drives `gaze.x` **positive**; turning the head
-left drives `yaw` **positive**; `pitch > 0` is the face pointing *up*. `CANONICAL_FACE` must therefore
-put the subject's left at **positive x** — it did the opposite until 2026-08-12, and because the fit
-solves for a rotation and a rotation cannot reflect, a person sitting perfectly square on was refused
-`implausible_pose` on 120 frames of 120. **Round-trip tests cannot catch this**: rotating the model
-and recovering the rotation is self-consistent under either handedness, which is how 32 of them
-passed over an unusable model. Tests that pin it construct a frame from the image convention instead
-(`test_the_model_handedness_matches_a_real_frame`).
-
-**`gaze` cannot detect a left/right swap and must never be described as doing so.** Both eyes are
-averaged in image coordinates and `_eye_offset` divides by an absolute width, so permuting the labels
-returns a bit-identical number. `head_pose` is the adjudicator — a mirrored table makes the
-correspondence unfittable, so it *refuses* rather than answering wrongly.
-
-```bash
-python scripts/verify_landmarks.py --gui
-```
-
-Three prompted steps with automatic verdicts — square on, eyes left, head left — because a check
-that costs twenty minutes of assembling a camera loop is a check nobody runs. Records no video; `--gui` previews it,
-deliberately **unmirrored**, since the whole question is which way is left. `capture_face_video_ecg.py`
-has the same flag for a different reason — it *does* write frames, so its preview is about not
-wasting a five-minute capture: the face box, the 128×128 crop the model will actually see, and the
-counters. Neither preview adds a way to persist a frame, and a test on each asserts that.
-Steps 2 and 3 test different things, not two halves of one thing: step 2 is iris tracking and the
-image-x sign, step 3 is the pose fit's handedness. **Step 2 cannot detect a mirror** — see above —
-and it claimed to until the run that found all this. It deliberately scores no attention:
-the geometry has a right answer and can be checked against one, the inference to "attending" is a
-judgement, and keeping them apart is what lets the judgement be revised without re-deriving
-anything.
-
-It uses an orthographic fit, **not `cv2.solvePnP`**, because solvePnP needs camera intrinsics we do
-not have — a guessed focal length yields a systematically wrong pose that still looks like a face
-turning. The trade is that perspective is ignored, so it degrades at close range and large angles.
-**Yaw is measurable only within ±90°**: past that the Euler recovery returns the other branch of a
-two-fold ambiguity no rotation matrix can resolve, corrupting pitch and roll by 180° as well, so it
-refuses with `implausible_pose` rather than reporting a mirrored angle.
-
-**The attention score is the part that still needs a measurement**, against a reference, before
-anything reaches a parent: "attention" inferred from head direction is least valid for exactly this
-product's users, and unlike a FER+ label it renders as an objective-looking percentage. A child
-looking away while thinking is not inattentive. One adult is not a sufficient validation set here —
-the failure mode is population-specific — so that step is blocked on a labelled recording rather than
-on code.
-
-**`identity_confidence` was retired instead (#86, `20260812000000`) — do not add it back without a
-consent decision first.** Matching a child's face against a stored identity is a *different purpose*
-from what the camera consent asks about ("works out how they are finding the questions"), so it needs
-its own consent channel and copy before it needs a model. Its removal also closed a live footgun:
-`face_signals` carried two confidences and `signal_fusion`'s face channel read the wrong one, so a
-clearly identified face with a garbage FER+ label withheld a difficulty increase while a
-well-classified expression on a poorly identified face was discarded, both silently.
-`emotion_confidence` keeps its qualified name for that reason.
-
-## Database — Postgres functions are world-executable by default
-
-**Every `CREATE FUNCTION` in the `public` schema is EXECUTE-able by every logged-in user unless
-you explicitly revoke it, and the usual boilerplate revoke does not catch it.**
-
-Two things stack up:
-
-1. Postgres grants `EXECUTE` on new functions to `PUBLIC` automatically (unlike tables).
-2. Supabase additionally ships `ALTER DEFAULT PRIVILEGES` granting `EXECUTE` to `anon` and
-   `authenticated` **by name**.
-
-Explicit grants to a named role survive a revoke aimed at the `PUBLIC` pseudo-role, so
-`REVOKE ALL ... FROM PUBLIC` alone leaves `anon` and `authenticated` still holding `EXECUTE`.
-Verified against `pg_proc.proacl` on a local instance — without the named revokes the ACL comes
-back as `{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,...}`.
-
-`scripts/check_function_grants.py` enforces this, inside the `Database grants` CI job (which runs
-both grant scripts; there is no separate function-grants job). It matches by
-function **name**, not signature, so it catches a forgotten revoke block but not a migration that
-adds an overload and revokes only the old signature — review still has to. Deliberate exceptions go
-in its `ALLOWLIST` with a reason.
-
-**Don't try to fix this with `ALTER DEFAULT PRIVILEGES`.** Making `EXECUTE` deny-by-default is the
-obvious move and it does not work here: tested on a local stack 2026-08-04, the `pg_default_acl` row
-records correctly and the `anon`/`authenticated` named grants do disappear from new functions, but
-Postgres's `PUBLIC` grant (`=X`) survives and both roles can still execute. Reproduced with three
-throwaway functions, with the grantees combined in one statement and separated, and with no event
-trigger re-granting. A default that silently fails to deny is worse than none.
-
-### The same trap applies to tables — `GRANT` does not narrow, only `REVOKE` does
-
-Supabase's `ALTER DEFAULT PRIVILEGES` grants **every** table privilege to `anon` and
-`authenticated` by name in `public`, so a new table arrives as
-`anon=arwdDxtm,authenticated=arwdDxtm` before your migration grants anything. Adding
-`GRANT SELECT` on top is a no-op that reads like a restriction.
-
-RLS covers most of it — with no policy for a command, that command is denied — but **RLS does not
-filter `TRUNCATE`**. Verified on a local stack: as `anon`, `INSERT` is blocked and `TRUNCATE`
-succeeds. PostgREST does not expose `TRUNCATE`, so the anon key in the frontend bundle is not a
-path to it; it needs a direct Postgres connection. "Not reachable from the client we ship" is a
-weaker property than the one a narrow grant appears to claim.
-
-So for a new table, revoke before granting:
-
-```sql
-REVOKE ALL ON TABLE "public"."my_table" FROM "anon";
-REVOKE ALL ON TABLE "public"."my_table" FROM "authenticated";
-GRANT SELECT ON TABLE "public"."my_table" TO "authenticated";
-GRANT ALL ON TABLE "public"."my_table" TO "service_role";
-```
-
-Sequences need the same treatment. `20260805110000` swept every remaining table, and
-`scripts/check_table_grants.py` enforces it as part of the `Database grants` CI job.
-
-**What to grant back is per-table judgement, and the lint deliberately does not check it — which
-means a judgement call can go stale as the write path it was based on moves, and nothing catches
-that.** `math_topics` and `questions` have `USING (true)` public-read policies, so `anon` keeps
-`SELECT` on those two and nothing else anywhere. Every other table written only by the backend gets
-`SELECT` for `authenticated` and nothing more.
-
-`sessions` was the one that had been missed, until `20260817000000`. It kept `authenticated=arwd`
-next to a `FOR ALL` own policy, so a student could rewrite any column of their own sessions through
-PostgREST. Found via `chart_paths` — a path pointed at another child's chart object and then signed
-— but `started_at`/`ended_at` drive the rollup's day bucketing and the expiry cutoff, and a DELETE
-there cascades all three signal tables. **RLS narrows which rows a command touches, never which
-commands exist**, so an own-row policy is not a substitute for withholding the grant. Nothing in
-`frontend/src` reads or writes `sessions` directly; they reach the browser through the backend.
-
-**`class_memberships`, `classes`, `profiles`, `parent_child_links`, `user_math_performance`,
-`user_stats`, and `session_answers` were the next seven, until `20260905000000`.** This file used to
-say `Adaptive.jsx:290` upserts `user_math_performance` directly through PostgREST, which is what
-justified that table's grant — that was true once, but the write moved server-side in
-`20260825000000_record_topic_attempt.sql`, and this file was never updated to say so. A repo-wide
-grep of `frontend/src` for `.insert(`/`.update(`/`.upsert(`/`.delete(` against the Supabase client
-returns zero matches today: every write in this app, `profiles` included (`PUT /api/profile/me` uses
-the backend's service-role client), goes through the backend. All seven grants were live capability
-nothing used, reachable by a student's own JWT through PostgREST, constrained only by each table's
-`FOR ALL "own"` policy — which, per the reasoning two paragraphs up, does not withhold `TRUNCATE`
-either. **A stale "the frontend needs this" comment is exactly as dangerous as the missing revoke it
-excuses — re-verify the claim against the current write path before trusting an old grant rationale,
-this file's own included.**
-
-### When adding a function
-
-Revoke from the named roles, then grant only what the caller needs:
-
-```sql
-REVOKE ALL ON FUNCTION "public"."my_function"("uuid", integer) FROM PUBLIC;
-REVOKE ALL ON FUNCTION "public"."my_function"("uuid", integer) FROM "anon";
-REVOKE ALL ON FUNCTION "public"."my_function"("uuid", integer) FROM "authenticated";
-GRANT EXECUTE ON FUNCTION "public"."my_function"("uuid", integer) TO "service_role";
-```
-
-Also:
-
-- **Prefer `SECURITY INVOKER`** (the default). A `SECURITY DEFINER` function returning rows or
-  aggregates over student data is a ready-made way to read anyone's data. As invoker, RLS still
-  applies if the function is ever reached by a lower-privileged role.
-- **If you do need `SECURITY DEFINER`, pin `SET search_path`.** An unpinned definer function is
-  the classic privilege-escalation vector.
-- **End the migration with `NOTIFY pgrst, 'reload schema';`** so PostgREST picks up the new RPC.
-- **`CREATE INDEX CONCURRENTLY` is not available in migrations** — Supabase wraps each migration
-  in a transaction. Plain `CREATE INDEX` takes an `ACCESS EXCLUSIVE` lock while building. If a
-  table is already large, build the index manually with `CONCURRENTLY` outside a transaction
-  first; the `IF NOT EXISTS` in the migration then no-ops.
-
-### When changing an existing function's signature
-
-Adding a parameter creates a **new** function rather than replacing the old one, so the migration
-has to `DROP FUNCTION` the previous signature explicitly — `CREATE OR REPLACE` alone leaves it
-behind as an overload that is still granted, still callable, and unaware of whatever the new
-parameter controls. Keeping both is not an option either: with named-argument RPC calls that
-match more than one signature, Postgres rejects the call as ambiguous. The new signature also
-carries a fresh ACL, so repeat the revokes and the `service_role` grant against it.
-
-That leaves a window. Backend code calling the new signature against a database that has not run
-the migration yet gets PostgREST's `PGRST202`, which the callers here catch — so the failure is
-silent, and the symptom is empty data rather than an error. **Apply the migration before rolling
-out the code that depends on it.**
-
-Where an in-between state would be visible to a user, a temporary retry against the old signature
-is a reasonable bridge — but only where doing so cannot violate what the caller asked for, and
-only if it is removed once the migration is applied everywhere. Left in, it is dead code that
-looks live, and it makes any *later* schema mismatch — a bad rollback, an environment built from
-an old dump — degrade to a quietly wrong answer instead of an error. `_summary_rpc` in
-`Website/AdaptiveLearning/backend/main.py` carried one for `p_include_face`; it was removed in
-#48 once `20260801000000` was applied, and the git history is the worked example.
-
-### Do not "fix" the RLS helper functions
-
-`is_member_of_class` and `is_teacher_of_class`
-(`supabase/migrations/20260709154104_teacher_read_policies_and_recursion_fix.sql`) are
-`SECURITY DEFINER` **and deliberately granted to `anon` and `authenticated`**. That is required:
-RLS policies evaluate them as the calling user, so revoking the grants breaks the policies they
-exist to serve.
-
-They are safe by construction — both are `auth.uid()`-scoped booleans with no parameter to pivot
-on (they answer "am *I* in this class", not "is user X"), and both pin
-`SET search_path TO 'public'`.
-
-Audited 2026-08-04 against `pg_proc.proacl` on production and a local stack: five functions in
-`public`, and the two above are the only ones granted to an application role. `handle_new_user` was
-the last permissive holdout — harmless, since it returns `trigger`, which Postgres refuses to invoke
-directly and PostgREST will not expose as RPC — and `20260804000000` revoked it anyway rather than
-leave a permissive ACL sitting next to the ones that matter. Re-audit with:
-
-```sql
-SELECT p.proname, p.proacl
-FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-WHERE n.nspname = 'public';
-```
-
-## Ingestion is push or pull, and which one is a setting rather than a guess
-
-`eeg_poller` runs **inside the backend** and polls the sidecar over HTTP. That works only because
-`start.ps1` puts both on one machine. The camera breaks it: the sidecar is a per-student local
-process, and a hosted backend has no route to a student's laptop. So the sidecar POSTs to
-`/api/signals/*` with the student's own token instead.
-
-`INGEST_MODE` (`pull`, the default, or `push`) says which is live. **Explicit because the failure is
-silent otherwise** — a poller that cannot reach a sidecar produces no rows, raises nothing, and
-leaves a session looking live: indistinguishable from a headband nobody put on. Deploy the backend
-anywhere but the student's machine and every session degrades that way with nothing to read.
-
-Under `push`, `eeg_poller.start` raises `PushModeError`. `INGEST_MODE` binds **the poller only** —
-the ingest endpoints stay open in both modes, so a developer can hand-post a batch under `pull`.
-That is why the double-write warning asks `eeg_poller.claim_double_write_warning(session_id)`, which
-is the real condition, rather than reading the mode as a proxy for it.
-
-**Every endpoint that probes the sidecar checks the mode first, and there are eight of them.** "EEG
-service is not running on port 8001" is true under `push` and entirely misleading — it reads as a
-fault when the deployment simply does not work that way. Two shapes:
-
-- **Returns a payload** (`/api/eeg/{health,status,debug,devices}`) — the liveness field is `None`,
-  never `False`, and `ingest_mode` rides alongside so the caller can say *why*. `None` because "not
-  probed in this deployment" is a different claim from "probed and down", and **a consumer that
-  branches on falsiness renders both identically** — which is exactly how the outage string survived
-  in the debug panel after the endpoint behind it was fixed. Same three-state rule as the reporting
-  helpers. The panel no longer reads this endpoint under push at all — `sidecarDebug` assembles the
-  same shape from the sidecar the page can actually reach — so its `available` there is a **real
-  boolean, observed rather than proxied**, and the panel tests it with `=== false`. Two-valued and
-  three-valued sources under one field name is a trap of its own: `!available` would read the
-  backend's "not probed" as an outage again, one layer further out. Deriving it from the payloads
-  is the other wrong answer — an idle sidecar answers `data: null` and a headband-less one answers
-  an empty muse block, both ordinary, so **a payload that is empty in normal operation cannot stand
-  in for reachability**. Hardcoding it `true` made the "not answering" line unreachable and drew a
-  panel of blanks for a sidecar that was not running.
-- **Raises** (`/api/eeg/{start,muse/refresh,muse/connect,muse/disconnect}`) — call
-  `_refuse_under_push(what)` in `main.py`, *before* `eeg_client.is_alive()`, or the misleading 503
-  wins the race. Don't write the 409 out by hand; one inline copy already drifted from the helper
-  that claimed to have replaced it.
-
-**Those four refusals left push with no pairing path, which is why the browser now has one.** The
-backend is remote under push by definition, so refusing is right — but nothing replaced it, and the
-sidecar's own start/scan/connect routes were admin-only while the browser holds the *learner* token.
-Every push deployment therefore answered 401 to the one channel push exists for. `sidecar.js` now
-calls them directly (`deviceStart`, `museRefresh`, `museConnect`, …) and `toggleHeadband` picks the
-transport from `headband.pushMode` — one adapter, the same seven steps, because a second copy of the
-pairing sequence would drift and that sequence is where the ordering matters.
-
-**`require_local_controller` is what admits it, and it is scoped to the mode on purpose.** Admin in
-both modes; the learner token *only* when `PUSH_ENABLED`. Under pull the browser gains nothing,
-because the backend is the legitimate controller there. What it grants is bounded by what the
-learner token already was — it ships in the bundle and the sidecar is on loopback, so it separates
-pages in one browser, not users, and any page that could call `/api/v1/push/start` could already make
-the sidecar stream a student's signals. Pinned by `test_under_pull_the_learner_token_may_not_drive_the_hardware`;
-removing the mode check fails exactly that.
-
-**`start.ps1 -Camera` selects push, and without it the mode goes back to pull.** Written on both
-branches like the `FACE_*` keys and for the same reason: a stale `INGEST_MODE=push` from a camera run
-would disable the poller on a later headband-only run, and a headband recording nothing while the page
-says "streaming" is what explicit modes exist to prevent. The camera has no choice in this —
-`/api/signals/face` is its only writer, so a camera configured under pull captures frames and stores
-nothing.
-
-**"Before" means before every sidecar call, not just before the liveness probe.** `/api/eeg/status`
-had the check and still 500'd under push, because `get_muse_status()` ran a few lines above it.
-`eeg_client._learner_headers()` raises when `EEG_API_TOKEN` is unset — the normal state of a hosted
-push deployment — and it raises *outside* the request try, so the endpoint dies before reaching the
-check that exists to protect it. Test stubs for `eeg_client` must therefore **raise** from
-`get_muse_status`, as `_StubClient` in `test_ingest_mode.py` does: a stub returning `{}` modelled a
-deployment that does not exist and hid this for two rounds.
-
-A ninth endpoint needs the same treatment and an entry in `_MODE_AWARE` or `_MODE_AWARE_RAISING` in
-`backend/tests/test_ingest_mode.py`, which parametrises both push and pull over every member. This
-was found one endpoint at a time across five review rounds because each site was written by hand and
-the test listed only the endpoints someone had already remembered.
-
-Both paths share `signal_mapping.py`. The mapping used to live in `eeg_client`, which is the pull
-*transport*; the push path would have had to import an HTTP client it never calls to reach a pure
-function, or keep a second copy — and a second copy of a unit conversion is how one path ends up
-storing percentages while the other stores ratios.
-
-**What may be recorded is part of that shared mapping, not of either caller.** `eeg_quality()`
-answers `no_signal` / `contact_poor` / `ok`, and all three mappers return `None` for a channel that
-produced nothing:
-
-- **`no_signal`** — a disconnected headband reports *zeroed* scores. Zeros are worse than nulls:
-  aggregates average them and exclude nulls, so a headband on the desk read as sustained zero focus
-  rather than as no data. That is the can't-tell-no-data-from-zero failure arriving through the
-  *write* side, where none of the reporting rules can see it.
-- **`contact_poor`** — keep the row, null the eight measurement columns. "Recording but unable to
-  measure" is not "no session", and `class_live` derives staleness from the newest row's `ts`.
-  Only `signal_quality == "poor"` **with `quality_basis == "contact"`** counts; the legacy heuristic
-  says "poor" for any focused student.
-
-These rules lived inline in `eeg_poller` and were absent from the push path, so the same unworn
-headband wrote nothing under pull and a zeroed row per tick under push. Anything of this kind
-belongs in the mapper: it is the only place both deployments are guaranteed to read.
-
-### Headband heart rate is a held window, not a per-tick reading
-
-The headband is the primary heart source (the camera is emotion-only), and it reaches
-`heart_signals` through `optics_processing.build_heart_record`. Four things about it are load-bearing:
-
-- **Nothing arrives unless `MUSE_ENABLE_OPTICS` is on**, and it is still off by default. The flag is
-  narrower than its name: the OPTICS/PPG listeners are registered unconditionally, so "emits no
-  optics" stays distinguishable from "never asked". What it gates is moving a capable headband off
-  `PRESET_21`, and **two separate things argue for leaving that alone**. The bandwidth cliff is the
-  known one — 16 CH at 64 Hz drops the BLE link, and the default `1035` rung is the safe side of it.
-  The other is the reason not to flip the default now that heart rate is a real feature: changing
-  preset at all is an *EEG* risk, since it moves bit depth 12 → 14 and on some rungs the channel
-  count, and a silent EEG regression would be blamed on whatever shipped beside it. With the flag
-  off a session records no heart rate and every window is refused as `no_samples` — the honest
-  answer, not a fault.
-  (`connect_named` setting `PRESET_21` unconditionally is not an override: `get_model()` returns
-  `MU_02` for anything post-2018 until `CONNECTED`, so the real choice happens on the connection
-  callback in `apply_model_preset`.)
-- **The window is placed on `seq`, never on `mono_ts_ms`.** The bridge's stamp records BLE *delivery*
-  — ~9% of samples share one with their predecessor and the rest arrive in bursts — so `seq` is the
-  only real sample index, and the stamps are used solely to measure an average rate across the whole
-  window, where the batching averages out. That rate is `seq`-span over elapsed seconds, not
-  `len(rows)`: with samples dropped, counting rows reports a rate low by exactly the loss and scales
-  every bpm down with it. This is the opposite call to `rgb_window`'s median-of-intervals, and the
-  reason is the clock, not preference.
-- **Sample *loss* is gated separately from sample *rate*, and only the second is obvious.** `fs`
-  comes from `seq`, which counts what the headband **sent**, so it reads a healthy 64 Hz no matter
-  how few samples arrived; `window_coverage` is elapsed span, which the survivors still bracket. A
-  window can therefore pass both while being almost entirely `np.interp` output — and interpolation
-  manufactures the smooth periodicity autocorrelation rewards, so the result is a *confident* wrong
-  rate. Measured on the resting fixture (true ~68 bpm): one sample in 32 gave **55.8 bpm at
-  confidence 1.00**, one in 64 gave **44.0**. So `received_rate_hz` — real samples per second of
-  span — carries the same `MIN_SAMPLE_RATE` Nyquist bar, and `completeness` rides on the row.
-  Anything below 10 Hz effective is refused as `effective_rate_too_low`, including windows that
-  happen to still be right: nothing available here separates "sparse but above Nyquist" from
-  "aliased", and a refusal costs one window where an acceptance costs a number on a parent's chart.
-- **25s window, recomputed every 10s, then *held* on the payload.** The 10s step is what
-  `MAX_BPM_CHANGE_PER_S` was validated against. Holding is what lets a 1 Hz poller see every reading;
-  emitting for one tick would have push record everything and pull record almost nothing.
-  **An EEG no-data tick drops the held block but must not restart the cadence**
-  (`_drop_held_heart_block`, not `_reset_heart`). `drain_samples` raises whenever no EEG sample
-  arrives in its timeout, so flapping contact takes that path repeatedly; restarting the clock there
-  re-stamps the same 25 s of optical signal every tick, and since both writers dedupe on `ts` the
-  unique key cannot collapse those — up to 4 near-identical rows a second. It leaves the tracker
-  alone too: EEG dropping out says nothing about the optical emitters, and the anchor is what
-  catches octave errors.
-- **A session's first heart reading is withheld until a second window agrees.** The window right
-  after motion — putting the headband on, sitting down after exercise — produces a *confident,
-  unanimous, wrong* rate, and no in-window test separates it from a real one: agreement, out-of-band
-  power and the peak margin were all tried and all fail, and one candidate discriminator rejected
-  every genuinely fast rate along with it. So the tracker asks a different question — is the
-  periodicity still there a step later — and holds an unanchored candidate until it is. Motion
-  settling is not; a heartbeat is. An unusable window in between discards the candidate rather than
-  bridging it. **Re-acquisition after a dropped lock goes through the same rule**, and needs it most:
-  a lock is dropped because two windows disagreed with it, so whatever re-acquires comes from exactly
-  the population this distrusts — adopting it directly was the same bug one path over. Costs one
-  usable window of latency and refuses nothing: a fast rate is published a step late.
-  `rejected_by="unconfirmed_anchor"` says a rate was *withheld*, which is not `no_signal`.
-- **The block carries its own `ts`, and both writers key on it.** Held, one measurement arrives on
-  ~40 consecutive ticks. `map_heart_to_heart_signal` prefers `heart["ts"]` over the tick's, the push
-  client dedupes per `(device, source)`, and the poller upserts on
-  `heart_session_source_ts_key`. The camera's block has no `ts` and still takes the tick's.
-- **`EEG_SOURCE=sim` produces a heart block since 2026-09-16.** It did not — the simulator modelled
-  no optical channel, and a simulated pulse would be a number on a parent's chart with nothing
-  behind it — and the classroom simulation needs the heart path exercised end to end, so
-  `SimulatedMuseIngestionAdapter.optics_window` now synthesises one and it goes through this
-  same, unmodified `build_heart_record`. See *The simulator pairs like a headband* for what it
-  models; `bridge_mode: python_sim` on the payload is the only mark of it.
-
-**A payload key needs a field on `InterpretedEegData` or `/api/v1/state` deletes it.** `Envelope.data`
-is typed `InterpretedEegData | CameraData | None`, so the sidecar's snapshot is serialised through a
-declared model and **pydantic drops undeclared keys silently** — the same trap as `main.FaceSample`
-on the website side, one layer further out. `heart` was undeclared, so under `INGEST_MODE=pull` (the
-default, and `eeg_client.get_state` reads precisely that endpoint) a headband on an optics preset
-could never record a heart rate. Every stage upstream worked: window built, anchor confirmed, block
-held and stamped, then deleted at the boundary with nothing raised. Measured on hardware 2026-08-15
-— 2697 optics packets at 64.3/s, and no `heart` key on 227 consecutive polls.
-
-It hid because **push bypasses the envelope** (`push_client` posts `snapshot()` directly) and every
-heart test asserts on `session.latest_payload`, the dict *before* the model — so the channel was well
-covered on both sides of the one layer eating it. `tests/test_state_envelope.py` derives the check
-from `stream_manager`'s source so the next key cannot go the same way.
-
-**`features` is its own nested model, and the same trap one level down.** That source-derived
-check sees top-level keys only; a diagnostic added to `SignalProcessor.update`'s return dict has
-to be declared on `schemas.FeatureData` or `/api/v1/state` drops it just as silently.
-`test_every_feature_key_the_processor_returns_is_declared_on_the_model` derives that set by
-calling the processor. `focus_log_ratio` / `calm_log_ratio` — the raw, pre-baseline ratios, `None`
-on a frame with no usable bands — were the first, added for the accuracy capture
-(`scripts/capture_eeg_reference.py`, HANDOFF.md Phase 0).
-
-**The bridge accepts one TCP client** (`listen(…, 1)`), so nothing can tap the raw 256 Hz stream
-while the sidecar holds it. Every frame does reach the sidecar — the queue is drained in full
-each tick, then only `samples[-1]` is scored — so a consumer of the raw stream belongs inside the
-sidecar's drain, not on a second socket. That is why the capture script's `--source bridge`
-mode is a separate run from its sidecar mode.
-
-### Optics measured against EEG: the two coexist at the 4 CH rung
-
-Run 2026-08-15 on a MuseS-0FFC (model `MS-03`), `./start.ps1 -Muse -Optics`, default `PRESET_1035`:
-
-| | `PRESET_21` (no optics) | `PRESET_1035` (4 CH optics) |
-| --- | --- | --- |
-| good EEG channels | 63.8% | 60.7% |
-| link drops in 3 min | — | 0 |
-| optics rate | n/a | 64.3 packets/s |
-
-So **optics is not what degrades EEG contact** — the earlier working hypothesis, formed across
-several failed attempts, was wrong. The 16 CH cliff documented above is real and separate; the
-bottom rung holds. Residual `is_good` failures with `hsi [1,1,1,1]` are dry electrodes, not
-bandwidth.
-
-**Verify the flag reached the bridge by reading the process, not the launcher.** Every earlier
-"phase B" measured a bridge that never had the variable — the flag was set in a string the outer
-shell expanded first, and the run looked exactly like optics being harmless. The bridge is a C++
-process reading `getenv`, so the check is its own environment block (`NtQueryInformationProcess` →
-PEB → `ProcessParameters`), or `requested_preset`/`active_preset` on `/api/v1/muse/status`, which
-must both read `PRESET_1035`. `active_preset: ""` means the device never applied one.
-
-**`rmssd_ms` is an enrichment, and a null one is the normal case.** `build_heart_record` derives it
-through `hrv_processing.estimate_hrv` over the same 25s window and the same rate — sharing them is
-required, not incidental, so the two cannot disagree about whether a window is usable. Roughly one
-window in five is gated out even seated and at rest, so **nothing may make a heart rate conditional
-on RMSSD being present**: `stress_score` is defined on heart rate alone, and a score whose
-definition shifted when an input dropped out would be unreadable across a session. The refusal has
-its own field (`rmssd_rejected_by`, carried into `raw`) precisely so it is never confused with
-`rejected_by`, which says whether there is a reading at all.
-
-Validated against six simultaneous watch ECGs, seated: r = 0.75 at the 30s window it was captured
-on. **The production 25s window has its own numbers** — r = 0.78, bias −3.1 ms, RMS 5.2 ms, worst
-window 21% against 15% — measured in `test_optics_rmssd.py` rather than carried across, because a
-shorter window has fewer beats to average. Don't quote the 30s figures for the shipped path.
-
-**All of that depends on more than one optical channel being alive, and a count-based quorum is how
-it silently stops.** RMSSD is only usable because beats are agreed across channels and timed by
-averaging the channels that saw each one; with one live channel both steps become the identity and
-what is recorded is the raw per-channel detector, which ranged 29–246 ms across four channels
-watching the same heart. Run single-channel against the six ECG windows it reports **all six, never
-refusing, at up to +75% error**. Nothing downstream catches it — `estimate_window`'s `agreement`
-term is 1.00 by construction against one waveform, the same inapplicable-confidence trap as camera
-rPPG — so `consensus_beats` refuses below `MIN_POPULATED_CHANNELS` and scales its quorum as
-`CONSENSUS_FRACTION` of the channels that produced detections. A fixed count is what to avoid: 3
-was tuned on 4 channels and would be 3-of-16 on the wide optics presets.
-
-Beat coverage is bounded **both ways** for the same reason. The lower bound catches missed beats;
-without an upper one a double-detected notch or an octave-low rate is indistinguishable from clean,
-since every count beneath it looks healthy. Genuine 4-channel windows reach 1.054 — a 25s window at
-70 bpm expects 29.2 beats and can honestly hold 30 — so the bound sits at 1.15, above real data and
-well below the 1.20–1.26 that single-channel runs produce.
-
-`sqi` and `stress_score` are still **not derived** on either path; those columns stay null, so
-`heart_signals.stress_score` has no producer — don't read an empty tile as a broken query.
-
-**The poller's heart write is consent-gated, and that gate is the only one there is.** It writes with
-the service-role client, so neither RLS nor `/api/signals/heart`'s per-sample check reaches it.
-`eeg_poller.set_heart_consent_check(fn)` is wired from `main` at import; `fn(user_id, source)` is
-built from the same `_may_record` + `_permitted_heart_sources` pair the endpoint uses, so the two
-paths cannot disagree about one student — and because `_permitted_heart_sources` reads the composed
-`record_*` flags, the school year applies without either site mentioning it. Unwired it denies, a
-failed read denies, and it is re-read on the same `CONSENT_RECHECK_SECONDS` cadence as EEG, so a
-mid-lesson withdrawal lands without waiting for the session to end.
-
-**`set_consent_check` returns a bool, so it cannot say *why*.** A withdrawal, a closed school year
-and a failed read of either all arrive as `False`, and the poller's own log used to assert the first
-of them. `set_consent_reason_check(fn)` is the optional companion that supplies the sentence for
-`start()`'s refusal and the log line; it is wired to `_poller_may_record_eeg_reason`, which reuses
-what the bool check just computed rather than re-reading `_may_record` — a second read would cost
-another round trip on every refused start and could return a different verdict from the one it is
-explaining. Unwired, `start()` falls back to a consent-only message, so a test that stubs
-`_consent_check` must stub this too or it reaches a real database. Per *source*, not per channel: a student who allowed the headband and refused the
-camera has consented to `muse_optics` and not to `rppg`.
-
-**On the pull path, EEG consent gates the heart channel as well — deliberately, and only there.**
-`_record_heart` runs inside the poller loop, and withdrawing `eeg` stops the poller outright, so it
-stops headband heart recording with it. `start()` refuses without EEG consent for the same reason, so
-a student who allows `headband_optical` and declines `eeg` records no heart rate under `pull` at all.
-That is accepted rather than overlooked: it errs the safe way — the path records *less* than consent
-allows, never more — and undoing it means a poller that keeps running with only its cognitive write
-switched off, which is a session reporting EEG stopped while still holding the device. A feature, not
-a fix; raise it as one. **Push is unaffected**, since `/api/signals/heart` checks per source and
-never consults EEG consent, so this is a real difference between the two deployments and the one
-place they are knowingly allowed to differ. Pinned by
-`test_withdrawing_eeg_consent_stops_the_heart_channel_too`.
-
-### The sidecar's push client does no arithmetic
-
-`EEGResearch/src/app/services/push_client.py` is the other half, enabled by `PUSH_ENABLED` with
-`BACKEND_URL`. It cannot import `signal_mapping` — different package — so instead of converting, it
-sends the sidecar's payload **whole**: `/api/signals/cognitive` accepts a sensor-shaped sample
-(`features`/`bands`, 0..100) as well as the flat already-mapped one, and maps the first itself. That
-keeps the /100 conversion in one place reached by both paths. Don't add a divide to the sidecar.
-
-Three properties worth not breaking:
-
-- **The student's bearer token arrives from the browser and lives in memory for one session.** It is
-  never logged or written to disk — this process runs on a student's laptop. `stop()` clears it, and
-  changing session drops the old queue, since those samples belong to a session the new token may
-  not own.
-- **The queue is bounded and drops oldest, counted.** `deque(maxlen=…)` evicts silently, and an
-  uncounted eviction is a signal path losing data with nothing anywhere to say so. That applies to
-  *returning* a failed batch too — `extendleft` evicts from the far end, i.e. the newest — which is
-  why restoring goes through `_restore` rather than straight onto the deque.
-- **A failure in one channel must not cost the others.** Each channel is drained immediately before
-  its own POST, not all three up front; the first version re-raised on the first failure and threw
-  away two already-popped batches.
-- **The sampling hook emits `snapshot()`, not `latest_payload`** — `bands` and `ingestion` are
-  assembled in `snapshot()`, so emitting the raw payload gave push-ingested rows null band powers
-  while pull-ingested ones had them — and it does so via `to_thread`, because `snapshot()` reaches
-  `get_ingestion_meta()`, the one call the sampling loop already offloads for blocking.
-- **A rejected window is not a reading.** `build_face_record` and `build_heart_record` always return
-  a dict, with `emotion: None` / `bpm: None` and a `rejected_by`. Enqueue on *the reading*, not on
-  the block's presence, or a 4 Hz session writes ~14k all-null rows an hour, every one counted as a
-  sample by the aggregates. `source` alone does not test it: the heart block sets `rppg`
-  unconditionally.
-- **Nothing after `raise_for_status()` may raise, and no POST is cancelled mid-flight.** The rows are
-  committed by then; a throw — or a `task.cancel()` during the request — restores the batch and the
-  re-post duplicates them. All three signal tables carry a dedupe key now (`20260914000000` added
-  the last two), so a re-post is a no-op rather than a second copy — but this rule stands on its own
-  and should not be relaxed against it: the key makes the *rows* idempotent, and nothing makes the
-  local accounting so. `stop()` therefore *asks* the loop to finish and awaits it, cancelling only
-  once `SHUTDOWN_BUDGET` is spent.
-  A batch whose fate is unknown is `unaccounted`, which is neither `recorded` nor `dropped_locally`.
-- **`stop()` is bounded by the clock.** An attempt cap is not a bound a reader can convert into
-  seconds; 12 attempts × 3 channels × a 4 s timeout is ~144 s on a Ctrl-C.
-
-The **browser** side has the matching rule: effect cleanup does not run on a tab close or hard
-refresh, so `Adaptive.jsx` also stops the sidecar from a `pagehide` listener via `stopPushOnUnload`,
-which uses `fetch(..., {keepalive: true})`. Without it the sidecar keeps the student's token and
-keeps recording for up to an hour after they walked away — a consent problem, not untidiness.
-`sendBeacon` cannot be used: it cannot set an `Authorization` header.
-- **Delivery is counted from the backend's `inserted`, not from what was sent.** The endpoint drops
-  samples for a sensor the student declined; counting sent would report a healthy session that
-  recorded nothing.
-
-`/api/v1/push/start` refuses with 409 when `PUSH_ENABLED` is false rather than becoming a second
-writer alongside a poller. The original reason was that `cognitive_signals` had no dedupe key, so
-both running meant every EEG sample landed twice with no error; `cog_session_ts_key`
-(`20260914000000`) closes that, and every writer upserts against it. **The refusal stays**, because
-two writers on one channel is still a deployment nobody chose — the key means the overlap now costs
-duplicate work rather than corrupt data, which is a reason to keep the guard honest rather than to
-drop it.
-
-### The browser calls the sidecar directly, and two tokens are in play
-
-`frontend/src/lib/sidecar.js`. Under push the hosted backend cannot reach a student's laptop, so
-lifecycle control comes from the page: it calls `http://127.0.0.1:8001` itself. An HTTPS page may do
-that — loopback is exempt from the mixed-content block, measured with a negative control on
-Chromium 148; evidence and limits in `EEGResearch/docs/LOOPBACK_FROM_HTTPS.md`.
-
-**Don't conflate the two credentials.** `VITE_EEG_LOCAL_TOKEN` is the sidecar's own `API_TOKEN`, is
-in the client bundle, and is *not a secret* — the sidecar binds to loopback, so it separates this
-page from other pages in this browser, not one user from another. The student's Supabase access
-token is a real secret, is fetched per call, and is handed to the sidecar once so it can post as
-them.
-
-**Re-hand the token on refresh.** Supabase access tokens expire roughly hourly and a lesson can run
-longer; the sidecar holds one token per session. `Adaptive.jsx` re-calls `startPush` on
-`TOKEN_REFRESHED`, which replaces the token in place — same session id, queue untouched. Without it
-the pushes 401 partway through and the samples sit in a bounded queue until they are dropped.
-
-**Never call `supabase.auth.getSession()` inside an `onAuthStateChange` callback.** supabase-js v2
-holds an internal auth lock while dispatching, and `getSession()` waits on it — awaiting it there
-deadlocks. Use the `session` the callback is handed; that is why `startPush` takes an optional token.
-The symptom is the worst kind: the refresh handler hangs, the sidecar keeps the expired token, and
-every push 401s for the rest of the lesson with nothing raised anywhere.
-
-**The camera is stopped when the Adaptive page goes away; the headband is not.** `stopPushOnUnload`
-drops the token and never touched the capture, and the only `deviceStop` was behind the Turn off
-button — so navigating to the dashboard left the sidecar reading and discarding frames with the
-lens open until someone came back. The headband stays paired across navigation deliberately (the
-bridge holds the link, re-pairing costs a 12 s scan); a webcam has no such cost and the consent copy
-scopes it to the questions. Two exits, because effect cleanup does not run on a tab close: the route
-change sends `deviceStop`, `pagehide` sends `deviceStopOnUnload` with `keepalive`, both reading the
-camera through a ref synced after every render. `AdaptiveCameraLifecycle.test.jsx` pins both and
-that a camera already off sends nothing.
-
-`ALLOWED_ORIGINS` on the sidecar must name the **frontend** origin, not just the backend's. Getting
-it wrong fails every local call on CORS while the sidecar itself looks perfectly healthy.
-
-All three ingest endpoints are rate-limited and length-bounded. `/api/signals/cognitive` was neither
-until the push client existed, which was survivable only while its sole writer was the in-process
-poller.
-
-## EEG focus, calm and confidence: measured on a person once, and most of it failed
-
-Until 2026-09-13 the three EEG scores had never been compared against a wearer doing a known
-thing — the simulator solves its bands *from* the scoring formulas, so every green test on that
-path was the formula agreeing with itself. Two labelled captures (eyes closed, eyes open, silent
-rest, arithmetic, clench, blink, fidget; one adult, MuseS) are scored in
-`EEGResearch/tests/fixtures/EEG_REFERENCE.md`; the recordings stay outside the repo. Replay a
-capture through the shipped path with `scripts/replay_eeg_capture.py` — **and score a change as
-replay-against-replay (`--save`, then `--against`)**, never recorded-against-replay: the live
-sidecar had state from before the capture began, so a recording carries the inputs but not the
-prior state, and the round-trip test holds only from a fresh processor.
-
-What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about each:
-
-- **Degraded contact is the ordinary state.** Even prepared and at rest, 2–3 of 4 electrodes;
-  every active segment drops below 2, and the wearer confirmed extended `good` is not achievable.
-  `degraded` (2 of 4, contact ratio ≥ 0.4) is the regime every score must work in and `poor` is
-  the fault. **Nothing gates on `good`.**
-- **The amplitude terms were the strap.** Rest spread was 147 µV on one fitting and 23 µV on
-  another for the same person at the same task, and a quarter of every focus and calm score was
-  that. Removed; the raw-level path now serves only a bridge that reports no band powers.
-- **Confidence is a signal-quality number, and calm is not in it.** It was 32% calm, so a stressed
-  student was the one most likely to be discarded as `insufficient_signal`; on hardware it never
-  left 40–98 and crossed the 0.45 gate on 2 ticks in ~5000. It is now warm-up, contact, spectral
-  stability and band presence, with a contact term that is 0 below the degraded line and **steps
-  to 0.5 on it** — no linear weighting puts every `poor` reading under the gate while keeping
-  `degraded` above it, since the two meet at 0.4, and a ramp from zero at 0.4 put two-of-four
-  electrodes at exactly 0.50 on a constant spectrum and under the gate on any jitter. With the step
-  the degraded regime clears the gate at zero spectral stability. `contact_ratio` rides on the
-  payload. Three gap rules follow from the stream manager resetting on every no-sample tick: the
-  baseline latches on *covered* seconds (a gap counts as one), `reset()` keeps the time-windowed
-  contact histories (a blip after a gap is smoothed against what preceded it), and the label's
-  pending run survives a reset and ages out at 5 s instead — cleared, contact flapping every other
-  tick never reached four readings and read `no_signal` throughout. The artifact gate's running
-  medians and the two session counters survive a reset for the same reason (cleared every fifth
-  tick, 0 of 20 blinks were held). **`stop()` calls `clear_session()`, not `reset()`**: a stop is
-  the end of a session, and through `reset()` the next student on a shared station was scored
-  against the previous one's baseline. Arming restarts the label engine beside the baseline, or the
-  lesson opens on a label formed during pairing.
-- **`engagement` is never drawn beside `focus`.** They are one number, so a second line, gauge,
-  tile, archived series or prompt sentence reads as two measurements agreeing. The column stays;
-  the session review, class trend, teacher Live view, archived SVG, strategies prompt, the
-  teacher's student list and both `SignalPanel` tiles show focus alone, and each of the three
-  charts has a test asserting the absence in its screen-reader table, since the sentence omits an
-  empty series on its own. **Every reader serves `engagement` from the focus average, never from
-  the stored `avg_engagement`** (`_shape_summary` in `main.py` says why): the stored column was the
-  confidence before Phase 1 and a copy of focus after it, with no flag saying which, and the rollup
-  outlives the raw rows — so the stored value is never surfaced and the series a reader sees is the
-  focus index throughout. **`raw.confidence` is dropped on a `contact_poor` row** along with the measurement
-  columns — kept, four poor rows beside one good one averaged focus 0.8 against confidence 0.36
-  and dropped the EEG channel — and the decider validates the value, not just the container,
-  since `raw` is client-supplied JSON on the push path: a string 500'd every question and `true`
-  claimed 1.0. `replay_eeg_capture.is_gap` reads `signal_quality`, never the label, which the
-  engine holds at `no_signal` on real ticks after a gap; `--arm-at` an absent segment is refused.
-  The flat ingest shape stores `engagement` as the posted `focus` too, so no path can write a row
-  where the two differ; `_raw()` removes the client's value under a key the backend derived as
-  `None`, or a posted `raw.confidence` stood for a tick the sidecar reported none on. **Archives
-  written before the series was dropped keep it**, since nothing revisits an archive after close:
-  `rearchive_session_charts.py --apply` re-renders them, and skips any session whose raw rows have
-  expired, because there the archive is the last copy and re-rendering would replace it with nothing.
-- **The population bounds were widened against the capture** (2026-09-14): its focus log-ratios
-  ran −1.53..−0.21 per segment and the floor was ln(0.40) = −0.92, above three of the four
-  labelled segments, so eyes-closed replayed as focus 0 on every pre-latch tick. Now ln(0.15) to
-  ln(2.00) for focus and ln(0.16) to ln(2.00) for calm — calm widened at **both** ends so its
-  midpoint, the pre-latch centre, stays at −0.57; raising the ceiling alone put the strap-settling
-  segment under the stressed line and eased difficulty on the opening questions. **The label lines
-  moved with the spans**: `focused` is focus ≥ 0.624 and `stressed` calm < 0.377, in both
-  `adaptation.py` and `signal_fusion.py`, so the Bels of movement each label needs are what they
-  were (0.322 above, 0.312 below); left at 0.7/0.35 the widening made `focused` 61% harder on a
-  capture where it was reached on zero ticks. Both remain unmeasured against a task. Focus's
-  midpoint deliberately moved down 0.49 Bels (the capture sat below the old one); only calm's is
-  held. **This re-anchors every stored focus and stress value across 2026-09-14** — 14 to 30
-  points pre-latch, ~38% of gain after — so `signal_mapping` writes `raw.score_scale` on every
-  cognitive row (2 on the sdk calm source, 3 on the local one, per `SCORE_SCALE_BY_CALM_SOURCE`;
-  see Phase 2 below) and rows without the key predate it. **The rollup records the range seen each day**
-  (`score_scale_min`/`score_scale_max`, `20260917000000`), and every rollup-backed payload carries
-  `score_scale: {min, max}` for its window — the term trend per week, the cohort trend, and the
-  weekly summary that collapses both scales into one number. **Never a date**: the rollout is per
-  sidecar process, as each student's machine restarts, so no calendar constant labels it, and
-  `_scale_range` keeps "no row recorded one" (rolled before the column) apart from scale 1.
-  `ScaleNote` renders the caption on the term trend, the class trend (only beside a drawn line),
-  the class roster (class range or any one student's, since the outlier flag is computed on those
-  numbers) and the weekly summary tiles, when the range straddles the change — a series on two
-  scales is not one series and the chart cannot show where the step is; each wiring has a test
-  with a mixed fixture, since the null branch passes with the element deleted. The rollup reads
-  `raw.score_scale` through `score_scale_of(jsonb)`, never a hard cast: `raw` is client-supplied
-  on the push path, and a cast raised out of the cognitive INSERT, the first of three, so one
-  posted sample aborted a student-day's rollup, which the close swallows and the expiry job then
-  refuses for ever — a student exempting their own rows from retention with one request.
-  `scripts/assert_signal_rls.sql` exercises that arithmetic against a real stack, garbage value
-  included, because it is the only place the function runs. The rollup read behind the labels is
-  the one stated exception to the cohort endpoint's consent bucketing: it selects no reading. The
-  replay figures quoted above (37/60, 78/27, 50/42) were taken on the old scale. `samples_no_delta`
-  and `samples_no_spread` count the usable ticks the blink and spread gates had no reference for
-  (an unreadable delta; a non-finite channel on a multi-electrode frame), so a recording whose
-  detector never armed does not read as flawless. The rearchive cursor advances only past a
-  session the run *finished* — skipped by decision, listed by a dry run, or re-rendered — since set
-  before the render a failed render was passed over by the resume exactly as a failed read was.
-  A NaN or infinite value in a **ratio** band, or a **partial** band dict, is a **held tick** with
-  `artifact_reason: malformed_bands` and confidence at the floor: as an exception it read as a
-  dead headband, as "no bands" it was scored on the amplitude fallback above the gate, and a
-  missing band defaulted to 0 Bels and scored. A NaN **delta** is not malformed — it feeds only the
-  blink gate, and holding on it pinned a session with four perfect ratio bands at the midpoint; it
-  costs that gate its reference for the tick and nothing else. The artifact histories are fed by
-  every usable tick whatever the bands say, since the spread comes from the raw channels. The
-  snapshot serialises a non-finite *or absent* band as `null` (`BandData` fields are optional) or
-  `/api/v1/state` 500'd on exactly that tick, and the mapper
-  stores the row with its measurement columns nulled and the reason in `raw` — a held score is
-  the previous tick's, not a measurement. A push batch validates each sample on its own and
-  reports `malformed`, since a typed list 422'd every valid sample beside one bad one. A stalled sample clock
-  counts as a nominal tick for the baseline's coverage *and the ramp* (coverage alone latched a
-  baseline the ramp never applied), and the baseline lists are capped. The push session end resets
-  the heart tracker and clears the adapter's optical buffer without dropping the link, or the next
-  student's first window straddles the previous one's samples — and it runs only if push was
-  actually running, since the page fires `push/stop` from pagehide under pull too and unconditional
-  it wiped a live armed session's baseline.
-- **`engagement` is the focus index** (`signal_mapping.py`, beta/(alpha+theta), Pope's engagement),
-  not the confidence — every Engagement tile was showing strap fit. The stored `avg_engagement`
-  is therefore two different quantities either side of the date Phase 1 merged, which is why no
-  reader serves it (rule below).
-- **Delta doubles on a blink**, gamma exceeds beta by 0.5 Bels on a clench and never at rest, an
-  artifact doubles the raw spread. A tick that trips one **holds** the previous scores and enters
-  neither the window nor the baseline — held is a third state beside rejected and low, with
-  `artifact_reason` and `samples_artifact` saying so. Bounds are relative to running medians of
-  **every usable tick**: referenced on admitted ticks only, the gate ratcheted and held a third of
-  resting ticks. Per-tick SDK bands are noisy enough that no bound separates artifact from rest by
-  better than ~3:1 (grid in `EEG_REFERENCE.md`); 3.0× delta / 3.5× spread hold 12% of rest and 39%
-  of artifact ticks, and a false hold is one 250 ms tick of the previous score.
-- **The ratios are smoothed over 4 s** on the sample clock before scaling; held and rejected ticks
-  leave the smoothed value alone. 92% of a step in 10 s, under the decider's cadence.
-- **The baseline is 45 s of at-least-degraded contact, fixed for the session by decision, on one
-  scale with a 10 s ramp at the latch.** It was the first 60 usable ticks with no contact condition,
-  and on both captures that fell entirely inside the loose-strap settling period. Gating on contact
-  was not enough: that period *is* degraded contact — the strap being adjusted on 2 electrodes with
-  beta and gamma high from muscle — and replayed on the capture the whole session still read focus
-  0–14. **So the baseline is taken from the first question, not from Connect.** The processor lives
-  from stream start (a sidecar session start does not reset it); `eeg_poller` now calls
-  `POST /api/v1/session/arm` when `record` flips true, which is `SignalProcessor.restart_baseline()`
-  — discard what was gathered, gather afresh, keep the old centre in use until the new one latches
-  and ramp to it. Under push, a `push/start` with a *new* session id does the same (a repeat with
-  the same id is a token refresh and leaves it alone). Best effort from the poller and logged on
-  failure: a sidecar too old to know the route must not cost the session its rows. Replayed armed at
-  the first protocol segment, run b reads eyes-closed 37/60 (focus/calm), eyes-open 78/27,
-  arithmetic 50/42 — the right directions, centred where the lesson began. A rolling reference was
-  considered and rejected: a sustained state would decay to 50. `replay_eeg_capture.py --arm-at
-  SEGMENT` stands in for the first question. **`reset()` keeps the baseline.** The stream manager
-  calls it on every tick with no sample, which flapping contact does repeatedly, so clearing it there
-  made a strap slipping at minute 20 the session's new zero point through a path nothing arms — the
-  failure the arm exists to prevent. Only `restart_baseline()` replaces it.
-- **The confidence rides in `raw.confidence` on `cognitive_signals`, and the fusion gate reads it
-  there.** No column carries it; `engagement` did, and once `engagement` became the focus index the
-  decider was still averaging it into the `eeg_channel` gate — a focus threshold, so a disengaged
-  student on good contact lost the whole EEG channel, ease-off included, while a focused one on a
-  bad strap passed. The decider selects `focus, stress, raw` and never `engagement` for that.
-- **A label needs four consecutive readings** before the 3 s cooldown protects it. 90 of 133
-  `focused` readings on the captures were the cooldown holding one spurious tick.
-
-**What the sidecar captures did not settle, Phase 1 deliberately did not touch:** the ratios
-themselves. Eyes-closed alpha rose 0.02 Bels in the SDK bands; beta and gamma fell 0.1–0.2 instead,
-and gamma drifts monotonically over a session (+0.25 → −0.55 over 12 min), so `calm` on the SDK
-ratio tracks muscle tone relaxing. Arithmetic aloud raised beta by 0.08 *with gamma by 0.10* —
-speech EMG — and `focused` was reached on 0 ticks. `EEG_FOCUSED_*` / `EEG_STRESSED_*` in
-`adaptation.py` and `signal_fusion.py` are rescaled to the widened bounds and still unmeasured.
-The `engaged student is not stressed` test pins only the ordering, because on the spectrum alone an
-engaged eyes-open profile sits below the stressed line against the population bounds.
-
-**Phase 2 settled the alpha question with the raw stream (2026-09-14, `--source bridge`, sidecar
-stopped, 256.4 frames/s over 556 s).** Eyes closed, **TP9 and TP10 carry a 10 Hz peak 4.6× above
-the 1/f fit** that is absent eyes open; the frontal pair does not, and AF7 was the noisy channel, so
-the SDK's four-channel average could not see it. The measure is `services/eeg_spectrum.py`: Welch
-over 2 s Hann windows on a 4 s buffer, per channel, a 1/f slope fit over 2–40 Hz **with 7–13 Hz
-excluded** (fit through the band and the peak becomes slope), and calm is the mean log10 residual
-over 8–12 Hz at the temporal pair. Closed against open separates at **AUC 0.92 at 4 s epochs**,
-0.97 at 8 s — the same 4 s the ratio smoothing uses. `EEG_SPECTRUM_SOURCE=local` scores calm from
-it on its own population scale (`CALM_ALPHA_RESIDUAL_*`, midpoint 0); **the default stays `sdk` by
-decision** — one adult, three runs — and the local figure rides on every payload as
-`calm_alpha_residual` either way, so a session on `sdk` still records what `local` would have read.
-On `local`, a tick before the buffer fills **holds** calm rather than borrowing the SDK ratio: the
-two are different numbers on different scales and one baseline cannot hold both. A signal-loss
-reset empties the buffer, since whatever spans a gap is two recordings. The estimator is fed from
-the drain in `DeviceSession._loop` — every sample, since the bridge takes one TCP client and only
-`samples[-1]` is scored. `scripts/replay_raw_capture.py` replays a bridge capture through it and
-prints per-segment medians, applying the same artifact poison `DeviceSession._loop` applies
-(the reference medians quoted before that were derived without it and do not reproduce: **with
-the gate the local calm is fresh on 18–21% of eyes-open and task ticks and held past the 10 s cap
-on 40% of resting ones**, since 7–19% of ticks are artifacts and each costs the next 4 s — see
-`EEG_REFERENCE.md`, "derived before the artifact poison"). **The SDK alpha band did move on this run** (+0.24 Bels closed) because contact held at
-3 of 4; it is not blind to alpha, it is unreliable at the contact the product gets.
-
-**Focus has no marker in this data, and `focus` stays the SDK ratio, documented as unmeasured.**
-Silent arithmetic raised neither beta (AUC 0.38–0.43 against eyes open, i.e. *lower*) nor gamma;
-the only task effect was alpha suppression, AUC 0.56 at 4 s. The beta ratio has now failed aloud,
-silently, on the SDK bands and on the raw spectrum. The 1/f slope itself separates closed from open
-(−1.24 against −2.75) more than any band does, which is why a raw band ratio mostly measures the
-slope. Blinking produces a spurious 8 Hz "alpha" from the blink harmonic; the delta gate is what
-keeps those epochs out of a baseline. Numbers and method: `EEG_REFERENCE.md`, raw-stream section,
-re-derivable with `scripts/analyze_raw_capture.py`; its AUCs are over adjacent epochs of one block
-each, so they describe that recording and are not estimates, and the 1/f slope separates better
-than the residual (0.94 against 0.92 at 4 s) but is carried unscored as `spectrum_slope`.
-
-**Its label and its surfaces are held as they are until the second wearer's capture — decided
-2026-09-17, so don't relabel it in passing.** Three things were weighed and rejected. A *rename* has
-nowhere true to go: the honest names (`beta/(alpha+theta)`, "EEG index") make no claim a reader can
-check, which invites them to invent one, and the readable alternative — engagement — is the same
-claim in a word this file already strips from every surface. That is the opposite case to the
-`Confidence` bar, which was correctly relabelled *Signal quality score* because there the number was
-well understood and only its name was wrong. A *caveat under the tile* is the anti-pattern
-`FacialRecognitionToggle` was retired for: needing a standing disclaimer means the label
-overpromised. And *removal*, the treatment `attention` got, is the real option — with the teacher's
-focus-versus-accuracy panel first, since a correlation coefficient is the strongest claim in the
-product about what this number means — but it cannot be done to focus alone: the **sdk calm sits in
-the same evidential position** (eyes-closed alpha moved 0.02 Bels; beta and gamma fell instead, so it
-tracks muscle tone relaxing), and `stress` is that number inverted. So this is one decision about the
-EEG family's family-facing surfaces, gated on the same capture as the calm decisions plus a marker
-for effort that three attempts have not found — not a wording change. What keeps it defensible
-meanwhile is that focus reaches fusion through **one** door, the `focused` label (focus ≥ 0.624
-*and* calm ≥ 0.5), which can only ever push difficulty **up** and is vetoable by heart and face; it
-has no ease-off role and is close to unreachable at the contact the product gets, so it is nearly
-inert in the live decision. Nothing on a parent's or teacher's screen calls it effort, and it must
-not start.
-
-**What the local calm may claim, after review.** The estimator is fed only by a headband
-(`device_config.kind == "muse"`) and refuses a buffer whose timestamp span is not a 256 Hz stream's:
-the simulator's one sample per tick filled it with 256 s analysed as four and published a residual
-with nothing behind it. An artifact tick **poisons** the buffer until its samples have left — the
-gate holds one tick, the window kept the blink for four seconds of estimates, and one blink moved
-the residual further than the whole closed-to-open effect. **The stressed line is per calm source**,
-`STRESSED_CALM_MAX` in `adaptation.py` and `EEG_STRESSED_CALM_MAX_BY_SOURCE` in `signal_fusion.py`,
-pinned equal by a test on each side: 0.377 was 0.311 Bels below centre on the SDK span and 0.148 on
-the local one, where silent arithmetic then read stressed; the local line is 0.25, set from the
-capture armed at eyes open (8% of resting eyes-open ticks, 0% arithmetic, 0% fidget) — **a table
-derived before the artifact poison, which does not reproduce under it**; the line stands only
-until the poison length and the pre-latch calm centre are decided against the second wearer's
-capture (`EEG_REFERENCE.md`). **Both alternatives exist as settings with the shipped behaviour as
-default** — `EEG_SPECTRUM_POISON_SECONDS` (4.0, the buffer; 2.0, the Welch window) and
-`EEG_CALM_CENTRE_ON_ARM` (`keep`; `midpoint`, the local calm only — focus keeps the no-step arm,
-and so does the sdk calm, which latches beside focus and never needed it). **Both are read at
-import, inside `StreamManager()`, so neither may refuse the boot**: `config.py` validators warn
-and fall back (a non-numeric poison length to 4.0, a misspelt centre to `keep`, a misspelt spectrum source to `sdk`, case and
-whitespace forgiven), and the estimator floors a numeric poison at one sample, since 0 made the
-poison a silent no-op and `nan` or `midpont` each took the sidecar down over a tuning knob —
-the `MUSE_OPTICS_PRESET` precedent. `SignalProcessor` itself still raises on an unknown centre,
-because a direct caller is code. And
-`replay_raw_capture.py --matrix` scores all four on a capture in one run, so the decision is made
-against numbers rather than by editing code twice. On the first wearer, `midpoint` is what makes the
-eyes-open segment read as eyes open (the arm had carried the eyes-closed centre) and 2 s is what
-moves availability (EEG_REFERENCE.md, "both alternatives are built"). The decider
-reads `raw.calm_source` off the rows and a window holding both sources has no calm opinion. **Calm
-latches on its own coverage** over the ticks that had a value (45 covered seconds at one second a
-tick at most, so at least 45 samples with no separate floor), with its own ramp, and keeps
-collecting after focus has latched: latched with focus, one calm sample was the session's calm
-centre for good. `calm_measured` is false on a placeholder — the opening
-fill, and after every gap, both write the same 50 a genuine residual of zero produces — and the
-engine labels neither stressed nor focused on one; `calm_held_seconds` says how long a local calm
-has been carried, and past `CALM_HOLD_MAX_SECONDS` the mapper nulls `stress` **and the engine
-labels neutral** — the constant lives in both `adaptation.py` and `signal_mapping.py`, pinned
-equal by a test on each side like the stressed line, or the sidecar asserts a learner state from
-a calm the backend has just declined to record. **`focus_centred` and `calm_centred` say whether
-each score is on the session's own baseline yet or still on the population midpoint**, and ride in
-`raw`: pre-latch was a 45-second opening window, but the local calm latch needs 45 covered seconds
-of ticks that *carried* a calm and a poisoned tick carries none, so at the reference capture's
-7–19% artifact rate it takes minutes and can outlast a session, and a midpoint-scored calm was indistinguishable on
-the row from a centred one. The row records
-`calm_source`, and **the local source is score scale 3** (`SCORE_SCALE_BY_CALM_SOURCE`), so two
-sidecars on one class cannot write calm on two scales under one version. **Scale 3 is a different
-unit, not a later version**: it moves stress and not focus, and it runs on one student's headband
-beside a classmate's on scale 2 at the same time, so `ScaleNote` (via `describeScaleChange`) names
-which figures a range moves and whether the split is a step in time (1→2) or two sources side by
-side (any range reaching 3). **A scale-3 row whose stress is NULL is left out of the day's range
-while any row with a scored stress is present**, and only a day with no scored stress at all falls
-back to reading such rows as scale 2 (they contributed only a focus, which is on scale 2). Mapping
-them to 2 unconditionally made every local session read 2..3 on its own, since its first ticks hold
-calm while the buffer fills, and one child on one headband drew the two-source caption; not
-mapping them at all drew it beside an sdk day for a window where the local source scored no stress.
-A row with a NULL `raw` is scale 1 like a row with no key: `raw ? 'score_scale'` is NULL on a NULL
-raw, so the null test comes first. A rejected `calm_measured`/`calm_held_seconds` is named in
-`raw.calm_invalid`, or the nulled stress reads as an older sidecar that never sent the key.
-**`calm_source`, `calm_measured` and `calm_held_seconds` are client-supplied on the push path and
-are validated by type in the mapper** (string; bool; finite non-negative number), the decider
-type-checks the source again before it is a set element, and a value present in the wrong type
-*withholds* stress rather than recording it: `"false"` is not `False` and `"150"` fails an
-isinstance check, and both read as a measured, fresh calm — the number the hold rule exists to
-withhold. A posted list as the source 500'd the ingest and then every question until it aged out. **A window whose calm is
-withdrawn — two scales, or every stress nulled by the hold rule — keeps its EEG channel**:
-`eeg_channel` reads focus and confidence, applies the contact gate, and answers `neutral` with
-cause `no_calm`; withdrawing the whole channel on `calm is None` lost the read with it. On the
-sidecar, `malformed_bands` does **not** poison the spectrum buffer (a fault in the SDK band dict,
-not the raw samples; poisoning cost 3.9 s of estimates), the rate check compares the span between
-two stamps against the sample *positions* between them (push admits an unstamped sample; counting
-stamps refused a real 256 Hz buffer with half of them absent), and a poison while the buffer is
-still filling reports `artifact`, not `filling`.
-
-`SignalProcessor` and `AdaptationEngine` take an injectable `clock` for the replay; a diagnostic key
-added to `update()`'s dict still has to be declared on `schemas.FeatureData` or the envelope drops it.
-
-## Two columns are called stress and only one measures it
-
-`cognitive_signals.stress` is `1.0 - calm`, written in `signal_mapping.map_eeg_to_cognitive` (the
-`"stress"` key of the row; a line number here went stale within a month). There is no `calm`
-column, so this *is* the EEG calm score, stored inverted. No independent quantity exists behind it,
-and `infer_state` never reads it — it uses `calm_score` directly, the same number the other way up.
-
-`heart_signals.stress_score` is a measurement: autonomic arousal on a 0–100 scale, derived against
-the session's own baseline, with its own quality gate and its own `calibrating` state.
-
-So: **never average them, never sum them, and never render both under one "Stress" label.** One is a
-cognitive score with a sign flip; the other is a physiological measurement with a baseline. A
-dashboard tile fed by whichever happens to be present would change meaning when a headband
-disconnects, which is the same class of failure as a reporting surface that cannot tell "no data"
-from "zero".
-
-`stress_score` is defined **on heart rate alone**. RMSSD is an enrichment term, added when available
-and absent without changing what the score means — a hard requirement, not a preference, because
-RMSSD is unavailable whenever the headband is off and one window in five is gated out even when it is
-on. A score whose definition shifts when an input drops out is unreadable across a session.
-
-## Fusion is asymmetric on purpose — easing off wins, pushing harder defers
-
-`Website/AdaptiveLearning/backend/signal_fusion.py` decides how hard the next question is, from
-whichever of EEG, heart and facial are consented and present. To **raise** difficulty every channel
-with an opinion must agree; to **lower** it, any one trusted channel suffices.
-
-Keep it that way. A wrong ease-off costs one easy question; a wrong push costs a struggling student
-a harder one, and the signals are least trustworthy exactly when a student is agitated. A
-brute-force test asserts the property directly: adding a channel can make sessions gentler and can
-never make them harder. If that test fails, the change is wrong, not the test.
-
-Facial is the weakest input by design — it can withhold an increase, and can neither cause one nor
-trigger an ease-off alone. FER+ is trained predominantly on adult faces and is least reliable on
-this product's users: children, and children with learning disabilities. Its labels deliberately use
-a different vocabulary (`negative`, never `stressed`) so no later edit can wire it into the ease-off
-branch by matching on a label name. `EMOTION_MIN_CONFIDENCE` is inherited from PR #49 and is a
-guess, not a measurement.
-
-**Consent gates the read, not the result.** A revoked channel is never queried, and the tests assert
-on which tables were reached — an empty result cannot distinguish "asked and got nothing" from
-"never asked". `_consent_flags` fails closed, like `_consent()` and unlike the reporting helpers.
-
-**Difficulty is chosen in the backend, not the sidecar.** `question_policy` was removed in 1.3.0:
-the sidecar computed it every tick, it was persisted and displayed, and nothing read it to pick a
-question. Don't add it back — the sidecar cannot see correctness, topic history or grade level.
-
-## Learning preferences live on `profiles`, and difficulty is a bias
-
-Three columns (`20260822000000`): `difficulty_bias`, `session_duration_minutes`, `practice_reminders`.
-They were `localStorage.al_prefs`, written by the Preferences tab and read by nothing — the backend
-picks the difficulty and cannot see a key in one browser's storage.
-
-**`difficulty_bias` is a shift, never an absolute difficulty**, and that is a safety property rather
-than a simplification. `_shift_difficulty` applies it on top of what the model chose from the
-student's accuracy history, and `LLM_topic_decider` overrides it *downward* whenever the fused
-signal says stressed — the same asymmetry `signal_fusion` documents. Storing "always hard" would
-store a value the ease-off rule has to contradict, and a setting the system routinely ignores is
-worse than one that does not exist. It is why the control offers three options and not four: medium
-and adaptive would both mean no shift.
-
-**A run of correct answers pushes difficulty up on its own** (`_decide_bias` in
-`LLM_topic_decider`): at least `PERFORMANCE_PUSH_MIN_ANSWERS` (3) of the session's last ten answers
-at `PERFORMANCE_PUSH_ACCURACY` (70%) or better shifts up — **and the newest
-`PERFORMANCE_PUSH_RECENT_CORRECT` (2) must be right**, because the aggregate cannot tell a rising
-student from a falling one: 7 of 10 is 0.7 whether the misses were the first three or the last
-three, and pushing a child who has just failed three in a row is the harm the asymmetry exists to
-prevent. `get_session_performance` keeps the order as `recent` (newest first) for that; a caller
-without it gets no push. Also with the control on Auto, the fused label not `stressed`, and no
-channel having withheld an increase (`FusedState.increase_withheld`, the facial veto, carried on
-every fused state past the ease-off step). It used to need a `focused` reading at the moment of choosing, and on hardware
-that is a state a student cannot hold: five correct answers at grade 1 stayed on easy throughout,
-because every decision landed on `stressed` (a loose strap) or `neutral`. The asymmetry is
-untouched — stressed still eases whatever the answers say, and a manual Easier/Harder still wins
-over a push — and `test_decide_bias.py` brute-forces it. **A run of misses vetoes a push from
-either source**: `recent` (newest first, kept by `get_session_performance`, whose `desc=True` is
-what makes `recent[:2]` the newest two — the fake in its test sorts by the flag so that direction
-is pinned) has to be all-correct over the newest `PERFORMANCE_PUSH_RECENT_CORRECT` (2) for the
-accuracy push, and a miss among them holds a `focused` push too. Correctness is the one channel
-here with no quality gate, so three straight misses is a trusted opinion that the student is
-falling, and every channel with an opinion must agree to raise; a focused reading over that run is
-the false-focused case the asymmetry exists for. No answers yet is no opinion, and focused pushes.
-
-**`start_session` prewarms at the student's bias, not 0.** `QUEUE_SIZE` questions are generated
-before the first answer and served first, so a hardcoded default there makes the setting do nothing
-for the opening of every session.
-
-**`QUEUE_SIZE` is `QUESTION_QUEUE_SIZE` and defaults to 0 — prefetching is off.** A queued question
-is billed when it is *generated* and only earns its cost when a student *answers* it, so any depth
-above 0 pays for the unanswered questions of everyone who closes the tab — and those are precisely
-the rows `expire_old_questions` collects, since they never gain a `session_answers` reference. Free
-against a local Ollama, which is why the queue was 2 and unconditional before. The cost of 0 is
-latency: `generate_question` always takes the inline path, so a student waits for a full model call
-on every question instead of only on a queue miss. It is an env var so a deployment can raise it
-once the per-question cost and the real abandonment rate are known, without a deploy.
-
-**A test that reads `QUEUE_SIZE` instead of pinning it goes vacuous at 0**, which is how this was
-nearly missed: `assert len(submitted) == main.QUEUE_SIZE` becomes `0 == 0` after submitting nothing,
-passing while exercising none of the pooling it exists to check. Any test whose point is prefetch
-*behaviour* must `monkeypatch.setattr(main, "QUEUE_SIZE", n)` explicitly — the same rule, and the
-same failure shape, as the `strategy_llm_enabled` default above.
-
-Bounds are stated twice on purpose — Pydantic on `UpdateProfileRequest` and a CHECK in the
-migration — and they must agree, or a value that passes one and fails the other surfaces as a 500
-from the client library instead of a 422 naming the field. The CHECK is a **range**, not the four
-durations the UI offers, so a fifth button is not a migration.
-
-**Duration is advisory.** The page asks between questions; nothing ends on a timer. A session closed
-mid-question discards an answer a child was part way through giving. **And its clock starts at the first
-question, not at Connect.** Under pull, `toggleHeadband` creates the session before anything has been
-asked — the poller's reservation is scoped by `session_id` — so a clock keyed on `sessionId` charged
-the 12 s scan, seating the electrodes and every reconnect against the student's planned duration: four
-minutes on the strap put them four minutes into a fifteen minute session before the first question.
-`fetchQuestion` starts it, beside `armRecording` and for the same reason — a paired headband is not a
-lesson, and the window that counts is first question → Finish. Push never had it, since
-`toggleHeadband` skips session creation there. The test costs two 22 s waits and they are not padding:
-the reminder is checked on a 20 s interval and the tick the clock *starts* on reads ~0 elapsed, so a
-short settle passes against the bug — the unfixed page raises the banner 20 s after Connect, which is
-after a 1.5 s wait, not before it. `Adaptive.jsx` now has a
-`finishSession` — before this it never called `/end` at all, so an adaptive session stayed open until
-the stale sweep on the student's *next* start, which is also when its rollup and chart archive were
-written.
-
-**`practice_reminders` is a dashboard banner and is named for that.** There is no push
-infrastructure — no service worker, no VAPID, no scheduled fan-out — so "Notifications: daily
-reminders to practice" described a system that does not exist. The banner needs *both* reads to have
-landed before it renders: derived from a failed `/api/sessions`, it tells a child they skipped a day
-they did not skip. Its "today" is the **browser's local day**, deliberately not `_school_day` — that
-helper buckets recorded data against the school's timezone, and this is a nudge about the student's
-own afternoon.
-
-### A practice test's length is a prop, and flashcards have none
-
-`PracticeSetup` offers 5/10/15/20 and hands the number to `Practice` through `onStart(session,
-count)`, which passes it to `PracticeTest` as `questionCount` (default 10, the value it was a module
-constant at). **Nothing is sent to the backend** — generation is one question per request, so the
-count is only ever a client-side stopping rule, exactly like Adaptive's question goal.
-
-Two differences from that goal, and both are deliberate. There is **no "No limit"**: Adaptive's
-number raises a dismissable banner beside a Finish button, and a test has no manual-finish
-affordance, so it must always auto-end. And the picker is **hidden in flashcard mode** — a deck ends
-on "Done", at any point, so a count there would name a limit that does not exist.
-
-## An answer is recorded by the backend, and the topic comes from the question
-
-`Adaptive.jsx` had no `/api/sessions/{id}/answer` call at all — only `Practice.jsx` did — so every
-question answered on the adaptive path was counted in `localStorage` and nowhere else.
-`session_answers`, `sessions.questions_answered`, `user_stats` and every report built on them read
-zero however long a student practised, while the page's own Topic Accuracy panel showed figures.
-Two records of one afternoon, one of them private to a browser.
-
-**The question id is what made it possible.** `add_question_to_supabase` returned a bool, so the
-generated question reached the page with no id and there was nothing to put in
-`session_answers.question_id`. It now returns the id — **and returns the existing row's id on a
-duplicate** rather than False, because answering a question the generator has produced before is
-exactly as real as answering a novel one.
-
-**And the question row's `subject` is the generator's own name, never the model's.** Each
-`LLM_*_generation.py` returns `question_topic`, which `add_question_to_supabase` stores as
-`questions.subject` — the column that join reads. Nine generators hardcode their own topic;
-`rationals` returned `question_data["question_topic"]`, and its prompt named `"algebra"` in prose and
-`"rations"` in the JSON example. Measured 3 of 3 against Haiku: **every fractions question was stored
-as algebra**, so a student's rationals work was credited to algebra in `user_math_performance` — the
-table the adaptive engine reads to choose what to serve next — while `rationals` accumulated nothing.
-A subject outside `ALL_TOPICS` is the other half: the join finds no row and the attempt is attributed
-to *nothing*, silently, since the helper never raises.
-
-`20260907000000` repairs what was already written, and **its rule is a prose regularity, not a
-structural fact** — an earlier version of this paragraph said otherwise and was wrong. The claim was
-that an algebra question must contain `=` because `_solve_worker` splits on it; it splits
-`variables`, which is **never stored** — `questions` has no such column. What is filtered is
-`question_text`, which the model writes freely. So it is a pattern observed on a sample and applied
-irreversibly, and it is built for that: **three signals must agree** (no `=`, no coefficient-variable
-`\d+[xyn]`, a fraction present), a row where they disagree is left alone, and every change is
-recorded in `question_subject_reclassification` so it can be audited and reversed. That table is why
-a heuristic is acceptable here at all — which is also why its `attempts_moved` counts **only** rows
-that moved something: a `rations` row credited nothing (its subject matched no topic), so recording
-its answer count would tell a reversal to push attempts back onto algebra that were never there. Over 25 real rows the three partition them completely — 19
-with `=` and a coefficient-variable and no fraction, 6 with a fraction and neither — with nothing in
-between.
-
-**A fractional answer is not a usable signal** — genuine algebra answers are frequently fractions
-(`7/2`, `17/6`) — and neither is "mentions x", since one of the six reads *"Solve for x: 3/4 + 2/5"*:
-a rationals question wearing algebra's phrasing, because the prompt told the model the topic was
-algebra. Only the coefficient form separates them.
-
-It moves the `user_math_performance` counters too, and the repair is **all-or-nothing**: if
-`math_topics` has no `rationals` row, nothing moves — subject included. Guarding only the counters
-would let the subject change while the attempts stayed on algebra, and a re-run would then find
-nothing to correct, making that inconsistency permanent.
-
-Letting the model name the topic is the same hazard as letting the caller name it, one layer up.
-`test_every_generator_stores_its_own_topic_name_not_the_models` pins both halves — the value must be
-a **literal** (a generator reading the model's value could still pass a membership check on any given
-run) and must be in `ALL_TOPICS`. Rows written before this fix still carry the wrong subject; nothing
-distinguishes them from genuine algebra rows except the question text.
-
-**`_record_topic_attempt` derives the topic from the question row, never from the caller.** The
-client has to be trusted about correctness; letting it also name the topic would let a page credit
-one subject for work done in another, and `user_math_performance` is what the adaptive engine reads
-to choose what to serve next. It never raises: it runs after `session_answers` is written, and a
-topic lookup failing must not turn a recorded answer into "that answer could not be saved".
-
-**It is one statement in the database** (`record_topic_attempt`, `20260825000000`). It was four
-sequential round trips on the hottest path in the product, and the last two were a read-modify-write
-with no lock — two answers together both read the same counts and the second overwrote the first,
-losing attempts silently. `ON CONFLICT DO UPDATE` incrementing the *stored* value removes that
-rather than narrowing it. It returns the topic **name**, which `/answer` hands back to the page so
-one figure moves; nothing holds an id-to-name map, so returning the id would cost a second query.
-The arithmetic is asserted in `scripts/assert_signal_rls.sql` — the backend suite drives a fake
-client and can only check that one call is made with the right three arguments.
-
-**Its PGRST202 is the deploy-ordering trap in its worst form**: the helper swallows exceptions by
-design, so code deployed ahead of the migration stops attributing anything with no symptom but the
-numbers not moving. It logs that case by name and cites the migration.
-
-**A roster surface reads once for the roster, never once per student.** `_profiles_many`,
-`_topic_performance_many`, `_open_sessions_many` and `_stats_including_open_session_many` are the
-batch forms; `class_students`, `my_children`, `class_live` and `leaderboard` use them. The stats half
-was batched first and the profile lookup was left in the loop beside it, which is the shape to watch
-for. One deliberate exception: `my_children` still reads the five most recent sessions **per child**,
-because "top N per group" has no PostgREST form — one `in_` query returns the newest five overall,
-which is one busy child's five.
-
-**Topic accuracy is read from `user_math_performance`, not from the browser.** It was
-`localStorage.accuracyStats_<uid>` — the only panel in the app whose numbers were not the
-database's. It disagreed with the dashboard on the same screen, started from zero on a school
-computer, and nothing server-side could correct it: a parent erasing a channel left the figures
-standing in the child's browser. The client-side `sendAccuracyToBackend` upsert is **deleted, not
-merely unused** — the backend owns that table now, and a client upsert would overwrite real counts
-with one browser's memory. Its `Number(v) || null` also turned every genuine zero into a null, which
-is why the table sat empty while the panel showed numbers.
-
-There is no "Reset stats" button any more. Against localStorage it cleared a browser key; against
-`user_math_performance` the same button deletes a student's academic record with one click and no
-confirmation. Erasure here is a parent-only, confirmed action.
-
-## Admin is a role, and three migrations are what make that safe — the flags can only ever say no
-
-Admin is `profiles.role = 'admin'` (`20260824020000`), read through the same `_role` every other
-role gate uses. Set from the dashboard SQL editor, like `retention_window`'s row.
-
-**It is a role rather than a side table only because the column is server-controlled on both
-edges**, and both edges are load-bearing: `20260824010000` revokes UPDATE/INSERT on it from the
-client roles, and `20260824020000` whitelists `student|teacher|parent` in `handle_new_user` so
-sign-up cannot ask for it. Widening the CHECK without the whitelist would have been a self-service
-admin signup — the trigger copies `raw_user_meta_data->>'role'` straight into the column, so
-`signUp({data:{role:'admin'}})` from a console would have made an administrator. The
-`20260824030000` backfill repeats the whitelist for the same reason: it reads the same
-client-supplied metadata, and trusting it would be the escalation in one INSERT.
-
-`AdminGuard` asks `GET /api/admin/me` rather than reading a role client-side; it is a UI
-convenience, and every `/api/admin/*` endpoint re-checks. `_can_view_student` gains admin as a
-**fourth relationship** rather than each admin path growing its own copy of a report query.
-
-### `profiles` rows come from a trigger, and it was missing from source control
-
-`handle_new_user` was written for an `auth.users` trigger that **no migration created**;
-`20260804000000` recorded that drift and left it, correctly, because `profiles` was decoration at
-the time. It stopped being decoration when `_role` started gating on it — a missing row means
-`_profile` degrades to a student-shaped dict, so a teacher is refused their own classes with nothing
-to read. `20260824030000` creates the trigger and backfills the rows, and is safe against a
-hand-made survivor: `on conflict (id) do nothing` makes a second firing a no-op. Check for one under
-a different name after applying.
-
-It deliberately **does not UPDATE existing rows**. `raw_user_meta_data` still holds whatever was
-typed at sign-up, so refreshing from it would silently demote every administrator.
-
-`feature_flags` is key/value, read through `_FEATURE_FLAG_DEFAULTS`, which is the contract: **a key
-absent from the table still has a value, and it is the value the system had before the table
-existed.** That is what let the flags ship without changing behaviour, and it is why an unreadable
-table falls back to the *declared defaults* rather than to off — a database blip is not a
-reconfiguration. The map is also the whitelist: an unrecognised row is inert and a write to an
-unknown key is a 404, so a typo cannot create a switch that reads back as set and controls nothing.
-Cached 30s, same reasoning as `_RETENTION_TTL_SECONDS`; `_feature_flags_cache_clear()` on every
-write.
-
-**The three `recording_*` flags are ANDed into `_may_record`, never ORed.** A flag can withhold
-recording and can never grant it, so no combination of switches records something a student
-declined — the same asymmetry `signal_fusion` documents, and a brute-force-ish test pins it.
-
-### `consent_enforcement_enabled` — the one switch that records without consent
-
-Off, `_may_record` substitutes a fully-consenting answer. It is for prototyping, it is against the
-grain of everything else here, and so it is **bounded rather than trusted**:
-
-- **Expiry is evaluated on every read** (`_consent_enforcement_active`), not by a job that flips the
-  row back. A scheduled job that fails to run leaves consent unenforced indefinitely, and
-  not-indefinitely is the single guarantee this has to make.
-- **A bypass with no `bypass_until` has already expired.** An unbounded bypass is the state the
-  column exists to prevent, so a hand-edited row resumes enforcement rather than running for ever.
-- **Disabling it requires an explicit duration**, capped at `_MAX_BYPASS_MINUTES` (4h). No default —
-  a default would be `main.py` choosing how long consent goes unenforced.
-- **`_consent()` itself is untouched.** The bypass is a decision about whether to *ask*, not a claim
-  that anyone agreed, so the consent screen, the reporting surfaces and the poller status keep
-  showing what the family actually decided. `consent_bypassed` rides on the `_may_record` payload so
-  a caller reporting *why* something is recorded does not say the student agreed.
-- **It does not override the school year.** The window is a separate gate and stays closed.
-
-Every write lands in `feature_flag_changes`, append-only, written by the backend rather than by a
-trigger — the backend already resolved the admin's identity to admit the request, so a trigger would
-be a second and worse answer to that question. A failed audit insert never undoes the flag: it is
-already written, and raising would invite a retry that changes nothing and audits nothing.
-
-### The admin read surfaces send counts and timestamps, never readings
-
-`/api/admin/live-signals` answers "is data arriving" for every open session. **It selects `ts`
-alone**, so the readings never leave the database rather than being fetched and dropped on the way
-out — no band powers, no emotion label, no bpm. An admin has no relationship to those students
-entitling them to the values, and asking for less is a stronger version of that property than
-filtering afterwards: the test asserts on the *select*, which is the only place the difference shows.
-
-It shares `_LIVE_WINDOW_SEC`/`_STALE_AFTER_SEC` with `class_live` — two sets of numbers would let one
-page call a session live while the other called it stale — but **not its row reads.** `class_live`
-reads the newest row per channel for the whole roster in **one** `latest_signals_for_sessions` RPC
-(`_latest_signals_many`), and that helper's own comment says why it must stay one call: an earlier
-version fanned a per-session read out into a shared four-worker pool, and fanning this endpoint's
-outer loop into the same pool **deadlocked** — the waiters and the work they wait on ended up in one
-queue, so four sessions occupied every worker while their own reads sat behind them. That pool and
-the test asserting it was distinct from `_admin_live_pool` are gone with the fan-out; do not
-reintroduce either. `_admin_live_pool` (8 workers) still exists for this endpoint's per-session
-work, and nothing submitted to it waits on anything else in it.
-
-Five states per channel, and they are not a scale: flowing, quiet, stale, **never-reported**, and
-**unreadable** (`seen: null`). The last two are the ones to keep apart — a session that never had
-that sensor is a different fact from one whose sensor stopped, and both are different from a read
-that failed. Reporting a failed read as never-reported is a claim about the deployment that a
-database blip has not earned.
-
-`/api/admin/health` reports `ok` / `degraded` / `unknown`, and **a check that could not run is
-`unknown`, never `ok`.** `/api/admin/consent-summary` is counts only. `/api/admin/env-flags` lists
-the env-var switches read-only, from a **named list** — `os.environ` also holds the service-role
-key, and a dashboard that enumerated the environment would eventually render a secret.
-
-Tests: `backend/tests/test_admin.py`. `conftest`'s `_feature_flags_are_default` pins the defaults for
-every other test file, and **deliberately does not take `monkeypatch`** — requesting it from an
-autouse fixture pytest orders early hoists `monkeypatch`'s setup ahead of `_join_poller_threads` and
-inverts their teardown, which failed three unrelated tests in teardown for a reason nothing in their
-bodies could explain. `pytest --setup-plan` shows the ordering directly.
+It is also the only place several pieces of arithmetic actually run — the rollup's per-measurement
+counts, `record_topic_attempt`, `score_scale_of` — because the backend suite drives `main.py` with a
+fake client, and CI applying the migration proves the SQL parses, not that it counts.
+
+## `supabase/seed.sql` is gitignored, so a broken one is a local problem
+
+Each machine generates its own with `supabase db dump --local --data-only`; nothing ships it, and CI
+never runs it.
+
+**A regenerated seed collides with the migrations that seed `math_topics`.** `db reset` applies every
+migration *first*, and several now insert topics, taking ids from the sequence. A dump written with
+explicit ids — which is what `--data-only` produces — then hits `duplicate key value violates unique
+constraint "math_topics_pkey"` and dies part way, leaving a database with four topics and no users.
+That reads as a corrupt checkout rather than a seed that needs regenerating.
+
+Fix a local copy by inserting topics **by name** with `ON CONFLICT ("topic_name") DO NOTHING`, and by
+deriving the `setval` from `MAX(id)` rather than hardcoding it — a literal was right only while the
+seed was the sole writer, and winding the sequence back makes the *next* insert collide, which is the
+same failure one step later. Nothing references `math_topics.id`: `record_topic_attempt` joins on
+`topic_name`, and the one foreign key to it, `user_math_performance`, is not seeded.
+
+`backend/tests/test_seed_sql.py` checks all three, and **skips when the file is absent** rather than
+failing on something the repo does not contain. It is a guard for whoever regenerates the file, not
+a gate.
+---
+
+# Privacy
+
+## The network edge: who may read a response, what rides on it, how much may be sent
+
+All of it is one block above the helpers in `main.py`, mirroring `EEGResearch/src/app/main.py`, which has had an origin
+allowlist and a headers middleware since it was written; this backend had neither.
+`backend/tests/test_network_edge.py` is the **first backend test to use `TestClient`** — every middleware here was
+unreachable from the suite by construction before it, so anything added to this block needs a test there or it is
+covered by nothing.
+
+**CORS is an allowlist, and `allow_credentials` has to be false for it to mean anything.** It was `allow_origins=["*"]`
+with `allow_credentials=True`, which Starlette serves by *reflecting* the asking Origin — a wildcard wearing an
+allowlist's clothes. Credentials here would mean cookies and there are none: the bearer token goes in a header, which a
+browser never attaches on its own. `ALLOWED_ORIGINS` defaults to the local frontend; methods are the four the API
+serves plus OPTIONS, and headers the two `lib/api.js` and the push client send. A production deploy that forgets the
+variable is refused at the edge on the first page load — loud, and the safe direction.
+
+**Read a blank env list as unset, not as a list of one empty string.** `_env_list` is `_env_number`'s shape for text.
+An empty allowed origin matches nothing, so the symptom is the whole frontend refused by a setting that looks
+configured.
+
+**The CSP says this server is not a document, and that is the honest policy rather than a weak one.** `main.py` serves
+no HTML — no `StaticFiles`, no template, no `HTMLResponse` — so
+`default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` is exactly right for it. **The
+`default-src 'self'; connect-src <supabase> <sidecar>` form is a *frontend* policy**: it describes what a page may
+fetch, and this server has no page. That one belongs with the Vite build's hosting config and is still an open
+decision. A test asserts the three HTML sinks stay absent, since the policy stops being honest the moment one appears —
+**and it walks the AST, because a source scan cannot tell a use from a mention**: read as text it failed on the comment
+beside the CSP, which names all three to explain why none is there. Same trap as `AccessibleChart.test.jsx`'s stated
+blind spot, from the other side.
+
+**`Permissions-Policy` denies the camera here, and that is not a mistake.** The product does open a webcam — on the
+*frontend* origin, through the sidecar. A `camera=(self)` carve-out on an origin with no document permits a capability
+nothing can use.
+
+**FastAPI's own docs are exempt from the CSP and off in production.** They are real HTML pulling Swagger from a CDN, so
+under `default-src 'none'` they render blank locally, which reads as broken tooling rather than as a policy working.
+`_DOCS_PATHS` names them once, so the paths exempted are the paths switched off.
+
+**The body cap is two caps, and the second is derived.** A single number would have refused real sensor data: a
+cognitive batch at the full `INGEST_MAX_BATCH` of 500 with the fattest `raw.ingestion` block the sidecar sends is
+**~637 KiB**, two and a half times the 256 KiB an ordinary endpoint gets. So `/api/signals/*` is bounded by
+`INGEST_MAX_BATCH × INGEST_MAX_SAMPLE_BYTES` rather than its own constant — raising the batch bound must not start
+refusing batches at the edge for a reason nothing in the ingest code mentions. A test rebuilds that full batch and
+asserts it fits, so trimming the per-sample allowance fails against the measurement rather than against a comment.
+
+**Both halves of the size check are needed.** `Content-Length` is what every client in this product sends, and checking
+it refuses the body before a byte is accepted. A client that chunks its upload sends none — precisely the client this
+exists for — so the middleware also counts what arrives. Pure ASGI rather than `BaseHTTPMiddleware`, because that one
+reads the body to hand it on and the point is not to read it.
+
+**The refusal has to be readable by the page that caused it**, so the size middleware is added first (innermost) and
+CORS last (outermost). A 413 carrying no CORS header reaches the browser as a generic network error, making a size
+limit indistinguishable from the backend being down. **`add_middleware` prepends, so *added last* means *outermost*** —
+getting that backwards is silent.
+
+Not here, deliberately: **no `TrustedHostMiddleware`** (the production host is an open decision, and an allowlist with
+no known host either breaks everything or is a no-op), and **no HSTS** — one line in `security_headers` when the
+hosting question is settled.
 
 ## Access control — check the relationship, not the role name
 
-Endpoints serving student data read through the **service-role Supabase client, which bypasses
-RLS**, so the checks in `Website/AdaptiveLearning/backend/main.py` are the only thing standing
-between a caller and another student's data.
-
-Use the existing helpers rather than writing a new check inline — re-deriving the rule per
-endpoint is how the original `class_live` guard drifted into `owner != user AND role != "teacher"`,
-which let any teacher read any class:
+Endpoints serving student data read through the **service-role Supabase client, which bypasses RLS**, so the checks in
+`main.py` are the only thing between a caller and another student's data. Use the existing helpers rather than writing
+a new check inline — re-deriving the rule per endpoint is how the original `class_live` guard drifted into
+`owner != user AND role != "teacher"`, which let any teacher read any class:
 
 - `_verify_class_owner(class_id, user_id)` — only the owning teacher.
-- `_verify_can_view_student(viewer, student_id)` — the student themselves, a teacher of a class
-  they are enrolled in, or a linked parent.
-- `_session_or_403(session_id, user_id, columns)` — a session is **one student's**, so this is
-  ownership and nothing weaker; no teacher or parent is admitted. It returns the row, which is the
-  point: `record_answer` and `end_session` need the session anyway, and paying for a second query
-  is why they were written with no check at all. `_verify_session_owner` is this with the row
-  thrown away. **Check before you write** — `record_answer` inserted the answer row *first* and
-  read the session afterwards, and `/end` stopped the poller before looking, so any student could
-  forge answers into another child's session or end one mid-lesson.
+- `_verify_can_view_student(viewer, student_id)` — the student themselves, a teacher of a class they are enrolled in,
+  a linked parent, or an admin (a **fourth relationship** rather than letting each admin path grow its own copy of a
+  report query).
+- `_session_or_403(session_id, user_id, columns)` — a session is **one student's**, so this is ownership and nothing
+  weaker; no teacher or parent is admitted. It returns the row, which is the point: `record_answer` and `end_session`
+  need the session anyway, and paying for a second query is why they were written with no check at all.
+  `_verify_session_owner` is this with the row thrown away. **Check before you write** — `record_answer` inserted the
+  answer row *first*, and `/end` stopped the poller before looking, so any student could forge answers into another
+  child's session or end one mid-lesson.
 
-Access is a **relationship**, not a path segment or a role claim. Don't namespace an endpoint
-under `/api/teacher/` when parents legitimately read it too, and don't gate on
-`user_metadata.role`.
+Access is a **relationship**, not a path segment or a role claim. Don't namespace an endpoint under `/api/teacher/`
+when parents legitimately read it too, and don't gate on `user_metadata.role`.
 
 ### Where a role gate must read it from, and why one column is not enough
 
-**`user_metadata.role` is attacker-controlled.** The client sets it at sign-up and can rewrite it
-whenever it likes with `supabase.auth.updateUser({data: {role: 'teacher'}})`, which talks to GoTrue
-and never passes through this backend. `create_class`, `my_classes` and `link_child` gated on it, so
-any student could self-elevate and create classes. They now call **`_role(uid)`**, which reads
-`profiles.role`; `test_no_endpoint_gates_on_user_metadata` greps the module so a fourth site cannot
-appear. It fails closed to `student`, since `_profile` degrades to a student-shaped dict on a failed
-read and a database blip must not be a way past a role check.
-
-**Switching to `profiles.role` is only half of it, and it is the half that looks like the whole
-fix.** `profiles` carries a `FOR ALL` own-row policy and `authenticated` holds UPDATE, so that
-column was equally client-writable — a student could PATCH their own row through PostgREST. RLS
-narrows *which rows*, never *which columns*, and a CHECK cannot express "not by you". Only the grant
-can, and grants are per-column for UPDATE and INSERT: `20260824010000` revokes both on `role` from
-`anon` and `authenticated`, leaving the rest of the row (display name, grade, the three preferences)
-writable as before. INSERT matters as much as UPDATE — with INSERT alone a student could delete
-their profile and re-insert it as a teacher.
-
-Self-service teacher sign-up is unaffected and still intentional: `handle_new_user` is
-`SECURITY DEFINER` owned by `postgres`, so it bypasses column grants and still writes the role the
-registration form chose. What changed is that the value cannot be edited afterwards by the account
-it describes.
-
-**The frontend reads the same column, through `GET /api/profile/me`.** `AuthContext` used to derive
-its role from `user_metadata.role` on the grounds that it only picks which dashboard to render — true
-while every role was chosen at sign-up, and wrong the moment one was not. An account promoted to
-`admin` in the SQL editor has no `role` in its metadata at all, so it rendered as a student: student
-nav, a badge reading "Student", and no link to the console it administers. `/admin` itself worked,
-because `AdminGuard` asks the backend — which is the shape of the bug. The authoritative check was
-right and every surface around it was reading a different source.
-
-Three things about that read are load-bearing:
-
-- **It is not in the `onAuthStateChange` callback.** `apiFetch` calls `getSession()` for the token,
-  supabase-js holds an auth lock while dispatching, and awaiting it there deadlocks — the app hangs
-  on a loader for ever. It lives in an effect the callback merely schedules.
-- **Keyed on the user *id*, not the user object**, so a token refresh mid-lesson does not re-fetch
-  and put the whole app back through a loading state.
-- **A failed read falls back to the claim, not to `student`.** A blip is not a demotion; defaulting
-  to the least-privileged role here would drop every teacher into the wrong application whenever the
-  API was down. That is the opposite direction to `_role` on the backend, deliberately: that one
-  decides *access*, this one decides which nav to draw.
-
-`loading` stays true until the role resolves, or the guards see `role === null` for a frame and
-render the "this account isn't set up" screen on every page load.
-
-**That makes this the one request in the app that may not hang, so it is the one that passes
-`timeoutMs`.** A request that *fails* is caught and falls back to the claim; a request that never
-settles has nothing waiting for it, and leaves `role` null and `loading` true for ever — an infinite
-loader over the whole application for every signed-in user. A `.catch` is not a bound. `apiFetch`'s
-`timeoutMs` is **opt-in with no default**, because a blanket one would abort
-`/api/students/{id}/learning-strategies`, which is bounded server-side at `STRATEGY_LLM_TIMEOUT` and
-can queue behind other waiters first — and `sidecar.js` already documents what a client timeout
-shorter than the work does: it does not cancel anything, it just stops you finding out what happened.
-The bound covers the **whole call**, not the `fetch`: `getAccessToken` awaits
-`supabase.auth.getSession()`, which goes to the network when the token needs refreshing, so wrapping
-`fetch` alone leaves exactly the hang it was added to stop.
-
-Login and Register navigate to `/` and let `HomeRedirect` choose, rather than computing a home from
-the claim. They each carried a second copy of the role-to-home map that `homeRoute.js` exists to be
-the only one of, and both were keyed on the value that does not know about `admin`.
-
-The claim survives only as that fallback, and nothing that matters may be gated on it — same
-reasoning as `AdminGuard` being a UI convenience over a backend check.
-
-**The *name* was the same bug, and it outlived the role fix.** Nine surfaces — all four sidebars, the
-student, parent and teacher dashboard greetings, teacher Settings and Profile's fallback — derived a
-name from `user.email.split('@')[0]`, while `profiles.display_name` was read on one page. The two
-agree until the first edit and then never again, because sign-up seeds the stored name *from* the
-email prefix, so nothing looks wrong until someone renames themselves. `AuthContext` was already
-fetching the row for `role` and discarding the name; it now keeps it and exposes `displayName`
-(stored name → the `user_metadata` claim → email prefix → null), so no surface derives a name of its
-own. **A save has to call `refreshProfile()`**, from both Profile and teacher Settings: the write is
-what makes every other surface stale, and without it a renamed student is greeted by the old name
-until a reload — the same staleness one value along. A blank stored name is `null`, not a name, or
-the greeting addresses nobody.
-
-Two traps met doing it. **`teacher/Settings.jsx` already had a `displayName`** — its edit field — so
-destructuring the context's under that name is a *parse error*, and a parse error deletes that file's
-tests from the run rather than failing them: the suite went quietly from 727 to 720 with zero
-failures. A totals check that counts assertions only cannot see it; count the **files** too, or read
-the per-file status. And `Settings.test.jsx`'s `useAuth` double had no `refreshProfile`, so the page
-threw where the double was thin rather than where a bug was — the mirror of the
-`_FakeMessages.create(**kwargs)` rule, and the same fix: make the double carry what the real thing
-carries.
-
-**The teacher's roster had the same defect on its own read**, and it is the worked example of the
-fixture rule. `Students.jsx` is the one page that reads `profiles` straight through Supabase
-(`profiles!inner(*)`), and it named each row `s.username || s.email.split('@')[0]` — **`profiles`
-has no `username` column**, in any migration, so the first branch never fired and every row showed
-an email prefix whatever the student was called. The search box had the same gap pointing the other
-way: it matched email and id only, so a teacher typing the name on screen found nothing. It survived
-because `Students.test.jsx`'s own fixture invented `username: 'ada'` — *a fixture written from the
-same misreading as the code cannot fail against it*, the rule this file already states for the
-roster `<select>`, arrived at a second time. Build a roster fixture from the columns the table
-actually has.
-
-Tests: `backend/tests/test_role_gates.py`, which asserts both halves — that the code reads the right
-column, and that a migration takes the write away.
-
-Access-control tests live in `Website/AdaptiveLearning/backend/tests/test_access_control.py` and
-run in CI.
-
-## Recording needs consent **and** an open school year
-
-`retention_window` is a single-row table (`enforced`, `starts_on`, `ends_on`, `timezone`) holding
-the school year. Outside it nothing is recorded whatever consent says, and on `ends_on` the
-per-sample rows are deleted — that job is a later change; this is the gate.
-
-**`enforced = false` turns the year off without turning the gate off** (`20260821000000`). It is for
-prototyping and for deployments that do not run on a term, and it exists because the alternative was
-inventing a pair of term dates — which produces a row indistinguishable from a real school year on
-the one table whose job is to say when recording is permitted. The dates are nullable so an
-unenforced row need not carry fake ones. Three states to keep apart: **no row** — nobody decided,
-records nothing; **`enforced = true`** — a real year, needs both dates; **`enforced = false`** —
-deliberately not gating on a term, records. Consent is unaffected and still required.
-
-Two fail-closed edges hold that apart from an accident. It is read as `is False`, never falsiness, so
-a row predating the column — or one PostgREST returns without it, or with an explicit null — keeps
-the gate on rather than being opened by the migration that added it. And `enforced = true` with no
-dates is `unconfigured`, not unbounded: a half-finished edit must not be the most permissive state in
-the system, which is the whole reason an absent row denies.
-
-**It fails closed in five different ways, and they are named separately.** `_retention_window()`
-answers `open`, `not_enforced`, `before_year`, `after_year`, `unconfigured` or `unreadable`, and only
-the first two record — kept distinct because "inside the configured year" and "not gating on a year
-at all" look identical from the recording side and are very different facts about a deployment. An unset window is not an open-ended licence — same default as consent — and a typo'd
-timezone denies rather than falling back to UTC, because a fallback moves every boundary by hours
-while looking like it worked, on a value edited by hand twice a year. "The year hasn't started" and
-"the year is over" reach a parent as different sentences; `_not_recording_reason` puts the window
-reason ahead of the consent one, or a closed year sends someone to the consent screen to fix a
-setting that is fine. `_poller_status` follows the same order, with its own machine-readable
-`stopped_reason` vocabulary (`school_year_ended`, …) — a poller that is not running with consent
-intact and nothing saying why is the silent quiet week arriving through the status endpoint.
-
-**Never read the raw `*_enabled` flags to decide whether to record.** `_permitted_heart_sources`
-takes a `_may_record` result and reads its composed `record_*` flags; hand it a bare `_consent`
-dict and it returns no sources at all, which is the safe direction for that mistake.
-`test_every_recording_site_gates_on_the_window` derives the seven sites (three ingest endpoints,
-the poller's three consent callbacks, `eeg_start`) and fails if one calls
-`_consent(` directly — the same exhaustiveness pattern as `_MODE_AWARE`, and for the same reason.
-
-**The window gates recording only. Don't put it in `_consent()`.** That helper is read by the
-reporting surfaces, the consent screen and the poller status, none of which should change answer
-because term ended: gating there would report every channel off on the last day of school, so a
-parent could not read the history that survives until the delete job runs — and it would read as a
-withdrawal, a claim about a decision nobody made. `_may_record()` composes the two and is what the
-seven recording sites call (the poller's three checks — EEG, its reason, and heart — the three `/api/signals/*` endpoints, and
-`/api/eeg/start`); `_consent()` stays pure and its raw flags ride along beside the `record_*` ones
-so a caller can still tell "they agreed but the year is over" from "they said no".
-
-**The timezone is the school's, not UTC**, for both the window boundaries and the weekly report's
-day buckets. The last day of school ends at local midnight; against a UTC clock it ends
-mid-afternoon or runs into the next day depending which side of the meridian the school is on.
-
-Bucketing goes through `_school_day(ts, tz)`, never `str(ts)[:10]` — PostgREST returns UTC, so
-slicing put a 4pm Californian lesson on the next day of a parent's chart. `_weekly_signal_report`
-resolves `since` to midnight of the earliest *school* day too: `now - 7 days` in UTC starts after
-that day begins wherever the school is behind UTC, so the oldest column silently averaged only part
-of itself.
-
-**`_school_timezone()` defaults to UTC where `_retention_window()` denies, and that asymmetry is
-deliberate.** A wrong boundary while recording collects data nobody agreed to; a wrong boundary
-while reporting moves a chart column by a few hours. Refusing to report over a config typo is the
-larger harm, so the gate fails closed and the report degrades.
-
-There is **no admin role** (`profiles.role` is CHECKed to `student|teacher|parent`), so the row is
-edited through the dashboard SQL editor. RLS is on with **no policies** and `anon`/`authenticated`
-are revoked outright, so only `service_role` and the dashboard reach it. Both are needed: RLS never
-filters `TRUNCATE`.
-
-Tests: `backend/tests/test_retention_window.py`. Every other test file gets an open year from the
-autouse `_school_year_is_open` fixture in `conftest.py` — without it they would pass by recording
-nothing, for a reason unrelated to what they assert.
-
-### The end-of-year delete refuses days nothing summarised
-
-`expire_signal_rows()` removes per-sample rows from `cognitive_signals`,
-`face_signals` and `heart_signals`; `sessions`, `session_answers`, `user_stats` and
-`user_math_performance` stay, because academic history is not signal data.
-
-**It skips any student-day with no `signal_daily_rollup` row**, per channel, and reports the count
-it skipped. That check is the whole safety property: without it a bug in the rollup writer becomes
-silent permanent loss on a fixed date, since the rows it takes are the only copy. With it, a broken
-writer degrades to data that does not expire — visible and fixable. Asserted in
-`scripts/assert_signal_rls.sql`, which runs against a real stack in CI — on all three tables, because
-"the loop body is generated identically" is an argument about the code and the channel mapping
-(`face_signals` → `emotion`) is the one pair whose names do not match.
-
-The return value carries `hit_batch_cap` beside the two counts. Rows that were eligible but not
-reached before `p_max_batches` appear in neither `deleted` nor `skipped_days_without_rollup`, so
-`skipped = 0` on its own does not mean everything eligible was handled — `hit_batch_cap` is the half
-that says so. Harmless either way, since the next run finishes the work, but not something a reader
-should have to infer from a missing number.
-
-**The cutoff is derived, never "today's date".** Days before `starts_on` always expire; once today
-in the school's timezone reaches `ends_on`, everything up to and including it expires too. So the
-job is idempotent and self-healing: a missed run completes on the next one, and a repeat deletes
-nothing new. That is what makes a same-day delete with no grace period acceptable. No window
-configured means no cutoff and nothing deleted — the same fail-closed direction as recording.
-
-Scheduled daily at 03:30 UTC via `pg_cron` rather than on one date, because scheduling a single day
-would turn a missed run into a year of silence. `cron.schedule` upserts on the job name, so
-re-running the migration re-points the job instead of creating a second one that would delete twice.
-
-Storage does **not** cascade. `sessions.chart_paths` is what would tell the job which objects to
-remove and is Phase 8; until that lands there are no archived charts to orphan.
-
-### The daily rollup is written as sessions close, never at expiry
-
-`signal_daily_rollup` holds one row per student per school day per channel
-(`cognitive|heart|emotion`), written by `_rollup_session_days` at the end of `end_session`. Writing
-it continuously is what keeps it from being a race against the end-of-year delete — generating it at
-expiry would make the one job that destroys data also the first to read it. The delete job (not yet
-written) refuses to delete a day with no rollup row, so a broken writer cannot become silent
-permanent loss on a fixed date.
-
-**The aggregation is a Postgres function (`rollup_signal_day`), not backend code**, because a day
-holds thousands of samples and the reporting path caps its reads — averaging a capped subset in
-Python would be quietly wrong, and this is the copy that survives the delete. It **recomputes**
-rather than accumulates, so closing two sessions on one day, or replaying a close, converges;
-an incremental writer would have to be exactly-once, which nothing here can promise.
-
-`_rollup_session_days` **never raises**: it runs last in `end_session`, after the writes that matter,
-because a failed summary must not cost a student their session record and stats update. It rolls up
-every school day the session touched (two if it crossed local midnight), bounded so a corrupt
-`started_at` cannot spin.
-
-Averages are over **trusted rows only** for heart and emotion, matching what the weekly report
-publishes — an untrusted reading is one the quality gate rejected, and averaging it here would
-smuggle it past that gate permanently. `heart_sources` deliberately includes untrusted sources: its
-job is to explain a change in the numbers, and a sensor whose readings were all rejected is exactly
-such an explanation. `trusted_sample_count` is defined per channel (cognitive has no trust flag, so
-it counts rows that produced a measurement rather than the nulled ones a poor-contact headband
-writes).
-
-Its access rules differ from `retention_window`'s above: the rollup carries a **read-your-own
-`SELECT` policy** and `authenticated` keeps `SELECT`, matching the per-sample tables it summarises.
-There is no insert/update/delete policy for anyone, so with RLS on, PostgREST cannot write it
-whatever JWT it carries — the only correct writer is `rollup_signal_day`.
-
-### The term trend reads the rollup and nothing else
-
-`/api/students/{id}/signal-trend` answers week-over-week averages, and is deliberately **not** built
-on `_weekly_signal_report`. That one reads the per-sample tables under `_REPORT_ROW_CAP`, which trims
-**oldest-first** — right for seven days and wrong for six months, because the early weeks would come
-back empty and read as a quiet term rather than as rows nobody fetched. `signal_daily_rollup` is one
-row per student per day per channel, so half a year is a few hundred rows and needs no cap. It is
-also the only copy that outlives `expire_signal_rows`, and a trend is the surface most likely to be
-read *after* a year ends.
-
-**Weeks are weighted by `trusted_sample_count`, and that is derived, not chosen.** `rollup_signal_day`
-writes `avg(focus)` for cognitive and `avg(…) FILTER (WHERE trusted)` for heart; Postgres `avg()`
-skips nulls, so both stored averages already have the trusted count as their denominator. Weighting
-by `sample_count` would divide by rows the average never saw. A mean of daily means is the other
-wrong answer — it weights a 4-sample day like a 4000-sample one.
-
-**`avg_rmssd_ms` carries an approximation**, because the rollup stores one count per channel and a
-column whose nulls do not follow that count's is weighted slightly wrongly: about one trusted window
-in five is gated out of RMSSD while the heart count counts trusted rows. **`avg_stress` carried the
-same one until `20260918000000`** — the cognitive `trusted_sample_count` is
-`count(*) FILTER (WHERE focus IS NOT NULL)`, focus and stress are derived independently, and the
-local calm's hold rule made stress-absent-focus-present the *ordinary* row: a day of 4000 focus rows
-with 200 fresh calms weighed its stress as 4000 and read 0.32 against 0.70. The rollup now records
-`stress_sample_count`, and every reader weights stress on it through `_stress_weight` in `main.py`
-and `COALESCE(stress_sample_count, trusted_sample_count)` in the two cohort RPCs — the fallback is
-per row, for rows rolled before the column, and is the old approximation on exactly the rows it
-always applied to. `avg_focus`, `avg_heart_rate_bpm` and `engagement` (served from `avg_focus`, see
-the Phase 1 section) are exact. The error is between days, never within one.
-
-**A week with nothing recorded is a gap, not a missing bar** — dropped, a fortnight off school renders
-as the weeks either side sitting adjacent. Weeks are whole and Monday-anchored for the same class of
-reason: counting back `weeks * 7` days from today leaves a part-week at each end that looks like a
-full one.
-
-**A declined channel is filtered out of the query, not out of the result.** The first version read
-every channel and dropped the declined ones in Python, on the reasoning that the alternative was
-three queries — a false choice, since one `.in_("channel", …)` narrows the single query it already
-made. CLAUDE.md's rule about the facial opt-out is exactly this: *never fall back to a query that
-reads what the caller opted out of*. Assert on the **filter**, not on the payload — an absent heart
-figure cannot tell "asked and discarded" from "never asked", which is the whole distinction the rule
-is about, and a test that checks only the payload passes either way.
-
-`_FakeSupabase` records every query it builds (`fake.queries`, each with `.filters`) so that
-assertion is possible at all.
-
-### The teacher analytics aggregate in Postgres, and one of them is a table not a chart
-
-Five surfaces (`20260831000000`): a class topic heatmap, class accuracy per school day, a
-weekday×hour heatmap, a real last-active column on the roster, and focus-vs-accuracy per student.
-Three Postgres functions behind them, all `SECURITY INVOKER` and `service_role`-only — the backend
-resolves who owns the class before calling, so they are only ever as safe as the check above them.
-
-**They aggregate in SQL for the reason `rollup_signal_day` does, and the trap is `_REPORT_ROW_CAP`.**
-A class of thirty answering fifty a day is 45,000 rows a month, far past the 5000 cap, and the cap
-trims **oldest-first** — so a Python-side average would describe the recent tail while the early
-weeks read as a quiet term. That is the same trap `/api/students/{id}/signal-trend` was built to
-avoid, one surface over. `class_answer_buckets` returns at most 720 rows for 30 days however busy
-the class, because it is bounded by the *range* rather than by the answers.
-
-**One function serves both the day trend and the time-of-day heatmap**, since they are two readings
-of one grouping — sum the hours for a day, or the days for an hour-of-week. It is still called once
-per endpoint rather than cached between them, so a failure in either cannot blank the other.
-
-**`last_active_for_users` exists because "newest row per student" has no PostgREST form.** One `in_`
-query ordered by time returns the newest rows *overall*, which is one busy student's — the same
-limitation `my_children` documents. That is why the column was absent rather than wrong. It is the
-greatest of two clocks (`coalesce(ended_at, started_at)` and `max(answered_at)`): a student mid-lesson
-answered more recently than their session began, and an open session must not drop out on a null
-`ended_at`. **Three states on the roster** — a timestamp, `null` for never active, and
-`last_active_retrieved: false`. Collapsing the last two tells a teacher the class has stopped
-working, which is both wrong and something they would act on.
-
-**`focus_accuracy_for_user` pairs each answer with the nearest focus reading in the same session**,
-within `_FOCUS_MATCH_SECONDS`. Same *session*, not same student: a reading from another session is a
-different lesson on a different day. An answer with no reading in range is **dropped, not counted as
-focus 0** — sessions run with the headband off, and a zero would drag exactly the unmeasured answers
-to the bottom of the correlation.
-
-**The correlation is withheld below `_FOCUS_MIN_PAIRS` (30) even when the database computed one.**
-`corr()` needs two pairs and will happily answer from them; r over a dozen answers is noise, and it
-reaches a teacher as a single objective-looking number with no visible denominator. The *buckets* are
-still returned below the threshold, deliberately — a bar chart of five bins shows its own sample
-sizes in a way a scalar cannot. Keep three outcomes apart: too few pairs, enough pairs with a null
-`corr()` (no variance in the input — every answer correct), and a real coefficient.
-
-**EEG consent skips the query, and the test asserts on the RPC call rather than the payload.** An
-absent correlation cannot tell "asked and found nothing" from "never asked" — the facial-opt-out rule
-again — so a test that checked only the payload would pass either way.
-
-**`Heatmap.jsx` is a real `<table>` and deliberately not an `AccessibleChart`.** That wrapper exists
-because Recharts emits a bare `<svg>`, so it pairs the picture with an `sr-only` table. A matrix has
-no series to plot: it *is* the table, and `<th scope>` headers let a reader ask for one cell by its
-two headings, which the sr-only copy could not. The shading is an enhancement on top of real markup.
-Consequence worth knowing: `AccessibleChart.test.jsx` **cannot see this file** — its guard matches
-Recharts imports and there are none — so this is on review, the same stated blind spot it has for a
-hand-written `<svg>`. Its colour scale is a **map of complete class strings**, never interpolated,
-for the reason the notice-banner tones are: Tailwind ships only classes it finds as whole strings, so
-`bg-${x}-500` renders as no background in production only.
-
-**A cell has three states and two of them look alike in colour**: a number, `null` for a topic never
-attempted (not shaded, and *not* the zero colour — a topic nobody was served is not one they failed),
-and a real 0%. Below `min_attempts` the figure is still shown and marked thin; what is withheld is
-the confidence, since one answer colours as strongly as four hundred.
-
-**The topic grid's `cells` are a list aligned to `topics`, built server-side in one pass.** Two
-independently ordered lists is the drift `AccessibleChart`'s single `columns` spec exists to prevent;
-don't re-sort either end. The time-of-day grid aligns in the *browser* instead, because that payload
-is sparse — an hour a given day never used is a real absence, not a missing row.
-
-### The cohort panels weight across students, and the roster floor is a server-side gate
-
-`GET /api/classes/{id}/cohort-signals` (`20260902000000`) answers a class-wide signal trend and the
-per-student rows behind it, rendered by `ClassSignalTrend` and `ClassSignalRoster` on `ClassDetail`.
-One endpoint for both, because they answer one question together and two fetches could disagree
-about when they were taken.
-
-**Consent buckets the roster before anything is read.** `_reportable_channels_many` for the whole
-roster, then grouped by `(heart, emotion)` flag pair — at most four calls. One
-call for the whole class would either read a declining student's heart rows under a classmate's
-permission or hide the channel from everyone who allowed it; the bucket is what avoids choosing.
-The RPC does **not** filter consent itself, deliberately, so passing it a mixed roster with one flag
-pair is the way to get that wrong. Heart is `headband_optical OR camera` — the camera carries the
-rPPG fallback — so a test that declines the headband and leaves the camera on has not declined heart.
-
-**Weighted on `trusted_sample_count` at both levels, and the second is the one to watch.** The RPC
-weights across students within a bucket; `_merge_cohort_trend` then weights across *buckets* in
-Python, because the buckets exist for consent reasons and re-averaging their means would weight a
-bucket of one like a bucket of twenty. Verified against the applied migration: two students on one
-day answer **0.7714**, where `avg(avg_focus)` answers 0.5000. A null daily average contributes no
-weight rather than a zero — its count is still real, so it stays in `trusted_sample_count` while
-staying out of the numerator's denominator, or a day of poor electrode contact drags the class below
-every student in it.
-
-**`_COHORT_MIN_STUDENTS` (5) is enforced in the backend, and gates on the roster.** Below it
-`per_student` is `null` and the rows are never built — a client-side hide would leave them in the
-payload for anyone reading it. It counts the roster, not the students who recorded something: a class
-of six where two wore a headband is still a class of six, and gating on the smaller number would
-expose that pair exactly when they are most identifiable. The class trend still renders; it is the
-aggregate the floor exists to protect.
-
-**`_consent_many` / `_reportable_channels_many` are the batch forms**, and a roster is where they
-matter: `my_children` keeps a per-student loop and can, since a family has a handful of children,
-but a class of thirty made thirty sequential reads on a page load. They fail closed exactly as
-`_consent` does and *per student* — a failed read denies **every** requested id with
-`retrieved: False`, since none of them was found out, while a student with no row denies with
-`retrieved: True`. `_channels_from_consent` is the shared pure mapping, so the single and batch
-forms cannot drift and disagree about the same student on two pages.
-
-**One failed bucket fails the whole trend, and takes the roster with it.** Breaking out of the
-bucket loop skips that bucket's totals call and every later one, so leaving `summaries` as `{}`
-reports students nobody asked about with zero counts and `retrieved: True` — "recorded nothing",
-which renders as `No sensor` and is indistinguishable from a class that left the headbands in the
-cupboard. Both flags go false together. The two reads still fail *independently* in the ordinary
-case: a broken totals RPC leaves the chart standing.
-
-**And the row's `retrieved` has to be read by the tile, or that fix stops at the API boundary.**
-Without it the row arrives correct and renders `No sensor` anyway, from the zero counts an unread row
-carries — so the backend flag reads as fixed while the screen still makes the claim. The day count
-needs the same guard: `0` asserts the student recorded on no day at all.
-
-**`cellLabel` orders it, and the order is not the order the flags arrive in.** Consent unreadable
-first, then **a known revocation, which beats the unread row**, then unread, then the sample count.
-The consent fields come from `channels` — a *different query* from the totals RPC — so when that
-read fails the revocation and its date are still fully known; reporting the outage there discards a
-fact we hold for one we do not, and `Unavailable` implies a retry might yield a number that can never
-appear for a revoked channel. Folding `retrieved` straight into `consentRetrieved` gets this wrong
-and looks right, because both spellings produce the correct answer in the two simple cases.
-
-Four states means the tests have to cover the **compound** cases, not each flag alone: `retrieved`
-false and true separately both pass against the wrong precedence. And a fixture built from a
-happy-path helper has to null *every* average, or a leftover default renders a number where the test
-expects a reason.
-
-**Both panels read the rollup, and that is load-bearing rather than tidy.** The roster started on
-`student_signal_summary_many`, which reads the per-sample tables — the right source for the weekly
-report and the parent dashboard, and the wrong one *here*, because this is the first place a
-rollup-backed panel sits directly beside a raw-backed one. `expire_signal_rows` deletes the
-per-sample rows at the end of a school year and leaves the rollup standing, so the pair would have
-shown a full term of class averages above a table reading "No sensor" for every student in it — on a
-fixed date, rather than because anything broke. Caught by running it: a student with rollup rows and
-no raw rows rendered exactly that way.
-
-`class_signal_student_totals` (`20260903000000`) is the same aggregation as its sibling, grouped by
-student rather than by day. One source under both panels, so they cannot answer differently.
-`test_the_roster_reads_the_rollup_and_never_the_per_sample_tables` asserts on the tables that must
-**not** be read — the two sources look identical while both hold the same data, which is every day
-of a school year except the ones after expiry, so nothing about the numbers can see this.
-
-**The roster counts days recorded, not sessions**, for the same reason: a session count comes from
-`sessions`, a table with a different lifetime, which would put one column of the row back on the
-wrong side of the expiry.
-
-**The roster table is a real `<table>`, not an `AccessibleChart`** — same reasoning as `Heatmap.jsx`
-above, and the same blind spot in `AccessibleChart.test.jsx`. Its outlier flag compares against an
-**unweighted** class mean, deliberately a different number from the trend's weighted one: this asks
-"is this student unusual among their classmates", where each classmate is one comparison whatever
-their session length. Using the weighted figure would flag a student for sitting next to someone who
-recorded all afternoon.
-
-**A conditional `<Line>` needs a conditional column, and the sentence cannot test it.**
-`describeSeries` omits a series with no readings on its own, so an aria-label assertion passes
-whether or not the column is gated — inert against the exact bug it names. The defect shows in the
-`sr-only` **table**, where an unconditional column renders "not recorded" on every row. Assert on
-`columnheader`, not the summary.
-
-Both panels honour `viewPrefs.js`'s "Hide sensor data" switch; the academic panels beside them do
-not, because that switch hides sensor data and those measure answers. **It gates every series, not
-the heart one** — focus, stress and engagement are EEG-derived and are as much sensor data as a bpm
-is. Gating only heart left the cognitive lines drawing real values under a note reading "sensor data
-is hidden", which states the opposite of what the panel is doing. A test asserting on that note
-passes either way, since the note renders regardless; assert that no chart, no `sr-only` table and
-no numbers are on screen.
-
-### Abandoned sessions: a third sweep, and two surfaces that were lying about them
-
-Both original sweeps are **on demand** — `start_session` collects a student's strays when they next
-start one, `class_live` collects a class's when a teacher opens the monitor — so a student who never
-comes back is collected by neither. Found in production as sessions still open **two months** after
-they were started.
-
-`_sweep_abandoned_sessions` is the third, run from a background thread started in `_lifespan`.
-**It is a backend thread, not a `pg_cron` job, and that is not a preference.** Closing a session
-credits lifetime totals, writes the daily rollup, archives four charts to storage and raises the
-alerts; SQL can do none of it. A cron job stamping `ended_at` would be a fifth close site that
-skipped all of it — the exact thing `conftest.close_sites()` exists to catch. That helper picks the
-sweeper up automatically, so it is already covered by every close-site guard.
-
-`_SESSION_ABANDONED_AFTER_SEC` (6h, `SESSION_ABANDONED_AFTER_HOURS`) is **an age, not an idleness**,
-and the flag is named for what it can support. A two-hour session with a student answering
-throughout is not abandoned by this measure and is correctly untouched; `class_live` keeps its own
-much tighter `_STALE_AFTER_SEC` computed from real last activity. This one only has to catch the
-session nobody has touched since June, so it errs long — closing a live one would discard the
-question a child is part way through answering. `STALE_SWEEP_INTERVAL_SECONDS=0` disables it.
-
-Safe in several workers at once: `_claim_session_close` is an atomic conditional update, so a race
-means one does the work and the other sees it already closed. **The thread must be joined**, like
-the pollers — it prints, and a print during interpreter shutdown is a fatal stdout-lock abort.
-`conftest` joins it after every test.
-
-**Two surfaces were asserting things the data does not support**, both fixed with the same flag:
-
-- `Sessions.jsx` decided `live = !ended_at`, so an abandoned session rendered a *pulsing* `● LIVE`
-  badge indefinitely. Three states now — live, `never ended`, done — with `abandoned` derived in
-  `student_sessions` so the threshold has one definition rather than a second copy in the browser.
-- Its duration counted to `Date.now()` for open sessions, printing `83132m 45s` for a student who
-  left within the hour. An abandoned session shows a dash: we do not know when it ended.
-
-### The answers table shows the topic and the option text, never the ids
-
-A `session_answers` row carries a question *id* and a `selected_index`, and `SessionReview` rendered
-exactly that — a truncated uuid and the bare number `2`. Both true, neither usable: nothing on the
-screen said what was asked or what `2` meant.
-
-`/api/signals/session/{id}` now embeds the question on the answer
-(`select("*, questions(question_text, options, correct_answer, subject, difficulty)")`) — one query
-however many answers, named columns so a later addition to the bank does not start reaching the
-browser. **PostgREST left-joins the embed**, so an answer whose question has since been deleted
-arrives with `questions: null`; the answer still happened, so the row is still shown and says why it
-cannot expand.
-
-**`questions.correct_answer` is text, not an index.** Comparing it against a position marks the wrong
-option on every question whose answer is not stored in order, so `isCorrectOption` compares *values*
-(trimmed, case-insensitive) with a numeric fallback for a row that holds an index anyway. And
-`options` is unschema'd `jsonb` — `optionList` accepts an array or an object and yields `[]` for
-anything else, which renders as "options were not recorded" rather than crashing on `.map`.
-
-Chosen and correct are spelled out as words next to the glyph, not left to colour and a `✓`.
-
-### Session alerts are operations, never a judgement about a student
-
-`session_alerts` (`20260901000000`) is a teacher-facing feed of things that went wrong with a
-*session*: `session_auto_closed` (the stale sweep ended it, the student did not) and
-`signals_missing` (EEG recording was permitted and no cognitive row arrived). Read at
-`GET /api/classes/{id}/alerts`, rendered by `AlertFeed` on `ClassDetail`.
-
-**The scope is the feature.** `signal_fusion` produces a `stressed` label that no teacher surface
-consumes, and routing it here was considered and rejected: it is an inference from signals this
-codebase already treats as weak, and a timestamped event reads as more objective than a tile does.
-That is what retired `identity_confidence` and the `attention` surfaces (#86). FER+ is not validated
-on this product's users and `signal_fusion`'s own rule is that emotion may withhold and never
-trigger. Every kind in the CHECK whitelist is checkable against the database without interpreting a
-person; keep it that way, and if that ever changes it needs a labelled reference first, not a column.
-
-**`_close_session` takes `closed_by`, defaulting to `CLOSED_BY_STUDENT`.** The function cannot tell
-which of the three close sites is running and the difference is the entire content of
-`session_auto_closed`. It defaults to the student so a new site has to opt *in* to raising an alert —
-a wrongly-raised alert is worse than a missing one on a surface whose value is that every row means
-something happened. `test_every_close_site_says_who_ended_the_session` partitions the sites: each is
-either in `STUDENT_DRIVEN_CLOSERS` or must pass `CLOSED_BY_SWEEP`, so a new closer fails until
-someone classifies it. No property of the source separates them — `/end` and both sweeps stop the
-poller and call the same helper — which is why the list is by name.
-
-**`_raise_session_alerts` runs after the discard and never raises.** After, because an alert about a
-session about to be deleted goes with it on the cascade, and an empty session is not a fault worth
-anyone's attention. Never raises, because it runs after the credit and the rollup and a session's
-record must not be lost because a notification could not be filed.
-
-**`signals_missing` gates on `_may_record`, not `_consent`, and on `is False`, not falsiness.** A
-student who declined the headband is working exactly as configured; so is one whose school year has
-ended or whose recording flag is off. Alerting on any of those trains a teacher to ignore the feed,
-and the first would leak a consent decision as an incident. And `_session_had_signals` answers
-`True`/`False`/`None` — `None` is a failed count, which must not become an accusation that recording
-is broken, the same error as reporting a failed read as a quiet week.
-
-**A `try/except` around `_may_record` catches almost nothing, and that is the trap.** Both helpers
-behind it fail closed by *returning*, not raising: `_consent()` catches its own read error and
-answers `retrieved: False`, and `_retention_window()` answers `WINDOW_UNREADABLE` — and `_may_record`
-spreads both straight through as `record_*: False`. Read as a plain bool, an outage is
-indistinguishable from a student who declined, and the outage is the likelier of the two. The
-three-state signal is already in the dict; `_recording_was_expected` reads `retrieved` and
-`window_state` rather than inferring from the composed answer, and returns `None` for either.
-
-This generalises: **anywhere a `record_*` flag decides whether to report a fault, the `False` is
-three different facts.** Withholding is the right outcome for the unknown one — nobody can act on a
-database blip — but it has to be *logged*, because that branch has no other trace. And the test has
-to assert on the log: the outcome is identical either way, so a test checking only that no alert was
-raised passes against the bug.
-
-**Don't put a literal end-stamp key in a payload here.** `conftest.close_sites()` finds closers by
-scanning for that hand-written key, so a `detail` dict carrying one reads as a fourth close site —
-which happened, and then happened again in the comment explaining it. The timestamps are columns on
-the session the alert already points at, so `detail` carries none.
-
-**Expiry is `expire_session_alerts()`, on the same `expired_signal_cutoff()` — and deliberately with
-no rollup guard.** `expire_signal_rows` refuses a day with no `signal_daily_rollup` row because the
-rows it deletes are the only copy. Nothing summarises alerts and nothing should, so copying that
-guard — the obvious move when modelling this on its neighbour — would mean alerts never expire at
-all. It is also not batched, because this table takes a couple of rows per session rather than
-thousands per hour. Its own `pg_cron` job at 03:35, five minutes after the signal sweep, rather than
-a step inside `expire_signal_rows` — adding one there would change that function's return shape and
-the callers reading it.
-
-**No acknowledge or dismiss, by decision.** Both kinds are about a session that has already ended, so
-there is nothing to resolve; dismissal implies a triage workflow this product does not have, and the
-seven-day window already bounds what is on screen. **An unrecognised `kind` renders as a visible
-unstyled row**, never dropped — the CHECK makes it near-impossible, and if it happens a visible row
-is what gets it reported.
-
-### Archived charts are the other thing that survives the delete
-
-At every session close, `chart_archive.schedule()` renders the session's four charts to standalone
-SVG (`chart_render.py`) and uploads them to the private `session-charts` bucket. With the rollup,
-these are what is left of a school year once `expire_signal_rows` has run.
-
-**Off the request path, and it never raises.** A storage failure must not cost a student their
-session close — the session row, their stats and the rollup are all written by then. So the work
-goes to a two-worker pool and `schedule()` swallows even a submit failure. That makes the log the
-only place a failure can surface, and it *has* to surface: the window in which an archive can still
-be rebuilt closes on `ends_on`.
-
-**Four close sites** — `/end`, the stale-session sweep in `start_session`, `class_live`, and the
-background `_sweep_abandoned_sessions` thread (`conftest.close_sites()` finds all four) — and
-they all go through **`_close_session()`**. Don't hand-write a fifth: the sequence was copied into
-each site and every copy drifted separately, none of them raising anything. The sweep credited a
-`correct_answers` it had never selected (absent column → `None` → `or 0` → an honest-looking zero),
-so every session of a student who shut the tab added its questions and *no* correct answers to their
-record; `class_live` never ran the empty-session discard, so a failed pairing it closed stayed in
-History for ever; and the credit, the rollup and the archive each shipped at different times as "the
-third close site to be missed".
-
-Order is load-bearing: **discard first**, because a rollup of nothing and an archive of four empty
-charts are work done for a session about to stop existing.
-
-**`_close_session` stamps `ended_at` itself, and the stamp is a claim.** It used to sit at each call
-site above the call, which left two things to get wrong per site and both were. `class_live` stamped
-and closed *before* stopping its poller, so a tick could insert a signal row after the discard check
-had looked. And no site made the stamp conditional, so two closes racing — a delayed `/end` against
-the sweep — both ran the whole sequence and both credited the session's *cumulative* counts, landing
-every answer twice in the lifetime totals. `/end`'s read of `ended_at` is not the guard; that read
-and the write are two statements. `_claim_session_close` is: `is_("ended_at","null")` matches at most
-one row. **An empty update result is ambiguous** — it is also what a client not asking PostgREST for
-the updated row returns — so it is confirmed by reading the row back, and only a *different*
-`ended_at` counts as a loss. Guessing "lost" would skip the credit, rollup and archive for every
-close.
-
-Stopping the poller stays at the call sites — it takes different ids at each — and **before the
-call** is now the whole of the ordering rule, pinned by
-`test_every_close_site_stops_the_poller_first`.
-
-**The credit recounts from `session_answers`.** `questions_answered` is a denormalised cache written
-in a separate statement from the answer row, and `_discard_if_nothing_recorded` already distrusts it.
-The credit did not, so a session correctly *saved* from deletion by that re-check was then credited
-zero and the student's work never reached the lifetime totals — permanently, since no later close
-revisits a stamped session. `_answer_counts` only ever revises **upward**: rows fewer than the
-counter means a short read, and crediting less than a previous reading loses work.
-
-The exhaustiveness tests share one discovery helper, `tests/conftest.py:close_sites()` — a closer is
-a function that calls `_close_session(` **or** writes an `"ended_at":` of its own. Both halves
-matter: the first catches a site drifting away from the helper, the second catches a new site that
-hand-rolls a stamp and never reaches it. A second test pins the helper's own contents; the
-indirection is only safe while both halves exist. They catch a step being **removed**, not neutered.
-
-**`chart_paths` has four states and no column default.** A path, `null` for a channel that produced
-nothing, an absent key for a chart never attempted, and column-NULL for a session the archive never
-ran on. `'{}'::jsonb` would claim every pre-Phase-8 session was archived and found nothing — the
-absence-as-data failure again, and `scripts/assert_signal_rls.sql` fails if a default appears.
-
-**Nothing has a policy on `storage.objects`, deliberately.** RLS is on and no policy grants any
-role anything, so only `service_role` — the backend — reads or writes. Not even the student the
-chart is *about*: an object is fetched by URL, not filtered by a query, so the access decision
-belongs in the backend where the relationship checks are, handed out as a short-lived signed URL.
-The bucket is private for the reason no policy can fix later: a public object URL, once pasted
-anywhere, cannot be un-shared. All of that is asserted against a real stack in CI.
-
-Two smaller traps: the archive draws **untrusted rows too**, unlike the rollup, because it is a
-picture of what the reviewer was shown rather than a number outliving its evidence; and `upsert`
-in `file_options` must be the **string** `"true"` — storage-py passes those through as HTTP
-headers, so a bool arrives as `True` and a replayed close 409s instead of overwriting.
-
-**Reading them back is `GET /api/signals/session/{id}/charts`**, which resolves whose session it is,
-applies `_verify_can_view_student`, and issues a signed URL per recorded chart with a 300s TTL.
-Three states stay apart in the payload, and a surface saying "no charts" has to consult all three:
-`archived: false` (the archive never ran), `charts[name]: null` (that channel drew nothing), and
-`name in unavailable` (a path was recorded and the object could not be read). It has deliberately
-**no `retrieved` flag** — unlike the reporting helpers it raises rather than degrading, so a flag
-that is never false would be a state that does not exist.
-
-**The object path is derived there, never read out of `chart_paths`.** That column is ordinary
-jsonb on `sessions`, which carries a `FOR ALL` own-row policy — so before `20260817000000` a student
-could PATCH their own session row through PostgREST and point it at another child's object, and the
-endpoint would sign it, having just correctly confirmed they own *this* session. The stored value
-records **which** charts exist; it is not an address. That migration revokes the write as well, but
-the endpoint must hold without it — a grant is one migration away from being widened back. The
-consequence is that changing `object_path`'s scheme means migrating the objects, which was already
-true.
-
-**A signed URL cannot be revoked.** It stays valid until it expires whatever happens to consent in
-between, so the TTL is the only bound on a leaked one — that is the argument for keeping it short,
-not convenience. A *public* bucket would be worse in kind rather than degree: a URL that has been
-shared cannot be un-shared by any policy added later.
-
-**Storage does not cascade, so a deleted session orphans its SVGs — `sweep_orphan_charts` is what
-collects them.** There is still no delete endpoint in `main.py`, which is exactly why a sweep rather
-than a hook: those deletes come from the dashboard or a direct connection, where the backend never
-runs. `python sweep_orphan_charts.py` reports, `--apply` deletes.
-
-**It deletes on *absence*, which is the dangerous kind of job**, and the guards are the point rather
-than the sweeping. One failed read of `sessions` makes every object in the bucket look orphaned, so:
-the read failing **refuses** instead of proceeding, more than `max_orphan_fraction` (default 0.5)
-looking orphaned refuses, a path that is not `{uuid}/{uuid}/…` is left alone rather than deleted, and
-`dry_run` is the default. **The bucket is listed *before* `sessions` is read**, and that order is a
-guard too — read the table first and a session created in between has objects whose id is missing
-from the snapshot, deleted as an orphan while its row sits there. Listing first can only be stale in
-the safe direction. Each guard has a test and each test was checked by breaking the guard; the first
-version of the read-failure test passed with the guard removed, because the fraction guard caught it
-and its message also mentioned sessions.
-
-An orphan is not a leak — `/charts` resolves the session row before signing, and the bucket has no
-policies — so this is storage that should not exist rather than data anyone can reach. It stops
-being fine when account deletion becomes a feature (#75), because then "delete my account" leaves
-charts of the child behind. **Objects for a session that still exists are out of scope on purpose**:
-`expire_signal_rows` leaves the archive standing deliberately, and a sweep that "corrected" that
-would remove the thing that makes a same-day delete defensible.
-
-**The archived charts deliberately survive `expire_signal_rows`.** The plan says in one place that
-the expiry job removes them; that is wrong and the plan contradicts itself two paragraphs later.
-Deleting per-sample rows on `ends_on` with no grace period is only defensible *because* the rollup
-and these SVGs survive — they are the human-readable record of the year. A job that took both would
-remove the thing that makes its own schedule safe.
+**`user_metadata.role` is attacker-controlled.** The client sets it at sign-up and can rewrite it with
+`supabase.auth.updateUser({data: {role: 'teacher'}})`, which talks to GoTrue and never passes through this backend.
+`create_class`, `my_classes` and `link_child` gated on it, so any student could self-elevate. They call **`_role(uid)`**,
+which reads `profiles.role`; `test_no_endpoint_gates_on_user_metadata` greps the module so a fourth site cannot appear.
+It fails closed to `student`, since `_profile` degrades to a student-shaped dict on a failed read.
+
+**Switching to `profiles.role` is only half of it, and it is the half that looks like the whole fix.** `profiles`
+carries a `FOR ALL` own-row policy and `authenticated` held UPDATE, so that column was equally client-writable. **RLS
+narrows *which rows*, never *which columns*, and a CHECK cannot express "not by you".** Only the grant can, and grants
+are per-column for UPDATE and INSERT — INSERT matters as much as UPDATE, since with it alone a student could delete
+their profile and re-insert it as a teacher. Self-service teacher sign-up is unaffected: `handle_new_user` is
+`SECURITY DEFINER` owned by `postgres`, so it bypasses column grants. What changed is that the value cannot be edited
+afterwards by the account it describes. `backend/tests/test_role_gates.py` asserts both halves — the code reads the
+right column, and a migration takes the write away.
+
+### The frontend reads the same column, through `GET /api/profile/me`
+
+`AuthContext` used to derive its role from the claim, true while every role was chosen at sign-up and wrong the moment
+one was not: an account promoted to `admin` in the SQL editor has no `role` in its metadata, so it rendered as a
+student — while `/admin` itself worked, because `AdminGuard` asks the backend. That is the shape of the bug: the
+authoritative check was right and every surface around it read a different source.
+
+- **It is not in the `onAuthStateChange` callback.** `apiFetch` calls `getSession()` for the token, supabase-js holds
+  an auth lock while dispatching, and awaiting it there deadlocks — the app hangs on a loader for ever. It lives in an
+  effect the callback merely schedules.
+- **Keyed on the user *id*, not the user object**, so a token refresh mid-lesson does not put the whole app back
+  through a loading state.
+- **A failed read falls back to the claim, not to `student`.** A blip is not a demotion; defaulting to the
+  least-privileged role would drop every teacher into the wrong application whenever the API was down. The opposite
+  direction to `_role` on the backend, deliberately: that one decides *access*, this one decides which nav to draw.
+
+`loading` stays true until the role resolves, or the guards see `role === null` for a frame and render "this account
+isn't set up" on every page load. **That makes this the one request in the app that may not hang, so it is the one that
+passes `timeoutMs`.** A request that *fails* is caught; one that never settles leaves `loading` true for ever — an
+infinite loader for every signed-in user. **A `.catch` is not a bound.** `timeoutMs` is **opt-in with no default**,
+because a blanket one would abort `/api/students/{id}/learning-strategies`, which is bounded server-side and can queue
+behind other waiters first. The bound covers the **whole call**, not the `fetch`: `getAccessToken` awaits
+`supabase.auth.getSession()`, which goes to the network when the token needs refreshing, so wrapping `fetch` alone
+leaves exactly the hang it was added to stop.
+
+Login and Register navigate to `/` and let `HomeRedirect` choose rather than computing a home from the claim — they
+each carried a second copy of the role-to-home map that `homeRoute.js` exists to be the only one of, keyed on the value
+that does not know about `admin`. The claim survives only as the fallback, and nothing that matters may be gated on it.
+
+### The *name* was the same bug, and it outlived the role fix
+
+Nine surfaces derived a name from `user.email.split('@')[0]` while `profiles.display_name` was read on one page. The two
+agree until the first edit and then never again, because sign-up seeds the stored name *from* the email prefix.
+`AuthContext` was already fetching the row for `role` and discarding the name; it now exposes `displayName` (stored
+name → claim → email prefix → null), so no surface derives a name of its own. **A save has to call `refreshProfile()`**
+from both Profile and teacher Settings: the write is what makes every other surface stale. A blank stored name is
+`null`, not a name, or the greeting addresses nobody.
+
+Two traps met doing it. **`teacher/Settings.jsx` already had a `displayName`** — its edit field — so destructuring the
+context's under that name is a *parse error*, and **a parse error deletes that file's tests from the run rather than
+failing them**: the suite went quietly from 727 to 720 with zero failures. A totals check that counts assertions cannot
+see it; count the **files** too. And `Settings.test.jsx`'s `useAuth` double had no `refreshProfile`, so the page threw
+where the double was thin rather than where a bug was — make the double carry what the real thing carries.
+
+**The teacher's roster had the same defect on its own read**, and is the worked example of rule 4. `Students.jsx` is
+the one page that reads `profiles` straight through Supabase, and it named each row
+`s.username || s.email.split('@')[0]` — **`profiles` has no `username` column**, in any migration, so the first branch
+never fired and every row showed an email prefix. The search box had the same gap pointing the other way: it matched
+email and id only, so a teacher typing the name on screen found nothing. It survived because `Students.test.jsx`'s own
+fixture invented `username: 'ada'`.
+
+Access-control tests live in `backend/tests/test_access_control.py` and run in CI.
 
 ## Consent — `signal_consent` decides what may be recorded
 
 Three channels, named for the **sensor** rather than the signal derived from it: `eeg`,
-`headband_optical` (heart rate today; the Athena's `OPTICS` packet also carries fNIRS, so a
-`_ppg_` name would go stale), and `camera` — which covers expression **and** the rPPG heart-rate
-fallback. One device, one decision: a heart-rate failover must never open a webcam the student
-declined.
+`headband_optical` (heart rate today; the Athena's `OPTICS` packet also carries fNIRS, so a `_ppg_`
+name would go stale), and `camera` — which covers expression **and** the rPPG heart-rate fallback. One
+device, one decision: a heart-rate failover must never open a webcam the student declined.
 
 **Everything defaults to false.** An absent row means the same as a row of falses, so there is no
-backfill and an unconfigured student records nothing. `_consent()` fails **closed** on a read error
-and carries `retrieved` so callers can tell "nobody consented" from "we couldn't find out" — the
-opposite of the reporting helpers below, deliberately: a dashboard degrading to empty is fine, a
-consent check degrading to *enabled* records data against a refusal.
+backfill and an unconfigured student records nothing. `_consent()` fails **closed** on a read error and
+carries `retrieved` so callers can tell "nobody consented" from "we couldn't find out".
 
-**Withdrawal stops future recording and keeps what is already stored.** Decided 2026-08-10: a
-revoked channel records nothing further until consent is given again, and no past row is deleted or
-hidden. Withdrawal is not erasure — that is `POST /api/consent/{id}/erase`, below.
+**Withdrawal stops future recording and keeps what is already stored.** A revoked channel records
+nothing further until consent is given again, and no past row is deleted or hidden. Withdrawal is not
+erasure.
 
-### Erasure is the other request, and nothing triggers it by side effect
+**Writes only through the backend.** The table has no insert/update/delete policy for anyone, so with
+RLS on, PostgREST cannot write it whatever JWT it carries — including the anon key in the frontend
+bundle. `main.py` is the enforcement:
+
+- a student may only move a flag **true → false**; only a linked parent may move it back
+- a **teacher may read but not write** — they need to see a channel is off, or a blank tile reads as a
+  broken query, but consent is not theirs to change. Use `_consent_actor`, not
+  `_verify_can_view_student`, which admits teachers
+- `revoked_by` is surfaced as a **role, never an identity**, and is stored **per channel**. The row has
+  one `updated_by` and the channels are revoked independently, so deriving the role from it would
+  report a parent's later unrelated write as having made the student's earlier revocation
+
+**RLS `WITH CHECK` cannot see the previous row**, so "off-direction only" is not expressible as a
+policy — which is why the student gets no update policy at all rather than a narrowed one.
+
+Writes are **conditional on the state they were decided against** (`.eq()` on each flag being changed)
+and answer 409 if it moved. Read-then-write is not atomic, and the pair that races here is a student's
+withdrawal against a parent's re-enable on the same channel — losing that silently means recording
+against a refusal.
+
+A parent turning a channel **back on** sets `parent_enabled_at` and raises `needs_student_ack`, cleared
+by `POST /api/consent/ack`. A parent turning one *off* raises nothing. Discovering a resumed sensor by
+noticing data reappear is not consent.
+
+**That rule has to hold on both ingestion paths, and for a while it did not.** `/api/signals/*` has
+called `_consent()` per request since it existed; the poller writes `cognitive_signals` directly with
+the **service-role** client, so under `pull` a withdrawal stopped nothing. Now: `/api/eeg/start` refuses
+**403** (not the 409 push uses — one says this student said no, the other says this deployment does not
+work that way), and a running poller re-reads consent every `CONSENT_RECHECK_SECONDS`.
+`eeg_poller.set_consent_check()` is wired from `main` at import and has **no default**: unwired,
+`start()` raises rather than assuming yes, because an unwired deployment that assumes yes is
+indistinguishable from a wired one.
+
+Tests: `backend/tests/test_consent.py`.
+
+## Recording needs consent **and** an open school year
+
+`retention_window` is a single-row table (`enforced`, `starts_on`, `ends_on`, `timezone`) holding the
+school year. Outside it nothing is recorded whatever consent says, and on `ends_on` the per-sample rows
+are deleted.
+
+**`enforced = false` turns the year off without turning the gate off.** It is for prototyping and for
+deployments that do not run on a term, and it exists because the alternative was inventing a pair of
+term dates — which produces a row indistinguishable from a real school year on the one table whose job
+is to say when recording is permitted. The dates are nullable so an unenforced row need not carry fake
+ones. Three states: **no row** — nobody decided, records nothing; **`enforced = true`** — a real year,
+needs both dates; **`enforced = false`** — deliberately not gating on a term, records. Consent is
+unaffected and still required.
+
+Two fail-closed edges hold that apart from an accident. It is read as `is False`, never falsiness, so a
+row predating the column — or one PostgREST returns without it, or with an explicit null — keeps the
+gate on rather than being opened by the migration that added it. And `enforced = true` with no dates is
+`unconfigured`, not unbounded: a half-finished edit must not be the most permissive state in the system.
+
+**It fails closed in five different ways, and they are named separately.** `_retention_window()` answers
+`open`, `not_enforced`, `before_year`, `after_year`, `unconfigured` or `unreadable`, and only the first
+two record. "Inside the configured year" and "not gating on a year at all" look identical from the
+recording side and are very different facts about a deployment. A typo'd timezone **denies** rather than
+falling back to UTC, because a fallback moves every boundary by hours while looking like it worked, on a
+value edited by hand twice a year. "The year hasn't started" and "the year is over" reach a parent as
+different sentences; `_not_recording_reason` puts the window reason ahead of the consent one, or a
+closed year sends someone to the consent screen to fix a setting that is fine. `_poller_status` follows
+the same order, with its own machine-readable `stopped_reason` vocabulary (`school_year_ended`, …) — a
+poller that is not running with consent intact and nothing saying why is the silent quiet week arriving
+through the status endpoint.
+
+**Never read the raw `*_enabled` flags to decide whether to record.** `_permitted_heart_sources` takes a
+`_may_record` result and reads its composed `record_*` flags; hand it a bare `_consent()` dict and it
+returns no sources at all, which is the safe direction for that mistake.
+`test_every_recording_site_gates_on_the_window` derives the seven sites (three ingest endpoints, the
+poller's three consent callbacks, `eeg_start`) and fails if one calls `_consent(` directly.
+
+**The window gates recording only. Don't put it in `_consent()`.** That helper is read by the reporting
+surfaces, the consent screen and the poller status, none of which should change answer because term
+ended: gating there would report every channel off on the last day of school, so a parent could not read
+the history that survives until the delete job runs — and it would read as a withdrawal, a claim about a
+decision nobody made. `_may_record()` composes the two; `_consent()` stays pure and its raw flags ride
+along beside the `record_*` ones.
+
+**The timezone is the school's, not UTC**, for both the window boundaries and the weekly report's day
+buckets. The last day of school ends at local midnight; against a UTC clock it ends mid-afternoon or
+runs into the next day. Bucketing goes through `_school_day(ts, tz)`, never `str(ts)[:10]` — PostgREST
+returns UTC, so slicing put a 4pm Californian lesson on the next day of a parent's chart.
+`_weekly_signal_report` resolves `since` to midnight of the earliest *school* day too: `now - 7 days` in
+UTC starts after that day begins wherever the school is behind UTC, so the oldest column silently
+averaged only part of itself.
+
+**`_school_timezone()` defaults to UTC where `_retention_window()` denies, and that asymmetry is
+deliberate.** A wrong boundary while recording collects data nobody agreed to; a wrong boundary while
+reporting moves a chart column by a few hours. So the gate fails closed and the report degrades.
+
+The row is edited through the dashboard SQL editor. RLS is on with **no policies** and
+`anon`/`authenticated` are revoked outright, so only `service_role` and the dashboard reach it. Both are
+needed: RLS never filters `TRUNCATE`.
+
+Tests: `backend/tests/test_retention_window.py`. Every other test file gets an open year from the autouse
+`_school_year_is_open` fixture in `conftest.py` — without it they would pass by recording nothing, for a
+reason unrelated to what they assert.
+
+### The end-of-year delete refuses days nothing summarised
+
+`expire_signal_rows()` removes per-sample rows from `cognitive_signals`, `face_signals` and
+`heart_signals`; `sessions`, `session_answers`, `user_stats` and `user_math_performance` stay, because
+academic history is not signal data.
+
+**It skips any student-day with no `signal_daily_rollup` row**, per channel, and reports the count it
+skipped. That check is the whole safety property: without it a bug in the rollup writer becomes silent
+permanent loss on a fixed date, since the rows it takes are the only copy. With it, a broken writer
+degrades to data that does not expire — visible and fixable. Asserted in `scripts/assert_signal_rls.sql`
+**on all three tables**, because "the loop body is generated identically" is an argument about the code
+and the channel mapping (`face_signals` → `emotion`) is the one pair whose names do not match.
+
+The return value carries `hit_batch_cap` beside the two counts. Rows that were eligible but not reached
+before `p_max_batches` appear in neither `deleted` nor `skipped_days_without_rollup`, so `skipped = 0`
+alone does not mean everything eligible was handled.
+
+**The cutoff is derived, never "today's date".** Days before `starts_on` always expire; once today in the
+school's timezone reaches `ends_on`, everything up to and including it expires too. So the job is
+idempotent and self-healing: a missed run completes on the next one, and a repeat deletes nothing new.
+That is what makes a same-day delete with no grace period acceptable. No window configured means no
+cutoff and nothing deleted.
+
+Scheduled daily at 03:30 UTC via `pg_cron` rather than on one date, because scheduling a single day would
+turn a missed run into a year of silence. `cron.schedule` upserts on the job name, so re-running the
+migration re-points the job instead of creating a second one that would delete twice.
+
+**Archived charts deliberately survive it.** Deleting per-sample rows on `ends_on` with no grace period
+is only defensible *because* the rollup and the archived SVGs survive — they are the human-readable
+record of the year. A job that took both would remove the thing that makes its own schedule safe.
+
+`expire_session_alerts()` runs on the same `expired_signal_cutoff()` and deliberately with **no rollup
+guard** — nothing summarises alerts and nothing should, so copying that guard would mean alerts never
+expire at all. It is not batched (a couple of rows per session, not thousands per hour) and has its own
+`pg_cron` job at 03:35 rather than a step inside `expire_signal_rows`, which would change that function's
+return shape and the callers reading it.
+
+## Erasure is the other request, and nothing triggers it by side effect
 
 `erase_signals(user, channel, by, tz)` destroys one channel's stored signals for one student;
 `signal_erasure` records that it happened. It runs **only** when a parent asks by name —
-`test_changing_consent_never_erases` pins that, because wiring a revocation to the delete would turn
-the reversible control into the irreversible one by a side effect nobody asked for.
+`test_changing_consent_never_erases` pins that, because wiring a revocation to the delete would turn the
+reversible control into the irreversible one by a side effect nobody asked for.
 
-**A linked parent only**, so *not* `_consent_actor`: a student may withdraw precisely because a
-parent can undo it, and nothing undoes this. The request carries its own `confirm: true` — a dialog
-is not auditable.
+**A linked parent only**, so *not* `_consent_actor`: a student may withdraw precisely because a parent
+can undo it, and nothing undoes this. The request carries its own `confirm: true` — a dialog is not
+auditable.
 
-**Per channel, with the heart deletes keyed on `source`.** `camera` takes `face_signals` and the
-`rppg` heart rows; `headband_optical` takes the `muse_optics` ones. Keyed on the table instead, a
-parent erasing the webcam would destroy headband data they said nothing about.
+**Per channel, with the heart deletes keyed on `source`.** `camera` takes `face_signals` and the `rppg`
+heart rows; `headband_optical` takes the `muse_optics` ones. Keyed on the table instead, a parent erasing
+the webcam would destroy headband data they said nothing about.
 
 **Derived data goes too, and the rollup is deleted before it is rebuilt.** `rollup_signal_day` has
 `HAVING count(*) > 0` on every channel, so with the raw rows gone it inserts nothing and *leaves the
-existing row standing* — averages of erased data outliving the erasure. Deleting first is what makes
-the rebuild a recomputation. The rebuild is not optional either: `expire_signal_rows` refuses a day
-with no rollup row, so a day left without one keeps its raw rows past `ends_on`.
+existing row standing* — averages of erased data outliving the erasure. Deleting first is what makes the
+rebuild a recomputation. The rebuild is not optional either: `expire_signal_rows` refuses a day with no
+rollup row, so a day left without one keeps its raw rows past `ends_on`.
 
 **Archived charts go if they draw on the channel at all**, so `camera` takes `heart_rate` and
 `stress_pie` with it — those mix both sensors into one picture and no pixel says which is which.
@@ -3090,270 +997,354 @@ Over-deletion, preferred to serving a chart that still contains what was erased.
 writer's choosing.
 
 The database half is one transaction; storage removal runs after it commits and is **counted, not
-awaited** (`charts_failed`, plus a log line). Once `chart_paths` is nulled the objects are
-unreachable through the product either way, which is why that is safe to report rather than roll
-back.
+awaited** (`charts_failed`, plus a log line). Once `chart_paths` is nulled the objects are unreachable
+through the product either way.
 
-**The control** (`ConsentChannels.jsx`) is per channel and parent-only; a student sees that an
-erasure happened but is not offered an action the backend would refuse. It is gated behind an "I
-understand this cannot be undone" checkbox, cleared whenever a panel opens so an acknowledgement
-cannot carry between channels, and sends the **channel** name (`camera`), not the switch key
-(`camera_enabled`), which 422s. The confirmation states what goes *and* what stays, and that the
-setting is unchanged — erasing the past while leaving the sensor on is the mistake most available to
-a parent. That scope belongs in the confirmation, not as standing copy: a permanent disclaimer means
-the control's name overpromised, which is what retired `FacialRecognitionToggle`.
+**The control** (`ConsentChannels.jsx`) is per channel and parent-only; a student sees that an erasure
+happened but is not offered an action the backend would refuse. It is gated behind an "I understand this
+cannot be undone" checkbox, **cleared whenever a panel opens** so an acknowledgement cannot carry between
+channels, and sends the **channel** name (`camera`), not the switch key (`camera_enabled`), which 422s.
+The confirmation states what goes *and* what stays, and that the setting is unchanged — erasing the past
+while leaving the sensor on is the mistake most available to a parent. **That scope belongs in the
+confirmation, not as standing copy**: a permanent disclaimer means the control's name overpromised, which
+is what retired `FacialRecognitionToggle`.
 
-**The tombstone is the fourth reporting state.** `erased_at` rides on each channel of the consent
-payload, independent of `enabled` and `revoked_at` — a parent who erased and re-consented has a
-channel that is on and a past that is gone. `_erasures()` fails **open** to `{}`, unlike `_consent()`:
-it decides only whether a tile says "erased" or "no sensor", never whether anything may be recorded.
+**The tombstone is the fourth reporting state.** `erased_at` rides on each channel of the consent payload,
+independent of `enabled` and `revoked_at` — a parent who erased and re-consented has a channel that is on
+and a past that is gone. `_erasures()` fails **open** to `{}`, unlike `_consent()`: it decides only
+whether a tile says "erased" or "no sensor", never whether anything may be recorded.
 
-That rule has to hold on **both ingestion paths**, and for a while it did not. `/api/signals/*` has
-called `_consent()` per request since it existed; the poller writes `cognitive_signals` directly with
-the **service-role** client, so neither RLS nor the ingest endpoint applies to it, and under
-`INGEST_MODE=pull` a withdrawal stopped nothing. Now: `/api/eeg/start` refuses **403** (not the 409
-push uses — one says this student said no, the other says this deployment does not work that way),
-and a running poller re-reads consent every `CONSENT_RECHECK_SECONDS` so a mid-lesson withdrawal
-lands without waiting for the session to end. `eeg_poller.set_consent_check()` is wired from `main`
-at import and has **no default**: unwired, `start()` raises rather than assuming yes, because an
-unwired deployment that assumes yes is indistinguishable from a wired one.
+## Admin is a role, and three migrations are what make that safe
 
-**Writes only through the backend.** The table has no insert/update/delete policy for anyone, so
-with RLS on, PostgREST cannot write it whatever JWT it carries — including the anon key in the
-frontend bundle. `main.py` is the enforcement:
+Admin is `profiles.role = 'admin'`, read through the same `_role` every other role gate uses, and set
+from the dashboard SQL editor.
 
-- a student may only move a flag **true → false**; only a linked parent may move it back
-- a **teacher may read but not write** — they need to see a channel is off, or a blank tile reads as
-  a broken query, but consent is not theirs to change. Use `_consent_actor`, not
-  `_verify_can_view_student`, which admits teachers
-- `revoked_by` is surfaced as a **role, never an identity**, and is stored **per channel**. The row
-  has one `updated_by` and the channels are revoked independently, so deriving the role from it
-  would report a parent's later unrelated write as having made the student's earlier revocation
+**It is a role rather than a side table only because the column is server-controlled on both edges**, and
+both are load-bearing: one migration revokes UPDATE/INSERT on it from the client roles, another whitelists
+`student|teacher|parent` in `handle_new_user` so sign-up cannot ask for it. Widening the CHECK without the
+whitelist would have been a self-service admin signup — the trigger copies `raw_user_meta_data->>'role'`
+straight into the column, so `signUp({data:{role:'admin'}})` from a console would have made an
+administrator. The backfill migration repeats the whitelist for the same reason: it reads the same
+client-supplied metadata.
 
-RLS `WITH CHECK` cannot see the previous row, so "off-direction only" is not expressible as a
-policy — which is why the student gets no update policy at all rather than a narrowed one.
+`AdminGuard` asks `GET /api/admin/me` rather than reading a role client-side; it is a UI convenience, and
+every `/api/admin/*` endpoint re-checks.
 
-Writes are **conditional on the state they were decided against** (`.eq()` on each flag being
-changed) and answer 409 if it moved. Read-then-write is not atomic, and the pair that races here is
-a student's withdrawal against a parent's re-enable on the same channel — losing that silently
-means recording against a refusal.
+### `profiles` rows come from a trigger, and it was missing from source control
 
-A parent turning a channel **back on** sets `parent_enabled_at` and raises `needs_student_ack`,
-cleared by `POST /api/consent/ack`. A parent turning one *off* raises nothing. Discovering a
-resumed sensor by noticing data reappear is not consent.
+`handle_new_user` was written for an `auth.users` trigger that **no migration created**. That was
+recorded and left, correctly, while `profiles` was decoration — it stopped being decoration when `_role`
+started gating on it, since a missing row means `_profile` degrades to a student-shaped dict and a teacher
+is refused their own classes with nothing to read. The migration creates the trigger and backfills the
+rows, and is safe against a hand-made survivor: `on conflict (id) do nothing` makes a second firing a
+no-op. Check for one under a different name after applying.
 
-Tests: `backend/tests/test_consent.py`.
+It deliberately **does not UPDATE existing rows**. `raw_user_meta_data` still holds whatever was typed at
+sign-up, so refreshing from it would silently demote every administrator.
 
-`frontend/src/lib/facePref.js`, the viewer-side localStorage read filter that used to sit beside
-this, is deleted — this table replaced it, and the teacher's `viewPrefs.js` (below) is the only
-client-side filter left and is not a consent control.
+### Feature flags can only ever say no
 
-## Reporting — a failed read must not look like a quiet week
+`feature_flags` is key/value, read through `_FEATURE_FLAG_DEFAULTS`, which is the contract: **a key absent
+from the table still has a value, and it is the value the system had before the table existed.** That is
+what let the flags ship without changing behaviour, and it is why an unreadable table falls back to the
+*declared defaults* rather than to off — a database blip is not a reconfiguration. The map is also the
+whitelist: an unrecognised row is inert and a write to an unknown key is a 404, so a typo cannot create a
+switch that reads back as set and controls nothing. Cached 30 s, cleared on every write.
 
-Every reporting helper swallows its exception so one broken query doesn't blank a dashboard, and
-answers 200 with a default payload. Zero samples and a null average are then indistinguishable
-from a student who genuinely recorded nothing — which is how surfaces came to report an absence in
-data that never loaded. Three states, and the payload has to separate all three:
+**The three `recording_*` flags are ANDed into `_may_record`, never ORed.** A flag can withhold recording
+and can never grant it, so no combination of switches records something a student declined — the same
+asymmetry `signal_fusion` documents, and a brute-force-ish test pins it.
 
-- **nothing recorded** — the read succeeded and found no rows.
-- **not requested** — `face_included: false`, the facial opt-out was on.
-- **not retrieved** — `retrieved: false`, the query itself failed.
+Every write lands in `feature_flag_changes`, append-only, written by the backend rather than by a trigger —
+the backend already resolved the admin's identity to admit the request, so a trigger would be a second and
+worse answer to that question. A failed audit insert never undoes the flag: it is already written, and
+raising would invite a retry that changes nothing and audits nothing.
 
-`_shape_summary` carries both flags on every payload, so a consumer never treats "field absent" as
-a fourth state. `_signal_summaries` returns `None` for a failed batch read versus `{}` for one that
-succeeded with nothing to return. **Any surface that renders "no data" must consult these before
-saying so**, and a new aggregate helper has to carry them the same way.
+### `consent_enforcement_enabled` — the one switch that records without consent
+
+Off, `_may_record` substitutes a fully-consenting answer. It is for prototyping, it is against the grain of
+everything else here, and so it is **bounded rather than trusted**:
+
+- **Expiry is evaluated on every read** (`_consent_enforcement_active`), not by a job that flips the row
+  back. A scheduled job that fails to run leaves consent unenforced indefinitely, and not-indefinitely is
+  the single guarantee this has to make.
+- **A bypass with no `bypass_until` has already expired**, so a hand-edited row resumes enforcement rather
+  than running for ever.
+- **Disabling it requires an explicit duration**, capped at `_MAX_BYPASS_MINUTES` (4 h). No default — a
+  default would be `main.py` choosing how long consent goes unenforced.
+- **`_consent()` itself is untouched.** The bypass is a decision about whether to *ask*, not a claim that
+  anyone agreed, so the consent screen, the reporting surfaces and the poller status keep showing what the
+  family actually decided. `consent_bypassed` rides on the `_may_record` payload so a caller reporting
+  *why* something is recorded does not say the student agreed.
+- **It does not override the school year.**
+
+### The admin read surfaces send counts and timestamps, never readings
+
+`/api/admin/live-signals` answers "is data arriving" for every open session. **It selects `ts` alone**, so
+the readings never leave the database rather than being fetched and dropped on the way out. An admin has no
+relationship to those students entitling them to the values, and asking for less is a stronger version of
+that property than filtering afterwards: the test asserts on the *select*, which is the only place the
+difference shows.
+
+It shares `_LIVE_WINDOW_SEC`/`_STALE_AFTER_SEC` with `class_live` — two sets of numbers would let one page
+call a session live while the other called it stale — but **not its row reads.** `class_live` reads the
+newest row per channel for the whole roster in **one** `latest_signals_for_sessions` RPC
+(`_latest_signals_many`), and that must stay one call: an earlier version fanned a per-session read out
+into a shared four-worker pool, and fanning this endpoint's outer loop into the same pool **deadlocked** —
+the waiters and the work they wait on ended up in one queue. That pool is gone; do not reintroduce it.
+`_admin_live_pool` (8 workers) still exists for this endpoint's per-session work, and nothing submitted to
+it waits on anything else in it.
+
+**Five states per channel, and they are not a scale**: flowing, quiet, stale, **never-reported**, and
+**unreadable** (`seen: null`). The last two are the ones to keep apart — a session that never had that
+sensor is a different fact from one whose sensor stopped, and both differ from a read that failed.
+
+`/api/admin/health` reports `ok` / `degraded` / `unknown`, and **a check that could not run is `unknown`,
+never `ok`.** `/api/admin/consent-summary` is counts only. `/api/admin/env-flags` lists the env-var
+switches read-only, from a **named list** — `os.environ` also holds the service-role key, and a dashboard
+that enumerated the environment would eventually render a secret.
+
+Tests: `backend/tests/test_admin.py`. `conftest`'s `_feature_flags_are_default` pins the defaults for every
+other test file, and **deliberately does not take `monkeypatch`** — requesting it from an autouse fixture
+pytest orders early hoists `monkeypatch`'s setup ahead of `_join_poller_threads` and inverts their
+teardown, which failed three unrelated tests in teardown for a reason nothing in their bodies could
+explain. `pytest --setup-plan` shows the ordering directly.
+---
+
+# Reporting and UI
+
+## A failed read must not look like a quiet week
+
+Every reporting helper swallows its exception so one broken query doesn't blank a dashboard, and answers
+200 with a default payload. Zero samples and a null average are then indistinguishable from a student who
+genuinely recorded nothing — rule 1, and how surfaces came to report an absence in data that never loaded.
+The payload has to separate all three states: **nothing recorded** (the read succeeded and found no rows),
+**not requested** (`face_included: false`), **not retrieved** (`retrieved: false`).
+
+`_shape_summary` carries both flags on every payload, so a consumer never treats "field absent" as a fourth
+state. `_signal_summaries` returns `None` for a failed batch read versus `{}` for one that succeeded with
+nothing to return. **Any surface that renders "no data" must consult these before saying so**, and a new
+aggregate helper has to carry them the same way.
 
 ## The facial opt-out means the data is not read
 
-`include_face=False` skips the query outright — `_weekly_signal_report` never touches
-`face_signals`, and the summary RPCs take `p_include_face` so the aggregate reads no facial row
-either. Nulling values on the way out is not an implementation of this. If there is ever no way to
-tell the database to skip the rows, the correct answer is a blank tile, not a read — never fall
-back to a query that reads what the caller opted out of.
+`include_face=False` skips the query outright — `_weekly_signal_report` never touches `face_signals`, and
+the summary RPCs take `p_include_face` so the aggregate reads no facial row either. **Nulling values on the
+way out is not an implementation of this.** If there is ever no way to tell the database to skip the rows,
+the correct answer is a blank tile, not a read — never fall back to a query that reads what the caller opted
+out of. Assert on the **filter**, not the payload (rule 4).
 
-**That rule now belongs to consent, which is server-side and genuinely skips the read.** The
-viewer-side switch it was written for is gone: `facePref.js` was a read filter wearing the
-vocabulary of consent, and it needed a disclaimer in its own UI copy — *"this does not switch a
-camera on or off"* — to stop being read as one. Needing that sentence was the signal the control was
-wrong.
+That rule now belongs to consent, which is server-side and genuinely skips the read. The viewer-side switch
+it was written for is gone: `facePref.js` was a read filter wearing the vocabulary of consent, and it needed
+a disclaimer in its own UI copy — *"this does not switch a camera on or off"* — to stop being read as one.
+**Needing that sentence was the signal the control was wrong.**
 
 **The teacher's replacement deliberately breaks the rule, and says so.** `frontend/src/lib/viewPrefs.js`
-(*"Hide sensor data"*, on `/teacher/students` and `/teacher/students/:id/report`) is **client-side
-only: it fetches the data and does not draw it.** That is acceptable there and nowhere else — the
-teacher is already authorised for the data by relationship, so it is decluttering, not a privacy
-boundary. Keeping it client-side also avoids a second `include_face`-style axis through every
-reporting endpoint. A future reader will otherwise find a filter that fetches what it hides and
-assume it is a bug.
+(*"Hide sensor data"*, on `/teacher/students` and `/teacher/students/:id/report`) is **client-side only: it
+fetches the data and does not draw it.** Acceptable there and nowhere else — the teacher is already
+authorised by relationship, so it is decluttering, not a privacy boundary. Keeping it client-side also avoids
+a second `include_face`-style axis through every reporting endpoint. A future reader will otherwise find a
+filter that fetches what it hides and assume it is a bug.
 
-It hides **all** sensor data, not just facial: heart rate now comes from the headband as often as
-the camera, so a facial-only filter would leave HR and HRV on screen and satisfy nobody. Live class
-monitoring and session review stay outside it and deliberately don't render the switch — a control
-that silently changes a page it is absent from is worse than one with a stated edge. And it never
-manufactures a reason: a channel off for consent reasons still reads "not recorded — turned off on
-<date>" when the filter is off.
+It hides **all** sensor data, not just facial: heart rate comes from the headband as often as the camera, so
+a facial-only filter would leave HR and HRV on screen and satisfy nobody. Live class monitoring and session
+review stay outside it and deliberately don't render the switch — a control that silently changes a page it
+is absent from is worse than one with a stated edge. And it never manufactures a reason: a channel off for
+consent reasons still reads "not recorded — turned off on \<date\>" when the filter is off.
 
-`_reportable_channels`' `want_heart`/`want_emotion` parameters survive but no client sends them.
-They default to True and are not a privacy boundary; don't build one on them.
+`_reportable_channels`' `want_heart`/`want_emotion` parameters survive but no client sends them. They default
+to True and are not a privacy boundary; don't build one on them.
 
-### A refusal is not an outage, and `LoadError` is where the two stop being one sentence
+## A tile never says "no data" for something that was not recorded
 
-`components/ui/LoadError.jsx` used to say *"make sure the backend is running"* for every failure.
-That names a layer, and naming a layer sends someone to inspect it — so a teacher whose Question
-Bank filter was refused went and checked a server that had answered perfectly well. It now picks
-the sentence from `error.status`, which `apiFetch` attaches: **403** is "you don't have access to
-X" and gets **no Try again button**, since retrying a refusal cannot work and offering the button
-is part of the false claim; **401** says the session expired and keeps it; **anything else,
-including an error carrying no `status` at all**, keeps the original wording, because a dropped
-connection genuinely is an unreachable backend and relabelling it as a permissions problem is the
-same mistake pointing the other way. Callers pass nothing and are unchanged; a page wires it by
-holding the error in the state it already had (`setFailed(e)` — every read of that flag was a
+`SignalPanel`'s `offLabel` picks between four states, and every tile goes through `valueOrReason` rather than
+branching on the channel flag itself:
+
+| State | Shown | Because |
+| --- | --- | --- |
+| consent withdrawn | `Off since <date>` | the date comes from `*_revoked_at` on the payload |
+| consent unreadable | `Unavailable` | "the student turned this off" is a claim a failed read has not earned |
+| read, samples arrived, none usable | `Calibrating` | a rejected window or a baseline still forming |
+| read, no samples at all | `No sensor` | consented, but nothing produced anything |
+
+Branching on the flag alone is the trap: it leaves `pct()`'s own `'N/A'` standing whenever a *consented*
+channel produced nothing usable — the exact string the rule exists to stop showing, surviving in the case
+least likely to be tested.
+
+**EEG carries `eeg_enabled` + `eeg_revoked_at`, not an `eeg_included`.** The name is the point: the summary
+RPCs have no `p_include_cognitive`, so that channel is *always* read, and withdrawal keeps what is already
+stored — a student who switched the headband off last week still has true averages from before then. Calling
+it `eeg_included` would claim a read was skipped that was not. Absent reads as **on** — defaulting to off
+would tell every reader of an older payload about a decision nobody made. The batch RPC cannot carry it, so
+`my_children` stamps it per child, like `emotion_revoked_at` beside it.
+
+**A channel that is off keeps its tile.** Dropping the row tells a parent who switched a sensor off nothing
+at all. The one exception is a payload predating the channel (`heart_included` absent rather than `false`):
+there is nothing true to say about a channel the payload does not know about.
+
+## A refusal is not an outage
+
+`components/ui/LoadError.jsx` used to say *"make sure the backend is running"* for every failure. That names
+a layer, and naming a layer sends someone to inspect it — so a teacher whose Question Bank filter was refused
+went and checked a server that had answered perfectly well. It now picks the sentence from `error.status`,
+which `apiFetch` attaches: **403** is "you don't have access to X" and gets **no Try again button**, since
+retrying a refusal cannot work and offering the button is part of the false claim; **401** says the session
+expired and keeps it; **anything else, including an error carrying no `status` at all**, keeps the original
+wording, because a dropped connection genuinely is an unreachable backend. Callers pass nothing; a page wires
+it by holding the error in the state it already had (`setFailed(e)` — every read of that flag was a
 truthiness check).
 
-**Name what was actually refused, not what the page is about.** `questions` is public-read, so a
-403 on the Question Bank can only ever concern the student filter — *"you don't have access to the
-question bank"* would deny access to something the teacher can see behind the message.
+**Name what was actually refused, not what the page is about.** `questions` is public-read, so a 403 on the
+Question Bank can only ever concern the student filter — *"you don't have access to the question bank"* would
+deny access to something the teacher can see behind the message.
 
-### A roster row has `user_id` and `name` — not `id`, not `display_name`
+## A roster row has `user_id` and `name` — not `id`, not `display_name`
 
-`/api/classes/{id}/students` returns `{user_id, name, email, joined_at, ...}`. `Students.jsx` is
-the exception that proves the rule: it reads `profiles` straight through Supabase, so its rows
-really do have `id`.
+`/api/classes/{id}/students` returns `{user_id, name, email, joined_at, ...}`. `Students.jsx` is the exception
+that proves the rule: it reads `profiles` straight through Supabase, so its rows really do have `id`.
 
-Getting this wrong in a `<select>` does **not** render a blank option. **An `<option>` with an
-undefined `value` falls back to its own text content**, so `value={s.id}` over a label of
-`{s.display_name || s.email}` sent the student's *email* to `/api/students/{id}/questions`, which
-resolves a uuid through `_verify_can_view_student` — 403 on every pick, from a picker that looked
-right and named the right student.
+Getting this wrong in a `<select>` does **not** render a blank option. **An `<option>` with an undefined
+`value` falls back to its own text content**, so `value={s.id}` over a label of `{s.display_name || s.email}`
+sent the student's *email* to `/api/students/{id}/questions`, which resolves a uuid through
+`_verify_can_view_student` — 403 on every pick, from a picker that looked right and named the right student.
+Five tests passed over that filter because the fixture also said `id`/`display_name` (rule 4). Build a roster
+fixture from what the endpoint returns, `email` included — without that field the failure is not even
+representable — and assert on the **request path**, since both the option's value and its label come from one
+row and a wrong key still displays the right name.
 
-**A fixture written from the same misreading as the code cannot fail against it.** Five tests
-passed over that filter because `ROSTER` in the test file also said `id`/`display_name`. Build a
-roster fixture from what the endpoint returns, `email` included — without that field the failure is
-not even representable — and assert on the **request path**, since both the option's value and its
-label come from one row and a wrong key still displays the right name.
+## Every chart goes through `AccessibleChart`, and a test enforces it
 
-### Every chart goes through `AccessibleChart`, and a test enforces it
+Recharts emits bare `<svg>` with no accessible name and nothing a screen reader can walk, so a chart rendered directly
+announces as nothing at all. `components/charts/AccessibleChart.jsx` is the only place that may render one.
 
-Recharts emits bare `<svg>` with no accessible name and nothing a screen reader
-can walk, so a chart rendered directly announces as nothing at all.
-`components/charts/AccessibleChart.jsx` is the only place that may render one.
+**The `sr-only` data table is a *sibling* of the `role="img"` wrapper, never a child.** WAI-ARIA's
+presentational-children rule prunes every descendant role from an `img`, so a nested table is invisible to real
+assistive technology — while being **perfectly visible to a jsdom test**, because Testing Library reads DOM attributes
+rather than modelling the accessibility tree. That is the trap, and it is the opposite way round from how it first
+reads: the table is not what the test cannot see, it is the *pruning*. `getByRole('table')` finds the element whether
+or not a real reader would, so a hand-assembled call site has nothing to fail against, in the browser or in CI. That is
+why this is a component rather than a documented recipe, and why `AccessibleChart.test.jsx` walks the source and fails
+on any chart component rendered outside it. **It cannot see a hand-written `<svg>`** — the honest limit of a source
+check, and where `Heatmap.jsx`, `BarGraph` and the cohort roster table sit.
 
-**The `sr-only` data table is a *sibling* of the `role="img"` wrapper, never a
-child.** WAI-ARIA's presentational-children rule prunes every descendant role
-from an `img`, so a nested table is invisible to real assistive technology — while
-being **perfectly visible to a jsdom test**, because Testing Library reads DOM
-attributes rather than modelling the accessibility tree. That is the trap, and
-it is the opposite way round from how it first reads: the table is not what the
-test cannot see, it is the *pruning*. `getByRole('table')` finds the element
-whether or not a real reader ever would, so a hand-assembled call site has
-nothing to fail against, in the browser or in CI. That is why this is a
-component rather than a documented recipe, and why
-`AccessibleChart.test.jsx` walks the source and fails on any chart component
-rendered outside it. It cannot see a hand-written `<svg>`; that is the honest
-limit of a source check.
+**One `columns` spec drives the sentence and the table.** They were separate literals for one PR and disagreed twice in
+it: a key named `bpm` where the rows carry `heart_rate_bpm`, so a visibly-plotted line announced "not recorded"; and
+raw 0..1 ratios described with a `%` unit, announcing a session ranging 42–78% as "Focus 0% to 1%". Neither is visible
+on screen and no test could catch them, because both surfaces were wrong in the same way at once.
 
-**One `columns` spec drives the sentence and the table.** They were separate
-literals for one PR and disagreed twice in it: a key named `bpm` where the rows
-carry `heart_rate_bpm`, so a visibly-plotted line announced "not recorded"; and
-raw 0..1 ratios described with a `%` unit, announcing a session ranging 42–78%
-as "Focus 0% to 1%". Neither is visible on screen and no test could catch them,
-because both surfaces were wrong in the same way at once.
+**Scaling belongs in the spec, per page, because the pages differ.** `SessionReview` and `Live` plot raw ratios
+against `domain={[0, 1]}` and need `scale: asPercent`. `SignalPanel` scales **the fields it names** into its chart data
+and spreads every other field across untouched, so a column for one of those others needs a `scale` like anywhere
+else. "This page scales on the way in" is the wrong unit of thought and has already cost one bug.
 
-**Scaling belongs in the spec, per page, because the pages differ.**
-`SessionReview` and `Live` plot raw ratios against `domain={[0, 1]}` and need
-`scale: asPercent` on those columns. `SignalPanel` scales **the fields it names**
-into its chart data — `toPct(d.focus)`, `toPct(d.stress)` — and spreads every
-other field across untouched, so a column for one of those others needs a
-`scale` like anywhere else. "This page scales on the way in" is the wrong unit
-of thought and it has already cost one bug: an `engagement` column was added
-without a `scale` on exactly that reasoning and announced "0% to 1%".
+**A column must name a series the chart actually draws** — including when the `<Line>` is conditional, in which case
+the column is too. A screen-reader user given a series no sighted reader can see has a different report, not an
+equivalent one. Found **twice**: `SignalPanel`'s `engagement` column had no `<Line>` at all, so nothing on screen could
+contradict its wrong scaling; `SessionReview` then kept `heart_rate_bpm`/`rmssd_ms` columns whose lines are gated on
+`hasHeart`, so a session with no headband emitted "Heart rate: not recorded" on every row. The first fix was applied
+where it was found rather than swept for siblings. **Check what the chart plots, and under what condition, before
+copying a spec across.**
 
-**And a column must name a series the chart actually draws** — including when
-the `<Line>` is conditional, in which case the column is too. A screen-reader
-user given a series no sighted reader can see has a different report, not an
-equivalent one.
+### A reader can hide a series, so the one-list rule is structural
 
-This one has now been found **twice**, which is why it is a rule rather than an
-anecdote. `SignalPanel`'s `engagement` column had no `<Line>` at all, so nothing
-on screen could contradict its wrong scaling; `SessionReview` then kept
-`heart_rate_bpm`/`rmssd_ms` columns whose lines are gated on `hasHeart`, so a
-session with no headband emitted "Heart rate: not recorded" on every row. The
-first fix was applied where it was found rather than swept for siblings. Check
-what the chart plots, and under what condition, before copying a spec across.
+`SeriesFilter` + `useSeriesFilter` put toggles above three line charts. **Two of them reach a parent as well as a
+teacher**, because `StudentProgressReport` is shared by `teacher/StudentReport` and `parent/ChildDetail`: anything
+added to those panels lands on both routes. Fine here — the control draws less, never more — but it is the question to
+ask of the next thing added, and `viewerRole` is how a panel differs between the two.
 
-**A reader can hide a series, so the one-list rule is now structural rather than remembered.**
-`SeriesFilter` + `useSeriesFilter` put toggles above three line charts — focus, EEG stress, heart
-rate and RMSSD on `SessionReview`'s timeline; focus, stress and heart rate on `SignalPanel`'s daily
-and term charts — in any combination. **The last two reach a parent as well as a teacher**, because
-`StudentProgressReport` is shared by `teacher/StudentReport` and `parent/ChildDetail`: anything
-added to those panels lands on both routes, and describing them as teacher surfaces was wrong in the
-first version of this paragraph. That is fine here — the control draws less, never more, so it is
-decluttering rather than a boundary, the same standing as `viewPrefs.js` — but it is the question to
-ask of the next thing added there, and `viewerRole` is how a panel differs between the two. Each chart declares **one list per
-series** (`key`, `label`, `unit`, `scale`, `colour`, `axis`, `name`) and derives the `<Line>`s, the
-`columns` spec and the chips from it. That is the point rather than tidiness: "a column must name a
-series the chart draws" was a thing to remember while the only gate was `hasHeart`, and it becomes a
-thing a teacher does at will — a hand-wired column goes on announcing *"RMSSD: not recorded"* on
-every row of a session that recorded it fine and was simply not being shown. Four things follow:
+Each chart declares **one list per series** (`key`, `label`, `unit`, `scale`, `colour`, `axis`, `name`) and derives the
+`<Line>`s, the `columns` spec and the chips from it. That is the point rather than tidiness: "a column must name a
+series the chart draws" was a thing to remember while the only gate was `hasHeart`, and it becomes a thing a teacher
+does at will — a hand-wired column goes on announcing *"RMSSD: not recorded"* on every row of a session that recorded
+it fine and was simply not being shown. Four things follow:
 
-- **The colour is read from the same entry the line is stroked with**, and applied inline rather
-  than as a Tailwind class — the chip cannot drift from what it names, and a `bg-${…}` would ship no
-  rule at all (the whole-class-name trap above). **The backend reads that list too**:
-  `test_chart_render.py` scrapes `colour` out of it to check the archived SVGs still use the palette
-  the app drew, so moving those colours breaks a *Python* test — which is how this landed, since it
-  used to scrape the `stroke` attributes the series list replaced. Its scraper refuses an empty
-  result, because a shape change it cannot read is otherwise a check that passes while seeing
-  nothing.
-- **An axis mounts only while a *shown* series uses it**, and anything referencing an axis —
-  `SessionReview`'s answer markers and its failover lines — is gated the same way. Recharts throws
-  on a line naming an axis that is not there, and draws an empty scale for one with no lines.
-- **Everything off says so and offers *Show all*, rather than the last toggle refusing to move.** A
-  control that silently does nothing is harder to understand than an empty chart that explains
-  itself, and the message is distinct from "no history yet" and "could not be loaded" beside it:
-  those are claims about the data, this is a claim about the view. The chart is not rendered at all
-  there, so there is no empty axis and no column-less table.
-- **No toggle for a series that cannot be drawn** — a control whose only outcome is the state
-  already on screen.
+- **The colour is read from the same entry the line is stroked with**, applied inline rather than as a Tailwind class —
+  the chip cannot drift from what it names, and a `bg-${…}` would ship no rule at all. **The backend reads that list
+  too**: `test_chart_render.py` scrapes `colour` out of it to check the archived SVGs still use the palette the app
+  drew, so moving those colours breaks a *Python* test. Its scraper refuses an empty result, because a shape change it
+  cannot read is otherwise a check that passes while seeing nothing.
+- **An axis mounts only while a *shown* series uses it**, and anything referencing an axis — `SessionReview`'s answer
+  markers and its failover lines — is gated the same way. Recharts throws on a line naming an axis that is not there.
+- **Everything off says so and offers *Show all*, rather than the last toggle refusing to move.** A control that
+  silently does nothing is harder to understand than an empty chart that explains itself, and the message is distinct
+  from "no history yet" and "could not be loaded": those are claims about the data, this is a claim about the view. The
+  chart is not rendered there at all, so there is no empty axis and no column-less table.
+- **No toggle for a series that cannot be drawn** — a control whose only outcome is the state already on screen.
 
-**The hook stores what is *hidden*, and takes no series list.** Both halves are load-bearing.
-Storing the hidden keys is what draws a series that becomes available *later*: these charts gain
-series as data resolves, and a shown-set snapshotted at mount leaves the newcomer switched off with
-nothing on screen explaining why. Taking no list is what keeps it callable above `SessionReview`'s
-`loading` and `err` early returns — `hasHeart` is derived from loaded rows far below them, so a hook
-needing the list was a conditional hook call and threw on all 28 tests in that file. The selection is
-per mount and deliberately not persisted; `viewPrefs.js` persists a standing page preference, this is
-a look at one chart, and persisted view state leaks into every test declared after one that flips it.
+**The hook stores what is *hidden*, and takes no series list.** Both halves are load-bearing. Storing the hidden keys
+is what draws a series that becomes available *later*: these charts gain series as data resolves, and a shown-set
+snapshotted at mount leaves the newcomer switched off with nothing explaining why. Taking no list is what keeps it
+callable above `SessionReview`'s `loading` and `err` early returns — `hasHeart` is derived from loaded rows far below
+them, so a hook needing the list was a conditional hook call and threw on all 28 tests in that file. The selection is
+per mount and deliberately not persisted.
 
-**Test it on `columnheader`, never on the summary sentence** — `describeSeries` drops a series with
-no readings on its own, so an aria-label assertion passes whether or not the column is gated. And a
-`getByText('Focus')` that used to be unambiguous now matches the chip *and* the table header; that
-is what broke the existing heart-off test, and the fix was to assert the role rather than loosen the
-query.
+**Test it on `columnheader`, never on the summary sentence** — `describeSeries` drops a series with no readings on its
+own, so an aria-label assertion passes whether or not the column is gated. And a `getByText('Focus')` that used to be
+unambiguous now matches the chip *and* the table header; assert the role rather than loosening the query.
 
-**A categorical chart is `sliceSpec(label, rows, noun, {nameKey, valueKey,
-rowLabel})`, spread into the component.** It returns the sentence, the rows and
-the columns together so the noun is written once — it names what the values
-count in the sentence and heads the table column. As two literals they drifted:
-`Analytics` built its sentence from a remapped `topicData.map(d => ({name, value}))`
-while its table read `topicData` with key `count`.
+### Categorical charts, and the sampled table
 
-The table is **sampled to 60 rows** and says so in its caption. A 4Hz channel
-over an hour is ~14,000 rows, built on every render for a table nobody sighted
-sees — and unusable for those who do. A silently shortened one would claim the
-session was shorter than it was.
+**A categorical chart is `sliceSpec(label, rows, noun, {nameKey, valueKey, rowLabel})`, spread into the component.** It
+returns the sentence, the rows and the columns together so the noun is written once — it names what the values count in
+the sentence and heads the table column. As two literals they drifted: `Analytics` built its sentence from a remapped
+`topicData.map(d => ({name, value}))` while its table read `topicData` with key `count`.
 
-`sample()` returns the rows alone; "was it sampled" is
-`tableRows.length < (rows?.length ?? 0)` at the one place that asks. Two return
-values could disagree with each other — but note the `?? 0`: `sample()` guards a
-nullish `rows` internally, so deriving the flag *outside* it moved that check
-away from the guard and crashed on a comparison. Moving a derivation out of a
-function moves it out of that function's guards.
+The table is **sampled to 60 rows** and says so in its caption. A 4 Hz channel over an hour is ~14,000 rows, built on
+every render for a table nobody sighted sees — and unusable for those who do. A silently shortened one would claim the
+session was shorter than it was. `sample()` returns the rows alone; "was it sampled" is
+`tableRows.length < (rows?.length ?? 0)` at the one place that asks, since two return values could disagree. Note the
+`?? 0`: `sample()` guards a nullish `rows` internally, so deriving the flag *outside* it moved that check away from the
+guard and crashed on a comparison. **Moving a derivation out of a function moves it out of that function's guards.**
 
-### Muted text is `text-gray-600 dark:text-gray-400`, and a test does the arithmetic
+## `set-state-in-effect` is cleared, and the shapes that cleared it are worth reusing
+
+Where the state is a reset driven by a prop changing — an acknowledgement cleared when enforcement resumes, a pulse
+started by a new timestamp — adjust it *during render* against a `useState` holding the previous value, which React
+re-runs before painting. Where it is a `loading` flag around a fetch, don't store one: keep the key the data in hand
+belongs to (`loadedFor`) and derive `loading = loadedFor !== id`, so switching session or class raises the skeleton on
+the render that changes the id and no previous subject's charts can be painted under this one's heading. A flag raised
+by a *user action* stays a flag — `Sessions.jsx` sets it in the class selector's `onChange`, which is an event handler
+and not an effect.
+
+Both shapes have since bitten, and the corrections are the load-bearing half:
+
+- **Derived `loading` needs a remount, not just a derivation.** `loading = loadedFor !== id` reads *false* when you
+  navigate A→B→A: B's request is cancelled on the way out without ever advancing `loadedFor`, so returning to A finds
+  it still saying `'A'`. `SessionReview.jsx` therefore keys the body on the id (`<Body key={sessionId} …>`), which
+  resets every piece of session-scoped state at once — including the `err` that otherwise let a failure on A mask a B
+  that loaded fine. `ChildDetail.jsx` does the same, and this is now the pattern for any page whose whole state
+  belongs to one route param.
+- **The render-time adjustment compares against the previous *render*, and that is not always the question.**
+  `useValueChange` (`hooks/useValueChange.js`) is the extracted form and is right for `Flags.jsx`. It was wrong for
+  `FlowDot.jsx`, which needs the last value it *acted on*: the pulse timer clears the live state, so a timestamp that
+  goes transiently null and comes back unchanged reads as a change and flashes "fresh data" for data that is not new.
+  Keep the acted-on value in its own state that nothing else clears. **A hook parameter nobody reads is the tell.**
+- **Deriving state does not remove the need to cancel.** Every fetch that can be superseded needs a guard, and the
+  slow ones are where it matters: `Sessions.jsx`'s roster read fans out per student, so a class switch let the
+  previous class's response land last and repaint the list under the new class's name. It uses a generation ref
+  rather than a cleanup flag, because the effect is not the only caller — the retry button is the other, and a retry
+  is exactly when someone changes class rather than waiting.
+
+## `react/jsx-uses-vars` is the only rule from `eslint-plugin-react` that is on, and it has to stay on
+
+`no-unused-vars` cannot see JSX, so without it every identifier used *only* inside markup — `motion` from
+framer-motion, an `icon: Icon` prop rendered as `<Icon />` — is reported as an unused import. That was **40 of the
+65** errors the backlog held, all false, and the noise is what hid the real ones: the same sweep found one genuinely
+dead `motion` import sitting among 33 identical false positives. The plugin's `recommended` config is deliberately
+**not** extended — it brings a large ruleset that would add to the backlog rather than clear it.
+
+`ignoreRestSiblings: true` goes with it, for the destructure-to-omit idiom (`const { x, ...rest } = obj` to build an
+object *without* `x`, which is how the tests construct a payload predating a field). The binding is unused by design;
+deleting it to satisfy the rule would put the key back.
+
+With both, **`no-unused-vars` is clean and therefore load-bearing** — a hit is real dead code, so fix it rather than
+adding it to the backlog.
+
+## Muted text is `text-gray-600 dark:text-gray-400`, and a test does the arithmetic
 
 Contrast is one of the few accessibility properties a source check can settle outright, so
-`src/test/contrast.test.js` computes it rather than trusting a convention. Measured against the
-surfaces this app paints (Tailwind 3.4 stock `gray`):
+`src/test/contrast.test.js` computes it rather than trusting a convention. Measured against the surfaces this
+app paints (Tailwind 3.4 stock `gray`):
 
 | | best surface | worst surface | AA 4.5 |
 | --- | --- | --- | --- |
@@ -3363,1686 +1354,599 @@ surfaces this app paints (Tailwind 3.4 stock `gray`):
 | dark `gray-500` | 4.16 on gray-950 | 2.13 on gray-700 | fails everywhere |
 | dark `gray-400` | 7.93 on gray-950 | 4.06 on gray-700 | passes except on gray-700 |
 
-**The dark half has to be added, not just the light half darkened.** 138 of the 146 sites named no
-`dark:` variant at all, so they rendered gray-400 in *both* modes — where it already passes. A
-straight `gray-400 → gray-600` substitution would have fixed light mode by breaking dark mode, which
-is why the fix is a pair.
+**The dark half has to be added, not just the light half darkened.** 138 of the 146 sites named no `dark:`
+variant at all, so they rendered gray-400 in *both* modes — where it already passes. A straight
+`gray-400 → gray-600` substitution would have fixed light mode by breaking dark mode.
 
-**A dark class in one ternary branch says nothing about the grey in another.** Asking whether the
-className *string* contains `dark:text-` is the mistake that shipped a regression: three badges
-reading `${on ? '… dark:text-indigo-300' : 'bg-gray-100 text-gray-400 dark:bg-gray-800'}` looked
-paired, so the grey branch was darkened without a companion and dark mode went from 5.78 to **1.94**
-— worse than before the fix. Resolve each branch separately, and model the fallback: an element with
-no `dark:text-` renders its bare colour in dark mode too.
+**A dark class in one ternary branch says nothing about the grey in another.** Three badges reading
+`${on ? '… dark:text-indigo-300' : 'bg-gray-100 text-gray-400 dark:bg-gray-800'}` looked paired, so the grey
+branch was darkened without a companion and dark mode went from 5.78 to **1.94** — worse than before the fix.
+Resolve each branch separately, and model the fallback: an element with no `dark:text-` renders its bare colour
+in dark mode too.
 
-**Compute the ratio, never match a class name.** The first version of the test grepped for the
-literal `dark:text-gray-500`, so `dark:text-gray-600` — worse, at 2.35 — went straight through a
-green suite, and so did the regression above. Both were found by review, not by the test that
-existed to find them.
+**Compute the ratio, never match a class name.** The first version of the test grepped for the literal
+`dark:text-gray-500`, so `dark:text-gray-600` — worse, at 2.35 — went straight through a green suite, and so
+did the regression above. Both were found by review, not by the test that existed to find them.
 
-`text-gray-500` on white is fine at 4.83 and is left alone; it is only wrong on a `bg-gray-100` card
-(4.39). A bare grey with **no** dark companion is a separate failure the same-element check cannot
-see — it renders gray-500 on the gray-900 card at 3.67 — so the last test asks whether *the file*
-ever paints a dark surface. Coarse on purpose: it is what separates a page whose cards flip from
-`MainLayout`, the permanently-white marketing shell, where adding a companion would put gray-400 on
-white at 2.54. **Where the background comes from a parent, no source check can see it.**
+`text-gray-500` on white is fine at 4.83 and is left alone; it is only wrong on a `bg-gray-100` card (4.39). A
+bare grey with **no** dark companion is a separate failure the same-element check cannot see — it renders
+gray-500 on the gray-900 card at 3.67 — so the last test asks whether *the file* ever paints a dark surface.
+Coarse on purpose: it separates a page whose cards flip from `MainLayout`, the permanently-white marketing
+shell, where adding a companion would put gray-400 on white at 2.54. **Where the background comes from a
+parent, no source check can see it.**
 
-**`Adaptive.jsx`'s debug readout is exempt and is the only exemption.** It paints `bg-gray-950` with
-no `dark:` prefix, so it is dark in both modes and every rule above reverses inside it: gray-400
-passes at 7.93 and gray-600 would be unreadable. Its `gray-500` was raised *to* gray-400 — the
-opposite direction to the rest of the app. Check for an unprefixed dark background before assuming a
+**`Adaptive.jsx`'s debug readout is the only exemption.** It paints `bg-gray-950` with no `dark:` prefix, so it
+is dark in both modes and every rule above reverses inside it: gray-400 passes at 7.93 and gray-600 would be
+unreadable. Its `gray-500` was raised *to* gray-400. Check for an unprefixed dark background before assuming a
 grey is too light.
 
-`text-[10px]` (36 uses at the 2026-09-15 count; 31 when the sweep was done) is **not** a contrast
-failure — WCAG sets no minimum font size — so it was
-left alone. What mattered was the combination, and the tiny badges that were also sub-AA are fixed.
-
-### The three consent notices share `NoticeBanner`, and a tone is a whole class name
-
-`ChildWithdrewBanner`, `ParentRestoredBanner` and `ParentLinkedBanner` were one component wearing
-three colours. What they each restated was the part worth having in one place: **a failed
-acknowledgement leaves the banner standing**, because the person has not been told yet and a notice
-that dismisses itself on a failed write is one nobody sees again. Stated three times is two more
-places for the fourth notice's author to drop it.
-
-`onAcknowledge` clears whatever made the banner render; the shell owns the pending flag and
-swallows the rejection. `busy` is cleared in a `finally`, not only on the failure path — a caller
-that acknowledges without unmounting would otherwise be left with a permanently dead button.
-
-**Tone classes are full strings in a map, never interpolated.** Tailwind decides what CSS to ship by
-scanning source text for complete class names, so `bg-${tone}-50` renders markup pointing at a rule
-that was never generated — a banner with no background at all, **in production only**, since the dev
-server is not what does the scan. No test can catch it either: the rendered class string is identical
-either way and jsdom has no stylesheet. Source review is the only check, which is why the map exists.
-
-### A tile never says "no data" for something that was not recorded
-
-`SignalPanel`'s `offLabel` picks between four states, and every tile goes through
-`valueOrReason` rather than branching on the channel flag itself:
-
-| State | Shown | Because |
-| --- | --- | --- |
-| consent withdrawn | `Off since <date>` | the date comes from `*_revoked_at` on the payload |
-| consent unreadable | `Unavailable` | "the student turned this off" is a claim a failed read has not earned |
-| read, samples arrived, none usable | `Calibrating` | a rejected window or a baseline still forming |
-| read, no samples at all | `No sensor` | consented, but nothing produced anything |
-
-The single `FACE_OFF = 'Off'` this replaces meant "the viewer switched facial
-reporting off" — true when there was one viewer-side switch, and now wrong in
-three ways at once. Branching on the flag alone is the trap: it leaves `pct()`'s
-own `'N/A'` standing whenever a *consented* channel produced nothing usable,
-which is the exact string the rule exists to stop showing, surviving in the case
-least likely to be tested.
-
-**EEG carries `eeg_enabled` + `eeg_revoked_at`, not an `eeg_included`.** The name is the point: the
-summary RPCs have no `p_include_cognitive`, so that channel is *always* read, and withdrawal keeps
-what is already stored — a student who switched the headband off last week still has true averages
-from before then. Calling it `eeg_included` would claim a read was skipped that was not. Until it
-existed, `eegReason` hardcoded `on: true` and the three cognitive tiles were the only ones that
-could not say `Off since <date>`; a parent who switched the headband off read `No sensor`, which is
-what a fault looks like. Absent reads as **on** — defaulting to off would tell every reader of an
-older payload about a decision nobody made. The batch RPC cannot carry it, so `my_children` stamps
-it per child, like `emotion_revoked_at` beside it.
-
-A channel that is off keeps its tile. Dropping the row tells a parent who
-switched a sensor off nothing at all — the same failure wearing a different
-shape. The one exception is a payload predating the channel (`heart_included`
-absent rather than `false`): there is nothing true to say about a channel the
-payload does not know about, so the row is omitted.
-
-## The strategies model pass is optional and bounded
-
-`/api/students/{id}/learning-strategies` always has a deterministic rule-based answer; the
-`strategy_llm_enabled` **feature flag** (default **on**, since `20260905030000`) only decides whether
-a model gets a chance to replace it. Off, the endpoint never opens a socket — which is what CI and
-any deployment without a local Ollama should do. Every failure path degrades to the rules rather than
-erroring.
-
-**The default was `false` from `20260824000000` through `20260905000000`, and nothing ever flipped
-it** — it's admin-only, via `POST /api/admin/flags/{key}`, so every deployment that never had an
-admin manually enable it had this pass silently doing nothing: every response was `source:
-"rule-based"`, indistinguishable from the model being tried and always failing. `20260905030000`
-flips both the Python default and, guarded on there being no recorded `feature_flag_changes` row for
-the key, the already-seeded live row — so a deployment where an admin deliberately turned it off
-after trying it is not silently overwritten. Turning it on for good still needs a working provider
-underneath it (`ANTHROPIC_API_KEY` + `LLM_PROVIDER=claude`, or a running local Ollama) — `_llm_strategies`
-catches every exception and falls back to the rules, so a misconfigured provider produces the exact
-same symptom as the flag being off.
-
-**Tests must pin this flag explicitly, not rely on the suite's default.** The autouse
-`_feature_flags_are_default` fixture in `conftest.py` reads live from `_FEATURE_FLAG_DEFAULTS`, so
-flipping the production default flipped it for the whole test suite in one step — several tests that
-called `student_learning_strategies` without an explicit `set_flag("strategy_llm_enabled", False)`
-started actually attempting the model call, one of them via a genuine ~20s `STRATEGY_LLM_TIMEOUT`
-wait per test, not a fast failure. Every test whose point is the rule-based path, access control, or
-rate limiting now pins the flag off explicitly for that reason, even though the assertion happened to
-still pass either way.
-
-It was the `STRATEGY_LLM_ENABLED` env var until the admin dashboard landed, and is now read per
-request rather than at import: the reason to reach for this switch is a model behaving badly in
-front of students, which is not a moment to be waiting on a deploy.
-
-The bounds exist because this is a sync endpoint, so each waiting request holds one of anyio's ~40
-threadpool slots: `STRATEGY_LLM_TIMEOUT` enforced by waiting on a future (an httpx timeout is
-per-operation, not per-call), a 2-worker pool, `STRATEGY_LLM_MAX_WAITERS` on how many callers may
-block at once, and `STRATEGY_RATE_LIMIT`/`STRATEGY_RATE_WINDOW` per user id. An abandoned wait
-cancels its future, or a stalled server turns every timeout into work that still runs later. If you
-add another model-backed endpoint, it needs the same four bounds — the per-user rate limit alone
-does not protect the threadpool. Question generation is now the second such caller and has its own
-four; see *Every model call goes through `llm_client`*.
-
-`_llm_strategies` reaches its model through `llm_client` like everything else, so `LLM_PROVIDER`
-switches this pass too and it shares the process-wide concurrency ceiling with the eleven
-generation calls. It keeps its own `STRATEGY_LLM_*` bounds on top: those are about a *sync endpoint*
-holding an anyio threadpool slot, which is a different problem from a background prefetch thread.
-
-Model output is untrusted text: it's parsed, length-bounded, stripped of markdown emphasis and list
-markers, and run through a clinical-term filter, and anything failing validation falls back to the
-rules. Extend `_validated_strategies` rather than rendering raw output.
-
-**The panel is on the teacher report as well as the parent one, and the copy is the only thing that
-differs.** The endpoint is gated on relationship rather than role — its own docstring says so — so a
-teacher could always ask for this advice and, until then, had no way to see it. `viewerRole`
-('parent' by default, and for any value the panel does not recognise) picks the framing;
-`_llm_strategies` and `_validated_strategies` are untouched, so both readers get the same list.
-**The heading stays "At-Home" on both.** The prompt says *"you are helping a parent support their
-child's maths practice at home"* and the rule-based fallback says *"ask your child to explain one
-solved problem out loud"* — so a classroom-sounding label would claim the model had been asked for
-something it was not. The teacher frame says whose advice it is instead, which is the useful thing
-to know when deciding what to do with it. It stays **on demand**: nothing is fetched until the
-button is pressed, or a class of thirty report pages would spend a model call each. On the teacher page it is
-**behind "Hide sensor data" with the charts**, because the advice *is* sensor data in prose — the
-rule-based list says *"stress indicators ran high this week"* and *"focus indicators were low this
-week"*, and the model pass is handed the same averages. Unconditional, the switch took the tiles off
-screen and left a button that writes those numbers back out as sentences. The whole panel goes rather
-than its individual lines: the advice mixes topic accuracy with signal readings and nothing
-downstream can separate them, and asking the endpoint for a signal-free list would change the advice
-rather than hide it. Assert on the **Generate button's** absence, not the heading — hiding a heading
-over a live button satisfies a heading check and none of the point. **And a test that flips that
-switch has to clear it**: `writeHideSensorData` persists to `localStorage`, which jsdom keeps for the
-whole file, so every test declared *after* one that hides sensors renders with them already hidden —
-silently, and only for the tests written later, which reads as one of them being broken rather than
-as leaked state. `clearViewPrefs()` in `beforeEach` is the guard, and it needs a test standing
-**downstream of the leak** to have teeth: with the switching test last in the file, removing the
-guard breaks nothing. `StudentReport.test.jsx` keeps one after it asserting the switch starts off. The same trap caught a
-second file: `al_sidebar_collapsed:<scope>` persists too, and a collapsed sidebar hides the account
-badge *entirely*, so a describe rendering that badge sees nothing if an earlier test collapsed one.
-`layoutAccessibility.test.jsx` clears storage in every sidebar describe for that reason — and its
-account describe collapses the sidebar in its **first** test, so the two after it fail without the
-clear rather than passing on whatever ordering happened to hold.
-
-## The chart summary states numbers, so what it may say is checked against what we gave it
-
-`POST /api/students/{id}/chart-summary` describes a student's report charts in plain sentences.
-Built to the shape the section above fixes — a deterministic answer that is always available, the
-`chart_summary_llm_enabled` flag deciding whether a model gets a chance to rephrase it, and the four
-bounds (`CHART_SUMMARY_LLM_TIMEOUT`, a 2-worker pool, `CHART_SUMMARY_MAX_WAITERS`,
-`CHART_SUMMARY_RATE_LIMIT`/`_WINDOW`). **That is now the fourth copy of the bounds block** —
-ingest, generation, strategies, this — and consolidating the four is a standalone change rather
-than a rider on a new endpoint, because the other three are reached into by name from their tests
-(`main._strategy_hits`, `main._STRATEGY_LLM_POOL`).
-
-**The model is handed the finished sentences, not the aggregates.** It is asked to rephrase, never
-to interpret, and that is what makes numeric fidelity checkable at all: every number it may use is
-already in front of it, so one that is not is an invention. `_validated_chart_summary` rejects the
-whole reply on any numeral that is not in the allowed set.
-
-**The allowed set is read out of the deterministic sentences, never enumerated from the basis
-fields.** Enumerating was the first shape and rejected *correct* replies in two ways a reader would
-not predict: the sentence prints a rounded heart rate where the basis holds a fractional one, and a
-revocation date puts a day number on screen that no basis field carries. Reading the text the prompt
-actually sends closes the whole class, and makes drift between the two impossible — the same reason
-`AccessibleChart` drives its sentence and its table from one `columns` spec.
-
-**What it does not check is that a number is attached to the right measurement.** A reply that swaps
-the focus and stress figures uses only allowed numbers and passes. That is the residual
-hallucination risk on this endpoint and it is not closed; closing it means parsing the reply back
-into measurements, which is a second implementation of the sentences being parsed.
-
-**The reply must have exactly the baseline's number of points.** A range let a reply drop one
-silently, and the likeliest one to go is the channel-absence sentence — the single point whose whole
-job is to say that something is missing.
-
-Four reads sit behind one response (the weekly aggregate, the rollup-backed trend, the academic
-totals, the topic figures) and **each reports its own `retrieved`**. Collapsed into one, a summary
-missing only its trend sentence is presented either as entirely fine or as entirely broken. Three
-consequences that were bugs first: `sessions` comes from the *signal* aggregate, so a failed signal
-read leaves it at 0 and printing it reports a quiet week for a query that never ran; an empty trend
-is indistinguishable from a student's first week, so a failed trend read must not say "only one week
-so far"; and `_topic_breakdown` swallows its exception and answers `[]`, which most callers degrade
-on identically — the strategies endpoint falls back to generic advice — but which here becomes the
-*assertion* "no topic has been attempted yet". **`_topic_breakdown_with_state` is the form that
-reports the read**, split out rather than added as a parameter so a caller that did not know to ask
-for the flag cannot drop it; reach for it wherever an empty list would become a claim.
-
-**Zero weeks and one week are different facts, and `_trend_direction` returns a dict for both.** It
-answered `None` for each, so a student part way through their very first session — raw rows, so a
-focus average, but no rollup row yet, so no week at all — was told that one week had readings. The
-rollup row is not written until the session closes, so that state is ordinary rather than an error.
-A helper that computes a count and returns it only on the success path cannot be asked the question
-the count answers.
-
-**But the sentence for it names no cause, and the first version did.** A first session is one way to
-reach zero weeks; a rollup writer that failed on every day in range is another, and so is a set of
-rolled days all carrying null for that series. The read succeeded in all three, so nothing there can
-tell them apart — and *"from this session's own readings"* contradicted the session count two
-sentences above it whenever one of the others was the real one. **Where a branch exists precisely
-because the code cannot establish a cause, its sentence may not supply one**; state the observable
-("no week has a reading for it yet") and stop. The same trap as reporting a failed read as a quiet
-week, one step further out: there the claim is about the data, here it is about the explanation.
-
-Channel absence is ordered as `cellLabel` is on the cohort roster and for the same reason: consent
-unreadable, then a known revocation, then a failed read, then nothing recorded. The revocation and
-its date come from a *different query* from the signals, so reporting the outage instead discards a
-fact we hold for one we do not. `engagement` is never named — it is the focus index, and a sentence
-naming both describes one measurement as two agreeing ones. The heart channel gets **no trend**:
-`_CHART_SUMMARY_TREND_MIN_DELTA` is written for the 0..1 ratios focus and stress are stored on, and
-against bpm the same number is a twentieth of a beat.
-
-`ChartSummaryPanel` mounts on both report routes, **on demand and never auto-fetched** — a teacher
-opening a class of thirty would otherwise spend a model call per page for a summary nobody asked to
-read. On the teacher route it is behind *"Hide sensor data"* with the charts, for a stronger version
-of the reason the strategies panel is: that list mentions sensor readings in passing, where this
-panel's whole job is to state them.
-
-## Every model call goes through `llm_client`, and the provider is a setting
-
-`backend/llm_client.py` is the only place either model provider is reached. Fourteen call sites used
-to import `ollama` directly — the ten `LLM_*_generation.py` topic files, three in
-`LLM_topic_decider.py`, and `main._llm_strategies`. So a provider switch was fourteen edits, and the
-bounds below had nowhere to live at all.
-
-**Twelve of those remained at the time; the count moves with the topic list** (nineteen
-`generate_text(` sites today across seventeen generators, the decider and the strategies pass —
-count them rather than trusting a number here). Two of the three in `LLM_topic_decider.py` belonged to
-`parallel_topic_and_difficulty_calculation`, which spent *two* model calls on what the live path
-does in one and was reachable from nothing — `main.py` has only ever called
-`LLM_single_prompt_topic_and_difficulty_decider`. Deleted along with its sole caller
-`LLM_topic_and_difficulty_separate_decider`, since dead code that bills twice per question is a trap
-for whoever wires it up next.
-
-**A question served costs exactly two model calls**: one for the topic-and-difficulty decision, one
-for the generation. Each has its own three-attempt retry loop, so six is the worst case — but the
-decider's loop is *around its own call only*, and `question_generation` runs after it, so a retried
-decision never re-runs a generation. `CLAUDE_MAX_RETRIES` is 0 against the SDK's 2 so nothing
-multiplies underneath that.
-
-**`LLM_PROVIDER` defaults to `ollama`.** A fresh checkout running `start.ps1` must not begin billing
-an Anthropic account; a deployment opts in with `LLM_PROVIDER=claude` and `ANTHROPIC_API_KEY`. Both
-packages are pinned in `requirements.txt` and neither is imported until its branch is taken.
-
-**`temperature` is not a parameter of `messages.create` in `anthropic` 1.x, so the Claude branch
-sends no sampling parameter at all.** It went with the 0.x → 1.x major version, along with `top_p`
-and `top_k`. Passing it raises `TypeError: Messages.create() got an unexpected keyword argument
-'temperature'` *before a request is built* — every question, on every topic, from the first call.
-The migration plan had corrected Ollama's `temperature=1.1` down into Anthropic's 0.0–1.0 range,
-which is a real constraint and a different problem; the corrected value was equally unsendable.
-
-The API's own default temperature is 1.0, which is exactly what `CLAUDE_TEMPERATURE` defaults to, so
-the hot path asks for nothing and cannot be refused for asking. A caller wanting something else —
-`_llm_strategies` wants 0.4 — goes through `_claude_sampling`, which puts it in `extra_body`, the
-escape hatch for a wire parameter the typed signature no longer carries. **That path is unverified**
-(no credits when it was written) and degrades safely, but a strategies response reading
-`source: "rule-based"` against a working key is the first place to look.
-
-**A test double must not be more permissive than the thing it stands in for.** This survived every
-review and a green suite because `_FakeMessages.create` took `**kwargs` — so `test_llm_client.py`
-pinned a request shape the SDK cannot accept, and the one assertion anyone would have trusted
-(*"the request we build is valid"*) was the one that could not fail. It now validates every kwarg
-against `inspect.signature` of the **installed** SDK, read at call time rather than copied into a
-list that ages. Any future parameter the pinned version drops fails there instead of on a student's
-first question.
-
-Verification stops at the network boundary without credits, and that boundary is still worth
-reaching: a `400` carrying a `request_id` proves the request was built, sent, and validated — a
-`TypeError` proves it never left the process. Distinguish the two before concluding anything about
-a request's shape.
-
-**Four bounds, because CLAUDE.md already required them of the one model-backed endpoint that existed
-before this** (see *The strategies model pass is optional and bounded*). Question generation is on
-the hottest path in the product and had none:
-
-| Bound | Setting | Why the existing one was not it |
-| --- | --- | --- |
-| Per-call deadline | `GENERATION_LLM_TIMEOUT` (30s) | The SDK's own default is **ten minutes**; a prefetch worker blocked that long never refills the queue |
-| Process-wide concurrency | `GENERATION_MAX_CONCURRENCY` (8) | `_prefetch_active` bounds *per user*, so the peak was however many children pressed start at once |
-| Per-student volume | `GENERATION_RATE_LIMIT` / `_WINDOW` (60/min) | The queue bounds calls *in flight*, not calls *over time* |
-| Spend | `GENERATION_DAILY_CALL_LIMIT` (2500/24h, Claude only) | Nothing bounded it; free against a local model |
-| Waiting callers | `GENERATION_MAX_WAITERS` (30; was 12 until the load test below) | See below — this was the fourth bound, and it was missing |
-
-**The spend ceiling counts calls, and a question served is two of them** — the topic-and-difficulty
-decision and the generation. It was 5000, justified as "eightfold headroom" on ~600 generations a
-day; that compared a call ceiling against a question count and overstated the headroom by two.
-Corrected to 1500 against a 20-question day, which was then *under* the ~1800 calls a 30-question
-day actually makes — **size it against the workload, not against whichever example is written
-down.** 2500 covers that with room for retries. **And size it against the worst case, not the
-average:** `max_tokens=2048` at Haiku 4.5's $5/MTok makes one call cost up to ~$0.0102, so the
-ceiling is ~$25/day where the ~$0.0023-per-question average suggests ~$2. It bounds neither
-tokens (seeding more lesson-plan text raises the bill without moving it) nor a restarting process
-(in-memory, so several uvicorn workers multiply it and a crash-loop defeats it).
-
-**`GENERATION_MAX_WAITERS` is the threadpool bound, and it is not the concurrency one.**
-`GENERATION_MAX_CONCURRENCY` bounds calls *in flight*; this bounds callers *blocked waiting to
-become one*. Only the second protects the app: `llm_client._generation_slots.acquire(timeout=…)`
-blocks in the caller's own thread, and FastAPI runs these sync endpoints on anyio's shared ~40-slot
-threadpool — so with a concurrency of 8, a class of thirty starting together puts twenty-two
-requests to sleep in threadpool slots for up to `GENERATION_LLM_TIMEOUT`, and `/api/signals/*` ingest
-queues behind them. The per-student rate limit does not help: that counts one student over time,
-this is thirty students at one instant. Exactly the hazard `_STRATEGY_LLM_MAX_WAITERS` was added for
-one endpoint over, which is why CLAUDE.md said *four* bounds.
-
-It was latent while the prefetch queue absorbed it — those waits happened in the prefetch pool, not
-in a request thread. Setting `QUESTION_QUEUE_SIZE=0` made the inline path the only path and promoted
-it to the ordinary case. **Both** generation endpoints take it (`/api/generate-question` and the
-practice one); a third would need it too.
-
-**Measured against a real server, 2026-09-03** — `scripts/load_test_generation.py`, which runs
-uvicorn and fires a class at it. Nothing is billed: only the *network peer* is faked, so the
-semaphore, the budget arithmetic and every refusal are the shipped code. Two things it settles and
-one it corrects:
-
-- **The waiter cap *subsumes* the concurrency cap, it does not add to it.** `_generation_waiter`
-  wraps the whole call, so it bounds requests **in flight**; the semaphore bounds model calls
-  inside that. The ceiling is 12, not 8 + 12 — and a check written the obvious way asserted 20.
-- **The bounds hold, and the threadpool is only starved past ~40 in flight.** anyio's default
-  limiter is exactly **40** threads (measured, not assumed), shared with every other sync endpoint.
-  At 30 waiters a probe on `/api/topics` stayed at 31 ms; at 60 in flight its **worst** probe was
-  **11.9 s**, and at 80, **23.9 s**. **p50 and p95 stayed under 25 ms in every one of those runs** —
-  only the max moves, so a percentile-only report shows a healthy service that is intermittently
-  hanging for twenty seconds. Watch the max here.
-- **The cost is refusals, and how many depends entirely on arrival.** 30 students, 2 s per model
-  call, at the *old* `GENERATION_MAX_WAITERS=12`: **40% served on a simultaneous start, 87% over
-  10 s, 100% over 30 s.** A synchronised start is not a hypothetical — it is a teacher saying
-  "everyone start now" — and on it, 18 of 30 got a 503. **The cap is now 30**, which serves the
-  whole class on a simultaneous start; it costs no extra model calls, only threads and waiting,
-  since a refused student generates nothing. 30 and not 40 because anyio's pool is 40 and every
-  other sync endpoint draws from it — the 10 remaining threads are deliberate headroom.
-
-**The 503 carries `Retry-After: 5`, and `apiFetch` now honours it** — for **GET only**, so a retry
-can never replay a side effect; both generation endpoints are GETs, which makes that restriction
-free. Bounded at two retries and clamped to 10 s, because the header is a request from the server
-and not an instruction.
-
-**Jitter is the load-bearing half of that, not a refinement.** Every browser refused in one burst
-holds the *same* `Retry-After`, so honouring it exactly reforms the burst one round later — the
-arrival table above is the measurement of why that matters, 40% against 87%. `jittered()` is full
-jitter over `[0, delay]` rather than the delay plus a wobble: a tight band around a common centre is
-still a herd. A retry added anywhere else in this app needs the same treatment.
-
-**Take it through `_generation_waiter()`, never a bare acquire/release pair.** The refusal raises
-`HTTPException` *inside* the guarded block, so a hand-written release is skipped on the path most
-likely to run. The permit never comes back, and since the cap is a `BoundedSemaphore` acquired with
-`blocking=False`, once all of them leak generation is off for the life of the process.
-
-**The budget covers the whole call, so time spent queueing for a slot comes out of it** — the model
-call is charged the *remainder*, and a caller that queues its budget away is refused rather than
-started with no deadline left. Charged twice, one caller blocks for nearly double what it asked for;
-`_llm_strategies` had that bug against its own pool and this is the same fix one layer down. It
-belongs here rather than at a call site, because this is where the queueing happens. Tests on both
-must therefore assert `<=` the budget, never `==` it.
-
-`_ensure_queue` submits to a pool sized to `GENERATION_MAX_CONCURRENCY` instead of spawning a bare
-daemon thread per question. **A submit that fails must roll the in-flight count back**, because
-`_prefetch_worker` owns that decrement in its `finally` and a worker that never starts never runs
-one — the student's count would stay raised for the life of the process, `needed` would be ≤ 0 from
-then on, and their queue would never refill again. It is swallowed rather than raised for a separate
-reason: `_ensure_queue` runs *after* the response is assembled, so letting a failed refill out turns
-a served question into a 500. The daily ceiling is **Claude-only** on purpose: Ollama is local and
-free, so a call ceiling there would refuse a child a question to protect nothing.
-
-**An API that cannot be *reached* is a 503, not a 500, and the message names the base URL.**
-`generate_text` catches `anthropic.APIConnectionError` (which `APITimeoutError` subclasses) and
-re-raises it as `GenerationUnavailable`, so both `main.py` call sites already turn it into the 503
-that means "this deployment cannot serve right now". Unclassified it was a 500 with a 200-line
-traceback, and the student's page said *"make sure the backend is running"* while the backend was
-running and the unreachable thing was the API.
-
-**`AuthenticationError` is deliberately excluded** — it is an `APIStatusError`, a different branch,
-and a bad key is a misconfiguration that must stay loud rather than read as a passing outage. That is
-the line between classifying and swallowing: a connection failure still fails the call and still
-serves no question.
-
-The URL is in the message because it is the whole diagnosis when it is wrong. A stale
-`ANTHROPIC_BASE_URL` in the *user's Windows environment* — pointing at a local proxy that is not
-listening — gives exactly `WinError 10061`, and took three rounds to find because "Connection error."
-names nothing. It is inherited at process start, so clearing it needs a new terminal, not a reload.
-
-**`start.ps1` skips Ollama when `backend/.env` says `LLM_PROVIDER=claude`.** It ran unconditionally,
-so a Claude deployment still started `ollama serve` in its own window and would `ollama pull
-llama3.1:8b` if that model was missing — a multi-gigabyte download for a model nothing calls, and a
-window saying the opposite of what is configured. Guarded with `Test-Path` and a match check, per the
-rule above.
-
-**On breach the answer is to refuse — `GenerationUnavailable`, surfaced as 503, never a fallback.**
-Serving a question from the bank or from a cheaper model instead would change what a child is asked
-with nothing on any surface saying so, which is the same class of failure as a dashboard that cannot
-tell "no data" from "zero". 503 rather than 500 because a ceiling is a decision this deployment made,
-not something that broke. The prefetch worker is the one place a refusal is *silent*, and that is
-safe because it is invisible by construction: the queue stays short and the next question is
-generated inline.
-
-`CLAUDE_MAX_RETRIES` defaults to **0**, against the SDK's 2. Every call site already sits in its own
-`for attempt in range(3)`, so the defaults multiply to nine billed attempts per failed generation —
-and the loop the call sites own is the one worth keeping, since it also rejects a *well-formed*
-response for being bad JSON or the wrong shape, which no transport retry can.
-
-### The Claude branch constrains its replies with a schema; the Ollama branch does not
-
-`extract_json` hunts a JSON object out of prose because `llama3.1:8b` wraps replies in markdown
-fences and preamble. That is a property of *that model*, and it was carried across to Claude
-untouched — so the retry loop went on absorbing malformed JSON from a provider that can simply be
-told not to produce any. `question_schemas.py` is one schema per topic, passed as
-`generate_text(prompt, schema=...)` and sent as `output_config`.
-
-**It replaces no code-level check, and that is the whole caveat.** `grade_appropriateness`,
-`question_consistency`, `SCENARIO_VARS`, the scenario-grade checks and the bounded solvers all still
-run. A schema constrains the *shape* of a reply, never whether the question inside it is solvable,
-in band, or consistent with the data it will be scored against. It is also enforced by the provider
-rather than by us, and **only on one branch** — Ollama sends no schema, so a dev run exercises the
-unschema'd path and every one of those checks is the only thing between its reply and a question.
-`extract_json` stays for the same reason, and because a reply truncated at `max_tokens` is now the
-one malformed-JSON path left on Claude.
-
-What it buys beyond fewer retries: `scenario` is pinned to an enum of the **one** scenario actually
-selected, so the wrong-scenario class — Haiku returning `circle_missing_radius_circumference` for a
-scenario spelled `circle_circumference_missing_side`, or blending two scenarios' variable keys —
-becomes unrepresentable rather than merely rejected. Geometry's `variables` keys and the scenario
-enums are **derived** from `geometry_solvers.SCENARIO_VARS` and the block tables, never restated: a
-second copy of a scenario's keys is how the schema and the solver drift into telling the model to
-produce something the solver cannot read.
-
-**Two JSON Schema keywords are refused by this endpoint, and neither is guessable from the spec.**
-Both were found by sending a request and reading the 400:
-
-    For 'array' type, 'minItems' values other than 0 or 1 are not supported
-    For 'object' type, 'additionalProperties: object' is not supported. Please set it to false
-
-So `angle_solvers.SCENARIO_ARITY` **cannot** be expressed — it stays a runtime check, and that gap is
-pinned by a test because every other shape here is constrained and a reader would reasonably assume
-this one is too. And probability's two bag scenarios return **`None` rather than a schema**: their
-`items` maps category names the model invents to counts, which needs an open object. A schema listing
-every key *except* the one carrying the data would be accepted, constrain nothing that matters, and
-read as covered. `test_no_schema_uses_a_keyword_the_api_refuses` walks every schema for both, because
-a violation is not a degraded question — it is a 400 on the first question of that topic.
-
-**A generator added without a schema keeps the `extract_json` path silently**, which is why
-`test_every_generator_sends_a_schema` is an exhaustiveness check over the `LLM_*_generation.py` files,
-the same shape as `_MODE_AWARE` and the close-site tests.
-
-Verified end to end against `claude-haiku-4-5` on 2026-08-31: all ten topics generated and solved,
-with the answer present among its own options in every one.
-
-**Switching provider does not invalidate the checks below it, but it does invalidate every measured
-rate.** `grade_appropriateness` and `question_consistency` are code and are provider-agnostic — that
-is why those rules were moved out of prompts in the first place. Every "measured on llama3.1:8b"
-figure in the sections that follow describes the **Ollama** path and nothing else. Before a
-deployment runs on Claude, redo the sampling: **count how often each fail-open check *engages*, not
-just how often it fires.** A check whose input it can no longer locate — a differently formatted
-dataset, a separator that moved — reports a perfect record while doing nothing, and that has already
-happened once here (fractions in `ordering`). Label the new figures with the model and keep the
-Ollama ones labelled as Ollama's; the reasoning survives the model change even where the rate does
-not.
-
-### `grade` reaches a prompt rebuilt from its number, never as the caller wrote it
-
-`grade` is interpolated into **nineteen** prompts — `Student Grade Level = {grade}` in
-`LLM_topic_decider`, and one `a {grade} student` line in each of the seventeen generators — and
-every one of those strings is client-supplied. `GET /api/generate-question?grade=` is a query
-parameter with no request model behind it; `PUT /api/profile/me`, the two class endpoints and
-`POST /api/practice-sessions/start` all declared it a bare `str | None`. A value carrying a newline
-closes the line it sits on and opens an instruction of its own, in a prompt whose whole job is to
-be followed.
-
-**Escaping it is the weaker answer and is not what is there.** A grade is not free text: the only
-thing any consumer wants from it is the number `grade_levels.grade_number` already reads. So
-`grade_for_prompt` hands the prompt a label **rebuilt from that number** —
-`CANONICAL_GRADE_LABELS`, fourteen fixed strings, plus `UNKNOWN_GRADE_LABEL` for a grade that
-cannot be read. Nothing the caller wrote survives, so injection is unrepresentable rather than
-filtered for. Assert *membership of the closed set*, never the absence of a payload: an absence
-test passes against a filter that strips one sequence and misses the next.
-
-**The labels round-trip** (`grade_number(CANONICAL_GRADE_LABELS[n]) == n`), which is the whole
-reason the substitution is behaviour-preserving — `_allowed_topics`, `grade_band` and every
-generator's `GRADE_OVERRIDES` key on the number and never on the string. Break the round-trip and
-the grade gates move with no other symptom. Two dropdown labels are relabelled on the way through
-("Highschool" → "9th Grade"), which is safe for the same reason and reads better against the
-prompt's own numeric GRADE RULES.
-
-**Applied at two chokepoints, not nineteen**: `question_generation` is the sole dispatch point to
-all seventeen generators, so sanitising there covers eighteen of the sites and the decider covers
-its own. That is sound only while it *is* sole — a test walks the module's AST and fails on a
-generator called from anywhere else.
-
-**The edge checks (`validated_grade`, on all five entry points) are the second layer and are not
-what stops an injection.** They keep an unreadable grade out of the column, off a teacher's class
-list and off a profile badge. The first draft of that check was a length cap plus "does it parse",
-and `"5th Grade\r\nOUTPUT"` cleared both at seventeen characters: **a cap bounds how much can be
-said, never whether a second line can be started.** It now refuses control and format characters
-and the line and paragraph separators (`Cc`, `Cf`, `Zl`, `Zp`) that `\n` is not the only spelling
-of. Three short payloads in `test_grade_prompt_injection.py` keep it from being simplified back,
-and one long single-line one keeps the cap from reading as redundant.
-
-**A backend test must not hold a `main` class object from collection time.**
-`test_consent_gates_polling` calls `importlib.reload(main)`, which rebinds every class in the
-module — so a `@pytest.mark.parametrize` capturing `main.CreateClassRequest` gets a stale object,
-and anything keyed on it raises `KeyError` in a full-suite run while the file passes on its own.
-Parametrize by **name** and `getattr(main, name)` inside the test.
-
-## Question generation can be grounded in a lesson plan, but nothing seeds one
-
-`lesson_plans` (`20260827010000`) holds curriculum text keyed on `(topic_name, grade_band)`, at the
-same `early`/`middle`/`upper`/`advanced` granularity `LLM_*_generation.py`'s own `_grade_band()`
-already uses — not per exact grade, since one lesson plan already covers a band there. Public read,
-like `math_topics`/`questions`; written only via the dashboard, since it's reference content the
-backend never mutates.
-
-`lesson_plan_context.append_lesson_context(prompt, topic_name, grade_band)` is the one-line call
-site wired into every `LLM_*_generation.py` topic file (seventeen today; "ten" elsewhere in this
-file is the original set before the young and grade-9 topics), right after the grade-magnitude block.
-It returns `None` on a missing row, a blank row, a failed read, or missing Supabase credentials --
-same fail-open direction as the reporting helpers: this is prompt grounding, not a consent or
-access gate, so any failure should degrade to the existing difficulty/grade heuristics rather than
-block generation. Cached with the same 30s TTL and `time.monotonic()` pattern as `main.py`'s
-`_feature_flags()` (a lesson-plan edit lands within the TTL, not on the next restart), and clamped
-to 2000 chars before it reaches a prompt -- dashboard-authored text is still bounded like every
-other prompt input here, even though only the dashboard/SQL editor can write it.
-
-**The Supabase client is created lazily, on first lookup, not at import.** `main.py` imports
-`LLM_topic_decider`, which imports the ten generation modules, which import this one -- eager
-`create_client()` at that point ran ahead of `main.py`'s own `RuntimeError` for a missing
-`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`, so a misconfigured deployment saw a bare `KeyError`
-three imports away instead of the clear error `main.py` exists to give it.
-
-The table has no rows yet, so none of this changes generated output until it's seeded per
-`(topic_name, grade_band)`.
-
-**Don't scrape third-party worksheet sites into this table.** Vendors like K5 Learning gate real
-content behind membership and hold copyright on what isn't; their topic taxonomy for a grade also
-doesn't line up with this product's topics (algebra/geometry/angle-relationships/mean/median/mode/
-probability/rationals/ordering are mostly older-than-grade-1 concepts). Write original objectives
-per topic/grade_band instead.
-
-## Grade appropriateness is code-enforced twice: which topic, and what that topic asks
-
-Both layers used to be soft prompt hints only, and both leaked. `LLM_topic_decider.py`'s topic
-prompt has always said "grades 1-3 should primarily see ordering, geometry, and expressions... 
-algebra and probability should only appear after grade 6" -- but nothing enforced it, and
-`randomize_selection()` -- the fallback whenever an LLM call fails to parse, which fires often
-enough to matter -- picked uniformly across all 10 topics with **no grade parameter at all**. That
-was the most direct way a 1st grader landed on "algebra".
-
-`LLM_topic_decider._allowed_topics(grade)` is the single source of truth for that rule, and it is
-keyed on **`TOPIC_MIN_GRADE`, one entry per topic**, not on grade brackets. Brackets were the
-original shape and they have to be *remembered* for every topic they should exclude — two were not.
-Measured over 640 generated questions, grades 1-9: `angle_relationships` was allowed from grade 4
-against **7.G.5**, and all 30 questions at grades 4, 5 and 6 were above grade; `probability` was
-allowed from grade 6 against **7.SP.5**, 10 of 10. Neither is reachable by prompt tuning or by a band
-table — the topic arrives before the concept, so no version of the question is grade-appropriate.
-Same lesson as `SCENARIO_MIN_GRADE` one file over: a per-bucket allowlist can omit a bucket, a
-per-item minimum cannot, and an item added without one fails a test rather than defaulting to
-available everywhere.
-
-**`mean`/`median`/`mode` sit at 4 against 6.SP.5c and that is a recorded decision, not an
-oversight.** The same audit flagged 10 of 10 at grades 4 and 5 in all six cells. They stay because
-raising them is a question about what grades 4-5 are offered at all — with `angle_relationships`
-gone they would drop to five topics — rather than a defect to fix in passing.
-That decision was later reversed — they moved from 4 to 6 (see *A band's tiers are written for its
-ceiling* below), and `test_mean_median_mode_wait_for_the_grade_that_teaches_them` is where the
-current decision lives, so changing it means changing a test that says why.
-
-**A grade is read numerically, through `grade_levels`, and an unreadable one counts as the
-youngest.** `profiles.grade_level` is free text; only the frontend dropdown keeps it to "1st grade"
-form, and nothing in the schema enforces that. Every grade rule here used to match those exact
-strings and fall through to its *most permissive* branch for anything else — so `"Grade 1"` missed
-every branch of `_allowed_topics` and made a 1st grader eligible for algebra, and missed every
-branch of `_grade_band` and gave them `advanced` content. Both halves matter: fixing the topic gate
-alone still leaves advanced material reaching a child. `grade_levels.grade_number` parses a digit or
-a named label (`Kindergarten`, `Highschool`, `College`), rejects a number outside 0-13 so
-`"2026 cohort"` cannot become grade 2026, and answers `None` when it genuinely cannot tell — which
-every caller treats as the youngest, the same withholding-is-cheap asymmetry `signal_fusion`
-documents. `_grade_band` in every generation file now delegates to it rather than carrying a
-tenth copy of the string match. `_safe_topic(topic, grade)` checks
-the LLM's own selection against it (the prompt asks for the right thing but an 8B model doesn't
-reliably comply, same reasoning as the deterministic EEG-bias clamp in
-`LLM_single_prompt_topic_and_difficulty_decider`), and `randomize_selection()` now draws from it
-directly instead of an unconditional 10-way `match`. Both success paths and both fallback paths go
-through one of these two functions -- there is no third way a topic reaches `question_generation()`.
-
-**Below that, each `LLM_*_generation.py` used to scale difficulty and grade independently** --
-`DIFFICULTY_COMPLEXITY[difficulty]` described the question's *structure* ("one-step equation with
-x") and `GRADE_COMPLEXITY[grade_band]` only ever scaled a *number's magnitude* on top of it. That
-meant "easy" always meant "one-step equation with x" for every grade, algebra notation included --
-grade only changed how big the constants in that equation were. Replaced with
-`COMPLEXITY_BY_GRADE[grade_band][difficulty]`, one self-contained instruction per band per tier.
-"early" band content is grounded in grades 1-3 arithmetic specifically (whole numbers,
-addition/subtraction primary, no algebraic notation), not just smaller versions of the same
-structure every other grade gets.
-
-**Eleven of the seventeen topics use that table; `geometry`, `angle_relationships` and
-`probability` deliberately do not (nor do `quadratics`, `functions` and `spread`, whose difficulty
-is in coefficients chosen in code — see their section), and the difference is not an unfinished
-migration.** In those three, difficulty
-already selects a *scenario* (`DIFFICULTY_SCENARIOS` → a circle-area question, a triangle-sum
-question), so the question's structure is chosen by picking which question to ask rather than by
-describing it in prose. They keep `GRADE_COMPLEXITY[band]` for magnitude alone. Giving them a
-`COMPLEXITY_BY_GRADE` too would state the difficulty rule twice, in two places that can disagree —
-which is the failure the single table exists to prevent. Grade still gates their scenarios, through
-`_pick_scenario(difficulty, grade_band)`.
-
-Two scenario-level leaks were the concrete bugs behind this, both now gated by `grade_band` rather
-than `difficulty` alone (a "hard"-difficulty 1st grader — a real state, since difficulty and grade
-are independent inputs — could reach either regardless of the topic-selection gate above, once the
-topic itself was already reachable):
-
-- **`expressions`' "simplify" scenario** (`2x + 3x`, algebraic notation) was one of three scenarios
-  picked by unconditional `random.randint(1,3)` at every grade. Withheld from "early"/"middle"
-  bands now (`_pick_scenario(grade_band)`); only "upper"/"advanced" (grades 7+) see it. This means
-  grade 6 -- pre-algebra-ready per the topic-selection rule above -- won't get "simplify" from this
-  particular topic either, a deliberate simplification rather than adding a fifth grade bucket for
-  one scenario.
-- **`angle_relationships`' scenario 5** (`algebra_complementary`, solves an equation for x) was
-  gated to "hard" *difficulty* only, with no grade check -- so a struggling-topic or randomized
-  "hard" pick could still reach it at any grade. Withheld from "early"/"middle" bands the same way.
-
-`geometry` already gated scenarios by difficulty (`DIFFICULTY_SCENARIOS`); added an orthogonal
-`EARLY_BAND_SCENARIOS` filter on top, since circle/volume/pythagorean-theorem scenarios assume
-formulas grades 1-3 haven't reached regardless of which difficulty tier picked them.
-
-**A per-scenario grade is now the pattern in three places, and the third was found by audit.**
-`angle_relationships` sits at grade 7 in `TOPIC_MIN_GRADE` for 7.G.5 — complementary, supplementary,
-linear pairs — but `triangle_sum` is **8.G.5**, a grade later, and a topic-level minimum cannot say
-so. Measured over 539 questions: **4 of 10 at grade 7 were triangle-sum**, and not by chance — the
-medium difficulty tier is *only* that scenario, so every grade-7 student on that tier got a grade-8
-question. `LLM_angle_relationship_generation.SCENARIO_MIN_GRADE` mirrors geometry's, and grade 7's
-medium tier now falls back to the rest of the topic. Regenerated: 10 of 10 complementary,
-supplementary or linear pair, 0 triangle.
-
-**A grade gate has two halves, and the second is easy to leave out.** `SCENARIO_MIN_GRADE` decides
-which prompt block is *sent*; nothing about that constrains what comes *back*. Both topics shipped
-with only the first half: a `sphere_volume` reply to a grade-4 request was solved and served (8.G.9),
-and a `triangle_sum` reply to a grade-7 one likewise (8.G.5) — each walking straight past the gate
-written to stop it. The reply is now checked against the same allowed set inside the retry loop.
-
-That is not a defensive check. **Haiku returned a scenario other than the one asked for twice in
-this work** — `circle_missing_radius_circumference` for a scenario spelled
-`circle_circumference_missing_side`, and a `rect_perimeter_missing_side` carrying
-`rect_area_missing_side`'s keys. Selecting a block is a prompt-level act; only validating the reply
-is enforcement, which is the same split as `grade_appropriateness` beside it.
-
-**The generalisation, having needed it three times: a per-bucket minimum cannot describe an item that
-arrives after the bucket it belongs to.** Topics inside a grade bracket, scenarios inside a topic,
-scenarios inside a band. Whenever a gate is one number for a group, ask which member of the group
-arrives last.
-
-**That filter was itself too generous, and it filtered one band.** It admitted `triangle_area` —
-½ × base × height, CCSS **6.G.1** — to a band meaning grades 1-3, and a grade-1 session was duly
-generated asking for the area of a triangle. Fixing that band alone then left the *larger* half:
-`middle` (grades 4-6) was unfiltered entirely, offering circle area (7.G.4), the Pythagorean theorem
-(8.G.7), and on the hard tier **only** volumes, two of them 8.G.9 — so a 4th grader on that tier was
-always asked a grade-8 question.
-
-`SCENARIO_MIN_GRADE` now records the grade each formula is introduced at, and `_pick_scenario`
-filters **every** band against `_BAND_CEILING`. That is the structural point: a per-band allowlist
-can omit a band, a per-scenario grade cannot, and a scenario added without one fails the test rather
-than defaulting to available everywhere. Gating on the top of a band means a 4th grader can meet
-grade-6 content — the cost of bands being coarser than grades, and a far smaller one than the
-Pythagorean theorem.
-
-**Nothing else catches this class.** `grade_appropriateness` looks for variable notation, and a
-seeded lesson plan steers what a scenario *asks* rather than which scenarios are offered. Both
-instances were found by reading generated output. **Check a band's scenarios against the standard
-they claim to match, not against whether they look simple**: area of a triangle looks as elementary
-as area of a rectangle and is three grades apart.
-
-**Most of the original ten topics are still defense-in-depth for "early" band, not primary content**, since
-`_allowed_topics()` above keeps `algebra`/`probability`/`rationals`/`mean`/`median`/`mode`/
-`angle_relationships` from ever reaching a grade 1-3 session in the first place. Their "early"
-tables exist only to fail safely if that gate is ever bypassed -- write real curriculum depth into
-`ordering`, `geometry`, and `expressions` first if extending this further, since those three are
-what grades 1-3 actually see. `supabase/seeds/lesson_plans_priority_topics.sql` seeds exactly those
-three across all four bands, and `lesson_plans_remaining_topics.sql` seeds the other seven at
-`upper`/`advanced` only, with `early`/`middle` left unseeded for those seven
-because `_allowed_topics` already keeps them out of grade 1-5 and an unseeded cell fails open to the
-heuristics. `lesson_plans_young_topics.sql` is the third, covering the four topics added for grades
-1-3 — **five rows, not sixteen**, because `TOPIC_MAX_GRADE` makes most of that grid unreachable:
-`missing_number`, `graphs` and `shape_fractions` stop at grade 3 and exist only in `early`, and
-`patterns` stops at 5, so its `middle` row is written for grades 4-5 rather than for the band
-ceiling of 6 the other seed files' `middle` rows target. **A capped topic's band text is not the
-band's text.** Two more files came with the grade-9 topics: `lesson_plans_hs_topics.sql`
-(`quadratics` and `functions`, `advanced` only, two rows) and `lesson_plans_spread_topic.sql` (one
-row). **34 rows across five files** (12 + 14 + 5 + 2 + 1; count the INSERT tuples rather than
-trusting this). All five are dashboard-run scripts rather than migrations, because a migration
-would re-apply their text over any later dashboard edit on every rebuild.
-
-**A lesson plan must describe question shapes the generator can actually emit, and the limits are
-tighter than the grade band.** Objectives are prompt text, so anything they invite, the model will
-attempt — and the solver then scores it, correctly or not. Read off the code, then confirmed by
-generating: `algebra` takes `solve(...)[0]` and splits on a single `=`, so one linear equation with
-one solution — a quadratic would present one root as the answer and mark the other correct choice
-wrong. `probability` has three scenarios (one named category, its complement, a die condition) and
-no compound or conditional events. `rationals` is `a/b` fractions with mixed numbers forbidden by
-the prompt. `mean`/`median`/`mode` are a listed dataset and one statistic — no box plots, no MAD, no
-comparing distributions. `angle_relationships` is two angles in one stated relationship, with no
-diagram to refer to. So at these bands **`advanced` means harder numbers and one more reasoning step
-inside the same question shape, not different mathematics.**
-
-**Three wrong-answer bugs came from seed text alone, all found by reading generated output and none
-catchable by `grade_appropriateness`** (2026-08-18, llama3.1:8b). "Counted from a described
-condition" produced *"either blue or yellow"* — a compound event — scored **1 against a true 10/21**.
-"Recognise that a dataset may have no mode at all" is true of the subject and wrong as an
-instruction: nine distinct rainfall readings, **no mode, answer 0**. And a percentage framing
-("80% of 15 brands") also scored **1**, because percentages give the solver no counts to divide.
-Each is now forbidden in the objectives *and* in the row's `notes`. The general rule: **an objective
-that is pedagogically true can still be an instruction the solver cannot score** — check what a cell
-generates before trusting it, not just what it says.
-
-**`notes` is prompt text, not a margin note.** `_lookup` appends it to `objectives` and sends the
-pair, and the 2000-char clamp covers both together — so a `notes` field written as documentation for
-the next editor is documentation the model reads, and repo-internal references (a module name, what
-would have to change to lift a limit) are noise inside a prompt. Keep it to constraints on the
-question; the reasoning aimed at a person goes in the seed file's `--` comments, which are sent
-nowhere.
-
-### A band's tiers are written for its ceiling, so its youngest grade is over-served
-
-`grade_band` buckets 1-3, 4-6, 7-8, 9+, and every `COMPLEXITY_BY_GRADE` tier is written for the top
-of its band. Measured at grade 4, which sits at the bottom of a three-grade band: **66% of questions
-above grade**, from three separate mechanisms —
-
-| cause | measured | standard |
-| --- | --- | --- |
-| geometry gated on the band ceiling (6), not the grade | 3/10 | volume is 5.MD.5 |
-| `expressions` middle tiers allow parentheses | 6/10 | 5.OA.1 |
-| `rationals` middle tiers use unlike denominators | 7/10 | 5.NF.1 |
-| `mean`/`median`/`mode` offered from grade 4 | 30/30 | 6.SP.5c |
-
-The first is fixed by gating on the grade rather than the band — `SCENARIO_MIN_GRADE` is per
-scenario and the student's grade is known, so there was never anything to round up. **Where a
-per-item minimum exists, use the grade; the band ceiling is only a fallback for a grade that cannot
-be read.**
-
-The next two are fixed by `GRADE_OVERRIDES`, a per-grade line appended to the prompt. Not folded
-into `COMPLEXITY_BY_GRADE`: that table is keyed by band, and giving it a thirteenth column to
-express one rule would make every other topic's table wrong by omission. It is prompt-level and can
-leak — `grade_appropriateness` is where a code-level check belongs if it does.
-
-Grade 4 went **66% → 43%** on a regenerated set, and then **43% → 0%** when `mean`/`median`/`mode`
-were raised from 4 to 6 (6.SP.5c). Grade 5 is 0% and grade 6 was already.
-
-**That last step cost breadth, and the cost is the point of recording it**: grades 4-5 offered four
-topics after the audit — `ordering`, `geometry`, `expressions`, `rationals` — where they offered
-eight before it, and **five** since `patterns` was extended to grade 5 (4.OA.5, 5.OA.3). It is a
-deliberate trade of coverage for accuracy, pinned by
-`test_the_cost_of_that_decision_is_four_topics_for_grades_four_and_five` (which asserts the five,
-its name predating `patterns`) so a later widening has to be a choice rather than a drift.
-
-Grades 1-2 had the same shape for geometry and were fixed by **adding a scenario rather than
-removing the topic**. The easiest scenario was `rectangle_area` (3.MD.7), so a strict reading left
-those grades no geometry at all — and the alternative, dropping the topic, left them two topics.
-`rectangle_area_by_counting` is **2.G.2**, counting the squares that fill a rectangle: the one
-numeric geometry standard below grade 3, and the only thing those grades can be asked here. It
-reuses `solve_rectangle_area` because rows × columns *is* length × width — the difference is entirely
-in the wording, which is the scenario block's job, and a second solver would be a copy free to drift.
-
-Generated at grade 2: *"A rectangle is separated into 2 rows of 5 same-size squares. How many squares
-fill the rectangle?"* — countable without multiplying, which is why 2.G.2 exists as the bridge to
-3.MD.7.
-
-### A question may carry a figure, and it is a spec the client draws
-
-`questions.figure` (`20260909000000`) holds a specification, built by
-`question_figures.py`; `components/questions/QuestionFigure.jsx` is the only thing that turns one
-into pixels. It exists because grades 1-3 mathematics is largely visual and the standards this system
-could not ask were mostly the visual ones — `rectangle_area_by_counting` (2.G.2) was being asked in
-*words*, "a rectangle split into 3 rows of 4 same-size squares", which is a description of a picture
-rather than the picture.
-
-**The figure is derived from the data the solver uses, and no generator asks a model for one.** That
-is the design, not a preference. `question_consistency` exists because a model free to write the
-question text and the scored data separately eventually disagrees with itself, and the student
-answers the version on screen while being marked against the other. A picture is the same hazard with
-**no text for any check to read** — nothing downstream could compare a model-drawn diagram against
-the numbers it is scored on. Reading `variables`, the same dict `geometry_solvers` indexes, makes
-that disagreement unrepresentable rather than unlikely.
-
-**A spec, not an SVG**, for two reasons. The drawing and the sentence a screen reader is given come
-from one object, so they cannot describe different pictures — the rule `AccessibleChart` exists for,
-after its chart and its `sr-only` table drifted twice as separate literals, and it binds harder here
-because a figure has no text of its own. And a renderer fixed later applies to every question already
-in the bank; stored markup bakes today's renderer into rows that outlive it.
-
-**A figure is an enrichment and never a requirement.** `figure_for` returns `None` for a scenario
-with no figure, values it cannot use, or a size it will not draw, and it never raises — it runs after
-the solve, so an escaping exception would turn a checked, grade-appropriate question into a 500 over
-a decoration. The client matches that: an unrecognised `type` renders nothing rather than throwing,
-which is what an older bundle meets against a newer bank. Both ends bound the grid at 12 a side,
-because a bank row outlives the code that wrote it.
-
-**The column is nullable with no default** — same four-state rule as `sessions.chart_paths`. A
-`'{}'::jsonb` default would claim every question ever generated was considered for a figure and found
-to need none. The generators return the key as `None` rather than omitting it, for the same reason.
-
-**Every surface that *presents* a question renders its figure, and there are five.** This shipped
-wired into two — the adaptive view and flashcards — leaving the teacher's session review, the bank
-modal and practice test mode showing the wording with nothing to count, which is a different question
-from the one the student answered. `normalizeQuestion` returns a fixed object, so a key it does not
-name does not exist for any caller downstream; it carries `figure` through. `QuestionFigure.test.jsx`
-walks the source and fails on a file that renders question text without it — matching
-`<QuestionFigure`, **not the bare name**, which a dangling import satisfies and which is exactly what
-deleting the element leaves behind. The first version of that check passed against a build with the
-render removed and the import kept; `no-unused-vars` would have flagged it, but lint is non-blocking
-in CI here, so it would have landed. The teacher dashboard's
-"Recent Questions" list is the one stated exception: a `line-clamp-2` row is a *reference* to a
-question, not the question.
-
-**A read path that names its columns has to name this one.** `/api/signals/session/{id}` embeds
-`questions(...)` by name, so the session review would have shown the wording without the picture —
-"3 rows of 4 same-size squares" with nothing to count, which is a different question from the one the
-student answered. `/api/questions` uses `select("*")` and needed nothing.
-
-### A question carries its Common Core code, resolved by grade and scenario
-
-`questions.ccss_standard` (`20260916000000`) is the machine-readable copy of the codes
-`TOPIC_MIN_GRADE` and the two `SCENARIO_MIN_GRADE` tables only ever cited in comments.
-`ccss_standards.ccss_for(topic, grade, scenario)` resolves it and every generator attaches it
-to its return dict; `CCSSBadge.jsx` renders it on the same five surfaces `QuestionFigure`
-reaches, with the same source-scan exhaustiveness test.
-
-**Resolved by grade, not band, and by scenario first.** A band spans three grades and the
-standard changes inside it (`1.MD.4` at grade 1, `2.MD.10` at grade 2, both "early"), and a
-scenario names the standard inside a topic (`triangle_sum` is 8.G.5 in a grade-7 topic). A
-*ladder* of `(floor_grade, code)` per topic or scenario picks the highest floor at or below
-the student's grade; a grade below every floor takes the lowest rung, since the
-defense-in-depth tiers still describe content and the floor's standard is its honest name.
-`test_every_scenario_in_a_gate_table_has_a_code` pins the scenario tables to the gate tables,
-so a scenario added to one without the other fails. The one imprecision is difficulty inside a
-band: grade 6 algebra's two-step medium tier is 7.EE.4 content and reads `6.EE.7`, because the
-resolver does not see the tier. Same nullable-no-default rule as `figure`, and the same named
-column to add to `/api/signals/session/{id}`'s embed — `/api/questions` is `select("*")`.
-
-**`add_question_to_supabase` dedupes on text *and* standard.** The code is the first stored
-field derived from the student's grade, so one text generated at grade 6 and again at grade 8 is
-two rows (`6.EE.7`, `8.EE.7b`) rather than one whose badge belongs to whichever grade wrote it
-first and then contradicts what the second student saw on their own screen. Nothing constrains
-`question_text` unique, so the second row inserts cleanly — and a text regenerated after the
-column landed no longer matches its NULL-coded predecessor, so the bank gains one row per such
-question, visible to a teacher as a duplicate. That is the accepted trade: updating the old
-row in place would stamp a grade-8 code on a row grade-6 answers already reference. And every
-scenario-selecting generator checks the reply's scenario name (`expressions` was the one that did
-not): an off-name reply misses `SCENARIO_LADDER` and takes the topic's grade-1 rung.
-
-### `shape_fractions` reads a fraction off a picture, and refuses an ambiguous one
-
-1.G.3 (halves and fourths), 2.G.3 (thirds), 3.NF.1 (a/b as a parts of b). **Distinct from
-`rationals`, which is 4.NF.3 onward and is fraction *arithmetic*** — this is recognition, which is
-why it sits at grade 1 while `rationals` starts at 4. Its figure is required, for the same reason
-`graphs`' is.
-
-**Lowest terms is required, and refusing otherwise is the point.** Two shaded parts in four is a
-perfectly good picture and an ambiguous question: `2/4` and `1/2` are both correct readings, and
-whichever the solver picked, a student giving the other is marked wrong for a right answer — the
-failure this codebase treats as the worst available, and worse than a refusal, which costs one retry.
-Reducing the answer instead is the other option and is worse: the student is asked to read the
-picture, and the picture says two of four. `question_figures._part_whole` deliberately does **not**
-check it — a reducible fraction is perfectly drawable, and drawability and answerability are
-different questions.
-
-**Grade 1 has exactly three legal pictures, and the model reaches for a fourth.** 1.G.3 holds it to
-2 or 4 parts, and lowest terms then leaves only `1/2`, `1/4` and `3/4` — while half-of-four is the
-shading a model produces first. Measured on llama3.1:8b at grade 1 / easy: `2/4` on all three
-attempts, so the request **failed outright** rather than degrading. That is the cost of a refusal
-landing on a cell with almost no legal answers left, and it is not visible from either the standard
-or the refusal rule alone. The fix is in the lesson plan, which names the three fractions for grade
-1 (`supabase/seeds/lesson_plans_young_topics.sql`): 4 of 4 generate afterwards, 2 of them still
-spending one retry on `2/4` first. **Check a narrow cell's retry rate, not just that it can
-succeed** — a tier whose legal answers you can count on one hand is where an exhausted retry budget
-stops being theoretical.
-
-**The distractor space is checked exhaustively rather than sampled**, because it is 21 fractions.
-Two properties, both violated before: an option of one or more cannot be part of a shape, so `2/1` is
-not a misreading a child could make but an option nobody considers — which quietly makes a three-way
-choice a two-way one. And `1/1` and `2/2` were both offered against `1/2`, two options of equal value
-that go together with a single thought. Halves is what forced neighbouring denominators into the
-candidate list: with only near-misses of 2, the sole proper distractor available was `1/3`.
-
-**The whole is a constant width and the parts divide it**, not the other way round. Fixed-size parts
-drew eighths at twice the width of halves, which says the wrong thing about what a whole is — and is
-exactly the misconception these standards are about. Found by rendering it and looking.
-
-### `graphs` is the one topic whose figure is required
-
-1.MD.4 ("ask and answer questions about how many more or less"), 2.MD.10 (a bar graph with up to
-four categories), through 3.MD.3. Two scenarios: `how_many_total` is one addition, `how_many_more` a
-reading *and* a subtraction. It is the visual precursor to `mean`/`median`/`mode` — counts read off a
-graph at grade 1-2, statistics over a listed dataset at grade 6.
-
-**Everywhere else a figure that cannot be built costs the picture and nothing else**, because the
-question text stands alone: "a rectangle split into 3 rows of 4 same-size squares" is answerable read
-aloud. "How many more cats than dogs?" is not — the counts live *only* in the graph. So this
-generator treats an unbuildable figure as an unusable reply and retries. `figure_for` keeps its own
-fail-open contract and still returns `None` rather than raising; **the decision that `None` is fatal
-belongs to the topic that cannot do without it**, so a new figure type does not inherit a requirement
-it does not have.
-
-**A digit in the question text is refused.** Writing the counts out hands the student the reading the
-question exists to ask for — it stops being a graph question and becomes arithmetic. Checked, not
-merely requested, like every other prompt rule here that leaked at least once.
-
-**`categories` is a list of `{name, count}`, not a map.** The obvious `{"cats": "7"}` cannot be
-schema'd at all — the API refuses an open `additionalProperties`, which is why probability's bag
-scenarios get no schema. Choosing a shape that *can* be schema'd costs the generator one indirection
-and is cheaper than accepting the gap.
-
-**Asking how many more of the *smaller* bar is refused, not answered with an absolute value.** The
-question on screen asks for something with no answer; scoring the difference would mark a student
-right for answering a question nobody asked.
-
-Capped at grade 3: 3.MD.3 is the last bar-graph standard, and grades 4-5 move to line plots (4.MD.4,
-5.MD.2), which is a different figure and a different reading.
-
-**Two things about the renderer were found by looking at it, not by a test.** Column width is
-derived from the widest label — at a fixed width "storybooks" and "picture books" printed on top of
-each other, with both labels present and correct in the DOM, on a figure whose entire job is to be
-read. And gridlines are ruled at every unit, so bars can be *counted* rather than compared, which is
-the reading 1.MD.4 asks for. The component is named `BarGraph` because the obvious name is one
-`AccessibleChart.test.jsx` matches as a bare word to find Recharts charts rendered outside it — a
-hand-written `<svg>` is the case that guard states it cannot see, so the match is a false accusation.
-The word cannot appear in that file's comments either; the guard reads the file, not the syntax tree.
-
-### Grade 1 had two topics, and now has six
-
-`missing_number` (1.OA.8, the unknown in an equation — "8 + ? = 11", through 3.OA.4's unknown
-factor) and `patterns` (1.NBT.1 counting sequences and 2.NBT.2 skip counting, through 5.OA.3). Both
-answer to a single whole number an exact solver produces, which is the constraint that rules out
-most of 1.G and 1.OA — a shape-partitioning question has no number to score. Grade 1 goes 2 → 4,
-grade 2 goes 3 → 5, grade 4 goes 4 → 5.
-
-**Both write the unknown as `?`, never `x`**, and that is the whole distinction from `algebra`
-(6.EE.7, gated to grade 6). `grade_appropriateness` lists both in `FORBIDDEN_BANDS` for exactly that
-reason: the prompt asks, and only the check enforces.
-
-**`TOPIC_MAX_GRADE` is new, and it is the answer to `TOPIC_MIN_GRADE` being a floor with no
-ceiling.** "8 + ? = 11" is 1.OA.8 and does not become a grade-9 question by using bigger numbers —
-the skill is finding an unknown in one arithmetic fact, and past grade 3 that skill is `algebra` with
-proper notation. Without a ceiling `_allowed_topics` would keep offering both to a 15-year-old and
-the difficulty tiers would rank them as somebody's "easy". It is deliberately **not** applied to the
-original ten, which all scale: harder numbers inside the same question shape stay honest work.
-
-It also repeals a property a test used to assert — that topics only ever accumulate with grade. That
-was true of a floor-only gate; `test_each_topic_is_offered_over_exactly_the_grades_it_declares`
-replaces it with what the subset test was really protecting, that availability follows the declared
-tables and is contiguous.
-
-**Neither solver touches sympy, so neither needs the bounded subprocess.** `safe_solve` exists
-because `sympify("9**9**9")` never returns; there is no parser here to feed — the arithmetic is one
-operation on integers matched by `^\d{1,4}$`. Both refuse rather than guess, and
-`solve_pattern` derives the step and then **checks it against every known term**: `2, 4, 6, ?, 9` has
-a first-pair step of 2 and is not an arithmetic sequence, so taking the first pair would answer 8
-confidently for a question with no single right answer.
-
-**Each has its own shown-versus-scored check rather than `question_consistency.dataset_mismatch`**,
-which locates a dataset after the last colon. There is no dataset here, there is an equation — and
-the question *is* the equation, so a text reading "8 + ? = 12" over variables scoring 11 produces a
-question answered correctly and marked wrong. Both also refuse any digit outside the equation, since
-a second number on screen leaves a young reader unable to tell which one is meant.
-
-**A new topic needs five things wired, and the third is the one that fails silently.** `ALL_TOPICS`
-and `TOPIC_MIN_GRADE`; a `case` in `question_generation`'s match (which now raises by name rather
-than falling through to an `UnboundLocalError` on `return response`); **a `math_topics` row, via a
-migration** — `record_topic_attempt` joins `math_topics.topic_name = questions.subject` and
-attributes nothing when that finds none, so a topic without one serves and scores questions while
-crediting the student's work to nothing, which is exactly what `20260907000000` had to repair for
-`rationals`; an entry in `grade_appropriateness.FORBIDDEN_BANDS`; and `frontend/src/lib/topics.js`.
-
-**That last one used to be four hardcoded lists, and was six.** Two teacher surfaces had never been
-updated past the original ten: `Analytics.jsx` counted questions on the newer topics in *nothing* —
-its chart drops empty bars, so they vanished with no hint anything was missing — and `Questions.jsx`
-offered no way to filter the bank to them. Both bite hardest for grades 1-3, whose topics those are.
-Three changes in a row left a list behind, so the list stopped being a thing to remember.
-`lib/topics.js` is now the only place one is written down, and **`topics.test.js` parses
-`ALL_TOPICS` out of `LLM_topic_decider.py` and fails if the two disagree** — a React bundle cannot
-import Python, so the copy is checked rather than trusted. A third test fails on any new file that
-writes a topic list of its own. `test_young_topics.py` pins
-the first three.
-
-The per-topic history in `get_user_history` is now derived from `ALL_TOPICS` rather than listed
-again: `question_generation` reads `history[topic] if topic in history else []`, which fails *open*,
-so a forgotten topic quietly lost its repeat-avoidance and started serving the same question back.
-
-Verified against `claude-haiku-4-5` on 2026-09-01, 6 of 6 generated, solved and scored — including
-grade 1 on the **hard** tier staying within 20 and addition-only, which is `GRADE_OVERRIDES` holding
-a tier that would otherwise have reached for multiplication (3.OA).
-
-**Grade 1 has no geometry at all**, and that is the end of this thread rather than a gap in it. 1.G
-is defining attributes of shapes and partitioning into halves and fourths: nothing that produces a
-number a solver can score. The tempting fix — *"3 triangles and 4 squares, how many shapes?"* — is
-addition wearing a geometry label, and counting it would keep the topic list long while teaching
-1.OA. So `TOPIC_MIN_GRADE["geometry"]` is 2, and grade 1's list is `ordering` and `expressions`
-plus the four young topics above (`missing_number`, `patterns`, `graphs`, `shape_fractions`):
-**six**, none of them geometry. That is the honest size of what this system can ask a 6-year-old.
-
-**An unreadable grade lands there too.** It used to resolve to the early band's ceiling of 3 — two
-grades of content granted to a student nobody could identify — and now matches `_allowed_topics` and
-`_grade_band` in treating an unknown student as the youngest.
-
-### Difficulty tiers are relative to what a grade can see, because the signals move them
-
-A topic used to map a difficulty to a fixed list of scenario numbers. That is right while every
-scenario is available and wrong once a grade filter removes some. Geometry's hard tier is the
-volumes, and the hard ones — cylinder and sphere, with π — are 8.G.9, so gating scenarios on grade
-left grades 6-7 with the two simplest:
-
-    grade 6  medium -> rect_area_missing_side, triangle_area_missing_side, …   (invert a formula)
-    grade 6  hard   -> cube_volume, rect_volume                                (multiply three)
-
-**That is not cosmetic, because difficulty is what the biosignals move.** `signal_fusion` labels a
-student `focused`, `LLM_topic_decider` shifts medium → hard, and at those grades that handed them an
-*easier* question — the fusion firing correctly and being undone one layer down. Anything that
-narrows what a difficulty tier can offer has to be checked against the tier ordering, not just
-against the grade rule it was written for.
-
-`scenario_tiers.pick` ranks the *available* scenarios by `SCENARIO_DIFFICULTY` and slices them into
-thirds, so `hard` is the hardest third of whatever remains and cannot invert however much the grade
-filter removes. Small sets overlap rather than emptying — a grade with one scenario gets it at every
-difficulty, which is honest, and `random.choice` never sees an empty list.
-
-**`SCENARIO_DIFFICULTY` is ordered by steps to solve, deliberately not by the grade that teaches
-it.** The two are different axes and conflating them reads `algebra_complementary` (7.G.5, set up
-and solve an equation) as easier than `triangle_sum` (8.G.5, one subtraction). A CCSS-grade metric
-reported angles as broken when it was correct; check difficulty claims against difficulty.
-
-### Grades 9+ have no content of their own, and prompts cannot give them any
-
-`advanced` was `upper` with the magnitude clause deleted — "No additional restriction", "beyond
-what's typical". **An empty restriction reads to a model as no requirement, not a harder one**, so it
-produced the easiest shape that fit the topic. Measured over 640 generated questions, grades 1-9:
-**83% of grade-9 questions were three or more grades below grade**, including `Simplify 5/9 + 7/11 -
-2/9` (5.NF.1) and `Evaluate 72 / 8 + 5 * (9 - 4) - 3 * 2 + 10` (5.OA.1) on the **hard** tier.
-
-Every `advanced` tier now states a requirement, and the model complies: negatives in `mean` went
-3/10 → 10/10, in `ordering` 0/7 → 10/10, nested parentheses in `expressions` 0/10 → 2/10.
-
-**It barely moved the number — 83% → 81% — and that is the real finding.** The score is by the CCSS
-grade of the *concept*, and every concept these solvers can score tops out at grade 8: `algebra` is
-one linear equation with one solution (a quadratic is correctly refused, so 8.EE.7b is the ceiling),
-`mean`/`median`/`mode` are one statistic over a listed dataset (6.SP.5c), `probability` is a single
-event (7.SP.5), `rationals` is fraction arithmetic (7.NS.1). Harder numbers inside 8.EE.7b are still
-8.EE.7b.
-
-So **`advanced` meant "the hardest grade-8 content"** until `quadratics` and `functions` were added.
-Closing it needed solvers, not prompt text, and each new solver has to be able to *score* what it
-asks — the constraint that rules out most of high-school mathematics here. Verified before those
-tiers were written: variables on both sides, distribution and fractional coefficients all score
-correctly; a quadratic and a two-unknown equation are both correctly refused.
-
-### `quadratics`, `functions` and `spread` are the grade 9+ content, and `hs_solvers` is why
-
-Both sit at `TOPIC_MIN_GRADE` 9 and are the first topics here whose concept is above grade 8 at all.
-`hs_solvers.py` holds the arithmetic for both — **pure bounded-integer, no sympy, so no bounded
-subprocess**, the same call `missing_number` and `patterns` make. There is no parser to hand a
-`9**9**9` to: every value goes through `parse_int`, which matches `^-?\d{1,4}$` *before* `int()`
-sees it. Reach for `safe_solve` only when something downstream needs a sympy object.
-
-**The equation shown is rendered from the coefficients being scored, never parsed out of the text.**
-`render_quadratic`/`render_polynomial` are the only things that write an equation, and each
-generator requires its output verbatim in `question_text`. Same direction as `question_figures`:
-derive the presentation from the scored data and a disagreement stops being representable. Sign
-handling is the load-bearing part — naive formatting gives `x^2 + -5x + 6 = 0`, which nobody writes,
-so the model "corrects" it and every negative-middle-coefficient question costs a retry.
-
-**A two-root equation is only scoreable because the question names which root**, and that choice is
-made *before* the call and pinned in the prompt, not left to the model — `target` is deliberately
-absent from the schema. `shown_matches_scored` therefore checks two things, and the second is the
-one no equation check can see: a text asking for "the smaller solution" scored against the larger is
-a well-formed question, correctly solved, marked wrong. It also refuses a text naming *neither*.
-
-**The coefficients are chosen in code too, and `quadratics` is the worked example for why.** The
-schema asks for nothing but the sentence. Measured on llama3.1:8b across three promptings — the
-constraint as a description, as a construction recipe, and as a recipe with a worked example — the
-model produced a factorable quadratic **0 of 3, 2 of 3 and 1 of 4** times. Nearly every failure was
-`irrational roots`: it picks `b` and `c` freely and a random pair almost never leaves `b² − 4ac` a
-perfect square. Of the successes, two silently dropped the constraint they were given and one copied
-the worked example verbatim, so the tier was *also* not producing the content it named. No wording
-fixed it, because it is not a wording problem.
-
-**`functions` hands its coefficients over too, and needed it more.** Its `_FOOTER` told the model
-the text must contain each function exactly as given under `FUNCTIONS AS THEY MUST APPEAR` — and
-that section was never emitted, because the footer was written for a design only `quadratics`
-implemented. So the model was pointed at instructions that did not exist and had to reproduce
-`render_polynomial`'s spacing and sign conventions from nothing. With the lesson plan injected,
-`compose` failed **3 of 3** on llama3.1:8b, every one `text does not contain 'g(x) = x + 2'` — two
-of the topic's three tiers, since `compose` is medium *and* hard. **A prompt that references a
-section it never emits is worth grepping for whenever a generator retries on formatting.** The
-inner function of a composition is always degree 1, which is what bounds the answer by construction
-rather than by drawing until something fits.
-
-`_choose_coefficients` builds from two distinct integer roots, so the equation is factorable by
-construction and the whole refusal class is gone. Three things follow, and the second is the one to
-generalise: **every retry that class caused was a billed model call that could not have succeeded**;
-the `hard` tier can be the AC method (a leading coefficient of 2–4), which is the right Algebra I
-rung and was measured as the *least* achievable thing to ask for; and difficulty tiers get a uniform
-meaning rather than whatever the model reached for. It is the same move already made for `target`
-here and for the scenario in geometry and probability — **decide the part with a right answer in
-code, and let the model write the sentence.** Reach for it whenever a generator is retrying against
-a constraint the model keeps missing rather than against a malformed reply.
-
-Four quadratics are refused rather than served: no real roots, a **repeated** root (where "the
-larger" names nothing and every distractor would simply not be a root), irrational roots, and
-roots that are not whole numbers. That restricts the topic to equations factorable over the
-integers, which is A-REI.4b's core rather than a limitation worked around.
-
-**`functions` is grade 9 on a narrower claim than its name suggests.** Evaluating a rule at a value
-is 8.F.2, and grade 8 explicitly does not require function notation; what is high school is the
-notation (F-IF.2) and composition (F-BF.1c), which has no grade-8 equivalent. That is why `compose`
-is the medium *and* hard tier — a version of this topic whose every tier was `evaluate` would be
-8.F.2 wearing an `f(x)`. `MAX_ABS_RESULT` bounds it because composition squares its input: two
-quadratics with reasonable-looking coefficients reach 10^16, and a question answered 48,271,009
-tests calculator ownership rather than composition.
-
-**Measured on both providers with the seeds injected, which is the path no test covers** — an
-unseeded cell fails open to the heuristics, so every validation that does not deliberately inject
-the lesson text exercises the wrong path. Claude Haiku 4.5: **6 of 6 in 6 calls**, no retries, all
-answers correct by hand. Ollama llama3.1:8b: 3 of 3 per topic. Redo it after any edit to a seed row
-or to a prompt these topics send.
-
-**`spread` is S-ID.2, and it is standard deviation only.** The interquartile range and mean absolute
-deviation S-ID.2 also names are exactly scoreable and are **6.SP.5c** — offering them would put
-grade-6 content inside a topic added to serve grades 9-12, measured against the very audit that
-motivated it. Same reasoning that makes `compose` two of `functions`' three tiers.
-
-Three things about it are load-bearing, and the last two were each found after the first looked
-finished:
-
-- **The answer is exact because the data is built to make it so.** Most datasets have an irrational
-  standard deviation, and an answer rounded to whatever precision the formatter chose is the
-  answered-correctly-marked-wrong failure wearing a decimal point — which is why this topic was
-  deferred. `_DEVIATION_PATTERNS` holds multisets that sum to zero and whose population variance is
-  a perfect square, scaled and shifted by `_choose_dataset`; same move as restricting `quadratics`
-  to equations that factor over the integers. Hardcoded rather than searched, because "does this
-  multiset have an exact standard deviation" is a property of the numbers and a search is a loop
-  whose termination depends on its input.
-- **The question must say "population standard deviation", and the generator refuses without it.**
-  Sample standard deviation over n−1 is what many high-school courses teach, and it gives a
-  different number — so a question saying only "standard deviation" has two defensible answers and
-  scores one. That is a worse hazard than the rounding one this topic was deferred over, it is not
-  fixable by any solver, and only the wording removes it.
-- **Checking the data is *contained* in the text binds neither its extent nor its label.** The
-  containment check every sibling topic uses was wrong here in three ways at once: `"14, 16, 17,
-  18, 20, 25"` contains `"14, 16, 17, 18, 20"`, so an appended value passed; the two sets could be
-  written in either order; and — the one no ordering check catches — the same sets in the same
-  order under **swapped labels** asks for A−B while B−A is scored, putting the negation of the
-  answer on screen. `shown_matches_scored` therefore compares the text's comma-separated *runs*
-  exactly and in order, and additionally requires each set verbatim under its `Set A:`/`Set B:`
-  label. `functions` gets this free by carrying `f(x) =` inside its shown strings; **when the
-  semantics live in a label the prose writes, the label has to be part of what is checked.** This
-  one is deliberately strict where `question_consistency` fails open, and the difference is who
-  chose the data: the generator supplied every number, so any other number is a reply that ignored
-  its instructions, not an ambiguity to read generously.
-- **Binding the data is not binding the question, and the ask needs its own check.** Two correctly
-  labelled sets in the scored order still pass every data check under a text asking for *Set B's
-  own* standard deviation — scored 3 where the screen says 5, with 5 on the option list, because
-  `near` offers each set's own spread as a distractor. `quadratics` binds its ask with
-  `_TARGET_WORDS` and `functions` with the literal `f(g(4))`; the `ASK FOR:` line here was
-  prompt-level only. Two things that check has to get right: **it applies to the interrogative
-  clause, not the whole text** — "a coach checks how much more consistent the team is" is context
-  this prompt actively asks to vary, and refusing it costs three retries and a 503. Scoping has two
-  traps of its own, both found only by mutation. The clause may *contain* the data, whose
-  `Set A:`/`Set B:` labels then win the ordering, so the verbatim anchors are stripped before the
-  labels are located. And **an ask is not always a question**: with no `?` anywhere, a
-  clauses-ending-in-`?` search finds nothing, and two arms reading that empty result in opposite
-  directions is how one of them silently skipped its guard while the other refused a correctly
-  worded imperative. Fall back to the closing sentence — not to the whole text, which quietly
-  reinstates the context false-positive for every reply ending in a full stop. Then **it must
-  not pin word order**, since "Set B's … is how much larger than Set A's?" and "…does Set B exceed
-  that of Set A?" are both exactly the scored question. Direction rides on which label appears
-  first, which is order-independent; a magnitude phrase is what separates it from "which is larger,
-  Set B or Set A?", whose answer is a label where a number is scored.
-
-**A rule a scenario cannot use is not noise in a prompt, it is a suggestion.** The shared footer
-told a *one-set* prompt about `Set A:`/`Set B:` labels and about comparisons, and llama3.1:8b duly
-invented both — labelling the single set "Set A", making up a `Set B: 74`, and asking for Set B's
-standard deviation, which would have been scored as Set A's. 4 refusals in 6 one-set generations,
-every one of them mentioning a label or a comparison. Splitting the rules per scenario took Ollama
-from **1.25 to 1.00 model calls per question** (Claude was already 1.00). Same family as the
-`expressions` early-band example: what the prompt *shows* beats what it *says*, and that includes
-rules it shows for a case that is not the one being asked.
-
-**None of the three topics appears in `grade_appropriateness.FORBIDDEN_BANDS`, deliberately, exactly
-as `algebra` does not.** Variable notation is what they *are*; a band rule would refuse every question
-either exists to ask. `TOPIC_MIN_GRADE` is what keeps them away from a 6-year-old.
-
-**This does not take the "below grade" figure to zero.** Re-measured after the two topics landed
-(2026-09-02, Claude Haiku 4.5, 64 questions, `scripts/audit_grade_appropriateness.py` — which
-exists because the original audit left no script and therefore could not be repeated): grade 9 went
-**81% → 56%** three-or-more grades below grade, then **69%** at grade 10, **81%** at grade 11 and
-**100%** at grade 12.
-
-**The grade-12 figure is arithmetic, not a sample.** The highest concept anything here can *score*
-is grade 9, so every question this system can ask a 12th grader is ≥3 grades below by construction —
-the two new topics included. So **adding topics at grade 9 cannot move grades 11-12**; only a solver
-for content above grade 9 can, which is the wall `spread` runs into as well. Read a grade-9
-improvement as exactly that, and do not expect the upper grades to follow.
-
-The other thirteen topics (seventeen, less the four capped young ones) carry no ceiling, so a
-grade-9 student is still offered them and still
-draws grade-8 content most of the time.
-
-**Capping them was considered and rejected, on arithmetic rather than taste** (2026-09-02). Since
-the highest concept anything here can score is grade 9, a cap keyed to the student's grade removes
-everything above it:
-
-| rule | grade 9 | grade 10 | grade 11 | grade 12 |
-| --- | --- | --- | --- | --- |
-| concept grade ≥ student grade | 2 topics | **0** | **0** | **0** |
-| within two grades | 8 topics | 5 | 2 | **0** |
-
-**Capping cannot fix a ceiling.** It converts "serves below-grade content" into "serves no content",
-and `_safe_topic` calls `random.choice` on that list — empty, that is an `IndexError`, so it is a 500
-on every question at that grade rather than a graceful narrowing.
-
-**And the metric over-reads for practice topics, which matters before trusting it again.** It counts
-the grade a concept is *introduced*. S-ID.2 has high schoolers using mean and median to compare
-distributions, so a 9th grader finding a median is doing grade-appropriate work that this measure
-scores three grades below. The audit is a good instrument for "the topic arrived before the concept"
-and a poor one for "the student has outgrown this".
-
-So the only real lever for grades 9-12 is more solvers, and `spread` (S-ID.2) is the next one.
-`test_the_grade_eight_topics_are_knowingly_uncapped` holds the decision, so reversing it means
-editing a test that says why.
-
-**A test that reads "allowed iff it has no ceiling" was true only until a topic had a floor above
-8.** `test_topics_at_eighth_grade_are_those_inside_both_bounds` was that test; these two topics
-broke its equivalence rather than its behaviour. Assert the range, not the absence of a cap.
-
-### Angle answers are whole numbers through 5th grade, and decimals after
-
-Scenario 5's coefficients are unconstrained, so `algebra_complementary` returns things like 11.875
-(displayed `11.88`). The lesson-plan text asking for whole numbers did not stop it — prompt, not
-enforcement, as usual — so `LLM_angle_relationship_generation` now checks the **solved value** and
-regenerates when it is fractional for a young student. A decimal answer is not a defect in itself:
-from 6th grade it is ordinary mathematics, and the rule is scoped to the grades where it is not.
-
-**Keyed on the raw grade string, not `_grade_band()`.** The line falls between grade 5 and grade 6
-while `middle` spans 4, 5 **and** 6 — so no band boundary is in the right place, and using one would
-either impose whole numbers on a 6th grader or allow decimals for a 4th. Same reason
-`LLM_topic_decider._allowed_topics` is grade-keyed; `test_the_cutoff_splits_the_middle_band_which_is_why_it_is_grade_keyed`
-pins it. An unrecognised grade falls through to "decimals allowed", matching `_grade_band()`'s own
-`advanced` default: the constraint is a scaffold for younger students, so the safe direction when
-the grade is unknown is to leave the mathematics alone.
-
-**The solve moved inside the retry loop to make this possible** (`_solve_scenario`). Whether the
-answer is a whole number is a property of the *solved value*, not of the question text, so it cannot
-be checked until the scenario has been evaluated — and a question that fails has to be regenerated,
-not patched. An unrecognised scenario now returns `None` and retries rather than falling through
-with `solution` unbound. Measured after: grades 4-5 whole on 6 of 6, grades 6+ free to return
-`14.29`/`16.67` as before.
-
-### `grade_appropriateness` checks the output, because everything else only checks the prompt
-
-`COMPLEXITY_BY_GRADE` and the lesson-plan text are both **prompt-level** — they ask the model for
-something and nothing verifies it complied. That is the same shape as every rule this codebase has
-already had to move into code, so `find_violation(question_text, topic, grade_band)` runs inside
-each generation retry loop: a violation retries, and exhausting the retries raises, which
-`_prefetch_worker` already catches. Thirteen of the seventeen topics are wired in; `algebra`,
-`quadratics`, `functions` and `spread` are the exemptions explained below.
-
-**It tests one thing — algebraic variable notation reaching a band that must not see it** — and the
-narrowness is the design. A check with a real false-positive rate is worse than no check: it burns
-retries, and a question rejected for a bad reason looks exactly like a model that cannot follow
-instructions. `x` as a multiplication sign is the false positive that actually occurs here, so the
-pattern is `\d+[xyn]\b` — anchored so `2x` matches while **`6 x 4` and `6x4` do not** (the trailing
-`4` kills the word boundary). `test_ordinary_questions_are_not_refused` is the load-bearing half of
-its test file; a naive `/[xyn]/` fails exactly those cases.
-
-**`algebra` is deliberately exempt at every band.** Its own early-band content is one-step equations
-with x, so a blanket rule would reject every question the topic exists to ask — the gate protecting
-grades 1-5 from algebra is `_allowed_topics`, not this. `geometry` is early-only, since `upper`
-legitimately labels triangle sides `a`, `b`, `c`.
-
-What it deliberately does **not** check: magnitude/decimal/negative rules (`-` is also a hyphen and
-a range separator, so detection would be guesswork), and whether the question reflects the
-lesson-plan text's *content* — that needs a model to judge, which puts an unbounded LLM call on the
-hot generation path. **So this bounds the damage a bad lesson plan can do; it does not confirm a
-good one was followed.** Seeding still needs its effect checked by reading generated output.
-
-**Forbidden operators in early-band `expressions` are the one exception, and they are checked
-because reading the output found them.** Measured on llama3.1:8b with the lesson plans seeded
-(2026-08-18, grade 1 / easy): **2 of 8 questions came back with parentheses** — `Solve 5 + (2 - 1).`
-— and a separate run produced `Evaluate (3+2)*4-1.`, both while the *same prompt* said "ADDITION AND
-SUBTRACTION ONLY. Do NOT use multiplication, division, or parentheses." **A few-shot example beats a
-textual constraint**: every scenario example in `expr_prompt` is written for older students
-(scenario 1's is `36/3+(8*2)-(15-7)+4`), and the model followed their shape over the rule. Three
-changes, all needed: scenario 2 (`order_of_operations`) is withheld from `early` — it is CCSS 5.OA.1
-and is *defined* by mixing precedence, so it cannot be expressed within the band's rule at all —
-`EARLY_BAND_EXAMPLE` gives the band a worked example in the shape it is allowed, and the operator
-check rejects what still slips through. Re-measured after: **10 of 10 compliant**. Unlike negatives
-and decimals these characters have exactly one reading inside a generated expression, and the prompt
-already constrains the topic to `+ - * / ( )`, so there is no third interpretation available.
-
-**That is the general lesson, not a fact about one topic: seeding a lesson plan does not make the
-model follow it, and neither does an unambiguous instruction sitting next to a contradicting
-example.** Anything added to these prompts needs its effect read off generated output before it is
-believed — which is what `scripts/` has no home for yet and was done by hand here.
-
-### The solvers trust model output the retry loop above them already distrusts
-
-Switching to Haiku found five bugs, none of them in the migration: all five were in code that had
-only ever seen `llama3.1:8b`'s output shape, and every one is the same mistake — a solver, or a
-distractor generator, taking the model's reply as well-formed *after* the retry loop that exists to
-reject malformed replies has already broken.
-
-**Solve inside the retry loop, never after it.** That placement is what turns each of these from a
-retry into a 500. Measured against Haiku 4.5 at 8th grade, 3 generations per topic:
-
-| Site | Failure | Was |
-| --- | --- | --- |
-| `LLM_geometry_generation` | a scenario name the `match` has no branch for | `UnboundLocalError` on `solution`, 2 in 3 |
-| `LLM_geometry_generation` | a known scenario missing a variable the solver indexes | `KeyError: 'b'`, 2 in 3 |
-| `LLM_algebra_generation` | `solve` returning `[]` for `x+1 = x+2` | `float(None)` → `TypeError`, 1 in 3 |
-| `LLM_algebra_generation` | `solve` returning two roots | **a wrong answer** — `[0]` scored one root and marked the other choice wrong |
-| `incorrect_solution_generation` | a one-term answer like `5*x` | **an infinite loop**, 28 minutes at 100% CPU |
-
-The algebra multi-root case is the one to notice: this file already *said* the topic is "one linear
-equation with one solution — a quadratic would present one root as the answer and mark the other
-correct choice wrong", and nothing enforced it. A constraint documented as a limit is a wrong answer
-waiting for a model that writes one.
-
-**`while len(results) < n` needs a bound and a deterministic filler.** All three generators in
-`incorrect_solution_generation` were unbounded. The symbolic one did not merely risk hanging, it hung
-*deterministically* on its commonest input: `wrong_coefficient` only perturbed an `Add`, so for `5*x`
-— what simplifying `2x+3x` produces — it returned the expression unchanged, leaving `sign_error`'s
-negation as the only reachable alternative. Two distinct values where three are needed. Whether a
-randomised search can reach `n` distinct results is a property of the *input*, not of how long you
-try, so the retry count is not the bound — the filler is.
-
-It read as intermittent for two compounding reasons, and both are worth recognising: `_pick_scenario`
-reaches `simplify` about one time in three, and only above the `middle` band. **A hang that depends
-on a random branch below a grade gate looks like flakiness and is not.**
-
-**All three solver topics go through `safe_solve.py`, and the boundary is the whole solve, not the
-last step of it.** A CPU-bound sympy call cannot be bounded in-process — `parse_expr("9**9**9")` and `solve` on `9**9**9 + x = 5` never return, the operand is
-the model's, and the spin holds the GIL inside CPython's long-integer code, so a watchdog thread
-never gets scheduled and a signal handler never runs. Only an external kill works. It costs ~0.85s of
-sympy import per call, which is a minority addition to a ~1-3s model call and is paid only where an
-expression, equation or scenario is solved.
-
-**All eleven topics that touch sympy are wired (the six that never parse model text with it —
-the young topics and the high-school solvers — need no worker), and getting there took four
-rounds of finding the next unwired one.**
-`expressions` bounded while `algebra` still parsed in the request thread; then `algebra` bounded
-while `geometry` still ran `preprocess_variables` — `sympify` over the model's raw values —
-in-process, with a docstring claiming otherwise; then the remaining seven, which had never been
-looked at. `SCENARIO_VARS` checks that the keys are *present*, which says nothing about the
-values behind them, and a `try/except` catches exceptions rather than non-termination. If a topic
-touches model text with sympy anywhere, all of that topic belongs in the worker.
-
-`geometry_solvers.py` and `angle_solvers.py` exist for that: the worker cannot import a generator
-module, which pulls in supabase, flask and dotenv at import, so the pure arithmetic lives apart from
-the prompt and the retry loop. Anything a bounded worker must run needs the same separation — and a
-validity check that needs the *parsed* form goes with it, which is why `invalid_reason` moved
-alongside the angle solvers rather than staying beside its caller.
-
-**Every worker branch checks its result is usable, and the `evaluate`/`simplify` one did not.**
-`1/0` came back as the string `zoo` and `0/0` as `nan`. `rationals` served them —
-`correct_answer='zoo'` among the options — and `expressions` raised
-`TypeError: Cannot convert complex to float` building distractors, a 500 rather than a retry. Every
-sibling branch guards this, in `_solve_worker` and in both solver modules; this was the only one that
-did not.
-
-**`is_number` cannot be the test** — `simplify` exists to return `5*x`, so rejecting anything
-non-numeric refuses every question that scenario is for. **And `is_finite is False` cannot be it
-either: `nan.is_finite` is `None`, not `False`**, so that form catches `zoo` and the infinities and
-lets `nan` straight through. The guard tests both, and a mutation to the `is_finite`-only version
-fails on exactly the `nan` cases.
-
-**`rationals` was the last generator solving below its `for/else`**, so tokens that would not join and
-a division by zero were both a 500 on attempt 1. Moved inside the loop with the rest.
-
-**Concurrent solves are bounded, because the budget collapsed for all of them at once rather than
-degrading.** Solves contend for CPU, and while the timeout covered the whole child process — nearly
-all of it sympy startup — that contention hit the budget directly. Measured unbounded, before the
-phases were split: 16 concurrent all succeeded, **32 gave 7 of 32, 48 gave
-0 of 48**. Nothing bounded it — `GENERATION_MAX_CONCURRENCY` bounds *model calls*, and a solve is not
-one; prefetch, the inline path and practice reach the worker independently. So a class starting
-together took every solve-backed topic down, and once a solve failure became `SolverUnavailable` it
-did so as a **503 with no retry**. `SOLVE_MAX_CONCURRENCY` (8) fixes it by queueing: 48 of 48 now
-succeed, and 96 of 96 within `SOLVE_QUEUE_TIMEOUT` (20s). The bound stays after the split for a
-different reason — it is what keeps a class starting together from putting a hundred interpreters
-on one machine, which is a resource question rather than a timeout one.
-
-**The semaphore bounds *this process*, and a co-tenant still spent the budget — so a *startup*
-timeout gets one more attempt.** This was the reason the whole two-phase split happened, and the
-history is worth keeping because the conclusion inverted along the way.
-
-While the budget was wall-clock over a child dominated by sympy startup, any other load on the
-machine could exhaust it: reproduced with the frontend suite running alongside the backend one, and
-again with CPU hogs — **8 of 8 solves killed at 3.0s**. Eleven of the seventeen topics reach the worker,
-and since a timeout raises rather than returning `None`, every one was a **503 on the first
-attempt**. Retrying was then the only thing that separated the two meanings of "timeout", because
-nothing in-process could tell them apart.
-
-**Splitting the phases made them distinguishable, and then inverted which one is worth retrying.** A
-*startup* timeout is contention, and contention passes. A *solve* timeout is now 3s against ~10ms of
-arithmetic, so it is a genuine spin — and a spin spins again. The retry moved to startup; a spin gets
-one attempt. Full detail, and the corrected saturation figures, under *`SOLVE_TIMEOUT` bounds the
-arithmetic* below.
-
-The permit is taken **per attempt**, not around both: holding one through a wait that has already
-failed shrinks the effective concurrency exactly when the machine is busiest, which is when the retry
-exists.
-
-**Waiting for a slot deliberately does *not* come out of the solve budget** — the opposite of
-`llm_client`, and for a stated reason. There the wait is the caller's own deadline, so charging the
-model call the remainder is right. Here the deadline exists to bound a CPU spin, and a spin does not
-start until the process does; charging the wait would fail solves that then had no budget left to run
-in, under exactly the load the bound exists for.
-
-Take the permit through `_solve_slot`, never a bare acquire/release — the refusal raises *inside* the
-guarded region, which is the path most likely to run under load, and a `BoundedSemaphore` turns one
-leaked permit into solving being off for the life of the process. Same rule as
-`llm_client._generation_waiter`.
-
-**Test the bound by holding the permits, not by measuring a peak across threads.** An earlier version
-of that test passed against a build with the bound removed, because the pool happened to start its
-threads in groups no larger than the bound — a peak is not deterministic, and a mutation check that
-passes is worse than no check. What is deterministic is that a caller finding no free slot is refused
-rather than run.
-
-**A solver that could not *run* is not a bad model reply, and `SolverUnavailable` is the difference.**
-Five things in `_run` returned `None` and only one was the model's fault — a worker that read the
-input and rejected it. A timeout, a failure to spawn, a non-zero exit and unreadable output all say
-nothing about the reply and everything about the machine. Collapsed into one `None`, a load-dependent
-timeout retried three times — **billing a model call each time that could not possibly help** — and
-then raised *"Failed to generate valid JSON after retries"*, a claim about the model for a subprocess
-that never ran. It surfaced as an intermittent failure in an unrelated topic's test, which is exactly
-how much that misdiagnosis costs. It now raises on the first attempt, at one model call instead of
-three, naming the cause.
-
-It subclasses `llm_client.GenerationUnavailable`, so both `main.py` call sites already turn it into
-the **503** that means "this deployment cannot serve right now" rather than a 500. A worker that ran
-and refused the input still returns `None` and still retries, because a different reply genuinely
-might work.
-
-**`_probe_startup` must catch it.** That function runs at import and its own docstring is explicit
-that raising there would take the whole backend down — ingest, dashboards and consent with it — over
-one topic's tuning knob. Making `_run` raise nearly did exactly that; a mechanism that cannot run is
-folded into the existing "probe failed" branch, which leaves the configured budget alone rather than
-guessing one from a failed measurement.
-
-**`SOLVE_TIMEOUT` bounds the arithmetic, and `SOLVE_STARTUP_BUDGET` bounds getting there.** Two
-phases, because for a long time there was one and it was the wrong one: the single budget covered
-launching Python and importing sympy, which is ~99% of an ordinary solve — measured 0.64–1.00s wall
-where the maths is ~10ms — so a nominal 3s was ~3× margin over *startup*, and any co-tenant on the
-machine spent it. Measured with CPU hogs running: **8 of 8 solves killed at 3.0s**, and at 2×
-oversubscription the retry rescued none.
-
-`_solve_worker` prints a readiness line once sympy is loaded, and `_run` times the two phases
-separately. Re-measured, 8 concurrent solves, hogs given 3-5s to spin up before the run:
-
-| load | before | after |
-| --- | --- | --- |
-| idle | — | **8/8**, slowest 2.2s |
-| saturated (18 hogs / 18 cores) | 0/8 | **7/8**, slowest 30.7s |
-| 2x oversubscribed (36 hogs) | 0/8 | **1/8**, slowest 32.4s |
-
-**2x oversubscription is not fixed, and the first version of this note claimed it was** — measured
-with a 2-second settle, so the hogs had not begun loading the machine. Give them 5s. What the split
-buys is *saturation*, where a solve now nearly always completes instead of never; past that the
-machine cannot start interpreters fast enough and no budget arrangement changes that.
-
-The other half of the trade is the tail: a contended startup that retries holds an anyio slot for
-~30s where the old code failed in 3. Bounded by `SOLVE_MAX_CONCURRENCY` to 8 of the ~40 slots, and
-a slow question beats a 503 — but it is a real change in behaviour under load, not a free win.
-
-Consequences worth holding:
-
-- **The budgets now mean different things and should be tuned differently.** `SOLVE_TIMEOUT` (3s)
-  is the runaway bound and has ~300× margin over the maths, so it can be tightened without risking
-  a loaded machine. Treat any startup multiplier quoted here with suspicion, including the ones
-  above: startup is ~0.8s idle on the machine these were taken on and 1.4–2.2s under ordinary
-  background load, so the margin moves by a factor of three depending on when you look. That is
-  what `_probe_startup` measuring it is for. `SOLVE_STARTUP_BUDGET` (15s) is the one that absorbs contention, and tightening
-  *it* reinstates the old failure.
-- **Only a *startup* timeout is retried, and the split is what inverted that.** While the budget was
-  ~99% startup, "timeout" almost always meant contention and retrying was how a moment of it was
-  survived. Now the two are distinguishable and mean opposite things: a solve timeout is 3s against
-  ~10ms, so it is a spin, and a spin spins again — retrying costs a second full startup to reach the
-  same kill, with the student waiting through both. A startup timeout is the machine failing to
-  launch Python in 15s, which passes; observed once under 18 CPU hogs and rescued. The worst-case
-  hold on an anyio slot drops with it: a spin is 18s absolute rather than 42s, ~4s in practice.
-- **`SOLVE_RETRY_BUDGET_FACTOR` is gone.** It widened the solve budget on the second attempt and
-  there is no second attempt at a solve. A knob whose name promises tuning that is not available is
-  worse than its absence — the first version of this change kept it, reading 3.0 and controlling
-  nothing.
-- **The probe must escape the budget it validates.** It runs a solve, so once startup had its own
-  budget the probe was bounded by the very setting it exists to check — a too-small value made it
-  time out reporting the problem it should have measured, and the clamp never ran. `_run` takes a
-  `startup_timeout` override for that one caller.
-
-`safe_solve._probe_startup()` runs at import: it times one trivial solve and raises the **startup**
-budget for that process if the configured value is under `_STARTUP_SAFETY_FACTOR` (3×) of the
-measurement. It
-**clamps up and logs; it never refuses to start** — raising there would take the whole backend down
-over one topic's tuning knob, and every non-generation surface with it, which is the failure
-`_env_number`'s floor exists to prevent. A probe that cannot run keeps the configured value and says
-so separately: that means the subprocess mechanism is broken, which is a different problem, and a
-budget guessed from a failed measurement is worse than the one someone chose. `SOLVE_STARTUP_PROBE=0`
-skips it, for a process that imports the module and never solves; it costs ~0.8s of boot once.
-
-**A threshold that depends on how fast the machine is has to be measured on that machine, not
-written down.** Both tests around the probe got this wrong in different directions. One pinned the
-shipped default against the measured floor and failed *locally* under suite load. The other hardcoded
-1.0s as "obviously below the floor" — true on a laptop where startup is ~0.8s and the floor ~2.4s,
-false on CI where startup is 0.32s and the floor 0.97s, so the clamp correctly did not fire and the
-test failed for asserting it had. **CI is the faster machine here, which is the opposite of the usual
-flakiness direction** and is why this passed several runs before failing. Probe first, derive the
-value from that measurement, and leave an order of magnitude rather than a factor of two so a second
-measurement's variance cannot cross it.
-
-**Don't pin the shipped default against the measured floor in a test.** The first version of that
-check asserted `_CONFIGURED_TIMEOUT_S >= floor`, passed alone, and failed in sequence — startup is
-slower while the suite is spawning subprocesses, so the floor moves. That is an elapsed-time
-assertion wearing an invariant's clothes, the same rule as
-`test_time_spent_queueing_comes_out_of_the_budget_it_was_promised` above. Assert what the probe
-actually guarantees: the *effective* budget clears the floor.
-
-**Most topics need only the parse bounded, not the whole solve.** `safe_sympify_values` covers five
-of the eleven: they parse the model's numbers and then do ordinary arithmetic, which cannot hang. Only
-`geometry` and `angle_relationships` needed their solvers moved, because both keep sympy *expressions*
-past the parse — geometry solves for a missing side, and `algebra_complementary` substitutes a solved
-`x` back into two angle expressions. Reach for the value parser first; move a solver only when
-something downstream needs the sympy object rather than a number.
-
-Three parses stay in-process deliberately, and all three read the **worker's own output** rather than
-the model's: `sympify(solved)` in `expressions` and `rationals`, and `format_number`'s fallback in
-`median`. `MAX_RESULT_CHARS` is what makes those bounded — a short canonical literal parses in linear
-time. A parse whose operand came from the model belongs in the worker, full stop.
-
-**A `raise` from a helper does not reach a retry loop the call site sits below.** Every generator's
-`for ... else` has already run by the time the solve happens, unless the solve was deliberately moved
-inside — so a helper that raises to signal "unusable reply" produces a 500, not another attempt.
-`incorrect_solution_generation`'s non-finite `ValueError` was documented as reaching the loop and
-could not; `LLM_geometry_generation._solve_scenario` is the fix, and the rule generalises: **if the
-recovery is a retry, the check belongs above the `break`, and returning `None` says so where raising
-does not.**
-
-**Use `faulthandler.dump_traceback_later(n, exit=True)` rather than reasoning about where a hang is.**
-Two plausible mechanisms were proposed and implemented against this one before it was measured —
-`parse_expr` eagerly evaluating an exponent tower (real: `9**9**9` never returns, and
-`safe_solve.py` now bounds it in a killable subprocess) and `sp.simplify` being slow (not real, it is
-fast on every shape these prompts produce). Neither was the bug. The stack dump named it in one run.
-
-**A diagnostic print must not be able to kill what it is describing.** The generators print the raw
-reply on their error paths; Windows console streams are cp1252, so a `π`, an em-dash or an accented
-name raised `UnicodeEncodeError` — from inside the retry loop, which absorbs bad JSON and bad shapes
-and then died on printing them. `console_encoding.make_console_safe()` sets `errors="replace"` on
-both streams and is applied from `llm_client`, which every generator imports. Deliberately at the
-stream and not at the 23 print sites: the next print cannot forget, and it covers the ones passing
-model-derived values without looking like it (`question_data`, a rejection reason). The console's own
-encoding is left alone — forcing UTF-8 onto a cp1252 console trades a crash for mojibake.
-
-### The question shown and the data scored are two fields, and they must agree
-
-Every generator returns a `question_text` the student reads and a separate structured field the
-solver computes from — `variables` for the dataset topics, `values` for `ordering`, `items` +
-`scenario` for `probability`. **Nothing checked that they described the same thing**, and
-`LLM_mode_generation.py` carried a stale note contemplating exactly that ("*POSSIBLY: manually
-generate solution using numbers from question_text*").
-
-Measured 2026-08-19 on llama3.1:8b, **2 wrong answers in 12 generated**:
-
-- **mode** — shown `8, 4, 12, 16, 4, 14, 8, 10, 20, 4`, answered `[8, 4]`. 4 occurs three times and
-  8 twice, so 4 is the only mode; the scored `variables` were not the numbers on screen.
-- **probability** — shown *"what is the probability of selecting an EDM band?"* over 17+23+14+15 = 69
-  bands, answered `18/23`. That is 54/69, the **complement**: the text asked a positive question
-  while the JSON said `scenario: not_probability_of`.
-
-**This is the worst failure shape available here** — the question is well-formed and answerable, the
-student answers it correctly, and is marked wrong against data they never saw. Worse than a refused
-question, which costs one retry and nothing else.
-
-`question_consistency.dataset_mismatch` compares the numbers **after the last colon** against the
-scored list (these prompts all put the dataset there, which is what makes locating it reliable);
-`negation_mismatch` requires a negated wording and `not_probability_of` to imply each other, **in
-both directions**, since a negated question scored as `probability_of` is wrong by the same amount.
-Wired inside the existing retry loops, and **the two checks do not cover the same topics**:
-`dataset_mismatch` is in `mean`/`median`/`mode`/`ordering` only, and `negation_mismatch` is in
-`probability` only. This file said `dataset_mismatch` covered probability too, for months; it never
-has. Probability's counts live in the sentence body ("a bag contains 17 red, 23 blue"), not after a
-colon, so the check would be inert there anyway — but *documented as wired and absent* is the worst
-of the three states, because it is the one nobody re-checks. Verified by
-`grep -l dataset_mismatch LLM_*_generation.py`, which is a cheaper habit than trusting this
-paragraph.
-
-**Both fail open**, and that is what makes them safe to run on every question: order is ignored (the
-solvers sort anyway), non-numeric `variables` are skipped, and a question with no colon-delimited
-list is left alone rather than compared against stray numbers in the sentence ("during a school
-year", "for a week"). A false rejection burns retries and looks exactly like a model that cannot
-follow instructions — the same reasoning `grade_appropriateness` is built on. They catch a clear
-contradiction; they are not a proof of agreement. `algebra`, `expressions`, `geometry` and
-`angle_relationships` are **not** covered: their scored fields mix operators and labels with numbers,
-so there is no comparable multiset.
-
-**A key read *below* the `for/else` must be validated *inside* it.** `probability` reads `sides`,
-`items` and `scenario` after the loop, and `required_keys` can list neither of the first two — they
-belong to one scenario each. So a dice reply with no `sides`, a bag reply with no `items`, and a bag
-question mislabelled `dice` each raised `KeyError` straight out of the generator on attempt 1 and
-reached the student as a **500**, where every other malformed reply costs a retry. All three were
-reproduced. It also never compared the returned `scenario` against the one it asked for — the same
-hole geometry and angles had, and this prompt sends all three blocks and names the wanted one by
-*number*, so the reply is free to answer a different one. The schema does not cover any of this: it
-closes the dice half only, and only on Claude, since the bag scenarios get none and `LLM_PROVIDER`
-defaults to ollama. Same rule as *"if the recovery is a retry, the check belongs above the `break`"*
-— and the question to ask of any generator is which keys the code below the loop reads that the loop
-never checked.
-
-**In every generator's retry loop, the `if not raw:` guard comes before anything that touches
-`raw`.** `extract_json` answers `None` for a response with no JSON in it — prose, a refusal, an
-empty completion — which is the exact case the three attempts exist to absorb, so a `.replace` or a
-`.strip()` above the guard raises `AttributeError` straight out of the loop and the retry never
-happens. `LLM_median_generation` had those two lines the other way round;
-`tests/test_generation_retry_loop.py` is parametrised over every `LLM_*_generation.py` file by glob
-(seventeen today) so the next copy cannot be a one-off.
-
-**Measure how often a fail-open check *engages*, never just how often it fires.** A check that never
-finds anything to compare reports a perfect false-positive rate while doing nothing, and reads as
-evidence that it works. Live sampling of 32 generations found exactly that: the dataset check was
-inert on **half** the `ordering` questions, because `_as_floats` rejected fractions as "not
-comparable" — while `solve_ordering` sorts on `float(sympify(v))` and handles them fine. Fractions
-are now one token and both sides are compared **by value**, so `4/5` shown against `0.8` scored
-agrees, and so does `32/40`. A **mixed number** anywhere in the text fails open: `1 1/2` is one value
-to a reader and two tokens to the regex, which truncates the list at it and would report the
-tokenisation as a dataset disagreement.
-
-**`scripts/measure_generation_checks.py` is where that measurement lives now**, instead of being
-done by hand. Run it against `ollama` for a free baseline and `claude` for the number that describes
-production; it bills like any other caller (~30 calls at `--per-topic 3`).
-
-Measured on **claude-haiku-4-5, 2026-08-26, 5th grade / medium, 3 per topic**: the dataset check
-engaged on **12 of 12** applicable questions and agreed on all of them, `negation_mismatch` engaged
-3 of 3 on probability, and `grade_appropriateness` engaged on all 27 of the nine topics it is wired
-into, refusing none. So the fraction fix holds against Haiku — its `ordering` output is exactly the
-`1/2, 0.75, 2/5` mix that used to go inert.
-
-**Two things about running it are worth more than the numbers.** It must observe the checks *where
-they run* — the generators call them against the raw model JSON, and the dict they **return** has
-the scored field stripped, so a harness that re-derives the inputs from the return value reports
-`inert` on everything. That produced a confident "0 of 15, the check is switched off" that was
-entirely an artefact of the measurement, which is this rule eating its own tail: a measurement that
-cannot see its input reports absence, and absence reads as a finding. And it must keep **`n/a` (never
-called) apart from `inert` (called, found nothing)** — collapsing them is how a check that was never
-wired reads as one that is working, which is exactly how the probability gap above survived.
-
-### A lesson-plan cell has four ways to contribute nothing, and they are named
-
-`lesson_plan_context` returns `None` for an unseeded cell, a blank row, a failed read, and missing
-credentials — all four degrade identically to the difficulty/grade heuristics, which is right, but
-they were also indistinguishable in the log. They are very different problems: a content gap
-somebody has to write, a half-finished edit, an outage, and a misconfigured process. `_lookup()`
-returns `(text, reason)` and names them (`NO_ROW` / `BLANK_ROW` / `READ_FAILED` / `NO_CREDENTIALS`
-/ `FOUND`), and each logs its own line. Nothing in generation branches on it — every non-`FOUND` reason degrades the same way —
-so this is diagnostics, deliberately.
-
-**`READ_FAILED` and `NO_CREDENTIALS` are not cached**, unlike the other three: caching an outage
-would keep answering `None` for the full TTL after the database came back, and credentials can be
-loaded later in a process's life. The cached reasons keep the log to one line per cell per TTL.
+`text-[10px]` (36 uses) is **not** a contrast failure — WCAG sets no minimum font size — so it was left alone.
+What mattered was the combination, and the tiny badges that were also sub-AA are fixed.
+
+## A tone is a whole class name
+
+The three consent notices (`ChildWithdrewBanner`, `ParentRestoredBanner`, `ParentLinkedBanner`) share
+`NoticeBanner`. What each restated was the part worth having in one place: **a failed acknowledgement leaves
+the banner standing**, because the person has not been told yet and a notice that dismisses itself on a failed
+write is one nobody sees again. `onAcknowledge` clears whatever made the banner render; the shell owns the
+pending flag and swallows the rejection. `busy` is cleared in a `finally`, not only on the failure path — a
+caller that acknowledges without unmounting would otherwise be left with a permanently dead button.
+
+**Tone classes are full strings in a map, never interpolated.** Tailwind decides what CSS to ship by scanning
+source text for complete class names, so `bg-${tone}-50` renders markup pointing at a rule that was never
+generated — a banner with no background at all, **in production only**, since the dev server is not what does
+the scan. No test can catch it either: the rendered class string is identical and jsdom has no stylesheet.
+Source review is the only check, which is why the map exists. The same applies to `Heatmap.jsx`'s colour scale,
+which is a map of complete class strings rather than an interpolation.
+
+## The daily rollup is written as sessions close, never at expiry
+
+`signal_daily_rollup` holds one row per student per school day per channel (`cognitive|heart|emotion`), written
+by `_rollup_session_days` at the end of `end_session`. Writing it continuously is what keeps it from being a
+race against the end-of-year delete — generating it at expiry would make the one job that destroys data also
+the first to read it.
+
+**The aggregation is a Postgres function (`rollup_signal_day`), not backend code**, because a day holds
+thousands of samples and the reporting path caps its reads — averaging a capped subset in Python would be
+quietly wrong, and this is the copy that survives the delete. It **recomputes** rather than accumulates, so
+closing two sessions on one day, or replaying a close, converges; an incremental writer would have to be
+exactly-once, which nothing here can promise.
+
+`_rollup_session_days` **never raises**: it runs last in `end_session`, after the writes that matter, because a
+failed summary must not cost a student their session record and stats update. It rolls up every school day the
+session touched (two if it crossed local midnight), bounded so a corrupt `started_at` cannot spin.
+
+Averages are over **trusted rows only** for heart and emotion, matching what the weekly report publishes — an
+untrusted reading is one the quality gate rejected, and averaging it here would smuggle it past that gate
+permanently. `heart_sources` deliberately **includes** untrusted sources: its job is to explain a change in the
+numbers, and a sensor whose readings were all rejected is exactly such an explanation. `trusted_sample_count` is
+defined per channel (cognitive has no trust flag, so it counts rows that produced a measurement rather than the
+nulled ones a poor-contact headband writes).
+
+Its access rules differ from `retention_window`'s: the rollup carries a **read-your-own `SELECT` policy** and
+`authenticated` keeps `SELECT`, matching the per-sample tables it summarises. There is no insert/update/delete
+policy for anyone, so with RLS on, PostgREST cannot write it whatever JWT it carries — the only correct writer
+is `rollup_signal_day`.
+
+## The term trend reads the rollup and nothing else
+
+`/api/students/{id}/signal-trend` answers week-over-week averages, and is deliberately **not** built on
+`_weekly_signal_report`. That one reads the per-sample tables under `_REPORT_ROW_CAP`, which trims
+**oldest-first** — right for seven days and wrong for six months, because the early weeks would come back empty
+and read as a quiet term rather than as rows nobody fetched. `signal_daily_rollup` is a few hundred rows for
+half a year and needs no cap. It is also the only copy that outlives `expire_signal_rows`, and a trend is the
+surface most likely to be read *after* a year ends.
+
+**Weeks are weighted by `trusted_sample_count`, and that is derived, not chosen.** `rollup_signal_day` writes
+`avg(focus)` for cognitive and `avg(…) FILTER (WHERE trusted)` for heart; Postgres `avg()` skips nulls, so both
+stored averages already have the trusted count as their denominator. Weighting by `sample_count` would divide by
+rows the average never saw. A mean of daily means is the other wrong answer — it weights a 4-sample day like a
+4000-sample one.
+
+**`avg_stress` needs its own count.** The cognitive `trusted_sample_count` is
+`count(*) FILTER (WHERE focus IS NOT NULL)`, focus and stress are derived independently, and the local calm's
+hold rule made stress-absent-focus-present the *ordinary* row: a day of 4000 focus rows with 200 fresh calms
+weighed its stress as 4000 and read 0.32 against 0.70. The rollup records `stress_sample_count`, and every reader
+weights stress on it through `_stress_weight` in `main.py` and
+`COALESCE(stress_sample_count, trusted_sample_count)` in the two cohort RPCs — the fallback is **per row**, for
+rows rolled before the column, and is the old approximation on exactly the rows it always applied to.
+
+`avg_rmssd_ms` still carries that approximation, because the rollup stores one count per channel and about one
+trusted window in five is gated out of RMSSD. `avg_focus`, `avg_heart_rate_bpm` and `engagement` (served from
+`avg_focus`) are exact. The error is between days, never within one.
+
+**A week with nothing recorded is a gap, not a missing bar** — dropped, a fortnight off school renders as the
+weeks either side sitting adjacent. Weeks are whole and Monday-anchored for the same class of reason: counting
+back `weeks * 7` days from today leaves a part-week at each end that looks like a full one.
+
+**A declined channel is filtered out of the query, not out of the result.** The first version read every channel
+and dropped the declined ones in Python, on the reasoning that the alternative was three queries — a false
+choice, since one `.in_("channel", …)` narrows the single query it already made. Assert on the **filter**, not
+the payload. `_FakeSupabase` records every query it builds (`fake.queries`, each with `.filters`) so that
+assertion is possible at all.
+
+## The teacher analytics aggregate in Postgres, and one of them is a table not a chart
+
+Five surfaces: a class topic heatmap, class accuracy per school day, a weekday×hour heatmap, a real last-active
+column on the roster, and focus-vs-accuracy per student. Three Postgres functions behind them, all
+`SECURITY INVOKER` and `service_role`-only — the backend resolves who owns the class before calling, so they are
+only ever as safe as the check above them.
+
+**They aggregate in SQL for the reason `rollup_signal_day` does, and the trap is `_REPORT_ROW_CAP`.** A class of
+thirty answering fifty a day is 45,000 rows a month, far past the 5000 cap, and the cap trims **oldest-first** —
+so a Python-side average would describe the recent tail while the early weeks read as a quiet term.
+`class_answer_buckets` returns at most 720 rows for 30 days however busy the class, because it is bounded by the
+*range* rather than by the answers.
+
+**One function serves both the day trend and the time-of-day heatmap**, since they are two readings of one
+grouping. It is still called once per endpoint rather than cached between them, so a failure in either cannot
+blank the other.
+
+**`last_active_for_users` exists because "newest row per student" has no PostgREST form.** One `in_` query ordered
+by time returns the newest rows *overall*, which is one busy student's — the same limitation `my_children`
+documents. That is why the column was absent rather than wrong. It is the greatest of two clocks
+(`coalesce(ended_at, started_at)` and `max(answered_at)`): a student mid-lesson answered more recently than their
+session began, and an open session must not drop out on a null `ended_at`. **Three states on the roster** — a
+timestamp, `null` for never active, and `last_active_retrieved: false`. Collapsing the last two tells a teacher
+the class has stopped working, which is both wrong and something they would act on.
+
+**`focus_accuracy_for_user` pairs each answer with the nearest focus reading in the same session**, within
+`_FOCUS_MATCH_SECONDS`. Same *session*, not same student: a reading from another session is a different lesson on
+a different day. An answer with no reading in range is **dropped, not counted as focus 0** — sessions run with the
+headband off, and a zero would drag exactly the unmeasured answers to the bottom of the correlation (rule 2).
+
+**The correlation is withheld below `_FOCUS_MIN_PAIRS` (30) even when the database computed one.** `corr()` needs
+two pairs and will happily answer from them; r over a dozen answers is noise, and it reaches a teacher as a single
+objective-looking number with no visible denominator. The *buckets* are still returned below the threshold — a bar
+chart of five bins shows its own sample sizes in a way a scalar cannot. Keep three outcomes apart: too few pairs,
+enough pairs with a null `corr()` (no variance — every answer correct), and a real coefficient.
+
+**EEG consent skips the query, and the test asserts on the RPC call rather than the payload.**
+
+**`Heatmap.jsx` is a real `<table>` and deliberately not an `AccessibleChart`.** That wrapper exists because
+Recharts emits a bare `<svg>`; a matrix has no series to plot — it *is* the table, and `<th scope>` headers let a
+reader ask for one cell by its two headings, which the sr-only copy could not. The shading is an enhancement on
+top of real markup.
+
+**A cell has three states and two of them look alike in colour**: a number, `null` for a topic never attempted
+(not shaded, and *not* the zero colour — a topic nobody was served is not one they failed), and a real 0%. Below
+`min_attempts` the figure is still shown and marked thin; what is withheld is the confidence, since one answer
+colours as strongly as four hundred.
+
+**The topic grid's `cells` are a list aligned to `topics`, built server-side in one pass.** Two independently
+ordered lists is the drift `AccessibleChart`'s single `columns` spec exists to prevent; don't re-sort either end.
+The time-of-day grid aligns in the *browser* instead, because that payload is sparse — an hour a given day never
+used is a real absence, not a missing row.
+
+## The cohort panels weight across students, and the roster floor is a server-side gate
+
+`GET /api/classes/{id}/cohort-signals` answers a class-wide signal trend and the per-student rows behind it, rendered
+by `ClassSignalTrend` and `ClassSignalRoster`. One endpoint for both, because they answer one question together and
+two fetches could disagree about when they were taken.
+
+**Consent buckets the roster before anything is read.** `_reportable_channels_many` for the whole roster, then grouped
+by `(heart, emotion)` flag pair — at most four calls. One call for the whole class would either read a declining
+student's heart rows under a classmate's permission or hide the channel from everyone who allowed it. The RPC does
+**not** filter consent itself, so passing it a mixed roster with one flag pair is the way to get that wrong. Heart is
+`headband_optical OR camera` — the camera carries the rPPG fallback — so a test that declines the headband and leaves
+the camera on has not declined heart.
+
+**Weighted on `trusted_sample_count` at both levels, and the second is the one to watch.** The RPC weights across
+students within a bucket; `_merge_cohort_trend` then weights across *buckets* in Python, because the buckets exist for
+consent reasons and re-averaging their means would weight a bucket of one like a bucket of twenty. Verified against the
+applied migration: two students on one day answer **0.7714**, where `avg(avg_focus)` answers 0.5000. A null daily
+average contributes no weight rather than a zero — its count is still real, so it stays in `trusted_sample_count` while
+staying out of the numerator's denominator, or a day of poor electrode contact drags the class below every student in
+it.
+
+**`_COHORT_MIN_STUDENTS` (5) is enforced in the backend, and gates on the roster.** Below it `per_student` is `null`
+and the rows are never built — a client-side hide would leave them in the payload for anyone reading it. It counts the
+roster, not the students who recorded something: a class of six where two wore a headband is still a class of six, and
+gating on the smaller number would expose that pair exactly when they are most identifiable. The class trend still
+renders; it is the aggregate the floor exists to protect.
+
+**`_consent_many` / `_reportable_channels_many` are the batch forms**, and a roster is where they matter:
+`my_children` keeps a per-student loop and can, since a family has a handful of children, but a class of thirty made
+thirty sequential reads on a page load. They fail closed exactly as `_consent` does and *per student* — a failed read
+denies **every** requested id with `retrieved: False`, since none of them was found out, while a student with no row
+denies with `retrieved: True`. `_channels_from_consent` is the shared pure mapping, so the single and batch forms
+cannot drift and disagree about the same student on two pages.
+
+**One failed bucket fails the whole trend, and takes the roster with it.** Breaking out of the bucket loop skips that
+bucket's totals call and every later one, so leaving `summaries` as `{}` reports students nobody asked about with zero
+counts and `retrieved: True` — "recorded nothing", which renders as `No sensor` and is indistinguishable from a class
+that left the headbands in the cupboard. Both flags go false together. The two reads still fail *independently* in the
+ordinary case: a broken totals RPC leaves the chart standing. **And the row's `retrieved` has to be read by the tile,
+or that fix stops at the API boundary** — without it the row arrives correct and renders `No sensor` anyway, from the
+zero counts an unread row carries. The day count needs the same guard: `0` asserts the student recorded on no day at
+all.
+
+**`cellLabel` orders it, and the order is not the order the flags arrive in.** Consent unreadable first, then **a known
+revocation, which beats the unread row**, then unread, then the sample count. The consent fields come from `channels` —
+a *different query* from the totals RPC — so when that read fails the revocation and its date are still fully known;
+reporting the outage there discards a fact we hold for one we do not, and `Unavailable` implies a retry might yield a
+number that can never appear for a revoked channel. Folding `retrieved` straight into `consentRetrieved` gets this
+wrong and looks right, because both spellings produce the correct answer in the two simple cases. **Four states means
+the tests have to cover the *compound* cases**, not each flag alone; and a fixture built from a happy-path helper has
+to null *every* average, or a leftover default renders a number where the test expects a reason.
+
+**Both panels read the rollup, and that is load-bearing rather than tidy.** The roster started on
+`student_signal_summary_many`, which reads the per-sample tables — the right source for the weekly report and the
+parent dashboard, and the wrong one *here*, because this is the first place a rollup-backed panel sits directly beside
+a raw-backed one. `expire_signal_rows` deletes the per-sample rows and leaves the rollup standing, so the pair would
+have shown a full term of class averages above a table reading "No sensor" for every student in it — on a fixed date,
+rather than because anything broke. `class_signal_student_totals` is the same aggregation as its sibling, grouped by
+student rather than by day. `test_the_roster_reads_the_rollup_and_never_the_per_sample_tables` asserts on the tables
+that must **not** be read — the two sources look identical while both hold the same data, which is every day of a
+school year except the ones after expiry, so nothing about the numbers can see this. **The roster counts days
+recorded, not sessions**, for the same reason: a session count comes from `sessions`, a table with a different
+lifetime.
+
+Its outlier flag compares against an **unweighted** class mean, deliberately a different number from the trend's
+weighted one: this asks "is this student unusual among their classmates", where each classmate is one comparison
+whatever their session length. Using the weighted figure would flag a student for sitting next to someone who recorded
+all afternoon.
+
+**A conditional `<Line>` needs a conditional column, and the sentence cannot test it.** Assert on `columnheader`.
+
+Both panels honour `viewPrefs.js`'s "Hide sensor data"; the academic panels beside them do not, because that switch
+hides sensor data and those measure answers. **It gates every series, not the heart one** — focus, stress and
+engagement are EEG-derived and are as much sensor data as a bpm is. Gating only heart left the cognitive lines drawing
+real values under a note reading "sensor data is hidden", stating the opposite of what the panel is doing. A test
+asserting on that note passes either way; assert that no chart, no `sr-only` table and no numbers are on screen.
+
+## Every session close goes through `_close_session`
+
+**Four close sites** — `/end`, the stale-session sweep in `start_session`, `class_live`, and the background
+`_sweep_abandoned_sessions` thread — and `conftest.close_sites()` finds all four. Don't hand-write a fifth: the
+sequence was copied into each site and every copy drifted separately, none of them raising anything. The sweep
+credited a `correct_answers` it had never selected (absent column → `None` → `or 0` → an honest-looking zero), so
+every session of a student who shut the tab added its questions and *no* correct answers to their record;
+`class_live` never ran the empty-session discard, so a failed pairing it closed stayed in History for ever; and
+the credit, the rollup and the archive each shipped at different times as "the third close site to be missed".
+
+**Order is load-bearing: discard first**, because a rollup of nothing and an archive of four empty charts are work
+done for a session about to stop existing.
+
+**`_close_session` stamps `ended_at` itself, and the stamp is a claim.** It used to sit at each call site above the
+call, which left two things to get wrong per site and both were. `class_live` stamped and closed *before* stopping
+its poller, so a tick could insert a signal row after the discard check had looked. And no site made the stamp
+conditional, so two closes racing — a delayed `/end` against the sweep — both ran the whole sequence and both
+credited the session's *cumulative* counts, landing every answer twice in the lifetime totals. `/end`'s read of
+`ended_at` is not the guard; that read and the write are two statements. `_claim_session_close` is:
+`is_("ended_at","null")` matches at most one row. **An empty update result is ambiguous** — it is also what a
+client not asking PostgREST for the updated row returns — so it is confirmed by reading the row back, and only a
+*different* `ended_at` counts as a loss. Guessing "lost" would skip the credit, rollup and archive for every close.
+
+Stopping the poller stays at the call sites — it takes different ids at each — and **before the call** is the whole
+of the ordering rule, pinned by `test_every_close_site_stops_the_poller_first`.
+
+**The credit recounts from `session_answers`.** `questions_answered` is a denormalised cache written in a separate
+statement from the answer row, and `_discard_if_nothing_recorded` already distrusts it. The credit did not, so a
+session correctly *saved* from deletion by that re-check was then credited zero and the student's work never
+reached the lifetime totals — permanently, since no later close revisits a stamped session. `_answer_counts` only
+ever revises **upward**: rows fewer than the counter means a short read, and crediting less than a previous reading
+loses work.
+
+`_close_session` takes `closed_by`, defaulting to `CLOSED_BY_STUDENT`. The function cannot tell which site is
+running and the difference is the entire content of the `session_auto_closed` alert. It defaults to the student so
+a new site has to opt *in* to raising one — a wrongly-raised alert is worse than a missing one on a surface whose
+value is that every row means something happened. `test_every_close_site_says_who_ended_the_session` partitions the
+sites: each is either in `STUDENT_DRIVEN_CLOSERS` or must pass `CLOSED_BY_SWEEP`, so a new closer fails until
+someone classifies it. No property of the source separates them — `/end` and both sweeps stop the poller and call
+the same helper — which is why the list is by name.
+
+The exhaustiveness tests share `tests/conftest.py:close_sites()` — a closer is a function that calls
+`_close_session(` **or** writes an `"ended_at":` of its own. Both halves matter: the first catches a site drifting
+away from the helper, the second catches a new site that hand-rolls a stamp. A second test pins the helper's own
+contents; the indirection is only safe while both halves exist. **They catch a step being removed, not neutered.**
+
+**Don't put a literal end-stamp key in an alert payload** — that scan reads such a key as a fourth close site,
+which happened, and then happened again in the comment explaining it. The timestamps are columns on the session the
+alert already points at, so `detail` carries none.
+
+### Abandoned sessions, and two surfaces that were lying about them
+
+Both original sweeps are **on demand** — `start_session` collects a student's strays when they next start one,
+`class_live` collects a class's when a teacher opens the monitor — so a student who never comes back is collected
+by neither. Found in production as sessions still open **two months** after they were started.
+
+`_sweep_abandoned_sessions` is the third, run from a background thread started in `_lifespan`. **It is a backend
+thread, not a `pg_cron` job, and that is not a preference.** Closing a session credits lifetime totals, writes the
+daily rollup, archives four charts and raises the alerts; SQL can do none of it. A cron job stamping `ended_at`
+would be a fifth close site that skipped all of it.
+
+`_SESSION_ABANDONED_AFTER_SEC` (6 h, `SESSION_ABANDONED_AFTER_HOURS`) is **an age, not an idleness**, and the flag
+is named for what it can support. A two-hour session with a student answering throughout is not abandoned by this
+measure and is correctly untouched; `class_live` keeps its own much tighter `_STALE_AFTER_SEC` computed from real
+last activity. This one only has to catch the session nobody has touched since June, so it errs long — closing a
+live one would discard the question a child is part way through answering. `STALE_SWEEP_INTERVAL_SECONDS=0`
+disables it.
+
+Safe in several workers at once via `_claim_session_close`. **The thread must be joined**, like the pollers — it
+prints, and a print during interpreter shutdown is a fatal stdout-lock abort.
+
+Two surfaces were asserting things the data does not support. `Sessions.jsx` decided `live = !ended_at`, so an
+abandoned session rendered a *pulsing* `● LIVE` badge indefinitely — three states now (live, `never ended`, done)
+with `abandoned` derived in `student_sessions` so the threshold has one definition rather than a second copy in the
+browser. And its duration counted to `Date.now()` for open sessions, printing `83132m 45s` for a student who left
+within the hour; an abandoned session shows a dash, because we do not know when it ended.
+
+## Session alerts are operations, never a judgement about a student
+
+`session_alerts` is a teacher-facing feed of things that went wrong with a *session*: `session_auto_closed` (the
+stale sweep ended it, the student did not) and `signals_missing` (EEG recording was permitted and no cognitive row
+arrived). Read at `GET /api/classes/{id}/alerts`, rendered by `AlertFeed`.
+
+**The scope is the feature.** `signal_fusion` produces a `stressed` label that no teacher surface consumes, and
+routing it here was considered and rejected: it is an inference from signals this codebase already treats as weak,
+and a timestamped event reads as more objective than a tile does. That is what retired `identity_confidence` and
+the `attention` surfaces. **Every kind in the CHECK whitelist is checkable against the database without
+interpreting a person; keep it that way**, and if that ever changes it needs a labelled reference first, not a
+column.
+
+**`_raise_session_alerts` runs after the discard and never raises.** After, because an alert about a session about
+to be deleted goes with it on the cascade, and an empty session is not a fault worth anyone's attention. Never
+raises, because it runs after the credit and the rollup and a session's record must not be lost because a
+notification could not be filed.
+
+**`signals_missing` gates on `_may_record`, not `_consent`, and on `is False`, not falsiness.** A student who
+declined the headband is working exactly as configured; so is one whose school year has ended or whose recording
+flag is off. Alerting on any of those trains a teacher to ignore the feed, and the first would leak a consent
+decision as an incident. And `_session_had_signals` answers `True`/`False`/`None` — `None` is a failed count, which
+must not become an accusation that recording is broken.
+
+**A `try/except` around `_may_record` catches almost nothing, and that is the trap.** Both helpers behind it fail
+closed by *returning*, not raising: `_consent()` answers `retrieved: False` and `_retention_window()` answers
+`WINDOW_UNREADABLE`, and `_may_record` spreads both straight through as `record_*: False`. Read as a plain bool, an
+outage is indistinguishable from a student who declined — and the outage is the likelier of the two.
+`_recording_was_expected` reads `retrieved` and `window_state` rather than inferring from the composed answer, and
+returns `None` for either.
+
+**This generalises: anywhere a `record_*` flag decides whether to report a fault, the `False` is three different
+facts.** Withholding is right for the unknown one — nobody can act on a database blip — but it has to be *logged*,
+because that branch has no other trace. And the test has to assert on the log: the outcome is identical either way,
+so a test checking only that no alert was raised passes against the bug.
+
+**No acknowledge or dismiss, by decision.** Both kinds are about a session that has already ended, so there is
+nothing to resolve; dismissal implies a triage workflow this product does not have, and the seven-day window
+already bounds what is on screen. **An unrecognised `kind` renders as a visible unstyled row**, never dropped — the
+CHECK makes it near-impossible, and if it happens a visible row is what gets it reported.
+
+## Archived charts are the other thing that survives the delete
+
+At every session close, `chart_archive.schedule()` renders the session's four charts to standalone SVG
+(`chart_render.py`) and uploads them to the private `session-charts` bucket. With the rollup, these are what is
+left of a school year once `expire_signal_rows` has run.
+
+**Off the request path, and it never raises.** A storage failure must not cost a student their session close — the
+session row, their stats and the rollup are all written by then. So the work goes to a two-worker pool and
+`schedule()` swallows even a submit failure. That makes the log the only place a failure can surface, and it *has*
+to surface: the window in which an archive can still be rebuilt closes on `ends_on`.
+
+**`chart_paths` has four states and no column default.** A path, `null` for a channel that produced nothing, an
+absent key for a chart never attempted, and column-NULL for a session the archive never ran on. `'{}'::jsonb` would
+claim every pre-archive session was archived and found nothing, and `scripts/assert_signal_rls.sql` fails if a
+default appears.
+
+**Nothing has a policy on `storage.objects`, deliberately.** RLS is on and no policy grants any role anything, so
+only `service_role` reads or writes — not even the student the chart is *about*: an object is fetched by URL, not
+filtered by a query, so the access decision belongs in the backend where the relationship checks are, handed out as
+a short-lived signed URL. The bucket is private for the reason no policy can fix later: **a public object URL, once
+pasted anywhere, cannot be un-shared.** All of that is asserted against a real stack in CI.
+
+Two smaller traps: the archive draws **untrusted rows too**, unlike the rollup, because it is a picture of what the
+reviewer was shown rather than a number outliving its evidence; and `upsert` in `file_options` must be the
+**string** `"true"` — storage-py passes those through as HTTP headers, so a bool arrives as `True` and a replayed
+close 409s instead of overwriting.
+
+**Reading them back is `GET /api/signals/session/{id}/charts`**, which resolves whose session it is, applies
+`_verify_can_view_student`, and issues a signed URL per recorded chart with a 300 s TTL. Three states stay apart in
+the payload, and a surface saying "no charts" has to consult all three: `archived: false` (the archive never ran),
+`charts[name]: null` (that channel drew nothing), and `name in unavailable` (a path was recorded and the object
+could not be read). It has deliberately **no `retrieved` flag** — unlike the reporting helpers it raises rather than
+degrading, so a flag that is never false would be a state that does not exist.
+
+**The object path is derived there, never read out of `chart_paths`.** That column is ordinary jsonb on `sessions`,
+which carries a `FOR ALL` own-row policy — so a student could PATCH their own session row through PostgREST, point
+it at another child's object, and the endpoint would sign it, having just correctly confirmed they own *this*
+session. The stored value records **which** charts exist; it is not an address. The migration revokes the write as
+well, but the endpoint must hold without it — a grant is one migration away from being widened back. The
+consequence is that changing `object_path`'s scheme means migrating the objects, which was already true.
+
+**A signed URL cannot be revoked.** It stays valid until it expires whatever happens to consent in between, so the
+TTL is the only bound on a leaked one — that is the argument for keeping it short, not convenience.
+
+**Storage does not cascade, so a deleted session orphans its SVGs — `sweep_orphan_charts.py` collects them.** There
+is still no delete endpoint in `main.py`, which is exactly why a sweep rather than a hook: those deletes come from
+the dashboard or a direct connection, where the backend never runs. Run it to report; `--apply` deletes.
+
+**It deletes on *absence*, which is the dangerous kind of job**, and the guards are the point rather than the
+sweeping. One failed read of `sessions` makes every object look orphaned, so: the read failing **refuses** instead
+of proceeding, more than `max_orphan_fraction` (default 0.5) looking orphaned refuses, a path that is not
+`{uuid}/{uuid}/…` is left alone, and `dry_run` is the default. **The bucket is listed *before* `sessions` is read**,
+and that order is a guard too — read the table first and a session created in between has objects whose id is
+missing from the snapshot, deleted as an orphan while its row sits there. Listing first can only be stale in the
+safe direction. Each guard has a test and each test was checked by breaking the guard; the first version of the
+read-failure test passed with the guard removed, because the fraction guard caught it and its message also
+mentioned sessions.
+
+An orphan is not a leak — `/charts` resolves the session row before signing, and the bucket has no policies — so
+this is storage that should not exist rather than data anyone can reach. It stops being fine when account deletion
+becomes a feature. **Objects for a session that still exists are out of scope on purpose**: `expire_signal_rows`
+leaves the archive standing deliberately, and a sweep that "corrected" that would remove the thing that makes a
+same-day delete defensible.
+
+## The answers table shows the topic and the option text, never the ids
+
+A `session_answers` row carries a question *id* and a `selected_index`, and `SessionReview` rendered exactly that —
+a truncated uuid and the bare number `2`. Both true, neither usable.
+
+`/api/signals/session/{id}` embeds the question on the answer
+(`select("*, questions(question_text, options, correct_answer, subject, difficulty, figure, ccss_standard)")`) — one
+query however many answers, named columns so a later addition to the bank does not start reaching the browser.
+**A read path that names its columns has to name every column a surface renders**, which is how `figure` and
+`ccss_standard` each had to be added; `/api/questions` uses `select("*")` and needed nothing. **PostgREST
+left-joins the embed**, so an answer whose question has since been deleted arrives with `questions: null`; the
+answer still happened, so the row is still shown and says why it cannot expand.
+
+**`questions.correct_answer` is text, not an index.** Comparing it against a position marks the wrong option on
+every question whose answer is not stored in order, so `isCorrectOption` compares *values* (trimmed,
+case-insensitive) with a numeric fallback for a row that holds an index anyway. And `options` is unschema'd
+`jsonb` — `optionList` accepts an array or an object and yields `[]` for anything else, which renders as "options
+were not recorded" rather than crashing on `.map`. Chosen and correct are spelled out as words next to the glyph,
+not left to colour and a `✓`.
+
+## An answer is recorded by the backend, and the topic comes from the question
+
+`Adaptive.jsx` had no `/api/sessions/{id}/answer` call at all — only `Practice.jsx` did — so every question
+answered on the adaptive path was counted in `localStorage` and nowhere else. `session_answers`,
+`sessions.questions_answered`, `user_stats` and every report built on them read zero however long a student
+practised, while the page's own Topic Accuracy panel showed figures: two records of one afternoon, one of them
+private to a browser.
+
+**The question id is what made it possible.** `add_question_to_supabase` returned a bool, so the generated question
+reached the page with no id and there was nothing to put in `session_answers.question_id`. It now returns the id —
+**and returns the existing row's id on a duplicate** rather than False, because answering a question the generator
+has produced before is exactly as real as answering a novel one.
+
+**`_record_topic_attempt` derives the topic from the question row, never from the caller.** The client has to be
+trusted about correctness; letting it also name the topic would let a page credit one subject for work done in
+another, and `user_math_performance` is what the adaptive engine reads to choose what to serve next. It never
+raises: it runs after `session_answers` is written, and a topic lookup failing must not turn a recorded answer into
+"that answer could not be saved".
+
+**It is one statement in the database** (`record_topic_attempt`). It was four sequential round trips on the hottest
+path in the product, and the last two were a read-modify-write with no lock — two answers together both read the
+same counts and the second overwrote the first, losing attempts silently. `ON CONFLICT DO UPDATE` incrementing the
+*stored* value removes that rather than narrowing it. It returns the topic **name**, which `/answer` hands back to
+the page so one figure moves; nothing holds an id-to-name map, so returning the id would cost a second query. The
+arithmetic is asserted in `scripts/assert_signal_rls.sql` — the backend suite drives a fake client and can only
+check that one call is made with the right three arguments. **Its PGRST202 is the deploy-ordering trap in its worst
+form**: the helper swallows exceptions by design, so code deployed ahead of the migration stops attributing
+anything with no symptom but the numbers not moving. It logs that case by name and cites the migration.
+
+**Topic accuracy is read from `user_math_performance`, not from the browser.** It was
+`localStorage.accuracyStats_<uid>` — the only panel whose numbers were not the database's. It disagreed with the
+dashboard on the same screen, started from zero on a school computer, and nothing server-side could correct it: a
+parent erasing a channel left the figures standing in the child's browser. The client-side upsert is **deleted, not
+merely unused** — the backend owns that table now, and a client upsert would overwrite real counts with one
+browser's memory. Its `Number(v) || null` also turned every genuine zero into a null (rule 2), which is why the
+table sat empty while the panel showed numbers.
+
+**There is no "Reset stats" button any more.** Against localStorage it cleared a browser key; against
+`user_math_performance` the same button deletes a student's academic record with one click and no confirmation.
+Erasure here is a parent-only, confirmed action.
+
+### A roster surface reads once for the roster, never once per student
+
+`_profiles_many`, `_topic_performance_many`, `_open_sessions_many` and `_stats_including_open_session_many` are the
+batch forms; `class_students`, `my_children`, `class_live` and `leaderboard` use them. The stats half was batched
+first and the profile lookup was left in the loop beside it, which is the shape to watch for. One deliberate
+exception: `my_children` still reads the five most recent sessions **per child**, because "top N per group" has no
+PostgREST form — one `in_` query returns the newest five overall, which is one busy child's five.
+
+## The two model-backed panels on a report page
+
+Both follow the same shape: a deterministic answer that is always available, a feature flag deciding whether a model
+gets a chance to replace it, and the four bounds. **Both are on demand and never auto-fetched** — a teacher opening
+a class of thirty would otherwise spend a model call per page.
+
+### Strategies
+
+`/api/students/{id}/learning-strategies` always has a rule-based answer; `strategy_llm_enabled` (default **on**)
+only decides whether a model gets a chance to replace it. Off, the endpoint never opens a socket — which is what CI
+and any deployment without a local Ollama should do. Every failure path degrades to the rules rather than erroring.
+
+The default was `false` for a long time and nothing ever flipped it — it is admin-only — so every deployment without
+an admin who enabled it had this pass silently doing nothing: every response `source: "rule-based"`,
+indistinguishable from the model being tried and always failing. The migration that flipped it also flips the
+already-seeded live row, **guarded on there being no recorded `feature_flag_changes` row for the key**, so a
+deployment where an admin deliberately turned it off is not silently overwritten. Turning it on still needs a
+working provider underneath — `_llm_strategies` catches every exception and falls back, so a misconfigured provider
+produces the exact same symptom as the flag being off.
+
+**Tests must pin this flag explicitly, not rely on the suite's default.** The autouse `_feature_flags_are_default`
+fixture reads live from `_FEATURE_FLAG_DEFAULTS`, so flipping the production default flipped it for the whole suite
+in one step — several tests started actually attempting the model call, one via a genuine ~20 s
+`STRATEGY_LLM_TIMEOUT` wait per test. Every test whose point is the rule-based path, access control, or rate
+limiting pins it off, even where the assertion happened to pass either way.
+
+Model output is untrusted text: parsed, length-bounded, stripped of markdown emphasis and list markers, and run
+through a clinical-term filter, with anything failing validation falling back to the rules. Extend
+`_validated_strategies` rather than rendering raw output.
+
+**The panel is on the teacher report as well as the parent one, and the copy is the only thing that differs.** The
+endpoint is gated on relationship rather than role, so a teacher could always ask for this advice and had no way to
+see it. `viewerRole` ('parent' by default, and for any value the panel does not recognise) picks the framing;
+`_llm_strategies` and `_validated_strategies` are untouched. **The heading stays "At-Home" on both**: the prompt
+says *"you are helping a parent support their child's maths practice at home"* and the rule-based fallback says
+*"ask your child to explain one solved problem out loud"*, so a classroom-sounding label would claim the model had
+been asked for something it was not.
+
+On the teacher page it is **behind "Hide sensor data" with the charts**, because the advice *is* sensor data in
+prose — the rule-based list says *"stress indicators ran high this week"*, and the model pass is handed the same
+averages. The whole panel goes rather than its individual lines: the advice mixes topic accuracy with signal
+readings and nothing downstream can separate them, and asking the endpoint for a signal-free list would change the
+advice rather than hide it. **Assert on the Generate button's absence, not the heading** — hiding a heading over a
+live button satisfies a heading check and none of the point.
+
+### Chart summary
+
+`POST /api/students/{id}/chart-summary` describes a student's report charts in plain sentences, flagged by
+`chart_summary_llm_enabled`. **That is the fourth copy of the bounds block** — ingest, generation, strategies,
+this — and consolidating the four is a standalone change rather than a rider on a new endpoint, because the other
+three are reached into by name from their tests (`main._strategy_hits`, `main._STRATEGY_LLM_POOL`).
+
+**The model is handed the finished sentences, not the aggregates.** It is asked to rephrase, never to interpret, and
+that is what makes numeric fidelity checkable at all: every number it may use is already in front of it, so one that
+is not is an invention. `_validated_chart_summary` rejects the whole reply on any numeral not in the allowed set.
+
+**The allowed set is read out of the deterministic sentences, never enumerated from the basis fields.** Enumerating
+was the first shape and rejected *correct* replies in two ways a reader would not predict: the sentence prints a
+rounded heart rate where the basis holds a fractional one, and a revocation date puts a day number on screen that no
+basis field carries. Reading the text the prompt actually sends closes the whole class, and makes drift between the
+two impossible — the same reason `AccessibleChart` drives its sentence and table from one spec.
+
+**What it does not check is that a number is attached to the right measurement.** A reply that swaps the focus and
+stress figures uses only allowed numbers and passes. That is the residual hallucination risk on this endpoint and it
+is not closed; closing it means parsing the reply back into measurements, which is a second implementation of the
+sentences being parsed.
+
+**The reply must have exactly the baseline's number of points.** A range let a reply drop one silently, and the
+likeliest one to go is the channel-absence sentence — the single point whose whole job is to say something is
+missing.
+
+Four reads sit behind one response (the weekly aggregate, the rollup-backed trend, the academic totals, the topic
+figures) and **each reports its own `retrieved`**. Collapsed into one, a summary missing only its trend sentence is
+presented either as entirely fine or as entirely broken. Three consequences that were bugs first: `sessions` comes
+from the *signal* aggregate, so a failed signal read leaves it at 0 and printing it reports a quiet week for a query
+that never ran; an empty trend is indistinguishable from a student's first week, so a failed trend read must not say
+"only one week so far"; and `_topic_breakdown` swallows its exception and answers `[]`, which most callers degrade on
+identically — the strategies endpoint falls back to generic advice — but which here becomes the *assertion* "no topic
+has been attempted yet". **`_topic_breakdown_with_state` is the form that reports the read**, split out rather than
+added as a parameter so a caller that did not know to ask for the flag cannot drop it; reach for it wherever an empty
+list would become a claim.
+
+**Zero weeks and one week are different facts, and `_trend_direction` returns a dict for both.** It answered `None`
+for each, so a student part way through their very first session — raw rows, so a focus average, but no rollup row
+yet, so no week at all — was told that one week had readings. The rollup row is not written until the session closes,
+so that state is ordinary rather than an error. **A helper that computes a count and returns it only on the success
+path cannot be asked the question the count answers.**
+
+**But the sentence for it names no cause, and the first version did.** A first session is one way to reach zero
+weeks; a rollup writer that failed on every day in range is another, and so is a set of rolled days all carrying null
+for that series. The read succeeded in all three, so nothing can tell them apart — and *"from this session's own
+readings"* contradicted the session count two sentences above it whenever one of the others was the real one.
+**Where a branch exists precisely because the code cannot establish a cause, its sentence may not supply one**; state
+the observable ("no week has a reading for it yet") and stop.
+
+Channel absence is ordered as `cellLabel` is on the cohort roster and for the same reason. `engagement` is never
+named — it is the focus index, and a sentence naming both describes one measurement as two agreeing ones. The heart
+channel gets **no trend**: `_CHART_SUMMARY_TREND_MIN_DELTA` is written for the 0..1 ratios focus and stress are
+stored on, and against bpm the same number is a twentieth of a beat.
+
+`ChartSummaryPanel` mounts on both report routes, and on the teacher route is behind *"Hide sensor data"* with the
+charts — a stronger version of the reason the strategies panel is: that list mentions sensor readings in passing,
+where this panel's whole job is to state them.
+---

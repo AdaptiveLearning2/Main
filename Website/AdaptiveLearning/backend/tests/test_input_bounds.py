@@ -168,13 +168,15 @@ class _PayloadCarryingMore:
     way. `.dict()` is provided precisely so the old implementation would work
     and would leak.
 
-    **`__getattr__` answers `None` for anything not passed.** Without it, the
-    *correct* forward change -- a new field on the model and in the handler's
-    tuple -- made `update_my_profile` raise `AttributeError` reading this
-    object, at a line in the handler: a failure in the double dressed as one in
-    the code, which is exactly what `_CapturingClient.single()` above exists to
-    prevent. It weakens nothing, because the handler filters `None` out and the
-    equality assertion still requires every declared column to be written.
+    **`__getattr__` answers `None` for anything not passed**, so this is safe to
+    construct with a partial field set. Without it, a handler reading a field
+    this object was not given raises `AttributeError` at a line in the
+    *handler* -- a failure in the double dressed as one in the code, which is
+    what `_CapturingClient.single()` above exists to prevent.
+
+    `_payload_for` now supplies every declared field, so the two tests below do
+    not reach this fallback; `test_the_payload_double_answers_for_a_field_it_was_not_given`
+    is what keeps it from being an unexercised guard that merely looks live.
     """
 
     def __init__(self, **fields):
@@ -200,6 +202,20 @@ def _payload_for(model, **extra):
     declared = {name: _sample_value(field)
                 for name, field in model.model_fields.items()}
     return _PayloadCarryingMore(**declared, **extra)
+
+
+def test_the_payload_double_answers_for_a_field_it_was_not_given():
+    """The double's own contract, pinned so the guard is not unexercised.
+
+    A handler reading a field this object was not constructed with must get
+    `None`, not an `AttributeError` raised from a line in the handler. The two
+    tests below build their payload from the model and so never reach it; this
+    is what makes removing it fail something.
+    """
+    payload = _PayloadCarryingMore(display_name="Ada")
+    assert payload.display_name == "Ada"
+    assert payload.a_field_nobody_passed is None
+    assert payload.dict() == {"display_name": "Ada"}
 
 
 def test_a_profile_update_writes_only_the_columns_it_names(monkeypatch):

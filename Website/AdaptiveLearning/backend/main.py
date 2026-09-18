@@ -16,6 +16,7 @@ import eeg_client
 import signal_mapping
 import eeg_poller
 import llm_client
+import grade_levels
 
 load_dotenv()
 
@@ -2486,13 +2487,29 @@ class AnswerPayload(BaseModel):
     selected_index: int
     correct:        bool
 
+# `grade_level` is the one free-text field with a confirmed model-prompt
+# consumer -- the topic decider and all seventeen generators interpolate it --
+# so it is checked here as well as canonicalised at the prompt boundary
+# (grade_levels.grade_for_prompt, which is what actually makes an injection
+# unrepresentable). This layer refuses a value no gate in the system could
+# read, so it never reaches the column, a class list, or a profile badge.
+# Shared by the three writers and the two grade-taking read paths below, since
+# a check written out four times is three chances to write it differently.
+def _grade_level_field(cls, v):
+    return grade_levels.validated_grade(v)
+
+
 class CreateClassRequest(BaseModel):
     name: str
     grade_level: str | None = None
 
+    _check_grade = field_validator("grade_level")(classmethod(_grade_level_field))
+
 class UpdateClassRequest(BaseModel):
     name: str | None = None
     grade_level: str | None = None
+
+    _check_grade = field_validator("grade_level")(classmethod(_grade_level_field))
 
 class JoinClassRequest(BaseModel):
     join_code: str
@@ -2513,6 +2530,8 @@ class UpdateProfileRequest(BaseModel):
     difficulty_bias:          int | None = Field(None, ge=-1, le=1)
     session_duration_minutes: int | None = Field(None, ge=5, le=180)
     practice_reminders:       bool | None = None
+
+    _check_grade = field_validator("grade_level")(classmethod(_grade_level_field))
 
 class EegSessionRequest(BaseModel):
     session_id: str
@@ -2739,6 +2758,16 @@ def generate_question(
     bias:       int        = Query(0),
     session_id: str | None = Query(None),
 ):
+    # A query parameter, so no request model checked it on the way in -- and
+    # this is the shortest path in the product from a client string to a model
+    # prompt. `grade_for_prompt` at the decider is what makes the prompt safe;
+    # refusing here is so an unreadable grade is a 422 naming the field rather
+    # than a lesson silently served at the youngest band all the way through.
+    try:
+        grade = grade_levels.validated_grade(grade)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
     effective_grade = grade or "5th Grade"
     if class_id:
         # Own catch, not `_row_or_404`: an unknown class just falls back to
@@ -3019,6 +3048,8 @@ class StartPracticeSessionRequest(BaseModel):
     topics:     list[str]
     difficulty: str
     grade:      str | None = None
+
+    _check_grade = field_validator("grade")(classmethod(_grade_level_field))
 
     @field_validator("mode")
     @classmethod

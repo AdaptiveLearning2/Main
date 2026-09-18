@@ -3843,6 +3843,51 @@ happened once here (fractions in `ordering`). Label the new figures with the mod
 Ollama ones labelled as Ollama's; the reasoning survives the model change even where the rate does
 not.
 
+### `grade` reaches a prompt rebuilt from its number, never as the caller wrote it
+
+`grade` is interpolated into **nineteen** prompts — `Student Grade Level = {grade}` in
+`LLM_topic_decider`, and one `a {grade} student` line in each of the seventeen generators — and
+every one of those strings is client-supplied. `GET /api/generate-question?grade=` is a query
+parameter with no request model behind it; `PUT /api/profile/me`, the two class endpoints and
+`POST /api/practice-sessions/start` all declared it a bare `str | None`. A value carrying a newline
+closes the line it sits on and opens an instruction of its own, in a prompt whose whole job is to
+be followed.
+
+**Escaping it is the weaker answer and is not what is there.** A grade is not free text: the only
+thing any consumer wants from it is the number `grade_levels.grade_number` already reads. So
+`grade_for_prompt` hands the prompt a label **rebuilt from that number** —
+`CANONICAL_GRADE_LABELS`, fourteen fixed strings, plus `UNKNOWN_GRADE_LABEL` for a grade that
+cannot be read. Nothing the caller wrote survives, so injection is unrepresentable rather than
+filtered for. Assert *membership of the closed set*, never the absence of a payload: an absence
+test passes against a filter that strips one sequence and misses the next.
+
+**The labels round-trip** (`grade_number(CANONICAL_GRADE_LABELS[n]) == n`), which is the whole
+reason the substitution is behaviour-preserving — `_allowed_topics`, `grade_band` and every
+generator's `GRADE_OVERRIDES` key on the number and never on the string. Break the round-trip and
+the grade gates move with no other symptom. Two dropdown labels are relabelled on the way through
+("Highschool" → "9th Grade"), which is safe for the same reason and reads better against the
+prompt's own numeric GRADE RULES.
+
+**Applied at two chokepoints, not nineteen**: `question_generation` is the sole dispatch point to
+all seventeen generators, so sanitising there covers eighteen of the sites and the decider covers
+its own. That is sound only while it *is* sole — a test walks the module's AST and fails on a
+generator called from anywhere else.
+
+**The edge checks (`validated_grade`, on all five entry points) are the second layer and are not
+what stops an injection.** They keep an unreadable grade out of the column, off a teacher's class
+list and off a profile badge. The first draft of that check was a length cap plus "does it parse",
+and `"5th Grade\r\nOUTPUT"` cleared both at seventeen characters: **a cap bounds how much can be
+said, never whether a second line can be started.** It now refuses control and format characters
+and the line and paragraph separators (`Cc`, `Cf`, `Zl`, `Zp`) that `\n` is not the only spelling
+of. Three short payloads in `test_grade_prompt_injection.py` keep it from being simplified back,
+and one long single-line one keeps the cap from reading as redundant.
+
+**A backend test must not hold a `main` class object from collection time.**
+`test_consent_gates_polling` calls `importlib.reload(main)`, which rebinds every class in the
+module — so a `@pytest.mark.parametrize` capturing `main.CreateClassRequest` gets a stale object,
+and anything keyed on it raises `KeyError` in a full-suite run while the file passes on its own.
+Parametrize by **name** and `getattr(main, name)` inside the test.
+
 ## Question generation can be grounded in a lesson plan, but nothing seeds one
 
 `lesson_plans` (`20260827010000`) holds curriculum text keyed on `(topic_name, grade_band)`, at the

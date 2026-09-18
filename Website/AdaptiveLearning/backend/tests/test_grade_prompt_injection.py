@@ -220,47 +220,37 @@ def test_the_generators_still_take_the_grade_this_is_protecting():
 
 # ─── the edge, layer 1 ───────────────────────────────────────────────────
 
-@pytest.mark.parametrize("model,field", [
-    (main.CreateClassRequest, "grade_level"),
-    (main.UpdateClassRequest, "grade_level"),
-    (main.UpdateProfileRequest, "grade_level"),
-    (main.StartPracticeSessionRequest, "grade"),
-])
-def test_a_write_model_refuses_a_grade_the_system_cannot_read(model, field):
-    base = {
-        main.CreateClassRequest: {"name": "4B"},
-        main.UpdateClassRequest: {},
-        main.UpdateProfileRequest: {},
-        main.StartPracticeSessionRequest: {
-            "mode": "test", "topics": ["ordering"], "difficulty": "easy"},
-    }[model]
+# The model is named rather than captured, and resolved from `main` inside the
+# test. `test_consent_gates_polling` calls `importlib.reload(main)`, which
+# rebinds every class in the module -- so a class object held from collection
+# time is a different object from `main`'s by the time this runs, and anything
+# keyed on it raises KeyError in a full-suite run while passing on its own.
+WRITE_MODELS = [
+    ("CreateClassRequest", "grade_level", {"name": "4B"}),
+    ("UpdateClassRequest", "grade_level", {}),
+    ("UpdateProfileRequest", "grade_level", {}),
+    ("StartPracticeSessionRequest", "grade",
+     {"mode": "test", "topics": ["ordering"], "difficulty": "easy"}),
+]
 
+
+@pytest.mark.parametrize("model_name,field,base", WRITE_MODELS)
+def test_a_write_model_refuses_a_grade_the_system_cannot_read(model_name, field, base):
+    model = getattr(main, model_name)
     for payload in PAYLOADS:
         with pytest.raises(ValidationError):
             model(**base, **{field: payload})
 
 
-@pytest.mark.parametrize("model,field", [
-    (main.CreateClassRequest, "grade_level"),
-    (main.UpdateClassRequest, "grade_level"),
-    (main.UpdateProfileRequest, "grade_level"),
-    (main.StartPracticeSessionRequest, "grade"),
-])
-def test_a_write_model_accepts_what_the_product_actually_sends(model, field):
+@pytest.mark.parametrize("model_name,field,base", WRITE_MODELS)
+def test_a_write_model_accepts_what_the_product_actually_sends(model_name, field, base):
     """The refusal is worthless if it also refuses the dropdown.
 
     Including the legacy free-text shapes on purpose: `profiles.grade_level`
     predates any constraint, so "Grade 1" and "1" are real stored values a
     student can re-save from their own profile page.
     """
-    base = {
-        main.CreateClassRequest: {"name": "4B"},
-        main.UpdateClassRequest: {},
-        main.UpdateProfileRequest: {},
-        main.StartPracticeSessionRequest: {
-            "mode": "test", "topics": ["ordering"], "difficulty": "easy"},
-    }[model]
-
+    model = getattr(main, model_name)
     for value in DROPDOWN + ["Grade 1", "1", "grade 7", "Kindergarten", None]:
         model(**base, **{field: value})
 

@@ -1,4 +1,5 @@
 import { render, screen, cleanup, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { LiveSignalSummary, WeeklySignalReport, SignalTrend, StrategyPanel, pct } from './SignalPanel'
 
 // Signals cross the wire as 0..1 ratios. Guards against rendering them
@@ -785,10 +786,15 @@ describe('SignalTrend', () => {
   it('omits the heart series entirely when the channel is off', () => {
     // Not drawn as an all-null line: an empty legend entry reads as a
     // measurement that flatlined.
+    //
+    // Asserted on the column and the toggle rather than on the bare text,
+    // which now matches both. A control for a line that can never appear is
+    // worse than its absence: it offers a choice with one outcome.
     render(<SignalTrend trend={{ ...trend, heart_included: false }} />)
 
-    expect(screen.queryByText('Heart rate')).not.toBeInTheDocument()
-    expect(screen.getByText('Focus')).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: /heart rate/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: /heart rate/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /focus/i })).toBeInTheDocument()
   })
 })
 
@@ -811,5 +817,156 @@ describe('the score-scale caption', () => {
     expect(screen.getByRole('note')).toHaveTextContent(/not comparable/)
     rerender(<WeeklySignalReport report={report} />)
     expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+})
+
+describe('choosing which measurements a chart draws', () => {
+  afterEach(cleanup)
+
+  /**
+   * The rule these exist for is CLAUDE.md's: a column must name a series the
+   * chart actually draws. Turning a line off makes that something a teacher
+   * can do at will, so the column has to follow — otherwise the sr-only table
+   * goes on emitting "Heart rate: not recorded" on every row for a series
+   * they chose to hide, in the one surface that cannot be skimmed past.
+   *
+   * Asserted on `columnheader` throughout, never on the summary sentence:
+   * `describeSeries` drops a series with no readings on its own, so an
+   * aria-label assertion passes whether or not the column is gated and is
+   * inert against the exact bug it names.
+   */
+
+  it('drops both the line and its column when a measurement is switched off', async () => {
+    render(<SignalTrend trend={trend} />)
+    expect(screen.getByRole('columnheader', { name: /heart rate/i })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('switch', { name: /heart rate/i }))
+
+    expect(screen.queryByRole('columnheader', { name: /heart rate/i })).not.toBeInTheDocument()
+    // The others are untouched -- this is a filter, not a reset.
+    expect(screen.getByRole('columnheader', { name: /focus/i })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /stress/i })).toBeInTheDocument()
+  })
+
+  it('says so on the toggle, not only by colour', async () => {
+    render(<SignalTrend trend={trend} />)
+    const heart = screen.getByRole('switch', { name: /heart rate/i })
+    expect(heart).toHaveAttribute('aria-checked', 'true')
+
+    await userEvent.click(heart)
+
+    expect(screen.getByRole('switch', { name: /heart rate/i }))
+      .toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('takes any combination, not one at a time', async () => {
+    render(<SignalTrend trend={trend} />)
+
+    await userEvent.click(screen.getByRole('switch', { name: /focus/i }))
+    await userEvent.click(screen.getByRole('switch', { name: /heart rate/i }))
+
+    expect(screen.queryByRole('columnheader', { name: /focus/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: /heart rate/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /stress/i })).toBeInTheDocument()
+  })
+
+  it('puts a measurement back', async () => {
+    render(<SignalTrend trend={trend} />)
+
+    await userEvent.click(screen.getByRole('switch', { name: /stress/i }))
+    expect(screen.queryByRole('columnheader', { name: /stress/i })).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('switch', { name: /stress/i }))
+    expect(screen.getByRole('columnheader', { name: /stress/i })).toBeInTheDocument()
+  })
+
+  it('explains an empty chart and offers a way back, rather than refusing the last click', async () => {
+    // A toggle that silently does nothing is harder to understand than an
+    // empty chart that says what happened. The message is also distinct from
+    // "no signal history yet" and "could not be loaded" beside it: those are
+    // claims about the data, this is a claim about the view.
+    render(<SignalTrend trend={trend} />)
+    for (const name of [/focus/i, /stress/i, /heart rate/i]) {
+      await userEvent.click(screen.getByRole('switch', { name }))
+    }
+
+    expect(screen.getByText(/no measurements selected/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no signal history yet/i)).not.toBeInTheDocument()
+    // No empty table either -- the chart is not rendered at all, so there are
+    // no columns left to describe.
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /show all/i }))
+    expect(screen.getByRole('columnheader', { name: /focus/i })).toBeInTheDocument()
+  })
+
+  it('draws a measurement that only becomes available later', () => {
+    // The hook stores what is *hidden*, not what is shown, and this is the
+    // reason. These charts gain series as data resolves -- a report that loads
+    // with no heart readings and then resolves its trend turns the heart
+    // series from unavailable into available. Held as a set of shown keys it
+    // would be missing from a selection made before it existed and would stay
+    // switched off with nothing on screen explaining why.
+    const { rerender } = render(<SignalTrend trend={{ ...trend, heart_included: false }} />)
+    expect(screen.queryByRole('columnheader', { name: /heart rate/i })).not.toBeInTheDocument()
+
+    rerender(<SignalTrend trend={trend} />)
+
+    expect(screen.getByRole('columnheader', { name: /heart rate/i })).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: /heart rate/i })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('keeps a hidden measurement hidden across a re-render', async () => {
+    // The other half of the above: an explicit choice is not undone by new
+    // data arriving.
+    const { rerender } = render(<SignalTrend trend={trend} />)
+    await userEvent.click(screen.getByRole('switch', { name: /stress/i }))
+
+    rerender(<SignalTrend trend={{ ...trend, retrieved: true }} />)
+
+    expect(screen.queryByRole('columnheader', { name: /stress/i })).not.toBeInTheDocument()
+  })
+
+  it('paints each swatch with the colour its own line is stroked with', () => {
+    // The gap that let the real bug through. The component read `s.color`
+    // while every call site writes `colour`, so the dot painted `undefined`
+    // in both states -- invisible, and the "cannot drift from the line"
+    // property the prop exists for was inoperative.
+    //
+    // Nothing else could catch it: the swatch is `aria-hidden`, so it is not
+    // in the accessibility tree, and jsdom has no stylesheet, so only reading
+    // the inline style sees anything at all. Asserted per chip rather than on
+    // one known hex, so a series added without a colour fails here too.
+    render(<SignalTrend trend={trend} />)
+
+    for (const name of [/^focus$/i, /stress/i, /heart rate/i]) {
+      const swatch = screen.getByRole('switch', { name }).querySelector('[aria-hidden="true"]')
+      expect(swatch.getAttribute('style')).toMatch(/#[0-9a-f]{6}|rgb\(/i)
+      expect(swatch.getAttribute('style')).not.toMatch(/undefined/)
+    }
+    // And it is the palette value, not merely some colour: this is the one
+    // the heart line is stroked with on both this chart and SessionReview.
+    expect(screen.getByRole('switch', { name: /heart rate/i })
+      .querySelector('[aria-hidden="true"]')).toHaveStyle({ backgroundColor: '#a855f7' })
+  })
+
+  it('keeps the swatch colour when the measurement is switched off', async () => {
+    // Hollow rather than gone -- the chip still has to say which line it names.
+    render(<SignalTrend trend={trend} />)
+    await userEvent.click(screen.getByRole('switch', { name: /heart rate/i }))
+
+    const swatch = screen.getByRole('switch', { name: /heart rate/i })
+      .querySelector('[aria-hidden="true"]')
+    expect(swatch.getAttribute('style')).toContain('a855f7')
+    expect(swatch.getAttribute('style')).not.toMatch(/undefined/)
+  })
+
+  it('offers the same control on the daily chart', async () => {
+    render(<WeeklySignalReport report={report} />)
+
+    await userEvent.click(screen.getByRole('switch', { name: /^focus$/i }))
+
+    expect(screen.queryByRole('columnheader', { name: /focus/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /stress/i })).toBeInTheDocument()
   })
 })

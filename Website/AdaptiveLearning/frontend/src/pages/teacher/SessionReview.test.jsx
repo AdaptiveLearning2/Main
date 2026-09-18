@@ -443,3 +443,97 @@ describe('engagement is not drawn beside focus', () => {
     expect(screen.queryByRole('columnheader', { name: /engagement/i })).not.toBeInTheDocument()
   })
 })
+
+describe('choosing which measurements the timeline draws', () => {
+  /**
+   * This is the chart that carries all four — focus, EEG stress, heart rate
+   * and RMSSD — so it is where a combination is worth anything. The rule under
+   * test is the one this file already followed by hand: a column must name a
+   * series the chart actually draws. Hiding a line makes that a thing a
+   * teacher does, so the column has to follow, or the sr-only table keeps
+   * saying "RMSSD: not recorded" on every row of a session that recorded it
+   * fine and was simply not being shown.
+   */
+  const WITH_HEART = {
+    cognitive: [
+      { ts: '2026-08-10T09:00:00Z', focus: 0.6, engagement: 0.6, stress: 0.4 },
+      { ts: '2026-08-10T09:01:00Z', focus: 0.7, engagement: 0.7, stress: 0.3 },
+    ],
+    heart: [
+      { ts: '2026-08-10T09:00:00Z', heart_rate_bpm: 72, rmssd_ms: 41, source: 'muse_optics' },
+      { ts: '2026-08-10T09:01:00Z', heart_rate_bpm: 75, rmssd_ms: 38, source: 'muse_optics' },
+    ],
+    face: [],
+    answers: [{
+      answered_at: '2026-08-10T09:00:30Z', question_id: 'q-1',
+      selected_index: 0, correct: true, questions: null,
+    }],
+  }
+
+  it('hides RMSSD on its own, leaving heart rate drawn', async () => {
+    apiFetch.mockResolvedValue(WITH_HEART)
+    renderAt()
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: /rmssd/i })).toBeInTheDocument())
+
+    await userEvent.click(screen.getByRole('switch', { name: /rmssd/i }))
+
+    expect(screen.queryByRole('columnheader', { name: /rmssd/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /heart rate/i })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Focus' })).toBeInTheDocument()
+  })
+
+  it('offers no toggle for a measurement this session never recorded', async () => {
+    // A control whose only outcome is the one already on screen is worse than
+    // its absence.
+    apiFetch.mockResolvedValue({ ...WITH_HEART, heart: [] })
+    renderAt()
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Focus' })).toBeInTheDocument())
+
+    expect(screen.queryByRole('switch', { name: /rmssd/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: /heart rate/i })).not.toBeInTheDocument()
+  })
+
+  it('explains an empty timeline and offers a way back', async () => {
+    apiFetch.mockResolvedValue(WITH_HEART)
+    renderAt()
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Focus' })).toBeInTheDocument())
+
+    for (const name of [/^focus$/i, /eeg stress/i, /heart rate/i, /rmssd/i]) {
+      await userEvent.click(screen.getByRole('switch', { name }))
+    }
+
+    expect(screen.getByText(/no measurements selected/i)).toBeInTheDocument()
+    // Not an empty chart with an empty table beside it.
+    expect(screen.queryByRole('table', { name: /session replay/i })).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /show all/i }))
+    expect(screen.getByRole('columnheader', { name: /rmssd/i })).toBeInTheDocument()
+  })
+
+  it('takes the answer-marker legend away with the markers themselves', async () => {
+    // The markers are drawn against the ratio axis, so they go when Focus and
+    // EEG stress are both hidden -- even with Heart rate still on, which keeps
+    // a chart on screen and keeps `shownSeries` non-empty. Gated on that
+    // instead, the page claimed "Vertical lines = answer events" over a chart
+    // with none.
+    apiFetch.mockResolvedValue(WITH_HEART)
+    renderAt()
+    await waitFor(() => expect(screen.getByText(/vertical lines = answer events/i)).toBeInTheDocument())
+
+    await userEvent.click(screen.getByRole('switch', { name: /^focus$/i }))
+    await userEvent.click(screen.getByRole('switch', { name: /eeg stress/i }))
+
+    // The chart is still there -- heart rate is drawn -- so this is not the
+    // empty-selection path.
+    expect(screen.getByRole('columnheader', { name: /heart rate/i })).toBeInTheDocument()
+    expect(screen.queryByText(/vertical lines = answer events/i)).not.toBeInTheDocument()
+
+    // **What this does not check**: that the markers themselves are gated.
+    // Removing `axisShown('ratio')` from the `ReferenceLine` map leaves this
+    // test green — Recharts renders nothing measurable under jsdom, which is
+    // the same blind spot this file already states for chart internals. So the
+    // caption is verified and the gate beneath it is not; it is there because
+    // a `ReferenceLine` naming an axis that was never mounted is a Recharts
+    // error, and only a browser can show that.
+  })
+})

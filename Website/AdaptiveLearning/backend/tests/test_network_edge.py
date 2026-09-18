@@ -21,6 +21,7 @@ them are weaker than they look:
 
 import ast
 import json
+import re
 import os
 import subprocess
 import sys
@@ -449,6 +450,23 @@ def _env_example():
     return open(path, encoding="utf-8").read()
 
 
+def _env_doc_block():
+    """The comment block documenting ENV, and the `ENV=` line itself.
+
+    Scoped deliberately. Searching the whole file for a name like `ci` or
+    `prod` finds it inside "decision" and "production" -- five of the seven
+    recognised names already appear somewhere else in this file, so a
+    whole-file check asserts almost nothing while reading as though it asserts
+    the lot.
+    """
+    lines = _env_example().splitlines()
+    i = next(n for n, line in enumerate(lines) if line.startswith("ENV="))
+    start = i
+    while start > 0 and lines[start - 1].startswith("#"):
+        start -= 1
+    return "\n".join(lines[start:i + 1])
+
+
 def test_the_example_file_ships_a_value_this_app_recognises(capsys):
     """`.env.example` is the file a deployment is copied from.
 
@@ -474,8 +492,16 @@ def test_every_name_the_app_recognises_is_written_down_where_a_deploy_looks(name
     described the fallback as keeping the docs *on* when the shipped rule turns
     them off, in the file someone copies to configure a deployment. Adding a
     recognised spelling without naming it here fails this.
+
+    Two anchors, and the first version had neither. Scoped to the ENV block,
+    because `ci` and `prod` are substrings of "decision" and "production" and
+    five of the seven names occur elsewhere in this file -- so a whole-file
+    search would have passed with the block deleted. And matched as whole
+    words, or "production" alone satisfies the assertion for `prod` and the
+    shorter spelling never has to be documented at all.
     """
-    assert name in _env_example()
+    assert re.search(rf"\b{re.escape(name)}\b", _env_doc_block()), \
+        f"{name!r} is recognised by _is_production but not named where ENV is documented"
 
 
 @pytest.mark.parametrize("raw", [None, "", "development", "production", "prod"])

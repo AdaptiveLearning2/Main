@@ -23,6 +23,7 @@ So the tests here are of two kinds, and the second kind is the one with teeth:
 """
 
 import os
+from zoneinfo import available_timezones
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
@@ -135,6 +136,16 @@ class _CapturingClient:
         return _Q()
 
 
+def _declared_fields(model):
+    """Every field the model declares, which is what the handler must write.
+
+    Derived rather than listed, so adding a field to the model and not to the
+    handler's tuple fails here instead of being accepted with 200 and never
+    stored.
+    """
+    return set(model.model_fields)
+
+
 class _PayloadCarryingMore:
     """A payload with a field the handler's model does not declare.
 
@@ -172,9 +183,13 @@ def test_a_profile_update_writes_only_the_columns_it_names(monkeypatch):
     for obj in written:
         assert "role" not in obj, "a posted role reached profiles.role"
         assert "email" not in obj
-        assert set(obj) <= {"display_name", "grade_level", "difficulty_bias",
-                            "session_duration_minutes", "practice_reminders",
-                            "updated_at"}
+        # Equality, not `<=`. A subset assertion passes when the handler writes
+        # *fewer* columns than the model declares, which is the other way this
+        # can go wrong: add a field to `UpdateProfileRequest` and forget the
+        # handler's tuple, and the request is accepted with 200 while the value
+        # is silently never stored. Naming columns is what makes that possible,
+        # so the test for it has to cover both directions.
+        assert set(obj) - {"updated_at"} == _declared_fields(main.UpdateProfileRequest)
 
 
 def test_a_class_update_writes_only_the_columns_it_names(monkeypatch):
@@ -193,7 +208,7 @@ def test_a_class_update_writes_only_the_columns_it_names(monkeypatch):
     for obj in written:
         assert "teacher_id" not in obj, "a posted teacher_id reached classes"
         assert "join_code" not in obj
-        assert set(obj) <= {"name", "grade_level"}
+        assert set(obj) == _declared_fields(main.UpdateClassRequest)
 
 
 def test_the_service_role_client_is_why_those_two_tests_exist():
@@ -241,14 +256,29 @@ def test_a_free_text_field_is_bounded(model_name, field, extra, ordinary):
 
 @pytest.mark.parametrize("model_name,field,extra,ordinary", CAPPED)
 def test_an_ordinary_value_still_fits(model_name, field, extra, ordinary):
-    """A cap that refuses real input is a broken endpoint, not a bound.
-
-    The timezone case is the tightest of these on purpose: the longest name in
-    the IANA database is 32 characters, which is the cap, so this fails if the
-    bound is ever tightened by one.
-    """
+    """A cap that refuses real input is a broken endpoint, not a bound."""
     model = getattr(main, model_name)
     model(**extra, **{field: ordinary})
+
+
+def test_the_timezone_cap_clears_every_name_it_has_to_accept():
+    """Against the installed zone database, not against one sample.
+
+    The cap has deliberate headroom -- IANA adds names -- so a single long
+    example cannot pin it: this test's docstring used to claim the longest name
+    *was* the cap and that tightening it by one would fail, while the constant
+    sat at twice that. Both halves were wrong, and the mutation run reported as
+    killing it had cut the value in half rather than by one.
+
+    Derived from `available_timezones()`, so it fails if the cap is ever set
+    below a name a school could legitimately enter, and says by how much.
+    """
+    names = available_timezones()
+    assert names, "no zone database installed; this test cannot mean anything"
+    longest = max(names, key=len)
+    assert len(longest) <= main._TIMEZONE_MAX, (
+        f"{longest!r} is {len(longest)} characters and the cap is "
+        f"{main._TIMEZONE_MAX}")
 
 
 @pytest.mark.parametrize("model_name,field", [
@@ -262,15 +292,65 @@ def test_a_range_parameter_is_clamped_by_its_handler_and_not_refused_here(model_
     The obvious §6 move is `Field(ge=..., le=...)` on each of these, and it is
     wrong: all three are already clamped in their handlers
     (`max(1, min(payload.days, 30))`), which is this codebase's convention for
-    a caller-supplied range, and `test_learning_strategies_clamps_the_day_range`
-    pins it at 999 -> 30 and 0 -> 1. Adding a field bound turns that documented
-    clamp into a 422 for the same input: two bounds over one number, the
-    stricter winning silently. Caught by that test, which is the only reason
-    this is a comment rather than a regression.
+    a caller-supplied range. Adding a field bound turns that clamp into a 422
+    for the same input: two bounds over one number, the stricter winning
+    silently.
+
+    The decision rests on the clamp existing, so each of the three has a test
+    below. It used to cite `test_learning_strategies_clamps_the_day_range`
+    alone, which covers one of them -- deleting either of the chart-summary
+    clamps left this passing, which is the argument resting on something
+    nothing checked.
     """
     model = getattr(main, model_name)
     for extreme in (0, -1, 999_999):
         model(**{field: extreme})
+
+
+@pytest.mark.parametrize("asked,expected_days,expected_weeks", [
+    (999_999, 30, main._TREND_MAX_WEEKS),
+    (0,       1,  2),
+    (-5,      1,  2),
+])
+def test_the_chart_summary_clamps_both_of_its_ranges(monkeypatch, asked,
+                                                     expected_days, expected_weeks):
+    """The other two thirds of the decision above.
+
+    Recorded at `_chart_summary_basis`, which is where the clamped values are
+    handed on, so this fails if either clamp is removed rather than only if the
+    endpoint raises.
+    """
+    seen = {}
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "viewer-1"})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    monkeypatch.setattr(main, "_rate_limit_chart_summary", lambda *_a: None)
+    # The response builder reads nine keys off the basis, so the stub carries
+    # all of them. A thinner double fails inside that builder with a KeyError,
+    # which reads as the endpoint being broken rather than as the double being
+    # incomplete -- the same rule as `_CapturingClient.single()` above.
+    stub_basis = {"face_included": True, "signals_retrieved": True,
+                  "trend_retrieved": True, "stats_retrieved": True,
+                  "topics_retrieved": True, "consent_retrieved": True,
+                  "averages": {}, "trend": {}, "academic": {}, "topics": []}
+
+    def _basis(sid, days, weeks, include_face):
+        seen.update(days=days, weeks=weeks)
+        return dict(stub_basis)
+
+    monkeypatch.setattr(main, "_chart_summary_basis", _basis)
+    monkeypatch.setattr(main, "_rule_based_chart_summary", lambda _b: [])
+    monkeypatch.setattr(main, "_feature_flags",
+                        lambda: {"chart_summary_llm_enabled": {"enabled": False}})
+
+    answer = main.student_chart_summary(
+        "student-1", None,
+        main.ChartSummaryRequest(days=asked, weeks=asked))
+
+    assert seen == {"days": expected_days, "weeks": expected_weeks}
+    # And on the way out, since `basis` is what a caller reads back to see what
+    # range it actually got.
+    assert answer["basis"]["days"] == expected_days
+    assert answer["basis"]["weeks"] == expected_weeks
 
 
 def test_the_acknowledgement_map_is_bounded():

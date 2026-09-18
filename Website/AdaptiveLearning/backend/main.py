@@ -2763,8 +2763,12 @@ class StrictModel(BaseModel):
 # cap in the network-edge block already bounds a request, and `grade_level` is
 # the only field here with a confirmed model-prompt consumer. What they bound
 # is what gets stored and then rendered back onto a class list, a roster and a
-# profile badge, and they turn a 500 from the database's own limits into a 422
-# naming the field.
+# profile badge.
+#
+# They are **not** turning a database error into a 422: every column they guard
+# is unbounded `text` in the schema, so Postgres would have accepted a megabyte
+# of it without complaint. The cap is the only bound these values have ever
+# had, which is the argument for them rather than against.
 _NAME_MAX      = 100    # a display name, a class name
 _TITLE_MAX     = 200    # a session title, which nothing but the student reads
 _ID_MAX        = 64     # a uuid is 36; `device_id` is a short name like "default"

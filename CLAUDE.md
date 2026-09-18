@@ -769,10 +769,18 @@ column reading "not measured" for ever, which
 `test_every_column_the_mapper_writes_can_be_supplied_by_the_endpoint` already covers.
 
 **Don't add `ge`/`le` to `days` or `weeks`.** All three are clamped in their handlers
-(`max(1, min(payload.days, 30))`), which is this codebase's convention for a caller-supplied range,
-and `test_learning_strategies_clamps_the_day_range` pins it at 999 → 30 and 0 → 1. A field bound turns
-that documented clamp into a 422 for the same input — two bounds over one number, the stricter
-winning silently. Tried, and caught by that test.
+(`max(1, min(payload.days, 30))`), which is this codebase's convention for a caller-supplied range. A
+field bound turns that clamp into a 422 for the same input — two bounds over one number, the stricter
+winning silently. **The decision rests on the clamp existing, so all three are pinned**:
+`test_learning_strategies_clamps_the_day_range` for the strategies one, and
+`test_the_chart_summary_clamps_both_of_its_ranges` for the other two — citing only the first left two
+thirds of the argument resting on nothing, and deleting either chart-summary clamp passed.
+
+**A cap on a free-text field is that field's only bound, not a nicer error.** Every column they guard
+(`display_name`, class `name`, session `title`) is unbounded `text` in the schema, so there is no
+database limit being converted into a 422 — Postgres would have stored a megabyte. That is the
+argument for the caps, and describing them as error-shaping overstates the schema and understates
+them.
 
 ## Access control — check the relationship, not the role name
 

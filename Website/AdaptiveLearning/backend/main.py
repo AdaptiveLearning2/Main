@@ -2731,13 +2731,14 @@ class StrictModel(BaseModel):
 
     Pydantic v2 drops an unrecognised key silently, so this is not closing a
     live bypass -- it is removing the thing that would turn one edit into one.
-    Two handlers build a database update out of `payload.dict()` wholesale, and
-    the client roles' column grants do not protect them, because every write
-    here goes through the **service-role** client, which bypasses grants and
-    RLS alike. So the only thing standing between a posted `role` and
-    `profiles.role` is that the model does not declare the field. That is a
-    true statement about today and a thin one to rely on; those two handlers
-    now name their columns as well (see `update_my_profile`).
+
+    What keeps a posted `role` out of `profiles.role` is that
+    `update_my_profile` names the columns it writes; `update_class` does the
+    same for `classes`. That is the barrier, and it has to be, because the
+    client roles' column grants do not reach either statement: every write here
+    goes through the **service-role** client, which bypasses grants and RLS
+    alike. This model is the second layer -- it stops the key arriving, where
+    naming the columns stops one being written.
 
     The cost is a 422 where an unknown field used to be ignored, which is worth
     paying for a body a browser sends -- the bundle and this backend deploy
@@ -2856,10 +2857,11 @@ def update_my_profile(payload: UpdateProfileRequest, request: Request):
     # client -- which bypasses both RLS and the column grants
     # `20260824010000` revoked from `anon`/`authenticated`. So the migration
     # that makes `role` non-client-writable does not reach this statement, and
-    # the only thing that stopped a posted `role` landing in the column was
-    # that `UpdateProfileRequest` happened not to declare the field. That is a
-    # true statement about today and the wrong thing to be relying on: one
-    # field added to the model, by anyone who has not read this, is a
+    # the tuple below is what keeps a posted `role` out of the column.
+    #
+    # It used to be `payload.dict()`, which left that job to
+    # `UpdateProfileRequest` happening not to declare the field -- one field
+    # added to the model, by anyone who had not read this, would have been a
     # self-service role change.
     #
     # `extra="forbid"` on the model is the other half and is not a substitute

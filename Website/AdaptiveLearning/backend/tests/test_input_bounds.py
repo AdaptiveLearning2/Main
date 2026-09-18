@@ -146,6 +146,19 @@ def _declared_fields(model):
     return set(model.model_fields)
 
 
+def _sample_value(field):
+    """Something plausible of the field's own type, for the double below."""
+    annotation = getattr(field.annotation, "__args__", (field.annotation,))
+    for kind in annotation:
+        if kind is bool:
+            return True
+        if kind is int:
+            return 1
+        if kind is str:
+            return "Ada"
+    return "Ada"
+
+
 class _PayloadCarryingMore:
     """A payload with a field the handler's model does not declare.
 
@@ -154,6 +167,14 @@ class _PayloadCarryingMore:
     two produce identical keys, so a test using the real model passes either
     way. `.dict()` is provided precisely so the old implementation would work
     and would leak.
+
+    **`__getattr__` answers `None` for anything not passed.** Without it, the
+    *correct* forward change -- a new field on the model and in the handler's
+    tuple -- made `update_my_profile` raise `AttributeError` reading this
+    object, at a line in the handler: a failure in the double dressed as one in
+    the code, which is exactly what `_CapturingClient.single()` above exists to
+    prevent. It weakens nothing, because the handler filters `None` out and the
+    equality assertion still requires every declared column to be written.
     """
 
     def __init__(self, **fields):
@@ -161,8 +182,24 @@ class _PayloadCarryingMore:
         for key, value in fields.items():
             setattr(self, key, value)
 
+    def __getattr__(self, _name):
+        return None
+
     def dict(self):
         return dict(self._fields)
+
+
+def _payload_for(model, **extra):
+    """A double carrying every field `model` declares, plus `extra`.
+
+    Derived from the model so the correct forward change passes without
+    anyone remembering this file: add a field to the model and to the
+    handler's tuple, and a value for it appears here. Add it to the model
+    alone and the equality assertion still fails, naming it.
+    """
+    declared = {name: _sample_value(field)
+                for name, field in model.model_fields.items()}
+    return _PayloadCarryingMore(**declared, **extra)
 
 
 def test_a_profile_update_writes_only_the_columns_it_names(monkeypatch):
@@ -172,10 +209,8 @@ def test_a_profile_update_writes_only_the_columns_it_names(monkeypatch):
     monkeypatch.setattr(main, "_profile", lambda _uid: {"id": STUDENT["id"]})
 
     main.update_my_profile(
-        _PayloadCarryingMore(
-            display_name="Ada", grade_level="5th Grade", difficulty_bias=1,
-            session_duration_minutes=15, practice_reminders=True,
-            role="admin", email="attacker@example.test"),
+        _payload_for(main.UpdateProfileRequest,
+                     role="admin", email="attacker@example.test"),
         None)
 
     written = [obj for table, obj in client.updates if table == "profiles"]
@@ -199,8 +234,8 @@ def test_a_class_update_writes_only_the_columns_it_names(monkeypatch):
 
     main.update_class(
         "class-1",
-        _PayloadCarryingMore(name="4B", grade_level="5th Grade",
-                             teacher_id="someone-else", join_code="AAAAAA"),
+        _payload_for(main.UpdateClassRequest,
+                     teacher_id="someone-else", join_code="AAAAAA"),
         None)
 
     written = [obj for table, obj in client.updates if table == "classes"]

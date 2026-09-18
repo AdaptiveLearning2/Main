@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 
-import { apiFetch, mockApi, resetApi, apiError } from '../../test/mocks/apiFetch'
+import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
 import { _resetForTests } from '../../lib/questionsCache'
 import Questions from './Questions'
 import Analytics from './Analytics'
@@ -17,6 +17,16 @@ const QUESTION = {
   correct_index: 1,
   subject: 'algebra',
   difficulty: 'easy',
+}
+
+// Only the focus-restore test registers this, and only because one row cannot
+// tell "focus returned to the opener" from "focus returned to the first button
+// on the page". Left out of the shared `mockApi` so the pagination and cache
+// tests keep counting the bank they were written against.
+const SECOND_QUESTION = {
+  ...QUESTION,
+  id: 'q-2',
+  question_text: 'What is 9 x 6?',
 }
 
 beforeEach(() => {
@@ -80,10 +90,19 @@ describe('the question modal', () => {
     // it named the wrong element and then only asserted it was truthy, which
     // `closest('div')` almost always is. A `useDialog` restoring focus to any
     // live element on the page -- the first filter button, say -- passed.
+    //
+    // **Two rows, and the second one is the one clicked.** Against the
+    // one-question bank the rest of this file uses, "focus came back to the
+    // opener" and "focus came back to a row" are the same sentence -- the row
+    // is the first `<button>` in the document, so a restore aimed at
+    // `querySelector('button')` passes. Mutation found exactly that.
+    overrideApi('/api/questions?limit=1000', () => [QUESTION, SECOND_QUESTION])
     render(<Questions />, { wrapper: MemoryRouter })
-    const text = await screen.findByText('What is 7 x 8?')
+    const text = await screen.findByText('What is 9 x 6?')
     const opener = text.closest('button')
     expect(opener, 'the row is a <button>; the restore has nothing to aim at otherwise').toBeTruthy()
+    expect(opener, 'the clicked row must not be the first button on the page')
+      .not.toBe(document.querySelector('button'))
 
     await userEvent.click(opener)
     await screen.findByRole('dialog')

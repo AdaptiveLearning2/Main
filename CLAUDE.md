@@ -684,6 +684,21 @@ browser never attaches on its own. `ALLOWED_ORIGINS` defaults to the local front
 serves plus OPTIONS, and headers the two `lib/api.js` and the push client send. A production deploy that forgets the
 variable is refused at the edge on the first page load — loud, and the safe direction.
 
+**A response header the page must read has to be named in `expose_headers`.** Only the CORS-safelisted few are
+readable cross-origin by default, and the frontend is a different origin from this API in every deployment — local dev
+on `:5173` against `:8000` included. `Retry-After` is not safelisted, so the allowlist alone left it hidden: seven
+refusals set it, `apiFetch` reads it to size its wait and then jitters that delay, and unexposed every one of them
+falls back to the fixed delay — `retryAfterMs` reads null and the arrival-rate measurement behind
+`GENERATION_MAX_WAITERS` describes behaviour no browser performs. Nothing else is exposed; it is a read permission,
+granted per header.
+
+**`ENV` names both sides, and an unrecognised value hides the docs.** `== "production"` is silent in the one direction
+that matters — `ENV=prod` leaves `/docs`, `/redoc` and `/openapi.json` published with nothing in the boot log saying
+so. `_is_production` recognises spellings on both sides and falls to production with a `[config]` line otherwise,
+which is the **opposite** fallback direction from `_env_number`: there the safe side is the feature's own default,
+here it is publishing less. Unset stays development, silently, since that is the ordinary local state and a warning on
+every boot is one nobody reads.
+
 **Read a blank env list as unset, not as a list of one empty string.** `_env_list` is `_env_number`'s shape for text.
 An empty allowed origin matches nothing, so the symptom is the whole frontend refused by a setting that looks
 configured.

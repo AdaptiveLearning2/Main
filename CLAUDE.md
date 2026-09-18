@@ -483,7 +483,8 @@ separately because it is not part of the `GENERATION_*` group and is a spend dec
 preferences* below), the `STRATEGY_LLM_*` /
 `STRATEGY_RATE_*` group below, and the
 `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` group under *Every model call goes through
-`llm_client`*. The ingest bounds
+`llm_client`*, and the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` /
+`INGEST_MAX_SAMPLE_BYTES` group under *The network edge*. The ingest bounds
 matter because the sidecar posts with the *student's* token: that endpoint is a trust boundary, and
 neither the session check nor the consent check bounds volume. Frontend: `VITE_SUPABASE_URL`,
 `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`, `VITE_EEG_DEBUG`. EEGResearch reads `.env` through
@@ -1300,6 +1301,76 @@ SELECT p.proname, p.proacl
 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname = 'public';
 ```
+
+## The network edge: who may read a response, what rides on it, how much may be sent
+
+All of it is in one block above the helpers in `main.py`, mirroring
+`EEGResearch/src/app/main.py`, which has had an origin allowlist and a headers middleware since it
+was written. This backend had neither. `backend/tests/test_network_edge.py` is the **first backend
+test to use `TestClient`** — every middleware here was unreachable from the suite by construction
+before it, so anything added to this block needs a test there or it is not covered by anything.
+
+**CORS is an allowlist, and `allow_credentials` has to be false for it to mean anything.** It was
+`allow_origins=["*"]` with `allow_credentials=True`, which Starlette serves by *reflecting* the
+asking Origin — a wildcard wearing an allowlist's clothes. Credentials here would mean cookies and
+there are none: the bearer token goes in a header, which a browser never attaches on its own.
+`ALLOWED_ORIGINS` is a comma-separated env list defaulting to the local frontend; methods are the
+four the API actually serves plus OPTIONS, and headers are the two `lib/api.js` and the sidecar's
+push client actually send. A production deploy that forgets the variable is refused at the edge on
+the first page load — loud and the safe direction.
+
+**Read a blank env list as unset, not as a list of one empty string.** `_env_list` is `_env_number`'s
+shape for text. An empty allowed origin matches nothing, so the symptom is the whole frontend
+refused by a setting that looks configured.
+
+**The CSP says this server is not a document, and that is the honest policy rather than a weak
+one.** `main.py` serves no HTML — no `StaticFiles`, no template, no `HTMLResponse` — so
+`default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` is exactly right
+for it. **The `default-src 'self'; connect-src <supabase> <sidecar>` form is a *frontend* policy**:
+it describes what a page may fetch, and this server has no page. That one belongs with the Vite
+build's hosting config and is still an open decision; nothing on the backend substitutes for it. A
+test asserts the three HTML sinks stay absent, since the policy stops being honest the moment one
+appears.
+
+**`Permissions-Policy` denies the camera here, and that is not a mistake.** The product does open a
+webcam — on the *frontend* origin, through the sidecar. A `camera=(self)` carve-out on an origin
+with no document permits a capability nothing can use.
+
+**FastAPI's own docs are exempt from the CSP and off in production.** They are real HTML pulling
+Swagger from a CDN, so under `default-src 'none'` they render blank locally, which reads as broken
+tooling rather than as a policy working. `_DOCS_PATHS` names them once, so the paths that are
+exempted are the paths that get switched off.
+
+**A source scan cannot tell a use from a mention.** The no-HTML check read `main.py` as text and
+failed on the comment beside the CSP, which names all three sinks to explain why none is there. It
+walks the AST instead. Same trap as `AccessibleChart.test.jsx`'s stated blind spot, arrived at from
+the other side.
+
+**The body cap is two caps, and the second is derived.** A single number would have refused real
+sensor data: measured, a cognitive batch at the full `INGEST_MAX_BATCH` of 500 with the fattest
+`raw.ingestion` block the sidecar sends is **~637 KiB**, two and a half times the 256 KiB an
+ordinary endpoint gets. So `/api/signals/*` is bounded by `INGEST_MAX_BATCH × INGEST_MAX_SAMPLE_BYTES`
+rather than by its own constant — raising the batch bound must not start refusing batches at the
+edge for a reason nothing in the ingest code mentions. A test rebuilds that full batch and asserts
+it fits, so trimming the per-sample allowance fails against the measurement rather than against a
+comment.
+
+**Both halves of the size check are needed.** `Content-Length` is what every client in this product
+sends, and checking it refuses the body before a byte is accepted. A client that chunks its upload
+sends none — which is precisely the client this exists for — so the middleware also counts what
+arrives. It is pure ASGI rather than `BaseHTTPMiddleware`, because that one reads the body to hand
+it on and the point is not to read it.
+
+**The refusal has to be readable by the page that caused it**, so the size middleware is added
+first (innermost) and CORS last (outermost). A 413 carrying no CORS header reaches the browser as a
+generic network error, which makes a size limit indistinguishable from the backend being down.
+Starlette's `add_middleware` prepends, so *added last* means *outermost* — getting that backwards
+is silent.
+
+Not here, and deliberately: **no `TrustedHostMiddleware`** (the production host is an open
+decision, and an allowlist with no known host either breaks everything or is a no-op), and **no
+HSTS** — that is §1 of the security plan, one line in `security_headers` when the hosting question
+is settled.
 
 ## Ingestion is push or pull, and which one is a setting rather than a guess
 

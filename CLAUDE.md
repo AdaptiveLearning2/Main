@@ -742,6 +742,46 @@ Not here, deliberately: **no `TrustedHostMiddleware`** (the production host is a
 no known host either breaks everything or is a no-op), and **no HSTS** — one line in `security_headers` when the
 hosting question is settled.
 
+## A write names its columns; a request model refuses what it does not declare
+
+**The service-role client bypasses column grants as well as RLS, so a migration that revokes a column's
+UPDATE does not reach any statement in `main.py`.** `20260824010000` takes `profiles.role` away from
+`anon`/`authenticated`, which constrains PostgREST and nothing here. So **build a database update
+from named attributes, never from the payload as a dict**, wherever the table holds a column the
+caller must not set: `profiles.role`, `classes.teacher_id`, `classes.join_code`. The named columns
+in `update_my_profile` and `update_class` are what keep a posted `role` out of that column; a
+`payload.dict()` write leaves the job to the model happening not to declare the field, which is one
+edit away from a self-service role change.
+
+**A test of that has to hand the handler more than the model declares.** Against today's model a
+named-column write and `payload.dict()` produce identical keys, so a test using the real model passes
+either way — it has to simulate the future the guard exists for.
+
+**`StrictModel` carries `extra="forbid"` and every request model inherits it**, which is defense in
+depth rather than a live fix (Pydantic v2 already drops an unknown key). `test_input_bounds.py` pins
+the list of models that do *not*.
+
+**The six ingest models are exempt, by name.** A sidecar runs on a student's laptop and updates on its
+own schedule, so a field it gained before this backend did is ordinary version skew — and under
+`forbid` that skew 422s the **whole batch**, losing every valid sample travelling with it. That is
+the failure `CognitiveBatch.samples` is already `list[Any]` for. The cost of staying lenient is a
+column reading "not measured" for ever, which
+`test_every_column_the_mapper_writes_can_be_supplied_by_the_endpoint` already covers.
+
+**Don't add `ge`/`le` to `days` or `weeks`.** All three are clamped in their handlers
+(`max(1, min(payload.days, 30))`), which is this codebase's convention for a caller-supplied range. A
+field bound turns that clamp into a 422 for the same input — two bounds over one number, the stricter
+winning silently. **The decision rests on the clamp existing, so all three are pinned**:
+`test_learning_strategies_clamps_the_day_range` for the strategies one, and
+`test_the_chart_summary_clamps_both_of_its_ranges` for the other two — citing only the first left two
+thirds of the argument resting on nothing, and deleting either chart-summary clamp passed.
+
+**A cap on a free-text field is that field's only bound, not a nicer error.** Every column they guard
+(`display_name`, class `name`, session `title`) is unbounded `text` in the schema, so there is no
+database limit being converted into a 422 — Postgres would have stored a megabyte. That is the
+argument for the caps, and describing them as error-shaping overstates the schema and understates
+them.
+
 ## Access control — check the relationship, not the role name
 
 Endpoints serving student data read through the **service-role Supabase client, which bypasses RLS**, so the checks in

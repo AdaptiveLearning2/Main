@@ -137,12 +137,42 @@ def test_the_endpoint_refuses_values_the_column_would_refuse(field, value):
     ("difficulty_bias", 0),
     ("practice_reminders", False),
 ])
-def test_the_falsy_settings_are_sent_rather_than_filtered_out(field, value):
+def test_the_falsy_settings_are_sent_rather_than_filtered_out(field, value, monkeypatch):
     """`update_my_profile` drops fields that are None, which is right -- but 0
     is the adaptive bias and False is reminders off, and both are real choices.
     Filtering them as falsy would mean neither could ever be saved: a student
-    could turn reminders on and never off again."""
-    payload = main.UpdateProfileRequest(**{field: value})
-    fields = {k: v for k, v in payload.dict().items() if v is not None}
+    could turn reminders on and never off again.
 
-    assert fields == {field: value}
+    Driven through the handler, not by restating its filter here. This test
+    used to rebuild the `payload.dict()` line beside it and assert on that --
+    so once the handler stopped using that line it was asserting nothing about
+    the handler at all, and `is not None` becoming `if value` kept the suite
+    green while reminders could never be turned off again.
+    """
+    written = []
+
+    class _Recording:
+        def table(self, _name):
+            outer = self
+
+            class _Q:
+                def update(self, obj):
+                    outer_obj = dict(obj)
+                    outer_obj.pop("updated_at", None)
+                    written.append(outer_obj)
+                    return self
+
+                def eq(self, *_a):  return self
+                def select(self, *_a, **_k): return self
+                def single(self):   return self
+                def execute(self):  return type("R", (), {"data": []})()
+
+            return _Q()
+
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+    monkeypatch.setattr(main, "supabase", _Recording())
+    monkeypatch.setattr(main, "_profile", lambda _uid: {"id": STUDENT["id"]})
+
+    main.update_my_profile(main.UpdateProfileRequest(**{field: value}), None)
+
+    assert written == [{field: value}]

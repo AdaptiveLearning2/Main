@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 import os, math, re, requests, random, string, threading, time, collections, contextlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
@@ -2725,11 +2725,63 @@ def _ensure_queue(user_id: str, grade: str, bias: int, session_id: str | None = 
 
 # ─── models ──────────────────────────────────────────────────────────────
 
-class StartSessionRequest(BaseModel):
-    title: str | None = None
 
-class AnswerPayload(BaseModel):
-    question_id:    str
+class StrictModel(BaseModel):
+    """A request model that refuses a field it does not declare.
+
+    Pydantic v2 drops an unrecognised key silently, so this is not closing a
+    live bypass -- it is removing the thing that would turn one edit into one.
+
+    What keeps a posted `role` out of `profiles.role` is that
+    `update_my_profile` names the columns it writes; `update_class` does the
+    same for `classes`. That is the barrier, and it has to be, because the
+    client roles' column grants do not reach either statement: every write here
+    goes through the **service-role** client, which bypasses grants and RLS
+    alike. This model is the second layer -- it stops the key arriving, where
+    naming the columns stops one being written.
+
+    The cost is a 422 where an unknown field used to be ignored, which is worth
+    paying for a body a browser sends -- the bundle and this backend deploy
+    together, so a field one knows and the other does not is a bug worth
+    hearing about.
+
+    **The sidecar's ingest models deliberately do not inherit this**, and
+    `test_input_bounds.py` pins the exemption by name. A sidecar runs on a
+    student's laptop and updates on its own schedule, so a field it gained
+    before this backend did is ordinary version skew -- and under `forbid` that
+    skew would 422 the *whole batch* rather than dropping one key, losing every
+    valid sample travelling with it. `CognitiveBatch.samples` is already
+    `list[Any]` validated per sample for exactly that reason. The known cost of
+    staying lenient there is a column that reads "not measured" forever, which
+    is what `test_every_column_the_mapper_writes_can_be_supplied_by_the_endpoint`
+    exists to catch.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+# Free-text caps. None of these is a security boundary on its own -- the body
+# cap in the network-edge block already bounds a request, and `grade_level` is
+# the only field here with a confirmed model-prompt consumer. What they bound
+# is what gets stored and then rendered back onto a class list, a roster and a
+# profile badge.
+#
+# They are **not** turning a database error into a 422: every column they guard
+# is unbounded `text` in the schema, so Postgres would have accepted a megabyte
+# of it without complaint. The cap is the only bound these values have ever
+# had, which is the argument for them rather than against.
+_NAME_MAX      = 100    # a display name, a class name
+_TITLE_MAX     = 200    # a session title, which nothing but the student reads
+_ID_MAX        = 64     # a uuid is 36; `device_id` is a short name like "default"
+_SHORT_MAX     = 32     # a join code (generated as 6), a channel name
+_TIMEZONE_MAX  = 64     # "America/Argentina/ComodRivadavia" is 32
+
+
+class StartSessionRequest(StrictModel):
+    title: str | None = Field(None, max_length=_TITLE_MAX)
+
+class AnswerPayload(StrictModel):
+    question_id:    str = Field(max_length=_ID_MAX)
     selected_index: int
     correct:        bool
 
@@ -2745,26 +2797,26 @@ def _grade_level_field(cls, v):
     return grade_levels.validated_grade(v)
 
 
-class CreateClassRequest(BaseModel):
-    name: str
+class CreateClassRequest(StrictModel):
+    name: str = Field(max_length=_NAME_MAX)
     grade_level: str | None = None
 
     _check_grade = field_validator("grade_level")(classmethod(_grade_level_field))
 
-class UpdateClassRequest(BaseModel):
-    name: str | None = None
+class UpdateClassRequest(StrictModel):
+    name: str | None = Field(None, max_length=_NAME_MAX)
     grade_level: str | None = None
 
     _check_grade = field_validator("grade_level")(classmethod(_grade_level_field))
 
-class JoinClassRequest(BaseModel):
-    join_code: str
+class JoinClassRequest(StrictModel):
+    join_code: str = Field(max_length=_SHORT_MAX)
 
-class LinkChildRequest(BaseModel):
-    child_id: str
+class LinkChildRequest(StrictModel):
+    child_id: str = Field(max_length=_ID_MAX)
 
-class UpdateProfileRequest(BaseModel):
-    display_name: str | None = None
+class UpdateProfileRequest(StrictModel):
+    display_name: str | None = Field(None, max_length=_NAME_MAX)
     grade_level:  str | None = None
     # Learning preferences. Bounded here as well as by the database's CHECK
     # constraints, since a 422 names the field but a constraint violation
@@ -2779,9 +2831,9 @@ class UpdateProfileRequest(BaseModel):
 
     _check_grade = field_validator("grade_level")(classmethod(_grade_level_field))
 
-class EegSessionRequest(BaseModel):
-    session_id: str
-    device_id: str | None = None
+class EegSessionRequest(StrictModel):
+    session_id: str = Field(max_length=_ID_MAX)
+    device_id: str | None = Field(None, max_length=_ID_MAX)
     # `/api/eeg/start` only. False brings the stream up without writing a row
     # (pairing); the page sends True on the first question, which arms the
     # running poller in place. Defaults to True so a caller predating the
@@ -2799,7 +2851,30 @@ def get_my_profile(request: Request):
 @app.put("/api/profile/me")
 def update_my_profile(payload: UpdateProfileRequest, request: Request):
     user = get_user(request)
-    fields = {k: v for k, v in payload.dict().items() if v is not None}
+    # Named columns, not `payload.dict()`.
+    #
+    # `profiles` holds `role`, and this write goes through the service-role
+    # client -- which bypasses both RLS and the column grants
+    # `20260824010000` revoked from `anon`/`authenticated`. So the migration
+    # that makes `role` non-client-writable does not reach this statement, and
+    # the tuple below is what keeps a posted `role` out of the column.
+    #
+    # It used to be `payload.dict()`, which left that job to
+    # `UpdateProfileRequest` happening not to declare the field -- one field
+    # added to the model, by anyone who had not read this, would have been a
+    # self-service role change.
+    #
+    # `extra="forbid"` on the model is the other half and is not a substitute
+    # -- it stops a key arriving, this stops one being written.
+    fields = {
+        name: value for name, value in (
+            ("display_name", payload.display_name),
+            ("grade_level", payload.grade_level),
+            ("difficulty_bias", payload.difficulty_bias),
+            ("session_duration_minutes", payload.session_duration_minutes),
+            ("practice_reminders", payload.practice_reminders),
+        ) if value is not None
+    }
     if fields:
         fields["updated_at"] = datetime.utcnow().isoformat()
         supabase.table("profiles").update(fields).eq("id", user["id"]).execute()
@@ -3289,9 +3364,12 @@ def _practice_session_or_403(practice_session_id: str, user_id: str, columns: st
     return row
 
 
-class StartPracticeSessionRequest(BaseModel):
+class StartPracticeSessionRequest(StrictModel):
     mode:       str
-    topics:     list[str]
+    # Every entry is checked against `_allowed_topics` in the handler, which is
+    # the gate that matters; the cap is so a list of a million strings is
+    # refused before that loop rather than inside it.
+    topics:     list[str] = Field(max_length=64)
     difficulty: str
     grade:      str | None = None
 
@@ -3429,8 +3507,8 @@ def _practice_topic_for_question(question_id: str) -> str | None:
         return None
 
 
-class PracticeAnswerPayload(BaseModel):
-    question_id:    str
+class PracticeAnswerPayload(StrictModel):
+    question_id:    str = Field(max_length=_ID_MAX)
     selected_index: int
     correct:        bool
 
@@ -3475,8 +3553,8 @@ def record_practice_answer(practice_session_id: str = Path(...),
     return {"ok": True, "topic": topic}
 
 
-class PracticeViewPayload(BaseModel):
-    question_id: str
+class PracticeViewPayload(StrictModel):
+    question_id: str = Field(max_length=_ID_MAX)
 
 
 @app.post("/api/practice-sessions/{practice_session_id}/view")
@@ -4569,8 +4647,15 @@ def _llm_strategies_admitted(prompt: str) -> list[str] | None:
         return None
 
 
-class LearningStrategyRequest(BaseModel):
+class LearningStrategyRequest(StrictModel):
     include_face: bool = True
+    # Deliberately *not* range-bounded here. The handler clamps it
+    # (`max(1, min(payload.days, 30))`), which is this codebase's convention
+    # for a caller-supplied range and is pinned by
+    # `test_learning_strategies_clamps_the_day_range`. A `ge`/`le` on the
+    # field would turn that documented clamp into a 422 for the same input --
+    # two bounds disagreeing about one number, and the stricter one wins
+    # silently. Same for `ChartSummaryRequest` below.
     days: int = 7
     # When set, the topic-accuracy input is a just-finished practice session's
     # own results instead of the student's live-session topic breakdown -- see
@@ -4578,7 +4663,7 @@ class LearningStrategyRequest(BaseModel):
     # averages) is untouched either way: a practice session has no signals of
     # its own to report, so `signals_retrieved`/the averages simply describe
     # the student's live-session state as they already do today.
-    practice_session_id: str | None = None
+    practice_session_id: str | None = Field(None, max_length=_ID_MAX)
 
 
 def _topics_from_practice_summary(topic_summary: dict) -> list[dict]:
@@ -5319,9 +5404,11 @@ def _llm_chart_summary_admitted(prompt: str, baseline: list[str]) -> list[str] |
         return None
 
 
-class ChartSummaryRequest(BaseModel):
+class ChartSummaryRequest(StrictModel):
     include_face: bool = True
-    days: int = 7
+    # Both clamped in the handler, not bounded here -- see
+    # `LearningStrategyRequest.days`.
+    days:  int = 7
     weeks: int = 8
 
 
@@ -5521,7 +5608,17 @@ def update_class(class_id: str, payload: UpdateClassRequest, request: Request):
         supabase.table("classes").select("*").eq("id", class_id), "Class")
     if cls["teacher_id"] != user["id"]:
         raise HTTPException(403, "Not your class")
-    fields = {k: v for k, v in payload.dict().items() if v is not None}
+    # Named columns, for the reason `update_my_profile` states at length:
+    # `classes` also holds `teacher_id`, `join_code` and `id`, and this write
+    # is service-role, so nothing below the model constrains which columns it
+    # may touch. A field added to `UpdateClassRequest` that happens to share a
+    # column name would be a class reassigned to someone else.
+    fields = {
+        name: value for name, value in (
+            ("name", payload.name),
+            ("grade_level", payload.grade_level),
+        ) if value is not None
+    }
     if fields:
         supabase.table("classes").update(fields).eq("id", class_id).execute()
     # Re-read so the response reflects what was actually stored. A 404 here
@@ -6767,14 +6864,14 @@ def _shape_consent(row: dict, student_id: str, erasures: dict | None = None) -> 
     }
 
 
-class ConsentUpdate(BaseModel):
+class ConsentUpdate(StrictModel):
     eeg_enabled:              bool | None = None
     headband_optical_enabled: bool | None = None
     camera_enabled:           bool | None = None
 
 
-class ErasureRequest(BaseModel):
-    channel: str
+class ErasureRequest(StrictModel):
+    channel: str = Field(max_length=_SHORT_MAX)
     # Erasure is unrecoverable with no undo anywhere in the system, so the
     # request carries its own confirmation rather than trusting a dialog
     # nobody can audit. Omitting it gets a 422 naming the field.
@@ -8195,11 +8292,15 @@ def ack_parent_links(request: Request):
 _MAX_WITHDRAWAL_NOTICES = 200
 
 
-class ConsentNoticeAck(BaseModel):
+class ConsentNoticeAck(StrictModel):
     """`{child_id: iso8601}` -- the newest withdrawal the parent was shown, per
     child. The client hands back what the server gave it rather than a
     timestamp of its own, so "seen" means one agreed value."""
-    through: dict[str, str] = {}
+    # One entry per child a parent is linked to. Capped because it is the only
+    # field here a client may grow freely -- the body limit bounds the whole
+    # request, but nothing else bounds the number of keys the handler loops
+    # over.
+    through: dict[str, str] = Field(default={}, max_length=200)
 
 
 CONSENT_CHANNEL_LABELS = {
@@ -8454,7 +8555,7 @@ def _require_admin(request: Request) -> dict:
     return user
 
 
-class FeatureFlagUpdate(BaseModel):
+class FeatureFlagUpdate(StrictModel):
     enabled: bool
     # Only read when disabling `consent_enforcement_enabled`. Bounded, since
     # the point of the bypass is that it can't be left on -- a window
@@ -8653,11 +8754,13 @@ def admin_env_flags(request: Request):
     } for key, default, description in _DEPLOYMENT_FLAGS]}
 
 
-class RetentionWindowUpdate(BaseModel):
+class RetentionWindowUpdate(StrictModel):
     enforced: bool
-    starts_on: str | None = None
-    ends_on: str | None = None
-    timezone: str = "UTC"
+    starts_on: str | None = Field(None, max_length=_SHORT_MAX)
+    ends_on: str | None = Field(None, max_length=_SHORT_MAX)
+    # A typo'd zone already denies rather than falling back to UTC (see
+    # `_retention_window`), so this only bounds the string.
+    timezone: str = Field("UTC", max_length=_TIMEZONE_MAX)
 
 
 @app.get("/api/admin/retention-window")

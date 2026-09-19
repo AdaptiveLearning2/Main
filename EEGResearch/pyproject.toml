@@ -54,7 +54,7 @@ dev = [
 # constructs and runs) and then against a real camera -- see the manual check in
 # CLAUDE.md, which had to be re-run because that is the claim this changes.
 face = [
-  "opencv-contrib-python>=4.9.0,<5",
+  "opencv-contrib-python>=4.9.0,<6",
   "onnxruntime>=1.17.0"
 ]
 
@@ -75,7 +75,7 @@ gaze = [
   # someone would lift it. `face` now pins the same distribution, so this is one
   # package with one version rather than two providers of `cv2` racing to own
   # the import -- which is what an unconstrained mediapipe produced.
-  "opencv-contrib-python>=4.9.0,<5"
+  "opencv-contrib-python>=4.9.0,<6"
 ]
 
 [tool.setuptools]

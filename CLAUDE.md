@@ -284,18 +284,22 @@ testing an interpreter nobody ran; keep them together. `EEGResearch/requirements
 generated under the same version, and its header records which one.
 
 **Check the wheels on both platforms, not just this one.** Everything an install resolves —
-**transitive as well as direct** — ships a `cp314` wheel for `win_amd64` *and* `manylinux_x86_64`,
-or is version-agnostic. The second half is the one a developer cannot see, because CI is ubuntu and
-the venvs are Windows, and the example is transitive rather than direct, which is why the rule has
-to say so: `uvicorn[standard]` pulls `uvloop` on Linux and **`uvloop` publishes no Windows wheel at
-all**, so a check run here passes without ever looking at a package the ubuntu jobs install.
+**transitive as well as direct** — ships a `cp314` wheel for each platform *it is resolved on*
+(`win_amd64` here, `manylinux_x86_64` in CI), or is version-agnostic. Scoped that way on purpose: a
+package only one platform resolves needs a wheel only there, and **`uvloop` publishes none for
+Windows at all**, which is fine because Windows never installs it. What is *not* fine is that
+`uvicorn[standard]` pulls it on Linux, so a check run here passes without ever looking at a package
+the ubuntu jobs do install — and the example is transitive rather than direct, which is why the rule
+has to say so.
 
 **`EEGResearch/requirements*.lock` are resolved on Windows, and uvloop's absence from them is how
 you can tell.** So installing them on Linux gives an environment `pyproject` would not — missing
 `uvloop` and anything else platform-gated. That is a live trap rather than a curiosity, because the
 obvious fix for the nested workflow below never running is to move it to the repository root, and
-that would run exactly this lock on ubuntu. Regenerate them on the platform that will install them,
-or make them universal, before doing it.
+that would run exactly this lock on ubuntu. **Regenerate them on the platform that will install
+them** — that is the whole of the available fix. A single lock covering both platforms is not one:
+`pip-compile` has no `--universal`, in 7.6.1 or any version, so that route is a toolchain change
+rather than a flag.
 One pre-existing gap: none has ever carried `setuptools`, so `import rppg`
 / `import heartpy` fail on a missing `pkg_resources` against a persistent venv. (`keras`/`jax` load fine once
 `KERAS_BACKEND` is set the way `rppg/models.py` already sets it at import.) The `open-rppg`

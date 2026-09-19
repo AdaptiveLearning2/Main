@@ -277,8 +277,30 @@ evidence the app can import something: `anthropic` was in the root venv and abse
 imports it lazily, so not at boot. Install a new runtime dependency into `backend/.venv` in the
 same change that pins it.
 
-All three venvs are on Python 3.14.7; every direct dependency ships a `cp314`/`win_amd64` or
-version-agnostic wheel. One pre-existing gap: none has ever carried `setuptools`, so `import rppg`
+All three venvs are on Python 3.14.7, **and so is CI** — `ci.yml`'s four `setup-python` pins say
+`3.14`, the minor rather than the patch, because `setup-python` fails outright on an exact version
+the runner image does not have. They sat at 3.12 for a month after development moved, so CI was
+testing an interpreter nobody ran; keep them together. `EEGResearch/requirements*.lock` are
+generated under the same version, and its header records which one.
+
+**Check the wheels on both platforms, not just this one.** Everything an install resolves —
+**transitive as well as direct** — ships a `cp314` wheel for each platform *it is resolved on*
+(`win_amd64` here, `manylinux_x86_64` in CI), or is version-agnostic. Scoped that way on purpose: a
+package only one platform resolves needs a wheel only there, and **`uvloop` publishes none for
+Windows at all**, which is fine because Windows never installs it. What is *not* fine is that
+`uvicorn[standard]` pulls it on Linux, so a check run here passes without ever looking at a package
+the ubuntu jobs do install — and the example is transitive rather than direct, which is why the rule
+has to say so.
+
+**`EEGResearch/requirements*.lock` are resolved on Windows, and uvloop's absence from them is how
+you can tell.** So installing them on Linux gives an environment `pyproject` would not — missing
+`uvloop` and anything else platform-gated. That is a live trap rather than a curiosity, because the
+obvious fix for the nested workflow below never running is to move it to the repository root, and
+that would run exactly this lock on ubuntu. **Regenerate them on the platform that will install
+them** — that is the whole of the available fix. A single lock covering both platforms is not one:
+`pip-compile` has no `--universal`, in 7.6.1 or any version, so that route is a toolchain change
+rather than a flag.
+One pre-existing gap: none has ever carried `setuptools`, so `import rppg`
 / `import heartpy` fail on a missing `pkg_resources` against a persistent venv. (`keras`/`jax` load fine once
 `KERAS_BACKEND` is set the way `rppg/models.py` already sets it at import.) The `open-rppg`
 measurements were always done in a throwaway `pip install --target ... "setuptools<81"` env.
@@ -294,7 +316,8 @@ integration's, not CI's, and is always skipped.)
 **`EEGResearch/.github/workflows/ci.yml` exists and has never run.** GitHub reads workflows only
 from the repository root's `.github/workflows/`, so a nested one is an ordinary file. It is the only
 thing that installs the `requirements*.lock` files, which is why they went stale without anything
-going red.
+going red. **Moving it to the root is not a one-line fix**: those locks are Windows-resolved, so it
+would install them on ubuntu — see *Three venvs* for what that costs and what to do first.
 
 ### The two scanners, and what they are allowed to be red about
 

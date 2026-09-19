@@ -12,9 +12,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 3.14, matching the three local venvs -- see CLAUDE.md's *Three venvs*.
+      # These four pins sat at 3.12 for a month after development moved, so CI
+      # was not testing the interpreter anyone runs. The minor, not the patch:
+      # setup-python fails outright on an exact version it cannot find, so
+      # pinning 3.14.7 would break every job the day the runner image moves to
+      # 3.14.8.
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Install EEGResearch (with dev deps)
         working-directory: EEGResearch
@@ -60,7 +66,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       # requirements-dev.txt, not requirements.txt: it pulls in the runtime
       # requirements via `-r` and adds pytest, which the test step below needs.
@@ -122,7 +128,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       # The parser first. A regex over SQL has two failure modes and both are
       # quiet: missing a real leak, and failing correct SQL so the next person
       # learns to ignore the job. The cases cover an unqualified CREATE (lands
@@ -270,7 +276,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Install pip-audit
         run: pip install pip-audit

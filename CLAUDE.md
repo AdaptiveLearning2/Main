@@ -277,8 +277,12 @@ evidence the app can import something: `anthropic` was in the root venv and abse
 imports it lazily, so not at boot. Install a new runtime dependency into `backend/.venv` in the
 same change that pins it.
 
-All three venvs are on Python 3.14.7; every direct dependency ships a `cp314`/`win_amd64` or
-version-agnostic wheel. One pre-existing gap: none has ever carried `setuptools`, so `import rppg`
+All three venvs are on Python 3.14.7, **and so is CI** — `ci.yml`'s four `setup-python` pins say
+`3.14`, the minor rather than the patch, because `setup-python` fails outright on an exact version
+the runner image does not have. They sat at 3.12 for a month after development moved, so CI was
+testing an interpreter nobody ran; keep them together. `EEGResearch/requirements*.lock` are
+generated under the same version, and its header records which one. Every direct dependency ships a
+`cp314`/`win_amd64` or version-agnostic wheel. One pre-existing gap: none has ever carried `setuptools`, so `import rppg`
 / `import heartpy` fail on a missing `pkg_resources` against a persistent venv. (`keras`/`jax` load fine once
 `KERAS_BACKEND` is set the way `rppg/models.py` already sets it at import.) The `open-rppg`
 measurements were always done in a throwaway `pip install --target ... "setuptools<81"` env.

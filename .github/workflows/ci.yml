@@ -275,27 +275,62 @@ jobs:
       - name: Install pip-audit
         run: pip install pip-audit
 
+      # Every audit step below is `continue-on-error` with an `id`, and the
+      # last step fails the job on any of them. Otherwise the first finding
+      # aborts the job and hides the rest -- which is the opposite of what a
+      # scanner is for, and is what happened here: a red lock-file audit meant
+      # the frontend was never evaluated at all.
+
+      # Its own virtualenv. Sharing one environment between this and the
+      # sidecar makes both readings wrong: pip leaves this file's
+      # `fastapi==0.141.1` in place against the sidecar's `fastapi>=0.115.0`,
+      # so the sidecar is audited at the backend's versions, and every
+      # backend-only package is then reported under the sidecar's heading.
+      #
       # The environment, not the file: requirements.txt pins direct
       # dependencies only, so auditing it alone would miss the transitive tree
       # -- which is where starlette, urllib3 and idna live.
       - name: Audit the website backend
+        id: audit-backend
+        continue-on-error: true
         working-directory: Website/AdaptiveLearning/backend
         run: |
-          pip install -r requirements-dev.txt
-          pip-audit
+          python -m venv .audit-venv
+          # The venv ships its own pip, which has advisories of its own and is
+          # not a dependency of this product -- unupgraded it is 12 findings
+          # under a heading that says "website backend", which is the kind of
+          # noise that gets a scanner ignored. Upgrading is the honest fix;
+          # excluding it by name would also hide a real pip advisory.
+          .audit-venv/bin/pip install --quiet --upgrade pip
+          .audit-venv/bin/pip install --quiet -r requirements-dev.txt
+          # Asked for, not spelled out: a hardcoded `lib/python3.12/...` breaks
+          # silently the day setup-python's version moves, and a pip-audit that
+          # finds nothing because it looked in an empty directory reads exactly
+          # like a clean audit.
+          pip-audit --path "$(.audit-venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
 
-      # Resolved from pyproject, exactly as the EEGResearch tests job installs
-      # it, so this audits the versions that job actually runs against.
+      # Resolved from pyproject into a clean environment, which is what makes
+      # this the versions the `EEGResearch tests` job runs against.
       - name: Audit the EEG sidecar
+        id: audit-sidecar
+        continue-on-error: true
         working-directory: EEGResearch
         run: |
-          pip install -e ".[dev]"
-          pip-audit
+          python -m venv .audit-venv
+          .audit-venv/bin/pip install --quiet --upgrade pip
+          .audit-venv/bin/pip install --quiet -e ".[dev]"
+          # `--skip-editable`: the sidecar itself is installed editable and is
+          # not on PyPI, so auditing it can only ever report that it could not
+          # be looked up.
+          pip-audit --skip-editable \
+            --path "$(.audit-venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
 
       # `--no-deps`, because the point of a lock file is that it already names
       # every version. Resolving it would audit what pip would pick today,
       # which is the question the two steps above already answer.
       - name: Audit the committed lock files
+        id: audit-locks
+        continue-on-error: true
         working-directory: EEGResearch
         run: |
           status=0
@@ -313,12 +348,43 @@ jobs:
           cache: "npm"
           cache-dependency-path: Website/AdaptiveLearning/frontend/package-lock.json
 
-      # `high` rather than every advisory: npm reports transitive dev-only
-      # findings in build tooling that never reaches a browser, and a job that
-      # is red for those is one nobody reads by the time a real one lands.
+      # `--omit=dev` is the gate, because dev-vs-prod is the axis that decides
+      # whether an advisory can reach a child's browser, and `--audit-level`
+      # alone does not express it: measured on this lockfile, 8 of the 11 high
+      # findings are build tooling and 3 ship. Gating on severity alone made
+      # the job red for eight things nobody can act on, which is how a security
+      # job becomes one nobody reads.
+      #
+      # The full audit still prints, so a dev-only advisory is visible to
+      # anyone who looks -- it just does not fail the build.
       - name: Audit the frontend
+        id: audit-frontend
+        continue-on-error: true
         working-directory: Website/AdaptiveLearning/frontend
-        run: npm audit --audit-level=high
+        run: |
+          echo "::group::every advisory, including dev-only build tooling"
+          npm audit || true
+          echo "::endgroup::"
+          npm audit --omit=dev --audit-level=high
+
+      # The gate. Named outcomes rather than a bare `failure()`, so the summary
+      # says which set is dirty without opening the log.
+      - name: Fail if any audit found something
+        if: always()
+        run: |
+          status=0
+          for pair in \
+            "website backend:${{ steps.audit-backend.outcome }}" \
+            "EEG sidecar:${{ steps.audit-sidecar.outcome }}" \
+            "committed lock files:${{ steps.audit-locks.outcome }}" \
+            "frontend (shipped deps):${{ steps.audit-frontend.outcome }}"; do
+            name="${pair%:*}"; outcome="${pair##*:}"
+            if [ "$outcome" != "success" ]; then
+              echo "::error::$name has known vulnerabilities"
+              status=1
+            fi
+          done
+          exit $status
 
   # Secrets that reached a commit. `.env` is gitignored and nothing is in-repo
   # today, which is the state this exists to keep.
@@ -338,12 +404,20 @@ jobs:
       # `GITLEAKS_LICENSE` for repositories owned by an organisation, and this
       # one is. The action would fail on a missing secret rather than on a
       # finding, which is the worst way for a security job to be red.
+      # Pinned by digest, not just by tag. A tag can be moved to a different
+      # artefact, and this job's own dependabot entry argues that a moving tag
+      # is a supply-chain path into CI -- fetching a tarball by tag and running
+      # it as root-installed without checking it would be that exact hole, in
+      # the change that names it. The digest is upstream's published checksum
+      # for this asset; bump both together.
       - name: Install gitleaks
         env:
           GITLEAKS_VERSION: "8.21.2"
+          GITLEAKS_SHA256: "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba"
         run: |
           curl -sSfL -o gitleaks.tar.gz \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum --check --strict
           tar -xzf gitleaks.tar.gz gitleaks
           sudo mv gitleaks /usr/local/bin/
 

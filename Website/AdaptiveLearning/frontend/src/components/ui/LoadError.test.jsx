@@ -101,6 +101,14 @@ describe('every LoadError call site is classified', () => {
     // which can. The stricter class applies to the file, and both pass `error`.
     'pages/teacher/Live.jsx':
       'GET /api/teacher/classes/{id}/live -- _verify_class_owner',
+    // Admin-gated rather than relationship-gated, but the same reachable 403:
+    // `_require_admin` refuses a signed-in non-admin, and `AdminGuard` is a UI
+    // convenience rather than the check. The page's *other* failure state --
+    // `retrieved: false` -- deliberately does not come through here, because
+    // that is a successful request whose read failed and LoadError would give
+    // it the generic unreachable-backend wording.
+    'pages/admin/SecurityEvents.jsx':
+      'GET /api/admin/security-events -- _require_admin',
   }
 
   // Exempt, and the reason is the point: two different reasons hide here, and

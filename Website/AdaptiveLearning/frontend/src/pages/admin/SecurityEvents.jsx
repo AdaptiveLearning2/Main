@@ -111,13 +111,20 @@ export default function AdminSecurityEvents() {
       </header>
 
       <div className="flex flex-wrap gap-2">
+        {/* The same selected/unselected pair `SeriesFilter` uses, and for the
+            reason its own comment gives: an inverted chip (`dark:bg-white`
+            with `dark:text-gray-900`) is correct on screen but fails the
+            contrast pairing check, which resolves a grey against the dark
+            surfaces the page paints rather than against a background set in
+            the same class string. Naming a grey on both sides keeps the check
+            able to do its arithmetic. */}
         <button
           onClick={() => setKind(null)}
           aria-pressed={kind === null}
-          className={`px-3 py-1.5 rounded-full text-xs font-bold border ${
+          className={`px-3 py-2.5 min-h-[44px] rounded-lg border text-xs font-bold ${
             kind === null
-              ? 'bg-gray-900 text-white border-gray-900 dark:bg-white dark:text-gray-900'
-              : 'border-gray-200 text-gray-600 dark:border-gray-800 dark:text-gray-400'}`}
+              ? 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100'
+              : 'border-gray-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800 text-gray-600 dark:text-gray-400'}`}
         >
           All
         </button>
@@ -126,10 +133,10 @@ export default function AdminSecurityEvents() {
             key={k}
             onClick={() => setKind(k)}
             aria-pressed={kind === k}
-            className={`px-3 py-1.5 rounded-full text-xs font-bold border ${
+            className={`px-3 py-2.5 min-h-[44px] rounded-lg border text-xs font-bold ${
               kind === k
-                ? 'bg-gray-900 text-white border-gray-900 dark:bg-white dark:text-gray-900'
-                : 'border-gray-200 text-gray-600 dark:border-gray-800 dark:text-gray-400'}`}
+                ? 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100'
+                : 'border-gray-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800 text-gray-600 dark:text-gray-400'}`}
           >
             {(KINDS[k] || UNKNOWN).label}
           </button>

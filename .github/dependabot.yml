@@ -9,12 +9,39 @@ version: 2
 # here is advisory -- a queue nobody reads is the same failure as a lint backlog
 # nobody burns down. `Dependency scan` in ci.yml is what makes an *urgent* one
 # visible without waiting for this schedule.
+#
+# ─── why everything below is grouped ──────────────────────────────────────
+#
+# Ungrouped, this config opened **fourteen** pull requests the moment it
+# merged -- it did not wait for the weekly schedule, because the first run
+# happens on the commit that adds the file. Fourteen is past the point where
+# anyone reads them, which is the same failure the paragraph above is about,
+# arriving by a different route.
+#
+# So: minor and patch updates are one pull request per ecosystem, and a
+# **major stays on its own**. That split is the whole design. A minor or patch
+# bump is the kind of thing worth taking in a batch on a green suite; a major
+# is a decision, and three of the fourteen were majors that should not be
+# rubber-stamped -- `tailwindcss` 3 -> 4 rewrites the config format, `@eslint/js`
+# 9 -> 10 can move the 14-error lint backlog whose *count* CLAUDE.md uses as a
+# check, and widening `opencv-contrib-python` past `<5` touches a cap whose
+# stated reason (`cv2.data.haarcascades`, the `CAP_PROP_*` constants) no test
+# covers.
+#
+# `github-actions` is the exception and groups its majors too. An action major
+# is usually a runner or Node version bump rather than a behaviour change, they
+# arrive for every action at once, and reviewing four of them together is
+# better than four PRs -- which is exactly what happened.
 updates:
   - package-ecosystem: pip
     directory: /Website/AdaptiveLearning/backend
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      backend-python:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   # Reads pyproject.toml. The four `.lock` files beside it are not managed by
   # Dependabot -- it does not regenerate pip-compile output, so a lock left
@@ -25,12 +52,20 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      sidecar-python:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: npm
     directory: /Website/AdaptiveLearning/frontend
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      frontend-npm:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   # A third-party action runs with access to the workflow's token, so a tag
   # that moves is a supply-chain path into CI.
@@ -38,3 +73,6 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]

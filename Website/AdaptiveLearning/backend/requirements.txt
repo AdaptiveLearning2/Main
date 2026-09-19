@@ -32,4 +32,4 @@ ollama==0.6.2
 # rebuild. Neither import runs until its branch is taken.
 anthropic==1.1.0
 sympy==1.14.0
-tzdata==2026.3
+tzdata==2026.4

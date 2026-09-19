@@ -295,19 +295,26 @@ jobs:
         continue-on-error: true
         working-directory: Website/AdaptiveLearning/backend
         run: |
-          python -m venv .audit-venv
+          # Outside the working tree. `.gitignore` covers `.venv` and `venv`
+          # and says it names those two deliberately, so a venv called anything
+          # else is untracked clutter the moment someone reproduces a red run
+          # locally -- and the reason those rules are unanchored in the first
+          # place is that a nested venv was once missed. Building it in the
+          # runner's temp directory means there is nothing to ignore.
+          venv="$(mktemp -d)/venv"
+          python -m venv "$venv"
           # The venv ships its own pip, which has advisories of its own and is
           # not a dependency of this product -- unupgraded it is 12 findings
           # under a heading that says "website backend", which is the kind of
           # noise that gets a scanner ignored. Upgrading is the honest fix;
           # excluding it by name would also hide a real pip advisory.
-          .audit-venv/bin/pip install --quiet --upgrade pip
-          .audit-venv/bin/pip install --quiet -r requirements-dev.txt
+          "$venv/bin/pip" install --quiet --upgrade pip
+          "$venv/bin/pip" install --quiet -r requirements-dev.txt
           # Asked for, not spelled out: a hardcoded `lib/python3.12/...` breaks
           # silently the day setup-python's version moves, and a pip-audit that
           # finds nothing because it looked in an empty directory reads exactly
           # like a clean audit.
-          pip-audit --path "$(.audit-venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+          pip-audit --path "$("$venv/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
 
       # Resolved from pyproject into a clean environment, which is what makes
       # this the versions the `EEGResearch tests` job runs against.
@@ -316,14 +323,15 @@ jobs:
         continue-on-error: true
         working-directory: EEGResearch
         run: |
-          python -m venv .audit-venv
-          .audit-venv/bin/pip install --quiet --upgrade pip
-          .audit-venv/bin/pip install --quiet -e ".[dev]"
+          venv="$(mktemp -d)/venv"
+          python -m venv "$venv"
+          "$venv/bin/pip" install --quiet --upgrade pip
+          "$venv/bin/pip" install --quiet -e ".[dev]"
           # `--skip-editable`: the sidecar itself is installed editable and is
           # not on PyPI, so auditing it can only ever report that it could not
           # be looked up.
           pip-audit --skip-editable \
-            --path "$(.audit-venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+            --path "$("$venv/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
 
       # `--no-deps`, because the point of a lock file is that it already names
       # every version. Resolving it would audit what pip would pick today,
@@ -369,14 +377,15 @@ jobs:
 
       # The gate. Named outcomes rather than a bare `failure()`, so the summary
       # says which set is dirty without opening the log.
-      # The gate. Three outcomes, not two: an audit that *ran and found
-      # something* and an audit that *never ran* both have to fail the job, and
-      # they are different facts. `!= success` collapses them, so a failed
+      #
+      # Three outcomes, not two: an audit that *ran and found something* and an
+      # audit that *never ran* both have to fail the job, and they are
+      # different facts. `!= success` collapses them, so a failed
       # `Install pip-audit` or a failed `setup-node` -- which skip the audits
       # below them -- would be annotated "has known vulnerabilities" about a
       # set nothing looked at. Failing closed is right; naming the wrong cause
       # on the one step whose whole job is to name the cause is not.
-      - name: Fail if any audit found something
+      - name: Fail if any audit found something, or did not run
         if: always()
         run: |
           status=0

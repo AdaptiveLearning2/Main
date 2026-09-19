@@ -1,0 +1,40 @@
+version: 2
+
+# Four ecosystems, because this repo installs from four places and they are
+# genuinely separate: the website backend pins direct dependencies, the sidecar
+# resolves from pyproject, the frontend has its own lockfile, and the workflows
+# pin third-party actions by tag.
+#
+# Weekly rather than daily. Dependabot opens a pull request per update, and CI
+# here is advisory -- a queue nobody reads is the same failure as a lint backlog
+# nobody burns down. `Dependency scan` in ci.yml is what makes an *urgent* one
+# visible without waiting for this schedule.
+updates:
+  - package-ecosystem: pip
+    directory: /Website/AdaptiveLearning/backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # Reads pyproject.toml. The four `.lock` files beside it are not managed by
+  # Dependabot -- it does not regenerate pip-compile output, so a lock left
+  # behind by a bump here stays stale silently. That is the reason
+  # `Dependency scan` audits the locks separately.
+  - package-ecosystem: pip
+    directory: /EEGResearch
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /Website/AdaptiveLearning/frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # A third-party action runs with access to the workflow's token, so a tag
+  # that moves is a supply-chain path into CI.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

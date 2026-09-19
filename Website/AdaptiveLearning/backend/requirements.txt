@@ -18,7 +18,7 @@
 # To upgrade: bump a pin, rebuild the venv, run `python -m pytest tests/`.
 
 fastapi==0.141.1
-uvicorn[standard]==0.52.4
+uvicorn[standard]==0.53.0
 python-dotenv==1.2.3
 supabase==2.31.0
 requests==2.34.2

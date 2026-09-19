@@ -285,11 +285,45 @@ measurements were always done in a throwaway `pip install --target ... "setuptoo
 
 ### The suites
 
-CI (`.github/workflows/ci.yml`) runs **six** jobs on PRs and pushes to `main`: `EEGResearch tests`,
+CI (`.github/workflows/ci.yml`) runs **eight** jobs on PRs and pushes to `main`: `EEGResearch tests`,
 `Native bridge build`, `Website backend tests`, `Database grants`, `Database migrations`,
-`Frontend tests, build & lint`. Counted by name, so a seventh on the PR page is new or undocumented
-rather than a stale number. (The `Supabase Preview` check is the integration's, not CI's, and is
-always skipped.)
+`Frontend tests, build & lint`, `Dependency scan`, `Secret scan`. Counted by name, so a ninth on the
+PR page is new or undocumented rather than a stale number. (The `Supabase Preview` check is the
+integration's, not CI's, and is always skipped.)
+
+**`EEGResearch/.github/workflows/ci.yml` exists and has never run.** GitHub reads workflows only
+from the repository root's `.github/workflows/`, so a nested one is an ordinary file. It is the only
+thing that installs the `requirements*.lock` files, which is why they went stale without anything
+going red.
+
+### The two scanners, and what they are allowed to be red about
+
+**`Dependency scan` is blocking, unlike lint.** A CVE is not a style backlog to burn down: every
+step names the advisory and the fixed version, so a red run says what to do. Tuning the threshold
+until it passes is tuning the detector to the disease.
+
+It audits **three Python sets, because they are three different installs** — the backend's pinned
+`requirements-dev.txt`, the sidecar's `pyproject`, and the four committed `.lock` files. The first
+two are audited *as installed*, not as files: `requirements.txt` pins direct dependencies only, so
+auditing the file alone would miss the transitive tree, which is where `starlette`, `idna` and
+`urllib3` live. The locks are audited `--no-deps`, since the point of a lock is that it already
+names every version.
+
+`npm audit` runs at `--audit-level=high`: npm reports transitive dev-only findings in build tooling
+that never reaches a browser, and a job red for those is one nobody reads by the time a real one
+lands. **Check `--omit=dev` before judging severity** — that is what separates a shipped advisory
+from one in a bundler.
+
+**`Secret scan` runs `gitleaks` over the whole history**, not the diff: a key committed and then
+removed is still leaked, because the commit is what GitHub serves. It installs the pinned binary
+rather than `gitleaks/gitleaks-action`, which requires a `GITLEAKS_LICENSE` for org-owned
+repositories — the action would go red on a missing secret rather than on a finding, which is the
+worst way for a security job to fail. `--redact`, so a finding does not reprint the secret into a
+build log and leak it to a wider audience than the commit did.
+
+**`dependabot.yml` covers four ecosystems** and deliberately does **not** manage the `.lock` files:
+Dependabot does not regenerate `pip-compile` output, so a lock left behind by a bump it opens stays
+stale silently. That is why the scan audits the locks separately.
 
 Locally, **all three from the repo root**, each under its own venv and with the env it needs:
 

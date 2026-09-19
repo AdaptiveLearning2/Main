@@ -369,6 +369,13 @@ jobs:
 
       # The gate. Named outcomes rather than a bare `failure()`, so the summary
       # says which set is dirty without opening the log.
+      # The gate. Three outcomes, not two: an audit that *ran and found
+      # something* and an audit that *never ran* both have to fail the job, and
+      # they are different facts. `!= success` collapses them, so a failed
+      # `Install pip-audit` or a failed `setup-node` -- which skip the audits
+      # below them -- would be annotated "has known vulnerabilities" about a
+      # set nothing looked at. Failing closed is right; naming the wrong cause
+      # on the one step whose whole job is to name the cause is not.
       - name: Fail if any audit found something
         if: always()
         run: |
@@ -379,10 +386,21 @@ jobs:
             "committed lock files:${{ steps.audit-locks.outcome }}" \
             "frontend (shipped deps):${{ steps.audit-frontend.outcome }}"; do
             name="${pair%:*}"; outcome="${pair##*:}"
-            if [ "$outcome" != "success" ]; then
-              echo "::error::$name has known vulnerabilities"
-              status=1
-            fi
+            case "$outcome" in
+              success)
+                ;;
+              failure)
+                echo "::error::$name has known vulnerabilities"
+                status=1
+                ;;
+              *)
+                # skipped, cancelled, or an empty string if the id ever stops
+                # matching a step -- that last one is why this is the default
+                # arm rather than a list of the two known values.
+                echo "::error::$name was not audited (step outcome: ${outcome:-none}); this is a broken job, not a clean result"
+                status=1
+                ;;
+            esac
           done
           exit $status
 

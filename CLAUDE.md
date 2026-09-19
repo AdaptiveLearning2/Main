@@ -746,12 +746,12 @@ hosting question is settled.
 
 **The service-role client bypasses column grants as well as RLS, so a migration that revokes a column's
 UPDATE does not reach any statement in `main.py`.** `20260824010000` takes `profiles.role` away from
-`anon`/`authenticated`, which constrains PostgREST and nothing here. `update_my_profile` and
-`update_class` built their update out of `payload.dict()` wholesale, so the only thing keeping a
-posted `role` out of the column was that the model happened not to declare the field — true, and one
-field away from being false. Both now name their columns. **Build a database update from named
-attributes, never from the payload as a dict**, wherever the table holds a column the caller must not
-set: `profiles.role`, `classes.teacher_id`, `classes.join_code`.
+`anon`/`authenticated`, which constrains PostgREST and nothing here. So **build a database update
+from named attributes, never from the payload as a dict**, wherever the table holds a column the
+caller must not set: `profiles.role`, `classes.teacher_id`, `classes.join_code`. The named columns
+in `update_my_profile` and `update_class` are what keep a posted `role` out of that column; a
+`payload.dict()` write leaves the job to the model happening not to declare the field, which is one
+edit away from a self-service role change.
 
 **A test of that has to hand the handler more than the model declares.** Against today's model a
 named-column write and `payload.dict()` produce identical keys, so a test using the real model passes

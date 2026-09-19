@@ -5,21 +5,23 @@ one question. A model decides which keys survive parsing; a handler decides
 which columns a write touches. Getting only the first right is what made this
 worth doing:
 
-`update_my_profile` and `update_class` built their database update out of
-`payload.dict()` wholesale. Both write through the **service-role** client,
-which bypasses RLS *and* the column grants `20260824010000` revoked from
-`anon`/`authenticated` -- so the migration that makes `profiles.role`
-non-client-writable does not reach those statements. The only thing stopping a
-posted `role` from landing in the column was that the model happened not to
-declare the field. True today, and one field away from being false.
+`update_my_profile` and `update_class` name the columns they write, and that is
+what keeps a posted `role` out of `profiles.role`. It has to be: both write
+through the **service-role** client, which bypasses RLS *and* the column grants
+`20260824010000` revoked from `anon`/`authenticated`, so the migration that
+makes `role` non-client-writable does not reach either statement. They used to
+build the update out of `payload.dict()` wholesale, which left that job to the
+model happening not to declare the field.
 
 So the tests here are of two kinds, and the second kind is the one with teeth:
 
 - that the models refuse what they do not declare, and bound their free text;
 - that the handlers write named columns *even when handed a payload carrying
-  more than they declare* -- which is the future state the model guard exists
-  to prevent, simulated, because a test against today's model cannot tell a
-  named-column write from `payload.dict()`. Both produce the same five keys.
+  more than they declare* -- which is the state the model guard exists to
+  prevent, simulated, because a test against today's model cannot tell a
+  named-column write from `payload.dict()`: both produce exactly the fields the
+  model declares, five for `UpdateProfileRequest` and two for
+  `UpdateClassRequest`.
 """
 
 import os

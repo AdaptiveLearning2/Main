@@ -1221,6 +1221,37 @@ other test file, and **deliberately does not take `monkeypatch`** — requesting
 pytest orders early hoists `monkeypatch`'s setup ahead of `_join_poller_threads` and inverts their
 teardown, which failed three unrelated tests in teardown for a reason nothing in their bodies could
 explain. `pytest --setup-plan` shows the ordering directly.
+
+### The security log records that something happened, never what was in it
+
+`security_events` is append-only, written by `_record_security_event` from the two `_verify_*` helpers and
+`_session_or_403`, `_require_admin`, the three rate limiters and the consent write. Read at
+`GET /api/admin/security-events`, rendered by `pages/admin/SecurityEvents.jsx`.
+
+**Never a reading, a request body or an IP.** `detail` is context — which check failed, which limiter
+fired — and the values live in the tables that own them. An IP would be new personal data about children
+for a purpose no consent channel covers, and behind a proxy it is whatever `X-Forwarded-For` says.
+`test_security_events.py` reads the call sites and fails on any of those being passed: this is the
+property that cannot be walked back once rows exist. Every kind stays checkable without interpreting a
+person, the rule `session_alerts` holds, and the CHECK whitelist and `_SECURITY_EVENT_KINDS` are pinned
+equal **both ways** — a kind in code alone is a constraint violation the never-raises path swallows, and
+one in the schema alone is a filter that can only return nothing.
+
+**Record outside the limiters' locks**, or every caller queues behind a database round trip — worst on
+ingest, the most contended of the three. `rate_limited` is cooled per caller (300 s) because a limiter
+fires once per *request* past the allowance; denials are not, since deduplicating them would hide a caller
+probing a series of different students.
+
+**The audit must not break what it audits.** It never raises, like `_raise_session_alerts`, and
+`_require_admin` — the one hook reaching into the request object — reads `.url.path` defensively.
+
+**Retention is a rolling 180 days on its own `pg_cron` job**, deliberately not `expired_signal_cutoff()`:
+that would delete the record of who read a child's signals at the moment those signals expire, and no
+bound at all would leave an unbounded log of which adult opened which child's record.
+
+**`LoadError` is for a request that *failed*, and ignores a message you pass it** — it derives its
+sentence from `error.status`. A `retrieved: false` payload is a successful request whose read failed, so
+it needs its own wording; on this page "could not be read" and "is empty" must never share a rendering.
 ---
 
 # Reporting and UI

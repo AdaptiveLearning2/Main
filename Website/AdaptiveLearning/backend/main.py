@@ -381,6 +381,69 @@ def _unique_ids(values) -> list:
     return [v for v in dict.fromkeys(values) if v]
 
 
+# ─── the security log ────────────────────────────────────────────────────
+
+# How long before the same (kind, actor) is worth another row. Only the
+# high-frequency kinds consult it.
+#
+# A rate limiter fires once per *request* past the allowance, so a client
+# hammering an endpoint would write a row per refused request -- adding a
+# database write to the path that exists because the caller is already sending
+# too much, which is the one moment to add least. One row every few minutes
+# says the same thing: this caller is over the limit, and has been since then.
+_SECURITY_EVENT_COOLDOWN_SEC = _env_number(
+    "SECURITY_EVENT_COOLDOWN_SECONDS", 300, float, minimum=0)
+_COOLED_KINDS = {"rate_limited"}
+
+_security_event_seen: dict[tuple, float] = {}
+_security_event_lock = threading.Lock()
+
+
+def _record_security_event(kind: str, actor_user_id: str | None,
+                           subject_user_id: str | None = None,
+                           **detail) -> None:
+    """Append one row to `security_events`. Never raises.
+
+    Never raises for the reason `_raise_session_alerts` does not: every caller
+    is on a path that has already decided its answer -- a 403 is being returned,
+    a 429 is being returned, a consent write has landed -- and an audit row that
+    could not be filed must not turn that into a 500. The log line is the only
+    place such a failure surfaces, so it says which kind was lost.
+
+    **`detail` is context, never content.** No readings, no request bodies, no
+    IP addresses; the migration header has the full reasoning. Values are
+    stringified and truncated here rather than trusted, because some callers
+    pass a path or an endpoint name that ultimately came from a client.
+    """
+    if kind in _COOLED_KINDS and _SECURITY_EVENT_COOLDOWN_SEC > 0:
+        key = (kind, actor_user_id)
+        now = time.monotonic()
+        with _security_event_lock:
+            last = _security_event_seen.get(key)
+            if last is not None and now - last < _SECURITY_EVENT_COOLDOWN_SEC:
+                return
+            _security_event_seen[key] = now
+            # Bounded, or a sweep of distinct callers grows this for the life
+            # of the process. Dropping the oldest costs at worst one extra row
+            # for a caller whose cooldown had nearly expired anyway.
+            if len(_security_event_seen) > 4096:
+                for stale in sorted(_security_event_seen,
+                                    key=_security_event_seen.get)[:1024]:
+                    del _security_event_seen[stale]
+
+    try:
+        supabase.table("security_events").insert({
+            "kind": kind,
+            "actor_user_id": actor_user_id,
+            "subject_user_id": subject_user_id,
+            "detail": {k: str(v)[:200] for k, v in detail.items() if v is not None},
+        }).execute()
+    except Exception as e:                                     # noqa: BLE001
+        # Named, because this branch has no other trace: a security event that
+        # was not recorded is indistinguishable from one that never happened.
+        print(f"[security] could not record {kind}: {e}")
+
+
 def _group_by_user(rows) -> dict[str, list]:
     """Rows bucketed by `user_id`, order within a bucket preserved.
 
@@ -4255,14 +4318,23 @@ def _rate_limit_strategies(user_id: str):
             _strategy_hits[user_id] = hits
             # Measured from the oldest hit still counted -- that is the one
             # whose expiry frees a slot.
-            retry_after = max(1, int(_STRATEGY_RATE_WINDOW - (now - min(hits))) + 1)
-            raise HTTPException(
-                429,
-                "Too many strategy requests. Try again shortly.",
-                headers={"Retry-After": str(retry_after)},
-            )
-        hits.append(now)
-        _strategy_hits[user_id] = hits
+            refused_after = max(1, int(_STRATEGY_RATE_WINDOW - (now - min(hits))) + 1)
+        else:
+            refused_after = None
+            hits.append(now)
+            _strategy_hits[user_id] = hits
+
+    # Outside the lock, and that is the point of the restructure: recording the
+    # event writes to the database, and doing it while holding this lock would
+    # serialise every other caller of this limiter behind a network round trip
+    # -- worst at exactly the moment the limiter is firing.
+    if refused_after is not None:
+        _record_security_event("rate_limited", user_id, limiter="strategies")
+        raise HTTPException(
+            429,
+            "Too many strategy requests. Try again shortly.",
+            headers={"Retry-After": str(refused_after)},
+        )
 
 _STRATEGY_COUNT = 5
 _STRATEGY_MAX_CHARS = 320
@@ -4849,14 +4921,20 @@ def _rate_limit_chart_summary(user_id: str):
                 if now - t < _CHART_SUMMARY_RATE_WINDOW]
         if len(hits) >= _CHART_SUMMARY_RATE_LIMIT:
             _chart_summary_hits[user_id] = hits
-            retry_after = max(1, int(_CHART_SUMMARY_RATE_WINDOW - (now - min(hits))) + 1)
-            raise HTTPException(
-                429,
-                "Too many summary requests. Try again shortly.",
-                headers={"Retry-After": str(retry_after)},
-            )
-        hits.append(now)
-        _chart_summary_hits[user_id] = hits
+            refused_after = max(1, int(_CHART_SUMMARY_RATE_WINDOW - (now - min(hits))) + 1)
+        else:
+            refused_after = None
+            hits.append(now)
+            _chart_summary_hits[user_id] = hits
+
+    # Recorded outside the lock -- see `_rate_limit_strategies`.
+    if refused_after is not None:
+        _record_security_event("rate_limited", user_id, limiter="chart_summary")
+        raise HTTPException(
+            429,
+            "Too many summary requests. Try again shortly.",
+            headers={"Retry-After": str(refused_after)},
+        )
 
 
 # A week-over-week move smaller than this is "steady". On the 0..1 ratios the
@@ -5669,6 +5747,12 @@ def _verify_class_owner(class_id: str, user_id: str):
     cls = _row_or_404(
         supabase.table("classes").select("teacher_id").eq("id", class_id), "Class")
     if cls["teacher_id"] != user_id:
+        # Recorded in the helper rather than at each endpoint, for the reason
+        # the helper exists at all: re-deriving the rule per endpoint is how
+        # the original `class_live` guard drifted, and re-deriving the *audit*
+        # per endpoint would leave the same gaps in a different file.
+        _record_security_event("authz_denied", user_id,
+                               check="class_owner", class_id=class_id)
         raise HTTPException(403, "Not your class")
 
 
@@ -5717,6 +5801,11 @@ def _can_view_student(viewer: dict, student_id: str) -> bool:
 
 def _verify_can_view_student(viewer: dict, student_id: str):
     if not _can_view_student(viewer, student_id):
+        # `subject_user_id` is the point of this one: the question an admin
+        # asks is "who tried to read this child's record", and an actor-only
+        # row cannot answer it.
+        _record_security_event("authz_denied", viewer.get("id"), student_id,
+                               check="can_view_student")
         raise HTTPException(403, "You do not have access to this student")
 
 
@@ -6999,6 +7088,20 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
 
     _record_withdrawals(student_id, withdrawn, user["id"], now)
 
+    # After the conditional update is confirmed, for the same reason
+    # `_record_withdrawals` is: a lost race must not leave an audit row for a
+    # change that did not land.
+    #
+    # The channel *names* and the direction, never the resulting flags. Those
+    # live in `signal_consent`, which is the authority and is already readable
+    # by the consent screen -- duplicating them here would create a second
+    # answer to "what is this student's consent" that can drift from the first.
+    _record_security_event(
+        "consent_changed", user["id"], student_id,
+        actor_role=actor,
+        withdrew=",".join(withdrawn) or None,
+        re_enabled=re_enabled or None)
+
     return _shape_consent(_consent(student_id), student_id, _erasures(student_id))
 
 
@@ -7289,11 +7392,19 @@ def _rate_limit_ingest(user_id: str):
                 if now - t < _INGEST_RATE_WINDOW]
         if len(hits) >= _INGEST_RATE_LIMIT:
             _ingest_hits[user_id] = hits
-            retry_after = max(1, int(_INGEST_RATE_WINDOW - (now - min(hits))) + 1)
-            raise HTTPException(429, "Too many ingest batches. Slow down.",
-                                headers={"Retry-After": str(retry_after)})
-        hits.append(now)
-        _ingest_hits[user_id] = hits
+            refused_after = max(1, int(_INGEST_RATE_WINDOW - (now - min(hits))) + 1)
+        else:
+            refused_after = None
+            hits.append(now)
+            _ingest_hits[user_id] = hits
+
+    # Recorded outside the lock -- see `_rate_limit_strategies`. This is the
+    # limiter where it matters most: ingest runs at ~1 Hz per student, so this
+    # lock is the most contended of the three.
+    if refused_after is not None:
+        _record_security_event("rate_limited", user_id, limiter="ingest")
+        raise HTTPException(429, "Too many ingest batches. Slow down.",
+                            headers={"Retry-After": str(refused_after)})
 
 
 def _permitted_heart_sources(gate: dict) -> set[str]:
@@ -7356,6 +7467,8 @@ def _session_or_403(session_id: str, user_id: str, columns: str = "user_id") -> 
         supabase.table("sessions").select(columns).eq("id", session_id),
         "Session")
     if row.get("user_id") != user_id:
+        _record_security_event("authz_denied", user_id, row.get("user_id"),
+                               check="session_owner", session_id=session_id)
         raise HTTPException(403, "Not your session")
     return row
 
@@ -8551,6 +8664,19 @@ def _require_admin(request: Request) -> dict:
     """
     user = get_user(request)
     if not _is_admin(user["id"]):
+        # Its own kind rather than `authz_denied`: every other denial is a
+        # relationship that legitimately does not exist, where this one is
+        # someone reaching for the console. Collapsed together, it would be
+        # four rows deep in a list of ordinary refusals.
+        # Defensively read: the audit must not be able to break the refusal it
+        # is auditing, and this is the one hook that reaches into the request
+        # object rather than taking what its caller already resolved. A caller
+        # holding something without `.url` -- a test double, a future internal
+        # caller -- should lose the path, not get an AttributeError instead of
+        # its 403.
+        _record_security_event(
+            "admin_denied", user["id"],
+            path=getattr(getattr(request, "url", None), "path", None))
         raise HTTPException(403, "Admin access required")
     return user
 
@@ -9050,6 +9176,78 @@ def admin_health(request: Request):
     })
 
     return {"checks": checks}
+
+
+_SECURITY_EVENT_KINDS = (
+    "authz_denied", "admin_denied", "rate_limited", "consent_changed")
+_SECURITY_EVENTS_MAX = 200
+
+
+@app.get("/api/admin/security-events")
+def admin_security_events(request: Request, kind: str | None = None,
+                          limit: int = 50):
+    """The security log, newest first, optionally narrowed to one kind.
+
+    Names are resolved through `_profiles_many` rather than returned as bare
+    uuids, for the reason the session review does not render question ids: a
+    uuid is true and unusable, and an admin reading "who tried to open this
+    child's record" cannot act on one.
+
+    That is a real widening of what an admin sees, and it is the narrowest
+    version of it: display names for the two ids already on the row, and
+    nothing else about either person. `/api/admin/live-signals` selects `ts`
+    alone for the same reason -- ask for the least that answers the question.
+    """
+    _require_admin(request)
+
+    if kind is not None and kind not in _SECURITY_EVENT_KINDS:
+        # Named rather than silently ignored: a filter that matches nothing
+        # renders as "no events", which is the one answer this page must not
+        # give wrongly.
+        raise HTTPException(422, f"Unknown kind; expected one of {', '.join(_SECURITY_EVENT_KINDS)}")
+
+    # Clamped like every other caller-supplied range here, rather than bounded
+    # on the model -- see CLAUDE.md on `days`/`weeks`.
+    limit = max(1, min(limit, _SECURITY_EVENTS_MAX))
+
+    try:
+        q = supabase.table("security_events") \
+            .select("id, kind, actor_user_id, subject_user_id, detail, created_at") \
+            .order("created_at", desc=True).limit(limit)
+        if kind:
+            q = q.eq("kind", kind)
+        rows = q.execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[admin:security_events] {e}")
+        # Three states, not two: an empty list from a failed read would say
+        # "nothing has happened", which on this surface is the worst available
+        # wrong answer.
+        return {"retrieved": False, "events": [], "kinds": list(_SECURITY_EVENT_KINDS)}
+
+    names = _profiles_many(
+        _unique_ids([r.get("actor_user_id") for r in rows]
+                    + [r.get("subject_user_id") for r in rows]))
+
+    def _who(uid):
+        if not uid:
+            return None
+        # The id stays on the row: a display name is for reading, the id is
+        # what an admin needs to look the account up.
+        return {"id": uid,
+                "name": (names.get(uid) or {}).get("display_name") or "Unknown"}
+
+    return {
+        "retrieved": True,
+        "kinds": list(_SECURITY_EVENT_KINDS),
+        "events": [{
+            "id": r["id"],
+            "kind": r["kind"],
+            "actor": _who(r.get("actor_user_id")),
+            "subject": _who(r.get("subject_user_id")),
+            "detail": r.get("detail") or {},
+            "created_at": r["created_at"],
+        } for r in rows],
+    }
 
 
 @app.get("/api/admin/consent-summary")

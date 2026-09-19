@@ -146,6 +146,7 @@ ADMIN_GETS = [
     ("admin_student_search", lambda r: main.admin_student_search(r, q="ada")),
     ("admin_flag_history",
      lambda r: main.admin_flag_history("strategy_llm_enabled", r)),
+    ("admin_security_events", lambda r: main.admin_security_events(r)),
 ]
 
 

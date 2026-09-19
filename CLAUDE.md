@@ -281,8 +281,16 @@ All three venvs are on Python 3.14.7, **and so is CI** — `ci.yml`'s four `setu
 `3.14`, the minor rather than the patch, because `setup-python` fails outright on an exact version
 the runner image does not have. They sat at 3.12 for a month after development moved, so CI was
 testing an interpreter nobody ran; keep them together. `EEGResearch/requirements*.lock` are
-generated under the same version, and its header records which one. Every direct dependency ships a
-`cp314`/`win_amd64` or version-agnostic wheel. One pre-existing gap: none has ever carried `setuptools`, so `import rppg`
+generated under the same version, and its header records which one.
+
+**Check the wheels on both platforms, not just this one.** Every direct dependency ships a `cp314`
+wheel for `win_amd64` *and* `manylinux_x86_64`, or is version-agnostic — and the second half is the
+one a developer cannot see, because CI is ubuntu and the venvs are Windows. `uvicorn[standard]`
+pulls `uvloop` on Linux and **`uvloop` publishes no Windows wheel at all**, so a check run here
+passes without ever looking at a package the ubuntu jobs install. Its absence from
+`EEGResearch/requirements*.lock` is also how you can tell those were resolved on Windows: they are
+platform-specific, which is survivable only because nothing installs them (see *The two scanners*).
+One pre-existing gap: none has ever carried `setuptools`, so `import rppg`
 / `import heartpy` fail on a missing `pkg_resources` against a persistent venv. (`keras`/`jax` load fine once
 `KERAS_BACKEND` is set the way `rppg/models.py` already sets it at import.) The `open-rppg`
 measurements were always done in a throwaway `pip install --target ... "setuptools<81"` env.

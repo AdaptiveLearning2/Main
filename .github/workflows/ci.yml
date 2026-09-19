@@ -168,7 +168,7 @@ jobs:
       # different bundled Postgres image -- than anyone uses locally, and an
       # unrelated CLI release can turn it red on a PR that touched no SQL.
       # Bump this and the package.json range together.
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@v3
         with:
           version: 2.108.0
 

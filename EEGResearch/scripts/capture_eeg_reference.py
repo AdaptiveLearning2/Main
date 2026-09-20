@@ -303,12 +303,43 @@ class SlopeMonitor:
             return None
         return sum(slopes) / len(slopes) if slopes else None
 
+    def _filled(self) -> dict[str, int]:
+        """Buffered samples per temporal channel, for telling a window that
+        is still filling from one a channel has stopped feeding."""
+        return {c: len(buf) for c, buf in self._buf.items()} if self._deps else {}
+
     def line(self) -> str | None:
-        """One line for the progress output, or None if there is nothing to
-        say yet."""
-        s = self.slope()
-        if s is None:
-            return None
+        """One line for the progress output, or None only while the window is
+        still filling — the one state with nothing to say.
+
+        **A slope that cannot be computed gets its own line rather than
+        silence.** Returning None for both left a starved temporal electrode
+        looking exactly like the opening seconds of a recording: frame counts
+        ticking and no slope, which is the experience this class exists to
+        end. It bites hardest here because calm is an alpha residual at the
+        temporal pair, so a dead or badly seated temporal contact is both the
+        likeliest way to ruin a capture and the way to silence the check.
+        `_load()` already speaks up when the imports fail; this is the
+        per-read failure, which had no voice.
+        """
+        counts = self._filled()
+        if counts:
+            need = int(self.window_seconds * (self._fs or 256.0))
+            # The fullest channel decides: below the window everywhere is an
+            # ordinary start, while one channel short of a full neighbour is
+            # a channel that has stopped delivering.
+            if max(counts.values()) < need:
+                return None
+            s = self.slope()
+            if s is None:
+                short = [f"{c} {n}/{need}" for c, n in sorted(counts.items()) if n < need]
+                why = ", ".join(short) if short else "the fit did not resolve"
+                return (f"  cannot read the slope -- {why}. A temporal contact that stops "
+                        "delivering silences this check; re-seat it before recording.")
+        else:
+            s = self.slope()
+            if s is None:
+                return None
         if s > self.warn_above:
             return (f"  slope {s:+.2f} -- FLAT: broadband power, most likely muscle. "
                     "Check the strap is above the temple muscle and the jaw is loose. "
@@ -608,7 +639,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="warn while recording if the temporal 1/f slope is shallower "
                          "than this (bridge source only); broadband muscle flattens it")
     ap.add_argument("--no-slope-check", action="store_true",
-                    help="do not report the 1/f slope while recording")
+                    help="do not report the 1/f slope while recording (bridge source only)")
     return ap
 
 

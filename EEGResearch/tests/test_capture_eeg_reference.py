@@ -268,3 +268,52 @@ def test_the_slope_check_is_on_by_default_and_can_be_turned_off():
     assert ap.parse_args(["--out", "x"]).no_slope_check is False
     assert ap.parse_args(["--out", "x"]).slope_warn == -1.0
     assert ap.parse_args(["--out", "x", "--no-slope-check"]).no_slope_check is True
+
+
+def _feed_one(monitor, series, channel):
+    """Only one temporal channel delivers -- a dead or lifted contact."""
+    for v in series:
+        monitor.push({channel: float(v)})
+
+
+def test_a_starved_temporal_channel_says_so_rather_than_going_quiet():
+    """The state the monitor exists for: calm is an alpha residual at the
+    temporal pair, so a contact that stops delivering both ruins the capture
+    and silences the check. Returning None for it looked exactly like the
+    opening seconds of a recording -- frame counts ticking, no slope."""
+    m = capture.SlopeMonitor(window_seconds=4.0)
+    _feed_one(m, _white(3 * 4 * 256), "tp9")
+    assert m.slope() is None, "one channel cannot give a pair slope"
+    line = m.line()
+    assert line is not None, "a starved channel must not be silent"
+    assert "cannot read the slope" in line and "tp10" in line
+
+
+def test_a_channel_delivering_nothing_usable_is_the_same_state():
+    """A contact present but sending None reaches the same place as one
+    sending nothing at all, and must say so the same way."""
+    m = capture.SlopeMonitor(window_seconds=4.0)
+    for v in _white(4 * 256):
+        m.push({"tp9": float(v), "tp10": None})
+    assert "cannot read the slope" in (m.line() or "")
+
+
+def test_a_window_that_cannot_be_fit_is_reported_not_swallowed():
+    """Both channels full, nothing finite in them: the fit resolves to
+    nothing and the operator is told, rather than reading silence as fine."""
+    m = capture.SlopeMonitor(window_seconds=4.0)
+    nan = [float("nan")] * (4 * 256)
+    _feed(m, nan)
+    assert m.slope() is None
+    assert "cannot read the slope" in (m.line() or "")
+
+
+def test_a_filling_window_stays_silent_and_a_starved_one_does_not():
+    """The two states this split exists to separate, asserted together so
+    neither drifts into the other's branch."""
+    filling = capture.SlopeMonitor(window_seconds=4.0)
+    _feed(filling, _white(256))
+    assert filling.line() is None, "an ordinary start has nothing to say"
+    starved = capture.SlopeMonitor(window_seconds=4.0)
+    _feed_one(starved, _white(4 * 256), "tp9")
+    assert starved.line() is not None

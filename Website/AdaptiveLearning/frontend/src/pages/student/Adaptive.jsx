@@ -1482,6 +1482,13 @@ export default function Adaptive() {
                       : push?.recorded
                         ? `${Object.values(push.recorded).reduce((a, b) => a + b, 0)} readings recorded from this computer.`
                         : 'Turn on your Muse S headband, then click Connect. It pairs through the app on this computer.')
+                  // Ahead of `available`, which is deliberately stale through a
+                  // refusal: both sentences below are claims the check has not
+                  // earned, and the second is the worse of the two -- it names
+                  // a layer and a port, which sends a student to restart a
+                  // backend that answered fine.
+                  : headband.probeRefused
+                  ? 'Could not check the EEG service just now. That says nothing about your headband — the check runs again on its own.'
                   : headband.available
                   ? 'EEG service ready. Turn on your Muse S headband then click Connect.'
                   : 'EEG service not reachable on port 8001. Make sure the EEGResearch backend is running.'

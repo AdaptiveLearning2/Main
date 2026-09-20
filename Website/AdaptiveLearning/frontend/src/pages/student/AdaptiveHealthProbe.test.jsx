@@ -61,6 +61,17 @@ it('says the check failed, not that the headband is offline', async () => {
   // The word this replaces. "offline" is a claim about the headband, and a
   // refused probe has not earned it.
   expect(screen.queryByText('offline')).not.toBeInTheDocument()
+
+  // The sentence under the badge, which is a second copy of the same claim and
+  // needs a query that can see it: the badge assertions above match whole text
+  // nodes of two words, so they read as covering this panel while saying
+  // nothing about the paragraph beside them.
+  const sentence = await screen.findByText(/EEG service/)
+  expect(sentence).toHaveTextContent(/Could not check/)
+  // Worse than the badge it replaced: naming a layer and a port sends a
+  // student to restart a backend that answered perfectly well.
+  expect(sentence).not.toHaveTextContent(/port 8001/)
+  expect(sentence).not.toHaveTextContent(/backend is running/)
 })
 
 it('goes on acting on the last answer without claiming it is current', async () => {
@@ -93,13 +104,20 @@ it('goes on acting on the last answer without claiming it is current', async () 
   expect(screen.getByText('status unavailable')).toBeInTheDocument()
   expect(screen.queryByText('ready')).not.toBeInTheDocument()
   expect(screen.queryByText('offline')).not.toBeInTheDocument()
+  // The sentence has to follow the badge. This is the state where it read
+  // "EEG service ready" -- the suppressed claim verbatim, and stronger for
+  // being a sentence rather than a two-word chip.
+  expect(screen.getByText(/EEG service/)).toHaveTextContent(/Could not check/)
 }, 25000)
 
 it('still reports a sidecar that genuinely did not answer', async () => {
   // The other half: this must not have turned every failure into "unknown".
+  // A probe that ran and found nothing there has earned both the badge and the
+  // sentence, port and all -- that one really is an unreachable backend.
   eegHealth.mockResolvedValue({ available: false, error: 'Failed to fetch' })
   render(<Adaptive />)
 
   expect(await screen.findByText('offline')).toBeInTheDocument()
   expect(screen.queryByText('status unavailable')).not.toBeInTheDocument()
+  expect(screen.getByText(/EEG service/)).toHaveTextContent(/not reachable on port 8001/)
 })

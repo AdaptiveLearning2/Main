@@ -19,6 +19,18 @@ const QUESTION = {
   difficulty: 'easy',
 }
 
+// **The bank has two rows so that a test can be wrong about which one.** With
+// one, "the row that opened the modal" and "the first `<button>` on the page"
+// are the same element, and the focus-restore test below cannot tell them
+// apart -- mutation found exactly that. Nothing here counts rows: the cache
+// test counts *calls* on the bank path, and the filter tests assert on the
+// text of a named question.
+const SECOND_QUESTION = {
+  ...QUESTION,
+  id: 'q-2',
+  question_text: 'What is 9 x 6?',
+}
+
 beforeEach(() => {
   resetApi()
   // The question-bank cache is module-level state shared with Analytics.jsx,
@@ -26,7 +38,7 @@ beforeEach(() => {
   // a still-fresh entry left behind by an earlier one.
   _resetForTests()
   mockApi({
-    '/api/questions?limit=1000': () => [QUESTION],
+    '/api/questions?limit=1000': () => [QUESTION, SECOND_QUESTION],
     // Fetched on mount for the student filter. Registered here rather
     // than per test because the router double throws on an unrouted
     // path -- which is what stops a gap in setup arriving dressed as
@@ -69,19 +81,43 @@ describe('the question modal', () => {
     expect(dialog).toContainElement(document.activeElement)
   })
 
-  it('gives focus back to what opened it', async () => {
-    // Otherwise focus resets to the top of the document.
+  it('gives focus back to the row that opened it, not merely somewhere', async () => {
+    // Otherwise a keyboard user closing the modal is returned to the top of
+    // the document and has to tab back down the whole list.
+    //
+    // **Assert the identity, not that focus left `body`.** This checked
+    // `document.body !== document.activeElement` against an `opener` resolved
+    // by `closest('[role="button"], button, div')` from the *text* element --
+    // which matches the wrapper `<div>` two levels inside the row's button, so
+    // it named the wrong element and then only asserted it was truthy, which
+    // `closest('div')` almost always is. A `useDialog` restoring focus to any
+    // live element on the page -- the first filter button, say -- passed.
+    //
+    // **The second row is the one clicked**, because the first is also the
+    // first `<button>` on the page: a restore aimed at `querySelector('button')`
+    // passes against it. Mutation found exactly that.
     render(<Questions />, { wrapper: MemoryRouter })
-    const row = await screen.findByText('What is 7 x 8?')
-    const opener = row.closest('[role="button"], button, div')
+    const text = await screen.findByText('What is 9 x 6?')
+    const opener = text.closest('button')
+    expect(opener, 'the row is a <button>; the restore has nothing to aim at otherwise').toBeTruthy()
+    expect(opener, 'the clicked row must not be the first button on the page')
+      .not.toBe(document.querySelector('button'))
 
-    await userEvent.click(row)
+    await userEvent.click(opener)
     await screen.findByRole('dialog')
     await userEvent.keyboard('{Escape}')
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-    expect(document.body).not.toBe(document.activeElement)
-    expect(opener).toBeTruthy()
+    // `waitFor` waits on the condition rather than on a duration: the restore
+    // is `useDialog`'s effect cleanup, so it lands with the unmount, and this
+    // only has to tolerate the unmount being a render behind the query above.
+    //
+    // **What this does not cover**: `useDialog` skips the restore when the
+    // opener has left the DOM (`document.contains`), and jsdom then leaves
+    // focus on `body`. That is a real gap -- focus goes nowhere useful -- and
+    // it is the hook's behaviour rather than this page's, so it is not
+    // asserted here in either direction.
+    await waitFor(() => expect(document.activeElement).toBe(opener))
   })
 })
 

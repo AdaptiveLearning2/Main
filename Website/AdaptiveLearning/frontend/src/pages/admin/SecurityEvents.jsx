@@ -17,8 +17,8 @@ const KINDS = {
     label: 'Access refused',
     icon: ShieldAlert,
     tone: 'text-amber-700 dark:text-amber-300',
-    describe: (e) => e.subject
-      ? `tried to read ${e.subject.name}'s data`
+    describe: (e, subject) => e.subject
+      ? `tried to read ${subject}'s data`
       : 'was refused access',
   },
   admin_denied: {
@@ -37,12 +37,12 @@ const KINDS = {
     label: 'Consent changed',
     icon: UserCheck,
     tone: 'text-emerald-700 dark:text-emerald-300',
-    describe: (e) => {
+    describe: (e, subject) => {
       const parts = []
       if (e.detail?.withdrew) parts.push(`turned off ${e.detail.withdrew}`)
       if (e.detail?.re_enabled) parts.push('turned a channel back on')
       const what = parts.join(' and ') || 'changed consent'
-      return e.subject ? `${what} for ${e.subject.name}` : what
+      return e.subject ? `${what} for ${subject}` : what
     },
   },
 }
@@ -52,6 +52,20 @@ const UNKNOWN = {
   icon: ShieldAlert,
   tone: 'text-gray-600 dark:text-gray-400',
   describe: () => 'was recorded by a newer backend than this page knows about',
+}
+
+// Three states, because the backend now sends a null name rather than a
+// substituted one: a name it read, an account it found no profile for, and a
+// name lookup that failed. The last two look identical if collapsed, and on an
+// audit page "this account does not exist" is a claim a failed read has not
+// earned -- the same rule `SignalPanel`'s `Unavailable` tile holds.
+// The id is rendered beside every one of these, so the row is actionable
+// whichever state it is in.
+function nameOf(who, namesRetrieved, capital) {
+  if (who?.name) return who.name
+  if (namesRetrieved) return capital ? 'An unnamed account' : 'an unnamed account'
+  return capital ? 'An account whose name could not be read'
+    : 'an account whose name could not be read'
 }
 
 function when(iso) {
@@ -164,9 +178,9 @@ export default function AdminSecurityEvents() {
                     {/* The actor's name for reading and the id for looking the
                         account up. A uuid alone is true and unusable; a name
                         alone cannot be acted on. */}
-                    <span>{e.actor?.name || 'An unknown account'}</span>
+                    <span>{nameOf(e.actor, data.names_retrieved, true)}</span>
                     {' '}
-                    {spec.describe(e)}
+                    {spec.describe(e, nameOf(e.subject, data.names_retrieved, false))}
                   </p>
                   <p className="text-[11px] text-gray-600 dark:text-gray-400">
                     {when(e.created_at)}

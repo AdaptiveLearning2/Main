@@ -393,7 +393,13 @@ def _unique_ids(values) -> list:
 # says the same thing: this caller is over the limit, and has been since then.
 _SECURITY_EVENT_COOLDOWN_SEC = _env_number(
     "SECURITY_EVENT_COOLDOWN_SECONDS", 300, float, minimum=0)
-_COOLED_KINDS = {"rate_limited"}
+# The kinds that consult it, mapped to the `detail` fields that make two of
+# their events different. Those fields go into the cooldown key, so a kind
+# written from several places cools per place: all three limiters write
+# `rate_limited`, and keyed on `(kind, actor)` alone the first to fire silences
+# the other two for the whole window -- which would be ingest, at ~1 Hz per
+# student, hiding every refusal the other two make.
+_COOLED_KINDS = {"rate_limited": ("limiter",)}
 
 _security_event_seen: dict[tuple, float] = {}
 _security_event_lock = threading.Lock()
@@ -415,8 +421,9 @@ def _record_security_event(kind: str, actor_user_id: str | None,
     stringified and truncated here rather than trusted, because some callers
     pass a path or an endpoint name that ultimately came from a client.
     """
-    if kind in _COOLED_KINDS and _SECURITY_EVENT_COOLDOWN_SEC > 0:
-        key = (kind, actor_user_id)
+    cooled_on = _COOLED_KINDS.get(kind)
+    if cooled_on is not None and _SECURITY_EVENT_COOLDOWN_SEC > 0:
+        key = (kind, actor_user_id, *(str(detail.get(f)) for f in cooled_on))
         now = time.monotonic()
         with _security_event_lock:
             last = _security_event_seen.get(key)
@@ -3423,6 +3430,8 @@ def _practice_session_or_403(practice_session_id: str, user_id: str, columns: st
         supabase.table("practice_sessions").select(columns).eq("id", practice_session_id),
         "Practice session")
     if row.get("user_id") != user_id:
+        _record_security_event("authz_denied", user_id, row.get("user_id"),
+                               check="practice_session_owner")
         raise HTTPException(403, "Not your practice session")
     return row
 
@@ -4793,6 +4802,11 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
                 .eq("id", payload.practice_session_id),
             "Practice session")
         if practice.get("user_id") != student_id:
+            # The subject is the student whose advice was asked for, not the
+            # practice session's owner: the caller has already been admitted to
+            # *this* student, and what they reached for is a second one.
+            _record_security_event("authz_denied", viewer["id"], student_id,
+                                   check="practice_session_student")
             raise HTTPException(403, "That practice session does not belong to this student")
         topics = _topics_from_practice_summary(practice.get("topic_summary") or {})
     else:
@@ -5682,10 +5696,11 @@ def get_class(class_id: str, request: Request):
 @app.put("/api/classes/{class_id}")
 def update_class(class_id: str, payload: UpdateClassRequest, request: Request):
     user = get_user(request)
-    cls = _row_or_404(
-        supabase.table("classes").select("*").eq("id", class_id), "Class")
-    if cls["teacher_id"] != user["id"]:
-        raise HTTPException(403, "Not your class")
+    # The shared helper rather than a second copy of its rule. The copy here
+    # read the whole row to compare one column and, being a copy, was also the
+    # one class-owner refusal the security log never saw -- re-deriving the
+    # *audit* per endpoint leaves the same gaps as re-deriving the check.
+    _verify_class_owner(class_id, user["id"])
     # Named columns, for the reason `update_my_profile` states at length:
     # `classes` also holds `teacher_id`, `join_code` and `id`, and this write
     # is service-role, so nothing below the model constrains which columns it
@@ -6903,6 +6918,8 @@ def _consent_actor(viewer: dict, student_id: str) -> str:
         return "student"
     if _is_linked_parent(viewer["id"], student_id):
         return "parent"
+    _record_security_event("authz_denied", viewer["id"], student_id,
+                           check="consent_actor")
     raise HTTPException(403, "Only the student or a linked parent can change consent")
 
 
@@ -7018,6 +7035,12 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
         # A student may withdraw at any time; only a parent may re-enable, or
         # the parent's control would be nominal.
         if requested and actor == "student":
+            # Recorded, unlike the other refusals about a caller's own data:
+            # the UI never offers this, so reaching it means going around the
+            # page, and it is an attempt to undo a parent's decision on the
+            # one control this log exists to cover.
+            _record_security_event("authz_denied", user["id"], student_id,
+                                   check="consent_direction", channel=c)
             raise HTTPException(
                 403,
                 f"You can turn {c} off, but only a parent can turn it back on",
@@ -7157,6 +7180,10 @@ def erase_consent_channel(student_id: str, payload: ErasureRequest,
     """
     user = get_user(request)
     if not _is_linked_parent(user["id"], student_id):
+        # The one refusal here that guards an irreversible action, so a
+        # refused attempt is worth as much as a successful one is.
+        _record_security_event("authz_denied", user["id"], student_id,
+                               check="erasure_parent")
         raise HTTPException(403, "Only a linked parent can erase stored signals")
     if payload.channel not in CONSENT_CHANNELS:
         raise HTTPException(422, f"Unknown channel {payload.channel!r}")
@@ -9222,22 +9249,45 @@ def admin_security_events(request: Request, kind: str | None = None,
         # Three states, not two: an empty list from a failed read would say
         # "nothing has happened", which on this surface is the worst available
         # wrong answer.
-        return {"retrieved": False, "events": [], "kinds": list(_SECURITY_EVENT_KINDS)}
+        # `names_retrieved` on both branches, so a consumer never has to treat
+        # a missing field as a third state.
+        return {"retrieved": False, "names_retrieved": False,
+                "events": [], "kinds": list(_SECURITY_EVENT_KINDS)}
 
-    names = _profiles_many(
-        _unique_ids([r.get("actor_user_id") for r in rows]
-                    + [r.get("subject_user_id") for r in rows]))
+    # Not `_profiles_many`, which substitutes `_placeholder_profile` for a row
+    # it could not read -- and that placeholder's `display_name` is the literal
+    # "Student". Right where it is used, since a blank name there renders as a
+    # withdrawn preference; wrong here, where it would put a plausible name on
+    # an audit row, and on a teacher's row the wrong one. An account this page
+    # cannot name has to stay unnamed, and the id is on the row either way.
+    ids = _unique_ids([r.get("actor_user_id") for r in rows]
+                      + [r.get("subject_user_id") for r in rows])
+    names: dict[str, str] = {}
+    names_retrieved = True
+    if ids:
+        try:
+            for p in (supabase.table("profiles").select("id, display_name")
+                      .in_("id", ids).execute().data or []):
+                if p.get("display_name"):
+                    names[p["id"]] = p["display_name"]
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[admin:security_events] names: {e}")
+            # Its own flag rather than failing the whole read: the events are
+            # in hand and are the point of the page. "We could not look this
+            # account up" and "this account has no profile" are two facts, and
+            # on an audit surface the first must not be reported as the second.
+            names_retrieved = False
 
     def _who(uid):
         if not uid:
             return None
-        # The id stays on the row: a display name is for reading, the id is
-        # what an admin needs to look the account up.
-        return {"id": uid,
-                "name": (names.get(uid) or {}).get("display_name") or "Unknown"}
+        # The id stays on the row whatever the name does: a display name is
+        # for reading, the id is what an admin looks the account up by.
+        return {"id": uid, "name": names.get(uid)}
 
     return {
         "retrieved": True,
+        "names_retrieved": names_retrieved,
         "kinds": list(_SECURITY_EVENT_KINDS),
         "events": [{
             "id": r["id"],

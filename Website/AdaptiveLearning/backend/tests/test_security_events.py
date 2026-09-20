@@ -11,6 +11,7 @@ here are in three groups, and the middle one is the point:
   that has already decided to return a 403, a 429, or a saved consent change.
 """
 
+import ast
 import os
 import re
 import pathlib
@@ -330,3 +331,225 @@ def test_every_kind_the_table_accepts_is_actually_written_somewhere():
         # line, and a plain substring match would report that kind as unwritten
         # purely because of how it is formatted.
         assert re.search(rf'_record_security_event\(\s*"{kind}"', source), kind
+
+
+# ─── the page names an account, or says it cannot ────────────────────────
+
+class _ReadClient:
+    """`security_events` rows, and a `profiles` read that can be made to fail."""
+
+    def __init__(self, rows, profiles=(), names_fail=False):
+        self.rows, self.profiles, self.names_fail = rows, list(profiles), names_fail
+
+    def table(self, name):
+        is_profiles = name == "profiles"
+        fail = is_profiles and self.names_fail
+        data = self.profiles if is_profiles else self.rows
+
+        class _Q:
+            def select(self, *_a, **_k): return self
+            def order(self, *_a, **_k):  return self
+            def limit(self, *_a):        return self
+            def eq(self, *_a):           return self
+            def in_(self, *_a):          return self
+
+            def execute(self):
+                if fail:
+                    raise RuntimeError("profiles is down")
+                return type("R", (), {"data": data})()
+
+        return _Q()
+
+
+def _one_event():
+    return [{"id": 1, "kind": "authz_denied", "actor_user_id": "teacher-1",
+             "subject_user_id": "student-1", "detail": {}, "created_at": "2026-09-19T10:00:00Z"}]
+
+
+def test_an_account_with_no_profile_row_is_not_handed_a_name(monkeypatch):
+    """`_profiles_many` answers a missing row with `_placeholder_profile`,
+    whose `display_name` is the literal "Student" -- right where a blank name
+    would otherwise read as a withdrawn preference, and wrong on an audit page,
+    where it puts a plausible name on a row and on a teacher's row the wrong
+    one. The name is absent here, and the id carries the row."""
+    monkeypatch.setattr(main, "_require_admin", lambda _r: {"id": "admin-1"})
+    monkeypatch.setattr(main, "supabase", _ReadClient(_one_event()))
+
+    out = main.admin_security_events(None)
+
+    assert out["names_retrieved"] is True
+    assert out["events"][0]["actor"] == {"id": "teacher-1", "name": None}
+
+
+def test_a_name_that_was_read_is_used(monkeypatch):
+    monkeypatch.setattr(main, "_require_admin", lambda _r: {"id": "admin-1"})
+    monkeypatch.setattr(main, "supabase", _ReadClient(
+        _one_event(), profiles=[{"id": "teacher-1", "display_name": "Mr Vance"}]))
+
+    out = main.admin_security_events(None)
+    assert out["events"][0]["actor"]["name"] == "Mr Vance"
+    # The subject was in the same query and has no row, so it stays unnamed
+    # while its neighbour is named -- the two states side by side.
+    assert out["events"][0]["subject"]["name"] is None
+
+
+def test_a_failed_name_lookup_says_so_rather_than_losing_the_events(monkeypatch):
+    """Its own flag, not `retrieved`. The events are in hand and are the point
+    of the page; what could not be read is the names, and "we could not look
+    this account up" must not render as "this account has no profile"."""
+    monkeypatch.setattr(main, "_require_admin", lambda _r: {"id": "admin-1"})
+    monkeypatch.setattr(main, "supabase", _ReadClient(_one_event(), names_fail=True))
+
+    out = main.admin_security_events(None)
+
+    assert out["retrieved"] is True and len(out["events"]) == 1
+    assert out["names_retrieved"] is False
+    assert out["events"][0]["actor"]["name"] is None
+
+
+def test_both_branches_carry_the_flag(monkeypatch):
+    """Or a consumer has to treat an absent field as a third state."""
+    monkeypatch.setattr(main, "_require_admin", lambda _r: {"id": "admin-1"})
+
+    class _Broken:
+        def table(self, _n):
+            raise RuntimeError("down")
+
+    monkeypatch.setattr(main, "supabase", _Broken())
+    assert main.admin_security_events(None)["names_retrieved"] is False
+
+
+# ─── the cooldown separates the limiters ─────────────────────────────────
+
+def test_one_limiter_firing_does_not_silence_the_others(recorder, monkeypatch):
+    """The cooldown key has to carry what makes two events different.
+
+    All three limiters write the same kind, so keying on `(kind, actor)` alone
+    let the first one to fire hide the other two for the whole window -- and
+    ingest, posting at ~1 Hz per student, is always the one that gets there
+    first. A student refused by ingest would then hit the strategies limiter
+    with nothing recorded at all.
+    """
+    for setting, window in (("_INGEST_RATE_LIMIT", "_INGEST_RATE_WINDOW"),
+                            ("_STRATEGY_RATE_LIMIT", "_STRATEGY_RATE_WINDOW"),
+                            ("_CHART_SUMMARY_RATE_LIMIT", "_CHART_SUMMARY_RATE_WINDOW")):
+        monkeypatch.setattr(main, setting, 1)
+        monkeypatch.setattr(main, window, 60)
+    monkeypatch.setattr(main, "_SECURITY_EVENT_COOLDOWN_SEC", 300)
+
+    for limit in (main._rate_limit_ingest, main._rate_limit_strategies,
+                  main._rate_limit_chart_summary):
+        limit("caller-1")
+        with pytest.raises(main.HTTPException):
+            limit("caller-1")
+        with pytest.raises(main.HTTPException):
+            limit("caller-1")          # still inside the cooldown for this one
+
+    assert [r["detail"]["limiter"] for r in recorder.rows] == [
+        "ingest", "strategies", "chart_summary"]
+
+
+# ─── every refusal is either recorded or classified ──────────────────────
+
+def _functions_raising_403() -> set[str]:
+    """The functions in `main.py` that answer 403, by name.
+
+    The AST rather than a grep: a 403 inside a nested helper belongs to the
+    function a reader would name, and a string search cannot tell a raise from
+    the same digits in a comment or a message.
+    """
+    tree = ast.parse(pathlib.Path(main.__file__).read_text(encoding="utf-8"))
+    names = set()
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)
+                    and getattr(node.exc.func, "id", None) == "HTTPException"
+                    and node.exc.args
+                    and isinstance(node.exc.args[0], ast.Constant)
+                    and node.exc.args[0].value == 403):
+                names.add(fn.name)
+    return names
+
+
+def _denial_kinds_recorded_in(name: str) -> set[str]:
+    tree = ast.parse(pathlib.Path(main.__file__).read_text(encoding="utf-8"))
+    kinds = set()
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or fn.name != name:
+            continue
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Call)
+                    and getattr(node.func, "id", None) == "_record_security_event"
+                    and node.args and isinstance(node.args[0], ast.Constant)):
+                kinds.add(node.args[0].value)
+    return kinds
+
+
+# Refuses someone reach for another person's data, or for a control over it.
+# The value is what the refusal is about, so the classification can be
+# re-checked against the code rather than taken on trust.
+RECORDS_THE_DENIAL = {
+    "_verify_class_owner":         "another teacher's class",
+    "_verify_can_view_student":    "another student's report",
+    "_session_or_403":             "another student's session",
+    "_practice_session_or_403":    "another student's practice session",
+    "student_learning_strategies": "a practice session belonging to a second student",
+    "_consent_actor":              "a child's consent, by someone who is neither",
+    "update_consent":              "undoing a parent's decision, as the student",
+    "erase_consent_channel":       "an irreversible erasure, by a non-parent",
+    "_require_admin":              "the admin console",
+}
+
+# Refuses something that is not access to anyone's data. Each of these would
+# be a row that means nothing, and a log whose rows mean nothing is one nobody
+# reads by the time a real one lands -- the argument `npm audit`'s threshold
+# makes, on a surface where it matters more.
+NOT_AN_ACCESS_DENIAL = {
+    "create_class":        "a role gate on the caller's own action",
+    "link_child":          "a role gate on the caller's own action",
+    "_reserve_and_call":   "a headband is in use by someone else -- contention, not authorization",
+    "eeg_muse_disconnect": "the same device contention",
+    "eeg_start":           "consent or the school year, which is a configuration state; "
+                           "filing it as an incident is what `signals_missing` must not do either",
+}
+
+
+def test_every_403_is_either_recorded_or_classified():
+    """Without this the *next* refusal joins the silent ones by default.
+
+    A classification list rather than "every 403 must record": several of these
+    are genuinely not access decisions, and forcing a row for them would fill
+    the log with events nobody can act on. What the list removes is the option
+    of not deciding.
+    """
+    unclassified = _functions_raising_403() - set(RECORDS_THE_DENIAL) - set(NOT_AN_ACCESS_DENIAL)
+    assert unclassified == set()
+
+
+def test_the_list_has_not_outlived_its_subjects():
+    """A stale entry is how an exemption granted for one reason is inherited by
+    whatever takes the function's place."""
+    raising = _functions_raising_403()
+    declared = set(RECORDS_THE_DENIAL) | set(NOT_AN_ACCESS_DENIAL)
+    assert declared - raising == set()
+
+
+def test_the_list_is_read_against_a_module_that_was_actually_parsed():
+    """Or every check above passes against an empty set."""
+    assert len(_functions_raising_403()) > 10
+
+
+@pytest.mark.parametrize("name", sorted(RECORDS_THE_DENIAL))
+def test_a_function_classified_as_recording_actually_records(name):
+    """Classification is not the fix; the call is. Asserted per function so a
+    failure names the one that stopped."""
+    assert _denial_kinds_recorded_in(name) & {"authz_denied", "admin_denied"}, name
+
+
+@pytest.mark.parametrize("name", sorted(NOT_AN_ACCESS_DENIAL))
+def test_a_function_classified_as_not_a_denial_records_none(name):
+    """The other direction: a function that started recording after being
+    exempted has had its decision changed without the list moving."""
+    assert not _denial_kinds_recorded_in(name) & {"authz_denied", "admin_denied"}, name

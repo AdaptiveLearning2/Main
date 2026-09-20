@@ -1224,9 +1224,17 @@ explain. `pytest --setup-plan` shows the ordering directly.
 
 ### The security log records that something happened, never what was in it
 
-`security_events` is append-only, written by `_record_security_event` from the two `_verify_*` helpers and
-`_session_or_403`, `_require_admin`, the three rate limiters and the consent write. Read at
-`GET /api/admin/security-events`, rendered by `pages/admin/SecurityEvents.jsx`.
+`security_events` is append-only, written by `_record_security_event` from the access helpers, the three
+rate limiters and the consent write. Read at `GET /api/admin/security-events`, rendered by
+`pages/admin/SecurityEvents.jsx`.
+
+**Every site answering 403 is classified, in `test_security_events.py`, as recording the denial or as not
+being one** — a role gate on the caller's own action, device contention, a consent or school-year state.
+Not "every 403 records": several would be rows nobody can act on, and a log of those is one nobody reads by
+the time a real event lands. What the list removes is the option of not deciding — without it a new refusal
+is silent by default. **A hand-rolled copy of a check is where this goes wrong**, because the copy is
+outside the helper that records: use `_verify_class_owner` and the other helpers rather than re-deriving
+the rule, since re-deriving the *audit* per endpoint leaves the same gaps as re-deriving the check.
 
 **Never a reading, a request body or an IP.** `detail` is context — which check failed, which limiter
 fired — and the values live in the tables that own them. An IP would be new personal data about children
@@ -1238,9 +1246,12 @@ equal **both ways** — a kind in code alone is a constraint violation the never
 one in the schema alone is a filter that can only return nothing.
 
 **Record outside the limiters' locks**, or every caller queues behind a database round trip — worst on
-ingest, the most contended of the three. `rate_limited` is cooled per caller (300 s) because a limiter
-fires once per *request* past the allowance; denials are not, since deduplicating them would hide a caller
-probing a series of different students.
+ingest, the most contended of the three. `rate_limited` is cooled (300 s) because a limiter fires once per
+*request* past the allowance; denials are not, since deduplicating them would hide a caller probing a
+series of different students. **The cooldown key carries what makes two of that kind's events different** —
+`_COOLED_KINDS` names the `detail` fields, `limiter` here. On `(kind, actor)` alone the first limiter to
+fire masks the other two for the whole window, and ingest at ~1 Hz per student is always the one that gets
+there first.
 
 **The audit must not break what it audits.** It never raises, like `_raise_session_alerts`, and
 `_require_admin` — the one hook reaching into the request object — reads `.url.path` defensively.
@@ -1248,6 +1259,13 @@ probing a series of different students.
 **Retention is a rolling 180 days on its own `pg_cron` job**, deliberately not `expired_signal_cutoff()`:
 that would delete the record of who read a child's signals at the moment those signals expire, and no
 bound at all would leave an unbounded log of which adult opened which child's record.
+
+**Don't name an account through `_profiles_many` here.** It substitutes `_placeholder_profile` for a row it
+could not read, whose `display_name` is the literal **"Student"** — right where a blank name would otherwise
+render as a withdrawn preference, and wrong on an audit page, where it puts a plausible name on every row of
+a name-lookup outage and the wrong one on a teacher's. The endpoint reads names itself and sends `null`,
+with `names_retrieved` beside it: "no profile" and "could not look it up" are two facts, and the id carries
+the row either way.
 
 **`LoadError` is for a request that *failed*, and ignores a message you pass it** — it derives its
 sentence from `error.status`. A `retrieved: false` payload is a successful request whose read failed, so

@@ -20,7 +20,7 @@ const event = (over = {}) => ({
 })
 
 const payload = (over = {}) => ({
-  retrieved: true, kinds: KINDS, events: [event()], ...over,
+  retrieved: true, names_retrieved: true, kinds: KINDS, events: [event()], ...over,
 })
 
 beforeEach(() => {
@@ -111,5 +111,54 @@ describe('a kind this page does not know', () => {
     // Scoped to the row: 'Unrecognised' is also the chip label for that kind.
     const row = await screen.findByRole('listitem')
     expect(within(row).getByText(/Unrecognised/)).toBeInTheDocument()
+  })
+})
+
+describe('an account this page cannot name', () => {
+  it('says the profile is missing rather than inventing a name', async () => {
+    // The backend sends `name: null` instead of a placeholder, because the
+    // shared profile helper substitutes the literal "Student" for a row it
+    // could not read -- a plausible name on an audit row, and on a teacher's
+    // row the wrong one.
+    overrideApi('/api/admin/security-events', () => payload({
+      events: [event({ actor: { id: 'teacher-1', name: null } })],
+    }))
+    render(<AdminSecurityEvents />)
+
+    const row = await screen.findByRole('listitem')
+    expect(within(row).getByText(/An unnamed account/)).toBeInTheDocument()
+    // The id is what makes the row actionable without the name.
+    expect(within(row).getByText('teacher-1')).toBeInTheDocument()
+    expect(within(row).queryByText(/Student/)).not.toBeInTheDocument()
+  })
+
+  it('keeps a failed name lookup apart from an account with no profile', async () => {
+    // "We could not look this up" and "there is nothing to look up" are two
+    // facts, and the second is a claim the first has not earned. Same rule as
+    // the `Unavailable` tile, one surface up.
+    overrideApi('/api/admin/security-events', () => payload({
+      names_retrieved: false,
+      events: [event({ actor: { id: 'teacher-1', name: null } })],
+    }))
+    render(<AdminSecurityEvents />)
+
+    const row = await screen.findByRole('listitem')
+    expect(within(row).getByText(/name could not be read/)).toBeInTheDocument()
+    expect(within(row).queryByText(/unnamed account/)).not.toBeInTheDocument()
+    // And the events themselves still render: the names failing is not the
+    // log failing, so this must not become the "could not be read" screen.
+    expect(screen.queryByText(/The security log could not be read/)).not.toBeInTheDocument()
+  })
+
+  it('does not leave a possessive dangling in the sentence', async () => {
+    // `tried to read ${subject.name}'s data` against a null name rendered
+    // "tried to read 's data".
+    overrideApi('/api/admin/security-events', () => payload({
+      events: [event({ subject: { id: 'student-1', name: null } })],
+    }))
+    render(<AdminSecurityEvents />)
+
+    const row = await screen.findByRole('listitem')
+    expect(within(row).getByText(/an unnamed account's data/)).toBeInTheDocument()
   })
 })

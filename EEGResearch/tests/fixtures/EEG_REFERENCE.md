@@ -396,3 +396,11 @@ strap, and the 19th cost a whole session that looked completely normal the entir
 recorded. It is a warning and not an abort: the threshold is two adults' worth, and a flat slope is
 also what strap position produces. `capture_eeg_reference.py` prints it beside the frame count on
 the bridge source and warns below the threshold.
+
+**A slope it cannot compute gets its own line rather than silence**, and that is the half worth
+remembering: printing nothing for it left a temporal contact that stopped delivering looking
+exactly like the opening seconds of a recording — frame counts ticking, no slope — which is the
+experience the reading exists to end. It matters here more than it would elsewhere because calm is
+an alpha residual at the temporal pair, so a dead or lifted temporal electrode is both the
+likeliest way to ruin a capture and the way to silence the check on it. The line names the starved
+channel and its sample count. Only a window still filling is silent.

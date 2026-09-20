@@ -311,12 +311,12 @@ _PUBLIC_LIMITER = {
     "/api/questions":         "public_read",
     "/api/questions/count":   "public_read",
     "/api/topics":            "public_read",
-    # Its own bucket, not `public_read`, and the reason is what it costs to be
-    # refused. Every open lesson polls this every 5 s, so it is by far the
-    # largest consumer of any shared budget -- and the *first* thing a burst
-    # against the question bank would starve. `checkHealth`'s catch turns any
-    # failure into `available: false`, so the whole school's pages would report
-    # the headband as down because somebody hammered an unrelated route.
+    # Its own bucket, not `public_read`. Every open lesson polls this every 5 s,
+    # which makes it the largest consumer of any budget it shares and the first
+    # thing an unrelated burst would starve -- and a refused probe costs every
+    # one of those lessons its reading of the sidecar until the window rolls.
+    # The page no longer reports that as the headband being offline, but it
+    # still cannot tell a student whether the headband is there.
     "/api/eeg/health":        "public_probe",
 }
 

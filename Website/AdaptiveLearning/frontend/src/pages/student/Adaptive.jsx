@@ -1430,7 +1430,15 @@ export default function Adaptive() {
             Muse Headband
             {headband.connected && <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● STREAMING</span>}
             {headband.phase === 'reconnecting' && <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">reconnecting</span>}
-            {!headband.connected && headband.phase !== 'reconnecting' && headband.available && <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">ready</span>}
+            {/* Not while the probe is being refused. `available` is kept
+                deliberately stale through a refusal so the page goes on
+                *acting* on the last answer -- discovery keeps running, Connect
+                stays offered -- but "ready" is a claim to the reader that the
+                sidecar was reachable, and during a refusal nothing has
+                confirmed that. Without this the two badges render together and
+                the state this exists for is the one state that contradicts
+                itself on screen. */}
+            {!headband.connected && headband.phase !== 'reconnecting' && headband.available && !headband.probeRefused && <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">ready</span>}
             {/* Three states, not two: reachable, not reachable, and a probe
                 that was refused and therefore says neither. "offline" names
                 the headband; this one names the check. */}

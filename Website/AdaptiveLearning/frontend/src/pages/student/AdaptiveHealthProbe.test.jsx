@@ -38,7 +38,7 @@ vi.mock('../../context/AuthContext', () => ({
 }))
 
 import { mockApi, resetApi } from '../../test/mocks/apiFetch'
-import { eegHealth } from '../../lib/signals'
+import { eegHealth, eegDevices } from '../../lib/signals'
 import Adaptive from './Adaptive'
 
 beforeEach(() => {
@@ -63,20 +63,37 @@ it('says the check failed, not that the headband is offline', async () => {
   expect(screen.queryByText('offline')).not.toBeInTheDocument()
 })
 
-it('keeps the last answer the probe did give', async () => {
-  // The refusal carries no answer, so the most recent one that did is the best
-  // thing known -- and it is what decides whether Connect is offered at all.
-  // Overwriting it with false would take a working headband off the page.
+it('goes on acting on the last answer without claiming it is current', async () => {
+  // Two halves, and the first is why the state is kept stale at all: station
+  // discovery and the Connect button are both gated on `available`, so
+  // overwriting it with false during a refusal would take a working headband
+  // off the page.
+  //
+  // The second is what the badge may say about that. "ready" is a claim that
+  // the sidecar was reachable, and a refused probe has confirmed nothing -- so
+  // the page keeps *behaving* as though the last answer holds while saying out
+  // loud that it could not check. Asserting only "ready is still there" would
+  // pass with both badges on screen at once, which is the one state this
+  // change exists for and the one it must not contradict itself in.
   eegHealth.mockResolvedValueOnce({ available: true, ingest_mode: 'pull' })
   eegHealth.mockResolvedValue({ refused: true, error: 'Too many requests.' })
   render(<Adaptive />)
 
   await screen.findByText('ready')
-  await waitFor(() => expect(eegHealth.mock.calls.length).toBeGreaterThan(1), { timeout: 8000 })
+  await screen.findByText('status unavailable', undefined, { timeout: 8000 })
 
-  expect(screen.getByText('ready')).toBeInTheDocument()
+  // Still acting on it: station discovery is gated on `available` and tears
+  // itself down when that goes false, so calls continuing past the refusal is
+  // the behaviour, not a badge asserting itself.
+  const during = eegDevices.mock.calls.length
+  await waitFor(() => expect(eegDevices.mock.calls.length).toBeGreaterThan(during),
+                { timeout: 8000 })
+
+  // And exactly one of the three badges is on screen.
+  expect(screen.getByText('status unavailable')).toBeInTheDocument()
+  expect(screen.queryByText('ready')).not.toBeInTheDocument()
   expect(screen.queryByText('offline')).not.toBeInTheDocument()
-}, 15000)
+}, 25000)
 
 it('still reports a sidecar that genuinely did not answer', async () => {
   // The other half: this must not have turned every failure into "unknown".

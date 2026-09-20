@@ -713,10 +713,11 @@ def test_the_refusal_is_recorded_without_saying_who(monkeypatch):
 
 def test_the_probe_has_a_budget_of_its_own():
     """Sharing one with the question bank made the probe both the largest
-    consumer of that bucket and the first casualty of anyone else's burst --
-    and `checkHealth` turns any failure into `available: false`, so the whole
-    school's pages would have reported the headband as down because somebody
-    hammered an unrelated route."""
+    consumer of that bucket and the first casualty of anyone else's burst,
+    which is a refusal every open lesson pays for: while it lasts, none of them
+    can tell whether the headband is there. The page says so rather than
+    calling the headband offline, and that is a separate fix -- a budget it can
+    lose to an unrelated route is still the wrong budget."""
     assert main._PUBLIC_LIMITER["/api/eeg/health"] != \
         main._PUBLIC_LIMITER["/api/questions"]
 

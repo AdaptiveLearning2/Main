@@ -806,11 +806,12 @@ route fails until it is given a budget.
 **An address is a school, not a student**, and that sets the numbers. A class leaves through one NAT and
 `Adaptive.jsx` polls the health route every 5 s per open page, so sixty students behind one address is
 720/min before anyone answers a question; the defaults sit above that. These refuse a runaway client and
-are not a way to police a class. **The probe has its own bucket**, because being refused costs it more
-than the others: `eegHealth` turns a failure into `available: false`, so sharing one would let a burst
-against the question bank report every student's headband as offline. A refused probe is a third state
-there — it answers neither reachable nor not, so the page keeps the last answer it did get and says
-*status unavailable* rather than *offline*.
+are not a way to police a class. **The probe has its own bucket**: polled every 5 s per open lesson, it is the
+largest consumer of any budget it shares and the first thing an unrelated burst would starve. **A refused
+probe is a third state** — it answers neither reachable nor unreachable, so the page goes on *acting* on
+the last answer (discovery keeps running, Connect stays offered) while saying *status unavailable* rather
+than *offline*. Those are one change, not two: keeping `available` stale without suppressing the `ready`
+badge puts both claims on screen at once, in the one state the whole thing exists for.
 
 **A hook on the event loop must not write.** `_record_security_event` does a synchronous Supabase insert,
 and every other call site is in a `def` handler that FastAPI already runs in a worker thread. Middleware

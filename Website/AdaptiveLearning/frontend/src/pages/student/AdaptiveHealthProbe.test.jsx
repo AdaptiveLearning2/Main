@@ -289,7 +289,15 @@ it('keeps a push deployment in push mode when the health probe stops answering',
   expect(await screen.findByText('on your device')).toBeInTheDocument()
 
   const before = eegHealth.mock.calls.length
-  eegHealth.mockResolvedValue({ available: false, error: 'Failed to fetch' })
+  // `answered: false` because that is what `eegHealth` returns on a non-429
+  // failure -- a marker it carries so a client-side failure is not
+  // shape-identical to the backend's deliberate `{available: false}`, which it
+  // sends when the sidecar is reachable and the learner token is
+  // misconfigured. The guard under test reads `ingest_mode`, which neither
+  // carries, so this fixture is about matching the real fallback rather than
+  // about what makes the test pass -- a mock that drifts from the function it
+  // stands in for is the next bug's hiding place.
+  eegHealth.mockResolvedValue({ answered: false, available: false, error: 'Failed to fetch' })
   // Two further probes, so a wrong write has landed and painted rather than
   // this asserting into the gap before the first one.
   await waitFor(() => expect(eegHealth.mock.calls.length).toBeGreaterThan(before + 1),

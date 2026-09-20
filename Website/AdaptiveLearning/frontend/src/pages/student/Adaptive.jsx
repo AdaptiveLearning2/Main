@@ -843,7 +843,16 @@ export default function Adaptive() {
     const tick = async () => {
       const s = await eegStatus(stationId)
       if (killed) return
-      setHeadband(prev => ({
+      setHeadband(prev => {
+      // The mode this tick is read under: what it reported, or -- when it did
+      // not land -- what is already known. Every `ingest_mode` test below goes
+      // through this, because on the swallowed fallback the field is undefined
+      // and reads as "not push", which lifts the two push exemptions further
+      // down. Those exist because under push this poll is not the writer of
+      // those fields at all, so lifting them lets a failed request overwrite
+      // what the telemetry poll owns.
+      const isPush = s.answered === false ? prev.pushMode : s.ingest_mode === 'push'
+      return {
         ...prev,
         // This poll is the *other* writer of `available`, and it reaches an
         // authenticated endpoint -- so it is never refused by the public
@@ -867,9 +876,7 @@ export default function Adaptive() {
         // service that deployment does not have. `eeg_health` returns
         // `available: None` under push precisely to keep that sentence off the
         // first screen a student sees; this wrote it from a failed read
-        // instead. `connected` and the counts below stay outside the guard on
-        // purpose: those are claims about flow, and nothing flowing is exactly
-        // what a failed status read means.
+        // instead.
         //
         // `service` is null (not false) under push -- the backend never probes
         // a sidecar it has no route to.
@@ -887,19 +894,22 @@ export default function Adaptive() {
         // here as well raced it: this poll is faster, and setting
         // `connected: false` tore the telemetry effect down before it could
         // claim the drop, so under pull nothing was announced or recovered.
-        ...(s.ingest_mode === 'push' || prev.phase === 'reconnecting' ? {} : {
+        ...(isPush || prev.phase === 'reconnecting' ? {} : {
           connected: !!s.poller?.running,
         }),
+        // Unconditional, unlike the two exemptions around them: under push
+        // `headbandSamples` reads `push.recorded` instead, so nothing renders
+        // what this writes and a failed tick zeroing it is invisible.
         samples:   s.poller?.samples || 0,
         lastTs:    s.poller?.last_ts || null,
         // Only under pull -- the telemetry effect above already polls this
         // under push. typeof check so a real 0% charge isn't read as no
         // reading.
-        ...(s.ingest_mode === 'push' ? {} : {
+        ...(isPush ? {} : {
           battery: typeof s.muse?.ingestion?.battery_percent === 'number'
             ? s.muse.ingestion.battery_percent : null,
         }),
-      }))
+      }})
     }
     tick()
     const id = setInterval(tick, 3000)

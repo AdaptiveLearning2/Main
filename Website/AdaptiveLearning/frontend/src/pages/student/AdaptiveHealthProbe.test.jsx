@@ -12,7 +12,7 @@
  * neither.
  */
 import { it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
@@ -51,6 +51,7 @@ vi.mock('../../context/AuthContext', () => ({
 
 import { mockApi, overrideApi, resetApi } from '../../test/mocks/apiFetch'
 import { eegHealth, eegStatus, eegDevices } from '../../lib/signals'
+import { museState, devices } from '../../lib/sidecar'
 import Adaptive from './Adaptive'
 
 beforeEach(() => {
@@ -251,3 +252,48 @@ it('does not flip a push deployment to pull because a tick did not land', async 
   expect(screen.getByText(/pairs through the app on this computer/)).toBeInTheDocument()
   expect(screen.queryByText(/EEG service not reachable/)).not.toBeInTheDocument()
 })
+
+
+// A link the bridge already holds, so Connect adopts it instead of walking the
+// scan/connect chain -- the cheap way into a streaming push session.
+// `eeg_age_ms` is part of "connected": the page counts a link as alive only
+// with EEG flowing on it.
+const ALREADY_CONNECTED = {
+  muse_connected: true, muse_devices: ['Muse-1'], battery_percent: 80,
+  auto_reconnect: true, reconnecting: false, reconnect_attempt: 0,
+  reconnect_max_attempts: 5, reconnect_exhausted: false, eeg_age_ms: 2,
+}
+
+it('does not tear a streaming push link down because a tick did not land', async () => {
+  // The two push exemptions below the guard read `s.ingest_mode` straight off
+  // the response, so on an unlanded tick they lifted: `connected` was written
+  // from a poller that does not exist under push, and `battery` from a muse
+  // block that was never in the payload. Both belong to the telemetry poll
+  // under push -- this one is not their writer at all, which is exactly what
+  // the exemptions say and what an undefined field defeated.
+  eegHealth.mockResolvedValue({ available: null, ingest_mode: 'push' })
+  eegStatus.mockResolvedValue({ ingest_mode: 'push', service: null, poller: {} })
+  devices.mockResolvedValue([{ device_id: 'default', kind: 'muse', running: true }])
+  museState.mockResolvedValue({ running: true, ingestion: ALREADY_CONNECTED })
+  render(<Adaptive />)
+
+  await startASession()
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+  // The charge arrives on the telemetry poll's own cycle, which is not the one
+  // that painted STREAMING -- so this waits rather than reading straight after.
+  await screen.findByLabelText(/Headband charge 80%/, {}, { timeout: 8000 })
+
+  const before = eegStatus.mock.calls.length
+  eegStatus.mockResolvedValue({ answered: false, service: false, poller: { running: false } })
+  await waitFor(() => expect(eegStatus.mock.calls.length).toBeGreaterThan(before),
+                { timeout: 8000 })
+
+  // Still streaming, and still holding the reading it had. A student mid-
+  // lesson would otherwise watch the panel drop to "Connect Headband" because
+  // one request to an unrelated endpoint did not land.
+  expect(screen.getByText(/STREAMING/)).toBeInTheDocument()
+  expect(screen.getByLabelText(/Headband charge 80%/)).toBeInTheDocument()
+}, 30000)

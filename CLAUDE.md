@@ -824,9 +824,14 @@ answered — `eegStatus` swallows its own failure into `service: false`, and tre
 **`pushMode` is behind the same guard**, and more plainly: a deployment's ingest mode cannot change because
 a request failed. Read from the swallowed fallback it is undefined, so push became pull and the panel
 changed branch to *"not reachable on port 8001"* — a port and a service that deployment does not have, which
-is the sentence `eeg_health`'s `available: None` exists to keep off a student's first screen. `connected`
-and the sample counts stay *outside* the guard on purpose: those are claims about flow, and nothing flowing
-is what a failed read means.
+is the sentence `eeg_health`'s `available: None` exists to keep off a student's first screen.
+
+**Every `ingest_mode` test in that tick goes through one derived `isPush`**, which falls back to the known
+mode when the response did not land. The field is undefined there, so read directly it reads as *not push*
+and silently lifts the two push exemptions below it — the ones that exist because under push the telemetry
+poll owns `connected` and `battery` and this poll is not their writer at all. A failed request then tore a
+streaming link down mid-lesson. `samples`/`lastTs` stay unconditional: under push `headbandSamples` reads
+`push.recorded`, so nothing renders what they hold.
 
 **A hook on the event loop must not write.** `_record_security_event` does a synchronous Supabase insert,
 and every other call site is in a `def` handler that FastAPI already runs in a worker thread. Middleware

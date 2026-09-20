@@ -182,3 +182,23 @@ def test_the_arithmetic_prompt_asks_for_silence():
     prompt = next(p for s, _, p in capture.DEFAULT_PROTOCOL if s == "arithmetic")
     assert "aloud" not in prompt.lower()
     assert "silent" in prompt.lower()
+
+
+def test_the_short_protocol_is_the_long_one_s_first_two_segments():
+    """Sliced, not restated: the five-minute run is compared against the
+    long one segment by segment, so a prompt or a duration that drifted
+    between them would be an unrecorded difference in method."""
+    assert capture.CLOSED_OPEN_PROTOCOL == capture.DEFAULT_PROTOCOL[:2]
+    assert [s for s, _, _ in capture.CLOSED_OPEN_PROTOCOL] == [
+        "eyes_closed_rest", "eyes_open_rest"]
+
+
+def test_the_header_records_the_protocol_that_was_selected():
+    """`--protocol closed_open` exists so the file does not claim segments
+    nobody performed -- running the long protocol and stopping after two
+    would write a nine-segment header over a two-segment recording."""
+    args = capture.build_parser().parse_args(
+        ["--out", "x", "--source", "bridge", "--protocol", "closed_open"])
+    h = capture.header(args, capture.CLOSED_OPEN_PROTOCOL)
+    assert h["protocol"] == [{"segment": "eyes_closed_rest", "seconds": 120},
+                             {"segment": "eyes_open_rest", "seconds": 120}]

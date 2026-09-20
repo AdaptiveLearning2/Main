@@ -22,8 +22,10 @@ Two sources, because the bridge accepts exactly one TCP client:
   recovered from such a capture by replaying it through ``SignalProcessor``.
 
 Each row carries a ``segment`` set by a prompted protocol: the script says
-what to do, waits for Enter, then times the segment. ``--protocol none``
-with ``--seconds N`` records a free-running capture instead.
+what to do, waits for Enter, then times the segment. ``--protocol
+closed_open`` runs the two rest segments only, about five minutes, which is
+what the raw capture needs; ``--protocol none`` with ``--seconds N`` records
+a free-running capture instead.
 
 Usage, sidecar running and the headband paired with good contact::
 
@@ -82,6 +84,17 @@ DEFAULT_PROTOCOL: list[tuple[str, int, str]] = [
 SESSION_SEGMENT: tuple[str, int, str] = (
     "adaptive_session", 120, "Answer questions on the student page as normal.",
 )
+# `--protocol closed_open`: the two rest segments and nothing else, about
+# five minutes on a wearer. Enough on its own for the questions the raw
+# capture is for -- whether the temporal alpha separation holds on a second
+# person, and both local-calm decisions, which read off the eyes-closed and
+# eyes-open columns of `replay_raw_capture.py --matrix`. **Sliced from
+# DEFAULT_PROTOCOL rather than restated**, so the prompt text and the
+# durations cannot drift from the long run this is compared against.
+# Selecting it is what keeps the header honest: `header()` records the
+# protocol it is given, so running the long one and stopping after two
+# segments would write a file claiming seven segments nobody performed.
+CLOSED_OPEN_PROTOCOL: list[tuple[str, int, str]] = DEFAULT_PROTOCOL[:2]
 # Rows recorded while waiting for Enter, or with no protocol at all.
 BETWEEN = "between"
 FREE = "free"
@@ -476,7 +489,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="sidecar API_TOKEN (default: env API_TOKEN); sidecar source only")
     ap.add_argument("--hz", type=float, default=8.0,
                     help="poll rate for the sidecar source; twice the tick rate so no tick is missed")
-    ap.add_argument("--protocol", choices=("default", "none"), default="default")
+    ap.add_argument("--protocol", choices=("default", "closed_open", "none"), default="default",
+                    help="closed_open: the two rest segments only, ~5 min")
     ap.add_argument("--with-session", action="store_true",
                     help="append the optional adaptive-session segment")
     ap.add_argument("--no-prompt", action="store_true",
@@ -512,7 +526,9 @@ def main(argv: list[str] | None = None) -> int:
         print("--protocol none needs --seconds", file=sys.stderr)
         return 2
 
-    protocol = list(DEFAULT_PROTOCOL) if args.protocol == "default" else []
+    protocol = {"default": list(DEFAULT_PROTOCOL),
+                "closed_open": list(CLOSED_OPEN_PROTOCOL),
+                "none": []}[args.protocol]
     if args.with_session:
         protocol.append(SESSION_SEGMENT)
     clock = SegmentClock(BETWEEN if protocol else FREE)

@@ -218,9 +218,16 @@ def _white(n, seed=0):
 
 
 def test_the_slope_monitor_says_nothing_until_its_window_is_full():
-    m = capture.SlopeMonitor(window_seconds=4.0)
-    _feed(m, _white(256))
-    assert m.slope() is None and m.line() is None
+    """Enough samples for Welch to succeed, fewer than the window asks for:
+    the guard has to be what withholds the number, not an exception from a
+    short buffer, or a half-window slope gets reported as a reading."""
+    m = capture.SlopeMonitor(window_seconds=8.0)
+    half = _white(4 * 256)
+    _feed(m, half)
+    assert m.slope() is None and m.line() is None, "a partial window is not a reading"
+    # The same samples do produce one once the window is full.
+    _feed(m, _white(4 * 256, seed=1))
+    assert m.slope() is not None
 
 
 def test_a_flat_spectrum_is_reported_as_flat():

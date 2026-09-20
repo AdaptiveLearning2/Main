@@ -912,15 +912,16 @@ is Welch over 2 s Hann windows on a 4 s buffer, per channel, a 1/f slope fit ove
 pair. Closed against open separates at **AUC 0.92 at 4 s epochs**.
 
 **That is one adult, and a second does not show it.** Captured twice on a different adult under the same setup: no
-channel reaches chance (tp9 0.37, tp10 0.43, af7 0.37, af8 0.50 at 4 s, against 0.90/0.91/0.27/0.82 on the first),
+channel separates (tp9 0.37, tp10 0.43, af7 0.37, af8 0.504 at 4 s — chance, against 0.90/0.91/0.27/0.82 on the first),
 with a background slope of −1.34 confirming the recording itself is sound. Alpha-band power sits above the fit in
 both conditions, so the electrodes see something; it does not react to eye closure. **So `EEG_SPECTRUM_SOURCE` stays
 `sdk`, and not pending more data** — a measurement that reads nothing on one of the two adults it has been tried on
 cannot become what every stored calm value means, and on that wearer eyes-closed rest replayed as `stressed` on 154
 ticks of 480. Two people is no basis for a rate, a cause, or any claim about children: `EEG_REFERENCE.md`, *the
 separation does not generalise*, lists what these runs cannot establish, and the first attempt on that wearer was
-lost to mains interference that the headband's own contact grade read as good contact — which is why
-`capture_eeg_reference.py` now prints the 1/f slope live on the bridge source.
+lost to mains interference that the headband's own contact grade read as good contact. **Read the 1/f
+slope live when capturing** — shallower than −1.0 is mains or strap; `EEG_REFERENCE.md` says how, and why
+the script does not print it yet.
 
 **The two decisions that capture was for are retired as decisions.** `EEG_SPECTRUM_POISON_SECONDS` and
 `EEG_CALM_CENTRE_ON_ARM` are parameters of a measurement that produced nothing on the second wearer; both settings

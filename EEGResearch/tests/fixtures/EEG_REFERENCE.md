@@ -352,7 +352,7 @@ does not produce a positive one.
    changed them was the room.
 2. **The 20 Sep capture is clean and the effect is still absent on every channel.** tp9's slope
    is −1.34 against wearer 1's −1.39, so the quality problem is fixed and the answer did not
-   change. Not one channel reaches chance.
+   change. No channel separates: the highest is af8 at 0.504, which is chance.
 3. **The electrodes are not blind.** Alpha-band power sits above the background fit in both
    conditions on all four channels, +0.14 to +0.34. It does not react to eye closure, and the
    small tilt that exists runs the wrong way.
@@ -391,7 +391,13 @@ are parameters of a measurement that produced nothing here. Both settings stay, 
 shipped behaviour, and the matrix above for wearer 1 stays recorded; choosing between them on one
 participant's numbers would be fitting settings to the only person they worked on.
 
-**`capture_eeg_reference.py` reads the slope live because of this**, printing it beside the frame
-count on the bridge source and warning when it is shallower than −1.0. The 19th cost a whole
-session that looked completely normal while it was being recorded. It warns rather than aborting:
-the threshold is two adults' worth, and a flat slope is also what strap position produces.
+**Read the 1/f slope while a capture is running, not afterwards.** Shallower than −1.0 is mains or
+strap, and the 19th cost a whole session that looked completely normal the entire time it was being
+recorded. It is a warning and not an abort: the threshold is two adults' worth, and a flat slope is
+also what strap position produces.
+
+**`capture_eeg_reference.py` does not print it yet** — the change is on a separate branch, so
+`grep -c slope_warn EEGResearch/scripts/capture_eeg_reference.py` before relying on it, and read
+the slope off the bridge source by hand if that answers 0. Delete this paragraph when it lands:
+until then, an operator who sees no slope line reads the silence as a pass, which is the 19th
+again.

@@ -248,6 +248,7 @@ class SlopeMonitor:
         self._fs: float | None = None
         self._deps: Any = None
         self._off = False
+        self._pushed = 0
 
     def _load(self) -> bool:
         """numpy and the sidecar's spectrum helpers, imported on first use so
@@ -273,6 +274,10 @@ class SlopeMonitor:
     def push(self, frame: dict[str, Any]) -> None:
         if not self._load():
             return
+        # Every frame, whatever its channels carry. This is the only thing
+        # that separates "the recording has just started" from "frames are
+        # arriving and none of them is usable" -- see line().
+        self._pushed += 1
         cap = int(self.window_seconds * (self._fs or 256.0))
         for c in self._buf:
             v = frame.get(c)
@@ -322,24 +327,24 @@ class SlopeMonitor:
         `_load()` already speaks up when the imports fail; this is the
         per-read failure, which had no voice.
         """
-        counts = self._filled()
-        if counts:
-            need = int(self.window_seconds * (self._fs or 256.0))
-            # The fullest channel decides: below the window everywhere is an
-            # ordinary start, while one channel short of a full neighbour is
-            # a channel that has stopped delivering.
-            if max(counts.values()) < need:
-                return None
-            s = self.slope()
-            if s is None:
-                short = [f"{c} {n}/{need}" for c, n in sorted(counts.items()) if n < need]
-                why = ", ".join(short) if short else "the fit did not resolve"
-                return (f"  cannot read the slope -- {why}. A temporal contact that stops "
-                        "delivering silences this check; re-seat it before recording.")
-        else:
-            s = self.slope()
-            if s is None:
-                return None
+        if not self._load():
+            return None
+        need = int(self.window_seconds * (self._fs or 256.0))
+        # **Frames seen, never samples buffered.** Deciding from the fullest
+        # channel scoped this to one dead contact: with both starved the
+        # fullest is also empty, so the broken state and an ordinary start
+        # were one output for the whole capture -- and both at once is the
+        # likelier shape, since a strap that is off or riding high kills the
+        # pair together, and calm is an alpha residual at that pair.
+        if self._pushed < need:
+            return None
+        s = self.slope()
+        if s is None:
+            counts = self._filled()
+            short = [f"{c} {n}/{need}" for c, n in sorted(counts.items()) if n < need]
+            why = ", ".join(short) if short else "the fit did not resolve"
+            return (f"  cannot read the slope -- {why}, over {self._pushed} frames. A temporal "
+                    "contact that stops delivering silences this check; re-seat before recording.")
         if s > self.warn_above:
             return (f"  slope {s:+.2f} -- FLAT: broadband power, most likely muscle. "
                     "Check the strap is above the temple muscle and the jaw is loose. "

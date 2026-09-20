@@ -238,8 +238,19 @@ resolve no caller **by address**, and this whole run is one address:
 The probe is comfortable. Generation is not: a script answering instantly does 20–30 questions
 per student per minute. **Pace it to roughly a question every 6 s per student** rather than
 raising the cap — raising it throws away the one measurement this run could make about whether
-the shipped default suits a classroom. If it does throttle, #224 records `rate_limited` in
-`security_events`, so Phase 6 reads the evidence rather than inferring it from missing questions.
+the shipped default suits a classroom.
+
+**Count the 429s in the harness; that is the measurement.** Each refused request is one 429 carrying
+`Retry-After`, and `apiFetch` retries **503 only** — a 429 reaches the caller on the first response —
+so one refusal is one response and the count is exact. Record it per student and per minute; that is
+the number Phase 6 needs.
+
+**`security_events` cannot supply it, and looks like it can.** `rate_limited` is cooled at
+`SECURITY_EVENT_COOLDOWN_SECONDS` (300) on `(kind, actor, limiter)`, and the public limiter records
+with `actor_user_id=None` — so every generation refusal in the run, from all 30 students behind one
+address, collapses to one key and writes at most one row per five minutes, carrying neither a count
+nor an address by design. One refused request and ten thousand leave the same handful of rows. It is
+a presence flag: useful for *whether* the cap was reached and worthless for *how far past* it.
 #225 was open at the time of writing; check whether it merged before designing the pacing.
 
 ## Phase 5a — full-coverage pass on the new code. NOT STARTED.

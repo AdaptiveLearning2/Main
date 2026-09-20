@@ -21,6 +21,7 @@ them are weaker than they look:
 
 import ast
 import json
+import pathlib
 import re
 import os
 import subprocess
@@ -55,7 +56,15 @@ client = None
 def _client_for_the_live_module():
     global client
     client = TestClient(main.app)
+    # The public limiter's hits are module-level and every test in this file
+    # shares one peer address, so without this a test that lowers the budget
+    # leaves the next one refused -- and it would be the *next* test that
+    # failed, for a reason nothing in its body mentions. Same leak the
+    # security-log fixture clears, and the same one `clearViewPrefs` exists for
+    # in the frontend suite.
+    main._public_hits.clear()
     yield
+    main._public_hits.clear()
     client = None
 
 
@@ -510,3 +519,191 @@ def test_a_name_this_app_knows_is_silent(raw, capsys):
     line above only means something while it is rare."""
     main._is_production(raw)
     assert capsys.readouterr().out == ""
+
+
+# ─── the routes with no caller ───────────────────────────────────────────
+
+def _public_route_paths() -> set[str]:
+    """Every route handler that never resolves a caller, read from the module.
+
+    Derived rather than listed, for the reason `close_sites()` is: a sixth
+    public route added later is exactly the one nobody would remember to
+    budget, and it would arrive with no limiter of any kind rather than a
+    loose one.
+    """
+    tree = ast.parse(pathlib.Path(main.__file__).read_text(encoding="utf-8"))
+    paths = set()
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        routes = [d for d in fn.decorator_list
+                  if isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
+                  and getattr(d.func.value, "id", None) == "app"
+                  # `app.middleware("http")` is not a route, and the limiter
+                  # itself is one of those -- counted, it would demand a budget
+                  # for the thing that applies the budgets.
+                  and d.func.attr in ("get", "post", "put", "delete")]
+        if not routes:
+            continue
+        body = ast.unparse(fn)
+        if "get_user(" in body or "_require_admin(" in body:
+            continue
+        paths.update(r.args[0].value for r in routes
+                     if r.args and isinstance(r.args[0], ast.Constant))
+    return paths
+
+
+def test_every_route_with_no_caller_has_an_address_budget():
+    """The gap this closes: the other limiters key on the id `get_user`
+    returns, so on a route that never calls it neither one runs at all."""
+    assert _public_route_paths() == set(main._PUBLIC_LIMITER)
+
+
+def test_the_derivation_found_routes_at_all():
+    """Or the comparison above passes against two empty sets."""
+    assert len(_public_route_paths()) >= 5
+
+
+def test_every_budgeted_path_names_a_budget_that_exists():
+    """A typo'd limiter name raises `KeyError` inside the middleware, which is
+    a 500 on a public route rather than a missing limit."""
+    for path, limiter in main._PUBLIC_LIMITER.items():
+        assert limiter in main._PUBLIC_RATE_LIMITS, path
+
+
+def _tighten(monkeypatch, limiter="public_read", limit=2, window=60.0):
+    monkeypatch.setattr(main, "_PUBLIC_RATE_LIMITS",
+                        {**main._PUBLIC_RATE_LIMITS, limiter: (limit, window)})
+    main._public_hits.clear()
+
+
+def test_a_public_read_is_refused_once_the_address_is_over_its_allowance(monkeypatch):
+    _tighten(monkeypatch)
+
+    assert client.get(OPEN_PATH).status_code == 200
+    assert client.get(OPEN_PATH).status_code == 200
+    refused = client.get(OPEN_PATH)
+
+    assert refused.status_code == 429
+    # Sized from the window rather than a constant, so a caller that waits the
+    # stated time is genuinely inside its allowance again.
+    assert int(refused.headers["retry-after"]) >= 1
+
+
+def test_the_refusal_is_readable_by_the_page_that_caused_it(monkeypatch):
+    """Ordering, asserted rather than commented: the limiter is added *before*
+    `security_headers` and CORS, so it sits inside both. A 429 carrying no CORS
+    header reaches a browser as a generic network error, which makes a rate
+    limit indistinguishable from the backend being down."""
+    _tighten(monkeypatch, limit=1)
+
+    client.get(OPEN_PATH, headers={"Origin": ALLOWED})
+    refused = client.get(OPEN_PATH, headers={"Origin": ALLOWED})
+
+    assert refused.status_code == 429
+    assert refused.headers["access-control-allow-origin"] == ALLOWED
+    # Set is not the same as readable: `Retry-After` is not CORS-safelisted, so
+    # the exposure list is what makes this one legible to the page.
+    assert "retry-after" in refused.headers["access-control-expose-headers"].lower()
+    # And the inner middleware still ran, so the refusal is as guarded as any
+    # other response.
+    assert refused.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_a_caller_cannot_mint_a_fresh_allowance_out_of_the_query_string(monkeypatch):
+    """`/api/generate-question` has a limiter already, keyed on `user_id` --
+    which on an unauthenticated route is a string the caller writes. A new one
+    per request bought a new allowance, on the shortest path in the product to
+    a model call. The address is the identity the caller does not choose."""
+    _tighten(monkeypatch, "public_generate", limit=2)
+    # This route reaches a model and a database, neither of which exists here,
+    # so its own body raises. That is beside the point and is also the point:
+    # the allowance is spent before the handler runs, so the expensive path
+    # cannot be hammered for free by making it fail.
+    unguarded = TestClient(main.app, raise_server_exceptions=False)
+
+    seen = [unguarded.get(f"/api/generate-question?user_id=fresh-{i}&grade=5th+Grade")
+            for i in range(3)]
+
+    assert [r.status_code for r in seen[:2]] != [429, 429], "the first two were inside it"
+    assert seen[2].status_code == 429
+
+
+def test_two_addresses_do_not_share_one_allowance(monkeypatch):
+    """Or one noisy caller refuses everybody, which is the failure a limiter is
+    meant to prevent rather than cause."""
+    _tighten(monkeypatch, limit=1)
+    a = TestClient(main.app, client=("10.0.0.1", 1))
+    b = TestClient(main.app, client=("10.0.0.2", 1))
+
+    assert a.get(OPEN_PATH).status_code == 200
+    assert a.get(OPEN_PATH).status_code == 429
+    assert b.get(OPEN_PATH).status_code == 200
+
+
+def test_the_forwarded_header_is_not_read_unless_a_proxy_is_declared(monkeypatch):
+    """Unset, `X-Forwarded-For` is a header anyone can write, so reading it
+    would be the query-parameter hole again in a different spelling."""
+    _tighten(monkeypatch, limit=1)
+
+    first = client.get(OPEN_PATH, headers={"X-Forwarded-For": "9.9.9.1"})
+    second = client.get(OPEN_PATH, headers={"X-Forwarded-For": "9.9.9.2"})
+
+    assert (first.status_code, second.status_code) == (200, 429)
+
+
+def test_with_a_proxy_declared_the_client_is_taken_from_the_right(monkeypatch):
+    """Entries are appended left to right, so only the rightmost were written
+    by something trusted: with one proxy in front the client is the last entry,
+    and whatever the caller invented sits to its left."""
+    _tighten(monkeypatch, limit=1)
+    monkeypatch.setattr(main, "_TRUSTED_PROXY_HOPS", 1)
+
+    mine = client.get(OPEN_PATH, headers={"X-Forwarded-For": "spoofed, 9.9.9.1"})
+    same = client.get(OPEN_PATH, headers={"X-Forwarded-For": "other, 9.9.9.1"})
+    other = client.get(OPEN_PATH, headers={"X-Forwarded-For": "9.9.9.1, 9.9.9.2"})
+
+    assert mine.status_code == 200
+    # One trusted entry, two invented prefixes: one caller, one allowance.
+    assert same.status_code == 429
+    assert other.status_code == 200
+
+
+def test_a_short_forwarded_chain_falls_back_to_the_peer(monkeypatch):
+    """The header is then not what this deployment was told it would be.
+    Sharing the proxy's bucket shows up as refusals; trusting the one entry
+    present would let a caller name itself, which is silent."""
+    _tighten(monkeypatch, limit=1)
+    monkeypatch.setattr(main, "_TRUSTED_PROXY_HOPS", 2)
+
+    first = client.get(OPEN_PATH, headers={"X-Forwarded-For": "9.9.9.1"})
+    second = client.get(OPEN_PATH, headers={"X-Forwarded-For": "9.9.9.2"})
+
+    assert (first.status_code, second.status_code) == (200, 429)
+
+
+def test_a_route_that_is_not_public_is_not_touched_by_this(monkeypatch):
+    """The map is by path, so an authenticated route keeps its own answer --
+    not a 429 from a budget it was never in."""
+    _tighten(monkeypatch, limit=1)
+    for _ in range(3):
+        client.get(OPEN_PATH)
+
+    assert client.get("/api/profile/me").status_code == 401
+
+
+def test_the_refusal_is_recorded_without_saying_who(monkeypatch):
+    """An address is personal data about a child for a purpose no consent
+    channel covers, so the row names the endpoint and nothing else. The cost is
+    stated rather than hidden: with no caller in the key these events cool per
+    limiter, so the log says the public path is being hammered and not by how
+    many callers."""
+    _tighten(monkeypatch, limit=1)
+    rows = []
+    monkeypatch.setattr(main, "_record_security_event",
+                        lambda kind, actor, subject=None, **d: rows.append((kind, actor, d)))
+
+    client.get(OPEN_PATH)
+    assert client.get(OPEN_PATH).status_code == 429
+
+    assert rows == [("rate_limited", None, {"limiter": "public_read"})]

@@ -491,8 +491,8 @@ treatment in `config.py` — a validator warns and falls back rather than refusi
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MODE`, `INGEST_MAX_BATCH` /
 `INGEST_RATE_LIMIT` / `INGEST_RATE_WINDOW`, `SESSION_ABANDONED_AFTER_HOURS` /
 `STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep), `QUESTIONS_CACHE_TTL`,
-`QUESTION_QUEUE_SIZE`, the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` group under
-*The network edge*, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels*,
+`QUESTION_QUEUE_SIZE`, the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
+`PUBLIC_*_RATE_*` / `TRUSTED_PROXY_HOPS` group under *The network edge*, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels*,
 and the `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` / `SOLVE_*` groups in `docs/question-generation.md`.
 
 `QUESTIONS_CACHE_TTL` (30 s) fronts `GET /api/questions` and is bounded at 256 entries, so a sweep
@@ -794,6 +794,23 @@ reads the body to hand it on and the point is not to read it.
 CORS last (outermost). A 413 carrying no CORS header reaches the browser as a generic network error, making a size
 limit indistinguishable from the backend being down. **`add_middleware` prepends, so *added last* means *outermost*** —
 getting that backwards is silent.
+
+**Five GET routes resolve no caller, and every other limiter here keys on the id `get_user` returns** —
+so on the question bank, the topic list, the sidecar health probe and question generation, none of them
+runs. A middleware inside `security_headers` and CORS budgets those five by **address**, which is the only
+identity an unauthenticated caller cannot choose: `/api/generate-question` already had a limiter keyed on
+its `user_id` *query parameter*, so a new string per request bought a new allowance on the shortest path in
+the product to a model call. `test_network_edge.py` derives the public set from the module, so a sixth such
+route fails until it is given a budget.
+
+**An address is a school, not a student**, and that sets the numbers. A class leaves through one NAT and
+`Adaptive.jsx` polls the health route every 5 s per open page, so sixty students behind one address is
+720/min before anyone answers a question; the defaults sit above that. These refuse a runaway client and
+are not a way to police a class. **`X-Forwarded-For` is read only as far right as `TRUSTED_PROXY_HOPS`
+says a proxy wrote it**, default 0 — trusting it with nothing in front is the query-parameter hole again,
+and not trusting it behind a proxy puts every caller in the world in one bucket. **The 429 records the
+limiter and never the address**, so these events cool per endpoint rather than per caller: the log says
+the public path is being hammered, not by whom, and whoever holds addresses is whatever sits in front.
 
 Not here, deliberately: **no `TrustedHostMiddleware`** (the production host is an open decision, and an allowlist with
 no known host either breaks everything or is a no-op), and **no HSTS** — one line in `security_headers` when the

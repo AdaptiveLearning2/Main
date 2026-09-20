@@ -171,3 +171,14 @@ def test_the_flattened_row_carries_every_feature_field_the_sidecar_declares():
     row = capture.flatten_state(_envelope(), segment="x", t="2026-09-13T00:00:00+00:00")
     missing = [f for f in FeatureData.model_fields if f not in row]
     assert missing == [], f"flatten_state does not carry {missing}"
+
+
+def test_the_arithmetic_prompt_asks_for_silence():
+    """Aloud, the segment measures speech muscle: beta rose 0.08 with gamma
+    0.10 and good contact halved, and broadband EMG corrupts the temporal
+    alpha residual the local calm is. The method moved to silent for the
+    raw capture while this prompt still said aloud -- and the wearer reads
+    the prompt, not the method note."""
+    prompt = next(p for s, _, p in capture.DEFAULT_PROTOCOL if s == "arithmetic")
+    assert "aloud" not in prompt.lower()
+    assert "silent" in prompt.lower()

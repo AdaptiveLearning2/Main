@@ -62,8 +62,16 @@ SCRIPT_VERSION = 1
 DEFAULT_PROTOCOL: list[tuple[str, int, str]] = [
     ("eyes_closed_rest", 120, "Close your eyes and rest. Stay still."),
     ("eyes_open_rest", 120, "Eyes open, rest, look at a blank wall."),
-    ("arithmetic", 120, "Mental arithmetic aloud: multiply two-digit numbers "
-                        "(47 x 23, 68 x 19, ...), one after another, no pauses."),
+    # Silently, and the prompt has to say so on screen. Aloud on the first
+    # capture, speech muscle raised beta by 0.08 *with gamma by 0.10* and
+    # halved good contact (2.5 channels to 1.5), so the segment measured
+    # talking rather than thinking -- and the local calm is an alpha
+    # residual at the temporal pair, which broadband EMG corrupts outright.
+    # The 2026-09-14 raw capture was done silently for that reason while
+    # this prompt still said aloud; a second wearer reads the prompt.
+    ("arithmetic", 120, "Mental arithmetic SILENTLY -- do not speak or move your "
+                        "jaw: multiply two-digit numbers (47 x 23, 68 x 19, ...), "
+                        "one after another. Write nothing down."),
     ("eyes_open_rest_2", 60, "Eyes open, rest."),
     ("jaw_clench", 10, "Clench your jaw firmly and hold it."),
     ("rest_after_clench", 10, "Relax the jaw. Stay still."),

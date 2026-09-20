@@ -317,3 +317,36 @@ def test_a_filling_window_stays_silent_and_a_starved_one_does_not():
     starved = capture.SlopeMonitor(window_seconds=4.0)
     _feed_one(starved, _white(4 * 256), "tp9")
     assert starved.line() is not None
+
+
+def test_both_temporal_channels_starved_is_reported_not_read_as_a_start():
+    """The likelier shape and the least recoverable one: a strap off or
+    riding high kills the pair together, and calm is an alpha residual at
+    that pair. Deciding from the fullest channel made this identical to an
+    ordinary start, for the whole capture, while frame counts ticked."""
+    m = capture.SlopeMonitor(window_seconds=4.0)
+    for _ in range(3 * 4 * 256):
+        m.push({"af7": 1.0})          # frames arriving, neither temporal in them
+    assert m.slope() is None
+    line = m.line()
+    assert line is not None, "two dead contacts must not read as a start"
+    assert "cannot read the slope" in line
+    assert "tp9" in line and "tp10" in line, "name both, not one"
+
+
+def test_both_channels_present_but_never_usable_is_the_same():
+    m = capture.SlopeMonitor(window_seconds=4.0)
+    for _ in range(4 * 256):
+        m.push({"tp9": None, "tp10": None})
+    assert "cannot read the slope" in (m.line() or "")
+
+
+def test_frames_seen_is_what_separates_the_two_states():
+    """Not samples buffered. Below a window of frames nothing is claimed;
+    past it, buffers that have not kept up are the finding."""
+    quiet = capture.SlopeMonitor(window_seconds=4.0)
+    for _ in range(4 * 256 - 1):
+        quiet.push({})
+    assert quiet.line() is None, "a window of frames has not arrived yet"
+    quiet.push({})
+    assert "cannot read the slope" in (quiet.line() or ""), "it has now"

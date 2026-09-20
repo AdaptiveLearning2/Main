@@ -605,8 +605,20 @@ export default function Adaptive() {
     let killed = false
     const read = async () => {
       try {
-        const st = headband.pushMode ? await museState(stationId)
-                                     : (await eegStatus(stationId))?.muse
+        let st
+        if (headband.pushMode) {
+          st = await museState(stationId)
+        } else {
+          // `eegStatus` answers with its fallback instead of throwing, so the
+          // `catch` below never sees a failed read -- and that fallback has no
+          // `muse`, which arrives here as an empty `ing` and clears the charge
+          // from a request that never landed. `battery` is the one field this
+          // poll owns under pull, so it is the one that leaks. Same guard the
+          // status tick makes on the same flag.
+          const answer = await eegStatus(stationId)
+          if (answer?.answered === false) return
+          st = answer?.muse
+        }
         if (killed) return
         const ing = st?.ingestion || {}
         const prev = headbandRef.current

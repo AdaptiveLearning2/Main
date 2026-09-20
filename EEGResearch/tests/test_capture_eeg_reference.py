@@ -202,3 +202,62 @@ def test_the_header_records_the_protocol_that_was_selected():
     h = capture.header(args, capture.CLOSED_OPEN_PROTOCOL)
     assert h["protocol"] == [{"segment": "eyes_closed_rest", "seconds": 120},
                              {"segment": "eyes_open_rest", "seconds": 120}]
+
+
+# -- the live slope check --
+
+def _feed(monitor, series):
+    """Push one frame per sample of the temporal pair."""
+    for v in series:
+        monitor.push({"tp9": float(v), "tp10": float(v)})
+
+
+def _white(n, seed=0):
+    import numpy as np
+    return np.random.default_rng(seed).normal(0.0, 30.0, n)
+
+
+def test_the_slope_monitor_says_nothing_until_its_window_is_full():
+    m = capture.SlopeMonitor(window_seconds=4.0)
+    _feed(m, _white(256))
+    assert m.slope() is None and m.line() is None
+
+
+def test_a_flat_spectrum_is_reported_as_flat():
+    """Broadband power flattens the 1/f slope. That is what muscle does, it
+    sits on the alpha band the local calm reads, and on the second wearer's
+    capture nothing on screen said so until it was scored afterwards."""
+    m = capture.SlopeMonitor(window_seconds=4.0, warn_above=-1.0)
+    _feed(m, _white(4 * 256))
+    s = m.slope()
+    assert s is not None and s > -1.0, "white noise is flat by construction"
+    assert "FLAT" in m.line()
+
+
+def test_a_steep_spectrum_passes_and_is_measured_as_steeper():
+    """The comparison, not the absolute value, is what the check rests on:
+    a 1/f signal must read steeper than a flat one through this same path."""
+    from tests.test_eeg_spectrum import pink
+    steep = capture.SlopeMonitor(window_seconds=4.0, warn_above=-0.5)
+    _feed(steep, pink(4 * 256, 0))
+    flat = capture.SlopeMonitor(window_seconds=4.0, warn_above=-0.5)
+    _feed(flat, _white(4 * 256))
+    assert steep.slope() < flat.slope()
+    assert steep.line().endswith("ok") and "FLAT" in flat.line()
+
+
+def test_the_slope_check_never_raises_on_a_bad_frame():
+    """A diagnostic must not be able to kill the recording it describes."""
+    m = capture.SlopeMonitor(window_seconds=4.0)
+    for bad in ({}, {"tp9": None}, {"tp9": "x", "tp10": []}, {"tp10": float("nan")}):
+        m.push(bad)
+    assert m.slope() is None
+    _feed(m, _white(4 * 256))
+    assert m.line() is not None
+
+
+def test_the_slope_check_is_on_by_default_and_can_be_turned_off():
+    ap = capture.build_parser()
+    assert ap.parse_args(["--out", "x"]).no_slope_check is False
+    assert ap.parse_args(["--out", "x"]).slope_warn == -1.0
+    assert ap.parse_args(["--out", "x", "--no-slope-check"]).no_slope_check is True

@@ -221,6 +221,101 @@ def header(args: argparse.Namespace, protocol: list[tuple[str, int, str]]) -> di
     }
 
 
+# -- live recording quality --
+
+class SlopeMonitor:
+    """Reports the aperiodic (1/f) slope of the temporal pair while recording.
+
+    The second wearer's capture was scored afterwards and found to carry
+    broadband power that flattened the slope to −0.65 at rest, where the
+    first wearer's rest sat at −1.24 and only a *deliberate jaw clench*
+    reached −0.49. That is what muscle looks like, it sits on top of the
+    alpha band the local calm is built from, and electrode contact was good
+    throughout — so nothing on screen during the session said anything was
+    wrong, and five minutes of a person's time bought an uninterpretable
+    file. A slope read live is the one number that would have caught it.
+
+    Warns rather than aborts. The threshold comes from two adults, which is
+    not enough to refuse someone's recording over, and a flat slope can also
+    be a strap sitting low on the temporalis or an ordinary difference
+    between people. It says what it sees and leaves the call to the operator.
+    """
+
+    def __init__(self, window_seconds: float = 8.0, warn_above: float = -1.0) -> None:
+        self.window_seconds = window_seconds
+        self.warn_above = warn_above
+        self._buf: dict[str, list[float]] = {}
+        self._fs: float | None = None
+        self._deps: Any = None
+        self._off = False
+
+    def _load(self) -> bool:
+        """numpy and the sidecar's spectrum helpers, imported on first use so
+        `--summarize` and the sidecar source keep running without them."""
+        if self._deps is not None:
+            return True
+        if self._off:
+            return False
+        try:
+            sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+            import numpy as np
+            from src.app.services.eeg_spectrum import (SAMPLE_RATE_HZ, TEMPORAL,
+                                                       one_over_f_fit, welch_log_psd)
+            self._deps = (np, one_over_f_fit, welch_log_psd, TEMPORAL)
+            self._fs = SAMPLE_RATE_HZ
+            self._buf = {c: [] for c in TEMPORAL}
+            return True
+        except Exception as exc:  # pragma: no cover - environment dependent
+            print(f"  (slope check off: {exc})", file=sys.stderr)
+            self._off = True
+            return False
+
+    def push(self, frame: dict[str, Any]) -> None:
+        if not self._load():
+            return
+        cap = int(self.window_seconds * (self._fs or 256.0))
+        for c in self._buf:
+            v = frame.get(c)
+            if isinstance(v, (int, float)):
+                buf = self._buf[c]
+                buf.append(float(v))
+                if len(buf) > cap:
+                    del buf[:len(buf) - cap]
+
+    def slope(self) -> float | None:
+        """Mean 1/f slope over the temporal pair, or None until the window
+        has filled. Never raises: a diagnostic must not be able to kill the
+        recording it is describing."""
+        if not self._load():
+            return None
+        np, one_over_f_fit, welch_log_psd, _ = self._deps
+        need = int(self.window_seconds * (self._fs or 256.0))
+        slopes = []
+        try:
+            for c, buf in self._buf.items():
+                if len(buf) < need:
+                    return None
+                f, log_psd = welch_log_psd(np.asarray(buf, dtype=float), self._fs)
+                s, _ = one_over_f_fit(f, log_psd)
+                if np.isfinite(s):
+                    slopes.append(float(s))
+        except Exception:
+            return None
+        return sum(slopes) / len(slopes) if slopes else None
+
+    def line(self) -> str | None:
+        """One line for the progress output, or None if there is nothing to
+        say yet."""
+        s = self.slope()
+        if s is None:
+            return None
+        if s > self.warn_above:
+            return (f"  slope {s:+.2f} -- FLAT: broadband power, most likely muscle. "
+                    "Check the strap is above the temple muscle and the jaw is loose. "
+                    f"Rest should be under {self.warn_above:+.2f}.")
+        return f"  slope {s:+.2f} ok"
+
+
 # -- the protocol --
 
 class SegmentClock:
@@ -334,6 +429,9 @@ def capture_bridge(args: argparse.Namespace, clock: SegmentClock, fh) -> int:
     last_ms: float | None = None
     deadline = None if args.seconds is None else time.monotonic() + args.seconds
     last_report = time.monotonic()
+    # Read live, because afterwards is too late: a contaminated capture looks
+    # entirely normal while it is being recorded.
+    monitor = None if args.no_slope_check else SlopeMonitor(warn_above=args.slope_warn)
     try:
         sock.settimeout(1.0)
         buf = b""
@@ -366,6 +464,8 @@ def capture_bridge(args: argparse.Namespace, clock: SegmentClock, fh) -> int:
                 fh.write(json.dumps(msg) + "\n")
                 if kind == "eeg":
                     frames += 1
+                    if monitor is not None:
+                        monitor.push(msg)
                     ms = msg.get("mono_ts_ms")
                     if isinstance(ms, (int, float)):
                         first_ms = ms if first_ms is None else first_ms
@@ -376,6 +476,10 @@ def capture_bridge(args: argparse.Namespace, clock: SegmentClock, fh) -> int:
             if now - last_report >= 10:
                 last_report = now
                 print(f"  {frames} eeg frames ({clock.segment})", file=sys.stderr)
+                if monitor is not None:
+                    line = monitor.line()
+                    if line:
+                        print(line, file=sys.stderr)
     finally:
         sock.close()
     if frames and first_ms is not None and last_ms is not None and last_ms > first_ms:
@@ -500,6 +604,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--keep-duplicates", action="store_true",
                     help="write a row on every poll even when the sidecar tick has not advanced")
     ap.add_argument("--notes", default="", help="method notes for the header -- no names")
+    ap.add_argument("--slope-warn", type=float, default=-1.0,
+                    help="warn while recording if the temporal 1/f slope is shallower "
+                         "than this (bridge source only); broadband muscle flattens it")
+    ap.add_argument("--no-slope-check", action="store_true",
+                    help="do not report the 1/f slope while recording")
     return ap
 
 

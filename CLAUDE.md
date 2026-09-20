@@ -821,6 +821,12 @@ caller, so it is not in `_PUBLIC_LIMITER` and the address budget never touches i
 the refused health probe could not, and clears `probeRefused` with the value it writes. Only when it
 answered — `eegStatus` swallows its own failure into `service: false`, and treating that as an answer turns
 "we could not check" into "we checked and it is down", which the sentence turns into an instruction.
+**`pushMode` is behind the same guard**, and more plainly: a deployment's ingest mode cannot change because
+a request failed. Read from the swallowed fallback it is undefined, so push became pull and the panel
+changed branch to *"not reachable on port 8001"* — a port and a service that deployment does not have, which
+is the sentence `eeg_health`'s `available: None` exists to keep off a student's first screen. `connected`
+and the sample counts stay *outside* the guard on purpose: those are claims about flow, and nothing flowing
+is what a failed read means.
 
 **A hook on the event loop must not write.** `_record_security_event` does a synchronous Supabase insert,
 and every other call site is in a `def` handler that FastAPI already runs in a worker thread. Middleware

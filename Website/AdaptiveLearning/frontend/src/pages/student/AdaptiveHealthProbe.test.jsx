@@ -28,10 +28,21 @@ vi.mock('../../lib/signals', () => ({
   eegStatus: vi.fn(async () => ({})),
   eegDevices: vi.fn(async () => ({ devices: [] })),
 }))
+// Everything the page imports from here, not only what the pull tests reach:
+// the push test below takes branches that call the rest, and a factory missing
+// one of them fails where the double is thin rather than where a bug is.
 vi.mock('../../lib/sidecar', () => ({
-  startPush: vi.fn(), stopPush: vi.fn(), stopPushOnUnload: vi.fn(),
-  pushStatus: vi.fn(async () => ({})), deviceStart: vi.fn(), museRefresh: vi.fn(),
-  museConnect: vi.fn(), museDisconnect: vi.fn(), museStatus: vi.fn(async () => ({})),
+  startPush: vi.fn(async () => ({})), stopPush: vi.fn(async () => ({})),
+  stopPushOnUnload: vi.fn(),
+  pushStatus: vi.fn(async () => ({})),
+  deviceStart: vi.fn(async () => ({})), deviceStop: vi.fn(async () => ({})),
+  deviceStopOnUnload: vi.fn(),
+  museRefresh: vi.fn(async () => ({})), museConnect: vi.fn(async () => ({})),
+  museDisconnect: vi.fn(async () => ({})),
+  museState: vi.fn(async () => ({ running: false, ingestion: {} })),
+  museStatus: vi.fn(async () => ({})),
+  devices: vi.fn(async () => []),
+  releasePushIfIdle: vi.fn(async () => ({})),
   sidecarDebug: vi.fn(async () => ({})),
 }))
 vi.mock('../../context/AuthContext', () => ({
@@ -209,4 +220,34 @@ it('leaves the refusal standing when the status tick did not answer either', asy
   const sentence = screen.getByText(/EEG service/)
   expect(sentence).toHaveTextContent(/Could not check/)
   expect(sentence).not.toHaveTextContent(/Make sure/)
+})
+
+
+it('does not flip a push deployment to pull because a tick did not land', async () => {
+  // `ingest_mode` read from an unlanded response is undefined, so push became
+  // pull and the whole panel changed branch -- ending at "not reachable on
+  // port 8001", which names a port and a service a push deployment does not
+  // have. `eeg_health` answers `available: None` under push precisely to keep
+  // that sentence off the first screen a student sees.
+  //
+  // A deployment's ingest mode cannot change because a request failed, which
+  // is a stronger claim than the one about `available`: there is no reading to
+  // go stale, only a fact about how this installation is wired.
+  eegHealth.mockResolvedValue({ available: null, ingest_mode: 'push' })
+  eegStatus.mockResolvedValue({ answered: false, service: false, poller: { running: false } })
+  render(<Adaptive />)
+
+  expect(await screen.findByText('on your device')).toBeInTheDocument()
+
+  await startASession()
+  await waitFor(() => expect(eegStatus).toHaveBeenCalled())
+
+  expect(screen.getByText('on your device')).toBeInTheDocument()
+  expect(screen.queryByText('offline')).not.toBeInTheDocument()
+  // The push branch's own sentence, which can only render while `pushMode`
+  // holds. Asserting the *absence* of "not reachable on port 8001" instead
+  // passes for the wrong reason: the debug readout carries that phrase too,
+  // so the query matches a second element and says nothing about this panel.
+  expect(screen.getByText(/pairs through the app on this computer/)).toBeInTheDocument()
+  expect(screen.queryByText(/EEG service not reachable/)).not.toBeInTheDocument()
 })

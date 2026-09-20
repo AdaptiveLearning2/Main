@@ -845,9 +845,6 @@ export default function Adaptive() {
       if (killed) return
       setHeadband(prev => ({
         ...prev,
-        // `service` is null (not false) under push -- the backend never probes
-        // a sidecar it has no route to.
-        pushMode: s.ingest_mode === 'push',
         // This poll is the *other* writer of `available`, and it reaches an
         // authenticated endpoint -- so it is never refused by the public
         // address limiter that can refuse `/api/eeg/health`. A tick that
@@ -862,7 +859,22 @@ export default function Adaptive() {
         // could not check" with "we checked and it is down" -- a claim from a
         // request that never landed, and one the sentence below turns into an
         // instruction to go and restart something.
+        // `pushMode` is inside the guard for the same reason and a sharper
+        // one: a deployment's ingest mode cannot change because a request
+        // failed. Read from an unlanded response `s.ingest_mode` is undefined,
+        // so push flips to pull and the whole panel changes branch -- ending
+        // at "EEG service not reachable on port 8001", naming a port and a
+        // service that deployment does not have. `eeg_health` returns
+        // `available: None` under push precisely to keep that sentence off the
+        // first screen a student sees; this wrote it from a failed read
+        // instead. `connected` and the counts below stay outside the guard on
+        // purpose: those are claims about flow, and nothing flowing is exactly
+        // what a failed status read means.
+        //
+        // `service` is null (not false) under push -- the backend never probes
+        // a sidecar it has no route to.
         ...(s.answered === false ? {} : {
+          pushMode: s.ingest_mode === 'push',
           available: !!s.service,
           probeRefused: false,
         }),

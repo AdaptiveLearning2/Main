@@ -73,7 +73,12 @@ export async function eegHealth() {
 export async function eegStatus(deviceId) {
   const path = deviceId ? `/api/eeg/status?device_id=${encodeURIComponent(deviceId)}` : '/api/eeg/status'
   try { return await apiFetch(path) }
-  catch { return { service: false, poller: { running: false } } }
+  // `answered: false` beside the shape callers already read. The poller half
+  // of this fallback is a deliberate claim -- nothing is flowing if we cannot
+  // ask -- but `service: false` is not one this read has earned, and a caller
+  // that treats it as an answer would learn "the sidecar is down" from a
+  // request that never landed.
+  catch { return { answered: false, service: false, poller: { running: false } } }
 }
 
 export async function eegDevices() {

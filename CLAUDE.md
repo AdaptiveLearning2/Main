@@ -810,8 +810,17 @@ are not a way to police a class. **The probe has its own bucket**: polled every 
 largest consumer of any budget it shares and the first thing an unrelated burst would starve. **A refused
 probe is a third state** — it answers neither reachable nor unreachable, so the page goes on *acting* on
 the last answer (discovery keeps running, Connect stays offered) while saying *status unavailable* rather
-than *offline*. Those are one change, not two: keeping `available` stale without suppressing the `ready`
-badge puts both claims on screen at once, in the one state the whole thing exists for.
+than *offline*. Every surface reading it has to follow, badge and sentence alike: keeping `available` stale
+and leaving one of them asserting the old value puts both claims on screen at once, in the one state the
+whole thing exists for. **The sentence still names what to do when the stale value is a known outage** —
+withdrawing it leaves a disabled Connect with no stated reason. That needs `available` to start at `null`,
+or "nobody has checked" and "checked, and it is down" are one state.
+
+**`available` has two writers, and only one of them can be refused.** The `/api/eeg/status` poll resolves a
+caller, so it is not in `_PUBLIC_LIMITER` and the address budget never touches it: mid-lesson it knows what
+the refused health probe could not, and clears `probeRefused` with the value it writes. Only when it
+answered — `eegStatus` swallows its own failure into `service: false`, and treating that as an answer turns
+"we could not check" into "we checked and it is down", which the sentence turns into an instruction.
 
 **A hook on the event loop must not write.** `_record_security_event` does a synchronous Supabase insert,
 and every other call site is in a `def` handler that FastAPI already runs in a worker thread. Middleware

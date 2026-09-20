@@ -13,6 +13,7 @@
  */
 import { it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 vi.mock('../../lib/supabase', async () => await import('../../test/mocks/supabase'))
@@ -37,8 +38,8 @@ vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u1', email: 'a@b.c' }, role: 'student', loading: false }),
 }))
 
-import { mockApi, resetApi } from '../../test/mocks/apiFetch'
-import { eegHealth, eegDevices } from '../../lib/signals'
+import { mockApi, overrideApi, resetApi } from '../../test/mocks/apiFetch'
+import { eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import Adaptive from './Adaptive'
 
 beforeEach(() => {
@@ -54,6 +55,9 @@ beforeEach(() => {
 })
 
 it('says the check failed, not that the headband is offline', async () => {
+  // Refused from the first probe, so nothing has ever answered: `available` is
+  // null here, not false, and the page may not claim an outage it has never
+  // observed any more than it may claim the service is fine.
   eegHealth.mockResolvedValue({ refused: true, error: 'Too many requests. Slow down.' })
   render(<Adaptive />)
 
@@ -110,6 +114,37 @@ it('goes on acting on the last answer without claiming it is current', async () 
   expect(screen.getByText(/EEG service/)).toHaveTextContent(/Could not check/)
 }, 25000)
 
+it('keeps the instruction when the refusal follows a real outage', async () => {
+  // The mirror of the case above, and the one the branch order gets wrong if
+  // it is unconditional. Here the stale value is *false* and the page is still
+  // acting on it -- Connect stays disabled -- so withdrawing the sentence
+  // leaves a greyed-out button with no stated reason and tells a student to
+  // wait for a check instead of starting the service that is actually down.
+  //
+  // Which is why `available` starts at null rather than false: without a third
+  // value, this state and "nobody has checked yet" are the same one, and the
+  // branch has to treat them alike.
+  eegHealth.mockResolvedValueOnce({ available: false, error: 'Failed to fetch' })
+  eegHealth.mockResolvedValue({ refused: true, error: 'Too many requests.' })
+  render(<Adaptive />)
+
+  expect(await screen.findByText(/EEG service/)).toHaveTextContent(/not reachable on port 8001/)
+  await screen.findByText('status unavailable', undefined, { timeout: 8000 })
+
+  const sentence = screen.getByText(/EEG service/)
+  // Three things, and the first is the one this test is named for: the step
+  // that fixes it has to survive the refusal. Asserting only that the sentence
+  // still mentions an outage passes against a version that drops the
+  // instruction and leaves a student with a disabled button and no next move.
+  expect(sentence).toHaveTextContent(/Make sure the EEGResearch backend is running/)
+  expect(sentence).toHaveTextContent(/not reachable/)
+  expect(sentence).toHaveTextContent(/could not re-check/)
+  // And not the sentence for an unknown state -- it would deny the very thing
+  // the page is still acting on.
+  expect(sentence).not.toHaveTextContent(/says nothing about your headband/)
+}, 25000)
+
+
 it('still reports a sidecar that genuinely did not answer', async () => {
   // The other half: this must not have turned every failure into "unknown".
   // A probe that ran and found nothing there has earned both the badge and the
@@ -120,4 +155,58 @@ it('still reports a sidecar that genuinely did not answer', async () => {
   expect(await screen.findByText('offline')).toBeInTheDocument()
   expect(screen.queryByText('status unavailable')).not.toBeInTheDocument()
   expect(screen.getByText(/EEG service/)).toHaveTextContent(/not reachable on port 8001/)
+})
+
+
+/**
+ * The status poll is the other writer of `available`, and it needs a session
+ * to mount -- which is why none of the tests above can see this interaction at
+ * all: they render the page and never start one.
+ */
+const startASession = async () => {
+  overrideApi(p => p.startsWith('/api/generate-question'), () => ({
+    id: 'q1', question_text: 'What is 2 + 2?', question_topic: 'ordering',
+    answer_options: ['3', '4', '5'], correct_answer: '4', difficulty: 'easy',
+  }))
+  await userEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+}
+
+it('lets an answered status tick clear a refusal the health probe could not', async () => {
+  // `/api/eeg/status` resolves a caller, so it is not in the public limiter and
+  // the address budget cannot refuse it. Mid-lesson it therefore learns the
+  // same fact `/api/eeg/health` was refused for -- and until it cleared the
+  // flag, the page said it could not check the service while holding a
+  // successful check of exactly that, seconds old, and withheld "ready" from a
+  // sidecar it had confirmed.
+  eegHealth.mockResolvedValue({ refused: true, error: 'Too many requests.' })
+  eegStatus.mockResolvedValue({ ingest_mode: 'pull', service: true, poller: {} })
+  render(<Adaptive />)
+
+  // Before a session exists that poll is not mounted, so the refusal stands --
+  // the state every test above lives in.
+  await screen.findByText('status unavailable')
+
+  await startASession()
+
+  expect(await screen.findByText('ready')).toBeInTheDocument()
+  expect(screen.queryByText('status unavailable')).not.toBeInTheDocument()
+  expect(screen.getByText(/EEG service/)).toHaveTextContent(/EEG service ready/)
+})
+
+it('leaves the refusal standing when the status tick did not answer either', async () => {
+  // `eegStatus` swallows its own failure into `service: false`, so clearing the
+  // flag on that would turn "we could not check" into "we checked and it is
+  // down" -- and the sentence turns that into an instruction to go and restart
+  // something, on the strength of a request that never landed.
+  eegHealth.mockResolvedValue({ refused: true, error: 'Too many requests.' })
+  eegStatus.mockResolvedValue({ answered: false, service: false, poller: { running: false } })
+  render(<Adaptive />)
+  await startASession()
+
+  expect(await screen.findByText('status unavailable')).toBeInTheDocument()
+  expect(screen.queryByText('offline')).not.toBeInTheDocument()
+  const sentence = screen.getByText(/EEG service/)
+  expect(sentence).toHaveTextContent(/Could not check/)
+  expect(sentence).not.toHaveTextContent(/Make sure/)
 })

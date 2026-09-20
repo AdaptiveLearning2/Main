@@ -216,7 +216,19 @@ export default function Adaptive() {
   const [headband, setHeadband]   = useState({
     // `pushMode` stays unset until a health check lands -- guessing "not
     // push" showed a false outage message on first paint.
-    available: false, connected: false, samples: 0, lastTs: null,
+    //
+    // `available` is **null until a probe answers**, and that is a third value
+    // rather than a tidier false: started at false, "nobody has checked yet"
+    // and "checked, and the sidecar is not there" are the same state, so a
+    // refused probe cannot tell whether there is a known outage to keep
+    // reporting. Every gate below reads it as falsy and is unaffected --
+    // null and false both mean "don't offer Connect". Only the sentence,
+    // which has to say *why*, tells them apart.
+    //
+    // Unrelated to the `available: null` the devices payload can carry (see
+    // the discovery effect): that one is the backend saying it did not probe.
+    // This one is the browser saying it has had no answer yet.
+    available: null, connected: false, samples: 0, lastTs: null,
     // `reconnecting` is a link that dropped on its own and is being brought
     // back -- by the bridge, or failing that by this page. `connected` is
     // false throughout it: the data is not flowing, and saying otherwise
@@ -836,7 +848,24 @@ export default function Adaptive() {
         // `service` is null (not false) under push -- the backend never probes
         // a sidecar it has no route to.
         pushMode: s.ingest_mode === 'push',
-        available: !!s.service,
+        // This poll is the *other* writer of `available`, and it reaches an
+        // authenticated endpoint -- so it is never refused by the public
+        // address limiter that can refuse `/api/eeg/health`. A tick that
+        // answers therefore knows the same fact the health probe could not
+        // get, and has to clear `probeRefused` with it: otherwise the page
+        // goes on saying it could not check the service while holding a
+        // successful check of exactly that, seconds old, and withholds
+        // `ready` from a sidecar it has confirmed.
+        //
+        // Only when it answered. `eegStatus` swallows its own failure into
+        // `service: false`, and clearing the flag on that would replace "we
+        // could not check" with "we checked and it is down" -- a claim from a
+        // request that never landed, and one the sentence below turns into an
+        // instruction to go and restart something.
+        ...(s.answered === false ? {} : {
+          available: !!s.service,
+          probeRefused: false,
+        }),
         // Only under pull: `poller.running` is the backend's own poller, which
         // doesn't exist under push and would otherwise read as disconnected.
         // And not during a reconnect: the poller runs on through a BLE drop,
@@ -1483,10 +1512,19 @@ export default function Adaptive() {
                         ? `${Object.values(push.recorded).reduce((a, b) => a + b, 0)} readings recorded from this computer.`
                         : 'Turn on your Muse S headband, then click Connect. It pairs through the app on this computer.')
                   // Ahead of `available`, which is deliberately stale through a
-                  // refusal: both sentences below are claims the check has not
-                  // earned, and the second is the worse of the two -- it names
-                  // a layer and a port, which sends a student to restart a
-                  // backend that answered fine.
+                  // refusal -- but only where the stale value is a claim the
+                  // check has not earned. A *known outage* is the opposite
+                  // case: the page is still acting on it (Connect stays
+                  // disabled), so withdrawing the one sentence that says how to
+                  // fix it leaves a greyed-out button with no stated reason,
+                  // and tells a student to wait for a check instead of
+                  // starting the service. So the refusal qualifies that
+                  // sentence rather than replacing it.
+                  : headband.probeRefused && headband.available === false
+                  ? 'EEG service was not reachable when we last checked, and we could not re-check just now. Make sure the EEGResearch backend is running on port 8001.'
+                  // Either nothing has answered yet (`null`) or the last answer
+                  // was that it is there. Neither earns a claim about the
+                  // headband.
                   : headband.probeRefused
                   ? 'Could not check the EEG service just now. That says nothing about your headband — the check runs again on its own.'
                   : headband.available

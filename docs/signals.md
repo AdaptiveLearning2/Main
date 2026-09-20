@@ -911,8 +911,24 @@ is Welch over 2 s Hann windows on a 4 s buffer, per channel, a 1/f slope fit ove
 (fit through the band and the peak becomes slope), and calm is the mean log10 residual over 8–12 Hz at the temporal
 pair. Closed against open separates at **AUC 0.92 at 4 s epochs**.
 
+**That is one adult, and a second does not show it.** Captured twice on a different adult under the same setup: no
+channel reaches chance (tp9 0.37, tp10 0.43, af7 0.37, af8 0.50 at 4 s, against 0.90/0.91/0.27/0.82 on the first),
+with a background slope of −1.34 confirming the recording itself is sound. Alpha-band power sits above the fit in
+both conditions, so the electrodes see something; it does not react to eye closure. **So `EEG_SPECTRUM_SOURCE` stays
+`sdk`, and not pending more data** — a measurement that reads nothing on one of the two adults it has been tried on
+cannot become what every stored calm value means, and on that wearer eyes-closed rest replayed as `stressed` on 154
+ticks of 480. Two people is no basis for a rate, a cause, or any claim about children: `EEG_REFERENCE.md`, *the
+separation does not generalise*, lists what these runs cannot establish, and the first attempt on that wearer was
+lost to mains interference that the headband's own contact grade read as good contact — which is why
+`capture_eeg_reference.py` now prints the 1/f slope live on the bridge source.
+
+**The two decisions that capture was for are retired as decisions.** `EEG_SPECTRUM_POISON_SECONDS` and
+`EEG_CALM_CENTRE_ON_ARM` are parameters of a measurement that produced nothing on the second wearer; both settings
+stay, defaulted to the shipped behaviour, and choosing between them on the first wearer's numbers alone would be
+fitting settings to the only person they worked on.
+
 `EEG_SPECTRUM_SOURCE=local` scores calm from it on its own population scale (`CALM_ALPHA_RESIDUAL_*`, midpoint 0);
-**the default stays `sdk` by decision** — one adult, three runs — and the local figure rides on every payload as
+the local figure rides on every payload as
 `calm_alpha_residual` either way, so a session on `sdk` still records what `local` would have read. On `local`, a tick
 before the buffer fills **holds** calm rather than borrowing the SDK ratio: the two are different numbers on different
 scales and one baseline cannot hold both. A signal-loss reset empties the buffer, since whatever spans a gap is two
@@ -928,7 +944,9 @@ slope — carried unscored as `spectrum_slope`. Blinking produces a spurious 8 H
 delta gate keeps those epochs out of a baseline. Re-derivable with `EEGResearch/scripts/analyze_raw_capture.py`; its
 AUCs are over adjacent epochs of one block each, so they describe that recording and are not estimates.
 
-**Its label and its surfaces are held as they are until the second wearer's capture — don't relabel it in passing.**
+**Its label and its surfaces are held as they are — don't relabel it in passing.** The second wearer's capture has
+now happened and did not change this: it weakened the calm side rather than the focus side, so the two still stand
+or fall together.
 Three options were weighed and rejected. A *rename* has nowhere true to go: the honest names make no claim a reader can
 check, which invites them to invent one, and the readable alternative — engagement — is the same claim in a word this
 file strips from every surface. (The opposite case to the `Confidence` bar, correctly relabelled *Signal quality
@@ -958,8 +976,9 @@ while still filling reports `artifact`, not `filling`.
 **The stressed line is per calm source** — `STRESSED_CALM_MAX` in `adaptation.py` and
 `EEG_STRESSED_CALM_MAX_BY_SOURCE` in `signal_fusion.py`, pinned equal by a test on each side. 0.377 was 0.311 Bels
 below centre on the SDK span and 0.148 on the local one, where silent arithmetic then read stressed; the local line is
-**0.25**. It stands only until the poison length and the pre-latch calm centre are decided against the second wearer's
-capture — the table it came from was derived before the artifact poison and does not reproduce under it.
+**0.25**, and it is one adult's number from a table derived before the artifact poison, which does not reproduce
+under it. The second wearer could not re-set it: the measurement it is a line on produced nothing there
+(`EEG_REFERENCE.md`). It binds only while `EEG_SPECTRUM_SOURCE=local`, which is not the default.
 
 **Both alternatives exist as settings with the shipped behaviour as default** — `EEG_SPECTRUM_POISON_SECONDS` (4.0,
 the buffer; 2.0, the Welch window) and `EEG_CALM_CENTRE_ON_ARM` (`keep`; `midpoint`, the local calm only — focus keeps

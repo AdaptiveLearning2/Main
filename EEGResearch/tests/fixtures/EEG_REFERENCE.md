@@ -310,3 +310,88 @@ What this one capture says, to be read against the second before either is chose
 - Under `2 s · midpoint`, the line at 0.25 reads 0% on every eyes-open and task segment and 4%
   eyes closed on this wearer; under `4 s · midpoint`, 0% everywhere. Neither is a decision yet:
   one adult, and the second wearer is what the matrix is for.
+
+## Second wearer, 2026-09-19 and 2026-09-20 — the separation does not generalise
+
+The 2026-09-14 capture above is **one adult**. This section is the second, and is the reason
+`EEG_SPECTRUM_SOURCE` stays `sdk`. Same MuseS on `PRESET_21`, `--source bridge` with the sidecar
+stopped, paired through the normal stack first. A different adult. Recordings outside the repo.
+
+| capture | frames | rate | segments |
+| --- | --- | --- | --- |
+| `2026-09-19_raw_b.jsonl` | 84,625 | 256.4 Hz | closed 120 s, open 120 s |
+| `2026-09-20_raw_c.jsonl` | 67,853 | 256.4 Hz | closed 120 s, open 120 s |
+
+**Per channel, 4 s epochs, eyes closed against eyes open.** The AUC is over the 1/f-relative
+alpha residual, 0.5 being chance; `scripts/analyze_raw_capture.py` averages TP9+TP10 into one
+temporal figure, which hides exactly the disagreement this table is for.
+
+| channel | wearer 1, 14 Sep | wearer 2, 19 Sep | wearer 2, 20 Sep |
+| --- | --- | --- | --- |
+| tp9 | **0.898** | 0.242 | 0.368 |
+| tp10 | **0.912** | 0.446 | 0.430 |
+| af7 | 0.266 | 0.357 | 0.370 |
+| af8 | 0.822 | 0.421 | 0.504 |
+
+**Background slope and residual, wearer 2.** The slope is the recording-quality reading; a brain
+does not produce a positive one.
+
+| channel | 19 Sep slope closed / open | 20 Sep slope closed / open | 20 Sep residual closed / open |
+| --- | --- | --- | --- |
+| tp9 | **+0.33 / +0.45** | −1.34 / −1.29 | +0.234 / +0.343 |
+| tp10 | −0.97 / −0.64 | −0.61 / −0.61 | +0.198 / +0.247 |
+| af7 | −1.07 / −0.71 | −1.18 / −0.94 | +0.136 / +0.205 |
+| af8 | −1.03 / −0.92 | −1.07 / −1.04 | +0.188 / +0.174 |
+
+1. **The 19 Sep capture was ruined by mains interference and is not evidence about the wearer.**
+   Measured live before the second run: 60 Hz on both temporal channels ~1000× their own noise
+   floor, with a 120 Hz harmonic and sidebands at 44 and 76 Hz, and none of it on the frontal
+   pair. **The headband's own contact grade did not reveal it** — `hsi` read 1 on 90–99% of
+   frames, because a high-impedance contact behaves as an aerial for mains while grading as
+   connected. Re-seating and re-wetting moved the figures not at all across four checks; what
+   changed them was the room.
+2. **The 20 Sep capture is clean and the effect is still absent on every channel.** tp9's slope
+   is −1.34 against wearer 1's −1.39, so the quality problem is fixed and the answer did not
+   change. Not one channel reaches chance.
+3. **The electrodes are not blind.** Alpha-band power sits above the background fit in both
+   conditions on all four channels, +0.14 to +0.34. It does not react to eye closure, and the
+   small tilt that exists runs the wrong way.
+4. **Interference explains the 19th's tp9 and not the rest of it.** Both frontal channels that
+   day had normal slopes and no mains and still returned 0.357 and 0.421.
+
+### What these runs cannot establish
+
+Two adults is not a sample, and this section is written so nobody reads it as one.
+
+- **No prevalence.** "Roughly a tenth of adults produce little alpha on eye closure" is a
+  textbook figure, not a measurement from here. Two people, one each way, supports no rate.
+- **No cause for the null.** Nothing distinguishes a low-voltage-alpha variant from headband
+  placement, from a rhythm strongest at a site a Muse does not reach, or from something about the
+  session. That needs a reference recording this project does not have.
+- **Nothing about children**, who are the product's users. Both wearers are adults.
+- **The 20 Sep capture is clean, not pristine.** 60 Hz still sat at +0.30 (tp9) and +1.80 (tp10)
+  above each channel's floor, roughly a thousandth of the 19th but not absent. The fit excludes
+  7–13 Hz and runs to 40 Hz, so a 60 Hz tone does not enter the residual directly.
+- **The epochs are adjacent slices of one block**, as for wearer 1: an AUC here describes a
+  recording, not a population, and has no confidence interval.
+- **The contrast is not the product's contrast.** Eyes closed against eyes open does not occur in
+  a lesson. The comparison a lesson needs — resting against working, eyes open throughout — gave
+  AUC 0.56 on the wearer where eye closure gave 0.92.
+
+### What it settles, and what it retires
+
+**`EEG_SPECTRUM_SOURCE` stays `sdk`, and not pending more data.** A measurement that reads nothing
+on one of the two adults it has been tried on cannot become what every stored calm value means. On
+this wearer, replayed, eyes-closed rest scored under the 0.25 local stressed line on 39% of ticks
+and was labelled `stressed` on 154 of 480 — a child sitting quietly would have read as struggling.
+
+**The two open decisions are retired as decisions.** How long an artifact poisons the buffer
+(`EEG_SPECTRUM_POISON_SECONDS`) and what calm is centred on at the arm (`EEG_CALM_CENTRE_ON_ARM`)
+are parameters of a measurement that produced nothing here. Both settings stay, defaulted to the
+shipped behaviour, and the matrix above for wearer 1 stays recorded; choosing between them on one
+participant's numbers would be fitting settings to the only person they worked on.
+
+**`capture_eeg_reference.py` reads the slope live because of this**, printing it beside the frame
+count on the bridge source and warning when it is shallower than −1.0. The 19th cost a whole
+session that looked completely normal while it was being recorded. It warns rather than aborting:
+the threshold is two adults' worth, and a flat slope is also what strap position produces.

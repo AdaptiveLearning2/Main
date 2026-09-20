@@ -788,6 +788,7 @@ export default function Adaptive() {
         if (!linkSettling(st?.ingestion)) settlingSince.current = null
         if (run.cancelled) break
         if (linkAlive(st?.ingestion)) { ok = true; break }
+        if (st == null) continue
         const res = await pairOnce(hw, sid, run).catch(() => ({ ok: false }))
         if (run.cancelled) break
         if (res.ok) { ok = true; break }
@@ -1148,7 +1149,10 @@ export default function Adaptive() {
                                   { method: 'POST', body: { device_id: stationId, session_id: sid } }),
     connect:    (name, sid) => apiFetch('/api/eeg/muse/connect',
                                         { method: 'POST', body: { name, device_id: stationId, session_id: sid } }),
-    status:     async () => (await eegStatus(stationId))?.muse || {},
+    status:     async () => {
+      const st = await eegStatus(stationId)
+      return st?.answered === false ? null : (st?.muse || {})
+    },
     // `?.` because the page-driven reconnect can end a session whose recorder
     // was already dropped by a Disconnect that raced it.
     end:        () => rec?.stop(),

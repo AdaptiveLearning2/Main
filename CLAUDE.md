@@ -806,7 +806,17 @@ route fails until it is given a budget.
 **An address is a school, not a student**, and that sets the numbers. A class leaves through one NAT and
 `Adaptive.jsx` polls the health route every 5 s per open page, so sixty students behind one address is
 720/min before anyone answers a question; the defaults sit above that. These refuse a runaway client and
-are not a way to police a class. **`X-Forwarded-For` is read only as far right as `TRUSTED_PROXY_HOPS`
+are not a way to police a class. **The probe has its own bucket**, because being refused costs it more
+than the others: `eegHealth` turns a failure into `available: false`, so sharing one would let a burst
+against the question bank report every student's headband as offline. A refused probe is a third state
+there — it answers neither reachable nor not, so the page keeps the last answer it did get and says
+*status unavailable* rather than *offline*.
+
+**A hook on the event loop must not write.** `_record_security_event` does a synchronous Supabase insert,
+and every other call site is in a `def` handler that FastAPI already runs in a worker thread. Middleware
+is not: measured at **0.95 s** of starvation for every other request against a 1 s insert, with httpx's 5 s
+timeout as the ceiling, so this one goes through `run_in_threadpool`. The cooldown makes it rare, which is
+the wrong comfort — it fires under exactly the load that made it fire. **`X-Forwarded-For` is read only as far right as `TRUSTED_PROXY_HOPS`
 says a proxy wrote it**, default 0 — trusting it with nothing in front is the query-parameter hole again,
 and not trusting it behind a proxy puts every caller in the world in one bucket. **The 429 records the
 limiter and never the address**, so these events cool per endpoint rather than per caller: the log says

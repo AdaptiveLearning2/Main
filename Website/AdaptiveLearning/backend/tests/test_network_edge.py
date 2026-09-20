@@ -20,12 +20,14 @@ them are weaker than they look:
 """
 
 import ast
+import asyncio
 import json
 import pathlib
 import re
 import os
 import subprocess
 import sys
+import threading
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
@@ -707,3 +709,82 @@ def test_the_refusal_is_recorded_without_saying_who(monkeypatch):
     assert client.get(OPEN_PATH).status_code == 429
 
     assert rows == [("rate_limited", None, {"limiter": "public_read"})]
+
+
+def test_the_probe_has_a_budget_of_its_own():
+    """Sharing one with the question bank made the probe both the largest
+    consumer of that bucket and the first casualty of anyone else's burst --
+    and `checkHealth` turns any failure into `available: false`, so the whole
+    school's pages would have reported the headband as down because somebody
+    hammered an unrelated route."""
+    assert main._PUBLIC_LIMITER["/api/eeg/health"] != \
+        main._PUBLIC_LIMITER["/api/questions"]
+
+
+def test_exhausting_the_question_bank_does_not_refuse_the_health_probe(monkeypatch):
+    _tighten(monkeypatch, "public_read", limit=1)
+
+    assert client.get(OPEN_PATH).status_code == 200
+    assert client.get(OPEN_PATH).status_code == 429
+    # The probe is a different bucket, so it is unaffected by the burst next
+    # to it. Its own body may fail without a sidecar; what is asserted is that
+    # it was not refused at the edge.
+    assert client.get("/api/eeg/health").status_code != 429
+
+
+def test_the_audit_write_does_not_stop_the_event_loop(monkeypatch):
+    """The one hook that runs on the loop.
+
+    The other thirteen sit in `def` handlers, which FastAPI runs in a worker
+    thread. This one is middleware, so a synchronous Supabase insert here
+    blocks every request in the process -- measured at 0.95 s of starvation
+    against a 1 s insert, with httpx's 5 s timeout as the ceiling. The cooldown
+    makes it rare, and rare is the wrong comfort: it fires under exactly the
+    load that made it fire.
+
+    Asserted as an ordering rather than a duration (CLAUDE.md's rule for tests
+    that synchronise on a thread): the insert waits on a flag only a coroutine
+    can set, so it can only observe it set if the loop kept running while the
+    write was in flight. The timeout exists to fail rather than hang.
+    """
+    released = threading.Event()
+    observed = []
+
+    class _Blocking:
+        def table(self, _name):
+            class _Q:
+                def insert(self, _obj):
+                    observed.append(released.wait(2.0))
+                    return self
+
+                def execute(self):
+                    return type("R", (), {"data": []})()
+            return _Q()
+
+    monkeypatch.setattr(main, "supabase", _Blocking())
+    monkeypatch.setattr(main, "_PUBLIC_RATE_LIMITS",
+                        {**main._PUBLIC_RATE_LIMITS, "public_read": (1, 60.0)})
+    main._public_hits.clear()
+    main._security_event_seen.clear()
+
+    class _Req:
+        url = type("U", (), {"path": OPEN_PATH})()
+        headers: dict = {}
+        client = type("C", (), {"host": "10.1.1.1"})()
+
+    async def _call_next(_request):
+        return "not reached"
+
+    async def _drive():
+        await main.public_rate_limit(_Req(), _call_next)      # inside the allowance
+        asyncio.ensure_future(_release())
+        return await main.public_rate_limit(_Req(), _call_next)
+
+    async def _release():
+        released.set()
+
+    refused = asyncio.run(_drive())
+
+    assert refused.status_code == 429
+    assert observed == [True], \
+        "the audit insert ran on the event loop, so nothing else could run"

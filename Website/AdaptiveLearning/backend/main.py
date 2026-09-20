@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 import os, math, re, requests, random, string, threading, time, collections, contextlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -310,7 +311,13 @@ _PUBLIC_LIMITER = {
     "/api/questions":         "public_read",
     "/api/questions/count":   "public_read",
     "/api/topics":            "public_read",
-    "/api/eeg/health":        "public_read",
+    # Its own bucket, not `public_read`, and the reason is what it costs to be
+    # refused. Every open lesson polls this every 5 s, so it is by far the
+    # largest consumer of any shared budget -- and the *first* thing a burst
+    # against the question bank would starve. `checkHealth`'s catch turns any
+    # failure into `available: false`, so the whole school's pages would report
+    # the headband as down because somebody hammered an unrelated route.
+    "/api/eeg/health":        "public_probe",
 }
 
 # **An address is a school, not a student**, and that decides the numbers. A
@@ -328,6 +335,14 @@ _PUBLIC_RATE_LIMITS = {
     "public_read": (
         _env_number("PUBLIC_READ_RATE_LIMIT", 1800, int, minimum=1),
         _env_number("PUBLIC_READ_RATE_WINDOW", 60.0, float, minimum=1.0)),
+    # The probe's own budget, sized off its own poll: 12/min per open lesson,
+    # so this is a hundred and fifty of them behind one address. Separate so
+    # that reaching it means the probe itself is the thing being sent too
+    # often, which is a fact about that endpoint rather than about whatever
+    # else shared the bucket.
+    "public_probe": (
+        _env_number("PUBLIC_PROBE_RATE_LIMIT", 1800, int, minimum=1),
+        _env_number("PUBLIC_PROBE_RATE_WINDOW", 60.0, float, minimum=1.0)),
 }
 
 # How many proxies sit in front of this process. `X-Forwarded-For` is written
@@ -418,7 +433,16 @@ async def public_rate_limit(request: Request, call_next):
     # every few minutes saying the public question path is being hammered,
     # which is the fact an admin can act on. Who is doing it is a question for
     # whatever sits in front of this process, which is where addresses live.
-    _record_security_event("rate_limited", None, limiter=limiter)
+    #
+    # Through the threadpool because this is the one hook on the event loop.
+    # The other thirteen sit in `def` handlers, which FastAPI already runs in a
+    # worker thread; this is middleware, so a synchronous Supabase insert here
+    # blocks every other request in the process for as long as it takes --
+    # measured at 0.95 s of starvation against a 1 s insert, with httpx's 5 s
+    # timeout as the ceiling. The cooldown makes it rare, and rare is not the
+    # same as harmless: it fires under exactly the load that made it fire.
+    await run_in_threadpool(_record_security_event, "rate_limited", None,
+                            limiter=limiter)
     return JSONResponse(
         {"detail": "Too many requests. Slow down."},
         status_code=429, headers={"Retry-After": str(refused_after)})

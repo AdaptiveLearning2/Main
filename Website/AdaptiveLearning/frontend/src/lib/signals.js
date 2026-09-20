@@ -58,7 +58,16 @@ export function createSignalRecorder({ sessionId, deviceId }) {
 
 export async function eegHealth() {
   try { return await apiFetch('/api/eeg/health') }
-  catch (e) { return { available: false, error: e.message } }
+  catch (e) {
+    // A refused probe is not a fact about the headband. `available: false`
+    // says the sidecar could not be reached; a 429 says only that this
+    // endpoint was asked too often, and every open lesson asks it every 5 s.
+    // Collapsed into `available: false`, a rate limit renders as "offline" on
+    // every student's page with nothing saying a limit caused it -- rule 1,
+    // on the state that decides whether Connect is even offered.
+    if (e.status === 429) return { refused: true, error: e.message }
+    return { available: false, error: e.message }
+  }
 }
 
 export async function eegStatus(deviceId) {

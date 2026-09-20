@@ -458,6 +458,12 @@ export default function Adaptive() {
     const checkHealth = async () => {
       try {
         const h = await eegHealth()
+        // A refused probe leaves both of these alone. It carries no answer
+        // about the sidecar, so the last one that did is the best thing known
+        // -- overwriting it with false would report the headband as offline
+        // because of a rate limit on the poll, which is a claim about this
+        // endpoint and not about the hardware.
+        if (alive && h.refused) return setHeadband(s => ({ ...s, probeRefused: true }))
         // Runs before a session exists, so pushMode is known before first
         // paint -- otherwise the page shows a false "not reachable" message
         // under push.
@@ -465,6 +471,7 @@ export default function Adaptive() {
           ...s,
           pushMode: h.ingest_mode === 'push',
           available: !!h.available,
+          probeRefused: false,
         }))
       } catch { if (alive) setHeadband(s => ({ ...s, available: false })) }
     }
@@ -1424,7 +1431,11 @@ export default function Adaptive() {
             {headband.connected && <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● STREAMING</span>}
             {headband.phase === 'reconnecting' && <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">reconnecting</span>}
             {!headband.connected && headband.phase !== 'reconnecting' && headband.available && <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">ready</span>}
-            {!headband.available && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">offline</span>}
+            {/* Three states, not two: reachable, not reachable, and a probe
+                that was refused and therefore says neither. "offline" names
+                the headband; this one names the check. */}
+            {headband.probeRefused && !headband.connected && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">status unavailable</span>}
+            {!headband.probeRefused && !headband.available && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">offline</span>}
             {headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">on your device</span>}
             {/* Three states: push === null renders nothing (not asked yet), a
                 known not-recording state is amber, and only reachable +

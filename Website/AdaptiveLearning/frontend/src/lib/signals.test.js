@@ -9,8 +9,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 vi.mock('./api', async () => await import('../test/mocks/apiFetch'))
-import { apiFetch, mockApi, resetApi } from '../test/mocks/apiFetch'
-import { createSignalRecorder } from './signals'
+import { apiFetch, mockApi, overrideApi, resetApi } from '../test/mocks/apiFetch'
+import { createSignalRecorder, eegHealth } from './signals'
 
 const startBodies = () => apiFetch.mock.calls
   .filter(([path]) => path === '/api/eeg/start')
@@ -57,5 +57,33 @@ describe('createSignalRecorder', () => {
     await rec.stop()
     expect(rec.isActive()).toBe(false)
     expect(rec.isRecording()).toBe(false)
+  })
+})
+
+
+describe('eegHealth, and what a failed probe is allowed to claim', () => {
+  const fail = (status) => () => {
+    throw Object.assign(new Error('nope'), { status })
+  }
+
+  it('reports the sidecar as unavailable when the probe reached the backend', async () => {
+    // A 500, a dropped connection, anything that is not a refusal: the probe
+    // ran and the answer is that the sidecar is not there.
+    overrideApi('/api/eeg/health', fail(500))
+    expect(await eegHealth()).toMatchObject({ available: false })
+  })
+
+  it('does not call the headband offline because the probe was rate limited', async () => {
+    // The state this feeds decides whether the page says "offline" and whether
+    // Connect is offered. A 429 is a fact about how often this endpoint was
+    // asked -- every open lesson asks it every 5 s -- and says nothing about
+    // the hardware. `apiFetch` retries only 503, so nothing upstream softens
+    // this either.
+    overrideApi('/api/eeg/health', fail(429))
+
+    const h = await eegHealth()
+
+    expect(h.refused).toBe(true)
+    expect(h).not.toHaveProperty('available')
   })
 })

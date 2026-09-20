@@ -271,6 +271,33 @@ const ALREADY_CONNECTED = {
   reconnect_max_attempts: 5, reconnect_exhausted: false, eeg_age_ms: 2,
 }
 
+it('keeps a push deployment in push mode when the health probe stops answering', async () => {
+  // `eegHealth` swallows a non-429 failure into `{available: false}`, which
+  // carries no `ingest_mode` -- so `h.ingest_mode === 'push'` reads false and
+  // the page decides this deployment is pull because one browser request
+  // failed. Under push that lifts the exemptions below, and re-points the
+  // samples line at `push.recorded` while the poller's own count is what is on
+  // screen. `available` may move on a failed probe; the mode may not.
+  //
+  // The badge is the discriminator, as it is for the test above it: it renders
+  // if and only if `pushMode`, and unlike the samples count it does not read 0
+  // in both modes, which is what made every other observable here useless.
+  // No session and no pairing -- the health effect runs from mount, so this
+  // isolates the one write under test.
+  eegHealth.mockResolvedValue({ available: null, ingest_mode: 'push' })
+  render(<Adaptive />)
+  expect(await screen.findByText('on your device')).toBeInTheDocument()
+
+  const before = eegHealth.mock.calls.length
+  eegHealth.mockResolvedValue({ available: false, error: 'Failed to fetch' })
+  // Two further probes, so a wrong write has landed and painted rather than
+  // this asserting into the gap before the first one.
+  await waitFor(() => expect(eegHealth.mock.calls.length).toBeGreaterThan(before + 1),
+                { timeout: 20000 })
+
+  expect(screen.getByText('on your device')).toBeInTheDocument()
+}, 30000)
+
 it('does not tear a streaming push link down because a tick did not land', async () => {
   // The two push exemptions below the guard read `s.ingest_mode` straight off
   // the response, so on an unlanded tick they lifted: `connected` was written

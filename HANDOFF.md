@@ -138,9 +138,13 @@ corrected in passing. The arithmetic for the raise: 30 students × ~40 questions
 Both pre-flight checks from the previous handoff are **clear, with nothing to do**:
 
 - No `FACE_DEBUG_PREVIEW_ENABLED` line in `EEGResearch/.env`.
-- The local database is migrated through `20260918000000`; `questions.ccss_standard`,
+- The local database was migrated through `20260918000000`; `questions.ccss_standard`,
   `questions.figure` and `signal_daily_rollup.stress_sample_count` all exist, so
   `add_question_to_supabase` will not 500.
+  **That check has since gone stale and must be re-run**: `20260919000000_security_events.sql`
+  landed with #224. `npx supabase migration up` before launching — the failure is silent, not
+  loud, because `_record_security_event` never raises, so an unmigrated stack loses the whole
+  security log and says nothing.
 
 ### What is left, and the one thing to verify when it runs
 
@@ -209,11 +213,34 @@ needs focus ≥ 0.624 **and** calm ≥ 0.5 and is unreachable by design until a 
 `stressed` (calm < 0.377 on `sdk`) still eases. Design the ability tiers against that, and say it
 plainly in the report — an EEG-driven difficulty *rise* is not something this run can produce.
 
+**The second wearer's capture settles which scale that is.** `0b9923da`: two captures on a second
+adult, no channel reaching chance (0.37, 0.43, 0.37, 0.50 against the first wearer's 0.90, 0.91,
+0.27, 0.82). `EEG_SPECTRUM_SOURCE` stays `sdk`, the two decisions that capture was gated on are
+retired, and **the run must not use `-LocalCalm`**. Phase 6 cites this rather than the
+single-wearer figures: one adult where it worked and one where it did not is the shape that
+invites a general claim, and `EEG_REFERENCE.md` now states what two adults cannot establish.
+
 Use moderate scripted concurrency rather than strictly serial, respecting
-`GENERATION_MAX_CONCURRENCY` (8, in `llm_client.py`) and `GENERATION_MAX_WAITERS` (30, at
-`main.py:2326` — the plan says 12, which was the value before the load test raised it). CLAUDE.md's
-load-test table is the reason to stagger starts at all: at the old cap, 30 students starting
-simultaneously were served 40%, against 87% over 10 s.
+`GENERATION_MAX_CONCURRENCY` (8, in `llm_client.py`) and `GENERATION_MAX_WAITERS` (30 — the plan
+says 12, which was the value before the load test raised it; grep for it rather than trusting a
+line number here, `main.py` is ~9k lines). CLAUDE.md's load-test table is the reason to stagger
+starts at all: at the old cap, 30 students starting simultaneously were served 40%, against 87%
+over 10 s.
+
+**Neither of those is the binding constraint any more.** #225 bounds the five GET routes that
+resolve no caller **by address**, and this whole run is one address:
+
+| route | load at 30 students | limit |
+| --- | --- | --- |
+| `/api/eeg/health` probe | ~360/min (12/min per open page) | `PUBLIC_PROBE_RATE_LIMIT` 1800 |
+| `/api/generate-question` | ~180/min at human pace; **600–900/min scripted** | `PUBLIC_GENERATE_RATE_LIMIT` 600 |
+
+The probe is comfortable. Generation is not: a script answering instantly does 20–30 questions
+per student per minute. **Pace it to roughly a question every 6 s per student** rather than
+raising the cap — raising it throws away the one measurement this run could make about whether
+the shipped default suits a classroom. If it does throttle, #224 records `rate_limited` in
+`security_events`, so Phase 6 reads the evidence rather than inferring it from missing questions.
+#225 was open at the time of writing; check whether it merged before designing the pacing.
 
 ## Phase 5a — full-coverage pass on the new code. NOT STARTED.
 
@@ -238,6 +265,13 @@ joined the same way, excluded from Phase 4's bulk run and from the report's clas
 
 Between them these four cover all four picker values, the full connect/disconnect/reconnect cycle,
 both streak directions, and every chart-summary and strategies data state.
+
+**One surface none of them reaches.** #224 added `pages/admin/SecurityEvents.jsx` behind
+`AdminGuard`, and this phase creates teacher, student and parent accounts only — admin is
+`profiles.role = 'admin'`, set through the dashboard SQL editor, with no UI to do it through. So
+either add an admin account here (a SQL-editor step, outside the no-shortcuts rule because there
+is no form to submit) or record it in Phase 6 as a surface this run did not cover. The run
+generates real rows for it either way, which is what makes it worth looking at.
 
 ## Phase 5b — human verification pass. NOT STARTED.
 
@@ -305,6 +339,11 @@ scratchpad with the Write tool and run it by path.
 branch: `main` is first imported by the school-year fixture, which rewires the consent check after
 the consent fixture set it. It passes in the full suite, where `main` is imported at collection. Not
 a regression; do not chase it.
+
+**CLAUDE.md is now three files.** It was split into `CLAUDE.md`, `docs/signals.md` and
+`docs/question-generation.md`, each with a stated trigger for when to read it. Section names cited
+in this document may resolve to a doc rather than to CLAUDE.md; the signals and generation rules
+this plan leans on are in the two docs.
 
 **Three venvs.** `EEGResearch/.venv` runs the sidecar, `Website/AdaptiveLearning/backend/.venv` runs
 the backend app, and the repo-root `.venv` is what `pytest` uses for the backend suite. A package in

@@ -1239,7 +1239,13 @@ def test_a_student_may_not_touch_another_students_session(monkeypatch, endpoint)
     # the session was checked afterwards, the forged answer row would land no
     # matter what the later check decided -- and `/end` would stop the poller
     # before ever looking.
-    assert client.writes == [], f"the refusal came too late: {client.writes}"
+    #
+    # `security_events` is excluded by name, not by loosening this to "no
+    # product writes": the refusal itself is audited, and that row is the
+    # opposite of a leak. Narrowing it to the one table keeps a genuine early
+    # write -- an answer, a session stamp, anything else -- still tripping this.
+    product_writes = [w for w in client.writes if w[0] != "security_events"]
+    assert product_writes == [], f"the refusal came too late: {product_writes}"
     assert stopped == [], "another student's poller was stopped before the check"
 
 

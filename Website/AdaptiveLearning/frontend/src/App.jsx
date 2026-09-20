@@ -64,6 +64,7 @@ const AdminOverview    = lazy(() => import('./pages/admin/Overview'))
 const AdminFlags       = lazy(() => import('./pages/admin/Flags'))
 const AdminLiveFlow    = lazy(() => import('./pages/admin/LiveFlow'))
 const AdminSchoolYear  = lazy(() => import('./pages/admin/SchoolYear'))
+const AdminSecurity    = lazy(() => import('./pages/admin/SecurityEvents'))
 
 const NotFound = lazy(() => import('./pages/NotFound'))
 
@@ -148,6 +149,7 @@ export default function App() {
               <Route path="/admin/flags" element={<AdminFlags />} />
               <Route path="/admin/live"  element={<AdminLiveFlow />} />
               <Route path="/admin/year"  element={<AdminSchoolYear />} />
+              <Route path="/admin/security" element={<AdminSecurity />} />
             </Route>
 
             {/* Role-aware, not hardcoded to the student home. Sending every

@@ -22,8 +22,10 @@ Two sources, because the bridge accepts exactly one TCP client:
   recovered from such a capture by replaying it through ``SignalProcessor``.
 
 Each row carries a ``segment`` set by a prompted protocol: the script says
-what to do, waits for Enter, then times the segment. ``--protocol none``
-with ``--seconds N`` records a free-running capture instead.
+what to do, waits for Enter, then times the segment. ``--protocol
+closed_open`` runs the two rest segments only, about five minutes, which is
+what the raw capture needs; ``--protocol none`` with ``--seconds N`` records
+a free-running capture instead.
 
 Usage, sidecar running and the headband paired with good contact::
 
@@ -62,8 +64,16 @@ SCRIPT_VERSION = 1
 DEFAULT_PROTOCOL: list[tuple[str, int, str]] = [
     ("eyes_closed_rest", 120, "Close your eyes and rest. Stay still."),
     ("eyes_open_rest", 120, "Eyes open, rest, look at a blank wall."),
-    ("arithmetic", 120, "Mental arithmetic aloud: multiply two-digit numbers "
-                        "(47 x 23, 68 x 19, ...), one after another, no pauses."),
+    # Silently, and the prompt has to say so on screen. Aloud on the first
+    # capture, speech muscle raised beta by 0.08 *with gamma by 0.10* and
+    # halved good contact (2.5 channels to 1.5), so the segment measured
+    # talking rather than thinking -- and the local calm is an alpha
+    # residual at the temporal pair, which broadband EMG corrupts outright.
+    # The 2026-09-14 raw capture was done silently for that reason while
+    # this prompt still said aloud; a second wearer reads the prompt.
+    ("arithmetic", 120, "Mental arithmetic SILENTLY -- do not speak or move your "
+                        "jaw: multiply two-digit numbers (47 x 23, 68 x 19, ...), "
+                        "one after another. Write nothing down."),
     ("eyes_open_rest_2", 60, "Eyes open, rest."),
     ("jaw_clench", 10, "Clench your jaw firmly and hold it."),
     ("rest_after_clench", 10, "Relax the jaw. Stay still."),
@@ -74,6 +84,17 @@ DEFAULT_PROTOCOL: list[tuple[str, int, str]] = [
 SESSION_SEGMENT: tuple[str, int, str] = (
     "adaptive_session", 120, "Answer questions on the student page as normal.",
 )
+# `--protocol closed_open`: the two rest segments and nothing else, about
+# five minutes on a wearer. Enough on its own for the questions the raw
+# capture is for -- whether the temporal alpha separation holds on a second
+# person, and both local-calm decisions, which read off the eyes-closed and
+# eyes-open columns of `replay_raw_capture.py --matrix`. **Sliced from
+# DEFAULT_PROTOCOL rather than restated**, so the prompt text and the
+# durations cannot drift from the long run this is compared against.
+# Selecting it is what keeps the header honest: `header()` records the
+# protocol it is given, so running the long one and stopping after two
+# segments would write a file claiming seven segments nobody performed.
+CLOSED_OPEN_PROTOCOL: list[tuple[str, int, str]] = DEFAULT_PROTOCOL[:2]
 # Rows recorded while waiting for Enter, or with no protocol at all.
 BETWEEN = "between"
 FREE = "free"
@@ -200,6 +221,132 @@ def header(args: argparse.Namespace, protocol: list[tuple[str, int, str]]) -> di
     }
 
 
+# -- live recording quality --
+
+class SlopeMonitor:
+    """Reports the aperiodic (1/f) slope of the temporal pair while recording.
+
+    The second wearer's capture was scored afterwards and found to carry
+    broadband power that flattened the slope to −0.65 at rest, where the
+    first wearer's rest sat at −1.24 and only a *deliberate jaw clench*
+    reached −0.49. That is what muscle looks like, it sits on top of the
+    alpha band the local calm is built from, and electrode contact was good
+    throughout — so nothing on screen during the session said anything was
+    wrong, and five minutes of a person's time bought an uninterpretable
+    file. A slope read live is the one number that would have caught it.
+
+    Warns rather than aborts. The threshold comes from two adults, which is
+    not enough to refuse someone's recording over, and a flat slope can also
+    be a strap sitting low on the temporalis or an ordinary difference
+    between people. It says what it sees and leaves the call to the operator.
+    """
+
+    def __init__(self, window_seconds: float = 8.0, warn_above: float = -1.0) -> None:
+        self.window_seconds = window_seconds
+        self.warn_above = warn_above
+        self._buf: dict[str, list[float]] = {}
+        self._fs: float | None = None
+        self._deps: Any = None
+        self._off = False
+
+    def _load(self) -> bool:
+        """numpy and the sidecar's spectrum helpers, imported on first use so
+        `--summarize` and the sidecar source keep running without them."""
+        if self._deps is not None:
+            return True
+        if self._off:
+            return False
+        try:
+            sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+            import numpy as np
+            from src.app.services.eeg_spectrum import (SAMPLE_RATE_HZ, TEMPORAL,
+                                                       one_over_f_fit, welch_log_psd)
+            self._deps = (np, one_over_f_fit, welch_log_psd, TEMPORAL)
+            self._fs = SAMPLE_RATE_HZ
+            self._buf = {c: [] for c in TEMPORAL}
+            return True
+        except Exception as exc:  # pragma: no cover - environment dependent
+            print(f"  (slope check off: {exc})", file=sys.stderr)
+            self._off = True
+            return False
+
+    def push(self, frame: dict[str, Any]) -> None:
+        if not self._load():
+            return
+        cap = int(self.window_seconds * (self._fs or 256.0))
+        for c in self._buf:
+            v = frame.get(c)
+            if isinstance(v, (int, float)):
+                buf = self._buf[c]
+                buf.append(float(v))
+                if len(buf) > cap:
+                    del buf[:len(buf) - cap]
+
+    def slope(self) -> float | None:
+        """Mean 1/f slope over the temporal pair, or None until the window
+        has filled. Never raises: a diagnostic must not be able to kill the
+        recording it is describing."""
+        if not self._load():
+            return None
+        np, one_over_f_fit, welch_log_psd, _ = self._deps
+        need = int(self.window_seconds * (self._fs or 256.0))
+        slopes = []
+        try:
+            for c, buf in self._buf.items():
+                if len(buf) < need:
+                    return None
+                f, log_psd = welch_log_psd(np.asarray(buf, dtype=float), self._fs)
+                s, _ = one_over_f_fit(f, log_psd)
+                if np.isfinite(s):
+                    slopes.append(float(s))
+        except Exception:
+            return None
+        return sum(slopes) / len(slopes) if slopes else None
+
+    def _filled(self) -> dict[str, int]:
+        """Buffered samples per temporal channel, for telling a window that
+        is still filling from one a channel has stopped feeding."""
+        return {c: len(buf) for c, buf in self._buf.items()} if self._deps else {}
+
+    def line(self) -> str | None:
+        """One line for the progress output, or None only while the window is
+        still filling — the one state with nothing to say.
+
+        **A slope that cannot be computed gets its own line rather than
+        silence.** Returning None for both left a starved temporal electrode
+        looking exactly like the opening seconds of a recording: frame counts
+        ticking and no slope, which is the experience this class exists to
+        end. It bites hardest here because calm is an alpha residual at the
+        temporal pair, so a dead or badly seated temporal contact is both the
+        likeliest way to ruin a capture and the way to silence the check.
+        `_load()` already speaks up when the imports fail; this is the
+        per-read failure, which had no voice.
+        """
+        counts = self._filled()
+        if counts:
+            need = int(self.window_seconds * (self._fs or 256.0))
+            # The fullest channel decides: below the window everywhere is an
+            # ordinary start, while one channel short of a full neighbour is
+            # a channel that has stopped delivering.
+            if max(counts.values()) < need:
+                return None
+            s = self.slope()
+            if s is None:
+                short = [f"{c} {n}/{need}" for c, n in sorted(counts.items()) if n < need]
+                why = ", ".join(short) if short else "the fit did not resolve"
+                return (f"  cannot read the slope -- {why}. A temporal contact that stops "
+                        "delivering silences this check; re-seat it before recording.")
+        else:
+            s = self.slope()
+            if s is None:
+                return None
+        if s > self.warn_above:
+            return (f"  slope {s:+.2f} -- FLAT: broadband power, most likely muscle. "
+                    "Check the strap is above the temple muscle and the jaw is loose. "
+                    f"Rest should be under {self.warn_above:+.2f}.")
+        return f"  slope {s:+.2f} ok"
+
+
 # -- the protocol --
 
 class SegmentClock:
@@ -313,6 +460,9 @@ def capture_bridge(args: argparse.Namespace, clock: SegmentClock, fh) -> int:
     last_ms: float | None = None
     deadline = None if args.seconds is None else time.monotonic() + args.seconds
     last_report = time.monotonic()
+    # Read live, because afterwards is too late: a contaminated capture looks
+    # entirely normal while it is being recorded.
+    monitor = None if args.no_slope_check else SlopeMonitor(warn_above=args.slope_warn)
     try:
         sock.settimeout(1.0)
         buf = b""
@@ -345,6 +495,8 @@ def capture_bridge(args: argparse.Namespace, clock: SegmentClock, fh) -> int:
                 fh.write(json.dumps(msg) + "\n")
                 if kind == "eeg":
                     frames += 1
+                    if monitor is not None:
+                        monitor.push(msg)
                     ms = msg.get("mono_ts_ms")
                     if isinstance(ms, (int, float)):
                         first_ms = ms if first_ms is None else first_ms
@@ -355,6 +507,10 @@ def capture_bridge(args: argparse.Namespace, clock: SegmentClock, fh) -> int:
             if now - last_report >= 10:
                 last_report = now
                 print(f"  {frames} eeg frames ({clock.segment})", file=sys.stderr)
+                if monitor is not None:
+                    line = monitor.line()
+                    if line:
+                        print(line, file=sys.stderr)
     finally:
         sock.close()
     if frames and first_ms is not None and last_ms is not None and last_ms > first_ms:
@@ -468,7 +624,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="sidecar API_TOKEN (default: env API_TOKEN); sidecar source only")
     ap.add_argument("--hz", type=float, default=8.0,
                     help="poll rate for the sidecar source; twice the tick rate so no tick is missed")
-    ap.add_argument("--protocol", choices=("default", "none"), default="default")
+    ap.add_argument("--protocol", choices=("default", "closed_open", "none"), default="default",
+                    help="closed_open: the two rest segments only, ~5 min")
     ap.add_argument("--with-session", action="store_true",
                     help="append the optional adaptive-session segment")
     ap.add_argument("--no-prompt", action="store_true",
@@ -478,6 +635,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--keep-duplicates", action="store_true",
                     help="write a row on every poll even when the sidecar tick has not advanced")
     ap.add_argument("--notes", default="", help="method notes for the header -- no names")
+    ap.add_argument("--slope-warn", type=float, default=-1.0,
+                    help="warn while recording if the temporal 1/f slope is shallower "
+                         "than this (bridge source only); broadband muscle flattens it")
+    ap.add_argument("--no-slope-check", action="store_true",
+                    help="do not report the 1/f slope while recording (bridge source only)")
     return ap
 
 
@@ -504,7 +666,9 @@ def main(argv: list[str] | None = None) -> int:
         print("--protocol none needs --seconds", file=sys.stderr)
         return 2
 
-    protocol = list(DEFAULT_PROTOCOL) if args.protocol == "default" else []
+    protocol = {"default": list(DEFAULT_PROTOCOL),
+                "closed_open": list(CLOSED_OPEN_PROTOCOL),
+                "none": []}[args.protocol]
     if args.with_session:
         protocol.append(SESSION_SEGMENT)
     clock = SegmentClock(BETWEEN if protocol else FREE)

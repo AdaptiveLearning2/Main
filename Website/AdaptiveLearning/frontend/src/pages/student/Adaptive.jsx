@@ -843,48 +843,43 @@ export default function Adaptive() {
     const tick = async () => {
       const s = await eegStatus(stationId)
       if (killed) return
-      setHeadband(prev => {
-      // The mode this tick is read under: what it reported, or -- when it did
-      // not land -- what is already known. Every `ingest_mode` test below goes
-      // through this, because on the swallowed fallback the field is undefined
-      // and reads as "not push", which lifts the two push exemptions further
-      // down. Those exist because under push this poll is not the writer of
-      // those fields at all, so lifting them lets a failed request overwrite
-      // what the telemetry poll owns.
-      const isPush = s.answered === false ? prev.pushMode : s.ingest_mode === 'push'
-      return {
+      // **An unlanded response answers nothing, so nothing below is written
+      // from one.** `eegStatus` swallows its own failure into a shaped object
+      // -- `service: false`, `poller: {running: false}`, no `ingest_mode` --
+      // and every field here then reads like an answer: the sidecar is down,
+      // the poller stopped, there is no charge, no samples have been sent.
+      // All of them are invented by the client from a request that never
+      // reached the backend, which is server-side and entirely unaffected by
+      // one browser call failing.
+      //
+      // Under push the exemptions below hide most of that. Under pull nothing
+      // stands between it and the panel: one failed tick took a streaming
+      // session to "Connect Headband" over a sentence saying the teacher can
+      // see it live, with no toast, because `phase` stayed `connected` while
+      // `connected` went false. A student clicking the button they are being
+      // shown then runs disconnect->scan->connect and genuinely drops a
+      // working link.
+      //
+      // A drop belongs to the telemetry poll in **both** modes -- only the
+      // bridge's own `muse_connected` says the headband went away, which is
+      // the whole subject of `AdaptiveReconnectPull.test.jsx`. This poll has
+      // no evidence of anything when its request did not land.
+      if (s.answered === false) return
+      setHeadband(prev => ({
         ...prev,
+        // `service` is null (not false) under push -- the backend never probes
+        // a sidecar it has no route to.
+        pushMode: s.ingest_mode === 'push',
         // This poll is the *other* writer of `available`, and it reaches an
         // authenticated endpoint -- so it is never refused by the public
         // address limiter that can refuse `/api/eeg/health`. A tick that
         // answers therefore knows the same fact the health probe could not
-        // get, and has to clear `probeRefused` with it: otherwise the page
-        // goes on saying it could not check the service while holding a
-        // successful check of exactly that, seconds old, and withholds
-        // `ready` from a sidecar it has confirmed.
-        //
-        // Only when it answered. `eegStatus` swallows its own failure into
-        // `service: false`, and clearing the flag on that would replace "we
-        // could not check" with "we checked and it is down" -- a claim from a
-        // request that never landed, and one the sentence below turns into an
-        // instruction to go and restart something.
-        // `pushMode` is inside the guard for the same reason and a sharper
-        // one: a deployment's ingest mode cannot change because a request
-        // failed. Read from an unlanded response `s.ingest_mode` is undefined,
-        // so push flips to pull and the whole panel changes branch -- ending
-        // at "EEG service not reachable on port 8001", naming a port and a
-        // service that deployment does not have. `eeg_health` returns
-        // `available: None` under push precisely to keep that sentence off the
-        // first screen a student sees; this wrote it from a failed read
-        // instead.
-        //
-        // `service` is null (not false) under push -- the backend never probes
-        // a sidecar it has no route to.
-        ...(s.answered === false ? {} : {
-          pushMode: s.ingest_mode === 'push',
-          available: !!s.service,
-          probeRefused: false,
-        }),
+        // get, and clears `probeRefused` with it: otherwise the page goes on
+        // saying it could not check the service while holding a successful
+        // check of exactly that, seconds old, and withholds `ready` from a
+        // sidecar it has confirmed.
+        available: !!s.service,
+        probeRefused: false,
         // Only under pull: `poller.running` is the backend's own poller, which
         // doesn't exist under push and would otherwise read as disconnected.
         // And not during a reconnect: the poller runs on through a BLE drop,
@@ -894,22 +889,19 @@ export default function Adaptive() {
         // here as well raced it: this poll is faster, and setting
         // `connected: false` tore the telemetry effect down before it could
         // claim the drop, so under pull nothing was announced or recovered.
-        ...(isPush || prev.phase === 'reconnecting' ? {} : {
+        ...(s.ingest_mode === 'push' || prev.phase === 'reconnecting' ? {} : {
           connected: !!s.poller?.running,
         }),
-        // Unconditional, unlike the two exemptions around them: under push
-        // `headbandSamples` reads `push.recorded` instead, so nothing renders
-        // what this writes and a failed tick zeroing it is invisible.
         samples:   s.poller?.samples || 0,
         lastTs:    s.poller?.last_ts || null,
         // Only under pull -- the telemetry effect above already polls this
         // under push. typeof check so a real 0% charge isn't read as no
         // reading.
-        ...(isPush ? {} : {
+        ...(s.ingest_mode === 'push' ? {} : {
           battery: typeof s.muse?.ingestion?.battery_percent === 'number'
             ? s.muse.ingestion.battery_percent : null,
         }),
-      }})
+      }))
     }
     tick()
     const id = setInterval(tick, 3000)

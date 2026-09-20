@@ -297,3 +297,45 @@ it('does not tear a streaming push link down because a tick did not land', async
   expect(screen.getByText(/STREAMING/)).toBeInTheDocument()
   expect(screen.getByLabelText(/Headband charge 80%/)).toBeInTheDocument()
 }, 30000)
+
+
+it('writes nothing at all from a tick that did not land, under pull too', async () => {
+  // Under pull no exemption stands between the swallowed fallback and the
+  // panel: `connected` came from a poller that is server-side and entirely
+  // unaffected by one browser request failing, `battery` from an absent muse
+  // block, and `samples` -- which under pull *is* what the sub-line renders --
+  // from an absent poller block. One failed tick took a streaming session to
+  // "Connect Headband" over a sentence saying the teacher can see it live,
+  // with no toast, because `phase` stayed `connected` while `connected` went
+  // false. Clicking that button runs disconnect->scan->connect and drops a
+  // link that was working.
+  const streaming = {
+    ingest_mode: 'pull', service: true,
+    poller: { running: true, samples: 3, last_ts: '2026-09-20T00:00:00Z' },
+    muse: { ingestion: { battery_percent: 80 } },
+  }
+  eegStatus.mockResolvedValue(streaming)
+  // The bridge agrees, so the telemetry poll beside this one is not the thing
+  // moving the charge.
+  museState.mockResolvedValue({
+    running: true, ingestion: { muse_connected: true, battery_percent: 80, eeg_age_ms: 2 },
+  })
+  render(<Adaptive />)
+  await startASession()
+
+  await screen.findByText(/STREAMING/, {}, { timeout: 8000 })
+  await screen.findByLabelText(/Headband charge 80%/, {}, { timeout: 8000 })
+  expect(screen.getByText(/3 samples sent/)).toBeInTheDocument()
+
+  const before = eegStatus.mock.calls.length
+  eegStatus.mockResolvedValue({ answered: false, service: false, poller: { running: false } })
+  await waitFor(() => expect(eegStatus.mock.calls.length).toBeGreaterThan(before),
+                { timeout: 8000 })
+
+  expect(screen.getByText(/STREAMING/)).toBeInTheDocument()
+  expect(screen.getByLabelText(/Headband charge 80%/)).toBeInTheDocument()
+  expect(screen.getByText(/3 samples sent/)).toBeInTheDocument()
+  // The button is the sharp end: it is what a student would act on.
+  expect(screen.getByRole('button', { name: /disconnect/i })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /connect headband/i })).not.toBeInTheDocument()
+}, 30000)

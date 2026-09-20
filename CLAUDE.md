@@ -818,20 +818,19 @@ or "nobody has checked" and "checked, and it is down" are one state.
 
 **`available` has two writers, and only one of them can be refused.** The `/api/eeg/status` poll resolves a
 caller, so it is not in `_PUBLIC_LIMITER` and the address budget never touches it: mid-lesson it knows what
-the refused health probe could not, and clears `probeRefused` with the value it writes. Only when it
-answered — `eegStatus` swallows its own failure into `service: false`, and treating that as an answer turns
-"we could not check" into "we checked and it is down", which the sentence turns into an instruction.
-**`pushMode` is behind the same guard**, and more plainly: a deployment's ingest mode cannot change because
-a request failed. Read from the swallowed fallback it is undefined, so push became pull and the panel
-changed branch to *"not reachable on port 8001"* — a port and a service that deployment does not have, which
-is the sentence `eeg_health`'s `available: None` exists to keep off a student's first screen.
+the refused health probe could not, and clears `probeRefused` with the value it writes.
 
-**Every `ingest_mode` test in that tick goes through one derived `isPush`**, which falls back to the known
-mode when the response did not land. The field is undefined there, so read directly it reads as *not push*
-and silently lifts the two push exemptions below it — the ones that exist because under push the telemetry
-poll owns `connected` and `battery` and this poll is not their writer at all. A failed request then tore a
-streaming link down mid-lesson. `samples`/`lastTs` stay unconditional: under push `headbandSamples` reads
-`push.recorded`, so nothing renders what they hold.
+**A status tick that did not land writes nothing at all**, and that guard belongs above the updater rather
+than per field. `eegStatus` swallows its own failure into a *shaped* object — `service: false`,
+`poller: {running: false}`, no `ingest_mode` — so every field reads like an answer: the sidecar is down, the
+poller stopped, there is no charge, no samples were sent. All are invented in the browser from a request
+that never reached a backend the failure says nothing about. Guarding one field at a time fixed the fields
+named and left the neighbours: the undefined `ingest_mode` also flips push to pull, which lifts the
+exemptions that exist *because under push this poll is not the writer* of `connected` and `battery` — and
+under pull there is no exemption at all, so one failed tick took a streaming session to *Connect Headband*
+over a sentence saying the teacher can see it live, with no toast, since `phase` stayed `connected`.
+**A drop belongs to the telemetry poll in both modes** — only the bridge's own `muse_connected` says the
+headband went away, which is the whole subject of `AdaptiveReconnectPull.test.jsx`.
 
 **A hook on the event loop must not write.** `_record_security_event` does a synchronous Supabase insert,
 and every other call site is in a `def` handler that FastAPI already runs in a worker thread. Middleware

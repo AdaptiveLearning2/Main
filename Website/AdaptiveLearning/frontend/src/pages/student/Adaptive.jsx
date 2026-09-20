@@ -481,7 +481,16 @@ export default function Adaptive() {
         // under push.
         if (alive) setHeadband(s => ({
           ...s,
-          pushMode: h.ingest_mode === 'push',
+          // **Only a response that carried a mode may set one.** `eegHealth`
+          // swallows a non-429 failure into `{available: false}`, which has no
+          // `ingest_mode` -- so `=== 'push'` reads false and a deployment's
+          // ingest mode changes because one browser request failed. Under push
+          // that lifts the exemptions that exist because this page is not the
+          // writer of `connected` and `battery` there, and it re-points
+          // `headbandSamples` at `push.recorded`, which is 0 while the poller's
+          // own count is what is on screen. `available` below is different and
+          // is written: not reaching the probe *is* what that field reports.
+          ...(h.ingest_mode === undefined ? {} : { pushMode: h.ingest_mode === 'push' }),
           available: !!h.available,
           probeRefused: false,
         }))

@@ -57,6 +57,13 @@ import Adaptive from './Adaptive'
 beforeEach(() => {
   resetApi()
   vi.clearAllMocks()
+  // **`clearAllMocks` clears calls, never implementations.** A
+  // `mockResolvedValue` set by one test is still in force for every test
+  // declared after it, so the push-mode health answer below leaks forward and
+  // a later pull test silently runs against `ingest_mode: 'push'` -- which
+  // re-points the samples line at `push.recorded` and reads 0. Restate the
+  // factory defaults here so each test starts from the declared one.
+  eegHealth.mockResolvedValue({ available: true, ingest_mode: 'pull' })
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
     'GET /api/performance/student/u1': () => [],
@@ -329,8 +336,15 @@ it('writes nothing at all from a tick that did not land, under pull too', async 
 
   const before = eegStatus.mock.calls.length
   eegStatus.mockResolvedValue({ answered: false, service: false, poller: { running: false } })
-  await waitFor(() => expect(eegStatus.mock.calls.length).toBeGreaterThan(before),
-                { timeout: 8000 })
+  // **Three calls, not one.** Both polls call `eegStatus` with the same
+  // argument under pull, so the counter cannot tell them apart and advancing
+  // it by one proves only that the 3 s status tick ran -- which happens before
+  // the 5 s telemetry poll re-reads, so a charge that poll clears is still on
+  // screen when a one-call wait returns. Three spans a telemetry cycle. It is
+  // cadence-derived rather than a recorded event because there is no event to
+  // record: one function, one argument, two callers.
+  await waitFor(() => expect(eegStatus.mock.calls.length).toBeGreaterThan(before + 2),
+                { timeout: 20000 })
 
   expect(screen.getByText(/STREAMING/)).toBeInTheDocument()
   expect(screen.getByLabelText(/Headband charge 80%/)).toBeInTheDocument()

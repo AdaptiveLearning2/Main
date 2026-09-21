@@ -143,7 +143,12 @@ it('keeps the instruction when the refusal follows a real outage', async () => {
   // Which is why `available` starts at null rather than false: without a third
   // value, this state and "nobody has checked yet" are the same one, and the
   // branch has to treat them alike.
-  eegHealth.mockResolvedValueOnce({ available: false, error: 'Failed to fetch' })
+  // `answered: false`: this fixture means the request never landed. Without
+  // the marker it is the backend's *auth-error* answer -- reachable sidecar,
+  // misconfigured token -- which now renders differently and should.
+  // An *answered* outage: the probe reached the backend and it reported the
+  // sidecar down. A non-answer here would not be a known outage at all.
+  eegHealth.mockResolvedValueOnce({ available: false, ingest_mode: 'pull', url: 'http://localhost:8001' })
   eegHealth.mockResolvedValue({ refused: true, error: 'Too many requests.' })
   render(<Adaptive />)
 
@@ -168,7 +173,7 @@ it('still reports a sidecar that genuinely did not answer', async () => {
   // The other half: this must not have turned every failure into "unknown".
   // A probe that ran and found nothing there has earned both the badge and the
   // sentence, port and all -- that one really is an unreachable backend.
-  eegHealth.mockResolvedValue({ available: false, error: 'Failed to fetch' })
+  eegHealth.mockResolvedValue({ available: false, ingest_mode: 'pull', url: 'http://localhost:8001' })
   render(<Adaptive />)
 
   expect(await screen.findByText('offline')).toBeInTheDocument()
@@ -388,3 +393,203 @@ it('writes nothing at all from a tick that did not land, under pull too', async 
   expect(screen.getByRole('button', { name: /disconnect/i })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: /connect headband/i })).not.toBeInTheDocument()
 }, 30000)
+
+
+it('tells a reachable-but-misconfigured service apart from an unreachable one', async () => {
+  // `/api/eeg/health` answers `{available: false, error}` when the sidecar is
+  // reachable and the learner token is wrong -- "a config error, not an
+  // outage, so report it rather than 500". `eegHealth`'s own catch produced
+  // the same shape, so both rendered as "not reachable on port 8001. Make
+  // sure the EEGResearch backend is running": the one instruction that cannot
+  // help, naming the one layer that is demonstrably fine.
+  eegHealth.mockResolvedValue({
+    available: false, url: 'http://localhost:8001',
+    error: 'EEG_API_TOKEN is not set',
+  })
+  render(<Adaptive />)
+
+  // Precise, not `/EEG/`: the debug readout carries that string too, and a
+  // findBy matching twice retries until the budget, surfacing as a timeout
+  // rather than as the ambiguity it is.
+  const sentence = await screen.findByText(/is running but is not set up/)
+  expect(sentence).not.toHaveTextContent(/Make sure the EEGResearch backend is running/)
+  // And the badge follows it: a service that answered is not offline.
+  expect(screen.getByText('needs setup')).toBeInTheDocument()
+  expect(screen.queryByText('offline')).not.toBeInTheDocument()
+  // The detail is a server-side configuration string, not something a student
+  // can act on, so it stays out of the copy.
+  expect(document.body.textContent).not.toMatch(/EEG_API_TOKEN/)
+})
+
+it('lets a healthy pull answer set the mode, which omits ingest_mode', async () => {
+  // The guard this replaces read a missing `ingest_mode` as "did not land" --
+  // but the backend omits that field on two of its four shapes, including the
+  // ordinary healthy pull answer. So the probe could no longer set
+  // `pushMode: false` at all, and a push-to-pull reconfiguration stopped
+  // self-correcting mid-session. Harmless only because `undefined` and `false`
+  // are both falsy and `undefined` is the initial value.
+  eegHealth.mockResolvedValueOnce({ available: null, ingest_mode: 'push', url: null })
+  eegHealth.mockResolvedValue({ available: true, url: 'http://localhost:8001', muse: {} })
+  render(<Adaptive />)
+
+  await screen.findByText('on your device')
+  // The pull answer carries no `ingest_mode`, and has to be believed anyway.
+  expect(await screen.findByText('ready', undefined, { timeout: 8000 })).toBeInTheDocument()
+  expect(screen.queryByText('on your device')).not.toBeInTheDocument()
+}, 20000)
+
+
+it('does not let a probe that reached nothing erase a fault the backend stated', async () => {
+  // The config error is a fact the backend *reported*: the sidecar is
+  // reachable and the token is wrong. A later request that reached nothing
+  // changes none of that, so clearing the field there swapped a known fault
+  // for "Make sure the EEGResearch backend is running" -- the one instruction
+  // the erased sentence says cannot help.
+  eegHealth.mockResolvedValueOnce({
+    available: false, url: 'http://localhost:8001', error: 'EEG_API_TOKEN is not set',
+  })
+  eegHealth.mockResolvedValue({ answered: false, available: false, error: 'Failed to fetch' })
+  render(<Adaptive />)
+
+  await screen.findByText(/is running but is not set up/)
+
+  const before = eegHealth.mock.calls.length
+  await waitFor(() => expect(eegHealth.mock.calls.length).toBeGreaterThan(before),
+                { timeout: 8000 })
+
+  // Still on file -- which is what this test is for -- and now stated as the
+  // stale fact it is, rather than as the current state of a service nothing
+  // has reached since.
+  expect(screen.getByText(/when we last checked/)).toHaveTextContent(/not set up to use the headband/)
+  expect(screen.queryByText(/Make sure the EEGResearch backend is running/)).not.toBeInTheDocument()
+  expect(screen.getByText('needs setup · unchecked')).toBeInTheDocument()
+  expect(screen.queryByText('offline')).not.toBeInTheDocument()
+}, 20000)
+
+it('keeps the known fault ahead of the unread state when the probe is refused', async () => {
+  // The 429 path early-returns before the writer, so `serviceError` correctly
+  // survives -- and the sentence chain ignored it, preferring an outage branch
+  // whose advice the config sentence explicitly contradicts. Most specific
+  // known fact first, the unread state after it, as `cellLabel` orders the
+  // cohort roster.
+  eegHealth.mockResolvedValueOnce({
+    available: false, url: 'http://localhost:8001', error: 'EEG_API_TOKEN is not set',
+  })
+  eegHealth.mockResolvedValue({ refused: true, error: 'Too many requests.' })
+  render(<Adaptive />)
+
+  await screen.findByText(/is running but is not set up/)
+  await screen.findByText(/could not re-check just now/, undefined, { timeout: 8000 })
+
+  // Both halves in one sentence: what is known, and that it could not be
+  // confirmed -- not one replacing the other.
+  const sentence = screen.getByText(/could not re-check just now/)
+  expect(sentence).toHaveTextContent(/not set up to use the headband/)
+  expect(sentence).toHaveTextContent(/Restarting it will not help/)
+  expect(sentence).not.toHaveTextContent(/Make sure the EEGResearch backend is running/)
+  // And the badge follows it rather than the refusal.
+  // The chip carries the qualifier as well: two words asserting a current
+  // state from evidence of unknown age is the same claim in miniature.
+  expect(screen.getByText('needs setup · unchecked')).toBeInTheDocument()
+  expect(screen.queryByText('status unavailable')).not.toBeInTheDocument()
+}, 20000)
+
+
+it('does not end a refusal with a request that established nothing', async () => {
+  // `probeRefused: false` sat outside the guard, undefended by the comment
+  // above it, which justified only `available`. Cleared from a non-answer,
+  // "could not check" became a confident outage claim on the strength of a
+  // request that checked nothing at all.
+  eegHealth.mockResolvedValueOnce({ refused: true, error: 'Too many requests.' })
+  eegHealth.mockResolvedValue({ answered: false, available: false, error: 'Failed to fetch' })
+  render(<Adaptive />)
+
+  await screen.findByText(/Could not check the EEG service/)
+
+  const before = eegHealth.mock.calls.length
+  await waitFor(() => expect(eegHealth.mock.calls.length).toBeGreaterThan(before),
+                { timeout: 8000 })
+
+  expect(screen.getByText(/Could not check the EEG service/)).toBeInTheDocument()
+  expect(screen.queryByText(/Make sure the EEGResearch backend is running/)).not.toBeInTheDocument()
+  expect(screen.getByText('status unavailable')).toBeInTheDocument()
+  expect(screen.queryByText('offline')).not.toBeInTheDocument()
+}, 20000)
+
+it('names the server it could not reach, not the one it never probed', async () => {
+  // Nothing has been checked: the request went to this app's backend and did
+  // not arrive, so the sidecar on 8001 was never asked. The old sentence named
+  // that service and that port anyway -- the commonest failure of the set,
+  // wearing the message for a different one.
+  eegHealth.mockResolvedValue({ answered: false, available: false, error: 'Failed to fetch' })
+  render(<Adaptive />)
+
+  const sentence = await screen.findByText(/hasn't been checked/)
+  expect(sentence).not.toHaveTextContent(/8001/)
+  expect(sentence).not.toHaveTextContent(/EEGResearch/)
+  // Not offline either: "offline" is an answered claim about the sidecar.
+  expect(screen.getByText('status unavailable')).toBeInTheDocument()
+  expect(screen.queryByText('offline')).not.toBeInTheDocument()
+})
+
+it('still names the sidecar when a probe answered that it is down', async () => {
+  // The branch the sentence above must not swallow: this one was answered, so
+  // the port and the instruction are the right ones.
+  eegHealth.mockResolvedValue({ available: false, ingest_mode: 'pull', url: 'http://localhost:8001' })
+  render(<Adaptive />)
+
+  expect(await screen.findByText(/EEG service not reachable on port 8001/)).toBeInTheDocument()
+  expect(await screen.findByText('offline')).toBeInTheDocument()
+  expect(screen.queryByText('status unavailable')).not.toBeInTheDocument()
+})
+
+
+it('qualifies a known fault the unreachable server has not re-confirmed', async () => {
+  // The decisive pair. A refusal already turned the claim into "when we last
+  // checked"; a probe that reached nothing is the same kind of staleness and
+  // said nothing at all -- the sentence was byte-identical to the one shown
+  // while the probe was answering. And it withheld the more urgent fact, which
+  // nothing else on screen carried: it is this app's own backend that cannot
+  // be reached.
+  eegHealth.mockResolvedValueOnce({
+    available: false, url: 'http://localhost:8001', error: 'EEG_API_TOKEN is not set',
+  })
+  eegHealth.mockResolvedValue({ answered: false, available: false, error: 'Failed to fetch' })
+  render(<Adaptive />)
+
+  const fresh = await screen.findByText(/is running but is not set up/)
+  expect(fresh).toBeInTheDocument()
+
+  const stale = await screen.findByText(/when we last checked/, undefined, { timeout: 8000 })
+  expect(stale).toHaveTextContent(/server can't be reached right now/)
+  expect(stale).toHaveTextContent(/Restarting it will not help/)
+  // Not the refusal's qualifier: that one says the check was declined, which
+  // is a different reason and a different thing to wait for.
+  expect(stale).not.toHaveTextContent(/could not re-check just now/)
+  expect(screen.getByText('needs setup · unchecked')).toBeInTheDocument()
+}, 20000)
+
+
+it('does not report an outage from a probe that has not come back', async () => {
+  // `available` starts at null so that "nobody has checked" and "checked, and
+  // it is down" stay apart -- and the terminal branch tested it for falsiness,
+  // so the two were one state there. Rendered with the very first probe still
+  // in flight, the page named a service and a port it had not contacted and
+  // told the reader to go and start it.
+  //
+  // Nothing bounds how long that lasts. `apiFetch`'s `timeoutMs` has no
+  // default and `eegHealth` passes no options, so against a backend that never
+  // answers the request never settles, `probeUnreachable` never becomes true,
+  // and the false claim stands for the whole lesson.
+  eegHealth.mockImplementation(() => new Promise(() => {}))
+  render(<Adaptive />)
+
+  const sentence = await screen.findByText(/Checking the EEG service/)
+  // Scoped to the status line: the debug readout carries a sentence of its own
+  // naming the same port, from its own state, so a document-wide query here
+  // would fail for a reason this test is not about.
+  expect(sentence).not.toHaveTextContent(/not reachable on port 8001/)
+  // And the badge: `offline` is an answered claim about the sidecar, and no
+  // answer has arrived.
+  expect(screen.queryByText('offline')).not.toBeInTheDocument()
+})

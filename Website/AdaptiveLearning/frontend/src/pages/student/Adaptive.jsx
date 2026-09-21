@@ -481,18 +481,45 @@ export default function Adaptive() {
         // under push.
         if (alive) setHeadband(s => ({
           ...s,
-          // **Only a response that carried a mode may set one.** `eegHealth`
-          // swallows a non-429 failure into `{available: false}`, which has no
-          // `ingest_mode` -- so `=== 'push'` reads false and a deployment's
-          // ingest mode changes because one browser request failed. Under push
-          // that lifts the exemptions that exist because this page is not the
-          // writer of `connected` and `battery` there, and it re-points
-          // `headbandSamples` at `push.recorded`, which is 0 while the poller's
-          // own count is what is on screen. `available` below is different and
-          // is written: not reaching the probe *is* what that field reports.
-          ...(h.ingest_mode === undefined ? {} : { pushMode: h.ingest_mode === 'push' }),
+          // **Only a response that landed may set the mode**, and that is read
+          // from the failure marker rather than inferred from a missing field.
+          // A deployment's ingest mode cannot change because one browser
+          // request failed: under push that lifts the exemptions that exist
+          // because this page is not the writer of `connected` and `battery`
+          // there, and re-points `headbandSamples` at `push.recorded`, which is
+          // 0 while the poller's own count is what is on screen.
+          //
+          // Inferring it from `ingest_mode === undefined` was the wrong test:
+          // the backend omits that field on *two* of its four shapes, and one
+          // of them is the ordinary healthy pull answer -- so the probe could
+          // no longer set `pushMode: false` at all, and a push-to-pull
+          // reconfiguration stopped self-correcting mid-session.
+          // `serviceError` is behind the same guard, and for the sharper
+          // reason: it is a fact the backend *stated* -- the sidecar is
+          // reachable and the token is wrong. A later request that reached
+          // nothing changes none of that, so clearing it there erases a known
+          // fault and leaves the page telling a student to restart a service
+          // the erased sentence said restarting would not fix. Only an answer
+          // can say the fault is gone.
+          // `probeRefused: false` is inside it for the same reason as
+          // `serviceError`, which it sat beside undefended: a request that did
+          // not land is not evidence a refusal ended. Cleared from a
+          // non-answer, "could not check" became a confident outage claim on
+          // the strength of a request that established nothing.
+          ...(h.answered === false ? {} : {
+            pushMode: h.ingest_mode === 'push',
+            serviceError: h.error || null,
+            probeRefused: false,
+          }),
+          // These two are written either way, and they are the pair that makes
+          // the difference expressible. `available: false` is what disables
+          // Connect, and not reaching the probe is a reason to disable it --
+          // but it says nothing about the *sidecar*, which was never probed:
+          // the request that failed went to this app's own backend. So the
+          // reason is carried beside it rather than collapsed into it, and the
+          // sentence names the server it actually failed to reach.
           available: !!h.available,
-          probeRefused: false,
+          probeUnreachable: h.answered === false,
         }))
       } catch { if (alive) setHeadband(s => ({ ...s, available: false })) }
     }
@@ -765,6 +792,11 @@ export default function Adaptive() {
       const hw = makeHw(recorderRef.current)
       const sid = sessionIdRef.current
       let ok = false
+      // An attempt that established nothing is not one of the three. The
+      // budget is evidence about the *headband* -- three scans that reached
+      // the bridge and found nothing -- and a status read that never landed
+      // contributes none of that.
+      let unreachable = false
       for (let attempt = 1; attempt <= RECONNECT_ATTEMPTS && !run.cancelled; attempt++) {
         setHeadband(s => ({ ...s, phase: 'reconnecting',
                              reconnect: { attempt, max: RECONNECT_ATTEMPTS, byBridge: false } }))
@@ -788,15 +820,47 @@ export default function Adaptive() {
         if (!linkSettling(st?.ingestion)) settlingSince.current = null
         if (run.cancelled) break
         if (linkAlive(st?.ingestion)) { ok = true; break }
-        if (st == null) continue
+        // The same conclusion the abort below reaches, one read earlier: this
+        // read is the pre-attempt "did it come back on its own", and a `null`
+        // from it means the service is not answering. `continue` would spend
+        // the attempt on that, which is the thing the break exists to stop --
+        // two readings of one fact have to agree.
+        if (st == null) { unreachable = true; break }
         const res = await pairOnce(hw, sid, run).catch(() => ({ ok: false }))
         if (run.cancelled) break
         if (res.ok) { ok = true; break }
+        // Retrying two seconds later against a service that has just failed
+        // to answer buys nothing, so this ends the run rather than spending
+        // the rest of the budget on it. The retry is the telemetry poll:
+        // leaving the phase on `reconnecting` is what keeps that effect
+        // mounted, and it restarts this loop (or adopts the link outright)
+        // on its first landed read.
+        if (res.reason === 'status_unavailable') { unreachable = true; break }
       }
       if (run.cancelled) return
       reconnectRun.current = null
       if (ok) {
         onReconnected()
+        return
+      }
+      // Nothing was established, so nothing is concluded and nothing is torn
+      // down. The teardown below ends the telemetry effect, which is the only
+      // thing watching for the link to come back -- exactly the state that
+      // effect's comment says it exists to prevent -- and its message is
+      // advice about hardware no read here reached.
+      //
+      // The counter has to stop with the attempt it was counting. Left as it
+      // was it reads "(attempt 1 of 3)" with nothing running, no way for the
+      // number to advance and a bound nothing will reach -- a progress
+      // indicator outliving its process. The flag is what the sub-line reads
+      // instead of the count, and it says what is actually being waited on,
+      // which is unbounded and is not the headband. `attempt`/`max` are left
+      // alone because that branch is the only thing that reads them. The next
+      // run rewrites `reconnect` at the top of its first attempt, so this
+      // clears itself.
+      if (unreachable) {
+        setHeadband(s => ({ ...s, reconnect: { ...s.reconnect,
+                                               serverUnreachable: true } }))
         return
       }
       // The same teardown as Disconnect and "Stop trying", and not a bare
@@ -1149,6 +1213,12 @@ export default function Adaptive() {
                                   { method: 'POST', body: { device_id: stationId, session_id: sid } }),
     connect:    (name, sid) => apiFetch('/api/eeg/muse/connect',
                                         { method: 'POST', body: { name, device_id: stationId, session_id: sid } }),
+    // `null` for a read that did not land, which is what every caller's
+    // `.catch(() => null)` already expects and never got: `eegStatus`
+    // swallows its own failure into a shaped object, so the catch was
+    // structurally dead and `|| {}` handed the callers an *answer* meaning
+    // "nothing is connected". The push branch's `museState` throws, so this
+    // is the two halves agreeing rather than a new state.
     status:     async () => {
       const st = await eegStatus(stationId)
       return st?.answered === false ? null : (st?.muse || {})
@@ -1200,6 +1270,13 @@ export default function Adaptive() {
     // bridge disconnect outside "Stop trying", nothing could clear it.
     const already = await hw.status().catch(() => null)
     if (cancelled()) return { ok: false, reason: 'cancelled' }
+    // A read that did not land is not "there is no link to adopt". The
+    // fall-through from here disconnects and rescans, and that disconnect is
+    // global to the shared bridge device -- so one failed request at the
+    // moment of the click tore down a headband that was streaming, which is
+    // the exact "connects, then immediately disconnects" the adoption check
+    // above exists to stop. Nothing is known, so nothing is touched.
+    if (already === null) return { ok: false, reason: 'status_unavailable' }
     if (linkAlive(already?.ingestion)) {
       clearTimeout(phaseTimer.current)
       setHeadband(s => ({ ...s, connected: true, phase: 'connected', reconnect: null,
@@ -1219,16 +1296,23 @@ export default function Adaptive() {
     await hw.scan(activeSessionId)
 
     let devices = []
+    // Twelve reads that never landed are not twelve empty scans. Without
+    // this the reason is `no_device`, and its instruction sends a student to
+    // check a headband that is switched on, in range, and fine.
+    let scanAnswered = false
     for (let i = 0; i < 12; i++) {
       await new Promise(r => setTimeout(r, 1000))
       if (cancelled()) return { ok: false, reason: 'cancelled' }
       const st = await hw.status()
+      if (st === null) continue
+      scanAnswered = true
       devices = st?.ingestion?.muse_devices || []
       if (devices.length > 0) break
       // Stops waiting immediately if the bridge reports Bluetooth itself
       // is off, instead of burning the full 12s timeout.
       if (st?.ingestion?.bluetooth_enabled === false) return { ok: false, reason: 'bluetooth_off' }
     }
+    if (!scanAnswered) return { ok: false, reason: 'status_unavailable' }
     if (devices.length === 0) return { ok: false, reason: 'no_device' }
     if (cancelled()) return { ok: false, reason: 'cancelled' }
 
@@ -1239,17 +1323,23 @@ export default function Adaptive() {
 
     // Bridge connects asynchronously; poll for it. A BadStateError here means
     // the headband is still streaming from a prior session and needs a power-cycle.
+    let connectAnswered = false
     for (let i = 0; i < 10; i++) {
       await new Promise(r => setTimeout(r, 1000))
       if (cancelled()) return { ok: false, reason: 'cancelled' }
       const st = await hw.status()
+      if (st === null) continue
+      connectAnswered = true
       if (st?.ingestion?.muse_connected) {
         clearTimeout(phaseTimer.current)
         setHeadband(s => ({ ...s, connected: true, phase: 'connected', reconnect: null }))
         return { ok: true }
       }
     }
-    return { ok: false, reason: 'not_connected' }
+    // `not_connected`'s instruction is a power-cycle, which is the most
+    // disruptive thing this page ever asks for -- and it is a claim about
+    // firmware that no read here established.
+    return { ok: false, reason: connectAnswered ? 'not_connected' : 'status_unavailable' }
   }
 
   const disconnectHeadband = async (hw) => {
@@ -1330,7 +1420,17 @@ export default function Adaptive() {
       setHeadband(s => ({ ...s, phase: 'idle', deviceName: null }))
       // Longer dwell than the default toast -- these are instructions the
       // student has to act on, not just read.
-      if (outcome.reason === 'bluetooth_off') {
+      // Names the check, not the hardware. The three below all instruct the
+      // student to do something to the headband -- move it, switch it on,
+      // power-cycle it -- and none of those is supported by a status read
+      // that never arrived.
+      if (outcome.reason === 'status_unavailable') {
+        toast.error('Could not reach the EEG service.', {
+          description: 'Your headband was not touched. This usually clears on its own — '
+            + 'click Connect Headband again in a moment.',
+          duration: 12_000,
+        })
+      } else if (outcome.reason === 'bluetooth_off') {
         toast.error('Bluetooth is turned off on this PC.', {
           description: 'Turn Bluetooth on in Windows Settings, then click Connect Headband again.',
           duration: 12_000,
@@ -1510,8 +1610,16 @@ export default function Adaptive() {
             {/* Three states, not two: reachable, not reachable, and a probe
                 that was refused and therefore says neither. "offline" names
                 the headband; this one names the check. */}
-            {headband.probeRefused && !headband.connected && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">status unavailable</span>}
-            {!headband.probeRefused && !headband.available && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">offline</span>}
+            {(headband.probeRefused || headband.probeUnreachable) && !headband.serviceError && !headband.connected && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">status unavailable</span>}
+            {/* The badge follows the sentence, as always: a service that
+                answered is not offline, whatever it answered -- and it carries
+                the sentence's qualifier too, or a two-word chip goes on
+                asserting a current state from evidence of unknown age. */}
+            {headband.serviceError && !headband.connected && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">{(headband.probeRefused || headband.probeUnreachable) ? 'needs setup · unchecked' : 'needs setup'}</span>}
+            {/* `=== false`, never falsiness: null is "no probe has answered
+                yet", and a badge is the shortest possible form of the claim
+                the sentence beside it is careful not to make. */}
+            {!headband.probeRefused && !headband.probeUnreachable && !headband.serviceError && headband.available === false && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">offline</span>}
             {headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">on your device</span>}
             {/* Three states: push === null renders nothing (not asked yet), a
                 known not-recording state is amber, and only reachable +
@@ -1530,10 +1638,17 @@ export default function Adaptive() {
             {headband.phase === 'starting'   && 'Starting EEG session...'}
             {/* Attempt 0 is the bridge waiting out its first backoff, which
                 is not an attempt a student should count. */}
+            {/* The health branches below are gated on `phase === 'idle'`, so
+                during a reconnect nothing would otherwise say the server is
+                the thing that cannot be reached. This is the one state where
+                that matters most: no attempt is running, and what is being
+                waited on is the next landed poll. */}
             {headband.phase === 'reconnecting' && (
-              `🔄 The headband disconnected — reconnecting${
-                headband.reconnect?.attempt > 0 && headband.reconnect?.max > 0
-                  ? ` (attempt ${headband.reconnect.attempt} of ${headband.reconnect.max})` : ''}…`
+              headband.reconnect?.serverUnreachable
+                ? "🔄 The headband disconnected — and the server can't be reached, so we can't try again yet. This carries on by itself as soon as it answers."
+                : `🔄 The headband disconnected — reconnecting${
+                    headband.reconnect?.attempt > 0 && headband.reconnect?.max > 0
+                      ? ` (attempt ${headband.reconnect.attempt} of ${headband.reconnect.max})` : ''}…`
             )}
             {headband.phase === 'connected'  && `${headbandSamples} samples sent · teacher can see your focus & stress live`}
             {headband.phase === 'idle' && (
@@ -1550,6 +1665,28 @@ export default function Adaptive() {
                       : push?.recorded
                         ? `${Object.values(push.recorded).reduce((a, b) => a + b, 0)} readings recorded from this computer.`
                         : 'Turn on your Muse S headband, then click Connect. It pairs through the app on this computer.')
+                  // **Most specific known fact first, the unread state after
+                  // it** -- `cellLabel`'s ordering on the cohort roster, for
+                  // the same reason. A config error is the most specific thing
+                  // on file here: the backend stated it, a refusal does not
+                  // withdraw it, and the outage branches below would replace it
+                  // with advice this very sentence says cannot help. So it goes
+                  // above them, qualified by the refusal rather than erased by
+                  // it.
+                  // Two ways the fault on file can be stale, and both need
+                  // saying: a refusal, and a probe that reached nothing. Only
+                  // the first had a qualifier, so with the server unreachable
+                  // the page asserted the service's *current* state from
+                  // evidence of unknown age -- byte-identical to the sentence
+                  // it shows while the probe is answering. The unreachable one
+                  // also names the more urgent fact, which nothing on screen
+                  // said: it is this app's own backend that cannot be reached.
+                  : headband.serviceError && headband.probeUnreachable
+                  ? "The EEG service was running but not set up to use the headband when we last checked — and the server can't be reached right now, so that hasn't been re-checked. Restarting it will not help; this needs whoever set up this computer."
+                  : headband.serviceError && headband.probeRefused
+                  ? 'The EEG service was running but not set up to use the headband when we last checked, and we could not re-check just now. Restarting it will not help — this needs whoever set up this computer.'
+                  : headband.serviceError
+                  ? 'The EEG service is running but is not set up to use the headband. Restarting it will not help — this needs whoever set up this computer.'
                   // Ahead of `available`, which is deliberately stale through a
                   // refusal -- but only where the stale value is a claim the
                   // check has not earned. A *known outage* is the opposite
@@ -1559,7 +1696,10 @@ export default function Adaptive() {
                   // and tells a student to wait for a check instead of
                   // starting the service. So the refusal qualifies that
                   // sentence rather than replacing it.
-                  : headband.probeRefused && headband.available === false
+                  // `available === false` is itself two facts, and only the
+                  // answered one is a known outage: the other is this
+                  // field reporting that the probe never arrived.
+                  : headband.probeRefused && headband.available === false && !headband.probeUnreachable
                   ? 'EEG service was not reachable when we last checked, and we could not re-check just now. Make sure the EEGResearch backend is running on port 8001.'
                   // Either nothing has answered yet (`null`) or the last answer
                   // was that it is there. Neither earns a claim about the
@@ -1568,6 +1708,29 @@ export default function Adaptive() {
                   ? 'Could not check the EEG service just now. That says nothing about your headband — the check runs again on its own.'
                   : headband.available
                   ? 'EEG service ready. Turn on your Muse S headband then click Connect.'
+                  // The commonest failure of the set, and the last one without
+                  // a sentence of its own: the request went to *this app's*
+                  // backend and never arrived, so the sidecar was not probed at
+                  // all. Naming it and its port -- as the branch below does --
+                  // sends a student to a service nothing has said anything
+                  // about. Expressible only since the probe started marking a
+                  // non-answer.
+                  : headband.probeUnreachable
+                  ? "Couldn't reach the server, so the headband service hasn't been checked. This usually clears on its own."
+                  // The state `available: null` exists for, and the last one
+                  // reading it as falsiness: the first probe is still in
+                  // flight, so nothing has been checked and the branch below
+                  // named a port nothing had contacted. It is not the
+                  // unreachable branch either -- that one is a request that
+                  // *failed*, and nothing bounds how long this one runs:
+                  // `apiFetch`'s `timeoutMs` has no default and `eegHealth`
+                  // passes none, so against a black-holed backend the claim
+                  // would have stood for the whole lesson.
+                  : headband.available === null
+                  ? 'Checking the EEG service…'
+                  // Reached only with an answer in hand saying the sidecar is
+                  // down, and no config error on file: those branches are
+                  // above, ahead of the refusal.
                   : 'EEG service not reachable on port 8001. Make sure the EEGResearch backend is running.'
             )}
           </p>

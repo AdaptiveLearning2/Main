@@ -397,3 +397,82 @@ it('announces a drop under pull, where the poller keeps running through it', asy
   await screen.findByText(/STREAMING/, {}, { timeout: 6000 })
   expect(toast.success).toHaveBeenCalledWith('Headband reconnected.')
 }, 60_000)
+
+
+it('does not spend the reconnect budget on attempts that reached nothing', async () => {
+  // `pairOnce` now aborts with `status_unavailable` when the status read did
+  // not land -- correct, and the loop above it read only `res.ok`, so each
+  // abort still cost one of three attempts. With 2/4/8s backoffs, fourteen
+  // seconds of an unreachable server during a drop exhausted the budget and
+  // the student was told to check a headband nothing had learned anything
+  // about.
+  //
+  // The sharper half is what followed: the give-up path tears down and clears
+  // `reconnectRun`, which ends the telemetry effect -- so nothing was left
+  // watching for the link to come back, which is the state that effect's own
+  // comment says it exists to prevent. The link then needed a manual click.
+  render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+  await waitFor(() => expect(apiFetch.mock.calls.some(c => c[0] === '/api/eeg/muse/connect')).toBe(true),
+                { timeout: 10000 })
+  await new Promise(r => setTimeout(r, 1500))
+
+  // The link goes, with the bridge not retrying -- so this page's loop drives
+  // it. The drop has to be *observed* before the server goes away, or the
+  // poll's own guard returns early and there is no reconnect to test.
+  bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: false,
+                       reconnect_exhausted: true, muse_devices: [], battery_percent: null }
+  await screen.findByText(/reconnecting \(attempt 1 of 3\)/, {}, { timeout: 9000 })
+
+  // Now the server stops answering.
+  bridge.unanswered = true
+
+  // Comfortably past 2+4+8s of backoff, which is what the whole budget costs
+  // when every attempt aborts immediately.
+  await new Promise(r => setTimeout(r, 25000))
+  expect(toast.error).not.toHaveBeenCalledWith('The headband could not be reconnected.', expect.anything())
+  // Still watching, and the way out is still offered.
+  expect(screen.getByRole('button', { name: /stop trying/i })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /connect headband/i })).toBeNull()
+  expect(bridge.recorders[0].stop).not.toHaveBeenCalled()
+
+  // And the decisive half: the link comes back with the server, and is picked
+  // up without anyone clicking anything.
+  bridge.ingestion = { ...CONNECTED }
+  bridge.unanswered = false
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+  expect(toast.success).toHaveBeenCalledWith('Headband reconnected.')
+}, 120_000)
+
+
+it('stops counting attempts once no attempt is running', async () => {
+  // The consequence of the early break: it leaves `phase: 'reconnecting'`
+  // and the last `reconnect: {attempt, max}` standing, so the panel went on
+  // reading "reconnecting (attempt 1 of 3)" with no attempt running, no way
+  // for the count to advance, and "of 3" naming a bound nothing will reach.
+  // What the page is actually doing is waiting for the poll to land, which
+  // is unbounded -- and nothing on screen said the server was the problem.
+  render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+  await waitFor(() => expect(apiFetch.mock.calls.some(c => c[0] === '/api/eeg/muse/connect')).toBe(true),
+                { timeout: 10000 })
+  await new Promise(r => setTimeout(r, 1500))
+
+  bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: false,
+                       reconnect_exhausted: true, muse_devices: [], battery_percent: null }
+  await screen.findByText(/reconnecting \(attempt 1 of 3\)/, {}, { timeout: 9000 })
+  bridge.unanswered = true
+
+  // Generous: the read that aborts may be the next attempt's, a full scan
+  // cycle away, if this one had already got past its own.
+  const line = await screen.findByText(/server can't be reached/, {}, { timeout: 25000 })
+  expect(line).toHaveTextContent(/disconnected/)
+  // No number, because there is no attempt behind one.
+  expect(screen.queryByText(/attempt \d+ of \d+/)).toBeNull()
+}, 90_000)

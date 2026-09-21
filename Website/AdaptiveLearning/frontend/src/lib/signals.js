@@ -58,13 +58,34 @@ export function createSignalRecorder({ sessionId, deviceId }) {
 
 export async function eegHealth() {
   try { return await apiFetch('/api/eeg/health') }
-  catch (e) { return { available: false, error: e.message } }
+  catch (e) {
+    // A refused probe is not a fact about the headband. `available: false`
+    // says the sidecar could not be reached; a 429 says only that this
+    // endpoint was asked too often, and every open lesson asks it every 5 s.
+    // Collapsed into `available: false`, a rate limit renders as "offline" on
+    // every student's page with nothing saying a limit caused it -- rule 1,
+    // on the state that decides whether Connect is even offered.
+    if (e.status === 429) return { refused: true, error: e.message }
+    // `answered: false`, the marker `eegStatus` already carries. Without it
+    // this fallback is shape-identical to an answer the backend gives on
+    // purpose: `/api/eeg/health` returns `{available: false, error}` when the
+    // sidecar is *reachable* and the learner token is misconfigured -- "a
+    // config error, not an outage, so report it rather than 500". Read as one
+    // state, a working backend was reported as an unreachable one, naming the
+    // only layer that was demonstrably fine.
+    return { answered: false, available: false, error: e.message }
+  }
 }
 
 export async function eegStatus(deviceId) {
   const path = deviceId ? `/api/eeg/status?device_id=${encodeURIComponent(deviceId)}` : '/api/eeg/status'
   try { return await apiFetch(path) }
-  catch { return { service: false, poller: { running: false } } }
+  // `answered: false` beside the shape callers already read. The poller half
+  // of this fallback is a deliberate claim -- nothing is flowing if we cannot
+  // ask -- but `service: false` is not one this read has earned, and a caller
+  // that treats it as an answer would learn "the sidecar is down" from a
+  // request that never landed.
+  catch { return { answered: false, service: false, poller: { running: false } } }
 }
 
 export async function eegDevices() {

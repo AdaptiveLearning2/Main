@@ -1,5 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 import os, math, re, requests, random, string, threading, time, collections, contextlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -288,6 +290,162 @@ class MaxBodySizeMiddleware:
 # cannot read because it carries no CORS header reaches the page as a generic
 # network error, which is the one thing worse than no message at all.
 app.add_middleware(MaxBodySizeMiddleware)
+
+
+# ─── the five routes with no caller ──────────────────────────────────────
+#
+# Every other limiter here keys on the id `get_user` resolved. These five never
+# call it, so on them those limiters simply never run.
+# `test_network_edge.py` derives this set from the module rather than trusting
+# the map below, so a sixth public route fails the suite until someone puts it
+# in a budget.
+#
+# `/api/generate-question` is the one that matters: it *looks* bounded, by
+# `_claim_generation_slot(user_id)`, but on an unauthenticated route `user_id`
+# is a query parameter the caller writes. A new string per request is a new
+# allowance, and the path it buys ends at a model. The address is the only
+# identity a caller cannot choose, which is what makes this a bound rather than
+# a formality.
+_PUBLIC_LIMITER = {
+    "/api/generate-question": "public_generate",
+    "/api/questions":         "public_read",
+    "/api/questions/count":   "public_read",
+    "/api/topics":            "public_read",
+    # Its own bucket, not `public_read`. Every open lesson polls this every 5 s,
+    # which makes it the largest consumer of any budget it shares and the first
+    # thing an unrelated burst would starve -- and a refused probe costs every
+    # one of those lessons its reading of the sidecar until the window rolls.
+    # The page no longer reports that as the headband being offline, but it
+    # still cannot tell a student whether the headband is there.
+    "/api/eeg/health":        "public_probe",
+}
+
+# **An address is a school, not a student**, and that decides the numbers. A
+# classroom leaves through one NAT, so these are sized against what this app's
+# own pages do at rest: `Adaptive.jsx` polls `/api/eeg/health` every 5 s while
+# it is open -- 12/min per student, so sixty students behind one address is
+# 720/min on that endpoint before anyone answers a question. The budgets sit
+# above that, on purpose: this refuses a runaway or hostile client and is not
+# a way to police a class. Tighten the generation budget before the read one
+# if it ever needs revisiting -- that is the path that spends a model call.
+_PUBLIC_RATE_LIMITS = {
+    "public_generate": (
+        _env_number("PUBLIC_GENERATE_RATE_LIMIT", 600, int, minimum=1),
+        _env_number("PUBLIC_GENERATE_RATE_WINDOW", 60.0, float, minimum=1.0)),
+    "public_read": (
+        _env_number("PUBLIC_READ_RATE_LIMIT", 1800, int, minimum=1),
+        _env_number("PUBLIC_READ_RATE_WINDOW", 60.0, float, minimum=1.0)),
+    # The probe's own budget, sized off its own poll: 12/min per open lesson,
+    # so this is a hundred and fifty of them behind one address. Separate so
+    # that reaching it means the probe itself is the thing being sent too
+    # often, which is a fact about that endpoint rather than about whatever
+    # else shared the bucket.
+    "public_probe": (
+        _env_number("PUBLIC_PROBE_RATE_LIMIT", 1800, int, minimum=1),
+        _env_number("PUBLIC_PROBE_RATE_WINDOW", 60.0, float, minimum=1.0)),
+}
+
+# How many proxies sit in front of this process. `X-Forwarded-For` is written
+# by whatever is in front *and* by anything before that, so entries are
+# trustworthy only from the right: with one trusted proxy the client is the
+# last entry, with two the second from last. Default 0 -- the header is not
+# read at all, and the peer address is used.
+#
+# Both directions of getting this wrong are silent. Trusting the header with
+# nothing in front lets a caller mint a fresh identity per request, which is
+# the same hole as keying on `user_id`. Not trusting it from behind a proxy
+# collapses every caller in the world into the proxy's own address, so one
+# bucket holds everybody and the first burst locks out the rest. It is left at
+# 0 because no hosting is chosen yet, and 0 is the one that fails toward
+# refusing an attacker rather than refusing a school.
+_TRUSTED_PROXY_HOPS = int(_env_number("TRUSTED_PROXY_HOPS", 0, int, minimum=0))
+
+_public_hits: dict[tuple[str, str], list[float]] = {}
+_public_hits_lock = threading.Lock()
+_public_sweep_at = time.monotonic()
+_PUBLIC_SWEEP_EVERY = 60.0
+_PUBLIC_SWEEP_ABOVE = 4096
+
+
+def _client_address(request: Request) -> str:
+    """The caller, for a route where there is no account to name them by."""
+    if _TRUSTED_PROXY_HOPS:
+        chain = [p.strip() for p in
+                 request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
+        if len(chain) >= _TRUSTED_PROXY_HOPS:
+            return chain[-_TRUSTED_PROXY_HOPS]
+        # Fewer entries than there are proxies means the header is not what
+        # this deployment was told it would be. Fall through to the peer, which
+        # is then the nearest proxy -- everyone shares a bucket, which is
+        # visible as refusals rather than silent as a bypass.
+    client = request.client
+    # An ASGI server that reports no peer would otherwise be an unlimited
+    # caller. One shared bucket instead: this cannot be forced from outside,
+    # and a limiter that gives up its key is not one.
+    return client.host if client and client.host else "unknown"
+
+
+def _public_rate_limited(limiter: str, address: str) -> int | None:
+    """Seconds to wait, or `None` while the caller is inside its allowance."""
+    global _public_sweep_at
+    limit, window = _PUBLIC_RATE_LIMITS[limiter]
+    key = (limiter, address)
+    now = time.monotonic()
+    with _public_hits_lock:
+        # Same shape as the ingest limiter's sweep: only when the dict is large
+        # and at most once an interval, since a big dict usually means real
+        # callers and scanning it per request would free nothing. It matters
+        # more here -- these keys are addresses, and nothing makes a caller
+        # come back.
+        if (len(_public_hits) > _PUBLIC_SWEEP_ABOVE
+                and now - _public_sweep_at >= _PUBLIC_SWEEP_EVERY):
+            _public_sweep_at = now
+            for stale in [k for k, ts in _public_hits.items()
+                          if all(now - t >= _PUBLIC_RATE_LIMITS[k[0]][1] for t in ts)]:
+                del _public_hits[stale]
+
+        hits = [t for t in _public_hits.get(key, ()) if now - t < window]
+        if len(hits) >= limit:
+            _public_hits[key] = hits
+            return max(1, int(window - (now - min(hits))) + 1)
+        hits.append(now)
+        _public_hits[key] = hits
+        return None
+
+
+# Inside `security_headers` and CORS (added before both), so a 429 from here
+# carries them: a refusal the page cannot read is indistinguishable from the
+# backend being down.
+@app.middleware("http")
+async def public_rate_limit(request: Request, call_next):
+    limiter = _PUBLIC_LIMITER.get(request.url.path)
+    if limiter is None:
+        return await call_next(request)
+
+    refused_after = _public_rate_limited(limiter, _client_address(request))
+    if refused_after is None:
+        return await call_next(request)
+
+    # No address, here or anywhere: an address is personal data about a child
+    # for a purpose no consent channel covers, and the log's whole rule is that
+    # it records that something happened, never what was in it. The cost is
+    # that these rows cool per *endpoint* rather than per caller -- one row
+    # every few minutes saying the public question path is being hammered,
+    # which is the fact an admin can act on. Who is doing it is a question for
+    # whatever sits in front of this process, which is where addresses live.
+    #
+    # Through the threadpool because this is the one hook on the event loop.
+    # The other thirteen sit in `def` handlers, which FastAPI already runs in a
+    # worker thread; this is middleware, so a synchronous Supabase insert here
+    # blocks every other request in the process for as long as it takes --
+    # measured at 0.95 s of starvation against a 1 s insert, with httpx's 5 s
+    # timeout as the ceiling. The cooldown makes it rare, and rare is not the
+    # same as harmless: it fires under exactly the load that made it fire.
+    await run_in_threadpool(_record_security_event, "rate_limited", None,
+                            limiter=limiter)
+    return JSONResponse(
+        {"detail": "Too many requests. Slow down."},
+        status_code=429, headers={"Retry-After": str(refused_after)})
 
 
 @app.middleware("http")

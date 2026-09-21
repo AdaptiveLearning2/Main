@@ -491,8 +491,8 @@ treatment in `config.py` — a validator warns and falls back rather than refusi
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MODE`, `INGEST_MAX_BATCH` /
 `INGEST_RATE_LIMIT` / `INGEST_RATE_WINDOW`, `SESSION_ABANDONED_AFTER_HOURS` /
 `STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep), `QUESTIONS_CACHE_TTL`,
-`QUESTION_QUEUE_SIZE`, the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` group under
-*The network edge*, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels*,
+`QUESTION_QUEUE_SIZE`, the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
+`PUBLIC_*_RATE_*` / `TRUSTED_PROXY_HOPS` group under *The network edge*, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels*,
 and the `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` / `SOLVE_*` groups in `docs/question-generation.md`.
 
 `QUESTIONS_CACHE_TTL` (30 s) fronts `GET /api/questions` and is bounded at 256 entries, so a sweep
@@ -794,6 +794,53 @@ reads the body to hand it on and the point is not to read it.
 CORS last (outermost). A 413 carrying no CORS header reaches the browser as a generic network error, making a size
 limit indistinguishable from the backend being down. **`add_middleware` prepends, so *added last* means *outermost*** —
 getting that backwards is silent.
+
+**Five GET routes resolve no caller, and every other limiter here keys on the id `get_user` returns** —
+so on the question bank, the topic list, the sidecar health probe and question generation, none of them
+runs. A middleware inside `security_headers` and CORS budgets those five by **address**, which is the only
+identity an unauthenticated caller cannot choose: `/api/generate-question` already had a limiter keyed on
+its `user_id` *query parameter*, so a new string per request bought a new allowance on the shortest path in
+the product to a model call. `test_network_edge.py` derives the public set from the module, so a sixth such
+route fails until it is given a budget.
+
+**An address is a school, not a student**, and that sets the numbers. A class leaves through one NAT and
+`Adaptive.jsx` polls the health route every 5 s per open page, so sixty students behind one address is
+720/min before anyone answers a question; the defaults sit above that. These refuse a runaway client and
+are not a way to police a class. **The probe has its own bucket**: polled every 5 s per open lesson, it is the
+largest consumer of any budget it shares and the first thing an unrelated burst would starve. **A refused
+probe is a third state** — it answers neither reachable nor unreachable, so the page goes on *acting* on
+the last answer (discovery keeps running, Connect stays offered) while saying *status unavailable* rather
+than *offline*. Every surface reading it has to follow, badge and sentence alike: keeping `available` stale
+and leaving one of them asserting the old value puts both claims on screen at once, in the one state the
+whole thing exists for. **The sentence still names what to do when the stale value is a known outage** —
+withdrawing it leaves a disabled Connect with no stated reason. That needs `available` to start at `null`,
+or "nobody has checked" and "checked, and it is down" are one state.
+
+**`available` has two writers, and only one of them can be refused.** The `/api/eeg/status` poll resolves a
+caller, so it is not in `_PUBLIC_LIMITER` and the address budget never touches it: mid-lesson it knows what
+the refused health probe could not, and clears `probeRefused` with the value it writes.
+
+**A status tick that did not land writes nothing at all**, and that guard belongs above the updater rather
+than per field. `eegStatus` swallows its own failure into a *shaped* object — `service: false`,
+`poller: {running: false}`, no `ingest_mode` — so every field reads like an answer: the sidecar is down, the
+poller stopped, there is no charge, no samples were sent. All are invented in the browser from a request
+that never reached a backend the failure says nothing about. Guarding one field at a time fixed the fields
+named and left the neighbours: the undefined `ingest_mode` also flips push to pull, which lifts the
+exemptions that exist *because under push this poll is not the writer* of `connected` and `battery` — and
+under pull there is no exemption at all, so one failed tick took a streaming session to *Connect Headband*
+over a sentence saying the teacher can see it live, with no toast, since `phase` stayed `connected`.
+**A drop belongs to the telemetry poll in both modes** — only the bridge's own `muse_connected` says the
+headband went away, which is the whole subject of `AdaptiveReconnectPull.test.jsx`.
+
+**A hook on the event loop must not write.** `_record_security_event` does a synchronous Supabase insert,
+and every other call site is in a `def` handler that FastAPI already runs in a worker thread. Middleware
+is not: measured at **0.95 s** of starvation for every other request against a 1 s insert, with httpx's 5 s
+timeout as the ceiling, so this one goes through `run_in_threadpool`. The cooldown makes it rare, which is
+the wrong comfort — it fires under exactly the load that made it fire. **`X-Forwarded-For` is read only as far right as `TRUSTED_PROXY_HOPS`
+says a proxy wrote it**, default 0 — trusting it with nothing in front is the query-parameter hole again,
+and not trusting it behind a proxy puts every caller in the world in one bucket. **The 429 records the
+limiter and never the address**, so these events cool per endpoint rather than per caller: the log says
+the public path is being hammered, not by whom, and whoever holds addresses is whatever sits in front.
 
 Not here, deliberately: **no `TrustedHostMiddleware`** (the production host is an open decision, and an allowlist with
 no known host either breaks everything or is a no-op), and **no HSTS** — one line in `security_headers` when the

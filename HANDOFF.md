@@ -1,190 +1,190 @@
-# Handoff
+# Handoff — the classroom simulation
 
-Rewritten 2026-09-16 at `18f5a2e`, after the classroom simulation's Phase 0 merged. **`CLAUDE.md`
-is what is kept current** — every durable rule from this work lives there, and this file is only
-what is *in flight*: what is done, what is next, and how to do it. When a step here lands, move its
-rule into CLAUDE.md and delete the step.
+Rewritten 2026-09-21 at `cce61383`. **`CLAUDE.md` and the two docs are what is kept current** —
+every durable rule from this work lives there, and this file is only what is *in flight*: what is
+done, what is next, and how to do it. When a step here lands, move its rule into `CLAUDE.md` (or
+`docs/signals.md` / `docs/question-generation.md`, per their trigger tables) and delete the step.
 
-**Scope: this session's work only.** Two things shipped — the Common Core standard on questions
-(#180) and Phase 0 of the classroom simulation (#187, #190) — and the simulation's Phases 1–6 are
-open. Other sessions' threads against this repo are not tracked here; anything of theirs that this
-work depends on is in CLAUDE.md, which is where a reader should go for it.
+**Scope: the classroom simulation only.** Other threads against this repo — the security hardening
+effort among them — are not tracked here; anything of theirs this work depends on is stated below as
+a constraint, with the rule itself in `CLAUDE.md`.
 
-The plan is `~/.claude/plans/we-will-be-doing-encapsulated-magpie.md`, with its Phase 0 superseded
-by `~/.claude/plans/nested-singing-scroll.md`.
+Plan: `~/.claude/plans/we-will-be-doing-encapsulated-magpie.md`, with its Phase 0 superseded by
+`~/.claude/plans/nested-singing-scroll.md`, and a 2026-09-20 addendum at the end recording what
+landed on `main` while Phases 2–6 were open.
 
-## Suite counts at this head
+## The goal, in one paragraph
 
-Run in this session at `18f5a2e`. **Record totals, not pass counts** (CLAUDE.md's canary rule).
-
-```
-CANARY baseline: main 18f5a2e | tree: clean | last suites: sidecar 826 / backend 1854 (1850 + 4 skipped) / frontend 714 (62 files)
-```
-
-After Phase 1 (1a #191, 1b #192, 1c open), measured on the 1c branch:
-
-```
-CANARY: chart-summary-endpoint | tree: clean | last suites: sidecar not run / backend 1898 (1897 + 1 skipped) / frontend 760 (62 files)
-```
-
-**The sidecar was not run and its count is carried, not measured** -- nothing in Phase 1 touched
-`EEGResearch`. Re-measure it rather than quoting 826 as if this session produced it. The backend's
-skip count fell from 4 to 1 and the frontend gained 45 tests over three PRs; neither is a deletion.
-
----
-
-# Common Core standards on questions. DONE.
-
-Merged as **#180** (`fc1018e`). A question now carries the CCSS code it follows, and five surfaces
-render it. It is the first stored field derived from the *student's grade*, which is what makes the
-dedupe rule at the end of this list a real decision rather than a detail. Fully documented in
-CLAUDE.md under *A question carries its Common Core code*; in outline:
-
-- `backend/ccss_standards.py` — `ccss_for(topic, grade, scenario)` over grade-keyed ladders.
-  Resolved **by grade, not band** (a band spans three grades and the standard changes inside it) and
-  **by scenario first** (`triangle_sum` is 8.G.5 inside a grade-7 topic).
-- All 17 `LLM_*_generation.py` files attach it to their return dict;
-  `20260916000000_question_ccss_standard.sql` adds the nullable, no-default column.
-- `CCSSBadge.jsx` on the same five question-rendering surfaces `QuestionFigure` reaches, with the
-  same source-scan exhaustiveness test.
-- **`add_question_to_supabase` dedupes on text *and* standard**, so one text generated at grade 6
-  and again at grade 8 is two rows rather than one whose badge contradicts what the second student
-  saw. The accepted cost is a visible duplicate in the teacher's bank.
-
-Nothing here is open. It is listed because it shipped in this session and its migration is on
-remote; Phase 2 below carries the one operational consequence (a local stack that has not run
-`npx supabase migration up` 500s on every generated question).
-
----
-
-# The classroom simulation
-
-The goal: 1 teacher, 1 class (6th grade), 30 students, 30 parents linked 1:1, parent-enabled EEG +
+1 teacher, 1 class (6th grade), 30 students, 30 parents linked 1:1, parent-enabled `eeg` +
 `headband_optical` consent (camera off), each student doing 20 practice questions (two sessions of
 10, topics and difficulty independently randomised) and 20 adaptive questions on difficulty bias
 "Auto" — **driven entirely through the real UI**, no API or database shortcuts — then a verification
-pass over every student, teacher and parent tab, then a bug-and-metrics report.
+pass over every student, teacher and parent surface, then a bug-and-metrics report.
 
-## Phase 0 — simulator realism. DONE.
+## Where it stands
 
-Merged as **#187** (`62eb794`) and **#190** (`18f5a2e`). The simulator now models the *device* around
-the signal, so a classroom-scale run on `EEG_SOURCE=sim` exercises the same paths a headband does.
-All of it is documented in CLAUDE.md under *The simulator pairs like a headband*; the constants below
-are the knobs a later phase might want to turn.
+| Phase | State |
+| --- | --- |
+| 0 — simulator realism | **DONE** (#187, #190) |
+| 1 — product features | **DONE** (1a #191, 1b #192, 1c #194) |
+| 2 — operational setup | **CONFIG DONE; STACK NOT STARTED** — this is the next action |
+| 3 — scripted account creation | NOT STARTED (opens with a real decision: Playwright is not installed) |
+| 4 — scripted sessions | NOT STARTED |
+| 5a — full-coverage pass on new code | NOT STARTED |
+| 5b — human verification pass | NOT STARTED |
+| 6 — report and cleanup | NOT STARTED |
 
-| Step | What shipped | Where |
-| --- | --- | --- |
-| 0.1 Pairing | `send_bridge_command` runs the bridge's `refresh` / `connect` / `disconnect` state machine against `SIM_DEVICE_NAME = "MuseS-SIM0"`; the pairing fields follow it. `eeg_age_ms` is a packet clock for which the sidecar's sample stream stands in: null for `PAIR_SETTLE_SECONDS` (5 s) after every connect, then time since the last read — so a *stopped* stream is the drop, and both `linkSettling` and `linkAlive` are reachable. | `EEGResearch/src/app/services/eeg_ingestion.py` |
-| 0.2 Battery | Null for `BATTERY_FIRST_REPORT_SECONDS` (50 s) after every connect, then a level drawn once from `BATTERY_START_RANGE` (55–100) draining at `BATTERY_DRAIN_PCT_PER_HOUR` (10) on the clock, floored at a reported `0.0`. Survives a disconnect; the *report* goes null with the link. | same |
-| 0.3 Contact | Two layers on the clock: a strap alternating seated/loose episodes (`STRAP_PHASE_SECONDS`) over per-electrode HSI streaks (`CONTACT_WEIGHTS`, `CONTACT_STREAK_SECONDS`). Measured through `SignalProcessor._contact_ratio` over two simulated hours: good ~30%, degraded ~55%, poor ~14%. | same |
-| 0.4 Task response | `record_answer` → `eeg_poller.notify_answer` (pull only, live poller only, one-worker pool, `NOTIFY_MAX_PENDING` 8) → `eeg_client.report_answer` → `POST /api/v1/session/answer` → `stream_manager.report_answer`. Hardware answers `applied: false`. The sim nudges hidden focus/calm into a bounded (`TASK_BIAS_BOUND` 0.25) decaying (`TASK_BIAS_DECAY_SECONDS` 90 s) offset applied *before* the bands are solved. | `main.py`, `eeg_poller.py`, `eeg_client.py`, `stream_manager.py`, `EEGResearch/src/app/main.py` |
-| 0.5 Pulse | `optics_window` synthesises a 4-channel 64 Hz pulse (`HEART_REST_BPM_RANGE` 62–84, raised by misses via `HEART_TASK_NUDGE`) fed through the **unmodified** `build_heart_record`. **Opt-in via `EEG_SIM_OPTICS`, off by default**, and every window is marked `synthetic`, which both ingestion paths write into the row's `raw`. | `eeg_ingestion.py`, `optics_processing.py`, `push_client.py`, `signal_mapping.py`, `main.py` |
-| 0.6 Docs | Class docstring and the CLAUDE.md simulator subsection; the heart-block and battery paragraphs that said `sim` reports nothing are corrected. | `CLAUDE.md` |
+## Suite counts
 
-**Three review rounds shaped this and the reasoning is in CLAUDE.md, not here.** The short version, so
-a later change does not undo them: the age clock must not be stamped by the *consumer's* reads (two
-earlier shapes each lost a page state); a synthesised heart rate must be opt-in *and* marked, on
-**both** ingestion paths through the shared mapper; and the answer notification must not run on the
-request thread, because `record_answer` is a sync endpoint on anyio's ~40-slot pool and `requests`
-applies its timeout to connect and read separately.
+**There is no current measurement at this head.** The counts this document used to carry were taken
+several merges ago and do not describe `cce61383`; quoting them would break the canary rule's whole
+point (`CLAUDE.md`, *Canary*). Measure before you rely on a number, and record the **total**, not the
+pass count:
 
-## Phase 1 — product features. DONE.
+```bash
+EEG_SOURCE=sim API_TOKEN=t ADMIN_TOKEN=a EEGResearch/.venv/Scripts/python.exe -m pytest EEGResearch/tests -q
+```
 
-Three independent pieces, shipped as three PRs. Every durable rule is in CLAUDE.md; the outline is
-here only because these landed in this session.
+```bash
+SUPABASE_URL=http://localhost:54321 SUPABASE_SERVICE_ROLE_KEY=x .venv/Scripts/python.exe -m pytest Website/AdaptiveLearning/backend/tests -q
+```
+
+```bash
+cd Website/AdaptiveLearning/frontend && npm test
+```
+
+---
+
+# Phase 0 — simulator realism. DONE
+
+Merged as **#187** and **#190**. The simulator models the *device* around the signal, so a
+classroom-scale run on `EEG_SOURCE=sim` exercises the same paths a headband does: pairing through
+the bridge's own state machine, a battery that is null for the first stretch and then drains,
+electrode contact that varies on the clock in two layers (so `degraded` and `poor` are both
+reachable), a cognitive state that answers the lesson, and an opt-in synthesised pulse fed through
+the unmodified heart path.
+
+All of it is documented in `docs/signals.md` under *The simulator pairs like a headband*. Three
+things a later change must not undo, because each was a review round:
+
+- the `eeg_age_ms` clock must not be stamped by the *consumer's* reads — two earlier shapes each
+  lost a page state;
+- a synthesised heart rate is opt-in **and** marked, on **both** ingestion paths, through the shared
+  mapper;
+- the answer notification must not run on the request thread.
+
+# Phase 1 — product features. DONE
 
 | Step | Shipped as | What it is |
 | --- | --- | --- |
-| 1a Practice question-count picker | **#191** | `PracticeSetup` offers 5/10/15/20 and hands the number down through `onStart(session, count)` to `PracticeTest`'s `questionCount` prop. Frontend only; nothing is sent to the backend, matching Adaptive's question goal. No "No limit", and the picker is hidden in flashcard mode. CLAUDE.md: *A practice test's length is a prop*. |
-| 1b Strategies panel on the teacher report | **#192** | `viewerRole` frames the same advice for a teacher; the endpoint was already gated on relationship, not role. The heading stays "At-Home" because the prompt and the rule-based fallback both are. Behind *"Hide sensor data"*, because the advice is sensor data in prose. |
-| 1c Chart-explaining summary | this branch | `POST /api/students/{id}/chart-summary`, the deterministic sentences plus an optional model rephrasing under `chart_summary_llm_enabled` and the four bounds. `ChartSummaryPanel` on both report routes, on demand. CLAUDE.md: *The chart summary states numbers*. |
+| 1a | **#191** | `PracticeSetup` offers 5/10/15/20 and hands the count to `PracticeTest`. Frontend only; nothing is sent to the backend. No "No limit", and the picker is hidden in flashcard mode. |
+| 1b | **#192** | The strategies panel on the teacher report, framed by `viewerRole`. The endpoint was always gated on relationship rather than role. Heading stays "At-Home" on both. |
+| 1c | **#194** | `POST /api/students/{id}/chart-summary` — deterministic sentences plus an optional model rephrasing under `chart_summary_llm_enabled`, with the four bounds. `ChartSummaryPanel` on both report routes, on demand. |
 
-**Three things about 1c a later change should not undo.** The model is handed the finished sentences
-rather than the aggregates, which is the only reason numeric fidelity is checkable at all; the
-allowed figures are read *out of those sentences*, never enumerated from the basis fields (enumerating
-rejected correct replies over a rounded heart rate and over a revocation date); and the three reads
-behind one response each report their own `retrieved`, because `sessions` comes from the signal
-aggregate and an empty trend is indistinguishable from a student's first week.
+**Three things about 1c a later change should not undo**, all in `CLAUDE.md` under *The chart
+summary states numbers*: the model is handed the finished sentences rather than the aggregates,
+which is the only reason numeric fidelity is checkable at all; the allowed figures are read *out of
+those sentences*, never enumerated from the basis fields; and the four reads behind one response
+each report their own `retrieved`.
 
-**The residual limitation Phase 6 has to report**: the numeric check is a containment check. A reply
-that swaps the focus and stress figures uses only allowed numbers and passes. Closing that means
+**The residual limitation Phase 6 has to report**: the numeric check is a *containment* check. A
+reply that swaps the focus and stress figures uses only allowed numbers and passes. Closing it means
 parsing the reply back into measurements, which is a second implementation of the sentences being
-parsed, so it is stated rather than solved.
+parsed — so it is stated rather than solved.
 
-## Phase 2 — operational setup. CONFIG DONE; STACK NOT STARTED.
+# Phase 2 — operational setup. CONFIG DONE; STACK NOT STARTED
 
-The two `.env` edits are made and both pre-flight checks pass. **Nothing here is committed** —
-both files are gitignored, so this section is the only record and Phase 6 reverts from it.
+**This is the next action.** The two `.env` edits are made and verified present at this head. Both
+files are gitignored, so this section is the only record of them and Phase 6 reverts from it.
 
-| What | Original | Now |
-| --- | --- | --- |
-| `backend/.env` `GENERATION_DAILY_CALL_LIMIT` | `200` | `5000` |
-| `EEGResearch/.env` `EEG_SIM_OPTICS` | absent (= false) | `true` |
+| File | Key | Original | Now |
+| --- | --- | --- | --- |
+| `Website/AdaptiveLearning/backend/.env` | `GENERATION_DAILY_CALL_LIMIT` | `200` | `5000` |
+| `EEGResearch/.env` | `EEG_SIM_OPTICS` | absent (= false) | `true` |
 
-Both edits carry a `Phase 6 reverts this` comment in the file itself, so the record survives losing
-this document.
+Both carry a `Phase 6 reverts this` comment in the file itself, so the record survives losing this
+document. Verified on 2026-09-21: `GENERATION_DAILY_CALL_LIMIT=5000` and `EEG_SIM_OPTICS=true` are
+both still in place.
 
-**`EEG_SIM_OPTICS=true` was a decision, not a default**, taken 2026-09-17: the run gets a heart
-channel, so the heart tiles, RMSSD, the heart series and the chart summary's heart sentence all have
-data to verify in Phase 5b. Every row carries `raw.synthetic: true` through both ingestion paths.
-**Phase 6 must state that every heart figure in the report is synthesised** — that is the cost of
-the choice, and the alternative was leaving the whole heart path unexercised.
+**`EEG_SIM_OPTICS=true` was a decision, not a default.** The run gets a heart channel, so the heart
+tiles, RMSSD, the heart series and the chart summary's heart sentence all have data to verify in
+Phase 5b. Every row carries `raw.synthetic: true` through both ingestion paths. **Phase 6 must state
+that every heart figure in the report is synthesised** — that is the cost of the choice, and the
+alternative was leaving the whole heart path unexercised.
 
-**The "someone lowered it" note about the call limit was wrong.** `200` is a deliberate dev ceiling
-with its reason written beside it — a bound that stops a runaway loop on a laptop making its first
-billed calls. Its comment did claim `llm_client`'s default is 5000 where the code says 2500;
-corrected in passing. The arithmetic for the raise: 30 students × ~40 questions × 2 calls ≈ 2,400.
+**The call-limit arithmetic**: 30 students × ~40 questions × 2 model calls ≈ 2,400. `200` is a
+deliberate dev ceiling with its reason written beside it — a bound that stops a runaway loop on a
+laptop making its first billed calls — so this raise is temporary by design.
 
-Both pre-flight checks from the previous handoff are **clear, with nothing to do**:
+### Pre-flight, and one check that has already gone stale once
 
-- No `FACE_DEBUG_PREVIEW_ENABLED` line in `EEGResearch/.env`.
-- The local database was migrated through `20260918000000`; `questions.ccss_standard`,
-  `questions.figure` and `signal_daily_rollup.stress_sample_count` all exist, so
-  `add_question_to_supabase` will not 500.
-  **That check has since gone stale and must be re-run**: `20260919000000_security_events.sql`
-  landed with #224. `npx supabase migration up` before launching — the failure is silent, not
-  loud, because `_record_security_event` never raises, so an unmigrated stack loses the whole
-  security log and says nothing.
+- **Re-run the migrations.** The newest is `20260919000000_security_events.sql`. An earlier version
+  of this document recorded the local database as migrated through `20260918000000`, which stopped
+  being true when that one landed — so treat the check as perishable and redo it rather than reading
+  it here:
 
-### What is left, and the one thing to verify when it runs
+  ```bash
+  npx supabase migration up
+  ```
 
-Start the stack — **no `-Muse`, no `-Camera`**:
+  The failure is silent rather than loud: the security log's writer never raises, so an unmigrated
+  stack loses rows and says nothing.
 
-```
+- **`questions.ccss_standard`, `questions.figure` and `signal_daily_rollup.stress_sample_count` must
+  exist**, or `add_question_to_supabase` 500s on every generated question.
+
+- **No `FACE_DEBUG_PREVIEW_ENABLED` line in `EEGResearch/.env`.** Clear when last checked.
+
+- `ANTHROPIC_BASE_URL` is set in the Windows environment to `https://api.anthropic.com`, which is
+  correct. `CLAUDE.md` flags a *stale* value here as a trap costing rounds to find; if generation
+  ever fails with `WinError 10061`, that is the first place to look — and it is inherited at process
+  start, so clearing it needs a new terminal.
+
+### Start the stack, then verify the conversion rather than trusting it
+
+```bash
 ./start.ps1
 ```
 
-Then confirm backend (8000), sidecar (8001) and frontend (5173) are healthy.
+**No `-Muse`, no `-Camera`, no `-Optics`, no `-LocalCalm`.** Then confirm backend (8000), sidecar
+(8001) and frontend (5173) are healthy.
 
-**This machine is currently configured for a `-Muse -Camera` run, and that is the exact state the
-2026-09-16 failure was found in.** `EEGResearch/.env` holds `EEG_SOURCE=muse`,
-`EEG_DEVICES=default:muse@8765,camera:face@0`, `FACE_ENABLED=true`, `PUSH_ENABLED=true`, and
-`backend/.env` holds `INGEST_MODE=push`. A plain run is documented to convert all of it —
-`Update-DeviceRegistry` rewrites the `default:` entry and strips the camera one, and `INGEST_MODE`
-is written on both branches from the flag — and `test_launcher_device_registry.py` passes 61/61 on
-this checkout. **Verify the result rather than trusting it**, because the symptom of the old bug is
-silent: a `default:muse@8765` left standing beside `EEG_SOURCE=sim` makes the sidecar look for a
-bridge that is not running, and the run reads `eeg_source: muse` with `no_signal` throughout while
-every window looks ordinary. After launching, read back:
+**Read the machine's state as it is now (2026-09-21), not as an earlier run left it:**
+
+| File | Key | Current value |
+| --- | --- | --- |
+| `EEGResearch/.env` | `EEG_SOURCE` | `muse` |
+| | `EEG_DEVICES` | `default:muse@8765` |
+| | `FACE_ENABLED` | `false` |
+| | `PUSH_ENABLED` | `false` |
+| | `EEG_SPECTRUM_SOURCE` | `sdk` |
+| `backend/.env` | `INGEST_MODE` | `pull` |
+
+So the camera half is already gone and the mode is already `pull` — **but the headband half is not**.
+`EEG_SOURCE=muse` with `default:muse@8765` in the registry is the state a plain run has to convert,
+and the registry wins over `EEG_SOURCE` for the device it names. `Update-DeviceRegistry` rewrites a
+`default:` entry to what this run asked for, and `test_launcher_device_registry.py` pins that
+behaviour — but **verify the result**, because the symptom of the old failure is silent: a
+`default:muse@8765` left standing beside `EEG_SOURCE=sim` makes the sidecar look for a bridge that is
+not running, and the run reads `eeg_source: muse` with `no_signal` throughout while every window
+looks ordinary.
+
+After launching, read back:
 
 - `EEGResearch/.env` — `EEG_SOURCE=sim`, no `muse@8765` in `EEG_DEVICES`, no `camera:` entry,
   `FACE_ENABLED=false`, `PUSH_ENABLED=false`, and **`EEG_SIM_OPTICS=true` still present**.
 - `backend/.env` — `INGEST_MODE=pull`.
 - The sidecar's `/api/v1/state` — `eeg_source: sim`, and a `heart` block once a session is armed.
 
-`ANTHROPIC_BASE_URL` is set in the Windows environment to `https://api.anthropic.com`, which is
-correct. CLAUDE.md flags a *stale* value here as a trap that costs rounds to find; this one is fine,
-but it is set explicitly, so if generation ever fails with `WinError 10061` that is the first place
-to look.
+# Phase 3 — scripted account creation. NOT STARTED
 
-## Phase 3 — scripted account creation. NOT STARTED.
-
-**Playwright is not installed anywhere in this repo** (no `node_modules/.bin/playwright`, nothing in
-`package.json`). Installing it is step zero of this phase, and it is a real decision: it adds a dev
-dependency and a browser download to a repo that has neither.
+**Playwright is not installed anywhere in this repo** (nothing in `package.json`, no
+`node_modules/.bin/playwright`). Installing it is step zero and is a real decision: a dev dependency
+plus a browser download in a repo that has neither.
 
 Every step is a real form submission against the running app — no API calls, no database writes. The
-local Supabase stack auto-confirms signups (`enable_confirmations = false`), so there is no email step.
+local Supabase stack auto-confirms signups (`enable_confirmations = false`), so there is no email
+step.
 
 1. **Teacher**: register, create one class (6th grade), note the join code.
 2. **30 students**: register each (role=student), set `profile.grade_level` to "6th Grade" via
@@ -197,63 +197,65 @@ local Supabase stack auto-confirms signups (`enable_confirmations = false`), so 
    high-performing, plus mild per-topic variance. Persist it to a file: it drives Phase 4's
    correctness and the Phase 6 report has to be able to explain each student's numbers.
 
-## Phase 4 — scripted sessions. NOT STARTED.
+**One open decision.** Phase 5a wants the admin console verified, and admin is
+`profiles.role = 'admin'` set through the dashboard SQL editor — there is no form to create one, so
+it cannot be done under this phase's no-shortcuts rule. Either add an admin account here as a stated
+exception, or record in Phase 6 that those surfaces went unverified.
+
+# Phase 4 — scripted sessions. NOT STARTED
 
 Per student, in order:
 
 1. **Two practice sessions** (Practice → Test mode), topics and difficulty independently randomised
-   per session, question count **10** via the new picker. Answers driven by the ability profile —
-   weighted probability of a correct pick, never always-right or a coin flip.
+   per session, question count **10** via the picker from 1a. Answers driven by the ability profile —
+   a weighted probability of a correct pick, never always-right or a coin flip.
 2. **One adaptive session, 20 questions**: connect the headband first and confirm the UI reaches
-   "Connected" (this is what Phase 0.1 made possible), leave difficulty bias on **Auto**, set the
-   question goal to 20, answer 20, click "Finish session" when the goal banner appears, disconnect.
+   "Connected" (this is what Phase 0's pairing work made possible), leave difficulty bias on
+   **Auto**, set the question goal to 20, answer 20, click "Finish session" when the goal banner
+   appears, disconnect.
+
+### What the EEG can and cannot do to difficulty
 
 **Expect difficulty to rise only through the correct-answer streak** (`_decide_bias`): `focused`
-needs focus ≥ 0.624 **and** calm ≥ 0.5 and is unreachable by design until a marker exists;
-`stressed` (calm < 0.377 on `sdk`) still eases. Design the ability tiers against that, and say it
-plainly in the report — an EEG-driven difficulty *rise* is not something this run can produce.
+needs focus ≥ 0.624 **and** calm ≥ 0.5 and is close to unreachable at the contact this product gets;
+`stressed` (calm < 0.377 on the `sdk` scale) still eases. Design the ability tiers against that, and
+say it plainly in the report — **an EEG-driven difficulty *rise* is not something this run can
+produce.**
 
-**The second wearer's capture settles which scale that is.** `0b9923da`: two captures on a second
-adult, no channel reaching chance (0.37, 0.43, 0.37, 0.50 against the first wearer's 0.90, 0.91,
-0.27, 0.82). `EEG_SPECTRUM_SOURCE` stays `sdk`, the two decisions that capture was gated on are
-retired, and **the run must not use `-LocalCalm`**. Phase 6 cites this rather than the
-single-wearer figures: one adult where it worked and one where it did not is the shape that
-invites a general claim, and `EEG_REFERENCE.md` now states what two adults cannot establish.
+**The second wearer's capture settles which scale that is.** Two captures on a second adult, no
+channel reaching chance (0.37, 0.43, 0.37, 0.504 against the first wearer's 0.90, 0.91, 0.27, 0.82).
+`EEG_SPECTRUM_SOURCE` stays `sdk`, the two decisions that capture was gated on are retired, and
+**the run must not use `-LocalCalm`**. Phase 6 cites this rather than the single-wearer figures; the
+numbers and what two adults cannot establish are in `EEGResearch/tests/fixtures/EEG_REFERENCE.md`.
 
-Use moderate scripted concurrency rather than strictly serial, respecting
-`GENERATION_MAX_CONCURRENCY` (8, in `llm_client.py`) and `GENERATION_MAX_WAITERS` (30 — the plan
-says 12, which was the value before the load test raised it; grep for it rather than trusting a
-line number here, `main.py` is ~9k lines). CLAUDE.md's load-test table is the reason to stagger
-starts at all: at the old cap, 30 students starting simultaneously were served 40%, against 87%
-over 10 s.
+### The binding constraint is the per-address rate limit, not the waiter cap
 
-**Neither of those is the binding constraint any more.** #225 bounds the five GET routes that
-resolve no caller **by address**, and this whole run is one address:
+`GENERATION_MAX_CONCURRENCY` is 8 and `GENERATION_MAX_WAITERS` is 30 (grep for them rather than
+trusting a line number — `main.py` is ~9k lines). Neither is what will bite. The five GET routes that
+resolve no caller are bounded **by address**, and this whole run is one address:
 
 | route | load at 30 students | limit |
 | --- | --- | --- |
 | `/api/eeg/health` probe | ~360/min (12/min per open page) | `PUBLIC_PROBE_RATE_LIMIT` 1800 |
 | `/api/generate-question` | ~180/min at human pace; **600–900/min scripted** | `PUBLIC_GENERATE_RATE_LIMIT` 600 |
 
-The probe is comfortable. Generation is not: a script answering instantly does 20–30 questions
-per student per minute. **Pace it to roughly a question every 6 s per student** rather than
-raising the cap — raising it throws away the one measurement this run could make about whether
-the shipped default suits a classroom.
+The probe is comfortable. Generation is not: a script answering instantly does 20–30 questions per
+student per minute. **Pace it to roughly a question every 6 s per student** rather than raising the
+cap — raising it throws away the one measurement this run could make about whether the shipped
+default suits a classroom.
 
-**Count the 429s in the harness; that is the measurement.** Each refused request is one 429 carrying
-`Retry-After`, and `apiFetch` retries **503 only** — a 429 reaches the caller on the first response —
-so one refusal is one response and the count is exact. Record it per student and per minute; that is
-the number Phase 6 needs.
+### Measure refusals by counting 429s, not from the security log
 
-**`security_events` cannot supply it, and looks like it can.** `rate_limited` is cooled at
-`SECURITY_EVENT_COOLDOWN_SECONDS` (300) on `(kind, actor, limiter)`, and the public limiter records
-with `actor_user_id=None` — so every generation refusal in the run, from all 30 students behind one
-address, collapses to one key and writes at most one row per five minutes, carrying neither a count
-nor an address by design. One refused request and ten thousand leave the same handful of rows. It is
-a presence flag: useful for *whether* the cap was reached and worthless for *how far past* it.
-#225 was open at the time of writing; check whether it merged before designing the pacing.
+Each refused request is one 429 carrying `Retry-After`, and `apiFetch` retries **503 only**, so a 429
+is never absorbed and a client-side count is exact. Record it per student and per minute.
 
-## Phase 5a — full-coverage pass on the new code. NOT STARTED.
+**`security_events` cannot supply that number even though it looks as if it can**: `rate_limited` is
+cooled at 300 s on `(kind, actor, limiter)` and the public limiter records `actor_user_id=None`, so
+the whole run collapses to one key — at most one row per five minutes, with no count and no address,
+by design. One refused request and ten thousand leave the same handful of rows. It is a presence
+flag: useful for *whether* the cap was reached, worthless for *how far past* it.
+
+# Phase 5a — full-coverage pass on new code. NOT STARTED
 
 The 30-student run will not exercise everything Phases 0–1 built: it always uses the picker's
 default, and contact/battery variability is probabilistic. Four **QA-only accounts**, created and
@@ -269,22 +271,18 @@ joined the same way, excluded from Phase 4's bulk run and from the report's clas
 - **QA-3 / QA-4** — one short adaptive session each (~10–15 questions, using the **5** and **15**
   options), connecting the headband explicitly and running connect → verify → disconnect → reconnect
   to exercise that cycle beyond the happy path. All-wrong on QA-3, all-correct on QA-4, watching the
-  teacher's Live monitor and the student's own signal readout to confirm Phase 0.4's drift produces a
-  visible directional shift rather than plausible noise.
-  **The streak probe asserts on calm and the `stressed` label, and on confidence as signal quality**
-  (moved by contact, never by calm). It must not expect `focused`.
+  teacher's Live monitor and the student's own signal readout to confirm the simulator's task
+  response produces a visible directional shift rather than plausible noise. **The streak probe
+  asserts on calm and the `stressed` label, and on confidence as signal quality** (moved by contact,
+  never by calm). It must not expect `focused`.
 
 Between them these four cover all four picker values, the full connect/disconnect/reconnect cycle,
 both streak directions, and every chart-summary and strategies data state.
 
-**One surface none of them reaches.** #224 added `pages/admin/SecurityEvents.jsx` behind
-`AdminGuard`, and this phase creates teacher, student and parent accounts only — admin is
-`profiles.role = 'admin'`, set through the dashboard SQL editor, with no UI to do it through. So
-either add an admin account here (a SQL-editor step, outside the no-shortcuts rule because there
-is no form to submit) or record it in Phase 6 as a surface this run did not cover. The run
-generates real rows for it either way, which is what makes it worth looking at.
+**One surface none of them reaches**: the admin console, including its security-events page, which
+sits behind `AdminGuard`. See the open decision at the end of Phase 3.
 
-## Phase 5b — human verification pass. NOT STARTED.
+# Phase 5b — human verification pass. NOT STARTED
 
 Driven by hand in a browser, not scripted — scripting defeats the point.
 
@@ -295,66 +293,92 @@ Driven by hand in a browser, not scripted — scripting defeats the point.
 - **Teacher side**: every class-wide page in full (Dashboard, Classes → class detail, roster, topic
   heatmap, class accuracy trend, time-of-day heatmap, cohort signal trend and roster,
   focus-vs-accuracy, alerts feed, Question Bank) — these already reflect all 30 — plus full
-  per-student report and analytics pages for the subset, including the now-visible strategies panel
-  and the new chart-summary panel.
-- **Parent side**: the parent Dashboard with all 30 children's tiles, plus full per-child report pages
-  for the subset including both panels, and the consent and erasure screens.
+  per-student report and analytics pages for the subset, including the strategies panel and the
+  chart-summary panel.
+- **Parent side**: the parent Dashboard with all 30 children's tiles, plus full per-child report
+  pages for the subset including both panels, and the consent and erasure screens.
 - Note every bug, inconsistency, confusing copy, dead-looking tile or state that contradicts
-  CLAUDE.md. **Fix nothing in flight** — the run has to stay a consistent, unmodified target
+  `CLAUDE.md`. **Fix nothing in flight** — the run has to stay a consistent, unmodified target
   throughout. Everything goes in the report for a follow-up pass.
 
-## Phase 6 — report and cleanup. NOT STARTED.
+**Surfaces added since the plan was written, which this pass should cover deliberately:**
 
-- **Revert `GENERATION_DAILY_CALL_LIMIT`** to the value recorded in Phase 2.
-- Publish an HTML artifact and a matching `.docx` covering: bugs ranked by severity with repro steps
-  and screenshots; UI/UX issues; per-student and class-wide success metrics (**the official 30 only**,
-  QA-1..4 called out separately); adaptive-difficulty progression, stating that the EEG never pushed
-  difficulty up and why; consent and EEG coverage; simulator before/after notes; Phase 5a's coverage
-  results; the chart-summary feature's hallucination-risk limitation; and open questions.
-- The Playwright run log (accounts created, sessions completed, failed steps) feeds the metrics
-  section directly.
+- **The per-series chart filter** (#195): toggles above `SessionReview`'s session timeline and above
+  `SignalPanel`'s daily and term charts, letting a reader draw any combination of focus, EEG stress,
+  heart rate and RMSSD. **It reaches parents as well as teachers**, because `StudentProgressReport`
+  is shared by `teacher/StudentReport` and `parent/ChildDetail`. Worth checking on both routes, with
+  the "everything off" state and its *Show all* among them.
+- **The CCSS badge and question figures** on the five surfaces that present a question.
+- **`ScaleNote`** wherever a window straddles a score-scale change.
+
+# Phase 6 — report and cleanup. NOT STARTED
+
+**Revert first:**
+
+- `GENERATION_DAILY_CALL_LIMIT` back to `200` in `backend/.env`.
+- `EEG_SIM_OPTICS` removed from `EEGResearch/.env` (it was absent, not `false`).
+- Anything Phase 4 raised for pacing, if the decision to pace rather than raise was reversed.
+
+**Then publish** an HTML artifact and a matching `.docx` covering: bugs ranked by severity with repro
+steps and screenshots; UI/UX issues; per-student and class-wide success metrics (**the official 30
+only**, QA-1..4 called out separately); adaptive-difficulty progression, stating that the EEG never
+pushed difficulty up and why; **that every heart figure in the report is synthesised**; consent and
+EEG coverage; simulator before/after notes; Phase 5a's coverage results; the chart summary's
+containment-check limitation; the 429 count if generation was ever refused; and open questions.
+
+The Playwright run log (accounts created, sessions completed, failed steps) feeds the metrics section
+directly.
 
 ---
 
 # Standing notes for a fresh session
 
-Things that cost time in this session and are not obvious from the code.
+Things that cost time and are not obvious from the code.
 
-**Branching and worktrees.** `main` is usually checked out in another worktree, so `git checkout main`
-fails. Branch from `origin/main`:
+**`CLAUDE.md` is now three files.** It was split into `CLAUDE.md`, `docs/signals.md` and
+`docs/question-generation.md`, each with a stated trigger for when to read it. Match the triggers
+against what you are about to do before the first edit; the signals and generation rules this plan
+leans on are in the two docs.
+
+**Branching and worktrees.** `main` is often checked out in another worktree or by another session,
+so `git checkout main` may fail. Branch from `origin/main`:
 `git worktree add -b <branch> "$SCRATCH/wt-x" origin/main`. Documentation-only changes go straight to
-`main` by ref, no PR; code always goes through a PR.
+`main` by ref; code always goes through a PR.
 
-**The sidecar's editable install points at the main checkout.** Running `pytest EEGResearch/tests` from
-a worktree without `PYTHONPATH` set **silently tests the main checkout's copy of the code** — a green
-run that exercised none of your changes. Always:
+**A fresh worktree cannot run the frontend suite as-is** — no `node_modules`, and installing them is
+a multi-minute download. Linking them in with `ln -s` **does not work**: MSYS copies instead of
+linking and node then fails with `MODULE_NOT_FOUND`, which vitest reports as a run producing no
+tests — silence that reads as a pass. Use a real junction
+(`cmd //c "mklink /J node_modules <abs path to the main checkout's node_modules>"`), or run the suite
+in the main checkout and confirm that checkout's branch carries no frontend changes of its own before
+quoting a number.
+
+**The sidecar's editable install points at the main checkout.** Running `pytest EEGResearch/tests`
+from a worktree without `PYTHONPATH` set **silently tests the main checkout's code** — a green run
+that exercised none of your changes:
 
 ```bash
 PYTHONPATH="$PWD/EEGResearch" EEG_SOURCE=sim API_TOKEN=t ADMIN_TOKEN=a EEGResearch/.venv/Scripts/python.exe -m pytest EEGResearch/tests -q
 ```
 
-**The frontend suite cannot run in a fresh worktree** — no `node_modules`, and installing them is a
-multi-minute download. Run it in the main checkout, and confirm that checkout's branch carries no
-frontend changes of its own before quoting the number.
-
 **Mutation checks: restore from a copy, never `git checkout --`.** A `git checkout` restore inside a
 mutation helper has wiped uncommitted edits here before. The working shape is `cp file /tmp/orig`,
-`sed -i`, run, `cp /tmp/orig file`, and assert the mutation was actually applied (a `sed` that matched
-nothing reports a green suite that proves nothing).
+mutate, run, `cp /tmp/orig file`, and assert the mutation actually applied — a `sed` that matched
+nothing reports a green suite that proves nothing.
 
-**Editing Python from bash heredocs is fragile.** Quoting inside a `python3 - <<'EOF'` block inside a
-compound bash command has failed with `unexpected EOF` more than once. Write the edit script to the
-scratchpad with the Write tool and run it by path.
+**Never run a controlled comparison in a tree you do not control.** If another session is editing the
+checkout, an A/B across two runs is not a comparison: the other variable moves between them. Use a
+worktree at a known commit. This is the canary rule's dirty-tree clause, and it costs whole rounds
+when ignored.
 
-**`test_eeg_poller.py`'s first test fails when that file runs alone**, at `main` as well as on a
-branch: `main` is first imported by the school-year fixture, which rewires the consent check after
-the consent fixture set it. It passes in the full suite, where `main` is imported at collection. Not
-a regression; do not chase it.
+**Editing Python or JSX from bash heredocs is fragile.** Quoting inside a `python - <<'EOF'` block
+inside a compound bash command has failed with `unexpected EOF` more than once. Write the edit script
+to the scratchpad and run it by path, or use the Write tool.
 
-**CLAUDE.md is now three files.** It was split into `CLAUDE.md`, `docs/signals.md` and
-`docs/question-generation.md`, each with a stated trigger for when to read it. Section names cited
-in this document may resolve to a doc rather than to CLAUDE.md; the signals and generation rules
-this plan leans on are in the two docs.
+**`test_eeg_poller.py`'s first test fails when that file runs alone**, on `main` as well as on a
+branch: `main` is first imported by the school-year fixture, which rewires the consent check after the
+consent fixture set it. It passes in the full suite, where `main` is imported at collection. Not a
+regression; do not chase it.
 
 **Three venvs.** `EEGResearch/.venv` runs the sidecar, `Website/AdaptiveLearning/backend/.venv` runs
 the backend app, and the repo-root `.venv` is what `pytest` uses for the backend suite. A package in

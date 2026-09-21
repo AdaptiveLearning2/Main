@@ -866,6 +866,23 @@ Not here, deliberately: **no `TrustedHostMiddleware`** (the production host is a
 no known host either breaks everything or is a no-op), and **no HSTS** — one line in `security_headers` when the
 hosting question is settled.
 
+## PostgREST is a second grammar, and `or_`/`filter`/`select`/`order` parse their argument as it
+
+There is no raw SQL anywhere — every read and write goes through the Supabase client or an RPC, both
+parameterized — so the classic injection is absent. What remains is that those methods take *strings
+that are parsed as query syntax*, and `rpc` takes a function name: a value interpolated into one is
+structure, not a bound parameter. `admin_student_search` is the live case, where a bare comma in a
+teacher's search term would end one `ilike` condition and begin another; it strips `, ( )` and escapes
+`\` and `%` first, and that stripping is the control.
+
+`backend/tests/test_query_construction.py` walks the AST of every backend module and requires **every
+non-literal argument** to those methods to carry a recorded reason — bare names included, since
+flagging only f-strings leaves the evasion of assigning to a variable first. Ten today. A second test
+deletes-by-failing any entry whose call site is gone, or the list only grows and a stale justification
+reads as evidence the current code was reviewed. **Its stated limit**: it reads one call at a time and
+cannot see where a name came from, so it catches a new site appearing, not an existing one being fed
+something new.
+
 ## A write names its columns; a request model refuses what it does not declare
 
 **The service-role client bypasses column grants as well as RLS, so a migration that revokes a column's

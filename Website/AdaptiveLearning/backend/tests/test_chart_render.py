@@ -227,3 +227,89 @@ def test_every_named_chart_is_one_this_module_can_draw():
     file nobody writes."""
     assert set(cr.CHART_NAMES) == {
         "cognitive_timeline", "heart_rate", "stress_pie", "emotion_pie"}
+
+
+# --- Escaping -------------------------------------------------------------
+#
+# These SVGs are uploaded to storage and later handed to a browser through a
+# signed URL, so the renderer is an HTML sink like any other. Every text
+# interpolation runs through `html.escape` today, and the question these
+# answer is whether it stays that way.
+#
+# One of the inputs is genuinely database-sourced: `_counts(face, "emotion")`
+# in `chart_archive.py` takes its keys from `face_signals.emotion`, so a pie
+# label is a stored value rather than a constant. Titles and units are
+# hardcoded at the call sites today -- tested anyway, because "no caller
+# passes anything interesting" is a property of the callers, and this module
+# is the thing that has to hold when one does.
+#
+# Asserted on the rendered output rather than on the source: a scan for
+# `html.escape` cannot tell a call from a mention, and cannot see a *new*
+# interpolation that needed one. `ElementTree` parsing is the whole check --
+# it fails on a structural break, and `.itertext()` proves the payload landed
+# as text instead of markup.
+#
+# Two interpolations are deliberately not escaped and are not gaps. `tip` is
+# built unescaped and escaped at its sink, so escaping it twice would print
+# the entities. `{total}` and `{value}` are counts the pie divides to get each
+# fraction, so a non-numeric one raises before anything is rendered.
+
+_HOSTILE = '</text><script>alert(1)</script><text x="0">'
+
+
+def _parsed(svg):
+    """The SVG as a tree, which is also the assertion that it is well-formed."""
+    return ElementTree.fromstring(svg)
+
+
+def _all_text(svg):
+    return "".join(_parsed(svg).itertext())
+
+
+def _tags(svg):
+    return {el.tag.split("}")[-1] for el in _parsed(svg).iter()}
+
+
+@pytest.mark.parametrize("render", [
+    pytest.param(lambda s: cr.pie_svg({s: 3, "sad": 1}, "Emotion", cr.EMOTION_COLOURS),
+                 id="pie-label-the-database-supplies"),
+    pytest.param(lambda s: cr.pie_svg({"happy": 3}, s, cr.EMOTION_COLOURS),
+                 id="pie-title"),
+    pytest.param(lambda s: cr.line_svg({s: [(0, 1), (1, 2)]}, "Signals"),
+                 id="line-series-name"),
+    pytest.param(lambda s: cr.line_svg({"focus": [(0, 1), (1, 2)]}, s),
+                 id="line-title"),
+    pytest.param(lambda s: cr.line_svg({"focus": [(0, 1), (1, 2)]}, "Signals", unit=s),
+                 id="line-unit"),
+    pytest.param(lambda s: cr._empty(s, "No readings."), id="empty-title"),
+    pytest.param(lambda s: cr._empty("Emotion", s), id="empty-reason"),
+])
+def test_a_hostile_string_renders_as_text_not_markup(render):
+    svg = render(_HOSTILE)
+    # Well-formed: the payload did not close a tag or open one.
+    assert "script" not in _tags(svg)
+    # And it is still *shown*, escaped rather than dropped -- a renderer that
+    # silently discarded it would pass the check above while losing a real
+    # emotion label like "n/a".
+    assert _HOSTILE in _all_text(svg)
+
+
+def test_a_hostile_colour_cannot_escape_its_attribute():
+    """`colour` is interpolated into `fill=`/`stroke=` without escaping.
+
+    It comes from this module's own palettes today, so nothing reaches it --
+    but the palettes are a parameter, and a quote in one would end the
+    attribute and start another of the string's choosing.
+    """
+    poisoned = dict(cr.EMOTION_COLOURS)
+    poisoned["happy"] = '#fff" onload="alert(1)'
+    svg = cr.pie_svg({"happy": 3, "sad": 1}, "Emotion", poisoned)
+    assert not any("onload" in el.attrib for el in _parsed(svg).iter())
+
+
+def test_the_title_is_the_accessible_name_and_is_escaped_there_too():
+    """`aria-label` is a second interpolation of the same value, and an
+    attribute rather than text -- a quote in the title would end it."""
+    svg = cr.pie_svg({"happy": 1}, 'Emotion" role="img', cr.EMOTION_COLOURS)
+    root = _parsed(svg)
+    assert root.attrib.get("aria-label") == 'Emotion" role="img'

@@ -133,7 +133,7 @@ def pie_svg(counts: dict, title: str, colours: dict) -> str:
         colour = colours.get(label.lower(), UNKNOWN_COLOUR)
         tip = f"{label}: {value} ({fraction * 100:.1f}%)"
         if fraction >= 0.999999:
-            out.append(f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{colour}">'
+            out.append(f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{html.escape(colour)}">'
                        f"<title>{html.escape(tip)}</title></circle>")
             angle += math.tau
             continue
@@ -143,7 +143,7 @@ def pie_svg(counts: dict, title: str, colours: dict) -> str:
         large = 1 if fraction > 0.5 else 0
         out.append(
             f'<path d="M {cx} {cy} L {x1:.2f} {y1:.2f} '
-            f'A {r} {r} 0 {large} 1 {x2:.2f} {y2:.2f} Z" fill="{colour}">'
+            f'A {r} {r} 0 {large} 1 {x2:.2f} {y2:.2f} Z" fill="{html.escape(colour)}">'
             f"<title>{html.escape(tip)}</title></path>"
         )
         angle = end
@@ -158,7 +158,7 @@ def pie_svg(counts: dict, title: str, colours: dict) -> str:
     for i, (label, value) in enumerate(data):
         y = 60 + i * 20
         colour = colours.get(label.lower(), UNKNOWN_COLOUR)
-        out.append(f'<rect x="286" y="{y - 9}" width="11" height="11" rx="2" fill="{colour}"/>')
+        out.append(f'<rect x="286" y="{y - 9}" width="11" height="11" rx="2" fill="{html.escape(colour)}"/>')
         out.append(f'<text x="304" y="{y}" font-family="sans-serif" font-size="11" '
                    f'fill="#334155">{html.escape(label)} -- {value}</text>')
 
@@ -227,10 +227,10 @@ def line_svg(points: dict, title: str, unit: str = "") -> str:
             """
             if len(run) > 1:
                 out.append(f'<polyline points="{" ".join(run)}" fill="none" '
-                           f'stroke="{colour}" stroke-width="2"/>')
+                           f'stroke="{html.escape(colour)}" stroke-width="2"/>')
             elif len(run) == 1:
                 x, y = run[0].split(",")
-                out.append(f'<circle cx="{x}" cy="{y}" r="2.5" fill="{colour}"/>')
+                out.append(f'<circle cx="{x}" cy="{y}" r="2.5" fill="{html.escape(colour)}"/>')
 
         run = []
         for x, y in pts:
@@ -243,7 +243,7 @@ def line_svg(points: dict, title: str, unit: str = "") -> str:
 
         ly = 60 + i * 18
         out.append(f'<rect x="{_PAD + plot_w + 14}" y="{ly - 9}" width="11" height="11" '
-                   f'rx="2" fill="{colour}"/>')
+                   f'rx="2" fill="{html.escape(colour)}"/>')
         out.append(f'<text x="{_PAD + plot_w + 32}" y="{ly}" font-family="sans-serif" '
                    f'font-size="11" fill="#334155">{html.escape(name)}</text>')
 

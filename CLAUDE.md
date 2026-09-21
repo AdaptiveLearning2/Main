@@ -866,6 +866,25 @@ Not here, deliberately: **no `TrustedHostMiddleware`** (the production host is a
 no known host either breaks everything or is a no-op), and **no HSTS** — one line in `security_headers` when the
 hosting question is settled.
 
+## The archived SVGs are an HTML sink, and `colour` was the one field not escaped
+
+`chart_render.py` renders to SVG that is uploaded to storage and later handed to a browser through a
+signed URL, so every interpolation is an injection site. Text ones always ran through `html.escape`;
+the six `fill=`/`stroke=` attributes did not, and a quote in a palette value ended the attribute and
+opened one of its own — proven by the test that now covers it. Not reachable, since the palettes are
+this module's own constants, but they are a *parameter*, and "everything is escaped except colour"
+is an exception nobody would carry. Now uniform.
+
+One input is genuinely database-sourced: `_counts(face, "emotion")` takes pie labels from
+`face_signals.emotion`. Titles and units are hardcoded at the call sites, which is a property of the
+callers rather than of this module, so they are tested too.
+
+The tests **assert on the rendered output, not the source** — a scan for `html.escape` cannot tell a
+call from a mention, nor see a new interpolation that needed one. `ElementTree.fromstring` is the
+check: it fails on a structural break, and `.itertext()` proves the payload landed as text rather
+than being silently dropped. Two interpolations stay unescaped on purpose: `tip` is escaped at its
+sink, and `{total}`/`{value}` are counts the pie divides, so a non-numeric raises first.
+
 ## PostgREST is a second grammar, and `or_`/`filter`/`select`/`order` parse their argument as it
 
 There is no raw SQL anywhere — every read and write goes through the Supabase client or an RPC, both

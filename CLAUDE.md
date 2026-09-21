@@ -1553,7 +1553,7 @@ Both shapes have since bitten, and the corrections are the load-bearing half:
   rather than a cleanup flag, because the effect is not the only caller — the retry button is the other, and a retry
   is exactly when someone changes class rather than waiting.
 
-## `react/jsx-uses-vars` is the only rule from `eslint-plugin-react` that is on, and it has to stay on
+## Two rules from `eslint-plugin-react` are on, and both have to stay on
 
 `no-unused-vars` cannot see JSX, so without it every identifier used *only* inside markup — `motion` from
 framer-motion, an `icon: Icon` prop rendered as `<Icon />` — is reported as an unused import. That was **40 of the
@@ -1567,6 +1567,31 @@ deleting it to satisfy the rule would put the key back.
 
 With both, **`no-unused-vars` is clean and therefore load-bearing** — a hit is real dead code, so fix it rather than
 adding it to the backlog.
+
+The second is **`react/no-danger`**, which arrives with the XSS sinks below rather than from the plugin's
+`recommended` config; that one is still not extended, for the reason above.
+
+## The XSS sinks are a second, blocking lint run, because the first one cannot fail
+
+`npm run lint` is non-blocking against the 14-error backlog, and a security rule nobody can fail is not
+enforcement. `npm run lint:sinks` (`eslint.sinks.config.js`, CI step *Lint XSS sinks*) therefore extends **no**
+shared config — the whole backlog lives in `js.configs.recommended` and the two react plugins, so it cannot reach
+this run, which is red if and only if a sink was added. The rules had zero hits when written, which is what makes
+blocking possible with nothing to burn down first.
+
+`eslint.sinks.js` exports them and **both configs import it** — the main one for editor feedback, the gate for CI.
+Two literals would drift, and the copy that drifts is the one nobody runs locally.
+
+**This is what lets the Supabase JWT stay in `localStorage`.** That is acceptable only while nothing in the app can
+execute injected markup, so the rules cover `dangerouslySetInnerHTML` (both the JSX attribute, via `react/no-danger`,
+and the object property, which that rule does not see), `eval`/`window.eval`, `Function`/`new Function`,
+`innerHTML`/`outerHTML` assignment, `insertAdjacentHTML` and `document.write`. Treat this, the CSP, and the absence
+of a markdown or LaTeX renderer as one mitigation.
+
+Two config details are load-bearing, both found by the gate failing on code it has no opinion about: it registers
+`react-hooks` **without enabling any of its rules**, because an `eslint-disable` naming a rule no config defines is
+itself an error (five, in source files); and it sets `reportUnusedDisableDirectives: 'off'`, because every disable
+in the tree is for a rule this run does not have.
 
 ## Muted text is `text-gray-600 dark:text-gray-400`, and a test does the arithmetic
 

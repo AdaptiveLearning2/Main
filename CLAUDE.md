@@ -452,6 +452,17 @@ field off the happy path, and a test that restates a whole payload to move one f
 two. `CHANNEL_REASONS` there is the `offLabel` four-state matrix, named for the state each input
 must produce rather than for its field values.
 
+**A fixture of one cannot tell identity from presence.** A test asserting *which* row, element or
+record something resolved to needs a sibling in the fixture to be wrong about: against a
+one-question bank, `Questions.test.jsx`'s focus-restore test could not separate "focus returned to
+the row that opened the modal" from "focus returned to the first `<button>` on the page", and a
+`useDialog` handing focus to `querySelector('button')` passed it. Rule 4 in its other direction —
+there the fixture repeats the code's misreading, here it is too small to contradict anything — and
+only the mutation check finds either. **Give the shared fixture the sibling**, rather than
+registering one per test: a local override needs a reason for why the shared one cannot have it,
+and the reason is easy to get wrong (this one claimed to protect pagination tests the file does not
+contain).
+
 **`asyncUtilTimeout` is 5000 in `src/test/setup.js`, not Testing Library's 1000.** That default is
 chosen for pure components; a query for something that legitimately arrives on the *second* 5 s poll
 races a budget unrelated to what it waits for, and only passed because the machine was idle. Under

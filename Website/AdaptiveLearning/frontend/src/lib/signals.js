@@ -66,7 +66,14 @@ export async function eegHealth() {
     // every student's page with nothing saying a limit caused it -- rule 1,
     // on the state that decides whether Connect is even offered.
     if (e.status === 429) return { refused: true, error: e.message }
-    return { available: false, error: e.message }
+    // `answered: false`, the marker `eegStatus` already carries. Without it
+    // this fallback is shape-identical to an answer the backend gives on
+    // purpose: `/api/eeg/health` returns `{available: false, error}` when the
+    // sidecar is *reachable* and the learner token is misconfigured -- "a
+    // config error, not an outage, so report it rather than 500". Read as one
+    // state, a working backend was reported as an unreachable one, naming the
+    // only layer that was demonstrably fine.
+    return { answered: false, available: false, error: e.message }
   }
 }
 

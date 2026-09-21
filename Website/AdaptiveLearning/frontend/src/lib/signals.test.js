@@ -86,4 +86,26 @@ describe('eegHealth, and what a failed probe is allowed to claim', () => {
     expect(h.refused).toBe(true)
     expect(h).not.toHaveProperty('available')
   })
+
+  it('marks a probe that never landed, so it cannot pass as an answer', async () => {
+    // `/api/eeg/health` returns `{available: false, error}` on purpose when the
+    // sidecar is reachable and the learner token is misconfigured -- a config
+    // fault it reports rather than 500ing on. This catch produced the same
+    // fields, so the two states were one, and the page named the layer that was
+    // demonstrably fine.
+    overrideApi('/api/eeg/health', fail(500))
+    expect(await eegHealth()).toMatchObject({ answered: false, available: false })
+  })
+
+  it('leaves an answer alone, including one that reports a fault', async () => {
+    // The complement, and the half a marker on the failure path could quietly
+    // break: a real answer must not acquire `answered: false` and be read as a
+    // request that never landed.
+    overrideApi('/api/eeg/health', () => ({
+      available: false, url: 'http://localhost:8001', error: 'EEG_API_TOKEN is not set',
+    }))
+    const h = await eegHealth()
+    expect(h.answered).toBeUndefined()
+    expect(h.error).toBe('EEG_API_TOKEN is not set')
+  })
 })

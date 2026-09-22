@@ -11,6 +11,14 @@
  * nothing pre-existing behind it -- unlike the fourteen in the lint backlog,
  * which is why these can gate CI and `npm run lint` still cannot.
  *
+ * **A selector covers one node type, and reading alike is not being alike.**
+ * `Property[key.name=x]` and `AssignmentExpression[left.property.name=x]` are
+ * different nodes for what a reader calls "setting x", so a sink reachable
+ * both ways needs both -- and a comment claiming one selector covers both is
+ * worse than the gap, because it stops anyone checking. When adding a sink,
+ * plant every spelling of it in a scratch file, lint that file, and read the
+ * report rather than the rule.
+ *
  * **Exported rather than written twice.** `eslint.config.js` carries them so
  * an editor flags a sink as it is typed, and `eslint.sinks.config.js` carries
  * them alone so CI can fail on them without also failing on the backlog. Two
@@ -51,15 +59,38 @@ export const sinkRules = {
       message: 'insertAdjacentHTML parses its argument as markup, exactly as innerHTML does.',
     },
     {
-      selector: "CallExpression[callee.object.name='document'][callee.property.name='write']",
-      message: 'document.write parses its argument as markup.',
+      // Matched on the method name, not on `document`: `const d = document;
+      // d.write(s)` is the same sink, and pinning the object let an alias
+      // through. `writeln` is the same API one word along, and the message is
+      // true of it verbatim. Nothing in `src/` calls `.write(`/`.writeln(` on
+      // anything, so the wider match costs nothing; if something legitimate
+      // ever does, narrowing it then is a decision someone makes on purpose.
+      selector: "CallExpression[callee.property.name=/^write(ln)?$/]",
+      message: 'write/writeln parse their argument as markup.',
     },
+    // `dangerouslySetInnerHTML` reached three ways, and `react/no-danger` sees
+    // only the first. Each needs its own selector -- a `Property` and an
+    // `AssignmentExpression` are different nodes, so one does not imply the
+    // other however alike they read.
     {
-      // Catches the object form -- `{...{dangerouslySetInnerHTML: x}}` and
-      // `props.dangerouslySetInnerHTML = x` -- which `react/no-danger` does
-      // not see, since that rule reads JSX attributes.
+      // `<div {...{dangerouslySetInnerHTML: x}} />`, and any object literal
+      // carrying the key on its way to becoming props.
       selector: "Property[key.name='dangerouslySetInnerHTML']",
       message: 'dangerouslySetInnerHTML injects unparsed markup. Nothing in this app needs it; see eslint.sinks.js.',
+    },
+    {
+      // `props.dangerouslySetInnerHTML = x`, then spread. The one route that
+      // is neither a JSX attribute nor an object literal, and the shape is
+      // the one the innerHTML rule above already uses.
+      selector: "AssignmentExpression[left.type='MemberExpression'][left.property.name='dangerouslySetInnerHTML']",
+      message: 'dangerouslySetInnerHTML injects unparsed markup, assigned onto a props object as much as written in JSX.',
+    },
+    {
+      // `Object.assign(el, {innerHTML: s})` and any other object literal that
+      // becomes an element's properties. The assignment rule above is the
+      // statement form of the same sink.
+      selector: "Property[key.name=/^(inner|outer)HTML$/]",
+      message: 'An innerHTML/outerHTML key parses its value as markup once the object reaches an element.',
     },
   ],
 }

@@ -1619,10 +1619,15 @@ blocking possible with nothing to burn down first.
 Two literals would drift, and the copy that drifts is the one nobody runs locally.
 
 **This is what lets the Supabase JWT stay in `localStorage`.** That is acceptable only while nothing in the app can
-execute injected markup, so the rules cover `dangerouslySetInnerHTML` (both the JSX attribute, via `react/no-danger`,
-and the object property, which that rule does not see), `eval`/`window.eval`, `Function`/`new Function`,
-`innerHTML`/`outerHTML` assignment, `insertAdjacentHTML` and `document.write`. Treat this, the CSP, and the absence
-of a markdown or LaTeX renderer as one mitigation.
+execute injected markup, so the rules cover `dangerouslySetInnerHTML` (three ways: the JSX attribute via
+`react/no-danger`, an object-literal key, and a member assignment — different AST nodes, so one selector does not
+imply another), `eval`/`window.eval`, `Function`/`new Function`, `innerHTML`/`outerHTML` both assigned and as an
+object key, `insertAdjacentHTML`, and `write`/`writeln` matched on the method rather than on `document`, since an
+alias is the same sink. Treat this, the CSP, and the absence of a markdown or LaTeX renderer as one mitigation.
+
+**Add a sink by planting every spelling of it in a scratch file, linting that file, and reading the report** —
+never by reading the rule and concluding. A comment once claimed one `Property` selector also caught the member
+assignment; it did not, and the claim is worse than the gap because it stops anyone checking.
 
 Two config details are load-bearing, both found by the gate failing on code it has no opinion about: it registers
 `react-hooks` **without enabling any of its rules**, because an `eslint-disable` naming a rule no config defines is

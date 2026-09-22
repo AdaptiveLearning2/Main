@@ -866,6 +866,42 @@ Not here, deliberately: **no `TrustedHostMiddleware`** (the production host is a
 no known host either breaks everything or is a no-op), and **no HSTS** — one line in `security_headers` when the
 hosting question is settled.
 
+## The archived SVGs are an HTML sink, and `colour` was the one field not escaped
+
+`chart_render.py` renders to SVG that is uploaded to storage and later handed to a browser through a
+signed URL, so every interpolation is an injection site. Text ones always ran through `html.escape`;
+the six `fill=`/`stroke=` attributes did not, and a quote in a palette value ended the attribute and
+opened one of its own — proven by the test that now covers it. Not reachable, since the palettes are
+this module's own constants, but they are a *parameter*, and "everything is escaped except colour"
+is an exception nobody would carry. Now uniform.
+
+One input is genuinely database-sourced: `_counts(face, "emotion")` takes pie labels from
+`face_signals.emotion`. Titles and units are hardcoded at the call sites, which is a property of the
+callers rather than of this module, so they are tested too.
+
+The tests **assert on the rendered output, not the source** — a scan for `html.escape` cannot tell a
+call from a mention, nor see a new interpolation that needed one. `ElementTree.fromstring` is the
+check: it fails on a structural break, and `.itertext()` proves the payload landed as text rather
+than being silently dropped. Two interpolations stay unescaped on purpose: `tip` is escaped at its
+sink, and `{total}`/`{value}` are counts the pie divides, so a non-numeric raises first.
+
+## PostgREST is a second grammar, and `or_`/`filter`/`select`/`order` parse their argument as it
+
+There is no raw SQL anywhere — every read and write goes through the Supabase client or an RPC, both
+parameterized — so the classic injection is absent. What remains is that those methods take *strings
+that are parsed as query syntax*, and `rpc` takes a function name: a value interpolated into one is
+structure, not a bound parameter. `admin_student_search` is the live case, where a bare comma in a
+teacher's search term would end one `ilike` condition and begin another; it strips `, ( )` and escapes
+`\` and `%` first, and that stripping is the control.
+
+`backend/tests/test_query_construction.py` walks the AST of every backend module and requires **every
+non-literal argument** to those methods to carry a recorded reason — bare names included, since
+flagging only f-strings leaves the evasion of assigning to a variable first. Ten today. A second test
+deletes-by-failing any entry whose call site is gone, or the list only grows and a stale justification
+reads as evidence the current code was reviewed. **Its stated limit**: it reads one call at a time and
+cannot see where a name came from, so it catches a new site appearing, not an existing one being fed
+something new.
+
 ## A write names its columns; a request model refuses what it does not declare
 
 **The service-role client bypasses column grants as well as RLS, so a migration that revokes a column's
@@ -1553,7 +1589,7 @@ Both shapes have since bitten, and the corrections are the load-bearing half:
   rather than a cleanup flag, because the effect is not the only caller — the retry button is the other, and a retry
   is exactly when someone changes class rather than waiting.
 
-## `react/jsx-uses-vars` is the only rule from `eslint-plugin-react` that is on, and it has to stay on
+## Two rules from `eslint-plugin-react` are on, and both have to stay on
 
 `no-unused-vars` cannot see JSX, so without it every identifier used *only* inside markup — `motion` from
 framer-motion, an `icon: Icon` prop rendered as `<Icon />` — is reported as an unused import. That was **40 of the
@@ -1567,6 +1603,44 @@ deleting it to satisfy the rule would put the key back.
 
 With both, **`no-unused-vars` is clean and therefore load-bearing** — a hit is real dead code, so fix it rather than
 adding it to the backlog.
+
+The second is **`react/no-danger`**, which arrives with the XSS sinks below rather than from the plugin's
+`recommended` config; that one is still not extended, for the reason above.
+
+## The XSS sinks are a second, blocking lint run, because the first one cannot fail
+
+`npm run lint` is non-blocking against the 14-error backlog, and a security rule nobody can fail is not
+enforcement. `npm run lint:sinks` (`eslint.sinks.config.js`, CI step *Lint XSS sinks*) therefore extends **no**
+shared config — the whole backlog lives in `js.configs.recommended` and the two react plugins, so it cannot reach
+this run, which is red if and only if a sink was added. The rules had zero hits when written, which is what makes
+blocking possible with nothing to burn down first.
+
+`eslint.sinks.js` exports them and **both configs import it** — the main one for editor feedback, the gate for CI.
+Two literals would drift, and the copy that drifts is the one nobody runs locally.
+
+**This is what lets the Supabase JWT stay in `localStorage`.** That is acceptable only while nothing in the app can
+execute injected markup, so the rules cover `dangerouslySetInnerHTML` (three ways: the JSX attribute via
+`react/no-danger`, an object-literal key, and a member assignment — different AST nodes, so one selector does not
+imply another), `eval`/`window.eval`, `Function`/`new Function`, `innerHTML`/`outerHTML` both assigned and as an
+object key, `insertAdjacentHTML`, and `write`/`writeln` matched on the method rather than on `document`, since an
+alias is the same sink. Treat this, the CSP, and the absence of a markdown or LaTeX renderer as one mitigation.
+
+**A name has two spellings and they are different nodes**, so no selector here may be written bare: `el.innerHTML`
+and `{innerHTML: s}` put the name in an Identifier's `.name`, `el['innerHTML']` and `{'innerHTML': s}` put it in a
+string Literal's `.value`. They go through `eitherSpelling`, which emits both. Written by hand this was wrong twice
+— once missing the member-assignment route *with a comment claiming otherwise*, once missing every quoted form, so
+`<div {...{'dangerouslySetInnerHTML': {__html: x}}} />` passed a green blocking gate on one pair of quotes.
+
+**Reading the rules is what failed both times, so `src/test/sinkRules.test.js` reads the report**: it runs ESLint
+over source text with the same `eslint.sinks.config.js` CI uses and asserts each of 25 spellings is flagged. Its
+other half asserts six ordinary forms are *not*, so the first half cannot be satisfied by a selector matching
+everything. Both halves are load-bearing and both were checked by breaking them. The lint script still has to
+exist: the test proves the rules catch the forms, the script proves they are applied to the tree.
+
+Two config details are load-bearing, both found by the gate failing on code it has no opinion about: it registers
+`react-hooks` **without enabling any of its rules**, because an `eslint-disable` naming a rule no config defines is
+itself an error (five, in source files); and it sets `reportUnusedDisableDirectives: 'off'`, because every disable
+in the tree is for a rule this run does not have.
 
 ## Muted text is `text-gray-600 dark:text-gray-400`, and a test does the arithmetic
 

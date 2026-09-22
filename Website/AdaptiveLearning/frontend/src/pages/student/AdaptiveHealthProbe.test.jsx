@@ -152,7 +152,14 @@ it('keeps the instruction when the refusal follows a real outage', async () => {
   eegHealth.mockResolvedValue({ refused: true, error: 'Too many requests.' })
   render(<Adaptive />)
 
-  expect(await screen.findByText(/EEG service/)).toHaveTextContent(/not reachable on port 8001/)
+  // Waits for *this* sentence, not for any node mentioning the service. The
+  // panel shows "Checking the EEG service…" until the first probe answers --
+  // `available` is null until then -- and `findByText(/EEG service/)` matches
+  // that immediately, so the assertion ran against the unchecked state. It
+  // passed locally, where the probe resolves before the query, and failed in
+  // CI. Anchoring on the text the settled state produces is what makes the
+  // wait mean what it says.
+  await screen.findByText(/not reachable on port 8001/)
   await screen.findByText('status unavailable', undefined, { timeout: 8000 })
 
   const sentence = screen.getByText(/EEG service/)

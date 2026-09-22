@@ -233,15 +233,31 @@ jobs:
         working-directory: Website/AdaptiveLearning/frontend
         run: npm ci
 
-      # Reported, not enforced. The frontend currently has ~48 pre-existing
-      # eslint errors (unused imports, set-state-in-effect, and a batch of
-      # false-positive "unused" reports for components only referenced in JSX).
-      # Blocking on those would make CI red from its first run, which trains
-      # everyone to ignore it. Burn the backlog down, then drop this flag.
+      # Reported, not enforced. The frontend has 14 pre-existing eslint errors
+      # (7 react-refresh/only-export-components, 5 no-undef on process/global
+      # in tests, 1 no-empty, 1 react-hooks/rules-of-hooks). Blocking on those
+      # would make CI red from its first run, which trains everyone to ignore
+      # it. Burn the backlog down, then drop this flag. Keep the count current:
+      # against a stale one, a reviewer reads the difference as errors this PR
+      # added.
       - name: Lint (non-blocking)
         continue-on-error: true
         working-directory: Website/AdaptiveLearning/frontend
         run: npm run lint
+
+      # Blocking, unlike the run above, and that is the whole point of it being
+      # a second run. The XSS sinks -- dangerouslySetInnerHTML, eval, Function,
+      # innerHTML/outerHTML assignment, insertAdjacentHTML, document.write --
+      # had zero hits when the rules were written, so there is no backlog
+      # behind them and nothing to burn down first. `eslint.sinks.config.js`
+      # extends no shared config, so the fourteen above cannot reach it: this
+      # step is red if and only if a sink was added.
+      #
+      # It is what lets the Supabase JWT stay in localStorage: that is only
+      # acceptable while nothing in this app can execute injected markup.
+      - name: Lint XSS sinks (blocking)
+        working-directory: Website/AdaptiveLearning/frontend
+        run: npm run lint:sinks
 
       # Blocking, unlike lint. These start green and cover behaviour that has
       # already regressed once (percent scaling on the parent report, the

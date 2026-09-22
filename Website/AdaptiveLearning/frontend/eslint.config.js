@@ -4,6 +4,7 @@ import react from 'eslint-plugin-react'
 import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
+import { sinkRules } from './eslint.sinks.js'
 
 export default defineConfig([
   // `coverage/` too: it is gitignored generated output, and linting it made
@@ -44,6 +45,10 @@ export default defineConfig([
       // eslint-plugin-react's recommended config brings a large ruleset that
       // would add to the backlog rather than clear it.
       'react/jsx-uses-vars': 'error',
+      // The XSS sinks. Here for editor feedback; `eslint.sinks.config.js`
+      // applies the same object alone, which is what CI gates on -- this run
+      // cannot, because of the fourteen-error backlog above.
+      ...sinkRules,
     },
   },
   {

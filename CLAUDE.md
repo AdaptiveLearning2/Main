@@ -1625,9 +1625,17 @@ imply another), `eval`/`window.eval`, `Function`/`new Function`, `innerHTML`/`ou
 object key, `insertAdjacentHTML`, and `write`/`writeln` matched on the method rather than on `document`, since an
 alias is the same sink. Treat this, the CSP, and the absence of a markdown or LaTeX renderer as one mitigation.
 
-**Add a sink by planting every spelling of it in a scratch file, linting that file, and reading the report** —
-never by reading the rule and concluding. A comment once claimed one `Property` selector also caught the member
-assignment; it did not, and the claim is worse than the gap because it stops anyone checking.
+**A name has two spellings and they are different nodes**, so no selector here may be written bare: `el.innerHTML`
+and `{innerHTML: s}` put the name in an Identifier's `.name`, `el['innerHTML']` and `{'innerHTML': s}` put it in a
+string Literal's `.value`. They go through `eitherSpelling`, which emits both. Written by hand this was wrong twice
+— once missing the member-assignment route *with a comment claiming otherwise*, once missing every quoted form, so
+`<div {...{'dangerouslySetInnerHTML': {__html: x}}} />` passed a green blocking gate on one pair of quotes.
+
+**Reading the rules is what failed both times, so `src/test/sinkRules.test.js` reads the report**: it runs ESLint
+over source text with the same `eslint.sinks.config.js` CI uses and asserts each of 25 spellings is flagged. Its
+other half asserts six ordinary forms are *not*, so the first half cannot be satisfied by a selector matching
+everything. Both halves are load-bearing and both were checked by breaking them. The lint script still has to
+exist: the test proves the rules catch the forms, the script proves they are applied to the tree.
 
 Two config details are load-bearing, both found by the gate failing on code it has no opinion about: it registers
 `react-hooks` **without enabling any of its rules**, because an `eslint-disable` naming a rule no config defines is

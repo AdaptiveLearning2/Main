@@ -11,13 +11,19 @@
  * nothing pre-existing behind it -- unlike the fourteen in the lint backlog,
  * which is why these can gate CI and `npm run lint` still cannot.
  *
- * **A selector covers one node type, and reading alike is not being alike.**
- * `Property[key.name=x]` and `AssignmentExpression[left.property.name=x]` are
- * different nodes for what a reader calls "setting x", so a sink reachable
- * both ways needs both -- and a comment claiming one selector covers both is
- * worse than the gap, because it stops anyone checking. When adding a sink,
- * plant every spelling of it in a scratch file, lint that file, and read the
- * report rather than the rule.
+ * **A name has two spellings and they are different nodes.** `el.innerHTML`
+ * and `{innerHTML: s}` put the name in `.name`, an Identifier; `el['innerHTML']`
+ * and `{'innerHTML': s}` put it in `.value`, a string Literal. A selector
+ * written for one matches none of the other, so `<div {...{'dangerouslySet
+ * InnerHTML': {__html: userText}}} />` went through a green gate on one pair
+ * of quotes. `eitherSpelling` below generates both, because this was written
+ * by hand twice and both times half the forms were missed -- the second time
+ * with a comment claiming otherwise, which is worse than the gap for stopping
+ * anyone checking.
+ *
+ * **So the rule is: never write a bare `[...name=]` selector here.** Go
+ * through `eitherSpelling`, and when adding a sink plant every spelling of it
+ * in a scratch file, lint that file, and read the report rather than the rule.
  *
  * **Exported rather than written twice.** `eslint.config.js` carries them so
  * an editor flags a sink as it is typed, and `eslint.sinks.config.js` carries
@@ -26,8 +32,21 @@
  * locally -- the same argument `AccessibleChart`'s single `columns` spec
  * makes.
  */
+
+/**
+ * One selector matching a name written bare or quoted.
+ *
+ * esquery reads a comma as a union, so this stays one rule with one message
+ * either way. `pattern` is an esquery attribute value -- a quoted string or a
+ * `/regex/`.
+ */
+const eitherSpelling = (node, path, pattern) =>
+  `${node}[${path}.name=${pattern}], ${node}[${path}.value=${pattern}]`
+
 export const sinkRules = {
-  // JSX's own sink, and the only one with a React-specific name.
+  // JSX's own sink, and the only one with a React-specific name. It reads JSX
+  // attributes, so it sees `<div dangerouslySetInnerHTML={…} />` and none of
+  // the object or assignment routes below.
   'react/no-danger': 'error',
 
   // Everything else is plain JS, matched on shape. `no-restricted-globals`
@@ -35,11 +54,15 @@ export const sinkRules = {
   'no-restricted-syntax': [
     'error',
     {
+      // A bare call. `eval` as an identifier has only this spelling -- you
+      // cannot quote a reference to a binding.
       selector: "CallExpression[callee.name='eval']",
       message: 'eval() executes strings as code. There is no use for it here, and its presence is what would turn a stored string into script.',
     },
     {
-      selector: "MemberExpression[property.name='eval']",
+      // `window.eval`, `globalThis['eval']`, and anything else reaching it as
+      // a property.
+      selector: eitherSpelling('MemberExpression', 'property', "'eval'"),
       message: 'window.eval / globalThis.eval is eval(). See the rule above it.',
     },
     {
@@ -51,11 +74,25 @@ export const sinkRules = {
       message: 'Function() compiles a string into a function, which is eval by another name.',
     },
     {
-      selector: "AssignmentExpression[left.type='MemberExpression'][left.property.name=/^(inner|outer)HTML$/]",
+      // `window.Function(s)` and `new window['Function'](s)`. The two rules
+      // above key on `callee.name`, so neither of these reached them -- the
+      // property route needs saying separately, as it does for eval.
+      selector: eitherSpelling('MemberExpression', 'property', "'Function'"),
+      message: 'window.Function is Function(), which compiles a string into a function.',
+    },
+    {
+      selector: eitherSpelling('AssignmentExpression', 'left.property', '/^(inner|outer)HTML$/'),
       message: 'Assigning innerHTML/outerHTML parses the string as markup. Set textContent, or render it through React.',
     },
     {
-      selector: "CallExpression[callee.property.name='insertAdjacentHTML']",
+      // `Object.assign(el, {innerHTML: s})` and any other object literal that
+      // becomes an element's properties. The assignment rule above is the
+      // statement form of the same sink.
+      selector: eitherSpelling('Property', 'key', '/^(inner|outer)HTML$/'),
+      message: 'An innerHTML/outerHTML key parses its value as markup once the object reaches an element.',
+    },
+    {
+      selector: eitherSpelling('CallExpression', 'callee.property', "'insertAdjacentHTML'"),
       message: 'insertAdjacentHTML parses its argument as markup, exactly as innerHTML does.',
     },
     {
@@ -65,7 +102,7 @@ export const sinkRules = {
       // true of it verbatim. Nothing in `src/` calls `.write(`/`.writeln(` on
       // anything, so the wider match costs nothing; if something legitimate
       // ever does, narrowing it then is a decision someone makes on purpose.
-      selector: "CallExpression[callee.property.name=/^write(ln)?$/]",
+      selector: eitherSpelling('CallExpression', 'callee.property', '/^write(ln)?$/'),
       message: 'write/writeln parse their argument as markup.',
     },
     // `dangerouslySetInnerHTML` reached three ways, and `react/no-danger` sees
@@ -75,22 +112,15 @@ export const sinkRules = {
     {
       // `<div {...{dangerouslySetInnerHTML: x}} />`, and any object literal
       // carrying the key on its way to becoming props.
-      selector: "Property[key.name='dangerouslySetInnerHTML']",
+      selector: eitherSpelling('Property', 'key', "'dangerouslySetInnerHTML'"),
       message: 'dangerouslySetInnerHTML injects unparsed markup. Nothing in this app needs it; see eslint.sinks.js.',
     },
     {
       // `props.dangerouslySetInnerHTML = x`, then spread. The one route that
       // is neither a JSX attribute nor an object literal, and the shape is
       // the one the innerHTML rule above already uses.
-      selector: "AssignmentExpression[left.type='MemberExpression'][left.property.name='dangerouslySetInnerHTML']",
+      selector: eitherSpelling('AssignmentExpression', 'left.property', "'dangerouslySetInnerHTML'"),
       message: 'dangerouslySetInnerHTML injects unparsed markup, assigned onto a props object as much as written in JSX.',
-    },
-    {
-      // `Object.assign(el, {innerHTML: s})` and any other object literal that
-      // becomes an element's properties. The assignment rule above is the
-      // statement form of the same sink.
-      selector: "Property[key.name=/^(inner|outer)HTML$/]",
-      message: 'An innerHTML/outerHTML key parses its value as markup once the object reaches an element.',
     },
   ],
 }

@@ -158,3 +158,19 @@ def set_flag(monkeypatch):
         monkeypatch.setattr(main, "_feature_flags", lambda: flags)
         return flags
     return _set
+
+
+def tighten(monkeypatch, limiter, *, limit=None, window=None):
+    """Shrink one `_SlidingWindowLimiter`'s budget for the duration of a test.
+
+    **Patch the limiter, never `main._X_RATE_LIMIT`.** Those constants are read
+    once at import to build the limiters, so patching one now changes nothing:
+    the test runs against the real budget, needs far more calls than it makes
+    to reach it, and passes or fails for a reason unrelated to what it claims.
+    Every limiter test in the suite was written the old way, and this is the
+    one-line replacement so the next one is not.
+    """
+    if limit is not None:
+        monkeypatch.setattr(limiter, "limit", limit)
+    if window is not None:
+        monkeypatch.setattr(limiter, "window", window)

@@ -22,6 +22,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 import pytest  # noqa: E402
 
 import main  # noqa: E402
+from conftest import tighten  # noqa: E402
 
 MIGRATION = (pathlib.Path(__file__).resolve().parents[4]
              / "supabase" / "migrations" / "20260919000000_security_events.sql")
@@ -68,9 +69,9 @@ def recorder(monkeypatch):
     # to be *inside* the allowance. Same shape as the persisted view state the
     # frontend suite has to clear in `beforeEach`.
     main._security_event_seen.clear()
-    main._strategy_hits.clear()
-    main._chart_summary_hits.clear()
-    main._ingest_hits.clear()
+    main._STRATEGY_LIMITER.reset()
+    main._CHART_SUMMARY_LIMITER.reset()
+    main._INGEST_LIMITER.reset()
     return rec
 
 
@@ -122,14 +123,13 @@ def test_reaching_for_the_admin_console_is_its_own_kind(recorder, monkeypatch):
     assert recorder.rows[0]["kind"] == "admin_denied"
 
 
-@pytest.mark.parametrize("limiter,fn,setting,window", [
-    ("strategies", "_rate_limit_strategies", "_STRATEGY_RATE_LIMIT", "_STRATEGY_RATE_WINDOW"),
-    ("chart_summary", "_rate_limit_chart_summary", "_CHART_SUMMARY_RATE_LIMIT", "_CHART_SUMMARY_RATE_WINDOW"),
-    ("ingest", "_rate_limit_ingest", "_INGEST_RATE_LIMIT", "_INGEST_RATE_WINDOW"),
+@pytest.mark.parametrize("limiter,fn,budget", [
+    ("strategies", "_rate_limit_strategies", "_STRATEGY_LIMITER"),
+    ("chart_summary", "_rate_limit_chart_summary", "_CHART_SUMMARY_LIMITER"),
+    ("ingest", "_rate_limit_ingest", "_INGEST_LIMITER"),
 ])
-def test_each_limiter_records_which_one_fired(recorder, monkeypatch, limiter, fn, setting, window):
-    monkeypatch.setattr(main, setting, 1)
-    monkeypatch.setattr(main, window, 60)
+def test_each_limiter_records_which_one_fired(recorder, monkeypatch, limiter, fn, budget):
+    tighten(monkeypatch, getattr(main, budget), limit=1, window=60)
     limit = getattr(main, fn)
 
     limit("caller-1")                       # inside the allowance
@@ -149,8 +149,7 @@ def test_a_hammering_caller_does_not_write_a_row_per_request(recorder, monkeypat
     client sending too much would add a database write to every refusal --
     load added at exactly the moment the caller is already sending too much.
     """
-    monkeypatch.setattr(main, "_STRATEGY_RATE_LIMIT", 1)
-    monkeypatch.setattr(main, "_STRATEGY_RATE_WINDOW", 60)
+    tighten(monkeypatch, main._STRATEGY_LIMITER, limit=1, window=60)
     monkeypatch.setattr(main, "_SECURITY_EVENT_COOLDOWN_SEC", 300)
 
     main._rate_limit_strategies("caller-1")
@@ -164,14 +163,13 @@ def test_a_hammering_caller_does_not_write_a_row_per_request(recorder, monkeypat
 def test_the_cooldown_is_per_caller(recorder, monkeypatch):
     """Or one noisy client silences the log for everyone else.
 
-    A limit of 1 and two calls each, not a limit of 0: `_STRATEGY_RATE_LIMIT`
+    A limit of 1 and two calls each, not a limit of 0: `STRATEGY_RATE_LIMIT`
     is read through `_env_number` with a floor of 1 precisely because 0 would
     refuse every request, and at 0 the limiter reaches `min(hits)` on an empty
     list. Setting it here anyway would be testing a state the setting cannot
     hold.
     """
-    monkeypatch.setattr(main, "_STRATEGY_RATE_LIMIT", 1)
-    monkeypatch.setattr(main, "_STRATEGY_RATE_WINDOW", 60)
+    tighten(monkeypatch, main._STRATEGY_LIMITER, limit=1, window=60)
 
     for caller in ("a", "b", "c"):
         main._rate_limit_strategies(caller)
@@ -430,11 +428,9 @@ def test_one_limiter_firing_does_not_silence_the_others(recorder, monkeypatch):
     first. A student refused by ingest would then hit the strategies limiter
     with nothing recorded at all.
     """
-    for setting, window in (("_INGEST_RATE_LIMIT", "_INGEST_RATE_WINDOW"),
-                            ("_STRATEGY_RATE_LIMIT", "_STRATEGY_RATE_WINDOW"),
-                            ("_CHART_SUMMARY_RATE_LIMIT", "_CHART_SUMMARY_RATE_WINDOW")):
-        monkeypatch.setattr(main, setting, 1)
-        monkeypatch.setattr(main, window, 60)
+    for budget in (main._INGEST_LIMITER, main._STRATEGY_LIMITER,
+                   main._CHART_SUMMARY_LIMITER):
+        tighten(monkeypatch, budget, limit=1, window=60)
     monkeypatch.setattr(main, "_SECURITY_EVENT_COOLDOWN_SEC", 300)
 
     for limit in (main._rate_limit_ingest, main._rate_limit_strategies,

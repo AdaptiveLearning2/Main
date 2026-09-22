@@ -69,11 +69,11 @@ def reset_chart_summary_rate_limit():
     whichever of them happens to run eleventh -- the same guard the strategy
     tests carry, and for the same reason.
     """
-    main._chart_summary_hits.clear()
-    main._chart_summary_sweep_at = 0.0
+    main._CHART_SUMMARY_LIMITER.reset()
+    main._CHART_SUMMARY_LIMITER.sweep_at = 0.0
     yield
-    main._chart_summary_hits.clear()
-    main._chart_summary_sweep_at = 0.0
+    main._CHART_SUMMARY_LIMITER.reset()
+    main._CHART_SUMMARY_LIMITER.sweep_at = 0.0
 
 
 # ── the flag ─────────────────────────────────────────────────────────────

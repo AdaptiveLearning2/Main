@@ -1348,8 +1348,10 @@ person, the rule `session_alerts` holds, and the CHECK whitelist and `_SECURITY_
 equal **both ways** — a kind in code alone is a constraint violation the never-raises path swallows, and
 one in the schema alone is a filter that can only return nothing.
 
-**Record outside the limiters' locks**, or every caller queues behind a database round trip — worst on
-ingest, the most contended of the three. `rate_limited` is cooled (300 s) because a limiter fires once per
+**Record outside the limiter's lock**, or every caller queues behind a database round trip — worst on
+ingest, the most contended of them. That separation is why `_SlidingWindowLimiter.check()` *answers*
+instead of raising: the 429 wording, the `limiter` label and the audit write all live at the call site,
+outside the lock. `rate_limited` is cooled (300 s) because a limiter fires once per
 *request* past the allowance; denials are not, since deduplicating them would hide a caller probing a
 series of different students. **The cooldown key carries what makes two of that kind's events different** —
 `_COOLED_KINDS` names the `detail` fields, `limiter` here. On `(kind, actor)` alone the first limiter to
@@ -1358,6 +1360,28 @@ there first.
 
 **The audit must not break what it audits.** It never raises, like `_raise_session_alerts`, and
 `_require_admin` — the one hook reaching into the request object — reads `.url.path` defensively.
+
+## Every per-caller rate limit is one `_SlidingWindowLimiter`, and tests patch the object
+
+There were **five** hand-rolled copies of one sliding window — strategies, chart summary, ingest,
+generation, and the three public address budgets — each with its own dict, lock, sweep and constants.
+They had not drifted, which is the only comfortable time to merge them; the fifth arrived without anyone
+noticing there were already four. One instance per budget, each with its own lock, so the health probe at
+1800/min no longer contends with question generation.
+
+**Not `llm_client`'s generation bounds**, which are a process-wide semaphore plus a daily counter — a
+different shape for a shared-availability resource, and folding it in would be a refactor for its own
+sake. The per-endpoint pools and waiter semaphores stay per-endpoint too: one shared pool would let a
+burst of chart summaries starve question generation.
+
+**`check()` answers rather than raising**, because the public routes call it from middleware where there
+is no handler to raise into — and `_claim_generation_slot` wants a bool, since the prefetch worker has no
+request to fail.
+
+**A test tightens the limiter object, never `main._X_RATE_LIMIT`.** Those constants are read once at
+import to build the limiters, so patching one now changes nothing: the test runs against the real budget
+and passes for a reason unrelated to what it claims. `conftest.tighten(monkeypatch, limiter, limit=,
+window=)` is the one-line form, and `.reset()` is what the autouse fixtures call.
 
 **Retention is a rolling 180 days on its own `pg_cron` job**, deliberately not `expired_signal_cutoff()`:
 that would delete the record of who read a child's signals at the moment those signals expire, and no

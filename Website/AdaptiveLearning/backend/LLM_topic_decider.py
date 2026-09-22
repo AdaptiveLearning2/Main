@@ -9,6 +9,7 @@ import random
 from statistics import fmean
 import signal_fusion
 import grade_levels
+import unicodedata
 from collections import deque
 
 from supabase_auth import datetime
@@ -468,6 +469,59 @@ def get_session_signal_state(session_id, user_id=None):
 # 40 questions globally, 10 per topic
 user_histories = {}
 
+# Replayed question text is the one prompt input that is neither a closed set
+# nor written by a person. `grade` is rebuilt from its number, `topic` comes
+# from the seeded `math_topics` vocabulary, `difficulty` is one of three, and a
+# lesson plan is dashboard-authored and clamped -- but this is the model's own
+# previous `question_text`, fed back so the next question is not a repeat.
+# Seventeen generators newline-join it and follow it with "DO NOT generate a
+# question matching any of the above", so a reply carrying a newline puts a
+# line of its own in instruction position.
+#
+# **This flattens and bounds rather than refusing**, the opposite of
+# `grade_levels.validated_grade`. That one guards an edge where a bad value is
+# the caller's and a 422 names the field. This is internal and the list's only
+# job is repeat avoidance, so a dropped or shortened entry costs at most one
+# repeated question -- where raising would fail a generation because of the
+# *previous* one's reply.
+#
+# The cap is a bound with a reason rather than a measurement: ten entries reach
+# a prompt (five global, five topic), so this keeps their total near the 2000
+# a whole lesson-plan block already gets, and a truncated question still serves
+# repeat avoidance. Nothing measures real `question_text` lengths, so treat the
+# number as a guess, like `EMOTION_MIN_CONFIDENCE`.
+_HISTORY_TEXT_MAX = 300
+# The categories `validated_grade` refuses, for the same reasons: `\n` is not
+# the only spelling of a new line (Zl, Zp), and Cf carries the right-to-left
+# overrides.
+_LINE_BREAKING = ("Cc", "Cf", "Zl", "Zp")
+
+
+def _prompt_safe_text(value) -> str:
+    """One bounded single line, for a value on its way into a prompt."""
+    if not isinstance(value, str):
+        return ""
+    flattened = "".join(
+        " " if unicodedata.category(ch) in _LINE_BREAKING else ch
+        for ch in value)
+    return " ".join(flattened.split())[:_HISTORY_TEXT_MAX]
+
+
+def _prompt_safe_history(entries):
+    """The repeat-avoidance list, every text flattened and bounded.
+
+    Keeps the `{"text", "topic"}` shape the seventeen generators read, so this
+    is one call at each site the history is *read* rather than a change in each
+    generator -- the chokepoint argument `grade_for_prompt` already makes.
+    """
+    safe = []
+    for entry in entries or ():
+        text = _prompt_safe_text((entry or {}).get("text"))
+        if text:
+            safe.append({**entry, "text": text})
+    return safe
+
+
 def get_user_history(user_id):
     if user_id not in user_histories:
         # Derived from ALL_TOPICS rather than listed again. `question_generation`
@@ -605,8 +659,11 @@ def question_generation(topic, difficulty, user_id, grade):
     # eighteenth to be forgotten. See grade_levels.grade_for_prompt.
     grade = grade_levels.grade_for_prompt(grade)
     history = get_user_history(user_id)
-    recent_global = list(history["global"])[-5:]
-    recent_topic  = list(history[topic])[-5:] if topic in history else []
+    # Flattened here, where the history is read, for the same reason `grade` is
+    # rebuilt here: one site instead of seventeen.
+    recent_global = _prompt_safe_history(list(history["global"])[-5:])
+    recent_topic  = _prompt_safe_history(
+        list(history[topic])[-5:] if topic in history else [])
     print(f"topic: {topic} difficulty: {difficulty}")
     match topic:
         case "ordering":
@@ -794,7 +851,12 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
     json_response = accuracy_response.data or []
 
     history = get_user_history(user_id)
-    recent_global = list(history["global"])[-10:]
+    # Flattened here too, though this prompt interpolates the *list* rather
+    # than joining it -- so Python's repr already escapes a newline to a
+    # literal `\n` and the labelled INPUT block below cannot be forged. That is
+    # true by accident of not calling `join`, and one edit from not being, in a
+    # block where `Student Grade Level` is the next line.
+    recent_global = _prompt_safe_history(list(history["global"])[-10:])
 
     # How the student is doing right now in this session, as opposed to
     # all-time accuracy. Reads straight from the database, not a live sidecar

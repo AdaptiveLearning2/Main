@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event'
 // endpoints, and a `mockResolvedValue` would answer both with one body.
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 
-import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
+import { apiFetch, mockApi, overrideApi, resetApi, apiError, pending } from '../../test/mocks/apiFetch'
 import History from './History'
 
 // A failed request must not look like an empty list -- "No sessions here" would
@@ -123,6 +123,46 @@ it('reports lifetime questions and accuracy, not a sum of the rows it was sent',
   await screen.findByText('Total Sessions')
   expect(tile('Questions Done')).toBe('431')    // the rows sum to 15
   expect(tile('Overall Accuracy')).toBe('70%')  // the rows give 73%
+})
+
+it('shows the totals as still loading, not as unavailable, while they are in flight', async () => {
+  // The list lands first. A dash here would say the figures could not be had
+  // -- the same thing a failed read says -- for a read that has not finished.
+  serve(page(THREE))
+  overrideApi('/api/stats/me', pending())
+
+  render(<History />)
+
+  await screen.findByText('Total Sessions')
+  expect(tile('Questions Done')).not.toBe('—')
+  expect(tile('Overall Accuracy')).not.toBe('—')
+  expect(screen.getAllByLabelText('Loading')).toHaveLength(2)
+})
+
+it.each([
+  ['a missing question count', { total_correct: 3, retrieved: true }],
+  ['a missing correct count',  { total_questions: 10, retrieved: true }],
+])('does not turn %s into a zero', async (_name, stats) => {
+  // Rule 2: an absence is never a zero. `?? 0` read a field the response did
+  // not carry as a student who had answered nothing.
+  serve(page(THREE), stats)
+
+  render(<History />)
+
+  await screen.findByText('Total Sessions')
+  expect(tile('Overall Accuracy')).toBe('—')
+  if (!('total_questions' in stats)) expect(tile('Questions Done')).toBe('—')
+})
+
+it('has no accuracy to show for no questions, rather than 0%', async () => {
+  // 0% reads as every answer wrong. Zero questions answered has no accuracy.
+  serve(page(THREE), { total_questions: 0, total_correct: 0, retrieved: true })
+
+  render(<History />)
+
+  await screen.findByText('Total Sessions')
+  expect(tile('Questions Done')).toBe('0')
+  expect(tile('Overall Accuracy')).toBe('—')
 })
 
 it('says nothing about questions or accuracy when the totals could not be read', async () => {

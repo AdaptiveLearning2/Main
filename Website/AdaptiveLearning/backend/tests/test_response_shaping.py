@@ -292,15 +292,74 @@ def _clamps(tree, param) -> bool:
     them. Its stated limit: the inner call has to *read* the parameter, not be
     handed it bare, since `generate_question` clamps `int(bias or 0)`.
     """
+    return bool(_clamp_nodes(tree, param))
+
+
+def _clamp_nodes(tree, param) -> list:
+    """The outermost call of every clamp of `param` in `tree`."""
+    found = []
     for node in ast.walk(tree):
         if _is_call(node, "_clamp_days") and any(_names_param(a, param) for a in node.args):
-            return True
+            found.append(node)
+            continue
         for outer, inner in (("max", "min"), ("min", "max")):
             if _is_call(node, outer) and any(
                     _is_call(arg, inner) and any(_names_param(a, param) for a in arg.args)
                     for arg in node.args):
-                return True
-    return False
+                found.append(node)
+                break
+    return found
+
+
+def _raw_uses(tree, param) -> list:
+    """Reads of `param` that are not the clamped value, as line numbers.
+
+    A clamp that exists and is not what gets used bounds nothing:
+    `clamped = max(1, min(limit, 100))` followed by `.limit(limit)` passes a
+    check that only asks whether the clamp is there. So every read has to be
+    inside a clamp, or come after the parameter was reassigned *to* one --
+    `limit = max(1, min(limit, 100))`, which is how the handlers spell it.
+
+    A body field is read as `payload.days`; that counts, and reassigning a
+    local does not clamp it -- only the attribute inside a clamp does. A method
+    that happens to share the name (`query.limit(...)`) is not a read of it.
+    """
+    inside = {id(n) for clamp in _clamp_nodes(tree, param) for n in ast.walk(clamp)}
+    reassigned = min(
+        (node.lineno for node in ast.walk(tree)
+         if isinstance(node, ast.Assign) and len(node.targets) == 1
+         and isinstance(node.targets[0], ast.Name) and node.targets[0].id == param
+         and _clamp_nodes(node.value, param)),
+        default=None)
+    method_names = {id(n.func) for n in ast.walk(tree)
+                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+    raw = []
+    for node in ast.walk(tree):
+        if id(node) in inside:
+            continue
+        if isinstance(node, ast.Name) and node.id == param and isinstance(node.ctx, ast.Load):
+            if reassigned is None or node.lineno <= reassigned:
+                raw.append(node.lineno)
+        elif (isinstance(node, ast.Attribute) and node.attr == param
+              and isinstance(node.ctx, ast.Load) and isinstance(node.value, ast.Name)
+              and id(node) not in method_names):
+            raw.append(node.lineno)
+    return sorted(raw)
+
+
+@pytest.mark.parametrize("source,param,raw", [
+    ("def f(limit):\n    limit = max(1, min(limit, 30))\n    q.limit(limit)",         "limit", False),
+    ("def f(weeks):\n    g(max(2, min(weeks, 8)))",                                "weeks", False),
+    ("def f(days):\n    w = _clamp_days(days)\n    g(w)",                             "days",  False),
+    ("def f(payload):\n    days = max(1, min(payload.days, 30))\n    g(days)",        "days",  False),
+    # The clamp is there and is not what is used.
+    ("def f(limit):\n    kept = max(1, min(limit, 30))\n    q.limit(limit)",          "limit", True),
+    ("def f(payload):\n    days = max(1, min(payload.days, 30))\n    g(payload.days)", "days", True),
+    # Used before it is clamped.
+    ("def f(limit):\n    q.limit(limit)\n    limit = max(1, min(limit, 30))",         "limit", True),
+])
+def test_a_clamp_is_the_value_that_gets_used(source, param, raw):
+    assert bool(_raw_uses(ast.parse(source), param)) is raw, source
 
 
 @pytest.mark.parametrize("source,param,clamped", [
@@ -340,12 +399,19 @@ def test_a_bound_claimed_clamped_in_the_handler_has_a_ceiling_and_a_floor(pair):
     `test_a_negative_limit_reaches_the_query_as_the_floor` below.
     """
     handler_name, param = pair
-    assert _clamps(_handler(handler_name), param), (
+    tree = _handler(handler_name)
+    assert _clamps(tree, param), (
         f"CALLER_NUMBERS says {handler_name} clamps `{param}` in the handler, and "
         f"no `max(floor, min({param}, ceiling))` or `_clamp_days({param})` is in "
         "it. Clamp it the way the others do, or -- if it is bounded some other "
         "correct way -- move the entry to the mechanism that describes it. This "
         "checks the spelling, not the arithmetic.")
+    # And the clamped value is the one read. Line numbers are relative to the
+    # handler's own source, `_handler` parsing it on its own.
+    assert not _raw_uses(tree, param), (
+        f"{handler_name} clamps `{param}` and then reads it unclamped at "
+        f"line(s) {_raw_uses(tree, param)} of its source -- reassign the clamp to "
+        "the name, or pass the clamp itself")
 
 
 @pytest.mark.parametrize("pair", sorted(

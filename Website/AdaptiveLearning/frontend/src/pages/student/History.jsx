@@ -8,6 +8,16 @@ import LoadError from '../../components/ui/LoadError'
 // A figure nobody could establish. Not 0, which is a claim about the student.
 const UNKNOWN = '—'
 
+// A figure still on its way. Drawn differently from UNKNOWN on purpose: the
+// dash says the figure could not be had, and it must not flash up for a read
+// that simply has not landed yet.
+const PENDING = (
+  <span aria-label="Loading"
+        className="inline-block w-10 h-6 align-middle rounded bg-gray-200 dark:bg-gray-700 animate-pulse" />
+)
+
+const numberOr = v => (typeof v === 'number' ? v : null)
+
 export default function History() {
   const [sessions, setSessions] = useState([])
   // The real number of sessions, which is not `sessions.length` once the
@@ -17,8 +27,9 @@ export default function History() {
   const [truncated, setTruncated] = useState(null)
   // Lifetime figures, from the credited totals rather than from the rows:
   // the rows are the newest page of a longer history, so summing them
-  // describes a subset while looking like a lifetime. `null` = not retrieved.
-  const [stats, setStats]       = useState(null)
+  // describes a subset while looking like a lifetime. Three states:
+  // `undefined` in flight, `null` failed, else the totals.
+  const [stats, setStats]       = useState(undefined)
   const [loading, setLoading]   = useState(true)
   const [failed, setFailed]     = useState(false)
   const [filter, setFilter]     = useState('all')
@@ -27,7 +38,9 @@ export default function History() {
   // loading already starts true, so no setState is needed here on mount.
   const load = () => {
     apiFetch('/api/stats/me')
-      .then(s => setStats(s?.retrieved === false ? null : s))
+      // No body is a failed read too: left `undefined`, it would read as
+      // still loading for ever.
+      .then(s => setStats(s && s.retrieved !== false ? s : null))
       .catch(() => setStats(null))
     fetchSessionList()
       .then(r => {
@@ -41,7 +54,10 @@ export default function History() {
       .catch(e => { console.error('Failed to load sessions:', e); setFailed(true); setLoading(false) })
   }
 
-  const retry = () => { setLoading(true); load() }
+  // Back to in-flight here, in the handler, rather than inside `load` -- which
+  // the mount effect also runs, and a synchronous set there is the
+  // set-state-in-effect shape the lint is clear of.
+  const retry = () => { setLoading(true); setStats(undefined); load() }
 
   useEffect(load, [])
 
@@ -51,10 +67,13 @@ export default function History() {
     return true
   })
 
-  const totalQ   = stats ? (stats.total_questions ?? 0) : null
-  const overallA = !stats ? UNKNOWN
-    : totalQ > 0 ? `${Math.round(((stats.total_correct ?? 0) / totalQ) * 100)}%`
-    : '0%'
+  // A field that is missing is not a zero (rule 2), and neither is the accuracy
+  // of no questions at all -- both have nothing to report, so both are a dash.
+  const totalQ   = numberOr(stats?.total_questions)
+  const totalC   = numberOr(stats?.total_correct)
+  const overallA = totalQ > 0 && totalC !== null
+    ? `${Math.round((totalC / totalQ) * 100)}%` : null
+  const statTile = v => (stats === undefined ? PENDING : v ?? UNKNOWN)
 
   return (
     <div className="p-6 lg:p-8 pb-12">
@@ -70,8 +89,8 @@ export default function History() {
             // past the cap those are different numbers, and the smaller one is
             // a claim that the student did less work than they did.
             { label: 'Total Sessions', value: total ?? UNKNOWN,   icon: '📋' },
-            { label: 'Questions Done',  value: totalQ ?? UNKNOWN, icon: '📝' },
-            { label: 'Overall Accuracy', value: overallA,         icon: '🎯' },
+            { label: 'Questions Done',  value: statTile(totalQ),   icon: '📝' },
+            { label: 'Overall Accuracy', value: statTile(overallA), icon: '🎯' },
           ].map((c, i) => (
             <motion.div key={c.label}
               initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}

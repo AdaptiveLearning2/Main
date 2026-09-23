@@ -938,9 +938,9 @@ with nobody deciding; `_SESSION_CLIENT_COLUMNS` leaves out `chart_paths`, a path
 `backend/tests/test_response_shaping.py` classifies every number a caller can send outside a list (the
 ingest samples' readings are the exception, and say why), and a new one fails until classified.
 
-**No read is uncapped: PostgREST cuts it at `db-max-rows` (1000), silently.** A list a surface counts
-and sums has to say when it was cut — `/api/sessions` sends the newest `_SESSION_LIST_MAX`, the real
-`total` and `truncated`, decided by `count="exact"` rather than `len(rows)`, `None` when no count came.
+**No read is uncapped: PostgREST cuts it at `db-max-rows` (1000), silently**, so a count is never a
+list's length. `/api/sessions` sends a page of rows beside the real `total` (`count="exact"`; `None` when
+none came, drawn as a dash), lifetime sums come from `/api/stats/me`, and `lib/session.js` reads it.
 
 ## Access control — check the relationship, not the role name
 

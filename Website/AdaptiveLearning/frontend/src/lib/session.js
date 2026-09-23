@@ -64,3 +64,30 @@ export async function endSession(id) {
     return false
   }
 }
+
+/**
+ * The student's own sessions, newest first: always `{ sessions, total,
+ * truncated }`, or a rejection -- never a guess.
+ *
+ * **A body of any other shape is a failed read, not "no sessions".** Each page
+ * used to unwrap with `r?.sessions || []`, which turned an unexpected response
+ * -- the bare list an older backend sends, mid-deploy -- into a student who had
+ * done nothing. One definition here, so the three pages cannot disagree.
+ *
+ * `total` and `truncated` keep their third state as `null`: the backend could
+ * not count, and a page must then claim neither a number nor a whole list.
+ *
+ * @param {{ limit?: number }} [opts]  ask for fewer rows; the backend clamps
+ * @returns {Promise<{ sessions: object[], total: number|null, truncated: boolean|null }>}
+ */
+export async function fetchSessionList({ limit } = {}) {
+  const r = await apiFetch(limit ? `/api/sessions?limit=${limit}` : '/api/sessions')
+  if (!r || typeof r !== 'object' || !Array.isArray(r.sessions)) {
+    throw new Error('The session list came back in a shape this page does not read')
+  }
+  return {
+    sessions:  r.sessions,
+    total:     typeof r.total === 'number' ? r.total : null,
+    truncated: typeof r.truncated === 'boolean' ? r.truncated : null,
+  }
+}

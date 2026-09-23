@@ -1,15 +1,24 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { apiFetch } from '../../lib/api'
+import { fetchSessionList } from '../../lib/session'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
+
+// A figure nobody could establish. Not 0, which is a claim about the student.
+const UNKNOWN = '—'
 
 export default function History() {
   const [sessions, setSessions] = useState([])
   // The real number of sessions, which is not `sessions.length` once the
-  // backend's cap applies. `null` while unknown -- see the note on the tiles.
+  // backend's cap applies. `null` when the backend could not count -- and then
+  // the tile says so rather than falling back to the rows it was sent.
   const [total, setTotal]       = useState(null)
   const [truncated, setTruncated] = useState(null)
+  // Lifetime figures, from the credited totals rather than from the rows:
+  // the rows are the newest page of a longer history, so summing them
+  // describes a subset while looking like a lifetime. `null` = not retrieved.
+  const [stats, setStats]       = useState(null)
   const [loading, setLoading]   = useState(true)
   const [failed, setFailed]     = useState(false)
   const [filter, setFilter]     = useState('all')
@@ -17,14 +26,14 @@ export default function History() {
   // Named so the retry button can call it again.
   // loading already starts true, so no setState is needed here on mount.
   const load = () => {
-    apiFetch('/api/sessions')
+    apiFetch('/api/stats/me')
+      .then(s => setStats(s?.retrieved === false ? null : s))
+      .catch(() => setStats(null))
+    fetchSessionList()
       .then(r => {
-        setSessions(r?.sessions || [])
-        setTotal(typeof r?.total === 'number' ? r.total : null)
-        // Three states, and only `true` may be acted on: `null` means the
-        // backend could not tell either, so the notice stays off rather than
-        // claiming a history is whole or cut on a count nobody received.
-        setTruncated(r?.truncated === true)
+        setSessions(r.sessions)
+        setTotal(r.total)
+        setTruncated(r.truncated)
         setFailed(false); setLoading(false)
       })
       // Also set failed, not just loading: otherwise an empty sessions list
@@ -42,9 +51,10 @@ export default function History() {
     return true
   })
 
-  const totalQ   = sessions.reduce((a, s) => a + (s.questions_answered || 0), 0)
-  const totalC   = sessions.reduce((a, s) => a + (s.correct_answers || 0), 0)
-  const overallA = totalQ > 0 ? Math.round((totalC / totalQ) * 100) : 0
+  const totalQ   = stats ? (stats.total_questions ?? 0) : null
+  const overallA = !stats ? UNKNOWN
+    : totalQ > 0 ? `${Math.round(((stats.total_correct ?? 0) / totalQ) * 100)}%`
+    : '0%'
 
   return (
     <div className="p-6 lg:p-8 pb-12">
@@ -56,12 +66,12 @@ export default function History() {
       {sessions.length > 0 && (
         <div className="grid grid-cols-3 gap-4 mb-4">
           {[
-            // The count the backend reports, not the length of what it sent:
-            // past the cap those are different numbers, and the smaller one
-            // is a claim that the student did less work than they did.
-            { label: 'Total Sessions', value: total ?? sessions.length, icon: '📋' },
-            { label: 'Questions Done',  value: totalQ,          icon: '📝' },
-            { label: 'Overall Accuracy', value: `${overallA}%`, icon: '🎯' },
+            // The count the backend reports, never the length of what it sent:
+            // past the cap those are different numbers, and the smaller one is
+            // a claim that the student did less work than they did.
+            { label: 'Total Sessions', value: total ?? UNKNOWN,   icon: '📋' },
+            { label: 'Questions Done',  value: totalQ ?? UNKNOWN, icon: '📝' },
+            { label: 'Overall Accuracy', value: overallA,         icon: '🎯' },
           ].map((c, i) => (
             <motion.div key={c.label}
               initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}
@@ -76,13 +86,12 @@ export default function History() {
       )}
 
       {/* The cap, said out loud. Without this the list below is a shorter
-          history rather than a shortened view of one, and the two tiles that
-          sum it are describing a subset while looking like a lifetime. */}
-      {truncated && (
+          history rather than a shortened view of one. Only on `true`:
+          `null` means the backend could not tell either. */}
+      {truncated === true && (
         <p className="text-xs text-gray-600 dark:text-gray-400 mb-4">
           Showing your {sessions.length} most recent sessions
-          {typeof total === 'number' ? ` of ${total}` : ''}. Questions Done and
-          Overall Accuracy cover those; Total Sessions is all of them.
+          {typeof total === 'number' ? ` of ${total}` : ''}.
         </p>
       )}
 

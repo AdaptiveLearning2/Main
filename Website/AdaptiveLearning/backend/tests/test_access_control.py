@@ -158,7 +158,8 @@ class _Query:
         if ceilings:
             rows = rows[:min(ceilings)]
         return _Result([self._project(r) for r in rows],
-                       count=total if self._count == "exact" else None)
+                       count=(total if self._count == "exact"
+                              and not getattr(self, "_drop_count", False) else None))
 
     def single(self):
         rows = self.execute().data
@@ -177,8 +178,11 @@ class _Single:
 
 class _FakeSupabase:
     def __init__(self, tables, max_rows=None, rpc_results=None, rpc_raises=None,
-                 table_raises=None):
+                 table_raises=None, count_missing=False):
         self._tables = tables
+        # A read that asked for `count="exact"` and came back without one: the
+        # third state a surface reporting a total has to be able to show.
+        self._count_missing = count_missing
         # Table names whose reads fail. Per table, because the report's
         # queries fail independently and one broken table must not blank out
         # what the others read.
@@ -206,6 +210,7 @@ class _FakeSupabase:
         cap = self._max_rows.get(name) if isinstance(self._max_rows, dict) else self._max_rows
         exc = RuntimeError(f"{name} read failed") if name in self._table_raises else None
         query = _Query(self._tables.get(name, []), max_rows=cap, raises=exc)
+        query._drop_count = self._count_missing
         self.queries.append(query)
         return query
 

@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { LayoutDashboard, BookOpen, Target, TrendingUp, Flame, Brain, ArrowUpRight, Zap } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
+import { fetchSessionList } from '../../lib/session'
 import { useAuth } from '../../context/AuthContext'
 import ParentRestoredBanner from '../../components/consent/ParentRestoredBanner'
 import ParentLinkedBanner from '../../components/consent/ParentLinkedBanner'
@@ -16,6 +17,9 @@ const ICONS  = TOPIC_ICONS
 // Below this many attempts, a topic's accuracy is too noisy to call it the
 // student's "weakest" -- one unlucky question would read as 0%.
 const MIN_ATTEMPTS_TO_RANK = 3
+
+// The recent-sessions panel's length, and all the dashboard asks the backend for.
+const RECENT_SESSIONS = 4
 
 /** How a topic tile is tinted, from the accuracy the backend computed.
  *
@@ -43,6 +47,9 @@ export default function StudentDashboard() {
   // trigger a full page reload instead of an in-app navigation.
   const navigate = useNavigate()
   const [stats, setStats]     = useState(null)
+  // `null` is a failed read, and the panel says so rather than "No sessions yet"
+  // -- which is what a child with a week of work behind them would otherwise
+  // be told whenever this request did not land.
   const [sessions, setSessions] = useState([])
   const [loading, setLoading] = useState(true)
   // The practice nudge. Stays `null` until both reads land, so a failed
@@ -60,15 +67,15 @@ export default function StudentDashboard() {
       apiFetch('/api/stats/me')
         .then(s => (s?.retrieved === false ? null : s))
         .catch(() => null),
-      // null (failed request) vs [] (no sessions) mean different things, so
-      // the list is pulled out only once the response itself is in hand --
-      // `r?.sessions` would make a failed read indistinguishable from a
-      // student with none, which is what the whole `nudge` branch turns on.
-      apiFetch('/api/sessions').then(r => r?.sessions || []).catch(() => null),
+      // null (failed request, or a body of a shape this page does not read)
+      // vs [] (no sessions) mean different things, and the whole `nudge`
+      // branch turns on it. Four rows, because four are shown: the newest
+      // session is also the only one "practised today" needs.
+      fetchSessionList({ limit: RECENT_SESSIONS }).then(r => r.sessions).catch(() => null),
       apiFetch('/api/profile/me').catch(() => null),
     ]).then(([s, sess, profile]) => {
       setStats(s)
-      setSessions((sess || []).slice(0, 4))
+      setSessions(sess)
       // The browser's local day, not the school's timezone -- this nudge is
       // about the student's own afternoon.
       const today = new Date().toLocaleDateString('en-CA')   // YYYY-MM-DD, local
@@ -318,6 +325,10 @@ export default function StudentDashboard() {
             </div>
             {loading ? (
               <SkeletonList count={3} height="h-12" gap="space-y-2" />
+            ) : sessions === null ? (
+              <p className="text-sm text-gray-600 dark:text-gray-400 py-6 text-center">
+                Your sessions couldn&apos;t be loaded just now.
+              </p>
             ) : sessions.length === 0 ? (
               <div className="text-center py-6">
                 <p className="text-4xl mb-2">🏁</p>

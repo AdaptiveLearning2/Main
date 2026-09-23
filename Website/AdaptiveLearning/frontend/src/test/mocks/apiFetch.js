@@ -62,7 +62,7 @@ export const apiFetch = vi.fn(async (path, opts = {}) => {
 
 /** Accepts either the object form, terser for the common case:
  *
- *     mockApi({ '/api/sessions': [], 'PUT /api/profile/me': { ok: true } })
+ *     mockApi({ '/api/stats/me': STATS, 'PUT /api/profile/me': { ok: true } })
  *
  *  or the array form, when a match needs a regex or a predicate:
  *

@@ -3630,25 +3630,25 @@ _SESSION_CLIENT_COLUMNS = ("id, user_id, class_id, title, started_at, ended_at, 
                            "questions_answered, correct_answers")
 
 
-# A heavy year is a few hundred sessions -- five a day over two hundred school
-# days -- so this covers every student the product has and bounds the read for
-# the one it does not. Not caller-supplied: there is no page offering a longer
-# list, and a query parameter would be a bound the caller could lift.
+# How many rows one read may carry, not how many sessions a student may have:
+# a heavy year runs to a thousand, and every figure a page shows about all of
+# them comes from `total` or from `/api/stats/me`, never from these rows. So the
+# ceiling only has to be a sensible page of history. A caller may ask for fewer
+# -- the dashboard shows four -- and never for more.
 _SESSION_LIST_MAX = 200
 
 
 @app.get("/api/sessions")
-def list_sessions(request: Request):
+def list_sessions(request: Request, limit: int = _SESSION_LIST_MAX):
     """A student's own sessions, newest first, capped.
 
     **Uncapped was already capped, silently.** PostgREST's `db-max-rows` (1000
     in `supabase/config.toml`) cuts any read that asks for no limit, so this
-    list stopped at a thousand with nothing saying so -- and it is the only
-    record of itself the page has: `History.jsx` counts it, sums its questions
-    and divides for an accuracy, so a shortened list does not render as a
-    shorter list, it renders as a student who did less work. The response is
-    an object for that reason: `total` is the real number of sessions, and the
-    rows are the newest `_SESSION_LIST_MAX` of them.
+    list stopped at a thousand with nothing saying so -- under pages that
+    counted and summed it, where a shortened list renders as a student who did
+    less work. So a count is never derived from these rows: `total` is the
+    real number of sessions, lifetime question totals come from
+    `/api/stats/me`, and the rows are the newest `limit` of them, for display.
 
     **`truncated` is decided by the count, not by `len(rows) == the cap`**,
     because that same server-side ceiling means a short read is not evidence
@@ -3657,9 +3657,10 @@ def list_sessions(request: Request):
     surface must say nothing rather than claim either.
     """
     user = get_user(request)
+    limit = max(1, min(limit, _SESSION_LIST_MAX))
     res  = supabase.table("sessions").select(_SESSION_CLIENT_COLUMNS, count="exact") \
         .eq("user_id", user["id"]).order("started_at", desc=True) \
-        .limit(_SESSION_LIST_MAX).execute()
+        .limit(limit).execute()
     rows = res.data or []
     total = res.count
     return {

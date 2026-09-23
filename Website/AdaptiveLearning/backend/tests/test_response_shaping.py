@@ -52,9 +52,9 @@ from tests.test_access_control import _FakeSupabase, _ts
 
 # (handler, param) -> (how it is bounded, why).
 #
-#   "handler"  the handler passes it through both `min(...)` and `max(...)`, or
-#              through `_clamp_days(...)`, which is both -- a ceiling and a
-#              floor, each checked mechanically below.
+#   "handler"  the handler clamps it as `max(floor, min(it, ceiling))`, or with
+#              `_clamp_days(...)` -- one bound wrapping the other, checked
+#              mechanically below.
 #   "field"    the request model carries `le=` and `ge=`, read off `model_fields`.
 #   "raises"   the handler answers 422 outside the range; cited to the test
 #              that drives it, since a raise has no one shape to match.
@@ -94,6 +94,9 @@ CALLER_NUMBERS = {
         ("handler", "_SECURITY_EVENTS_MAX."),
     ("admin_student_search", "limit"):
         ("handler", "25, over a term already refused below two characters."),
+    ("list_sessions", "limit"):
+        ("handler", "_SESSION_LIST_MAX. Rows for display only; every count the "
+                    "pages show comes from `total` or /api/stats/me."),
 
     ("student_learning_strategies", "days"):
         ("handler", "max(1, min(payload.days, 30)) -- clamped in the handler "
@@ -275,34 +278,51 @@ def _names_param(node, param) -> bool:
         for n in ast.walk(node))
 
 
-def _calls_mentioning(tree, callee, param):
-    return [
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        and node.func.id == callee
-        and any(_names_param(a, param) for a in node.args)
-    ]
+def _is_call(node, name) -> bool:
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == name)
 
 
-@pytest.mark.parametrize("source,callee,counts", [
-    ("max(1, min(days, 30))",             "max", True),
-    ("max(1, min(days, 30))",             "min", True),
-    ("max(1, min(payload.days, 30))",     "max", True),
-    ("max(-1, min(1, int(bias or 0)))",   "max", True),
-    ("max(0, len(school_days))",          "max", False),   # a longer name
-    ("min(len(days_off), 30)",            "min", False),
-    ("max(1, other)",                     "max", False),
+def _clamps(tree, param) -> bool:
+    """`max(floor, min(param, ceiling))`, either way round, or `_clamp_days`.
+
+    **The nesting is the check.** Asking only whether a `max` and a `min` each
+    mention the name counts `max(0, page * size - limit)` as a floor for
+    `limit`, beside any `min` elsewhere -- two calls that bound nothing between
+    them. Its stated limit: the inner call has to *read* the parameter, not be
+    handed it bare, since `generate_question` clamps `int(bias or 0)`.
+    """
+    for node in ast.walk(tree):
+        if _is_call(node, "_clamp_days") and any(_names_param(a, param) for a in node.args):
+            return True
+        for outer, inner in (("max", "min"), ("min", "max")):
+            if _is_call(node, outer) and any(
+                    _is_call(arg, inner) and any(_names_param(a, param) for a in arg.args)
+                    for arg in node.args):
+                return True
+    return False
+
+
+@pytest.mark.parametrize("source,param,clamped", [
+    ("max(1, min(days, 30))",                      "days", True),
+    ("min(max(days, 1), 30)",                      "days", True),
+    ("max(1, min(payload.days, 30))",              "days", True),
+    ("max(-1, min(1, int(bias or 0)))",            "bias", True),
+    ("_clamp_days(days)",                          "days", True),
+    ("max(0, len(school_days))",                   "days", False),  # a longer name
+    ("_clamp_days(school_days)",                   "days", False),
+    ("max(1, days)",                               "days", False),  # no ceiling
+    ("min(days, 30)",                              "days", False),  # no floor
+    ("max(0, page * size - days)\nmin(days, 30)",  "days", False),  # two calls, no clamp
 ])
-def test_a_clamp_is_matched_on_the_name_not_a_substring(source, callee, counts):
-    param = "bias" if "bias" in source else "days"
-    found = bool(_calls_mentioning(ast.parse(source), callee, param))
-    assert found is counts, source
+def test_a_clamp_is_one_bound_wrapping_the_other(source, param, clamped):
+    assert _clamps(ast.parse(source), param) is clamped, source
 
 
 @pytest.mark.parametrize("pair", sorted(
     p for p, (how, _why) in CALLER_NUMBERS.items() if how == "handler"))
 def test_a_bound_claimed_clamped_in_the_handler_has_a_ceiling_and_a_floor(pair):
-    """The name reaches a `min` *and* a `max`, or `_clamp_days`, which is both.
+    """One bound wraps the other around the name, or `_clamp_days` does both.
 
     **Both ends, because each fails differently.** Without the ceiling a caller
     chooses how much comes back; without the floor `?limit=-5` goes through
@@ -320,19 +340,12 @@ def test_a_bound_claimed_clamped_in_the_handler_has_a_ceiling_and_a_floor(pair):
     `test_a_negative_limit_reaches_the_query_as_the_floor` below.
     """
     handler_name, param = pair
-    tree = _handler(handler_name)
-    if _calls_mentioning(tree, "_clamp_days", param):
-        return
-    missing = [end for end, callee in (("ceiling", "min"), ("floor", "max"))
-               if not _calls_mentioning(tree, callee, param)]
-    assert not missing, (
-        f"CALLER_NUMBERS says {handler_name} clamps `{param}` in the handler, "
-        f"and it has no {' or '.join(missing)}: no "
-        f"{'/'.join(c for e, c in (('ceiling', 'min()'), ('floor', 'max()')) if e in missing)} "
-        "call in it mentions that name. Clamp it the way the others do, or -- "
-        "if it is bounded some other correct way -- move the entry to the "
-        "mechanism that describes it. This checks the spelling, not the "
-        "arithmetic.")
+    assert _clamps(_handler(handler_name), param), (
+        f"CALLER_NUMBERS says {handler_name} clamps `{param}` in the handler, and "
+        f"no `max(floor, min({param}, ceiling))` or `_clamp_days({param})` is in "
+        "it. Clamp it the way the others do, or -- if it is bounded some other "
+        "correct way -- move the entry to the mechanism that describes it. This "
+        "checks the spelling, not the arithmetic.")
 
 
 @pytest.mark.parametrize("pair", sorted(
@@ -536,6 +549,9 @@ _LIMITED_READS = {
     "admin_student_search": (
         lambda limit: main.admin_student_search(None, q="ada", limit=limit),
         "profiles", lambda: 25),
+    "list_sessions": (
+        lambda limit: main.list_sessions(None, limit=limit),
+        "sessions", lambda: main._SESSION_LIST_MAX),
 }
 
 
@@ -732,23 +748,24 @@ def test_a_list_exactly_at_the_cap_is_not_reported_as_cut(monkeypatch):
 def test_a_count_that_did_not_come_back_is_unknown_rather_than_whole(monkeypatch):
     """Third state. `False` would assert the list is complete on the strength
     of a number we did not receive, and a page would then present a cut
-    history as a whole one."""
-    class _NoCount:
-        def table(self, _name):
-            return self
+    history as a whole one.
 
-        def select(self, *_a, **_k):    return self
-        def eq(self, *_a):              return self
-        def order(self, *_a, **_k):     return self
-        def limit(self, *_a, **_k):     return self
-
-        def execute(self):
-            return type("R", (), {"data": [_SESSION_ROW], "count": None})()
-
+    The shared fake with its count withheld, not a hand-written one: that kept
+    the rows whatever the query asked, so dropping the student filter or the
+    cap would have passed it.
+    """
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid-1"})
-    monkeypatch.setattr(main, "supabase", _NoCount())
+    fake = _FakeSupabase(
+        {"sessions": [_SESSION_ROW, {**_SESSION_ROW, "id": "other", "user_id": "kid-2"}]},
+        count_missing=True)
+    monkeypatch.setattr(main, "supabase", fake)
 
     out = main.list_sessions(None)
 
     assert out["total"] is None
     assert out["truncated"] is None
+    # And the read it made is still the right one.
+    query = fake.queries[0]
+    assert ("user_id", "kid-1") in query.filters
+    assert query._limit == main._SESSION_LIST_MAX
+    assert [s["id"] for s in out["sessions"]] == ["sess-1"]

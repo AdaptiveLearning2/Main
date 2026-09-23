@@ -1371,7 +1371,11 @@ anybody — a skipped refill leaves the queue short and the next question is gen
 series of different students. **The cooldown key carries what makes two of that kind's events different** —
 `_COOLED_KINDS` names the `detail` fields, `limiter` here. On `(kind, actor)` alone the first limiter to
 fire masks the other two for the whole window, and ingest at ~1 Hz per student is always the one that gets
-there first.
+there first. **So two limiters may not answer to one name**, asserted beside the floor: the name is the
+cooldown field, so they would share one bucket, and both the floor and the partition compare *sets* of
+names, which collapses them into one entry. **Keyed on object identity, never on how many attribute paths
+reach it** — that scan deliberately finds a limiter by every path, so counting paths fails the registry
+refactor it was built to survive and blames a duplicated constructor that does not exist.
 
 **The audit must not break what it audits.** It never raises, like `_raise_session_alerts`, and
 `_require_admin` — the one hook reaching into the request object — reads `.url.path` defensively.

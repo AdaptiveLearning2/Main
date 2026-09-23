@@ -169,8 +169,17 @@ def tighten(monkeypatch, limiter, *, limit=None, window=None):
     to reach it, and passes or fails for a reason unrelated to what it claims.
     Every limiter test in the suite was written the old way, and this is the
     one-line replacement so the next one is not.
+
+    **It resets the limiter too**, like `test_network_edge._tighten`. Every
+    caller today happens to have a fixture that clears it, so this changes
+    nothing now — but a test written against `tighten` alone would otherwise
+    inherit the previous test's hits and be refused on its first call, which is
+    order-dependent in exactly the way the fixtures elsewhere exist to stop.
+    Nothing seeds hits *before* tightening, so there is nothing for this to
+    throw away.
     """
     if limit is not None:
         monkeypatch.setattr(limiter, "limit", limit)
     if window is not None:
         monkeypatch.setattr(limiter, "window", window)
+    limiter.reset()

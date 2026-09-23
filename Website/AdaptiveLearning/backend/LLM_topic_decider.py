@@ -486,9 +486,10 @@ user_histories = {}
 # *previous* one's reply.
 #
 # The cap is a bound with a reason rather than a measurement: ten entries reach
-# a prompt (five global, five topic), so this keeps their total near the 2000
-# a whole lesson-plan block already gets, and a truncated question still serves
-# repeat avoidance. Nothing measures real `question_text` lengths, so treat the
+# a generator (five global, five topic), so the replayed block is at most 3000
+# characters — the same order as the 2000 a whole lesson-plan block already
+# gets, rather than unbounded — and a truncated question still serves repeat
+# avoidance. Nothing here measures real `question_text` lengths, so treat the
 # number as a guess, like `EMOTION_MIN_CONFIDENCE`.
 _HISTORY_TEXT_MAX = 300
 # The categories `validated_grade` refuses, for the same reasons: `\n` is not

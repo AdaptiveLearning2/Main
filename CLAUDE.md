@@ -1649,11 +1649,18 @@ imply another), `eval`/`window.eval`, `Function`/`new Function`, `innerHTML`/`ou
 object key, `insertAdjacentHTML`, and `write`/`writeln` matched on the method rather than on `document`, since an
 alias is the same sink. Treat this, the CSP, and the absence of a markdown or LaTeX renderer as one mitigation.
 
-**A name has two spellings and they are different nodes**, so no selector here may be written bare: `el.innerHTML`
-and `{innerHTML: s}` put the name in an Identifier's `.name`, `el['innerHTML']` and `{'innerHTML': s}` put it in a
-string Literal's `.value`. They go through `eitherSpelling`, which emits both. Written by hand this was wrong twice
-— once missing the member-assignment route *with a comment claiming otherwise*, once missing every quoted form, so
+**A name has two spellings ordinary style produces, and they are different nodes**, so no selector here may be
+written bare for a property: `el.innerHTML` and `{innerHTML: s}` put the name in an Identifier's `.name`,
+`el['innerHTML']` and `{'innerHTML': s}` put it in a string Literal's `.value`. They go through `eitherSpelling`,
+which emits both. Written by hand this was wrong twice — once missing the member-assignment route *with a comment
+claiming otherwise*, once missing every quoted form, so
 `<div {...{'dangerouslySetInnerHTML': {__html: x}}} />` passed a green blocking gate on one pair of quotes.
+`callee.name` is the one exemption, for `eval`/`Function` as bindings, since a binding reference cannot be quoted.
+
+**A template-literal computed key is a third spelling and is not covered**, deliberately: nobody writes
+``el[`innerHTML`]`` by accident, and anyone writing one on purpose can defeat the gate with a disable comment
+instead. So this covers the spellings ordinary style produces, not every spelling the grammar allows — and the list
+above is what the rules cover, not a claim of closure.
 
 **Reading the rules is what failed both times, so `src/test/sinkRules.test.js` reads the report**: it runs ESLint
 over source text with the same `eslint.sinks.config.js` CI uses and asserts each of 25 spellings is flagged. Its

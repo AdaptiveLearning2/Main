@@ -4493,7 +4493,8 @@ def _rate_limit_strategies(user_id: str):
     # would serialise every other caller behind a network round trip -- worst
     # at exactly the moment the limiter is firing.
     if refused_after is not None:
-        _record_security_event("rate_limited", user_id, limiter="strategies")
+        _record_security_event("rate_limited", user_id,
+                               limiter=_STRATEGY_LIMITER.name)
         raise HTTPException(
             429,
             "Too many strategy requests. Try again shortly.",
@@ -5075,7 +5076,8 @@ def _rate_limit_chart_summary(user_id: str):
 
     # Recorded outside the limiter's lock -- see `_rate_limit_strategies`.
     if refused_after is not None:
-        _record_security_event("rate_limited", user_id, limiter="chart_summary")
+        _record_security_event("rate_limited", user_id,
+                               limiter=_CHART_SUMMARY_LIMITER.name)
         raise HTTPException(
             429,
             "Too many summary requests. Try again shortly.",
@@ -7539,7 +7541,8 @@ def _rate_limit_ingest(user_id: str):
     # This is where it matters most: ingest runs at ~1 Hz per student, so this
     # lock is the most contended of the three.
     if refused_after is not None:
-        _record_security_event("rate_limited", user_id, limiter="ingest")
+        _record_security_event("rate_limited", user_id,
+                               limiter=_INGEST_LIMITER.name)
         raise HTTPException(429, "Too many ingest batches. Slow down.",
                             headers={"Retry-After": str(refused_after)})
 

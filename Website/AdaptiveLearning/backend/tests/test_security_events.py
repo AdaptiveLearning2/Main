@@ -577,37 +577,64 @@ GENERATION_SILENT_SITES = {
 }
 
 
+# Every limiter that must be found, by the name it records under. A floor with
+# names rather than a count, so a rename fails too. Add to it only when adding
+# a limiter, which is the moment the partition below wants a decision anyway.
+EXPECTED_LIMITERS = {
+    "strategies", "chart_summary", "ingest", "generation",
+    "public_generate", "public_read", "public_probe",
+}
+
+
 def _limiter_instances():
-    """Module-level names bound to a `_SlidingWindowLimiter(...)` call."""
-    tree = ast.parse(pathlib.Path(main.__file__).read_text(encoding="utf-8"))
+    """Every `_SlidingWindowLimiter` the module holds, found at runtime.
+
+    **Runtime, not the AST.** A bare `ast.Assign` of a direct constructor call
+    is one spelling: an `AnnAssign` is invisible to it, and collecting the five
+    into one registry -- the obvious next refactor, since `_PUBLIC_BUDGETS`
+    already is one -- would make an AST scan report an empty set, leaving
+    `unclassified` empty and this test green having examined nothing. That is
+    the failure the partition exists to remove, one level up.
+
+    Recurses one level into dicts so a registry is found the way
+    `_PUBLIC_BUDGETS` is.
+    """
+    cls = type(main._STRATEGY_LIMITER)
     found = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
-            continue
-        call = node.value
-        # `_PUBLIC_BUDGETS` is a comprehension over `_PUBLIC_RATE_LIMITS`; its
-        # members are covered by the middleware, asserted separately below.
-        if (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
-                and call.func.id == "_SlidingWindowLimiter"
-                and isinstance(node.targets[0], ast.Name)):
-            found[node.targets[0].id] = getattr(main, node.targets[0].id).name
+    for name, value in vars(main).items():
+        if isinstance(value, cls):
+            found[name] = value
+        elif isinstance(value, dict):
+            for key, member in value.items():
+                if isinstance(member, cls):
+                    found[f"{name}[{key!r}]"] = member
     return found
 
 
-def _recorded_limiter_attrs():
-    """Every `X` in a `_record_security_event(..., limiter=X.name)` call."""
+def _recorded_limiter_labels():
+    """The limiter name each `_record_security_event(..., limiter=…)` records.
+
+    Resolved against the module rather than matched as a node shape, so
+    `X.name` and `_REGISTRY["ingest"].name` both answer. An expression that
+    cannot be resolved -- the middleware's bare `limiter=limiter` -- yields
+    nothing here and is covered behaviourally instead; see the exclusion in the
+    partition below.
+    """
     tree = ast.parse(pathlib.Path(main.__file__).read_text(encoding="utf-8"))
-    names = set()
+    labels = set()
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                 and node.func.id == "_record_security_event"):
             continue
         for kw in node.keywords:
-            if kw.arg == "limiter" and isinstance(kw.value, ast.Attribute) \
-                    and kw.value.attr == "name" \
-                    and isinstance(kw.value.value, ast.Name):
-                names.add(kw.value.value.id)
-    return names
+            if kw.arg != "limiter":
+                continue
+            try:
+                labels.add(eval(compile(ast.Expression(kw.value), "<label>", "eval"),
+                                vars(main)))
+            except Exception:
+                pass          # a local, like the middleware's `limiter`
+    return labels
 
 
 def test_every_limiter_either_records_or_is_classified_as_silent():
@@ -617,28 +644,37 @@ def test_every_limiter_either_records_or_is_classified_as_silent():
     did not, and nothing in the suite said whether that was a decision.
     """
     instances = _limiter_instances()
-    recording = _recorded_limiter_attrs()
-    unclassified = {
-        attr: label for attr, label in instances.items()
-        if attr not in recording and label not in SILENT_LIMITERS
-    }
+    found = {limiter.name for limiter in instances.values()}
+
+    # The floor, and the reason it is named rather than counted. Without it a
+    # scan that stops seeing limiters -- a registry refactor, a rename, a
+    # spelling it does not match -- reports an empty `unclassified` and passes
+    # having examined nothing. `test_chart_render`'s palette scraper refuses an
+    # empty result for this reason, and the sibling test below asserts it found
+    # call sites at all.
+    missing = EXPECTED_LIMITERS - found
+    assert not missing, (
+        f"the scan no longer sees {sorted(missing)} -- it found {sorted(found)}. "
+        "Fix the scan before trusting the partition below it.")
+
+    recording = _recorded_limiter_labels()
+    # The three public budgets record through the middleware, which passes a
+    # local `limiter=limiter` no static read can resolve. Excluded here and
+    # covered by behaviour instead: `test_network_edge.py`'s
+    # `test_the_refusal_is_recorded_without_saying_who` drives a real refused
+    # request and asserts the row, the absent actor and the label together.
+    # Asserting that here from source text would be the weaker copy of a test
+    # that already exists -- and the canary names source-text assertions on
+    # testable behaviour as a stop condition.
+    recording |= set(main._PUBLIC_BUDGETS)
+
+    unclassified = sorted(
+        name for name in found
+        if name not in recording and name not in SILENT_LIMITERS)
     assert not unclassified, (
         "These limiters refuse callers and write no security_events row. Record "
         "with `limiter=<instance>.name`, or add the limiter's name to "
-        "SILENT_LIMITERS with the reason:\n"
-        + "\n".join(f"  {a} (name={n!r})" for a, n in sorted(unclassified.items())))
-
-
-def test_the_public_budgets_record_through_the_middleware():
-    """`_PUBLIC_BUDGETS` is excluded from the scan above, so its coverage is
-    asserted rather than assumed: the middleware records every refusal it
-    returns, keyed on the name that *is* the dict key."""
-    src = pathlib.Path(main.__file__).read_text(encoding="utf-8")
-    middleware = src.split("async def public_rate_limit")[1].split("\ndef ")[0]
-    assert "_record_security_event" in middleware
-    assert "limiter=limiter" in middleware
-    # And with no actor, since an address is not one.
-    assert '"rate_limited", None' in middleware
+        f"SILENT_LIMITERS with the reason: {unclassified}")
 
 
 def test_every_generation_slot_site_records_or_says_why_not():
@@ -653,6 +689,24 @@ def test_every_generation_slot_site_records_or_says_why_not():
         return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
                    and n.func.id == name for n in ast.walk(fn))
 
+    def records_a_generation_refusal(fn):
+        """A record call carrying *this limiter's* label, not just any one.
+
+        Counting `_record_security_event` alone is satisfied by a handler that
+        records an authz denial and no generation refusal -- correct today,
+        since no exempted site has an unrelated record call, and one new
+        handler from being wrong.
+        """
+        for n in ast.walk(fn):
+            if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                    and n.func.id == "_record_security_event"):
+                continue
+            for kw in n.keywords:
+                if kw.arg == "limiter" and \
+                        ast.unparse(kw.value) == "_GENERATION_LIMITER.name":
+                    return True
+        return False
+
     sites = {}
     for fn in ast.walk(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -660,7 +714,7 @@ def test_every_generation_slot_site_records_or_says_why_not():
         if fn.name == "_claim_generation_slot":
             continue          # the helper itself, not one of its callers
         if calls(fn, "_claim_generation_slot"):
-            sites[fn.name] = calls(fn, "_record_security_event")
+            sites[fn.name] = records_a_generation_refusal(fn)
 
     assert sites, "no _claim_generation_slot call sites found -- has it moved?"
     unclassified = [name for name, records in sites.items()

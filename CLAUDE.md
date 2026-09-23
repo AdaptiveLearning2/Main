@@ -1357,7 +1357,11 @@ can name a limiter other than the one that fired.
 **Which limiters record is a partition, not a habit.** All five do, and
 `test_every_limiter_either_records_or_is_classified_as_silent` requires a new one to record or to be
 listed as deliberately silent with a reason — generation was silent for a while and nothing said
-whether that was a decision. The generation limiter is the one with **three call sites that differ**,
+whether that was a decision. **It finds the limiters at runtime and carries a named floor**, because a
+partition over a scan is only as good as the scan: an AST match on one assignment shape misses an
+annotated one, and collecting the five into a registry — which `_PUBLIC_BUDGETS` already is — would
+have left it reporting nothing unclassified while examining nothing. Same countermeasure as the
+chart-render palette scraper's refusal of an empty result. The generation limiter is the one with **three call sites that differ**,
 so it is pinned per site too: `practice_question` records, because `get_user` resolved a real actor;
 `/api/generate-question` does not, because `user_id` there is a query parameter the caller writes and
 an actor from it is an invented id in an append-only log (its refusals are recorded by the address

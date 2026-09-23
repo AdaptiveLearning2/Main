@@ -2930,6 +2930,10 @@ def _claim_generation_slot(user_id: str) -> bool:
 
 def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None):
     try:
+        # Deliberately records nothing, and this one is not about the actor: no
+        # refusal reaches anybody. A skipped refill leaves the queue short and
+        # the next question is generated inline, so there is no denial to audit
+        # -- a row here would report an event the student never experienced.
         if not _claim_generation_slot(user_id):
             print(f"[prefetch] rate limit reached for {user_id[:8]}; not refilling")
             return
@@ -3374,6 +3378,11 @@ def generate_question(
         # of 0 there is no queue to hit, so this is the ordinary path and would
         # otherwise print "cache miss" once per question forever.
         print(f"[generate] generating inline for {user_id[:8]}")
+        # Deliberately records nothing: `user_id` here is a query parameter the
+        # caller writes, so an `actor_user_id` from it is an invented id in an
+        # append-only log. The refusals on this route that *are* recorded come
+        # from the address budget (`public_generate`), with no actor at all --
+        # which is the honest row for a caller who cannot be resolved.
         if not _claim_generation_slot(user_id):
             raise HTTPException(
                 429, "Too many questions requested. Try again shortly.",
@@ -3724,6 +3733,12 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
     # including the waiter cap, since this endpoint is sync and blocks on the
     # same semaphore, so it can starve the threadpool exactly as that one can.
     if not _claim_generation_slot(user["id"]):
+        # The one generation refusal with a real actor to name, so the only one
+        # that records. `get_user(request)` resolved this id; the other two
+        # sites cannot -- see `_GENERATION_SILENT_SITES` in
+        # `test_security_events.py`, which pins that partition.
+        _record_security_event("rate_limited", user["id"],
+                               limiter=_GENERATION_LIMITER.name)
         raise HTTPException(
             429, "Too many questions requested. Try again shortly.",
             headers={"Retry-After": str(max(1, int(_GENERATION_RATE_WINDOW)))},

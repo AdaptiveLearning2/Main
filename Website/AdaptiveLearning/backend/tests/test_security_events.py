@@ -549,3 +549,127 @@ def test_a_function_classified_as_not_a_denial_records_none(name):
     """The other direction: a function that started recording after being
     exempted has had its decision changed without the list moving."""
     assert not _denial_kinds_recorded_in(name) & {"authz_denied", "admin_denied"}, name
+
+
+# ── which limiters record, and which deliberately do not ─────────────────
+#
+# `test_each_limiter_records_which_one_fired` lists three limiters by hand, so a
+# fourth or a sixth is *silent by default* rather than classified -- the failure
+# mode `close_sites()` and `test_every_recording_site_gates_on_the_window` exist
+# to remove. These two tests take the decision away from whoever adds the next
+# limiter: it either records, or it appears below with a reason.
+
+# Limiter name -> why a refusal from it writes no row.
+SILENT_LIMITERS = {}
+
+# `_claim_generation_slot` call site (enclosing function) -> why it records
+# nothing. The limiter itself *does* record, at the one site with a real actor,
+# so this partition is per site rather than per limiter.
+GENERATION_SILENT_SITES = {
+    "generate_question":
+        "`user_id` is a query parameter the caller writes, so an actor from it "
+        "is an invented id in an append-only log. This route's recorded "
+        "refusals come from the address budget instead, with no actor.",
+    "_prefetch_worker":
+        "No refusal reaches anybody -- a skipped refill leaves the queue short "
+        "and the next question is generated inline, so there is no denial to "
+        "audit.",
+}
+
+
+def _limiter_instances():
+    """Module-level names bound to a `_SlidingWindowLimiter(...)` call."""
+    tree = ast.parse(pathlib.Path(main.__file__).read_text(encoding="utf-8"))
+    found = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        call = node.value
+        # `_PUBLIC_BUDGETS` is a comprehension over `_PUBLIC_RATE_LIMITS`; its
+        # members are covered by the middleware, asserted separately below.
+        if (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                and call.func.id == "_SlidingWindowLimiter"
+                and isinstance(node.targets[0], ast.Name)):
+            found[node.targets[0].id] = getattr(main, node.targets[0].id).name
+    return found
+
+
+def _recorded_limiter_attrs():
+    """Every `X` in a `_record_security_event(..., limiter=X.name)` call."""
+    tree = ast.parse(pathlib.Path(main.__file__).read_text(encoding="utf-8"))
+    names = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "_record_security_event"):
+            continue
+        for kw in node.keywords:
+            if kw.arg == "limiter" and isinstance(kw.value, ast.Attribute) \
+                    and kw.value.attr == "name" \
+                    and isinstance(kw.value.value, ast.Name):
+                names.add(kw.value.value.id)
+    return names
+
+
+def test_every_limiter_either_records_or_is_classified_as_silent():
+    """A new limiter has to say which it is, rather than defaulting to silent.
+
+    This is what the generation limiter failed: four of the five recorded, it
+    did not, and nothing in the suite said whether that was a decision.
+    """
+    instances = _limiter_instances()
+    recording = _recorded_limiter_attrs()
+    unclassified = {
+        attr: label for attr, label in instances.items()
+        if attr not in recording and label not in SILENT_LIMITERS
+    }
+    assert not unclassified, (
+        "These limiters refuse callers and write no security_events row. Record "
+        "with `limiter=<instance>.name`, or add the limiter's name to "
+        "SILENT_LIMITERS with the reason:\n"
+        + "\n".join(f"  {a} (name={n!r})" for a, n in sorted(unclassified.items())))
+
+
+def test_the_public_budgets_record_through_the_middleware():
+    """`_PUBLIC_BUDGETS` is excluded from the scan above, so its coverage is
+    asserted rather than assumed: the middleware records every refusal it
+    returns, keyed on the name that *is* the dict key."""
+    src = pathlib.Path(main.__file__).read_text(encoding="utf-8")
+    middleware = src.split("async def public_rate_limit")[1].split("\ndef ")[0]
+    assert "_record_security_event" in middleware
+    assert "limiter=limiter" in middleware
+    # And with no actor, since an address is not one.
+    assert '"rate_limited", None' in middleware
+
+
+def test_every_generation_slot_site_records_or_says_why_not():
+    """Per site, because this limiter's three callers differ in whether there
+    is an actor to name and whether a refusal reaches anyone at all."""
+    tree = ast.parse(pathlib.Path(main.__file__).read_text(encoding="utf-8"))
+
+    def calls(fn, name):
+        """Call *nodes*, not a substring: matched as text, `_claim_generation_
+        slot`'s own `def` line contains its own name and it reads as its own
+        caller. Same use-versus-mention trap the CSP test documents."""
+        return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                   and n.func.id == name for n in ast.walk(fn))
+
+    sites = {}
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if fn.name == "_claim_generation_slot":
+            continue          # the helper itself, not one of its callers
+        if calls(fn, "_claim_generation_slot"):
+            sites[fn.name] = calls(fn, "_record_security_event")
+
+    assert sites, "no _claim_generation_slot call sites found -- has it moved?"
+    unclassified = [name for name, records in sites.items()
+                    if not records and name not in GENERATION_SILENT_SITES]
+    assert not unclassified, (
+        "These sites refuse a generation and record nothing. Record with "
+        "`limiter=_GENERATION_LIMITER.name`, or add the function to "
+        f"GENERATION_SILENT_SITES with the reason: {sorted(unclassified)}")
+    # The other direction: a site that started recording after being exempted
+    # has had its decision changed without the list moving.
+    for name in GENERATION_SILENT_SITES:
+        assert name in sites, f"{name} no longer claims a generation slot"

@@ -1350,8 +1350,19 @@ one in the schema alone is a filter that can only return nothing.
 
 **Record outside the limiter's lock**, or every caller queues behind a database round trip — worst on
 ingest, the most contended of them. That separation is why `_SlidingWindowLimiter.check()` *answers*
-instead of raising: the 429 wording, the `limiter` label and the audit write all live at the call site,
-outside the lock. `rate_limited` is cooled (300 s) because a limiter fires once per
+instead of raising: the 429 wording, the audit write and the `limiter` label live at the call site,
+outside the lock — and the label is `<instance>.name`, never a second copy of the string, or the row
+can name a limiter other than the one that fired.
+
+**Which limiters record is a partition, not a habit.** All five do, and
+`test_every_limiter_either_records_or_is_classified_as_silent` requires a new one to record or to be
+listed as deliberately silent with a reason — generation was silent for a while and nothing said
+whether that was a decision. The generation limiter is the one with **three call sites that differ**,
+so it is pinned per site too: `practice_question` records, because `get_user` resolved a real actor;
+`/api/generate-question` does not, because `user_id` there is a query parameter the caller writes and
+an actor from it is an invented id in an append-only log (its refusals are recorded by the address
+budget instead, with no actor at all); and `_prefetch_worker` does not, because no refusal reaches
+anybody — a skipped refill leaves the queue short and the next question is generated inline. `rate_limited` is cooled (300 s) because a limiter fires once per
 *request* past the allowance; denials are not, since deduplicating them would hide a caller probing a
 series of different students. **The cooldown key carries what makes two of that kind's events different** —
 `_COOLED_KINDS` names the `detail` fields, `limiter` here. On `(kind, actor)` alone the first limiter to

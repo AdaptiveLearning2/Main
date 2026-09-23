@@ -1,7 +1,6 @@
 # Handoff — the classroom simulation
 
-Rewritten 2026-09-21 at `cce61383`; revised 2026-09-23 against `origin/main` at `f4b0e407`.
-**`CLAUDE.md` and the two docs are what is kept current** —
+Rewritten 2026-09-21 at `cce61383`. **`CLAUDE.md` and the two docs are what is kept current** —
 every durable rule from this work lives there, and this file is only what is *in flight*: what is
 done, what is next, and how to do it. When a step here lands, move its rule into `CLAUDE.md` (or
 `docs/signals.md` / `docs/question-generation.md`, per their trigger tables) and delete the step.
@@ -11,8 +10,8 @@ effort among them — are not tracked here; anything of theirs this work depends
 a constraint, with the rule itself in `CLAUDE.md`.
 
 Plan: `~/.claude/plans/we-will-be-doing-encapsulated-magpie.md`, with its Phase 0 superseded by
-`~/.claude/plans/nested-singing-scroll.md`, and two addenda at the end (2026-09-20, 2026-09-23)
-recording what landed on `main` while Phases 2–6 were open.
+`~/.claude/plans/nested-singing-scroll.md`, and a 2026-09-20 addendum at the end recording what
+landed on `main` while Phases 2–6 were open.
 
 ## The goal, in one paragraph
 
@@ -119,22 +118,10 @@ laptop making its first billed calls — so this raise is temporary by design.
 
 ### Pre-flight, and one check that has already gone stale once
 
-- **Run the stack from a clean checkout at a known commit.** On 2026-09-23 the main checkout was on
-  another session's branch (`response-shaping`) with that session's uncommitted edits to
-  `History.jsx`. A run launched from there tests neither `main` nor anything recorded. Either wait
-  until that checkout is back on `main` and clean, or run from a worktree at `origin/main`.
-  A worktree needs its own copies of both gitignored `.env` files and the venvs and `node_modules`
-  that `start.ps1` expects. Record the commit the run was launched at, because Phase 6 reports
-  against it and the next pre-flight item depends on it.
-
-- **`npm install` in the frontend of whichever checkout runs the stack.** `main` moved from a vite 8
-  beta to stable vite 8 and the lockfile changed, so a `node_modules` installed before that is stale.
-  Keep the `overrides: { vite }` entry; `CLAUDE.md` explains why removing it breaks the suite.
-
-- **Re-run the migrations.** On 2026-09-23 the newest on `main` is
-  `20260919000000_security_events.sql`, and another branch adds `20260920000000`. Treat whatever
-  this document names as perishable: migrate to whatever the launched commit carries, rather than
-  to a name read here:
+- **Re-run the migrations.** The newest is `20260919000000_security_events.sql`. An earlier version
+  of this document recorded the local database as migrated through `20260918000000`, which stopped
+  being true when that one landed — so treat the check as perishable and redo it rather than reading
+  it here:
 
   ```bash
   npx supabase migration up
@@ -202,15 +189,8 @@ step.
 1. **Teacher**: register, create one class (6th grade), note the join code.
 2. **30 students**: register each (role=student), set `profile.grade_level` to "6th Grade" via
    `Profile.jsx`, join the class with the teacher's code via `JoinClass.jsx`.
-3. **30 parents**: register each (role=parent) and link to the corresponding student through
-   `LinkChild.jsx`, one parent per student, 1:1. **Read `LinkChild.jsx` at the launched commit
-   before scripting this step**, because the link flow is changing on another branch:
-   - *Today on `main`*: the parent enters the student's user id, read from Profile → Overview.
-   - *If the code flow has landed*: the student generates a link code in Profile (8 characters,
-     valid 30 min, single use, a new code replaces the previous one), and the parent enters it.
-     Script it pair by pair, generating the code and redeeming it straight away, so no code expires
-     while it waits. A wrong code and an expired code show the same message, and redemption is
-     rate-limited per parent (10/hour), so a script that retries blindly locks itself out.
+3. **30 parents**: register each (role=parent), read the corresponding student's user id from
+   Profile → Overview, link via `LinkChild.jsx`. One parent per student, 1:1.
 4. **Consent**: as each parent, Parent → Settings, turn on `eeg_enabled` and
    `headband_optical_enabled` for their linked child. **Camera stays off.**
 5. Assign each student a persisted **ability profile** — roughly 5 struggling, 20 average, 5
@@ -263,10 +243,6 @@ The probe is comfortable. Generation is not: a script answering instantly does 2
 student per minute. **Pace it to roughly a question every 6 s per student** rather than raising the
 cap — raising it throws away the one measurement this run could make about whether the shipped
 default suits a classroom.
-
-That pace clears both generation bounds: 30 students at ~10/min each is ~300/min against the shared
-600/min address budget, and each student's ~10/min sits under the separate per-user
-`GENERATION_RATE_LIMIT` of 60/min. Grep for both rather than trusting these figures.
 
 ### Measure refusals by counting 429s, not from the security log
 
@@ -334,12 +310,6 @@ Driven by hand in a browser, not scripted — scripting defeats the point.
   the "everything off" state and its *Show all* among them.
 - **The CCSS badge and question figures** on the five surfaces that present a question.
 - **`ScaleNote`** wherever a window straddles a score-scale change.
-- **The student's session lists** on History, Dashboard and Profile: another branch changes them to
-  show one page of sessions next to the real total, drawn as a dash when no total came back. Verify
-  whatever the launched commit carries, and say which version that was.
-- **The parent link flow**, in whichever form Phase 3 found it. If it is the code flow, check that a
-  wrong code and an expired code read the same, and that a newly generated code replaces the old
-  one.
 
 # Phase 6 — report and cleanup. NOT STARTED
 

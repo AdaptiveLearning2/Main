@@ -25,12 +25,21 @@ import url from 'node:url'
 const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '../..')
 
 let eslint
-beforeAll(() => {
+// **The warm-up lint is load-bearing, and its own timeout with it.**
+// Constructing `ESLint` is cheap; the first `lintText` is what resolves the
+// flat config and imports both react plugins, and that cost was landing inside
+// the first test's 5 s default budget. Alone it fits; under the full parallel
+// suite it does not, so this file failed on whichever spelling happened to be
+// first -- an intermittent failure that pointed at `eval(s)` and had nothing to
+// do with it. Same shape as the `asyncUtilTimeout` note in CLAUDE.md: the
+// assertion was racing a budget unrelated to what it was waiting for.
+beforeAll(async () => {
   eslint = new ESLint({
     cwd: ROOT,
     overrideConfigFile: path.join(ROOT, 'eslint.sinks.config.js'),
   })
-})
+  await lint('const warm = 1')
+}, 60_000)
 
 /** The rule ids reported for one snippet, linted as a file under `src/`. */
 async function lint(code) {

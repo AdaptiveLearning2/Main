@@ -658,7 +658,7 @@ def test_the_cognitive_endpoint_is_rate_limited(monkeypatch):
     monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     _capture_inserts(monkeypatch)
-    monkeypatch.setattr(main, "_ingest_hits", {})
+    monkeypatch.setattr(main._INGEST_LIMITER, "hits", {})
 
     batch = main.CognitiveBatch(session_id="s1", samples=[])
     for _ in range(main._INGEST_RATE_LIMIT):

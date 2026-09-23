@@ -23,11 +23,12 @@ from fastapi import HTTPException  # noqa: E402
 
 import llm_client  # noqa: E402
 import main  # noqa: E402
+from conftest import tighten  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def _fresh_counters(monkeypatch):
-    monkeypatch.setattr(main, "_generation_hits", {})
+    monkeypatch.setattr(main._GENERATION_LIMITER, "hits", {})
     monkeypatch.setattr(main, "_prefetch_cache", {})
     monkeypatch.setattr(main, "_prefetch_active", {})
 
@@ -35,14 +36,14 @@ def _fresh_counters(monkeypatch):
 # ─── the per-student rate limit ──────────────────────────────────────────
 
 def test_a_student_may_generate_up_to_the_limit_and_no_further(monkeypatch):
-    monkeypatch.setattr(main, "_GENERATION_RATE_LIMIT", 3)
+    tighten(monkeypatch, main._GENERATION_LIMITER, limit=3)
     assert [main._claim_generation_slot("kid") for _ in range(4)] == \
         [True, True, True, False]
 
 
 def test_the_limit_is_per_student(monkeypatch):
     """One child working quickly must not stop the rest of the class."""
-    monkeypatch.setattr(main, "_GENERATION_RATE_LIMIT", 1)
+    tighten(monkeypatch, main._GENERATION_LIMITER, limit=1)
     assert main._claim_generation_slot("kid-a") is True
     assert main._claim_generation_slot("kid-a") is False
     assert main._claim_generation_slot("kid-b") is True
@@ -51,8 +52,7 @@ def test_the_limit_is_per_student(monkeypatch):
 def test_hits_older_than_the_window_stop_counting(monkeypatch):
     """Timed on monotonic(), so a clock adjustment can neither wipe the window
     nor extend it -- same reasoning as the strategy limiter."""
-    monkeypatch.setattr(main, "_GENERATION_RATE_LIMIT", 1)
-    monkeypatch.setattr(main, "_GENERATION_RATE_WINDOW", 0.05)
+    tighten(monkeypatch, main._GENERATION_LIMITER, limit=1, window=0.05)
     assert main._claim_generation_slot("kid") is True
     assert main._claim_generation_slot("kid") is False
     import time
@@ -68,7 +68,7 @@ def test_the_limit_bounds_volume_where_the_queue_bounds_concurrency(monkeypatch)
     hundreds of questions, which was free against a local model and is not
     against a metered one.
     """
-    monkeypatch.setattr(main, "_GENERATION_RATE_LIMIT", 2)
+    tighten(monkeypatch, main._GENERATION_LIMITER, limit=2)
     # Nothing is in flight -- the concurrency counter is untouched -- and the
     # third attempt is still refused.
     assert main._prefetch_active == {}
@@ -111,7 +111,7 @@ def test_a_generation_that_genuinely_failed_is_still_a_500(monkeypatch):
 
 
 def test_the_rate_limited_student_gets_a_429_with_a_retry_after(monkeypatch):
-    monkeypatch.setattr(main, "_GENERATION_RATE_LIMIT", 1)
+    tighten(monkeypatch, main._GENERATION_LIMITER, limit=1)
     called = []
     decider = lambda *_a, **_k: called.append(1) or {"question_text": "2+2"}  # noqa: E731
 
@@ -183,7 +183,7 @@ def test_a_failed_refill_does_not_discard_the_question_already_built(monkeypatch
 def test_a_rate_limited_prefetch_skips_generating_rather_than_raising(monkeypatch):
     """There is no request to fail here, and a short queue is invisible -- the
     next question is simply generated inline."""
-    monkeypatch.setattr(main, "_GENERATION_RATE_LIMIT", 1)
+    tighten(monkeypatch, main._GENERATION_LIMITER, limit=1)
     main._claim_generation_slot("kid")
     called = []
     monkeypatch.setattr(main.LLM_topic_decider,

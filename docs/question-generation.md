@@ -286,6 +286,36 @@ keeps the cap from reading as redundant.
 `main.CreateClassRequest` gets a stale object, and anything keyed on it raises `KeyError` in a full-suite run while
 the file passes on its own. Parametrize by **name** and `getattr(main, name)` inside the test.
 
+## The repeat-avoidance history is the fourth prompt input, and the only open one
+
+Four things reach a generation prompt and three are closed: `grade` is rebuilt from its number, `topic` comes from the
+seeded `math_topics` vocabulary (`record_topic_attempt` refuses to invent a row, so no caller can create a name), and
+`difficulty` is one of three — `practice_sessions` revokes ALL from both client roles, so the stored value cannot be
+PATCHed past its validator. A lesson plan is dashboard-authored and clamped.
+
+The fourth is `get_user_history`: the model's own previous `question_text`, replayed so the next question is not a
+repeat. Seventeen generators newline-join it and follow it with *"DO NOT generate a question matching any of the
+above"*, so a reply carrying a newline put a line of its own in instruction position. `_prompt_safe_history` flattens
+and bounds it at the two sites the history is **read** — `question_generation` and the single-prompt decider — not in
+each generator, the chokepoint `grade_for_prompt` already argues for.
+
+**It flattens rather than refusing**, the opposite of `validated_grade`: that guards an edge where a bad value is the
+caller's and a 422 names the field, while this runs on the *previous* reply, so raising would fail a generation
+because of the question before it. A dropped or shortened entry costs at most one repeated question.
+
+**No student can supply this text**, so it is a model-to-itself feedback path rather than an injection route — and
+what bites with no attacker at all is the missing bound: ten unbounded strings ahead of our own instructions is cost
+on the Claude branch and context pressure on Ollama. `_HISTORY_TEXT_MAX` is a bound with a reason, not a measurement
+(nothing measures real question lengths) — treat it like `EMOTION_MIN_CONFIDENCE`.
+
+**The decider's own site is safe by accident, which is why it is flattened too.** It interpolates the *list*
+(`Recent Question History = {recent_global}`), so Python's repr escapes a newline to a literal `\n` and its labelled
+INPUT block cannot be forged — where `Student Grade Level` is the next line. That holds only because that one site
+does not call `join`, and is one edit from not holding.
+
+`test_history_prompt_injection.py` drives ten spellings of a line break, because a filter written for `\n` alone
+passes a test that only checks `\n` is gone — nine of the ten survive it.
+
 ## Question generation can be grounded in a lesson plan
 
 `lesson_plans` holds curriculum text keyed on `(topic_name, grade_band)`, at the same `early`/`middle`/`upper`/

@@ -21,9 +21,29 @@
  * with a comment claiming otherwise, which is worse than the gap for stopping
  * anyone checking.
  *
- * **So the rule is: never write a bare `[...name=]` selector here.** Go
- * through `eitherSpelling`, and when adding a sink plant every spelling of it
- * in a scratch file, lint that file, and read the report rather than the rule.
+ * **So the rule is: never write a bare `[...name=]` selector for a property.**
+ * Go through `eitherSpelling`, and when adding a sink plant every spelling of
+ * it in a scratch file, lint that file, and read the report rather than the
+ * rule.
+ *
+ * `callee.name` is the one exemption, and the three below are all of it: a
+ * *binding* reference cannot be quoted — `eval(s)` and `Function(s)` name
+ * identifiers in scope, where `['eval']` would be a property access on
+ * something, which the `MemberExpression` rules cover. Each of those three
+ * says so at its own selector, because a reader checking them against this
+ * paragraph should not have to infer which case they are.
+ *
+ * Not covered, and deliberately: a **template-literal** computed key
+ * (`el[`innerHTML`] = s`) is a third spelling this gate does not catch. Nobody
+ * writes a backtick computed member access by accident, and anyone writing one
+ * on purpose can defeat the gate with a disable comment instead — the same
+ * reason the blanket-`eslint-disable` hole is left alone. So this covers the
+ * two spellings ordinary style produces, not every spelling the grammar allows.
+ * Sinks that are not spellings of a name here at all — `setHTMLUnsafe`,
+ * `iframe.srcdoc`, `createContextualFragment` — are uncovered too, with no
+ * anchor in `src` to hang them on: there is no `<iframe>`, no `srcdoc` and no
+ * markup string anywhere, and `QuestionFigure` renders a spec into React SVG
+ * elements rather than markup. Add one when something plausibly wants it.
  *
  * **Exported rather than written twice.** `eslint.config.js` carries them so
  * an editor flags a sink as it is typed, and `eslint.sinks.config.js` carries
@@ -66,10 +86,14 @@ export const sinkRules = {
       message: 'window.eval / globalThis.eval is eval(). See the rule above it.',
     },
     {
+      // Bare, for the same reason as `eval` above: `Function` here is a
+      // binding reference, and a binding cannot be quoted. The property
+      // spellings are the rule below.
       selector: "NewExpression[callee.name='Function']",
       message: 'new Function() compiles a string into a function, which is eval by another name.',
     },
     {
+      // Bare for the same reason again.
       selector: "CallExpression[callee.name='Function']",
       message: 'Function() compiles a string into a function, which is eval by another name.',
     },
@@ -88,6 +112,13 @@ export const sinkRules = {
       // `Object.assign(el, {innerHTML: s})` and any other object literal that
       // becomes an element's properties. The assignment rule above is the
       // statement form of the same sink.
+      //
+      // This also matches a destructuring *read* -- `const { innerHTML } = el`
+      // -- which writes no markup. A known false positive with nothing to fire
+      // on: `innerHTML` appears nowhere in `src` outside the test for these
+      // rules. Narrow it only against a real read, not pre-emptively; on a
+      // blocking gate the cost of a false positive is one line of argument and
+      // the cost of a narrowing that goes too far is silence.
       selector: eitherSpelling('Property', 'key', '/^(inner|outer)HTML$/'),
       message: 'An innerHTML/outerHTML key parses its value as markup once the object reaches an element.',
     },

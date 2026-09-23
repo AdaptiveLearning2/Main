@@ -158,3 +158,28 @@ def set_flag(monkeypatch):
         monkeypatch.setattr(main, "_feature_flags", lambda: flags)
         return flags
     return _set
+
+
+def tighten(monkeypatch, limiter, *, limit=None, window=None):
+    """Shrink one `_SlidingWindowLimiter`'s budget for the duration of a test.
+
+    **Patch the limiter, never `main._X_RATE_LIMIT`.** Those constants are read
+    once at import to build the limiters, so patching one now changes nothing:
+    the test runs against the real budget, needs far more calls than it makes
+    to reach it, and passes or fails for a reason unrelated to what it claims.
+    Every limiter test in the suite was written the old way, and this is the
+    one-line replacement so the next one is not.
+
+    **It resets the limiter too**, like `test_network_edge._tighten`. Every
+    caller today happens to have a fixture that clears it, so this changes
+    nothing now — but a test written against `tighten` alone would otherwise
+    inherit the previous test's hits and be refused on its first call, which is
+    order-dependent in exactly the way the fixtures elsewhere exist to stop.
+    Nothing seeds hits *before* tightening, so there is nothing for this to
+    throw away.
+    """
+    if limit is not None:
+        monkeypatch.setattr(limiter, "limit", limit)
+    if window is not None:
+        monkeypatch.setattr(limiter, "window", window)
+    limiter.reset()

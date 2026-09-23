@@ -360,11 +360,84 @@ _PUBLIC_RATE_LIMITS = {
 # refusing an attacker rather than refusing a school.
 _TRUSTED_PROXY_HOPS = int(_env_number("TRUSTED_PROXY_HOPS", 0, int, minimum=0))
 
-_public_hits: dict[tuple[str, str], list[float]] = {}
-_public_hits_lock = threading.Lock()
-_public_sweep_at = time.monotonic()
-_PUBLIC_SWEEP_EVERY = 60.0
+class _SlidingWindowLimiter:
+    """`limit` calls per `window` seconds per key, on a monotonic clock.
+
+    Three limiters were three copies of this: per-user on the strategies
+    endpoint, per-user on ingest, per-address on the public routes. They had
+    not drifted, which is the only comfortable moment to merge them -- the
+    next fix to one of them would not have reached the other two, and the
+    third copy arrived without anyone noticing there were already two.
+
+    **Not `llm_client`'s generation bounds.** Those are a process-wide
+    semaphore plus a daily counter -- a different shape for a shared-
+    availability resource, already correct as its own thing. Folding them in
+    here would be a refactor for its own sake.
+
+    **Monotonic, never wall-clock**, or a clock adjustment wipes the window
+    or extends it arbitrarily.
+
+    **It answers rather than raising.** The public routes check it from
+    middleware, where there is no handler to raise into; the two that do want
+    a 429 build it from the answer, and each wants its own wording and its own
+    `limiter` label in the audit row.
+
+    **The sweep is size *and* time, not either alone.** Size alone means every
+    request scans and holds the lock once the dict is big, even with nothing
+    stale in it. `sweep_at` is seeded from `monotonic()` rather than 0.0: the
+    reference point is undefined (boot time on Linux), so 0.0 reads as "last
+    swept at boot" and suppresses the sweep on any host up for less than the
+    interval -- exactly the window a fresh container spends starting up.
+    """
+
+    def __init__(self, name: str, limit: int, window: float,
+                 sweep_above: int = 1024, sweep_every: float = 60.0):
+        self.name = name
+        self.limit = limit
+        self.window = window
+        self._sweep_above = sweep_above
+        self._sweep_every = sweep_every
+        self.hits: dict[str, list[float]] = {}
+        self.sweep_at = time.monotonic()
+        self._lock = threading.Lock()
+
+    def check(self, key: str) -> int | None:
+        """Seconds to wait, or `None` while the caller is inside its allowance."""
+        now = time.monotonic()
+        with self._lock:
+            if (len(self.hits) > self._sweep_above
+                    and now - self.sweep_at >= self._sweep_every):
+                self.sweep_at = now
+                for stale in [k for k, ts in self.hits.items()
+                              if all(now - t >= self.window for t in ts)]:
+                    del self.hits[stale]
+
+            hits = [t for t in self.hits.get(key, ()) if now - t < self.window]
+            self.hits[key] = hits
+            if len(hits) >= self.limit:
+                # Measured from the oldest hit still counted -- that is the one
+                # whose expiry frees a slot. The trimmed list is kept either
+                # way, so a refused caller's expired hits are not re-counted.
+                return max(1, int(self.window - (now - min(hits))) + 1)
+            hits.append(now)
+            return None
+
+    def reset(self) -> None:
+        """Forget every caller and re-arm the sweep. For tests."""
+        with self._lock:
+            self.hits.clear()
+            self.sweep_at = time.monotonic()
+
+
 _PUBLIC_SWEEP_ABOVE = 4096
+# One limiter per budget rather than one dict keyed on `(limiter, address)`.
+# Each then carries its own window instead of looking one up per key mid-sweep
+# -- and its own lock, so the health probe at 1800/min stops contending with
+# question generation, which is the same argument that gave it its own budget.
+_PUBLIC_BUDGETS = {
+    name: _SlidingWindowLimiter(name, limit, window, sweep_above=_PUBLIC_SWEEP_ABOVE)
+    for name, (limit, window) in _PUBLIC_RATE_LIMITS.items()
+}
 
 
 def _client_address(request: Request) -> str:
@@ -386,31 +459,12 @@ def _client_address(request: Request) -> str:
 
 
 def _public_rate_limited(limiter: str, address: str) -> int | None:
-    """Seconds to wait, or `None` while the caller is inside its allowance."""
-    global _public_sweep_at
-    limit, window = _PUBLIC_RATE_LIMITS[limiter]
-    key = (limiter, address)
-    now = time.monotonic()
-    with _public_hits_lock:
-        # Same shape as the ingest limiter's sweep: only when the dict is large
-        # and at most once an interval, since a big dict usually means real
-        # callers and scanning it per request would free nothing. It matters
-        # more here -- these keys are addresses, and nothing makes a caller
-        # come back.
-        if (len(_public_hits) > _PUBLIC_SWEEP_ABOVE
-                and now - _public_sweep_at >= _PUBLIC_SWEEP_EVERY):
-            _public_sweep_at = now
-            for stale in [k for k, ts in _public_hits.items()
-                          if all(now - t >= _PUBLIC_RATE_LIMITS[k[0]][1] for t in ts)]:
-                del _public_hits[stale]
+    """Seconds to wait, or `None` while the caller is inside its allowance.
 
-        hits = [t for t in _public_hits.get(key, ()) if now - t < window]
-        if len(hits) >= limit:
-            _public_hits[key] = hits
-            return max(1, int(window - (now - min(hits))) + 1)
-        hits.append(now)
-        _public_hits[key] = hits
-        return None
+    The sweep matters more here than on the two per-user limiters: these keys
+    are addresses, and nothing makes a caller come back.
+    """
+    return _PUBLIC_BUDGETS[limiter].check(address)
 
 
 # Inside `security_headers` and CORS (added before both), so a 429 from here
@@ -2789,7 +2843,8 @@ def _shutdown_prefetch_pool():
 # client looping on Generate without ever meeting a child working quickly.
 _GENERATION_RATE_LIMIT  = _env_number("GENERATION_RATE_LIMIT", 60, int, minimum=1)
 _GENERATION_RATE_WINDOW = _env_number("GENERATION_RATE_WINDOW", 60.0, float, minimum=1.0)
-_generation_hits: dict[str, list[float]] = {}
+_GENERATION_LIMITER = _SlidingWindowLimiter(
+    "generation", _GENERATION_RATE_LIMIT, _GENERATION_RATE_WINDOW)
 
 # How many requests may be *waiting* on a generation at once, process-wide.
 #
@@ -2862,44 +2917,23 @@ def _generation_waiter():
             _generation_waiters.release()
 
 
-# Guards `_generation_hits` above -- separated from it by the waiter block, so
-# keep the two visually together rather than letting this drift further.
-_generation_hits_lock = threading.Lock()
-_generation_sweep_at = time.monotonic()
-
-
 def _claim_generation_slot(user_id: str) -> bool:
     """Count one generation against this student's window, or refuse.
 
-    Returns a bool rather than raising: the prefetch worker has no request to
-    fail, and skipping a refill there is invisible -- the queue simply stays
-    short and the next question is generated inline. The endpoint turns a False
-    into a 429 itself.
+    Returns a bool rather than the wait in seconds: the prefetch worker has no
+    request to fail, and skipping a refill there is invisible -- the queue
+    simply stays short and the next question is generated inline. The endpoint
+    turns a False into a 429 itself, with its own Retry-After.
     """
-    global _generation_sweep_at
-    now = time.monotonic()
-    with _generation_hits_lock:
-        # Sweep only when the dict is large and at most once an interval, so
-        # the common path stays one lookup. Same shape as the strategy limiter.
-        if (len(_generation_hits) > _STRATEGY_SWEEP_ABOVE
-                and now - _generation_sweep_at >= _STRATEGY_SWEEP_EVERY):
-            _generation_sweep_at = now
-            for uid in [u for u, ts in _generation_hits.items()
-                        if all(now - t >= _GENERATION_RATE_WINDOW for t in ts)]:
-                del _generation_hits[uid]
-
-        hits = [t for t in _generation_hits.get(user_id, ())
-                if now - t < _GENERATION_RATE_WINDOW]
-        if len(hits) >= _GENERATION_RATE_LIMIT:
-            _generation_hits[user_id] = hits
-            return False
-        hits.append(now)
-        _generation_hits[user_id] = hits
-        return True
+    return _GENERATION_LIMITER.check(user_id) is None
 
 
 def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None):
     try:
+        # Deliberately records nothing, and this one is not about the actor: no
+        # refusal reaches anybody. A skipped refill leaves the queue short and
+        # the next question is generated inline, so there is no denial to audit
+        # -- a row here would report an event the student never experienced.
         if not _claim_generation_slot(user_id):
             print(f"[prefetch] rate limit reached for {user_id[:8]}; not refilling")
             return
@@ -3344,6 +3378,11 @@ def generate_question(
         # of 0 there is no queue to hit, so this is the ordinary path and would
         # otherwise print "cache miss" once per question forever.
         print(f"[generate] generating inline for {user_id[:8]}")
+        # Deliberately records nothing: `user_id` here is a query parameter the
+        # caller writes, so an `actor_user_id` from it is an invented id in an
+        # append-only log. The refusals on this route that *are* recorded come
+        # from the address budget (`public_generate`), with no actor at all --
+        # which is the honest row for a caller who cannot be resolved.
         if not _claim_generation_slot(user_id):
             raise HTTPException(
                 429, "Too many questions requested. Try again shortly.",
@@ -3694,6 +3733,12 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
     # including the waiter cap, since this endpoint is sync and blocks on the
     # same semaphore, so it can starve the threadpool exactly as that one can.
     if not _claim_generation_slot(user["id"]):
+        # The one generation refusal with a real actor to name, so the only one
+        # that records. `get_user(request)` resolved this id; the other two
+        # sites cannot -- see `_GENERATION_SILENT_SITES` in
+        # `test_security_events.py`, which pins that partition.
+        _record_security_event("rate_limited", user["id"],
+                               limiter=_GENERATION_LIMITER.name)
         raise HTTPException(
             429, "Too many questions requested. Try again shortly.",
             headers={"Retry-After": str(max(1, int(_GENERATION_RATE_WINDOW)))},
@@ -4423,14 +4468,14 @@ _INGEST_MAX_BATCH   = _env_number("INGEST_MAX_BATCH", 500, int, minimum=1)
 _INGEST_RATE_LIMIT  = _env_number("INGEST_RATE_LIMIT", 120, int, minimum=1)
 _INGEST_RATE_WINDOW = _env_number("INGEST_RATE_WINDOW", 60.0, float, minimum=1.0)
 
-_ingest_hits: dict[str, list[float]] = {}
-_ingest_hits_lock = threading.Lock()
-# Same sweep as the strategy limiter, but more needed: without it, a student
-# who posts once and stops leaves an entry behind for the process lifetime,
-# and ingest is the higher-volume endpoint so it accumulates fastest.
-_ingest_sweep_at = time.monotonic()
-_INGEST_SWEEP_EVERY = 60.0
-_INGEST_SWEEP_ABOVE = 1024
+# The sweep matters more here than on the strategies limiter: without it, a
+# student who posts once and stops leaves an entry behind for the process
+# lifetime, and ingest is the higher-volume endpoint so it accumulates
+# fastest. Kept as its own limiter rather than sharing one with strategies --
+# the budgets differ by two orders of magnitude, and one dict would make a
+# student's steady 1 Hz ingest compete with their own strategy requests.
+_INGEST_LIMITER = _SlidingWindowLimiter(
+    "ingest", _INGEST_RATE_LIMIT, _INGEST_RATE_WINDOW)
 
 # Which heart sources each sensor permits, one entry per sensor -- a student
 # who allowed the headband but declined the camera has consented to
@@ -4446,57 +4491,25 @@ _HEART_SOURCES_BY_RECORD_FLAG = {
 }
 
 _STRATEGY_RATE_WINDOW = _env_number("STRATEGY_RATE_WINDOW", 60.0, float, minimum=1.0)
-_strategy_hits: dict[str, list[float]] = {}
-_strategy_hits_lock = threading.Lock()
-# When the sweep below last ran. Pairs a size threshold with a time interval
-# so the sweep is proportional to time, not traffic -- size alone means every
-# request scans and holds the lock once the dict is big, even if nothing is
-# stale yet.
-#
-# Seeded from time.monotonic() itself, not 0.0: monotonic()'s reference point
-# is undefined (boot time on Linux), so 0.0 would mean "last swept at boot",
-# suppressing the sweep on any host up for less than the interval -- exactly
-# the window a fresh container spends starting up.
-_strategy_sweep_at = time.monotonic()
-_STRATEGY_SWEEP_EVERY = 60.0
-_STRATEGY_SWEEP_ABOVE = 1024
+_STRATEGY_LIMITER = _SlidingWindowLimiter(
+    "strategies", _STRATEGY_RATE_LIMIT, _STRATEGY_RATE_WINDOW)
 
 
 def _rate_limit_strategies(user_id: str):
     """Raise 429 if this caller has already had its allowance this window.
 
-    Timed on monotonic(), not wall-clock: a clock adjustment would otherwise
-    either wipe the window or extend it arbitrarily.
+    The window and the sweep live in `_SlidingWindowLimiter`; what stays here
+    is the wording and the audit label, which differ per limiter.
     """
-    global _strategy_sweep_at
-    now = time.monotonic()
-    with _strategy_hits_lock:
-        # Only sweep once the dict is large and only once per interval, so the
-        # common path stays a single lookup instead of a scan on every request.
-        if (len(_strategy_hits) > _STRATEGY_SWEEP_ABOVE
-                and now - _strategy_sweep_at >= _STRATEGY_SWEEP_EVERY):
-            _strategy_sweep_at = now
-            for uid in [u for u, ts in _strategy_hits.items()
-                        if all(now - t >= _STRATEGY_RATE_WINDOW for t in ts)]:
-                del _strategy_hits[uid]
+    refused_after = _STRATEGY_LIMITER.check(user_id)
 
-        hits = [t for t in _strategy_hits.get(user_id, ()) if now - t < _STRATEGY_RATE_WINDOW]
-        if len(hits) >= _STRATEGY_RATE_LIMIT:
-            _strategy_hits[user_id] = hits
-            # Measured from the oldest hit still counted -- that is the one
-            # whose expiry frees a slot.
-            refused_after = max(1, int(_STRATEGY_RATE_WINDOW - (now - min(hits))) + 1)
-        else:
-            refused_after = None
-            hits.append(now)
-            _strategy_hits[user_id] = hits
-
-    # Outside the lock, and that is the point of the restructure: recording the
-    # event writes to the database, and doing it while holding this lock would
-    # serialise every other caller of this limiter behind a network round trip
-    # -- worst at exactly the moment the limiter is firing.
+    # Outside the limiter's lock, and that is the point of the split: recording
+    # the event writes to the database, and doing it while holding that lock
+    # would serialise every other caller behind a network round trip -- worst
+    # at exactly the moment the limiter is firing.
     if refused_after is not None:
-        _record_security_event("rate_limited", user_id, limiter="strategies")
+        _record_security_event("rate_limited", user_id,
+                               limiter=_STRATEGY_LIMITER.name)
         raise HTTPException(
             429,
             "Too many strategy requests. Try again shortly.",
@@ -5017,12 +5030,11 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
 # of every model-backed endpoint.
 #
 # The four bounds are a fourth copy of the block above (pool, waiter
-# semaphore, per-caller rate limit, wall-clock budget). Consolidating the
-# four -- ingest, generation, strategies and this -- into one limiter is the
-# obvious follow-up and is deliberately not done here: the other three are
-# reached into by name from their tests (`main._strategy_hits`,
-# `main._STRATEGY_LLM_POOL`), so a shared implementation is its own change
-# with its own review, not a rider on a new endpoint.
+# semaphore, per-caller rate limit, wall-clock budget). The *rate limit* half
+# is now shared -- `_SlidingWindowLimiter`, one instance per budget. The pool
+# and the waiter semaphore are still per-endpoint and deliberately so: they
+# bound a model provider's concurrency, and two endpoints sharing one pool
+# would let a burst of chart summaries starve question generation.
 
 CHART_SUMMARY_LLM_MODEL = os.getenv("CHART_SUMMARY_LLM_MODEL", "llama3.1:8b")
 # Same floor and the same reason as STRATEGY_LLM_TIMEOUT: at zero the call
@@ -5069,39 +5081,18 @@ _chart_summary_waiters = threading.BoundedSemaphore(_CHART_SUMMARY_MAX_WAITERS)
 
 _CHART_SUMMARY_RATE_LIMIT  = _env_number("CHART_SUMMARY_RATE_LIMIT", 10, int, minimum=1)
 _CHART_SUMMARY_RATE_WINDOW = _env_number("CHART_SUMMARY_RATE_WINDOW", 60.0, float, minimum=1.0)
-_chart_summary_hits: dict[str, list[float]] = {}
-_chart_summary_hits_lock = threading.Lock()
-# Seeded from monotonic() itself, not 0.0 -- see `_strategy_sweep_at`.
-_chart_summary_sweep_at = time.monotonic()
-_CHART_SUMMARY_SWEEP_EVERY = 60.0
-_CHART_SUMMARY_SWEEP_ABOVE = 1024
+_CHART_SUMMARY_LIMITER = _SlidingWindowLimiter(
+    "chart_summary", _CHART_SUMMARY_RATE_LIMIT, _CHART_SUMMARY_RATE_WINDOW)
 
 
 def _rate_limit_chart_summary(user_id: str):
     """Raise 429 if this caller has already had its allowance this window."""
-    global _chart_summary_sweep_at
-    now = time.monotonic()
-    with _chart_summary_hits_lock:
-        if (len(_chart_summary_hits) > _CHART_SUMMARY_SWEEP_ABOVE
-                and now - _chart_summary_sweep_at >= _CHART_SUMMARY_SWEEP_EVERY):
-            _chart_summary_sweep_at = now
-            for uid in [u for u, ts in _chart_summary_hits.items()
-                        if all(now - t >= _CHART_SUMMARY_RATE_WINDOW for t in ts)]:
-                del _chart_summary_hits[uid]
+    refused_after = _CHART_SUMMARY_LIMITER.check(user_id)
 
-        hits = [t for t in _chart_summary_hits.get(user_id, ())
-                if now - t < _CHART_SUMMARY_RATE_WINDOW]
-        if len(hits) >= _CHART_SUMMARY_RATE_LIMIT:
-            _chart_summary_hits[user_id] = hits
-            refused_after = max(1, int(_CHART_SUMMARY_RATE_WINDOW - (now - min(hits))) + 1)
-        else:
-            refused_after = None
-            hits.append(now)
-            _chart_summary_hits[user_id] = hits
-
-    # Recorded outside the lock -- see `_rate_limit_strategies`.
+    # Recorded outside the limiter's lock -- see `_rate_limit_strategies`.
     if refused_after is not None:
-        _record_security_event("rate_limited", user_id, limiter="chart_summary")
+        _record_security_event("rate_limited", user_id,
+                               limiter=_CHART_SUMMARY_LIMITER.name)
         raise HTTPException(
             429,
             "Too many summary requests. Try again shortly.",
@@ -7555,39 +7546,18 @@ class HeartBatch(BaseModel):
 def _rate_limit_ingest(user_id: str):
     """Raise 429 once a caller has spent its allowance for the window.
 
-    Monotonic, like `_rate_limit_strategies`, so a clock adjustment can't wipe
-    or extend the window. Kept as a separate dict from that limiter: the
-    budgets differ by two orders of magnitude, and sharing one would make a
-    student's steady 1 Hz ingest compete with their own strategy requests.
+    Its own limiter rather than one shared with strategies: the budgets differ
+    by two orders of magnitude, and one dict would make a student's steady
+    1 Hz ingest compete with their own strategy requests.
     """
-    global _ingest_sweep_at
-    now = time.monotonic()
-    with _ingest_hits_lock:
-        # Sweep only once the dict is large and only once per interval -- a
-        # size-only trigger would scan every caller on every request and
-        # free nothing, since a large dict usually means real callers.
-        if (len(_ingest_hits) > _INGEST_SWEEP_ABOVE
-                and now - _ingest_sweep_at >= _INGEST_SWEEP_EVERY):
-            _ingest_sweep_at = now
-            for uid in [u for u, ts in _ingest_hits.items()
-                        if all(now - t >= _INGEST_RATE_WINDOW for t in ts)]:
-                del _ingest_hits[uid]
+    refused_after = _INGEST_LIMITER.check(user_id)
 
-        hits = [t for t in _ingest_hits.get(user_id, ())
-                if now - t < _INGEST_RATE_WINDOW]
-        if len(hits) >= _INGEST_RATE_LIMIT:
-            _ingest_hits[user_id] = hits
-            refused_after = max(1, int(_INGEST_RATE_WINDOW - (now - min(hits))) + 1)
-        else:
-            refused_after = None
-            hits.append(now)
-            _ingest_hits[user_id] = hits
-
-    # Recorded outside the lock -- see `_rate_limit_strategies`. This is the
-    # limiter where it matters most: ingest runs at ~1 Hz per student, so this
+    # Recorded outside the limiter's lock -- see `_rate_limit_strategies`.
+    # This is where it matters most: ingest runs at ~1 Hz per student, so this
     # lock is the most contended of the three.
     if refused_after is not None:
-        _record_security_event("rate_limited", user_id, limiter="ingest")
+        _record_security_event("rate_limited", user_id,
+                               limiter=_INGEST_LIMITER.name)
         raise HTTPException(429, "Too many ingest batches. Slow down.",
                             headers={"Retry-After": str(refused_after)})
 

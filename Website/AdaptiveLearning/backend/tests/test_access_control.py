@@ -20,6 +20,7 @@ import pytest  # noqa: E402
 
 import llm_client  # noqa: E402
 import main  # noqa: E402
+from conftest import tighten  # noqa: E402
 
 
 class _Result:
@@ -251,11 +252,11 @@ def reset_strategy_rate_limit():
     Without this the strategy tests share one allowance and start failing on
     whichever of them happens to run eleventh.
     """
-    main._strategy_hits.clear()
-    main._strategy_sweep_at = 0.0
+    main._STRATEGY_LIMITER.reset()
+    main._STRATEGY_LIMITER.sweep_at = 0.0
     yield
-    main._strategy_hits.clear()
-    main._strategy_sweep_at = 0.0
+    main._STRATEGY_LIMITER.reset()
+    main._STRATEGY_LIMITER.sweep_at = 0.0
 
 
 # ── _can_view_student ────────────────────────────────────────────────────
@@ -2673,7 +2674,7 @@ def test_learning_strategies_rate_limits_a_repeating_caller(monkeypatch, set_fla
     reads, a topic breakdown, and optionally a model call -- behind a button
     that can be pressed as fast as a parent likes."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
-    monkeypatch.setattr(main, "_STRATEGY_RATE_LIMIT", 3)
+    tighten(monkeypatch, main._STRATEGY_LIMITER, limit=3)
 
     for _ in range(3):
         assert _strategies_as(PARENT, monkeypatch, set_flag)["student_id"] == "student-1"
@@ -2689,7 +2690,7 @@ def test_learning_strategies_rate_limit_is_per_caller(monkeypatch, set_flag):
     """Counted per viewer, not globally: one parent exhausting their allowance
     must not lock out every other parent."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
-    monkeypatch.setattr(main, "_STRATEGY_RATE_LIMIT", 1)
+    tighten(monkeypatch, main._STRATEGY_LIMITER, limit=1)
 
     _strategies_as(PARENT, monkeypatch, set_flag)
     with pytest.raises(main.HTTPException):
@@ -2704,7 +2705,7 @@ def test_learning_strategies_checks_access_before_the_rate_limit(monkeypatch, se
     protects the work below it; letting it mask the access decision would make
     an unauthorised caller's result depend on how often they'd asked."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
-    monkeypatch.setattr(main, "_STRATEGY_RATE_LIMIT", 1)
+    tighten(monkeypatch, main._STRATEGY_LIMITER, limit=1)
 
     for _ in range(3):
         with pytest.raises(main.HTTPException) as exc:
@@ -2716,38 +2717,38 @@ def _sweep_is_due(monkeypatch):
     """Put the last sweep far enough in the past that the interval has elapsed.
 
     Set explicitly rather than left to the ambient clock. Relying on
-    _strategy_sweep_at being 0.0 plus time.monotonic() already exceeding
-    _STRATEGY_SWEEP_EVERY is true on a machine that's been up for more than a
-    minute, but false on a fresh CI runner where monotonic() is measured from
-    boot and might only have reached ~56s -- a property of the runner, not of
-    anything these tests are actually about.
+    `sweep_at` being 0.0 plus time.monotonic() already exceeding the interval
+    is true on a machine that's been up for more than a minute, but false on a
+    fresh CI runner where monotonic() is measured from boot and might only have
+    reached ~56s -- a property of the runner, not of anything these tests are
+    actually about.
     """
-    monkeypatch.setattr(main, "_strategy_sweep_at",
-                        time.monotonic() - main._STRATEGY_SWEEP_EVERY)
+    monkeypatch.setattr(main._STRATEGY_LIMITER, "sweep_at",
+                        time.monotonic() - main._STRATEGY_LIMITER._sweep_every)
 
 
 def test_rate_limit_sweep_reclaims_callers_whose_window_has_passed(monkeypatch):
     """The dict grows with everyone who's ever used the endpoint, so it needs
     sweeping."""
-    monkeypatch.setattr(main, "_STRATEGY_SWEEP_ABOVE", 2)
-    monkeypatch.setattr(main, "_STRATEGY_RATE_WINDOW", 0.0)   # every hit already expired
+    monkeypatch.setattr(main._STRATEGY_LIMITER, "_sweep_above", 2)
+    monkeypatch.setattr(main._STRATEGY_LIMITER, "window", 0.0)  # every hit already expired
     _sweep_is_due(monkeypatch)
     for i in range(4):
         main._rate_limit_strategies(f"user-{i}")
     # The sweep runs on the call that crosses the threshold, so only the
     # caller being served right now is left behind.
-    assert len(main._strategy_hits) == 1
+    assert len(main._STRATEGY_LIMITER.hits) == 1
 
 
 def test_rate_limit_sweep_does_not_run_on_every_request(monkeypatch):
     """Past the size threshold, with that many *active* callers, there's
     nothing to reclaim -- so a size-only trigger would rescan the whole dict
     on every request, under the lock, just to find that out each time."""
-    monkeypatch.setattr(main, "_STRATEGY_SWEEP_ABOVE", 2)
+    monkeypatch.setattr(main._STRATEGY_LIMITER, "_sweep_above", 2)
     _sweep_is_due(monkeypatch)
     scans = []
     real_items = dict.items
-    monkeypatch.setattr(main, "_strategy_hits",
+    monkeypatch.setattr(main._STRATEGY_LIMITER, "hits",
                         type("_Counted", (dict,), {
                             "items": lambda self: (scans.append(1), real_items(self))[1],
                         })())

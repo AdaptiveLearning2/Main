@@ -1348,8 +1348,25 @@ person, the rule `session_alerts` holds, and the CHECK whitelist and `_SECURITY_
 equal **both ways** — a kind in code alone is a constraint violation the never-raises path swallows, and
 one in the schema alone is a filter that can only return nothing.
 
-**Record outside the limiters' locks**, or every caller queues behind a database round trip — worst on
-ingest, the most contended of the three. `rate_limited` is cooled (300 s) because a limiter fires once per
+**Record outside the limiter's lock**, or every caller queues behind a database round trip — worst on
+ingest, the most contended of them. That separation is why `_SlidingWindowLimiter.check()` *answers*
+instead of raising: the 429 wording, the audit write and the `limiter` label live at the call site,
+outside the lock — and the label is `<instance>.name`, never a second copy of the string, or the row
+can name a limiter other than the one that fired.
+
+**Which limiters record is a partition, not a habit.** All five do, and
+`test_every_limiter_either_records_or_is_classified_as_silent` requires a new one to record or to be
+listed as deliberately silent with a reason — generation was silent for a while and nothing said
+whether that was a decision. **It finds the limiters at runtime and carries a named floor**, because a
+partition over a scan is only as good as the scan: an AST match on one assignment shape misses an
+annotated one, and collecting the five into a registry — which `_PUBLIC_BUDGETS` already is — would
+have left it reporting nothing unclassified while examining nothing. Same countermeasure as the
+chart-render palette scraper's refusal of an empty result. The generation limiter is the one with **three call sites that differ**,
+so it is pinned per site too: `practice_question` records, because `get_user` resolved a real actor;
+`/api/generate-question` does not, because `user_id` there is a query parameter the caller writes and
+an actor from it is an invented id in an append-only log (its refusals are recorded by the address
+budget instead, with no actor at all); and `_prefetch_worker` does not, because no refusal reaches
+anybody — a skipped refill leaves the queue short and the next question is generated inline. `rate_limited` is cooled (300 s) because a limiter fires once per
 *request* past the allowance; denials are not, since deduplicating them would hide a caller probing a
 series of different students. **The cooldown key carries what makes two of that kind's events different** —
 `_COOLED_KINDS` names the `detail` fields, `limiter` here. On `(kind, actor)` alone the first limiter to
@@ -1358,6 +1375,28 @@ there first.
 
 **The audit must not break what it audits.** It never raises, like `_raise_session_alerts`, and
 `_require_admin` — the one hook reaching into the request object — reads `.url.path` defensively.
+
+## Every per-caller rate limit is one `_SlidingWindowLimiter`, and tests patch the object
+
+There were **five** hand-rolled copies of one sliding window — strategies, chart summary, ingest,
+generation, and the three public address budgets — each with its own dict, lock, sweep and constants.
+They had not drifted, which is the only comfortable time to merge them; the fifth arrived without anyone
+noticing there were already four. One instance per budget, each with its own lock, so the health probe at
+1800/min no longer contends with question generation.
+
+**Not `llm_client`'s generation bounds**, which are a process-wide semaphore plus a daily counter — a
+different shape for a shared-availability resource, and folding it in would be a refactor for its own
+sake. The per-endpoint pools and waiter semaphores stay per-endpoint too: one shared pool would let a
+burst of chart summaries starve question generation.
+
+**`check()` answers rather than raising**, because the public routes call it from middleware where there
+is no handler to raise into — and `_claim_generation_slot` wants a bool, since the prefetch worker has no
+request to fail.
+
+**A test tightens the limiter object, never `main._X_RATE_LIMIT`.** Those constants are read once at
+import to build the limiters, so patching one now changes nothing: the test runs against the real budget
+and passes for a reason unrelated to what it claims. `conftest.tighten(monkeypatch, limiter, limit=,
+window=)` is the one-line form, and `.reset()` is what the autouse fixtures call.
 
 **Retention is a rolling 180 days on its own `pg_cron` job**, deliberately not `expired_signal_cutoff()`:
 that would delete the record of who read a child's signals at the moment those signals expire, and no
@@ -1625,11 +1664,18 @@ imply another), `eval`/`window.eval`, `Function`/`new Function`, `innerHTML`/`ou
 object key, `insertAdjacentHTML`, and `write`/`writeln` matched on the method rather than on `document`, since an
 alias is the same sink. Treat this, the CSP, and the absence of a markdown or LaTeX renderer as one mitigation.
 
-**A name has two spellings and they are different nodes**, so no selector here may be written bare: `el.innerHTML`
-and `{innerHTML: s}` put the name in an Identifier's `.name`, `el['innerHTML']` and `{'innerHTML': s}` put it in a
-string Literal's `.value`. They go through `eitherSpelling`, which emits both. Written by hand this was wrong twice
-— once missing the member-assignment route *with a comment claiming otherwise*, once missing every quoted form, so
+**A name has two spellings ordinary style produces, and they are different nodes**, so no selector here may be
+written bare for a property: `el.innerHTML` and `{innerHTML: s}` put the name in an Identifier's `.name`,
+`el['innerHTML']` and `{'innerHTML': s}` put it in a string Literal's `.value`. They go through `eitherSpelling`,
+which emits both. Written by hand this was wrong twice — once missing the member-assignment route *with a comment
+claiming otherwise*, once missing every quoted form, so
 `<div {...{'dangerouslySetInnerHTML': {__html: x}}} />` passed a green blocking gate on one pair of quotes.
+`callee.name` is the one exemption, for `eval`/`Function` as bindings, since a binding reference cannot be quoted.
+
+**A template-literal computed key is a third spelling and is not covered**, deliberately: nobody writes
+``el[`innerHTML`]`` by accident, and anyone writing one on purpose can defeat the gate with a disable comment
+instead. So this covers the spellings ordinary style produces, not every spelling the grammar allows — and the list
+above is what the rules cover, not a claim of closure.
 
 **Reading the rules is what failed both times, so `src/test/sinkRules.test.js` reads the report**: it runs ESLint
 over source text with the same `eslint.sinks.config.js` CI uses and asserts each of 25 spellings is flagged. Its

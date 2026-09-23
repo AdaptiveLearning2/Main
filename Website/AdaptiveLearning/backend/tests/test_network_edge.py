@@ -64,9 +64,11 @@ def _client_for_the_live_module():
     # failed, for a reason nothing in its body mentions. Same leak the
     # security-log fixture clears, and the same one `clearViewPrefs` exists for
     # in the frontend suite.
-    main._public_hits.clear()
+    for budget in main._PUBLIC_BUDGETS.values():
+        budget.reset()
     yield
-    main._public_hits.clear()
+    for budget in main._PUBLIC_BUDGETS.values():
+        budget.reset()
     client = None
 
 
@@ -574,9 +576,16 @@ def test_every_budgeted_path_names_a_budget_that_exists():
 
 
 def _tighten(monkeypatch, limiter="public_read", limit=2, window=60.0):
-    monkeypatch.setattr(main, "_PUBLIC_RATE_LIMITS",
-                        {**main._PUBLIC_RATE_LIMITS, limiter: (limit, window)})
-    main._public_hits.clear()
+    """Shrink one budget for the duration of a test.
+
+    Patches the limiter *object*, not `_PUBLIC_RATE_LIMITS`. That table is read
+    once at import to build the budgets, so patching it now changes nothing and
+    a test tightened that way would quietly run against the real 1800/min.
+    """
+    budget = main._PUBLIC_BUDGETS[limiter]
+    monkeypatch.setattr(budget, "limit", limit)
+    monkeypatch.setattr(budget, "window", window)
+    budget.reset()
 
 
 def test_a_public_read_is_refused_once_the_address_is_over_its_allowance(monkeypatch):
@@ -763,9 +772,7 @@ def test_the_audit_write_does_not_stop_the_event_loop(monkeypatch):
             return _Q()
 
     monkeypatch.setattr(main, "supabase", _Blocking())
-    monkeypatch.setattr(main, "_PUBLIC_RATE_LIMITS",
-                        {**main._PUBLIC_RATE_LIMITS, "public_read": (1, 60.0)})
-    main._public_hits.clear()
+    _tighten(monkeypatch, "public_read", limit=1)
     main._security_event_seen.clear()
 
     class _Req:

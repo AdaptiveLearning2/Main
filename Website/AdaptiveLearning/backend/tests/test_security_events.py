@@ -22,6 +22,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 import pytest  # noqa: E402
 
 import main  # noqa: E402
+from conftest import tighten  # noqa: E402
 
 MIGRATION = (pathlib.Path(__file__).resolve().parents[4]
              / "supabase" / "migrations" / "20260919000000_security_events.sql")
@@ -68,9 +69,9 @@ def recorder(monkeypatch):
     # to be *inside* the allowance. Same shape as the persisted view state the
     # frontend suite has to clear in `beforeEach`.
     main._security_event_seen.clear()
-    main._strategy_hits.clear()
-    main._chart_summary_hits.clear()
-    main._ingest_hits.clear()
+    main._STRATEGY_LIMITER.reset()
+    main._CHART_SUMMARY_LIMITER.reset()
+    main._INGEST_LIMITER.reset()
     return rec
 
 
@@ -122,14 +123,13 @@ def test_reaching_for_the_admin_console_is_its_own_kind(recorder, monkeypatch):
     assert recorder.rows[0]["kind"] == "admin_denied"
 
 
-@pytest.mark.parametrize("limiter,fn,setting,window", [
-    ("strategies", "_rate_limit_strategies", "_STRATEGY_RATE_LIMIT", "_STRATEGY_RATE_WINDOW"),
-    ("chart_summary", "_rate_limit_chart_summary", "_CHART_SUMMARY_RATE_LIMIT", "_CHART_SUMMARY_RATE_WINDOW"),
-    ("ingest", "_rate_limit_ingest", "_INGEST_RATE_LIMIT", "_INGEST_RATE_WINDOW"),
+@pytest.mark.parametrize("limiter,fn,budget", [
+    ("strategies", "_rate_limit_strategies", "_STRATEGY_LIMITER"),
+    ("chart_summary", "_rate_limit_chart_summary", "_CHART_SUMMARY_LIMITER"),
+    ("ingest", "_rate_limit_ingest", "_INGEST_LIMITER"),
 ])
-def test_each_limiter_records_which_one_fired(recorder, monkeypatch, limiter, fn, setting, window):
-    monkeypatch.setattr(main, setting, 1)
-    monkeypatch.setattr(main, window, 60)
+def test_each_limiter_records_which_one_fired(recorder, monkeypatch, limiter, fn, budget):
+    tighten(monkeypatch, getattr(main, budget), limit=1, window=60)
     limit = getattr(main, fn)
 
     limit("caller-1")                       # inside the allowance
@@ -149,8 +149,7 @@ def test_a_hammering_caller_does_not_write_a_row_per_request(recorder, monkeypat
     client sending too much would add a database write to every refusal --
     load added at exactly the moment the caller is already sending too much.
     """
-    monkeypatch.setattr(main, "_STRATEGY_RATE_LIMIT", 1)
-    monkeypatch.setattr(main, "_STRATEGY_RATE_WINDOW", 60)
+    tighten(monkeypatch, main._STRATEGY_LIMITER, limit=1, window=60)
     monkeypatch.setattr(main, "_SECURITY_EVENT_COOLDOWN_SEC", 300)
 
     main._rate_limit_strategies("caller-1")
@@ -164,14 +163,13 @@ def test_a_hammering_caller_does_not_write_a_row_per_request(recorder, monkeypat
 def test_the_cooldown_is_per_caller(recorder, monkeypatch):
     """Or one noisy client silences the log for everyone else.
 
-    A limit of 1 and two calls each, not a limit of 0: `_STRATEGY_RATE_LIMIT`
+    A limit of 1 and two calls each, not a limit of 0: `STRATEGY_RATE_LIMIT`
     is read through `_env_number` with a floor of 1 precisely because 0 would
     refuse every request, and at 0 the limiter reaches `min(hits)` on an empty
     list. Setting it here anyway would be testing a state the setting cannot
     hold.
     """
-    monkeypatch.setattr(main, "_STRATEGY_RATE_LIMIT", 1)
-    monkeypatch.setattr(main, "_STRATEGY_RATE_WINDOW", 60)
+    tighten(monkeypatch, main._STRATEGY_LIMITER, limit=1, window=60)
 
     for caller in ("a", "b", "c"):
         main._rate_limit_strategies(caller)
@@ -430,11 +428,9 @@ def test_one_limiter_firing_does_not_silence_the_others(recorder, monkeypatch):
     first. A student refused by ingest would then hit the strategies limiter
     with nothing recorded at all.
     """
-    for setting, window in (("_INGEST_RATE_LIMIT", "_INGEST_RATE_WINDOW"),
-                            ("_STRATEGY_RATE_LIMIT", "_STRATEGY_RATE_WINDOW"),
-                            ("_CHART_SUMMARY_RATE_LIMIT", "_CHART_SUMMARY_RATE_WINDOW")):
-        monkeypatch.setattr(main, setting, 1)
-        monkeypatch.setattr(main, window, 60)
+    for budget in (main._INGEST_LIMITER, main._STRATEGY_LIMITER,
+                   main._CHART_SUMMARY_LIMITER):
+        tighten(monkeypatch, budget, limit=1, window=60)
     monkeypatch.setattr(main, "_SECURITY_EVENT_COOLDOWN_SEC", 300)
 
     for limit in (main._rate_limit_ingest, main._rate_limit_strategies,
@@ -553,3 +549,226 @@ def test_a_function_classified_as_not_a_denial_records_none(name):
     """The other direction: a function that started recording after being
     exempted has had its decision changed without the list moving."""
     assert not _denial_kinds_recorded_in(name) & {"authz_denied", "admin_denied"}, name
+
+
+# ── which limiters record, and which deliberately do not ─────────────────
+#
+# `test_each_limiter_records_which_one_fired` lists three limiters by hand, so a
+# fourth or a sixth is *silent by default* rather than classified -- the failure
+# mode `close_sites()` and `test_every_recording_site_gates_on_the_window` exist
+# to remove. These two tests take the decision away from whoever adds the next
+# limiter: it either records, or it appears below with a reason.
+
+# Limiter name -> why a refusal from it writes no row.
+SILENT_LIMITERS = {}
+
+# `_claim_generation_slot` call site (enclosing function) -> why it records
+# nothing. The limiter itself *does* record, at the one site with a real actor,
+# so this partition is per site rather than per limiter.
+GENERATION_SILENT_SITES = {
+    "generate_question":
+        "`user_id` is a query parameter the caller writes, so an actor from it "
+        "is an invented id in an append-only log. This route's recorded "
+        "refusals come from the address budget instead, with no actor.",
+    "_prefetch_worker":
+        "No refusal reaches anybody -- a skipped refill leaves the queue short "
+        "and the next question is generated inline, so there is no denial to "
+        "audit.",
+}
+
+
+# Every limiter that must be found, by the name it records under. A floor with
+# names rather than a count, so a rename fails too. Add to it only when adding
+# a limiter, which is the moment the partition below wants a decision anyway.
+EXPECTED_LIMITERS = {
+    "strategies", "chart_summary", "ingest", "generation",
+    "public_generate", "public_read", "public_probe",
+}
+
+
+def _limiter_instances():
+    """Every `_SlidingWindowLimiter` the module holds, found at runtime.
+
+    **Runtime, not the AST.** A bare `ast.Assign` of a direct constructor call
+    is one spelling: an `AnnAssign` is invisible to it, and collecting the five
+    into one registry -- the obvious next refactor, since `_PUBLIC_BUDGETS`
+    already is one -- would make an AST scan report an empty set, leaving
+    `unclassified` empty and this test green having examined nothing. That is
+    the failure the partition exists to remove, one level up.
+
+    Recurses one level into dicts so a registry is found the way
+    `_PUBLIC_BUDGETS` is.
+    """
+    cls = type(main._STRATEGY_LIMITER)
+    found = {}
+    for name, value in vars(main).items():
+        if isinstance(value, cls):
+            found[name] = value
+        elif isinstance(value, dict):
+            for key, member in value.items():
+                if isinstance(member, cls):
+                    found[f"{name}[{key!r}]"] = member
+    return found
+
+
+def _recorded_limiter_labels():
+    """The limiter name each `_record_security_event(..., limiter=…)` records.
+
+    Resolved against the module rather than matched as a node shape, so
+    `X.name` and `_REGISTRY["ingest"].name` both answer. An expression that
+    cannot be resolved -- the middleware's bare `limiter=limiter` -- yields
+    nothing here and is covered behaviourally instead; see the exclusion in the
+    partition below.
+    """
+    tree = ast.parse(pathlib.Path(main.__file__).read_text(encoding="utf-8"))
+    labels = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "_record_security_event"):
+            continue
+        for kw in node.keywords:
+            if kw.arg != "limiter":
+                continue
+            try:
+                labels.add(eval(compile(ast.Expression(kw.value), "<label>", "eval"),
+                                vars(main)))
+            except Exception:
+                pass          # a local, like the middleware's `limiter`
+    return labels
+
+
+def test_every_limiter_either_records_or_is_classified_as_silent():
+    """A new limiter has to say which it is, rather than defaulting to silent.
+
+    This is what the generation limiter failed: four of the five recorded, it
+    did not, and nothing in the suite said whether that was a decision.
+    """
+    instances = _limiter_instances()
+    found = {limiter.name for limiter in instances.values()}
+
+    # The floor, and the reason it is named rather than counted. Without it a
+    # scan that stops seeing limiters -- a registry refactor, a rename, a
+    # spelling it does not match -- reports an empty `unclassified` and passes
+    # having examined nothing. `test_chart_render`'s palette scraper refuses an
+    # empty result for this reason, and the sibling test below asserts it found
+    # call sites at all.
+    missing = EXPECTED_LIMITERS - found
+    assert not missing, (
+        f"the scan no longer sees {sorted(missing)} -- it found {sorted(found)}. "
+        "Fix the scan before trusting the partition below it.")
+
+    # Names must be distinct, and this is not only about the partition. Both
+    # `found` and EXPECTED_LIMITERS are sets, so two limiters answering to one
+    # name collapse to one entry: the floor above passes, the partition below
+    # passes, and a limiter that refuses callers reads as classified because a
+    # *different* limiter answers to its name.
+    #
+    # It reaches the product too. The cooldown key is
+    # `(kind, actor_user_id, str(detail["limiter"]))` with
+    # `_COOLED_KINDS = {"rate_limited": ("limiter",)}`, so two limiters sharing
+    # a name share one 300 s bucket per actor and the first to fire silences the
+    # other -- verbatim what the comment above `_COOLED_KINDS` says that field
+    # is in the key to prevent.
+    #
+    # Keyed on `id(limiter)`, because the scan above deliberately finds one
+    # limiter by every path that reaches it -- so an *attribute path* count
+    # answers a different question. A registry referencing the existing globals
+    # (`_LIMITERS = {"ingest": _INGEST_LIMITER, …}`, which is what the
+    # incremental refactor looks like while the `limiter=_X_LIMITER.name` call
+    # sites still name them) yields two paths to one object, and grouping by
+    # name alone failed that refactor while claiming a duplicate constructor
+    # nobody could find. One object, one bucket, nothing to tell apart. The
+    # property is that name -> instance is injective, which is identity.
+    by_name = {}
+    for attr, limiter in sorted(instances.items()):
+        by_name.setdefault(limiter.name, {}).setdefault(id(limiter), attr)
+    collisions = {name: sorted(paths.values())
+                  for name, paths in by_name.items() if len(paths) > 1}
+    assert not collisions, (
+        "two limiters answer to one name, so they share a cooldown bucket and "
+        f"this partition cannot tell them apart: {collisions}")
+
+    recording = _recorded_limiter_labels()
+    # The three public budgets record through the middleware, which passes a
+    # local `limiter=limiter` no static read can resolve. Excluded here and
+    # covered by behaviour instead: `test_network_edge.py`'s
+    # `test_the_refusal_is_recorded_without_saying_who` drives a real refused
+    # request and asserts the row, the absent actor and the label together.
+    # Asserting that here from source text would be the weaker copy of a test
+    # that already exists -- and the canary names source-text assertions on
+    # testable behaviour as a stop condition.
+    #
+    # The citation is checked rather than written: delete or rename that test
+    # and this exclusion would otherwise keep three limiters green over nothing.
+    # A name check is all a cross-file link can be from here, and it is the half
+    # that actually goes stale.
+    cited = (pathlib.Path(__file__).parent / "test_network_edge.py").read_text(
+        encoding="utf-8")
+    # Anchored on the paren: without it a rename that *appends* -- which is what
+    # a rename usually is -- still contains the searched substring, so the check
+    # passed against the mutation written to break it. Prefix matching, the same
+    # shape as the use-versus-mention traps above.
+    assert "def test_the_refusal_is_recorded_without_saying_who(" in cited, (
+        "the test this exclusion rests on is gone or renamed -- the three public "
+        "budgets are now unchecked by anything")
+    recording |= set(main._PUBLIC_BUDGETS)
+
+    unclassified = sorted(
+        name for name in found
+        if name not in recording and name not in SILENT_LIMITERS)
+    assert not unclassified, (
+        "These limiters refuse callers and write no security_events row. Record "
+        "with `limiter=<instance>.name`, or add the limiter's name to "
+        f"SILENT_LIMITERS with the reason: {unclassified}")
+
+
+def test_every_generation_slot_site_records_or_says_why_not():
+    """Per site, because this limiter's three callers differ in whether there
+    is an actor to name and whether a refusal reaches anyone at all."""
+    tree = ast.parse(pathlib.Path(main.__file__).read_text(encoding="utf-8"))
+
+    def calls(fn, name):
+        """Call *nodes*, not a substring: matched as text, `_claim_generation_
+        slot`'s own `def` line contains its own name and it reads as its own
+        caller. Same use-versus-mention trap the CSP test documents."""
+        return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                   and n.func.id == name for n in ast.walk(fn))
+
+    def records_a_generation_refusal(fn):
+        """A record call carrying *this limiter's* label, not just any one.
+
+        Counting `_record_security_event` alone is satisfied by a handler that
+        records an authz denial and no generation refusal -- correct today,
+        since no exempted site has an unrelated record call, and one new
+        handler from being wrong.
+        """
+        for n in ast.walk(fn):
+            if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                    and n.func.id == "_record_security_event"):
+                continue
+            for kw in n.keywords:
+                if kw.arg == "limiter" and \
+                        ast.unparse(kw.value) == "_GENERATION_LIMITER.name":
+                    return True
+        return False
+
+    sites = {}
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if fn.name == "_claim_generation_slot":
+            continue          # the helper itself, not one of its callers
+        if calls(fn, "_claim_generation_slot"):
+            sites[fn.name] = records_a_generation_refusal(fn)
+
+    assert sites, "no _claim_generation_slot call sites found -- has it moved?"
+    unclassified = [name for name, records in sites.items()
+                    if not records and name not in GENERATION_SILENT_SITES]
+    assert not unclassified, (
+        "These sites refuse a generation and record nothing. Record with "
+        "`limiter=_GENERATION_LIMITER.name`, or add the function to "
+        f"GENERATION_SILENT_SITES with the reason: {sorted(unclassified)}")
+    # The other direction: a site that started recording after being exempted
+    # has had its decision changed without the list moving.
+    for name in GENERATION_SILENT_SITES:
+        assert name in sites, f"{name} no longer claims a generation slot"

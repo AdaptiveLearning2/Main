@@ -22,6 +22,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 import pytest  # noqa: E402
 
 import main  # noqa: E402
+from conftest import tighten  # noqa: E402
 import signal_mapping  # noqa: E402
 
 STUDENT = {"id": "student-1"}
@@ -110,7 +111,7 @@ def store(monkeypatch):
     monkeypatch.setattr(main, "_verify_session_owner",
                         lambda *a: st["_owner_checks"].append(a))
     # Each test gets its own rate-limit budget; the limiter has its own tests.
-    monkeypatch.setattr(main, "_ingest_hits", {})
+    monkeypatch.setattr(main._INGEST_LIMITER, "hits", {})
     return st
 
 
@@ -338,7 +339,7 @@ def test_a_flooding_client_is_rate_limited(store, monkeypatch):
     from fastapi import HTTPException
 
     _consent(store, headband_optical_enabled=True)
-    monkeypatch.setattr(main, "_INGEST_RATE_LIMIT", 3)
+    tighten(monkeypatch, main._INGEST_LIMITER, limit=3)
 
     for _ in range(3):
         _post_heart([_heart()])
@@ -352,7 +353,7 @@ def test_a_flooding_client_is_rate_limited(store, monkeypatch):
 def test_the_limit_is_per_caller(store, monkeypatch):
     """One student exhausting their allowance must not lock out another."""
     _consent(store, headband_optical_enabled=True)
-    monkeypatch.setattr(main, "_INGEST_RATE_LIMIT", 2)
+    tighten(monkeypatch, main._INGEST_LIMITER, limit=2)
 
     for _ in range(2):
         _post_heart([_heart()])
@@ -371,7 +372,7 @@ def test_the_rate_limit_runs_before_the_session_lookup(store, monkeypatch):
     from fastapi import HTTPException
 
     _consent(store, headband_optical_enabled=True)
-    monkeypatch.setattr(main, "_INGEST_RATE_LIMIT", 1)
+    tighten(monkeypatch, main._INGEST_LIMITER, limit=1)
 
     _post_heart([_heart()])
     assert len(store["_owner_checks"]) == 1
@@ -419,33 +420,33 @@ def test_stale_callers_are_evicted_rather_than_accumulating(store, monkeypatch):
     the process lifetime. Entries are pruned on that caller's *next* request,
     which for a caller who never returns is never."""
     _consent(store, headband_optical_enabled=True)
-    monkeypatch.setattr(main, "_INGEST_SWEEP_ABOVE", 5)
-    monkeypatch.setattr(main, "_INGEST_SWEEP_EVERY", 0.0)
+    monkeypatch.setattr(main._INGEST_LIMITER, "_sweep_above", 5)
+    monkeypatch.setattr(main._INGEST_LIMITER, "_sweep_every", 0.0)
 
     # Callers who posted a full window ago and never came back.
-    stale = time.monotonic() - (main._INGEST_RATE_WINDOW + 1)
-    main._ingest_hits.update({f"gone-{i}": [stale] for i in range(10)})
-    main._ingest_sweep_at = 0.0
+    stale = time.monotonic() - (main._INGEST_LIMITER.window + 1)
+    main._INGEST_LIMITER.hits.update({f"gone-{i}": [stale] for i in range(10)})
+    main._INGEST_LIMITER.sweep_at = 0.0
 
     _post_heart([_heart()])
 
-    assert not [k for k in main._ingest_hits if k.startswith("gone-")], (
+    assert not [k for k in main._INGEST_LIMITER.hits if k.startswith("gone-")], (
         "stale callers were not evicted"
     )
-    assert STUDENT["id"] in main._ingest_hits, "the live caller was evicted too"
+    assert STUDENT["id"] in main._INGEST_LIMITER.hits, "the live caller was evicted too"
 
 
 def test_an_active_caller_is_never_swept(store, monkeypatch):
     """The sweep must only drop entries whose every hit has aged out."""
     _consent(store, headband_optical_enabled=True)
-    monkeypatch.setattr(main, "_INGEST_SWEEP_ABOVE", 0)
-    monkeypatch.setattr(main, "_INGEST_SWEEP_EVERY", 0.0)
+    monkeypatch.setattr(main._INGEST_LIMITER, "_sweep_above", 0)
+    monkeypatch.setattr(main._INGEST_LIMITER, "_sweep_every", 0.0)
 
-    main._ingest_hits["busy"] = [time.monotonic()]      # a hit just now
-    main._ingest_sweep_at = 0.0
+    main._INGEST_LIMITER.hits["busy"] = [time.monotonic()]   # a hit just now
+    main._INGEST_LIMITER.sweep_at = 0.0
 
     _post_heart([_heart()])
-    assert "busy" in main._ingest_hits
+    assert "busy" in main._INGEST_LIMITER.hits
 
 
 def test_a_clients_raw_blob_survives_the_mapper(store):

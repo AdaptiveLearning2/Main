@@ -3244,6 +3244,12 @@ def get_questions(limit: int = 100, subject: str | None = None, difficulty: str 
     the clamp.
     """
     limit = max(1, min(limit, _QUESTIONS_MAX))
+    # The key is built from the values that decide the query and nothing
+    # else. `?subject=` is falsy, so it filters on nothing exactly as an absent
+    # subject does -- keyed raw, the two were separate entries holding the
+    # same rows.
+    subject = subject or None
+    difficulty = difficulty or None
     key = (limit, subject, difficulty)
     cached, hit = _questions_cache.get(key)
     if hit:

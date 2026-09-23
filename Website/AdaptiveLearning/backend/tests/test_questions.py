@@ -224,6 +224,21 @@ def test_the_cache_is_keyed_on_the_clamped_limit(_questions):
         "two limits that clamp to the same value took two cache entries")
 
 
+@pytest.mark.parametrize("field", ["subject", "difficulty"])
+def test_an_empty_filter_shares_the_entry_of_no_filter(_questions, field):
+    """`?subject=` filters on nothing, exactly as leaving it out does, so the
+    two must be one entry -- the key has to be built from what decides the
+    query, or the cache holds two copies of one answer."""
+    c = _questions(rows=[{"id": "q1"}])
+
+    main.get_questions(limit=100, **{field: ""})
+    main.get_questions(limit=100)
+
+    assert len(c.selects) == 1, (
+        f"an empty {field} and no {field} took two cache entries")
+    assert c.filters == [], "an empty filter reached the query as a real one"
+
+
 def test_the_list_returns_an_empty_list_rather_than_none(_questions):
     """`res.data or []` -- the page maps over this result."""
     _questions(rows=None)

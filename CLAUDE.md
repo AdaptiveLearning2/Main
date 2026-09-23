@@ -515,13 +515,9 @@ treatment in `config.py` — a validator warns and falls back rather than refusi
 `PUBLIC_*_RATE_*` / `TRUSTED_PROXY_HOPS` group under *The network edge*, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels*,
 and the `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` / `SOLVE_*` groups in `docs/question-generation.md`.
 
-`QUESTIONS_CACHE_TTL` (30 s) fronts `GET /api/questions` and is bounded at 32 entries, so a sweep of
-distinct `limit`/`subject`/`difficulty` combinations from that unauthenticated endpoint cannot grow
-it unboundedly. **That bounds the number of entries and says nothing about their size**, which this
-file claimed it did: `limit` was unclamped and keyed the cache, so the entry bound was intact and
-holding 256 copies of the whole question bank. It is clamped to `_QUESTIONS_MAX`, and the key is
-built from the *clamped* value or two limits above the ceiling are two entries holding one identical
-copy. The ingest bounds matter because the sidecar posts with the *student's* token:
+`QUESTIONS_CACHE_TTL` (30 s) fronts `GET /api/questions`, bounded at 32 entries **and** by `_QUESTIONS_MAX`
+on `limit`: the entry count bounds how many, the clamp how big, and the key is built from the clamped,
+normalised values that decide the query. The ingest bounds matter because the sidecar posts with the *student's* token:
 that endpoint is a trust boundary, and neither the session check nor the consent check bounds volume.
 
 **Frontend.** `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`, `VITE_EEG_DEBUG`,
@@ -906,16 +902,13 @@ reads as evidence the current code was reviewed. **Its stated limit**: it reads 
 cannot see where a name came from, so it catches a new site appearing, not an existing one being fed
 something new.
 
-## A write names its columns; a request model refuses what it does not declare
+## A read or a write names its columns; a caller's number has a floor and a ceiling
 
 **The service-role client bypasses column grants as well as RLS, so a migration that revokes a column's
-UPDATE does not reach any statement in `main.py`.** `20260824010000` takes `profiles.role` away from
-`anon`/`authenticated`, which constrains PostgREST and nothing here. So **build a database update
-from named attributes, never from the payload as a dict**, wherever the table holds a column the
-caller must not set: `profiles.role`, `classes.teacher_id`, `classes.join_code`. The named columns
-in `update_my_profile` and `update_class` are what keep a posted `role` out of that column; a
-`payload.dict()` write leaves the job to the model happening not to declare the field, which is one
-edit away from a self-service role change.
+UPDATE does not reach any statement in `main.py`.** So **build a database update from named attributes,
+never from the payload as a dict**, wherever the table holds a column the caller must not set:
+`profiles.role`, `classes.teacher_id`, `classes.join_code` (`update_my_profile`, `update_class`). A
+`payload.dict()` write leaves it to the model not declaring the field — one edit from a self-promotion.
 
 **A test of that has to hand the handler more than the model declares.** Against today's model a
 named-column write and `payload.dict()` produce identical keys, so a test using the real model passes
@@ -927,48 +920,25 @@ the list of models that do *not*.
 
 **The six ingest models are exempt, by name.** A sidecar runs on a student's laptop and updates on its
 own schedule, so a field it gained before this backend did is ordinary version skew — and under
-`forbid` that skew 422s the **whole batch**, losing every valid sample travelling with it. That is
-the failure `CognitiveBatch.samples` is already `list[Any]` for. The cost of staying lenient is a
-column reading "not measured" for ever, which
-`test_every_column_the_mapper_writes_can_be_supplied_by_the_endpoint` already covers.
+`forbid` that skew 422s the **whole batch**, losing every valid sample travelling with it. The cost of
+staying lenient, a column reading "not measured" for ever, is what
+`test_every_column_the_mapper_writes_can_be_supplied_by_the_endpoint` covers.
 
 **Don't add `ge`/`le` to `days` or `weeks`.** All three are clamped in their handlers
 (`max(1, min(payload.days, 30))`), which is this codebase's convention for a caller-supplied range. A
 field bound turns that clamp into a 422 for the same input — two bounds over one number, the stricter
 winning silently. **The decision rests on the clamp existing, so all three are pinned**:
-`test_learning_strategies_clamps_the_day_range` for the strategies one, and
-`test_the_chart_summary_clamps_both_of_its_ranges` for the other two — citing only the first left two
-thirds of the argument resting on nothing, and deleting either chart-summary clamp passed.
+`test_learning_strategies_clamps_the_day_range` and `test_the_chart_summary_clamps_both_of_its_ranges`.
 
 **A cap on a free-text field is that field's only bound, not a nicer error.** Every column they guard
 (`display_name`, class `name`, session `title`) is unbounded `text` in the schema, so there is no
-database limit being converted into a 422 — Postgres would have stored a megabyte. That is the
-argument for the caps, and describing them as error-shaping overstates the schema and understates
-them.
+database limit being converted into a 422 — Postgres would have stored a megabyte.
 
-## A response names its columns, and every number a caller sends has a ceiling
-
-The read mirror of the rule above, and `leaderboard` is the worked example: it clamps `limit` because
-it reads through the service-role client, and it pops `user_id` because the page needs to know which
-row is the viewer's own, not a uuid→name map for the whole board.
-
-**A bound on how many things a cache holds is not a bound on how big they are.** `/api/questions` is
-the case — see `QUESTIONS_CACHE_TTL` above.
-
-**`select("*")` on a row that reaches a browser ships whatever column the table gains next**, with
-nobody deciding. `_SESSION_CLIENT_COLUMNS` is every `sessions` column except `chart_paths`, which is
-a storage object path rendered nowhere — the charts come from `/api/signals/session/{id}/charts`,
-which derives the path and refuses to read that column as an address. Naming columns means a new one
-has to be added deliberately, which is how `figure` and `ccss_standard` reached `SessionReview`.
-
-`backend/tests/test_response_shaping.py` holds both: the session payloads, and a **partition over
-every int a caller can send** — query parameter or request-model field, found at runtime from
-`app.routes` and `model_fields`. Each is clamped in its handler, bounded by `le=` on the field,
-refused with a 422, or classified as not a bound at all. A new one fails until someone says which,
-because whether a number bounds a read or is a value to be stored is not a property of its type.
-Its clamp check reads the **spelling** (`min` / `_clamp_days`, the one form all eighteen use), not
-the arithmetic; what a ceiling should be is per-endpoint behaviour, asserted on the limit the *query*
-received.
+**A row that reaches a browser names its columns too, and a caller's number needs a floor as well as a
+ceiling.** `select("*")` ships whatever the table gains next with nobody deciding; an unfloored `limit`
+reaches Postgres as `LIMIT -5`, a 500. `backend/tests/test_response_shaping.py` partitions every int a
+caller can send, found at runtime through `Optional`/`Annotated` and nested models, and a new one fails
+until classified; its docstrings carry the rest.
 
 ## Access control — check the relationship, not the role name
 

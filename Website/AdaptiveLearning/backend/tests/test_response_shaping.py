@@ -41,7 +41,8 @@ import types
 import typing
 from typing import Annotated, Optional
 
-from pydantic import BaseModel
+from annotated_types import Interval
+from pydantic import BaseModel, Field, conint
 
 import pytest
 
@@ -69,8 +70,8 @@ CALLER_NUMBERS = {
     ("leaderboard", "limit"):
         ("handler", "_LEADERBOARD_MAX. The precedent this file extends."),
     ("generate_question", "bias"):
-        ("handler", "min(1, ...) -- a difficulty shift, not a row count, but "
-                    "unbounded it would reach _shift_difficulty."),
+        ("handler", "max(-1, min(1, ...)) -- a difficulty shift, not a row "
+                    "count, but unbounded it would reach _shift_difficulty."),
     ("student_signal_trend", "weeks"):
         ("handler", "_TREND_MAX_WEEKS, with a floor of 2."),
     ("student_weekly_report", "days"):
@@ -203,7 +204,9 @@ def _model_numbers(model, prefix="", seen=None):
 
 
 def _caller_numbers():
-    """Every int/float a caller can put in a request, found at runtime.
+    """Every int/float a caller can put in a request outside a container,
+    found at runtime. Inside one -- the ingest samples -- is out of scope on
+    purpose; see `_WRAPPERS`.
 
     From `app.routes` and `model_fields`, not the AST: the limiter partition's
     scan was rebuilt this way after an AST match on one assignment shape turned
@@ -261,13 +264,39 @@ def _handler(name):
     return ast.parse(inspect.getsource(fn)).body[0]
 
 
+def _names_param(node, param) -> bool:
+    """Whether an expression reads the parameter itself: the bare name, or an
+    attribute of that name on a body (`payload.days`). Matched on nodes, not
+    text -- as a substring, `days` is also in `len(school_days)`, and
+    `max(0, len(school_days))` would have counted as a floor for it."""
+    return any(
+        (isinstance(n, ast.Name) and n.id == param)
+        or (isinstance(n, ast.Attribute) and n.attr == param)
+        for n in ast.walk(node))
+
+
 def _calls_mentioning(tree, callee, param):
     return [
         node for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         and node.func.id == callee
-        and any(param in ast.unparse(a) for a in node.args)
+        and any(_names_param(a, param) for a in node.args)
     ]
+
+
+@pytest.mark.parametrize("source,callee,counts", [
+    ("max(1, min(days, 30))",             "max", True),
+    ("max(1, min(days, 30))",             "min", True),
+    ("max(1, min(payload.days, 30))",     "max", True),
+    ("max(-1, min(1, int(bias or 0)))",   "max", True),
+    ("max(0, len(school_days))",          "max", False),   # a longer name
+    ("min(len(days_off), 30)",            "min", False),
+    ("max(1, other)",                     "max", False),
+])
+def test_a_clamp_is_matched_on_the_name_not_a_substring(source, callee, counts):
+    param = "bias" if "bias" in source else "days"
+    found = bool(_calls_mentioning(ast.parse(source), callee, param))
+    assert found is counts, source
 
 
 @pytest.mark.parametrize("pair", sorted(
@@ -317,14 +346,50 @@ def test_a_bound_claimed_on_the_field_carries_both_ends(pair):
     endpoint = next(r.endpoint for r in main.app.routes
                     if getattr(getattr(r, "endpoint", None), "__name__", None)
                     == handler_name)
-    metadata = [m for p in inspect.signature(endpoint).parameters.values()
-                for model in _models_in(p.annotation)
-                if field_name in model.model_fields
-                for m in model.model_fields[field_name].metadata]
-    assert any(hasattr(m, "le") for m in metadata), (
-        f"{field_name} no longer carries an upper bound on its field")
-    assert any(hasattr(m, "ge") for m in metadata), (
-        f"{field_name} no longer carries a lower bound on its field")
+    fields = [model.model_fields[field_name]
+              for p in inspect.signature(endpoint).parameters.values()
+              for model in _models_in(p.annotation)
+              if field_name in model.model_fields]
+    assert fields, f"{handler_name} no longer has a `{field_name}` field"
+    floor, ceiling = _field_bounds(fields[0])
+    assert ceiling, f"{field_name} no longer carries an upper bound on its field"
+    assert floor, f"{field_name} no longer carries a lower bound on its field"
+
+
+def _field_bounds(field) -> tuple[bool, bool]:
+    """(has a floor, has a ceiling), read off a field's metadata by *value*.
+
+    Not `hasattr`: `conint(le=180)` and `Interval(le=180)` both carry
+    `ge=None`, so an attribute check reads a floor that is not there. And
+    `gt`/`lt` are bounds as much as `ge`/`le` are.
+    """
+    def present(*names):
+        return any(getattr(m, n, None) is not None
+                   for m in field.metadata for n in names)
+    return present("ge", "gt"), present("le", "lt")
+
+
+class _Bounds(BaseModel):
+    both:        int | None = Field(None, ge=-1, le=1)
+    ceiling:     int = Field(0, le=180)
+    con_ceiling: conint(le=180) = 0
+    interval:    Annotated[int, Interval(le=180)] = 0
+    strict:      int = Field(0, gt=0, lt=10)
+    con_both:    conint(ge=1, le=5) = 1
+    neither:     int = 0
+
+
+@pytest.mark.parametrize("name,floor,ceiling", [
+    ("both",        True,  True),
+    ("ceiling",     False, True),
+    ("con_ceiling", False, True),    # carries ge=None
+    ("interval",    False, True),    # carries ge=None
+    ("strict",      True,  True),    # gt / lt
+    ("con_both",    True,  True),
+    ("neither",     False, False),
+])
+def test_a_field_bound_is_read_by_value_in_every_spelling(name, floor, ceiling):
+    assert _field_bounds(_Bounds.model_fields[name]) == (floor, ceiling), name
 
 
 def test_the_bound_enforced_by_raising_still_has_the_test_it_cites():
@@ -381,7 +446,7 @@ def test_a_students_own_session_list_carries_no_object_paths(monkeypatch):
     fake = _FakeSupabase({"sessions": [_SESSION_ROW]})
     monkeypatch.setattr(main, "supabase", fake)
 
-    rows = main.list_sessions(None)
+    rows = main.list_sessions(None)["sessions"]
 
     _assert_sessions_read_names_its_columns(fake)
     assert rows and "chart_paths" not in rows[0], (
@@ -451,28 +516,13 @@ def test_a_parents_child_sessions_carry_no_object_paths(monkeypatch):
 # `limit` routes that had no test driving either end. Asserted on the number the
 # query was handed, not on what came back (rule 4): a fake answers the same
 # rows whatever limit it is asked for.
+#
+# **Every limit that table was sent, not the last one.** A later `.limit(1)`
+# read of the same table -- an existence check, say -- would otherwise stand in
+# for the main read and pass the floor test with the floor removed.
 
-class _RecordsLimits:
-    """Any PostgREST chain, recording the `.limit()` each table was given."""
-
-    def __init__(self):
-        self.limits = {}
-
-    def table(self, name):
-        rec = self
-
-        class _Q:
-            def limit(self, n, *_a, **_k):
-                rec.limits[name] = n
-                return self
-
-            def execute(self):
-                return type("R", (), {"data": [], "count": 0})()
-
-            def __getattr__(self, _attr):
-                return lambda *_a, **_k: self
-
-        return _Q()
+def _limits_sent_to(fake, table):
+    return [q._limit for t, q in zip(fake.table_calls, fake.queries) if t == table]
 
 
 _LIMITED_READS = {
@@ -504,27 +554,27 @@ def test_a_negative_limit_reaches_the_query_as_the_floor(monkeypatch, _no_gates,
     refuses: a 500 from the caller's own input, on routes whose ceiling was
     already tested and whose floor was not."""
     call, table, _ceiling = _LIMITED_READS[route]
-    fake = _RecordsLimits()
+    fake = _FakeSupabase({})
     monkeypatch.setattr(main, "supabase", fake)
 
     call(asked)
 
-    assert fake.limits.get(table) == 1, (
-        f"{route} asked for {asked}; the {table} query received "
-        f"{fake.limits.get(table)!r}")
+    assert _limits_sent_to(fake, table) == [1], (
+        f"{route} asked for {asked}; the {table} reads received "
+        f"{_limits_sent_to(fake, table)!r}")
 
 
 @pytest.mark.parametrize("route", sorted(_LIMITED_READS))
 def test_an_enormous_limit_reaches_the_query_as_the_ceiling(monkeypatch, _no_gates,
                                                            route):
     call, table, ceiling = _LIMITED_READS[route]
-    fake = _RecordsLimits()
+    fake = _FakeSupabase({})
     monkeypatch.setattr(main, "supabase", fake)
 
     call(10_000_000)
 
-    assert fake.limits.get(table) == ceiling(), (
-        f"{route}: the {table} query received {fake.limits.get(table)!r}")
+    assert _limits_sent_to(fake, table) == [ceiling()], (
+        f"{route}: the {table} reads received {_limits_sent_to(fake, table)!r}")
 
 
 # ── what the scan can see ────────────────────────────────────────────────
@@ -617,3 +667,88 @@ def test_the_scan_finds_every_spelling_of_a_caller_number(monkeypatch):
         ("annotated_body", "weeks"),
         ("nested_body", "window.days"),
     }
+
+
+# ── the cap on a student's own session list ──────────────────────────────
+#
+# Not a caller-supplied bound -- no page offers a longer list and no parameter
+# lifts it -- so it is not in the partition above. It came out of the same
+# audit: `/api/sessions` read every session a student had ever had, and the
+# page it feeds is the only record of itself, counting the rows, summing their
+# questions and dividing for an accuracy. A cap with no way to say it applied
+# would not render as a shorter list; it would render as a student who did
+# less work.
+
+
+def _sessions(n, *, ended=True):
+    return [{**_SESSION_ROW, "id": f"sess-{i}", "started_at": _ts(n - i),
+             "ended_at": _ts(n - i) if ended else None} for i in range(n)]
+
+
+def test_the_session_list_is_capped_and_asks_for_the_real_total(monkeypatch):
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid-1"})
+    fake = _FakeSupabase({"sessions": _sessions(3)})
+    monkeypatch.setattr(main, "supabase", fake)
+
+    main.list_sessions(None)
+
+    query = fake.queries[0]
+    assert query._limit == main._SESSION_LIST_MAX, (
+        f"the session read is bounded at {query._limit}, not the cap")
+    assert query._count == "exact", (
+        "without the count there is no way to tell a whole list from a cut one")
+
+
+def test_a_cut_list_reports_how_many_there_really_are(monkeypatch):
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid-1"})
+    monkeypatch.setattr(main, "_SESSION_LIST_MAX", 2)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({"sessions": _sessions(5)}))
+
+    out = main.list_sessions(None)
+
+    assert len(out["sessions"]) == 2
+    assert out["total"] == 5, "the page cannot say `of 5` without this"
+    assert out["truncated"] is True
+
+
+def test_a_list_exactly_at_the_cap_is_not_reported_as_cut(monkeypatch):
+    """The case `len(rows) == cap` gets wrong, which is why the count decides.
+
+    It is also the case PostgREST's own `db-max-rows` makes unreliable in the
+    other direction: a short read is not evidence the list was whole.
+    """
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid-1"})
+    monkeypatch.setattr(main, "_SESSION_LIST_MAX", 3)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({"sessions": _sessions(3)}))
+
+    out = main.list_sessions(None)
+
+    assert out["total"] == 3
+    assert out["truncated"] is False, (
+        "a whole list of exactly the cap was reported as cut, which puts a "
+        "`showing your most recent 3` notice on a complete history")
+
+
+def test_a_count_that_did_not_come_back_is_unknown_rather_than_whole(monkeypatch):
+    """Third state. `False` would assert the list is complete on the strength
+    of a number we did not receive, and a page would then present a cut
+    history as a whole one."""
+    class _NoCount:
+        def table(self, _name):
+            return self
+
+        def select(self, *_a, **_k):    return self
+        def eq(self, *_a):              return self
+        def order(self, *_a, **_k):     return self
+        def limit(self, *_a, **_k):     return self
+
+        def execute(self):
+            return type("R", (), {"data": [_SESSION_ROW], "count": None})()
+
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid-1"})
+    monkeypatch.setattr(main, "supabase", _NoCount())
+
+    out = main.list_sessions(None)
+
+    assert out["total"] is None
+    assert out["truncated"] is None

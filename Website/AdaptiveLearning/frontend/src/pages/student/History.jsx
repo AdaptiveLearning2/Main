@@ -6,6 +6,10 @@ import LoadError from '../../components/ui/LoadError'
 
 export default function History() {
   const [sessions, setSessions] = useState([])
+  // The real number of sessions, which is not `sessions.length` once the
+  // backend's cap applies. `null` while unknown -- see the note on the tiles.
+  const [total, setTotal]       = useState(null)
+  const [truncated, setTruncated] = useState(null)
   const [loading, setLoading]   = useState(true)
   const [failed, setFailed]     = useState(false)
   const [filter, setFilter]     = useState('all')
@@ -14,7 +18,15 @@ export default function History() {
   // loading already starts true, so no setState is needed here on mount.
   const load = () => {
     apiFetch('/api/sessions')
-      .then(s => { setSessions(s || []); setFailed(false); setLoading(false) })
+      .then(r => {
+        setSessions(r?.sessions || [])
+        setTotal(typeof r?.total === 'number' ? r.total : null)
+        // Three states, and only `true` may be acted on: `null` means the
+        // backend could not tell either, so the notice stays off rather than
+        // claiming a history is whole or cut on a count nobody received.
+        setTruncated(r?.truncated === true)
+        setFailed(false); setLoading(false)
+      })
       // Also set failed, not just loading: otherwise an empty sessions list
       // reads as "no sessions" instead of "the request failed".
       .catch(e => { console.error('Failed to load sessions:', e); setFailed(true); setLoading(false) })
@@ -42,9 +54,12 @@ export default function History() {
       </motion.div>
 
       {sessions.length > 0 && (
-        <div className="grid grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-3 gap-4 mb-4">
           {[
-            { label: 'Total Sessions', value: sessions.length, icon: '📋' },
+            // The count the backend reports, not the length of what it sent:
+            // past the cap those are different numbers, and the smaller one
+            // is a claim that the student did less work than they did.
+            { label: 'Total Sessions', value: total ?? sessions.length, icon: '📋' },
             { label: 'Questions Done',  value: totalQ,          icon: '📝' },
             { label: 'Overall Accuracy', value: `${overallA}%`, icon: '🎯' },
           ].map((c, i) => (
@@ -58,6 +73,17 @@ export default function History() {
             </motion.div>
           ))}
         </div>
+      )}
+
+      {/* The cap, said out loud. Without this the list below is a shorter
+          history rather than a shortened view of one, and the two tiles that
+          sum it are describing a subset while looking like a lifetime. */}
+      {truncated && (
+        <p className="text-xs text-gray-600 dark:text-gray-400 mb-4">
+          Showing your {sessions.length} most recent sessions
+          {typeof total === 'number' ? ` of ${total}` : ''}. Questions Done and
+          Overall Accuracy cover those; Total Sessions is all of them.
+        </p>
       )}
 
       <div className="flex gap-2 mb-5">

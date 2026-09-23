@@ -60,8 +60,11 @@ export default function StudentDashboard() {
       apiFetch('/api/stats/me')
         .then(s => (s?.retrieved === false ? null : s))
         .catch(() => null),
-      // null (failed request) vs [] (no sessions) mean different things.
-      apiFetch('/api/sessions').catch(() => null),
+      // null (failed request) vs [] (no sessions) mean different things, so
+      // the list is pulled out only once the response itself is in hand --
+      // `r?.sessions` would make a failed read indistinguishable from a
+      // student with none, which is what the whole `nudge` branch turns on.
+      apiFetch('/api/sessions').then(r => r?.sessions || []).catch(() => null),
       apiFetch('/api/profile/me').catch(() => null),
     ]).then(([s, sess, profile]) => {
       setStats(s)

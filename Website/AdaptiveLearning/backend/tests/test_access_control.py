@@ -100,6 +100,14 @@ class _Query:
         self._filters.append((col, ("is", val)))
         return self
 
+    def or_(self, expr):
+        # Recorded, not evaluated: PostgREST's or-grammar is not modelled here.
+        # So a query carrying one may only run against an empty table -- see
+        # `execute` -- rather than returning rows the real filter would drop,
+        # which is the silently-ignored-filter trap `is_` refuses above.
+        self.or_filters = getattr(self, "or_filters", []) + [expr]
+        return self
+
     def _matches(self, row):
         for col, want in self._filters:
             have = row.get(col)
@@ -134,6 +142,10 @@ class _Query:
     def execute(self):
         if self._raises:
             raise self._raises
+        if getattr(self, "or_filters", None) and self._rows:
+            raise AssertionError(
+                "or_() is recorded but not evaluated by this fake; give the "
+                "table no rows, or model the filter")
         rows = [r for r in self._rows if self._matches(r)]
         if self._order:
             rows = sorted(rows, key=lambda r: str(r.get(self._order, "")), reverse=self._desc)

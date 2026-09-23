@@ -45,8 +45,9 @@ export default function Profile() {
         .then(s => (s?.retrieved === false ? null : s))
         .catch(() => null),
       // `null` (fetch failed) is kept separate from `[]` (no sessions yet),
-      // so a failed request doesn't render the same as "no sessions".
-      apiFetch('/api/sessions').catch(() => null),
+      // so a failed request doesn't render the same as "no sessions". The
+      // unwrap is inside the `then`, or a failed read would arrive as `[]`.
+      apiFetch('/api/sessions').then(r => r?.sessions || []).catch(() => null),
       apiFetch('/api/profile/me').catch(() => null),
     ]).then(([s, sess, p]) => {
       setStats(s)

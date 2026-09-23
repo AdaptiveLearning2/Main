@@ -910,13 +910,11 @@ never from the payload as a dict**, wherever the table holds a column the caller
 `profiles.role`, `classes.teacher_id`, `classes.join_code` (`update_my_profile`, `update_class`). A
 `payload.dict()` write leaves it to the model not declaring the field — one edit from a self-promotion.
 
-**A test of that has to hand the handler more than the model declares.** Against today's model a
-named-column write and `payload.dict()` produce identical keys, so a test using the real model passes
-either way — it has to simulate the future the guard exists for.
+**A test of that has to hand the handler more than the model declares** — against today's model both
+spellings write identical keys, so it has to simulate the future the guard exists for.
 
-**`StrictModel` carries `extra="forbid"` and every request model inherits it**, which is defense in
-depth rather than a live fix (Pydantic v2 already drops an unknown key). `test_input_bounds.py` pins
-the list of models that do *not*.
+**Every request model inherits `StrictModel`'s `extra="forbid"`**, as defence in depth (Pydantic v2
+already drops an unknown key); `test_input_bounds.py` pins the list of models that do *not*.
 
 **The six ingest models are exempt, by name.** A sidecar runs on a student's laptop and updates on its
 own schedule, so a field it gained before this backend did is ordinary version skew — and under
@@ -930,15 +928,19 @@ field bound turns that clamp into a 422 for the same input — two bounds over o
 winning silently. **The decision rests on the clamp existing, so all three are pinned**:
 `test_learning_strategies_clamps_the_day_range` and `test_the_chart_summary_clamps_both_of_its_ranges`.
 
-**A cap on a free-text field is that field's only bound, not a nicer error.** Every column they guard
-(`display_name`, class `name`, session `title`) is unbounded `text` in the schema, so there is no
-database limit being converted into a 422 — Postgres would have stored a megabyte.
+**A cap on a free-text field is that field's only bound, not a nicer error.** The columns they guard
+(`display_name`, class `name`, session `title`) are unbounded `text` — Postgres would store a megabyte.
 
-**A row that reaches a browser names its columns too, and a caller's number needs a floor as well as a
-ceiling.** `select("*")` ships whatever the table gains next with nobody deciding; an unfloored `limit`
-reaches Postgres as `LIMIT -5`, a 500. `backend/tests/test_response_shaping.py` partitions every int a
-caller can send, found at runtime through `Optional`/`Annotated` and nested models, and a new one fails
-until classified; its docstrings carry the rest.
+**A row that reaches a browser names its columns.** `select("*")` ships whatever the table gains next
+with nobody deciding; `_SESSION_CLIENT_COLUMNS` leaves out `chart_paths`, a path nothing renders.
+
+**A caller's number needs a floor as well as a ceiling**: unfloored, `?limit=-5` is `LIMIT -5` and a 500.
+`backend/tests/test_response_shaping.py` classifies every number a caller can send outside a list (the
+ingest samples' readings are the exception, and say why), and a new one fails until classified.
+
+**No read is uncapped: PostgREST cuts it at `db-max-rows` (1000), silently.** A list a surface counts
+and sums has to say when it was cut — `/api/sessions` sends the newest `_SESSION_LIST_MAX`, the real
+`total` and `truncated`, decided by `count="exact"` rather than `len(rows)`, `None` when no count came.
 
 ## Access control — check the relationship, not the role name
 

@@ -43,7 +43,7 @@ beforeEach(() => {
   navigate.mockReset()
   mockApi({
     '/api/stats/me': () => STATS,
-    '/api/sessions': () => [],
+    '/api/sessions': () => ({ sessions: [], total: 0, truncated: false }),
     '/api/profile/me': () => ({ practice_reminders: false }),
     [BREAKDOWN]: () => [
       topic('algebra', 30, 10),

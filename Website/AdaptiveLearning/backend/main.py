@@ -3630,12 +3630,43 @@ _SESSION_CLIENT_COLUMNS = ("id, user_id, class_id, title, started_at, ended_at, 
                            "questions_answered, correct_answers")
 
 
+# A heavy year is a few hundred sessions -- five a day over two hundred school
+# days -- so this covers every student the product has and bounds the read for
+# the one it does not. Not caller-supplied: there is no page offering a longer
+# list, and a query parameter would be a bound the caller could lift.
+_SESSION_LIST_MAX = 200
+
+
 @app.get("/api/sessions")
 def list_sessions(request: Request):
+    """A student's own sessions, newest first, capped.
+
+    **Uncapped was already capped, silently.** PostgREST's `db-max-rows` (1000
+    in `supabase/config.toml`) cuts any read that asks for no limit, so this
+    list stopped at a thousand with nothing saying so -- and it is the only
+    record of itself the page has: `History.jsx` counts it, sums its questions
+    and divides for an accuracy, so a shortened list does not render as a
+    shorter list, it renders as a student who did less work. The response is
+    an object for that reason: `total` is the real number of sessions, and the
+    rows are the newest `_SESSION_LIST_MAX` of them.
+
+    **`truncated` is decided by the count, not by `len(rows) == the cap`**,
+    because that same server-side ceiling means a short read is not evidence
+    the list was whole, and a full one is not evidence it was cut. `None` is
+    the third state: the count did not come back, so we do not know, and a
+    surface must say nothing rather than claim either.
+    """
     user = get_user(request)
-    res  = supabase.table("sessions").select(_SESSION_CLIENT_COLUMNS) \
-        .eq("user_id", user["id"]).order("started_at", desc=True).execute()
-    return res.data or []
+    res  = supabase.table("sessions").select(_SESSION_CLIENT_COLUMNS, count="exact") \
+        .eq("user_id", user["id"]).order("started_at", desc=True) \
+        .limit(_SESSION_LIST_MAX).execute()
+    rows = res.data or []
+    total = res.count
+    return {
+        "sessions":  rows,
+        "total":     total,
+        "truncated": None if total is None else total > len(rows),
+    }
 
 
 # ─── practice sessions ──────────────────────────────────────────────────────

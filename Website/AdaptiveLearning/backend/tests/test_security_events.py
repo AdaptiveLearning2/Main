@@ -669,10 +669,21 @@ def test_every_limiter_either_records_or_is_classified_as_silent():
     # a name share one 300 s bucket per actor and the first to fire silences the
     # other -- verbatim what the comment above `_COOLED_KINDS` says that field
     # is in the key to prevent.
+    #
+    # Keyed on `id(limiter)`, because the scan above deliberately finds one
+    # limiter by every path that reaches it -- so an *attribute path* count
+    # answers a different question. A registry referencing the existing globals
+    # (`_LIMITERS = {"ingest": _INGEST_LIMITER, …}`, which is what the
+    # incremental refactor looks like while the `limiter=_X_LIMITER.name` call
+    # sites still name them) yields two paths to one object, and grouping by
+    # name alone failed that refactor while claiming a duplicate constructor
+    # nobody could find. One object, one bucket, nothing to tell apart. The
+    # property is that name -> instance is injective, which is identity.
     by_name = {}
     for attr, limiter in sorted(instances.items()):
-        by_name.setdefault(limiter.name, []).append(attr)
-    collisions = {name: attrs for name, attrs in by_name.items() if len(attrs) > 1}
+        by_name.setdefault(limiter.name, {}).setdefault(id(limiter), attr)
+    collisions = {name: sorted(paths.values())
+                  for name, paths in by_name.items() if len(paths) > 1}
     assert not collisions, (
         "two limiters answer to one name, so they share a cooldown bucket and "
         f"this partition cannot tell them apart: {collisions}")

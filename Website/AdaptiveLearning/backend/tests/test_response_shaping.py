@@ -323,10 +323,17 @@ def _raw_uses(tree, param) -> list:
     A body field is read as `payload.days`; that counts, and reassigning a
     local does not clamp it -- only the attribute inside a clamp does. A method
     that happens to share the name (`query.limit(...)`) is not a read of it.
+
+    **Only a reassignment that always runs counts**: a statement directly in
+    the function's body, not inside an `if`, loop, `try` or `with`. Line order
+    is execution order only for those -- a clamp in one branch of an `if`
+    leaves the other branch reading the raw value on every later line.
     """
     inside = {id(n) for clamp in _clamp_nodes(tree, param) for n in ast.walk(clamp)}
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))), tree)
     reassigned = min(
-        (node.lineno for node in ast.walk(tree)
+        (node.lineno for node in fn.body
          if isinstance(node, ast.Assign) and len(node.targets) == 1
          and isinstance(node.targets[0], ast.Name) and node.targets[0].id == param
          and _clamp_nodes(node.value, param)),
@@ -357,6 +364,11 @@ def _raw_uses(tree, param) -> list:
     ("def f(payload):\n    days = max(1, min(payload.days, 30))\n    g(payload.days)", "days", True),
     # Used before it is clamped.
     ("def f(limit):\n    q.limit(limit)\n    limit = max(1, min(limit, 30))",         "limit", True),
+    # Clamped on one path only: the other reaches the read raw.
+    ("def f(limit, x):\n    if x:\n        limit = max(1, min(limit, 30))\n    q.limit(limit)",
+     "limit", True),
+    ("def f(limit):\n    try:\n        limit = max(1, min(limit, 30))\n    except E:\n        pass\n"
+     "    q.limit(limit)", "limit", True),
 ])
 def test_a_clamp_is_the_value_that_gets_used(source, param, raw):
     assert bool(_raw_uses(ast.parse(source), param)) is raw, source

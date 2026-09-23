@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { apiFetch } from '../../lib/api'
 import { fetchSessionList } from '../../lib/session'
@@ -12,7 +12,7 @@ const UNKNOWN = '—'
 // dash says the figure could not be had, and it must not flash up for a read
 // that simply has not landed yet.
 const PENDING = (
-  <span aria-label="Loading"
+  <span role="status" aria-label="Loading"
         className="inline-block w-10 h-6 align-middle rounded bg-gray-200 dark:bg-gray-700 animate-pulse" />
 )
 
@@ -36,14 +36,21 @@ export default function History() {
 
   // Named so the retry button can call it again.
   // loading already starts true, so no setState is needed here on mount.
+  // A retry supersedes the load before it, whose reads may still be out: a
+  // slow failure from that one landing after the retry succeeded would put the
+  // tiles back to a dash. Only the newest run writes.
+  const run = useRef(0)
   const load = () => {
+    const mine = ++run.current
+    const current = () => mine === run.current
     apiFetch('/api/stats/me')
       // No body is a failed read too: left `undefined`, it would read as
       // still loading for ever.
-      .then(s => setStats(s && s.retrieved !== false ? s : null))
-      .catch(() => setStats(null))
+      .then(s => { if (current()) setStats(s && s.retrieved !== false ? s : null) })
+      .catch(() => { if (current()) setStats(null) })
     fetchSessionList()
       .then(r => {
+        if (!current()) return
         setSessions(r.sessions)
         setTotal(r.total)
         setTruncated(r.truncated)
@@ -51,7 +58,10 @@ export default function History() {
       })
       // Also set failed, not just loading: otherwise an empty sessions list
       // reads as "no sessions" instead of "the request failed".
-      .catch(e => { console.error('Failed to load sessions:', e); setFailed(true); setLoading(false) })
+      .catch(e => {
+        if (!current()) return
+        console.error('Failed to load sessions:', e); setFailed(true); setLoading(false)
+      })
   }
 
   // Back to in-flight here, in the handler, rather than inside `load` -- which

@@ -1,5 +1,5 @@
 import { it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 // Through the shared router rather than a bare `vi.fn()`: the page reads two
@@ -136,7 +136,41 @@ it('shows the totals as still loading, not as unavailable, while they are in fli
   await screen.findByText('Total Sessions')
   expect(tile('Questions Done')).not.toBe('—')
   expect(tile('Overall Accuracy')).not.toBe('—')
-  expect(screen.getAllByLabelText('Loading')).toHaveLength(2)
+  // A role, or a screen reader announces nothing: a bare span's label is not read.
+  expect(screen.getAllByRole('status', { name: 'Loading' })).toHaveLength(2)
+})
+
+it('keeps the totals a retry read when the first load fails late', async () => {
+  // The first load's list fails at once and its totals hang; the retry gets
+  // both. When the first totals read then fails, it answers a load nobody is
+  // waiting on, and must not put the tiles back to a dash.
+  serve(page(THREE))
+  let failFirstStats
+  let statsCalls = 0
+  overrideApi('/api/stats/me', () => {
+    statsCalls += 1
+    if (statsCalls === 1) return new Promise((_, reject) => { failFirstStats = reject })
+    return STATS
+  })
+  let sessionCalls = 0
+  overrideApi('/api/sessions', () => {
+    sessionCalls += 1
+    if (sessionCalls === 1) throw apiError(500, 'transient')
+    return page(THREE)
+  })
+  render(<History />)
+  await screen.findByText(/couldn't load your session history/i)
+
+  await userEvent.click(screen.getByRole('button', { name: /try again/i }))
+  await waitFor(() => expect(tile('Questions Done')).toBe('431'))
+
+  // Inside act, so any state the stale rejection writes is rendered before looking.
+  await act(async () => {
+    failFirstStats(apiError(500, 'late'))
+    await new Promise(r => setTimeout(r, 0))
+  })
+  expect(tile('Questions Done')).toBe('431')
+  expect(tile('Overall Accuracy')).toBe('70%')
 })
 
 it.each([

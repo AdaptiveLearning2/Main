@@ -657,6 +657,26 @@ def test_every_limiter_either_records_or_is_classified_as_silent():
         f"the scan no longer sees {sorted(missing)} -- it found {sorted(found)}. "
         "Fix the scan before trusting the partition below it.")
 
+    # Names must be distinct, and this is not only about the partition. Both
+    # `found` and EXPECTED_LIMITERS are sets, so two limiters answering to one
+    # name collapse to one entry: the floor above passes, the partition below
+    # passes, and a limiter that refuses callers reads as classified because a
+    # *different* limiter answers to its name.
+    #
+    # It reaches the product too. The cooldown key is
+    # `(kind, actor_user_id, str(detail["limiter"]))` with
+    # `_COOLED_KINDS = {"rate_limited": ("limiter",)}`, so two limiters sharing
+    # a name share one 300 s bucket per actor and the first to fire silences the
+    # other -- verbatim what the comment above `_COOLED_KINDS` says that field
+    # is in the key to prevent.
+    by_name = {}
+    for attr, limiter in sorted(instances.items()):
+        by_name.setdefault(limiter.name, []).append(attr)
+    collisions = {name: attrs for name, attrs in by_name.items() if len(attrs) > 1}
+    assert not collisions, (
+        "two limiters answer to one name, so they share a cooldown bucket and "
+        f"this partition cannot tell them apart: {collisions}")
+
     recording = _recorded_limiter_labels()
     # The three public budgets record through the middleware, which passes a
     # local `limiter=limiter` no static read can resolve. Excluded here and
@@ -666,6 +686,20 @@ def test_every_limiter_either_records_or_is_classified_as_silent():
     # Asserting that here from source text would be the weaker copy of a test
     # that already exists -- and the canary names source-text assertions on
     # testable behaviour as a stop condition.
+    #
+    # The citation is checked rather than written: delete or rename that test
+    # and this exclusion would otherwise keep three limiters green over nothing.
+    # A name check is all a cross-file link can be from here, and it is the half
+    # that actually goes stale.
+    cited = (pathlib.Path(__file__).parent / "test_network_edge.py").read_text(
+        encoding="utf-8")
+    # Anchored on the paren: without it a rename that *appends* -- which is what
+    # a rename usually is -- still contains the searched substring, so the check
+    # passed against the mutation written to break it. Prefix matching, the same
+    # shape as the use-versus-mention traps above.
+    assert "def test_the_refusal_is_recorded_without_saying_who(" in cited, (
+        "the test this exclusion rests on is gone or renamed -- the three public "
+        "budgets are now unchecked by anything")
     recording |= set(main._PUBLIC_BUDGETS)
 
     unclassified = sorted(

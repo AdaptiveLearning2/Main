@@ -515,9 +515,13 @@ treatment in `config.py` — a validator warns and falls back rather than refusi
 `PUBLIC_*_RATE_*` / `TRUSTED_PROXY_HOPS` group under *The network edge*, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels*,
 and the `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` / `SOLVE_*` groups in `docs/question-generation.md`.
 
-`QUESTIONS_CACHE_TTL` (30 s) fronts `GET /api/questions` and is bounded at 256 entries, so a sweep
-of distinct `limit`/`subject`/`difficulty` combinations from that unauthenticated endpoint cannot
-grow it unboundedly. The ingest bounds matter because the sidecar posts with the *student's* token:
+`QUESTIONS_CACHE_TTL` (30 s) fronts `GET /api/questions` and is bounded at 32 entries, so a sweep of
+distinct `limit`/`subject`/`difficulty` combinations from that unauthenticated endpoint cannot grow
+it unboundedly. **That bounds the number of entries and says nothing about their size**, which this
+file claimed it did: `limit` was unclamped and keyed the cache, so the entry bound was intact and
+holding 256 copies of the whole question bank. It is clamped to `_QUESTIONS_MAX`, and the key is
+built from the *clamped* value or two limits above the ceiling are two entries holding one identical
+copy. The ingest bounds matter because the sidecar posts with the *student's* token:
 that endpoint is a trust boundary, and neither the session check nor the consent check bounds volume.
 
 **Frontend.** `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`, `VITE_EEG_DEBUG`,
@@ -941,6 +945,30 @@ thirds of the argument resting on nothing, and deleting either chart-summary cla
 database limit being converted into a 422 — Postgres would have stored a megabyte. That is the
 argument for the caps, and describing them as error-shaping overstates the schema and understates
 them.
+
+## A response names its columns, and every number a caller sends has a ceiling
+
+The read mirror of the rule above, and `leaderboard` is the worked example: it clamps `limit` because
+it reads through the service-role client, and it pops `user_id` because the page needs to know which
+row is the viewer's own, not a uuid→name map for the whole board.
+
+**A bound on how many things a cache holds is not a bound on how big they are.** `/api/questions` is
+the case — see `QUESTIONS_CACHE_TTL` above.
+
+**`select("*")` on a row that reaches a browser ships whatever column the table gains next**, with
+nobody deciding. `_SESSION_CLIENT_COLUMNS` is every `sessions` column except `chart_paths`, which is
+a storage object path rendered nowhere — the charts come from `/api/signals/session/{id}/charts`,
+which derives the path and refuses to read that column as an address. Naming columns means a new one
+has to be added deliberately, which is how `figure` and `ccss_standard` reached `SessionReview`.
+
+`backend/tests/test_response_shaping.py` holds both: the session payloads, and a **partition over
+every int a caller can send** — query parameter or request-model field, found at runtime from
+`app.routes` and `model_fields`. Each is clamped in its handler, bounded by `le=` on the field,
+refused with a 422, or classified as not a bound at all. A new one fails until someone says which,
+because whether a number bounds a read or is a value to be stored is not a property of its type.
+Its clamp check reads the **spelling** (`min` / `_clamp_days`, the one form all eighteen use), not
+the arithmetic; what a ceiling should be is per-endpoint behaviour, asserted on the limit the *query*
+received.
 
 ## Access control — check the relationship, not the role name
 

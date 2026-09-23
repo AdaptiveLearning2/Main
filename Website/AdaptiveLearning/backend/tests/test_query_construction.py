@@ -64,6 +64,19 @@ ALLOWLIST = {
      "','.join((f'{c}.not.is.null' for c in columns))"):
         "Same `columns`. The join builds an or-tree from those fixed names.",
 
+    # One constant, four reads, because the alternative to naming it is four
+    # copies of the column list -- and the copy that drifts is the one that
+    # quietly starts returning the column the others stopped returning.
+    ("main.py", "list_sessions", "select", "_SESSION_CLIENT_COLUMNS"):
+        "A module-level literal: every `sessions` column except `chart_paths`. "
+        "No interpolation and nothing from a request reaches it.",
+    ("main.py", "_open_sessions_many", "select", "_SESSION_CLIENT_COLUMNS"):
+        "The same constant.",
+    ("main.py", "student_sessions", "select", "_SESSION_CLIENT_COLUMNS"):
+        "The same constant.",
+    ("main.py", "my_children", "select", "_SESSION_CLIENT_COLUMNS"):
+        "The same constant.",
+
     ("main.py", "_summary_rpc", "rpc", "name"):
         "The RPC name, passed by internal callers as a literal.",
     ("main.py", "_session_or_403", "select", "columns"):

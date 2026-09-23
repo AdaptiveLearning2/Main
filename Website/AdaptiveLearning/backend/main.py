@@ -3169,6 +3169,13 @@ class _TTLCache:
     entry per combination -- a memory-growth vector the cache itself would
     be introducing, where an uncached endpoint only ever cost per-call
     CPU/DB time and left nothing behind.
+
+    **`max_size` bounds the number of entries and nothing about their size**,
+    so a caller whose key decides how much data an entry holds has to bound
+    that too: `get_questions` keys on `limit`, and unclamped it put a copy of
+    the whole question bank behind every entry this bound was keeping. A cache
+    turns a per-call cost into a resident one, so every part of its key needs a
+    ceiling, not just the count of them.
     """
     def __init__(self, ttl: float, max_size: int = 256):
         self._ttl = ttl
@@ -3206,10 +3213,37 @@ class _TTLCache:
 # the student's live adaptive session (that path's own duplicate-check in
 # LLM_topic_decider.py stays live/uncached).
 QUESTIONS_CACHE_TTL = _env_number("QUESTIONS_CACHE_TTL", 30.0, float, minimum=1.0)
-_questions_cache = _TTLCache(QUESTIONS_CACHE_TTL)
+# 32, not the default 256, because the entry bound is the *only* thing bounding
+# this cache's memory and each entry is now up to `_QUESTIONS_MAX` question rows
+# rather than however many happened to be asked for. `subject` and `difficulty`
+# are arbitrary caller-supplied strings, so the number of reachable keys is
+# unbounded whatever the clamp does -- the sweep is stopped by eviction, and the
+# size of what eviction is holding is stopped by the clamp. Only two keys are
+# ever live in real traffic: the teacher pages ask for 1000 and the dashboard
+# for 5, neither with a filter.
+_questions_cache = _TTLCache(QUESTIONS_CACHE_TTL, max_size=32)
+
+# The largest any surface asks for (`questionsCache.js` defaults to 1000, which
+# Analytics and Questions both pass). Anything above it is a caller inventing a
+# number, and this is the one unauthenticated read that returns rows.
+_QUESTIONS_MAX = 1000
 
 @app.get("/api/questions")
 def get_questions(limit: int = 100, subject: str | None = None, difficulty: str | None = None):
+    """The question bank, newest first.
+
+    `limit` is clamped for the reason the leaderboard's is: this reads through
+    the service-role client and is the only row-returning route with no caller
+    to resolve, so the bound is what decides how much one request costs. The
+    rows themselves are not the concern -- `questions` is public-read by policy
+    and reachable through PostgREST with the anon key -- the *cache* is: the
+    entry bound that stops a key sweep holds whatever each entry contains, and
+    an unclamped limit made that the whole bank, once per surviving key.
+    **The key is built from the clamped value**, or `limit=9999` and
+    `limit=10000` are two entries holding identical rows and the sweep survives
+    the clamp.
+    """
+    limit = max(1, min(limit, _QUESTIONS_MAX))
     key = (limit, subject, difficulty)
     cached, hit = _questions_cache.get(key)
     if hit:
@@ -3578,10 +3612,23 @@ def end_session(session_id: str = Path(...), request: Request = None):
         return {"ok": True, "already_closed": True}
     return {"ok": True, **({"discarded": True} if result["discarded"] else {})}
 
+# Every column on `sessions` except `chart_paths`, for the reads whose rows are
+# returned to a browser. `chart_paths` is the storage object path of each
+# archived SVG: nothing in `src/` renders it -- the charts are fetched through
+# `/api/signals/session/{id}/charts`, which *derives* the path and deliberately
+# refuses to read it out of this column -- so shipping it is a value the client
+# has no use for and one more place its scheme is visible. Named rather than
+# `select("*")` for the reason the answer embed names its columns: a column
+# added to `sessions` later should not start reaching three browsers on its own.
+_SESSION_CLIENT_COLUMNS = ("id, user_id, class_id, title, started_at, ended_at, "
+                           "questions_answered, correct_answers")
+
+
 @app.get("/api/sessions")
 def list_sessions(request: Request):
     user = get_user(request)
-    res  = supabase.table("sessions").select("*").eq("user_id", user["id"]).order("started_at", desc=True).execute()
+    res  = supabase.table("sessions").select(_SESSION_CLIENT_COLUMNS) \
+        .eq("user_id", user["id"]).order("started_at", desc=True).execute()
     return res.data or []
 
 
@@ -3993,7 +4040,9 @@ def _open_sessions_many(student_ids) -> dict[str, list]:
     ids = _unique_ids(student_ids)
     if not ids:
         return {}
-    rows = supabase.table("sessions").select("*") \
+    # `class_live` returns the open session it finds here as `active_session`,
+    # so these rows reach a teacher's browser.
+    rows = supabase.table("sessions").select(_SESSION_CLIENT_COLUMNS) \
         .in_("user_id", ids).is_("ended_at", "null") \
         .order("started_at", desc=True).execute().data or []
     return _group_by_user(rows)
@@ -4155,7 +4204,8 @@ def student_sessions(student_id: str, request: Request):
     list asserting that a long-dead session is in progress.
     """
     _verify_can_view_student(get_user(request), student_id)
-    res = supabase.table("sessions").select("*").eq("user_id", student_id).order("started_at", desc=True).limit(20).execute()
+    res = supabase.table("sessions").select(_SESSION_CLIENT_COLUMNS) \
+        .eq("user_id", student_id).order("started_at", desc=True).limit(20).execute()
     rows = res.data or []
     cutoff = _utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)
     for r in rows:
@@ -8748,7 +8798,8 @@ def my_children(request: Request, include_face: bool = True):
         # no batch form in PostgREST -- one `in_` query returns the newest
         # five overall, which could be one busy child's five. A parent has a
         # handful of children, so this stays cheap; a class roster would not.
-        sess_res = supabase.table("sessions").select("*").eq("user_id", cid).order("started_at", desc=True).limit(5).execute()
+        sess_res = supabase.table("sessions").select(_SESSION_CLIENT_COLUMNS) \
+            .eq("user_id", cid).order("started_at", desc=True).limit(5).execute()
         p = profiles.get(cid) or {}
         children.append({
             "user_id":     cid,

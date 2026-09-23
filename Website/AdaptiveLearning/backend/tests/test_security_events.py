@@ -496,6 +496,13 @@ RECORDS_THE_DENIAL = {
     "update_consent":              "undoing a parent's decision, as the student",
     "erase_consent_channel":       "an irreversible erasure, by a non-parent",
     "_require_admin":              "the admin console",
+    # It also has a role gate on the caller's own action, which is why it used
+    # to be classified the other way. What records is the *code*: a refused
+    # link code is a failed credential, and a series of them from one account
+    # is the only shape guessing has. The 403 on the role gate still records
+    # nothing -- these lists are per function, so the entry means "this
+    # function has a denial worth a row", not "every refusal in it does".
+    "link_child":                  "a link code that was wrong or expired",
 }
 
 # Refuses something that is not access to anyone's data. Each of these would
@@ -504,7 +511,10 @@ RECORDS_THE_DENIAL = {
 # makes, on a surface where it matters more.
 NOT_AN_ACCESS_DENIAL = {
     "create_class":        "a role gate on the caller's own action",
-    "link_child":          "a role gate on the caller's own action",
+    "create_parent_link_code":
+                           "a role gate on the caller's own account -- a "
+                           "teacher asking for a code meant for a student is "
+                           "a wrong page, not an attempt on anyone's data",
     "_reserve_and_call":   "a headband is in use by someone else -- contention, not authorization",
     "eeg_muse_disconnect": "the same device contention",
     "eeg_start":           "consent or the school year, which is a configuration state; "
@@ -583,6 +593,7 @@ GENERATION_SILENT_SITES = {
 EXPECTED_LIMITERS = {
     "strategies", "chart_summary", "ingest", "generation",
     "public_generate", "public_read", "public_probe",
+    "parent_link_code",
 }
 
 

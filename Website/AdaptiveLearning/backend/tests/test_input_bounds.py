@@ -289,7 +289,7 @@ CAPPED = [
     ("UpdateClassRequest",    "name",         {},                       LONG_NAME),
     ("UpdateProfileRequest",  "display_name", {},                       LONG_NAME),
     ("JoinClassRequest",      "join_code",    {},                       "ABC123"),
-    ("LinkChildRequest",      "child_id",     {},                       UUID),
+    ("LinkChildRequest",      "link_code",    {},                       "ABCD2345"),
     ("AnswerPayload",         "question_id",  {"selected_index": 0, "correct": True}, UUID),
     ("PracticeAnswerPayload", "question_id",  {"selected_index": 0, "correct": True}, UUID),
     ("PracticeViewPayload",   "question_id",  {},                       UUID),

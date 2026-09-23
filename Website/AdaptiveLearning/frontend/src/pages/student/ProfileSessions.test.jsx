@@ -36,6 +36,7 @@ const serve = sessions => mockApi({
   '/api/stats/me': () => ({ total_questions: 10, total_correct: 5, best_streak: 2, retrieved: true }),
   [ONE]: sessions,
   '/api/profile/me': () => ({ display_name: 'Ada' }),
+  '/api/student/link-code': () => ({ code: null, expires_at: null, retrieved: true }),
 })
 
 beforeEach(() => { resetApi() })

@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-import os, math, re, requests, random, string, threading, time, collections, contextlib
+import os, math, re, requests, random, secrets, string, threading, time, collections, contextlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta, timezone, tzinfo
@@ -586,6 +586,29 @@ def get_user(request: Request):
 
 def rand_code(n=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=n))
+
+
+# ─── the code a child gives a parent ─────────────────────────────────────
+#
+# Not `rand_code`, and the difference is the whole point rather than style.
+# This code is the only credential between an account claiming to be a parent
+# and a child's reports -- plus the power to re-enable a sensor the child
+# switched off -- so it comes from `secrets` (a CSPRNG) rather than `random`
+# (a Mersenne Twister, whose state is recoverable from its output), it is
+# longer, and it is read from an alphabet with no O/0/I/1 because a child
+# reads it aloud or writes it down.
+#
+# 32**8 is about 1.1e12, against at most a handful of codes outstanding at any
+# moment and ten redemption attempts an hour per account. Entropy is not the
+# control on its own; the TTL, the single use and the limiter are.
+_LINK_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_LINK_CODE_LEN = 8
+_LINK_CODE_TTL_SEC = 30 * 60
+
+
+def _new_link_code() -> str:
+    return "".join(secrets.choice(_LINK_CODE_ALPHABET)
+                   for _ in range(_LINK_CODE_LEN))
 
 
 def _unique_ids(values) -> list:
@@ -3075,7 +3098,10 @@ class JoinClassRequest(StrictModel):
     join_code: str = Field(max_length=_SHORT_MAX)
 
 class LinkChildRequest(StrictModel):
-    child_id: str = Field(max_length=_ID_MAX)
+    # The child's own code, not their user id. `StrictModel` forbids extras, so
+    # a client still posting `child_id` gets a 422 rather than silently linking
+    # nothing -- loud is the right direction for a credential that changed.
+    link_code: str = Field(max_length=_LINK_CODE_LEN * 2)
 
 class UpdateProfileRequest(StrictModel):
     display_name: str | None = Field(None, max_length=_NAME_MAX)
@@ -8529,23 +8555,89 @@ def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
 
 # ─── parent endpoints ────────────────────────────────────────────────────
 
+# Ten redemption attempts an hour per account. A code is eight characters from
+# a 32-symbol alphabet, so this is not what makes guessing infeasible -- it is
+# what makes *trying* visible, since every refused attempt writes an
+# `authz_denied` row and `authz_denied` is deliberately not cooled.
+_LINK_CODE_LIMITER = _SlidingWindowLimiter("parent_link_code", 10, 3600.0)
+
+
 @app.post("/api/parent/link-child")
 def link_child(payload: LinkChildRequest, request: Request):
+    """Link this parent to the child whose code they were given.
+
+    **The code is the act, and the id was not one.** This took the child's
+    user id, on the reasoning that a parent could only have it if the child
+    handed it over -- but that id is on every roster payload a teacher of that
+    child reads, in the URL of every report page about them, and in the admin
+    search. See the migration header for the rest of the argument.
+
+    It stays "notify, not block": the link takes effect here and
+    `ParentLinkedBanner` tells the child afterwards. What the code adds is that
+    the child had to do something for it to exist.
+    """
     user = get_user(request)
     if _role(user["id"]) != "parent":
         raise HTTPException(403, "Only parents can link children")
-    p = _profile(payload.child_id)
-    if not p or p.get("role") != "student":
-        raise HTTPException(404, "Child account not found or not a student")
+
+    wait = _LINK_CODE_LIMITER.check(user["id"])
+    if wait is not None:
+        _record_security_event("rate_limited", user["id"],
+                               limiter=_LINK_CODE_LIMITER.name)
+        raise HTTPException(429, "Too many attempts. Ask your child for a new "
+                                 "code and try again later.",
+                            headers={"Retry-After": str(wait)})
+
+    code = payload.link_code.strip().upper()
+    try:
+        rows = supabase.table("parent_link_codes") \
+            .select("code, student_id, expires_at").eq("code", code) \
+            .limit(1).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        # Fails closed, and says which of the two it was: refusing a valid code
+        # as "not valid" would send a parent to ask for another one that would
+        # be refused the same way.
+        print(f"[link-child] could not read the code: {e}")
+        raise HTTPException(503, "Could not check that code just now. Try again "
+                                 "in a moment.")
+
+    row = rows[0] if rows else None
+    expires = _parse_ts(row.get("expires_at")) if row else None
+    if row is None or expires is None or expires <= _utc_now():
+        # One message for "no such code" and "expired", because the difference
+        # is information about somebody else's account -- and a parent's action
+        # is the same either way: ask the child for a new one.
+        _record_security_event("authz_denied", user["id"],
+                               check="parent_link_code")
+        raise HTTPException(404, "That code is not valid or has expired. Ask "
+                                "your child to create a new one.")
+
+    child_id = str(row["student_id"])
+    p = _profile(child_id)
     already = supabase.table("parent_child_links").select("id") \
-        .eq("parent_id", user["id"]).eq("child_id", payload.child_id).execute()
+        .eq("parent_id", user["id"]).eq("child_id", child_id).execute()
     if already.data:
         raise HTTPException(409, "Already linked to this child")
     supabase.table("parent_child_links").insert({
         "parent_id": user["id"],
-        "child_id":  payload.child_id,
+        "child_id":  child_id,
     }).execute()
-    return {"ok": True, "child_id": payload.child_id, "child_name": p.get("display_name") or "Student"}
+
+    # Single use, and deleted rather than stamped: `parent_child_links` already
+    # records that the link happened, so a spent-code table would be a second
+    # permanent log of which adult linked which child with nothing reading it.
+    # After the insert, because a code consumed by a link that then failed to
+    # write would leave the child generating another one for no reason.
+    try:
+        supabase.table("parent_link_codes").delete().eq("code", code).execute()
+    except Exception as e:                                     # noqa: BLE001
+        # The link exists; the code is past its TTL soon anyway and the sweep
+        # collects it. Raising here would report a failure for something that
+        # succeeded.
+        print(f"[link-child] linked, but the code was not cleared: {e}")
+
+    return {"ok": True, "child_id": child_id,
+            "child_name": p.get("display_name") or "Student"}
 
 
 @app.delete("/api/parent/children/{child_id}")
@@ -8639,6 +8731,76 @@ def ack_parent_links(request: Request):
     if not written:
         raise HTTPException(404, "Nothing to acknowledge")
     return {"ok": True, "acknowledged": len(written)}
+
+
+@app.post("/api/student/link-code")
+def create_parent_link_code(request: Request):
+    """Make a code this student can give a parent, replacing any outstanding one.
+
+    **Students only.** The code is generated by the account it is about, so
+    whoever holds one was given it by that account -- which is the property the
+    child's *user id* was being relied on for and does not have. Refusing other
+    roles here is what keeps `link_child` from needing its own role check on the
+    far side: a teacher generating a code and handing it over would otherwise
+    produce a parent linked to a teacher, which `_verify_can_view_student`
+    would honour and no surface expects.
+
+    One code at a time, upserted on `student_id`: generating a new one has to
+    *replace* the old rather than leaving two live, and an upsert is how that
+    stays one statement instead of a delete-then-insert this could half-finish.
+    """
+    user = get_user(request)
+    if _role(user["id"]) != "student":
+        raise HTTPException(403, "Only a student can create a code for their own account")
+    code = _new_link_code()
+    expires = _utc_now() + timedelta(seconds=_LINK_CODE_TTL_SEC)
+    try:
+        supabase.table("parent_link_codes").upsert({
+            "code":       code,
+            "student_id": user["id"],
+            "created_at": _utc_now().isoformat(),
+            "expires_at": expires.isoformat(),
+        }, on_conflict="student_id").execute()
+    except Exception as e:                                     # noqa: BLE001
+        # Raises rather than degrading: the whole value of the answer is a code
+        # that will work, and returning one that was never stored sends a child
+        # to read out eight characters that refuse.
+        print(f"[link-code] could not store a code for {user['id'][:8]}: {e}")
+        raise HTTPException(503, "Could not create a code just now. Try again "
+                                 "in a moment.")
+    return {"code": code, "expires_at": expires.isoformat()}
+
+
+@app.get("/api/student/link-code")
+def my_parent_link_code(request: Request):
+    """The outstanding code, if there is one and it has not expired.
+
+    Readable again rather than shown once: a child who navigated away between
+    making the code and reading it out would otherwise have to make another,
+    and each new one invalidates the last -- which is the one way this flow can
+    turn into a child reading a code that no longer works.
+
+    Three states. `retrieved: False` is a failed read; `code: null` with
+    `retrieved: True` means there is genuinely none outstanding. A page that
+    collapsed them would offer "create one" for an account that already has one
+    and is about to have it replaced.
+    """
+    user = get_user(request)
+    try:
+        rows = supabase.table("parent_link_codes").select("code, expires_at") \
+            .eq("student_id", user["id"]).limit(1).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[link-code] could not read the code for {user['id'][:8]}: {e}")
+        return {"code": None, "expires_at": None, "retrieved": False}
+    row = rows[0] if rows else None
+    expires = _parse_ts(row.get("expires_at")) if row else None
+    # An expired row is still here until the nightly sweep takes it, and the
+    # redemption path refuses it -- so reporting it as the outstanding code
+    # would be this surface disagreeing with that one.
+    if row is None or expires is None or expires <= _utc_now():
+        return {"code": None, "expires_at": None, "retrieved": True}
+    return {"code": row["code"], "expires_at": row["expires_at"],
+            "retrieved": True}
 
 
 # A cap on one parent's banner, not on the table. A parent who has not opened

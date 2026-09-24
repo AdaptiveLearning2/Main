@@ -18,8 +18,15 @@ SESSION = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 # ── a fake client: three signal tables, one sessions row, one bucket ─────────
 
 class _Query:
-    def __init__(self, rows):
+    """Honours `range` and PostgREST's `db-max-rows`: every response is cut at
+    `max_rows` whatever was asked for, which is what made a `.limit(20000)`
+    read return 1000 rows. A fake that returned everything could not fail
+    against that."""
+
+    def __init__(self, rows, max_rows=1000):
         self._rows = rows
+        self._max_rows = max_rows
+        self._range = None
 
     def select(self, *_a, **_k):
         return self
@@ -33,8 +40,17 @@ class _Query:
     def limit(self, *_a, **_k):
         return self
 
+    def range(self, start, end):
+        self._range = (start, end)
+        return self
+
     def execute(self):
-        return type("R", (), {"data": self._rows})()
+        rows = self._rows
+        if rows is None:                    # an update, which returns nothing here
+            return type("R", (), {"data": None})()
+        if self._range is not None:
+            rows = rows[self._range[0]:self._range[1] + 1]
+        return type("R", (), {"data": rows[:self._max_rows]})()
 
 
 class _Update(_Query):
@@ -241,14 +257,62 @@ def test_scheduling_never_raises_even_with_the_pool_shut_down(capsys):
     chart_archive.shutdown_pool()
 
 
-def test_archiving_reads_no_more_rows_than_session_review_does():
-    """The archive must match what the reviewer saw."""
-    import inspect
+def _long_session(n):
+    start = datetime(2026, 6, 11, 14, 0, tzinfo=timezone.utc).timestamp()
+    return [{"id": i, "ts": datetime.fromtimestamp(start + i, timezone.utc).isoformat(),
+             "focus": 0.5, "stress": 0.3} for i in range(n)]
 
+
+def test_the_archive_reads_past_the_servers_row_cap():
+    """PostgREST cuts every response at 1000 rows, service role included, and
+    says nothing. At 1 Hz a 45-minute lesson is 2700 rows, and a single
+    `.limit(20000)` read archived its first ~17 minutes as the whole lesson."""
+    rows = _long_session(2700)
+    cognitive, _, _ = chart_archive._fetch(_Client(cognitive=rows), SESSION)
+    assert [r["id"] for r in cognitive] == list(range(2700))
+
+
+def test_the_row_cap_still_binds():
+    rows = _long_session(chart_archive._ROW_CAP + 1500)
+    cognitive, _, _ = chart_archive._fetch(_Client(cognitive=rows), SESSION)
+    assert len(cognitive) == chart_archive._ROW_CAP
+
+
+def test_session_review_reads_the_same_rows_the_archive_draws(monkeypatch):
+    """The archive is meant to be what the reviewer saw, so the two must stop
+    at the same row. Asserted on what each returns from one table, not on the
+    source: a shared literal said nothing about what either read, and both were
+    cut at 1000 while agreeing on 20000."""
     import main
 
-    source = inspect.getsource(main.session_signals)
-    assert f"limit({chart_archive._ROW_CAP})" in source
+    rows = _long_session(2700)
+
+    class _ReviewClient(_Client):
+        def table(self, name):
+            if name == "sessions":
+                return _Single({"user_id": USER})
+            if name == "session_answers":
+                return _Query([])
+            return super().table(name)
+
+    class _Single(_Query):
+        def __init__(self, row):
+            super().__init__([row])
+
+        def single(self):
+            row = self._rows[0]
+            return type("S", (), {"execute": lambda _s: type("R", (), {"data": row})()})()
+
+    client = _ReviewClient(cognitive=rows)
+    monkeypatch.setattr(main, "supabase", client)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a, **_k: None)
+
+    reviewed = main.session_signals(SESSION, request=None)["cognitive"]
+    archived = chart_archive._fetch(client, SESSION)[0]
+
+    assert len(reviewed) == 2700
+    assert reviewed == archived
 
 
 # ── reading them back ───────────────────────────────────────────────────────

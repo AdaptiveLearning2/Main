@@ -17,7 +17,10 @@ import chart_render
 
 BUCKET = "session-charts"
 
-# Must equal `/api/signals/session/{id}`'s cap: the archive is what the reviewer saw.
+# What the read is capped at, for `/api/signals/session/{id}` and the archive
+# alike -- both read through `read_session_signals`. Shared on purpose: the
+# archive is meant to be what the reviewer saw, so the two have to truncate a
+# very long session at the same place.
 _ROW_CAP = 20000
 
 
@@ -100,13 +103,46 @@ def object_path(user_id: str, session_id: str, chart: str) -> str:
     return f"{user_id}/{session_id}/{chart}.svg"
 
 
-def _fetch(client, session_id: str):
-    """The same three reads `/api/signals/session/{id}` makes, same order and cap (service-role)."""
+# PostgREST cuts every response at `db-max-rows` (1000, `supabase/config.toml`),
+# service role included, and says nothing when it does. A `.limit(20000)` was
+# therefore a limit of 1000: at the default 1 Hz poll, a 45-minute lesson was
+# archived -- and shown in session review -- as its first ~17 minutes.
+_PAGE = 1000
+
+
+def read_session_signals(client, session_id: str, since: str | None = None):
+    """A session's cognitive, face and heart rows, in `ts` order, up to
+    `_ROW_CAP` each, read a page at a time.
+
+    The one reader for both session review and the archive, so the two stop at
+    the same row by construction rather than by keeping two literals equal.
+    Ordered on `id` as well as `ts`, because a page boundary inside a run of
+    equal timestamps is only stable under a total order. A page stops the loop
+    only when it comes back empty: a short page cannot be told apart from a
+    server cap lower than `_PAGE`.
+    """
     def rows(table):
-        return client.table(table).select("*").eq("session_id", session_id) \
-            .order("ts").limit(_ROW_CAP).execute().data or []
+        out: list = []
+        while len(out) < _ROW_CAP:
+            query = client.table(table).select("*").eq("session_id", session_id)
+            if since:
+                query = query.gt("ts", since)
+            end = min(len(out) + _PAGE, _ROW_CAP) - 1
+            page = query.order("ts").order("id").range(len(out), end) \
+                .execute().data or []
+            if not page:
+                break
+            out.extend(page)
+        return out
 
     return rows("cognitive_signals"), rows("face_signals"), rows("heart_signals")
+
+
+def _fetch(client, session_id: str):
+    """Service-role, so RLS doesn't apply: this runs with no request behind it,
+    already authorised by the fact that the session belongs to the student
+    whose close triggered it."""
+    return read_session_signals(client, session_id)
 
 
 def archive_session(client, session_id: str, user_id: str, *,

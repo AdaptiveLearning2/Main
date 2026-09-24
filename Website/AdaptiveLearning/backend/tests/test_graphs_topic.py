@@ -97,6 +97,24 @@ def test_a_reply_answering_a_different_scenario_is_refused(reply):
         graphs.generate_graphs_question([], [], "medium", "1st Grade")
 
 
+@pytest.mark.parametrize("text", [
+    # The report's case: a false premise, scored 2 because the target put the larger first.
+    "The graph shows the pets in Ms Lee's class. How many more dogs than cats are there?",
+    "How many more cats than birds are there?",
+    "How many cats and dogs are there?",
+])
+def test_a_target_that_is_not_the_comparison_on_screen_is_refused(reply, text):
+    reply({**VALID, "question_text": text})
+    with pytest.raises(ValueError, match="after retries"):
+        graphs.generate_graphs_question([], [], "medium", "1st Grade")
+
+
+def test_the_comparison_is_read_where_the_question_asks_it(reply):
+    """A name mentioned earlier in the sentence is not the order of the comparison."""
+    reply({**VALID, "question_text": "Look at the dogs and the cats. How many more Cats than dogs are there?"})
+    assert graphs.generate_graphs_question([], [], "medium", "1st Grade")["correct_answer"] == "2"
+
+
 def test_the_names_match_the_blocks_they_send():
     """A wrong map entry sends one block and validates against another."""
     import re

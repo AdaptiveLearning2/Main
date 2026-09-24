@@ -74,8 +74,9 @@ Rules:
 - Each "count" must be a whole number from 1 to 20, written as a string.
 - Every "name" must be different, and must be a simple plural noun a young
   child knows (cats, apples, books, cars).
-- For "how_many_more", "target" must name EXACTLY TWO of the categories, the
-  larger one first. For "how_many_total", "target" must be an empty list.
+- For "how_many_more", the question asks how many more of the LARGER category
+  than the smaller, and "target" names EXACTLY TWO categories in the order the
+  question names them. For "how_many_total", "target" must be an empty list.
 - "question_text" must NOT contain any digits. The counts are in the graph --
   writing them in the question is giving away the reading the student is
   being asked to do.
@@ -172,6 +173,24 @@ def solve_graph(scenario, categories, target):
     return None
 
 
+_HOW_MANY_MORE = re.compile(r"how\s+many\s+more\b", re.I)
+
+
+def _target_follows_text(text, target):
+    """True if the text asks "how many more" and then names both `target` categories, in order.
+
+    Read after the last "how many more": that is the comparison asked, not an earlier mention.
+    """
+    if not isinstance(text, str) or not isinstance(target, list) or len(target) != 2:
+        return False
+    asks = list(_HOW_MANY_MORE.finditer(text))
+    if not asks:
+        return False
+    question = text[asks[-1].end():]
+    found = [re.search(rf"\b{re.escape(str(name).strip())}\b", question, re.I) for name in target]
+    return all(found) and found[0].start() < found[1].start()
+
+
 def generate_incorrect_answers(solution, counts):
     """Near-misses first: individual bars and off-by-one reads."""
     candidates = [solution + 1, solution - 1, *counts, sum(counts),
@@ -259,6 +278,13 @@ def generate_graphs_question(global_questions, prev_questions, difficulty,
         if figure is None:
             print(f"[Attempt {attempt+1}] Unusable categories:",
                   repr(question_data.get("categories"))[:80])
+            continue
+
+        # The subtraction is target[0] - target[1], so it must be the comparison on screen.
+        if question_data["scenario"] == "how_many_more" and not _target_follows_text(
+                text, question_data.get("target")):
+            print(f"[Attempt {attempt+1}] Target is not the comparison the text asks:",
+                  repr(question_data.get("target"))[:60])
             continue
 
         solution = solve_graph(question_data["scenario"],

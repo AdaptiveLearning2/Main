@@ -1,6 +1,6 @@
 /** The page lists the topics the student's grade is served, and names a topic with every underscore a space. */
 import { it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
@@ -25,7 +25,7 @@ vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u1', email: 'a@b.c' }, role: 'student', loading: false }),
 }))
 
-import { mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
+import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
 import Adaptive from './Adaptive'
 
 const KINDERGARTEN = ['counting', 'comparing_numbers', 'add_and_subtract', 'teen_numbers', 'shapes']
@@ -48,6 +48,13 @@ beforeEach(() => {
     }),
   })
 })
+
+// Waits for that exact request to settle: until then the hook answers `null` either way.
+async function settled(path) {
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledWith(path))
+  const i = apiFetch.mock.calls.findIndex(([p]) => p === path)
+  await act(async () => { await apiFetch.mock.results[i].value.catch(() => {}) })
+}
 
 function sidebar() {
   return screen.getByText('Topic Accuracy').parentElement
@@ -73,7 +80,7 @@ it('keeps a topic the student has attempted, whatever the grade', async () => {
 it('lists every topic when the grade could not be looked up', async () => {
   overrideApi('/api/topics?grade=Kindergarten', () => { throw apiError(500, 'down') }, 'GET')
   render(<Adaptive />)
-  await screen.findByText(/how many questions/i)
+  await settled('/api/topics?grade=Kindergarten')
   expect(within(sidebar()).getByText(/ordering/)).toBeInTheDocument()
   expect(within(sidebar()).getByText(/add and subtract/)).toBeInTheDocument()
 })

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -36,6 +36,13 @@ const topic = (topic_name, accuracy, attempted_questions) => ({
 })
 
 const draw = () => render(<MemoryRouter><Dashboard /></MemoryRouter>)
+
+// Waits for that exact request to settle: until then the hook answers `null` either way.
+async function settled(path) {
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledWith(path))
+  const i = apiFetch.mock.calls.findIndex(([p]) => p === path)
+  await act(async () => { await apiFetch.mock.results[i].value.catch(() => {}) })
+}
 
 beforeEach(() => {
   resetApi()
@@ -99,6 +106,7 @@ describe('the topic grid', () => {
     draw()
 
     await screen.findByText('30%')
+    await settled('/api/topics?grade=1st%20Grade')
     expect(screen.getByText('mode')).toBeInTheDocument()
     expect(screen.getByText('counting')).toBeInTheDocument()
   })

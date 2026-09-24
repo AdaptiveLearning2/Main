@@ -83,6 +83,50 @@ def solve_not_probability_of(items, target):
 def solve_dice(sides, target):
     return Rational(len(target), sides)
 
+
+def _whole(value):
+    """`value` as an int if the parsed float is a whole number, else None."""
+    return int(value) if isinstance(value, (int, float)) and float(value).is_integer() else None
+
+
+def _scored_data(question_data):
+    """(items, target) the solvers can score, or the reason the reply cannot be.
+
+    Dice: `items` is the side count, `target` distinct faces in 1..sides. Bags: whole counts,
+    and a target naming items that exist (case and spacing ignored), so no target scores 0.
+    """
+    target = question_data["target"]
+    targets = target if isinstance(target, list) else [target]
+    if not targets:
+        return "no target"
+
+    # Parsed in the bounded worker, since `sympify` on model text can hang.
+    if question_data["scenario"] == "dice":
+        parsed = safe_solve.safe_sympify_values([question_data["sides"], *targets])
+        if parsed is None:
+            return f"unusable dice values: {question_data['sides']!r}, {target!r}"
+        sides, faces = _whole(parsed[0]), [_whole(f) for f in parsed[1:]]
+        if sides is None or sides < 2:
+            return f"a die needs a whole number of sides, not {question_data['sides']!r}"
+        if any(f is None or not 1 <= f <= sides for f in faces) or len(set(faces)) != len(faces):
+            return f"target faces {target!r} are not distinct faces of a {sides}-sided die"
+        return sides, faces
+
+    raw_items = question_data["items"]
+    if not isinstance(raw_items, dict) or not raw_items:
+        return "items is not a non-empty object"
+    parsed = safe_solve.safe_sympify_values(list(raw_items.values()))
+    counts = [_whole(c) for c in parsed] if parsed is not None else None
+    if counts is None or any(c is None or c < 0 for c in counts) or sum(counts) == 0:
+        return f"unusable item counts: {raw_items!r}"
+    items = dict(zip(raw_items.keys(), counts))
+
+    by_name = {str(k).strip().lower(): k for k in items}
+    resolved = [by_name.get(str(t).strip().lower()) for t in targets]
+    if None in resolved or len(set(resolved)) != len(resolved):
+        return f"target {target!r} does not name distinct items of {list(items)!r}"
+    return items, resolved if isinstance(target, list) else resolved[0]
+
 prob_prompt = f"""
 You are to provide a Math question suitable for students. The response must be in JSON format. 
 The Question Text, Question Topic, Scenario, Items, and Target will be displayed. The Question Topic will always be "probability"
@@ -253,33 +297,25 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
             print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
 
+        scored = _scored_data(question_data)
+        if isinstance(scored, str):
+            print(f"[Attempt {attempt+1}] Unusable scored data: {scored}")
+            continue
+        items, target = scored
+
+        if question_data["scenario"] != "dice":
+            inconsistent = question_consistency.counts_mismatch(
+                question_data.get("question_text"), items)
+            if inconsistent:
+                print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
+                continue
+
         break
 
     else:
         raise ValueError("Failed to generate valid JSON after retries")
 
     scenario = question_data["scenario"]
-    target = question_data["target"]
-
-    # Parsed in the bounded worker, since `sympify` on model text can hang.
-    if scenario == "dice":
-        parsed = safe_solve.safe_sympify_values([question_data["sides"], *target])
-        if parsed is None:
-            raise ValueError(f"unusable dice values: {question_data['sides']!r}")
-        items = parsed[0]
-        target = parsed[1:]
-    else:
-        raw_items = question_data["items"]
-        if not isinstance(raw_items, dict) or not raw_items:
-            raise ValueError("Invalid items in question data")
-        counts = safe_solve.safe_sympify_values(list(raw_items.values()))
-        if counts is None:
-            raise ValueError(f"unusable item counts: {raw_items!r}")
-        items = dict(zip(raw_items.keys(), counts))
-
-    if not items or not target:
-        raise ValueError("Invalid items or target in question data")
-
 
     solution = solve_probability(scenario, items, target)
 

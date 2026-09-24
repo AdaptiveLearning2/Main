@@ -83,6 +83,22 @@ def dataset_mismatch(question_text, values):
     return dataset_check(question_text, values)[1]
 
 
+def counts_mismatch(question_text, counts):
+    """Reason a count the text gives an item differs from the scored count, or None.
+
+    Reads "<n> <up to two words> <label>" ("6 red marbles"); a label with no number is left alone.
+    """
+    if not question_text or not isinstance(counts, dict):
+        return None
+    for label, count in counts.items():
+        pattern = rf"\b(\d+)\s+(?:[A-Za-z-]+\s+){{0,2}}?{re.escape(str(label))}(?:e?s)?\b"
+        shown = {int(n) for n in re.findall(pattern, question_text, re.I)}
+        if shown and count not in shown:
+            return (f"the question gives {label!r} as {sorted(shown)} but {count} is "
+                    f"scored -- the student would be marked against counts they were not given")
+    return None
+
+
 def negation_mismatch(question_text, scenario):
     """Reason a probability question's wording disagrees with its scenario, or None.
 

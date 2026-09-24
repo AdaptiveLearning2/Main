@@ -51,3 +51,80 @@ def test_a_reply_answering_the_scenario_that_was_asked_for_is_served(reply):
     question = prob.generate_probability_question([], [], "medium", "7th Grade")
     assert question["question_text"] == DICE["question_text"]
     assert question["correct_answer"] in question["answer_options"]
+
+
+# ── what is scored is what the question shows ───────────────────────────────
+
+BAG = {"question_text": "A bag contains 6 red marbles, 4 blue marbles, and 2 green marbles. "
+                        "If one marble is drawn at random, what is the probability of drawing a red marble?",
+       "question_topic": "probability", "scenario": "probability_of",
+       "items": {"red": "6", "blue": "4", "green": "2"}, "target": "red"}
+NOT_BAG = {**BAG, "scenario": "not_probability_of",
+           "question_text": BAG["question_text"].replace("of drawing", "of NOT drawing")}
+
+
+@pytest.fixture
+def replies(monkeypatch):
+    """Answers each attempt with the next payload; returns how many were asked for."""
+    monkeypatch.setattr(lesson_plan_context, "append_lesson_context", lambda p, t, b: p)
+    asked = []
+
+    def _use(*payloads):
+        def generate(*_a, **_k):
+            asked.append(1)
+            return json.dumps(payloads[min(len(asked), len(payloads)) - 1])
+        monkeypatch.setattr(llm_client, "generate_text", generate)
+        return asked
+    return _use
+
+
+def _generate(difficulty):
+    return prob.generate_probability_question([], [], difficulty, "7th Grade")
+
+
+@pytest.mark.parametrize("target", ["Red", " red ", ["RED"]])
+def test_a_target_written_differently_still_names_its_item(replies, target):
+    replies({**BAG, "target": target})
+    assert _generate("easy")["correct_answer"] == "1/2"
+
+
+@pytest.mark.parametrize("difficulty,payload", [
+    ("easy", {**BAG, "target": "red marbles"}),
+    ("easy", {**BAG, "target": "purple"}),
+    ("easy", {**BAG, "target": ["red", "Red"]}),
+    ("hard", {**NOT_BAG, "target": "purple"}),
+    ("easy", {**BAG, "items": {"red": "6", "blue": "4.5", "green": "2"},
+              "question_text": BAG["question_text"].replace("4 blue", "4.5 blue")}),
+    ("easy", {**BAG, "items": {"red": "0", "blue": "0"}}),
+])
+def test_a_target_or_count_that_cannot_be_scored_is_retried_not_served(replies, difficulty, payload):
+    """Unknown targets scored 0 favourable: 0 served as correct, or 1 for NOT."""
+    asked = replies(payload, BAG if difficulty == "easy" else NOT_BAG)
+    question = _generate(difficulty)
+    assert len(asked) == 2
+    # Red is half the bag, so "red" and "not red" both serve 1/2 from the good reply.
+    assert question["correct_answer"] == "1/2"
+
+
+@pytest.mark.parametrize("target,sides", [
+    (["5", "6", "7"], "6"), (["5", "5"], "6"), (["0", "1"], "6"), (["2.5"], "6"),
+    (["5", "6"], "6.5"), (["1"], "1"), ("56", "6"),
+])
+def test_dice_faces_must_be_distinct_faces_of_the_die(replies, target, sides):
+    asked = replies({**DICE, "target": target, "sides": sides}, DICE)
+    question = _generate("medium")
+    assert len(asked) == 2
+    assert question["correct_answer"] == "1/3"
+
+
+def test_counts_in_the_text_must_be_the_counts_scored(replies):
+    """Shown 6 red, scored 5: 5/11 would mark a correct 1/2 wrong."""
+    asked = replies({**BAG, "items": {"red": "5", "blue": "4", "green": "2"}}, BAG)
+    assert _generate("easy")["correct_answer"] == "1/2"
+    assert len(asked) == 2
+
+
+def test_a_reply_that_never_agrees_is_refused_not_served(replies):
+    replies({**BAG, "target": "purple"})
+    with pytest.raises(ValueError):
+        _generate("easy")

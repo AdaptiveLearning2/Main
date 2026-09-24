@@ -21,7 +21,7 @@ EEG_STRESSED_CALM_MAX_BY_SOURCE = {"sdk": EEG_STRESSED_CALM_MAX, "local": 0.25}
 EMOTION_MIN_CONFIDENCE = 0.50
 # FER+'s labels as the sidecar stores them (face_emotion.EMOTION_LABELS); a test reads that tuple.
 FER_LABELS = ("neutral", "happy", "surprise", "sad", "angry", "disgust", "fear", "contempt")
-NEGATIVE_EMOTIONS = frozenset({"sad", "fear", "angry", "disgust"})
+NEGATIVE_EMOTIONS = frozenset({"sad", "fear", "angry", "disgust", "contempt"})
 
 # `trusted` is checked separately: an untrusted sample still carries a category.
 ELEVATED_STRESS = frozenset({"high"})

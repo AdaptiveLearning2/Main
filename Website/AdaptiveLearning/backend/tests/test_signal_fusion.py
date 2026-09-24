@@ -122,7 +122,7 @@ def test_the_backend_names_exactly_the_labels_the_sidecar_emits():
 
 # Every FER+ label, and whether it withholds; a label added on either side fails until listed.
 WITHHOLDS = {"neutral": False, "happy": False, "surprise": False, "sad": True,
-             "angry": True, "disgust": True, "fear": True, "contempt": False}
+             "angry": True, "disgust": True, "fear": True, "contempt": True}
 
 
 def test_every_fer_label_is_classified():

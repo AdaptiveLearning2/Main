@@ -19,6 +19,9 @@ const prefsFrom = (p) => ({
   practice_reminders:       p?.practice_reminders ?? true,
 })
 
+// How often a code on screen is re-read, to notice it was used or expired.
+const CODE_RECHECK_MS = 15_000
+
 const TABS  = ['Overview', 'Account', 'Preferences', 'Devices']
 const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 
@@ -73,6 +76,27 @@ export default function Profile() {
       setLinkCode(lc?.code ? { code: lc.code, expires_at: lc.expires_at } : null)
     })
   }, [])
+
+  // A code on screen stops working without this page doing anything: a parent
+  // redeems it, or it expires. So while one is showing it is re-read, or the
+  // card goes on offering a spent code as live.
+  const shownCode = linkCode?.code
+  useEffect(() => {
+    if (!shownCode) return
+    const recheck = () => apiFetch('/api/student/link-code')
+      .then(lc => {
+        // A failed read says nothing about the code; leave it standing.
+        if (lc?.retrieved === false) return
+        // Only while it is still the code this read was about: a "New code"
+        // that landed meanwhile is newer than this answer.
+        setLinkCode(cur => (cur?.code !== shownCode ? cur
+          : lc?.code ? { code: lc.code, expires_at: lc.expires_at } : null))
+      })
+      .catch(() => {})
+    const timer = setInterval(recheck, CODE_RECHECK_MS)
+    window.addEventListener('focus', recheck)
+    return () => { clearInterval(timer); window.removeEventListener('focus', recheck) }
+  }, [shownCode])
 
   // Update the UI immediately so taps feel instant, then reconcile with what
   // the server actually stored (it clamps values). Revert on failure so the

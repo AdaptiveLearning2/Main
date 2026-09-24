@@ -262,20 +262,6 @@ def fake_supabase(monkeypatch):
     monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES))
 
 
-@pytest.fixture(autouse=True)
-def reset_strategy_rate_limit():
-    """The limiter counts in module-level state, which outlives a test.
-
-    Without this the strategy tests share one allowance and start failing on
-    whichever of them happens to run eleventh.
-    """
-    main._STRATEGY_LIMITER.reset()
-    main._STRATEGY_LIMITER.sweep_at = 0.0
-    yield
-    main._STRATEGY_LIMITER.reset()
-    main._STRATEGY_LIMITER.sweep_at = 0.0
-
-
 # ── _can_view_student ────────────────────────────────────────────────────
 
 def test_student_can_view_their_own_data():

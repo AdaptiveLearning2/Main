@@ -39,15 +39,21 @@ class _Fake:
     of every write, so a test can assert on what was *asked* rather than only on
     the answer."""
 
-    def __init__(self, codes=(), links=(), role="parent", code_read_raises=None):
+    def __init__(self, codes=(), links=(), role="student", code_read_raises=None,
+                 profile_raises=None, link_insert_raises=None, link_on_failure=False):
         self.codes = [dict(c) for c in codes]
         self.links = [dict(l) for l in links]
-        self.role = role
+        self.role = role       # the *child's* profile: the one link_child reads
         self.code_read_raises = code_read_raises
+        self.profile_raises = profile_raises
+        self.link_insert_raises = link_insert_raises
+        # The race a unique violation means: another request wrote the link.
+        self.link_on_failure = link_on_failure
         self.upserts = []      # (table, row, kwargs)
         self.inserts = []      # (table, row)
-        self.deletes = []      # (table, filters)
+        self.deletes = []      # (table, filters, gt)
         self.events = []       # every security_events insert
+        self.ops = []          # (kind, table), in order, writes only
 
     def table(self, name):
         client, table = self, name
@@ -55,6 +61,7 @@ class _Fake:
         class _Q:
             def __init__(self):
                 self._filters = {}
+                self._gt = {}
                 self._write = None
 
             def select(self, *_a, **_k):   return self
@@ -65,6 +72,15 @@ class _Fake:
             def eq(self, col, val):
                 self._filters[col] = val
                 return self
+
+            def gt(self, col, val):
+                self._gt[col] = val
+                return self
+
+            def _matches(self, row):
+                return (all(row.get(k) == v for k, v in self._filters.items())
+                        and all(main._parse_ts(row.get(k)) > main._parse_ts(v)
+                                for k, v in self._gt.items()))
 
             def upsert(self, row, **kw):
                 self._write = ("upsert", row, kw)
@@ -85,36 +101,45 @@ class _Fake:
             def execute(self):
                 if self._write:
                     kind, row, kw = self._write
+                    if table != "security_events":
+                        client.ops.append((kind, table))
                     if kind == "upsert":
                         client.upserts.append((table, row, kw))
                         client.codes = [c for c in client.codes
                                         if c["student_id"] != row["student_id"]]
                         client.codes.append(dict(row))
                     elif kind == "insert":
+                        if table == "parent_child_links" and client.link_insert_raises:
+                            if client.link_on_failure:
+                                client.links.append(dict(row))
+                            raise client.link_insert_raises
                         client.inserts.append((table, row))
                         if table == "security_events":
                             client.events.append(row)
                         if table == "parent_child_links":
                             client.links.append(dict(row))
+                        if table == "parent_link_codes":
+                            client.codes.append(dict(row))
                     elif kind == "delete":
-                        client.deletes.append((table, dict(self._filters)))
-                        client.codes = [
-                            c for c in client.codes
-                            if not all(c.get(k) == v
-                                       for k, v in self._filters.items())]
+                        if client.code_read_raises:
+                            raise client.code_read_raises
+                        client.deletes.append((table, dict(self._filters), dict(self._gt)))
+                        # PostgREST's default for a delete is to return the
+                        # rows it removed, which is what makes it a claim.
+                        gone = [c for c in client.codes if self._matches(c)]
+                        client.codes = [c for c in client.codes if not self._matches(c)]
+                        return type("R", (), {"data": gone})()
                     return type("R", (), {"data": [row] if row else []})()
 
                 if table == "parent_link_codes":
                     if client.code_read_raises:
                         raise client.code_read_raises
-                    rows = [c for c in client.codes
-                            if all(c.get(k) == v
-                                   for k, v in self._filters.items())]
+                    rows = [c for c in client.codes if self._matches(c)]
                 elif table == "parent_child_links":
-                    rows = [l for l in client.links
-                            if all(l.get(k) == v
-                                   for k, v in self._filters.items())]
+                    rows = [l for l in client.links if self._matches(l)]
                 elif table == "profiles":
+                    if client.profile_raises:
+                        raise client.profile_raises
                     rows = [{"id": self._filters.get("id"),
                              "display_name": "Ada", "role": client.role}]
                 else:
@@ -165,7 +190,8 @@ def test_a_code_is_stored_against_the_caller_and_replaces_the_last(monkeypatch, 
 def test_only_a_student_can_create_a_code(monkeypatch):
     """A teacher's code, handed over, would produce a parent linked to a
     teacher -- which `_verify_can_view_student` would honour. Refused at the
-    source, which is why `link_child` needs no role check on the far side."""
+    source, and checked again on redemption, since a role can change inside a
+    code's lifetime."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
     monkeypatch.setattr(main, "_role", lambda _uid: "teacher")
     monkeypatch.setattr(main, "supabase", _Fake())
@@ -270,9 +296,108 @@ def test_a_redeemed_code_does_not_work_twice(monkeypatch, parent):
     monkeypatch.setattr(main, "supabase", fake)
 
     main.link_child(main.LinkChildRequest(link_code=CODE), None)
-
-    assert ("parent_link_codes", {"code": CODE}) in fake.deletes
     assert fake.codes == [], "the spent code is still outstanding"
+
+    # A second adult with the same code.
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "parent-2"})
+    with pytest.raises(main.HTTPException) as e:
+        main.link_child(main.LinkChildRequest(link_code=CODE), None)
+    assert e.value.status_code == 404
+    assert [l["parent_id"] for l in fake.links] == [PARENT]
+
+
+def test_the_code_is_claimed_before_the_link_is_written(monkeypatch, parent):
+    """**The delete is the claim.** Two requests carrying one code both read it
+    as valid if the read is the check; only one gets rows back from a delete.
+    So the delete comes first, is conditional on the code being unexpired, and
+    nothing is linked unless it returned the row."""
+    fake = _Fake(codes=[_code()])
+    monkeypatch.setattr(main, "supabase", fake)
+
+    main.link_child(main.LinkChildRequest(link_code=CODE), None)
+
+    assert fake.ops[:2] == [("delete", "parent_link_codes"),
+                            ("insert", "parent_child_links")], fake.ops
+    table, filters, gt = fake.deletes[0]
+    assert (table, filters) == ("parent_link_codes", {"code": CODE})
+    # Conditional on the expiry, in the same statement -- or an expired code
+    # is deleted and honoured.
+    assert main._parse_ts(gt["expires_at"]) <= main._utc_now()
+
+
+def test_a_claim_that_failed_links_nobody(monkeypatch, parent):
+    """A delete that could not run has claimed nothing, so nothing is linked --
+    and it is a 503, not "not valid": the code may be fine."""
+    fake = _Fake(codes=[_code()], code_read_raises=RuntimeError("down"))
+    monkeypatch.setattr(main, "supabase", fake)
+
+    with pytest.raises(main.HTTPException) as e:
+        main.link_child(main.LinkChildRequest(link_code=CODE), None)
+
+    assert e.value.status_code == 503
+    assert fake.links == []
+
+
+def test_a_code_for_an_account_that_is_no_longer_a_student_links_nobody(monkeypatch, parent):
+    """Checked when the code was made, and again here: the role can change
+    inside the code's lifetime. Same refusal as any other code that does not
+    work, recorded like one, and spent rather than given back."""
+    fake = _Fake(codes=[_code()], role="teacher")
+    monkeypatch.setattr(main, "supabase", fake)
+
+    with pytest.raises(main.HTTPException) as e:
+        main.link_child(main.LinkChildRequest(link_code=CODE), None)
+
+    assert e.value.status_code == 404
+    assert fake.links == []
+    assert fake.codes == []
+    assert [ev for ev in fake.events if ev["kind"] == "authz_denied"], fake.events
+
+
+def test_a_child_profile_that_could_not_be_read_links_nobody(monkeypatch, parent):
+    """Not through `_role`, which answers "student" for a failed read -- the
+    permissive answer on this side. The code goes back: nothing is wrong with it."""
+    fake = _Fake(codes=[_code()], profile_raises=RuntimeError("down"))
+    monkeypatch.setattr(main, "supabase", fake)
+
+    with pytest.raises(main.HTTPException) as e:
+        main.link_child(main.LinkChildRequest(link_code=CODE), None)
+
+    assert e.value.status_code == 503
+    assert fake.links == []
+    assert [c["code"] for c in fake.codes] == [CODE], "a good code was spent"
+
+
+@pytest.mark.parametrize("linked_meanwhile,status", [
+    (True,  409),   # the unique constraint: this parent's other request won
+    (False, 503),
+])
+def test_a_link_that_was_not_written_is_answered_and_gives_the_code_back(
+        monkeypatch, parent, linked_meanwhile, status):
+    """A failed insert was an unhandled 500 that left the code spent. It is
+    asked what happened rather than guessed from the error text."""
+    fake = _Fake(codes=[_code()], link_insert_raises=RuntimeError("23505"),
+                 link_on_failure=linked_meanwhile)
+    monkeypatch.setattr(main, "supabase", fake)
+
+    with pytest.raises(main.HTTPException) as e:
+        main.link_child(main.LinkChildRequest(link_code=CODE), None)
+
+    assert e.value.status_code == status
+    assert [c["code"] for c in fake.codes] == [CODE]
+
+
+def test_a_code_given_back_never_replaces_a_newer_one(monkeypatch, parent):
+    """Inserted, not upserted on the student: if the child made a new code while
+    this one was claimed, the new one is what they are reading out."""
+    fake = _Fake(codes=[_code()], profile_raises=RuntimeError("down"))
+    monkeypatch.setattr(main, "supabase", fake)
+
+    with pytest.raises(main.HTTPException):
+        main.link_child(main.LinkChildRequest(link_code=CODE), None)
+
+    assert fake.upserts == []
+    assert ("insert", "parent_link_codes") in fake.ops
 
 
 def test_a_code_is_accepted_however_it_was_typed(monkeypatch, parent):

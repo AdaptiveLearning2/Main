@@ -61,21 +61,6 @@ def _basis(**over):
     return base
 
 
-@pytest.fixture(autouse=True)
-def reset_chart_summary_rate_limit():
-    """The limiter counts in module-level state, which outlives a test.
-
-    Without this these tests share one allowance and start failing on
-    whichever of them happens to run eleventh -- the same guard the strategy
-    tests carry, and for the same reason.
-    """
-    main._CHART_SUMMARY_LIMITER.reset()
-    main._CHART_SUMMARY_LIMITER.sweep_at = 0.0
-    yield
-    main._CHART_SUMMARY_LIMITER.reset()
-    main._CHART_SUMMARY_LIMITER.sweep_at = 0.0
-
-
 # ── the flag ─────────────────────────────────────────────────────────────
 
 def test_the_flag_is_declared_so_an_unreadable_table_cannot_change_behaviour():

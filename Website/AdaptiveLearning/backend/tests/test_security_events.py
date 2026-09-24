@@ -63,15 +63,9 @@ class _Recorder:
 def recorder(monkeypatch):
     rec = _Recorder()
     monkeypatch.setattr(main, "supabase", rec)
-    # All four of these are module-level dicts that outlive a test, so a
-    # caller id used twice in this file carries its hits across -- which is how
-    # the hammering test first failed, on a 429 from the call that was supposed
-    # to be *inside* the allowance. Same shape as the persisted view state the
-    # frontend suite has to clear in `beforeEach`.
+    # A module-level dict that outlives a test, so an event recorded by one
+    # would be cooled in the next. (The limiters are conftest's.)
     main._security_event_seen.clear()
-    main._STRATEGY_LIMITER.reset()
-    main._CHART_SUMMARY_LIMITER.reset()
-    main._INGEST_LIMITER.reset()
     return rec
 
 

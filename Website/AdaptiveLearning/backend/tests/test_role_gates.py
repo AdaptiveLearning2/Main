@@ -49,6 +49,8 @@ class _Profiles:
             def in_(self, *_a):     return self
             def order(self, *_a, **_k): return self
             def limit(self, *_a):   return self
+            def gt(self, *_a):      return self
+            def delete(self):       return self   # claims no code: there is none
             def single(self):
                 self._single = True
                 return self

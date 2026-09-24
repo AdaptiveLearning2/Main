@@ -10,7 +10,7 @@
  * a first one covering everything would be a different change.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
@@ -107,6 +107,63 @@ it('does not print the user id where the code goes', async () => {
   await screen.findByText('ABCD2345')
   expect(screen.queryByText('kid-1')).not.toBeInTheDocument()
   expect(screen.queryByText(/share this with a parent/i)).not.toBeInTheDocument()
+})
+
+describe('a code on screen that stopped working', () => {
+  // A parent redeemed it, or it expired. The card re-reads it rather than
+  // going on offering a spent code as live until the page reloads.
+  const live = { code: 'ABCD2345', expires_at: IN_TEN_MINUTES(), retrieved: true }
+  const spent = () => overrideApi('/api/student/link-code',
+    () => ({ code: null, expires_at: null, retrieved: true }))
+
+  it('is dropped when the student comes back to the page', async () => {
+    mockApi(happy(live))
+    render(<Profile />)
+    await screen.findByText('ABCD2345')
+
+    spent()
+    window.dispatchEvent(new Event('focus'))
+
+    expect(await screen.findByRole('button', { name: /create a link code/i }))
+      .toBeInTheDocument()
+    expect(screen.queryByText('ABCD2345')).not.toBeInTheDocument()
+  })
+
+  it('is dropped while the student watches it, without any action', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      mockApi(happy(live))
+      render(<Profile />)
+      await screen.findByText('ABCD2345')
+
+      spent()
+      await vi.advanceTimersByTimeAsync(60_000)
+
+      expect(await screen.findByRole('button', { name: /create a link code/i }))
+        .toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('is left standing by a re-read that failed', async () => {
+    // "Could not check" is not "it was used".
+    mockApi(happy(live))
+    render(<Profile />)
+    await screen.findByText('ABCD2345')
+
+    overrideApi('/api/student/link-code',
+      () => ({ code: null, expires_at: null, retrieved: false }))
+    const reads = () => apiFetch.mock.calls.filter(([p, o]) =>
+      p === '/api/student/link-code' && !o?.method).length
+    const before = reads()
+    window.dispatchEvent(new Event('focus'))
+    await waitFor(() => expect(reads()).toBe(before + 1))
+    // Let its answer land before looking.
+    await act(async () => { await new Promise(r => setTimeout(r, 0)) })
+
+    expect(screen.getByText('ABCD2345')).toBeInTheDocument()
+  })
 })
 
 it('reports a refused creation instead of showing a code it did not get', async () => {

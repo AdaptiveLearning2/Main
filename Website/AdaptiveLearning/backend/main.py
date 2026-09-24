@@ -8589,55 +8589,101 @@ def link_child(payload: LinkChildRequest, request: Request):
                             headers={"Retry-After": str(wait)})
 
     code = payload.link_code.strip().upper()
+    refused = HTTPException(404, "That code is not valid or has expired. Ask "
+                                 "your child to create a new one.")
+    unavailable = HTTPException(503, "Could not check that code just now. Try "
+                                     "again in a moment.")
+
+    # **The delete is the claim.** Conditional on the code being unexpired, and
+    # PostgREST returns the rows it deleted, so of two requests carrying one
+    # code only one gets the row back -- Postgres serialises the two deletes on
+    # the row. Deleting after the link was written left a window in which both
+    # linked, and a failed delete left the code working until it expired.
+    # Deleted rather than stamped: `parent_child_links` already records that the
+    # link happened, and a spent-code table would be a second permanent log of
+    # which adult linked which child with nothing reading it.
     try:
-        rows = supabase.table("parent_link_codes") \
-            .select("code, student_id, expires_at").eq("code", code) \
-            .limit(1).execute().data or []
+        claimed = supabase.table("parent_link_codes").delete() \
+            .eq("code", code).gt("expires_at", _utc_now().isoformat()) \
+            .execute().data or []
     except Exception as e:                                     # noqa: BLE001
         # Fails closed, and says which of the two it was: refusing a valid code
         # as "not valid" would send a parent to ask for another one that would
         # be refused the same way.
-        print(f"[link-child] could not read the code: {e}")
-        raise HTTPException(503, "Could not check that code just now. Try again "
-                                 "in a moment.")
+        print(f"[link-child] could not claim the code: {e}")
+        raise unavailable
 
-    row = rows[0] if rows else None
-    expires = _parse_ts(row.get("expires_at")) if row else None
-    if row is None or expires is None or expires <= _utc_now():
-        # One message for "no such code" and "expired", because the difference
-        # is information about somebody else's account -- and a parent's action
-        # is the same either way: ask the child for a new one.
+    if not claimed:
+        # One message for "no such code", "expired" and "already used", because
+        # the difference is information about somebody else's account -- and a
+        # parent's action is the same either way: ask the child for a new one.
         _record_security_event("authz_denied", user["id"],
                                check="parent_link_code")
-        raise HTTPException(404, "That code is not valid or has expired. Ask "
-                                "your child to create a new one.")
+        raise refused
 
+    row = claimed[0]
     child_id = str(row["student_id"])
-    p = _profile(child_id)
-    already = supabase.table("parent_child_links").select("id") \
-        .eq("parent_id", user["id"]).eq("child_id", child_id).execute()
-    if already.data:
-        raise HTTPException(409, "Already linked to this child")
-    supabase.table("parent_child_links").insert({
-        "parent_id": user["id"],
-        "child_id":  child_id,
-    }).execute()
 
-    # Single use, and deleted rather than stamped: `parent_child_links` already
-    # records that the link happened, so a spent-code table would be a second
-    # permanent log of which adult linked which child with nothing reading it.
-    # After the insert, because a code consumed by a link that then failed to
-    # write would leave the child generating another one for no reason.
+    def _give_back():
+        # A claimed code whose link was not made goes back, or the child makes
+        # another for no reason. Inserted, never upserted: if the child has made
+        # a new code since, that one is live and this must not replace it.
+        try:
+            supabase.table("parent_link_codes").insert({
+                k: row[k] for k in ("code", "student_id", "created_at", "expires_at")
+                if k in row}).execute()
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[link-child] a claimed code could not be given back: {e}")
+
+    # The account is still a student's. Checked when the code was made, and
+    # again here, because a role can change inside the code's lifetime. Read
+    # directly rather than through `_role`, which answers "student" for a read
+    # that failed -- the permissive answer, on this side.
     try:
-        supabase.table("parent_link_codes").delete().eq("code", code).execute()
+        prof = (supabase.table("profiles").select("role, display_name")
+                .eq("id", child_id).limit(1).execute().data or [None])[0]
     except Exception as e:                                     # noqa: BLE001
-        # The link exists; the code is past its TTL soon anyway and the sweep
-        # collects it. Raising here would report a failure for something that
-        # succeeded.
-        print(f"[link-child] linked, but the code was not cleared: {e}")
+        print(f"[link-child] could not read the child's profile: {e}")
+        _give_back()
+        raise unavailable
+    if not prof or prof.get("role") != "student":
+        # Spent, not given back: a code for an account that is not a student's
+        # should not stay live.
+        _record_security_event("authz_denied", user["id"],
+                               check="parent_link_code")
+        raise refused
+
+    def _linked():
+        return bool(supabase.table("parent_child_links").select("id")
+                    .eq("parent_id", user["id"]).eq("child_id", child_id)
+                    .execute().data)
+
+    try:
+        if _linked():
+            _give_back()
+            raise HTTPException(409, "Already linked to this child")
+        supabase.table("parent_child_links").insert({
+            "parent_id": user["id"],
+            "child_id":  child_id,
+        }).execute()
+    except HTTPException:
+        raise
+    except Exception as e:                                     # noqa: BLE001
+        # Most likely the unique constraint: this parent linked this child in a
+        # request that landed between the check and the insert. Asked rather
+        # than assumed from the error text.
+        print(f"[link-child] the link was not written: {e}")
+        _give_back()
+        try:
+            exists = _linked()
+        except Exception:                                      # noqa: BLE001
+            exists = False
+        if exists:
+            raise HTTPException(409, "Already linked to this child")
+        raise unavailable
 
     return {"ok": True, "child_id": child_id,
-            "child_name": p.get("display_name") or "Student"}
+            "child_name": prof.get("display_name") or "Student"}
 
 
 @app.delete("/api/parent/children/{child_id}")

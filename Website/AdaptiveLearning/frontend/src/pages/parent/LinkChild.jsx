@@ -81,7 +81,7 @@ export default function ParentLinkChild() {
                 required
               />
             </div>
-            <p className="text-xs text-gray-600 mt-1 dark:text-gray-400">Eight characters, letters and digits — there are no letter O or digit 0 in a code.</p>
+            <p className="text-xs text-gray-600 mt-1 dark:text-gray-400">Eight characters, letters and digits. A code never contains the letters O or I, or the digits 0 or 1.</p>
           </div>
 
           <motion.button type="submit" disabled={loading || !code.trim()}

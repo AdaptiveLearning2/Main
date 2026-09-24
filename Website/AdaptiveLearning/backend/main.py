@@ -5527,8 +5527,8 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
     # sensor failover must read as a sensor change, not a physiological event.
     cog_data, fac_data, hrt_data = chart_archive.read_session_signals(
         supabase, session_id, since)
-    # The question is embedded (one query) with named columns. Left-joined, so an
-    # answer whose question was deleted still appears with `questions: null`.
+    # Question embedded (one query, named columns). Left-joined: a deleted
+    # question arrives as `questions: null` and the answer still shows.
     answers = (supabase.table("session_answers")
                .select("*, questions(question_text, options, correct_answer, "
                        "subject, difficulty, figure, ccss_standard)")

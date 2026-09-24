@@ -943,9 +943,13 @@ Verify with `grep -l dataset_mismatch LLM_*_generation.py`, which is cheaper tha
 **Both fail open**, which is what makes them safe to run on every question: order is ignored (the solvers sort anyway),
 non-numeric `variables` are skipped, and a question with no colon-delimited list is left alone rather than compared
 against stray numbers in the sentence. A false rejection burns retries and looks exactly like a model that cannot
-follow instructions. They catch a clear contradiction; they are not a proof of agreement. `algebra`, `expressions`,
-`geometry` and `angle_relationships` are **not** covered: their scored fields mix operators and labels with numbers, so
-there is no comparable multiset.
+follow instructions. They catch a clear contradiction; they are not a proof of agreement.
+
+**`expression_mismatch` covers `rationals` and `algebra`**, whose scored field is a token list with operators in it, so
+it compares a sequence rather than a multiset: one displayed expression (an operation, not just a fraction bar) must
+match the tokens atom for atom, ignoring spacing, parentheses and `*`; a word problem instead needs every scored number
+in the text. It fails open on mixed numbers and on a text with no digits. `expressions`, `geometry` and
+`angle_relationships` are still **not** covered.
 
 **Measure how often a fail-open check *engages*, never just how often it fires.** A check that never finds anything to
 compare reports a perfect false-positive rate while doing nothing, and reads as evidence that it works. The dataset

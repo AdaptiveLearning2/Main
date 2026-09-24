@@ -752,12 +752,14 @@ one whose badge belongs to whichever grade wrote it first and then contradicts w
 constrains `question_text` unique, so the second row inserts cleanly — and a text regenerated after the column landed
 no longer matches its NULL-coded predecessor, so the bank gains one row per such question, visible to a teacher as a
 duplicate. That is the accepted trade: updating the old row in place would stamp a grade-8 code on a row grade-6
-answers already reference. **A match also needs the same option set, answer and figure**: `shape_fractions` and
-`graphs` keep digits out of the text, so on text alone every new figure took the first row's id. The options match in
-any order and the question is then **served in the stored row's order**, because an answer is stored as an index into
-it; requiring the same order made a reshuffled repeat a 1-in-24 match and added a row per question served. A list
-answer (`mode`, `ordering`) is compared parsed, since `correct_answer` is text and returns it as JSON text. And **every
-scenario-selecting generator checks the reply's scenario name**
+answers already reference. **A match also needs the same answer and figure**: `shape_fractions` and `graphs` keep
+digits out of the text, so on text alone every new figure took the first row's id. The options are **not** compared —
+the wrong answers are random and shuffled every generation, so comparing them, even as a set, almost never matched and
+added a row per question served. A repeat is instead **served the stored row's options**, wrong answers and order,
+because an answer is stored as an index into them. A single-string answer is a lookup filter, so a generic text with
+many rows still finds its match inside the candidate cap; a list answer (`mode`, `ordering`) is compared parsed, since
+`correct_answer` is text and returns it as JSON text. And **every scenario-selecting generator checks the reply's
+scenario name**
 (`expressions` was the one that did not): an off-name reply misses `SCENARIO_LADDER` and takes the topic's grade-1
 rung.
 

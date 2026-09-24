@@ -553,18 +553,11 @@ def extract_json(text):
 
     return None
 
-# How many same-text rows the duplicate check compares against. Generic texts
-# accumulate one row per distinct figure, so this is a bound on the read, not
-# on correctness: a match beyond it is stored again.
+# How many rows sharing a text (and, for a single-string answer, the answer)
+# the duplicate check compares against. Rows for one text and answer differ
+# only by figure, so this is a bound on the read, not on correctness: a match
+# beyond it is stored again.
 _DEDUPE_CANDIDATES = 50
-
-
-def _option_set(options):
-    """The options as an order-free multiset, so a reshuffle still matches.
-    Serialised, because an option can itself be a list (`mode`)."""
-    if not isinstance(options, list):
-        return None
-    return sorted(json.dumps(o, sort_keys=True) for o in options)
 
 
 def _answer_value(answer):
@@ -586,7 +579,7 @@ def add_question_to_supabase(question, difficulty):
     rather than False: the id is what `session_answers.question_id` refers
     to, and a duplicate is the ordinary case, not an error, since the
     generator reproduces a question sooner or later. On a duplicate the
-    question's `answer_options` are replaced, in place, by the stored order.
+    question's `answer_options` are replaced, in place, by the stored row's.
     """
     # Let the database find the duplicate instead of pulling the whole
     # questions table into Python on every generated question.
@@ -597,34 +590,45 @@ def add_question_to_supabase(question, difficulty):
     # than one whose badge belongs to whichever grade wrote it first -- and
     # then disagrees with what the second student saw on their own screen.
     #
-    # And a row is the same question only if the same options, answer and
-    # figure match. Text alone was not enough -- `shape_fractions` and `graphs`
-    # forbid digits in the text, so "What fraction of the shape is shaded?" at
-    # one grade mapped every new figure to the first stored row, and the answer
-    # was recorded against a different picture and answer key.
+    # And a row is the same question only if the answer and the figure match
+    # too. Text alone was not enough -- `shape_fractions` and `graphs` forbid
+    # digits in the text, so "What fraction of the shape is shaded?" at one
+    # grade mapped every new figure to the first stored row, and the answer was
+    # recorded against a different picture and answer key.
     #
-    # The options match as a set, and on a match the question is served in the
-    # *stored* order. The generators shuffle per generation, so requiring the
-    # same order made a match a 1-in-24 chance and the bank gained a row per
-    # question served; and an answer is stored as an index into the options,
-    # so serving the new order against the old row would mark the wrong one.
-    # Compared here rather than as filters: `options` and `figure` are jsonb,
-    # and a missed match costs only a second row.
+    # The options are *not* compared: on a match the question is served with
+    # the stored row's options, wrong answers and order alike. The generators
+    # draw the wrong answers at random and shuffle every time, so comparing
+    # options almost never matched and the bank gained a row per question
+    # served. Any wrong-answer set for the same answer is a valid question, and
+    # serving the stored one is what keeps a recorded answer -- an index into
+    # the options -- pointing at the option the student saw.
+    #
+    # A single-string answer is a filter, so a generic text with many rows
+    # still finds its match inside the candidate cap. A list answer (`mode`,
+    # `ordering`) is compared here instead: the text column returns it as JSON
+    # text in whatever spelling it was stored, and those two topics carry their
+    # numbers in the text, so few rows share one. `figure` is jsonb, compared
+    # here for the same reason. A missed match costs only a second row.
+    answer = question["correct_answer"]
     code = question.get("ccss_standard")
     lookup = supabase.table("questions") \
         .select("id, options, correct_answer, figure") \
         .eq("question_text", question["question_text"])
     lookup = lookup.is_("ccss_standard", "null") if code is None \
         else lookup.eq("ccss_standard", code)
+    if isinstance(answer, str):
+        lookup = lookup.eq("correct_answer", answer)
     existing = lookup.limit(_DEDUPE_CANDIDATES).execute()
 
-    wanted = _option_set(question["answer_options"])
     for row in existing.data or ():
-        if (_option_set(row.get("options")) == wanted
-                and _answer_value(row.get("correct_answer"))
-                    == _answer_value(question["correct_answer"])
-                and row.get("figure") == question.get("figure")):
-            question["answer_options"] = list(row["options"])
+        options = row.get("options")
+        if (_answer_value(row.get("correct_answer")) == _answer_value(answer)
+                and row.get("figure") == question.get("figure")
+                # The page marks an answer by finding it among the options, so
+                # a stored row that somehow lacks it is not one to serve.
+                and isinstance(options, list) and answer in options):
+            question["answer_options"] = list(options)
             return row["id"]
 
     response = supabase.table("questions").insert({

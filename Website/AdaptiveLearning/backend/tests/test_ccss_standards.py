@@ -164,8 +164,7 @@ _SHADED = {"question_text": "What fraction of the shape is shaded?",
     # The same option set with another answer, so only the answer check can
     # tell the two apart.
     {"correct_answer": "1/4", "answer_options": ["1/4", "3/4", "1/2"]},
-    {"answer_options": ["3/4", "1/3", "1/2"]},
-], ids=["another figure", "another answer", "another option"])
+], ids=["another figure", "another answer"])
 def test_the_same_text_with_different_content_is_a_different_row(change, monkeypatch):
     """`shape_fractions` and `graphs` keep digits out of the text, so one text
     at one grade covers every figure. Deduped on text, a new figure and answer
@@ -179,19 +178,51 @@ def test_the_same_text_with_different_content_is_a_different_row(change, monkeyp
     assert fake.store["rows"][-1]["id"] == second
 
 
-def test_a_reshuffled_repeat_reuses_its_row_and_is_served_in_the_stored_order(monkeypatch):
-    """The generators shuffle per generation. Requiring the same order made a
-    repeat a 1-in-24 match and put a row in the bank per question served.
-    Matched as a set, the repeat reuses the row -- and must be served in that
-    row's order, because an answer is recorded as an index into it."""
+@pytest.mark.parametrize("options", [
+    ["1/2", "3/4", "1/4"],
+    ["2/3", "3/4", "1/5"],
+], ids=["reshuffled", "other wrong answers"])
+def test_a_repeat_reuses_its_row_and_is_served_the_stored_options(options, monkeypatch):
+    """The generators draw wrong answers at random and shuffle every time, so
+    comparing options -- in order, or even as a set -- almost never matched and
+    put a row in the bank per question served. A repeat is the same text,
+    answer and figure; it reuses the row and is served that row's options,
+    because an answer is recorded as an index into them."""
     fake = _FakeSupabase()
     monkeypatch.setattr(LLM_topic_decider, "supabase", fake)
     first = LLM_topic_decider.add_question_to_supabase(dict(_SHADED), "easy")
 
-    again = {**_SHADED, "answer_options": ["1/2", "3/4", "1/4"]}
+    again = {**_SHADED, "answer_options": options}
     assert LLM_topic_decider.add_question_to_supabase(again, "easy") == first
     assert again["answer_options"] == ["3/4", "1/4", "1/2"]
     assert len(fake.store["rows"]) == 1
+
+
+def test_a_generic_text_finds_its_match_past_the_candidate_cap(monkeypatch):
+    """The lookup reads at most `_DEDUPE_CANDIDATES` rows sharing a text, in no
+    order. Once "What fraction of the shape is shaded?" had more rows than
+    that, later ones stopped matching and were stored again. The answer is a
+    filter now, so rows for other answers do not use up the cap."""
+    fake = _FakeSupabase()
+    for i in range(LLM_topic_decider._DEDUPE_CANDIDATES + 10):
+        fake.store["rows"].append({**_SHADED, "id": f"other-{i}", "correct_answer": f"{i}/99",
+                                   "options": [f"{i}/99", "1/4", "1/2"]})
+    fake.store["rows"].append({**_SHADED, "id": "the-match",
+                               "options": _SHADED["answer_options"]})
+    monkeypatch.setattr(LLM_topic_decider, "supabase", fake)
+
+    assert LLM_topic_decider.add_question_to_supabase(dict(_SHADED), "easy") == "the-match"
+    assert ("eq", "correct_answer", "3/4") in fake.queries[0].filters
+
+
+def test_a_stored_row_missing_its_answer_is_not_served(monkeypatch):
+    """The page finds the answer among the options to mark it. A stored row
+    whose options lack it would serve a question nobody can get right."""
+    fake = _FakeSupabase()
+    fake.store["rows"].append({**_SHADED, "id": "broken", "options": ["1/4", "1/2", "2/3"]})
+    monkeypatch.setattr(LLM_topic_decider, "supabase", fake)
+
+    assert LLM_topic_decider.add_question_to_supabase(dict(_SHADED), "easy") != "broken"
 
 
 @pytest.mark.parametrize("stored", ['["4", "8"]', '["4","8"]'],

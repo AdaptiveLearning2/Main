@@ -10,6 +10,7 @@ from datetime import datetime, date, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from supabase import create_client
+from postgrest.types import ReturnMethod  # supabase pins this sibling
 from typing import Any, NamedTuple
 
 import LLM_topic_decider
@@ -8602,8 +8603,12 @@ def link_child(payload: LinkChildRequest, request: Request):
     # Deleted rather than stamped: `parent_child_links` already records that the
     # link happened, and a spent-code table would be a second permanent log of
     # which adult linked which child with nothing reading it.
+    # `returning` is the client's default, and named anyway: an empty result is
+    # only "no such code" while the deleted rows are asked for, and under
+    # `minimal` every redemption would destroy a good code and blame the parent.
     try:
-        claimed = supabase.table("parent_link_codes").delete() \
+        claimed = supabase.table("parent_link_codes") \
+            .delete(returning=ReturnMethod.representation) \
             .eq("code", code).gt("expires_at", _utc_now().isoformat()) \
             .execute().data or []
     except Exception as e:                                     # noqa: BLE001
@@ -8648,9 +8653,10 @@ def link_child(payload: LinkChildRequest, request: Request):
         raise unavailable
     if not prof or prof.get("role") != "student":
         # Spent, not given back: a code for an account that is not a student's
-        # should not stay live.
+        # should not stay live. Recorded under its own check: the code was
+        # genuine, and a reader of the log must not count this as guessing.
         _record_security_event("authz_denied", user["id"],
-                               check="parent_link_code")
+                               check="parent_link_code_not_student")
         raise refused
 
     def _linked():
@@ -8659,28 +8665,38 @@ def link_child(payload: LinkChildRequest, request: Request):
                     .execute().data)
 
     try:
-        if _linked():
-            _give_back()
-            raise HTTPException(409, "Already linked to this child")
+        already = _linked()
+    except Exception as e:                                     # noqa: BLE001
+        # Nothing has been written yet, so the code is safe to give back.
+        print(f"[link-child] could not check for an existing link: {e}")
+        _give_back()
+        raise unavailable
+    if already:
+        _give_back()
+        raise HTTPException(409, "Already linked to this child")
+
+    try:
         supabase.table("parent_child_links").insert({
             "parent_id": user["id"],
             "child_id":  child_id,
         }).execute()
-    except HTTPException:
-        raise
     except Exception as e:                                     # noqa: BLE001
-        # Most likely the unique constraint: this parent linked this child in a
-        # request that landed between the check and the insert. Asked rather
-        # than assumed from the error text.
-        print(f"[link-child] the link was not written: {e}")
-        _give_back()
+        # A unique violation (this parent's other request got there first), or
+        # a write that landed and only the answer was lost. So the link's
+        # existence decides, and the code goes back only when the link certainly
+        # does not exist: a spent code live again is a second adult's link.
+        print(f"[link-child] the link write raised: {e}")
         try:
             exists = _linked()
         except Exception:                                      # noqa: BLE001
-            exists = False
+            exists = None
         if exists:
             raise HTTPException(409, "Already linked to this child")
-        raise unavailable
+        if exists is False:
+            _give_back()
+            raise unavailable
+        raise HTTPException(503, "Could not confirm the link. If this child is "
+                                 "not in your list, ask them for a new code.")
 
     return {"ok": True, "child_id": child_id,
             "child_name": prof.get("display_name") or "Student"}

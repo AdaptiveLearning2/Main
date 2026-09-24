@@ -1027,10 +1027,10 @@ A student's id is on every roster a teacher reads, in report URLs and in the adm
 O/0/I/1, 30 minutes, one per student. `parent_link_codes` has RLS on, no policies and both client roles revoked —
 reading a code is enough to become that child's parent.
 
-**The conditional delete is the claim**: the unexpired code is deleted, and the link written only if a row came back;
-read-then-delete lets two adults link on one code. A link not made gives the code back by insert, never upsert. The
-child's role is re-read (not via `_role`, which answers `student` on a failed read). Unknown, expired and spent are one
-404, a failed read is 503, refusals write `authz_denied`. Still "notify, not block", and **a student cannot remove a
+**The conditional delete is the claim**: the unexpired code is deleted (`returning` named), and the link written only
+if a row came back. The code goes back, by insert, only when its link certainly does not exist — a write that raised
+may have landed. The child's role is re-read (not via `_role`, which answers `student` on a failed read). Unknown,
+expired and spent are one 404, a failed read is 503. Still "notify, not block", and **a student cannot remove a
 link** — a safeguarding decision, not an omission. Tests: `test_parent_link_codes.py`.
 
 ## Consent — `signal_consent` decides what may be recorded

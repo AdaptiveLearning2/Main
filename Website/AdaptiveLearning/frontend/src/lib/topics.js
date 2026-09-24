@@ -4,6 +4,11 @@
  */
 
 export const TOPICS = [
+  'counting',
+  'comparing_numbers',
+  'add_and_subtract',
+  'teen_numbers',
+  'shapes',
   'ordering',
   'missing_number',
   'patterns',
@@ -25,6 +30,11 @@ export const TOPICS = [
 
 /** One emoji per topic; every topic needs one (a missing icon renders silently empty). */
 export const TOPIC_ICONS = {
+  counting: '🧮',
+  comparing_numbers: '⚖️',
+  add_and_subtract: '➕',
+  teen_numbers: '🔟',
+  shapes: '🔺',
   ordering: '🔢',
   missing_number: '❓',
   patterns: '📶',

@@ -31,6 +31,12 @@ TOPIC_LADDER = {
     "expressions":         [(1, "1.OA.6")],
     "geometry":            [(1, "2.G.2")],
     "functions":           [(1, "F-IF.2")],
+    # Kindergarten only (grade 0); refined per scenario below.
+    "counting":            [(0, "K.CC.5")],
+    "comparing_numbers":   [(0, "K.CC.7")],
+    "add_and_subtract":    [(0, "K.OA.2")],
+    "teen_numbers":        [(0, "K.NBT.1")],
+    "shapes":              [(0, "K.G.2")],
 }
 
 SCENARIO_LADDER = {
@@ -76,6 +82,36 @@ SCENARIO_LADDER = {
     "functions": {
         "evaluate": [(1, "F-IF.2")],
         "compose":  [(1, "F-BF.1c")],
+    },
+    "counting": {
+        "count_objects": [(0, "K.CC.5")],
+        "one_more":      [(0, "K.CC.4c")],
+        "one_less":      [(0, "K.CC.4c")],
+        "next_number":   [(0, "K.CC.2")],
+        "count_by_tens": [(0, "K.CC.1")],
+    },
+    "comparing_numbers": {
+        "larger_number":    [(0, "K.CC.7")],
+        "smaller_number":   [(0, "K.CC.7")],
+        "largest_of_three": [(0, "K.CC.7")],
+        "compare_groups":   [(0, "K.CC.6")],
+    },
+    "add_and_subtract": {
+        "add":            [(0, "K.OA.5")],
+        "subtract":       [(0, "K.OA.5")],
+        "add_story":      [(0, "K.OA.2")],
+        "subtract_story": [(0, "K.OA.2")],
+        "make_ten":       [(0, "K.OA.4")],
+    },
+    "teen_numbers": {
+        "count_ten_frames": [(0, "K.NBT.1")],
+        "teen_make":        [(0, "K.NBT.1")],
+        "teen_take_apart":  [(0, "K.NBT.1")],
+    },
+    "shapes": {
+        "name_shape":    [(0, "K.G.2")],
+        "count_sides":   [(0, "K.G.4")],
+        "count_corners": [(0, "K.G.4")],
     },
 }
 # fmt: on

@@ -420,8 +420,8 @@ cannot become grade 2026, and answers `None` when it cannot tell, which every ca
 `_safe_topic(topic, grade)` checks the LLM's own selection against the same table and `randomize_selection()` draws
 from it, so there is no third way a topic reaches `question_generation()`. **The decider's prompt lists that table
 too, never a list of its own**: one goes stale as topics are added, and a pick outside the grade is replaced at random,
-discarding the choice made from the student's performance. Grade 0 (kindergarten) is served grade 1's topics, since
-none starts earlier and an empty list has nothing to draw from.
+discarding the choice made from the student's performance. Kindergarten (grade 0) has its own topics and sees no
+other; an unreadable grade is still grade 1.
 
 ### Difficulty and grade are one table, not two independent scales
 
@@ -549,6 +549,30 @@ disagree** — a React bundle cannot import Python, so the copy is checked rathe
 any new file that writes a list of its own. `get_user_history` derives its per-topic history from `ALL_TOPICS` rather
 than listing them again: `question_generation` reads `history[topic] if topic in history else []`, which fails *open*,
 so a forgotten topic quietly lost its repeat-avoidance.
+
+### Kindergarten has its own five topics, and code picks every number
+
+`counting` (K.CC), `comparing_numbers` (K.CC.6–7), `add_and_subtract` (K.OA), `teen_numbers` (K.NBT.1) and `shapes`
+(K.G.2, K.G.4), each gated to exactly grade 0, all served by `LLM_kindergarten_generation`. The question types and
+their wording follow IXL's kindergarten skill list: "How many ducks are there?", "What number is one more than 6?",
+"Which number is larger?", short join and take-away stories, "14 is 10 and how many more?". Measurement, position,
+time, money and sorting are not covered yet.
+
+**The model writes the sentence and nothing else.** `_plan` picks the scenario, every number, the answer, the options
+and the figure; the model is told which numbers it may write, and `wording_problem` refuses a reply that shows any
+other number, in any other order, names the answer in digits or words, leaves out the word the question turns on
+("more", "sides", the item), or tells an addition story with a take-away word. A generator that let the model choose
+the numbers would need a solver and a shown-versus-scored check per scenario; this one has neither to get wrong. The
+tiers stay inside each standard's own limit — to 20 for counting (K.CC.5), within 10 for adding (K.OA.2, K.OA.5 to 5
+on easy), numerals to 10 for comparing (K.CC.7) — and a test holds every tier to it.
+
+**Its pictures are three new figure types**: `objects` (countable emoji, in rows of five), `ten_frames` and `shape`.
+The description names each picture once rather than giving the count, so a screen-reader user counts as a sighted
+one does; a `shape` asked for by name is described by its sides, never its name. The item and shape lists are Python
+constants that `QuestionFigure.test.jsx` reads, so a picture the browser cannot draw fails a test.
+
+**It is one generator serving five topics**, so `question_topic` is the caller's `topic` checked against `TOPICS`
+rather than a literal; `test_question_schemas.py` names it as the one such generator.
 
 ### Grades 9+ have no content of their own, and prompts cannot give them any
 

@@ -221,8 +221,16 @@ def test_a_new_topic_carries_a_math_topics_row():
 
 
 def test_every_topic_can_be_generated():
-    """`question_generation` dispatches on a `match`; every topic needs a case."""
-    source = open(os.path.join(BACKEND, "LLM_topic_decider.py"),
-                  encoding="utf-8").read()
+    """`question_generation` dispatches on a `match`; every topic needs a case.
+
+    Read from the AST, so a case that serves several topics (`case "a" | "b":`) counts.
+    """
+    import ast
+    tree = ast.parse(open(os.path.join(BACKEND, "LLM_topic_decider.py"),
+                          encoding="utf-8").read())
+    dispatch = next(n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == "question_generation")
+    cased = {node.value.value for node in ast.walk(dispatch)
+             if isinstance(node, ast.MatchValue) and isinstance(node.value, ast.Constant)}
     for topic in decider.ALL_TOPICS:
-        assert f'case "{topic}":' in source, f"{topic} has no generator case"
+        assert topic in cased, f"{topic} has no generator case"

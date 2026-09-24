@@ -61,7 +61,7 @@ const CHANNEL_LABELS = [
 const TOPICS = ALL_TOPICS
 const ICONS  = TOPIC_ICONS
 const SHORT  = { angle_relationships: 'Angle Rel.' }
-const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
+const GRADES = ['Kindergarten','1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 
 /** An error as a toast description. */
 const errorDetail = (e) => e?.message || String(e)

@@ -74,12 +74,63 @@ def _part_whole(variables):
     return {"type": "part_whole", "parts": parts, "shaded": shaded}
 
 
+# Kindergarten pictures. Item names are the frontend's emoji keys; `QuestionFigure.test.jsx` pins the two.
+FIGURE_ITEMS = ("apple", "star", "fish", "bird", "ball", "flower",
+                "car", "duck", "cookie", "balloon", "frog", "cupcake")
+# K.CC.5 counts to 20 in a line or array; two groups are a K.CC.6 comparison.
+MAX_OBJECTS = 20
+MAX_GROUPS = 2
+SHAPE_SIDES = {"circle": 0, "triangle": 3, "square": 4, "rectangle": 4, "hexagon": 6}
+
+
+def _objects(variables):
+    """K.CC.5 / K.CC.6 -- one or two groups of countable pictures, from the generator's `groups`."""
+    groups = variables.get("groups")
+    if not isinstance(groups, list) or not 1 <= len(groups) <= MAX_GROUPS:
+        return None
+    drawn = []
+    for entry in groups:
+        if not isinstance(entry, dict) or entry.get("item") not in FIGURE_ITEMS:
+            return None
+        count = _positive_int(entry.get("count"), MAX_OBJECTS)
+        if count is None:
+            return None
+        drawn.append({"item": entry["item"], "count": count})
+    if len({g["item"] for g in drawn}) != len(drawn):
+        return None            # two groups of one item cannot be told apart
+    return {"type": "objects", "groups": drawn}
+
+
+def _ten_frames(variables):
+    """K.NBT.1 -- dots filling ten frames in order: a full frame, then the ones."""
+    count = _positive_int(variables.get("count"), MAX_OBJECTS)
+    if count is None:
+        return None
+    return {"type": "ten_frames", "count": count}
+
+
+def _shape(variables, named=True):
+    """K.G.2 / K.G.4 -- one flat shape; `named` False keeps its name out of the description."""
+    shape = variables.get("shape")
+    if shape not in SHAPE_SIDES:
+        return None
+    return {"type": "shape", "shape": shape, "named": named}
+
+
 # Scenario name -> figure builder; an absent scenario has no figure.
 BUILDERS = {
     "rectangle_area_by_counting": _rect_grid,
     "how_many_total": _bar_chart,
     "how_many_more": _bar_chart,
     "part_whole": _part_whole,
+    "count_objects": _objects,
+    "compare_groups": _objects,
+    "count_ten_frames": _ten_frames,
+    "teen_take_apart": _ten_frames,
+    # The question asks for the name, so the description may not give it.
+    "name_shape": lambda variables: _shape(variables, named=False),
+    "count_sides": _shape,
+    "count_corners": _shape,
 }
 
 

@@ -19,7 +19,7 @@ const prefsFrom = (p) => ({
 const CODE_RECHECK_MS = 15_000
 
 const TABS  = ['Overview', 'Account', 'Preferences', 'Devices']
-const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
+const GRADES = ['Kindergarten','1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 
 export default function Profile() {
   const { user, displayName, refreshProfile, signOut } = useAuth()

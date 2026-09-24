@@ -92,13 +92,12 @@ def test_the_fallback_serves_a_topic_the_student_never_attempted(decider):
     assert question["difficulty"] == "easy"
 
 
-@pytest.mark.parametrize("grade", ["Kindergarten", "Pre-K", "Grade 0"])
-def test_kindergarten_is_served_grade_ones_topics(grade):
-    assert set(td._allowed_topics(grade)) == set(td._allowed_topics("1"))
-
-
-def test_kindergarten_gets_a_question_either_way(decider):
-    run, _, served = decider
+def test_kindergarten_gets_a_kindergarten_question_either_way(decider):
+    """Its list is not empty, so neither the model's pick nor the fallback can raise."""
+    run, prompts, served = decider
     run('{"topic": "algebra", "difficulty": "easy"}', grade="Kindergarten")
     run("not json at all", grade="Kindergarten")
-    assert [topic in td._allowed_topics("1") for topic, _ in served] == [True, True]
+    kindergarten = set(td._allowed_topics("Kindergarten"))
+    assert kindergarten and kindergarten.isdisjoint(td._allowed_topics("1"))
+    assert [topic in kindergarten for topic, _ in served] == [True, True]
+    assert set(t.strip() for t in _topics_line(prompts[0]).split(",")) == kindergarten

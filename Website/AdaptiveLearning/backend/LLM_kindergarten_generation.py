@@ -80,12 +80,14 @@ def _plan(topic, scenario, difficulty, rng):
         n = rng.randint(*{"easy": (2, 4), "medium": (2, 9), "hard": (10, 19)}[difficulty])
         # An exact phrase: told only the words, both models wrote a get-one-more story.
         p.update(shown=[n], answer=n + 1, phrase=f"one more than {n}",
-                 brief=f"Ask what number is one more than {n}. Ask about the number, not a story.",
+                 # No lead-in: given one, haiku repeated the number in it ("count on from 3!").
+                 brief=f"Write exactly this question and nothing else: 'What number is one more than {n}?'",
                  example=f"What number is one more than {n}?")
     elif scenario == "one_less":
         n = rng.randint(*{"easy": (3, 5), "medium": (3, 10), "hard": (11, 20)}[difficulty])
         p.update(shown=[n], answer=n - 1, phrase=f"one less than {n}",
-                 brief=f"Ask what number is one less than {n}. Ask about the number, not a story.",
+                 brief=f"Write the question 'What number is one less than {n}?'. You may put one short, "
+                       f"friendly sentence with no number in it before it. No story.",
                  example=f"What number is one less than {n}?")
     elif scenario == "next_number":
         s = rng.randint(*{"easy": (1, 2), "medium": (1, 7), "hard": (8, 17)}[difficulty])
@@ -240,12 +242,16 @@ def _prompt(topic, plan, grade, global_questions, prev_questions):
     if plan["forbid"]:
         rules.append(f"- Do NOT use these words: {', '.join(plan['forbid'])}.")
     must = "\n".join(rules)
+    # "Do not copy" beside a fixed phrase is a contradiction haiku settled by dropping the phrase.
+    style = ("AN EXAMPLE, which you may use exactly as written"
+             if plan.get("equation") or plan.get("phrase")
+             else "THE STYLE, not to be copied word for word")
     return f"""
 You write one maths question for a {grade} student, who is five years old.
 The Question Topic is "{topic}".
 
 WHAT TO ASK: {plan['brief']}
-THE STYLE, not to be copied word for word: "{plan['example']}"
+{style}: "{plan['example']}"
 
 Rules for "question_text":
 - Very short, simple sentences a five-year-old can follow; at most {plan['sentences']} sentences.
@@ -260,7 +266,7 @@ Previously generated questions:
 Recent global questions:
 {chr(10).join(q["text"] for q in global_questions)}
 
-Use different wording from all of the above.
+Use different wording from all of the above where you can; every MUST rule still applies.
 
 Return ONLY valid JSON, with double quotes, and nothing outside the object:
 {{"question_text": "{plan['example']}", "question_topic": "{topic}"}}

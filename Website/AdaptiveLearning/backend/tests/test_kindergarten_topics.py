@@ -153,6 +153,16 @@ def test_numbers_stay_inside_each_tier(model, monkeypatch, difficulty, top):
                     assert max(plan["options"]) <= min(top, 10)
 
 
+@pytest.mark.parametrize("topic,difficulty,scenario", CELLS)
+def test_a_fixed_phrase_is_never_paired_with_do_not_copy(model, monkeypatch, topic, difficulty, scenario):
+    """claude-haiku-4-5 settled "do not copy" against "MUST contain" by dropping the phrase."""
+    plans, prompts, _ = model
+    _generate(topic, difficulty, scenario, 1, monkeypatch)
+    fixed = plans[-1].get("equation") or plans[-1].get("phrase")
+    assert ("not to be copied" in prompts[-1]) is not bool(fixed)
+    assert "every MUST rule still applies" in prompts[-1]
+
+
 @pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
 def test_one_more_never_starts_from_one(difficulty):
     """At 1 the live model wrote "one more than one" and was refused on every attempt."""

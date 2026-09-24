@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 import LLM_topic_decider as decider
@@ -20,12 +22,18 @@ HEART_HIGH = [{"session_id": SESSION, "stress_category": "high",
                "trusted": True, "source": "muse_optics"}]
 
 
+def _fresh(rows, seconds_ago=0):
+    """`rows` as just written: every real row has a `ts`, and only recent ones are read."""
+    ts = (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).isoformat()
+    return [{"ts": ts, **r} for r in rows]
+
+
 def _install(monkeypatch, consent, **tables):
     fake = _FakeSupabase({
         "signal_consent": [consent] if consent else [],
-        "cognitive_signals": tables.get("eeg", []),
-        "heart_signals": tables.get("heart", []),
-        "face_signals": tables.get("face", []),
+        "cognitive_signals": _fresh(tables.get("eeg", [])),
+        "heart_signals": _fresh(tables.get("heart", [])),
+        "face_signals": _fresh(tables.get("face", [])),
     })
     monkeypatch.setattr(decider, "supabase", fake)
     return fake
@@ -115,7 +123,7 @@ def test_no_session_reads_nothing(monkeypatch):
 
 def test_a_broken_signals_table_does_not_retract_the_others(monkeypatch):
     fake = _FakeSupabase(
-        {"signal_consent": [CONSENT_ALL], "cognitive_signals": EEG_CALM},
+        {"signal_consent": [CONSENT_ALL], "cognitive_signals": _fresh(EEG_CALM)},
         table_raises={"heart_signals"},
     )
     monkeypatch.setattr(decider, "supabase", fake)
@@ -277,3 +285,51 @@ def test_the_score_scale_comes_from_the_rollup_rows_never_a_date():
     part = [{"day": "2026-09-07", "channel": "heart", "avg_heart_rate_bpm": 70.0,
              "sample_count": 10, "trusted_sample_count": 10, "student_count": 2}]
     assert "score_scale" not in backend_main._merge_cohort_trend([part])[0]
+
+
+# ── a sensor that stopped reporting stops steering ───────────────────────────
+
+STALE = decider.SIGNAL_MAX_AGE_SEC + 30
+RECENT = decider.SIGNAL_MAX_AGE_SEC - 30
+EEG_FOCUSED = [{"session_id": SESSION, "focus": 0.9, "stress": 0.2, "raw": {"confidence": 0.9}}]
+FACE_SAD = [{"session_id": SESSION, "emotion": "sad", "emotion_confidence": 0.9,
+             "emotion_trusted": True}]
+
+
+@pytest.mark.parametrize("age,label", [(RECENT, "focused"), (STALE, "no_eeg")])
+def test_an_eeg_reading_steers_only_while_it_is_recent(monkeypatch, age, label):
+    _install(monkeypatch, CONSENT_ALL, eeg=_fresh(EEG_FOCUSED, age))
+    assert decider.get_session_signal_state(SESSION, USER).label == label
+
+
+@pytest.mark.parametrize("age,label", [(RECENT, "stressed"), (STALE, "focused")])
+def test_a_heart_reading_eases_only_while_it_is_recent(monkeypatch, age, label):
+    _install(monkeypatch, CONSENT_ALL, eeg=EEG_FOCUSED, heart=_fresh(HEART_HIGH, age))
+    assert decider.get_session_signal_state(SESSION, USER).label == label
+
+
+@pytest.mark.parametrize("age,withheld", [(RECENT, True), (STALE, False)])
+def test_a_face_reading_withholds_only_while_it_is_recent(monkeypatch, age, withheld):
+    _install(monkeypatch, CONSENT_ALL, eeg=EEG_FOCUSED, face=_fresh(FACE_SAD, age))
+    assert decider.get_session_signal_state(SESSION, USER).increase_withheld is withheld
+
+
+def test_every_signal_read_is_bounded_by_age_in_the_query(monkeypatch):
+    """On the request, not the payload: an empty result cannot say it was filtered."""
+    fake = _install(monkeypatch, CONSENT_ALL, eeg=EEG_FOCUSED)
+    before = datetime.now(timezone.utc)
+    decider.get_session_signal_state(SESSION, USER)
+    after = datetime.now(timezone.utc)
+    window = timedelta(seconds=decider.SIGNAL_MAX_AGE_SEC)
+    signal_tables = {"cognitive_signals", "heart_signals", "face_signals"}
+    reads = [q for name, q in zip(fake.table_calls, fake.queries) if name in signal_tables]
+    assert len(reads) == 3
+    for q in reads:
+        cutoff, = [datetime.fromisoformat(v[1]) for col, v in q.filters
+                   if col == "ts" and isinstance(v, tuple) and v[0] == "gte"]
+        assert before - window <= cutoff <= after - window
+
+
+def test_the_age_bound_is_the_window_the_live_pages_call_flowing():
+    import main
+    assert decider.SIGNAL_MAX_AGE_SEC == main._LIVE_WINDOW_SEC

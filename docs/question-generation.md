@@ -815,6 +815,10 @@ cannot do without it**, so a new figure type does not inherit a requirement it d
 **A digit in the question text is refused.** Writing the counts out hands the student the reading the question exists
 to ask for — it stops being a graph question and becomes arithmetic. Checked, not merely requested.
 
+**A comparison is scored in the order the question names it.** The answer is `target[0] - target[1]`, so the text must
+ask "how many more" and then name both targets in that order (`_target_follows_text`). A prompt rule to put the larger
+first *whatever the text said* served 2 for "How many more dogs than cats?" over 4 dogs and 6 cats.
+
 **`categories` is a list of `{name, count}`, not a map.** The obvious `{"cats": "7"}` cannot be schema'd at all — the
 API refuses an open `additionalProperties`. Choosing a shape that *can* be schema'd costs the generator one
 indirection and is cheaper than accepting the gap.

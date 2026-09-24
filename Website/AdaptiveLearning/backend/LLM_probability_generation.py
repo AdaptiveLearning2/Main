@@ -313,9 +313,10 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
 
         # The student answers the text, so the scored die, counts and target must be the ones it states.
         text = question_data.get("question_text")
-        if question_data["scenario"] == "dice":
+        inconsistent = question_consistency.odds_mismatch(text)
+        if not inconsistent and question_data["scenario"] == "dice":
             inconsistent = question_consistency.dice_mismatch(text, items, target)
-        else:
+        elif not inconsistent:
             targets = target if isinstance(target, list) else [target]
             inconsistent = (question_consistency.counts_mismatch(text, items)
                             or question_consistency.target_mismatch(text, list(items), targets))

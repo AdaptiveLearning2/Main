@@ -896,10 +896,12 @@ as wired and absent* is the worst of the three states, because it is the one nob
 after a colon: each "<n> … <label>" must be that item's count, and the text's numbers must be exactly the scored
 counts plus a total the text states as one ("a bag of 12", "12 in total"), so an item left out of `items` or a
 changed count is a retry; the single draw ("1 marble is drawn") is not a count. The items named after the last
-"probability", "chance", "likely" or "odds" must be exactly the target. For dice, the sides ("six-sided", "standard
-die") and one recognised event (a comparison, even/odd/prime, or listed faces; one negation takes the complement)
-must be the scored ones. Counts in words, several events at once, and a double negation fail open. `_scored_data` also requires a target that names items, whole counts
-up to 1000, and distinct faces on a die of 2 to 100 sides.
+"probability", "chance" or "likely" must be exactly the target, and a question asking for odds is refused, since a
+probability is not odds. For dice, the sides ("six-sided", "standard die") and one recognised event (a comparison,
+even/odd/prime, or listed faces) must be the scored ones; one negation ("not", "other than", "except", "but",
+"cannot", "neither … nor") takes the complement. Counts in words, several events at once, and a double negation fail
+open. `_scored_data` also requires a target that names items, whole counts up to 1000, and distinct faces on a die of
+2 to 100 sides.
 
 **Both fail open**, which is what makes them safe to run on every question: order is ignored (the solvers sort anyway),
 non-numeric `variables` are skipped, and a question with no colon-delimited list is left alone rather than compared

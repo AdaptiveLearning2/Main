@@ -103,29 +103,43 @@ def object_path(user_id: str, session_id: str, chart: str) -> str:
 # PostgREST silently cuts every response at `db-max-rows` (1000), service role included.
 _PAGE = 1000
 
+# What session review and the archive read; `raw` (~1 KB a row) stays in the database.
+# A column a surface renders must be added here, or it arrives missing.
+SIGNAL_COLUMNS = {
+    "cognitive_signals": "id, ts, focus, stress",
+    "face_signals": "id, ts, emotion",
+    "heart_signals": "id, ts, source, heart_rate_bpm, rmssd_ms, stress_category",
+}
+
 
 def read_session_signals(client, session_id: str, since: str | None = None):
-    """A session's cognitive, face and heart rows, paged, up to `_ROW_CAP` each.
+    """A session's cognitive, face and heart rows in `ts` order, up to `_ROW_CAP` each.
 
     The one reader for session review and the archive, so both stop at the same row.
-    Ordered on `id` too: pages are only stable under a total order. Only an empty
-    page ends the loop, since a short one may be a server cap below `_PAGE`.
+    Paged by id, not position, so a row written or deleted mid-read is neither repeated
+    nor skipped; only an empty page ends a table, as a short one may be a lower server cap.
     """
     def rows(table):
         out: list = []
+        last_id = None
         while len(out) < _ROW_CAP:
-            query = client.table(table).select("*").eq("session_id", session_id)
+            query = client.table(table).select(SIGNAL_COLUMNS[table]) \
+                .eq("session_id", session_id)
             if since:
                 query = query.gt("ts", since)
-            end = min(len(out) + _PAGE, _ROW_CAP) - 1
-            page = query.order("ts").order("id").range(len(out), end) \
+            if last_id is not None:
+                query = query.gt("id", last_id)
+            page = query.order("id").limit(min(_PAGE, _ROW_CAP - len(out))) \
                 .execute().data or []
             if not page:
                 break
             out.extend(page)
-        return out
+            last_id = page[-1]["id"]
+        return sorted(out, key=lambda r: (str(r.get("ts")), r["id"]))
 
-    return rows("cognitive_signals"), rows("face_signals"), rows("heart_signals")
+    # The three tables at once, so review waits for the longest, not the sum.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        return tuple(pool.map(rows, SIGNAL_COLUMNS))
 
 
 def _fetch(client, session_id: str):

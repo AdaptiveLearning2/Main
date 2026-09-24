@@ -53,6 +53,8 @@ ALLOWLIST = {
         "a fixed set.",
     ("LLM_topic_decider.py", "_latest", "select", "columns"):
         "Column list passed by internal callers as a literal.",
+    ("chart_archive.py", "rows", "select", "SIGNAL_COLUMNS[table]"):
+        "A module-level literal keyed by the three table names it iterates itself.",
 }
 
 

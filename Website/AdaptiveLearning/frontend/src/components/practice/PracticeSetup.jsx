@@ -31,12 +31,13 @@ export default function PracticeSetup({ onStart }) {
   const [questionCount, setQuestionCount] = useState(10)
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
-  const [failed, setFailed] = useState(false)
+  // The error itself, so LoadError can tell a 429 from an outage.
+  const [failed, setFailed] = useState(null)
   const [starting, setStarting] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
-    setFailed(false)
+    setFailed(null)
     try {
       const profile = await apiFetch('/api/profile/me')
       // The backend's `grade_levels.DEFAULT_GRADE`, which the test reads.
@@ -45,7 +46,7 @@ export default function PracticeSetup({ onStart }) {
       apiFetch('/api/practice-sessions').then(setHistory).catch(() => {})
     } catch (e) {
       console.error('Failed to load the practice setup screen:', e)
-      setFailed(true)
+      setFailed(e || new Error('practice setup'))
     } finally {
       setLoading(false)
     }
@@ -87,7 +88,7 @@ export default function PracticeSetup({ onStart }) {
 
   if (failed) return (
     <div className="max-w-lg mx-auto px-4 py-8">
-      <LoadError what="practice setup" onRetry={load} />
+      <LoadError what="practice setup" error={failed} onRetry={load} />
     </div>
   )
 

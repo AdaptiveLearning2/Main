@@ -139,6 +139,16 @@ it('says a refused topics read was refused, not that the backend is down', async
   expect(box).not.toHaveTextContent(/backend/i)
 })
 
+it('says a refused profile read was refused, and offers a retry', async () => {
+  overrideApi('/api/profile/me', () => { throw apiError(429, 'slow down') })
+  draw()
+
+  const box = await screen.findByText(/too many requests/i)
+  expect(box).toHaveTextContent(/practice setup/i)
+  expect(box).not.toHaveTextContent(/backend/i)
+  expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument()
+})
+
 it('starts a student with no grade at the grade the backend defaults to', async () => {
   // Read from the backend, so the two defaults cannot drift apart again.
   const backend = resolve(fileURLToPath(import.meta.url), '..', '..', '..', '..', '..', 'backend')

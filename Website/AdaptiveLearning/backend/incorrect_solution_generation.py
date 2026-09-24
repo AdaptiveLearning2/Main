@@ -57,9 +57,11 @@ def generate_general_incorrect_answers(answer):
 
 
 def generate_incorrect_rational(answer):
+    """Three wrong fractions sharing the answer's sign, so a negative answer is not the only one."""
     generated_answers = []
 
     answer = sp.sympify(answer)
+    sign = -1 if answer < 0 else 1
 
     attempts = 0
     while len(generated_answers) < 3 and attempts < MAX_ATTEMPTS:
@@ -76,8 +78,10 @@ def generate_incorrect_rational(answer):
             else:
                 num += random.randint(-3, 3)
 
-        incorrect_answer = sp.Rational(num, denom)
-        sp.sympify(incorrect_answer) # already in simplest form
+        incorrect_answer = sign * sp.Rational(num, denom)
+        # 6/3 reduces to "2"; beside a fractional answer a whole number gives the form away.
+        if incorrect_answer.is_integer and not answer.is_integer:
+            continue
 
         # Compared as a string, because that is what the list holds.
         formatted = str(incorrect_answer)
@@ -88,7 +92,8 @@ def generate_incorrect_rational(answer):
 
     offset = 1
     while len(generated_answers) < 3 and offset <= 3 + MAX_ATTEMPTS:
-        candidate = str(sp.sympify(answer) + offset)
+        # Away from zero, so the filler keeps the sign too.
+        candidate = str(answer + sign * offset)
         if candidate not in generated_answers:
             generated_answers.append(candidate)
         offset += 1

@@ -49,6 +49,8 @@ class _Profiles:
             def in_(self, *_a):     return self
             def order(self, *_a, **_k): return self
             def limit(self, *_a):   return self
+            def gt(self, *_a):      return self
+            def delete(self, **_k): return self   # claims no code: there is none
             def single(self):
                 self._single = True
                 return self
@@ -94,7 +96,7 @@ def test_claiming_parent_in_user_metadata_does_not_let_a_student_link_a_child(
     monkeypatch.setattr(main, "get_user", lambda _r: _claiming("parent"))
 
     with pytest.raises(main.HTTPException) as e:
-        main.link_child(main.LinkChildRequest(child_id="child-1"), None)
+        main.link_child(main.LinkChildRequest(link_code="ABCD2345"), None)
     assert e.value.status_code == 403
 
 
@@ -124,13 +126,13 @@ def test_a_real_teacher_may_still_create_a_class(monkeypatch):
     assert out["teacher_id"] == UID
 
 
-def test_a_real_parent_reaches_the_child_lookup(monkeypatch):
-    """Past the role gate, so it fails on the child instead of on the role."""
+def test_a_real_parent_reaches_the_code_lookup(monkeypatch):
+    """Past the role gate, so it fails on the code instead of on the role."""
     monkeypatch.setattr(main, "supabase", _Profiles(role="parent"))
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": UID})
 
     with pytest.raises(main.HTTPException) as e:
-        main.link_child(main.LinkChildRequest(child_id="child-1"), None)
+        main.link_child(main.LinkChildRequest(link_code="ABCD2345"), None)
     assert e.value.status_code == 404
 
 

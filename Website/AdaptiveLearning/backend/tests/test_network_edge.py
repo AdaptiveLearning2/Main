@@ -58,17 +58,9 @@ client = None
 def _client_for_the_live_module():
     global client
     client = TestClient(main.app)
-    # The public limiter's hits are module-level and every test in this file
-    # shares one peer address, so without this a test that lowers the budget
-    # leaves the next one refused -- and it would be the *next* test that
-    # failed, for a reason nothing in its body mentions. Same leak the
-    # security-log fixture clears, and the same one `clearViewPrefs` exists for
-    # in the frontend suite.
-    for budget in main._PUBLIC_BUDGETS.values():
-        budget.reset()
+    # Every test here shares one peer address; the budgets it spends are
+    # emptied between tests by conftest's `_limiters_start_empty`.
     yield
-    for budget in main._PUBLIC_BUDGETS.values():
-        budget.reset()
     client = None
 
 

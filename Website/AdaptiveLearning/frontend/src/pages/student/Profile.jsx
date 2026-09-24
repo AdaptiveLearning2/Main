@@ -19,6 +19,9 @@ const prefsFrom = (p) => ({
   practice_reminders:       p?.practice_reminders ?? true,
 })
 
+// How often a code on screen is re-read, to notice it was used or expired.
+const CODE_RECHECK_MS = 15_000
+
 const TABS  = ['Overview', 'Account', 'Preferences', 'Devices']
 const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 
@@ -42,6 +45,13 @@ export default function Profile() {
   // controls don't render defaults as if the student had chosen them.
   const [prefs, setPrefs] = useState(null)
   const [prefsBusy, setPrefsBusy] = useState(false)
+  // `null` until the read lands, then a `{code, expires_at}` or `null` for
+  // "none outstanding". `codeRetrieved` keeps a failed read apart from that --
+  // offering to create one on a failed read would replace a code the student
+  // may have just read out to someone.
+  const [linkCode, setLinkCode] = useState(null)
+  const [codeRetrieved, setCodeRetrieved] = useState(null)
+  const [codeBusy, setCodeBusy] = useState(false)
 
   useEffect(() => {
     Promise.all([
@@ -52,15 +62,41 @@ export default function Profile() {
       // beside the rows whatever the limit.
       fetchSessionList({ limit: 1 }).then(r => r.total).catch(() => null),
       apiFetch('/api/profile/me').catch(() => null),
-    ]).then(([s, total, p]) => {
+      // `retrieved: false` rides on the payload, so a rejected promise and a
+      // read that failed server-side arrive as the same thing here.
+      apiFetch('/api/student/link-code').catch(() => ({ retrieved: false })),
+    ]).then(([s, total, p, lc]) => {
       setStats(s)
       setSessionTotal(total)
       setProfile(p)
       setEditName(p?.display_name || '')
       setEditGrade(p?.grade_level || '')
       if (p) setPrefs(prefsFrom(p))
+      setCodeRetrieved(lc?.retrieved !== false)
+      setLinkCode(lc?.code ? { code: lc.code, expires_at: lc.expires_at } : null)
     })
   }, [])
+
+  // A code on screen stops working without this page doing anything: a parent
+  // redeems it, or it expires. So while one is showing it is re-read, or the
+  // card goes on offering a spent code as live.
+  const shownCode = linkCode?.code
+  useEffect(() => {
+    if (!shownCode) return
+    const recheck = () => apiFetch('/api/student/link-code')
+      .then(lc => {
+        // A failed read says nothing about the code; leave it standing.
+        if (lc?.retrieved === false) return
+        // Only while it is still the code this read was about: a "New code"
+        // that landed meanwhile is newer than this answer.
+        setLinkCode(cur => (cur?.code !== shownCode ? cur
+          : lc?.code ? { code: lc.code, expires_at: lc.expires_at } : null))
+      })
+      .catch(() => {})
+    const timer = setInterval(recheck, CODE_RECHECK_MS)
+    window.addEventListener('focus', recheck)
+    return () => { clearInterval(timer); window.removeEventListener('focus', recheck) }
+  }, [shownCode])
 
   // Update the UI immediately so taps feel instant, then reconcile with what
   // the server actually stored (it clamps values). Revert on failure so the
@@ -98,11 +134,26 @@ export default function Profile() {
     }
   }
 
-  const copyId = () => {
-    navigator.clipboard.writeText(user?.id || '')
+  const copyCode = () => {
+    navigator.clipboard.writeText(linkCode?.code || '')
     setCopied(true)
-    toast.success('User ID copied!')
+    toast.success('Code copied!')
     setTimeout(() => setCopied(false), 2000)
+  }
+
+  const createCode = async () => {
+    setCodeBusy(true)
+    try {
+      const res = await apiFetch('/api/student/link-code', { method: 'POST' })
+      setLinkCode(res)
+      // The read succeeded by definition now, so an earlier failed one must
+      // stop suppressing the code we are holding.
+      setCodeRetrieved(true)
+    } catch (e) {
+      toast.error(e.message || 'Could not create a code')
+    } finally {
+      setCodeBusy(false)
+    }
   }
 
   const acc      = stats?.total_questions > 0 ? Math.round((stats.total_correct / stats.total_questions) * 100) : 0
@@ -140,14 +191,48 @@ export default function Profile() {
               <p className="font-bold text-sm">{joined}</p>
             </div>
 
+            {/* This block used to show the user id, under "share this with a
+                parent to link accounts". That was the instruction rather than
+                a leak -- but the id is on every roster payload a teacher of
+                this student reads and in the URL of every report page about
+                them, so it was never the shared secret the sentence implied.
+                A code has to be made here to exist, lasts 30 minutes and
+                works once. */}
             <div className="mt-3 bg-white/10 rounded-xl p-3">
-              <p className="text-xs text-indigo-200 mb-1">Your User ID</p>
-              <p className="font-mono text-xs text-white break-all leading-relaxed">{user?.id}</p>
-              <button onClick={copyId}
-                className="mt-2 flex items-center gap-1.5 mx-auto text-xs font-bold text-indigo-200 hover:text-white transition">
-                {copied ? <><Check size={12} /> Copied!</> : <><Copy size={12} /> Copy ID</>}
-              </button>
-              <p className="text-[10px] text-indigo-300 mt-2">Share this with a parent to link accounts</p>
+              <p className="text-xs text-indigo-200 mb-1">Link a parent</p>
+              {codeRetrieved === false ? (
+                // A failed read is not "you have no code": offering to create
+                // one would replace a code the student may have just read out.
+                <p className="text-xs text-indigo-100">
+                  Couldn't check for a code just now.
+                </p>
+              ) : linkCode ? (
+                <>
+                  <p className="font-mono text-lg font-black tracking-widest text-white">{linkCode.code}</p>
+                  <p className="text-[10px] text-indigo-300 mt-0.5">
+                    Works once, until {new Date(linkCode.expires_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                  <div className="flex items-center justify-center gap-3 mt-2">
+                    <button onClick={copyCode}
+                      className="flex items-center gap-1.5 text-xs font-bold text-indigo-200 hover:text-white transition">
+                      {copied ? <><Check size={12} /> Copied!</> : <><Copy size={12} /> Copy</>}
+                    </button>
+                    <button onClick={createCode} disabled={codeBusy}
+                      className="text-xs font-bold text-indigo-200 hover:text-white transition disabled:opacity-50">
+                      New code
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <button onClick={createCode} disabled={codeBusy}
+                  className="mt-1 w-full py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-bold transition disabled:opacity-50">
+                  {codeBusy ? 'Creating…' : 'Create a link code'}
+                </button>
+              )}
+              <p className="text-[10px] text-indigo-300 mt-2">
+                Read the code to a parent so they can see your progress. A new
+                one replaces the old.
+              </p>
             </div>
 
             <button onClick={signOut}

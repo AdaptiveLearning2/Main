@@ -39,6 +39,13 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
+      # First, because a dependency joins the first group it matches.
+      # `supabase` requires `postgrest` at its own exact version, and main.py
+      # imports postgrest directly, so both are pinned -- bumped alone, either
+      # fails to install. Every update type, majors too: this group is two
+      # packages moving as one, not a batch.
+      supabase:
+        patterns: ["supabase", "postgrest"]
       backend-python:
         patterns: ["*"]
         update-types: ["minor", "patch"]

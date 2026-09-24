@@ -1009,29 +1009,29 @@ Login and Register navigate to `/` and let `HomeRedirect` choose rather than com
 each carried a second copy of the role-to-home map that `homeRoute.js` exists to be the only one of, keyed on the value
 that does not know about `admin`. The claim survives only as the fallback, and nothing that matters may be gated on it.
 
-### The *name* was the same bug, and it outlived the role fix
+### A name comes from `displayName`, never from the email
 
-Nine surfaces derived a name from `user.email.split('@')[0]` while `profiles.display_name` was read on one page. The two
-agree until the first edit and then never again, because sign-up seeds the stored name *from* the email prefix.
-`AuthContext` was already fetching the row for `role` and discarding the name; it now exposes `displayName` (stored
-name → claim → email prefix → null), so no surface derives a name of its own. **A save has to call `refreshProfile()`**
-from both Profile and teacher Settings: the write is what makes every other surface stale. A blank stored name is
-`null`, not a name, or the greeting addresses nobody.
+`AuthContext` exposes `displayName` (stored name → claim → email prefix → null) and no surface derives its own: sign-up
+seeds the stored name from the email prefix, so the two agree only until the first edit. **A save calls
+`refreshProfile()`**, and a blank stored name is `null`. `profiles` has no `username` column.
 
-Two traps met doing it. **`teacher/Settings.jsx` already had a `displayName`** — its edit field — so destructuring the
-context's under that name is a *parse error*, and **a parse error deletes that file's tests from the run rather than
-failing them**: the suite went quietly from 727 to 720 with zero failures. A totals check that counts assertions cannot
-see it; count the **files** too. And `Settings.test.jsx`'s `useAuth` double had no `refreshProfile`, so the page threw
-where the double was thin rather than where a bug was — make the double carry what the real thing carries.
-
-**The teacher's roster had the same defect on its own read**, and is the worked example of rule 4. `Students.jsx` is
-the one page that reads `profiles` straight through Supabase, and it named each row
-`s.username || s.email.split('@')[0]` — **`profiles` has no `username` column**, in any migration, so the first branch
-never fired and every row showed an email prefix. The search box had the same gap pointing the other way: it matched
-email and id only, so a teacher typing the name on screen found nothing. It survived because `Students.test.jsx`'s own
-fixture invented `username: 'ada'`.
+**A parse error drops a file's tests from the run rather than failing them**, so count test **files** as well as tests.
+A `useAuth` double carries what the real one carries, `refreshProfile` included.
 
 Access-control tests live in `backend/tests/test_access_control.py` and run in CI.
+
+### A parent links with a code the child made; a user id is not a secret
+
+A student's id is on every roster a teacher reads, in report URLs and in the admin search, so holding one proves nothing.
+`link_child` takes a code from `POST /api/student/link-code`: students only, no body, `secrets`, eight characters with no
+O/0/I/1, 30 minutes, one per student. `parent_link_codes` has RLS on, no policies and both client roles revoked —
+reading a code is enough to become that child's parent.
+
+**The conditional delete is the claim**: the unexpired code is deleted (`returning` named), and the link written only
+if a row came back. It goes back (by insert) only if the write was never tried: one that raised may still commit. The
+child's role is re-read (not via `_role`, which answers `student` on a failed read). Unknown, expired and spent are one
+404 and write `authz_denied`; a failed read is 503. Still "notify, not block", and **a student cannot remove a
+link** — a safeguarding decision, not an omission. Tests: `test_parent_link_codes.py`.
 
 ## Consent — `signal_consent` decides what may be recorded
 

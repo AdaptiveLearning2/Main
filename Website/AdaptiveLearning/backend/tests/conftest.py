@@ -110,6 +110,37 @@ def _school_year_is_open(monkeypatch):
     main._retention_cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def _limiters_start_empty():
+    """Every sliding window is empty at the start of every test.
+
+    The windows are module-level and measured in minutes or hours, so hits
+    outlive the test that made them: with `parent_link_code` at ten an hour,
+    the eleventh test to drive that endpoint for one user id would 429 for a
+    reason nothing in its own body could explain, and the first ten would keep
+    passing. That is the shape the frontend's `clearViewPrefs` exists for --
+    the test that breaks is the one declared after the leak.
+
+    Found by walking the module rather than listing them, so a new limiter is
+    covered without anyone remembering this file. Takes no fixtures, for the
+    ordering reason `_feature_flags_are_default` documents below.
+    """
+    import main
+    cls = type(main._STRATEGY_LIMITER)
+    for value in list(vars(main).values()):
+        if isinstance(value, cls):
+            value.reset()
+        elif isinstance(value, dict):
+            # Copied before iterating, like the outer loop: poller and prefetch
+            # threads mutate module-level dicts, and "changed size during
+            # iteration" from an autouse fixture would fail whichever test
+            # happened to be starting.
+            for member in list(value.values()):
+                if isinstance(member, cls):
+                    member.reset()
+    yield
+
+
 def _default_flags():
     import main
     return {k: {"enabled": v, "bypass_until": None}

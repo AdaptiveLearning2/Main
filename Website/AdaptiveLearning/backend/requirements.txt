@@ -21,6 +21,10 @@ fastapi==0.141.1
 uvicorn[standard]==0.52.4
 python-dotenv==1.2.3
 supabase==2.31.0
+# Imported directly (`ReturnMethod`), so pinned here too. supabase requires
+# this exact version, so a split fails to install; the `supabase` group in
+# .github/dependabot.yml bumps the two in one pull request.
+postgrest==2.31.0
 requests==2.34.2
 openai==3.5.0
 flask==3.1.3

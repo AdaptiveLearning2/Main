@@ -823,6 +823,11 @@ rung.
 4.NF.3 onward and is fraction *arithmetic*** — this is recognition, which is why it sits at grade 1 while `rationals`
 starts at 4. Its figure is required, for the same reason `graphs`' is.
 
+**The code writes the question, not the model** (`QUESTION_TEXT`). The answer is always shaded/parts, so the one right
+sentence asks for the shaded part; any other wording the model chooses can only ask something else ("not shaded",
+"outside the shaded part") or give a count away, and no word list covers them all. The model supplies the two numbers
+only. `backend/repair_shape_fraction_texts.py` gives stored rows the same sentence (dry run by default).
+
 **Lowest terms is required, and refusing otherwise is the point.** Two shaded parts in four is a perfectly good
 picture and an ambiguous question: `2/4` and `1/2` are both correct readings, and whichever the solver picked, a
 student giving the other is marked wrong for a right answer — the failure this codebase treats as the worst

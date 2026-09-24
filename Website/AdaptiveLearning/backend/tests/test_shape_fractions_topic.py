@@ -77,13 +77,35 @@ def test_a_valid_reply_is_served_with_its_shape(reply):
     ({"shaded": "2"}, "2/4 has two right answers"),
     ({"shaded": "4"}, "the whole shape"),
     ({"parts": "12"}, "too many parts to count"),
-    ({"question_text": "What fraction of the 4 parts is shaded?"}, "a digit gives the reading away"),
     ({"scenario": "rectangle_area"}, "a scenario that was not asked for"),
 ])
 def test_an_unusable_reply_retries(override, why, reply):
     reply({**VALID, **override})
     with pytest.raises(ValueError, match="after retries"):
         shapes.generate_shape_fractions_question([], [], "easy", "1st Grade")
+
+
+@pytest.mark.parametrize("text", [
+    "What fraction of the rectangle is NOT shaded?",
+    "What fraction of the shape isn’t shaded?",
+    "What fraction is outside the shaded part?",
+    "What fraction of the 4 parts is shaded?",
+    None,
+])
+def test_the_question_served_is_always_the_shaded_one_whatever_the_model_wrote(text, reply):
+    """The answer is shaded/parts, so the sentence asking for it is written here, not by the model."""
+    payload = {**VALID, "question_text": text} if text else {k: v for k, v in VALID.items()
+                                                             if k != "question_text"}
+    reply(payload)
+    question = shapes.generate_shape_fractions_question([], [], "easy", "1st Grade")
+    assert question["question_text"] == shapes.QUESTION_TEXT == "What fraction of the shape is shaded?"
+    assert question["correct_answer"] == "3/4"
+
+
+def test_the_prompt_asks_for_the_sentence_that_is_served():
+    """So the model is not spending a reply on wording that is thrown away."""
+    assert f'"question_text": "{shapes.QUESTION_TEXT}"' in shapes.SHAPE_PROMPT
+    assert f'is always exactly "{shapes.QUESTION_TEXT}"' in shapes.SHAPE_PROMPT
 
 
 def test_the_figure_and_the_answer_come_from_the_same_two_numbers():

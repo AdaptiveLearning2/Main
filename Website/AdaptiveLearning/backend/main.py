@@ -225,9 +225,19 @@ _PUBLIC_LIMITER = {
     "/api/eeg/health":        "public_probe",
 }
 
+# Routes that resolve their caller *and* keep an address budget: sign-up is
+# self-service, so a per-student limit alone is a new allowance per account.
+# Separate so `_PUBLIC_LIMITER` means exactly "no caller" (tested both ways).
+_AUTHENTICATED_ADDRESS_LIMITER = {
+    "/api/generate-question": "public_generate",
+}
+
 # An address is a school behind one NAT, not a student: 60 students polling
 # health is 720/min at rest. These refuse runaway clients, not a class.
 _PUBLIC_RATE_LIMITS = {
+    "public_generate": (
+        _env_number("PUBLIC_GENERATE_RATE_LIMIT", 600, int, minimum=1),
+        _env_number("PUBLIC_GENERATE_RATE_WINDOW", 60.0, float, minimum=1.0)),
     "public_read": (
         _env_number("PUBLIC_READ_RATE_LIMIT", 1800, int, minimum=1),
         _env_number("PUBLIC_READ_RATE_WINDOW", 60.0, float, minimum=1.0)),
@@ -315,7 +325,8 @@ def _public_rate_limited(limiter: str, address: str) -> int | None:
 # Inside `security_headers` and CORS, so the page can read its 429.
 @app.middleware("http")
 async def public_rate_limit(request: Request, call_next):
-    limiter = _PUBLIC_LIMITER.get(request.url.path)
+    path = request.url.path
+    limiter = _PUBLIC_LIMITER.get(path) or _AUTHENTICATED_ADDRESS_LIMITER.get(path)
     if limiter is None:
         return await call_next(request)
 

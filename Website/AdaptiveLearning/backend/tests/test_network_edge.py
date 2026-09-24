@@ -371,8 +371,8 @@ def test_a_name_this_app_knows_is_silent(raw, capsys):
 
 # ─── the routes with no caller ───────────────────────────────────────────
 
-def _public_route_paths() -> set[str]:
-    """Every route handler that never resolves a caller, derived so a new one needs a budget."""
+def _public_route_paths(resolving: bool = False) -> set[str]:
+    """Routes that never resolve a caller, read from the module; `resolving=True`: those that do."""
     tree = ast.parse(pathlib.Path(main.__file__).read_text(encoding="utf-8"))
     paths = set()
     for fn in ast.walk(tree):
@@ -386,7 +386,7 @@ def _public_route_paths() -> set[str]:
         if not routes:
             continue
         body = ast.unparse(fn)
-        if "get_user(" in body or "_require_admin(" in body:
+        if ("get_user(" in body or "_require_admin(" in body) != resolving:
             continue
         paths.update(r.args[0].value for r in routes
                      if r.args and isinstance(r.args[0], ast.Constant))
@@ -405,8 +405,27 @@ def test_the_derivation_found_routes_at_all():
 
 def test_every_budgeted_path_names_a_budget_that_exists():
     """A typo'd name is a KeyError, so a 500 on a public route."""
-    for path, limiter in main._PUBLIC_LIMITER.items():
+    for path, limiter in {**main._PUBLIC_LIMITER,
+                          **main._AUTHENTICATED_ADDRESS_LIMITER}.items():
         assert limiter in main._PUBLIC_RATE_LIMITS, path
+
+
+def test_every_authenticated_address_route_resolves_its_caller():
+    """One that stopped calling `get_user` belongs in `_PUBLIC_LIMITER`; a non-route is a typo."""
+    assert main._AUTHENTICATED_ADDRESS_LIMITER, "nothing to check"
+    assert set(main._AUTHENTICATED_ADDRESS_LIMITER) <= _public_route_paths(resolving=True)
+    assert not set(main._AUTHENTICATED_ADDRESS_LIMITER) & set(main._PUBLIC_LIMITER)
+
+
+def test_question_generation_keeps_an_address_budget(monkeypatch):
+    """Sign-up is self-service; the address caps all accounts, even failing requests."""
+    _tighten(monkeypatch, "public_generate", limit=2)
+    unguarded = TestClient(main.app, raise_server_exceptions=False)
+
+    seen = [unguarded.get("/api/generate-question?grade=5th+Grade") for _ in range(3)]
+
+    assert [r.status_code for r in seen[:2]] == [401, 401]
+    assert seen[2].status_code == 429
 
 
 def _tighten(monkeypatch, limiter="public_read", limit=2, window=60.0):

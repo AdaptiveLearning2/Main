@@ -1,70 +1,23 @@
-"""Exact solvers for the two high-school topics, and the equations they render.
+"""Exact solvers for the high-school topics, and the equations they render.
 
-Grades 9-12 had no content of their own. Every concept the other topics can
-*score* tops out at grade 8 -- `algebra` is one linear equation with one
-solution (8.EE.7b), `probability` a single event (7.SP.5), `mean`/`median`/
-`mode` one statistic over a listed dataset (6.SP.5c) -- so an audit of 640
-generated questions found 81% of grade-9 questions three or more grades below
-grade, and stating a harder requirement in the prompt moved it by two points.
-Harder numbers inside 8.EE.7b are still 8.EE.7b. Closing that needs solvers,
-which is what this is.
-
-Three properties, and the first is why this file is not sympy:
-
-  * **No model-supplied value reaches this file at all**, which is why it is
-    not sympy. `safe_solve` exists because `sympify("9**9**9")` never returns
-    and the spin holds the GIL, so only an external kill stops it. Here there
-    is nothing to parse: the generators choose the coefficients and the input
-    themselves and hand them to the model, so every operation below is one
-    arithmetic step on integers this codebase picked. That is a stronger
-    property than the bounded-parse one this docstring used to claim -- there
-    was a `parse_int` guarding model output, and it went when the generators
-    stopped asking the model for numbers. `missing_number` and `patterns`
-    skip the subprocess for the older, weaker reason and still parse.
-  * **Refuse rather than guess.** Every function answers `(value, reason)` and
-    returns `None` for anything it cannot score exactly -- an irrational root,
-    a repeated root where "the larger" means nothing, a result too large to be
-    a sensible question. The caller is inside a retry loop, so a refusal costs
-    one attempt. A wrong answer costs a student a question they answered
-    correctly, which this codebase treats as the worst outcome available.
-  * **The equation shown is rendered from the coefficients being scored.**
-    `render_*` is the only thing that writes an equation, and the generators
-    require the model's `question_text` to contain its output verbatim. That
-    makes "the text says one equation and the solver scored another" -- the
-    failure `question_consistency` exists for, and the one this topic is most
-    exposed to, since the question *is* the equation -- unrepresentable rather
-    than merely unlikely. Same direction as `question_figures`: derive the
-    presentation from the scored data, never let the model write both.
-
-One module for two topics rather than the per-topic split `geometry_solvers`
-and `angle_solvers` use. Those are separate because `_solve_worker` imports
-them and must not pull in supabase and flask with them; nothing here runs in a
-subprocess, and the two topics share every helper below this line.
+No model-supplied value reaches this file (generators pick the integers), so
+it needs no sympy or subprocess. Every solver returns `(value, reason)` and
+refuses (`None`) anything it cannot score exactly. `render_*` is the only
+writer of an equation; generators require `question_text` to contain it verbatim.
 """
 
 import math
 
-# A result past this is not a question anyone would ask, and for `functions` it
-# is also the bound on the arithmetic: f(g(x)) over two quadratics squares its
-# input, so an unbounded composition reaches 10^16 from coefficients that each
-# look reasonable. Refusing is right either way -- "what is f(g(7))" answered
-# 48,271,009 is not a question about function composition, it is a question
-# about whether the student has a calculator.
+# Largest answer worth asking; also bounds f(g(x)), which squares its input.
 MAX_ABS_RESULT = 10 ** 6
 
-# Degree 2 is the whole of what these topics ask for, and it bounds the
-# composition above: a cubic inner function would cube the magnitude.
+# Also bounds the composition: a cubic inner function would cube the magnitude.
 MAX_DEGREE = 2
 
 
 # --- rendering ------------------------------------------------------------
-#
-# The generators require `question_text` to contain exactly what these return,
-# so a change here changes what the model is asked to reproduce. Signs are the
-# whole difficulty: "x^2 + -5x + 6 = 0" is what naive formatting produces and
-# is not how anyone writes a quadratic, so a student would reasonably read it
-# as a typo and the model would reasonably "correct" it -- costing a retry on
-# every question whose middle coefficient is negative.
+# `question_text` must contain these outputs verbatim. Negative coefficients
+# render as " - 5x", never " + -5x".
 
 
 def _first_term(coefficient, suffix):
@@ -77,13 +30,7 @@ def _first_term(coefficient, suffix):
 
 
 def _later_term(coefficient, suffix):
-    """A following term as " + 3x" or " - 3x", or "" when it vanishes.
-
-    A zero coefficient renders as nothing rather than "+ 0x": the term is
-    absent from the equation the student sees, and the solver is reading the
-    coefficient rather than the string, so there is nothing to keep them
-    honest about.
-    """
+    """A following term as " + 3x" or " - 3x", or "" when it vanishes."""
     if coefficient == 0:
         return ""
     sign = "-" if coefficient < 0 else "+"
@@ -93,22 +40,13 @@ def _later_term(coefficient, suffix):
 
 
 def render_quadratic(a, b, c):
-    """`ax^2 + bx + c = 0` as a student would write it.
-
-    `x^2` rather than `x²` or `x**2`: the first is what a keyboard produces and
-    what the prompt's example shows, and the substring check means all three
-    would otherwise be a retry apiece.
-    """
+    """`ax^2 + bx + c = 0` as a student would write it (`x^2`, matching the prompt)."""
     return (_first_term(a, "x^2") + _later_term(b, "x") + _later_term(c, "")
             + " = 0")
 
 
 def render_polynomial(coefficients):
-    """A polynomial in descending powers: `[3, -2, 1]` -> `3x^2 - 2x + 1`.
-
-    A bare constant (`[7]`) renders as `7`, which is a legitimate if dull
-    function; the generators' own tiers are what keep it from being asked.
-    """
+    """A polynomial in descending powers: `[3, -2, 1]` -> `3x^2 - 2x + 1`."""
     degree = len(coefficients) - 1
     parts = []
     for index, coefficient in enumerate(coefficients):
@@ -116,8 +54,7 @@ def render_polynomial(coefficients):
         suffix = "" if power == 0 else "x" if power == 1 else f"x^{power}"
         if not parts:
             if coefficient == 0 and power > 0:
-                # A leading zero is not a term; the polynomial is lower-degree
-                # than its list suggests. Skip it rather than render "0x^2".
+                # A leading zero is not a term; don't render "0x^2".
                 continue
             parts.append(_first_term(coefficient, suffix))
         else:
@@ -131,23 +68,8 @@ def render_polynomial(coefficients):
 def solve_quadratic(a, b, c, target):
     """The requested root of `ax^2 + bx + c = 0`, or `(None, reason)`.
 
-    Restricted to quadratics that **factor over the integers**, which is
-    A-REI.4b's core ("solve quadratic equations by inspection, taking square
-    roots, completing the square, the quadratic formula and factoring") and is
-    what keeps the answer and its distractors whole numbers. The alternatives
-    were both worse: an irrational root renders as a decimal that the correct
-    option matches only to whatever precision the formatter chose, and a
-    rational one puts a fraction among integer distractors, which is a tell.
-
-    `target` names which root, and the two refusals below are why it has to:
-
-      * a **repeated** root (discriminant 0) makes "the larger solution" a
-        question with no answer -- both roots are the same number, so a student
-        who reads carefully has nothing to choose between.
-      * **no real roots** (negative discriminant) cannot be scored at all here.
-
-    Neither is a defect in the model's reply so much as a quadratic this topic
-    cannot ask about, which is why both cost a retry rather than raising.
+    Integer roots only, so the answer and distractors are whole numbers.
+    `target` is "larger"/"smaller"; repeated or non-real roots are refused.
     """
     if target not in ("larger", "smaller"):
         return None, f"unknown target {target!r}"
@@ -180,13 +102,7 @@ def solve_quadratic(a, b, c, target):
 
 
 def other_root(a, b, c, target):
-    """The root that was *not* asked for, or None.
-
-    The best distractor this topic has: a student who solves correctly and
-    then reads "larger" as "smaller" lands exactly here, which is the mistake
-    worth putting in front of them. Distractors that are one away from the
-    answer test arithmetic; this one tests whether they read the question.
-    """
+    """The root that was *not* asked for (a distractor), or None."""
     opposite = "smaller" if target == "larger" else "larger"
     value, _ = solve_quadratic(a, b, c, opposite)
     return value
@@ -195,10 +111,7 @@ def other_root(a, b, c, target):
 def _exact_isqrt(value):
     """The integer square root of a perfect square, or None.
 
-    `math.isqrt` floors, so it answers 3 for 10 as readily as for 9 -- the
-    squaring back is what separates the two, and without it every discriminant
-    would look like a perfect square and every irrational root would be
-    served rounded.
+    `math.isqrt` floors; squaring back is what rejects non-squares.
     """
     if value < 0:
         return None
@@ -213,11 +126,7 @@ def _exact_isqrt(value):
 def evaluate_polynomial(coefficients, x):
     """`f(x)` for a polynomial in descending powers, or `(None, reason)`.
 
-    Horner's method, so the intermediate values stay the size of the answer
-    rather than of `x**degree` -- which matters because the bound below is
-    checked on the result, and an intermediate that overflowed the bound on
-    its way to a small answer would be refused for no reason a reader could
-    see.
+    Horner's method, so intermediates stay the size of the answer.
     """
     if not coefficients:
         return None, "no coefficients"
@@ -232,14 +141,7 @@ def evaluate_polynomial(coefficients, x):
 
 
 def solve_composition(outer, inner, x):
-    """`f(g(x))`, or `(None, reason)`.
-
-    Composition is the part of this topic that is unambiguously high school:
-    evaluating a rule at a value is 8.F.2, and it is *function notation* that
-    F-IF.2 introduces and `f(g(x))` (F-BF.1c) that has no grade-8 equivalent.
-    Both halves go through the same bound, so an inner value that is already
-    too large is refused before it is squared.
-    """
+    """`f(g(x))`, or `(None, reason)`. An oversized inner value is refused first."""
     middle, reason = evaluate_polynomial(inner, x)
     if middle is None:
         return None, f"inner function: {reason}"
@@ -252,20 +154,8 @@ def solve_composition(outer, inner, x):
 def population_sd(values):
     """The population standard deviation, or `(None, reason)` if not exact.
 
-    **Population, divided by n, and the questions say so.** Sample standard
-    deviation over n-1 is what many high-school courses teach by default, and
-    the two differ -- so a question saying only "the standard deviation" is
-    one a student can answer correctly and be marked wrong for, which this
-    codebase treats as the worst outcome available. That ambiguity is a
-    bigger hazard than the rounding one this topic was deferred over, and it
-    is not fixable by a solver: only the wording removes it.
-
-    Exact or nothing. Most datasets have an irrational standard deviation,
-    and a correct option that matches only to whatever precision a formatter
-    chose is the same wrong-answer failure wearing a decimal point. So the
-    variance must be a perfect square, and `_choose_dataset` builds data that
-    way -- the same move `quadratics` makes in restricting itself to
-    equations that factor over the integers.
+    Divides by n, not n-1, so the question wording must say "population".
+    The variance must be a perfect square; `_choose_dataset` builds data that way.
     """
     if not values or len(values) < 2:
         return None, "a spread needs at least two values"
@@ -286,9 +176,7 @@ def population_sd(values):
 
 
 def population_variance(values):
-    """The variance, for the distractor a student reaches by forgetting the
-    square root -- the commonest error on this topic, and the one worth
-    putting in front of them. `None` where the standard deviation is not
-    exact, so it is never offered beside an answer that was refused."""
+    """The variance (the forgot-the-square-root distractor), or None where the
+    standard deviation is not exact."""
     sd, _reason = population_sd(values)
     return None if sd is None else sd * sd

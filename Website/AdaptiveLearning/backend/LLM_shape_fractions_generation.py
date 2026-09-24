@@ -1,13 +1,6 @@
 # Generates "what fraction of the shape is shaded?" and solves it exactly.
-#
-# CCSS 1.G.3 (partition circles and rectangles into two and four equal shares,
-# describe them as halves and fourths), 2.G.3 (halves, thirds, fourths), and
-# 3.NF.1 (understand a/b as a parts of a whole partitioned into b equal parts).
-#
-# Distinct from `rationals`, which is 4.NF.3 onward and is fraction
-# *arithmetic*. This is fraction recognition: reading one off a picture. It is
-# the second topic whose figure is required rather than enriching -- "what
-# fraction of the shape is shaded" has nothing to read without the shape.
+# CCSS 1.G.3, 2.G.3, 3.NF.1: fraction recognition, not `rationals` arithmetic (4.NF.3+).
+# The figure is required: the question has nothing to read without it.
 
 import json
 import math
@@ -76,13 +69,11 @@ Rules:
 
 
 def _grade_band(grade):
-    # Delegated so the copies cannot drift apart, and so an unreadable grade
-    # ("Grade 1") lands in "early" rather than "advanced". See grade_levels.
+    # Shared so copies can't drift; profiles.grade_level is free text. See grade_levels.
     return grade_levels.grade_band(grade)
 
 
-# Only "early" is reachable -- TOPIC_MAX_GRADE caps this at grade 3 -- and the
-# rest is defense-in-depth, like the other capped topics.
+# Only "early" is reachable (grade 3 cap); the rest is defence in depth.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use 2 or 4 parts (halves and fourths).",
@@ -106,9 +97,7 @@ COMPLEXITY_BY_GRADE = {
     },
 }
 
-# 1.G.3 is two and four equal shares and nothing else -- thirds are 2.G.3.
-# Difficulty and grade are independent inputs, so a "hard" 1st grader is a real
-# state and the band's hard tier alone would hand them eighths.
+# 1.G.3 is halves and fourths only, so a "hard" 1st grader would otherwise get eighths.
 GRADE_OVERRIDES = {
     1: "This student is in GRADE 1. Use exactly 2 or 4 parts, nothing else (1.G.3).",
     2: "This student is in GRADE 2. Use 2, 3 or 4 parts (2.G.3).",
@@ -116,18 +105,9 @@ GRADE_OVERRIDES = {
 
 
 def solve_shape_fraction(parts, shaded):
-    """The shaded fraction as a string, or None if the picture does not
-    determine one answer.
+    """The shaded fraction as a string, or None if the picture does not determine one answer.
 
-    **Lowest terms is required, and refusing otherwise is the whole point.**
-    Two shaded parts in four is a perfectly good picture and an ambiguous
-    question: `2/4` and `1/2` are both correct readings of it, and whichever
-    one the solver picked, a student giving the other would be marked wrong for
-    a right answer. That is the failure this codebase treats as the worst
-    available -- worse than a refused question, which costs one retry.
-
-    Reducing the answer instead was the other option and is worse: the student
-    is asked to read the picture, and the picture says two of four.
+    Refuses non-lowest terms: 2 of 4 reads as both 2/4 and 1/2.
     """
     try:
         parts, shaded = int(parts), int(shaded)
@@ -141,12 +121,7 @@ def solve_shape_fraction(parts, shaded):
 
 
 def generate_incorrect_answers(parts, shaded):
-    """The misreadings this question is for, in order.
-
-    The complement first: counting the *unshaded* parts is the mistake a child
-    actually makes here. Then the inverted fraction, then a miscount of each
-    half of the ratio. Bounded by construction -- a fixed candidate list.
-    """
+    """Three likely misreadings, complement first; a fixed list, so bounded."""
     candidates = [
         (parts - shaded, parts),        # counted the unshaded parts
         (shaded, parts + 1),            # miscounted the parts
@@ -155,21 +130,14 @@ def generate_incorrect_answers(parts, shaded):
         (1, parts),
         (parts - shaded, parts + 1),
         (1, parts + 1),
-        # Neighbouring denominators, so halves has three proper distractors at
-        # all. Without these the only ones available for 1/2 were `2/2` and
-        # `1/1` -- both improper, and both worth exactly one whole, so a
-        # student could rule out two options with a single thought.
+        # Neighbouring denominators, so halves get three proper distractors.
         (1, parts * 2),
         (parts + 1, parts + 2),
         (parts - 1, parts + 1),
         (parts, shaded),                # read the ratio upside down
     ]
     answer = (shaded, parts)
-    # Proper fractions first, and improper ones only to fill. A fraction
-    # greater than one cannot be part of a shape, so `2/1` is not a misreading
-    # a child could make -- it is an option nobody considers, which wastes one
-    # of the three and makes the question easier than it looks. The inverted
-    # ratio stays available last, because for halves there is little else.
+    # Proper fractions first; an improper one can't be part of a shape, so only fills gaps.
     proper = [(n, d) for n, d in candidates if 0 < n < d]
     wrong = []
     for num, den in proper + candidates:
@@ -243,16 +211,14 @@ def generate_shape_fractions_question(global_questions, prev_questions,
                                         difficulty, attempt + 1):
             continue
 
-        # A digit in the text writes out the count the picture exists to be
-        # read for. Checked rather than only requested.
+        # A digit in the text gives away the count the picture is for.
         text = question_data.get("question_text")
         if not isinstance(text, str) or re.search(r"\d", text):
             print(f"[Attempt {attempt+1}] Digits in the question text:",
                   repr(text)[:80])
             continue
 
-        # Required, like `graphs`: "what fraction of the shape is shaded" has
-        # nothing to read without the shape.
+        # Required, like `graphs`.
         figure = question_figures.figure_for("part_whole", question_data)
         if figure is None:
             print(f"[Attempt {attempt+1}] Undrawable shape:",

@@ -1,23 +1,9 @@
 """The Common Core standard a generated question is scored against.
 
-Every topic is already grade-gated against a CCSS code -- `TOPIC_MIN_GRADE`,
-`TOPIC_MAX_GRADE` and the two `SCENARIO_MIN_GRADE` tables cite one next to each
-integer -- but only as a comment. This is the machine-readable copy, so the
-code can ride on the question row and reach a teacher.
-
-Resolved by *grade*, not band, for the reason the scenario gates use the grade:
-a band spans three grades and the standard can change inside it (grade 1's
-`1.MD.4` and grade 2's `2.MD.10` are both "early"). A ladder is a list of
-`(floor_grade, code)`; the code with the highest floor at or below the
-student's grade wins, and a grade below every floor takes the lowest rung --
-the defense-in-depth tiers still describe content, and the floor's standard is
-the honest name for it. An unreadable grade counts as the youngest, as it does
-everywhere else.
-
-Scenario ladders come first where a topic selects one, because there the
-standard is a property of the scenario (`triangle_sum` is 8.G.5 inside a
-grade-7 topic). Topics whose structure only scales by grade get a topic ladder;
-topics whose structure never changes get one rung.
+Resolved by grade, not band (a band spans three grades). A ladder is
+`[(floor_grade, code), ...]`: the highest floor at or below the grade wins;
+below every floor takes the lowest rung; an unreadable grade counts as the
+youngest. A scenario ladder, where one exists, beats the topic ladder.
 """
 import grade_levels
 
@@ -25,10 +11,8 @@ import grade_levels
 TOPIC_LADDER = {
     # Comparing whole numbers, then decimals and fractions, then negatives.
     "ordering":            [(1, "1.NBT.3"), (2, "2.NBT.4"), (4, "4.NF.7"), (7, "6.NS.7")],
-    # One-step within the topic's floor, two-step at 7, x on both sides and
-    # distribution at 8 -- and 8.EE.7b stays the ceiling however far the
-    # numbers grow, which is why grades 9+ score below grade (see hs_solvers).
-    "algebra":             [(1, "6.EE.7"), (7, "7.EE.4"), (8, "8.EE.7b")],
+    # 8.EE.7b is the ceiling, so grades 9+ score below grade (see hs_solvers).
+    "algebra":            [(1, "6.EE.7"), (7, "7.EE.4"), (8, "8.EE.7b")],
     # Like denominators, then unlike, then negatives.
     "rationals":           [(1, "4.NF.3"), (5, "5.NF.1"), (7, "7.NS.1")],
     # One statistic over a listed dataset, at every grade it is offered.
@@ -84,10 +68,8 @@ SCENARIO_LADDER = {
         "dice":               [(1, "7.SP.5")],
     },
     "expressions": {
-        # Add and subtract within 20, then within 100, then whole-number
-        # arithmetic, multi-step at 4, and parentheses only from 5 --
-        # `GRADE_OVERRIDES[4]` keeps grade 4 off 5.OA.1, so the floor is 5.
-        "evaluate":            [(1, "1.OA.6"), (2, "2.NBT.5"), (3, "3.NBT.2"), (4, "4.OA.3"), (5, "5.OA.1")],
+        # Parentheses only from 5: `GRADE_OVERRIDES[4]` keeps grade 4 off 5.OA.1.
+        "evaluate":           [(1, "1.OA.6"), (2, "2.NBT.5"), (3, "3.NBT.2"), (4, "4.OA.3"), (5, "5.OA.1")],
         "order_of_operations": [(1, "4.OA.3"), (5, "5.OA.1")],
         "simplify":            [(1, "6.EE.3")],
     },
@@ -108,8 +90,7 @@ def _rung(ladder, number):
 
 
 def ccss_for(topic, grade, scenario=None):
-    """The code for `topic` at `grade`, refined by `scenario` where the topic
-    has one. None only for a topic this module does not know."""
+    """The code for `topic` at `grade`, refined by `scenario`; None for an unknown topic."""
     number = grade_levels.grade_number(grade)
     if number is None:
         number = 1

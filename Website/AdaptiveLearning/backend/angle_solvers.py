@@ -1,16 +1,7 @@
 """The angle-relationship solve path, with nothing heavy imported.
 
-Lives apart from `LLM_angle_relationship_generation` for the reason
-`geometry_solvers` does: `_solve_worker` imports it, and the generator module
-pulls in supabase, flask and dotenv at import.
-
-It runs in the worker because `parse_expr` is applied to the model's raw
-variable strings and is unbounded -- `parse_expr("9**9**9")` never returns, and
-the spin holds the GIL inside CPython's long-integer code, so no watchdog
-thread and no signal handler can stop it. Four of the five scenarios need only
-a number, but `algebra_complementary` solves an equation in `x`, so the
-variables stay sympy expressions and the whole solve belongs here rather than
-just the parse.
+Separate from the generator so `_solve_worker` can import it without supabase
+or flask. Runs only in the worker: `parse_expr` on model strings is unbounded.
 """
 
 import math
@@ -28,10 +19,7 @@ transformations = standard_transformations + (implicit_multiplication_applicatio
 def preprocess_variables(raw_variables):
     """The model's variable strings as sympy expressions.
 
-    Only ever called from inside this module's `solve_scenario`, and so only
-    ever inside the worker: this is the unbounded step, and calling it from a
-    request thread is the bug this module exists to fix. Exposed because the
-    degenerate-figure tests build the parsed form directly.
+    Unbounded: call only inside the worker (tests call it directly).
     """
     return [parse_expr(str(v), transformations=transformations)
             for v in raw_variables]
@@ -60,9 +48,7 @@ def solve_complementary(expr1, expr2):
     return result[0] if result else None
 
 
-# How many variables each scenario indexes. Checked before the dispatch, so a
-# reply with too few is a rejection rather than an IndexError -- the same class
-# of failure `SCENARIO_VARS` covers for geometry.
+# Variables each scenario indexes; checked first so too few is a rejection, not an IndexError.
 SCENARIO_ARITY = {
     "complementary": 1,
     "supplementary": 1,
@@ -74,10 +60,7 @@ SCENARIO_ARITY = {
 SOLVABLE_SCENARIOS = frozenset(SCENARIO_ARITY)
 
 
-# The angle total each scenario's given values must fall inside. Measured
-# 2026-08-18: a triangle question with angles 75 and 105 was generated with the
-# answer 0 -- correct arithmetic, and not a real triangle, since those two
-# already use the full 180 degrees. `complementary` fails the same way at 90.
+# Degrees each scenario's angles sum to; givens and answer must lie strictly inside.
 _SCENARIO_TOTAL = {
     "complementary":         90,
     "supplementary":         180,
@@ -90,15 +73,10 @@ _SCENARIO_TOTAL = {
 def invalid_reason(scenario, variables, solution):
     """Why this configuration is invalid, or None if it is fine.
 
-    Lives here rather than in the generator because it needs the *parsed*
-    expressions: `algebra_complementary` substitutes the solved `x` back into
-    both angle expressions, which is impossible once only a float has crossed
-    the process boundary. Wrong at every grade, so it is checked before the
-    whole-number rule the caller applies.
+    Here, not in the generator, because it needs the parsed expressions.
     """
     if scenario == "algebra_complementary":
-        # `solution` here is x, not an angle, and x itself has no bound --
-        # check the two angle expressions evaluated at x instead.
+        # `solution` is x, not an angle; check both angles evaluated at x.
         x = sp.symbols('x')
         try:
             angles = [float(expr.subs(x, solution)) for expr in variables]
@@ -122,9 +100,7 @@ def invalid_reason(scenario, variables, solution):
             return (f"a given angle is {angle} degrees; it must be strictly "
                     f"between 0 and {total}")
 
-    # The half that catches 75 + 105: both givens are individually legal and
-    # together they use the entire total, so the answer is 0 -- correct
-    # arithmetic and not a figure that exists.
+    # Givens legal alone can still use the whole total (75 + 105), leaving 0.
     if solution <= 0:
         return (f"the answer is {solution} degrees -- the given angles already "
                 f"use the whole {total}-degree total, so there is no such figure")
@@ -136,11 +112,6 @@ def invalid_reason(scenario, variables, solution):
 
 def solve_scenario(scenario, raw_variables):
     """`(value, reason)` -- the answer as a float, or None and why not.
-
-    Both halves, because the caller is a subprocess whose only channel back is
-    a string: collapsing every failure to None made a degenerate triangle and
-    an unparseable variable print the same `unsolvable scenario`, while the
-    sentence explaining it was computed one frame away and dropped.
 
     `reason` is None exactly when `value` is not.
     """
@@ -164,15 +135,10 @@ def solve_scenario(scenario, raw_variables):
             case "algebra_complementary":
                 solution = solve_complementary(variables[0], variables[1])
             case _:
-                # Unreachable while SCENARIO_ARITY and this `match` agree, and
-                # the tests pin them equal -- but this is a standalone unit, so
-                # it holds that guarantee itself rather than borrowing the
-                # caller's.
+                # Unreachable while SCENARIO_ARITY matches this `match`.
                 return None, f"no branch for scenario {scenario!r}"
         if solution is None:
             return None, f"{scenario} has no solution"
-        # Checked here because it needs the parsed expressions, which do not
-        # cross the process boundary.
         reason = invalid_reason(scenario, variables, solution)
         if reason:
             return None, reason

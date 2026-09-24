@@ -1,55 +1,17 @@
 """Figure specifications for questions that need a picture.
 
-Grades 1-3 mathematics is largely visual, and the standards this system could
-not ask were mostly the visual ones: 1.G.3 and 2.G.3 partition a shape, 1.MD.4
-and 2.MD.10 read a picture or bar graph. `rectangle_area_by_counting` (2.G.2)
-was being asked in *words* -- "a rectangle split into 3 rows of 4 same-size
-squares" -- which is a description of a picture rather than the picture.
-
-THE FIGURE IS DERIVED FROM THE DATA THE SOLVER USES, NEVER FROM THE MODEL.
-That is the whole design, and it is not a preference. `question_consistency`
-exists because a model free to write the question text and the scored data
-separately will eventually disagree with itself, and a student answers the
-version on screen while being marked against the other. A picture is the same
-hazard with no text for any check to read: nothing downstream could compare a
-model-drawn diagram against the numbers it is scored on. Deriving the figure
-from `variables` -- the same dict `geometry_solvers` indexes -- makes that
-disagreement unrepresentable rather than merely unlikely.
-
-So no generator asks a model for a figure, and none may. What is stored is a
-*specification*, not markup: the browser draws it, and derives the description
-a screen reader is given from the same spec. One source for the picture and the
-sentence, for the reason `AccessibleChart` takes one `columns` spec for its
-chart and its table -- as two literals they drifted twice in one PR.
-
-**`figure_for` never raises and never refuses a question.** It returns `None`
-for a scenario with no figure, values it cannot use, or a size it will not
-draw, and it runs on the hot generation path after the solve -- so a picture
-that could not be built must cost the picture and nothing else.
-
-Whether that `None` is fatal is the *caller's* decision, and for all but one
-topic it is not: the question was complete without a picture, since the text
-still says "3 rows of 4 same-size squares". `graphs` is the exception and the
-only one. "How many more cats than dogs?" has no answer on screen without the
-graph, so that generator treats an unbuildable figure as an unusable reply and
-retries. The rule lives with the topic that cannot do without it rather than
-here, so a new figure type does not inherit a requirement it does not have.
+The figure is derived from the `variables` the solver scores, never from the model, so a
+picture cannot disagree with the answer. The browser draws the spec and derives its
+screen-reader description from it. `figure_for` returns None rather than raising; only the
+`graphs` generator treats a missing figure as an unusable reply.
 """
 
-# Grids larger than this are unreadable at the size a question card gives them,
-# and the SVG grows with the product. Refusing is safe -- the question keeps its
-# wording and loses the picture -- so the bound is deliberately tight rather
-# than generous.
+# Largest grid side drawn; beyond it the question keeps its wording and loses the picture.
 MAX_GRID_SIDE = 12
 
 
 def _positive_int(value, limit):
-    """`value` as an int in 1..limit, or None.
-
-    The generators hand these over as strings, because that is what the model
-    produced and what the solver parses. Anything else is not a figure this
-    module will draw.
-    """
+    """`value` (usually a string from the model) as an int in 1..limit, or None."""
     try:
         number = int(str(value).strip())
     except (TypeError, ValueError):
@@ -60,10 +22,7 @@ def _positive_int(value, limit):
 def _rect_grid(variables):
     """2.G.2 -- a rectangle partitioned into rows of same-size squares.
 
-    Reads `rows` and `columns`, which is exactly what
-    `geometry_solvers.SCENARIO_VARS["rectangle_area_by_counting"]` declares and
-    what its solver multiplies. Sharing the keys is the point: there is no
-    second reading of the question for the picture to be drawn from.
+    Reads the same `rows`/`columns` keys the solver multiplies (`SCENARIO_VARS`).
     """
     rows = _positive_int(variables.get("rows"), MAX_GRID_SIDE)
     columns = _positive_int(variables.get("columns"), MAX_GRID_SIDE)
@@ -72,22 +31,13 @@ def _rect_grid(variables):
     return {"type": "rect_grid", "rows": rows, "columns": columns}
 
 
-# The tallest bar a chart may show. Counts above this are not a reading
-# exercise for these grades -- 1.MD.4 and 2.MD.10 are "up to three/four
-# categories" of small counts -- and a bar drawn at 1:1 stops fitting the card.
-# 3.MD.3's *scaled* graphs, where one square is several units, are a separate
-# thing and are not built here: the scale is part of what the student has to
-# read, so it needs its own figure type rather than a bigger number.
+# Tallest bar, drawn 1:1; scaled graphs (3.MD.3) would need their own figure type.
 MAX_BAR = 20
 MAX_CATEGORIES = 5
 
 
 def _bar_chart(variables):
-    """1.MD.4 / 2.MD.10 -- counts by category, read off a graph.
-
-    Takes the same `categories` list the solver sums and subtracts over, in the
-    same order, so the bar a student counts is the number being scored.
-    """
+    """1.MD.4 / 2.MD.10 -- counts by category, from the solver's own `categories` list, in order."""
     categories = variables.get("categories")
     if not isinstance(categories, list) or not 2 <= len(categories) <= MAX_CATEGORIES:
         return None
@@ -105,35 +55,26 @@ def _bar_chart(variables):
     return {"type": "bar_chart", "bars": bars}
 
 
-# 1.G.3 partitions into two and four equal shares, 2.G.3 adds thirds, and
-# 3.NF.1 reaches eighths. Past that the parts are too thin to count at the size
-# a question card gives them, which is the whole reading being asked for.
+# Up to eighths (3.NF.1); thinner parts are too small to count on a question card.
 MAX_PARTS = 8
 
 
 def _part_whole(variables):
-    """1.G.3 / 2.G.3 / 3.NF.1 -- a shape partitioned into equal parts, some
-    shaded.
+    """1.G.3 / 2.G.3 / 3.NF.1 -- a shape in equal parts, some shaded.
 
-    Reads the same `parts` and `shaded` the solver divides. Note what is *not*
-    checked here: whether the fraction is in lowest terms. A picture of two
-    shaded parts in four is perfectly drawable; it is the *answer* that is
-    ambiguous, so the generator refuses it. Drawability and answerability are
-    different questions and this module only answers the first.
+    Checks drawability only; lowest terms is the generator's check.
     """
     parts = _positive_int(variables.get("parts"), MAX_PARTS)
     shaded = _positive_int(variables.get("shaded"), MAX_PARTS)
     if parts is None or shaded is None or parts < 2:
         return None
     if not 1 <= shaded < parts:
-        # None shaded and all shaded are not fraction questions a picture can
-        # ask -- 0/4 has nothing to point at and 4/4 is the whole shape.
+        # 0/n has nothing to point at and n/n is the whole shape.
         return None
     return {"type": "part_whole", "parts": parts, "shaded": shaded}
 
 
-# Scenario name -> the builder for its figure. A scenario absent from this map
-# has no figure, which is the ordinary case: most questions here are text.
+# Scenario name -> figure builder; an absent scenario has no figure.
 BUILDERS = {
     "rectangle_area_by_counting": _rect_grid,
     "how_many_total": _bar_chart,
@@ -143,12 +84,7 @@ BUILDERS = {
 
 
 def figure_for(scenario, variables):
-    """The figure spec for this scenario, or None.
-
-    Never raises. It runs on the hot generation path and a figure is an
-    enrichment -- a picture that could not be built must cost the picture and
-    nothing else, in the same fail-open direction as `lesson_plan_context`.
-    """
+    """The figure spec for this scenario, or None. Never raises: a failed figure costs only the figure."""
     builder = BUILDERS.get(scenario)
     if builder is None or not isinstance(variables, dict):
         return None

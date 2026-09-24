@@ -1,10 +1,5 @@
-# One dispatch point for every model call the backend makes.
-#
-# Question generation reaches a model from 13 places -- the 10
-# `LLM_*_generation.py` topic files and three in `LLM_topic_decider.py` -- and
-# `main.py:_llm_strategies` is a 14th. Each of those called `ollama` directly,
-# so switching provider meant 14 edits and the bounds below had nowhere to live
-# at all.
+# One dispatch point for every model call the backend makes: the 10
+# `LLM_*_generation.py` files, `LLM_topic_decider.py` and `main.py:_llm_strategies`.
 
 import math
 import os
@@ -17,19 +12,14 @@ import console_encoding
 
 load_dotenv()
 
-# Applied here because every generator imports this module, so it takes
-# effect wherever generation happens -- the app, the measurement script, a
-# direct call -- without each of them having to remember.
+# Here because every generator imports this module.
 console_encoding.make_console_safe()
 
 
 def _env_number(name, default, cast, minimum=None):
     """Read a numeric setting, falling back on a bad value.
 
-    A copy of `main.py:_env_number` rather than an import: `main` imports this
-    module (via `LLM_topic_decider`), so importing back would be a cycle. Same
-    contract -- see the docstring there for why non-finite values fall back
-    rather than clamp.
+    A copy of `main.py:_env_number`: `main` imports this module, so importing back would cycle.
     """
     raw = os.getenv(name)
     if raw is None or raw.strip() == "":
@@ -48,159 +38,54 @@ def _env_number(name, default, cast, minimum=None):
     return value
 
 
-# `ollama`, not `claude`, and deliberately so: a developer who checks the repo
-# out and runs `start.ps1` must not start billing an Anthropic account. A
-# deployment opts in explicitly.
+# Defaults to ollama so a fresh checkout never bills an Anthropic account.
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
 
-# The undated alias. This was `claude-haiku-4-5-20251001` on the reasoning
-# that pinning a snapshot protects the CLAUDE.md measurements from an alias
-# moving under them -- sound in principle, and the wrong trade here, because
-# the two IDs fail differently: the alias resolves whether or not a dated
-# snapshot exists, while a wrong dated string is `404 not_found_error` on
-# every question, on every topic, from the first call.
-#
-# Settled against the live Models API on 2026-08-26, once a key existed:
-# `models.list()` returns `claude-haiku-4-5-20251001`, and
-# `models.retrieve("claude-haiku-4-5")` resolves to it. So both forms are
-# valid -- the dated string this replaced was not wrong, and the argument for
-# the alias is the asymmetry above rather than a defect in the snapshot.
-#
-# Pin the snapshot if the CLAUDE.md measurements ever need to be reproducible
-# against one specific build. Until then the alias is the safer default,
-# because it cannot become a 404 by being mistyped or by ageing out.
+# Undated alias: a mistyped or aged-out dated snapshot is a 404 on every call.
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
 
-# Anthropic's `temperature` range is 0.0-1.0; Ollama's is not bounded there and
-# every generation call site passes 1.1. Passed through, that returns
-# `400 invalid_request_error` -- so the Claude branch takes its own value,
-# floored at 0.0 and capped at 1.0, since a knob that 400s every call is worse
-# than one that is merely mistuned.
-#
-# 1.0 is the top of the valid range, which is the nearest thing to the "keep it
-# varied" intent behind 1.1.
+# Anthropic accepts 0.0-1.0 (call sites pass Ollama's 1.1, which would 400), so clamped.
 CLAUDE_TEMPERATURE = min(1.0, _env_number("CLAUDE_TEMPERATURE", 1.0, float, minimum=0.0))
 
-# Wall-clock budget for one model call. The Anthropic SDK's own default is 10
-# minutes: a prefetch worker blocked that long never refills the queue, and the
-# student waits on an inline generation instead.
+# Seconds per model call, including queueing; the SDK's own 10-minute default would stall prefetch.
 GENERATION_LLM_TIMEOUT = _env_number("GENERATION_LLM_TIMEOUT", 30.0, float, minimum=1.0)
 
-# How many model calls may be in flight process-wide.
-#
-# `_prefetch_active` in main.py bounds this per *user* (at QUEUE_SIZE, 2),
-# which was the whole bound while the model was a local Ollama nobody paid per
-# call. Thirty students starting sessions is sixty concurrent calls and sixty
-# OS threads with nothing in between, and `start_session` prewarms before the
-# first question is served -- so the peak was a function of how many children
-# pressed start at once rather than of anything anyone chose.
-#
-# Bounds both providers, not just Claude: this is a resource ceiling rather
-# than a spend one, and a local 8B model is the likelier of the two to thrash.
+# Process-wide in-flight model calls, both providers; `_prefetch_active` bounds only per user.
 GENERATION_MAX_CONCURRENCY = _env_number("GENERATION_MAX_CONCURRENCY", 8, int, minimum=1)
 _generation_slots = threading.BoundedSemaphore(GENERATION_MAX_CONCURRENCY)
 
-# Ceiling on billable calls per rolling 24h, across the whole process.
-#
-# Scoped to the Claude branch on purpose: Ollama is local and free, so a call
-# ceiling there would refuse a child a question to protect nothing.
-#
-# The default is sized off the product rather than picked round, and it is
-# counted in **calls**, not questions: a question served is two of them, the
-# topic-and-difficulty decision and the generation. A class of 30 answering 20
-# questions in a day is ~600 questions and so ~1200 calls; at 30 questions it
-# is ~1800. 2500 covers the second shape with room for retries, and stops well
-# short of a second class -- which is the point.
-#
-# It was 5000, described as "eightfold headroom on ~600 generations": that
-# compared a call ceiling against a question count and overstated the headroom
-# by two. Corrected to 1500 against a 20-question day, which was then under the
-# 1800 a 30-question day actually makes -- the ceiling has to be sized against
-# the workload, not against the example that happened to be written down.
-#
-# What bounds one call is `max_tokens`, not this: 2048 output tokens at Haiku
-# 4.5's $5/MTok is ~$0.0102, so the worst case here is ~$15/day where the
-# ~$0.003-per-question average suggests ~$4.50. Size this against the worst
-# case; the average is not what a runaway produces.
-#
-# Two things it does not bound, both worth knowing before trusting it. It
-# counts calls rather than tokens, so seeding more lesson-plan text raises the
-# bill without moving the ceiling. And it is in-process and in-memory: several
-# uvicorn workers multiply it, and a restart resets the window, so a crash-loop
-# defeats it entirely. Same tradeoff `_STRATEGY_RATE_LIMIT` documents -- the
-# job is to bound a runaway, not to bill-count exactly.
+# Billable Claude calls per rolling 24h (a question is 2 calls; a class of 30 x 30 questions ~ 1800).
+# Counts calls, not tokens; in-memory and per worker, so a restart resets it.
 GENERATION_DAILY_CALL_LIMIT = _env_number("GENERATION_DAILY_CALL_LIMIT", 2500, int, minimum=1)
 _call_times: list[float] = []
 _call_lock = threading.Lock()
 
-# The SDK retries 429/5xx/connection errors twice by default, and every call
-# site already sits inside its own `for attempt in range(3)` loop -- so one
-# failing generation would be up to nine billed attempts. The loop the call
-# sites own is the one to keep, because it can also reject a *well-formed*
-# response for being bad JSON or the wrong shape, which no transport retry can.
+# 0: call sites already retry 3x and can also reject bad JSON; SDK retries would multiply billing.
 CLAUDE_MAX_RETRIES = _env_number("CLAUDE_MAX_RETRIES", 0, int, minimum=0)
 
 
-# What the Messages API uses when no `temperature` is sent. Named because
-# `_claude_sampling` compares against it to decide whether to send anything,
-# and comparing against the wrong constant silently disables the setting.
+# Temperature the Messages API applies when none is sent.
 _API_DEFAULT_TEMPERATURE = 1.0
 
 
 def _claude_sampling(claude_temperature):
     """The sampling kwargs for one Claude call -- usually none at all.
 
-    `temperature` is NOT a parameter of `messages.create` in anthropic 1.x. It
-    went with the 0.x -> 1.x major version, so passing it raises `TypeError:
-    Messages.create() got an unexpected keyword argument 'temperature'` before
-    a request is ever built -- on every question, from the first call. The plan
-    for this migration corrected Ollama's 1.1 down into Anthropic's 0.0-1.0
-    range, which was a real problem and not this one.
-
-    Nothing caught it because the test double accepted `**kwargs`, so the suite
-    pinned a request shape the SDK cannot accept. `_FakeMessages.create` now
-    validates against the real signature.
-
-    The default is to send no sampling parameter at all: the API's own default
-    temperature is 1.0, which is exactly what `CLAUDE_TEMPERATURE` defaults to,
-    so the hot path asks for nothing and cannot be refused for asking. A caller
-    wanting something else -- `_llm_strategies` wants 0.4, because advice a
-    parent reads is not the place for "keep it varied" -- gets it through
-    `extra_body`, the escape hatch for a wire parameter the typed signature no
-    longer carries.
-
-    That `extra_body` path is UNVERIFIED: the account had no credits when this
-    was written, so no billed call could confirm the wire still accepts
-    `temperature` for this model. It degrades safely -- `_llm_strategies`
-    catches everything and falls back to the rule-based list -- but if the
-    strategies pass reports `source: "rule-based"` against a working key, this
-    is the first thing to check.
+    anthropic 1.x `messages.create` has no `temperature` parameter (TypeError), so a
+    non-default one goes through `extra_body`. That path is unverified against a billed call.
     """
     temp = CLAUDE_TEMPERATURE if claude_temperature is None else claude_temperature
     temp = min(1.0, max(0.0, temp))
-    # Against the API's default, which is what omitting the parameter selects
-    # -- NOT against CLAUDE_TEMPERATURE. Comparing to the setting inverted the
-    # feature: with CLAUDE_TEMPERATURE=0.4, `_llm_strategies` asking for 0.4
-    # matched, so nothing was sent, so the call ran at the API default of 1.0
-    # -- the one value that configuration existed to avoid. And generation
-    # passes None, which returned early before the setting was ever read, so
-    # CLAUDE_TEMPERATURE was inert on both paths while `.env.example`
-    # documented it as the knob.
+    # Compare against the API default, not CLAUDE_TEMPERATURE, or a matching request sends nothing.
     if temp == _API_DEFAULT_TEMPERATURE:
         return {}
     return {"extra_body": {"temperature": temp}}
 
 
 class GenerationUnavailable(RuntimeError):
-    """A bound refused this call: the daily ceiling, or a concurrency slot.
+    """A bound refused this call (daily ceiling or concurrency slot), or the API was unreachable.
 
-    A distinct type because refusing is a *decision*. The alternative -- quietly
-    serving a question from somewhere else, or from a cheaper model -- changes
-    what a child is asked with nothing on any surface saying so, which is the
-    same class of failure as a dashboard that cannot tell "no data" from "zero".
-    Callers that can degrade (the prefetch worker, the strategies pass) already
-    catch broadly; `/api/questions/generate` turns this into a 503 rather than a
-    500, so a ceiling reads differently from a crash.
+    `/api/questions/generate` answers 503. Never degrade by silently serving from elsewhere.
     """
 
 
@@ -209,14 +94,7 @@ _client_lock = threading.Lock()
 
 
 def _get_anthropic_client():
-    """The Anthropic client, built on first use.
-
-    Lazy for the same reason `lesson_plan_context` builds its Supabase client
-    lazily: with `LLM_PROVIDER` defaulting to ollama, a dev machine with no
-    `ANTHROPIC_API_KEY` must not fail at import -- and this module is imported
-    by every generation file, so an import-time failure here would take the
-    whole app down over a provider nobody selected.
-    """
+    """The Anthropic client, built lazily so a machine without `ANTHROPIC_API_KEY` still imports."""
     global _anthropic_client
     with _client_lock:
         if _anthropic_client is None:
@@ -252,41 +130,12 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
                   max_tokens: int = 2048, timeout: float | None = None) -> str:
     """One model call, against whichever provider is configured.
 
-    The sampling parameters do not carry across, so each provider takes its
-    own. `temperature`/`top_p`/`top_k`/`ollama_model` are Ollama's and are
-    ignored on the Claude branch; `claude_temperature` overrides
-    `CLAUDE_TEMPERATURE` for a caller that wants something specific (the
-    strategies pass wants 0.4, not "keep it varied"), and no `top_p`/`top_k` is
-    sent at all, because on Claude 4.x and later at most one of
-    `temperature`/`top_p` should be set.
-
-    One signature rather than two functions is worth the comment: the 13
-    generation call sites pass none of these, so the split would buy them
-    nothing and cost every one of them a branch.
-
-    `schema` is Claude-only and constrains the reply to a JSON schema, so a
-    malformed reply becomes unrepresentable rather than merely retried -- see
-    `question_schemas`. It is ignored on the Ollama branch, which is the half
-    worth stating: dev runs are unschema'd, so `extract_json` and every
-    code-level check downstream of it stay load-bearing and stay tested.
-
-    Raises rather than returning "" when a bound refuses -- see
-    `GenerationUnavailable`, which a *failure to reach the API* is also raised
-    as -- being unable to connect is the same kind of fact as a bound refusing,
-    and it says nothing about the model or the reply.
-
-    Everything else is deliberately *not* caught: the call sites do not catch
-    them either, and swallowing would turn a misconfigured API key into
-    questions that quietly stop generating. The line between the two is
-    classification versus silence -- a connection failure still fails the call
-    and still serves no question; it just arrives as the 503 that means "this
-    deployment cannot serve right now" rather than as a 500.
+    `temperature`/`top_p`/`top_k`/`ollama_model` are Ollama-only; `claude_temperature` and
+    `schema` are Claude-only (Ollama runs unschema'd, so downstream JSON checks stay load-bearing).
+    Raises `GenerationUnavailable` for a refused bound or an unreachable API; everything else propagates.
     """
     budget = GENERATION_LLM_TIMEOUT if timeout is None else timeout
 
-    # Acquired with a deadline rather than blockingly: a caller that waits out
-    # its whole budget for a slot has spent the student's time and still has no
-    # question to show for it.
     queued_at = time.monotonic()
     if not _generation_slots.acquire(timeout=budget):
         raise GenerationUnavailable(
@@ -294,12 +143,7 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
             f"({GENERATION_MAX_CONCURRENCY} concurrent)"
         )
     try:
-        # What is LEFT of the budget, not the budget again. Charging the model
-        # call the full amount after queueing for a slot lets one caller block
-        # for nearly twice `budget` -- and `budget` is what the caller was told
-        # it would wait. `_llm_strategies` had exactly this bug against its own
-        # pool; this is the same fix one layer down, and it has to be here
-        # rather than at the call site because the queueing happens here.
+        # What is left of the budget after queueing, so one call cannot block for ~2x `budget`.
         remaining = budget - (time.monotonic() - queued_at)
         if remaining <= 0:
             raise GenerationUnavailable(
@@ -307,14 +151,8 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
         if LLM_PROVIDER == "claude":
             _claim_call_slot()
             client = _get_anthropic_client().with_options(timeout=remaining)
-            # Imported here for the same reason the client is built lazily: a
-            # deployment on ollama need not have the package. By this line the
-            # client exists, so the import is already cached.
             import anthropic
-            # `output_config` only when there is a schema: an absent key and
-            # a permissive schema are not the same request, and the topics
-            # that cannot express one (see `question_schemas.probability`)
-            # must send no constraint rather than an empty one.
+            # No schema sends no `output_config` at all, not an empty constraint.
             structured = ({"output_config":
                            {"format": {"type": "json_schema", "schema": schema}}}
                           if schema is not None else {})
@@ -327,55 +165,23 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
                     **structured,
                 )
             except anthropic.APIConnectionError as e:
-                # The API could not be *reached*. That is the same kind of fact
-                # as a bound refusing or a solver that will not start: this
-                # deployment cannot serve right now, and it says nothing about
-                # the model or the reply. Unclassified it surfaced as a 500
-                # with a 200-line traceback, and the page told the student to
-                # "make sure the backend is running" -- while the backend was
-                # running and the unreachable thing was the API.
-                #
-                # `APITimeoutError` subclasses this, so both are covered.
-                # `AuthenticationError` deliberately is not: it is an
-                # `APIStatusError`, and a bad key is a misconfiguration that
-                # must stay loud rather than read as a passing outage.
-                #
-                # This is a *classification*, not a swallow -- the call still
-                # fails and no question is served. The distinction the
-                # docstring draws is about not turning a broken key into
-                # questions that quietly stop generating.
-                #
-                # The base URL is named because it is the whole diagnosis when
-                # it is wrong: a stale `ANTHROPIC_BASE_URL` pointing at a local
-                # proxy that is not running gives exactly this error, and
-                # "Connection error." on its own sends you to look at the
-                # backend, the network and the key before the one setting that
-                # is actually at fault. It is not a secret; the key is, and is
-                # not logged.
+                # Covers APITimeoutError too; AuthenticationError is deliberately not caught, a bad key stays loud.
+                # The base URL is logged because a stale `ANTHROPIC_BASE_URL` is the usual cause; the key is not.
                 raise GenerationUnavailable(
                     f"cannot reach the model API at {client.base_url} -- "
                     f"{type(e).__name__}") from e
             return next((b.text for b in resp.content if b.type == "text"), "")
 
-        # Imported here, not at module scope, so a deployment running
-        # `LLM_PROVIDER=claude` need not have the ollama package installed.
-        #
-        # An explicit Client, not the module-level `generate()` the call sites
-        # used to reach: that one carries no deadline, so a server that accepts
-        # the connection and then stalls never raises. Same reasoning
-        # `_llm_strategies` already had for building its own.
+        # An explicit Client, because module-level `generate()` has no deadline.
         from ollama import Client
-        # A None is dropped rather than sent: `_llm_strategies` sets only a
-        # temperature, and adding a top_p/top_k it never sent would change what
-        # that endpoint returns as a side effect of moving it onto this module.
+        # None is dropped rather than sent, so callers setting only temperature are unchanged.
         options = {"temperature": temperature, "top_p": top_p, "top_k": top_k}
         resp = Client(timeout=remaining).generate(
             model=ollama_model,
             prompt=prompt,
             options={k: v for k, v in options.items() if v is not None},
         )
-        # A mapping on some versions of the client and an object on others --
-        # `_llm_strategies` already had to handle both.
+        # A mapping on some client versions, an object on others.
         if isinstance(resp, dict):
             return resp.get("response") or ""
         return getattr(resp, "response", "") or ""

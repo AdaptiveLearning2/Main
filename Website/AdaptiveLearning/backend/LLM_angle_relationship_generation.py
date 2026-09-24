@@ -1,14 +1,14 @@
 ﻿import os
 import re
 import random
-from supabase import create_client, Client #pip install supabase
-from dotenv import load_dotenv   #pip install dotenv
+from supabase import create_client, Client
+from dotenv import load_dotenv
 import llm_client
 import question_schemas
 import json
 from flask import Flask, jsonify
-from flask_cors import CORS #pip install flask-cors
-import sympy as sp #pip install sympy
+from flask_cors import CORS
+import sympy as sp
 from sympy import symbols, Eq, solve, sympify, Integer
 from sympy.parsing.sympy_parser import (
     parse_expr,
@@ -16,8 +16,7 @@ from sympy.parsing.sympy_parser import (
     implicit_multiplication_application
 )
 import incorrect_solution_generation as inc_gen
-# The solve path -- the five solvers, the parse and the degenerate-figure
-# check -- lives in `angle_solvers`, which the bounded worker imports.
+# The solve path lives in `angle_solvers`, which the bounded worker imports.
 import lesson_plan_context
 import angle_solvers
 import safe_solve
@@ -64,12 +63,8 @@ def format_answer(x):
         return str(int(x))
     return f"{round(x, 2)}"
 
-# Only the selected scenario's block is sent -- see the same note in
-# LLM_geometry_generation.py. _pick_scenario has already applied difficulty
-# and the grade-band restriction by the time this is built, so the other
-# scenarios were worked examples for questions the model was not being asked
-# to write. Plain strings, not f-strings: the original was an f-string with
-# no interpolation, so its `{{`/`}}` were escapes for single braces.
+# Only the selected scenario's block is sent. Plain strings, not f-strings, so
+# braces are literal.
 ANGLE_HEADER = """
 You are to provide a Math question suitable for students. The response must be in JSON format.
 The Question Text, Question Topic, Scenario, and Variables will be displayed. The Question Topic will always be "angle_relationships".
@@ -147,20 +142,14 @@ Rules:
 
 
 def _angle_prompt(scenario):
-    """Header + the one selected scenario's block + footer. KeyError on an
-    unknown scenario, for the reason _geometry_prompt documents."""
+    """Header + the selected scenario's block + footer. KeyError on an unknown scenario."""
     return ANGLE_HEADER + "\n" + SCENARIO_BLOCKS[scenario] + ANGLE_FOOTER
 
 
 solution = -1
 
-# Block number -> the scenario name that block asks for.
-#
-# A literal, unlike geometry's, and so cross-checked against the blocks by
-# `test_the_names_match_the_blocks_they_send`. It has to be: every grade and
-# tier test in this file keys off this dict, so an entry naming the wrong
-# scenario would send one block, validate against another, and be invisible to
-# all of them at once.
+# Block number -> scenario name; cross-checked against the blocks by
+# `test_the_names_match_the_blocks_they_send`.
 _SCENARIO_NAMES = {
     1: "complementary",
     2: "supplementary",
@@ -169,18 +158,8 @@ _SCENARIO_NAMES = {
     5: "algebra_complementary",
 }
 
-# The grade at which each scenario's relationship is introduced.
-#
-# Per scenario, not per topic. `TOPIC_MIN_GRADE` puts angle_relationships at 7
-# for 7.G.5 -- complementary, supplementary and linear pairs -- but the
-# triangle angle sum is **8.G.5**, one grade later. Measured over 539 generated
-# questions: 4 of 10 at grade 7 were triangle-sum questions, because the medium
-# difficulty tier is *only* that scenario, so a grade-7 student on that tier got
-# a grade-8 question every time.
-#
-# Same shape and same fix as `SCENARIO_MIN_GRADE` in
-# LLM_geometry_generation: a topic-level minimum cannot express a scenario that
-# arrives a year after the rest of its topic.
+# Grade each scenario is introduced. Per scenario, because triangle_sum (8.G.5)
+# arrives a grade after the rest of the topic (7.G.5).
 SCENARIO_MIN_GRADE = {
     "complementary":         7,   # 7.G.5
     "supplementary":         7,   # 7.G.5
@@ -193,9 +172,7 @@ SCENARIO_MIN_GRADE = {
 def _grade_scenarios(grade):
     """Scenario numbers whose relationship this student has reached.
 
-    An unreadable grade is the youngest, so it gets the grade-7 set -- which
-    it never reaches in practice, since `_allowed_topics` withholds this topic
-    below grade 7 entirely.
+    Below the lowest minimum (including an unreadable grade), the grade-7 set.
     """
     number = grade_levels.grade_number(grade)
     if number is None:
@@ -209,9 +186,7 @@ def _grade_scenarios(grade):
             if SCENARIO_MIN_GRADE[name] <= floor}
 
 
-# Difficulty, not grade -- see the note on geometry's SCENARIO_DIFFICULTY.
-# `triangle_sum` is 8.G.5 and one subtraction; `algebra_complementary` is
-# 7.G.5 and requires setting up an equation and solving it.
+# Difficulty, not grade: triangle_sum is later (8.G.5) but easier than algebra_complementary.
 SCENARIO_DIFFICULTY = {
     "complementary":         1,   # subtract from 90
     "supplementary":         1,   # subtract from 180
@@ -224,14 +199,8 @@ SCENARIO_DIFFICULTY = {
 def _pick_scenario(difficulty, grade):
     """A scenario for this difficulty, chosen from what this grade can see.
 
-    Ranked and sliced rather than looked up in a fixed per-tier list. A fixed
-    list is right until a grade filter removes part of it -- geometry's hard
-    tier is the volumes, and the hard ones are 8.G.9, so grades 6-7 were left
-    with the two simplest and `hard` became easier than `medium`.
-
-    Not cosmetic: difficulty is what the biosignals move, so a focused student
-    pushed from medium to hard was getting an easier question. The fusion
-    fired correctly and was undone one layer down.
+    Ranked and sliced after the grade filter, so `hard` never ends up easier
+    than `medium` when the filter removes the hardest scenarios.
     """
     allowed = _grade_scenarios(grade)
     return random.choice(scenario_tiers.pick(
@@ -239,7 +208,6 @@ def _pick_scenario(difficulty, grade):
         lambda number: SCENARIO_DIFFICULTY[_SCENARIO_NAMES[number]]))
 
 def _grade_band(grade):
-    # Shared with the other generation files so they can't drift apart.
     # An unreadable grade like "Grade 1" falls back to "early", not "advanced".
     return grade_levels.grade_band(grade)
 
@@ -247,38 +215,21 @@ GRADE_COMPLEXITY = {
     "early":    "Use angle measures that are whole numbers between 10 and 80, in multiples of 5 for easy mental math.",
     "middle":   "Use angle measures that are whole numbers between 5 and 170.",
     "upper":    "No additional restriction on angle measures.",
-    # Grades 9+. See the note in LLM_geometry_generation: an empty
-    # restriction is not a harder one.
+    # Grades 9+: an empty restriction is not a harder one.
     "advanced": "Use angle measures that are whole numbers NOT divisible by 5 (e.g. 37, 112, 143), so the arithmetic cannot be done by inspection. For the algebraic scenario use coefficients between 2 and 9.",
 }
 
-# Through 5th grade, answers must be whole degrees; from 6th grade, a
-# decimal answer is ordinary mathematics, not a defect.
-#
-# Keyed on the raw grade number, not _grade_band(), because the cutoff falls
-# between grade 5 and grade 6 while the "middle" band spans 4-6. A band-based
-# check would either force whole numbers on a 6th grader or allow decimals
-# for a 4th grader.
-#
-# An unreadable grade defaults to requiring whole numbers, matching
-# grade_levels' rule that an unknown student is treated as the youngest.
-# Highschool and College still parse as grade 9 and 13, so they're unaffected.
+# Whole degrees through grade 5 (and for an unreadable grade). Keyed on the grade
+# number, not the band, because the "middle" band spans 4-6.
 def _requires_whole_number_solution(grade):
     number = grade_levels.grade_number(grade)
     return number is None or number <= 5
 
 
-# What each scenario's angles must add up to. Every angle in the question --
-# given or asked for -- has to be strictly between 0 and this total.
-
-
 def generate_angle_relationship_question(global_questions,prev_questions, difficulty, grade, max_retries=3):
     for attempt in range(max_retries):
-        # select a scenario from the tier matching this question's difficulty
-        # and grade; the prompt is built around it rather than listing all five
         grade_band = _grade_band(grade)
-        # The grade, not the band: `triangle_sum` is 8.G.5 while the rest
-        # of this topic is 7.G.5.
+        # The grade, not the band: triangle_sum is 8.G.5, the rest 7.G.5.
         scenario = _pick_scenario(difficulty, grade)
 
         prompt = _angle_prompt(scenario)
@@ -302,8 +253,7 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
             f"{GRADE_COMPLEXITY[grade_band]}\n"
         )
         if _requires_whole_number_solution(grade):
-            # Asking costs nothing and saves retries; the check after the
-            # solve is what actually enforces it.
+            # Saves retries; the check after the solve enforces it.
             prompt += (
                 "\nThe ANSWER must be a whole number of degrees. Choose the "
                 "given angle measures so the result has no decimal part.\n"
@@ -332,38 +282,23 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # The scenario the model returned, not the one that was asked for.
-        # `SCENARIO_MIN_GRADE` gates which block is *sent*; nothing checked the
-        # reply, so a `triangle_sum` answer to a grade-7 request produced "In a
-        # triangle two angles measure 75 and 60 degrees. What is the third?" --
-        # 8.G.5, which the grade gate exists to withhold. Haiku returned a
-        # scenario other than the one asked for twice in this work, so this is
-        # an ordinary case rather than a defensive one.
+        # Gate the scenario the model returned, not the one asked for: it can differ.
         if question_data["scenario"] not in {
                 _SCENARIO_NAMES[n] for n in _grade_scenarios(grade)}:
             print(f"[Attempt {attempt+1}] Scenario above this grade:",
                   question_data["scenario"])
             continue
 
-        # Backstop on what the model actually produced, not just on what
-        # the prompt asked for -- see grade_appropriateness.
+        # Backstop on what the model actually produced; see grade_appropriateness.
         if grade_appropriateness.refuse(question_data.get("question_text"),
                                         "angle_relationships", grade_band, difficulty,
                                         attempt + 1):
             continue
 
-        # Solved here, inside the loop, so a question with a grade-inappropriate
-        # answer can be regenerated. The prompt asks for whole-number answers
-        # but isn't reliably obeyed -- measured 2026-08-18:
-        # (5x+15)+(3x-20)=90 came back as 11.875 -- so it's checked in code.
+        # Solved inside the loop, so a grade-inappropriate answer is regenerated.
         scenario_name = question_data.get("scenario")
-        # Parsed and solved in the bounded worker. `parse_expr` on the model's
-        # variable strings is the unbounded step -- `parse_expr("9**9**9")`
-        # never returns, and holds the GIL while it does not, so no watchdog
-        # thread can stop it. The degenerate-figure check goes with it because
-        # it needs the parsed expressions: `algebra_complementary` substitutes
-        # the solved `x` back into both angle expressions, which is impossible
-        # once only a float has crossed the process boundary.
+        # Bounded worker: `parse_expr("9**9**9")` holds the GIL. The degenerate-figure
+        # check runs there too, since it needs the parsed expressions.
         solution = safe_solve.safe_solve_angle(scenario_name,
                                                question_data["variables"])
         if solution is None:
@@ -373,10 +308,7 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
             continue
 
         if _requires_whole_number_solution(grade) and not float(solution).is_integer():
-            # A decimal answer is fine from 6th grade; before that it is
-            # arithmetic the student has not met, and rounding it for display
-            # would make the correct answer disagree with a correct
-            # calculation.
+            # Retry rather than round: a rounded answer disagrees with a correct calculation.
             print(f"[Attempt {attempt+1}] Non-whole-number answer "
                   f"({solution}) for a {grade} student")
             continue

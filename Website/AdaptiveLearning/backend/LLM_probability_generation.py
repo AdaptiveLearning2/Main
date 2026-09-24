@@ -3,14 +3,14 @@
 import os
 import re
 import random
-from supabase import create_client, Client #pip install supabase
-from dotenv import load_dotenv   #pip install dotenv
+from supabase import create_client, Client
+from dotenv import load_dotenv
 import llm_client
 import question_schemas
 import json
 from flask import Flask, jsonify
-from flask_cors import CORS #pip install flask-cors
-import sympy as sp #pip install sympy
+from flask_cors import CORS
+import sympy as sp
 from sympy import symbols, Eq, solve, sympify, Integer, Rational
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
@@ -142,20 +142,14 @@ Rules:
 
 solution = -1
 
-# probability_of is direct counting (EASY). dice requires reasoning about a
-# condition over a sample space, e.g. "greater than 4" (MEDIUM). not_probability_of
-# additionally requires the complementary-probability concept -- one more
-# conceptual step on top of probability_of (HARD).
+# Scenario block numbers: 1 counting (easy), 3 dice condition (medium), 2 complement (hard).
 DIFFICULTY_SCENARIOS = {
     "easy":   [1],
     "medium": [3],
     "hard":   [2],
 }
 
-# Block number -> the scenario name that block asks for. This prompt sends all
-# three blocks and names the wanted one by number, so this map is the only
-# thing tying "scenario 3" to the "dice" the reply must carry -- and the solver
-# dispatches on the name.
+# Prompt block number -> scenario name the reply must carry; the solver dispatches on the name.
 _SCENARIO_NAMES = {
     1: "probability_of",
     2: "not_probability_of",
@@ -166,30 +160,22 @@ _SCENARIO_NAMES = {
 def _pick_scenario(difficulty):
     return random.choice(DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"]))
 
-# Difficulty governs which scenario gets picked above; grade controls the
-# size of the sample space (total items or dice sides) within whatever
-# scenario gets chosen.
+# Difficulty picks the scenario; grade sizes the sample space.
 def _grade_band(grade):
-    # Delegated so ten copies of this cannot drift apart, and so an
-    # unreadable grade ("Grade 1") lands in "early" rather than
-    # "advanced" -- profiles.grade_level is free text. See grade_levels.
+    # Shared so copies can't drift; profiles.grade_level is free text. See grade_levels.
     return grade_levels.grade_band(grade)
 
-# "probability" isn't reachable before grade 6 at all --
-# LLM_topic_decider._safe_topic() withholds it from every grade below that
-# (see its docstring) -- so "early" and "middle" here are defense-in-depth
-# only, not primary content.
+# Topic is gated to grade 6+, so "early"/"middle" are defence in depth only.
 GRADE_COMPLEXITY = {
     "early":    "Keep the total number of items (or dice sides) small, no more than 10 total.",
     "middle":   "Total items may be up to 20.",
     "upper":    "Total items may be up to 50.",
-    # Grades 9+. See the note in LLM_geometry_generation: an empty
-    # restriction is not a harder one.
+    # Grades 9+: an empty restriction is not a harder one.
     "advanced": "Use total item counts between 20 and 60, chosen so the resulting probability does NOT reduce to a simple fraction like 1/2 or 1/3 -- the student should have to reduce it themselves.",
 }
 
 
-# The LLM has poor randomization of scenarios on its own, so the scenario is picked here instead.
+# The scenario is picked here because the LLM randomises poorly.
 def generate_probability_question(global_questions, prev_questions, difficulty, grade, max_retries=3):
     for attempt in range(max_retries):
         if attempt > 0:
@@ -217,8 +203,7 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
             f"{GRADE_COMPLEXITY[grade_band]}\n"
         )
         prompt = lesson_plan_context.append_lesson_context(prompt, "probability", grade_band)
-        # `None` for the two bag scenarios, whose `items` object cannot be
-        # expressed -- see question_schemas.probability.
+        # Schema is None for the bag scenarios; see question_schemas.probability.
         response_text = llm_client.generate_text(
             prompt, schema=question_schemas.probability(_SCENARIO_NAMES[scenario]))
 
@@ -241,43 +226,27 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # The scenario that came back, not the one that was asked for. This
-        # prompt sends all three blocks and names the wanted one by number, so
-        # the reply is free to answer a different one -- the same hole geometry
-        # and angles had, and the solver dispatches on the name it is given.
+        # The prompt sends all three blocks, so the reply may answer a different one.
         if question_data["scenario"] != _SCENARIO_NAMES[scenario]:
             print(f"[Attempt {attempt+1}] Wrong scenario:",
                   question_data["scenario"])
             continue
 
-        # `sides` and `items` are read below, and `required_keys` covers
-        # neither -- they belong to one scenario each, so neither can be listed
-        # unconditionally. Checked here rather than at the read, because the
-        # read is *below* the `for/else`: a missing key there is a KeyError
-        # escaping the generator on attempt 1 and reaching the student as a
-        # 500, where every other malformed reply costs a retry. Reproduced on
-        # all three shapes -- a dice reply with no `sides`, a bag reply with no
-        # `items`, and a bag question mislabelled `dice`.
-        #
-        # The schema does not make this redundant: it closes the dice half
-        # only, and only on Claude. The two bag scenarios get no schema at all,
-        # and `LLM_PROVIDER` defaults to ollama.
+        # Checked inside the loop: read after the for/else, a missing key is a 500, not a retry.
+        # The schema covers only dice, and only on Claude.
         needed = "sides" if question_data["scenario"] == "dice" else "items"
         if needed not in question_data:
             print(f"[Attempt {attempt+1}] Missing {needed!r} for scenario",
                   question_data["scenario"])
             continue
 
-        # Backstop on what the model actually produced, not just on what
-        # the prompt asked for -- see grade_appropriateness.
+        # Backstop on what the model produced, not what the prompt asked for.
         if grade_appropriateness.refuse(question_data.get("question_text"),
                                         "probability", grade_band, difficulty,
                                         attempt + 1):
             continue
 
-        # `not_probability_of` scores 1 - p, so a positively-worded question
-        # tagged with it is answered with the complement. Measured: a text
-        # asking for P(EDM) over 69 bands was answered 18/23, i.e. 54/69.
+        # `not_probability_of` scores 1 - p, so a positively-worded text would get the complement.
         inconsistent = question_consistency.negation_mismatch(
             question_data.get("question_text"), question_data.get("scenario"))
         if inconsistent:
@@ -292,11 +261,7 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
     scenario = question_data["scenario"]
     target = question_data["target"]
 
-    # Parsed in the bounded worker. `sympify` on the model's counts is the one
-    # unbounded step here -- `sympify("9**9**9")` never returns, and holds the
-    # GIL while it does not -- and the probability arithmetic afterwards is
-    # ordinary division. Whole numbers throughout, so the floats come back
-    # exact; `solve_probability` builds the Rational from them.
+    # Parsed in the bounded worker, since `sympify` on model text can hang.
     if scenario == "dice":
         parsed = safe_solve.safe_sympify_values([question_data["sides"], *target])
         if parsed is None:

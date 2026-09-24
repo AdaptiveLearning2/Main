@@ -1,8 +1,8 @@
 import os
 from flask import Flask, jsonify, request
-from flask_cors import CORS #pip install flask-cors
-from supabase import create_client, Client #pip install supabase
-from dotenv import load_dotenv   #pip install dotenv
+from flask_cors import CORS
+from supabase import create_client, Client
+from dotenv import load_dotenv
 import llm_client
 import json
 import random
@@ -33,175 +33,78 @@ ALL_TOPICS = [
     "quadratics", "functions", "spread",
 ]
 
-# Enforces in code the same grade rule the prompts below only state in
-# English ("Grades 1-3 should primarily see ordering, geometry, and
-# expressions... Algebra and probability should only appear after grade 6"),
-# because an 8B model does not reliably follow prose instructions. Keyed on
-# the raw grade string rather than a _grade_band()-style band, since the rule
-# splits between grade 5 and grade 6 -- finer than any four-band split.
 # The grade at which each topic's core concept is introduced, by CCSS code.
-#
-# Per topic rather than three grade brackets, for the reason
-# `SCENARIO_MIN_GRADE` is per scenario: a bracket has to be *remembered* for
-# every topic it should exclude, and two were missed. Measured over 640
-# generated questions, grades 1-9 --
-#
-#   angle_relationships was allowed from grade 4 against 7.G.5. Every one of
-#   30 questions at grades 4, 5 and 6 was above grade: a 4th grader asked
-#   "Two angles form a linear pair. If one measures 65 degrees, find the
-#   other" is being asked a grade-7 question, three years early, every time.
-#
-#   probability was allowed from grade 6 against 7.SP.5. 10 of 10 at grade 6.
-#
-# Neither is fixable by prompt or by band table -- the topic reaches the
-# student before the concept does, so there is no version of the question that
-# is grade-appropriate.
+# Enforced in code because the model does not reliably follow prose grade rules.
+# Per topic, not grade brackets: a bracket must be remembered for every topic it excludes.
 TOPIC_MIN_GRADE = {
     "ordering":            1,   # 1.NBT.3, comparing whole numbers
     "expressions":         1,   # 1.OA, add and subtract within 20
-    # 2.G.2 is the earliest numeric geometry standard -- counting the squares
-    # that fill a rectangle. Grade 1's geometry (1.G) is defining attributes of
-    # shapes and partitioning into halves and fourths: nothing that produces a
-    # number a solver can score, and nothing worth faking. A question like
-    # "3 triangles and 4 squares -- how many shapes?" is addition wearing a
-    # geometry label, and counting it as geometry would keep the topic count up
-    # while teaching 1.OA.
-    #
-    # The cost: grade 1 has two topics, `ordering` and `expressions`. That is
-    # the honest size of what this system can ask a 6-year-old.
+    # 1.G produces nothing a solver can score, so geometry starts at 2.G.2.
     "geometry":            2,   # 2.G.2; per-scenario floor in
                                 # LLM_geometry_generation.SCENARIO_MIN_GRADE
     "rationals":           4,   # 4.NF.3, fractions with like denominators
-    # Raised from 4 to 6. 6.SP.5c introduces all three, and the audit flagged
-    # 10 of 10 at grades 4 and 5 in all six cells -- 30 of the 46 questions
-    # grade 4 received above its grade.
-    #
-    # The cost is real and was the reason for leaving it: grades 4-5 now have
-    # four topics rather than seven, which is what grades 1-3 get plus
-    # `rationals`. That is a deliberate trade of breadth for accuracy, taken
-    # knowing the size of it, rather than a standard applied blindly.
     "mean":                6,   # 6.SP.5c
     "median":              6,   # 6.SP.5c
     "mode":                6,   # 6.SP.5c
     "algebra":             6,   # 6.EE.7, one-variable equations
     "angle_relationships": 7,   # 7.G.5, complementary and supplementary
     "probability":         7,   # 7.SP.5
-    # The two that exist for the youngest students. Grade 1 had `ordering` and
-    # `expressions` and nothing else -- two topics on rotation for a 6-year-old.
     "missing_number":      1,   # 1.OA.8, the unknown in an equation
     "patterns":            1,   # 1.NBT.1 counting sequences, 2.NBT.2 skip counting
     "graphs":              1,   # 1.MD.4 read a graph, 2.MD.10 compare bars
-    # 1.G.3 halves and fourths; NOT `rationals`, which is 4.NF.3 arithmetic.
-    # This is recognising a fraction in a picture, not computing with one.
-    "shape_fractions":     1,
-    # The two that exist for the oldest students, and the first content here
-    # whose concept is above grade 8 at all. Every other topic tops out there:
-    # 81% of grade-9 questions measured three or more grades below grade, and
-    # no prompt could fix it, because harder numbers inside 8.EE.7b are still
-    # 8.EE.7b. See `hs_solvers`.
+    "shape_fractions":     1,   # 1.G.3, reading a fraction off a picture
+    # High-school topics: every other topic tops out at grade 8. See `hs_solvers`.
     "quadratics":          9,   # A-REI.4b, solving a quadratic by factoring
-    # F-IF.2 (function notation) and F-BF.1c (composition). Grade 8 evaluates
-    # a rule at a value (8.F.2) and explicitly does not require the notation,
-    # which is the whole of the distinction -- so `compose`, which has no
-    # grade-8 equivalent, is the medium and hard tier rather than a flourish.
-    "functions":           9,
-    # S-ID.2, comparing the spread of data sets. Standard deviation only --
-    # the interquartile range and mean absolute deviation S-ID.2 also names
-    # are 6.SP.5c, so including them would put grade-6 content in a topic
-    # added to serve grades 9-12.
-    "spread":              9,
+    "functions":           9,   # F-IF.2 notation, F-BF.1c composition
+    "spread":              9,   # S-ID.2, standard deviation only
 }
 
-# A note on what this does NOT do, since the audit that prompted it is easy to
-# read as closed. Adding two grade-9 topics does not take the "below grade"
-# figure to zero: the other fourteen carry no ceiling, so a grade-9 student is
-# still offered them and still draws grade-8 content most of the time. Whether
-# the topics that top out at grade 8 should get a `TOPIC_MAX_GRADE` is a
-# separate and larger decision -- the comment below explains why the original
-# ten were deliberately left uncapped -- and reversing it would drop a grade-9
-# student to two topics. That trade has not been made here.
-
-# The grade past which a topic stops being worth serving. Empty for the ten
-# original topics, which all scale: harder numbers inside the same question
-# shape stay honest work at any grade above their floor.
-#
-# These two do not. "8 + ? = 11" is 1.OA.8 and does not become a grade-9
-# question by using bigger numbers -- the *skill* is finding an unknown in a
-# single arithmetic fact, and past grade 3 that skill is `algebra` with proper
-# notation. Without a ceiling `_allowed_topics` would keep offering both to a
-# 15-year-old, and the difficulty tiers would happily rank them as somebody's
-# "easy".
-#
-# This is the answer to a standing question about `TOPIC_MIN_GRADE` being a
-# floor with no ceiling. It is deliberately *not* applied to the original ten:
-# whether `rectangle_area_by_counting` should reach grade 9 is a question about
-# a scenario inside a topic, which is a different mechanism, and is unchanged.
+# Grade past which a topic stops being worth serving; absent means no ceiling.
+# These skills don't scale with bigger numbers, unlike the uncapped topics.
 TOPIC_MAX_GRADE = {
     "missing_number":      3,   # 3.OA.4 unknown factor is the last of it
     "patterns":            5,   # 4.OA.5 and 5.OA.3 still generate patterns
-    # 3.MD.3 is the last bar-graph standard; grades 4-5 move to line plots
-    # (4.MD.4, 5.MD.2), which is a different figure and a different reading.
-    "graphs":              3,
-    # 3.NF.1 is the last of it; 4.NF.3 is arithmetic, which is `rationals`.
-    "shape_fractions":     3,
+    "graphs":              3,   # 3.MD.3 is the last bar-graph standard
+    "shape_fractions":     3,   # 3.NF.1; 4.NF.3 is `rationals`
 }
 
 
 def _allowed_topics(grade):
-    # Reads the grade number via grade_levels instead of matching dropdown
-    # strings exactly, since profiles.grade_level is free text. An unreadable
-    # grade is treated as the youngest, so it cannot fall through to a
-    # permissive branch.
+    # profiles.grade_level is free text; an unreadable grade is treated as the youngest.
     number = grade_levels.grade_number(grade)
     if number is None:
         number = 1
     return [t for t in ALL_TOPICS
             if TOPIC_MIN_GRADE[t] <= number
-            # Absent means no ceiling, so the original ten are unaffected.
             and number <= TOPIC_MAX_GRADE.get(t, number)]
 
 
 def _safe_topic(topic, grade):
-    """Returns topic if the student's grade may see it, otherwise a random
-    allowed topic. Used both on the LLM's own pick and on the randomized
-    fallback, so every topic is checked here before a question generates."""
+    """`topic` if the student's grade may see it, otherwise a random allowed topic."""
     allowed = _allowed_topics(grade)
     return topic if topic in allowed else random.choice(allowed)
 
 
 def get_user_performance(user_id):
-    # Fetched fresh every call, not cached, so it reflects answers from the
-    # student's current session too.
+    # Not cached, so it includes this session's answers.
     return supabase.table("user_math_performance") \
         .select("correct_questions,attempted_questions, math_topics(topic_name)") \
         .eq("user_id", user_id) \
         .execute()
 
 
-# How many recent in-session answers/EEG samples to look at, versus the
-# all-time per-topic accuracy above.
+# Recent in-session answers / EEG samples considered.
 SESSION_PERFORMANCE_WINDOW = 10
 EEG_BIAS_WINDOW = 5
-# The focus/calm/confidence thresholds live only in `signal_fusion`; don't
-# duplicate them here.
+# Focus/calm/confidence thresholds live only in `signal_fusion`.
 
 DIFFS = ["easy", "medium", "hard"]
 
-# A run of correct answers can push difficulty up on its own. It used to need
-# the fused signal to read "focused" at the moment a question was chosen --
-# and on hardware that is a state a student cannot hold: a session of five
-# correct answers stayed on easy throughout because the label at every
-# decision was "stressed" (a loose headband) or "neutral". Over the last
-# SESSION_PERFORMANCE_WINDOW answers, at least this many at or above this
-# accuracy counts as the student telling us, in the one channel that has no
-# quality gate.
+# A run of correct answers can push difficulty up without a "focused" reading:
+# at least MIN_ANSWERS in the window, at or above this accuracy.
 PERFORMANCE_PUSH_ACCURACY = 0.7
 PERFORMANCE_PUSH_MIN_ANSWERS = 3
-# And the newest answers must be right. The aggregate cannot tell a rising
-# student from a falling one: 7 of 10 is 0.7 whether the misses were the
-# first three or the last three, and a push after three straight misses is
-# exactly the harm the asymmetry exists to prevent. Two, not one, so a single
-# slip on an otherwise strong run does not gate the push either way for long.
+# ...and the newest this-many answers must be right; the aggregate can't tell rising from falling.
 PERFORMANCE_PUSH_RECENT_CORRECT = 2
 
 
@@ -215,18 +118,9 @@ def _shift_difficulty(current, bias):
 def _decide_bias(eeg_label, session_perf, manual_bias=0, increase_withheld=False):
     """The deterministic shift applied on top of the model's difficulty.
 
-    Kept as `signal_fusion` documents: **easing off wins, pushing harder
-    defers.** "stressed" always eases, whatever the answers or the control
-    say. A push up needs the control on Auto and *either* a "focused"
-    reading *or* a run of correct answers this session (see the constants
-    above), and four things hold it: the label being "stressed"; a manual
-    setting, which is the student's; a channel having vetoed an increase
-    (`increase_withheld`, the facial channel's one power -- its "neutral" is
-    a veto, not an absence, and the label alone cannot tell the two apart);
-    and a run of misses (`_recent_falling`), which applies to *both* sources
-    -- correctness has no quality gate, so its opinion that the student is
-    falling outranks a focused reading. Pure, so the rule is testable
-    without a model or a database.
+    Easing off wins, pushing harder defers: "stressed" always eases; a push needs Auto and
+    a "focused" reading or a correct run, and is held by a manual setting, `increase_withheld`
+    (the facial veto), or recent misses. Pure, so testable without a model or database.
     """
     if eeg_label == "stressed":
         return -1
@@ -234,13 +128,7 @@ def _decide_bias(eeg_label, session_perf, manual_bias=0, increase_withheld=False
         return manual_bias
     if increase_withheld:
         return 0
-    # A run of wrong answers vetoes a push from *either* source. Correctness
-    # is the one channel here with no quality gate, so three straight misses
-    # is a trusted opinion that the student is falling, and "every channel
-    # with an opinion must agree" to raise. A focused reading over that run
-    # is exactly the false-focused case the asymmetry is written against:
-    # signals are least reliable when a student is agitated. With no answers
-    # yet there is no opinion, and focused pushes as before.
+    # Recent misses veto a push from either source: correctness has no quality gate.
     if _recent_falling(session_perf):
         return 0
     if eeg_label == "focused":
@@ -254,12 +142,9 @@ def _decide_bias(eeg_label, session_perf, manual_bias=0, increase_withheld=False
 
 
 def _recent_falling(session_perf):
-    """Whether the newest answers carry a miss -- an opinion against raising.
+    """Whether a miss is among the newest PERFORMANCE_PUSH_RECENT_CORRECT answers.
 
-    Distinct from `not _recent_all_correct`: with no answers yet, or a caller
-    predating `recent`, there is no opinion either way, and the focused push
-    is left to its own evidence. Only a recorded miss among the newest
-    PERFORMANCE_PUSH_RECENT_CORRECT answers says "falling".
+    Not `not _recent_all_correct`: no answers yet means no opinion, not "falling".
     """
     recent = (session_perf or {}).get("recent") or []
     return any(not r for r in recent[:PERFORMANCE_PUSH_RECENT_CORRECT])
@@ -268,8 +153,7 @@ def _recent_falling(session_perf):
 def _recent_all_correct(recent):
     """Whether the newest PERFORMANCE_PUSH_RECENT_CORRECT answers were right.
 
-    `recent` is newest first. Absent (a caller predating the field) fails
-    closed: no push, since the direction cannot be known.
+    `recent` is newest first; absent fails closed (no push).
     """
     if not recent or len(recent) < PERFORMANCE_PUSH_RECENT_CORRECT:
         return False
@@ -277,8 +161,7 @@ def _recent_all_correct(recent):
 
 
 def get_session_performance(session_id, limit=SESSION_PERFORMANCE_WINDOW):
-    """Recent in-session accuracy -- how the student is doing in THIS
-    session specifically, separate from their all-time per-topic accuracy."""
+    """Recent accuracy in this session, separate from all-time per-topic accuracy."""
     if not session_id:
         return None
     try:
@@ -293,10 +176,7 @@ def get_session_performance(session_id, limit=SESSION_PERFORMANCE_WINDOW):
         if not rows:
             return None
         correct = sum(1 for r in rows if r.get("correct"))
-        # `recent` keeps the order the aggregate throws away, newest first.
-        # An accuracy of 0.7 over ten is the same number for a student on a
-        # run of seven and one who has just missed three in a row, and only
-        # one of them should be pushed harder.
+        # `recent` (newest first) keeps the order the aggregate throws away.
         return {"answered": len(rows), "correct": correct,
                 "accuracy": round(correct / len(rows), 3),
                 "recent": [bool(r.get("correct")) for r in rows]}
@@ -306,12 +186,9 @@ def get_session_performance(session_id, limit=SESSION_PERFORMANCE_WINDOW):
 
 
 def _consent_flags(user_id):
-    """Which signal channels the student permits.
+    """Which signal channels the student permits. Fails closed: a read error revokes all.
 
-    Reads the table directly instead of main's `_consent()` because main
-    imports this module, so the reverse import would be circular. Fails
-    closed: a read error reports every channel as revoked, so a database
-    problem never records a signal the student refused.
+    Reads the table directly because main imports this module (circular otherwise).
     """
     if not user_id:
         return {"eeg": False, "heart": [], "face": False}
@@ -324,14 +201,10 @@ def _consent_flags(user_id):
             .execute()
         ).data or []
         if not rows:
-            # No row means the same as a row of falses. Nothing is recorded for
-            # a student nobody has configured.
+            # No row means the same as a row of falses.
             return {"eeg": False, "heart": [], "face": False}
         r = rows[0]
-        # Heart rate can come from either sensor, so this returns the permitted
-        # sources, not a plain bool. Collapsing both flags into one boolean
-        # would let a student who declined the camera have rppg-sourced rows
-        # acted on anyway.
+        # Permitted heart sources, not a bool: a declined camera must exclude rppg rows.
         heart_sources = []
         if r.get("headband_optical_enabled"):
             heart_sources += ["muse_optics", "muse_ppg"]
@@ -350,8 +223,7 @@ def _consent_flags(user_id):
 def _latest(table, columns, session_id, limit=1, sources=None):
     """This session's most recent row(s) from a signals table, newest first.
 
-    `sources` restricts to sensors the student permitted, filtered in the
-    query itself so a declined sensor's rows are never fetched at all.
+    `sources` filters in the query, so a declined sensor's rows are never fetched.
     """
     try:
         q = (
@@ -368,15 +240,10 @@ def _latest(table, columns, session_id, limit=1, sources=None):
 
 
 def get_session_signal_state(session_id, user_id=None):
-    """This session's fused EEG + heart + facial state.
+    """This session's fused EEG + heart + facial state, or None with no session.
 
-    Reads the database instead of calling the sidecar, so it still works if
-    that service is down. Averaging the last few rows also damps a 4 Hz
-    signal so it doesn't flap between labels question to question.
-
-    Returns a `FusedState`, or None with no session to read. The rule that
-    combines channels lives in `signal_fusion` as plain functions, testable
-    without a database or a model.
+    Reads the database, not the sidecar, so it works when that is down; averaging
+    damps label flapping. The fusion rule lives in `signal_fusion`.
     """
     if not session_id:
         return None
@@ -387,13 +254,8 @@ def get_session_signal_state(session_id, user_id=None):
                        session_id, EEG_BIAS_WINDOW) if consent["eeg"] else []
     focus_vals  = [r["focus"]  for r in eeg_rows if r.get("focus")  is not None]
     stress_vals = [r["stress"] for r in eeg_rows if r.get("stress") is not None]
-    # The EEG signal-quality number lives in `raw.confidence`; no column
-    # carries it. `engagement` used to, and reading it here after it became
-    # the focus index turned this gate into a focus threshold.
-    # `raw` is client-supplied JSON on the push path, stored unvalidated, so
-    # the value is checked and not just the container: a string here 500'd
-    # every question until the row aged out, and `true` claimed 1.0. Only a
-    # real number in 0..1 counts (bool is an int to isinstance).
+    # Signal quality is `raw.confidence` (no column). `raw` is unvalidated client JSON,
+    # so only a real number in 0..1 counts (bool is an int to isinstance).
     confidence_vals = [
         r["raw"]["confidence"] for r in eeg_rows
         if isinstance(r.get("raw"), dict)
@@ -403,18 +265,12 @@ def get_session_signal_state(session_id, user_id=None):
     ]
 
     focus      = fmean(focus_vals)      if focus_vals      else None
-    # cognitive_signals.stress is 1.0 - calm, so this just inverts it back.
-    # It is not an independent measurement, unlike heart_signals.stress_score.
+    # cognitive_signals.stress is 1.0 - calm; not an independent measurement.
     calm       = (1.0 - fmean(stress_vals)) if stress_vals else None
     confidence = fmean(confidence_vals) if confidence_vals else None
 
-    # Which spectrum the rows' calm came from, since the stressed line
-    # differs by source. Read from `raw` and validated like the confidence
-    # above; rows without the key predate it and are "sdk". A window whose
-    # rows disagree -- two sidecars on one class, one flipped to local --
-    # holds calm values on two scales, so its calm is no opinion.
-    # Type-checked before it is used as a set element: a posted dict or list
-    # is unhashable and raised here, ahead of the filter meant to catch it.
+    # Calm source (the stressed line differs by source); a missing key means "sdk".
+    # Type-checked before use as a set element: a posted dict or list is unhashable.
     def _calm_source_of(r: dict) -> str | None:
         raw = r.get("raw")
         s = raw.get("calm_source") if isinstance(raw, dict) else None
@@ -424,9 +280,7 @@ def get_session_signal_state(session_id, user_id=None):
     sources = {_calm_source_of(r) for r in eeg_rows if r.get("stress") is not None}
     sources = {s for s in sources if s in signal_fusion.EEG_STRESSED_CALM_MAX_BY_SOURCE}
     if len(sources) > 1:
-        # Only calm is withdrawn. Focus is the SDK ratio under both sources
-        # and the confidence is a contact number, so eeg_channel still reads
-        # them; withdrawing the whole channel lost the ease-off with it.
+        # Mixed sources put calm on two scales: withdraw calm only, not focus/confidence.
         calm = None
     calm_source = next(iter(sources)) if len(sources) == 1 else "sdk"
 
@@ -434,8 +288,6 @@ def get_session_signal_state(session_id, user_id=None):
                                     revoked=not consent["eeg"],
                                     calm_source=calm_source)
 
-    # Scoped to permitted sources in the query, so a declined sensor's rows
-    # are never fetched.
     heart_rows = _latest("heart_signals", "stress_category, trusted, source",
                          session_id, sources=consent["heart"]) if consent["heart"] else []
     newest_heart = heart_rows[0] if heart_rows else {}
@@ -446,8 +298,7 @@ def get_session_signal_state(session_id, user_id=None):
         revoked=not consent["heart"],
     )
 
-    # Named columns, not `*`, so the confidence value this gate reads stays
-    # unambiguous. See `signal_fusion.face_channel`.
+    # Named columns, so the confidence this gate reads is unambiguous.
     face_rows = _latest("face_signals", "emotion, emotion_confidence, emotion_trusted",
                         session_id) if consent["face"] else []
     newest_face = face_rows[0] if face_rows else {}
@@ -469,32 +320,10 @@ def get_session_signal_state(session_id, user_id=None):
 # 40 questions globally, 10 per topic
 user_histories = {}
 
-# Replayed question text is the one prompt input that is neither a closed set
-# nor written by a person. `grade` is rebuilt from its number, `topic` comes
-# from the seeded `math_topics` vocabulary, `difficulty` is one of three, and a
-# lesson plan is dashboard-authored and clamped -- but this is the model's own
-# previous `question_text`, fed back so the next question is not a repeat.
-# Seventeen generators newline-join it and follow it with "DO NOT generate a
-# question matching any of the above", so a reply carrying a newline puts a
-# line of its own in instruction position.
-#
-# **This flattens and bounds rather than refusing**, the opposite of
-# `grade_levels.validated_grade`. That one guards an edge where a bad value is
-# the caller's and a 422 names the field. This is internal and the list's only
-# job is repeat avoidance, so a dropped or shortened entry costs at most one
-# repeated question -- where raising would fail a generation because of the
-# *previous* one's reply.
-#
-# The cap is a bound with a reason rather than a measurement: ten entries reach
-# a generator (five global, five topic), so the replayed block is at most 3000
-# characters — the same order as the 2000 a whole lesson-plan block already
-# gets, rather than unbounded — and a truncated question still serves repeat
-# avoidance. Nothing here measures real `question_text` lengths, so treat the
-# number as a guess, like `EMOTION_MIN_CONFIDENCE`.
-_HISTORY_TEXT_MAX = 300
-# The categories `validated_grade` refuses, for the same reasons: `\n` is not
-# the only spelling of a new line (Zl, Zp), and Cf carries the right-to-left
-# overrides.
+# Replayed model text is newline-joined into prompts, so a newline in it lands in
+# instruction position. Flattened and bounded, not refused: only repeat avoidance is at stake.
+_HISTORY_TEXT_MAX = 300   # chars per entry; a guess, not a measurement
+# Line breaks beyond `\n` (Zl, Zp) and bidi overrides (Cf), as `validated_grade` refuses.
 _LINE_BREAKING = ("Cc", "Cf", "Zl", "Zp")
 
 
@@ -509,12 +338,7 @@ def _prompt_safe_text(value) -> str:
 
 
 def _prompt_safe_history(entries):
-    """The repeat-avoidance list, every text flattened and bounded.
-
-    Keeps the `{"text", "topic"}` shape the seventeen generators read, so this
-    is one call at each site the history is *read* rather than a change in each
-    generator -- the chokepoint argument `grade_for_prompt` already makes.
-    """
+    """The repeat-avoidance list, every text flattened and bounded; same shape the generators read."""
     safe = []
     for entry in entries or ():
         text = _prompt_safe_text((entry or {}).get("text"))
@@ -525,12 +349,8 @@ def _prompt_safe_history(entries):
 
 def get_user_history(user_id):
     if user_id not in user_histories:
-        # Derived from ALL_TOPICS rather than listed again. `question_generation`
-        # reads `history[topic] if topic in history else []`, which fails *open*
-        # -- so a topic added to ALL_TOPICS and forgotten here would quietly
-        # lose its repeat-avoidance and start serving the same question back.
+        # From ALL_TOPICS: a missing topic key would silently lose repeat avoidance.
         user_histories[user_id] = {
-            # last 40 questions regardless of topic, used to avoid repeats
             "global": deque(maxlen=40),
             **{topic: deque(maxlen=10) for topic in ALL_TOPICS},
         }
@@ -553,17 +373,12 @@ def extract_json(text):
 
     return None
 
-# How many rows sharing a text (and, for a single-string answer, the answer)
-# the duplicate check compares against. Rows for one text and answer differ
-# only by figure, so this is a bound on the read, not on correctness: a match
-# beyond it is stored again.
+# Rows the duplicate check reads; a match beyond it is just stored again.
 _DEDUPE_CANDIDATES = 50
 
 
 def _answer_value(answer):
-    """An answer as the generator returned it. `correct_answer` is a text
-    column, so a list answer (`mode`, `ordering`) comes back as its JSON text
-    and never equalled the list the generator holds."""
+    """An answer as the generator returned it; list answers are stored as JSON text."""
     if isinstance(answer, str) and answer.startswith("["):
         try:
             return json.loads(answer)
@@ -575,41 +390,12 @@ def _answer_value(answer):
 def add_question_to_supabase(question, difficulty):
     """Store the question and return its id, or None if it could not be stored.
 
-    Returns the id, not a bool, and a duplicate returns the existing row's id
-    rather than False: the id is what `session_answers.question_id` refers
-    to, and a duplicate is the ordinary case, not an error, since the
-    generator reproduces a question sooner or later. On a duplicate the
-    question's `answer_options` are replaced, in place, by the stored row's.
+    A duplicate returns the existing row's id (what `session_answers.question_id` needs)
+    and replaces the question's `answer_options` in place with the stored row's.
     """
-    # Let the database find the duplicate instead of pulling the whole
-    # questions table into Python on every generated question.
-    #
-    # Keyed on the standard as well as the text: the code depends on the
-    # student's grade, the only stored field that does, so one text generated
-    # at grade 6 and again at grade 8 is two rows (6.EE.7 and 8.EE.7b) rather
-    # than one whose badge belongs to whichever grade wrote it first -- and
-    # then disagrees with what the second student saw on their own screen.
-    #
-    # And a row is the same question only if the answer and the figure match
-    # too. Text alone was not enough -- `shape_fractions` and `graphs` forbid
-    # digits in the text, so "What fraction of the shape is shaded?" at one
-    # grade mapped every new figure to the first stored row, and the answer was
-    # recorded against a different picture and answer key.
-    #
-    # The options are *not* compared: on a match the question is served with
-    # the stored row's options, wrong answers and order alike. The generators
-    # draw the wrong answers at random and shuffle every time, so comparing
-    # options almost never matched and the bank gained a row per question
-    # served. Any wrong-answer set for the same answer is a valid question, and
-    # serving the stored one is what keeps a recorded answer -- an index into
-    # the options -- pointing at the option the student saw.
-    #
-    # A single-string answer is a filter, so a generic text with many rows
-    # still finds its match inside the candidate cap. A list answer (`mode`,
-    # `ordering`) is compared here instead: the text column returns it as JSON
-    # text in whatever spelling it was stored, and those two topics carry their
-    # numbers in the text, so few rows share one. `figure` is jsonb, compared
-    # here for the same reason. A missed match costs only a second row.
+    # Same question = same text, CCSS code (grade-dependent), answer and figure.
+    # Options are not compared: serving the stored ones keeps a recorded index valid.
+    # List answers and figures are compared in Python; a missed match costs one extra row.
     answer = question["correct_answer"]
     code = question.get("ccss_standard")
     lookup = supabase.table("questions") \
@@ -625,17 +411,14 @@ def add_question_to_supabase(question, difficulty):
         options = row.get("options")
         if (_answer_value(row.get("correct_answer")) == _answer_value(answer)
                 and row.get("figure") == question.get("figure")
-                # The page marks an answer by finding it among the options, so
-                # a stored row that somehow lacks it is not one to serve.
+                # The page marks an answer by finding it among the options.
                 and isinstance(options, list) and answer in options):
             question["answer_options"] = list(options)
             return row["id"]
 
     response = supabase.table("questions").insert({
         "subject" : question["question_topic"],
-        # NULL when there is none. A question is served from this row when the
-        # generator reproduces its text, so a figure that is not stored is a
-        # figure the second student never sees.
+        # NULL when there is none; a duplicate is served from this row, figure included.
         "figure": question.get("figure"),
         "ccss_standard": question.get("ccss_standard"),
         "difficulty": difficulty,
@@ -655,9 +438,7 @@ def add_question_to_supabase(question, difficulty):
 def _attach_stored_id(question, difficulty):
     """Store the question and set its id on it, in place. Returns the question.
 
-    The id is what the page sends to `/api/sessions/{id}/answer`, so a
-    question with no id never gets an answer recorded. Shared by both entry
-    points below so the id-setting logic exists in one place, not two.
+    Without an id, `/api/sessions/{id}/answer` cannot record an answer to it.
     """
     question["id"] = add_question_to_supabase(question, difficulty)
     if question["id"]:
@@ -702,17 +483,10 @@ def calculate_topic_and_difficulty(user_id, grade):
 
 
 def question_generation(topic, difficulty, user_id, grade):
-    # The one dispatch point to all seventeen generators, and each of them
-    # interpolates `grade` straight into its prompt ("a {grade} student"). So
-    # this is where the client's string stops: past this line `grade` is one
-    # of `CANONICAL_GRADE_LABELS`' values, rebuilt from the number every gate
-    # below already reads, and nothing the caller wrote reaches a prompt.
-    # Sanitising in each generator instead would be seventeen places for the
-    # eighteenth to be forgotten. See grade_levels.grade_for_prompt.
+    # The one dispatch point to every generator: past here `grade` is a canonical label,
+    # so no caller text reaches a prompt. See grade_levels.grade_for_prompt.
     grade = grade_levels.grade_for_prompt(grade)
     history = get_user_history(user_id)
-    # Flattened here, where the history is read, for the same reason `grade` is
-    # rebuilt here: one site instead of seventeen.
     recent_global = _prompt_safe_history(list(history["global"])[-5:])
     recent_topic  = _prompt_safe_history(
         list(history[topic])[-5:] if topic in history else [])
@@ -881,38 +655,22 @@ def question_generation(topic, difficulty, user_id, grade):
                     "topic": "spread"})
 
         case _:
-            # Unreachable while every ALL_TOPICS member has a case above, and
-            # that is exactly what makes the silent version dangerous: without
-            # this, a topic added to ALL_TOPICS and forgotten here falls
-            # through the match and `return response` raises UnboundLocalError
-            # -- a 500 naming a variable rather than the topic nobody wired.
+            # Names the unwired topic instead of an UnboundLocalError on `response`.
             raise ValueError(f"no generator wired for topic {topic!r}")
     return response
 
 def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=None, manual_bias=0):
-    # `Student Grade Level = {grade}` below is a line in an instruction the
-    # model is asked to follow, and `grade` arrives from
-    # `GET /api/generate-question?grade=` with nothing between it and here.
-    # Canonicalise first, for the reason question_generation does: the label
-    # is rebuilt from the parsed number, so `_safe_topic` and
-    # `randomize_selection` read the same grade they always did while the
-    # prompt can only ever see one of fourteen fixed strings.
+    # `grade` is caller text headed for the prompt; canonicalise it as question_generation does.
     grade = grade_levels.grade_for_prompt(grade)
     accuracy_response = get_user_performance(user_id)
 
     json_response = accuracy_response.data or []
 
     history = get_user_history(user_id)
-    # Flattened here too, though this prompt interpolates the *list* rather
-    # than joining it -- so Python's repr already escapes a newline to a
-    # literal `\n` and the labelled INPUT block below cannot be forged. That is
-    # true by accident of not calling `join`, and one edit from not being, in a
-    # block where `Student Grade Level` is the next line.
+    # Flattened even though repr of a list escapes newlines today; one `join` would change that.
     recent_global = _prompt_safe_history(list(history["global"])[-10:])
 
-    # How the student is doing right now in this session, as opposed to
-    # all-time accuracy. Reads straight from the database, not a live sidecar
-    # call, so this still works if the EEG service is unreachable.
+    # From the database, not the sidecar, so this works when EEG is unreachable.
     session_perf = get_session_performance(session_id)
     signal_state = get_session_signal_state(session_id, user_id)
     eeg_label    = signal_state.label if signal_state else "no_eeg"
@@ -1004,14 +762,8 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
         print("LLM selection generation failed, fallback to randomized selection")
         topic,difficulty = randomize_selection(accuracy_response, grade)
 
-    # The LLM saw cognitive state, this session's accuracy and the manual
-    # control as context, but an 8B model doesn't reliably follow that (it
-    # has answered "medium" for a clearly stressed student, and "easy" for
-    # five correct answers in a row at grade 1). So apply them again as a
-    # deterministic shift -- `_decide_bias`, which keeps signal_fusion's
-    # asymmetry: easing off overrides everything, pushing harder defers to
-    # the control and never happens while stressed. `eeg_label` is the fused
-    # label across every consented channel, not EEG alone.
+    # Re-applied deterministically because the model doesn't reliably follow them.
+    # `eeg_label` is the fused label across every consented channel, not EEG alone.
     effective_bias = _decide_bias(
         eeg_label, session_perf, manual_bias,
         increase_withheld=bool(getattr(signal_state, "increase_withheld", False)))
@@ -1023,15 +775,10 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
 
     _attach_stored_id(question, difficulty)
 
-    # Metadata for the frontend's "EEG eased/raised difficulty" badge, reusing
-    # the session-scoped EEG read above.
+    # For the frontend's "EEG eased/raised difficulty" badge.
     question["eeg_label"]    = eeg_label
     question["eeg_adjusted"] = bool(signal_state and signal_state.adjusted)
-    # Which channel decided, and why (e.g. "heart elevated overriding
-    # eeg-neutral"). Diagnostic only, and not meant for the student: this
-    # carries raw internals like confidence numbers. Adaptive.jsx only uses
-    # eeg_label and eeg_adjusted for the badge -- keep it that way. A child
-    # reading their own confidence score isn't useful or kind.
+    # Diagnostic only, never shown to the student: carries raw internals like confidence.
     question["signal_reason"]   = signal_state.reason if signal_state else "no session"
     question["signal_channels"] = signal_state.channels if signal_state else {}
     question["difficulty"]   = difficulty
@@ -1042,8 +789,7 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
 
 
 def randomize_selection(accuracy_response, grade):
-    # Fallback for a failed LLM call, so it fires often enough to matter.
-    # Draws only from the grade's allowed topics -- see _allowed_topics().
+    # Fallback for a failed LLM call; draws only from the grade's allowed topics.
     topic = random.choice(_allowed_topics(grade))
 
     for row in accuracy_response.data or []:

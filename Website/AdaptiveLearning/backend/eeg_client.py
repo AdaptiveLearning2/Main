@@ -9,10 +9,7 @@ EEG_API_URL     = os.getenv("EEG_API_URL", "http://127.0.0.1:8001")
 EEG_API_TOKEN   = os.getenv("EEG_API_TOKEN")
 EEG_ADMIN_TOKEN = os.getenv("EEG_ADMIN_TOKEN")
 
-# Not validated at import time: the EEG sidecar is optional hardware, so
-# requiring these tokens here would make the whole backend refuse to start
-# for anyone doing frontend/Supabase-only work with no headband involved.
-# Checked instead in the functions that actually send the header.
+# Not validated at import: the sidecar is optional, so tokens are checked where sent.
 
 
 def _learner_headers() -> dict:
@@ -49,8 +46,7 @@ def start_session(device_id: str = DEFAULT_DEVICE_ID) -> dict:
 
 
 def arm_session(device_id: str = DEFAULT_DEVICE_ID) -> dict:
-    """Tells the EEG service recording has started, so it takes the
-    per-session baseline from now rather than from stream start."""
+    """Tells the EEG service recording started, so the baseline is taken from now."""
     r = requests.post(
         f"{EEG_API_URL}/api/v1/session/arm",
         headers=_admin_headers(), params={"device_id": device_id}, timeout=3,
@@ -61,8 +57,7 @@ def arm_session(device_id: str = DEFAULT_DEVICE_ID) -> dict:
 
 def report_answer(device_id: str = DEFAULT_DEVICE_ID, *, correct: bool,
                   difficulty: str | None = None) -> dict:
-    """Tells the EEG service an answer was recorded for the student on this
-    device. The simulator moves its signals with it; hardware ignores it."""
+    """Tells the EEG service an answer was recorded; the simulator reacts, hardware ignores it."""
     r = requests.post(
         f"{EEG_API_URL}/api/v1/session/answer",
         headers=_admin_headers(),
@@ -84,9 +79,7 @@ def stop_session(device_id: str = DEFAULT_DEVICE_ID) -> dict:
 
 def get_state(device_id: str = DEFAULT_DEVICE_ID, timeout: float = 2.0) -> Optional[dict]:
     """Returns the latest interpreted EEG snapshot for device_id, or None if idle / unavailable."""
-    # Built before the try, so a missing token raises instead of being caught
-    # below and reported as "sidecar unavailable". A stopped sidecar is
-    # transient; a missing token never fixes itself and needs to be seen.
+    # Outside the try: a missing token must raise, not read as "sidecar unavailable".
     headers = _learner_headers()
     try:
         r = requests.get(
@@ -162,7 +155,5 @@ def list_devices() -> list:
         return []
 
 
-# Lives in `signal_mapping`, which both ingestion paths import. Re-exported
-# here so existing callers keep working. New code should import from
-# signal_mapping directly.
+# Re-export for existing callers; new code imports from signal_mapping.
 from signal_mapping import map_eeg_to_cognitive  # noqa: E402,F401

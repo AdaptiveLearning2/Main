@@ -1,13 +1,7 @@
 # Generates a "find the unknown in an equation" question and solves it exactly.
 #
-# CCSS 1.OA.8 -- "determine the unknown whole number in an addition or
-# subtraction equation relating three whole numbers" -- extending to 2.OA.1 and
-# 3.OA.4 (the unknown factor). It exists because grade 1 had two topics,
-# `ordering` and `expressions`, and a 6-year-old was seeing the two on rotation.
-#
-# It is deliberately NOT `algebra`, which is grade 6 (6.EE.7) and uses `x`. The
-# unknown here is written `?`, because algebraic notation at grade 1 is the
-# thing `grade_appropriateness` exists to catch.
+# CCSS 1.OA.8, extending to 2.OA.1 and 3.OA.4. Not `algebra` (6.EE.7): the
+# unknown is `?`, never `x`, which `grade_appropriateness` would refuse.
 
 import json
 import random
@@ -43,11 +37,7 @@ def extract_json(text):
 BLANK = "?"
 OPERATORS = {"+", "-", "*"}
 
-# A whole number a student of this age would recognise, and short enough that
-# `int()` on it is bounded by inspection. Nothing here reaches sympy -- the
-# arithmetic is one operation on two integers -- so unlike the other topics
-# this one needs no bounded subprocess. `safe_solve` exists because
-# `sympify("9**9**9")` never returns; there is no parser here to feed.
+# Short enough that `int()` is bounded; no sympy here, so no bounded subprocess.
 _NUMBER = re.compile(r"^\d{1,4}$")
 
 missing_prompt = """
@@ -90,15 +80,11 @@ Rules:
 
 
 def _grade_band(grade):
-    # Delegated so the copies cannot drift apart, and so an unreadable grade
-    # ("Grade 1") lands in "early" rather than "advanced". See grade_levels.
+    # An unreadable grade ("Grade 1") lands in "early", not "advanced".
     return grade_levels.grade_band(grade)
 
 
-# Only "early" is reachable: LLM_topic_decider.TOPIC_MAX_GRADE caps this topic
-# at grade 3. The other three bands are defense-in-depth, in the same spirit as
-# the "early" tables on the topics that gate to grade 6+ -- if that ceiling is
-# ever removed or bypassed, the content must still be something.
+# Only "early" is reachable (TOPIC_MAX_GRADE is 3); the rest is defense-in-depth.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use ADDITION only, with all numbers 10 or below (e.g. 3 + ? = 7).",
@@ -122,36 +108,19 @@ COMPLEXITY_BY_GRADE = {
     },
 }
 
-# Grade 1 is 1.OA.8, which is within 20 and addition/subtraction only.
-# Multiplication is 3.OA, so a grade-1 or grade-2 student must not meet it
-# however the difficulty tier landed -- difficulty and grade are independent
-# inputs, so a "hard" 1st grader is a real state.
+# Multiplication is 3.OA: grades 1-2 must not meet it on any difficulty tier.
 GRADE_OVERRIDES = {
     1: "This student is in GRADE 1. Use ADDITION or SUBTRACTION only, and every number must be 20 or below (1.OA.8). Do NOT use multiplication.",
     2: "This student is in GRADE 2. Use ADDITION or SUBTRACTION only, and every number must be 100 or below (2.OA.1, 2.NBT.5). Do NOT use multiplication.",
 }
 
-# Both entries above forbid multiplication, and nothing enforced it: a reply
-# of `3 * ? = 12` cleared solve_missing (it accepts "*"), shown_matches_scored
-# and grade_appropriateness (which only looks for variable notation) just as
-# happily as an addition equation, and was served two years above 1.OA.8. Keyed
-# off GRADE_OVERRIDES rather than restated so the prompt-level rule and the
-# code-level one cannot drift apart -- the same trap the `expressions`
-# parenthesis leak was, per CLAUDE.md. `None` is included because an
-# unreadable grade is treated as the youngest (see grade_levels), not as
-# unrestricted.
+# Code-level enforcement of GRADE_OVERRIDES, derived so the two cannot drift.
+# None: an unreadable grade is the youngest.
 _NO_MULTIPLICATION_GRADES = set(GRADE_OVERRIDES) | {None}
 
 
 def solve_missing(tokens):
-    """The number that makes the equation true, or None if it cannot be one.
-
-    `None` rather than a raise: every caller is inside the retry loop, so an
-    unusable reply must cost an attempt rather than escaping the generator as a
-    500. That is the rule the other nine generators arrived at the hard way.
-
-    No sympy anywhere, so no bounded subprocess -- see `_NUMBER`.
-    """
+    """The number that makes the equation true, or None (a retry, not a 500)."""
     if not isinstance(tokens, list) or len(tokens) != 5:
         return None
     left, operator, right, equals, result = tokens
@@ -168,8 +137,7 @@ def solve_missing(tokens):
 
     a, b, c = [None if t == BLANK else int(t) for t in slots]
 
-    # Solved by rearranging, never by searching: the answer is one arithmetic
-    # step whichever slot is blank.
+    # Solved by rearranging, never by searching.
     if operator == "+":
         value = c - b if a is None else c - a if b is None else a + b
     elif operator == "-":
@@ -192,12 +160,7 @@ def solve_missing(tokens):
 
 
 def _forbidden_operator(tokens, grade):
-    """Multiplication where a grade-1/2 (or unreadable) student must not see
-    it, or None. Reads the operator straight off the structured token list
-    rather than pattern-matching text -- unlike the `expressions` early-band
-    check, there's no ambiguity here between an operator and a stray
-    character to guess at.
-    """
+    """`"multiplication"` if a grade-1/2 (or unreadable) student would see it, else None."""
     if not isinstance(tokens, list) or len(tokens) != 5:
         return None
     if tokens[1] == "*" and grade_levels.grade_number(grade) in _NO_MULTIPLICATION_GRADES:
@@ -210,24 +173,14 @@ def _equation_text(tokens):
 
 
 def shown_matches_scored(question_text, tokens):
-    """The equation on screen must be the equation being scored.
-
-    Its own check rather than `question_consistency.dataset_mismatch`, which
-    locates a dataset after the last colon -- there is no dataset here, there is
-    an equation, and a model free to write "8 + ? = 12" above scored variables
-    reading `["8","+","?","=","11"]` produces a question answered correctly and
-    marked wrong. That is the worst failure shape available here, and it is the
-    one this topic is most exposed to, since the whole question *is* the
-    equation.
-    """
+    """A reason if the equation on screen is not the one being scored, else None."""
     if not isinstance(question_text, str):
         return "question_text is not a string"
     shown = re.sub(r"\s+", " ", question_text)
     equation = _equation_text(tokens)
     if equation not in shown:
         return f"text does not contain {equation!r}"
-    # Any digit outside the equation is a second number on screen, and a young
-    # reader cannot tell which one the question means.
+    # A digit outside the equation is a second number on screen.
     without = shown.replace(equation, " ", 1)
     if re.search(r"\d", without):
         return "question_text carries digits outside the equation"
@@ -235,13 +188,7 @@ def shown_matches_scored(question_text, tokens):
 
 
 def generate_incorrect_answers(solution, tokens):
-    """Near-misses first, because a distractor a student can reason about is
-    the point of the exercise; the general generator fills any gap.
-
-    Bounded by construction -- a fixed candidate list, not a search. Whether
-    three distinct wrong answers exist near a small number is a property of the
-    number, which is what made the unbounded loops elsewhere hang.
-    """
+    """Near-misses first, then the general generator. A fixed list, never a search."""
     numbers = [int(t) for t in (tokens[0], tokens[2], tokens[4]) if t != BLANK]
     candidates = [solution + 1, solution - 1, *numbers,
                   sum(numbers), abs(numbers[0] - numbers[1]),
@@ -305,10 +252,7 @@ def generate_missing_number_question(global_questions, prev_questions,
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # Backstop on what the model produced, not on what the prompt asked
-        # for -- see grade_appropriateness. It matters unusually much here:
-        # the whole topic is one step away from algebra notation, and `?`
-        # rather than `x` is what keeps it at grade 1.
+        # Backstop on what the model produced; `?` rather than `x` keeps this at grade 1.
         if grade_appropriateness.refuse(question_data.get("question_text"),
                                         "missing_number", grade_band, difficulty,
                                         attempt + 1):
@@ -319,8 +263,7 @@ def generate_missing_number_question(global_questions, prev_questions,
             print(f"[Attempt {attempt+1}] {forbidden} not allowed at this grade")
             continue
 
-        # Solved inside the loop, so an unsolvable equation is another attempt
-        # rather than an exception below the `for/else`.
+        # Solved inside the loop, so an unsolvable equation is another attempt.
         solution = solve_missing(question_data["variables"])
         if solution is None:
             print(f"[Attempt {attempt+1}] Unsolvable equation:",

@@ -1,23 +1,9 @@
 """Render a closed session's charts and put them in private storage.
 
-`chart_render.py` turns a payload into SVG. This is the half that decides
-*what* payload, *when*, and *where it goes* -- and, mostly, what must not
-happen when it fails.
-
-Three properties are load-bearing:
-
-- **Out of band.** A storage failure must not fail the session-end request.
-  The session record, stats and daily rollup are all written by then, so this
-  work goes to a small pool and the request returns immediately.
-- **Logged, never swallowed.** This archive is the copy that survives the
-  end-of-year delete, so a failure has to stay visible to whoever can fix it
-  before `ends_on` -- unlike the reporting helpers, which degrade quietly.
-- **Idempotent.** Uploads use upsert and paths are derived from ids, so a
-  replayed close overwrites the same four objects instead of doubling them.
-
-**A channel that recorded nothing gets no object**, not an empty chart -- an
-empty chart would claim the channel read flat. `chart_paths` carries null
-instead.
+Out of band (a storage failure never fails session close), logged rather
+than swallowed (this is the copy that survives the end-of-year delete), and
+idempotent (upsert to id-derived paths). A channel that recorded nothing gets
+a null in `chart_paths`, not an empty chart.
 """
 
 from __future__ import annotations
@@ -31,21 +17,12 @@ import chart_render
 
 BUCKET = "session-charts"
 
-# What the read is capped at, matching `/api/signals/session/{id}` exactly.
-# Shared on purpose: the archive is meant to be what the reviewer saw, so the
-# two have to truncate a very long session at the same place. A larger cap here
-# would archive a chart nobody was ever shown.
+# Must equal `/api/signals/session/{id}`'s cap: the archive is what the reviewer saw.
 _ROW_CAP = 20000
 
 
 def _epoch_ms(value) -> float | None:
-    """A timestamp as milliseconds, or None for anything unparseable.
-
-    Not `main._parse_ts`: that one logs against the consent path, where a bad
-    stamp matters. Here a bad stamp only costs one point on one chart, so it's
-    dropped quietly -- `chart_render` already breaks the line at a gap rather
-    than bridging it, so the loss reads as a gap, not a fabricated reading.
-    """
+    """A timestamp as milliseconds, or None (dropped quietly) for anything unparseable."""
     if isinstance(value, datetime):
         parsed = value
     else:
@@ -59,12 +36,7 @@ def _epoch_ms(value) -> float | None:
 
 
 def _line_points(rows, fields) -> dict:
-    """`{field: [(x, y), ...]}` for the named fields, x in epoch ms.
-
-    A row with no usable timestamp is dropped rather than placed at zero, which
-    would drag the axis back to 1970 and flatten the whole session against the
-    right-hand edge.
-    """
+    """`{field: [(x, y), ...]}` for the named fields, x in epoch ms; untimed rows dropped."""
     points = {name: [] for name in fields}
     for row in rows:
         x = _epoch_ms(row.get("ts"))
@@ -78,11 +50,7 @@ def _line_points(rows, fields) -> dict:
 def _counts(rows, field: str, default=None) -> dict:
     """Label frequencies for a pie.
 
-    Rows with a missing value are skipped when `default` is None -- a rejected
-    facial window isn't a reading, and counting it as an emotion would inflate
-    every slice. Where a default is given (heart's `unknown` bucket) it's
-    counted under that name, because there the state is real: a heart rate
-    with no stress category.
+    A missing value is skipped when `default` is None, else counted under `default`.
     """
     out: dict[str, int] = {}
     for row in rows:
@@ -96,16 +64,11 @@ def _counts(rows, field: str, default=None) -> dict:
 def build_session_charts(cognitive, face, heart) -> dict:
     """The four charts, keyed by `chart_render.CHART_NAMES`. None where empty.
 
-    **Trusted and untrusted rows alike**, unlike `signal_daily_rollup`, which
-    averages trusted rows only. The rollup publishes a number that outlives the
-    evidence and must not smuggle a rejected reading past the quality gate;
-    this is a picture of the session, and has to match what the reviewer saw.
+    Draws untrusted rows too (unlike the rollup): it must match what the reviewer saw.
     """
     charts = {}
 
-    # No `engagement`: it is the focus index under another name
-    # (signal_mapping.py), and this picture is permanent -- a second line of
-    # the same number would be baked into the archive as two measurements.
+    # No `engagement`: it is the focus index under another name.
     cog_points = _line_points(cognitive, ("focus", "stress"))
     charts["cognitive_timeline"] = (
         chart_render.line_svg(cog_points, "Cognitive signals") if cognitive else None
@@ -116,11 +79,7 @@ def build_session_charts(cognitive, face, heart) -> dict:
         chart_render.line_svg(heart_points, "Heart rate and HRV") if heart else None
     )
 
-    # "Autonomic arousal", never a bare "Stress". `heart_signals.stress_score`
-    # is a measurement against the session's own baseline; `cognitive_signals.
-    # stress` is `1.0 - calm` with a sign flip and no independent quantity
-    # behind it. One label over both is how a tile comes to change meaning when
-    # a headband disconnects.
+    # "Autonomic arousal", never "Stress": cognitive `stress` is `1 - calm`, a different quantity.
     charts["stress_pie"] = (
         chart_render.pie_svg(_counts(heart, "stress_category", default="unknown"),
                              "Autonomic arousal", chart_render.STRESS_COLOURS)
@@ -137,23 +96,12 @@ def build_session_charts(cognitive, face, heart) -> dict:
 
 
 def object_path(user_id: str, session_id: str, chart: str) -> str:
-    """`{user_id}/{session_id}/{chart}.svg`.
-
-    User-id first, so a storage RLS policy could be written against that
-    prefix if one is ever needed -- there's none today, only `service_role`
-    reaches the bucket, but a different layout would mean migrating every
-    object to get one.
-    """
+    """`{user_id}/{session_id}/{chart}.svg`; user-id first so an RLS policy could key on it."""
     return f"{user_id}/{session_id}/{chart}.svg"
 
 
 def _fetch(client, session_id: str):
-    """The same three reads `/api/signals/session/{id}` makes, same order, cap.
-
-    Service-role, so RLS doesn't apply: this runs with no request behind it,
-    already authorised by the fact that the session belongs to the student
-    whose close triggered it.
-    """
+    """The same three reads `/api/signals/session/{id}` makes, same order and cap (service-role)."""
     def rows(table):
         return client.table(table).select("*").eq("session_id", session_id) \
             .order("ts").limit(_ROW_CAP).execute().data or []
@@ -166,15 +114,9 @@ def archive_session(client, session_id: str, user_id: str, *,
                     existing_paths: dict | None = None) -> dict:
     """Render, upload, and record the paths on the session row.
 
-    Returns the `chart_paths` map it wrote, for tests and for a caller that
-    wants this synchronously. Raises on a failure it couldn't contain; `_run`
-    below turns that into a log line.
-
-    `only` restricts the re-render to those charts; the others keep their
-    entry from `existing_paths`. For `rearchive_sessions`: a chart an erasure
-    nulled must stay null, since the rows it drew on may still exist (a
-    camera erasure removes the two heart charts and leaves the headband's
-    heart rows), and re-rendering it would put back what a parent erased.
+    Returns the `chart_paths` map it wrote; raises (`_run` logs it).
+    `only` restricts the re-render; other charts keep their `existing_paths`
+    entry, so an erasure's null is never re-rendered from surviving rows.
     """
     cognitive, face, heart = _fetch(client, session_id)
     charts = build_session_charts(cognitive, face, heart)
@@ -193,10 +135,7 @@ def archive_session(client, session_id: str, user_id: str, *,
         storage.upload(
             path=path,
             file=svg.encode("utf-8"),
-            # `upsert` as a string: storage-py passes file_options through as
-            # HTTP headers, and a bool becomes "True", which the server
-            # doesn't recognise -- a replayed close would 409 instead of
-            # overwriting.
+            # `upsert` must be the string "true": file_options become HTTP headers.
             file_options={"content-type": "image/svg+xml", "upsert": "true"},
         )
         paths[name] = path
@@ -208,10 +147,7 @@ def archive_session(client, session_id: str, user_id: str, *,
 
 # ── reading them back ───────────────────────────────────────────────────────
 
-# Long enough to load a page of four images on a slow connection, short enough
-# that a URL copied out of devtools or a screenshot is stale for anyone else
-# who tries it. There's no revocation, so this TTL is the only bound on a
-# leaked URL -- the reason to keep it small rather than convenient.
+# Signed URLs can't be revoked, so this TTL is the only bound on a leaked one.
 SIGNED_URL_TTL_SECONDS = 300
 
 
@@ -219,31 +155,9 @@ def signed_chart_urls(client, chart_paths, user_id: str,
                       session_id: str) -> tuple[dict, list]:
     """`({chart: url | None}, [charts recorded but unreadable])`.
 
-    **The path is derived here, never taken from `chart_paths`.** That column
-    is ordinary jsonb on `sessions`, which carries a `FOR ALL` own-row policy,
-    so a student can PATCH their own row and put any string they like there
-    -- including another student's object path. Signing what's stored would
-    hand them a URL to it. The stored value only records **which** charts
-    exist; it's not a trusted address.
-
-    So `chart_paths` is read for presence only, and where it points is never
-    consulted. Changing `object_path`'s scheme therefore means migrating the
-    objects to match.
-
-    Signed rather than public, and issued per request rather than stored --
-    these are charts of a named child's physiological signals, and a public
-    URL is an access-control bypass no later policy can undo.
-
-    The two return values keep three states apart that would otherwise
-    collapse into one null:
-
-    * `url` -- rendered, uploaded, still there.
-    * `None` in the dict -- the channel produced nothing to draw.
-    * named in the second list -- a path *was* recorded but couldn't be
-      signed. A fault, not an absence.
-
-    A chart absent from `chart_paths` altogether is absent from both, meaning
-    it was never attempted (a session closed before archiving existed).
+    Security: the path is derived, never read from `chart_paths` (student-writable);
+    that column decides presence only. `None` = nothing drawn; listed = recorded
+    but unsignable; absent from both = never attempted.
     """
     urls: dict[str, str | None] = {}
     missing: list[str] = []
@@ -262,8 +176,7 @@ def signed_chart_urls(client, chart_paths, user_id: str,
             print(f"[charts] could not sign {path}: {e}")
             missing.append(name)
             continue
-        # storage3 returns both spellings; take either rather than depending on
-        # which one a future version keeps.
+        # storage3 returns both spellings; take either.
         url = (signed or {}).get("signedURL") or (signed or {}).get("signedUrl")
         if url:
             urls[name] = url
@@ -274,22 +187,15 @@ def signed_chart_urls(client, chart_paths, user_id: str,
 
 # ── removing them ───────────────────────────────────────────────────────────
 
-# One `remove` call per batch. Without batching, a parent erasing a term's
-# worth of sessions would be a few hundred round trips in one request.
+# Paths per `remove` call.
 _REMOVE_BATCH = 100
 
 
 def remove_objects(client, paths) -> tuple[int, list]:
     """Delete archived chart objects. Returns `(removed, failed paths)`.
 
-    Called by the erasure path with a list of paths `erase_signals` derives
-    from the ids -- never one read out of `chart_paths`, which would let a
-    caller destroy an object of the writer's choosing.
-
-    Failure is reported, not raised. By the time this runs, the database half
-    has committed and `chart_paths` no longer points at these objects, so
-    anything left behind is orphaned but unservable -- a smaller problem than
-    an erasure that half-rolls-back.
+    Paths must be derived from ids, never read from `chart_paths`. Failure is
+    reported, not raised: the database half has already committed.
     """
     paths = [p for p in (paths or []) if p]
     if not paths:
@@ -302,30 +208,15 @@ def remove_objects(client, paths) -> tuple[int, list]:
             storage.remove(batch)
             removed += len(batch)
         except Exception as e:
-            # Loud: this is the one part of an erasure that can be
-            # incomplete, and nobody is watching a return value by now.
+            # Loud: the one part of an erasure that can be incomplete.
             print(f"[charts] erasure could not remove {len(batch)} object(s): {e}")
             failed.extend(batch)
     return removed, failed
 
 
 # ── sweeping objects whose session is gone ──────────────────────────────────
-#
-# Storage does not cascade. Deleting a `sessions` row (or a `profiles` row,
-# which cascades to sessions) leaves the SVGs behind, and `main.py` has no
-# delete endpoint to hook -- those deletes come from the dashboard or a direct
-# connection. A sweep is the only thing that catches them.
-#
-# It deletes on **absence**, the dangerous kind of job: one failed read of
-# `sessions` makes every object in the bucket look orphaned. Every guard below
-# exists so that failure aborts instead of emptying the bucket, and
-# `dry_run=True` is the default for the same reason.
-#
-# Deliberately *not* in scope: an object belonging to a session that still
-# exists. `expire_signal_rows` leaves the archive standing on purpose -- it
-# survives the year alongside `signal_daily_rollup`, which is why a same-day
-# delete with no grace period is defensible. A sweep that "corrected" that
-# would remove the thing making its own schedule safe.
+# Deletes on absence, so every guard below aborts on a doubtful read. Objects of
+# sessions that still exist are out of scope: the archive outlives expiry on purpose.
 
 _LIST_PAGE = 100
 # storage-py pages silently; a backend that ignored `offset` would loop for ever.
@@ -336,12 +227,7 @@ _UUID = re.compile(
 
 
 def _list_all(storage, prefix: str) -> list[str]:
-    """Every entry name under `prefix`, paged.
-
-    `list` caps at 100 by default and reports no truncation, so a single call
-    is a silent cap: a bucket would look like its first 100 students forever,
-    and the sweep would report "nothing orphaned" about objects it never saw.
-    """
+    """Every entry name under `prefix`, paged: a single `list` silently caps at 100."""
     names: list[str] = []
     for page_no in range(_LIST_MAX_PAGES):
         page = storage.list(prefix, {"limit": _LIST_PAGE,
@@ -357,23 +243,16 @@ def sweep_orphan_charts(client, *, dry_run: bool = True, max_deletes: int = 500,
                         max_orphan_fraction: float = 0.5) -> dict:
     """Remove archived charts whose session row no longer exists.
 
-    Returns a report; never raises for an ordinary failure, since a traceback
-    is a worse answer than a refusal that says why. `refused` is the field to
-    read first: when it's set nothing was deleted.
-
-    `dry_run` defaults to **True**. A sweep that deletes by default is one
-    mistyped argument away from being the bug it exists to fix.
+    Returns a report and never raises for an ordinary failure; when `refused`
+    is set nothing was deleted. `dry_run` defaults to True.
     """
     report = {"scanned_sessions": 0, "orphaned_sessions": 0, "removed": 0,
               "failed": [], "unrecognised": 0, "hit_cap": False,
               "dry_run": dry_run, "refused": None}
     storage = client.storage.from_(BUCKET)
 
-    # The bucket is listed **before** `sessions` is read -- that order is the
-    # guard. Read the table first and a session created in between has objects
-    # missing from the snapshot, deleted as orphans while its row sits there.
-    # Listing first can only be stale in the safe direction: an object written
-    # after the listing is simply not considered.
+    # List the bucket BEFORE reading `sessions`: a session created in between
+    # would otherwise look orphaned. This order is stale only in the safe direction.
     try:
         found: list[tuple[str, str]] = []
         for user_id in _list_all(storage, ""):
@@ -402,8 +281,7 @@ def sweep_orphan_charts(client, *, dry_run: bool = True, max_deletes: int = 500,
                     .in_("id", batch).execute().data) or []
             live.update(str(r["id"]) for r in rows if r.get("id"))
     except Exception as e:                                     # noqa: BLE001
-        # Not "treat them as orphaned": a failed read here is exactly the
-        # state that would make a live bucket look deletable.
+        # Refuse: a failed read would make a live bucket look deletable.
         report["refused"] = f"could not read sessions: {e}"
         return report
 
@@ -412,9 +290,7 @@ def sweep_orphan_charts(client, *, dry_run: bool = True, max_deletes: int = 500,
     if not orphans:
         return report
 
-    # A handful of orphans is normal (deleted sessions). Most of the bucket
-    # looking orphaned means a broken read that didn't raise -- refuse and let
-    # a human look, rather than being the fastest way to lose the archive.
+    # Most of the bucket looking orphaned means a broken read that didn't raise.
     fraction = len(orphans) / len(found)
     if fraction > max_orphan_fraction:
         report["refused"] = (
@@ -425,8 +301,6 @@ def sweep_orphan_charts(client, *, dry_run: bool = True, max_deletes: int = 500,
         return report
 
     if len(orphans) > max_deletes:
-        # Reported, not silent: "removed 500" with nothing saying more is
-        # waiting reads as "the bucket is clean".
         report["hit_cap"] = True
         orphans = orphans[:max_deletes]
 
@@ -449,12 +323,7 @@ def sweep_orphan_charts(client, *, dry_run: bool = True, max_deletes: int = 500,
 
 
 # ── running it off the request path ─────────────────────────────────────────
-#
-# Two workers, lazily built, shut down from `main._lifespan`. Sized like the
-# strategy and live-signals pools next to it: this is a handful of reads and
-# four small uploads per closing session, and sessions close one student at a
-# time. A bigger pool would only buy holding more of a storage outage in
-# memory.
+# Two workers, lazily built, shut down from `main._lifespan`.
 
 _POOL: ThreadPoolExecutor | None = None
 _pool_lock = threading.Lock()
@@ -470,12 +339,7 @@ def _pool() -> ThreadPoolExecutor:
 
 
 def shutdown_pool() -> None:
-    """Drop the queue on the way out. Called from `main._lifespan`.
-
-    Pending archives are abandoned, not awaited: the rows they summarise are
-    still in the database until `ends_on`, so the archive can be rebuilt --
-    while a shutdown that blocks on storage is an outage with no end.
-    """
+    """Drop the queue on the way out; pending archives are abandoned, not awaited."""
     global _POOL
     with _pool_lock:
         pool, _POOL = _POOL, None
@@ -489,18 +353,12 @@ def _run(client, session_id: str, user_id: str) -> None:
         drawn = sum(1 for v in paths.values() if v)
         print(f"[charts] {session_id[:8]}: archived {drawn}/{len(paths)}")
     except Exception as e:
-        # Loud, and not into a response: nothing is waiting on this, so the
-        # log is the only place it can surface, and it must -- the window to
-        # fix it closes on `ends_on`.
+        # The log is the only place this surfaces; the fix window closes on `ends_on`.
         print(f"[charts] {session_id[:8]}: archive failed: {e}")
 
 
 def schedule(client, session_id: str, user_id: str) -> None:
-    """Queue an archive for a session that has just closed. Never raises.
-
-    Including on submit: a shut-down pool, or an interpreter already tearing
-    down, must not turn a successful session close into a 500 over a picture.
-    """
+    """Queue an archive for a session that has just closed. Never raises, even on submit."""
     try:
         _pool().submit(_run, client, session_id, user_id)
     except Exception as e:
@@ -513,33 +371,9 @@ def rearchive_sessions(client, sessions: list[dict], *, dry_run: bool = True,
                        max_rerenders: int = 200, max_read_failures: int = 5) -> dict:
     """Re-render and re-upload the charts of sessions already archived.
 
-    For a change to what a chart draws -- the `engagement` series was dropped
-    from the cognitive timeline, and every archive written before that keeps
-    it permanently, as a trace of electrode contact quality labelled as a
-    measurement. Archives are written once at close and nothing revisits
-    them, so this is the only path by which such a change reaches them.
-
-    **A session whose per-sample rows have expired is skipped, never
-    re-rendered.** `archive_session` draws from the raw tables, and after
-    `expire_signal_rows` those are empty: re-running it would upload four
-    empty charts over the only remaining picture of the session and null the
-    paths. That guard is the whole reason this is a function with a report
-    rather than a loop in a script. Sessions with no `chart_paths` are left
-    alone too -- the archive never ran on them and this is not the close
-    path. Dry run by default.
-
-    Three more guards, each for a way this job rewrites something it must
-    not. **Per chart, not per session**: expiry is per channel, so a session
-    whose heart rows are gone and cognitive rows remain is skipped outright
-    -- re-rendering it would null the heart paths and orphan those objects,
-    the last copy. **Only charts with a recorded path are re-rendered**: an
-    erasure nulls a chart's path and may leave the rows it drew on (a camera
-    erasure removes both heart charts, the headband's rows stay), so a
-    re-render from the rows would put back what a parent erased. **A failed
-    read refuses** rather than skipping: a read that fails looks exactly
-    like a session with no rows, which is the skip case, and past
-    `max_read_failures` the run stops and says so. `max_rerenders` bounds
-    how many live sessions' objects one run overwrites.
+    Dry run by default. Skips a session whose chart rows have expired (the archive
+    is the last copy); re-renders only charts with a recorded path (an erasure's
+    null stays null); refuses after `max_read_failures` failed reads.
     """
     report = {"dry_run": dry_run, "considered": 0, "rerendered": 0,
               "skipped_expired": 0, "skipped_unarchived": 0, "failed": 0,
@@ -563,10 +397,7 @@ def rearchive_sessions(client, sessions: list[dict], *, dry_run: bool = True,
         except Exception as exc:  # noqa: BLE001 -- counted, and refused past the cap
             print(f"[rearchive] {session_id}: read failed: {exc}")
             report["read_failures"] += 1
-            # At the cap, not past it: checked only at the top of the next
-            # iteration with `>`, five failures in five sessions returned
-            # `refused` unset and exit 0 -- exactly what a run with no work
-            # returns.
+            # Refuse at the cap, not past it, or a run of failures ends looking clean.
             if report["read_failures"] >= max_read_failures:
                 report["refused"] = (f"{report['read_failures']} session reads failed; "
                                      "a failed read is indistinguishable from an expired session")
@@ -574,13 +405,8 @@ def rearchive_sessions(client, sessions: list[dict], *, dry_run: bool = True,
             continue
         present = {name for name, rows in CHART_SOURCES.items()
                    if {"cognitive": cognitive, "face": face, "heart": heart}[rows]}
-        # The cursor: a run that hits the cap resumes with `--after` this, or
-        # every run repeats the same oldest batch and a backfill larger than
-        # the cap never finishes. Set only once the session is *handled* --
-        # skipped by decision, listed by a dry run, or re-rendered. Set before
-        # the read, a failed read was passed over by the resume; set after the
-        # read but before the render, a failed render was passed over the
-        # same way. A session this run did not finish stays ahead of the cursor.
+        # `last_ended_at` is the `--after` resume cursor: advance it only once a
+        # session is handled, so a failed read or render is retried next run.
         if not wanted <= present:
             report["skipped_expired"] += 1
             report["last_ended_at"] = row.get("ended_at")
@@ -599,8 +425,6 @@ def rearchive_sessions(client, sessions: list[dict], *, dry_run: bool = True,
     return report
 
 
-# Which per-sample table each chart draws on. `stress_pie` is the heart
-# table's `stress_category`, not the cognitive `stress` column -- see
-# build_session_charts.
+# Per-sample table each chart draws on (`stress_pie` is heart, not cognitive `stress`).
 CHART_SOURCES = {"cognitive_timeline": "cognitive", "heart_rate": "heart",
                  "stress_pie": "heart", "emotion_pie": "face"}

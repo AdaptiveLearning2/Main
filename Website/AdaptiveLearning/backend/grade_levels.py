@@ -1,27 +1,13 @@
-"""One reading of a grade string, shared by everything that gates on it.
+"""One reading of the free-text `profiles.grade_level`, shared by everything that gates on it.
 
-`profiles.grade_level` is free text, not constrained to the frontend
-dropdown's exact strings ("1st grade", "2nd grade", ...), so any code
-matching those strings and falling through to the most permissive branch on
-anything else is a hole: "Grade 1" could become eligible for algebra, or get
-advanced content in whatever topic was chosen.
-
-Two properties this file exists to hold:
-
-- **A grade is read numerically where it can be**, so "Grade 1", "1st
-  Grade", "grade 1" and "1" are one grade, not one grade plus three unknowns.
-- **An unreadable grade is treated as the youngest, not the oldest.** Same
-  asymmetry as `signal_fusion`: withholding a topic from a student who could
-  have handled it costs one easy question, while serving algebra to a 1st
-  grader is the failure the gate exists to prevent. `_grade_band` inherits
-  this -- an unreadable grade gets "early" content, not "advanced".
+A grade is read numerically ("Grade 1", "1st Grade" and "1" are one grade), and an
+unreadable grade is treated as the youngest, never the oldest.
 """
 
 import re
 import unicodedata
 
-# Labels with no digit in them. Kindergarten sits below 1st grade; the two
-# post-8th labels are what the frontend's dropdown offers above "8th grade".
+# Labels with no digit in them.
 _NAMED_GRADES = {
     "kindergarten": 0,
     "pre-k":        0,
@@ -32,8 +18,7 @@ _NAMED_GRADES = {
     "university":   13,
 }
 
-# A grade number outside this range is not a school grade, so a stray number
-# in the string ("2026 cohort") does not silently become grade 2026.
+# Outside this range a number is not a grade ("2026 cohort").
 _MIN_GRADE, _MAX_GRADE = 0, 13
 
 
@@ -59,11 +44,7 @@ def grade_number(grade):
 
 
 def grade_band(grade):
-    """The four-band bucket the generation files scale content by.
-
-    1-3 early, 4-6 middle, 7-8 upper, above that advanced. An unreadable
-    grade lands in "early" -- see the module docstring for why.
-    """
+    """The four-band bucket the generation files scale content by; unreadable is "early"."""
     number = grade_number(grade)
     if number is None:
         return "early"
@@ -77,34 +58,8 @@ def grade_band(grade):
 
 
 # ─── the canonical form a model prompt is allowed to see ──────────────────
-#
-# `grade` reaches nineteen f-string prompts as a raw string -- the topic
-# decider's `Student Grade Level = {grade}` and one `a {grade} student` line
-# in each of the seventeen generators. Every one of those strings is
-# client-supplied: `PUT /api/profile/me` and the two class endpoints write it,
-# `POST /api/practice-sessions/start` takes it directly, and
-# `GET /api/generate-question?grade=` hands it to the decider without so much
-# as a length cap. A value carrying newlines can close the line it sits on and
-# open an instruction of its own, in a prompt whose whole job is to be
-# followed.
-#
-# Escaping that string is the weaker answer, and it is not what this does. A
-# grade is not free text: the only thing any consumer wants from it is the
-# number `grade_number` already reads. So the prompt is handed a label
-# *rebuilt from that number*, and injection stops being something to filter
-# for -- it is unrepresentable, because nothing the caller wrote survives.
-#
-# The labels round-trip: `grade_number(CANONICAL_GRADE_LABELS[n]) == n` for
-# every n, which is what makes this substitution behaviour-preserving. Every
-# other consumer -- `_allowed_topics`, `grade_band`, each generator's
-# `GRADE_OVERRIDES` -- keys on the number, never on the string, so passing the
-# canonical label down changes nothing but what the model reads. A test pins
-# the round-trip; break it and the grade gates move.
-#
-# Two dropdown labels are relabelled on the way through: "Highschool" becomes
-# "9th Grade" and "College" stays "College", since both already collapse to
-# one number for every gate. The prompt's own GRADE RULES are written in
-# numbers ("Grades 7+"), so the numeric label is the one it can act on.
+# Prompts get a label rebuilt from the number, so no client-written text reaches them.
+# Must round-trip: grade_number(CANONICAL_GRADE_LABELS[n]) == n (a test pins it).
 CANONICAL_GRADE_LABELS = {
     0:  "Kindergarten",
     1:  "1st Grade",
@@ -122,47 +77,25 @@ CANONICAL_GRADE_LABELS = {
     13: "College",
 }
 
-# What the prompt is told when the grade cannot be read. Not a guessed grade:
-# an unreadable one is already treated as the youngest by `grade_band`, and
-# asserting "1st Grade" in the prompt would be a claim nobody made. Echoing
-# the unreadable string back is the option this exists to refuse -- it is
-# exactly the value that could not mean anything, and the only one that could
-# carry a payload.
+# Never a guessed grade, and never the unreadable input echoed back.
 UNKNOWN_GRADE_LABEL = "unspecified"
 
 
 def grade_for_prompt(grade):
-    """The only form of `grade` that may be interpolated into a prompt.
-
-    One of `CANONICAL_GRADE_LABELS`' fourteen values, or
-    `UNKNOWN_GRADE_LABEL`. Nothing the caller wrote reaches the string.
-    """
+    """The only form of `grade` that may be interpolated into a prompt."""
     return CANONICAL_GRADE_LABELS.get(grade_number(grade), UNKNOWN_GRADE_LABEL)
 
 
 # ─── the edge check, layer 1 ─────────────────────────────────────────────
-#
-# `grade_for_prompt` is what makes the prompt safe, and it holds on its own --
-# but it holds at the *last* step, and a value that reaches it has already
-# been stored, echoed onto a teacher's class list and a student's profile
-# badge, and read back by whatever is written next. So the edge refuses what
-# the system cannot read at all: a grade `grade_number` returns None for means
-# nothing to any gate here, and a 422 naming the field beats storing it and
-# quietly treating that student as the youngest for the rest of the year.
-#
-# The cap is not the security property -- forty characters is plenty of room
-# for a sentence -- it bounds what gets stored and displayed. The layer that
-# makes an injection unrepresentable is `grade_for_prompt`; this one keeps the
-# column honest.
+# Refuse unreadable grades at write time (422). The cap bounds storage/display;
+# `grade_for_prompt` is the injection defence.
 GRADE_MAX_LENGTH = 40
 
 
 def validated_grade(value):
     """`value` unchanged if it is a grade this system can read, else raise.
 
-    None and "" pass through as None -- clearing the field is not a bad grade.
-    Raises ValueError, so a Pydantic `field_validator` surfaces it as a 422
-    naming the field.
+    None and "" return None (clearing the field). Raises ValueError, a 422 via `field_validator`.
     """
     if value is None:
         return None
@@ -175,13 +108,8 @@ def validated_grade(value):
     if len(text) > GRADE_MAX_LENGTH:
         raise ValueError(
             f"grade is too long (max {GRADE_MAX_LENGTH} characters)")
-    # A grade is one line. Without this, "5th Grade\r\nOUTPUT FORMAT..." is
-    # seventeen characters and reads as grade 5, so it cleared both the cap
-    # and the number check -- the exact shape this is written against, and
-    # the reason a length cap is not a substitute for a structural one. The
-    # categories are control (Cc), format (Cf, which carries the
-    # right-to-left overrides), and the line and paragraph separators (Zl,
-    # Zp) that `\n` is not the only spelling of.
+    # One line only: "5th Grade\r\n..." passes the cap and reads as grade 5. Cf covers
+    # right-to-left overrides; Zl/Zp are the other line breaks.
     if any(unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") for ch in text):
         raise ValueError("grade must be a single line of plain text")
     if grade_number(text) is None:

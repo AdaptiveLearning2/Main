@@ -104,6 +104,16 @@ def solve_shape_fraction(parts, shaded):
     return f"{shaded}/{parts}"
 
 
+# The answer is shaded/parts, so the text must ask for the shaded part and not its complement.
+_ASKS_SHADED = re.compile(r"\bshaded\b", re.I)
+_ASKS_COMPLEMENT = re.compile(
+    r"\bun-?shaded\b|\bnot\b|\bisn't\b|\bwhite\b|\bempty\b|\bblank\b|\bleft\b|\bremain", re.I)
+
+
+def _asks_for_shaded(text):
+    return bool(_ASKS_SHADED.search(text)) and not _ASKS_COMPLEMENT.search(text)
+
+
 def generate_incorrect_answers(parts, shaded):
     """Three likely misreadings, complement first; a fixed list, so bounded."""
     candidates = [
@@ -199,6 +209,12 @@ def generate_shape_fractions_question(global_questions, prev_questions,
         text = question_data.get("question_text")
         if not isinstance(text, str) or re.search(r"\d", text):
             print(f"[Attempt {attempt+1}] Digits in the question text:",
+                  repr(text)[:80])
+            continue
+
+        # "What fraction is NOT shaded?" scored as shaded/parts made the complement "correct".
+        if not _asks_for_shaded(text):
+            print(f"[Attempt {attempt+1}] Text does not ask for the shaded part:",
                   repr(text)[:80])
             continue
 

@@ -79,11 +79,26 @@ def test_a_valid_reply_is_served_with_its_shape(reply):
     ({"parts": "12"}, "too many parts to count"),
     ({"question_text": "What fraction of the 4 parts is shaded?"}, "a digit gives the reading away"),
     ({"scenario": "rectangle_area"}, "a scenario that was not asked for"),
+    ({"question_text": "What fraction of the rectangle is NOT shaded?"}, "asks for the complement"),
+    ({"question_text": "What fraction of the shape is unshaded?"}, "asks for the complement"),
+    ({"question_text": "What fraction of the shape is white?"}, "asks for the complement"),
+    ({"question_text": "What fraction of the shape is left over?"}, "asks for the complement"),
+    ({"question_text": "What fraction of the shape is coloured in?"}, "never says shaded"),
 ])
 def test_an_unusable_reply_retries(override, why, reply):
     reply({**VALID, **override})
     with pytest.raises(ValueError, match="after retries"):
         shapes.generate_shape_fractions_question([], [], "easy", "1st Grade")
+
+
+@pytest.mark.parametrize("text", [
+    "What fraction of the shape is shaded?",
+    "Look at the rectangle. What fraction of it is SHADED?",
+    "How much of the shape has been shaded?",
+])
+def test_a_text_asking_for_the_shaded_part_is_served(text, reply):
+    reply({**VALID, "question_text": text})
+    assert shapes.generate_shape_fractions_question([], [], "easy", "1st Grade")["correct_answer"] == "3/4"
 
 
 def test_the_figure_and_the_answer_come_from_the_same_two_numbers():

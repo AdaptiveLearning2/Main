@@ -104,6 +104,20 @@ jobs:
       - name: Check public-schema tables revoke the default grants
         run: python scripts/check_table_grants.py
 
+  comment-length:
+    name: Comment length
+    runs-on: ubuntu-latest
+    # A written limit on comment size had already failed once; this makes it a gate.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Self-test the parser
+        run: python scripts/check_comment_length.py --self-test
+      - name: Check every tracked file
+        run: python scripts/check_comment_length.py
+
   database-migrations:
     name: Database migrations
     runs-on: ubuntu-latest

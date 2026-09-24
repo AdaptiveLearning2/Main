@@ -91,7 +91,11 @@ def traingle_perimeter_missing_side(perim, s1,s2):
     return solution
 
 def circle_area_missing_side(area):
-    x = symbols('x')
+    # The only quadratic here, so the only solve with two roots, and
+    # `normalize_solution` takes the first: `[-r, r]` scored every answer at -r.
+    # A radius is positive, so the symbol says so and the negative root is
+    # never produced; a non-positive area then has no root and is a retry.
+    x = symbols('x', positive=True)
     solution = solve(Eq(simple_pi*x**2, area), x)
     return solution
 

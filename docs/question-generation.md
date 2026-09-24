@@ -227,6 +227,11 @@ wrong-scenario class becomes unrepresentable rather than merely rejected. Geomet
 enums are **derived** from `SCENARIO_VARS` and the block tables, never restated — a second copy of a scenario's keys is
 how the schema and the solver drift.
 
+**A schema must admit the reply its own prompt shows.** `angles` pinned every scenario's variables to a numeral, and
+`algebra_complementary`'s example is `["x + 10", "2x - 20"]`: on Claude every attempt came back as bare numbers with no
+`x` to solve for, and failed, billed. Only Claude enforces a schema, so nothing on the dev path could show it.
+`test_every_angle_blocks_own_example_is_allowed_by_its_schema_and_solves` reads the examples from the blocks.
+
 **Two JSON Schema keywords are refused by this endpoint, and neither is guessable from the spec.** Both found by
 sending a request and reading the 400:
 
@@ -747,7 +752,9 @@ one whose badge belongs to whichever grade wrote it first and then contradicts w
 constrains `question_text` unique, so the second row inserts cleanly — and a text regenerated after the column landed
 no longer matches its NULL-coded predecessor, so the bank gains one row per such question, visible to a teacher as a
 duplicate. That is the accepted trade: updating the old row in place would stamp a grade-8 code on a row grade-6
-answers already reference. And **every scenario-selecting generator checks the reply's scenario name**
+answers already reference. **A match also needs the options in order, the answer and the figure**: `shape_fractions`
+and `graphs` keep digits out of the text, so on text alone every new figure took the first row's id, and an answer is
+stored as an index into that row's options. And **every scenario-selecting generator checks the reply's scenario name**
 (`expressions` was the one that did not): an off-name reply misses `SCENARIO_LADDER` and takes the topic's grade-1
 rung.
 

@@ -553,6 +553,12 @@ def extract_json(text):
 
     return None
 
+# How many same-text rows the duplicate check compares against. Generic texts
+# accumulate one row per distinct figure, so this is a bound on the read, not
+# on correctness: a match beyond it is stored again.
+_DEDUPE_CANDIDATES = 50
+
+
 def add_question_to_supabase(question, difficulty):
     """Store the question and return its id, or None if it could not be stored.
 
@@ -569,16 +575,29 @@ def add_question_to_supabase(question, difficulty):
     # at grade 6 and again at grade 8 is two rows (6.EE.7 and 8.EE.7b) rather
     # than one whose badge belongs to whichever grade wrote it first -- and
     # then disagrees with what the second student saw on their own screen.
+    #
+    # And a row is the same question only if everything the student saw
+    # matches: the options *in order*, the answer and the figure. Text alone
+    # was not enough -- `shape_fractions` and `graphs` forbid digits in the
+    # text, so "What fraction of the shape is shaded?" at one grade mapped every
+    # new figure to the first stored row, and the answer was recorded against a
+    # different picture and answer key. Order matters because the options are
+    # shuffled per generation and an answer is stored as an index into them.
+    # Compared here rather than as filters: `options` and `figure` are jsonb,
+    # and a missed match costs only a second row.
     code = question.get("ccss_standard")
     lookup = supabase.table("questions") \
-        .select("id") \
+        .select("id, options, correct_answer, figure") \
         .eq("question_text", question["question_text"])
     lookup = lookup.is_("ccss_standard", "null") if code is None \
         else lookup.eq("ccss_standard", code)
-    existing = lookup.limit(1).execute()
+    existing = lookup.limit(_DEDUPE_CANDIDATES).execute()
 
-    if existing.data:
-        return existing.data[0]["id"]
+    for row in existing.data or ():
+        if (row.get("options") == question["answer_options"]
+                and row.get("correct_answer") == question["correct_answer"]
+                and row.get("figure") == question.get("figure")):
+            return row["id"]
 
     response = supabase.table("questions").insert({
         "subject" : question["question_topic"],

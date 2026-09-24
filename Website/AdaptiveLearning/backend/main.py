@@ -3337,7 +3337,7 @@ def student_questions(student_id: str, request: Request, limit: int = 100):
     `questions` narrowed by something.
 
     One question can appear under several students, and more than once for
-    one student: `add_question_to_supabase` dedupes on exact text across the
+    one student: `add_question_to_supabase` dedupes on exact content across the
     whole product, and a student can be served the same question twice. Rows
     are collapsed per question with `attempts`/`correct` counts rather than
     repeated, and `session_id` is the most recent session it was asked in, so

@@ -12,6 +12,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pytest  # noqa: E402
+
 import ccss_standards  # noqa: E402
 import LLM_topic_decider  # noqa: E402
 
@@ -106,7 +108,8 @@ class _Query:
         self.filters.append(("is", col, val))
         return self
 
-    def limit(self, *_):
+    def limit(self, n):
+        self.n = n
         return self
 
     def insert(self, row):
@@ -120,7 +123,7 @@ class _Query:
         hits = [r for r in self.store["rows"]
                 if all((r.get(c) is None) if kind == "is" else (r.get(c) == v)
                        for kind, c, v in self.filters)]
-        return type("R", (), {"data": hits[:1]})()
+        return type("R", (), {"data": hits[:self.n]})()
 
 
 class _FakeSupabase:
@@ -148,6 +151,29 @@ def test_the_same_text_at_a_different_standard_is_a_different_row(monkeypatch):
     # The lookup filters on the code, not just the text -- assert on the
     # query, since a passing result alone could come from a text mismatch.
     assert ("eq", "ccss_standard", "8.EE.7b") in fake.queries[-2].filters
+
+
+@pytest.mark.parametrize("change", [
+    {"figure": {"kind": "shape", "parts": 4, "shaded": 1}},
+    {"correct_answer": "1/4", "answer_options": ["1/4", "3/4", "1/2"]},
+    {"answer_options": ["1/2", "3/4", "1/4"]},
+], ids=["another figure", "another answer", "same options, another order"])
+def test_the_same_text_with_different_content_is_a_different_row(change, monkeypatch):
+    """`shape_fractions` and `graphs` keep digits out of the text, so one text
+    at one grade covers every figure. Deduped on text, a new figure and answer
+    got the first row's id, and the answer was recorded against a picture and
+    an answer key the student never saw. Option order counts too: an answer is
+    stored as an index into the options."""
+    fake = _FakeSupabase()
+    monkeypatch.setattr(LLM_topic_decider, "supabase", fake)
+    q = {"question_text": "What fraction of the shape is shaded?",
+         "question_topic": "shape_fractions", "ccss_standard": "3.NF.1",
+         "figure": {"kind": "shape", "parts": 4, "shaded": 3},
+         "answer_options": ["3/4", "1/4", "1/2"], "correct_answer": "3/4"}
+    first = LLM_topic_decider.add_question_to_supabase(q, "easy")
+    second = LLM_topic_decider.add_question_to_supabase({**q, **change}, "easy")
+    assert second != first
+    assert fake.store["rows"][-1]["id"] == second
 
 
 def test_a_question_with_no_standard_dedupes_against_null_not_the_string_none(monkeypatch):

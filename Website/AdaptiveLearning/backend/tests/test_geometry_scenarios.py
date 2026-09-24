@@ -158,3 +158,27 @@ def test_an_unsolvable_scenario_is_a_retry_not_a_raise(scenario, variables, why)
 def test_an_ordinary_scenario_still_solves():
     """The bar every rejection above has to clear."""
     assert geo._solve_scenario("cube_volume", {"side": "3"}, 1) == 27.0
+
+
+def _block_example(block):
+    """The JSON example a scenario block shows the model."""
+    import json
+    return json.loads(block[block.index("{"):block.rindex("}") + 1])
+
+
+@pytest.mark.parametrize("number", sorted(geo.SCENARIO_BLOCKS))
+def test_every_blocks_own_example_solves_to_a_positive_measure(number):
+    """Every answer here is a length, an area or a volume, so a negative one is
+    wrong whatever the arithmetic says. `circle_area_missing_side` is the one
+    quadratic, and `solve` returned `[-r, r]` with the first taken: the prompt's
+    own `{"area": "50.24"}` was scored -4.0."""
+    example = _block_example(geo.SCENARIO_BLOCKS[number])
+    value, reason = geometry_solvers.solve_scenario(example["scenario"],
+                                                    example["variables"])
+    assert reason is None, reason
+    assert value > 0, f"{example['scenario']} {example['variables']} -> {value}"
+
+
+def test_a_missing_radius_is_the_positive_root():
+    assert geometry_solvers.solve_scenario(
+        "circle_area_missing_side", {"area": "78.5"}) == (5.0, None)

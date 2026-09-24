@@ -36,6 +36,7 @@ ALL_SCHEMAS = [
     ("geometry", qs.geometry("rectangle_area")),
     ("geometry-missing-side", qs.geometry("rect_area_missing_side")),
     ("angles", qs.angles("triangle_sum")),
+    ("angles-algebra", qs.angles("algebra_complementary")),
     ("probability-dice", qs.probability("dice")),
 ]
 
@@ -123,6 +124,34 @@ def test_the_angle_arity_is_deliberately_not_in_the_schema():
         assert "minItems" not in variables and "maxItems" not in variables
     assert angle_solvers.SCENARIO_ARITY["triangle_sum"] == 2, (
         "the arity this schema cannot express still has to exist somewhere")
+
+
+def test_every_angle_blocks_own_example_is_allowed_by_its_schema_and_solves():
+    """The schema must admit the reply the prompt asks for.
+
+    `angles` pinned every scenario's variables to a numeral, and
+    `algebra_complementary`'s own example is `["x + 10", "2x - 20"]` -- so on
+    Claude the only admissible reply was a pair of bare numbers, which has no
+    `x` to solve for. Every attempt failed, billed, the same way. Read from
+    the blocks rather than listed here, so a new scenario is covered by being
+    added.
+    """
+    import json
+    os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
+    os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
+    import LLM_angle_relationship_generation as angles
+
+    for number, block in angles.SCENARIO_BLOCKS.items():
+        example = json.loads(block[block.index("{"):block.rindex("}") + 1])
+        name = example["scenario"]
+        items = qs.angles(name)["properties"]["variables"]["items"]
+        for value in example["variables"]:
+            pattern = items.get("pattern")
+            assert pattern is None or re.fullmatch(pattern, value), (
+                f"block {number} ({name}): the schema refuses its own example "
+                f"{value!r}")
+        value, reason = angle_solvers.solve_scenario(name, example["variables"])
+        assert reason is None, f"block {number} ({name}): {reason}"
 
 
 def test_the_two_bag_scenarios_get_no_schema_rather_than_a_permissive_one():

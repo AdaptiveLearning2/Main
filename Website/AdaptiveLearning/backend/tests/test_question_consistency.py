@@ -196,7 +196,9 @@ def test_every_number_in_the_text_must_be_a_scored_count_or_their_total(text, co
 
 def test_a_swapped_count_is_caught_through_an_ies_plural():
     """The same numbers either way, so only reading "cherries" as "cherry" can see the swap."""
-    assert qc.counts_mismatch("A basket has 3 cherries and 4 plums.", {"cherry": 4, "plum": 3}) is not None
+    text = "A basket has 3 cherries and 4 berries."
+    assert qc.counts_mismatch(text, {"cherry": 4, "berry": 3}) is not None
+    assert qc.counts_mismatch(text, {"cherry": 3, "berry": 4}) is None
 
 
 def test_a_stated_total_that_adds_up_agrees():

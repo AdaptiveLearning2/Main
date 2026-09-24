@@ -248,6 +248,11 @@ class FaceCaptureAdapter:
         # refuses while the eyes stay readable; a closed eye refuses gaze
         # while pose is fine.
         self._latest_pose: Any = None
+        # When a face and a frame were last seen, so a reading is dropped only
+        # once its subject has been gone for a whole interval -- see
+        # `_forget_readings`. None until the first one.
+        self._last_face_at: float | None = None
+        self._last_frame_at: float | None = None
 
         self._source: FrameSource | None = None
         self._locator: Any = None
@@ -334,6 +339,7 @@ class FaceCaptureAdapter:
         self._locator = None
         self._latest_emotion = None
         self._last_emotion_at = 0.0
+        self._last_face_at = self._last_frame_at = None
         # The landmarker itself is kept (it holds a loaded model, and
         # MediaPipe takes seconds to build one) but the reading is cleared,
         # since a gaze from before release isn't a gaze now.
@@ -413,13 +419,14 @@ class FaceCaptureAdapter:
             with self._lock:
                 self._counters.consecutive_missing += 1
                 self._counters.missing_reason = "camera"
-            self._forget_readings(camera_gone=True)
+            self._forget_readings(now_seconds(), camera_gone=True)
             return False
 
         with self._lock:
             self._counters.frames_read += 1
 
         now = now_seconds()
+        self._last_frame_at = now
         # Sampled before the Haar box on purpose: the landmarker runs its own
         # detection on the full frame, so a Haar miss says nothing about
         # whether a mesh is available. Returning early on a Haar miss would
@@ -438,8 +445,9 @@ class FaceCaptureAdapter:
             with self._lock:
                 self._counters.consecutive_missing += 1
                 self._counters.missing_reason = "no_face"
-            self._forget_readings(camera_gone=False)
+            self._forget_readings(now, camera_gone=False)
             return True
+        self._last_face_at = now
 
         if (self.emotion_enabled
                 and now - self._last_emotion_at >= self._emotion_interval):
@@ -457,6 +465,12 @@ class FaceCaptureAdapter:
                 logger.exception("emotion crop failed")
                 with self._lock:
                     self._counters.last_error = f"{type(exc).__name__}: {exc}"
+                    # The earlier reading is not a reading of this face, and
+                    # left standing it would be stored at 4 Hz as trusted --
+                    # with a face at the frame's edge, for as long as it
+                    # stayed there. `no_face` is how `face_emotion` reports a
+                    # crop it cannot use.
+                    self._latest_emotion = None
             else:
                 with self._lock:
                     self._latest_emotion = result
@@ -497,7 +511,7 @@ class FaceCaptureAdapter:
             self._counters.samples_emitted += 1
         return True
 
-    def _forget_readings(self, *, camera_gone: bool) -> None:
+    def _forget_readings(self, now: float, *, camera_gone: bool) -> None:
         """Drop readings that no longer describe the current frame.
 
         Every stream tick sends `latest_*` as a new row, so a reading left in
@@ -515,10 +529,22 @@ class FaceCaptureAdapter:
         replaced only when the camera stops handing frames over, and with a
         named refusal rather than None: None reports `no_reading`, the
         warming-up state, which a camera that stopped is not.
+
+        Only once the face or the frames have been gone for a whole interval
+        (the emotion interval, the gaze interval). One missed detection is a
+        flicker, not a student leaving: cleared on the first, a Haar detector
+        struggling in poor light wrote `no_face` rows for a student who never
+        moved. Measured in time, not missed frames, because a frame count
+        means a different duration at every frame rate.
         """
-        with self._lock:
-            self._latest_emotion = None
-        if not camera_gone or not self.gaze_enabled:
+        def gone_for(since, interval):
+            return since is None or now - since >= interval
+
+        if gone_for(self._last_face_at, self._emotion_interval):
+            with self._lock:
+                self._latest_emotion = None
+        if (not camera_gone or not self.gaze_enabled
+                or not gone_for(self._last_frame_at, self._gaze_interval)):
             return
         from src.app.services.face_geometry import Gaze, HeadPose  # noqa: PLC0415
 

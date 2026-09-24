@@ -1,20 +1,8 @@
--- Split p_include_face into p_include_heart and p_include_emotion, and teach
--- the summaries about heart_signals. Headband and camera are consented
--- separately, so one boolean can no longer express what the caller may read.
---
--- p_include_emotion gates every read of face_signals, not just the emotion
--- column: attention and gaze come off the same camera under the same consent
--- flag, so the sensor is the real boundary.
---
--- Both flags lead their predicates so a false value excludes rows before
--- they reach an aggregate, rather than nulling a value afterward -- an
--- opt-out has to skip the read, not just hide the result.
+-- Split p_include_face into p_include_heart and p_include_emotion; summaries
+-- now read heart_signals. p_include_emotion gates every face_signals read.
+-- Both flags lead their predicates: an opt-out skips the read.
 
--- The old signature must be dropped explicitly. CREATE OR REPLACE can't
--- change a parameter list, so without this the old version survives as an
--- overload -- still granted, still callable, unaware of the new flag, and a
--- named-argument call matching both signatures would be rejected as
--- ambiguous.
+-- Drop the old signature, or it survives as a granted, ambiguous overload.
 DROP FUNCTION IF EXISTS "public"."student_signal_summary"("uuid", integer, boolean);
 DROP FUNCTION IF EXISTS "public"."student_signal_summary_many"("uuid"[], integer, boolean);
 
@@ -45,9 +33,7 @@ AS $$
     SELECT now() - (GREATEST(p_days, 1) || ' days')::interval AS since
   ),
   cog AS (
-    -- count(c.focus), not count(*): a row with a null focus (bad electrode
-    -- contact) contributes nothing to avg(), so counting it too would report
-    -- a nonzero sample count beside a null average.
+    -- count(c.focus), not count(*): poor-contact rows carry a null focus.
     SELECT avg(c.focus)      AS focus,
            avg(c.stress)     AS stress,
            avg(c.engagement) AS engagement,
@@ -58,18 +44,14 @@ AS $$
   fac AS (
     SELECT avg(f.attention)   AS attention,
            count(f.attention) AS n,
-           -- Explicit FILTER so a null emotion (nothing read) can't win the
-           -- mode() vote and render as an actual mood.
+           -- FILTER so a null emotion cannot win the mode() vote.
            mode() WITHIN GROUP (ORDER BY f.emotion)
              FILTER (WHERE f.emotion IS NOT NULL) AS emotion
     FROM face_signals f, bounds b
     WHERE p_include_emotion AND f.user_id = p_student_id AND f.ts >= b.since
   ),
   hrt AS (
-    -- Only trusted samples reach the average -- an untrusted one still carries
-    -- a heart rate, it's just not worth reporting. `trusted IS TRUE` excludes
-    -- null (unset) as well as false, rather than treating null as falsy by
-    -- accident.
+    -- Trusted only; `IS TRUE` excludes null as well as false.
     SELECT avg(h.heart_rate_bpm)   AS bpm,
            avg(h.rmssd_ms)         AS rmssd,
            count(h.heart_rate_bpm) AS n
@@ -89,9 +71,7 @@ AS $$
 $$;
 
 
--- No dominant_emotion here: this feeds the parent dashboard, which has no
--- emotion tile, so computing mode() per child on every load would cost
--- something for nothing.
+-- No dominant_emotion: the parent dashboard has no emotion tile.
 CREATE OR REPLACE FUNCTION "public"."student_signal_summary_many"(
   "p_student_ids" "uuid"[],
   "p_days" integer DEFAULT 7,
@@ -148,9 +128,7 @@ AS $$
 $$;
 
 
--- New signatures carry fresh ACLs, so the revokes have to be repeated. Both
--- Postgres's PUBLIC grant and Supabase's named anon/authenticated grants need
--- revoking -- a named grant survives a PUBLIC-only revoke.
+-- New signatures carry fresh ACLs; anon/authenticated are revoked by name.
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer, boolean, boolean) FROM PUBLIC;
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer, boolean, boolean) FROM "anon";
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer, boolean, boolean) FROM "authenticated";

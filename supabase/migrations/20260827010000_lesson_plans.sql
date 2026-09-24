@@ -1,8 +1,5 @@
--- Lesson-plan context for question generation. Grounds the Ollama prompts in
--- an actual curriculum sequence instead of only difficulty/grade heuristics.
--- Keyed by (topic_name, grade_band) at the same granularity as
--- LLM_*_generation.py's own GRADE_COMPLEXITY bands (early/middle/upper/advanced),
--- not by exact grade -- one lesson plan already covers a band of grades there.
+-- Lesson-plan context for question generation, keyed by (topic_name,
+-- grade_band) using the generators' GRADE_COMPLEXITY bands.
 
 CREATE TABLE IF NOT EXISTS "public"."lesson_plans" (
     "id" "uuid" DEFAULT "extensions"."uuid_generate_v4"() NOT NULL,
@@ -28,8 +25,6 @@ ALTER TABLE "public"."lesson_plans" ENABLE ROW LEVEL SECURITY;
 -- Same shape as math_topics/questions: reference content, public read.
 CREATE POLICY "lesson_plans: public read" ON "public"."lesson_plans" FOR SELECT USING (true);
 
--- Supabase already grants every table privilege to anon and authenticated by
--- name, so revoke first -- a bare GRANT on top wouldn't narrow anything.
 REVOKE ALL ON TABLE "public"."lesson_plans" FROM "anon";
 REVOKE ALL ON TABLE "public"."lesson_plans" FROM "authenticated";
 

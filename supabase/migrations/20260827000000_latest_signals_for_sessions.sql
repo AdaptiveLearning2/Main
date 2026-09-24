@@ -1,29 +1,6 @@
--- The live monitor's per-session reads, as one query for the whole class.
---
--- `class_live` used to call `_latest_session_signals` once per student, fanned
--- into a four-worker pool -- so a class of thirty cost 120 queries per poll,
--- and `Live.jsx` polls every second, which is how one poll came to take
--- longer than the interval between polls.
---
--- Widening the pool doesn't fix it: fanning the outer loop into the same pool
--- the work waits on deadlocks (the same trap `_admin_live_pool` was created
--- to avoid). The fix is asking for the right rows once, not more concurrency.
---
--- `DISTINCT ON (session_id) ... ORDER BY session_id, ts DESC` is the newest
--- row per session. Four of those unioned into one result means the whole
--- roster costs one round trip regardless of class size.
---
--- Rows come back as jsonb rather than four typed result sets, since a single
--- function can't return four different row shapes and four functions would
--- be four round trips again. `to_jsonb(t)` preserves every column, so adding
--- one to a signal table needs no change here.
---
--- `session_answers` carries `answered_at` rather than `ts`, and is ordered on
--- that. Included because the staleness check takes the newest of all four.
---
--- SECURITY INVOKER, granted to service_role only: the backend resolves who
--- may see a class before calling this, and the function itself makes no
--- access decision.
+-- Newest row per session from each of four tables, in one round trip for the
+-- whole class. Rows as jsonb, since one function cannot return four shapes.
+-- Makes no access decision: the backend checks the class first.
 
 CREATE OR REPLACE FUNCTION "public"."latest_signals_for_sessions"(
   "p_session_ids" "uuid"[]

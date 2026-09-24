@@ -1,38 +1,8 @@
--- Lesson-plan content for the three topics grades 1-3 actually see.
---
--- Run this in the Supabase dashboard SQL editor. It is deliberately NOT a
--- migration: `lesson_plans` is reference content the backend never mutates,
--- and seeding it is an editorial act rather than a schema change -- a
--- migration would also re-apply this text over any later dashboard edit
--- every time the database is rebuilt from scratch.
---
--- Idempotent: re-running updates existing rows rather than erroring, via
--- the (topic_name, grade_band) unique constraint from 20260827010000.
---
--- Scope. `LLM_topic_decider._allowed_topics()` keeps algebra, probability,
--- rationals, mean, median, mode and angle_relationships out of grade 1-3
--- sessions entirely, so `ordering`, `geometry` and `expressions` are the
--- only three topics an early-band student ever reaches. Those three are
--- seeded here across all four bands. The other seven are worth seeding at
--- `upper`/`advanced` (where students genuinely reach them) in a separate
--- pass; their `early`/`middle` rows are defense-in-depth padding and are
--- better left unseeded, which fails open to the existing difficulty/grade
--- heuristics rather than to nothing.
---
--- Band caveat, worth knowing before editing the `middle` text. `_grade_band()`
--- buckets 4th, 5th AND 6th grade together, so `middle` spans both "still
--- elementary" and "first pre-algebra year". Objectives below are written to
--- be safe for a 4th grader; where a skill only lands at the 6th-grade edge of
--- the band, that is stated in `notes` rather than assumed. Keeping
--- pre-algebra content away from a 4th grader is the code gates' job
--- (`_allowed_topics`, `_pick_scenario`), not this prose -- see CLAUDE.md.
---
--- Objectives are Common Core-based (thecorestandards.org progressions). If
--- this product ever targets a different framework, the text needs
--- re-sourcing; the band structure and topic priority still apply.
---
--- Kept well under lesson_plan_context._MAX_CONTEXT_CHARS (2000), which
--- truncates silently.
+-- Lesson plans for ordering, geometry and expressions across all four bands.
+-- Run in the dashboard SQL editor, not as a migration; idempotent.
+-- `middle` spans grades 4-6: write it safe for a 4th grader and state any
+-- 6th-grade-edge skill in `notes`. Common Core-based; keep under the
+-- 2000-char _MAX_CONTEXT_CHARS, which truncates silently.
 
 INSERT INTO "public"."lesson_plans" ("topic_name", "grade_band", "objectives", "notes")
 VALUES

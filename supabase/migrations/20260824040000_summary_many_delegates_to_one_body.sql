@@ -1,24 +1,6 @@
--- One body for the signal summary, fanned out, instead of two copies of it.
---
--- `student_signal_summary` and `student_signal_summary_many` computed the
--- same averages and counts from the same three tables, written out twice in
--- different shapes -- so every fix had to be made twice by hand. A previous
--- migration fixing `face_samples` had to apply the same one-line change
--- separately in each body.
---
--- `_many` is now a fan-out: unnest the ids, call the single-student function
--- once per id through a LATERAL join, and project its columns. The single
--- function keeps the whole definition of what a summary is.
---
--- Deliberately in this direction rather than the reverse, since the single
--- function calling `_many` would need to change `_many`'s return type --
--- meaning DROP + CREATE, a fresh ACL, and a window where deployed code reads
--- a column the database doesn't have yet. This way neither signature moves.
---
--- `p_include_heart` and `p_include_emotion` still gate inside the single
--- body, so an excluded channel is still never read -- the property the
--- facial opt-out rests on, which would be lost by projecting nulls out here
--- instead.
+-- student_signal_summary_many fans out to student_signal_summary via LATERAL,
+-- so the summary has one body. The include flags still gate inside it, so an
+-- excluded channel is never read.
 
 CREATE OR REPLACE FUNCTION "public"."student_signal_summary_many"(
   "p_student_ids" "uuid"[],
@@ -52,9 +34,7 @@ AS $$
     ids.sid, p_days, p_include_heart, p_include_emotion, p_timezone) s;
 $$;
 
--- Same signature, so CREATE OR REPLACE kept the existing ACL. Restated
--- anyway: a revoke that's assumed rather than written is the one nobody
--- notices is missing.
+-- ACL kept by CREATE OR REPLACE; restated.
 REVOKE ALL ON FUNCTION "public"."student_signal_summary_many"("uuid"[], integer, boolean, boolean, "text") FROM PUBLIC;
 REVOKE ALL ON FUNCTION "public"."student_signal_summary_many"("uuid"[], integer, boolean, boolean, "text") FROM "anon";
 REVOKE ALL ON FUNCTION "public"."student_signal_summary_many"("uuid"[], integer, boolean, boolean, "text") FROM "authenticated";

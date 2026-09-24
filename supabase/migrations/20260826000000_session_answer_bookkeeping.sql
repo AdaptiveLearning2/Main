@@ -1,22 +1,6 @@
--- Two small functions for the counters an answer moves.
---
--- bump_session_counters: `record_answer` used to bump
--- `sessions.questions_answered` by reading the row and writing back `read +
--- 1` -- the same lost-update race `record_topic_attempt` was written to
--- remove, left in place here: two answers landing together could both read
--- the same count and the second write would overwrite the first. Incrementing
--- the stored value removes the race rather than narrowing it, and drops a
--- round trip, since the caller already reads the session for the ownership
--- check.
---
--- session_answer_counts: what a closing session actually answered, as two
--- integers rather than every answer row. The Python version fetched up to
--- 2000 rows and summed them, which needed a cap and a fallback branch for
--- when the cap was hit. Counting in SQL has no cap to reason about.
---
--- Kept separate from the bump on purpose: they run at different times, on
--- different paths, and folding them together would put session-close logic
--- in the hot answer path.
+-- bump_session_counters increments the stored counts (no lost update).
+-- session_answer_counts counts a closing session's answers in SQL, uncapped.
+-- Separate so session-close logic stays out of the hot answer path.
 
 CREATE OR REPLACE FUNCTION "public"."bump_session_counters"(
   "p_session_id" "uuid",

@@ -1,22 +1,5 @@
--- `face_samples` counted a column with no producer, so it was always zero.
---
--- Both summary RPCs computed it as `count(f.attention)`, but `attention` has
--- never had a producer -- the column is always null -- so the count was
--- structurally 0 however much facial data existed. Every facial subtitle on
--- the teacher and parent dashboards quoted this number, reading "no face
--- data" directly beneath a Dominant Emotion the same query had just computed
--- correctly.
---
--- Now `count(f.emotion)`, matching what `rollup_signal_day` already counts
--- for the emotion channel, so the live summary and the one that outlives the
--- raw rows agree about what a facial sample is.
---
--- `avg(f.attention)` is left alone: it's also always null, but as a value
--- rather than a count, null correctly reads as "not measured" -- a zero
--- count incorrectly read as "nothing was recorded".
---
--- Same signatures, so CREATE OR REPLACE keeps the existing ACLs and creates
--- no overload; the revokes below are restated anyway.
+-- face_samples counts f.emotion (as rollup_signal_day does), not
+-- f.attention, which has no producer. Same signatures; revokes restated.
 
 CREATE OR REPLACE FUNCTION "public"."student_signal_summary"(
   "p_student_id" "uuid",
@@ -42,10 +25,7 @@ LANGUAGE "sql"
 STABLE
 AS $$
   WITH bounds AS (
-    -- Local midnight `p_days` days ago, expressed as the UTC instant it is --
-    -- matches the boundary `_school_timezone`/`_school_day` compute in
-    -- Python. An unrecognised zone name raises, so the RPC fails loudly
-    -- rather than silently using the wrong cutoff.
+    -- Local midnight `p_days` days ago. An unknown zone raises.
     SELECT (date_trunc('day', now() AT TIME ZONE p_timezone)
             - (GREATEST(p_days, 1) - 1) * interval '1 day') AT TIME ZONE p_timezone AS since
   ),
@@ -141,8 +121,6 @@ AS $$
   FROM ids;
 $$;
 
--- New signatures carry fresh ACLs, so the revokes are repeated rather than
--- inherited.
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer, boolean, boolean, "text") FROM PUBLIC;
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer, boolean, boolean, "text") FROM "anon";
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer, boolean, boolean, "text") FROM "authenticated";

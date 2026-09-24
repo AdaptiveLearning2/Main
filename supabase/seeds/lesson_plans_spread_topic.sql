@@ -1,31 +1,8 @@
--- Lesson-plan content for `spread`, the third topic added for grades 9-12.
---
--- Run this in the Supabase dashboard SQL editor. Like its siblings it is
--- deliberately NOT a migration: `lesson_plans` is reference content the backend
--- never mutates, and a migration would re-apply this text over any later
--- dashboard edit every time the database is rebuilt.
---
--- ONE ROW. `TOPIC_MIN_GRADE` puts this topic at grade 9, so only `advanced` is
--- reachable; an unseeded cell fails open to the heuristics, which is the right
--- outcome for a cell no student can land in.
---
--- BOTH COLUMNS ARE PROMPT TEXT -- `lesson_plan_context._lookup` appends `notes`
--- to `objectives` and sends the pair. Keep `notes` to constraints on the
--- question; anything addressed to a human belongs in these `--` comments.
---
--- AND THE MODEL DOES NOT CHOOSE THE DATA. `_choose_dataset` builds it from
--- deviation patterns whose variance is a perfect square, the generator renders
--- it into the prompt under DATA, and `shown_matches_scored` requires it back
--- verbatim. So this text must not invite the model to pick values, invent a
--- reading, or change one -- the same mistake the quadratics row had to have
--- rewritten out of it after review.
---
--- The population/sample distinction is the one thing here that is a scoring
--- hazard rather than a preference: sample standard deviation over n-1 is what
--- many high-school courses teach by default, so a question that says only
--- "standard deviation" has two defensible answers and scores one of them. The
--- generator requires the word "population" in the text and refuses without it;
--- this text reinforces it rather than being the only thing that asks.
+-- Lesson plan for `spread` (grade 9+, `advanced` only). Run in the dashboard
+-- SQL editor, not as a migration. Both columns are prompt text.
+-- The generator supplies the data, so never invite the model to pick or change
+-- values. "Population" must be explicit: sample SD is the other defensible
+-- answer.
 
 INSERT INTO "public"."lesson_plans" ("topic_name", "grade_band", "objectives", "notes")
 VALUES

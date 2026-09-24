@@ -1,12 +1,6 @@
--- Bucket the summary RPCs' cutoff by the school's timezone, not UTC. These
--- two RPCs back the same dashboard tiles as `_weekly_signal_report`, which
--- already buckets by school timezone -- left on a UTC cutoff, the per-day
--- chart and the headline average could disagree about whether a late-evening
--- session belongs to "this week".
---
--- The old signature must be dropped explicitly. CREATE OR REPLACE can't
--- change a parameter list, so without this the old version survives as an
--- overload, still granted and still cutting off in UTC.
+-- Summary RPC cutoff in the school's timezone, matching _weekly_signal_report.
+
+-- Drop the old signature, or it survives as a granted overload.
 DROP FUNCTION IF EXISTS "public"."student_signal_summary"("uuid", integer, boolean, boolean);
 DROP FUNCTION IF EXISTS "public"."student_signal_summary_many"("uuid"[], integer, boolean, boolean);
 
@@ -34,10 +28,7 @@ LANGUAGE "sql"
 STABLE
 AS $$
   WITH bounds AS (
-    -- Local midnight `p_days` days ago, expressed as the UTC instant it is --
-    -- matches the boundary `_school_timezone`/`_school_day` compute in
-    -- Python. An unrecognised zone name raises, so the RPC fails loudly
-    -- rather than silently using the wrong cutoff.
+    -- Local midnight `p_days` days ago, as in `_school_day`. An unknown zone raises.
     SELECT (date_trunc('day', now() AT TIME ZONE p_timezone)
             - (GREATEST(p_days, 1) - 1) * interval '1 day') AT TIME ZONE p_timezone AS since
   ),
@@ -133,8 +124,7 @@ AS $$
   FROM ids;
 $$;
 
--- New signatures carry fresh ACLs, so the revokes are repeated rather than
--- inherited.
+-- New signatures carry fresh ACLs.
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer, boolean, boolean, "text") FROM PUBLIC;
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer, boolean, boolean, "text") FROM "anon";
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer, boolean, boolean, "text") FROM "authenticated";

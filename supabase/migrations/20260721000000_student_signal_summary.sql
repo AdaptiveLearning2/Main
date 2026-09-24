@@ -1,21 +1,9 @@
--- Per-student signal averages, computed in Postgres instead of the app.
---
--- The parent dashboard needs four numbers per child (avg focus, avg stress,
--- avg face attention, session count). Pulling the raw signal rows into the
--- app to compute those costs ~10k rows per child on a busy week, on a page
--- that loads every visit. Postgres can return the same four numbers without
--- transferring any rows.
+-- Per-student signal averages computed in Postgres, so the parent dashboard
+-- does not pull ~10k raw rows per child.
 
 -- 1. Composite indexes -------------------------------------------------------
--- Every query here filters on user_id and ts together ("this student, since
--- this date"), so a composite index gives a single range scan instead of
--- combining two separate indexes.
---
--- Plain CREATE INDEX takes a brief lock that blocks writes while it builds.
--- CONCURRENTLY would avoid that but cannot run inside a migration's
--- transaction. Fine at current table sizes; if these tables grow large before
--- this reaches production, build the indexes manually with CONCURRENTLY
--- first and this will no-op.
+-- Every query filters on (user_id, ts). On a large table, build CONCURRENTLY
+-- by hand first; IF NOT EXISTS then no-ops.
 CREATE INDEX IF NOT EXISTS "cog_user_ts_idx"
   ON "public"."cognitive_signals" USING "btree" ("user_id", "ts" DESC);
 
@@ -26,10 +14,8 @@ CREATE INDEX IF NOT EXISTS "sessions_user_started_idx"
   ON "public"."sessions" USING "btree" ("user_id", "started_at" DESC);
 
 -- 2. Aggregate function ------------------------------------------------------
--- SECURITY INVOKER (the default), not DEFINER: the backend already does its
--- own relationship check before calling this, and INVOKER means RLS still
--- applies if a lower-privileged role ever reaches it. A DEFINER function here
--- would be a ready-made way to read any student's data.
+-- SECURITY INVOKER: the backend checks the relationship first, and RLS still
+-- applies if a lower-privileged role ever reaches it.
 CREATE OR REPLACE FUNCTION "public"."student_signal_summary"(
   "p_student_id" "uuid",
   "p_days" integer DEFAULT 7
@@ -50,11 +36,8 @@ AS $$
     SELECT now() - (GREATEST(p_days, 1) || ' days')::interval AS since
   ),
   cog AS (
-    -- count(c.focus), not count(*): a row with a NULL focus contributes
-    -- nothing to avg(). The pipeline deliberately writes rows with NULL
-    -- measurements when electrode contact is bad, keeping the row so the
-    -- session timeline stays intact -- counting those would report a nonzero
-    -- sample count beside a NULL average.
+    -- count(c.focus), not count(*): poor-contact rows carry NULL measurements
+    -- and must not count as samples beside a NULL average.
     SELECT avg(c.focus)      AS focus,
            avg(c.stress)     AS stress,
            avg(c.engagement) AS engagement,
@@ -79,9 +62,7 @@ AS $$
 $$;
 
 -- 3. Batch variant -----------------------------------------------------------
--- Same aggregate for many students in one round-trip, so a parent dashboard
--- with several children doesn't call the single-student function once per
--- child.
+-- Same aggregate for many students in one round-trip.
 CREATE OR REPLACE FUNCTION "public"."student_signal_summary_many"(
   "p_student_ids" "uuid"[],
   "p_days" integer DEFAULT 7
@@ -129,23 +110,13 @@ AS $$
   ) ses ON true;
 $$;
 
--- Lock execution down to the service role the backend uses.
---
--- REVOKE ... FROM PUBLIC alone is not enough: Supabase grants EXECUTE on new
--- public-schema functions to anon and authenticated by name, and an explicit
--- grant survives a revoke aimed at the PUBLIC pseudo-role -- both roles have
--- to be revoked individually.
---
--- SECURITY INVOKER means RLS would still filter such a caller to rows they
--- can already see, so this is defence in depth rather than the only thing
--- standing in the way -- but a function returning aggregates over a whole
--- table shouldn't be callable by anon.
+-- service_role only. anon/authenticated hold named EXECUTE grants that a
+-- revoke FROM PUBLIC does not remove, so each is revoked by name.
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer) FROM "anon";
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer) FROM "authenticated";
 GRANT EXECUTE ON FUNCTION "public"."student_signal_summary"("uuid", integer) TO "service_role";
 
--- Same treatment for the batch variant.
 REVOKE ALL ON FUNCTION "public"."student_signal_summary_many"("uuid"[], integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION "public"."student_signal_summary_many"("uuid"[], integer) FROM "anon";
 REVOKE ALL ON FUNCTION "public"."student_signal_summary_many"("uuid"[], integer) FROM "authenticated";

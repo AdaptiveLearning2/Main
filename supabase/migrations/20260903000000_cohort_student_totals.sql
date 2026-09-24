@@ -1,26 +1,7 @@
--- The per-student half of the cohort panels, read from the same table as the
--- trend beside it.
---
--- It used to come from `student_signal_summary_many`, which reads the
--- per-sample tables. That is the right source for the parent dashboard and the
--- weekly report, and the wrong one *here* -- because this roster sits directly
--- beside a chart built on `signal_daily_rollup`, and the two age differently.
--- `expire_signal_rows` deletes the per-sample rows at the end of a school year
--- and leaves the rollup standing, so the panel pair would have shown a full
--- term of class averages above a table reading "No sensor" for every student in
--- it. Two true readings of one class, on one screen, disagreeing -- and the
--- disagreement arrives on a fixed date rather than when anything breaks.
---
--- So this is the same aggregation as `class_signal_daily_trend`, grouped by
--- student rather than by day. Sharing the source is the whole point: the two
--- panels now cannot answer differently, because there is only one set of rows
--- under both.
---
--- SECURITY INVOKER and service_role only, and consent-agnostic for the same
--- reason its sibling is: the backend resolves who owns the class and buckets
--- the roster by consent before calling, and a mixed roster passed under one
--- flag pair would read a declining student's rows under a classmate's
--- permission.
+-- Per-student half of the cohort panels: class_signal_daily_trend's
+-- aggregation grouped by student, on the same rollup so the two panels cannot
+-- disagree after expiry. Like its sibling, the caller must bucket the roster
+-- by consent flag pair.
 CREATE OR REPLACE FUNCTION "public"."class_signal_student_totals"(
   "p_student_ids" "uuid"[],
   "p_days" integer DEFAULT 14,
@@ -45,16 +26,8 @@ SECURITY INVOKER
 SET "search_path" TO 'public'
 AS $$
   SELECT "r"."user_id",
-         -- Weighted on `trusted_sample_count`, identically to the trend: that
-         -- count is already the denominator of every stored average, since
-         -- `rollup_signal_day` writes `avg(...)` and Postgres `avg()` skips
-         -- nulls. A day that measured nothing has a real count and a null
-         -- average, so the FILTER keeps it out of the denominator rather than
-         -- letting it pull the student toward zero.
-         --
-         -- No channel filter is needed on these five: a metric column is null
-         -- on every row but its own channel's, so the FILTER already restricts
-         -- each sum to the rows that carry it.
+         -- Weighted as in the trend. A metric is null outside its own channel,
+         -- so the FILTER already restricts each sum.
          sum("r"."avg_focus" * "r"."trusted_sample_count")
            / NULLIF(sum("r"."trusted_sample_count")
                       FILTER (WHERE "r"."avg_focus" IS NOT NULL), 0) AS "avg_focus",
@@ -70,20 +43,14 @@ AS $$
          sum("r"."avg_rmssd_ms" * "r"."trusted_sample_count")
            / NULLIF(sum("r"."trusted_sample_count")
                       FILTER (WHERE "r"."avg_rmssd_ms" IS NOT NULL), 0) AS "avg_rmssd_ms",
-         -- The counts *do* need the channel, since `trusted_sample_count` is
-         -- per row whatever the row measures. These are what tell a tile
-         -- "calibrating" (readings arrived, none usable) from "no sensor".
+         -- Counts need the channel filter; they tell "calibrating" from "no sensor".
          COALESCE(sum("r"."trusted_sample_count")
                     FILTER (WHERE "r"."channel" = 'cognitive'), 0)::bigint AS "cognitive_samples",
          COALESCE(sum("r"."trusted_sample_count")
                     FILTER (WHERE "r"."channel" = 'heart'), 0)::bigint     AS "heart_samples",
          COALESCE(sum("r"."trusted_sample_count")
                     FILTER (WHERE "r"."channel" = 'emotion'), 0)::bigint   AS "emotion_samples",
-         -- Days rather than sessions, and that is deliberate. A session count
-         -- would have to come from `sessions`, which is a second table with a
-         -- different lifetime -- exactly the split this function exists to
-         -- remove. Days recorded comes from the rows the averages were computed
-         -- over, so the whole row survives expiry together.
+         -- Days, not sessions: `sessions` has a different lifetime.
          count(DISTINCT "r"."day")::bigint                                 AS "days_recorded"
     FROM "public"."signal_daily_rollup" "r"
    WHERE "r"."user_id" = ANY("p_student_ids")

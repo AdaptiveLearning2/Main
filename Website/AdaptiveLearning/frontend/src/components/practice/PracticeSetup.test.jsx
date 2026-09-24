@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -140,7 +141,8 @@ it('says a refused topics read was refused, not that the backend is down', async
 
 it('starts a student with no grade at the grade the backend defaults to', async () => {
   // Read from the backend, so the two defaults cannot drift apart again.
-  const py = readFileSync(resolve(process.cwd(), '..', 'backend', 'grade_levels.py'), 'utf8')
+  const backend = resolve(fileURLToPath(import.meta.url), '..', '..', '..', '..', '..', 'backend')
+  const py = readFileSync(resolve(backend, 'grade_levels.py'), 'utf8')
   const backendDefault = py.match(/^DEFAULT_GRADE = "([^"]+)"/m)?.[1]
   expect(backendDefault, 'DEFAULT_GRADE not found -- this check is inert').toBeTruthy()
   overrideApi('/api/profile/me', () => ({ grade_level: null }))

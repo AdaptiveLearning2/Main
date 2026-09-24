@@ -13,8 +13,9 @@ import pytest  # noqa: E402
 import chart_render as cr  # noqa: E402
 
 # tests/ -> backend/ -> AdaptiveLearning/ -> frontend/
-_JSX = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages"
-        / "teacher" / "SessionReview.jsx")
+_SRC = Path(__file__).resolve().parents[2] / "frontend" / "src"
+_JSX = _SRC / "pages" / "teacher" / "SessionReview.jsx"
+_EMOTIONS = _SRC / "lib" / "emotions.js"
 
 
 def _parses(svg: str):
@@ -105,24 +106,31 @@ def test_an_empty_line_chart_says_so():
 
 # ── the drift check ─────────────────────────────────────────────────────────
 
-def _jsx_map(name: str) -> dict:
-    source = _JSX.read_text(encoding="utf-8")
+def _jsx_map(name: str, path: Path) -> dict:
+    source = path.read_text(encoding="utf-8")
     block = re.search(rf"const {name} = \{{(.*?)\}}", source, re.S)
-    assert block, f"{name} not found in {_JSX.name} -- the frontend moved"
+    assert block, f"{name} not found in {path.name} -- the frontend moved"
     return dict(re.findall(r"(\w+):\s*'(#[0-9a-fA-F]{3,8})'", block.group(1)))
 
 
-@pytest.mark.parametrize("name,mapping", [
-    ("EMOTION_COLOURS", "EMOTION_COLOURS"),
-    ("STRESS_COLOURS", "STRESS_COLOURS"),
+@pytest.mark.parametrize("name,path", [
+    ("EMOTION_COLOURS", _EMOTIONS),
+    ("STRESS_COLOURS", _JSX),
 ])
-def test_the_archive_palette_matches_the_live_charts(name, mapping):
+def test_the_archive_palette_matches_the_live_charts(name, path):
     """The archive is a re-render, so nothing but a test enforces this."""
-    assert _jsx_map(name) == getattr(cr, mapping), (
-        f"{name} differs between SessionReview.jsx and chart_render.py. These "
+    assert _jsx_map(name, path) == getattr(cr, name), (
+        f"{name} differs between {path.name} and chart_render.py. These "
         "are two hand-kept copies of one palette; update both or the archive "
         "stops meaning what the parent saw."
     )
+
+
+def test_an_unknown_emotion_is_the_same_grey_in_the_archive_and_the_app():
+    source = _EMOTIONS.read_text(encoding="utf-8")
+    colour, = re.findall(r"UNKNOWN_EMOTION_COLOUR = '(#[0-9a-fA-F]{3,8})'", source)
+    assert colour == cr.UNKNOWN_COLOUR
+    assert colour not in cr.EMOTION_COLOURS.values()
 
 
 def _jsx_line_strokes(path: Path) -> dict:

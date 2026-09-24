@@ -6,6 +6,7 @@ import { LineChart, Line, YAxis } from 'recharts'
 import AccessibleChart from '../../components/charts/AccessibleChart'
 import { asPercent } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
+import { emotionEmoji } from '../../lib/emotions'
 import { STALE_AFTER_S, eegWeak, formatAge } from '../../lib/signalAge'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
@@ -21,10 +22,6 @@ const SOURCE_LABEL = {
   rppg:        'Heart · camera',
 }
 
-const EMOJI = {
-  happy: '😀', neutral: '😐', confused: '😕', frustrated: '😤',
-  sad: '😢', surprised: '😮', angry: '😠'
-}
 
 function Gauge({ label, value, color = 'bg-violet-500' }) {
   const pct = value == null ? 0 : Math.round(Math.max(0, Math.min(1, value)) * 100)
@@ -131,7 +128,7 @@ function StudentCard({ student, history, now }) {
 
       {face?.emotion && (
         <div className="flex items-center gap-2 mb-4 text-sm">
-          <span className="text-2xl">{EMOJI[face.emotion] || '🙂'}</span>
+          {emotionEmoji(face.emotion) && <span className="text-2xl">{emotionEmoji(face.emotion)}</span>}
           <span className="capitalize font-bold text-gray-700 dark:text-gray-300">{face.emotion}</span>
         </div>
       )}

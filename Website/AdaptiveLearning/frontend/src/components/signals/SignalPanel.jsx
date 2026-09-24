@@ -1,6 +1,7 @@
 import { Activity, Brain, Heart, Radio, Sparkles, Zap } from 'lucide-react'
 import ScaleNote from './ScaleNote'
 import { combineScales } from '../../lib/scoreScale'
+import { EMOTION_COLOURS, UNKNOWN_EMOTION_COLOUR } from '../../lib/emotions'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   PieChart, Pie, Cell, Legend,
@@ -42,13 +43,6 @@ export function offLabel({ on, revokedAt, consentRetrieved, samples }) {
  */
 export function valueOrReason(value, reason) {
   return (value && value !== 'N/A') ? value : offLabel(reason)
-}
-
-// Fixed per label, not by slice order, so a colour always means one emotion.
-const EMOTION_COLOURS = {
-  happy: '#10b981', neutral: '#94a3b8', surprise: '#f59e0b',
-  sad: '#6366f1', anger: '#ef4444', fear: '#8b5cf6',
-  disgust: '#14b8a6', contempt: '#f97316',
 }
 
 // muse_optics / muse_ppg / rppg are storage values, not display strings.
@@ -482,7 +476,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
                   <Pie data={emotionSlices} dataKey="value" nameKey="name"
                        innerRadius="45%" outerRadius="75%" paddingAngle={2}>
                     {emotionSlices.map(slice => (
-                      <Cell key={slice.name} fill={EMOTION_COLOURS[slice.name] || '#94a3b8'} />
+                      <Cell key={slice.name} fill={EMOTION_COLOURS[slice.name] || UNKNOWN_EMOTION_COLOUR} />
                     ))}
                   </Pie>
                   <ChartTooltip formatter={(v, n) => [`${v} samples`, n]} />

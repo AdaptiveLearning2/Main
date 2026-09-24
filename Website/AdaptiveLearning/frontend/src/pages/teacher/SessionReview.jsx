@@ -12,15 +12,9 @@ import SeriesFilter from '../../components/charts/SeriesFilter'
 import { useSeriesFilter } from '../../hooks/useSeriesFilter'
 import { asPercent, sliceSpec } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
+import { EMOTION_COLOURS, UNKNOWN_EMOTION_COLOUR, emotionEmoji } from '../../lib/emotions'
 import QuestionFigure from '../../components/questions/QuestionFigure'
 import CCSSBadge from '../../components/questions/CCSSBadge'
-
-// Fixed per FER+ label, so an emotion keeps its colour across sessions.
-const EMOTION_COLOURS = {
-  neutral: '#94a3b8', happy: '#10b981', surprise: '#38bdf8',
-  sad: '#6366f1', angry: '#f43f5e', disgust: '#84cc16',
-  fear: '#a855f7', contempt: '#f59e0b',
-}
 
 // calibrating/unknown are shown, not dropped, so categorisation isn't overstated.
 const STRESS_COLOURS = {
@@ -28,7 +22,6 @@ const STRESS_COLOURS = {
   calibrating: '#cbd5e1', unknown: '#94a3b8',
 }
 
-const EMOJI = { happy: '😀', neutral: '😐', confused: '😕', frustrated: '😤', sad: '😢', surprised: '😮', angry: '😠' }
 
 function fmtTime(ms) {
   if (!Number.isFinite(ms)) return ''
@@ -504,7 +497,10 @@ function SessionReviewBody({ sessionId }) {
             {ribbon.map((r, i) => (
               <div key={i} title={`${fmtTime(r.t)} — ${r.emotion || 'unknown'}`}
                    className="flex flex-col items-center text-xs flex-shrink-0 w-14">
-                <span className="text-2xl">{EMOJI[r.emotion] || '🙂'}</span>
+                {emotionEmoji(r.emotion)
+                  ? <span className="text-2xl">{emotionEmoji(r.emotion)}</span>
+                  : <span className="h-8 flex items-center text-[10px] font-bold text-gray-700 dark:text-gray-300">
+                      {r.emotion || 'unknown'}</span>}
                 <span className="text-[9px] text-gray-600 mt-0.5 dark:text-gray-400">{fmtTime(r.t)}</span>
               </div>
             ))}
@@ -532,7 +528,7 @@ function SessionReviewBody({ sessionId }) {
                     <Pie data={emotionSlices} dataKey="value" nameKey="name"
                          innerRadius="45%" outerRadius="75%" paddingAngle={2}>
                       {emotionSlices.map(sl => (
-                        <Cell key={sl.name} fill={EMOTION_COLOURS[sl.name] || '#94a3b8'} />
+                        <Cell key={sl.name} fill={EMOTION_COLOURS[sl.name] || UNKNOWN_EMOTION_COLOUR} />
                       ))}
                     </Pie>
                     <ChartTooltip formatter={(v, n) => [`${v} samples`, n]} />

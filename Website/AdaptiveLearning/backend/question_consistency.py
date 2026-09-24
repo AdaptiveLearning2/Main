@@ -95,14 +95,17 @@ def _label_pattern(label):
 def counts_mismatch(question_text, counts):
     """Reason the counts in the text differ from the scored `counts`, or None.
 
-    Each "<n> <up to two words> <label>" must be that label's count, and the text's numbers must
-    be exactly the counts plus at most their total. No digits at all ("six red") fails open.
+    Each "<n> <up to two words> <label>" or "<label>[:] <n>" must be that label's count, and the
+    text's numbers must be exactly the counts plus at most their total. No digits ("six red") fails open.
     """
     if not isinstance(question_text, str) or not isinstance(counts, dict) or not counts:
         return None
     for label, count in counts.items():
-        pattern = rf"\b(\d+)\s+(?:[A-Za-z-]+\s+){{0,2}}?{_label_pattern(label)}"
-        shown = {int(n) for n in re.findall(pattern, question_text, re.I)}
+        name = _label_pattern(label)
+        # Both readings: in "blue 4 and green 2" green's "4 and green" is blue's, and its own is after.
+        before = rf"\b(\d+)\s+(?:[A-Za-z-]+\s+){{0,2}}?{name}"
+        after = rf"{name}\s*[:=]?\s*(\d+)\b"
+        shown = {int(n) for p in (before, after) for n in re.findall(p, question_text, re.I)}
         if shown and count not in shown:
             return (f"the question gives {label!r} as {sorted(shown)} but {count} is "
                     f"scored -- the student would be marked against counts they were not given")
@@ -131,7 +134,8 @@ def _states_total(text, total):
     """True if `total` reads as the whole bag ("a bag of 12", "12 marbles in a bag: ...", "12 in total")."""
     before = rf"\b(?:of|contains|holds|has|with)\s+{total}\b"
     in_total = rf"\b{total}\s+(?:[A-Za-z-]+\s+){{0,2}}?(?:in\s+(?:all|total)|altogether)\b"
-    before_list = rf"\b{total}\s+(?:[A-Za-z-]+\s+){{0,4}}?[A-Za-z-]+\s*:\s*\d"
+    # The list may lead with its label: "12 marbles in a bag: red 6, ..." or "...: red: 6, ...".
+    before_list = rf"\b{total}\s+(?:[A-Za-z-]+\s+){{0,4}}?[A-Za-z-]+\s*:\s*(?:[A-Za-z-]+[:=]?\s+){{0,2}}\d"
     return any(re.search(p, text, re.I) for p in (before, in_total, before_list))
 
 

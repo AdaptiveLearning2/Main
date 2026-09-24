@@ -26,11 +26,12 @@ let authName = 'Ada Lovelace'
 vi.mock('../../components/consent/ParentRestoredBanner', () => ({ default: () => null }))
 vi.mock('../../components/consent/ParentLinkedBanner', () => ({ default: () => null }))
 
-import { mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
+import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
 import Dashboard from './Dashboard'
 
 const STATS = { total_questions: 40, total_correct: 30, current_streak: 2, best_streak: 9 }
 const BREAKDOWN = '/api/students/stu-1/topic-breakdown'
+const SESSIONS = '/api/sessions?limit=4'
 
 const topic = (topic_name, accuracy, attempted_questions) => ({
   topic_name, accuracy, attempted_questions, correct_questions: 0,
@@ -43,7 +44,9 @@ beforeEach(() => {
   navigate.mockReset()
   mockApi({
     '/api/stats/me': () => STATS,
-    '/api/sessions': () => [],
+    // Keyed with the query string: the router matches exactly, so a page that
+    // stopped asking for four rows would hit no route and fail loudly here.
+    [SESSIONS]: () => ({ sessions: [], total: 0, truncated: false }),
     '/api/profile/me': () => ({ practice_reminders: false }),
     [BREAKDOWN]: () => [
       topic('algebra', 30, 10),
@@ -173,4 +176,40 @@ it('greets a nameless account without addressing it as nobody', async () => {
   authName = null
   draw()
   expect(await screen.findByText(/there/)).toBeInTheDocument()
+})
+
+// ── the recent-sessions panel ────────────────────────────────────────────
+//
+// Four rows are shown, so four are asked for: the list is capped server-side
+// and counted exactly, and a dashboard load paying for two hundred rows to
+// draw four is the cost the limit removes. And a read that did not land is
+// not "No sessions yet" -- that sentence is a claim about a child's week.
+
+describe('the recent-sessions panel', () => {
+  it('asks for the four rows it shows and no more', async () => {
+    draw()
+
+    await screen.findByText(/no sessions yet/i)
+    expect(apiFetch).toHaveBeenCalledWith(SESSIONS)
+    expect(apiFetch).not.toHaveBeenCalledWith('/api/sessions')
+  })
+
+  it.each([
+    ['a rejected read', () => { throw apiError(500, 'down') }],
+    ['a body it does not read', () => [{ id: 's1', started_at: '2026-09-22T10:00:00Z' }]],
+  ])('says %s could not be loaded, rather than that there are none', async (_name, handler) => {
+    mockApi({
+      '/api/stats/me': () => STATS,
+      [SESSIONS]: handler,
+      '/api/profile/me': () => ({ practice_reminders: true }),
+      [BREAKDOWN]: () => [],
+    })
+    draw()
+
+    expect(await screen.findByText(/sessions couldn.t be loaded/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no sessions yet/i)).not.toBeInTheDocument()
+    // Reminders are on, and still no nudge: "you have not practised today"
+    // from a read that never landed is the same false claim, louder.
+    expect(screen.queryByText(/not practised today/i)).not.toBeInTheDocument()
+  })
 })

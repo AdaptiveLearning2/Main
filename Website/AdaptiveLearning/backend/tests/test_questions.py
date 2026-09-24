@@ -187,6 +187,58 @@ def test_the_list_passes_its_limit_through(_questions):
     assert c.limits == [5]
 
 
+@pytest.mark.parametrize("asked,sent", [
+    (10_000_000, 1000),   # the whole bank, from an unauthenticated caller
+    (1001, 1000),         # one past the ceiling
+    (1000, 1000),         # the largest a real surface asks for, untouched
+    (0, 1),
+    (-5, 1),
+])
+def test_the_list_clamps_the_limit_it_was_handed(_questions, asked, sent):
+    """The leaderboard's rule on the one route with no caller to resolve.
+
+    Asserted on what the *query* was given, not on the rows: the fake echoes
+    back whatever it holds, so an unclamped limit and a clamped one return the
+    same list here (rule 4).
+
+    The floor matters for its own reason -- PostgREST would pass a negative
+    straight through to Postgres, which errors on it, so an unauthenticated
+    caller could turn `?limit=-1` into a 500.
+    """
+    c = _questions(rows=[])
+
+    main.get_questions(limit=asked)
+
+    assert c.limits == [sent], f"asked for {asked}, query received {c.limits}"
+
+
+def test_the_cache_is_keyed_on_the_clamped_limit(_questions):
+    """Or the clamp bounds each entry's size and leaves the sweep intact:
+    9999 and 10000 would be two keys holding one identical copy of the bank."""
+    c = _questions(rows=[{"id": "q1"}])
+
+    main.get_questions(limit=9999)
+    main.get_questions(limit=10_000)
+
+    assert len(c.selects) == 1, (
+        "two limits that clamp to the same value took two cache entries")
+
+
+@pytest.mark.parametrize("field", ["subject", "difficulty"])
+def test_an_empty_filter_shares_the_entry_of_no_filter(_questions, field):
+    """`?subject=` filters on nothing, exactly as leaving it out does, so the
+    two must be one entry -- the key has to be built from what decides the
+    query, or the cache holds two copies of one answer."""
+    c = _questions(rows=[{"id": "q1"}])
+
+    main.get_questions(limit=100, **{field: ""})
+    main.get_questions(limit=100)
+
+    assert len(c.selects) == 1, (
+        f"an empty {field} and no {field} took two cache entries")
+    assert c.filters == [], "an empty filter reached the query as a real one"
+
+
 def test_the_list_returns_an_empty_list_rather_than_none(_questions):
     """`res.data or []` -- the page maps over this result."""
     _questions(rows=None)
@@ -260,8 +312,12 @@ def test_the_count_endpoint_is_never_cached(_questions):
 # from query params, so without a bound a sweep of distinct
 # (limit, subject, difficulty) combinations plants one permanent entry per
 # combination. These test `_TTLCache` directly rather than through
-# `get_questions`, since exercising the real 256-entry cap through the
-# endpoint would mean 257 fake Supabase round trips for no extra coverage.
+# `get_questions`, since exercising the real cap through the endpoint would
+# mean one fake Supabase round trip per entry for no extra coverage.
+#
+# The bound is on the number of entries and says nothing about their size,
+# which is the other half and lives with the clamp above: this cache held 256
+# copies of the whole question bank while every assertion here passed.
 
 def test_the_cache_evicts_the_least_recently_used_entry_once_full():
     cache = main._TTLCache(ttl=60.0, max_size=2)

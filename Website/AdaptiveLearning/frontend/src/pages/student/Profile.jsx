@@ -5,6 +5,7 @@ import ConsentChannels from '../../components/consent/ConsentChannels'
 import Toggle from '../../components/ui/Toggle'
 import { useAuth } from '../../context/AuthContext'
 import { apiFetch } from '../../lib/api'
+import { fetchSessionList } from '../../lib/session'
 import { toast } from 'sonner'
 
 // The three learning preferences, read off a profile the backend returned.
@@ -25,7 +26,11 @@ export default function Profile() {
   const { user, displayName, refreshProfile, signOut } = useAuth()
   const [tab, setTab]       = useState('Overview')
   const [stats, setStats]   = useState(null)
-  const [sessions, setSessions] = useState([])
+  // The backend's count of every session, never the length of a list it sent:
+  // that list is capped, so its length is a claim that the student did less.
+  // `null` for a failed read *and* for a count that did not come back -- the
+  // tile has nothing true to say in either case.
+  const [sessionTotal, setSessionTotal] = useState(null)
   const [copied, setCopied] = useState(false)
   const [profile, setProfile] = useState(null)
   const [editName, setEditName] = useState('')
@@ -37,21 +42,19 @@ export default function Profile() {
   // controls don't render defaults as if the student had chosen them.
   const [prefs, setPrefs] = useState(null)
   const [prefsBusy, setPrefsBusy] = useState(false)
-  const [sessionsFailed, setSessionsFailed] = useState(false)
 
   useEffect(() => {
     Promise.all([
       apiFetch('/api/stats/me')
         .then(s => (s?.retrieved === false ? null : s))
         .catch(() => null),
-      // `null` (fetch failed) is kept separate from `[]` (no sessions yet),
-      // so a failed request doesn't render the same as "no sessions".
-      apiFetch('/api/sessions').catch(() => null),
+      // One row: the page shows only the count, and the count comes back
+      // beside the rows whatever the limit.
+      fetchSessionList({ limit: 1 }).then(r => r.total).catch(() => null),
       apiFetch('/api/profile/me').catch(() => null),
-    ]).then(([s, sess, p]) => {
+    ]).then(([s, total, p]) => {
       setStats(s)
-      setSessionsFailed(sess === null)
-      setSessions(sess || [])
+      setSessionTotal(total)
       setProfile(p)
       setEditName(p?.display_name || '')
       setEditGrade(p?.grade_level || '')
@@ -174,7 +177,7 @@ export default function Profile() {
                   {[
                     // Show an em dash if the read failed, but 0 if it succeeded
                     // with no data -- don't report a network error as "you did nothing".
-                    { label: 'Total Sessions',     value: sessionsFailed ? '—' : sessions.length,        icon: '📋' },
+                    { label: 'Total Sessions',     value: sessionTotal ?? '—',                           icon: '📋' },
                     { label: 'Questions Answered', value: stats ? stats.total_questions ?? 0 : '—',      icon: '📝' },
                     { label: 'Correct Answers',    value: stats ? stats.total_correct ?? 0 : '—',        icon: '✅' },
                     { label: 'Best Streak',        value: stats ? stats.best_streak ?? 0 : '—',          icon: '🔥' },

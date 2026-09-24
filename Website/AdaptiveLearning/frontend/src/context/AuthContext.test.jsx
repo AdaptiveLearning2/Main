@@ -97,6 +97,24 @@ it('runs the sign-out tasks while the token still exists', async () => {
   }
 })
 
+it('joins a sign-out already in progress rather than starting a second', async () => {
+  // A slow task leaves the button live; a second click must not rerun the tasks.
+  let release
+  const task = vi.fn(() => new Promise(r => { release = r }))
+  const off = onSignOut(task)
+  try {
+    renderAuth()
+    const button = await screen.findByText('Sign out')
+    await userEvent.click(button)
+    await userEvent.click(button)
+    release()
+    await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
+    expect(task).toHaveBeenCalledTimes(1)
+  } finally {
+    off()
+  }
+})
+
 it('clears it on a sign-out this tab did not perform', async () => {
   // An expired refresh token or another tab's sign-out arrives as an auth event.
   renderAuth()

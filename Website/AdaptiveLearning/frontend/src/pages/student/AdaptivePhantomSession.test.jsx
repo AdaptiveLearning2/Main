@@ -77,3 +77,17 @@ it('ends the session before sign-out takes the token, and only once', async () =
   unmount()
   expect(endSession).toHaveBeenCalledTimes(1)
 })
+
+
+it('does not retry a failed sign-out end on unmount, when the token is gone', async () => {
+  // The retry could only 401, and it showed the failure message a second time.
+  const { unmount } = render(<Adaptive />)
+  await userEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+
+  endSession.mockResolvedValueOnce(false)
+  await runSignOutTasks()
+  unmount()
+
+  expect(endSession).toHaveBeenCalledTimes(1)
+})

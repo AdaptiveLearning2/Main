@@ -257,10 +257,11 @@ export default function Adaptive() {
   }, [])
 
   // Sign-out clears the token before unmount, so the cleanup above would 401.
-  // End the session now; clearing the ref stops a second, tokenless `/end`.
+  // This is the last attempt: the ref is cleared first, so a failure is not retried tokenless.
   useEffect(() => onSignOut(async () => {
     const id = sessionIdRef.current
-    if (id && await endSession(id)) sessionIdRef.current = null
+    sessionIdRef.current = null
+    if (id) await endSession(id)
   }), [])
 
   // Unmount: stop the 30s connect safety timer and drop the global session id.

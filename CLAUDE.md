@@ -1512,7 +1512,8 @@ a layer, and naming a layer sends someone to inspect it — so a teacher whose Q
 went and checked a server that had answered perfectly well. It now picks the sentence from `error.status`,
 which `apiFetch` attaches: **403** is "you don't have access to X" and gets **no Try again button**, since
 retrying a refusal cannot work and offering the button is part of the false claim; **401** says the session
-expired and keeps it; **anything else, including an error carrying no `status` at all**, keeps the original
+expired and keeps it; **429** says too many requests and keeps it — a school behind one address hits the address
+budget, not an outage; **anything else, including an error carrying no `status` at all**, keeps the original
 wording, because a dropped connection genuinely is an unreachable backend. Callers pass nothing; a page wires
 it by holding the error in the state it already had (`setFailed(e)` — every read of that flag was a
 truthiness check).

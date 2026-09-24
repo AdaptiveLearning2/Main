@@ -24,7 +24,7 @@ export default function PracticeSetup({ onStart }) {
   // `undefined` until the profile is read; the topic rows follow it (`useGradeTopicsState`).
   const [grade, setGrade] = useState(undefined)
   const [topicsAttempt, setTopicsAttempt] = useState(0)
-  const { rows: topics, failed: topicsFailed } = useGradeTopicsState(grade, topicsAttempt)
+  const { rows: topics, error: topicsError } = useGradeTopicsState(grade, topicsAttempt)
   const [selectedTopics, setSelectedTopics] = useState([])
   const [difficulty, setDifficulty] = useState('medium')
   const [mode, setMode] = useState('test')
@@ -39,8 +39,8 @@ export default function PracticeSetup({ onStart }) {
     setFailed(false)
     try {
       const profile = await apiFetch('/api/profile/me')
-      // 5th Grade, as `start_practice_session` defaults it.
-      setGrade(profile?.grade_level || '5th Grade')
+      // The backend's `grade_levels.DEFAULT_GRADE`, which the test reads.
+      setGrade(profile?.grade_level || '1st Grade')
       // Best-effort: a failed history read shouldn't block starting a session.
       apiFetch('/api/practice-sessions').then(setHistory).catch(() => {})
     } catch (e) {
@@ -101,8 +101,9 @@ export default function PracticeSetup({ onStart }) {
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 space-y-6">
         <div>
           <h3 className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3">Topics</h3>
-          {topicsFailed && <LoadError what="topics" onRetry={() => setTopicsAttempt(a => a + 1)} />}
-          {!topicsFailed && topics === null && (
+          {topicsError && <LoadError what="topics" error={topicsError}
+                                     onRetry={() => setTopicsAttempt(a => a + 1)} />}
+          {!topicsError && topics === null && (
             <p className="text-sm text-gray-600 dark:text-gray-400">Loading topics…</p>
           )}
           <div className="flex flex-wrap gap-2">

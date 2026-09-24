@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -125,6 +127,27 @@ it('says the topics could not be loaded, and a retry asks again', async () => {
 
   fail = false
   await userEvent.click(screen.getByRole('button', { name: /try again/i }))
+  expect(await screen.findByRole('button', { name: /ordering/i })).toBeEnabled()
+})
+
+it('says a refused topics read was refused, not that the backend is down', async () => {
+  overrideApi('/api/topics?grade=3rd%20Grade', () => { throw apiError(429, 'slow down') }, 'GET')
+  draw()
+
+  const box = await screen.findByText(/too many requests/i)
+  expect(box).not.toHaveTextContent(/backend/i)
+})
+
+it('starts a student with no grade at the grade the backend defaults to', async () => {
+  // Read from the backend, so the two defaults cannot drift apart again.
+  const py = readFileSync(resolve(process.cwd(), '..', 'backend', 'grade_levels.py'), 'utf8')
+  const backendDefault = py.match(/^DEFAULT_GRADE = "([^"]+)"/m)?.[1]
+  expect(backendDefault, 'DEFAULT_GRADE not found -- this check is inert').toBeTruthy()
+  overrideApi('/api/profile/me', () => ({ grade_level: null }))
+  overrideApi(`/api/topics?grade=${encodeURIComponent(backendDefault)}`, () => YOUNG_TOPICS, 'GET')
+  draw()
+
+  expect(await screen.findByLabelText(/grade/i)).toHaveValue(backendDefault)
   expect(await screen.findByRole('button', { name: /ordering/i })).toBeEnabled()
 })
 

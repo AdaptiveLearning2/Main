@@ -21,6 +21,9 @@ _NAMED_GRADES = {
 # Outside this range a number is not a grade ("2026 cohort").
 _MIN_GRADE, _MAX_GRADE = 0, 13
 
+# What a student or class with no grade is served, everywhere: the same grade 1 as an unreadable one.
+DEFAULT_GRADE = "1st Grade"
+
 
 def grade_number(grade):
     """The numeric school grade in `grade`, or None if it cannot be read.

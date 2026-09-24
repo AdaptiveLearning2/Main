@@ -77,6 +77,16 @@ def test_the_question_is_generated_for_the_caller_and_their_session(monkeypatch)
     assert seen[0][2] == "mine"
 
 
+def test_no_grade_is_generated_at_the_grade_the_topic_list_shows(monkeypatch):
+    """No grade and no class: the decider gets the grade `/api/topics` answers for, with no grade."""
+    seen = []
+    monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
+                        lambda *a, **_k: seen.append(a) or {"question_text": "2+2"})
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
+    main.generate_question(request=None, grade=None, class_id=None, bias=0, session_id=None)
+    assert main.list_topics(grade=seen[0][1]) == main.list_topics(grade=None)
+
+
 def test_another_students_session_is_refused_before_anything_is_read(monkeypatch):
     from test_access_control import _FakeSupabase
     monkeypatch.setattr(main, "supabase", _FakeSupabase(

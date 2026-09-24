@@ -2288,7 +2288,7 @@ def generate_question(
     except ValueError as e:
         raise HTTPException(422, str(e))
 
-    effective_grade = grade or "5th Grade"
+    effective_grade = grade or grade_levels.DEFAULT_GRADE
     if class_id:
         # Not `_row_or_404`: an unknown class falls back to the default grade.
         try:
@@ -2373,7 +2373,7 @@ def start_session(payload: StartSessionRequest, request: Request):
 
     # Pre-warm the queue at the student's own difficulty bias.
     profile = _profile(user["id"])
-    grade   = profile.get("grade_level") or "5th Grade"
+    grade   = profile.get("grade_level") or grade_levels.DEFAULT_GRADE
     bias    = max(-1, min(1, int(profile.get("difficulty_bias") or 0)))
     _ensure_queue(user["id"], grade, bias, res.data[0]["id"])
 
@@ -2538,7 +2538,7 @@ def start_practice_session(payload: StartPracticeSessionRequest, request: Reques
     if not payload.topics:
         raise HTTPException(400, "Pick at least one topic")
 
-    grade = payload.grade or _profile(user["id"]).get("grade_level") or "5th Grade"
+    grade = payload.grade or _profile(user["id"]).get("grade_level") or grade_levels.DEFAULT_GRADE
     # Server-side grade gate, the same one auto-selection uses.
     allowed = set(LLM_topic_decider._allowed_topics(grade))
     bad = [t for t in payload.topics if t not in allowed]

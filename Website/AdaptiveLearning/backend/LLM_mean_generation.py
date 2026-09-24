@@ -38,6 +38,8 @@ def to_native(value):
     if isinstance(value, Integer): 
         return int(value) 
     return value
+
+
 mean_prompt = f"""
 You are to provide a Math question suitable for students. The response must be in JSON format. 
 The Question Text, Question Topic, and Variables will be displayed. The Question Topic will be "mean".

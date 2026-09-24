@@ -1,7 +1,7 @@
 /**
  * "This didn't load": never drawn as an empty list. `error.status` picks the
- * sentence: 403 refused (no retry), 401 session expired, anything else
- * (no status included) could not reach the backend.
+ * sentence: 403 refused (no retry), 401 session expired, 429 too many requests,
+ * anything else (no status included) could not reach the backend.
  */
 export default function LoadError({ what = 'this page', onRetry, error }) {
   const status = error?.status
@@ -12,6 +12,7 @@ export default function LoadError({ what = 'this page', onRetry, error }) {
   const message =
     status === 403 ? `You don't have access to ${what}.`
     : status === 401 ? `Your session has expired. Sign in again to see ${what}.`
+    : status === 429 ? `Too many requests just now, so ${what} didn't load. Wait a moment and try again.`
     : `Couldn't load ${what}. Make sure the backend is running.`
 
   return (

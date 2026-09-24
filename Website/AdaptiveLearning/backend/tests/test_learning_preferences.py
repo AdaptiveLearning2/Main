@@ -75,6 +75,16 @@ def test_a_session_prewarms_at_the_students_own_difficulty(_stubbed, monkeypatch
     assert _stubbed == [saved]
 
 
+def test_a_student_with_no_grade_is_prewarmed_at_the_grade_the_topic_list_shows(_stubbed, monkeypatch):
+    _with_profile(monkeypatch, grade_level=None)
+    grades = []
+    monkeypatch.setattr(main, "_ensure_queue", lambda uid, grade, bias, sid=None: grades.append(grade))
+
+    main.start_session(main.StartSessionRequest(title=None), request=None)
+
+    assert main.list_topics(grade=grades[0]) == main.list_topics(grade=None)
+
+
 def test_a_corrupt_saved_bias_cannot_shift_difficulty_off_the_end(_stubbed, monkeypatch):
     """Second guard behind the CHECK: `_shift_difficulty` clamps rather than raising."""
     _with_profile(monkeypatch, difficulty_bias=7)

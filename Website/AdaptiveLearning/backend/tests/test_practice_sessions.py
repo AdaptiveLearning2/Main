@@ -201,6 +201,17 @@ def test_start_accepts_grade_appropriate_topics(_client, monkeypatch):
     assert c.inserted_sessions and c.inserted_sessions[0]["grade_level"] == "3rd Grade"
 
 
+def test_a_student_with_no_grade_practises_the_grade_the_topic_list_shows(_client, monkeypatch):
+    """No grade sent or saved: stored at the grade `/api/topics` answers for, with no grade."""
+    _as(monkeypatch, USER)
+    c = _client()
+    monkeypatch.setattr(main, "_profile", lambda _uid: {"grade_level": None})
+    payload = main.StartPracticeSessionRequest(mode="test", topics=["ordering"], difficulty="easy")
+    main.start_practice_session(payload, None)
+    stored = c.inserted_sessions[0]["grade_level"]
+    assert main.list_topics(grade=stored) == main.list_topics(grade=None)
+
+
 def test_start_rejects_an_empty_topic_list(_client, monkeypatch):
     _as(monkeypatch, USER)
     _client()

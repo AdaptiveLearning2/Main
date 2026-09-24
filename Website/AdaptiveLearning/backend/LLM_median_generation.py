@@ -31,6 +31,7 @@ def format_number(x):
         return str(int(val))
     return f"{val:.2f}"
 
+
 median_prompt = f"""
 You are to provide a Math question suitable for students. The response must be in JSON format. 
 The Question Text, Question Topic, and Variables will be displayed. The Question Topic will be "median".

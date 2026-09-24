@@ -257,10 +257,12 @@ export default function Adaptive() {
   }, [])
 
   // Sign-out clears the token before unmount, so the cleanup above would 401.
-  // This is the last attempt: the ref is cleared first, so a failure is not retried tokenless.
+  // The last attempt: cleared first so a failure is not retried tokenless, and state too so
+  // a page left up by a failed sign-out starts a new session rather than answering into this one.
   useEffect(() => onSignOut(async () => {
     const id = sessionIdRef.current
     sessionIdRef.current = null
+    setSessionId(null)
     if (id) await endSession(id)
   }), [])
 

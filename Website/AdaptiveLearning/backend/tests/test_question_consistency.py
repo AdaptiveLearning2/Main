@@ -332,6 +332,26 @@ def test_a_total_before_a_listing_colon_is_stated():
                               {"red": 6, "blue": 4, "green": 2}) is None
 
 
+@pytest.mark.parametrize("text", [
+    "There are 12 marbles in a bag: red 6, blue 4, green 2.",
+    "There are 12 marbles in a bag: red 6, blue 4 and green 2.",
+    "There are 12 marbles in a bag: red: 6, blue: 4, green: 2.",
+    "A bag has red 6, blue 4 and green 2.",
+])
+def test_a_list_that_leads_with_the_colour_agrees(text):
+    assert qc.counts_mismatch(text, {"red": 6, "blue": 4, "green": 2}) is None
+
+
+@pytest.mark.parametrize("text", [
+    "There are 12 marbles in a bag: red 4, blue 6, green 2.",
+    "A bag has red 4, blue 6 and green 2.",
+    "There are 12 marbles in a bag: red: 4, blue: 6, green: 2.",
+])
+def test_a_colour_led_list_that_swaps_two_counts_is_refused(text):
+    """Every number is still shown, so only reading "red 4" as red's count catches it."""
+    assert qc.counts_mismatch(text, {"red": 6, "blue": 4, "green": 2}) is not None
+
+
 def test_a_colon_that_starts_no_list_does_not_make_a_count_the_total():
     """The left-out green's 10 is the others' sum; only a list after the colon makes it the bag."""
     text = "A bag has 6 red, 4 blue and 10 green marbles in the bag: what is the probability of red?"

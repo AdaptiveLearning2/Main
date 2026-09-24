@@ -1,9 +1,4 @@
-/**
- * The session's security settings are passed explicitly, so a change to one is
- * a change to this file rather than to a dependency's default. The expected
- * values are written out here, not imported, or the test would compare the
- * setting with itself.
- */
+/** Auth client security settings are explicit; expected values are literals, not imports. */
 import { it, expect, vi, beforeEach } from 'vitest'
 
 const createClient = vi.fn(() => ({}))

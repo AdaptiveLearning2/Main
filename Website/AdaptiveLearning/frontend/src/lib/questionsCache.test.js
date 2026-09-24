@@ -18,9 +18,7 @@ afterEach(() => {
 
 describe('fetchQuestionsCached', () => {
   it('serves three simultaneous mounts from a single request', async () => {
-    // Analytics and Questions can both mount in the same tick during teacher
-    // navigation. This is the direct regression test for that: without the
-    // in-flight dedup, each call fires its own fetch before any resolves.
+    // Analytics and Questions can mount in the same tick; in-flight calls dedupe.
     const [a, b, c] = await Promise.all([
       fetchQuestionsCached(1000),
       fetchQuestionsCached(1000),

@@ -2,29 +2,11 @@ import { AlertTriangle, WifiOff, Clock } from 'lucide-react'
 import Panel from './Panel'
 
 /**
- * Operational alerts for a class, newest first.
- *
- * **What this deliberately never shows.** Every row is a checkable fact about
- * a session — it timed out, or recording was expected and nothing arrived.
- * None of them is a claim about the student. `signal_fusion` produces a
- * "stressed" label and it is not routed here, for the reason the `attention`
- * tiles were removed (#86): a timestamped event reads as objective, and that
- * inference is not validated on this product's users.
- *
- * There is no dismiss button, and that is a decision rather than an omission.
- * Both kinds are about a session that has already ended — a lesson that timed
- * out yesterday stays timed out — so there is nothing to resolve. A dismissal
- * implies a triage workflow this product does not have, and the seven-day
- * window already bounds what is on screen.
+ * Operational alerts for a class, newest first. Every row is a checkable fact
+ * about a session, never a judgement about a student. No dismiss, by decision.
  */
 
-/** One entry per whitelisted `kind`, and the map is the whitelist.
- *
- * An unknown kind renders as a plain row with its raw name rather than being
- * dropped: the database CHECK means it should be impossible, and if it does
- * happen a visible unstyled row is what gets it reported. Silently skipping it
- * would make a real alert invisible.
- */
+/** One entry per whitelisted `kind`. An unknown kind renders as a visible row, never dropped. */
 const KINDS = {
   session_auto_closed: {
     Icon: Clock,
@@ -93,9 +75,7 @@ export default function AlertFeed({ data, loading, onRetry }) {
                 <p className="text-xs text-gray-600 dark:text-gray-400">
                   {describe(a.detail)}
                 </p>
-                {/* The school day, from the payload, not re-derived here: a
-                    teacher marking from another timezone should still see the
-                    day the lesson was taught on. */}
+                {/* The school day from the payload, not the viewer's timezone. */}
                 <p className="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
                   <time dateTime={a.created_at}>
                     {a.school_day}{at && ` at ${at}`}

@@ -6,12 +6,10 @@ import HideSensorDataToggle from '../../components/common/HideSensorDataToggle'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 import { apiFetch } from '../../lib/api'
 
-// Matches the weekly report's window, so a teacher and a parent see the same week.
+// Matches the weekly report's window.
 const SIGNAL_WINDOW_DAYS = 7
-// Shown per-tile rather than as one heading, since Total Accuracy and Current
-// Streak are lifetime figures (from user_stats), not part of this window.
+// Per tile, since accuracy and streak are lifetime figures, not this window.
 const WINDOW_NOTE = `last ${SIGNAL_WINDOW_DAYS}d`
-// A failed request must not read as "no data" -- every count defaults to 0 on failure.
 const SIGNALS_UNAVAILABLE = 'signal data unavailable'
 const eegSub = (n, failed) => {
   if (failed) return SIGNALS_UNAVAILABLE
@@ -22,37 +20,22 @@ const faceSub = (n, text, failed) => {
   return n ? `${text} · ${WINDOW_NOTE}` : `no face data · ${WINDOW_NOTE}`
 }
 
-// Signals are stored as 0..1 ratios, so this scales to a percent like the rest
-// of the app (Live.jsx's Gauge, SignalPanel's pct). Returns null for
-// missing values rather than 0 or NaN, which the tiles render as "—".
+// 0..1 ratio to a percent; null (rendered "—") for a missing value, never 0 or NaN.
 const asPct = (value) => {
   if (value === null || value === undefined) return null
   const n = Number(value)
   return Number.isFinite(n) ? `${Math.round(n * 100)}%` : null
 }
 
-// Reads student stats from user_stats, the signal-summary endpoint, and topic
-// performance.
-//
-// user_stats and topic performance go through the browser client, so RLS
-// applies. Signal averages instead go through /api/students/{id}/signal-summary
-// -- a Postgres aggregate over the whole window rather than a capped direct
-// read, since capping cognitive_signals/face_signals at 200 rows only covers
-// the first few minutes at typical poll rates.
-//
-// The "Hide sensor data" switch on this page only affects what's displayed,
-// not what's requested -- consent decides that server-side. See lib/viewPrefs.js.
+// Stats, the signal summary (a server-side aggregate, not a capped read) and
+// topic performance. "Hide sensor data" affects display only, not the request.
 async function getStudentStats(studentId)
 {
    const [statsRes, summary, topicRes] = await Promise.all([
-    // Goes through the endpoint, not a direct user_stats read: that table only
-    // gains a row when a session closes, so a direct read would show "0
-    // questions" for a student mid-session. The endpoint adds open-session counts.
-    // Caught to a marked failure ({ retrieved: false }) rather than left to
-    // reject the whole Promise.all, which would blank the signal tiles too.
+    // The endpoint adds open-session counts that user_stats lacks mid-session.
+    // Caught per read so one failure can't blank the other tiles.
     apiFetch(`/api/stats/student/${studentId}`)
       .catch(err => { console.error('Failed to load student stats:', err); return { retrieved: false } }),
-    // Caught separately so a signal-summary outage doesn't cost the academic tiles.
     apiFetch(`/api/students/${studentId}/signal-summary?days=${SIGNAL_WINDOW_DAYS}`)
       .catch(err => { console.error('Failed to load signal summary:', err); return null }),
     supabase.from('user_math_performance')
@@ -64,7 +47,7 @@ async function getStudentStats(studentId)
 
   const userStats = statsRes
   const signals = summary || {}
-  // A failed read must not render as "0 questions, 0%" -- that would look measured.
+  // A failed read must not render as "0 questions, 0%".
   const statsRetrieved = userStats?.retrieved !== false
 
   const totalAccuracy = statsRetrieved && userStats && userStats.total_questions > 0
@@ -82,17 +65,15 @@ async function getStudentStats(studentId)
     dominantEmotion: signals.dominant_emotion ?? null,
     signalCount: signals.cognitive_samples ?? 0,
     faceSignalCount: signals.face_samples ?? 0,
-    // bpm and ms are absolute units, not ratios, so they skip asPct.
+    // bpm and ms are absolute units, so no asPct.
     heartRate: typeof signals.heart_rate_bpm === 'number' ? Math.round(signals.heart_rate_bpm) : null,
     rmssd: typeof signals.rmssd_ms === 'number' ? Math.round(signals.rmssd_ms) : null,
     heartSamples: signals.heart_samples ?? 0,
-    // Server-decided from consent: "sensor off" is different from "nothing recorded".
+    // Server-decided from consent: "sensor off" is not "nothing recorded".
     heartIncluded: signals.heart_included === true,
-    // True if the request itself failed (summary === null) or the endpoint's
-    // aggregate query failed (retrieved === false) -- either way, the zero
-    // counts above don't mean the student recorded nothing.
+    // Request failed or the aggregate failed; the zero counts above mean nothing then.
     signalsFailed: summary === null || signals.retrieved === false,
-    // Server-decided from consent, like heartIncluded: "camera off" vs "nothing recorded this week".
+    // Server-decided from consent, like heartIncluded.
     faceIncluded: signals.emotion_included !== undefined
       ? signals.emotion_included !== false
       : signals.face_included !== false,
@@ -118,26 +99,23 @@ export default function Students() {
   const [expandedId, setExpandedId] = useState(null)
   const [statsCache, setStatsCache] = useState({})
   const [statsLoading, setStatsLoading] = useState({})
-  // Same stored preference as the student progress report, so the switch is consistent across pages.
   const [hideSensors, setHideSensors] = useState(readHideSensorData)
-  // Per-student request id: a stale in-flight fetch could otherwise overwrite a newer result.
+  // Per-student request id, so a stale fetch can't overwrite a newer result.
   const statsRequestIds = useRef({})
 
   useEffect(() => {
-    // pull users who registered with the 'student' role
     let cancelled = false;
 
     async function loadStudents()
     {
-      // find what teacher is logged in
-      
+
       const {data: { user }, error: userError } = await supabase.auth.getUser()
       if (userError || !user )
       {
         if(!cancelled) setLoading(false)
         return 
       }
-      // pull students enrolled in any class taught by teacher.
+      // Students enrolled in any class this teacher teaches.
       const {data, error} = await supabase
       .from('class_memberships')
       .select('student_id, profiles!inner(*), classes!inner(teacher_id)')
@@ -154,7 +132,6 @@ export default function Students() {
         setLoading(false)
         return
       }
-    // Get rid of duplicate students
     const seen = new Map()
     for( const row of data || [])
     {
@@ -168,19 +145,9 @@ export default function Students() {
 
   loadStudents()
   return () => { cancelled = true}
-    // supabase
-    //   .from('profiles')
-    //   .select('*')
-    //   .eq('role', 'student')
-    //   .then(({ data, error }) => {
-    //     if (!error) setStudents(data || [])
-    //     setLoading(false)
-    //   })
-    //   .catch(() => setLoading(false))
   }, [])
 
-  // Both fields, not the first that exists: a teacher searching the name on
-  // screen found nothing, because the only searchable value was the email.
+  // Search name and email both.
   const filtered = students.filter(s =>
     `${s.display_name || ''} ${s.email || ''} ${s.id || ''}`
       .toLowerCase().includes(search.toLowerCase())
@@ -192,8 +159,7 @@ export default function Students() {
       return
     }
     setExpandedId(studentId)
-    // A cached row whose academic read failed isn't treated as loaded, so
-    // collapsing and re-expanding retries it instead of getting stuck.
+    // A cached failed read isn't loaded, so re-expanding retries it.
     const cached = statsCache[studentId]
     if ((cached && cached.statsRetrieved !== false) || statsLoading[studentId]) return
     await refreshStats(studentId)
@@ -207,14 +173,12 @@ export default function Students() {
     try {
       stats = await getStudentStats(studentId)
     } catch (err) {
-      // Must clear the loading flag even on failure, or the row's spinner never goes away.
       console.error('Failed to load student stats:', err)
       if (requestId === statsRequestIds.current[studentId]) {
         setStatsLoading(prev => ({ ...prev, [studentId]: false }))
       }
       return
     }
-    // Discard a superseded result -- an older in-flight request landing late must not overwrite newer data.
     if (requestId !== statsRequestIds.current[studentId]) return
     setStatsLoading(prev => ({ ...prev, [studentId]: false }))
     setStatsCache(prev => ({ ...prev, [studentId]: stats }))
@@ -223,7 +187,6 @@ export default function Students() {
   function handleHideSensorsChange(next) {
     setHideSensors(next)
     writeHideSensorData(next)
-    // No cache drop or re-fetch needed: this only changes what's displayed, not what was requested.
   }
 
 
@@ -360,12 +323,10 @@ export default function Students() {
                               />
                             </div>
 
-                            {/* Gated by "Hide sensor data" -- a display preference, doesn't change what was fetched. */}
                             {!hideSensors && (
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
-                              {/* No Engagement tile: it is the focus index under another
-                                  name (signal_mapping.py), and Focus Score is in this grid. */}
-                              {/* "Off" means the viewer turned off facial reporting; different from no reading. */}
+                              {/* No Engagement tile: it is the focus index under another name. */}
+                              {/* "Off" means facial reporting is off, not that there was no reading. */}
                               <MiniStat
                                 icon={<Smile size={16} />}
                                 label="Dominant Emotion"
@@ -378,7 +339,7 @@ export default function Students() {
                             </div>
                             )}
 
-                            {/* Heart rate/HRV in absolute units, own row. "Off" distinguishes a disabled sensor from one that recorded nothing. */}
+                            {/* "Off" is a disabled sensor, not one that recorded nothing. */}
                             {!hideSensors && (
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
                               <MiniStat
@@ -426,8 +387,7 @@ export default function Students() {
                               </div>
                             )}
 
-                            {/* Both branches only assert "no activity" once the relevant data was actually read
-                                -- not when the switch skipped facial data or the summary request failed. */}
+                            {/* Assert "no activity" only once the relevant data was actually read. */}
                             {stats.signalsFailed ? (
                               <p className="text-xs text-gray-600 mt-3 dark:text-gray-400">
                                 Signal data couldn&apos;t be loaded — the figures above cover questions only.

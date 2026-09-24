@@ -1,14 +1,9 @@
-/** Is this a timezone the backend will accept?
- *
- * The backend validates with Python's `ZoneInfo`, which is stricter than
- * `Intl.DateTimeFormat`: it rejects UTC-offset strings (`+05:30`) and
- * lowercase names (`america/chicago`) that `Intl` happily accepts. This
- * check mirrors those two rules so a bad value is caught before the round
- * trip, instead of the form claiming success and the save then failing.
+/**
+ * Whether the backend's `ZoneInfo` will accept this timezone: stricter than
+ * `Intl`, it rejects offsets (`+05:30`) and wrong case (`america/chicago`).
  */
 
-// Offset strings start with a sign (`Etc/GMT-5` doesn't, and is a valid
-// name, so this must anchor at the start rather than search anywhere).
+// Anchored: `Etc/GMT-5` is a valid name.
 const OFFSET = /^[+-]/
 
 export function isValidTimezone(tz) {
@@ -17,9 +12,7 @@ export function isValidTimezone(tz) {
   try {
     const canonical = new Intl.DateTimeFormat(undefined, { timeZone: tz })
       .resolvedOptions().timeZone
-    // Same letters, different case -> a typo, which ZoneInfo rejects.
-    // Genuinely different letters -> an alias (e.g. GMT -> UTC), which
-    // ZoneInfo accepts, so don't reject those.
+    // Case-only difference: rejected. A real alias (GMT -> UTC): accepted.
     if (canonical && canonical !== tz
         && canonical.toLowerCase() === tz.toLowerCase()) return false
     return true
@@ -28,12 +21,7 @@ export function isValidTimezone(tz) {
   }
 }
 
-/** Every zone the runtime knows, for a `<datalist>`, or `[]` where it cannot say.
- *
- * Suggestions only, not the validity check — the list omits `UTC`, which is
- * a valid zone and this form's own default, so using it as a check would
- * mark a freshly loaded form invalid.
- */
+/** Zones for a `<datalist>`, or `[]`. Suggestions only: the list omits `UTC`. */
 export function knownTimezones() {
   try {
     return Intl.supportedValuesOf('timeZone')

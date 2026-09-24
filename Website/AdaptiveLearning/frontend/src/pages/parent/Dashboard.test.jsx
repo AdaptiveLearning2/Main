@@ -3,8 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
 import ParentDashboard from './Dashboard'
 
-// A facial-recognition opt-out honoured on the child's report but ignored
-// here would put the data back on screen the moment a parent hits back.
+// The facial opt-out must hold here as on the child's report.
 
 vi.mock('../../lib/api', () => ({ apiFetch: vi.fn() }))
 vi.mock('../../context/AuthContext', () => ({
@@ -57,8 +56,7 @@ function renderDashboard() {
 
 
 it('does not read a pre-flag payload as facial data being withheld', async () => {
-  // A payload built before `emotion_included` existed must not be reported
-  // as a channel the parent switched off.
+  // A pre-`emotion_included` payload is not a channel switched off.
   apiFetch.mockImplementation(() => {
     const { face_included, ...summary } = withFace[0].signal_summary
     return Promise.resolve([{ ...withFace[0], signal_summary: summary }])
@@ -69,8 +67,7 @@ it('does not read a pre-flag payload as facial data being withheld', async () =>
 })
 
 it('does not show a row of N/As for a reading it has no tile for', async () => {
-  // engagement is in the payload but has no tile on this page, so a child
-  // whose only reading is engagement should show nothing here, not N/As.
+  // engagement has no tile here, so it alone must not produce N/As.
   apiFetch.mockImplementation(() => Promise.resolve([{
     ...withFace[0],
     signal_summary: {
@@ -103,8 +100,7 @@ it('says facial signals were not read when there is nothing else to show', async
 })
 
 it('does not tell a parent their child recorded nothing when the read failed', async () => {
-  // A failed aggregate still answers 200 with an all-default summary, which
-  // must not read as a genuine quiet week.
+  // A failed aggregate answers 200 with defaults; not a quiet week.
   apiFetch.mockImplementation(() => Promise.resolve([{
     ...withFace[0],
     signal_summary: {
@@ -150,8 +146,7 @@ it('still takes over the page when the very first load fails', async () => {
 })
 
 it('asks for the children without a viewer-side flag', async () => {
-  // What's recorded is controlled by consent on the Settings page, not a
-  // per-browser switch on this query.
+  // Consent on Settings controls recording, not a switch on this query.
   renderDashboard()
 
   await waitFor(() => expect(apiFetch).toHaveBeenCalled())

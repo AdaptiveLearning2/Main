@@ -1,29 +1,8 @@
 /**
- * The picture a question carries, drawn from its spec.
- *
- * The backend stores a specification rather than markup (`question_figures.py`,
- * `questions.figure`), and this is the only place that turns one into pixels.
- * Two things follow from that and both are load-bearing:
- *
- *  - **The drawing and the description come from the same object.** A screen
- *    reader is given a sentence built from the same `rows` and `columns` the
- *    squares are drawn from, so the two cannot describe different pictures.
- *    That is the rule `AccessibleChart` exists for -- its chart and its
- *    `sr-only` table were separate literals and drifted twice in one PR -- and
- *    it matters more here, because a figure has no text of its own for any
- *    check to compare.
- *
- *  - **An unknown type renders nothing rather than throwing.** A figure is an
- *    enrichment; the question text is complete without it ("a rectangle split
- *    into 3 rows of 4 same-size squares"). A client that crashed on a spec it
- *    did not recognise would take the whole question down to avoid drawing a
- *    picture, which is the wrong way round -- and it would do so on exactly the
- *    deployment running an older bundle against a newer bank.
- *
- * `role="img"` with a label, not a bare `<svg>`: WAI-ARIA prunes the children
- * of an `img`, which is right here -- a grid of squares has no meaning
- * element-by-element -- and it is why the label has to carry the whole
- * description rather than leaning on anything inside.
+ * The picture a question carries, drawn from its spec (`question_figures.py`).
+ * Drawing and description come from the same object, so they cannot disagree.
+ * An unknown or out-of-bounds spec renders nothing rather than throwing.
+ * `role="img"` prunes children, so the label carries the whole description.
  */
 
 const MAX_SIDE = 12          // matches question_figures.MAX_GRID_SIDE
@@ -40,11 +19,7 @@ const LABEL_PX = 11          // font-size of the category labels
 const CHAR_W = 0.58          // ems per character, near enough for sans-serif
 
 const MAX_PARTS = 8          // matches question_figures.MAX_PARTS
-// The *whole* is a constant width and the parts divide it, rather than each
-// part being a fixed size and the whole growing. A shape that got wider with
-// more parts drew eighths at twice the width of halves, which says the wrong
-// thing about what a whole is -- and is exactly the misconception 1.G.3 and
-// 3.NF.1 are about.
+// Fixed whole width that the parts divide, so a whole is always the same size.
 const WHOLE_W = 240
 const PART_H = 56
 
@@ -63,9 +38,7 @@ function RectGrid({ rows, columns }) {
           y={PAD + r * CELL}
           width={CELL}
           height={CELL}
-          // `currentColor` rather than a fixed grey: the card flips with the
-          // theme, and a figure drawn in one mode's ink is invisible in the
-          // other's.
+          // `currentColor` so the figure follows the theme.
           fill="none"
           stroke="currentColor"
           strokeWidth="1.5"
@@ -89,23 +62,12 @@ function RectGrid({ rows, columns }) {
   )
 }
 
-// `BarGraph`, deliberately: the obvious name is one of the Recharts component
-// names `AccessibleChart.test.jsx` matches as a bare word to find charts
-// rendered outside it. This is a hand-written `<svg>` -- the case that guard
-// states it cannot see -- so the match is a false accusation, and a guard
-// that produces those gets switched off. Renaming costs a word; exempting a
-// file costs the rule.
-//
-// The word cannot appear in this comment either, for the same reason: the
-// guard reads the file, not the syntax tree.
+// `BarGraph`, not the Recharts-style name: `AccessibleChart.test.jsx` matches
+// that word anywhere in the file, comments included.
 function BarGraph({ bars }) {
   const tallest = Math.max(...bars.map(b => b.value))
   const plotH = tallest * UNIT
-  // The column is as wide as the widest label, not a fixed size. Measured
-  // rather than assumed: at a fixed 34px bar and 18px gap, "storybooks" and
-  // "picture books" printed on top of each other -- legible in neither, on a
-  // figure whose entire job is to be read. Nothing in the DOM tests could see
-  // it, since both labels were present and correct.
+  // Column as wide as the widest label, so labels never overlap.
   const widest = Math.max(...bars.map(b => b.label.length))
   const slot = Math.max(BAR_W + BAR_GAP, widest * LABEL_PX * CHAR_W + 8)
   const width = bars.length * slot + BAR_GAP
@@ -119,8 +81,7 @@ function BarGraph({ bars }) {
       focusable="false"
       aria-hidden="true"
     >
-      {/* Gridlines at every unit, so the bars can be counted rather than
-          estimated -- which is the reading 1.MD.4 asks for. */}
+      {/* Gridlines at every unit, so bars can be counted (1.MD.4). */}
       {Array.from({ length: tallest + 1 }, (_, i) => (
         <line
           key={`g${i}`}
@@ -174,9 +135,7 @@ function PartWhole({ parts, shaded }) {
           y={PAD}
           width={partW}
           height={PART_H}
-          // Shaded parts are filled and the rest are outlined, so which is
-          // which survives being printed in black and white -- and does not
-          // depend on telling two colours apart.
+          // Filled vs outlined, not two colours, so it survives black and white.
           fill={i < shaded ? 'currentColor' : 'none'}
           fillOpacity={i < shaded ? 0.65 : 0}
           stroke="currentColor"
@@ -194,16 +153,11 @@ function describe(figure) {
       return `A rectangle split into ${plural(figure.rows, 'row')} of ` +
              `${plural(figure.columns, 'equal square')}.`
     case 'part_whole':
-      // The counts, not the fraction: naming "three quarters" would answer the
-      // question for a screen-reader user that a sighted one has to read off
-      // the picture.
+      // Counts, not the fraction, which would give away the answer.
       return `A shape split into ${plural(figure.parts, 'equal part')}, ` +
              `${figure.shaded} of them shaded.`
     case 'bar_chart':
-      // Every bar and its height, because the question asks the reader to
-      // compare them -- a summary like "a bar chart of four categories" is
-      // not the same information, and a screen-reader user would have a
-      // different question from a sighted one.
+      // Every bar and its height: the question asks the reader to compare them.
       return 'A bar graph showing ' +
              figure.bars.map(b => `${b.label}: ${b.value}`).join(', ') + '.'
     default:
@@ -227,9 +181,7 @@ function draw(figure) {
 function usable(figure) {
   if (!figure || typeof figure !== 'object') return false
   if (figure.type === 'rect_grid') {
-    // The same bound the backend applies. Checked again here because a bank row
-    // outlives the code that wrote it, and a 40x40 grid is 1600 rects in a
-    // question card.
+    // Re-checked here: a bank row outlives the code that wrote it.
     return [figure.rows, figure.columns].every(
       n => Number.isInteger(n) && n >= 1 && n <= MAX_SIDE)
   }

@@ -1,21 +1,8 @@
 import { Component } from 'react'
 
-/** The last line between a thrown render and a white screen.
- *
- * With no error boundary, any component that threw during render unmounted
- * the whole application down to a blank document, error only in the console.
- *
- * Not `LoadError` -- that's for a failed request the page can re-issue. This
- * is for a bug: the page's own render threw.
- *
- * **A class, because there is no hook form of this.** `componentDidCatch`
- * and `getDerivedStateFromError` have no function-component equivalent.
- *
- * **`resetKey` makes it recoverable.** An error boundary latches -- once
- * `hasError` is true it stays true, so without this a crashed page would keep
- * showing the error screen on every later page. The layouts pass the current
- * pathname, so a navigation clears it. It's a prop rather than a `key` on the
- * element so the reset survives the layout being reordered around it.
+/**
+ * Catches a thrown render so the app doesn't go blank (a class: no hook form exists).
+ * `resetKey` (the layouts pass the pathname) clears the latched error on navigation.
  */
 export default class ErrorBoundary extends Component {
   state = { error: null }
@@ -25,7 +12,7 @@ export default class ErrorBoundary extends Component {
   }
 
   componentDidCatch(error, info) {
-    // No error-reporting service wired up, so the console is the whole record.
+    // No error-reporting service; the console is the only record.
     console.error('[ErrorBoundary]', error, info?.componentStack)
   }
 
@@ -49,14 +36,11 @@ export default class ErrorBoundary extends Component {
             Something went wrong on this page
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            {/* Not "your work was lost" -- answers are posted as given, so
-                usually nothing was lost, and saying otherwise would scare a
-                child out of a session that is fine. */}
+            {/* Not "your work was lost": answers are posted as given. */}
             The rest of the app still works — try again, or move to another page.
           </p>
 
-          {/* Message shown only in development -- in production it's a
-              stack-shaped string a student can't act on. */}
+          {/* Development only. */}
           {import.meta.env.DEV && (
             <pre className="mt-4 text-left text-xs text-rose-600 dark:text-rose-400 whitespace-pre-wrap break-words">
               {String(this.state.error?.message || this.state.error)}

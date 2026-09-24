@@ -1,10 +1,4 @@
-/**
- * Built from the error classes auth-js actually throws, not from hand-made
- * objects: a refusal is an `AuthApiError(message, status, code)`, a request
- * that got no answer is an `AuthRetryableFetchError` with status 0 (or the
- * gateway's 502-504). A fixture of `{ message }` alone would pass against a
- * page that still printed Supabase's own sentence.
- */
+/** Fixtures are the error classes auth-js actually throws (`AuthApiError`, `AuthRetryableFetchError`). */
 import { describe, it, expect } from 'vitest'
 import { AuthApiError, AuthRetryableFetchError, AuthWeakPasswordError } from '@supabase/supabase-js'
 import { signInMessage, signUpMessage } from './authErrors'
@@ -13,8 +7,7 @@ const refused = (message, status, code) => new AuthApiError(message, status, cod
 
 describe('sign-in', () => {
   it('says the same thing for an unknown email and a wrong password', () => {
-    // Supabase already answers both with `invalid_credentials`; a code for
-    // "no such user" must not get a sentence of its own either.
+    // "No such user" must not get a sentence of its own.
     const wrong   = signInMessage(refused('Invalid login credentials', 400, 'invalid_credentials'))
     const unknown = signInMessage(refused('User not found', 400, 'user_not_found'))
 
@@ -68,8 +61,7 @@ describe('sign-up', () => {
     const taken = signUpMessage(refused('User already registered', 422, 'user_already_exists'))
 
     expect(taken).not.toMatch(/already registered|already exists|in use|taken/i)
-    // One sentence for every refusal about the account, so this one cannot be
-    // told apart from the others by its wording.
+    // One sentence for every refusal about the account.
     expect(signUpMessage(refused('Email exists', 422, 'email_exists'))).toBe(taken)
     // And a code nobody has seen yet, so a new spelling of "taken" is covered.
     expect(signUpMessage(refused('Something new', 422, 'not_yet_invented'))).toBe(taken)
@@ -87,8 +79,7 @@ describe('sign-up', () => {
   })
 
   it('says which password rule failed, when Supabase says', () => {
-    // Stricter rules in production than the page's own 6-character check would
-    // otherwise refuse a password with no hint of what to change.
+    // Production rules can be stricter than the page's 6-character check.
     const msg = signUpMessage(new AuthWeakPasswordError('Password is weak', 422, ['length', 'pwned']))
 
     expect(msg).toMatch(/too short/i)

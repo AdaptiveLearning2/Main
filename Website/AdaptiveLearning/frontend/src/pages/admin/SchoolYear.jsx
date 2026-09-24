@@ -3,9 +3,7 @@ import { apiFetch } from '../../lib/api'
 import useAdminResource from '../../hooks/useAdminResource'
 import { isValidTimezone, knownTimezones } from '../../lib/timezone'
 
-// The backend has six states because "not gating on a year" and "inside the
-// year" both record but for different reasons, and an admin needs to know
-// which one applies.
+// open and not_enforced both record, for different reasons.
 const STATE_COPY = {
   open:          ['Recording', 'Today is inside the configured school year.'],
   not_enforced:  ['Recording', 'The year is not being enforced. Consent still applies.'],
@@ -15,8 +13,7 @@ const STATE_COPY = {
   unreadable:    ['Not recording', 'The window could not be read — check the timezone.'],
 }
 
-// Computed once per module, not per render: it's ~450 strings and doesn't
-// change while the tab is open.
+// Once per module: ~450 strings.
 const ZONES = knownTimezones()
 
 export default function AdminSchoolYear() {
@@ -30,8 +27,7 @@ export default function AdminSchoolYear() {
   // The user's unsaved edits, or `null` for "showing what the server said".
   const [draft, setDraft] = useState(null)
 
-  // Route every edit through this, not `setDraft` directly, so "Saved."
-  // can't linger once the admin starts typing a new, unsaved change.
+  // Edit through this, not `setDraft`, so "Saved." clears on a new change.
   const edit = (patch) => {
     setSaved(false)
     setDraft(patch)
@@ -42,12 +38,8 @@ export default function AdminSchoolYear() {
     load: useCallback(() => apiFetch('/api/admin/retention-window'), []),
   })
 
-  // Derived, not synced via an effect, to avoid an extra render each time the
-  // server payload changes. The draft wins while it exists; clearing it after
-  // a save re-derives the form from what the server actually stored.
-  //
-  // `enforced !== false` so a row missing the column, or one PostgREST returns
-  // without it, reads as enforced rather than as the gate being off.
+  // Derived, not synced via an effect; the draft wins while it exists.
+  // `enforced !== false`: a row missing the column reads as enforced.
   const form = draft ?? (data && {
     enforced: data.enforced !== false,
     starts_on: data.starts_on || '',
@@ -55,14 +47,12 @@ export default function AdminSchoolYear() {
     timezone: data.timezone || 'UTC',
   })
 
-  // The backend denies rather than falling back on an unresolvable timezone,
-  // so a typo here would silently stop recording for every student.
+  // A bad timezone makes the backend deny recording for every student.
   const save = async () => {
     setSaved(false)
     const ok = await mutate(() =>
       apiFetch('/api/admin/retention-window', { method: 'PUT', body: form }))
-    // Drop the draft so the form re-derives from the saved row: the endpoint
-    // clamps values, so the stored row is the authority, not what was typed.
+    // Re-derive from the saved row: the endpoint clamps values.
     if (ok) { setDraft(null); setSaved(true) }
   }
 
@@ -154,9 +144,7 @@ export default function AdminSchoolYear() {
                 : 'border-rose-400 dark:border-rose-600'
             }`}
           />
-          {/* Suggestions only, not the validator — an empty list just means no
-              autocomplete, not a broken field. Memoized so the ~420 options
-              aren't rebuilt on every keystroke. */}
+          {/* Suggestions only, not the validator. */}
           {zoneOptions}
           {!tzValid && (
             <p className="mt-1 text-xs font-bold text-rose-600 dark:text-rose-400">

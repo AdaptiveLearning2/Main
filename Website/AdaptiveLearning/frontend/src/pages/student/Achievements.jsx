@@ -25,7 +25,6 @@ export default function Achievements() {
   const [loading, setLoading] = useState(true)
   const [failed, setFailed]   = useState(false)
 
-  // loading already starts true, so no setState is needed here on mount.
   const load = () => {
     apiFetch('/api/stats/me')
       // A failed read reports itself as retrieved: false instead of throwing.
@@ -34,8 +33,7 @@ export default function Achievements() {
         else { setStats(s); setFailed(false) }
         setLoading(false)
       })
-      // Falling back to stats of 0 would re-lock achievements the student
-      // already earned, which reads as a wrong answer, not a loading error.
+      // Not stats of 0: that would re-lock achievements already earned.
       .catch(e => { console.error('Failed to load stats:', e); setFailed(true); setLoading(false) })
   }
 
@@ -96,7 +94,7 @@ export default function Achievements() {
         </div>
       )}
 
-      {/* Hidden on failure too: with no stats every threshold reads as 0/locked, showing every achievement as lost. */}
+      {/* Hidden on failure: with no stats every achievement would read as locked. */}
       {!failed && locked.length > 0 && (
         <div>
           <h2 className="text-lg font-black text-gray-900 dark:text-white mb-4">🔒 Locked <span className="text-sm font-semibold text-gray-600 dark:text-gray-400">({locked.length})</span></h2>

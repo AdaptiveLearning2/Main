@@ -1,18 +1,8 @@
 /**
- * The browser's direct line to the EEG sidecar on this machine.
- *
- * Under push ingestion the sidecar runs on the student's own laptop, which a
- * hosted backend can't reach — so the page calls `http://127.0.0.1:8001`
- * directly instead of going through the backend.
- *
- * An HTTPS page is allowed to call loopback HTTP like this (verified on
- * Chromium; details in `EEGResearch/docs/LOOPBACK_FROM_HTTPS.md`).
- *
- * `VITE_EEG_LOCAL_TOKEN` being in the client bundle is fine: the sidecar only
- * binds to loopback, so the token just separates this page from other pages
- * in the same browser, not one user from another. It is not the student's
- * real backend credential — that one is fetched per call from the Supabase
- * session and handed to the sidecar so it can post as the student.
+ * The browser's direct line to the EEG sidecar on this machine (push mode,
+ * where a hosted backend can't reach the student's laptop).
+ * `VITE_EEG_LOCAL_TOKEN` in the bundle is fine: the sidecar binds to loopback only.
+ * See `EEGResearch/docs/LOOPBACK_FROM_HTTPS.md`.
  */
 
 import { supabase } from './supabase'
@@ -20,16 +10,10 @@ import { supabase } from './supabase'
 const SIDECAR_URL = import.meta.env.VITE_EEG_LOCAL_URL || 'http://127.0.0.1:8001'
 const SIDECAR_TOKEN = import.meta.env.VITE_EEG_LOCAL_TOKEN || ''
 
-/** Short, since this is a same-machine process — an absent sidecar should
- *  fail fast rather than stall the page. */
+/** Same-machine process: an absent sidecar should fail fast. */
 const TIMEOUT_MS = 3000
 
-/** Starting a device needs longer: opening a webcam and loading FER+/the
- * face landmarker takes seconds, and the muse path waits on a BLE bridge. A
- * short timeout here would abort the browser's request while the sidecar
- * kept going and started the device anyway — leaving the UI showing "off"
- * while the camera was actually running.
- */
+/** Device start takes seconds; timing out early leaves the UI "off" while the device runs. */
 const LIFECYCLE_TIMEOUT_MS = 30000
 
 async function call(path, { method = 'GET', body = null,
@@ -71,19 +55,11 @@ export async function sidecarAlive() {
 }
 
 /**
- * Hand the sidecar this session and the student's own backend token.
- *
- * The token lets the sidecar post as the student; it lives only in that
- * process's memory. Calling this again for the same session replaces the
- * token in place without touching the queue (what a token refresh needs).
- * Calling it for a different session drops the old queue, since those
- * samples belong to a session this token may not own.
+ * Hand the sidecar this session and the student's backend token.
+ * Same session: replaces the token, keeps the queue. New session: drops the queue.
  */
 export async function startPush(sessionId, accessTokenOverride = null) {
-  // `accessTokenOverride` is for the `onAuthStateChange` handler, which is
-  // handed the new session directly and must not call `getSession()` itself:
-  // supabase-js v2 holds an auth lock during that callback, so awaiting
-  // `getSession()` inside it deadlocks.
+  // For `onAuthStateChange`: awaiting `getSession()` inside it deadlocks.
   let accessToken = accessTokenOverride
   if (!accessToken) {
     const { data } = await supabase.auth.getSession()
@@ -102,15 +78,8 @@ export async function stopPush() {
 }
 
 /**
- * The same stop, issued from a page that is going away.
- *
- * React effect cleanup does not run on tab close, hard refresh, or
- * navigation away, so `stopPush` never fires for the most common way a
- * student ends a lesson. Without this the sidecar keeps the token and keeps
- * recording until it expires — a consent problem, not just untidiness.
- *
- * `keepalive` lets the request outlive the document. `sendBeacon` can't be
- * used instead because it can't set an `Authorization` header.
+ * `stopPush` for a page that is going away (effect cleanup doesn't run on unload).
+ * `keepalive`, not `sendBeacon`, which can't set `Authorization`.
  */
 export function stopPushOnUnload() {
   try {
@@ -120,17 +89,13 @@ export function stopPushOnUnload() {
       keepalive: true,
     }).catch(() => {})
   } catch {
-    // Page is unloading; there's nothing more useful to do.
     return Promise.resolve()
   }
 }
 
 /**
  * Queue depths and delivery counts.
- *
- * `recorded` is what the backend actually stored, not what was sent — it
- * drops samples for a sensor the student declined. Counting sent samples
- * instead would show a healthy session that recorded nothing.
+ * `recorded` is what the backend stored, not what was sent.
  */
 export async function pushStatus() {
   const out = await call('/api/v1/push/status')
@@ -138,14 +103,8 @@ export async function pushStatus() {
 }
 
 // ── driving the local hardware, push only ───────────────────────────────────
-//
-// Under `pull`, the backend owns this by polling the sidecar and proxying
-// scan/connect through `/api/eeg/muse/*`. Under push the backend is remote
-// and can't reach the student's hardware, so those backend endpoints refuse
-// (409) and the page talks to the sidecar directly instead. The sidecar only
-// accepts the learner token here when `PUSH_ENABLED` is on; under pull it
-// answers 401. So everything below is push-only — `Adaptive.jsx` must not
-// call it otherwise.
+// Under pull the backend proxies these (`/api/eeg/muse/*`) and the sidecar
+// answers 401 here, so `Adaptive.jsx` must not call them otherwise.
 
 /** Start capturing on one registered device (`default`, `camera`, ...). */
 export async function deviceStart(deviceId) {
@@ -159,15 +118,7 @@ export async function deviceStop(deviceId) {
               { method: 'POST', timeoutMs: LIFECYCLE_TIMEOUT_MS })
 }
 
-/**
- * The same device stop, issued from a page that is going away.
- *
- * `stopPushOnUnload` drops the token on a tab close; it does not stop the
- * capture, so a camera switched on from the Adaptive page kept its lens open
- * after the tab was gone. Same shape for the same reason: effect cleanup
- * does not run on unload, `keepalive` lets the request outlive the document,
- * and `sendBeacon` cannot carry the Authorization header.
- */
+/** `deviceStop` for a page that is going away; `stopPushOnUnload` alone leaves the camera open. */
 export function deviceStopOnUnload(deviceId) {
   try {
     return fetch(`${SIDECAR_URL}/api/v1/session/stop?device_id=${encodeURIComponent(deviceId)}`, {
@@ -204,35 +155,22 @@ export async function museDisconnect(deviceId) {
               { method: 'POST', timeoutMs: LIFECYCLE_TIMEOUT_MS })
 }
 
-/** One device's snapshot, unwrapped to `{running, ingestion, ...}`.
- *
- * Matches the shape the backend's `/api/eeg/status` puts under its `muse`
- * key, so a caller reading `ingestion.muse_devices` sees the same shape in
- * both modes regardless of which function it called.
- */
+/** One device's snapshot, the same shape as `/api/eeg/status`'s `muse` key. */
 export async function museState(deviceId) {
   const res = await call(`/api/v1/muse/status?device_id=${encodeURIComponent(deviceId)}`)
   return res?.data || {}
 }
 
-/** Tear down the shared push client, but only once nothing is left using it.
- *
- * `/api/v1/push/stop` is global — one `push_client` serves every device, so
- * stopping it unconditionally when either sensor turns off breaks the other:
- * stopping on headband-off silently kills a running camera's delivery, and
- * never stopping on camera-off leaves the sidecar holding the student's
- * token after they've walked away.
- *
- * Returns the device list it decided from, so a caller can update its own
- * view from the same read instead of a second one that could disagree.
+/**
+ * Stop the shared (global) push client once no device is running.
+ * Returns the device list it decided from, so the caller need not re-read.
  */
 export async function releasePushIfIdle() {
   let list = null
   try {
     list = await devices()
   } catch {
-    // Couldn't tell what's running, so stop it — a token left behind is
-    // worse than a device that briefly reports itself as not running.
+    // Unknown: stop anyway; a token left behind is worse.
     await stopPush().catch(() => {})
     return { stopped: true, devices: null }
   }
@@ -241,23 +179,15 @@ export async function releasePushIfIdle() {
   return { stopped: true, devices: list }
 }
 
-/** The interpreted EEG snapshot: state, features, bands, ingestion.
- *
- * Returns null when no stream data has arrived yet — a normal state, not a
- * failure, so it doesn't throw.
- */
+/** The interpreted EEG snapshot, or null (not a throw) before any stream data. */
 export async function sidecarState(deviceId) {
   const res = await call(`/api/v1/state?device_id=${encodeURIComponent(deviceId)}`)
   return res?.data || null
 }
 
-/** What `/api/eeg/debug` returns under pull, assembled here from the sidecar
- * directly since the backend can't reach the student's laptop under push.
- *
- * `available` is tracked separately from what each call returned, because
- * a normal empty response (no stream data yet, no headband attached) looks
- * the same as a call that never reached the sidecar. Deriving `available`
- * from the payload shape would misreport a healthy-but-idle sidecar as down.
+/**
+ * The push-mode equivalent of `/api/eeg/debug`.
+ * `available` comes from call status, not payload shape: an idle sidecar returns empty.
  */
 export async function sidecarDebug(deviceId) {
   const [state, muse] = await Promise.allSettled([

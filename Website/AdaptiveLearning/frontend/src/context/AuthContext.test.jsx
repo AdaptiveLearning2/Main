@@ -3,9 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import { AuthProvider, useAuth } from './AuthContext'
 
-// The display preference is stored in localStorage, scoped to the browser
-// rather than the account, so every sign-out path must clear it or the next
-// person on a shared machine inherits it.
+// The display preference is per browser, so every sign-out path clears it for shared machines.
 
 const signOut = vi.fn()
 const getSession = vi.fn()
@@ -78,7 +76,6 @@ it('clears the teacher display preference on sign-out', async () => {
 })
 
 it('clears it even when sign-out fails', async () => {
-  // Must clear even on failure — the user still ends up at the login screen.
   signOut.mockRejectedValue(new Error('offline'))
   renderAuth()
   await userEvent.click(await screen.findByText('Sign out'))
@@ -86,8 +83,7 @@ it('clears it even when sign-out fails', async () => {
 })
 
 it('clears it on a sign-out this tab did not perform', async () => {
-  // An expired refresh token, or a sign-out in another tab, arrives as an
-  // auth state change rather than through signOut() above.
+  // An expired refresh token or another tab's sign-out arrives as an auth event.
   renderAuth()
   await screen.findByText('Sign out')
   authCallback('SIGNED_OUT', null)
@@ -105,8 +101,7 @@ it('leaves it alone while the session is live', async () => {
 // ── where the role comes from ─────────────────────────────────────────────
 
 it('takes the role from the backend, not from the claim in the session', async () => {
-  // An account promoted directly in the database has no role in its
-  // session metadata, so the role must come from the backend, not the claim.
+  // An account promoted in the database has no role in its metadata.
   getSession.mockResolvedValue({ data: { session: SESSION(null) } })
   apiFetch.mockResolvedValue({ role: 'admin' })
 
@@ -126,9 +121,7 @@ it('believes the backend over a claim that disagrees', async () => {
 })
 
 it('says loading until the role has actually resolved', async () => {
-  // The window that matters is after the session resolves but before the
-  // profile does — asserting "loading" right after render proves nothing,
-  // since `authLoading` is true then regardless.
+  // The window that matters is after the session resolves, before the profile does.
   let resolve
   getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
   apiFetch.mockReturnValue(new Promise(r => { resolve = r }))
@@ -146,8 +139,7 @@ it('says loading until the role has actually resolved', async () => {
 })
 
 it('bounds the role read, so a hung request cannot strand the app', async () => {
-  // A `.catch` alone isn't a bound — a hung request never rejects, so this
-  // asserts the call actually carries a timeout.
+  // A `.catch` is not a bound: a hung request never rejects.
   getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
   apiFetch.mockReturnValue(new Promise(() => {}))
 
@@ -159,8 +151,7 @@ it('bounds the role read, so a hung request cannot strand the app', async () => 
 })
 
 it('falls back to the claim when the backend cannot be reached', async () => {
-  // A blip is not a demotion — falling back to 'student' would drop every
-  // teacher into the wrong app whenever the API was down.
+  // A blip is not a demotion.
   getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
   apiFetch.mockRejectedValue(new Error('offline'))
 
@@ -170,9 +161,7 @@ it('falls back to the claim when the backend cannot be reached', async () => {
 })
 
 it('does not read the role from inside the auth callback', async () => {
-  // supabase-js holds an auth lock while dispatching this callback, and
-  // `apiFetch` calls `getSession()`, so calling it here would deadlock. The
-  // read must happen in an effect the callback only schedules.
+  // supabase-js holds an auth lock during the callback and `apiFetch` calls `getSession()`: deadlock.
   renderAuth()
   await screen.findByText('Sign out')
   apiFetch.mockClear()
@@ -180,14 +169,13 @@ it('does not read the role from inside the auth callback', async () => {
   authCallback('SIGNED_IN', SESSION('teacher'))
   expect(apiFetch).not.toHaveBeenCalled()
 
-  // ...and it does happen, just afterwards.
+  // It happens afterwards, in an effect.
   await waitFor(() =>
     expect(apiFetch).toHaveBeenCalledWith('/api/profile/me', expect.any(Object)))
 })
 
 it('does not re-read the role when a token refresh replaces the session', async () => {
-  // A lesson can outlive an access token, so re-fetching on every refresh
-  // would put the app back through a loading state mid-session.
+  // Keyed on user id: a mid-lesson refresh must not re-enter loading.
   getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
   apiFetch.mockResolvedValue({ role: 'teacher' })
   render(<AuthProvider><RoleProbe /></AuthProvider>)
@@ -201,13 +189,7 @@ it('does not re-read the role when a token refresh replaces the session', async 
 })
 
 
-/**
- * The name every greeting and sidebar renders. It used to be the email local
- * part at nine call sites, so a student who set their name in Profile saw it
- * there and "ada.lovelace" everywhere else -- and the two only agreed until
- * that first edit, since sign-up seeds the stored name *from* the email. The
- * value was already arriving in this payload and being discarded.
- */
+/** `displayName`: stored name, then claim, then email prefix. */
 it('names a user from their stored profile, not from their email', async () => {
   getSession.mockResolvedValue({ data: { session: NAMED() } })
   apiFetch.mockResolvedValue({ role: 'student', display_name: 'Ada' })
@@ -217,8 +199,7 @@ it('names a user from their stored profile, not from their email', async () => {
 })
 
 it('falls back to the claim, then the email, when the profile has no name', async () => {
-  // The backend mirrors the stored name into user_metadata on every save, so
-  // the claim is a closer answer than an email prefix that was never a name.
+  // The backend mirrors the stored name into user_metadata on every save.
   getSession.mockResolvedValue({ data: { session: NAMED({ display_name: 'Ada L' }) } })
   apiFetch.mockResolvedValue({ role: 'student', display_name: null })
   const { unmount } = render(<AuthProvider><NameProbe /></AuthProvider>)
@@ -232,8 +213,6 @@ it('falls back to the claim, then the email, when the profile has no name', asyn
 })
 
 it('treats a blank stored name as no name at all', async () => {
-  // A row whose display_name is whitespace would otherwise render a greeting
-  // addressed to nobody.
   getSession.mockResolvedValue({ data: { session: NAMED() } })
   apiFetch.mockResolvedValue({ role: 'student', display_name: '   ' })
   render(<AuthProvider><NameProbe /></AuthProvider>)
@@ -242,8 +221,7 @@ it('treats a blank stored name as no name at all', async () => {
 })
 
 it('keeps a name on a failed read rather than showing none', async () => {
-  // Same direction as the role: an API blip is not a reason to forget who
-  // someone is.
+  // Same direction as the role.
   getSession.mockResolvedValue({ data: { session: NAMED({ display_name: 'Ada L' }) } })
   apiFetch.mockRejectedValue(new Error('offline'))
   render(<AuthProvider><NameProbe /></AuthProvider>)
@@ -252,8 +230,7 @@ it('keeps a name on a failed read rather than showing none', async () => {
 })
 
 it('re-reads the name after a save, instead of waiting for a reload', async () => {
-  // The save is what makes every other surface stale, so `refreshProfile` is
-  // what Profile calls once it succeeds.
+  // Profile calls `refreshProfile` after a successful save.
   getSession.mockResolvedValue({ data: { session: NAMED() } })
   apiFetch.mockResolvedValue({ role: 'student', display_name: 'Ada' })
   render(<AuthProvider><NameProbe /></AuthProvider>)

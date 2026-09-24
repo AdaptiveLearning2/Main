@@ -1,19 +1,9 @@
 /**
- * Electrode contact, read off the bridge's own `hsi` / `is_good` arrays.
+ * Electrode contact from the bridge's `hsi` / `is_good` arrays, with the same
+ * thresholds as the sidecar's `_signal_quality` (HSI 1/2/4 -> 1/0.5/0, 0 skipped;
+ * the worse of the two decides). Unsmoothed: the caller debounces.
  *
- * The sidecar computes the same verdict (`signal_processing._signal_quality`,
- * `quality_basis: "contact"`) and stores it on every row, but the status
- * endpoints a page polls carry only the raw arrays -- so this is the same
- * rule, at the one place a student can act on it. Thresholds match the
- * sidecar's: HSI 1 -> 1.0, 2 -> 0.5, 4 -> 0.0 (0 is "not reported" and is
- * skipped); IS_GOOD counts usable channels; the worse of the two decides.
- *
- * Unsmoothed, unlike the sidecar, because a page samples one frame every few
- * seconds and the caller debounces instead.
- *
- * @returns {'good'|'degraded'|'poor'|null} null when neither array has been
- *   reported -- an older bridge, a headband that hasn't sent contact packets
- *   yet, or no headband at all. "Not measured" is not "poor".
+ * @returns {'good'|'degraded'|'poor'|null} null when neither array is reported ("not measured", not "poor")
  */
 export function contactQuality(ingestion) {
   const hsi = Array.isArray(ingestion?.hsi) ? ingestion.hsi : null

@@ -1,19 +1,4 @@
-/**
- * A headband that drops mid-session is said out loud and watched, not
- * silently reset.
- *
- * The status poll used to answer `muse_connected === false` by putting the
- * panel back to "Connect Headband" as if nothing had been paired -- no toast,
- * and the poll itself ended with `connected`, so nothing was left watching
- * for the link to come back. The native bridge now retries a dropped link
- * itself and reports progress; this page shows that progress, and only
- * drives its own scan+connect once the bridge has given up.
- *
- * Real timers, deliberately. The pairing sequence is a chain of 1-1.5s waits
- * and the drop is noticed by a 5s poll, and every attempt to drive that from
- * a fake clock left React's own scheduling stuck behind it. So each test
- * costs ten to twenty real seconds; the timeouts below say so.
- */
+/** A headband drop is announced and watched, not reset; real timers, since every fake-clock version hung. */
 import { it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 
@@ -42,9 +27,7 @@ vi.mock('../../lib/sidecar', () => ({
   pushStatus: vi.fn(async () => ({ enabled: true, running: true, recorded: {} })),
   deviceStart: vi.fn(async () => ({})), deviceStop: vi.fn(async () => ({})),
   museRefresh: vi.fn(async () => ({})),
-  // The bridge as it behaves: not connected until asked. A harness that
-  // starts connected is adopted by the page without a scan, which is the
-  // right behaviour and the wrong fixture for tests about the scan.
+  // Not connected until asked; a harness that starts connected is adopted without a scan.
   museConnect: vi.fn(async () => { bridge.ingestion = { ...bridge.ingestion, muse_connected: true }; return {} }),
   museDisconnect: vi.fn(async () => ({})),
   museState: vi.fn(async () => ({ running: true, ingestion: { ...bridge.ingestion } })),
@@ -61,9 +44,7 @@ import { museRefresh, museConnect, museDisconnect, museState, deviceStart } from
 import { mockApi, resetApi } from '../../test/mocks/apiFetch'
 import Adaptive from './Adaptive'
 
-// `eeg_age_ms` is part of "connected" here: the page counts a link as alive
-// only with EEG flowing on it, so a fixture without an age is a link that
-// never streamed.
+// `eeg_age_ms` is required for "connected": a link counts only with EEG flowing.
 const CONNECTED = { muse_connected: true, muse_devices: ['Muse-1'], battery_percent: 80,
                     auto_reconnect: true, reconnecting: false, reconnect_attempt: 0,
                     reconnect_max_attempts: 5, reconnect_exhausted: false, eeg_age_ms: 2 }
@@ -95,16 +76,12 @@ async function connect() {
   // Enabled once the health check has said "push" and a station is known.
   await waitFor(() => expect(button).not.toBeDisabled())
   fireEvent.click(button)
-  // begin -> disconnect -> 1.5s settle -> scan -> 1s poll (devices) ->
-  // connect -> 1s poll (muse_connected).
+  // disconnect -> 1.5s settle -> scan -> 1s poll -> connect -> 1s poll.
   await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
 }
 
 it('adopts a link the bridge already has instead of tearing it down to scan for it', async () => {
-  // Seen on hardware: after both the bridge and the page had given up, the
-  // headband was switched back on and the bridge had it connected before
-  // Connect was clicked. The click's disconnect-then-scan dropped that link
-  // 1.5s in -- "connects, then immediately disconnects".
+  // Disconnect-then-scan would drop a link the bridge already holds.
   bridge.ingestion = { ...CONNECTED, active_muse_name: 'Muse-1', eeg_age_ms: 4 }
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })
@@ -118,11 +95,7 @@ it('adopts a link the bridge already has instead of tearing it down to scan for 
 }, TEST_TIMEOUT)
 
 it('does not let the reconnect loop declare a silent link recovered', async () => {
-  // Same evidence standard as Connect's adoption, on the loop's "came back on
-  // its own" check. After the bridge has exhausted its attempts -- exactly
-  // where the hardware run recorded CONNECTED-but-silent links -- a bridge
-  // saying connected with stale EEG must not end the loop with "Headband
-  // reconnected": the loop goes on to its own scan instead.
+  // "Connected" with stale EEG is not a recovery; the loop scans instead.
   await connect()
   bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: false,
                        reconnect_exhausted: true, battery_percent: null }
@@ -132,15 +105,12 @@ it('does not let the reconnect loop declare a silent link recovered', async () =
   const refreshes = museRefresh.mock.calls.length
   await waitFor(() => expect(museRefresh.mock.calls.length).toBeGreaterThan(refreshes),
                 { timeout: 8000 })
-  // The scan ran, which means the shortcut did not: nothing was declared
-  // recovered on the word "connected" alone.
+  // The scan ran, so the "came back on its own" shortcut did not.
   expect(toast.success).not.toHaveBeenCalled()
 }, TEST_TIMEOUT)
 
 it('does not call a drop recovered until EEG is flowing again', async () => {
-  // The third reader of the same rule: the telemetry poll's recovery while
-  // the bridge is reconnecting. CONNECTED with stale EEG stays "reconnecting";
-  // EEG arriving is what ends it.
+  // The telemetry poll's recovery follows the same rule: EEG arriving ends it.
   await connect()
   bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: true,
                        reconnect_attempt: 1, battery_percent: null }
@@ -157,11 +127,7 @@ it('does not call a drop recovered until EEG is flowing again', async () => {
 }, TEST_TIMEOUT)
 
 it('lets a bridge reconnect settle instead of tearing it down for having no packet yet', async () => {
-  // The bridge zeroes its packet clock on CONNECTED and reports no age until
-  // the first packet, which a preset switch delays by seconds. A reader that
-  // called that dead started a page-driven reconnect whose first act is a
-  // bridge disconnect: "connects, then immediately disconnects", on the
-  // recovery path. Connected-with-null-age is left to settle.
+  // The bridge reports no age until the first packet after CONNECTED; null age is left to settle.
   await connect()
   bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: true,
                        reconnect_attempt: 1, battery_percent: null }
@@ -173,9 +139,7 @@ it('lets a bridge reconnect settle instead of tearing it down for having no pack
   expect(museDisconnect).toHaveBeenCalledTimes(1)   // only the original pairing
   expect(museRefresh).toHaveBeenCalledTimes(1)
   expect(toast.success).not.toHaveBeenCalled()
-  // And the page did not take over either: the loop's own grace would also
-  // hold the disconnect back, so the two guards are told apart here -- the
-  // panel must not have moved to the page's "of 3" attempts.
+  // Tells this guard apart from the loop's own grace: the page's "of 3" loop must not have started.
   expect(screen.queryByText(/of 3\)/)).toBeNull()
 
   bridge.ingestion = { ...CONNECTED }
@@ -185,9 +149,7 @@ it('lets a bridge reconnect settle instead of tearing it down for having no pack
 }, TEST_TIMEOUT)
 
 it('lets the page-driven loop wait for a settling link too, instead of scanning over it', async () => {
-  // The other reader. With the loop already running -- the bridge had given
-  // up -- a link that then comes up with no packet yet must not be torn down
-  // by the loop's next attempt; it waits, and adopts the link when EEG flows.
+  // Same rule on the page-driven loop: wait, then adopt once EEG flows.
   await connect()
   bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: false,
                        reconnect_exhausted: true, muse_devices: [] }
@@ -208,24 +170,17 @@ it('gives a settling link a bounded grace, then treats it as dead', async () => 
                        reconnect_attempt: 1, battery_percent: null }
   await screen.findByText(/reconnecting \(attempt 1 of 5\)/, {}, POLL)
   bridge.ingestion = { ...CONNECTED, reconnecting: false, eeg_age_ms: null }
-  // Past the grace the page takes over and scans -- with the bridge's
-  // watchdog on it would have dropped the link first, so this is the
-  // watchdog-off case.
+  // Past the grace the page scans (the bridge-watchdog-off case).
   await waitFor(() => expect(museRefresh).toHaveBeenCalledTimes(2), { timeout: 20000 })
   await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
 
-  // The grace is per episode. This one expired into a scan, and left as it
-  // was the stamp read as a grace already spent on the *next* drop: the
-  // bridge's reconnect, null-age for a moment, was torn down on its first
-  // poll -- "connects, then immediately disconnects" on the recovery path.
+  // The grace is per episode: a spent one must not carry into the next drop.
   bridge.ingestion = { ...CONNECTED }
   await sleep(1000)
   bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: true,
                        reconnect_attempt: 1, battery_percent: null }
   await screen.findByText(/reconnecting \(attempt 1 of 5\)/, {}, POLL)
-  // The bridge's attempt lands before the page's next poll -- its first
-  // backoff is 2s, the same as the poll -- so the first thing the page sees
-  // of the new episode is a settling link.
+  // The bridge's 2s backoff matches the poll, so the page first sees a settling link.
   bridge.ingestion = { ...CONNECTED, reconnecting: false, eeg_age_ms: null }
   await sleep(5000)
   expect(museRefresh).toHaveBeenCalledTimes(2)   // no third scan inside the fresh grace
@@ -234,11 +189,7 @@ it('gives a settling link a bounded grace, then treats it as dead', async () => 
 }, TEST_TIMEOUT)
 
 it('does not adopt a link the bridge calls connected but has no recent EEG from', async () => {
-  // libMuse keeps saying CONNECTED after EEG stops. Adopting that would put
-  // the panel on STREAMING with nothing flowing and skip the one bridge
-  // disconnect a click can still send, so a dead link could never be
-  // cleared. A stale age -- or no age at all, from an older bridge -- goes
-  // through the disconnect-then-scan as before.
+  // libMuse keeps saying CONNECTED after EEG stops; a stale or absent age goes through disconnect-then-scan.
   bridge.ingestion = { ...CONNECTED, active_muse_name: 'Muse-1', eeg_age_ms: 20_000 }
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })
@@ -258,9 +209,8 @@ it('announces a drop and shows the bridge reconnecting instead of resetting the 
 
   expect(toast.warning).toHaveBeenCalledWith('The headband disconnected.', expect.anything())
   expect(screen.getByRole('button', { name: /stop trying/i })).toBeInTheDocument()
-  // The panel must not have gone back to the never-paired state.
   expect(screen.queryByRole('button', { name: /connect headband/i })).not.toBeInTheDocument()
-  // And the page did not start its own scan while the bridge was trying.
+  // No page scan while the bridge is trying.
   expect(museRefresh.mock.calls.length).toBe(refreshes)
 
   bridge.ingestion = { ...CONNECTED }
@@ -269,8 +219,7 @@ it('announces a drop and shows the bridge reconnecting instead of resetting the 
 }, TEST_TIMEOUT)
 
 it('says a flapping link dropped once, not once per drop', async () => {
-  // Measured at the edge of BLE range: reconnect in seconds, drop eight
-  // later, repeat. The panel tracks every drop; the toasts must not.
+  // Edge of BLE range: the panel tracks every drop; the toasts must not.
   await connect()
   const drop = { ...CONNECTED, muse_connected: false, reconnecting: true,
                  reconnect_attempt: 1, battery_percent: null }
@@ -289,9 +238,7 @@ it('says a flapping link dropped once, not once per drop', async () => {
 }, TEST_TIMEOUT)
 
 it('announces a new episode after a teardown, even inside the throttle window', async () => {
-  // The throttle is once per *episode*, not once per minute. A student who
-  // stopped trying and re-paired by hand has started a new one, and a drop
-  // on that link is news again -- keyed to wall-clock alone, it was not.
+  // The throttle is once per episode, not per minute; a hand re-pair starts a new one.
   await connect()
   bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: true,
                        reconnect_attempt: 1, battery_percent: null }
@@ -322,35 +269,26 @@ it('takes over once the bridge has given up, and gives the student a way out', a
                        reconnect_exhausted: true, muse_devices: [] }
   await screen.findByText(/The headband disconnected/, {}, POLL)
 
-  // First page-driven attempt: a 2s backoff, then a scan. No headband is
-  // found, so it will go on to the next attempt rather than succeed.
+  // First page-driven attempt: 2s backoff, then a scan that finds nothing.
   await waitFor(() => expect(museRefresh.mock.calls.length).toBeGreaterThan(refreshes),
                 { timeout: 8000 })
   expect(museConnect).toHaveBeenCalledTimes(1) // only the original pairing
 
-  // The way out is on screen for the whole attempt -- the page-driven scan
-  // does not step the panel through scanning/connecting, where the button
-  // is disabled.
+  // The way out stays on screen: the page-driven scan never disables it.
   const disconnects = museDisconnect.mock.calls.length
   fireEvent.click(screen.getByRole('button', { name: /stop trying/i }))
   await screen.findByRole('button', { name: /connect headband/i })
-  // "Stop trying" tears down like Disconnect, which also cancels whatever
-  // the bridge might still be doing -- every command it receives does.
+  // "Stop trying" tears down like Disconnect, which also cancels the bridge.
   expect(museDisconnect.mock.calls.length).toBeGreaterThan(disconnects)
 
-  // And the cancelled scan must not go on to pair the headband behind the
-  // student's back once it turns up.
+  // The cancelled scan must not pair the headband once it turns up.
   bridge.ingestion = { ...CONNECTED }
   await sleep(2500)
   expect(museConnect).toHaveBeenCalledTimes(1)
 }, TEST_TIMEOUT)
 
 it('stops the page-driven loop when the page unmounts, and sends the shared bridge nothing more', async () => {
-  // Cancelling `pairOnce` alone was half of it: the loop around it had its
-  // own token, which an unmount never set, and each attempt's disconnect
-  // goes to the one shared bridge device. Measured before the fix: three
-  // disconnects and three status reads over ~32s after unmount, then a
-  // failure toast on whatever page the student was on by then.
+  // The loop has its own cancel token, and each attempt's disconnect hits the shared bridge.
   await connect()
   bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: false,
                        reconnect_exhausted: true, muse_devices: [] }
@@ -358,15 +296,11 @@ it('stops the page-driven loop when the page unmounts, and sends the shared brid
 
   // Inside the first 2s backoff, before any attempt has run.
   cleanup()
-  // Counted after the unmount: the effects' own polls stop with it, so any
-  // later read is the loop's. Each attempt reads the bridge before pairing,
-  // so this is what catches a loop that survives even when its disconnect
-  // is blocked further down.
+  // Counted after unmount: the effects' polls stop, so any later read is the loop's.
   const disconnects = museDisconnect.mock.calls.length
   const refreshes = museRefresh.mock.calls.length
   const reads = museState.mock.calls.length
-  // Past all three backoffs (2s + 4s + 8s), where the loop would give up
-  // and toast.
+  // Past all three backoffs (2s + 4s + 8s).
   await sleep(16000)
   expect(museState.mock.calls.length).toBe(reads)
   expect(museDisconnect.mock.calls.length).toBe(disconnects)
@@ -375,12 +309,7 @@ it('stops the page-driven loop when the page unmounts, and sends the shared brid
 }, TEST_TIMEOUT)
 
 it('sends no disconnect for a Connect the page left before the pairing began', async () => {
-  // Connect's own path: two awaits (the session, then bringing the device
-  // up) run before `pairOnce`, and its first step is a disconnect that is
-  // global to the shared bridge. Leaving during those awaits used to let
-  // that disconnect land after the page was gone. The reconnect loop no
-  // longer reaches `pairOnce` cancelled, so this is the one path the
-  // pre-disconnect check still protects, and nothing else exercised it.
+  // Two awaits precede `pairOnce`, whose first step is a global bridge disconnect.
   deviceStart.mockImplementationOnce(() => new Promise(r => setTimeout(() => r({}), 800)))
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })
@@ -410,19 +339,7 @@ it('shows a contact hint only after two poor readings in a row, and clears it on
   await connect()
   const hint = /Adjust the headband/
 
-  // Anchored on readings served, not on seconds elapsed. This used to set the
-  // poor state, `sleep(6000)`, and assert the hint was absent "because at 6s
-  // exactly one 5s poll has landed" -- true only if the interval happened to
-  // be in the right part of its cycle when the state changed. Land two inside
-  // that window and the hint is correctly on screen and the assertion fails
-  // against working code, which is what made this file flaky under the load
-  // of a full run.
-  //
-  // Counting reads gives the assertion ~5s of slack instead of none: `waitFor`
-  // notices the first poor read within its 50ms polling interval, and the
-  // second is a whole poll away. The short settle after it is for the render,
-  // not for the poll -- the state is set when the read resolves and painted a
-  // microtask later.
+  // Anchored on reads served, not elapsed time: a whole poll of slack.
   const readsBefore = museState.mock.calls.length
   bridge.ingestion = { ...CONNECTED, hsi: [4, 4, 4, 4], is_good: [0, 0, 0, 0] }
   await waitFor(() => expect(museState.mock.calls.length).toBe(readsBefore + 1), POLL)

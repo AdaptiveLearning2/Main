@@ -1,21 +1,8 @@
 import { motion } from 'framer-motion'
 
-/** The headline figure on a dashboard: a label, a number, a tinted icon.
- *
- * The student and teacher dashboards each carried a copy of this, identical
- * but for the hover overlay's gradient.
- *
- * `color` and `hoverTint` are raw Tailwind class strings rather than named
- * tones, matching how call sites already wrote them -- a fixed palette would
- * have to enumerate every per-card gradient and render an unstyled chip on
- * a miss.
- *
- * **`value ?? '—'` is load-bearing.** Renders "not loaded" as an em dash, so
- * callers can pass `null` for a failed read instead of a zero. Do not turn it
- * into `value || '—'`: 0 is a real figure a student can have.
- *
- * Not to be confused with the compact tile in `pages/teacher/Students.jsx`,
- * which shares nothing but the idea.
+/**
+ * A dashboard headline figure. `color`/`hoverTint` are complete Tailwind class strings.
+ * `value ?? '—'`, never `||`: null is "not loaded", 0 is a real figure.
  */
 export default function StatCard({
   icon: Icon,

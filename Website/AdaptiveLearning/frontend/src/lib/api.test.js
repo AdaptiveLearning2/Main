@@ -1,13 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// The only test file that runs apiFetch for real, with only `lib/supabase`
-// and `fetch` mocked. Every other test replaces apiFetch wholesale, so this
-// is the sole place the URL, the bearer token, and error handling are
-// actually exercised.
-//
-// Timeouts get the most coverage because a hung request is not the same as
-// a failed one: a rejected promise has a `.catch` waiting; one that never
-// settles does not, and the caller waits forever.
+// The only file running apiFetch for real (only `lib/supabase` and `fetch` mocked).
 
 vi.mock('./supabase', async () => await import('../test/mocks/supabase'))
 
@@ -53,16 +46,14 @@ describe('the request it builds', () => {
   })
 
   it('omits Authorization entirely when nobody is signed in', async () => {
-    // Must be omitted, not sent as `Bearer null` — that reads as a bad
-    // credential, not as no credential.
+    // `Bearer null` reads as a bad credential, not as none.
     setSession(null)
     await apiFetch('/api/questions')
     expect(lastCall()[1].headers).not.toHaveProperty('Authorization')
   })
 
   it('omits it when reading the session throws, rather than failing the call', async () => {
-    // `getAccessToken` swallows this on purpose, so a public endpoint stays
-    // reachable even when the auth client is broken.
+    // Swallowed on purpose, so public endpoints survive a broken auth client.
     authFns.getSession.mockRejectedValue(new Error('auth client down'))
     await expect(apiFetch('/api/questions')).resolves.toEqual({ ok: true })
     expect(lastCall()[1].headers).not.toHaveProperty('Authorization')
@@ -87,7 +78,6 @@ describe('the request it builds', () => {
 
 describe('an error response', () => {
   it('carries the status code, not just a message', async () => {
-    // Callers need the status code to tell "not found" from "request failed".
     globalThis.fetch.mockResolvedValue(failing({ status: 404, body: '{"detail":"no such class"}' }))
 
     await expect(apiFetch('/api/classes/x'))
@@ -102,8 +92,6 @@ describe('an error response', () => {
   })
 
   it('falls back to the status text when the body is empty', async () => {
-    // An empty error message would render as a blank banner, which looks
-    // like a rendering bug rather than a failed request.
     globalThis.fetch.mockResolvedValue(
       failing({ status: 500, body: '', statusText: 'Internal Server Error' }))
 
@@ -134,8 +122,6 @@ describe('the optional bound', () => {
   })
 
   it('aborts the hung request rather than leaving it in flight', async () => {
-    // Rejecting alone leaves the request running in the background — the
-    // timeout must also abort it.
     vi.useFakeTimers()
     let signal
     globalThis.fetch.mockImplementation((_url, opts) => {
@@ -151,8 +137,7 @@ describe('the optional bound', () => {
   })
 
   it('bounds the token read too, not just the fetch', async () => {
-    // `getAccessToken` can itself hit the network refreshing the token, so
-    // the timeout has to cover that too, not just `fetch`.
+    // `getAccessToken` can hit the network refreshing the token.
     vi.useFakeTimers()
     authFns.getSession.mockReturnValue(new Promise(() => {}))
     globalThis.fetch.mockResolvedValue(ok())
@@ -167,8 +152,7 @@ describe('the optional bound', () => {
   })
 
   it('leaves a request without a bound alone', async () => {
-    // Opt-in on purpose: a default timeout would abort the LLM-backed
-    // endpoints, which can legitimately take longer and are bounded server-side.
+    // Opt-in: a default would abort the server-bounded LLM endpoints.
     vi.useFakeTimers()
     globalThis.fetch.mockReturnValue(new Promise(() => {}))
 
@@ -191,7 +175,6 @@ describe('the optional bound', () => {
   })
 
   it('still surfaces the status on an error response', async () => {
-    // The bound must not swallow what callers already rely on.
     globalThis.fetch.mockResolvedValue(
       failing({ status: 403, statusText: 'Forbidden', body: JSON.stringify({ detail: 'nope' }) }))
 
@@ -201,12 +184,7 @@ describe('the optional bound', () => {
 })
 
 // ─── honouring Retry-After ────────────────────────────────────────────────
-//
-// The backend has always sent `Retry-After: 5` with the 503 it raises when
-// the generation waiter cap is full, and until this existed nothing read it:
-// a student refused because their class started together saw an error screen
-// rather than a pause. Measured at the shipped cap, a simultaneous start of
-// 30 students served 40% of them.
+// The generation waiter cap answers 503 with `Retry-After`.
 
 const refused = (retryAfter) => ({
   ok: false,
@@ -230,8 +208,7 @@ describe('Retry-After', () => {
   })
 
   it('does not retry a 503 that asked for nothing', async () => {
-    // Only an explicit Retry-After is an invitation. A bare 503 is a failure,
-    // and retrying every one of them would turn any outage into a stampede.
+    // Only an explicit Retry-After is an invitation; retrying every 503 is a stampede.
     globalThis.fetch = vi.fn().mockResolvedValue(refused(null))
 
     await expect(apiFetch('/api/generate-question')).rejects.toMatchObject({ status: 503 })
@@ -239,9 +216,7 @@ describe('Retry-After', () => {
   })
 
   it('never retries a write, however politely it was refused', async () => {
-    // GET-only is what makes this safe by construction rather than by audit:
-    // a replayed POST could repeat a side effect. Both generation endpoints
-    // are GETs, so the restriction costs nothing.
+    // GET-only: a replayed POST could repeat a side effect.
     globalThis.fetch = vi.fn().mockResolvedValue(refused(0))
 
     await expect(apiFetch('/api/sessions', { method: 'POST', body: { a: 1 } }))
@@ -257,9 +232,7 @@ describe('Retry-After', () => {
   })
 
   it('spreads the retry instead of coming back in lockstep', async () => {
-    // The part that is easy to omit and defeats the change: every browser
-    // refused in the same burst holds the same `Retry-After`, so honouring
-    // it exactly reforms the burst one round later.
+    // A burst shares one `Retry-After`; honoured exactly, it reforms a round later.
     const random = vi.spyOn(Math, 'random').mockReturnValue(0.5)
     vi.useFakeTimers()
     globalThis.fetch = vi.fn()

@@ -14,9 +14,7 @@ vi.mock('sonner', () => ({
 
 const refreshProfile = vi.fn()
 vi.mock('../../context/AuthContext', () => ({
-  // `refreshProfile` is part of the context, so the double has to carry it:
-  // the page calls it after a save, and a double thinner than the real thing
-  // fails there rather than where the bug would be.
+  // The double carries `refreshProfile`, which the page calls after a save.
   useAuth: () => ({ user: { id: 't-1', email: 'teacher@example.com' },
                     displayName: 'Ms Patel', refreshProfile, signOut: vi.fn() }),
 }))
@@ -50,8 +48,7 @@ describe('the display name', () => {
 
   it('actually saves it', async () => {
     draw()
-    // Waits for the value, not just presence: the field is disabled until the
-    // profile loads, and userEvent.clear() throws on a disabled element.
+    // Wait for the value: the field is disabled until load, and clear() throws on it.
     await screen.findByDisplayValue('Ms Patel')
     const field = screen.getByLabelText(/display name/i)
     await userEvent.clear(field)
@@ -65,9 +62,7 @@ describe('the display name', () => {
       }))
     })
     expect(toastSuccess).toHaveBeenCalled()
-    // The sidebar and the dashboard greeting read the shared name, which this
-    // save has just made stale -- without this they keep the old one until a
-    // reload, which is the staleness this whole change removes.
+    // The sidebar and greeting read the shared name this save made stale.
     expect(refreshProfile).toHaveBeenCalled()
   })
 
@@ -94,9 +89,7 @@ describe('changing the password', () => {
   }
 
   it('checks the current password before changing anything', async () => {
-    // Supabase's updateUser doesn't ask for the old password itself, so the
-    // form must verify it -- otherwise a shared school machine left signed in
-    // gives anyone at the desk a way to change the password.
+    // updateUser does not ask for the old password, so the form must, for shared machines.
     authFns.signInWithPassword.mockResolvedValue({ error: new Error('bad creds') })
 
     await fill({ 'current password': 'wrong', '^new password': 'newpass123', 'confirm new': 'newpass123' })
@@ -130,7 +123,7 @@ describe('changing the password', () => {
 
 describe('the tabs', () => {
   it('does not offer notification switches with nothing behind them', async () => {
-    // There's no push infrastructure, so notification toggles would tell a teacher something is on when it isn't.
+    // No push infrastructure exists, so a toggle would claim something is on when it is not.
     draw()
     await screen.findByDisplayValue('Ms Patel')
 
@@ -138,13 +131,7 @@ describe('the tabs', () => {
   })
 })
 
-/**
- * The Account card sits directly above the Display Name input, which is close
- * enough that a card bound to the input's state reads as a live preview. It
- * is not one: it names the account, so it must show what is *saved*. Bound to
- * the draft it kept asserting a name the account did not have after a save
- * that failed.
- */
+/** The Account card shows the saved name, not the draft in the input below it. */
 it('shows the saved name on the account card while the field is being edited', async () => {
   draw()
   await screen.findByDisplayValue('Ms Patel')

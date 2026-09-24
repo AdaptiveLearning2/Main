@@ -11,7 +11,7 @@ import StatCard from '../../components/ui/StatCard'
 
 
 
-// A teacher may leave this open on a second screen, but nothing here changes fast enough to need a quick poll.
+// Nothing here changes fast enough to need a quick poll.
 const REFRESH_MS = 60_000
 
 export default function TeacherDashboard() {
@@ -49,7 +49,7 @@ export default function TeacherDashboard() {
       } catch (e) {
         if (killed) return
         console.error('Failed to load questions:', e)
-        // Leave old data on screen: a failed refresh shouldn't blank an already-correct dashboard.
+        // Leave old data on screen on a failed refresh.
         setQuestionsFailed(true)
         return false
       } finally {
@@ -62,8 +62,7 @@ export default function TeacherDashboard() {
         const rows = await apiFetch('/api/classes')
         if (killed) return
         setClasses(rows || [])
-        // One request for every class's averages instead of one roster fetch per class.
-        // Its own catch means a failure here only blanks the averages, not the class list.
+        // One request for all classes' averages; its own catch blanks only the averages.
         const averages = await apiFetch('/api/classes/summary').catch(() => ({}))
         if (killed) return
         setClassAverages(averages)
@@ -81,7 +80,7 @@ export default function TeacherDashboard() {
 
     const refresh = async () => {
       const [q, c] = await Promise.all([loadQuestions(), loadClasses()])
-      // Only stamp when both loads succeeded, or the timestamp would vouch for partly stale figures.
+      // Stamp only when both loads succeeded.
       if (!killed && q && c) setLastUpdated(new Date())
     }
 

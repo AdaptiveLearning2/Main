@@ -3,14 +3,12 @@ import { render, screen, waitFor, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 
-// The layouts render a sidebar and an `<Outlet/>` and read auth/theme
-// context, both stubbed here so this file tests only the markup.
+// Auth and theme context stubbed, so this file tests only the markup.
 vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({ user: { email: 'someone@example.com' },
                     displayName: authName, signOut: vi.fn() }),
 }))
-// Set per test. The provider resolves it from `profiles.display_name`; the
-// layouts render what they are given rather than deriving a name themselves.
+// Set per test; layouts render the given name rather than deriving one.
 let authName = 'Ada Lovelace'
 vi.mock('../context/ThemeContext', () => ({
   useTheme: () => ({ dark: false, toggleTheme: vi.fn() }),
@@ -41,10 +39,7 @@ function renderLayout(Layout, path) {
 }
 
 describe.each(LAYOUTS)('%s', (_name, Layout, path) => {
-  // These are icon-only buttons, so without a label a screen reader
-  // announces just "button". Asserted by accessible name, not by
-  // `aria-label` directly, so this still passes if the label comes from
-  // visible text instead.
+  // Icon-only buttons; asserted by accessible name, not `aria-label` directly.
   it.each([
     ['Collapse sidebar'],
     ['Open menu'],
@@ -55,8 +50,7 @@ describe.each(LAYOUTS)('%s', (_name, Layout, path) => {
   })
 
   it('names the theme toggle by what pressing it does', () => {
-    // Both the sidebar and mobile top bar have a copy, so use `getAllByRole`
-    // — a plain `getByRole` would fail on the duplicate.
+    // The sidebar and mobile top bar each have a copy.
     renderLayout(Layout, path)
     expect(screen.getAllByRole('button', { name: 'Switch to dark mode' }).length)
       .toBeGreaterThan(0)
@@ -70,9 +64,7 @@ describe.each(LAYOUTS)('%s', (_name, Layout, path) => {
 
 
 // ── the mobile drawer ───────────────────────────────────────────────────────
-//
-// Runs over every layout to make sure each one uses the shared
-// `MobileDrawer` implementation, not its own copy.
+// Over every layout, so each uses the shared `MobileDrawer`.
 
 describe.each(LAYOUTS)('%s mobile drawer', (_name, Layout, path) => {
   beforeEach(() => { localStorage.clear() })
@@ -84,19 +76,15 @@ describe.each(LAYOUTS)('%s mobile drawer', (_name, Layout, path) => {
   }
 
   it('announces itself as a modal dialog', async () => {
-    // Without this a screen reader reads the page behind as still available.
     const dialog = await open(Layout, path)
     expect(dialog).toHaveAttribute('aria-modal', 'true')
     expect(dialog).toHaveAccessibleName()
   })
 
   it('closes on Escape', async () => {
-    // Without Escape, the backdrop click is the only way to close the menu
-    // — no keyboard-only path exists.
     await open(Layout, path)
     await userEvent.keyboard('{Escape}')
-    // Longer than the default 1s: this waits on a spring exit animation,
-    // which can take over a second when the full suite runs alongside it.
+    // Waits on a spring exit animation, slow under the full suite.
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
                   { timeout: 4000 })
   })
@@ -107,8 +95,6 @@ describe.each(LAYOUTS)('%s mobile drawer', (_name, Layout, path) => {
   })
 
   it('gives focus back to the opener when it closes', async () => {
-    // Focus must return to the opener, or a keyboard user loses their place
-    // every time they close the menu.
     renderLayout(Layout, path)
     const opener = screen.getByRole('button', { name: 'Open menu' })
     await userEvent.click(opener)
@@ -119,10 +105,9 @@ describe.each(LAYOUTS)('%s mobile drawer', (_name, Layout, path) => {
   })
 
   it('keeps Tab inside it', async () => {
-    // Otherwise Tab walks into the page behind the overlay.
     const dialog = await open(Layout, path)
 
-    // More presses than the drawer has stops, to confirm focus wraps.
+    // More presses than the drawer has stops, so focus must wrap.
     for (let i = 0; i < 25; i += 1) await userEvent.tab()
     expect(dialog).toContainElement(document.activeElement)
   })
@@ -132,8 +117,6 @@ describe.each(LAYOUTS)('%s sidebar collapse', (_name, Layout, path) => {
   beforeEach(() => { localStorage.clear() })
 
   it('remembers the choice across a remount', async () => {
-    // Must be persisted, not just component state — otherwise it resets on
-    // every page load.
     const first = renderLayout(Layout, path)
     await userEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
     await screen.findByRole('button', { name: 'Expand sidebar' })
@@ -153,8 +136,7 @@ describe('sidebar collapse is per layout', () => {
   beforeEach(() => { localStorage.clear() })
 
   it('does not leak the choice from one role to another', async () => {
-    // A shared key would leak the collapse state between roles on a shared
-    // school machine.
+    // A shared key would leak between roles on a shared school machine.
     const teacher = renderLayout(TeacherLayout, '/teacher')
     await userEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
     await screen.findByRole('button', { name: 'Expand sidebar' })
@@ -165,8 +147,7 @@ describe('sidebar collapse is per layout', () => {
   })
 
   it('gives every layout a distinct key', () => {
-    // Reads the keys from storage, not from the components, so a new layout
-    // that forgets its own scope fails this test.
+    // Read from storage, so a new layout that forgets its scope fails.
     for (const [, Layout, path] of LAYOUTS) {
       renderLayout(Layout, path)
       cleanup()
@@ -176,26 +157,12 @@ describe('sidebar collapse is per layout', () => {
   })
 })
 
-/**
- * The avatar letter and the name under it are one fact shown twice, so they
- * are derived from one value. They were not: the name came from the resolved
- * profile name and the letter from `user.email[0]`, which renders "s" over
- * "Ada Lovelace" for someone@example.com -- a mismatch that reads as the
- * wrong person's account.
- */
+/** The avatar letter and the name beside it derive from one value. */
 describe.each(LAYOUTS)('%s account block', (_name, Layout, path) => {
-  // Every describe in this file that renders a sidebar clears storage, and
-  // this block needs it more than most: the account badge is hidden entirely
-  // when the sidebar is collapsed, `al_sidebar_collapsed:<scope>` persists,
-  // and two tests above click Collapse sidebar. Without this, whether these
-  // tests can see what they assert on depends on which scope an earlier test
-  // happened to leave collapsed.
+  // Collapse persists and hides the account block entirely.
   beforeEach(() => { localStorage.clear() })
 
-  // First, so the two below run against the state it leaves behind: collapsing
-  // persists, so without the `beforeEach` above they would render a collapsed
-  // sidebar and find no account block at all. A guard against leaked state is
-  // only a guard if something stands downstream of the leak.
+  // First, so the tests below stand downstream of its leak and give the clear teeth.
   it('is hidden entirely when the sidebar is collapsed', async () => {
     authName = 'Ada Lovelace'
     renderLayout(Layout, path)
@@ -211,7 +178,7 @@ describe.each(LAYOUTS)('%s account block', (_name, Layout, path) => {
 
     expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
     expect(screen.getByText('A')).toBeInTheDocument()
-    // 's', from someone@example.com, is what the email-derived letter gave.
+    // Not the email's first letter.
     expect(screen.queryByText('S')).not.toBeInTheDocument()
   })
 

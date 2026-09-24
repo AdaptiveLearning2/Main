@@ -11,26 +11,17 @@ import AccessibleChart from '../charts/AccessibleChart'
 import SeriesFilter from '../charts/SeriesFilter'
 import { useSeriesFilter } from '../../hooks/useSeriesFilter'
 
-// One string cannot answer for three channels, so this is a function of
-// *which* channel and *why* it has no value: withdrawn, sensor absent, or
-// read failed. Never render "no data" for something that was never recorded
-// -- "N/A" for a withdrawn channel and "Off" for a failed read both make a
-// claim that isn't true.
+// Why a channel has no value. Never "no data" for something never recorded.
 const CHANNEL_STATE = {
-  // Consent off, and we know when. `since` is the date it was switched off.
   revoked: since => (since ? `Off since ${since}` : 'Not recorded'),
-  // The consent read itself failed -- distinct from revoked, since we can't
-  // claim the student turned it off when we simply don't know.
+  // Consent read failed: we can't claim the student turned it off.
   unknown: () => 'Unavailable',
-  // Consented and present, but this window produced nothing usable.
+  // Samples arrived, none usable.
   calibrating: () => 'Calibrating',
-  // Consented, but no sensor produced anything this period.
   noSensor: () => 'No sensor',
 }
 
-// Formats an ISO timestamp as a short date, or null when there isn't one, so
-// a caller can tell "off, and here's when" from "off, unknown when" rather
-// than printing "Invalid Date".
+// Short date, or null (never "Invalid Date") when there is none.
 function shortDate(iso) {
   if (!iso) return null
   const d = new Date(iso)
@@ -38,35 +29,22 @@ function shortDate(iso) {
     { day: 'numeric', month: 'short' })
 }
 
-/**
- * What to show in a tile for a channel that has no value.
- *
- * `on` is whether the channel was read at all, `revokedAt` when it was switched
- * off, `consentRetrieved` whether we could find out, and `samples` how many
- * readings the period produced.
- */
+/** Tile text for a channel with no value: consent unreadable, revoked, calibrating, or no sensor. */
 export function offLabel({ on, revokedAt, consentRetrieved, samples }) {
   if (consentRetrieved === false) return CHANNEL_STATE.unknown()
   if (!on) return CHANNEL_STATE.revoked(shortDate(revokedAt))
-  // `samples > 0` means readings arrived and none was usable -- calibrating,
-  // not an absent sensor.
   return samples > 0 ? CHANNEL_STATE.calibrating() : CHANNEL_STATE.noSensor()
 }
 
 /**
  * A rendered value, or the reason there isn't one.
- *
- * Every tile goes through here rather than branching on the channel flag
- * directly -- branching only on "is the channel on" left `pct()`'s raw 'N/A'
- * showing whenever a consented channel produced nothing usable.
+ * Every tile goes through here, so `pct()`'s 'N/A' never reaches the screen.
  */
 export function valueOrReason(value, reason) {
   return (value && value !== 'N/A') ? value : offLabel(reason)
 }
 
-// One colour per FER+ label, fixed rather than positional -- a palette by
-// slice order would recolour every emotion whenever the distribution
-// changed, so the same week viewed twice would look like different data.
+// Fixed per label, not by slice order, so a colour always means one emotion.
 const EMOTION_COLOURS = {
   happy: '#10b981', neutral: '#94a3b8', surprise: '#f59e0b',
   sad: '#6366f1', anger: '#ef4444', fear: '#8b5cf6',
@@ -83,14 +61,8 @@ function sourceLabel(source) {
   return SOURCE_LABELS[source] || source
 }
 
-// Signal values cross the wire as 0..1 ratios, matching what /live and the
-// parent dashboard both assume. Rendering without scaling prints focus 0.72
-// as "1%" -- every metric ~100x too small.
-//
-// A measurement, or null for anything that is not one. `Number.isNaN` alone
-// isn't enough: Number('') and Number('  ') are both 0, so an empty value
-// would render as a confident "0%", and Number.isNaN(Infinity) is false, so
-// a non-finite number would pass through. Number.isFinite covers both.
+// Signals arrive as 0..1 ratios. A finite number, or null: Number('') is 0,
+// so a blank must not become a confident "0%".
 function ratio(value) {
   if (value === null || value === undefined) return null
   if (typeof value === 'string' && value.trim() === '') return null
@@ -98,45 +70,34 @@ function ratio(value) {
   return Number.isFinite(n) ? n : null
 }
 
-// Exported so the parent dashboard, which renders the same 0..1 ratios,
-// shares one definition of what an unrenderable value looks like.
 export function pct(value) {
   const n = ratio(value)
   return n === null ? 'N/A' : `${Math.round(n * 100)}%`
 }
 
-// Same scaling for chart series. Nulls must stay null, not become 0, so a
-// day with no data leaves a gap rather than drawing a line at zero.
+// Nulls stay null so a day with no data is a gap, not a line at zero.
 function toPct(value) {
   const n = ratio(value)
   return n === null ? null : n * 100
 }
 
-// Absolute units, not ratios. `toPct` must never touch these -- a 72 bpm day
-// through it draws at 7200%, so heart rate gets its own axis.
+// Absolute units (bpm); never through `toPct`.
 function unit(value, suffix, digits = 0) {
   const n = ratio(value)
   return n === null ? 'N/A' : `${n.toFixed(digits)}${suffix}`
 }
 
-// Two channels are consented separately, so one flag can't answer for both.
-// `face_included` is a deprecated alias for the emotion channel, kept as a
-// fallback so a payload from before the split still renders correctly.
+// `face_included` is the legacy alias; absent on both reads as on.
 export function emotionOn(report) {
   if (report?.emotion_included !== undefined) return report.emotion_included !== false
-  // The legacy alias. Absent means a payload from before the split, and
-  // treating that as "excluded" would blank a channel that was recorded.
   return report?.face_included !== false
 }
 
 function heartOn(report) {
-  // Absent means a pre-split payload with no heart data -- defaulting to true
-  // would draw an empty series and claim the sensor recorded nothing.
+  // Absent means a payload predating the heart channel.
   return report?.heart_included === true
 }
 
-// The offLabel `reason` for every face-derived tile on this panel -- one
-// definition so a change to the backing fields updates every call site.
 function faceReason(report, faceOn) {
   return {
     on: faceOn,
@@ -146,21 +107,9 @@ function faceReason(report, faceOn) {
   }
 }
 
-/** The same four states for the EEG channel.
- *
- * A headband with poor electrode contact writes rows with the measurement
- * columns nulled, and without this the snapshot printed "N/A" beside a
- * weekly average of 64% -- two true numbers that looked like a contradiction.
- *
- * `eeg_enabled`, not `eeg_included` like the other two channels: the
- * cognitive channel has no opt-out on the aggregate and is always read, and
- * withdrawal deliberately keeps what was already recorded -- so a withdrawn
- * EEG channel can still hold true averages from before the withdrawal.
- *
- * Absent means a payload from before the field existed and reads as *on* --
- * defaulting to off would claim a headband was switched off when it wasn't.
- * Same fallback as `emotionOn`; opposite of `heartOn`, where absent genuinely
- * meant the channel didn't exist yet.
+/**
+ * The offLabel reason for the EEG channel.
+ * `eeg_enabled`, not `eeg_included`: cognitive is always read. Absent reads as on.
  */
 function eegReason(report) {
   return {
@@ -199,9 +148,7 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
   const cog = latest.cognitive || {}
   const face = latest.face || {}
   const faceOn = emotionOn(report)
-  // `heart` is absent from `latest` when the channel wasn't read -- the
-  // backend omits the key rather than sending null, since a tile rendered
-  // from `{}` would read as a sensor recording nothing.
+  // Absent when the channel wasn't read.
   const heart = latest.heart
   const heartShown = heartOn(report) && !!heart
   return (
@@ -216,34 +163,18 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
         <Radio size={18} className="text-emerald-500" />
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {/* Through `valueOrReason`, like every other tile -- these three used
-            to print `pct()`'s raw 'N/A' beside a weekly average of 64%. */}
         <MiniMetric label="Focus" value={valueOrReason(pct(cog.focus), eegReason(report))}
                     icon={Brain} tone="emerald" />
         <MiniMetric label="Stress" value={valueOrReason(pct(cog.stress), eegReason(report))}
                     icon={Zap} tone="rose" />
-        {/* No Engagement tile: it is the focus index under another name
-            (signal_mapping.py), and Focus is the tile before last. */}
-        {/* No attention tile. `face_signals.attention` has no producer, so
-            the tile could only ever say "Calibrating" -- reads as warming up
-            rather than a measurement that will never arrive. Blocked on a
-            labelled reference: attention inferred from head direction is
-            least valid for this product's users and renders as an
-            objective-looking percentage. */}
-        {/* bpm, not a percentage -- `unit()` never touches the 0..1 path. */}
+        {/* No Engagement tile (it is focus) and no attention tile (no producer). */}
         {heartShown && (
           <MiniMetric label="Heart Rate" value={unit(heart.heart_rate_bpm, ' bpm')} icon={Heart} tone="rose" />
         )}
       </div>
-      {/* One tile, not two. "Identity Confidence" was retired: face identity
-          never had a producer, and identifying a child by face is a
-          different purpose from what camera consent asks about. */}
       <div className="mt-4 grid gap-3 text-sm">
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Facial Emotion</p>
-          {/* Not a binary faceOn ? value : "Reporting off" -- a failed consent
-              read also leaves faceOn false, and offLabel tells that apart
-              from a genuine withdrawal. */}
           <p className="font-bold text-gray-900 dark:text-white capitalize">
             {valueOrReason(faceOn && face.emotion, faceReason(report, faceOn))}
           </p>
@@ -254,16 +185,8 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
 }
 
 /**
- * Week-over-week averages, over months rather than days.
- *
- * A different question from the panel below it, and a different source. The
- * weekly report reads the per-sample tables under a row cap; this reads
- * `signal_daily_rollup`, which is the only copy that outlives
- * `expire_signal_rows` — and a trend is the surface most likely to be read
- * *after* a school year ends, which is exactly when the raw rows are gone.
- *
- * Same three-state rule as everything else here: a failed read is not a quiet
- * term, and a week with nothing recorded is a gap rather than a missing bar.
+ * Week-over-week averages from `signal_daily_rollup`, which outlives the raw rows.
+ * A failed read is not a quiet term; an empty week is a gap, not a missing bar.
  */
 export function SignalTrend({ trend, title = 'Term Trend' }) {
   const heartShown = heartOn(trend)
@@ -274,22 +197,13 @@ export function SignalTrend({ trend, title = 'Term Trend' }) {
     ...w,
     focus: toPct(w.focus),
     stress: toPct(w.stress),
-    // bpm, not a ratio. Through `toPct` a 72 bpm week draws at 7200%.
     heart_rate_bpm: ratio(w.heart_rate_bpm),
-    // The Monday, as `MM-DD`. The year is the same across any range this
-    // component offers, so it would be repetition on every tick.
+    // The Monday, as `MM-DD`.
     label: w.week_start ? w.week_start.slice(5) : '',
   }))
 
-  // One list per series; the lines, the columns and the toggles above the chart
-  // are all derived from it. The sr-only table is the text alternative for
-  // *this picture*, so a column naming something no sighted reader can see is a
-  // different report — which is why the columns follow what is shown rather
-  // than what exists. `focus` and `stress` are scaled on the way in above,
-  // hence no `scale` here; heart rate is left in bpm and says so in its unit.
-  //
-  // `colour` lives here because the toggle draws a swatch with it: one
-  // constant, so the chip and the line it names cannot disagree.
+  // Lines, columns and toggles all derive from this list. Focus/stress are
+  // scaled above, so no `scale` here.
   const SERIES = [
     { key: 'focus',  label: 'Focus',  unit: '%', colour: '#6366f1', axis: 'pct', name: 'Focus' },
     { key: 'stress', label: 'Stress', unit: '%', colour: '#f43f5e', axis: 'pct', name: 'Stress' },
@@ -302,23 +216,17 @@ export function SignalTrend({ trend, title = 'Term Trend' }) {
   const { hidden, toggle, showAll, shownOf } = useSeriesFilter()
   const shown = shownOf(SERIES)
   const COLUMNS = shown.map(({ key, label, unit }) => ({ key, label, unit }))
-  // An axis with no line draws an empty scale; a line naming an axis that was
-  // not mounted throws. Both follow what is shown.
+  // A line naming an unmounted axis throws, so axes follow what is shown.
   const axisShown = (axis) => shown.some((x) => x.axis === axis)
 
-  // Coverage belongs in the sentence, not in a column, for the reason above.
-  // It has to be said somewhere: the rollup keeps per-day counts precisely so a
-  // thin week stays visibly thin, and a week of three samples plotted beside a
-  // week of four thousand looks equally solid.
+  // Coverage goes in the sentence so a thin week stays visibly thin.
   const recorded = weeks.filter(w => w.days_with_data > 0).length
   const headline = `Weekly signal averages across ${weeks.length} week`
     + `${weeks.length === 1 ? '' : 's'}, with data recorded on ${recorded} of them.`
 
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
-      {/* Each week carries the score-scale range its rollup rows recorded;
-          a term straddling the change is two series, and only words can say
-          where the step is. Renders nothing otherwise. */}
+      {/* Says where a score-scale change falls in the term; otherwise nothing. */}
       <ScaleNote scale={combineScales(weeks)} what="The lines below" />
       <div className="mb-4">
         <h3 className="font-black text-gray-900 dark:text-white">{title}</h3>
@@ -328,8 +236,7 @@ export function SignalTrend({ trend, title = 'Term Trend' }) {
         </p>
       </div>
 
-      {/* Above the chart, because it says what the chart is about to show, and
-          outside the height-fixed box so the chips can wrap without eating it. */}
+      {/* Outside the height-fixed box so the chips can wrap. */}
       {!failed && chartData.length > 0 && (
         <SeriesFilter series={SERIES} hidden={hidden} onToggle={toggle}
                       label="Measurements shown on the term trend" />
@@ -337,17 +244,12 @@ export function SignalTrend({ trend, title = 'Term Trend' }) {
       <div className="h-56 rounded-2xl bg-slate-50 dark:bg-gray-800 p-3">
         {failed || chartData.length === 0 ? (
           <div className="h-full flex items-center justify-center text-sm text-gray-600 text-center px-4 dark:text-gray-400">
-            {/* A failed read empties the series exactly as an untouched term
-                does, so the "yet" claim is gated on having looked. */}
             {failed
               ? 'The term trend could not be loaded.'
               : 'No signal history yet.'}
           </div>
         ) : shown.length === 0 ? (
-          /* Every measurement turned off. Said in words with a way back rather
-             than the last toggle refusing to move, and distinct from both
-             messages above: "no history" and "could not load" are claims about
-             the data, this is a claim about the view. */
+          /* Every series hidden: a claim about the view, not the data. */
           <div className="h-full flex flex-col items-center justify-center gap-3">
             <p className="text-sm text-gray-600 dark:text-gray-400">No measurements selected.</p>
             <button type="button" onClick={showAll}
@@ -361,21 +263,14 @@ export function SignalTrend({ trend, title = 'Term Trend' }) {
             <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
               <XAxis dataKey="label" fontSize={11} tickLine={false} />
-              {/* Two axes and explicit ids, same as the daily chart: adding a
-                  second axis without giving the first one an id silently binds
-                  every existing series to the new one. */}
+              {/* Explicit ids on both axes, or every series binds to the second. */}
               {axisShown('pct') && <YAxis yAxisId="pct" domain={[0, 100]} fontSize={11} tickLine={false} />}
               {axisShown('bpm') && (
                 <YAxis yAxisId="bpm" orientation="right" domain={['auto', 'auto']}
                        fontSize={11} tickLine={false} unit=" bpm" />
               )}
               <ChartTooltip />
-              {/* Dots for the same reason as the daily chart: a student with
-                  one recorded week gives every series a single point, which
-                  draws no segment and renders as an empty chart without one.
-                  A series with no readings is still omitted upstream rather
-                  than drawn as an all-null line, since an empty legend entry
-                  reads as a measurement that flatlined. */}
+              {/* Dots, so a single recorded week is still visible. */}
               {shown.map((x) => (
                 <Line key={x.key} yAxisId={x.axis} type="monotone" dataKey={x.key}
                       stroke={x.colour} strokeWidth={2} dot={{ r: 3 }} name={x.name}
@@ -396,77 +291,38 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
   const counts = report?.sample_counts || {}
   const faceOn = emotionOn(report)
   const heartShown = heartOn(report)
-  // Scaled to percent to match the YAxis domain below -- left as 0..1
-  // ratios, every series drew flat along the axis floor.
+  // Ratios scaled to percent; heart rate stays in bpm.
   const chartData = (report?.daily || []).map(d => ({
     ...d,
     focus: toPct(d.focus),
     stress: toPct(d.stress),
-    // Not through toPct: these are bpm/ms, and scaling by 100 would flatten
-    // every other series against the floor. `ratio()` only sanitises -- null
-    // stays null so a day with no reading leaves a gap, not a zero.
     heart_rate_bpm: ratio(d.heart_rate_bpm),
     label: d.date ? d.date.slice(5) : '',
   }))
-  // Days the row cap kept us from retrieving, vs. days with no activity --
-  // both render as a gap, so the difference has to be stated separately.
+  // Days the row cap left unread; they draw as gaps like quiet days, so say so.
   const unretrieved = (report?.daily || []).filter(
     d => d.cognitive_retrieved === false
       || d.face_retrieved === false
       || d.heart_retrieved === false
       || d.sessions_retrieved === false
   ).length
-  // Which of the report's three reads happened. A failed query returns the
-  // same empty rows as a quiet week, so this says which is which. `=== false`
-  // throughout: undefined means a pre-field payload from a working read, and
-  // null is the facial opt-out rather than a failure.
+  // `=== false`, not falsy: undefined is an older payload, null the facial opt-out.
   const retrieved = report?.retrieved || {}
   const cogFailed = retrieved.cognitive === false
   const faceFailed = retrieved.face === false
   const sessionsFailed = retrieved.sessions === false
   const heartFailed = retrieved.heart === false
   const anyFailed = cogFailed || faceFailed || heartFailed || sessionsFailed
-  // Separate from the above: the consent lookup itself failing, which means
-  // "we couldn't find out", not "the student declined".
+  // Consent unreadable: "we couldn't find out", not "declined".
   const consentFailed = report?.consent_retrieved === false
-  // So "measured but unusable" is distinguishable from "never measured" -- a
-  // null average beside a nonzero count would otherwise look like off.
+  // Tells "measured but unusable" from "never measured".
   const heartSamples = counts.heart || 0
-  // Sorted by count for the legend, built from the backend's own tally
-  // rather than recounting raw rows the frontend doesn't have.
   const emotionSlices = Object.entries(report?.emotion_distribution || {})
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value)
 
-  // **The columns are what the chart draws, and nothing else.** This is the
-  // text alternative for *this picture*, so a series the picture omits does not
-  // belong in it — a screen-reader user reading a series no sighted reader can
-  // see is not equivalence, it is a different report.
-  //
-  // `engagement` was here, and was both undrawn and wrong. `chartData` scales
-  // `focus` and `stress` through `toPct` and carries every other field across
-  // by spread, so engagement stayed a 0..1 ratio and announced as "Engagement
-  // 0% to 1%". The comment that stood here claimed `chartData` is "already
-  // scaled to percentages" — true of the two fields above it, false of the one
-  // it was being used to justify. Nothing on screen could contradict it,
-  // because engagement is not plotted: the error existed *only* on the surface
-  // this component was built to fix, which is the failure mode to expect here
-  // and to check for deliberately.
-  //
-  // Heart rides on `heartShown` for the same reason: the line is conditional,
-  // so the description of it has to be.
-  //
-  // No `scale` on the two that remain — unlike SessionReview and Live, these
-  // really are scaled on the way in, and each is named in the map above.
-  // One list per series; the lines, the columns and the toggles above the chart
-  // all come from it, so a column can never outlive the line it describes.
-  // `focus` and `stress` are scaled into the chart data above, hence no
-  // `scale` here. `colour` lives here because the toggle draws a swatch with
-  // it — one constant, so the chip and its line cannot disagree.
-  //
-  // The palette matches SessionReview.jsx on the shared series; a backend test
-  // pins the two equal, since the archived SVGs re-render the session charts
-  // and one green line meaning two things across two pages is what that fixed.
+  // Lines, columns and toggles all derive from this list, so a column never
+  // names an undrawn series. Palette pinned equal to SessionReview.jsx by a backend test.
   const TREND_SERIES = [
     { key: 'focus',  label: 'Focus',  unit: '%', colour: '#6366f1', axis: 'pct', name: 'Focus' },
     { key: 'stress', label: 'Stress', unit: '%', colour: '#f43f5e', axis: 'pct', name: 'Stress' },
@@ -486,23 +342,14 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       <div className="mb-4">
         <h3 className="font-black text-gray-900 dark:text-white">{title}</h3>
         <p className="text-xs text-gray-600 dark:text-gray-400">Averages are based on the last {report?.days || 7} days of available samples.</p>
-        {/* A summary collapses both score scales into one number, where
-            unlike a series there is no step to see -- so it has to say so. */}
+        {/* An average can mix both score scales with no visible step. */}
         <ScaleNote scale={avg.score_scale} what="The averages below" />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
         <MiniMetric label="Avg Focus" value={pct(avg.focus)} icon={Brain} tone="emerald" />
         <MiniMetric label="Avg Stress" value={pct(avg.stress)} icon={Zap} tone="rose" />
-        {/* No Engagement tile: it is the focus index under another name
-            (signal_mapping.py), and Avg Focus is two tiles up. */}
-        {/* sessions_recorded, not sample_counts.sessions -- the latter is rows
-            under the session row cap, so a heavy week showed the cap value
-            instead of the real count. Falls back for older payloads.
-
-            A dash when the sessions read failed, not the 0 the fallback would
-            otherwise reach -- that would answer a broken query with a
-            confident "0 sessions this week". */}
+        {/* sessions_recorded: sample_counts.sessions is capped. Dash on a failed read, never 0. */}
         <MiniMetric
           label="Sessions"
           value={sessionsFailed ? '—' : (report?.sessions_recorded ?? counts.sessions ?? 0)}
@@ -518,15 +365,12 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       <div className="h-56 rounded-2xl bg-slate-50 dark:bg-gray-800 p-3">
         {chartData.length === 0 ? (
           <div className="h-full flex items-center justify-center text-sm text-gray-600 text-center px-4 dark:text-gray-400">
-            {/* A failed read empties the series exactly like a quiet week
-                does, so the "yet" claim has to be gated on having looked. */}
             {anyFailed
               ? 'Weekly signal data could not be loaded.'
               : 'No weekly signal data available yet.'}
           </div>
         ) : shown.length === 0 ? (
-          /* Every measurement turned off -- a claim about the view, distinct
-             from the two above it, which are claims about the data. */
+          /* Every series hidden: a claim about the view, not the data. */
           <div className="h-full flex flex-col items-center justify-center gap-3">
             <p className="text-sm text-gray-600 dark:text-gray-400">No measurements selected.</p>
             <button type="button" onClick={showAll}
@@ -535,10 +379,6 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
             </button>
           </div>
         ) : (
-          // `role="img"` + a summary, because Recharts emits bare `<svg>`: with
-          // no name and no walkable structure, the whole trend announced as
-          // nothing. The `sr-only` table below carries the days themselves --
-          // the summary alone is a headline with the data thrown away.
           <AccessibleChart
             headline={`Daily signal trend over ${chartData.length} day${chartData.length === 1 ? '' : 's'}.`}
             rows={chartData} rowKey="label" rowLabel="Day"
@@ -546,38 +386,14 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
             <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
                 <XAxis dataKey="label" fontSize={11} tickLine={false} />
-                {/* Two axes, because the series are in different units. The left
-                    one is percent for the 0..1 ratios; heart rate is beats per
-                    minute and would either flatten everything else against the
-                    floor or, if scaled to match, be drawn at 7200%. Explicit ids
-                    on both -- adding a second axis without giving the first one
-                    an id silently binds every existing series to the new axis. */}
+                {/* Percent left, bpm right. Explicit ids on both, or every series binds to the second. */}
                 {axisShown('pct') && <YAxis yAxisId="pct" domain={[0, 100]} fontSize={11} tickLine={false} />}
                 {axisShown('bpm') && (
                   <YAxis yAxisId="bpm" orientation="right" domain={['auto', 'auto']}
                          fontSize={11} tickLine={false} unit=" bpm" />
                 )}
                 <ChartTooltip />
-                {/* Distinct colours per series -- all three were "currentColor",
-                    which rendered them identically and made the chart unreadable.
-                    Matches the MiniMetric tones above. */}
-                {/* #6366f1, matching SessionReview.jsx. It was #10b981 here,
-                    which that file used for a different series at the time --
-                    so one green line meant two things across the two pages.
-                    The archived SVGs re-render the session charts, so those are
-                    the reference and this is the side that moved; a test in
-                    the backend pins the two palettes equal on shared series. */}
-                {/* Dots, not `dot={false}`. This chart holds at most seven
-                    points, one per day, and a student who practised on a single
-                    day gives every series exactly one -- which draws no segment
-                    and, without a dot, renders as a completely empty chart. That
-                    is the normal case for a new student in their first week, so
-                    the graph was blank precisely when it was first looked at. */}
-                {/* A channel that recorded nothing is omitted from the list
-                    above rather than drawn as an all-null line, because an
-                    empty legend entry reads as a measurement that flatlined.
-                    A channel a teacher switched off is a different thing and
-                    says so in the toggles. */}
+                {/* Dots, so a single recorded day is still visible. */}
                 {shown.map((x) => (
                   <Line key={x.key} yAxisId={x.axis} type="monotone" dataKey={x.key}
                         stroke={x.colour} strokeWidth={2} dot={{ r: 3 }} name={x.name} />
@@ -598,22 +414,13 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         </div>
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Dominant Emotion</p>
-          {/* Not a binary faceOn ? value : "Reporting off" -- a failed consent
-              read also leaves faceOn false, and offLabel tells that apart
-              from an actual withdrawal. */}
           <p className="font-bold text-gray-900 dark:text-white capitalize">
             {valueOrReason(faceOn && highlights.dominant_emotion, faceReason(report, faceOn))}
           </p>
         </div>
       </div>
 
-      {/* Three states, and the middle one is the point.
-          - Read: values.
-          - Explicitly not read (`heart_included === false`): the row stays
-            with *why* in place of numbers, since a channel that's off must
-            say so and never read as "no data".
-          - Field absent: a pre-split payload with no heart data to describe,
-            so the row is omitted. */}
+      {/* Off (`=== false`) keeps the row with the reason; absent omits it. */}
       {report?.heart_included === false && (
         <div className="mt-3 rounded-xl bg-slate-50 dark:bg-gray-800 p-3 text-sm">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Heart</p>
@@ -631,8 +438,6 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         <div className="mt-3 grid md:grid-cols-3 gap-3 text-sm">
           <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
             <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Avg Heart Rate</p>
-            {/* Not a raw "N/A": the channel was read (heartShown, above), so
-                an empty average means unusable samples, not never asked. */}
             <p className="font-bold text-gray-900 dark:text-white">
               {valueOrReason(unit(highlights.heart_rate_bpm, ' bpm'), {
                 on: true,
@@ -653,12 +458,8 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
           </div>
           <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
             <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Sensor</p>
-            {/* Named because accuracy differs materially by source, and the
-                camera one is unvalidated -- a reader comparing weeks should
-                be able to see the sensor changed. */}
+            {/* Named: accuracy differs by source, and the camera is unvalidated. */}
             <p className="font-bold text-gray-900 dark:text-white">
-              {/* Not "N/A": the channel was read, so an empty source list
-                  means no reading arrived, named by `offLabel`. */}
               {(report?.heart_sources || []).length
                 ? report.heart_sources.map(sourceLabel).join(', ')
                 : offLabel({
@@ -671,9 +472,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         </div>
       )}
 
-      {/* The distribution, not just its argmax -- `dominant_emotion` alone
-          hides a week split 40/35/25 behind one word. Rendered only when
-          there's something to render. */}
+      {/* The distribution, not just `dominant_emotion`. */}
       {faceOn && emotionSlices.length > 0 && (
         <div className="mt-4">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-600 mb-1 dark:text-gray-400">Emotion Mix</p>
@@ -699,25 +498,18 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
           Facial recognition data was not included in this report.
         </p>
       )}
-      {/* "Measured, unusable" is a third state: a null average beside a
-          nonzero sample count means every reading failed the quality gate,
-          not that the headband never ran. */}
+      {/* Samples but no average: every reading failed the quality gate. */}
       {heartShown && heartSamples > 0 && ratio(highlights.heart_rate_bpm) === null && (
         <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
           Heart-rate samples were recorded but none met the quality threshold, so no average is shown.
         </p>
       )}
-      {/* The consent lookup itself failing, distinct from the per-table
-          failures below -- without it, a database problem would render
-          identically to a student who declined. */}
       {consentFailed && (
         <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
           Consent settings could not be read, so heart and facial data were left out of this report — that is not a record of what was permitted.
         </p>
       )}
-      {/* Named per table rather than one blanket warning -- the reads fail
-          independently, and "EEG did not load" is a different thing to act on
-          than "session count did not load". */}
+      {/* Per table: the reads fail independently. */}
       {anyFailed && (
         <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
           {[
@@ -740,32 +532,10 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
 
 
 /**
- * At-home practice strategies for a student, with the control that generates
- * them.
- *
- * `source` is rendered rather than hidden: the backend answers from a fixed
- * rule set unless an optional local model passed its safety checks, and
- * which happened is worth showing to whoever acts on the advice.
- *
- * `signalsRetrieved` covers a different failure: when the aggregate behind
- * the report fails to load, the endpoint still answers with generic advice,
- * but the subtitle would otherwise claim it's built from this week. `false`
- * retracts that claim; undefined means a pre-field payload from a working read.
- */
-/**
- * `viewerRole` frames the same advice for whoever is reading it, and the frame
- * is the only thing it changes -- `_llm_strategies` and `_validated_strategies`
- * are untouched, so a teacher and a parent asking about one student get the
- * same list.
- *
- * Which is exactly why the heading stays "At-Home". The prompt behind this
- * says "you are helping a parent support their child's maths practice at
- * home" and the rule-based fallback says "ask your child to explain one solved
- * problem out loud", so relabelling it for a teacher would claim the model had
- * been asked for classroom advice when it had not. The teacher frame says whose
- * advice it is instead, which is the useful thing to know when deciding what to
- * do with it. An unrecognised role reads as a parent, the audience the copy was
- * written for.
+ * At-home practice strategies, with the control that generates them.
+ * `signalsRetrieved === false` swaps the subtitle to "general suggestions".
+ * `viewerRole` changes only the framing; the heading stays "At-Home" because
+ * the advice is written for a parent. Unrecognised roles read as parent.
  */
 export function StrategyPanel({ strategies, source, signalsRetrieved, loading, error, onGenerate,
                                 viewerRole = 'parent' }) {
@@ -778,8 +548,6 @@ export function StrategyPanel({ strategies, source, signalsRetrieved, loading, e
           <h3 className="font-black text-gray-900 dark:text-white flex items-center gap-2">
             <Sparkles size={18} className="text-violet-500" /> At-Home Learning Strategies
           </h3>
-          {/* Swapped rather than annotated, so the claim and its correction
-              don't sit next to each other contradicting one another. */}
           <p className="text-xs text-gray-600 mt-1 dark:text-gray-400">
             {signalsMissing
               ? <>General practice suggestions — this week&apos;s signal data could not be read. Learning indicators only — not medical or behavioural advice.</>
@@ -806,16 +574,14 @@ export function StrategyPanel({ strategies, source, signalsRetrieved, loading, e
         <p className="text-sm text-gray-600 dark:text-gray-400">No strategies generated yet.</p>
       ) : (
         <div className="space-y-3">
-          {/* Above the list, not beside `source` below -- it changes how the
-              items should be read, so it shouldn't come after them. */}
+          {/* Above the list: it changes how the items should be read. */}
           {signalsMissing && (
             <p className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
               This week&apos;s signal data couldn&apos;t be loaded, so these are general suggestions rather than ones based on
               {forTeacher ? ' this student’s' : ' your child’s'} report. Try again shortly.
             </p>
           )}
-          {/* Index key: replaced wholesale each generation, never reordered,
-              and strategy text isn't guaranteed unique. */}
+          {/* Index key: replaced wholesale, never reordered, text not unique. */}
           {strategies.map((s, i) => (
             <div key={i} className="flex gap-3 rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
               <span className="w-6 h-6 rounded-lg bg-violet-600 text-white flex items-center justify-center text-xs font-black shrink-0">{i + 1}</span>
@@ -831,36 +597,14 @@ export function StrategyPanel({ strategies, source, signalsRetrieved, loading, e
 
 
 /**
- * Plain sentences describing what the charts above already show, from
- * `POST /api/students/{id}/chart-summary`.
- *
- * On demand, never auto-fetched. The endpoint is the second heaviest thing a
- * click can trigger here, and a report page that generated one on mount would
- * spend a model call per student on every teacher who opened a roster —
- * thirty of them for a summary nobody asked to read.
- *
- * `source` says whether the sentences are the deterministic ones or a model's
- * rephrasing of them, and it is shown for the same reason the strategies panel
- * shows its own: which happened changes how much the wording is worth trusting.
- *
- * `retrieved` is four separate flags rather than one, because four separate
- * reads sit behind one response (the weekly aggregate, the term trend, the
- * academic totals, the topic figures). Collapsed into one, a summary missing
- * only its trend sentence would be presented either as entirely fine or as
- * entirely broken.
- * The sentences themselves already say which part is missing; the banner's job
- * is only to stop the subtitle claiming the summary describes the whole report.
- *
- * `viewerRole` frames the subtitle, exactly as on `StrategyPanel` and with the
- * same rule: it changes the framing and nothing about the content, and an
- * unrecognised role reads as a parent.
+ * Plain sentences describing the charts, from `POST /api/students/{id}/chart-summary`.
+ * On demand only (a model call per student otherwise). `retrieved` carries one
+ * flag per backing read. `viewerRole` works as on `StrategyPanel`.
  */
 export function ChartSummaryPanel({ summary, source, retrieved, loading, error, onGenerate,
                                     viewerRole = 'parent' }) {
   const forTeacher = viewerRole === 'teacher'
-  // `=== false` on each, never falsiness: these are absent on a payload from
-  // before the field existed, and `!undefined` would report an outage for
-  // every such response.
+  // `=== false`, not falsy: absent on older payloads.
   const missing = [
     retrieved?.signals === false && 'this week’s signal averages',
     retrieved?.trend === false && 'the term trend',
@@ -899,16 +643,14 @@ export function ChartSummaryPanel({ summary, source, retrieved, loading, error, 
         <p className="text-sm text-gray-600 dark:text-gray-400">No summary generated yet.</p>
       ) : (
         <div className="space-y-3">
-          {/* Above the sentences, not after them: it changes how they should
-              be read, so it cannot come once they have been read. */}
+          {/* Above the sentences: it changes how they should be read. */}
           {missing.length > 0 && (
             <p className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
               Part of this report couldn’t be loaded ({missing.join(', ')}), so the summary below describes
               less than the charts do. Try again shortly.
             </p>
           )}
-          {/* Index key: replaced wholesale each generation, never reordered,
-              and two sentences are not guaranteed to differ. */}
+          {/* Index key: replaced wholesale, never reordered, text not unique. */}
           {summary.map((s, i) => (
             <div key={i} className="flex gap-3 rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
               <span className="w-6 h-6 rounded-lg bg-sky-600 text-white flex items-center justify-center text-xs font-black shrink-0">{i + 1}</span>

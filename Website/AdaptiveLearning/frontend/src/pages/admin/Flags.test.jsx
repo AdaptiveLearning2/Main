@@ -3,9 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import AdminFlags from './Flags'
 
-// The consent bypass records signals from students who have not agreed, so the
-// control must require explicit acknowledgement, use a bounded duration, and
-// never offer "indefinitely".
+// The consent bypass needs explicit acknowledgement and a bounded duration, never "indefinitely".
 
 const apiFetch = vi.fn()
 vi.mock('../../lib/api', () => ({ apiFetch: (...a) => apiFetch(...a) }))
@@ -104,10 +102,7 @@ it('says plainly that students who did not consent are being recorded', async ()
 })
 
 it('clears the acknowledgement once enforcement is back on', async () => {
-  // Otherwise the checkbox stays ticked for a later, unrelated bypass.
-  // Driven through a real round trip, not a rerender with new props: the
-  // panel reads `active` from its own fetch, so only a real state change
-  // exercises the clearing logic.
+  // Via a real round trip: the panel reads `active` from its own fetch.
   let active = true
   apiFetch.mockImplementation((path, opts) => {
     if (path === '/api/admin/env-flags') return Promise.resolve({ flags: [] })
@@ -139,8 +134,7 @@ it('clears the acknowledgement once enforcement is back on', async () => {
 })
 
 it('re-reads on a timer, because the bypass expires on the clock', async () => {
-  // Nothing writes when the bypass lapses, so polling is the only way the
-  // page notices it's over.
+  // Nothing writes when the bypass lapses, so the page must poll.
   vi.useFakeTimers({ shouldAdvanceTime: true })
   respond()
   render(<AdminFlags />)
@@ -168,8 +162,7 @@ it('marks the deployment flags as needing a redeploy', async () => {
   })
   render(<AdminFlags />)
 
-  // Shown as a plain value, not a switch, so it can't look like a control
-  // that silently does nothing.
+  // A plain value, not a switch that would silently do nothing.
   const row = (await screen.findByText('INGEST_MODE')).closest('div.rounded-xl')
   expect(within(row).queryByRole('switch')).not.toBeInTheDocument()
   expect(within(row).getByText('pull')).toBeInTheDocument()

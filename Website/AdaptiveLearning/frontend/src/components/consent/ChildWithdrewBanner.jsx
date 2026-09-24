@@ -1,13 +1,6 @@
 /**
  * Tells a parent that a child has switched a sensor off.
- *
- * Notification used to run only one way: a parent re-enabling a channel
- * notified the student, but a child withdrawing one told nobody.
- *
- * **This is a notice, not a prompt to undo it.** A student's withdrawal
- * stands; a parent can restore a channel from Settings if that's the right
- * call. A "turn it back on" button here would make overriding the child's
- * decision the default response to hearing about it.
+ * A notice, not a prompt to undo it: deliberately no "turn it back on" button.
  */
 
 import { useEffect, useState } from 'react'
@@ -23,8 +16,7 @@ export default function ChildWithdrewBanner() {
   useEffect(() => {
     let cancelled = false
     apiFetch('/api/parent/consent-notices')
-      // Only on a genuine retrieved read -- a failed read must not be shown as
-      // "child withdrew something", since it fails open to an empty list.
+      // Only on a retrieved read.
       .then(r => { if (!cancelled && r?.retrieved) setNotices(r.notices || []) })
       .catch(() => { /* advisory, not a blocker */ })
     return () => { cancelled = true }
@@ -33,9 +25,7 @@ export default function ChildWithdrewBanner() {
   if (notices.length === 0) return null
 
   const acknowledge = async () => {
-    // Sends back the server's own watermark per child rather than letting the
-    // endpoint stamp `now()` -- otherwise a withdrawal that lands between the
-    // read and the dismiss click would be marked seen and never shown.
+    // The server's watermark per child, not `now()`, so a later withdrawal is never marked seen.
     const through = Object.fromEntries(
       notices.filter(n => n.through).map(n => [n.child_id, n.through]))
     await apiFetch('/api/parent/consent-notices/ack',

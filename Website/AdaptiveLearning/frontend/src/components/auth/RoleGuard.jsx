@@ -11,8 +11,7 @@ export default function RoleGuard({ roles, children }) {
 
   if (roles && !roles.includes(role)) {
     const home = homeFor(role)
-    // An unrecognised role has no home to send them to. Guessing one would
-    // loop, since every candidate route is guarded and would land back here.
+    // No home for an unrecognised role; guessing one would loop.
     if (!home) {
       return (
         <div className="min-h-screen grid place-items-center p-8 text-center">

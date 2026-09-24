@@ -6,16 +6,8 @@ import Panel from './Panel'
 import ScaleNote from '../signals/ScaleNote'
 
 /**
- * The class's signal averages per school day.
- *
- * The payload is one row per (day, channel), because the three channels are
- * aggregated separately and a day can have any subset of them. The chart wants
- * one row per day, so the channels are folded together here — a day with only
- * cognitive rows still appears, carrying nulls for the rest.
- *
- * Days with nothing recorded are absent from the payload and stay absent here.
- * `connectNulls={false}` is what makes that a visible gap rather than a line
- * drawn straight through a fortnight nobody was in.
+ * The class's signal averages per school day. Days with nothing recorded stay
+ * absent, drawn as gaps (`connectNulls={false}`).
  */
 
 /** One row per day, from the payload's row-per-(day, channel). */
@@ -23,8 +15,7 @@ function foldByDay(series) {
   const byDay = new Map()
   for (const r of series || []) {
     const row = byDay.get(r.day) || { day: r.day, label: String(r.day).slice(5) }
-    // Each channel contributes only its own metrics, so a heart row cannot
-    // overwrite a cognitive row's focus with the undefined it carries.
+    // Each channel writes only its own metrics.
     if (r.channel === 'cognitive') {
       row.avg_focus = r.avg_focus
       row.avg_stress = r.avg_stress
@@ -32,9 +23,7 @@ function foldByDay(series) {
       row.avg_heart_rate_bpm = r.avg_heart_rate_bpm
       row.avg_rmssd_ms = r.avg_rmssd_ms
     }
-    // Students are counted per channel, so the day's coverage is the widest
-    // channel rather than the sum — a student with both a headband and a
-    // camera appears in two rows and is still one student.
+    // Max, not sum: one student can appear in two channels.
     row.student_count = Math.max(row.student_count || 0, r.student_count || 0)
     byDay.set(r.day, row)
   }
@@ -44,28 +33,16 @@ function foldByDay(series) {
 export default function ClassSignalTrend({ data, loading, onRetry, hideSensors = false }) {
   const rows = foldByDay(data?.series)
 
-  // Whether a series is drawn at all, so the column spec can mirror it. A
-  // column naming a line the chart does not draw reads a screen-reader user a
-  // series no sighted reader can see — the defect this codebase has shipped
-  // twice, and the reason the two are derived from one condition here.
-  //
-  // `hideSensors` gates *both*, not just heart. Focus, stress and engagement are
-  // EEG-derived and are as much sensor data as a heart rate is — leaving them
-  // drawn under a note reading "sensor data is hidden" states the opposite of
-  // what the panel is doing, and CLAUDE.md's rule for this switch is that it
-  // hides all sensor data rather than the facial subset it began as.
+  // Lines and columns share these conditions. `hideSensors` gates every series.
   const hasCognitive = !hideSensors && rows.some(r => typeof r.avg_focus === 'number')
   const hasHeart = !hideSensors && rows.some(r => typeof r.avg_heart_rate_bpm === 'number')
 
-  // Ratios are stored 0..1 and read as percentages, so they carry
-  // `scale: asPercent` with a `%` unit. Heart rate is already in its own unit
-  // and takes no scale — combining the two would announce 6700%.
+  // Ratios scale to percent; heart rate takes no scale.
   const COLUMNS = [
     ...(hasCognitive ? [
       { key: 'avg_focus', label: 'Focus', unit: '%', scale: asPercent },
       { key: 'avg_stress', label: 'Stress', unit: '%', scale: asPercent },
-      // No `avg_engagement`: engagement is the focus index under another
-      // name (signal_mapping.py), so a second line would plot one number twice.
+      // No engagement: it is the focus index.
     ] : []),
     ...(hasHeart ? [{ key: 'avg_heart_rate_bpm', label: 'Heart rate', unit: ' bpm' }] : []),
   ]
@@ -90,13 +67,7 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
         : 'No signals recorded for this class in this range yet.'}
       className="lg:col-span-2"
     >
-      {/* The payload's score-scale range over the window; renders only when
-          the range straddles the change, since then the days on either side
-          are not comparable and the chart cannot show where the step is. */}
-      {/* Only beside a drawn focus/stress line: the range comes from the
-          cognitive rollup rows whether or not a day produced an average, so
-          a week of poor contact would otherwise caption series the chart
-          does not draw. */}
+      {/* Score-scale caveat, only beside a drawn focus/stress line. */}
       {hasCognitive && (
         <ScaleNote scale={data?.score_scale} what="This class's averages" />
       )}
@@ -108,9 +79,7 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
           <LineChart data={rows} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" className="stroke-gray-200 dark:stroke-gray-700" />
             <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-            {/* Ratios plotted raw against a 0..1 domain, formatted to percent
-                on the axis and the tooltip. The column spec scales instead,
-                which is why it carries `asPercent` and this does not. */}
+            {/* Raw 0..1 domain, formatted as percent; the column spec scales instead. */}
             <YAxis yAxisId="ratio" domain={[0, 1]} tick={{ fontSize: 11 }}
               tickFormatter={v => `${Math.round(v * 100)}%`} />
             {hasHeart && (

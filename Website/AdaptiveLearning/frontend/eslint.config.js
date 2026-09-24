@@ -7,10 +7,7 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 import { sinkRules } from './eslint.sinks.js'
 
 export default defineConfig([
-  // `coverage/` too: it is gitignored generated output, and linting it made
-  // the local problem count depend on whether coverage had ever been run on
-  // that checkout -- which is the number CLAUDE.md's backlog rule compares
-  // against.
+  // `coverage/` is generated; linting it skews the backlog count.
   globalIgnores(['dist', 'coverage']),
   {
     files: ['**/*.{js,jsx}'],
@@ -30,31 +27,19 @@ export default defineConfig([
     },
     plugins: { react },
     rules: {
-      // `ignoreRestSiblings` covers destructuring-to-omit — `const { x, ...rest }
-      // = obj` to build an object *without* `x`, which is how the tests construct
-      // a payload that predates a field. The binding is unused by design there,
-      // and deleting it to satisfy the rule would put the key back.
+      // `ignoreRestSiblings`: `const { x, ...rest } = obj` omits `x` by design.
       'no-unused-vars': ['error', {
         varsIgnorePattern: '^[A-Z_]',
         ignoreRestSiblings: true,
       }],
-      // `no-unused-vars` cannot see JSX. Without this, every identifier used
-      // only inside JSX — `motion` from framer-motion, an `icon: Icon` prop
-      // rendered as `<Icon />` — reads as an unused import. That was 40 of the
-      // 65 errors in the backlog, all false. Only this one rule is enabled;
-      // eslint-plugin-react's recommended config brings a large ruleset that
-      // would add to the backlog rather than clear it.
+      // `no-unused-vars` cannot see JSX. Only this rule, not the plugin's recommended set.
       'react/jsx-uses-vars': 'error',
-      // The XSS sinks. Here for editor feedback; `eslint.sinks.config.js`
-      // applies the same object alone, which is what CI gates on -- this run
-      // cannot, because of the fourteen-error backlog above.
+      // Editor feedback; CI gates on `eslint.sinks.config.js`.
       ...sinkRules,
     },
   },
   {
-    // Test files run under vitest with `globals: true` (see vite.config.js),
-    // so describe/it/expect/vi are injected rather than imported. Without this
-    // every assertion reads as a no-undef error.
+    // vitest `globals: true` injects describe/it/expect/vi.
     files: ['**/*.{test,spec}.{js,jsx}', 'src/test/**/*.{js,jsx}'],
     languageOptions: {
       globals: { ...globals.browser, ...globals.vitest },

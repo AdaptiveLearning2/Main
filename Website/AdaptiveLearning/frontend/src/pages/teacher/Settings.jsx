@@ -8,8 +8,7 @@ import { toast } from 'sonner'
 import { apiFetch } from '../../lib/api'
 import { supabase } from '../../lib/supabase'
 
-// No "Notifications" tab: there's no push infrastructure, so a switch here
-// would persist nothing while claiming to be on.
+// No "Notifications" tab: there's no push infrastructure behind one.
 const TABS = ['General', 'Security', 'Appearance']
 
 export default function TeacherSettings() {
@@ -45,8 +44,7 @@ export default function TeacherSettings() {
         method: 'PUT',
         body: { display_name: displayName.trim() },
       })
-      // The sidebar and the teacher dashboard greeting read the shared name,
-      // which this save has just made stale.
+      // The sidebar and dashboard greeting read the shared name.
       refreshProfile()
       toast.success('Saved.')
     } catch (e) {
@@ -63,8 +61,7 @@ export default function TeacherSettings() {
 
     setSavingPw(true)
     try {
-      // Supabase's updateUser doesn't verify the current password itself, so
-      // this does -- otherwise anyone at a signed-in school machine could change it.
+      // updateUser doesn't verify the current password, so re-auth here first.
       const { error: reauth } = await supabase.auth.signInWithPassword({
         email: user?.email,
         password: pw.current,

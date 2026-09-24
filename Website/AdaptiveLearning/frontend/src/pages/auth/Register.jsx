@@ -13,8 +13,7 @@ const ROLES = [
 ]
 
 
-// Bar color, text color, and label grouped per score, rather than three
-// parallel arrays that could drift out of sync.
+// Indexed by score (0-4).
 const STRENGTH = [
   { bar: 'bg-rose-500',   text: 'text-rose-500',   label: 'Weak' },
   { bar: 'bg-rose-500',   text: 'text-rose-500',   label: 'Weak' },
@@ -26,8 +25,7 @@ const STRENGTH = [
 function StrengthBar({ password }) {
   if (!password) return null
   const score = [password.length >= 8, /[A-Z]/.test(password), /[0-9]/.test(password), /[^A-Za-z0-9]/.test(password)].filter(Boolean).length
-  // Index 0 is a real score: a non-empty password can satisfy none of the
-  // four checks ("abc" scores 0). The empty case is already handled above.
+  // 0 is a real score: "abc" satisfies none of the four checks.
   const rung = STRENGTH[score]
   return (
     <div className="mt-2">
@@ -83,8 +81,7 @@ export default function Register() {
           <p className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-3">I am joining as...</p>
           <div className="grid grid-cols-3 gap-2">
             {ROLES.map(r => (
-              // aria-pressed conveys the selection for screen readers, since
-              // color alone doesn't.
+              // aria-pressed: color alone doesn't convey the selection.
               <motion.button key={r.id} type="button" onClick={() => setRole(r.id)}
                 aria-pressed={role === r.id}
                 whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}

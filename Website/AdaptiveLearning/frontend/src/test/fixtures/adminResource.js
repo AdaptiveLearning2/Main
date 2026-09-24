@@ -1,7 +1,6 @@
 /** The admin payloads that `useAdminResource` loads. */
 
-/** `GET /api/admin/flags`. The defaults are the values the system had before
- *  the table existed, so a flag absent from the response still has one. */
+/** `GET /api/admin/flags`. */
 export function buildFlags(overrides = {}) {
   return {
     flags: [
@@ -16,14 +15,7 @@ export function buildFlags(overrides = {}) {
   }
 }
 
-/**
- * `GET /api/admin/retention-window`.
- *
- * `state` has six values but only `open` and `not_enforced` permit
- * recording. The other four each deny for a different reason (e.g. "year
- * hasn't started" vs "couldn't read the setting") that a reader must be
- * able to tell apart.
- */
+/** `GET /api/admin/retention-window`. Only `open` and `not_enforced` permit recording. */
 export function buildRetentionWindow(overrides = {}) {
   return {
     enforced: true,
@@ -39,6 +31,5 @@ export const RETENTION_STATES = [
   'open', 'not_enforced', 'before_year', 'after_year', 'unconfigured', 'unreadable',
 ]
 
-/** The two states that permit recording, so a test asserting the copy cannot
- *  quietly drift into asserting the gate. */
+/** The two states that permit recording. */
 export const RECORDING_STATES = ['open', 'not_enforced']

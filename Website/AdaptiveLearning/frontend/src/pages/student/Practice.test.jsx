@@ -12,9 +12,7 @@ vi.mock('../../context/AuthContext', () => ({
 const toastError = vi.fn()
 vi.mock('sonner', () => ({ toast: { error: (...a) => toastError(...a), success: vi.fn() } }))
 
-// `lib/practiceSession` is deliberately not mocked, since `recordPracticeAnswer`
-// owns the failure toast these tests assert on -- stubbing it would just test
-// the stub, the same reasoning Practice.jsx's old test file used for `lib/session`.
+// `lib/practiceSession` is not mocked: `recordPracticeAnswer` owns the toast asserted on.
 
 import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
 import Practice from './Practice'
@@ -119,16 +117,9 @@ describe('test mode', () => {
   })
 })
 
-// The results screen itself (score, topic breakdown, AI study tips) is
-// exercised directly against a finished session in PracticeResults.test.jsx,
-// rather than driving a full ten-question test through this page just to
-// reach it.
+// The results screen is covered in PracticeResults.test.jsx.
 
-/**
- * The count is chosen on the setup screen and consumed by `PracticeTest`, two
- * components apart. Each end is covered by its own file; this pins the wiring
- * between them, which is the part a prop rename would silently break.
- */
+/** Pins the question-count wiring from setup to `PracticeTest`. */
 it('carries the picked question count from setup through to the test', async () => {
   draw()
   await userEvent.click(await screen.findByRole('button', { name: /ordering/i }))

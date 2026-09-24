@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { apiFetch, apiError, mockApi, overrideApi, pending, resetApi } from './apiFetch'
 
-// Every page test reads its data through this router, so a bug here would
-// surface as a bug in whatever page happens to be under test.
+// Every page test reads through this router, so its bugs would surface as page bugs.
 
 beforeEach(() => { resetApi() })
 
@@ -24,8 +23,7 @@ describe('routing', () => {
   })
 
   it('prefers the method-scoped route however the keys are ordered', async () => {
-    // Same routes as above, keys in the opposite order — must not depend on
-    // write order.
+    // Same routes, keys reversed: must not depend on write order.
     mockApi({
       'PUT /api/profile/me': { name: 'written' },
       '/api/profile/me': { name: 'read' },
@@ -60,8 +58,7 @@ describe('routing', () => {
 
 describe('an unrouted path', () => {
   it('throws rather than resolving undefined', async () => {
-    // A silent `undefined` would look like a successful empty read, masking
-    // a gap in test setup as the bug it was meant to catch.
+    // A silent `undefined` would look like a successful empty read.
     mockApi({ '/api/known': 1 })
     await expect(apiFetch('/api/unknown')).rejects.toThrow(/no route for GET \/api\/unknown/i)
   })
@@ -100,8 +97,7 @@ describe('overrides', () => {
 
 describe('helpers', () => {
   it('apiError carries the status the real client attaches', async () => {
-    // Callers branch on `.status` to tell "not found" from "request failed";
-    // a bare Error would only exercise the second path.
+    // Callers branch on `.status`.
     mockApi({ '/api/missing': () => { throw apiError(404, 'no such class') } })
 
     await expect(apiFetch('/api/missing'))
@@ -128,8 +124,7 @@ it('records calls, so the router does not replace asserting on them', async () =
 })
 
 it('resetApi clears calls and routes but keeps the router working', async () => {
-  // `mockReset()` would drop the implementation too, leaving a mock that
-  // resolves undefined for everything.
+  // `mockReset()` would drop the implementation too.
   mockApi({ '/api/x': 1 })
   await apiFetch('/api/x')
   resetApi()

@@ -1,10 +1,4 @@
-/**
- * Every Recharts tooltip goes through ChartTooltip, and a test enforces it --
- * the same shape as AccessibleChart's guard, for the same reason: the stock
- * tooltip is a white box whose text inherits the page colour, unreadable in
- * dark mode, and a call site that reaches for `Tooltip` directly gets that
- * back silently.
- */
+/** Every Recharts tooltip goes through ChartTooltip: the stock one is unreadable in dark mode. */
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -19,12 +13,7 @@ const walk = (dir) => readdirSync(dir).flatMap(name => {
     : full.endsWith('.jsx') && !full.includes('.test.') ? [full] : []
 })
 
-/**
- * Every `label=` prop on an `<XAxis` / `<YAxis`, with its value captured at
- * brace depth -- the same reason LoadError.test.jsx scans rather than
- * matches: a regex cannot cross the `}` a nested object or a `${…}` puts
- * inside the value. A string value (`label="…"`) is returned as-is.
- */
+/** Every `label=` value on an `<XAxis`/`<YAxis`, scanned at brace depth since a regex cannot cross a nested `}`. */
 function axisLabels(src) {
   const out = []
   const open = /<[XY]Axis\b/g
@@ -61,9 +50,7 @@ describe('ChartTooltip', () => {
   it('picks readable text for each theme rather than inheriting it', () => {
     const light = tooltipStyles(false)
     const dark = tooltipStyles(true)
-    // Light: dark text on white. Dark: light text on a dark panel. The label
-    // is the line that names the bar, so it is styled explicitly, not left to
-    // the page's text colour.
+    // The label is styled explicitly, not inherited from the page.
     expect(light.contentStyle.backgroundColor).toBe('#ffffff')
     expect(light.labelStyle.color).toBe('#111827')
     expect(dark.contentStyle.backgroundColor).toBe('#111827')
@@ -72,9 +59,7 @@ describe('ChartTooltip', () => {
   })
 
   it('chooses an axis-label fill per theme rather than the library grey', () => {
-    // Recharts' default label fill is #808080 in both modes: 3.95:1 on white,
-    // under AA. Ratios here are computed, not trusted -- the same arithmetic
-    // as contrast.test.js, which cannot see an SVG attribute.
+    // Recharts' default #808080 is 3.95:1 on white, under AA.
     const lum = hex => {
       const c = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
         .map(v => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
@@ -87,9 +72,7 @@ describe('ChartTooltip', () => {
   })
 
   it('gives every axis label a fill, since the library default fails AA', () => {
-    // A source check: the chart does not lay out under jsdom (the responsive
-    // container has no size), so the rendered <text> cannot be read here.
-    // What can be read is that no axis `label=` prop omits a fill.
+    // A source check: charts do not lay out under jsdom.
     const charted = walk(SRC)
       .filter(f => /from 'recharts'/.test(readFileSync(f, 'utf8')))
     const offenders = charted
@@ -97,11 +80,7 @@ describe('ChartTooltip', () => {
         .filter(l => !/\bfill:/.test(l))
         .map(l => `${rel(f)}: ${l}`))
     expect(offenders).toEqual([])
-    // `[]` is also what a walk that matched nothing produces -- a renamed
-    // directory, a `.tsx` migration `walk` does not follow -- so the scanned
-    // set is pinned through the same walk and filter the guard used, not by
-    // reading FocusAccuracy directly, which would exercise the extractor and
-    // never the walk. Same shape as LoadError.test.jsx's non-empty check.
+    // `[]` is also what an empty walk gives, so pin the scanned set via the same walk.
     expect(charted.length).toBeGreaterThan(5)
     const focus = charted.find(f => rel(f) === 'components/analytics/FocusAccuracy.jsx')
     expect(focus).toBeDefined()
@@ -109,10 +88,7 @@ describe('ChartTooltip', () => {
   })
 
   it('finds an axis label however it is written', () => {
-    // The extractor scans at brace depth rather than with a regex: `[^}]*`
-    // cannot cross a `}`, so a nested `style`, a template literal's `${…}`
-    // and the plain string form all went unmatched -- and an unmatched label
-    // is never checked, which is a green guard over a #808080 label.
+    // An unmatched label is never checked.
     const src = `
       <XAxis dataKey="x" label={{ value: 'A', fill: '#374151' }} />
       <YAxis label={{ value: 'B', position: 'insideLeft' }} />
@@ -124,8 +100,7 @@ describe('ChartTooltip', () => {
     `
     const found = axisLabels(src)
     expect(found).toHaveLength(6)
-    // `fill:` the key, not `fill` the word: a label whose *text* says "fill"
-    // carries no fill prop and paints #808080 like the rest.
+    // `fill:` the key, not `fill` the word in label text.
     expect(found.filter(l => !/\bfill:/.test(l))).toHaveLength(5)
   })
 
@@ -138,8 +113,7 @@ describe('ChartTooltip', () => {
       .filter(f => rel(f) !== 'components/charts/ChartTooltip.jsx')
       .filter(f => {
         const src = readFileSync(f, 'utf8')
-        // Importing `Tooltip` from recharts, or rendering `<Tooltip` at all --
-        // a local alias would satisfy the first check and not the second.
+        // Import or render: a local alias passes the first check, not the second.
         return /import\s*{[^}]*\bTooltip\b[^}]*}\s*from\s*'recharts'/.test(src)
           || /<Tooltip[\s/>]/.test(src)
       })

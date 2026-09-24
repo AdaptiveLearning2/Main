@@ -6,8 +6,7 @@ import { apiFetch } from '../../lib/api'
 const STATUS = {
   ok:       { Icon: CheckCircle2,  cls: 'text-emerald-600 dark:text-emerald-400' },
   degraded: { Icon: AlertTriangle, cls: 'text-amber-600 dark:text-amber-400' },
-  // A check that could not run is `unknown`, never `ok` — a checkmark would
-  // wrongly claim it passed.
+  // A check that could not run is `unknown`, never `ok`.
   unknown:  { Icon: HelpCircle,    cls: 'text-gray-600 dark:text-gray-400' },
 }
 
@@ -87,38 +86,23 @@ function ConsentCounts() {
 
 function StudentSearch() {
   const [term, setTerm] = useState('')
-  // Holds the query its results belong to. `searching`/`results` are derived
-  // by comparing it to the current box value, so a late response can't be
-  // rendered against a query the user has since changed.
+  // Carries the query its results belong to, so a late response can't be
+  // rendered against a changed query.
   const [hits, setHits] = useState({ q: '', students: [] })
 
   const q = term.trim()
   const enough = q.length >= 2
   const searching = enough && hits.q !== q
-  // The last results we have, kept on screen while a newer query is in flight.
-  //
-  // Blanking on `hits.q !== q` emptied the list on *every keystroke*, before
-  // the 300ms debounce had even started -- so typing a name flashed the results
-  // away and back on each letter. The concern that produced it is real (hits
-  // for one term sitting under another), and it is answered by saying so and by
-  // taking the rows out of reach, rather than by showing nothing: `searching`
-  // is up throughout, the label names the query the rows actually belong to,
-  // and the list is dimmed *and* non-interactive until the new answer lands.
-  // Dimming alone left a stale row clickable, which is a worse trade than the
-  // flash it replaced -- see the `pointer-events-none` note below.
-  //
-  // Cleared only when the query gets too short to search, which is the one case
-  // where there is no newer answer coming.
+  // Last results stay on screen (dimmed, non-interactive) while a newer query
+  // is in flight; cleared only when the query is too short to search.
   const results = enough ? hits.students : []
 
   useEffect(() => {
     if (!enough) return
-    // Debounced, since every keystroke would otherwise fire a query.
     let cancelled = false
     const t = setTimeout(() => {
       apiFetch(`/api/admin/students/search?q=${encodeURIComponent(q)}`)
-        // On failure, record the query with no results rather than leaving
-        // the previous query's hits on screen.
+        // On failure, record the query with no results, not the previous hits.
         .then(d => { if (!cancelled) setHits({ q, students: d.students || [] }) })
         .catch(() => { if (!cancelled) setHits({ q, students: [] }) })
     }, 300)
@@ -142,12 +126,8 @@ function StudentSearch() {
         </p>
       )}
       {results.length > 0 && (
-        // Superseded results stay on screen but stop being clickable. Dimming
-        // alone still let a stale row be opened: these are the *previous*
-        // query's students, so a click during the debounce navigates to
-        // someone the reader did not search for -- and the rows move under the
-        // cursor the moment the new answer lands. `pointer-events-none` covers
-        // the mouse and `tabIndex={-1}` the keyboard, which the dim never did.
+        // Superseded rows are the previous query's students, so they must not be
+        // openable: `pointer-events-none` for the mouse, `tabIndex={-1}` for keys.
         <ul
           aria-busy={searching}
           className={`mt-3 space-y-2 transition-opacity ${searching ? 'opacity-50 pointer-events-none' : ''}`}

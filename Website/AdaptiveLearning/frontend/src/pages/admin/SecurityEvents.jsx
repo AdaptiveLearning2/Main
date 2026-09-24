@@ -4,14 +4,8 @@ import { apiFetch } from '../../lib/api'
 import useAdminResource from '../../hooks/useAdminResource'
 import LoadError from '../../components/ui/LoadError'
 
-// One entry per kind the backend writes. The sentence is what the row means,
-// not what the column says: `authz_denied` is accurate and tells an admin
-// nothing they can act on.
-//
-// Keyed by the backend's own vocabulary, and an unrecognised kind still
-// renders -- see `UNKNOWN` below. The CHECK constraint makes one near
-// impossible, and if it happens a visible row is what gets it reported, which
-// is the rule `AlertFeed` already holds for session alerts.
+// One entry per backend kind, worded as what the row means. An unrecognised
+// kind still renders, via `UNKNOWN`.
 const KINDS = {
   authz_denied: {
     label: 'Access refused',
@@ -54,13 +48,8 @@ const UNKNOWN = {
   describe: () => 'was recorded by a newer backend than this page knows about',
 }
 
-// Three states, because the backend now sends a null name rather than a
-// substituted one: a name it read, an account it found no profile for, and a
-// name lookup that failed. The last two look identical if collapsed, and on an
-// audit page "this account does not exist" is a claim a failed read has not
-// earned -- the same rule `SignalPanel`'s `Unavailable` tile holds.
-// The id is rendered beside every one of these, so the row is actionable
-// whichever state it is in.
+// Three states: a name, no profile, and a failed name lookup. The last two
+// must not collapse; the id is shown beside every one.
 function nameOf(who, namesRetrieved, capital) {
   if (who?.name) return who.name
   if (namesRetrieved) return capital ? 'An unnamed account' : 'an unnamed account'
@@ -74,8 +63,7 @@ function when(iso) {
 }
 
 export default function AdminSecurityEvents() {
-  // `null` is "every kind", which is the default view: an admin opening this
-  // page is asking "what happened", not "what happened of one type".
+  // `null` is "every kind", the default view.
   const [kind, setKind] = useState(null)
 
   // Memoised on `kind`, or `useAdminResource`'s effect re-runs every render.
@@ -88,15 +76,8 @@ export default function AdminSecurityEvents() {
   if (error) return <LoadError error={error} />
   if (!data) return <p className="text-gray-600 dark:text-gray-400">Loading…</p>
 
-  // Three states, not two. A failed read must never render as "nothing has
-  // happened" -- on this page that is the worst available wrong answer, since
-  // an empty log is exactly what someone covering their tracks would want it
-  // to look like.
-  // Not `LoadError`: that one is for a request that failed, and picks its
-  // sentence from `error.status` -- it ignores a message a caller passes, so
-  // wording this through it silently rendered the generic "make sure the
-  // backend is running" instead. This is the other state: the request
-  // succeeded and the read inside it did not.
+  // A failed read must never render as an empty log. Not `LoadError`: the
+  // request succeeded and the read inside it did not.
   if (!data.retrieved) {
     return (
       <div className="rounded-xl border border-amber-200 bg-amber-50 p-4
@@ -125,13 +106,7 @@ export default function AdminSecurityEvents() {
       </header>
 
       <div className="flex flex-wrap gap-2">
-        {/* The same selected/unselected pair `SeriesFilter` uses, and for the
-            reason its own comment gives: an inverted chip (`dark:bg-white`
-            with `dark:text-gray-900`) is correct on screen but fails the
-            contrast pairing check, which resolves a grey against the dark
-            surfaces the page paints rather than against a background set in
-            the same class string. Naming a grey on both sides keeps the check
-            able to do its arithmetic. */}
+        {/* `SeriesFilter`'s chip pair; an inverted chip fails the contrast check. */}
         <button
           onClick={() => setKind(null)}
           aria-pressed={kind === null}
@@ -158,8 +133,7 @@ export default function AdminSecurityEvents() {
       </div>
 
       {events.length === 0 ? (
-        // Distinct from the unreadable case above, and worded so the two can
-        // never be confused by a reader skimming.
+        // Worded distinctly from the unreadable case above.
         <p className="text-sm text-gray-600 dark:text-gray-400">
           The log was read and holds no {kind ? 'events of this kind' : 'events'}.
         </p>
@@ -175,9 +149,7 @@ export default function AdminSecurityEvents() {
                   <p className="text-sm text-gray-900 dark:text-white">
                     <span className="font-bold">{spec.label}</span>
                     {' — '}
-                    {/* The actor's name for reading and the id for looking the
-                        account up. A uuid alone is true and unusable; a name
-                        alone cannot be acted on. */}
+                    {/* Name to read; the id below to look the account up. */}
                     <span>{nameOf(e.actor, data.names_retrieved, true)}</span>
                     {' '}
                     {spec.describe(e, nameOf(e.subject, data.names_retrieved, false))}

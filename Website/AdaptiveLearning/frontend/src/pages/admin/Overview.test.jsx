@@ -6,8 +6,7 @@ import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/m
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 
-// The student search is debounced and its results are keyed to the query they
-// answer, so a stale response can never repaint the list under a newer term.
+// Search results are keyed to their query, so a stale response cannot repaint under a newer term.
 
 const HEALTH = {
   retrieved: true,
@@ -25,8 +24,7 @@ const searchPath = q => `/api/admin/students/search?q=${encodeURIComponent(q)}`
 
 beforeEach(() => {
   resetApi()
-  // `shouldAdvanceTime` keeps Testing Library's polling and userEvent's
-  // keystroke delays moving; without it every test would just time out.
+  // `shouldAdvanceTime` keeps Testing Library polling and userEvent delays moving.
   vi.useFakeTimers({ shouldAdvanceTime: true })
   mockApi({
     '/api/admin/health': HEALTH,
@@ -84,10 +82,7 @@ describe('the student search', () => {
   })
 
   it('keeps the last results on screen while a newer query is in flight', async () => {
-    // Blanking on `hits.q !== q` emptied the list on *every keystroke*, before
-    // the 300ms debounce had even started -- so typing a name flashed the
-    // results away and back on each letter. The staleness is said out loud
-    // instead, which is what the concern behind the blanking actually needed.
+    // Stale hits stay, disclosed as stale, rather than blanking on every keystroke.
     const user = setup()
     await user.type(box(), 'ada')
     await settle()
@@ -100,9 +95,7 @@ describe('the student search', () => {
   })
 
   it('names the term the visible results actually answer', async () => {
-    // Showing them is only safe if it is clear they are not for what is in the
-    // box -- otherwise it is the "hits under a newer term" the blanking was
-    // trying to avoid.
+    // Safe only if it is clear they are not for what is in the box.
     const user = setup()
     await user.type(box(), 'ada')
     await settle()
@@ -112,10 +105,7 @@ describe('the student search', () => {
   })
 
   it('takes the stale results out of reach until the new answer lands', async () => {
-    // Dimming alone was not enough. These rows belong to the PREVIOUS query, so
-    // a click during the debounce opens a student the reader did not search for
-    // -- and the rows move under the cursor the moment the new answer arrives.
-    // Disclosure says which query they answer; this stops them being acted on.
+    // Stale rows belong to the previous query, so they must not be clickable.
     const user = setup()
     await user.type(box(), 'ada')
     await settle()
@@ -186,8 +176,7 @@ describe('the student search', () => {
 })
 
 describe('the surrounding panels', () => {
-  // Both must report a failed read explicitly, not render an empty panel
-  // that looks like "nothing to report".
+  // A failed read must not render as "nothing to report".
   it('says the consent counts could not be read when the read failed', async () => {
     overrideApi('/api/admin/consent-summary', { retrieved: false })
     setup()

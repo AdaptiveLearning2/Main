@@ -7,26 +7,17 @@ import PracticeHistory from './PracticeHistory'
 import { TOPIC_ICONS } from '../../lib/topics'
 
 const DIFFICULTIES = ['easy', 'medium', 'hard']
-// The same rungs Adaptive's question-goal picker offers, deliberately without
-// its "No limit": that page's number is a goal that raises a dismissable
-// banner, and it has a Finish button. A test has no manual-finish affordance,
-// so it must always auto-end and the count is a real cap.
+// Adaptive's goal rungs minus "No limit": a test has no Finish button, so the count is a real cap.
 const QUESTION_COUNTS = [5, 10, 15, 20]
 const GRADES = ['1st Grade', '2nd Grade', '3rd Grade', '4th Grade', '5th Grade',
   '6th Grade', '7th Grade', '8th Grade', 'Highschool', 'College']
-// Same topic->icon map Adaptive.jsx keeps for its own picker -- read-only
-// here, not a shared import, since that page has no test coverage and this
-// change deliberately doesn't touch it.
 const ICONS = TOPIC_ICONS
 
-/** The Quizlet-style picker: topic(s), difficulty, grade, and Test vs
- * Flashcard mode, then `POST /api/practice-sessions/start`.
+/**
+ * The practice picker (topics, difficulty, grade, Test vs Flashcard), then
+ * `POST /api/practice-sessions/start`.
  *
- * @param onStart  called with `(session, questionCount)` -- the started
- *                  session row, and how many questions a Test should run for.
- *                  The count is frontend-only, like Adaptive's question goal:
- *                  nothing is sent to the backend, which serves one question
- *                  per request and has no view on how many are coming.
+ * @param onStart  called with `(session, questionCount)`; the count is frontend-only.
  */
 export default function PracticeSetup({ onStart }) {
   const [topics, setTopics] = useState([])
@@ -61,10 +52,7 @@ export default function PracticeSetup({ onStart }) {
 
   useEffect(() => { load() }, [load])
 
-  // Grade is changed from a `<select>`'s onChange -- a user action, so this
-  // refetches imperatively from the handler rather than reacting to `grade`
-  // in an effect (the two shapes CLAUDE.md calls out: an event handler stays
-  // a handler, it doesn't need to become derived state).
+  // Refetches from the event handler, not an effect on `grade`.
   async function handleGradeChange(newGrade) {
     setGrade(newGrade)
     try {
@@ -188,9 +176,7 @@ export default function PracticeSetup({ onStart }) {
           </div>
         </div>
 
-        {/* Test only. Flashcards have no deck size -- "Done" ends them at any
-            point -- so offering a count there would name a limit that does
-            not exist. */}
+        {/* Test only: flashcards have no deck size. */}
         {mode === 'test' && (
           <div>
             <h3 className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3">How many questions?</h3>

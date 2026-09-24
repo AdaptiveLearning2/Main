@@ -15,15 +15,14 @@ import { apiFetch } from '../../lib/api'
 import QuestionFigure from '../../components/questions/QuestionFigure'
 import CCSSBadge from '../../components/questions/CCSSBadge'
 
-// Fixed per label so the same emotion is always the same colour across sessions.
-// Keyed on the FER+ labels the backend actually stores.
+// Fixed per FER+ label, so an emotion keeps its colour across sessions.
 const EMOTION_COLOURS = {
   neutral: '#94a3b8', happy: '#10b981', surprise: '#38bdf8',
   sad: '#6366f1', angry: '#f43f5e', disgust: '#84cc16',
   fear: '#a855f7', contempt: '#f59e0b',
 }
 
-// calibrating/unknown are shown, not dropped: omitting them would overstate how much was categorised.
+// calibrating/unknown are shown, not dropped, so categorisation isn't overstated.
 const STRESS_COLOURS = {
   low: '#10b981', moderate: '#f59e0b', high: '#f43f5e',
   calibrating: '#cbd5e1', unknown: '#94a3b8',
@@ -38,29 +37,15 @@ function fmtTime(ms) {
 }
 
 /* ── the answers table ────────────────────────────────────────────────────
- *
- * These four turn a `session_answers` row into something a teacher can read.
- * The row itself carries a question *id* and a `selected_index`, which is why
- * the table used to show a truncated uuid and the bare number 2 — true, and
- * useless. The question is embedded on the answer by the endpoint.
- *
- * Every one of them tolerates a missing question: PostgREST left-joins the
- * embed, so an answer whose question has since been deleted from the bank
- * arrives with `questions: null`. The answer still happened, so it is still
- * shown.
+ * Readable text from a `session_answers` row with its embedded question. Each
+ * tolerates `questions: null` (a question deleted from the bank).
  */
 
-/** The question's topic, for the column a teacher scans. */
 function topicLabel(q) {
   return q?.subject || 'Unknown topic'
 }
 
-/** `options` as an array of strings, whatever shape it was stored in.
- *
- * The column is `jsonb` with no schema behind it, so it has held a plain
- * array and could hold an object. Anything else yields `[]`, which the table
- * renders as "options were not recorded" rather than crashing on `.map`.
- */
+/** `options` (unschema'd jsonb) as strings: an array or object, else `[]`. */
 function optionList(q) {
   const raw = q?.options
   if (Array.isArray(raw)) return raw.map(String)
@@ -68,33 +53,17 @@ function optionList(q) {
   return []
 }
 
-/** What the student picked, by text. Falls back to the index when it cannot
- *  be resolved — better a bare number than silently showing nothing. */
+/** What the student picked, by text; falls back to the index. */
 function answerLabel(opts, index) {
   if (index === null || index === undefined) return '—'
   const opt = opts[index]
   return opt === undefined ? `Option ${index}` : opt
 }
 
-/** The index of the correct option, or -1 if it cannot be resolved.
- *
- * `questions.correct_answer` is **text, not an index**, so this matches by
- * value rather than position — comparing positions would mark the wrong
- * option on every question whose answer is not stored in order. Trimmed and
- * case-insensitive, because the generators write the answer as its own string
- * and it need not match the option byte for byte.
- *
- * **Resolved once for the question, not asked per option**, so a duplicate
- * distractor equal to `correct_answer` marks the first and not both. Most
- * generators guard distractor uniqueness but `LLM_ordering_generation` does
- * not check its underlying values, and there is no central dedup pass. Two
- * options both ticked "correct answer" is worse than either alone: it reads
- * as a broken panel and tells a teacher nothing.
- *
- * The numeric fallback covers a row whose `correct_answer` holds an index
- * anyway — the column's type does not prevent it — and is bounds-checked, so
- * a stray "7" against three options resolves to nothing rather than silently
- * marking none while claiming to have looked.
+/** Index of the correct option, or -1.
+ * `correct_answer` is text, matched by value (trimmed, case-insensitive), once
+ * per question so a duplicate distractor isn't also marked. A bounds-checked
+ * numeric fallback covers a row that stores an index.
  */
 function correctIndex(q, opts) {
   const want = q?.correct_answer
@@ -109,9 +78,7 @@ function correctIndex(q, opts) {
   return -1
 }
 
-// Per-section label for the archived SVG, so a fallback never appears under
-// the wrong heading. The emotion ribbon has no archived equivalent (it shows
-// sequence; the archive only kept the pie), so it deliberately maps to nothing.
+// Per-section archived SVG. The emotion ribbon has no archived equivalent.
 function ArchivedChart({ url, label }) {
   return (
     <figure className="mt-3">
@@ -124,24 +91,8 @@ function ArchivedChart({ url, label }) {
   )
 }
 
-/** Remount on a new session id, so nothing from the previous one survives.
- *
- * Two bugs came out of state outliving the session it described, and both are
- * navigation-ordinary rather than exotic:
- *
- * - **A→B→A showed A's first-visit data with no skeleton.** `loading` is derived
- *   as `loadedFor !== sessionId`, and B's request is cancelled on the way out
- *   without ever advancing `loadedFor` -- so coming back to A found it still
- *   reading `'A'`, called the page loaded, and drew stale rows while a fresh
- *   fetch was in flight.
- * - **An error on A masked a B that loaded fine.** `err` was never cleared, and
- *   the `if (err)` branch sits below `if (loading)`, so once B resolved the page
- *   fell straight through to A's error message.
- *
- * A key is the fix rather than clearing four pieces of state on the way in:
- * that would be one more thing to remember for the next one added, and it is
- * exactly the `set-state-in-effect` shape this component was refactored to
- * remove. `ChildDetail.jsx` already does this for the same reason.
+/** Remount on a new session id, so no state (derived `loading`, `err`)
+ * survives from the previous session, e.g. on A→B→A navigation.
  */
 export default function SessionReview() {
   const { sessionId } = useParams()
@@ -149,48 +100,30 @@ export default function SessionReview() {
 }
 
 function SessionReviewBody({ sessionId }) {
-  // Both back links used to be hardcoded to /teacher/live, so opening a session
-  // from history sent a teacher to Live Monitoring instead of back to the list.
-  // Falls back to Live rather than history.back(): a teacher who arrived via a
-  // pasted link has no history to return to.
+  // Falls back to Live, not history.back(): a pasted link has no history.
   const location = useLocation()
   const backTo = location.state?.from || '/teacher/live'
   const [data, setData] = useState(null)
   const [err, setErr]   = useState(null)
-  // Which answer's question is expanded. One at a time: the point is to read
-  // one question, and a table of twenty open panels is the list again.
-  // Session-scoped state, and the whole body is keyed on `sessionId`, so
-  // navigating to another session resets it with everything else.
+  // The one expanded answer.
   const [openAnswer, setOpenAnswer] = useState(null)
-  // Deriving loading from comparing loadedFor to the URL's session id means
-  // switching sessions raises the skeleton immediately, not one render later.
   const [loadedFor, setLoadedFor] = useState(null)
   const loading = loadedFor !== sessionId
-  // Kept separate from `data`: a failure loading the archive must not blank
-  // the answers/tiles/accuracy above it, which don't depend on it.
+  // Separate from `data`, so an archive failure can't blank the rest.
   const [archive, setArchive] = useState(null)
   const [archiveErr, setArchiveErr] = useState(false)
-  // Up here with the other hooks, not beside the chart: `hasHeart` is derived
-  // from loaded rows well below this component's `loading` and `err` early
-  // returns, so a hook that needed the series list would be called
-  // conditionally. React counts hooks by call order, so the first render that
-  // returns early leaves every later one misaligned — it threw on all 28 tests
-  // in this file. The hook holds the hidden keys and nothing else.
+  // Above the early exits below, or it would be a conditional hook.
   const { hidden: hiddenSeries, toggle: toggleSeries,
           showAll: showAllSeries, shownOf } = useSeriesFilter()
 
   useEffect(() => {
     let killed = false
-    // Deliberately does NOT honour the "Hide sensor data" switch in
-    // lib/viewPrefs.js -- that control covers reporting surfaces, not this page.
+    // Ignores "Hide sensor data": that covers reporting surfaces, not this page.
     apiFetch(`/api/signals/session/${sessionId}`)
       .then(d => {
         if (killed) return
         setData(d)
-        // No archive reset needed here: the component remounts per session id,
-        // so there's no previous session's archive left to clear.
-        // Only fetch the archive when every channel is empty -- that's what
-        // expired per-sample rows look like, not one sensor being off.
+        // Archive only when every channel is empty: that's what expired rows look like.
         const empty = ['cognitive', 'face', 'heart']
           .every(k => !Array.isArray(d?.[k]) || d[k].length === 0)
         if (!empty) return
@@ -242,15 +175,13 @@ function SessionReviewBody({ sessionId }) {
       .filter(Boolean),
   )
 
-  // Heart is merged into the cognitive rows by nearest timestamp, since
-  // Recharts wants one dataset and the two channels sample at different rates.
+  // Heart merges into cognitive rows by nearest timestamp: Recharts wants one dataset.
   const heartByT = heart
     .map(h => ({ t: new Date(h.ts).getTime(), h }))
     .filter(x => Number.isFinite(x.t))
     .sort((a, b) => a.t - b.t)
 
-  // Union of both channels' timestamps, not cognitive alone: a student can
-  // consent to heart without EEG, so cognitive can be empty while heart isn't.
+  // Union of both channels' timestamps: heart can be consented without EEG.
   const series = Array.from(new Set([...cognitiveByT.keys(), ...heartByT.map(x => x.t)]))
     .sort((a, b) => a - b)
     .map(t => {
@@ -262,10 +193,8 @@ function SessionReviewBody({ sessionId }) {
       }
     })
 
-  // Each heart reading lands on exactly one row (the nearest), not every row
-  // within 15s -- cognitive arrives at 4Hz, so that would copy one reading
-  // across up to 120 rows and draw it as a flat line. `dot` on the chart lines
-  // below is what makes a single point visible.
+  // Each heart reading lands on one row (the nearest), never copied across rows;
+  // `dot` on the lines makes a single point visible.
   const rowIndexByT = series.map(r => r.t)
   let heartCollisions = 0
   for (const { t, h } of heartByT) {
@@ -304,8 +233,7 @@ function SessionReviewBody({ sessionId }) {
 
   const hasHeart = series.some(r => r.heart_rate_bpm !== undefined && r.heart_rate_bpm !== null)
 
-  // Marks where the heart sensor changed mid-session, rather than splicing
-  // both into one continuous trace, which would look like a real physiological event.
+  // Heart sensor changes are marked, not spliced into one trace.
   const failovers = []
   for (let i = 1; i < heartByT.length; i++) {
     if (heartByT[i].h.source && heartByT[i].h.source !== heartByT[i - 1].h.source) {
@@ -313,8 +241,7 @@ function SessionReviewBody({ sessionId }) {
     }
   }
 
-  // Shows proportion, which the ribbon below can't (it shows sequence).
-  // Uses raw samples, not the ribbon's 10s buckets, so a 10s bucket doesn't outweigh a 2s one.
+  // Proportion, from raw samples rather than the ribbon's 10s buckets.
   const emotionSlices = Object.entries(
     face.reduce((acc, f) => {
       if (!f.emotion) return acc          // a rejected window is not a reading
@@ -325,7 +252,7 @@ function SessionReviewBody({ sessionId }) {
 
   const stressSlices = Object.entries(
     heart.reduce((acc, h) => {
-      // calibrating/unknown kept as slices, not dropped, so the pie doesn't overstate categorisation.
+      // calibrating/unknown kept as slices, not dropped.
       const key = h.stress_category || 'unknown'
       acc[key] = (acc[key] || 0) + 1
       return acc
@@ -350,52 +277,17 @@ function SessionReviewBody({ sessionId }) {
   const correctAnswers = answers.filter(a => a.correct).length
   const acc = totalAnswers ? Math.round((correctAnswers / totalAnswers) * 100) : 0
 
-  // One spec, driving the summary sentence and the sr-only table alike.
-  //
-  // `asPercent` because this page's cognitive rows are raw 0..1 ratios -- the
-  // chart plots them against `domain={[0, 1]}` -- so describing them with a `%`
-  // unit and no scaling announced a session ranging 42-78% as "Focus 0% to 1%".
-  // `SignalPanel` scales on the way into its chart data and so never hit this;
-  // here the chart wants ratios and only the text wants percentages.
-  //
-  // `heart_rate_bpm` and `rmssd_ms` are the field names the chart plots. Named
-  // `bpm` at first, which made a visibly-drawn heart line read as "not
-  // recorded" in both the sentence and the table -- and RMSSD was absent from
-  // the table entirely while being plotted beside it.
-  // The columns are the series this chart draws. `focus` and `stress` always
-  // have a `<Line>`; the two heart series are gated on `hasHeart`, so their
-  // columns are too. `engagement` is not drawn: it is the focus index under
-  // another name (signal_mapping.py), and two lines of one number read as
-  // two measurements agreeing.
-  //
-  // Left unconditional, the sentence was fine — `describeSeries` drops a series
-  // with no readings — but the table still emitted "Heart rate: not recorded"
-  // and "RMSSD: not recorded" on every row of a session that never had a
-  // headband, which is noise in the one surface that cannot be skimmed past.
-  // Same class as the `engagement` column removed from `SignalPanel`, one file
-  // over: that fix was applied where it was found rather than generalised.
-  // One list per series, and the lines, the columns and the toggles above the
-  // chart are all derived from it. The rule this file already followed — a
-  // column must name a series the chart actually draws — stops being something
-  // to remember once a teacher can turn a line off: any wired-by-hand column
-  // would go on announcing "RMSSD: not recorded" for a series they chose to
-  // hide, on every row of the one surface that cannot be skimmed past.
-  //
-  // `colour` is here rather than at the `<Line>` because the toggle draws a
-  // swatch with it; one constant, so the chip and the line cannot disagree.
-  // `axis` likewise: which axes to mount is now a question about the *shown*
-  // series, and Recharts throws if a line names an axis that is not there.
+  // One list per series drives the lines, the sr-only columns and the toggles,
+  // so a column always names a drawn series. Ratios are 0..1, hence `asPercent`.
+  // Heart series are gated on `hasHeart`; no `engagement` (it is the focus index).
   const TIMELINE_SERIES = [
     { key: 'focus',  label: 'Focus',      unit: '%', scale: asPercent,
       colour: '#6366f1', axis: 'ratio', name: 'Focus',      dot: false },
-    // "EEG stress", not bare "stress": distinct from the heart-derived
-    // stress_category pie below, and the two must never share a label.
+    // "EEG stress": must never share a label with the heart stress pie.
     { key: 'stress', label: 'EEG stress', unit: '%', scale: asPercent,
       colour: '#f43f5e', axis: 'ratio', name: 'EEG stress', dot: false },
     ...(hasHeart ? [
-      // `dot` on, unlike the cognitive lines: heart readings are sparse (one
-      // held window per ~10s against thousands of cognitive samples), so an
-      // isolated point needs a dot to be visible at all.
+      // `dot` on: heart readings are sparse, so an isolated point needs one.
       { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm',
         colour: '#a855f7', axis: 'abs', name: 'Heart rate (bpm)', dot: { r: 2 } },
       { key: 'rmssd_ms',       label: 'RMSSD',      unit: ' ms',
@@ -405,28 +297,17 @@ function SessionReviewBody({ sessionId }) {
 
   const shownSeries = shownOf(TIMELINE_SERIES)
 
-  // `engagement` is not among them and must not be: it is the focus index
-  // under another name (signal_mapping.py), and two lines of one number read
-  // as two measurements agreeing.
   const TIMELINE_COLUMNS = shownSeries.map(
     ({ key, label, unit, scale }) => ({ key, label, unit, scale }),
   )
 
-  // An axis with no line on it draws an empty scale down the side of the
-  // chart; a line naming an axis that was not mounted throws. Both are decided
-  // by what is shown, not by what exists.
+  // Mount an axis only for shown series: Recharts throws on a line naming a missing axis.
   const axisShown = (axis) => shownSeries.some((s) => s.axis === axis)
 
   const hasChart = series.length >= 2
 
-  // Five distinct states, so a backend hiccup or a missing archive is never
-  // reported as "nothing was recorded":
-  //   url          -- archived and still readable
-  //   'empty'      -- the archive ran and this channel drew nothing
-  //   'unavailable'-- a path was recorded but the object couldn't be read
-  //   'unarchived' -- the archive never ran for this session
-  //   'failed'     -- the request for it failed
-  //   'pending'    -- still waiting on the request
+  // url | 'empty' (drew nothing) | 'unavailable' (object unreadable) |
+  // 'unarchived' | 'failed' (request) | 'pending'. Failure never reads as empty.
   const archivedChart = (name) => {
     if (archiveErr) return 'failed'
     if (!archive) return 'pending'
@@ -436,7 +317,7 @@ function SessionReviewBody({ sessionId }) {
     return url || 'empty'
   }
 
-  // One distinct sentence per non-URL state, so a teacher can tell "nothing recorded" from "failed to load".
+  // One distinct sentence per non-URL state.
   const NO_CHART_COPY = {
     empty: 'Nothing was recorded on this channel.',
     unavailable: 'The archived chart for this session could not be loaded.',
@@ -447,9 +328,7 @@ function SessionReviewBody({ sessionId }) {
 
   const isUrl = (v) => typeof v === 'string' && v.startsWith('http')
 
-  // A section can cover multiple charts with independently differing states
-  // (e.g. cognitive_timeline empty while heart_rate is unavailable), so a
-  // fault always outranks a mere absence when reporting on the set.
+  // Across a section's charts, a fault outranks an absence.
   const anyUnavailable = (names) => names.some(n => archivedChart(n) === 'unavailable')
 
   const noChartCopy = (names) =>
@@ -488,8 +367,7 @@ function SessionReviewBody({ sessionId }) {
         </h2>
         {!hasChart ? (
           <div className="text-center py-12">
-            {/* Falls back to the archived SVGs once per-sample rows have expired. Both are shown since the
-                archive keeps cognitive and heart separate, unlike the live merged trace. */}
+            {/* Archived SVGs once per-sample rows expire; the archive keeps cognitive and heart apart. */}
             {isUrl(archivedChart('cognitive_timeline')) || isUrl(archivedChart('heart_rate')) ? (
               <>
                 <p className="text-sm text-gray-500 dark:text-gray-400">
@@ -502,7 +380,7 @@ function SessionReviewBody({ sessionId }) {
                 {isUrl(archivedChart('heart_rate')) && (
                   <ArchivedChart url={archivedChart('heart_rate')} label="Heart rate and HRV" />
                 )}
-                {/* One chart drawn, the other unreadable -- said explicitly so a partial view isn't mistaken for the whole session. */}
+                {/* Say so when only one chart could be drawn. */}
                 {anyUnavailable(['cognitive_timeline', 'heart_rate']) && (
                   <p className="text-[11px] text-amber-600 dark:text-amber-500 mt-2">
                     One archived chart for this session could not be loaded.
@@ -515,25 +393,17 @@ function SessionReviewBody({ sessionId }) {
                 <p className="text-sm text-gray-600 dark:text-gray-400">
                   {noChartCopy(['cognitive_timeline', 'heart_rate'])}
                 </p>
-                {/* Only shown here, not beside an archived chart -- that would tell a teacher to wait on a session that already ended. */}
+                {/* Not beside an archived chart: that session has already ended. */}
                 <p className="text-[11px] text-gray-600 mt-1 dark:text-gray-400">Once a sensor starts streaming, it'll show up here.</p>
               </>
             )}
           </div>
         ) : (
           <>
-          {/* Above the chart, because it says what the chart is about to show.
-              Renders nothing below two series, which here means a session with
-              no heart readings still gets both cognitive chips -- two is a
-              choice. */}
+          {/* Renders nothing below two series. */}
           <SeriesFilter series={TIMELINE_SERIES} hidden={hiddenSeries} onToggle={toggleSeries} />
           {shownSeries.length === 0 ? (
-            /* Every measurement turned off. Said in words with a way back,
-               rather than the last toggle refusing to move: a control that
-               silently does nothing is harder to understand than an empty
-               chart that explains itself. The chart is not rendered at all
-               here, so no empty axis is drawn and the screen-reader table has
-               no columns to describe. */
+            /* Every series hidden: say so, offer Show all, render no chart. */
             <div className="h-72 flex flex-col items-center justify-center gap-3 rounded-xl bg-slate-50 dark:bg-gray-800">
               <p className="text-sm text-gray-600 dark:text-gray-400">
                 No measurements selected.
@@ -559,9 +429,7 @@ function SessionReviewBody({ sessionId }) {
                   fontSize={10}
                   minTickGap={50}
                 />
-                {/* Two axes with explicit ids: bpm/RMSSD don't belong on the 0-1 ratio scale.
-                    Each mounts only while a *shown* series uses it, so hiding
-                    both heart lines takes the right-hand scale with them. */}
+                {/* bpm/RMSSD get their own axis; each mounts only while a shown series uses it. */}
                 {axisShown('ratio') && <YAxis yAxisId="ratio" domain={[0, 1]} fontSize={10} />}
                 {axisShown('abs') && (
                   <YAxis yAxisId="abs" orientation="right" domain={['auto', 'auto']}
@@ -572,18 +440,13 @@ function SessionReviewBody({ sessionId }) {
                   formatter={(v) => (typeof v === 'number' ? v.toFixed(2) : v)}
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
-                {/* Drawn from the one series list, in its order, so a line can
-                    never outlive the column that describes it. */}
                 {shownSeries.map((s) => (
                   <Line key={s.key} yAxisId={s.axis} type="monotone" dataKey={s.key}
                         name={s.name} stroke={s.colour} dot={s.dot}
                         connectNulls isAnimationActive={false} />
                 ))}
 
-                {/* Marks where the heart sensor changed. Gated on the "abs"
-                    axis being mounted, not on hasHeart: these reference it, so
-                    hiding both heart lines would leave them pointing at an
-                    axis that is no longer there. */}
+                {/* Heart sensor changes; gated on the "abs" axis they reference, not hasHeart. */}
                 {axisShown('abs') && failovers.map((f, i) => (
                   <ReferenceLine key={`fo-${i}`} yAxisId="abs" x={f.t}
                                  stroke="#a855f7" strokeOpacity={0.5} />
@@ -609,11 +472,7 @@ function SessionReviewBody({ sessionId }) {
           )}
           </>
         )}
-        {/* Gated on the same condition as the markers themselves, not on
-            `shownSeries.length`: they are drawn against the ratio axis, so
-            hiding Focus and EEG stress with Heart rate still on takes the
-            lines away and would otherwise leave this legend standing over a
-            chart with none. */}
+        {/* Same gate as the markers (the ratio axis), not `shownSeries.length`. */}
         {hasChart && axisShown('ratio') && answers.length > 0 && (
           <p className="text-[11px] text-gray-600 mt-2 dark:text-gray-400">
             Vertical lines = answer events · <span className="text-emerald-500">green</span> correct ·{' '}
@@ -629,8 +488,7 @@ function SessionReviewBody({ sessionId }) {
         {ribbon.length === 0 ? (
           <div className="text-center py-8">
             <div className="text-4xl mb-2">📷</div>
-            {/* No archived equivalent here, deliberately: the archive only kept the proportion pie (shown below), not the sequence this section shows. */}
-            {/* Compared against the state, not the rendered string, since two states can share wording. */}
+            {/* No archived ribbon: the archive kept only the pie. Compare states, not strings. */}
             <p className="text-sm text-gray-600 dark:text-gray-400">
               {isUrl(archivedChart('emotion_pie'))
                 ? 'The per-sample rows have expired, so the moment-by-moment timeline is gone. The emotion mix is below.'
@@ -654,9 +512,7 @@ function SessionReviewBody({ sessionId }) {
         )}
       </div>
 
-      {/* Shows proportion beside the ribbon's sequence: a single bad stretch
-          and a whole bad session look the same scrolling through emojis.
-          'unavailable' still mounts the section rather than hiding it, so an unreadable chart is reported, not silently dropped. */}
+      {/* Proportion beside the ribbon's sequence; 'unavailable' still mounts, to report it. */}
       {(emotionSlices.length > 0 || stressSlices.length > 0
         || isUrl(archivedChart('emotion_pie')) || isUrl(archivedChart('stress_pie'))
         || anyUnavailable(['emotion_pie', 'stress_pie'])) && (
@@ -689,7 +545,7 @@ function SessionReviewBody({ sessionId }) {
           {(stressSlices.length > 0 || isUrl(archivedChart('stress_pie'))
             || archivedChart('stress_pie') === 'unavailable') && (
             <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
-              {/* Not bare "Stress": distinct physiological measurement from the "EEG stress" line above; never share the label. */}
+              {/* Not bare "Stress": never share a label with "EEG stress". */}
               <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">Heart-rate stress</h2>
               {stressSlices.length === 0 ? (
                 isUrl(archivedChart('stress_pie'))
@@ -735,8 +591,7 @@ function SessionReviewBody({ sessionId }) {
                   const t = new Date(a.answered_at).getTime()
                   const q = a.questions || null
                   const opts = optionList(q)
-                  // Once per question, so a repeated option value cannot mark
-                  // two rows correct -- see `correctIndex`.
+                  // Once per question, so a repeated option can't mark two rows correct.
                   const correctIdx = correctIndex(q, opts)
                   const open = openAnswer === i
                   return (
@@ -744,9 +599,6 @@ function SessionReviewBody({ sessionId }) {
                       <tr className="border-t border-gray-50 dark:border-gray-800">
                         <td className="px-5 py-2 text-gray-500 whitespace-nowrap dark:text-gray-400">{fmtTime(t)}</td>
                         <td className="text-gray-700 dark:text-gray-300">
-                          {/* The topic, not the uuid. A truncated id told a
-                              teacher nothing; the topic is the thing they are
-                              scanning the column for. */}
                           <button
                             type="button"
                             onClick={() => setOpenAnswer(open ? null : i)}
@@ -759,8 +611,6 @@ function SessionReviewBody({ sessionId }) {
                           </button>
                         </td>
                         <td className="text-gray-700 dark:text-gray-300">
-                          {/* The text they picked, not its index. "2" is not
-                              a fact anyone can act on. */}
                           {answerLabel(opts, a.selected_index)}
                         </td>
                         <td className="pr-5">
@@ -777,10 +627,7 @@ function SessionReviewBody({ sessionId }) {
                                 <p className="text-sm font-bold text-gray-900 dark:text-white">
                                   {q.question_text}
                                 </p>
-                                {/* The wording without the picture is a
-                                    different question from the one the student
-                                    answered -- "3 rows of 4 same-size squares"
-                                    with nothing to count. */}
+                                {/* Without the figure it is a different question. */}
                                 <QuestionFigure figure={q.figure} />
                                 <CCSSBadge standard={q.ccss_standard} />
                                 {q.difficulty && (
@@ -802,10 +649,7 @@ function SessionReviewBody({ sessionId }) {
                                           <span aria-hidden="true">{right ? '✓' : picked ? '✗' : '·'}</span>
                                           <span>
                                             {opt}
-                                            {/* Spelled out rather than left to
-                                                colour and a glyph: a reader
-                                                who cannot see either still
-                                                needs to know which was which. */}
+                                            {/* In words, not only colour and glyph. */}
                                             {picked && <span className="ml-1 text-xs font-normal">(chosen)</span>}
                                             {right && <span className="ml-1 text-xs font-normal">(correct answer)</span>}
                                           </span>
@@ -821,7 +665,6 @@ function SessionReviewBody({ sessionId }) {
                               </>
                             ) : (
                               // The answer happened; only the question is gone.
-                              // Saying so is different from showing a blank.
                               <p className="text-sm text-gray-600 dark:text-gray-400">
                                 This question is no longer in the question bank, so
                                 its text and options cannot be shown.

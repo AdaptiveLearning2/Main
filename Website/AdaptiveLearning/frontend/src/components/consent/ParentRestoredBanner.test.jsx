@@ -20,9 +20,7 @@ describe('ParentRestoredBanner', () => {
   })
 
   it('tells the student when a parent turned a sensor back on', async () => {
-    // Only a parent may restore, so a channel can start recording again
-    // without the student doing anything -- finding out from data reappearing
-    // would be a surprise, not consent.
+    // A parent can restore recording without the student acting, so the student is told.
     apiFetch.mockResolvedValue({ needs_student_ack: true })
 
     render(<ParentRestoredBanner studentId="stu-1" />)
@@ -31,8 +29,7 @@ describe('ParentRestoredBanner', () => {
   })
 
   it('does not claim anything happened when the read fails', async () => {
-    // A failed consent read answers with defaults, so it must not claim a
-    // change occurred.
+    // A failed consent read answers with defaults; no change claimed.
     apiFetch.mockRejectedValue(new Error('network down'))
 
     const { container } = render(<ParentRestoredBanner studentId="stu-1" />)

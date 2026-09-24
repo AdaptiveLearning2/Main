@@ -28,12 +28,10 @@ export default function TeacherAnalytics() {
   const [loading, setLoading]     = useState(true)
   const [failed, setFailed]       = useState(false)
 
-  // loading is already true on mount; no need to set it again here.
   const load = () => {
     fetchQuestionsCached(1000)
       .then(q => { setQuestions(q || []); setFailed(false); setLoading(false) })
-      // Track failure explicitly, or the charts would render as all-zero
-      // instead of showing that the load failed.
+      // Track failure, or the charts render as all-zero.
       .catch(e => { console.error('Failed to load questions:', e); setFailed(true); setLoading(false) })
   }
 
@@ -68,7 +66,7 @@ export default function TeacherAnalytics() {
         <p className="text-gray-500 dark:text-gray-400 mt-1">Question bank distribution and insights.</p>
       </motion.div>
 
-      {/* Shown above the charts; the cards below already render "—" on failure. */}
+      {/* The cards below render "—" on failure. */}
       {failed && <LoadError what="the question bank" onRetry={retry} />}
 
       {/* summary */}

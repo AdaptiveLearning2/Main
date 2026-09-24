@@ -84,57 +84,38 @@ export default function Questions() {
   const [topicFilter, setTopicFilter] = useState('all')
   const [diffFilter, setDiffFilter]   = useState('all')
   const [selected, setSelected]   = useState(null)
-  // Holds the error itself, not a flag. Every read of it is a truthiness
-  // check, and keeping the error is what lets `LoadError` tell a refusal
-  // apart from an unreachable backend.
+  // The error itself, not a flag, so `LoadError` can tell a refusal from an outage.
   const [failed, setFailed]       = useState(false)
   const [page, setPage]           = useState(1)
-  // Class then student, mirroring Sessions.jsx: there is no "all my students"
-  // endpoint, rosters are per class, and fanning out across every class to
-  // build one list is the read pattern CLAUDE.md warns about.
+  // Class then student: rosters are per class, with no "all my students" endpoint.
   const [classes, setClasses]     = useState([])
   const [classId, setClassId]     = useState('')
   const [roster, setRoster]       = useState({ classId: '', kids: [] })
   const [studentId, setStudentId] = useState('')
-  // Only set when viewing one student: the per-student payload carries counts
-  // the bank has no equivalent of, and the three-state read of "no questions"
-  // needs `expired` to tell an empty history from one that aged out.
+  // Set only for one student; `expired` tells an empty history from an aged-out one.
   const [studentMeta, setStudentMeta] = useState(null)
   const PER_PAGE = 15
 
-  // One counter across BOTH loaders, because they supersede each other in
-  // both directions. Guarding only the per-student read would leave the
-  // likeliest case open: switching back to the bank resolves from the 30s
-  // cache almost immediately, so it can land *under* a student request that
-  // is still in flight and then be overwritten by it -- one child's history
-  // rendered under another child's name.
-  //
-  // A generation ref rather than a cleanup flag scoped to the effect, because
-  // `retry()` is a second caller and a flag the effect owns leaves it
-  // unguarded -- the same reasoning useLatestRequest documents and Sessions.jsx
-  // already relies on.
+  // One counter across BOTH loaders: a cached bank read can land under an
+  // in-flight student read. A ref, not a cleanup flag, because `retry()` also calls.
   const beginQuestionRead = useLatestRequest()
 
-  // loading already starts true, so no setState is needed here on mount.
   const load = () => {
     const isCurrent = beginQuestionRead()
-    // Fetches the whole bank since this page paginates client-side.
+    // Whole bank: this page paginates client-side.
     fetchQuestionsCached(1000)
       .then(q => {
         if (!isCurrent()) return
         setQuestions(q || []); setStudentMeta(null); setFailed(false); setLoading(false)
       })
-      // Guarded too: a superseded *failure* would otherwise raise the error
-      // state over a read that has since succeeded.
+      // Guarded too, so a superseded failure can't override a later success.
       .catch(e => {
         if (!isCurrent()) return
         console.error('Failed to load questions:', e); setFailed(e); setLoading(false)
       })
   }
 
-  // Deliberately not cached like the bank is: this is per student, changes as
-  // they answer, and `fetchQuestionsCached`'s 30s window is tuned for content
-  // that is the same for every teacher.
+  // Not cached: per student and changes as they answer.
   const loadStudent = (id) => {
     const isCurrent = beginQuestionRead()
     apiFetch(`/api/students/${id}/questions?limit=200`)
@@ -159,8 +140,7 @@ export default function Questions() {
   useEffect(() => { studentId ? loadStudent(studentId) : load() }, [studentId])
 
   useEffect(() => {
-    // Failing to load classes costs the student filter, not the bank -- the
-    // page's primary content does not depend on it, so this only logs.
+    // Failure costs only the student filter, so this just logs.
     apiFetch('/api/classes')
       .then(rows => setClasses(rows || []))
       .catch(e => console.error('Failed to load classes:', e))
@@ -170,19 +150,13 @@ export default function Questions() {
     if (!classId) return
     let cancelled = false
     apiFetch(`/api/classes/${classId}/students`)
-      // Stored with the class it belongs to, so a response landing after the
-      // selection moved on cannot be rendered under the new class's name --
-      // the same superseded-read problem Sessions.jsx documents.
+      // Stored with its class, so a late response can't render under another.
       .then(kids => { if (!cancelled) setRoster({ classId, kids: kids || [] }) })
       .catch(e => { if (!cancelled) { console.error('Failed to load roster:', e); setRoster({ classId, kids: [] }) } })
     return () => { cancelled = true }
   }, [classId])
 
-  // Derived rather than reset in an effect: clearing it there is a setState
-  // in an effect body, which this project keeps `react-hooks/set-state-in-
-  // effect` clean of. Keying on the class the rows were fetched for also
-  // means "All classes" and a class still loading both show nothing without
-  // needing a separate loading flag.
+  // Derived, not reset in an effect; "All classes" and a loading class show nothing.
   const visibleRoster = roster.classId === classId ? roster.kids : []
 
   const filtered = questions.filter(q => {
@@ -207,8 +181,7 @@ export default function Questions() {
         <p className="text-gray-500 dark:text-gray-400 mt-1">
           {loading ? '...'
             : studentMeta
-              // "asked" not "total": this is one student's history, and the
-              // count is of distinct questions, not of the bank.
+              // "asked", not "total": distinct questions in one student's history.
               ? `${questions.length} question${questions.length === 1 ? '' : 's'} asked`
                 + (studentMeta.expired ? ` · ${studentMeta.expired} no longer in the bank` : '')
                 + (studentMeta.truncated ? ' · showing the most recent 200 answers' : '')
@@ -258,14 +231,7 @@ export default function Questions() {
               onChange={e => { setStudentId(e.target.value); setPage(1); setLoading(true) }}
               className="appearance-none pl-3 pr-8 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-violet-500 cursor-pointer">
               <option value="">Whole bank</option>
-              {/* `user_id` and `name`, which is what the roster carries -- `id`
-                  and `display_name` are what it looks like it should carry, and
-                  reading those sent the student's *email* to an endpoint that
-                  takes a uuid, so every pick answered 403. The wrong key does
-                  not render as a blank option: an `<option>` with no `value`
-                  falls back to its own text content, which here is the email.
-                  So the picker looked right, named the right student, and the
-                  page reported that the backend was down. */}
+              {/* Roster rows carry `user_id`/`name`, not `id`/`display_name`. */}
               {visibleRoster.map(s => (
                 <option key={s.user_id} value={s.user_id}>{s.name || s.email || s.user_id}</option>
               ))}
@@ -285,10 +251,8 @@ export default function Questions() {
       {loading ? (
         <SkeletonList count={5} height="h-14" gap="space-y-2" />
       ) : failed ? (
-        // Distinct from "No questions found" so a failed load doesn't look like a filter problem.
-        // Named for whichever read failed: the bank is public, so a refusal
-        // here is always about the student, and saying "the question bank"
-        // would deny access to something the teacher plainly has.
+        // Named for whichever read failed: the bank is public, so a refusal is
+        // always about the student.
         <LoadError error={failed} onRetry={retry}
           what={studentId ? "this student's questions" : 'the question bank'} />
       ) : filtered.length === 0 ? (
@@ -302,15 +266,11 @@ export default function Questions() {
         <>
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden mb-4">
             {paginated.map((q, i) => (
-              // The bank returns `id`; the per-student payload returns
-              // `question_id`. Both are the questions table's id.
+              // Bank rows have `id`, per-student rows `question_id`; same id.
               <motion.button key={q.id || q.question_id}
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.025 }}
                 whileHover={{ x: 3 }}
-                // The student payload deliberately carries no `options` (the
-                // endpoint does not send answer keys), so the modal has
-                // nothing to show -- that view links to the session review
-                // instead, where the answer is shown in context.
+                // The student payload has no `options`, so link to the session review.
                 onClick={() => (studentMeta ? navigate(`/teacher/sessions/${q.session_id}`) : setSelected(q))}
                 className="w-full flex items-start gap-4 px-5 py-4 border-b border-gray-50 dark:border-gray-800 last:border-0 hover:bg-slate-50 dark:hover:bg-gray-800 transition-colors text-left"
               >
@@ -327,8 +287,7 @@ export default function Questions() {
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full capitalize ${DIFF_STYLE[q.difficulty] || ''}`}>{q.difficulty}</span>
                     )}
                     {q.attempts != null && (
-                      // Rendered off `attempts`, not off studentMeta: a row
-                      // either carries its own counts or it does not.
+                      // Keyed on the row's own `attempts`, not studentMeta.
                       <span className="text-[10px] font-bold px-2 py-0.5 bg-slate-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full">
                         {q.correct}/{q.attempts} correct
                       </span>

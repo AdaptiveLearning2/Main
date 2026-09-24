@@ -4,29 +4,13 @@ import { X } from 'lucide-react'
 import useDialog from '../../hooks/useDialog'
 
 /**
- * The slide-in navigation drawer, once.
- *
- * All four layouts carried an identical copy of this and were all missing the
- * same three things, via `useDialog`:
- *
- * - **Escape closed nothing.** The backdrop was the only way out.
- * - **Tab walked out of it**, into the still-focusable page behind, with no
- *   visible cursor to say focus had left.
- * - **Focus did not come back.** Closing dropped it to the top of the
- *   document, losing the reader's place each time.
- *
- * `role="dialog"` + `aria-modal` is the other half: without it a screen
- * reader announces the page behind as though it were still available.
- *
- * Not a general `<Modal>` -- `Questions.jsx`'s overlay has its own markup and
- * animation and shares only the behaviour, which is why `useDialog` is a hook.
+ * The slide-in navigation drawer shared by the layouts: a modal dialog with
+ * Escape, a focus trap and focus return via `useDialog`.
  */
 export default function MobileDrawer({ open, onClose, label = 'Navigation', children }) {
   const panel = useRef(null)
 
-  // Memoised because `useDialog` depends on it -- a fresh closure every
-  // render would rebuild the trap and steal focus from wherever the user
-  // had tabbed to.
+  // Stable, or `useDialog` rebuilds the trap and steals focus each render.
   const close = useCallback(() => onClose?.(), [onClose])
 
   useDialog(panel, close, open)
@@ -42,8 +26,7 @@ export default function MobileDrawer({ open, onClose, label = 'Navigation', chil
           />
           <motion.aside
             ref={panel}
-            // `tabIndex={-1}` so the panel can hold focus if it ever renders
-            // with nothing focusable inside.
+            // Can hold focus if nothing inside is focusable.
             tabIndex={-1}
             role="dialog"
             aria-modal="true"

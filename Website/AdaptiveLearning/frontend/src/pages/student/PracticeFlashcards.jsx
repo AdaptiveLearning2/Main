@@ -7,14 +7,8 @@ import { normalizeValue } from '../../lib/practiceQuestion'
 import QuestionFigure from '../../components/questions/QuestionFigure'
 import CCSSBadge from '../../components/questions/CCSSBadge'
 
-/** Flashcard mode: self-paced, card-flip, no timer and no score. "Done" ends
- * the session at any point -- there is no fixed deck size the way a test has
- * one, which is also why `PracticeSetup` hides its question-count picker in
- * this mode.
- *
- * @param session   the started practice session
- * @param onFinish  called with `{questions_answered, correct_answers: 0}`
- *                   when the student ends the deck
+/** Flashcard mode: self-paced, no timer, no score, no deck size; "Done" ends it.
+ * `onFinish` gets `{questions_answered, correct_answers: 0}`.
  */
 export default function PracticeFlashcards({ session, onFinish }) {
   const [question, setQuestion] = useState(null)
@@ -25,9 +19,7 @@ export default function PracticeFlashcards({ session, onFinish }) {
   const reviewedRef = useRef(0)
   const flippedRef = useRef(false)
 
-  // See PracticeTest: the same two problems, the same two fixes. Only the
-  // latest request may write state, and the mount effect runs once per
-  // session rather than once per StrictMode replay.
+  // As PracticeTest: only the latest request writes state; mount effect runs once per session.
   const requestRef = useRef(0)
 
   const loadCard = useCallback(async () => {

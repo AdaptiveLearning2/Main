@@ -8,25 +8,11 @@ import Panel from './Panel'
 
 /**
  * Whether this student answers better when the headband reads focused.
- *
- * Four states, and the two in the middle are the ones worth keeping apart:
- *
- *   - EEG consent withdrawn  → says so, with the date. The join was never run.
- *   - consent unreadable     → "unavailable". "They turned it off" is a claim
- *                              a failed read has not earned.
- *   - read, too few pairs    → the buckets are drawn and the correlation is
- *                              withheld. r over a dozen answers is noise, and
- *                              it renders as a single objective-looking number
- *                              with no visible denominator.
- *   - read, enough pairs     → the correlation, alongside the buckets.
- *
- * The bars are shown below the threshold on purpose: a bar chart carries its
- * own sample sizes in a way a scalar cannot, so a reader can see that the
- * left-hand bin rests on four answers.
+ * States: consent withdrawn (with date), consent unreadable, too few pairs
+ * (buckets drawn, correlation withheld), enough pairs (both).
  */
 export default function FocusAccuracy({ data, loading, onRetry }) {
-  // Axis labels take their colour from the theme, like the tooltip: left to
-  // Recharts they are #808080 in both modes. No provider (a test) reads as light.
+  // Theme-aware axis label fill; the library default fails AA. No provider reads as light.
   const labelFill = axisLabelFill(!!useTheme()?.dark)
   const off = data?.eeg_enabled === false
   const consentUnknown = data?.consent_retrieved === false
@@ -37,7 +23,6 @@ export default function FocusAccuracy({ data, loading, onRetry }) {
     accuracy: typeof b.accuracy === 'number' ? b.accuracy * 100 : null,
   }))
 
-  // One series drawn, one column. Same rule as the accuracy trend.
   const COLUMNS = [{ key: 'accuracy', label: 'Accuracy', unit: '%' }]
 
   const r = data?.correlation
@@ -45,26 +30,16 @@ export default function FocusAccuracy({ data, loading, onRetry }) {
 
   let verdict
   if (typeof r === 'number') {
-    // Described in words as well as reported, because a bare coefficient is
-    // read as a grade by anyone who does not work with them daily. The bands
-    // are conventional and deliberately cautious at the top.
+    // In words too; bands deliberately cautious at the top.
     const strength = Math.abs(r) < 0.2 ? 'little or no'
       : Math.abs(r) < 0.4 ? 'a weak' : 'a moderate'
-    // Direction is only claimed where there is one. `corr()` returns an exact
-    // 0 readily — it is the answer whenever the two are perfectly unrelated —
-    // and `r > 0 ? … : 'Negative'` labelled that "Negative: little or no
-    // relationship", which contradicts itself in the same sentence and points
-    // a teacher at a trend that is not there. Rounding makes the reachable set
-    // wider than exact zero, too: anything under 0.005 prints as `r = 0.00`,
-    // so a signed label would disagree with the figure printed beside it.
+    // Direction from the rounded figure, so `r = 0.00` never reads as signed.
     const rounded = Number(r.toFixed(2))
     const direction = rounded === 0 ? 'No direction'
       : rounded > 0 ? 'Positive' : 'Negative'
     verdict = `${direction}: ${strength} relationship (r = ${r.toFixed(2)}) over ${data.pairs} answers.`
   } else if (data?.sufficient) {
-    // `corr()` answers null when an input has no variance — every answer
-    // correct, say. Enough data, no coefficient, which is not the same as
-    // not enough data.
+    // Null `corr()` with enough pairs: no variance (e.g. every answer correct).
     verdict = `No coefficient could be computed from these ${data.pairs} answers.`
   } else {
     verdict = `Too few answers with a focus reading to report a correlation — ${data?.pairs || 0} of the ${data?.min_pairs || 0} needed.`
@@ -100,9 +75,7 @@ export default function FocusAccuracy({ data, loading, onRetry }) {
           headline={headline} rows={rows} rowKey="label" rowLabel="Focus"
           columns={COLUMNS}
         >
-          {/* Both axes named. Without them the chart read as three purple
-              bars over three percentages, and which percentage was the
-              headband's and which the answers' was not on the picture. */}
+          {/* Both axes named: both are percentages. */}
           <BarChart data={rows} margin={{ top: 8, right: 8, left: 4, bottom: 16 }}>
             <CartesianGrid strokeDasharray="3 3" className="stroke-gray-200 dark:stroke-gray-700" />
             <XAxis dataKey="label" tick={{ fontSize: 11 }}

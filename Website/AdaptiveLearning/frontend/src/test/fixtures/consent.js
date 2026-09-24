@@ -33,14 +33,7 @@ export function withChannelOff(payload, name, {
   }
 }
 
-/**
- * What a failed consent read looks like.
- *
- * `_consent()` fails closed, so this is a complete, plausible payload with
- * every channel off and no date — not an error shape. That's what makes it
- * risky to render wrong, and why testing with `{...ALL_ON, retrieved: false}`
- * wouldn't prove anything: those channels being on couldn't be misreported.
- */
+/** A failed consent read: fails closed, so a plausible all-off payload, not an error shape. */
 export const CONSENT_READ_FAILED = {
   student_id: 'stu-1',
   retrieved: false,
@@ -51,9 +44,7 @@ export const CONSENT_READ_FAILED = {
   },
 }
 
-/** What the erase endpoint returns. `charts_failed: 0` is the good outcome --
- *  readings can be erased while an archived SVG resists deletion, and that is
- *  reported separately from an outright failure. */
+/** The erase endpoint's response. `charts_failed: 0` is the good outcome. */
 export function buildErasureResult(overrides = {}) {
   return { erased: true, rows_deleted: 1200, charts_failed: 0, ...overrides }
 }

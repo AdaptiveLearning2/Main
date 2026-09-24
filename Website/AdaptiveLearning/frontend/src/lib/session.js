@@ -2,40 +2,10 @@ import { apiFetch } from './api'
 import { toast } from 'sonner'
 
 /**
- * Close a practice session.
- *
- * Shared by both practice pages so a failed close is never silently swallowed.
- * The daily rollup and chart archive both depend on this call succeeding, and
- * those raw rows get deleted at year end, so a lost close means a lost summary.
- *
- * Never throws: the stale-session sweep cleans up a failed close later, so the
- * page can reset its own state regardless. The caller decides what to do with
- * the page; this just tells the student what happened.
- *
- * @param {string} id  session id; a falsy id is a no-op, not an error
- * @returns {Promise<boolean>} whether the backend confirmed the close
- */
-/**
- * Record one answer against a session.
- *
- * Shared by both question pages, which both POST to
- * `/api/sessions/{id}/answer` and need to handle a failure the same way.
- *
- * Never throws, so it's safe to call without awaiting — `Practice`'s
- * countdown does this from a timer callback with nothing to catch a rejection.
- *
- * Returns the backend's response so a caller can use it: `Adaptive` reads
- * `topic` off it to update its tallies without guessing which topic the
- * question belonged to. `null` means the answer did not land.
- *
- * Does not decide correctness — the two pages hold questions in different
- * shapes and compare them differently, so `correct` stays the caller's call.
- *
- * @returns {Promise<object|null>} the response, or null if nothing was recorded
+ * Record one answer against a session. Never throws (safe from a timer callback).
+ * @returns {Promise<object|null>} the response (`topic` included), or null if not recorded
  */
 export async function recordAnswer({ sessionId, questionId, selectedIndex, correct }) {
-  // Loud rather than silent: an answer with no session or question id can't
-  // be attributed to anything, so this must not fail invisibly.
   if (!sessionId || !questionId) {
     console.error('[answer] not recorded', { session: sessionId, question: questionId })
     toast.error('That answer could not be saved.')
@@ -53,6 +23,10 @@ export async function recordAnswer({ sessionId, questionId, selectedIndex, corre
   }
 }
 
+/**
+ * Close a practice session. Never throws; tells the student if it failed.
+ * @returns {Promise<boolean>} whether the backend confirmed the close (falsy id: false)
+ */
 export async function endSession(id) {
   if (!id) return false
   try {
@@ -66,17 +40,8 @@ export async function endSession(id) {
 }
 
 /**
- * The student's own sessions, newest first: always `{ sessions, total,
- * truncated }`, or a rejection -- never a guess.
- *
- * **A body of any other shape is a failed read, not "no sessions".** Each page
- * used to unwrap with `r?.sessions || []`, which turned an unexpected response
- * -- the bare list an older backend sends, mid-deploy -- into a student who had
- * done nothing. One definition here, so the three pages cannot disagree.
- *
- * `total` and `truncated` keep their third state as `null`: the backend could
- * not count, and a page must then claim neither a number nor a whole list.
- *
+ * The student's own sessions, newest first: `{ sessions, total, truncated }`, or a rejection.
+ * Any other body shape is a failed read, not "no sessions"; `total`/`truncated` are null when the backend could not count.
  * @param {{ limit?: number }} [opts]  ask for fewer rows; the backend clamps
  * @returns {Promise<{ sessions: object[], total: number|null, truncated: boolean|null }>}
  */

@@ -1,8 +1,6 @@
-/** A Quizlet-style "recent sets" list of the student's own past practice
- * sessions -- deliberately not merged into Dashboard's Topic Accuracy panel,
- * which is wired to live-session `user_math_performance`. Keeping the two
- * lists visibly separate is the point: practice tracking must read as its
- * own thing, not as more live-session history.
+/**
+ * The student's recent practice sessions; kept separate from the live-session
+ * Topic Accuracy panel on purpose.
  */
 export default function PracticeHistory({ sessions }) {
   if (!sessions || sessions.length === 0) return null

@@ -4,9 +4,7 @@ import { vi } from 'vitest'
 import RoleGuard from './RoleGuard'
 import { homeFor, HOME_BY_ROLE } from '../../lib/homeRoute'
 
-// The guard sends a user who reached a route they may not see back to their
-// own home, from a role-to-route map so no redirect can point at a route
-// that same role is guarded away from.
+// A refused user goes to their own home, from one role-to-route map.
 
 let auth = { user: { id: 'u1' }, role: 'student', loading: false }
 vi.mock('../../context/AuthContext', () => ({ useAuth: () => auth }))
@@ -41,8 +39,7 @@ it('sends a parent to the parent home, not the student one', async () => {
 })
 
 it('never redirects a role to a route that role may not see', () => {
-  // Every home this map hands out must be reachable by the role it is handed
-  // to, or that role loops.
+  // Each home must be reachable by its role, or that role loops.
   for (const [role, home] of Object.entries(HOME_BY_ROLE)) {
     auth = { user: { id: 'x' }, role, loading: false }
     const { unmount } = renderAt(home, [role])
@@ -52,8 +49,7 @@ it('never redirects a role to a route that role may not see', () => {
 })
 
 it('explains itself for an unrecognised role rather than bouncing', () => {
-  // A profile with no role has no home. Guessing one loops, since every
-  // candidate is guarded, so it shows an explanation instead.
+  // No role, no home: guessing one loops, so explain instead.
   auth = { user: { id: 'x' }, role: null, loading: false }
 
   renderAt('/dashboard', ['student'])
@@ -74,8 +70,7 @@ it('sends a signed-out visitor to login', () => {
 })
 
 it('waits for auth instead of guessing while it loads', () => {
-  // Redirecting during load reads `role` as undefined, which looks like a
-  // signed-in parent being logged out at random.
+  // During load `role` is undefined; redirecting then logs users out at random.
   auth = { user: null, role: null, loading: true }
   renderAt('/dashboard', ['student'])
   expect(screen.queryByText('login')).not.toBeInTheDocument()
@@ -83,16 +78,14 @@ it('waits for auth instead of guessing while it loads', () => {
 })
 
 it('has no home for a role it does not know', () => {
-  // Uses a role that is genuinely not in the map, not just `undefined`, so
-  // the unknown-role case is tested directly.
+  // A role genuinely not in the map, not just `undefined`.
   expect(homeFor('librarian')).toBeNull()
   expect(homeFor(undefined)).toBeNull()
   expect(homeFor(null)).toBeNull()
 })
 
 it('knows where each real role lives', () => {
-  // Every role the app actually has -- a role added without an entry here
-  // fails instead of sending that user to a route their guard refuses.
+  // A new role without an entry fails here.
   expect(homeFor('student')).toBe('/dashboard')
   expect(homeFor('teacher')).toBe('/teacher')
   expect(homeFor('parent')).toBe('/parent')

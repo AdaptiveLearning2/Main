@@ -8,11 +8,7 @@ import { apiFetch } from '../../lib/api'
 import { fetchSessionList } from '../../lib/session'
 import { toast } from 'sonner'
 
-// The three learning preferences, read off a profile the backend returned.
-// One shared definition, used both on load and after a save.
-//
-// Use `??`, not `||`: 0 (adaptive bias) and false (reminders off) are valid
-// choices, and `||` would overwrite them with the defaults every time.
+// Learning preferences off a profile. `??`, not `||`: 0 and false are valid choices.
 const prefsFrom = (p) => ({
   difficulty_bias:          p?.difficulty_bias ?? 0,
   session_duration_minutes: p?.session_duration_minutes ?? 15,
@@ -29,10 +25,7 @@ export default function Profile() {
   const { user, displayName, refreshProfile, signOut } = useAuth()
   const [tab, setTab]       = useState('Overview')
   const [stats, setStats]   = useState(null)
-  // The backend's count of every session, never the length of a list it sent:
-  // that list is capped, so its length is a claim that the student did less.
-  // `null` for a failed read *and* for a count that did not come back -- the
-  // tile has nothing true to say in either case.
+  // The backend's session count, never a capped list's length; `null` if unread.
   const [sessionTotal, setSessionTotal] = useState(null)
   const [copied, setCopied] = useState(false)
   const [profile, setProfile] = useState(null)
@@ -40,15 +33,11 @@ export default function Profile() {
   const [editGrade, setEditGrade] = useState('')
   const [saving, setSaving] = useState(false)
 
-  // Preferences live on the profile, not in localStorage, so they follow the
-  // student to any device. Stays `null` until the profile loads, so the
-  // controls don't render defaults as if the student had chosen them.
+  // `null` until the profile loads, so defaults never render as choices.
   const [prefs, setPrefs] = useState(null)
   const [prefsBusy, setPrefsBusy] = useState(false)
-  // `null` until the read lands, then a `{code, expires_at}` or `null` for
-  // "none outstanding". `codeRetrieved` keeps a failed read apart from that --
-  // offering to create one on a failed read would replace a code the student
-  // may have just read out to someone.
+  // `{code, expires_at}` or `null` for none; `codeRetrieved` keeps a failed
+  // read apart, since creating a code would replace one already read out.
   const [linkCode, setLinkCode] = useState(null)
   const [codeRetrieved, setCodeRetrieved] = useState(null)
   const [codeBusy, setCodeBusy] = useState(false)
@@ -58,12 +47,10 @@ export default function Profile() {
       apiFetch('/api/stats/me')
         .then(s => (s?.retrieved === false ? null : s))
         .catch(() => null),
-      // One row: the page shows only the count, and the count comes back
-      // beside the rows whatever the limit.
+      // One row: only the count is shown, and it comes back whatever the limit.
       fetchSessionList({ limit: 1 }).then(r => r.total).catch(() => null),
       apiFetch('/api/profile/me').catch(() => null),
-      // `retrieved: false` rides on the payload, so a rejected promise and a
-      // read that failed server-side arrive as the same thing here.
+      // A rejection becomes `retrieved: false`, like a server-side failed read.
       apiFetch('/api/student/link-code').catch(() => ({ retrieved: false })),
     ]).then(([s, total, p, lc]) => {
       setStats(s)
@@ -77,9 +64,7 @@ export default function Profile() {
     })
   }, [])
 
-  // A code on screen stops working without this page doing anything: a parent
-  // redeems it, or it expires. So while one is showing it is re-read, or the
-  // card goes on offering a spent code as live.
+  // Re-read a shown code: a parent may redeem it or it may expire.
   const shownCode = linkCode?.code
   useEffect(() => {
     if (!shownCode) return
@@ -87,8 +72,7 @@ export default function Profile() {
       .then(lc => {
         // A failed read says nothing about the code; leave it standing.
         if (lc?.retrieved === false) return
-        // Only while it is still the code this read was about: a "New code"
-        // that landed meanwhile is newer than this answer.
+        // Only if still the code this read was about; a "New code" may have landed.
         setLinkCode(cur => (cur?.code !== shownCode ? cur
           : lc?.code ? { code: lc.code, expires_at: lc.expires_at } : null))
       })
@@ -98,9 +82,7 @@ export default function Profile() {
     return () => { clearInterval(timer); window.removeEventListener('focus', recheck) }
   }, [shownCode])
 
-  // Update the UI immediately so taps feel instant, then reconcile with what
-  // the server actually stored (it clamps values). Revert on failure so the
-  // UI never shows a setting that didn't actually save.
+  // Optimistic; reconcile with the stored (clamped) row, revert on failure.
   const savePrefs = async (updated) => {
     const previous = prefs
     setPrefs(updated)
@@ -146,8 +128,7 @@ export default function Profile() {
     try {
       const res = await apiFetch('/api/student/link-code', { method: 'POST' })
       setLinkCode(res)
-      // The read succeeded by definition now, so an earlier failed one must
-      // stop suppressing the code we are holding.
+      // An earlier failed read must stop suppressing this code.
       setCodeRetrieved(true)
     } catch (e) {
       toast.error(e.message || 'Could not create a code')
@@ -191,18 +172,11 @@ export default function Profile() {
               <p className="font-bold text-sm">{joined}</p>
             </div>
 
-            {/* This block used to show the user id, under "share this with a
-                parent to link accounts". That was the instruction rather than
-                a leak -- but the id is on every roster payload a teacher of
-                this student reads and in the URL of every report page about
-                them, so it was never the shared secret the sentence implied.
-                A code has to be made here to exist, lasts 30 minutes and
-                works once. */}
+            {/* A link code, not the user id, which is not a secret. */}
             <div className="mt-3 bg-white/10 rounded-xl p-3">
               <p className="text-xs text-indigo-200 mb-1">Link a parent</p>
               {codeRetrieved === false ? (
-                // A failed read is not "you have no code": offering to create
-                // one would replace a code the student may have just read out.
+                // A failed read is not "no code"; don't offer to replace it.
                 <p className="text-xs text-indigo-100">
                   Couldn't check for a code just now.
                 </p>
@@ -260,8 +234,7 @@ export default function Profile() {
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-3">
                   {[
-                    // Show an em dash if the read failed, but 0 if it succeeded
-                    // with no data -- don't report a network error as "you did nothing".
+                    // A dash for a failed read, 0 only for a read that found nothing.
                     { label: 'Total Sessions',     value: sessionTotal ?? '—',                           icon: '📋' },
                     { label: 'Questions Answered', value: stats ? stats.total_questions ?? 0 : '—',      icon: '📝' },
                     { label: 'Correct Answers',    value: stats ? stats.total_correct ?? 0 : '—',        icon: '✅' },
@@ -324,8 +297,7 @@ export default function Profile() {
             {/* PREFERENCES */}
             {tab === 'Preferences' && !prefs && (
               <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm">
-                {/* Show a loading message instead of default controls, so a tap
-                    here can't save a setting the student never chose. */}
+                {/* Not default controls, so a tap can't save an unchosen setting. */}
                 <p className="text-sm text-gray-600 dark:text-gray-400">Loading your preferences…</p>
               </div>
             )}
@@ -335,10 +307,7 @@ export default function Profile() {
 
                 <div>
                   <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Difficulty</label>
-                  {/* Sets the starting Easier/Auto/Harder value on the practice page.
-                      It's a shift on top of the model's own difficulty pick, so
-                      there's no "medium" option -- medium and adaptive both mean
-                      no shift. */}
+                  {/* A shift on the model's pick, so no "medium": adaptive is no shift. */}
                   <div className="grid grid-cols-3 gap-2">
                     {[[-1, 'Easier'], [0, 'Adaptive'], [1, 'Harder']].map(([v, label]) => (
                       <button key={v} disabled={prefsBusy}
@@ -372,9 +341,7 @@ export default function Profile() {
 
                 <div className="flex items-center justify-between">
                   <div>
-                    {/* Named for what it actually is: a dashboard banner, not a
-                        push notification -- there's no service worker or
-                        scheduled fan-out behind it. */}
+                    {/* A dashboard banner, not a push notification. */}
                     <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Practice reminder</p>
                     <p className="text-xs text-gray-600 dark:text-gray-400">Show a nudge on your dashboard when you have not practised today</p>
                   </div>
@@ -388,8 +355,6 @@ export default function Profile() {
             {tab === 'Devices' && (
               <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm space-y-4">
                 <h3 className="font-black text-gray-900 dark:text-white">Sensors</h3>
-                {/* Sensor consent switches live here, not on the practice screen,
-                    so a student can just sit down and answer questions. */}
                 <p className="text-sm text-gray-500 dark:text-gray-400">
                   Choose what gets measured while you practise. You can turn anything off at any time.
                 </p>

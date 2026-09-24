@@ -29,7 +29,6 @@ describe('the class list', () => {
 
     draw()
 
-    // Confirms the list rendered rather than being replaced by an error screen.
     expect(await screen.findByText('Year 7 Maths')).toBeInTheDocument()
     expect(screen.getByText('Untitled class')).toBeInTheDocument()
   })

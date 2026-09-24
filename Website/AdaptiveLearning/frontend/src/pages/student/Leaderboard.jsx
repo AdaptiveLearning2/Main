@@ -14,7 +14,7 @@ export default function Leaderboard() {
       .catch(() => { setError(true); setLoading(false) })
   }, [])
 
-  // The backend flags "you" as is_me, so the response doesn't need to include everyone's UUID.
+  // The backend flags "you" as is_me, so no one's UUID is sent.
   const RANK_BADGE = { 1: 'bg-yellow-400 text-white', 2: 'bg-gray-400 text-white', 3: 'bg-orange-400 text-white' }
   const MEDALS     = ['🥇','🥈','🥉']
 

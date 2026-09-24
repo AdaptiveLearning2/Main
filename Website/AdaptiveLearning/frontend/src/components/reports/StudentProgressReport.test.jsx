@@ -4,9 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
 import StudentProgressReport from './StudentProgressReport'
 
-// Stored consent decides what the server reads; the teacher's switch only
-// hides what is drawn. On the wire that means no viewer flag; on screen it
-// means hiding costs nothing and changes no request.
+// Consent decides what the server reads; the teacher's switch only hides what is drawn.
 
 vi.mock('../../lib/api', () => ({ apiFetch: vi.fn() }))
 
@@ -25,13 +23,11 @@ function urlsFor(fragment) {
   return apiFetch.mock.calls.map(c => String(c[0])).filter(u => u.includes(fragment))
 }
 
-// The trend reads a different table through a different endpoint, so it has
-// its own empty fixture rather than sharing the weekly report's.
+// The trend reads a different table, so it has its own empty fixture.
 const emptyTrend = { weeks: [], retrieved: true, heart_included: false,
                      emotion_included: true }
 
-// The default responses, so a test overriding one endpoint can defer the
-// rest here rather than restating all four.
+// Default responses; a test overriding one endpoint defers the rest here.
 function defaultFetch(url) {
   const u = String(url)
   if (u.includes('/stats/'))                return Promise.resolve({ total_questions: 4, total_correct: 2, current_streak: 1 })
@@ -57,7 +53,6 @@ function renderReport(props = {}) {
 }
 
 it('requests the weekly report once per render, not twice', async () => {
-  // Guards against two effects fetching the report on mount.
   renderReport()
   await screen.findByText('Recent Sessions')
   expect(urlsFor('/weekly-report')).toHaveLength(1)
@@ -70,7 +65,6 @@ it('requests the weekly report once per render, not twice', async () => {
 
 describe('at-home strategies', () => {
   it('is absent unless the route asks for it', async () => {
-    // These are written for a parent at home; teacher-facing copy is wrong here.
     renderReport()
     await screen.findByText('Recent Sessions')
     expect(screen.queryByText(/at-home learning strategies/i)).not.toBeInTheDocument()
@@ -78,9 +72,7 @@ describe('at-home strategies', () => {
 
 
   it('carries the "signals did not load" flag from the response to the panel', async () => {
-    // `basis.signals_retrieved` is the only signal that the advice is generic
-    // rather than built from this student's week -- dropping it on the way
-    // through would make the panel misclaim it.
+    // `basis.signals_retrieved` is the only marker that the advice is generic.
     apiFetch.mockImplementation((u) => {
       if (String(u).includes('/learning-strategies')) {
         return Promise.resolve({
@@ -104,16 +96,13 @@ describe('at-home strategies', () => {
 
 
   it('frames the panel for whoever is reading the report', async () => {
-    // Two components apart: the page decides the audience, the panel words it.
     renderReport({ showStrategies: true, viewerRole: 'teacher' })
     await screen.findByText('Recent Sessions')
     expect(screen.getByText(/written for a family to use at home/i)).toBeInTheDocument()
   })
 
   it('POSTs a JSON body, not an empty request', async () => {
-    // FastAPI requires a body even though every field defaults -- a bodyless
-    // POST 422s. apiFetch is mocked, so this only asserts the call carries a
-    // body for lib/api.js's `if (body)` to serialize.
+    // FastAPI 422s a bodyless POST even though every field defaults.
     renderReport({ showStrategies: true })
     await screen.findByText('Recent Sessions')
     await userEvent.click(screen.getByRole('button', { name: /generate strategies/i }))
@@ -141,8 +130,6 @@ describe('at-home strategies', () => {
 
 
 it('asks for the report without a viewer-side flag', async () => {
-  // Consent decides what the server reads -- not a client-side `include_face`
-  // flag.
   renderReport()
 
   await waitFor(() => expect(urlsFor('/weekly-report')).toHaveLength(1))
@@ -150,27 +137,23 @@ it('asks for the report without a viewer-side flag', async () => {
 })
 
 it('renders the sensor panels by default', async () => {
-  // The teacher's filter is passed in; the parent surface, which knows
-  // nothing about it, must get the whole report.
+  // The parent surface passes no filter and gets the whole report.
   renderReport()
 
   expect(await screen.findByText(/Weekly EEG/)).toBeInTheDocument()
 })
 
 it('hides the sensor panels when the caller asks, without changing the request', async () => {
-  // Client-side only. See lib/viewPrefs.js for why a filter that fetches
-  // what it hides is acceptable here but not for consent.
+  // Client-side only; see lib/viewPrefs.js.
   renderReport({ showSignals: false })
 
-  // Still fetched -- the request is unchanged; only rendering is.
   await waitFor(() => expect(urlsFor('/weekly-report')).toHaveLength(1))
   expect(screen.queryByText(/Weekly EEG/)).not.toBeInTheDocument()
 })
 
 
 it('a failed trend does not blank the weekly report, or the other way round', async () => {
-  // Two endpoints over two tables. Sharing one error state would let either
-  // failure claim the other channel had nothing to show.
+  // Two endpoints over two tables, so two error states.
   apiFetch.mockImplementation(url => {
     const u = String(url)
     if (u.includes('/signal-trend')) return Promise.reject(new Error('down'))
@@ -191,8 +174,7 @@ describe('chart-explaining summary', () => {
   })
 
   it('fetches nothing until the button is pressed', async () => {
-    // An auto-fetch on mount spends a model call per report page -- thirty of
-    // them for a teacher opening a class, for a summary nobody asked to read.
+    // An auto-fetch would spend a model call per report page.
     renderReport({ showChartSummary: true })
     await screen.findByText('Recent Sessions')
     expect(urlsFor('/chart-summary')).toHaveLength(0)
@@ -214,9 +196,7 @@ describe('chart-explaining summary', () => {
   })
 
   it('names which part of the report failed to load, not just that something did', async () => {
-    // Three reads sit behind one response. Collapsed into one flag, a summary
-    // missing only its trend sentence reads as either entirely fine or
-    // entirely broken.
+    // Several reads sit behind one response, each with its own flag.
     apiFetch.mockImplementation((u) => {
       if (String(u).includes('/chart-summary')) {
         return Promise.resolve({
@@ -239,9 +219,7 @@ describe('chart-explaining summary', () => {
   })
 
   it('names a failed topics read, which is the fourth of the four', async () => {
-    // Added after review: `_topic_breakdown` swallows its exception and
-    // answers an empty list, and this is the first surface where that empty
-    // list becomes an assertion about the child rather than generic output.
+    // `_topic_breakdown` swallows failure into [], which here would become a claim.
     apiFetch.mockImplementation((u) => {
       if (String(u).includes('/chart-summary')) {
         return Promise.resolve({
@@ -264,8 +242,7 @@ describe('chart-explaining summary', () => {
   })
 
   it('does not claim an outage for a payload that predates the flags', async () => {
-    // Absent is not false. `!undefined` would report a failure for every
-    // response written before these fields existed.
+    // Absent is not false.
     renderReport({ showChartSummary: true })
     await screen.findByText('Recent Sessions')
     await userEvent.click(screen.getByRole('button', { name: /generate summary/i }))
@@ -275,10 +252,7 @@ describe('chart-explaining summary', () => {
   })
 
   it('keeps its own state, so the two panels cannot overwrite each other', async () => {
-    // Two buttons a reader can press in either order, so both directions are
-    // pressed here. Checking only one leaves the other handler free to clear
-    // the panel it does not own, which is exactly the shape shared state
-    // would produce.
+    // Both press orders, so neither handler can clear the other's panel.
     renderReport({ showChartSummary: true, showStrategies: true })
     await screen.findByText('Recent Sessions')
 

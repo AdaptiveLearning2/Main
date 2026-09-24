@@ -5,26 +5,18 @@ import { join, resolve, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import LoadError from './LoadError'
 
-/**
- * The sentence this component picks is the one someone acts on. It used to
- * pick the same one for everything -- "make sure the backend is running" --
- * which sent a teacher to check a server that had answered correctly and
- * refused. What is under test here is that a refusal, a lapsed session and an
- * unreachable backend stay three different statements.
- */
+/** A refusal, a lapsed session and an unreachable backend are three different sentences. */
 describe('LoadError', () => {
   const err = (status) => Object.assign(new Error('nope'), { status })
 
   it('blames the backend only when the request never got an answer', () => {
-    // No `status` is the shape of a dropped connection or an aborted fetch:
-    // the one case where "is the backend running" is the right question.
+    // No `status`: a dropped connection or aborted fetch.
     render(<LoadError what="your classes" error={new Error('network down')} />)
     expect(screen.getByRole('status')).toHaveTextContent(
       "Couldn't load your classes. Make sure the backend is running.")
   })
 
   it('says the same with no error at all, so an unwired caller is unchanged', () => {
-    // Twelve call sites pass nothing. Their wording must not move.
     render(<LoadError what="your classes" />)
     expect(screen.getByRole('status')).toHaveTextContent(
       "Couldn't load your classes. Make sure the backend is running.")
@@ -34,8 +26,7 @@ describe('LoadError', () => {
     render(<LoadError what="this student's questions" error={err(403)} />)
     const box = screen.getByRole('status')
     expect(box).toHaveTextContent("You don't have access to this student's questions.")
-    // The load-bearing half. The old copy was not merely vague, it named the
-    // wrong layer, and naming a layer is what makes someone go and look at it.
+    // Naming a layer sends someone to inspect it.
     expect(box).not.toHaveTextContent(/backend/i)
   })
 
@@ -46,10 +37,6 @@ describe('LoadError', () => {
   })
 
   it('keeps Try again on a 401, which a restored session can fix', () => {
-    // Deliberately not folded in with 403. Both are "you may not have this",
-    // but only one of them can come good without the user doing anything
-    // else, so collapsing them would either hide a usable button or offer a
-    // dead one.
     render(<LoadError what="your classes" error={err(401)} onRetry={vi.fn()} />)
     expect(screen.getByRole('status')).toHaveTextContent(/session has expired/i)
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
@@ -68,16 +55,8 @@ describe('LoadError', () => {
 })
 
 /**
- * Exhaustiveness, like the backend's `_MODE_AWARE` and close-site tests.
- *
- * `error` is optional, so a call site that never passes one is silently back
- * to blaming the backend for a refusal -- and unlike the other guards in this
- * repo, "every call site must pass one" is the wrong rule here. Most of these
- * pages read the caller's own data and cannot 403 on a relationship, and one
- * of them has no error object to pass at all. So this is a classification
- * list, not a requirement: a new file rendering `<LoadError` fails until
- * someone says which kind it is, which is the decision that would otherwise
- * be skipped.
+ * Every `<LoadError` call site must be classified: whether a 403 is reachable there.
+ * A classification list, not a requirement to pass `error` everywhere.
  */
 describe('every LoadError call site is classified', () => {
   const SRC = resolve(fileURLToPath(import.meta.url), '..', '..', '..')
@@ -89,45 +68,25 @@ describe('every LoadError call site is classified', () => {
       : full.endsWith('.jsx') && !full.includes('.test.') ? [full] : []
   })
 
-  // Reads data belonging to somebody else, through a relationship check that
-  // answers 403 when it does not hold. The value is the endpoint, so the
-  // claim can be re-checked against the backend rather than taken on trust.
+  // Reads someone else's data behind a check that can 403; the value names the endpoint.
   const MUST_PASS_ERROR = {
     'pages/teacher/Questions.jsx':
       'GET /api/students/{id}/questions -- _verify_can_view_student',
     'pages/teacher/Sessions.jsx':
       'GET /api/classes/{id}/students -- _verify_class_owner',
-    // Two sites: the own-classes read (which cannot 403) and the live roster,
-    // which can. The stricter class applies to the file, and both pass `error`.
+    // Two sites; the stricter class applies to the file.
     'pages/teacher/Live.jsx':
       'GET /api/teacher/classes/{id}/live -- _verify_class_owner',
-    // Admin-gated rather than relationship-gated, but the same reachable 403:
-    // `_require_admin` refuses a signed-in non-admin, and `AdminGuard` is a UI
-    // convenience rather than the check. The page's *other* failure state --
-    // `retrieved: false` -- deliberately does not come through here, because
-    // that is a successful request whose read failed and LoadError would give
-    // it the generic unreachable-backend wording.
+    // Admin-gated; `retrieved: false` deliberately does not come through LoadError.
     'pages/admin/SecurityEvents.jsx':
       'GET /api/admin/security-events -- _require_admin',
   }
 
-  // Exempt, and the reason is the point: two different reasons hide here, and
-  // only the second is about the data.
   const NO_REFUSAL_TO_REPORT = {
-    // No error object exists to pass. `Panel`'s `failed` is the payload's
-    // `retrieved` flag, because these aggregates answer 200 with a default
-    // payload when they fail server-side, and the pages fold a rejected fetch
-    // into that same flag on the way in. The status is discarded at that
-    // conversion, so wiring this means seven callers keeping the error beside
-    // the flag -- a real change, not a prop.
+    // No error object exists: `failed` is the payload's `retrieved` flag.
     'components/analytics/Panel.jsx': 'failed is a retrieved flag, not an error',
 
-    // The rest read the caller's own data, so no relationship check stands
-    // between them and it and 403 is not reachable. Passing the error would
-    // be harmless and would say nothing. Note the endpoint, not the page: two
-    // of these files DO call a relationship-checked endpoint elsewhere --
-    // Classes.jsx PUTs /api/classes/{id}, Settings.jsx reads a single child --
-    // and both send those failures to a toast rather than here.
+    // Own data, so 403 is unreachable on the endpoint that feeds LoadError.
     'pages/parent/Settings.jsx':            'GET /api/parent/children -- own children',
     'pages/student/Achievements.jsx':       'GET /api/stats/me -- own',
     'pages/student/History.jsx':            'GET /api/sessions -- own',
@@ -139,16 +98,13 @@ describe('every LoadError call site is classified', () => {
     'components/practice/PracticeSetup.jsx': 'own profile and the topic list',
   }
 
-  // `<LoadError`, not the bare name: a dangling import satisfies the name,
-  // which is exactly what deleting the element leaves behind. That mistake
-  // has already been made once here, in QuestionFigure.test.jsx.
+  // `<LoadError`, not the bare name: a dangling import satisfies the name.
   const callSites = walk(SRC)
     .filter(f => readFileSync(f, 'utf8').includes('<LoadError'))
     .map(rel)
 
   it('finds the call sites at all', () => {
-    // Without this the checks below pass vacuously against a walk that
-    // matched nothing -- a renamed directory would read as a clean sweep.
+    // Otherwise the checks below pass vacuously.
     expect(callSites.length).toBeGreaterThan(5)
   })
 
@@ -159,20 +115,12 @@ describe('every LoadError call site is classified', () => {
   })
 
   it('has no stale entry naming a file that no longer renders one', () => {
-    // A list that outlives its subject is how an exemption granted for one
-    // reason gets inherited by whatever takes the file's place.
     const declared = [...Object.keys(MUST_PASS_ERROR),
                       ...Object.keys(NO_REFUSAL_TO_REPORT)]
     expect(declared.filter(f => !callSites.includes(f))).toEqual([])
   })
 
-  /**
-   * The `<LoadError ... />` elements in a file, as source text.
-   *
-   * Scanning to the first `>` at brace depth 0, rather than a regex, because
-   * `onRetry={() => retry()}` puts a `>` inside the props and `[^>]*` would
-   * cut the element in half there.
-   */
+  /** The `<LoadError ... />` elements as source text; brace-depth scan, since props can hold `>`. */
   const loadErrorElements = (src) => {
     const found = []
     let start = src.indexOf('<LoadError')
@@ -191,12 +139,7 @@ describe('every LoadError call site is classified', () => {
   }
 
   it('passes the error everywhere a refusal is reachable', () => {
-    // On the element, not anywhere in the file -- which is the substitution
-    // the comment above `callSites` warns about, made one test lower. A file
-    // with any other `error={` in it (a catch block, another component's
-    // prop) satisfied a file-wide search, so dropping the prop from the
-    // element itself kept this green and put "make sure the backend is
-    // running" back on a 403.
+    // On the element, not anywhere in the file: any other `error={` would satisfy a file-wide search.
     const notPassing = Object.keys(MUST_PASS_ERROR).filter((f) => {
       const elements = loadErrorElements(readFileSync(join(SRC, f), 'utf8'))
       return elements.length === 0
@@ -206,10 +149,7 @@ describe('every LoadError call site is classified', () => {
   })
 
   it('reads the element rather than the file', () => {
-    // The extractor is the load-bearing part of the check above, so it is
-    // pinned directly: a props blob containing a `>` inside an arrow function
-    // must not truncate, and a stray `error={` elsewhere in the file must not
-    // count.
+    // Pins the extractor: `>` in an arrow must not truncate, a stray `error={` must not count.
     const src = [
       'const a = <LoadError onRetry={() => go()} error={err} />',
       'function b() { try {} catch (error) { report({ error: e }) } }',

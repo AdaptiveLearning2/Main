@@ -2,8 +2,7 @@ import { render, screen, cleanup, act } from '@testing-library/react'
 import { vi } from 'vitest'
 import FlowDot from './FlowDot'
 
-// The pulse fires on a changed timestamp, not on every poll, so a stopped
-// sensor goes still instead of blinking as if it were healthy.
+// The pulse fires on a changed timestamp, not every poll, so a stopped sensor goes still.
 
 const ping = () => document.querySelector('.animate-ping')
 
@@ -12,8 +11,7 @@ const flowing = (ts) => ({ flowing: true, stale: false, seen: true, last_ts: ts 
 beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
-// Wrap timer advances in act(), or the state update from the timeout lands
-// outside React's knowledge and the assertion reads a stale tree.
+// Wrap timer advances in act(), or the assertion reads a stale tree.
 const advance = (ms) => act(() => { vi.advanceTimersByTime(ms) })
 
 describe('the pulse', () => {
@@ -48,15 +46,7 @@ describe('the pulse', () => {
   })
 
   it('does not fire when a timestamp goes missing and comes back unchanged', () => {
-    // The backend answers `last_ts: null` for a channel it could not read --
-    // `/api/admin/live-signals` has an explicit `seen: null` state for exactly
-    // that -- so a poll can go value, null, same-value on a session with
-    // nothing new in it.
-    //
-    // Comparing against the *previous rendered* value calls that a change,
-    // twice, and lights the dot on the way back. The comparison has to be
-    // against the last timestamp actually pulsed for, which the 600ms timer
-    // must not clear.
+    // An unread poll gives `last_ts: null`; compare against the last timestamp pulsed for, not the last render.
     const { rerender } = render(<FlowDot channel={flowing('2026-08-18T10:00:00Z')} label="EEG" />)
     rerender(<FlowDot channel={flowing('2026-08-18T10:00:01Z')} label="EEG" />)
     advance(600)
@@ -69,8 +59,7 @@ describe('the pulse', () => {
   })
 
   it('restarts the 600ms when a timestamp arrives mid-pulse', () => {
-    // A pulse that inherited the previous one's remainder would cut short and
-    // make a busy channel look intermittent.
+    // An inherited remainder would make a busy channel look intermittent.
     const { rerender } = render(<FlowDot channel={flowing('2026-08-18T10:00:00Z')} label="EEG" />)
     rerender(<FlowDot channel={flowing('2026-08-18T10:00:01Z')} label="EEG" />)
     advance(500)
@@ -94,8 +83,7 @@ describe('the pulse', () => {
 })
 
 describe('the four states', () => {
-  // Check the title text, not the color, since "never reported" and "stale"
-  // are different facts that a color alone can't distinguish.
+  // Title text, not colour: "never reported" and "stale" are different facts.
   const titleOf = () => screen.getByTitle(/EEG:/).getAttribute('title')
 
   it('reports a channel that has never reported', () => {

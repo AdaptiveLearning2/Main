@@ -1,10 +1,4 @@
-/** Read and write one browser-local preference, without letting storage break a page.
- *
- * `localStorage` can throw instead of returning null — Safari private
- * browsing, blocked site data, a partitioned iframe. Every access needs a
- * try/catch, or an unavailable `localStorage` can crash a component during
- * render and take down the whole app.
- */
+/** Browser-local preferences. `localStorage` can throw, so every access is guarded. */
 
 /** The stored string, or `fallback` when there is nothing to read or reading throws. */
 export function readPref(key, fallback = null) {
@@ -16,12 +10,7 @@ export function readPref(key, fallback = null) {
   }
 }
 
-/** Store a string. Silently does nothing when storage is unavailable.
- *
- * Deliberately silent: the caller has no better answer than carrying on, and
- * every call site here is a layout preference rather than anything a user would
- * be told about.
- */
+/** Store a string. Silently does nothing when storage is unavailable. */
 export function writePref(key, value) {
   try {
     localStorage.setItem(key, String(value))

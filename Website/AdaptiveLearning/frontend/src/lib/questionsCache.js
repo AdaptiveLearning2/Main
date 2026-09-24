@@ -1,14 +1,6 @@
 import { apiFetch } from './api'
 
-// Analytics and Questions both fetch the full question bank independently on
-// every mount -- two redundant reads of the same data during ordinary
-// teacher navigation. Module-level state (not component state) is what lets
-// this be shared across those two separate component instances.
-//
-// Keyed by `limit` rather than a single slot: a single slot would only help
-// callers sharing the exact same limit, and a second caller with a different
-// limit (e.g. Dashboard.jsx's `?limit=5`) would thrash the first one's entry
-// on every call instead of getting its own.
+// Module-level question-bank cache shared across pages, keyed by `limit`.
 const TTL_MS = 30_000 // matches backend QUESTIONS_CACHE_TTL default
 
 const cache = new Map()     // limit -> { data, expiresAt }
@@ -30,18 +22,13 @@ export function fetchQuestionsCached(limit = 1000) {
       inFlight.delete(limit)
       return data
     })
-    // Not populating `cache` on failure means each page's existing retry()
-    // still forces a genuine refetch rather than replaying a rejection.
+    // Failures are not cached, so a retry refetches.
     .catch(err => { inFlight.delete(limit); throw err })
   inFlight.set(limit, promise)
   return promise
 }
 
-// The cache is module-level state on purpose (see above), which means it
-// also persists across tests in the same file unless cleared. Any test that
-// renders a page using `fetchQuestionsCached` should call this in
-// `beforeEach`, or a later test can be served a still-fresh entry left
-// behind by an earlier one instead of hitting its own mocked response.
+// Call in `beforeEach` of any test rendering a page that uses the cache.
 export function _resetForTests() {
   cache.clear()
   inFlight.clear()

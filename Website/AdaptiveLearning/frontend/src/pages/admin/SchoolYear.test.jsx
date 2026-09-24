@@ -28,9 +28,7 @@ describe('isValidTimezone', () => {
     expect(isValidTimezone('UTC')).toBe(true)
   })
 
-  // Must agree with the backend, which validates with Python's `ZoneInfo`.
-  // Accepting a value the backend then rejects is worse than no check at all.
-  // The rows below are known divergences between `Intl` and `ZoneInfo`.
+  // Must agree with the backend's `ZoneInfo`; rows below are known `Intl` divergences.
 
   it('rejects a UTC offset, which Intl accepts and ZoneInfo does not', () => {
     expect(isValidTimezone('+00:00')).toBe(false)
@@ -45,8 +43,7 @@ describe('isValidTimezone', () => {
   })
 
   it('still accepts a legacy alias, which ZoneInfo also accepts', () => {
-    // `Intl` canonicalizes `US/Central` to `America/Chicago` and `GMT` to
-    // `UTC`, so this can't be a plain round-trip check.
+    // `Intl` canonicalizes aliases, so this cannot be a round-trip check.
     expect(isValidTimezone('US/Central')).toBe(true)
     expect(isValidTimezone('GMT')).toBe(true)
   })
@@ -57,20 +54,17 @@ describe('isValidTimezone', () => {
   })
 
   it('accepts the default the form itself loads with', () => {
-    // `UTC` is absent from `Intl.supportedValuesOf('timeZone')`, so a naive
-    // check against that list would mark a freshly loaded form invalid.
+    // `UTC` is absent from `Intl.supportedValuesOf('timeZone')`.
     expect(isValidTimezone('UTC')).toBe(true)
   })
 
   it('rejects a plausible typo', () => {
-    // One transposed letter is enough to deny recording for the whole
-    // deployment, which is the case this whole check exists for.
+    // One typo denies recording for the whole deployment.
     expect(isValidTimezone('America/Chigago')).toBe(false)
   })
 
   it('rejects something merely shaped like a zone', () => {
-    // A regex over `Area/City` would wrongly accept this; must use the
-    // runtime's own resolver instead.
+    // A regex over `Area/City` would accept this; use the runtime's resolver.
     expect(isValidTimezone('Area/Nonsense')).toBe(false)
   })
 
@@ -83,8 +77,7 @@ describe('isValidTimezone', () => {
 
 describe('the timezone field', () => {
   it('refuses to save a zone the platform cannot resolve', async () => {
-    // The backend 422s an unresolvable zone before persisting it, so this
-    // check exists to catch the typo before the round trip, not after.
+    // The backend 422s too; this catches the typo before the round trip.
     render(<AdminSchoolYear />)
     const field = await screen.findByLabelText(/timezone/i)
 

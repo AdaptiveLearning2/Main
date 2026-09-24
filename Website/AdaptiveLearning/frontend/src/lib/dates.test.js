@@ -3,8 +3,7 @@ import { fmtDate } from './dates'
 
 describe('fmtDate', () => {
   it('answers null rather than a placeholder for a missing or bad date', () => {
-    // Every use site reads `{fmtDate(x) && <> on {fmtDate(x)}</>}`, so a
-    // placeholder would render "on Invalid Date" instead of nothing at all.
+    // Call sites guard on truthiness, so a placeholder would render "on Invalid Date".
     expect(fmtDate(null)).toBeNull()
     expect(fmtDate(undefined)).toBeNull()
     expect(fmtDate('')).toBeNull()

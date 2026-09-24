@@ -1,14 +1,5 @@
-// One switch, after three. `teacher/Settings.jsx`, `student/Profile.jsx` and
-// `admin/Flags.jsx` each defined their own, and had diverged: only the admin
-// copy had `role="switch"` and `aria-checked`, so two of three were invisible
-// to a screen reader as controls, and it named its prop `checked` while the
-// others said `value`.
-//
-// **The geometry is inline-flex, not absolute.** The other two positioned the
-// knob with `absolute` and `left-0`, but a button centres its content, so
-// without a flow layout `left` resolved from the span's centred static
-// position -- both states drew the knob right of centre, and neither looked
-// broken enough to read as a bug.
+// The shared switch. Knob is inline-flex, not absolute: a button centres its
+// content, so `left` would resolve from the centre.
 const TONES = {
   violet:  'bg-violet-600',
   indigo:  'bg-indigo-600',

@@ -1,22 +1,4 @@
-/**
- * Every spelling of every XSS sink, linted through the real gate config.
- *
- * `npm run lint:sinks` is what CI blocks on, and it is only as good as its
- * selectors. Those were hand-checked twice and were wrong twice: first the
- * member-assignment route to `dangerouslySetInnerHTML` (with a comment saying
- * otherwise), then every *quoted* spelling, because `el.innerHTML` puts the
- * name in an Identifier's `.name` and `el['innerHTML']` puts it in a string
- * Literal's `.value`. `<div {...{'dangerouslySetInnerHTML': {__html: x}}} />`
- * passed a green blocking gate on one pair of quotes.
- *
- * Reading the rules is what failed both times, so this reads the *report*.
- * It runs ESLint over source text with `eslint.sinks.config.js` -- the same
- * file CI uses, not a copy -- and asserts each form is flagged. A selector
- * that stops matching fails here rather than going quiet.
- *
- * `npm run lint:sinks` still has to exist: this proves the rules catch the
- * forms, that proves they are applied to the tree.
- */
+/** Every spelling of every XSS sink, linted through the real `eslint.sinks.config.js` and read from the report. */
 import { describe, it, expect, beforeAll } from 'vitest'
 import { ESLint } from 'eslint'
 import path from 'node:path'
@@ -25,14 +7,7 @@ import url from 'node:url'
 const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '../..')
 
 let eslint
-// **The warm-up lint is load-bearing, and its own timeout with it.**
-// Constructing `ESLint` is cheap; the first `lintText` is what resolves the
-// flat config and imports both react plugins, and that cost was landing inside
-// the first test's 5 s default budget. Alone it fits; under the full parallel
-// suite it does not, so this file failed on whichever spelling happened to be
-// first -- an intermittent failure that pointed at `eval(s)` and had nothing to
-// do with it. Same shape as the `asyncUtilTimeout` note in CLAUDE.md: the
-// assertion was racing a budget unrelated to what it was waiting for.
+// The warm-up lint loads config and plugins under its own timeout, outside the first test's 5 s budget.
 beforeAll(async () => {
   eslint = new ESLint({
     cwd: ROOT,
@@ -48,8 +23,7 @@ async function lint(code) {
   return result.messages
 }
 
-// Both spellings of each sink. The quoted column is the one that was open:
-// nothing about a sink changes when its name is written as a string.
+// Both spellings of each sink: Identifier `.name` and quoted Literal `.value`.
 const SINKS = [
   ['eval, called bare',            'eval(s)'],
   ['eval through window',          'window.eval(s)'],
@@ -87,8 +61,7 @@ describe('the sink gate flags', () => {
 })
 
 describe('the sink gate leaves alone', () => {
-  // The complement, and the half that keeps this from being satisfiable by a
-  // rule matching everything. Each is ordinary code this app writes.
+  // The complement: stops a match-everything rule from passing.
   it.each([
     ['setting text',                 'el.textContent = s'],
     ['a className',                  'el.className = s'],

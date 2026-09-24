@@ -36,9 +36,7 @@ describe('normalizeQuestion', () => {
 })
 
 describe('every surface that presents a question', () => {
-  // The same exhaustiveness check QuestionFigure.test.jsx runs, for the same
-  // reason: an enrichment field shipped wired into some surfaces and not
-  // others, and nothing said which.
+  // Exhaustive over question surfaces, as QuestionFigure.test.jsx.
   const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..')
   const REFERENCES_ONLY = [resolve(root, 'pages', 'teacher', 'Dashboard.jsx')]
 

@@ -5,8 +5,7 @@ import { vi } from 'vitest'
 import StudentReport from './StudentReport'
 import { clearViewPrefs } from '../../lib/viewPrefs'
 
-// Tests the "back" link and heading built from router state, including the
-// direct-visit case where no state exists (refresh / bookmark / deep link).
+// Back link and heading come from router state, which a direct visit lacks.
 
 vi.mock('../../lib/api', () => ({ apiFetch: vi.fn() }))
 
@@ -15,11 +14,7 @@ const { apiFetch } = await import('../../lib/api')
 const SID = 'stu-1'
 
 beforeEach(() => {
-  // This page owns a *persisted* preference: the sensor switch writes to
-  // localStorage, which jsdom keeps for the whole file. Without this, every
-  // test declared after one that flips the switch renders with sensors
-  // already hidden -- silently, and only for the tests written later, so it
-  // reads as one of them being broken rather than as leaked state.
+  // The sensor switch persists to localStorage, which jsdom keeps for the whole file.
   clearViewPrefs()
   apiFetch.mockReset()
   // Resolve by URL, not call order, so fixtures can't get silently swapped.
@@ -70,8 +65,6 @@ it('falls back to the class list on a direct visit with no state', async () => {
 })
 
 it('shows an error state, not an empty report, when the core load fails', async () => {
-  // A failed load must show an error, not a zeros-filled report that looks
-  // like a real but inactive student.
   apiFetch.mockReset()
   apiFetch.mockImplementation((url) =>
     String(url).includes('/weekly-report')
@@ -88,16 +81,7 @@ it('shows an error state, not an empty report, when the core load fails', async 
   expect(screen.getByRole('link', { name: /back to algebra/i })).toHaveAttribute('href', '/teacher/classes/class-1')
 })
 
-/**
- * The strategies panel was parent-only, on the reasoning that its advice is
- * written for someone at home. But the endpoint behind it is gated on
- * relationship rather than role -- its own docstring says so -- so a teacher
- * of this student could always ask for the advice and had no way to see it.
- *
- * On demand, not on mount: the panel fetches nothing until the button is
- * pressed, which is what keeps it from spending a model call per report page
- * across a class of thirty.
- */
+/** On demand, not on mount: no model call per report page across a class. */
 it('offers the strategies panel, framed for a teacher and generating nothing on its own', async () => {
   renderWithState({ name: 'Ada', classId: 'class-1', className: 'Algebra' })
   await screen.findByText('Recent Sessions')
@@ -107,18 +91,7 @@ it('offers the strategies panel, framed for a teacher and generating nothing on 
   expect(apiFetch.mock.calls.some(([u]) => String(u).includes('/learning-strategies'))).toBe(false)
 })
 
-/**
- * The strategies panel goes behind "Hide sensor data" with the charts, because
- * the advice *is* sensor data in prose: the rule-based list says "stress
- * indicators ran high this week" and "focus indicators were low this week",
- * and the model pass is handed the same averages. Unconditional, the switch
- * took the tiles off screen and left a button that writes those numbers back
- * out as sentences.
- *
- * The button's absence is the assertion, not the panel's heading -- hiding the
- * heading while leaving a live Generate button would satisfy a heading check
- * and none of the point.
- */
+/** The advice is sensor data in prose; assert the button's absence, not the heading's. */
 it('hides the strategies panel behind the sensor switch, button included', async () => {
   renderWithState({ name: 'Ada', classId: 'class-1', className: 'Algebra' })
   await screen.findByText('Recent Sessions')
@@ -128,18 +101,11 @@ it('hides the strategies panel behind the sensor switch, button included', async
 
   expect(screen.queryByRole('button', { name: /generate strategies/i })).not.toBeInTheDocument()
   expect(screen.queryByText(/at-home learning strategies/i)).not.toBeInTheDocument()
-  // Academic content is untouched -- the switch hides sensor data, and these
-  // measure answers.
+  // Academic content measures answers, so it stays.
   expect(screen.getByText('Recent Sessions')).toBeInTheDocument()
 })
 
-/**
- * Declared after the test that flips the switch, and that position is the
- * whole point: the preference is persisted, so without the `clearViewPrefs()`
- * in `beforeEach` this renders with sensors already hidden and fails. A guard
- * against leaked state is only a guard if something is standing downstream of
- * the leak.
- */
+/** Must stay after the switch-flipping test: it is what gives `clearViewPrefs()` teeth. */
 it('starts each test showing sensor data, whatever an earlier test switched off', async () => {
   renderWithState({ name: 'Ada', classId: 'class-1', className: 'Algebra' })
   await screen.findByText('Recent Sessions')
@@ -148,18 +114,7 @@ it('starts each test showing sensor data, whatever an earlier test switched off'
   expect(screen.getByRole('button', { name: /generate strategies/i })).toBeInTheDocument()
 })
 
-/**
- * The chart summary is mounted here too, and behind the same switch as the
- * charts -- a stronger version of the reason the strategies panel is. The
- * strategies list mentions sensor readings in passing; this panel's whole job
- * is to state them ("Average focus is 63%, and across the weeks with readings
- * it has risen from 55% to 63%"). Left unconditional, "Hide sensor data" would
- * take the tiles off screen and put the same numbers back as sentences, under
- * a heading naming charts that are no longer there.
- *
- * The button's absence is the assertion, not the heading, for the reason the
- * strategies test above gives.
- */
+/** The chart summary states sensor readings outright, so it hides with the charts. */
 it('hides the chart summary behind the sensor switch, button included', async () => {
   renderWithState({ name: 'Ada', classId: 'class-1', className: 'Algebra' })
   await screen.findByText('Recent Sessions')

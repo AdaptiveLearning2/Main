@@ -4,19 +4,11 @@ import { vi } from 'vitest'
 import Students from './Students'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 
-// This page reads topic performance from the browser client, and its academic
-// totals and signal averages from the backend -- /api/stats/student/{id} and
-// /api/students/{id}/signal-summary respectively -- so totals reflect a session
-// still in progress and week-long averages are not capped to a few minutes of
-// one sitting, matching what the parent dashboard reports for the same
-// student. The tests below cover those endpoints, and that the facial switch
-// still stops the facial data being asked for rather than merely hiding it.
+// Totals from /api/stats/student/{id}, averages from /api/students/{id}/signal-summary; topics via supabase.
 
 vi.mock('../../lib/api', () => {
   const apiCalls = []
-  // The next signal-summary response. A plain object resolves, an Error
-  // rejects, and a Promise is adopted as-is -- which is what the staleness
-  // tests need in order to land two responses out of order.
+  // Next response: an object resolves, an Error rejects, a Promise is adopted as-is.
   const state = { summary: null, userStats: null }
   return {
     apiFetch: (path) => {
@@ -32,12 +24,9 @@ vi.mock('../../lib/api', () => {
 vi.mock('../../lib/supabase', () => {
   const fromCalls = []
   const results = {}
-  // Every builder method the page chains returns the builder; the terminal
-  // calls resolve. The builder is itself a thenable because the topic query is
-  // awaited straight off .eq() with no limit()/maybeSingle().
+  // Chainable builder; also a thenable, since the topic query is awaited straight off .eq().
   const query = (table) => {
-    // An Error stored for a table rejects rather than resolving, so a test can
-    // exercise the throw path as well as the { data, error } one.
+    // A stored Error rejects, to exercise the throw path.
     const settle = () => {
       const r = results[table] ?? { data: [], error: null }
       return r instanceof Error ? Promise.reject(r) : Promise.resolve(r)
@@ -65,10 +54,7 @@ vi.mock('../../lib/supabase', () => {
 const { __fromCalls: fromCalls, __results: results } = await import('../../lib/supabase')
 const { __apiCalls: apiCalls, __apiState: apiState } = await import('../../lib/api')
 
-// `profiles!inner(*)`, so these are real `profiles` columns: id, display_name,
-// email, role, grade_level. There is no `username` -- this fixture invented
-// one, matching a read in the page that invented the same one, so neither
-// could ever fail against the other.
+// Real `profiles` columns only: there is no `username`.
 const MEMBERSHIPS = {
   data: [{
     student_id: 'stu-1',
@@ -79,9 +65,7 @@ const MEMBERSHIPS = {
   error: null,
 }
 
-// Seven days at 1 Hz across a few sittings. Deliberately far above any small
-// row cap, so a count rendered from rows rather than from the aggregate
-// cannot accidentally match.
+// Seven days at 1 Hz: far above any row cap, so a count from rows cannot match.
 const WEEK_OF_SAMPLES = 51840
 
 const SUMMARY = {
@@ -90,9 +74,7 @@ const SUMMARY = {
   face_included: true, dominant_emotion: 'happy',
 }
 
-// What the endpoint returns for the same student with the switch off: no facial
-// row is read, so every facial field comes back empty and face_included says
-// why. Sessions and EEG are untouched by the switch.
+// The endpoint's answer with facial off: facial fields empty, EEG and sessions untouched.
 const SUMMARY_FACE_OFF = {
   ...SUMMARY, face_attention: null, face_samples: 0,
   face_included: false, dominant_emotion: null,
@@ -110,14 +92,11 @@ function setData({ summary = SUMMARY, userStats = USER_STATS } = {}) {
     user_math_performance: { data: [], error: null },
   })
   apiState.summary = summary
-  // `{ data, error }` was the shape of the old PostgREST read; the endpoint
-  // returns the row itself, so tests that hand a stats fixture keep working
-  // while ones that hand an Error still exercise the rejection path.
+  // The endpoint returns the row itself; unwrap `{ data }` fixtures, pass Errors through.
   apiState.userStats = userStats instanceof Error ? userStats : (userStats?.data ?? userStats)
 }
 
-// StatCard renders the value, label and subtitle in one div, so scope by the
-// label's parent.
+// StatCard renders value, label and subtitle in one div.
 function tile(label) {
   return within(screen.getByText(label).closest('div'))
 }
@@ -141,17 +120,12 @@ describe('signal averages', () => {
     await expandAda()
     await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
     expect(tile('Stress Level').getByText('40%')).toBeInTheDocument()
-    // No Engagement tile: it is the focus index under another name, and
-    // Focus Score is in the same grid. The fixture's differing value is a
-    // payload the mapper can no longer produce, so only absence is checkable.
+    // No Engagement tile: it is the focus index under another name.
     expect(screen.queryByText('Engagement')).not.toBeInTheDocument()
     expect(tile('Dominant Emotion').getByText('happy')).toBeInTheDocument()
   })
 
   it('reports the whole window, not a row cap', async () => {
-    // Guards against a row cap being presented as a measurement of the week
-    // -- e.g. rendering "200 EEG readings · last 7d" for a busier week, a
-    // number that would contradict the parent dashboard for the same student.
     render(<Students />)
     await expandAda()
     await waitFor(() =>
@@ -159,9 +133,7 @@ describe('signal averages', () => {
   })
 
   it('asks the aggregate for the window the tiles claim', async () => {
-    // The tiles say "last 7d", so the request has to say seven days -- matching
-    // the weekly report and the summary RPCs' p_days default, so that a teacher
-    // and a parent describe the same week.
+    // Seven days, matching the weekly report, so teacher and parent describe the same week.
     render(<Students />)
     await expandAda()
     await waitFor(() => expect(summaryCalls()).toHaveLength(1))
@@ -173,13 +145,11 @@ describe('signal averages', () => {
     setData({ summary: { ...SUMMARY, focus: null, cognitive_samples: 0 } })
     render(<Students />)
     await expandAda()
-    // "0%" here would read as a real measurement of a struggling student.
     await waitFor(() => expect(tile('Focus Score').getByText('—')).toBeInTheDocument())
   })
 
   it('does not render a missing field as NaN%', async () => {
-    // Number(undefined) is NaN and Number(null) is 0, so converting without a
-    // finite check turns an absent field into "NaN%" or a confident "0%".
+    // Number(undefined) is NaN and Number(null) is 0.
     setData({ summary: {} })
     render(<Students />)
     await expandAda()
@@ -190,8 +160,6 @@ describe('signal averages', () => {
 
 describe('a failed read', () => {
   it('costs the signal tiles only, not the academic ones beside them', async () => {
-    // The summary is one of three parallel reads. Letting it reject the whole
-    // Promise.all would blank stats that loaded perfectly well.
     setData({ summary: new Error('signal summary down') })
     render(<Students />)
     await expandAda()
@@ -200,12 +168,7 @@ describe('a failed read', () => {
   })
 
   it('leaves the row refetchable rather than stuck loading', async () => {
-    // The loading flag is what toggleExpand checks to decide a row is already
-    // handled. A read that throws without clearing it leaves the row showing a
-    // spinner that collapsing and re-expanding never clears -- the same stuck
-    // row the supersede path is careful to avoid.
-    // Counted from apiFetch now, not `supabase.from`: the stats read moved to
-    // /api/stats/student, which is the only source that sees an open session.
+    // A throw that leaves the loading flag set makes toggleExpand treat the row as handled.
     const statsCalls = () => apiCalls.filter(p => String(p).includes('/api/stats/student/'))
     setData({ userStats: new Error('network down') })
     render(<Students />)
@@ -220,9 +183,6 @@ describe('a failed read', () => {
   })
 
   it('costs the academic tiles only, not the signal ones beside them', async () => {
-    // The mirror of the first test in this block, and the direction that was
-    // wrong: the stats read had no catch, so its failure rejected the whole
-    // Promise.all and blanked four signal tiles that had loaded fine.
     setData({ userStats: new Error('stats down') })
     render(<Students />)
     await expandAda()
@@ -232,23 +192,18 @@ describe('a failed read', () => {
   })
 
   it('says the academic figures could not be loaded rather than showing zero', async () => {
-    // The three-state rule, on the numbers a parent judges a week of their
-    // child's work by. Catching the failure to a zeroed object would report a
-    // child who answered nothing -- an absence asserted from data that never
-    // loaded, and indistinguishable from a genuinely quiet week.
     setData({ userStats: new Error('stats down') })
     render(<Students />)
     await expandAda()
 
     await waitFor(() => expect(tile('Total Accuracy').getByText(/couldn't be loaded/i)).toBeInTheDocument())
     expect(tile('Total Accuracy').queryByText('0 questions')).not.toBeInTheDocument()
-    // And the streak, which has no natural "—" of its own.
+    // The streak has no natural "—" of its own.
     expect(tile('Current Streak').getByText('—')).toBeInTheDocument()
   })
 
   it('still reports a genuinely empty record as zero', async () => {
-    // So the flag above cannot be satisfied by treating every empty record as
-    // a failure -- a student who has answered nothing must still read as zero.
+    // Teeth for the test above.
     setData({ userStats: { total_questions: 0, total_correct: 0, current_streak: 0,
                            best_streak: 0, retrieved: true } })
     render(<Students />)
@@ -263,9 +218,7 @@ describe('facial recognition switch', () => {
 
 
   it('labels the facial tiles as off rather than missing', async () => {
-    // face_included, not the "Hide sensor data" switch, is what drives these
-    // labels -- that switch now actually hides the sensor tiles (see below),
-    // so clicking it here would hide the very tiles this test reads.
+    // Driven by face_included; "Hide sensor data" would hide these tiles entirely.
     setData({ summary: SUMMARY_FACE_OFF })
     render(<Students />)
     await expandAda()
@@ -279,10 +232,7 @@ describe('facial recognition switch', () => {
 
 describe('the "nothing recorded" note', () => {
   it('does not claim no sessions on the strength of facial data it never read', async () => {
-    // face_samples is 0 by construction with the switch off, so including it in
-    // the condition unconditionally let this assert "no sessions" for a student
-    // whose only recorded activity was the facial signals we were asked not to
-    // look at.
+    // face_samples is 0 by construction with facial off.
     setData({
       summary: { ...SUMMARY_FACE_OFF, cognitive_samples: 0 },
       userStats: { data: { total_questions: 0, total_correct: 0, current_streak: 0, best_streak: 0 }, error: null },
@@ -292,7 +242,6 @@ describe('the "nothing recorded" note', () => {
     await expandAda()
 
     expect(screen.queryByText(/hasn't completed any sessions yet/i)).not.toBeInTheDocument()
-    // What was actually checked, stated as such.
     expect(screen.getByText(/facial signals were not read/i)).toBeInTheDocument()
   })
 
@@ -310,11 +259,7 @@ describe('the "nothing recorded" note', () => {
   })
 
   it('does not claim no sessions on the strength of a request that failed', async () => {
-    // The same mistake as the facial one above, reached from the other side.
-    // The summary request is caught individually so an outage costs the signal
-    // tiles rather than the academic ones beside them -- which leaves every
-    // signal count at its zero default, indistinguishable from a student who
-    // recorded nothing unless the failure travels with them.
+    // A caught summary failure leaves zero counts that must carry the failure with them.
     setData({
       summary: new Error('signal summary unavailable'),
       userStats: { data: { total_questions: 0, total_correct: 0, current_streak: 0, best_streak: 0 }, error: null },
@@ -329,10 +274,7 @@ describe('the "nothing recorded" note', () => {
   })
 
   it('does not claim no sessions when the endpoint answered 200 with defaults', async () => {
-    // The other half of the same finding. The backend swallows a failed
-    // aggregate so one broken read does not blank the page, and answers 200
-    // with an all-default summary -- so the request succeeds, and only
-    // retrieved=false distinguishes it from a student who recorded nothing.
+    // A swallowed aggregate answers 200 with defaults; only retrieved=false tells.
     setData({
       summary: { ...SUMMARY, focus: null, stress: null, engagement: null,
                  face_attention: null, sessions: 0, cognitive_samples: 0,
@@ -349,9 +291,6 @@ describe('the "nothing recorded" note', () => {
   })
 
   it('treats a retrieved summary with nothing in it as a quiet week', async () => {
-    // The mirror: retrieved=true with zero samples is a real answer about a
-    // student who recorded nothing, and must still say so. Marking it as a
-    // failure would collapse the distinction from the other side.
     setData({
       summary: { ...SUMMARY, cognitive_samples: 0, face_samples: 0, retrieved: true },
       userStats: { data: { total_questions: 0, total_correct: 0, current_streak: 0, best_streak: 0 }, error: null },
@@ -366,10 +305,6 @@ describe('the "nothing recorded" note', () => {
   })
 
   it('does not report a failed request as an absence of readings on the tiles', async () => {
-    // "no EEG data · last 7d" is the same claim in miniature: the count it
-    // quotes is zero because nothing came back, not because nothing was
-    // recorded. The academic tiles beside it are unaffected, which is the
-    // point of catching the summary separately.
     setData({ summary: new Error('signal summary unavailable') })
 
     render(<Students />)
@@ -385,20 +320,13 @@ describe('the "nothing recorded" note', () => {
 
 
 it('hides the sensor tiles without changing what it asks for', async () => {
-  // The teacher's switch is a display filter, purely client-side: it does not
-  // narrow the query. Consent still decides what the server will return, and
-  // a channel that is off for consent reasons still says so when the filter
-  // is off -- the filter hides data, it never manufactures a reason. See
-  // lib/viewPrefs.js.
+  // Client-side display filter only; see lib/viewPrefs.js.
   expect(readHideSensorData()).toBe(false)
   writeHideSensorData(true)
   expect(readHideSensorData()).toBe(true)
 })
 
 it('actually hides the sensor tiles on screen when the switch is flipped, and leaves the rest', async () => {
-  // Guards against the switch updating state and localStorage while the tiles
-  // stay ungated on it, which would make flipping the switch visibly do
-  // nothing: this renders the tiles, not just the preference.
   render(<Students />)
   await expandAda()
 
@@ -414,23 +342,14 @@ it('actually hides the sensor tiles on screen when the switch is flipped, and le
                         'Dominant Emotion', 'Avg Heart Rate', 'Avg HRV']) {
     expect(screen.queryByText(label)).not.toBeInTheDocument()
   }
-  // Not sensor-derived, so unaffected by a display preference over sensor data.
+  // Not sensor-derived, so unaffected.
   expect(screen.getByText('Total Accuracy')).toBeInTheDocument()
   expect(screen.getByText('Current Streak')).toBeInTheDocument()
-  // Client-side only: hiding these tiles must not have asked the server again.
+  // Client-side only: no second request.
   expect(summaryCalls()).toHaveLength(1)
 })
 
-/**
- * The roster showed an email prefix for every student, whatever they had
- * called themselves. The read is `profiles!inner(*)` and `profiles` has
- * `display_name`, `email`, `role`, `grade_level` and `id` -- there is no
- * `username`, so the branch the page reached for first never fired and the
- * fallback was the whole behaviour.
- *
- * It survived because this file's own fixture invented the same column: a
- * fixture written from the same misreading as the code cannot fail against it.
- */
+/** `profiles` has `display_name` and no `username`. */
 it('names a student by their profile name, not by their email', async () => {
   render(<Students />)
 
@@ -439,8 +358,6 @@ it('names a student by their profile name, not by their email', async () => {
 })
 
 it('searches the name on screen, not only the email behind it', async () => {
-  // A teacher typing what the row says found nothing, because the only
-  // searchable value was the address.
   render(<Students />)
   await screen.findByText('Ada Lovelace')
 
@@ -453,12 +370,7 @@ it('searches the name on screen, not only the email behind it', async () => {
 })
 
 it('falls back to the email prefix for a student with no name set', async () => {
-  // Not reachable through the UI: `PUT /api/profile/me` drops null fields
-  // (`if v is not None`), so clearing the field saves nothing, and
-  // `handle_new_user` seeds the column from the email rather than leaving it
-  // empty. The column is nullable and the dashboard SQL editor is a real
-  // writer here, so the fallback still has to hold -- but it is a row nobody
-  // can produce from the app.
+  // Unreachable from the app, but the column is nullable and the SQL editor writes it.
   results.class_memberships = {
     data: [{
       student_id: 'stu-1',

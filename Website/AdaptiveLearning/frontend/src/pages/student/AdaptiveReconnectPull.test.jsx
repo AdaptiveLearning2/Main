@@ -1,16 +1,4 @@
-/**
- * The drop is announced under `pull` too -- the default mode.
- *
- * `AdaptiveReconnect.test.jsx` covers push, where the 3s status poll never
- * touches `connected`. Under pull it does, and a first version read the
- * bridge's `muse_connected` there as well: being the faster poll it set
- * `connected: false` before the 5s telemetry poll could claim the drop, and
- * that flip tore the telemetry effect down -- so nothing was toasted, no
- * `reconnecting` phase was entered, and the button did not come back either.
- * Whether a harness sees it depends on which poll observes the drop first;
- * see the timing note in the test. Checked by mutation: with the clause
- * restored this test fails, and an earlier version of it did not.
- */
+/** Reconnect under `pull`, where the 3s status poll and the 5s telemetry poll both read the bridge. */
 import { it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 
@@ -25,16 +13,9 @@ vi.mock('../../lib/session', () => ({
   recordAnswer: vi.fn(async () => ({ topic: 'expressions' })),
 }))
 
-// The bridge as the backend relays it under pull, via /api/eeg/status.
-// `stamps` records when each status read happened: the two polls are
-// phase-locked to the first one, and the test times the drop off it.
-// `pollerRunning` follows the recorder, as the backend's poller follows
-// /api/eeg/start and /stop: under pull that is what `connected` reads.
+// The bridge as relayed by /api/eeg/status; `stamps` times each read, `pollerRunning` follows the recorder.
 const bridge = { ingestion: {}, stamps: [], recorders: [], pollerRunning: false,
-                 // `eegStatus` swallows its failure into a shaped object rather
-                 // than throwing, so this is what an unlanded read looks like to
-                 // the page -- not an absent response, a present one saying
-                 // nothing.
+                 // `eegStatus` swallows failure into a shaped object; this is an unlanded read.
                  unanswered: false }
 vi.mock('../../lib/signals', () => ({
   createSignalRecorder: ({ sessionId }) => {
@@ -74,8 +55,7 @@ import { toast } from 'sonner'
 import { apiFetch, mockApi, resetApi } from '../../test/mocks/apiFetch'
 import Adaptive from './Adaptive'
 
-// `eeg_age_ms` is part of "connected": the page counts a link as alive only
-// with EEG flowing on it.
+// `eeg_age_ms` is required for "connected": a link counts only with EEG flowing.
 const CONNECTED = { muse_connected: true, muse_devices: ['Muse-1'], battery_percent: 80,
                     auto_reconnect: true, reconnecting: false, reconnect_attempt: 0,
                     reconnect_max_attempts: 5, reconnect_exhausted: false, eeg_age_ms: 2 }
@@ -83,8 +63,7 @@ const CONNECTED = { muse_connected: true, muse_devices: ['Muse-1'], battery_perc
 beforeEach(() => {
   resetApi()
   vi.clearAllMocks()
-  // Discoverable, not yet connected; the connect route flips it. A harness
-  // that starts connected is adopted without a scan.
+  // Discoverable, not yet connected; the connect route flips it.
   bridge.ingestion = { ...CONNECTED, muse_connected: false }
   bridge.stamps = []
   bridge.recorders = []
@@ -101,7 +80,7 @@ beforeEach(() => {
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '4th Grade' }),
     'GET /api/classes': () => [],
     'GET /api/performance/student/u1': () => [],
-    // A new id per session, so a second sitting is a second session.
+    // A new id per session.
     'POST /api/sessions/start': () => ({ id: `sess-${++bridge.sessions}` }),
     'POST /api/eeg/muse/disconnect': () => ({ ok: true }),
     'POST /api/eeg/muse/refresh': () => ({ ok: true }),
@@ -112,17 +91,13 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 it('brings the stream up at Connect and records only from the first question', async () => {
-  // Found on hardware: a student who paired and never started a question had
-  // rows on the teacher's Live view. Pairing needs the poller; a lesson is
-  // what should be recorded.
+  // Pairing needs the poller; only a lesson is recorded.
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })
   await waitFor(() => expect(button).not.toBeDisabled())
   fireEvent.click(button)
   await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
-  // Let the pairing finish before the test does: `pairOnce` is not cancelled
-  // by an unmount, and a scan it sends after this test ends is counted by
-  // the next one.
+  // `pairOnce` survives unmount, so let it finish or its scan counts in the next test.
   await waitFor(() => expect(apiFetch.mock.calls.some(c => c[0] === '/api/eeg/muse/connect')).toBe(true),
                 { timeout: 10000 })
   await new Promise(r => setTimeout(r, 1500))
@@ -138,22 +113,8 @@ it('brings the stream up at Connect and records only from the first question', a
 }, 30_000)
 
 /**
- * The same split, one surface over: the *duration* clock also starts at the
- * first question, not at Connect.
- *
- * Under pull, `toggleHeadband` creates the session before anything has been
- * asked -- the poller's reservation is scoped by session_id -- and the clock
- * used to start on `sessionId`. So the 12 s scan, seating the electrodes and
- * any reconnect were all charged against the student's planned duration: a
- * student who spent four minutes on the strap was four minutes into a fifteen
- * minute session before the first question.
- *
- * Real timers and two 22 s waits, for the reason `AdaptiveQuestionGoal`
- * documents: the reminder is checked on a 20 s interval, and the tick the
- * clock *starts* on reads ~0 elapsed, so `0.001` minutes is only up on the
- * one after it. A shorter wait here passes against the bug -- the unfixed
- * build starts the clock at Connect and raises the banner 20 s later, which
- * is after a 1.5 s settle, not before it.
+ * The duration clock starts at the first question, not at Connect.
+ * Real timers: the reminder checks every 20 s, so each wait is 22 s.
  */
 it('starts the duration clock at the first question, not at Connect', async () => {
   mockApi({
@@ -178,26 +139,19 @@ it('starts the duration clock at the first question, not at Connect', async () =
   await waitFor(() => expect(apiFetch.mock.calls.some(c => c[0] === '/api/eeg/muse/connect')).toBe(true),
                 { timeout: 10000 })
 
-  // Paired, streaming, and past a tick -- but no question has been asked, so
-  // there is no session length to be part way through.
+  // Paired and past a tick, but no question asked yet.
   await new Promise(r => setTimeout(r, 22000))
   expect(screen.queryByText(/That is your 0\.001 minutes/)).toBeNull()
 
   fireEvent.click(screen.getByRole('button', { name: /generate question/i }))
   await screen.findByText(/What is 2 \+ 2\?/)
-  // And it does start there: without this half, a clock that never started at
-  // all would satisfy the assertion above.
+  // Without this half, a clock that never started would pass.
   await new Promise(r => setTimeout(r, 22000))
   expect(screen.getByText(/That is your 0\.001 minutes/)).toBeInTheDocument()
 }, 90_000)
 
 it('stops the finished session\'s recorder before starting the next one\'s', async () => {
-  // Each recorder registers a `beforeunload` listener at construction that
-  // only its `stop()` removes. `armRecording` is the one place a live
-  // recorder is replaced -- after a Finish, for the next session -- and it
-  // used to drop the old one without stopping it, leaving a listener per
-  // Finish-and-resume, all posting /api/eeg/stop for long-ended sessions on
-  // tab close.
+  // Each recorder's `beforeunload` listener is removed only by its `stop()`.
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })
   await waitFor(() => expect(button).not.toBeDisabled())
@@ -244,9 +198,7 @@ it('abandons a pairing when the page unmounts, instead of scanning for a page th
 }, 20_000)
 
 it('reads topic performance once, not once per render', async () => {
-  // This harness's `useAuth` returns a fresh `user` literal on every call,
-  // which is what a real token refresh does too. Keyed on the object, the
-  // performance read re-ran on every status tick: 172 requests in 7s.
+  // `useAuth` here returns a fresh `user` object each call, as a token refresh does.
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })
   await waitFor(() => expect(button).not.toBeDisabled())
@@ -261,9 +213,7 @@ it('reads topic performance once, not once per render', async () => {
 }, 30_000)
 
 it('does not read the pairing itself as a drop, which under pull starts with connected: true', async () => {
-  // The bridge reports no headband until the scan and connect have run --
-  // the ordinary shape of every pairing, and one the 5s poll observes at
-  // least once, since `connected` is true from `/api/eeg/start`.
+  // No headband until scan and connect run, while `connected` is already true from `/api/eeg/start`.
   bridge.ingestion = { ...CONNECTED, muse_connected: false, active_muse_name: '', battery_percent: null }
   const flip = setTimeout(() => { bridge.ingestion = { ...CONNECTED } }, 3500)
   render(<Adaptive />)
@@ -275,25 +225,14 @@ it('does not read the pairing itself as a drop, which under pull starts with con
 
   expect(toast.warning).not.toHaveBeenCalled()
   expect(screen.queryByText(/reconnecting/i)).toBeNull()
-  // One scan and one connect: nothing sent a second pairing over the first.
+  // One scan and one connect.
   expect(apiFetch.mock.calls.filter(c => c[0] === '/api/eeg/muse/refresh')).toHaveLength(1)
   expect(apiFetch.mock.calls.filter(c => c[0] === '/api/eeg/muse/connect')).toHaveLength(1)
   expect(screen.getByText(/STREAMING/)).toBeInTheDocument()
 }, 60_000)
 
 it('does not scan on a status read that never landed, which would drop a live link', async () => {
-  // The page-driven loop reads the bridge between attempts to see whether the
-  // link came back on its own. `hw.status()` under pull is `eegStatus(...)
-  // ?.muse`, and `eegStatus` answers with a shaped fallback rather than
-  // throwing -- so an unlanded read arrived as `{}`, which is not alive and
-  // not settling, and the loop went straight to `pairOnce`. Its first act is a
-  // bridge disconnect, so a request that never reached the backend dropped a
-  // link that may have been fine: the "connects, then immediately
-  // disconnects" failure, reached without evidence rather than from it.
-  //
-  // The scan is what makes it observable -- `pairOnce` disconnects and then
-  // refreshes, and the refresh goes through the mocked router where this file
-  // already counts it.
+  // An unlanded read must not reach `pairOnce` (which disconnects first); observed via the scan count.
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })
   await waitFor(() => expect(button).not.toBeDisabled())
@@ -303,10 +242,7 @@ it('does not scan on a status read that never landed, which would drop a live li
                 { timeout: 10000 })
   const scansAfterPairing = apiFetch.mock.calls.filter(c => c[0] === '/api/eeg/muse/refresh').length
 
-  // The bridge has given up, so the page takes over. The drop has to be
-  // *observed* first: the telemetry poll reads `eegStatus` too, so killing the
-  // reads before it lands means no drop is seen and no loop starts -- which is
-  // itself correct, and not what this test is about.
+  // The drop must be observed before reads stop, or no reconnect loop starts.
   await new Promise(r => setTimeout(r, 1500))
   bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: false,
                        reconnect_exhausted: true, muse_devices: [], battery_percent: null }
@@ -315,20 +251,14 @@ it('does not scan on a status read that never landed, which would drop a live li
   // From here every read answers nothing.
   bridge.unanswered = true
 
-  // Past the first backoff (2s) and the second (4s), so the loop has reached
-  // the point it would pair at, twice, rather than this asserting into the gap
-  // before it got there.
+  // Past the 2s and 4s backoffs, so the loop has reached its pairing point twice.
   await new Promise(r => setTimeout(r, 9000))
   expect(apiFetch.mock.calls.filter(c => c[0] === '/api/eeg/muse/refresh'))
     .toHaveLength(scansAfterPairing)
 }, 60_000)
 
 it('stays disconnected after giving up, under pull where the poller would otherwise say streaming', async () => {
-  // Seen on hardware: the bridge exhausted, the page's three attempts found
-  // nothing, the toast showed -- and three seconds later the panel read
-  // STREAMING with a Disconnect button, because the give-up path reset the
-  // state without stopping the poller, and under pull `connected` *is* the
-  // poller. The teardown has to be Disconnect's.
+  // Under pull `connected` is the poller, so giving up must stop it as Disconnect does.
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })
   await waitFor(() => expect(button).not.toBeDisabled())
@@ -347,7 +277,7 @@ it('stays disconnected after giving up, under pull where the poller would otherw
   await waitFor(() => expect(toast.error).toHaveBeenCalledWith('The headband could not be reconnected.', expect.anything()),
                 { timeout: 5000 })
 
-  // Past the next status tick, and the next.
+  // Past the next two status ticks.
   await new Promise(r => setTimeout(r, 7000))
   expect(screen.queryByText(/STREAMING/)).toBeNull()
   expect(screen.getByRole('button', { name: /connect headband/i })).toBeInTheDocument()
@@ -359,28 +289,12 @@ it('announces a drop under pull, where the poller keeps running through it', asy
   const button = await screen.findByRole('button', { name: /connect headband/i })
   await waitFor(() => expect(button).not.toBeDisabled())
   fireEvent.click(button)
-  // Under pull `connected` means the backend's poller is running, which is
-  // true from `rec.start()` -- before the scan and connect have finished. Wait
-  // for the pairing itself to complete, or its last poll would report the
-  // restored link as a first connection rather than a recovery.
+  // Wait for pairing to complete, or its last poll reads the restore as a first connection.
   await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
   await waitFor(() => expect(apiFetch.mock.calls.some(c => c[0] === '/api/eeg/muse/connect')).toBe(true),
                 { timeout: 10000 })
 
-  // *When* the drop happens decides whether this test can see the bug. Both
-  // polls start from the first status read: the 3s one ticks at 3, 6, 9...
-  // and the 5s one at 5, 10... The bug -- the status poll setting
-  // `connected: false` and tearing the telemetry effect down -- only shows
-  // when the status poll observes the drop first, so the drop has to land in
-  // a window where the next 3s tick comes before the next 5s tick. Dropping
-  // at 5.3s puts the first observation at 6 (status) and the next at 10
-  // (telemetry). A first version dropped at ~4.7s, where telemetry at 5
-  // wins, and passed against the bug it was written for.
-  //
-  // Keyed to the tick, not to the clock: the drop goes in right after the
-  // 5s read has *happened*, which is a recorded event. An absolute offset
-  // sat 278ms clear of that tick and drifted out of the window under load,
-  // in both directions, without failing.
+  // The drop must land where the 3s status tick precedes the 5s telemetry tick; keyed to the recorded 5s read.
   const t0 = bridge.stamps[0]
   await waitFor(() => expect(bridge.stamps.some(t => t >= t0 + 4900)).toBe(true),
                 { timeout: 8000 })
@@ -390,7 +304,7 @@ it('announces a drop under pull, where the poller keeps running through it', asy
   await screen.findByText(/reconnecting \(attempt 1 of 5\)/, {}, { timeout: 9000 })
   expect(toast.warning).toHaveBeenCalledWith('The headband disconnected.', expect.anything())
   expect(screen.getByRole('button', { name: /stop trying/i })).toBeInTheDocument()
-  // The page waited for the bridge rather than starting a scan of its own.
+  // The page waited for the bridge rather than scanning itself.
   expect(apiFetch.mock.calls.filter(c => c[0] === '/api/eeg/muse/refresh')).toHaveLength(1)
 
   bridge.ingestion = { ...CONNECTED }
@@ -400,17 +314,7 @@ it('announces a drop under pull, where the poller keeps running through it', asy
 
 
 it('does not spend the reconnect budget on attempts that reached nothing', async () => {
-  // `pairOnce` now aborts with `status_unavailable` when the status read did
-  // not land -- correct, and the loop above it read only `res.ok`, so each
-  // abort still cost one of three attempts. With 2/4/8s backoffs, fourteen
-  // seconds of an unreachable server during a drop exhausted the budget and
-  // the student was told to check a headband nothing had learned anything
-  // about.
-  //
-  // The sharper half is what followed: the give-up path tears down and clears
-  // `reconnectRun`, which ends the telemetry effect -- so nothing was left
-  // watching for the link to come back, which is the state that effect's own
-  // comment says it exists to prevent. The link then needed a manual click.
+  // A `status_unavailable` abort must not cost an attempt, nor end the telemetry watch.
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })
   await waitFor(() => expect(button).not.toBeDisabled())
@@ -420,9 +324,7 @@ it('does not spend the reconnect budget on attempts that reached nothing', async
                 { timeout: 10000 })
   await new Promise(r => setTimeout(r, 1500))
 
-  // The link goes, with the bridge not retrying -- so this page's loop drives
-  // it. The drop has to be *observed* before the server goes away, or the
-  // poll's own guard returns early and there is no reconnect to test.
+  // Bridge not retrying, so the page's loop drives; the drop must be observed first.
   bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: false,
                        reconnect_exhausted: true, muse_devices: [], battery_percent: null }
   await screen.findByText(/reconnecting \(attempt 1 of 3\)/, {}, { timeout: 9000 })
@@ -430,17 +332,14 @@ it('does not spend the reconnect budget on attempts that reached nothing', async
   // Now the server stops answering.
   bridge.unanswered = true
 
-  // Comfortably past 2+4+8s of backoff, which is what the whole budget costs
-  // when every attempt aborts immediately.
+  // Past 2+4+8s, the whole budget if every attempt aborts immediately.
   await new Promise(r => setTimeout(r, 25000))
   expect(toast.error).not.toHaveBeenCalledWith('The headband could not be reconnected.', expect.anything())
-  // Still watching, and the way out is still offered.
   expect(screen.getByRole('button', { name: /stop trying/i })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: /connect headband/i })).toBeNull()
   expect(bridge.recorders[0].stop).not.toHaveBeenCalled()
 
-  // And the decisive half: the link comes back with the server, and is picked
-  // up without anyone clicking anything.
+  // The link returns with the server and is picked up without a click.
   bridge.ingestion = { ...CONNECTED }
   bridge.unanswered = false
   await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
@@ -449,12 +348,7 @@ it('does not spend the reconnect budget on attempts that reached nothing', async
 
 
 it('stops counting attempts once no attempt is running', async () => {
-  // The consequence of the early break: it leaves `phase: 'reconnecting'`
-  // and the last `reconnect: {attempt, max}` standing, so the panel went on
-  // reading "reconnecting (attempt 1 of 3)" with no attempt running, no way
-  // for the count to advance, and "of 3" naming a bound nothing will reach.
-  // What the page is actually doing is waiting for the poll to land, which
-  // is unbounded -- and nothing on screen said the server was the problem.
+  // While waiting on an unreachable server, "attempt 1 of 3" names a bound nothing will reach.
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })
   await waitFor(() => expect(button).not.toBeDisabled())
@@ -469,10 +363,8 @@ it('stops counting attempts once no attempt is running', async () => {
   await screen.findByText(/reconnecting \(attempt 1 of 3\)/, {}, { timeout: 9000 })
   bridge.unanswered = true
 
-  // Generous: the read that aborts may be the next attempt's, a full scan
-  // cycle away, if this one had already got past its own.
+  // Generous: the aborting read may be a full scan cycle away.
   const line = await screen.findByText(/server can't be reached/, {}, { timeout: 25000 })
   expect(line).toHaveTextContent(/disconnected/)
-  // No number, because there is no attempt behind one.
   expect(screen.queryByText(/attempt \d+ of \d+/)).toBeNull()
 }, 90_000)

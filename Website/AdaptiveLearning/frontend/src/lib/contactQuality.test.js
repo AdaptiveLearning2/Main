@@ -24,8 +24,7 @@ describe('contactQuality', () => {
   it('takes the worse of the two measures when both report', () => {
     expect(contactQuality({ hsi: [1, 1, 1, 1], is_good: [1, 0, 0, 0] })).toBe('poor')
     expect(contactQuality({ hsi: [4, 4, 4, 4], is_good: [1, 1, 1, 1] })).toBe('poor')
-    // Perfect fit, but one electrode's last second was unusable: 0.75, and
-    // the sidecar calls that degraded, not good.
+    // One electrode's last second unusable: 0.75, which the sidecar calls degraded.
     expect(contactQuality({ hsi: [1, 1, 1, 1], is_good: [1, 1, 1, 0] })).toBe('degraded')
     expect(contactQuality({ hsi: [1, 1, 1, 1], is_good: [1, 1, 1, 1] })).toBe('good')
   })

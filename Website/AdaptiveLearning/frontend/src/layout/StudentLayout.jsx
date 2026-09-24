@@ -25,9 +25,7 @@ function SidebarContent({ collapsed, mobile, onClose }) {
   const { displayName, signOut } = useAuth()
   const { dark, toggleTheme } = useTheme()
   const navigate = useNavigate()
-  // From the name beside it, not the email: those are two different
-  // strings now, so deriving them separately lets the letter and the
-  // label disagree -- "A" over "ada.lovelace", or "k" over "Ada".
+  // From `displayName`, so the letter matches the label beside it.
   const initials = (displayName || '?')[0].toUpperCase()
 
   const handleSignOut = async () => {
@@ -115,9 +113,8 @@ function SidebarContent({ collapsed, mobile, onClose }) {
 }
 
 export default function StudentLayout() {
-  // See ParentLayout: the key has to come from router state, not the browser.
+  // Transition key from router state, not `window.location`.
   const { pathname } = useLocation()
-  // Scoped key so collapsing this sidebar doesn't collapse the other layouts'.
   const [collapsed, toggleCollapsed] = useCollapsedSidebar('student')
   const { open: mobileOpen, onOpen: openMobile, onClose: closeMobile } =
     useMobileDrawer()

@@ -8,13 +8,7 @@ const SRC = resolve(fileURLToPath(import.meta.url), '..', '..')
 
 describe('the topic list', () => {
   it('matches the backend, which is the only list that decides anything', () => {
-    // This file duplicates `LLM_topic_decider.ALL_TOPICS` because a React
-    // bundle cannot import Python. Parsing the backend is what turns the copy
-    // from trusted into checked -- without it, a topic added on one side of
-    // the stack goes missing on the other, which has now happened three times.
-    //
-    // Compared as sets: order here is display order and this file's own
-    // business.
+    // Checks the copy of `LLM_topic_decider.ALL_TOPICS` against the backend, as sets.
     const decider = readFileSync(
       resolve(SRC, '..', '..', 'backend', 'LLM_topic_decider.py'), 'utf8')
     const block = decider.match(/^ALL_TOPICS = \[([\s\S]*?)\]/m)
@@ -25,16 +19,13 @@ describe('the topic list', () => {
   })
 
   it('gives every topic an icon', () => {
-    // A tile whose icon is `undefined` renders an empty slot rather than an
-    // error, which is how two topics shipped iconless and nothing caught it.
+    // An `undefined` icon renders an empty slot, not an error.
     expect(TOPICS.filter(t => !TOPIC_ICONS[t])).toEqual([])
     expect(Object.keys(TOPIC_ICONS).filter(t => !TOPICS.includes(t))).toEqual([])
   })
 
   it('is the only place a topic list is written down', () => {
-    // Six copies existed and they disagreed; the two teacher surfaces had
-    // never been updated past the original ten. A seventh would go the same
-    // way, so it fails here instead.
+    // No second topic list may appear in the source.
     const walk = (dir) => readdirSync(dir).flatMap(name => {
       const full = join(dir, name)
       if (statSync(full).isDirectory()) return walk(full)
@@ -44,8 +35,7 @@ describe('the topic list', () => {
       .filter(f => f !== resolve(SRC, 'lib', 'topics.js'))
       .filter(f => {
         const src = readFileSync(f, 'utf8')
-        // Three or more known topic slugs quoted in one array literal is a
-        // list, whatever it is called.
+        // Three or more known slugs in one array literal is a list.
         return /\[[^\]]*'(?:ordering|rationals|algebra|geometry|probability)'[^\]]*'(?:ordering|rationals|algebra|geometry|probability)'[^\]]*'(?:ordering|rationals|algebra|geometry|probability)'/.test(src)
       })
       .map(f => f.slice(SRC.length + 1).split(sep).join('/'))
@@ -53,8 +43,7 @@ describe('the topic list', () => {
   })
 
   it('spells out every underscore, not just the first', () => {
-    // `String.replace` with a string pattern replaces one occurrence, which
-    // was fine while every slug had at most one underscore.
+    // `String.replace` with a string pattern replaces only one occurrence.
     expect(topicLabel('angle_relationships')).toBe('angle relationships')
     expect(topicLabel('a_b_c')).toBe('a b c')
   })

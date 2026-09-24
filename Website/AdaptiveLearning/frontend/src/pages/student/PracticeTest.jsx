@@ -8,17 +8,8 @@ import { normalizeQuestion, normalizeValue } from '../../lib/practiceQuestion'
 
 const TIMER = 60
 
-/** Test mode: sequential, timed, scored -- adapted from the old Practice.jsx,
- * but pulling one AI-generated question at a time from
- * `GET /api/practice-sessions/{id}/question` instead of a static 10-question
- * read, since generation is now on-demand.
- *
- * @param session        the started practice session
- * @param onFinish       called with `{questions_answered, correct_answers}`
- *                        once `questionCount` questions have been answered
- * @param questionCount  how many questions this test runs for. Defaults to 10
- *                        -- the value it was a module constant at -- so a
- *                        caller that doesn't pass one is unchanged.
+/** Test mode: sequential, timed, scored; one generated question per request.
+ * `onFinish` gets `{questions_answered, correct_answers}` after `questionCount` answers.
  */
 export default function PracticeTest({ session, onFinish, questionCount = 10 }) {
   const [question, setQuestion] = useState(null)
@@ -30,45 +21,19 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
   const [revealed, setRevealed] = useState(false)
   const [timeLeft, setTimeLeft] = useState(TIMER)
   const timerRef = useRef(null)
-  // Score/answered live in a ref as well as state so `postAnswer` (fired
-  // from a `setInterval` closure) always reads the latest count rather than
-  // one captured when the timer was set up.
+  // A ref too, so `postAnswer` from the interval closure reads the latest count.
   const tallyRef = useRef({ score: 0, answered: 0 })
-  // Whether *this* question has already been answered, by either path
-  // (a click or the countdown reaching zero). A ref rather than the
-  // `revealed` state: the timeout path used to guard on `revealed` from
-  // inside a `setTimeLeft` updater, but React can invoke an updater more
-  // than once for the same transition (StrictMode's double-invoke in dev is
-  // one case, not the only one) -- every extra invocation read the same
-  // stale `revealed=false` closure and posted a second "timed out" answer,
-  // so one timeout could land two-to-four rows for a single question.
+  // Whether this question is answered (click or timeout). A ref, not `revealed`:
+  // React may invoke an updater more than once, which double-posted timeouts.
   const answeredRef = useRef(false)
-  // The in-flight `recordPracticeAnswer` promise, if any -- the timeout path
-  // fires `postAnswer` without awaiting it (it runs from an effect, not an
-  // event handler), so on the last question `handleNext`'s `onFinish` could
-  // race it to `/end`. The 409 guard on `/answer` then rejects the
-  // now-too-late POST, `recordPracticeAnswer` toasts a save failure right as
-  // results appear, and the results screen shows one more question answered
-  // than the server recorded. `handleNext` awaits this before finishing.
+  // In-flight answer promise; `handleNext` awaits it so `/end` can't race `/answer`.
   const pendingAnswerRef = useRef(null)
-  // `handleNext` has no re-entrancy guard by default: `setRevealed(true)`
-  // renders its button before `postAnswer` is awaited, so the button is
-  // clickable for the whole in-flight window, and `handleNext` itself awaits
-  // `pendingAnswerRef` before doing anything -- a second click landing in
-  // that window re-enters and runs `setIndex`/`loadQuestion` twice, skipping
-  // a question the student never saw and still paying for its generation
-  // call. A ref for the synchronous guard (state alone can't stop a second
-  // click arriving before the first's `setState` commits); `advancing` state
-  // alongside it just disables the button so a second click never reaches
-  // the handler visually either.
+  // Synchronous re-entrancy guard for `handleNext` (a double click skipped a
+  // question); `advancing` state just disables the button.
   const advancingRef = useRef(false)
   const [advancing, setAdvancing] = useState(false)
 
-  // Which request is the live one. Every load takes a number and only the
-  // latest may write state: two in flight otherwise race, and the loser lands
-  // last, replacing the question on screen with one the student never saw
-  // arrive. That is the visible half of the bug -- the first question
-  // appearing and vanishing before it can be answered.
+  // Only the latest load may write state, or a stale question replaces the shown one.
   const requestRef = useRef(0)
 
   const loadQuestion = useCallback(async () => {
@@ -96,15 +61,8 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
     }
   }, [session.id])
 
-  // Once per session, not once per effect run. `<React.StrictMode>` invokes
-  // mount effects twice in development, so this fired two `/question` calls --
-  // and a question is not a free read: each one is two billed model calls, a
-  // topic decision and a generation. The guard above stops the second *answer*
-  // from being shown; this stops the second *request* from being made.
-  //
-  // Keyed on the session id rather than a bare "have I run" flag, so starting
-  // a new practice session still loads its first question. The explicit
-  // "next question" and retry calls do not go through here at all.
+  // Once per session id, not per effect run: StrictMode double-mounts, and
+  // each `/question` is two billed model calls.
   const autoLoadedFor = useRef(null)
   useEffect(() => {
     if (autoLoadedFor.current === session.id) return
@@ -116,11 +74,7 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
     if (loading || failed || !question) return
     setTimeLeft(TIMER)
     clearInterval(timerRef.current)
-    // The interval only ever decrements state here -- no side effect lives
-    // inside the updater function passed to `setTimeLeft`. The effect below,
-    // reacting to the resulting `timeLeft` value, is what fires the timeout
-    // exactly once, guarded by `answeredRef` rather than by re-entering the
-    // updater.
+    // Only decrements; the effect below fires the timeout once, via `answeredRef`.
     timerRef.current = setInterval(() => {
       setTimeLeft(t => (t <= 1 ? 0 : t - 1))
     }, 1000)
@@ -143,8 +97,7 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
       score: tallyRef.current.score + (isCorrect ? 1 : 0),
       answered: tallyRef.current.answered + 1,
     }
-    // Assigned before the `await` below, so it's set synchronously even when
-    // the caller (the timeout effect) doesn't itself await `postAnswer`.
+    // Set before the `await`, since the timeout effect doesn't await `postAnswer`.
     const promise = recordPracticeAnswer({
       sessionId: session.id,
       questionId: rawId,
@@ -172,9 +125,7 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
     if (advancingRef.current) return
     advancingRef.current = true
     setAdvancing(true)
-    // The current question's answer may still be in flight (the timeout path
-    // never awaits `postAnswer`) -- wait for it so `onFinish`/`/end` can't
-    // race an `/answer` that would otherwise land after the session closed.
+    // Wait for an in-flight answer so `/end` can't race it.
     if (pendingAnswerRef.current) await pendingAnswerRef.current
     if (index + 1 >= questionCount) {
       onFinish({ questions_answered: tallyRef.current.answered, correct_answers: tallyRef.current.score })

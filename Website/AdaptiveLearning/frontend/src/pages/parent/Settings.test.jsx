@@ -15,8 +15,7 @@ vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'p-1', email: 'parent@example.com' } }),
 }))
 
-// Stubbed so this file tests the page around the consent panels, not the
-// panels themselves — they have their own test file.
+// Consent panels stubbed; they have their own test file.
 vi.mock('../../components/consent/ConsentChannels', () => ({
   default: ({ studentId }) => <div data-testid={`consent-${studentId}`} />,
 }))
@@ -46,8 +45,7 @@ beforeEach(() => {
 
 describe('the facial opt-out', () => {
   it('does not read facial data for a page that renders none', async () => {
-    // The opt-out must skip the query entirely, not just drop the values
-    // on the way out.
+    // The opt-out skips the query, not just the values.
     draw()
     await waitFor(() => expect(apiFetch).toHaveBeenCalled())
     const urls = apiFetch.mock.calls.map(c => String(c[0]))
@@ -66,9 +64,7 @@ describe('the account section', () => {
 
   it('saves the display name', async () => {
     draw()
-    // Wait for the value, not just presence: `findByLabelText` resolves as
-    // soon as the (still-disabled) input exists, before the fetch settles,
-    // and `userEvent.clear()` throws on a disabled element.
+    // Wait for the value: the input is disabled until load, and clear() throws on it.
     await screen.findByDisplayValue('Rae')
     const field = screen.getByLabelText(/display name/i)
     await userEvent.clear(field)

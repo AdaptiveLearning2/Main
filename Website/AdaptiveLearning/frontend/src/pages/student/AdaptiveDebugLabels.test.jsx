@@ -1,11 +1,4 @@
-/**
- * The debug readout names the signal-quality number for what it is.
- *
- * The payload key is still `confidence`, but since Phase 1 the number is
- * warm-up, contact, spectral stability and band presence, with calm no
- * longer in it. Labelled "Confidence" it read as confidence in the focus
- * and calm scores beside it, which it never was.
- */
+/** The debug readout labels the `confidence` key as signal quality, not confidence in the scores. */
 import { it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 
@@ -64,7 +57,6 @@ it('calls the quality number a signal quality score, not confidence', async () =
   render(<Adaptive />)
   const label = await screen.findByText(/signal quality score/i, {}, { timeout: 5000 })
   expect(label).toHaveTextContent('83%')
-  // The word must not survive as a label anywhere on the readout: it read
-  // as confidence in the scores beside it.
+  // The word must not survive as a label anywhere on the readout.
   expect(screen.queryByText(/^confidence/i)).not.toBeInTheDocument()
 })

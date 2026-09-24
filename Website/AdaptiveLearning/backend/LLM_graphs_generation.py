@@ -173,22 +173,37 @@ def solve_graph(scenario, categories, target):
     return None
 
 
-_HOW_MANY_MORE = re.compile(r"how\s+many\s+more\b", re.I)
+_HOW_MANY_MORE = re.compile(r"\bhow\s+many\s+more\b", re.I)
 
 
-def _target_follows_text(text, target):
-    """True if the text asks "how many more" and then names both `target` categories, in order.
+def _forms(name):
+    """A category name and its singular or plural: a question may say "apple" of "apples"."""
+    n = name.strip().lower()
+    forms = {n, n + "s", n + "es"}
+    forms.update(n[:-len(end)] for end in ("es", "s") if n.endswith(end) and len(n) > len(end))
+    return forms
+
+
+def comparison_in_text(text, names):
+    """[larger, smaller] as the text asks it, from `names`, or None if it names other than two.
 
     Read after the last "how many more": that is the comparison asked, not an earlier mention.
     """
-    if not isinstance(text, str) or not isinstance(target, list) or len(target) != 2:
-        return False
+    if not isinstance(text, str):
+        return None
     asks = list(_HOW_MANY_MORE.finditer(text))
     if not asks:
-        return False
+        return None
     question = text[asks[-1].end():]
-    found = [re.search(rf"\b{re.escape(str(name).strip())}\b", question, re.I) for name in target]
-    return all(found) and found[0].start() < found[1].start()
+    first_seen = {}
+    for name in names:
+        pattern = r"\b(?:" + "|".join(re.escape(f) for f in _forms(name)) + r")\b"
+        found = re.search(pattern, question, re.I)
+        if found:
+            first_seen[name] = found.start()
+    if len(first_seen) != 2:
+        return None
+    return sorted(first_seen, key=first_seen.get)
 
 
 def generate_incorrect_answers(solution, counts):
@@ -280,19 +295,19 @@ def generate_graphs_question(global_questions, prev_questions, difficulty,
                   repr(question_data.get("categories"))[:80])
             continue
 
-        # The subtraction is target[0] - target[1], so it must be the comparison on screen.
-        if question_data["scenario"] == "how_many_more" and not _target_follows_text(
-                text, question_data.get("target")):
-            print(f"[Attempt {attempt+1}] Target is not the comparison the text asks:",
-                  repr(question_data.get("target"))[:60])
-            continue
+        # A comparison is read from the text the student answers, never the model's `target`.
+        target = question_data.get("target")
+        if question_data["scenario"] == "how_many_more":
+            target = comparison_in_text(text, [bar["label"] for bar in figure["bars"]])
+            if target is None:
+                print(f"[Attempt {attempt+1}] The text does not compare exactly two bars:",
+                      repr(text)[:80])
+                continue
 
         solution = solve_graph(question_data["scenario"],
-                               question_data["categories"],
-                               question_data.get("target"))
+                               question_data["categories"], target)
         if solution is None:
-            print(f"[Attempt {attempt+1}] No single answer:",
-                  repr(question_data.get("target"))[:60])
+            print(f"[Attempt {attempt+1}] No single answer:", repr(target)[:60])
             continue
 
         break

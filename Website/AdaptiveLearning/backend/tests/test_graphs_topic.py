@@ -98,21 +98,46 @@ def test_a_reply_answering_a_different_scenario_is_refused(reply):
 
 
 @pytest.mark.parametrize("text", [
-    # The report's case: a false premise, scored 2 because the target put the larger first.
+    # The smaller bar first: a false premise, whatever order `target` gives.
     "The graph shows the pets in Ms Lee's class. How many more dogs than cats are there?",
-    "How many more cats than birds are there?",
-    "How many cats and dogs are there?",
+    "How many more cats than birds are there?",                    # one bar is not on the graph
+    "How many cats and dogs are there?",                           # a total, not a comparison
+    "How many more cats than dogs and fish together?",             # three bars
+    "Somehow many more cats than dogs came.",                      # not the phrase
 ])
-def test_a_target_that_is_not_the_comparison_on_screen_is_refused(reply, text):
+def test_a_text_that_does_not_compare_two_bars_larger_first_is_retried(reply, text):
     reply({**VALID, "question_text": text})
     with pytest.raises(ValueError, match="after retries"):
         graphs.generate_graphs_question([], [], "medium", "1st Grade")
 
 
-def test_the_comparison_is_read_where_the_question_asks_it(reply):
-    """A name mentioned earlier in the sentence is not the order of the comparison."""
-    reply({**VALID, "question_text": "Look at the dogs and the cats. How many more Cats than dogs are there?"})
+@pytest.mark.parametrize("text", [
+    "Look at the dogs and the cats. How many more Cats than dogs are there?",
+    # The last "how many more" is the comparison asked.
+    "How many more fish? No -- how many more cats than dogs are there?",
+    "How many more cat than dog are there?",                       # singular of the bar names
+])
+def test_the_comparison_is_read_from_the_text_where_it_asks(reply, text):
+    reply({**VALID, "question_text": text})
     assert graphs.generate_graphs_question([], [], "medium", "1st Grade")["correct_answer"] == "2"
+
+
+def test_the_models_target_does_not_decide_the_comparison(reply):
+    """The text is what the student answers; a reversed or wrong `target` is ignored."""
+    reply({**VALID, "target": ["fish", "cats"]})
+    assert graphs.generate_graphs_question([], [], "medium", "1st Grade")["correct_answer"] == "2"
+
+
+def test_a_comparison_naming_three_bars_has_no_answer():
+    """Checked on the reader itself: `solve_graph` would also refuse a three-name target."""
+    names = ["cats", "dogs", "fish"]
+    assert graphs.comparison_in_text("How many more cats than dogs and fish together?", names) is None
+    assert graphs.comparison_in_text("How many more cats than dogs?", names) == ["cats", "dogs"]
+
+
+@pytest.mark.parametrize("name,said", [("apples", "apple"), ("boxes", "box"), ("fish", "fish")])
+def test_a_bar_is_found_by_its_singular_or_plural(name, said):
+    assert graphs.comparison_in_text(f"How many more {said} than cats?", [name, "cats"]) == [name, "cats"]
 
 
 def test_the_names_match_the_blocks_they_send():

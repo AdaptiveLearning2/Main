@@ -106,30 +106,53 @@ def counts_mismatch(question_text, counts):
         if shown and count not in shown:
             return (f"the question gives {label!r} as {sorted(shown)} but {count} is "
                     f"scored -- the student would be marked against counts they were not given")
-    numbers = [int(n) for n in re.findall(r"(?<![\d.])\d+(?![\d.])", question_text)]
+    # "If 1 marble is drawn" is the draw, not a count; "1 red is removed" stays one.
+    text = _ONE_DRAWN.sub(" ", question_text)
+    numbers = [int(n) for n in re.findall(r"(?<![\d.])\d+(?!\.?\d)", text)]
     if not numbers:
         return None
     extra = list(numbers)
     for count in counts.values():
         if count in extra:
             extra.remove(count)
-    if extra and extra != [sum(counts.values())]:
-        return (f"the question also gives {extra}, which no scored count or their total "
-                f"({sum(counts.values())}) accounts for -- an item left out, or a count changed")
+    total = sum(counts.values())
+    if extra and not (extra == [total] and _states_total(text, total)):
+        return (f"the question also gives {extra}, which no scored count or a stated total "
+                f"({total}) accounts for -- an item left out, or a count changed")
     return None
+
+
+_ONE_DRAWN = re.compile(
+    r"\b1\s+(?:[A-Za-z-]+\s+){0,2}?(?:is\s+|are\s+)?(?:drawn|picked|chosen|selected|pulled)\b", re.I)
+
+
+def _states_total(text, total):
+    """True if `total` reads as the whole bag ("a bag of 12", "12 marbles: ...", "12 in total")."""
+    before = rf"\b(?:of|contains|holds|has|with)\s+{total}\b"
+    after = rf"\b{total}\s+(?:[A-Za-z-]+\s+){{0,2}}?(?:in\s+(?:all|total)|altogether)\b|\b{total}\s+[A-Za-z-]+\s*:"
+    return bool(re.search(before, text, re.I) or re.search(after, text, re.I))
+
+
+# Where a question asks: after the last of these is the item or event it is about.
+_ASKS = re.compile(r"\b(?:probability|chances?|likely|likelihood|odds)\b", re.I)
+
+
+def _question_part(text):
+    asks = list(_ASKS.finditer(text))
+    return text[asks[-1].end():] if asks else None
 
 
 def target_mismatch(question_text, labels, targets):
     """Reason the items the question asks about are not the scored `targets`, or None.
 
-    Read after the last "probability": the item labels named there must be exactly the targets.
+    Read after the last "probability", "chance", "likely" or "odds": the labels named there
+    must be exactly the targets.
     """
     if not isinstance(question_text, str):
         return None
-    asks = list(re.finditer(r"\bprobability\b", question_text, re.I))
-    if not asks:
+    question = _question_part(question_text)
+    if question is None:
         return None
-    question = question_text[asks[-1].end():]
     named = {label for label in labels if re.search(_label_pattern(label), question, re.I)}
     if named and named != set(targets):
         return f"the question asks about {sorted(named)} but {sorted(targets)} is scored"
@@ -142,10 +165,11 @@ _COMPARISONS = [
     (r"\b(?:less|fewer|lower|smaller)\s+than\s+(\d+)", lambda f, n: f < n),
     (r"\bat\s+least\s+(\d+)|\b(\d+)\s+or\s+(?:more|higher|greater|above)\b", lambda f, n: f >= n),
     (r"\bat\s+most\s+(\d+)|\b(\d+)\s+or\s+(?:less|lower|fewer|below)\b", lambda f, n: f <= n),
-    (r"\bmultiple\s+of\s+(\d+)", lambda f, n: f % n == 0),
+    (r"\bmultiple\s+of\s+(\d+)", lambda f, n: n > 0 and f % n == 0),
 ]
 _PARITY = {"even": lambda f: f % 2 == 0, "odd": lambda f: f % 2 == 1,
-           "prime": lambda f: f in {2, 3, 5, 7, 11, 13, 17, 19}}
+           "prime": lambda f: f > 1 and all(f % d for d in range(2, int(f ** 0.5) + 1))}
+_NEGATED = re.compile(r"\bnot\b|n['’]t\b", re.I)
 
 
 def _sides_in_text(text):
@@ -157,9 +181,11 @@ def _sides_in_text(text):
 
 
 def _event_faces(question, sides):
-    """The faces one recognised event names, or None if there is none, several, or a negation."""
-    if re.search(r"\bnot\b|\bn't\b", question, re.I):
+    """The faces one recognised event names, its complement under one negation, or None."""
+    negations = len(_NEGATED.findall(question))
+    if negations > 1:
         return None
+    question = _NEGATED.sub(" ", question)
     question = re.sub(r"\b\d+[\s-]*(?:sided|faced)\b", " ", question, flags=re.I)
     found = []
     for pattern, test in _COMPARISONS:
@@ -170,24 +196,26 @@ def _event_faces(question, sides):
               if re.search(rf"\b{word}\b", question, re.I)]
     if not found:
         found = [{int(n) for n in re.findall(r"\b\d+\b", question)}] if re.search(r"\d", question) else []
-    return found[0] if len(found) == 1 and found[0] else None
+    if len(found) != 1 or not found[0]:
+        return None
+    return set(range(1, sides + 1)) - found[0] if negations else found[0]
 
 
 def dice_mismatch(question_text, sides, faces):
     """Reason the die or the event the text describes is not the scored one, or None.
 
-    Sides from "six-sided", "8-sided", "standard die"; the event after the last "probability"
-    from one comparison, even/odd/prime or listed faces. Anything else fails open.
+    Sides from "six-sided", "8-sided", "standard die"; the event after the question word from one
+    comparison, even/odd/prime or listed faces, negated at most once. Anything else fails open.
     """
     if not isinstance(question_text, str) or not isinstance(sides, int) or not 1 < sides <= 1000:
         return None          # the events are enumerated face by face
     shown_sides = _sides_in_text(question_text)
     if shown_sides is not None and shown_sides != sides:
         return f"the question shows a {shown_sides}-sided die but {sides} sides are scored"
-    asks = list(re.finditer(r"\bprobability\b", question_text, re.I))
-    if not asks:
+    question = _question_part(question_text)
+    if question is None:
         return None
-    event = _event_faces(question_text[asks[-1].end():], sides)
+    event = _event_faces(question, sides)
     if event is not None and event != set(faces):
         return f"the question's event is faces {sorted(event)} but {sorted(faces)} is scored"
     return None

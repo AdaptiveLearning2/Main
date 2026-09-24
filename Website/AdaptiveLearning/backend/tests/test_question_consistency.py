@@ -201,10 +201,31 @@ def test_a_swapped_count_is_caught_through_an_ies_plural():
     assert qc.counts_mismatch(text, {"cherry": 3, "berry": 4}) is None
 
 
-def test_a_stated_total_that_adds_up_agrees():
-    assert qc.counts_mismatch("A bag of 12 marbles has 6 red, 4 blue and 2 green.",
-                              {"red": 6, "blue": 4, "green": 2}) is None
+@pytest.mark.parametrize("text", [
+    "A bag of 12 marbles has 6 red, 4 blue and 2 green.",
+    "A bag contains 12 marbles: 6 red, 4 blue and 2 green.",
+    "There are 12 marbles in total, 6 red, 4 blue and 2 green.",
+])
+def test_a_stated_total_that_adds_up_agrees(text):
+    assert qc.counts_mismatch(text, {"red": 6, "blue": 4, "green": 2}) is None
     assert qc.counts_mismatch("A basket has 3 cherries and 2 plums.", {"cherry": 3, "plum": 2}) is None
+
+
+def test_a_left_out_item_equal_to_the_total_is_not_read_as_the_total():
+    """"and 10 green" is a count, not the bag: only a stated total may be the extra number."""
+    assert qc.counts_mismatch("A bag has 6 red, 4 blue and 10 green marbles.", {"red": 6, "blue": 4}) is not None
+
+
+def test_a_count_before_a_full_stop_is_read():
+    assert qc.counts_mismatch("In the bag. Blue: 4. Red: 6. Green: 2.", {"red": 6, "blue": 4}) is not None
+
+
+def test_the_single_draw_is_not_a_count_but_a_removal_is():
+    tail = " what is the probability of red?"
+    assert qc.counts_mismatch("A bag has 6 red and 4 blue. If 1 marble is drawn," + tail,
+                              {"red": 6, "blue": 4}) is None
+    assert qc.counts_mismatch("A bag has 6 red and 4 blue. After 1 red is removed," + tail,
+                              {"red": 6, "blue": 4}) is not None
 
 
 # ── target_mismatch: the item the question asks about ──────────────────────
@@ -218,7 +239,9 @@ LABELS = ["red", "blue", "green"]
     (BAG_TEXT + " What is the probability of drawing a red or blue marble?", ["red", "blue"], True),
     (BAG_TEXT + " What is the probability of drawing a red or blue marble?", ["red"], False),
     (BAG_TEXT + " What is the probability of NOT drawing a green marble?", ["green"], True),
-    (BAG_TEXT + " What are the chances of red?", ["blue"], True),               # no "probability"
+    (BAG_TEXT + " What are the chances of drawing a red marble?", ["blue"], False),
+    (BAG_TEXT + " How likely is a red marble?", ["red"], True),
+    (BAG_TEXT + " Which colour would you pick?", ["blue"], True),               # asks nothing
 ])
 def test_the_items_asked_about_must_be_the_target(text, targets, agrees):
     assert (qc.target_mismatch(text, LABELS, targets) is None) is agrees
@@ -257,8 +280,31 @@ def test_the_die_and_event_described_agree(text, sides, faces):
 
 @pytest.mark.parametrize("text", [
     DIE + "an even number greater than 2?",                             # two events at once
-    DIE + "a number that is not 3?",                                    # a negated event
-    "A die is rolled. What are the chances of a four?",                 # no "probability", words
+    DIE + "a number that is not not 3?",                                # two negations
+    DIE + "a multiple of 0?",                                           # no such event
+    "A die is rolled. What are the chances of a four?",                 # the event in words
 ])
 def test_it_fails_open_on_an_event_it_cannot_read(text):
     assert qc.dice_mismatch(text, 6, [1]) is None
+
+
+@pytest.mark.parametrize("text,faces", [
+    (DIE + "a number that isn't a 6?", [1, 2, 3, 4, 5]),
+    (DIE + "a number that isn’t even?", [1, 3, 5]),
+    (DIE + "a number that is not greater than 4?", [1, 2, 3, 4]),
+])
+def test_a_negated_event_is_its_complement(text, faces):
+    """"Isn't a 6" scored as [6] served 1/6 for a 5/6 question."""
+    assert qc.dice_mismatch(text, 6, faces) is None
+    assert qc.dice_mismatch(text, 6, [f for f in range(1, 7) if f not in faces]) is not None
+
+
+def test_prime_is_computed_for_any_die():
+    text = "A 30-sided die is rolled. What is the probability of rolling a prime number?"
+    assert qc.dice_mismatch(text, 30, [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]) is None
+    assert qc.dice_mismatch(text, 30, [2, 3, 5, 7, 11, 13, 17, 19]) is not None
+
+
+def test_chances_and_likely_ask_the_question_too():
+    text = "A standard six-sided die is rolled. What are the chances of rolling a number greater than 4?"
+    assert qc.dice_mismatch(text, 6, [6]) is not None

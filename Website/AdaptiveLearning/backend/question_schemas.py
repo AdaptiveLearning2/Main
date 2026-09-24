@@ -141,13 +141,25 @@ def angles(scenario_name):
     take that job over. Worth stating rather than leaving as a silent gap: a
     reader who sees every other shape pinned would reasonably assume this one
     is too, and stop checking the arity.
+
+    The numeral pattern is per scenario, not per topic. `algebra_complementary`'s
+    variables are expressions in `x` (its prompt's own example is
+    `["x + 10", "2x - 20"]`), and under the pattern the only replies the API
+    would allow were bare numbers, which `solve_complementary` cannot solve for
+    `x` -- three billed attempts and a ValueError, every time, on Claude only.
+    Those get `token_list`'s treatment: no pattern, and the bounded worker
+    validates them.
     """
+    items = _TEXT if scenario_name in _EXPRESSION_SCENARIOS else \
+        {"type": "string", "pattern": r"^-?\d+(\.\d+)?$"}
     return _object({"question_text": _TEXT,
                     "question_topic": _TEXT,
                     "scenario": {"type": "string", "enum": [scenario_name]},
-                    "variables": {"type": "array",
-                                  "items": {"type": "string",
-                                            "pattern": r"^-?\d+(\.\d+)?$"}}})
+                    "variables": {"type": "array", "items": items}})
+
+
+# The angle scenarios whose variables are expressions rather than numbers.
+_EXPRESSION_SCENARIOS = frozenset({"algebra_complementary"})
 
 
 def probability(scenario_name):

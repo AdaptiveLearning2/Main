@@ -199,6 +199,37 @@ def test_no_option_is_identifiable_by_its_formatting(name, module, entry,
         f"{name}: {odd} rendered by a different rule from {options}")
 
 
+@pytest.mark.parametrize("tokens", [
+    ["36", "/", "8", "+", "1"],      # a fraction that terminates: 11/2
+    ["1", "/", "3", "+", "1"],       # one that does not: 4/3
+    ["0.5", "+", "1"],               # a Float rather than a Rational
+])
+def test_a_fractional_expression_answer_is_one_of_its_options(tokens, monkeypatch):
+    """The shared CASES evaluate to a whole number, which every formatting
+    agrees on -- so they passed while `correct_answer` was a float string and
+    the option carrying it was sympy's `11/2`, and no option could be marked
+    right. The middle band allows `/`, so this is an ordinary reply."""
+    import LLM_expressions_generation as expr_gen
+
+    payload = {"question_text": "Evaluate " + " ".join(tokens) + ".",
+               "question_topic": "expressions", "scenario": "evaluate",
+               "variables": tokens}
+    monkeypatch.setattr(llm_client, "generate_text",
+                        lambda *a, **k: json.dumps(payload))
+    monkeypatch.setattr(expr_gen, "_pick_scenario", lambda band: 1)
+    monkeypatch.setattr(expr_gen.lesson_plan_context, "append_lesson_context",
+                        lambda prompt, topic, band: prompt)
+    monkeypatch.setattr(expr_gen.grade_appropriateness, "refuse",
+                        lambda *a, **k: False)
+
+    question = expr_gen.generate_expression_question([], [], "medium", "8th Grade")
+
+    wire = json.loads(json.dumps(question))
+    options, correct = wire["answer_options"], wire["correct_answer"]
+    assert [o for o in options if json.dumps(o) == json.dumps(correct)] == [correct], (
+        f"{correct!r} is not exactly one of {options}")
+
+
 @pytest.mark.parametrize("solution,values,why", [
     (5.0, [5.0, 5.0, 5.0, 7.0], "one non-modal value, formatted pool"),
     ([4.0, 9.0], [4.0, 9.0], "bimodal with no spare value"),

@@ -3337,7 +3337,7 @@ def student_questions(student_id: str, request: Request, limit: int = 100):
     `questions` narrowed by something.
 
     One question can appear under several students, and more than once for
-    one student: `add_question_to_supabase` dedupes on exact text across the
+    one student: `add_question_to_supabase` dedupes on exact content across the
     whole product, and a student can be served the same question twice. Rows
     are collapsed per question with `attempts`/`correct` counts rather than
     repeated, and `session_id` is the most recent session it was asked in, so
@@ -3871,9 +3871,9 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
         raise HTTPException(500, "Failed to generate question")
 
     # `question_generation` is topic-agnostic and does not store or attach an
-    # id itself -- `_attach_stored_id` is the same dedup-by-text storage path
-    # the live decider uses, so a practice question and a live one that
-    # happen to match text share one row in `questions`.
+    # id itself -- `_attach_stored_id` is the same deduplicating storage path
+    # the live decider uses, so a practice question and a live one with the
+    # same content share one row in `questions`.
     LLM_topic_decider._attach_stored_id(question, session["difficulty"])
     question["difficulty"] = session["difficulty"]
     return question

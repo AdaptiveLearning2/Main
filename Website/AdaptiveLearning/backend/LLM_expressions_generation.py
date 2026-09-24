@@ -22,19 +22,25 @@ import grade_levels
 import ccss_standards
 import grade_appropriateness
 import question_schemas
+import answer_format
 
 transformations = (standard_transformations + (implicit_multiplication_application,))
 
 def is_numeric(expr):   
     return len(expr.free_symbols) == 0
 
-def normalize_answer(val):
-    if isinstance(val, (sp.Integer, int)):
-        return int(val)
-    if isinstance(val, (sp.Float, float)):
-        return float(val)
-    if isinstance(val, sp.Rational):
-        return float(val)  
+def answer_text(val):
+    """The one string a solved value is shown as.
+
+    Used for the option *and* for `correct_answer`, because the page marks an
+    answer by comparing the two strings. They were formatted separately --
+    `str(solution)` in the options, a float in `correct_answer` -- so `36/8+1`
+    offered `9/2` and expected `4.5`, and every answer to it was marked wrong.
+    A numeric answer takes `answer_format`'s rule, the one its distractors are
+    already written in; a symbolic one (`simplify`) is its sympy string.
+    """
+    if is_numeric(val):
+        return answer_format.format_value(float(val))
     return str(val)
 
 def extract_json(text):
@@ -360,7 +366,8 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
             incorrect_answers = []
     
     
-    answers = [str(ans) for ans in incorrect_answers] + [str(solution)]
+    correct = answer_text(solution)
+    answers = [str(ans) for ans in incorrect_answers] + [correct]
     random.shuffle(answers)
 
     return {
@@ -368,6 +375,6 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
         "question_topic": "expressions",
         "ccss_standard": ccss_standards.ccss_for("expressions", grade, scenario),
         "answer_options": answers,
-        "correct_answer": str(normalize_answer(solution))
+        "correct_answer": correct
     }
 

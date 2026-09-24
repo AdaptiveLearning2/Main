@@ -553,13 +553,33 @@ def extract_json(text):
 
     return None
 
+# How many rows sharing a text (and, for a single-string answer, the answer)
+# the duplicate check compares against. Rows for one text and answer differ
+# only by figure, so this is a bound on the read, not on correctness: a match
+# beyond it is stored again.
+_DEDUPE_CANDIDATES = 50
+
+
+def _answer_value(answer):
+    """An answer as the generator returned it. `correct_answer` is a text
+    column, so a list answer (`mode`, `ordering`) comes back as its JSON text
+    and never equalled the list the generator holds."""
+    if isinstance(answer, str) and answer.startswith("["):
+        try:
+            return json.loads(answer)
+        except ValueError:
+            pass
+    return answer
+
+
 def add_question_to_supabase(question, difficulty):
     """Store the question and return its id, or None if it could not be stored.
 
     Returns the id, not a bool, and a duplicate returns the existing row's id
     rather than False: the id is what `session_answers.question_id` refers
     to, and a duplicate is the ordinary case, not an error, since the
-    generator reproduces a question sooner or later.
+    generator reproduces a question sooner or later. On a duplicate the
+    question's `answer_options` are replaced, in place, by the stored row's.
     """
     # Let the database find the duplicate instead of pulling the whole
     # questions table into Python on every generated question.
@@ -569,16 +589,47 @@ def add_question_to_supabase(question, difficulty):
     # at grade 6 and again at grade 8 is two rows (6.EE.7 and 8.EE.7b) rather
     # than one whose badge belongs to whichever grade wrote it first -- and
     # then disagrees with what the second student saw on their own screen.
+    #
+    # And a row is the same question only if the answer and the figure match
+    # too. Text alone was not enough -- `shape_fractions` and `graphs` forbid
+    # digits in the text, so "What fraction of the shape is shaded?" at one
+    # grade mapped every new figure to the first stored row, and the answer was
+    # recorded against a different picture and answer key.
+    #
+    # The options are *not* compared: on a match the question is served with
+    # the stored row's options, wrong answers and order alike. The generators
+    # draw the wrong answers at random and shuffle every time, so comparing
+    # options almost never matched and the bank gained a row per question
+    # served. Any wrong-answer set for the same answer is a valid question, and
+    # serving the stored one is what keeps a recorded answer -- an index into
+    # the options -- pointing at the option the student saw.
+    #
+    # A single-string answer is a filter, so a generic text with many rows
+    # still finds its match inside the candidate cap. A list answer (`mode`,
+    # `ordering`) is compared here instead: the text column returns it as JSON
+    # text in whatever spelling it was stored, and those two topics carry their
+    # numbers in the text, so few rows share one. `figure` is jsonb, compared
+    # here for the same reason. A missed match costs only a second row.
+    answer = question["correct_answer"]
     code = question.get("ccss_standard")
     lookup = supabase.table("questions") \
-        .select("id") \
+        .select("id, options, correct_answer, figure") \
         .eq("question_text", question["question_text"])
     lookup = lookup.is_("ccss_standard", "null") if code is None \
         else lookup.eq("ccss_standard", code)
-    existing = lookup.limit(1).execute()
+    if isinstance(answer, str):
+        lookup = lookup.eq("correct_answer", answer)
+    existing = lookup.limit(_DEDUPE_CANDIDATES).execute()
 
-    if existing.data:
-        return existing.data[0]["id"]
+    for row in existing.data or ():
+        options = row.get("options")
+        if (_answer_value(row.get("correct_answer")) == _answer_value(answer)
+                and row.get("figure") == question.get("figure")
+                # The page marks an answer by finding it among the options, so
+                # a stored row that somehow lacks it is not one to serve.
+                and isinstance(options, list) and answer in options):
+            question["answer_options"] = list(options)
+            return row["id"]
 
     response = supabase.table("questions").insert({
         "subject" : question["question_topic"],

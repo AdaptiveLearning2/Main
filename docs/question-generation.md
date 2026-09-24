@@ -227,6 +227,11 @@ wrong-scenario class becomes unrepresentable rather than merely rejected. Geomet
 enums are **derived** from `SCENARIO_VARS` and the block tables, never restated — a second copy of a scenario's keys is
 how the schema and the solver drift.
 
+**A schema must admit the reply its own prompt shows.** `angles` pinned every scenario's variables to a numeral, and
+`algebra_complementary`'s example is `["x + 10", "2x - 20"]`: on Claude every attempt came back as bare numbers with no
+`x` to solve for, and failed, billed. Only Claude enforces a schema, so nothing on the dev path could show it.
+`test_every_angle_blocks_own_example_is_allowed_by_its_schema_and_solves` reads the examples from the blocks.
+
 **Two JSON Schema keywords are refused by this endpoint, and neither is guessable from the spec.** Both found by
 sending a request and reading the 400:
 
@@ -747,7 +752,14 @@ one whose badge belongs to whichever grade wrote it first and then contradicts w
 constrains `question_text` unique, so the second row inserts cleanly — and a text regenerated after the column landed
 no longer matches its NULL-coded predecessor, so the bank gains one row per such question, visible to a teacher as a
 duplicate. That is the accepted trade: updating the old row in place would stamp a grade-8 code on a row grade-6
-answers already reference. And **every scenario-selecting generator checks the reply's scenario name**
+answers already reference. **A match also needs the same answer and figure**: `shape_fractions` and `graphs` keep
+digits out of the text, so on text alone every new figure took the first row's id. The options are **not** compared —
+the wrong answers are random and shuffled every generation, so comparing them, even as a set, almost never matched and
+added a row per question served. A repeat is instead **served the stored row's options**, wrong answers and order,
+because an answer is stored as an index into them. A single-string answer is a lookup filter, so a generic text with
+many rows still finds its match inside the candidate cap; a list answer (`mode`, `ordering`) is compared parsed, since
+`correct_answer` is text and returns it as JSON text. And **every scenario-selecting generator checks the reply's
+scenario name**
 (`expressions` was the one that did not): an off-name reply misses `SCENARIO_LADDER` and takes the topic's grade-1
 rung.
 
@@ -940,6 +952,11 @@ Measured against Haiku 4.5 at 8th grade, 3 generations per topic:
 The algebra multi-root case is the one to notice: this file already *said* the topic is one linear equation with one
 solution, and nothing enforced it. **A constraint documented as a limit is a wrong answer waiting for a model that
 writes one.**
+
+Geometry is the same shape: every input and answer is a length, area or volume, and the solver checked only that the
+answer was finite, so a perimeter of 10 with a known side of 8 was served with -3 correct. `solve_scenario` now
+refuses any non-positive input or answer, and three triangle sides that break the triangle inequality; each is a
+retry.
 
 **`while len(results) < n` needs a bound and a deterministic filler.** All three generators in
 `incorrect_solution_generation` were unbounded, and the symbolic one hung *deterministically* on its commonest input:

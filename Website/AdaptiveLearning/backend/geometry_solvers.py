@@ -1,16 +1,7 @@
 """The geometry solve path, with nothing heavy imported.
 
-Lives apart from `LLM_geometry_generation` so `_solve_worker` can import it:
-the generator module pulls in supabase, flask and dotenv at import, which a
-subprocess spawned per question cannot afford, and none of that is needed to
-turn a scenario and a dict of values into a number.
-
-It runs in the worker rather than the request thread because `preprocess_variables`
-applies `sympify` to the model's raw values and is unbounded:
-`sympify("9**9**9")` never returns, and the spin holds the GIL inside CPython's
-long-integer code, so no watchdog thread and no signal handler can stop it.
-Only an external kill works. `SCENARIO_VARS` checks that the keys are present,
-which says nothing about what the values are.
+Separate from the generator so `_solve_worker` can import it without supabase
+or flask. Runs only in the worker: `sympify` on model values is unbounded.
 """
 
 import math
@@ -91,10 +82,7 @@ def traingle_perimeter_missing_side(perim, s1,s2):
     return solution
 
 def circle_area_missing_side(area):
-    # The only quadratic here, so the only solve with two roots, and
-    # `normalize_solution` takes the first: `[-r, r]` scored every answer at -r.
-    # A radius is positive, so the symbol says so and the negative root is
-    # never produced; a non-positive area then has no root and is a retry.
+    # positive=True: the only two-root solve, and `normalize_solution` takes the first.
     x = symbols('x', positive=True)
     solution = solve(Eq(simple_pi*x**2, area), x)
     return solution
@@ -105,10 +93,8 @@ def circle_circumference_missing_side(circ):
     return solution
 
 
-# The variables each scenario's solver indexes, derived from the dispatch below
-# and pinned against it in tests/test_geometry_scenarios.py. A valid scenario
-# carrying the wrong variables is a KeyError out of the dispatch -- a 500, not
-# a retry -- and two hand-maintained lists is how that comes back.
+# Variables each scenario's solver indexes; pinned to the dispatch in
+# tests/test_geometry_scenarios.py.
 SCENARIO_VARS = {
     "rectangle_area_by_counting": ("columns", "rows",),
     "rectangle_area": ("length", "width",),
@@ -137,10 +123,6 @@ SOLVABLE_SCENARIOS = frozenset(SCENARIO_VARS)
 def solve_scenario(scenario, raw_vars):
     """`(value, reason)` -- the solution as a float, or None and why not.
 
-    Both halves, because the caller is a subprocess whose only channel back is
-    a string: collapsing every failure to None made an unparseable variable and
-    an unknown scenario print the same `unsolvable scenario`.
-
     `reason` is None exactly when `value` is not.
     """
     if scenario not in SCENARIO_VARS:
@@ -151,18 +133,13 @@ def solve_scenario(scenario, raw_vars):
         return None, f"{scenario} is missing variables: {missing}"
     try:
         vars = preprocess_variables(raw_vars)
-        # Every value here is a length, an area or a volume. A non-positive
-        # one is a figure that does not exist, and `rectangle_area` with
-        # {-5, 3} still solved -- to -15.
+        # Every value is a length, area or volume, so must be positive.
         given = [k for k, v in vars.items() if v.is_number and v <= 0]
         if given:
             return None, f"{scenario} was given non-positive {given}"
         match (scenario):
             case "rectangle_area_by_counting":
-                # 2.G.2 is rows x columns counted, the same arithmetic as
-                # area. It reuses the solver rather than adding one that would
-                # drift from it -- the difference is entirely in how the
-                # question is worded, which is the scenario block's job.
+                # 2.G.2: same arithmetic as area; only the wording differs.
                 solution = solve_rectangle_area(vars["rows"], vars["columns"])
             case "rectangle_area":
                 solution = solve_rectangle_area(vars["length"], vars["width"])
@@ -201,28 +178,18 @@ def solve_scenario(scenario, raw_vars):
             case "triangle_perimeter_missing_side" :
                 solution = traingle_perimeter_missing_side(vars["perimeter"], vars["s1"], vars["s2"])
             case _:
-                # Unreachable while the caller checks SOLVABLE_SCENARIOS first
-                # and the tests pin the two lists equal -- but the extraction
-                # made this a standalone unit, so that guarantee now lives in a
-                # different file. Without the default, an unlisted scenario
-                # leaves `solution` unbound and raises UnboundLocalError from a
-                # line that reads like arithmetic.
+                # Unreachable while SCENARIO_VARS matches; avoids an unbound `solution`.
                 return None, f"no branch for scenario {scenario!r}"
         solution = normalize_solution(solution)
         value = float(solution)
     except Exception as e:
         return None, f"could not solve {scenario}: {type(e).__name__}: {e}"
     if not math.isfinite(value):
-        # `1e200` cubed is `1e600`, and `float()` of that is `inf`. There is no
-        # question here, and no set of distractors around it.
         return None, f"{scenario} solved to a non-finite value"
     if value <= 0:
-        # The answer is a measure too. Positive inputs can still produce one
-        # when they do not fit together: a perimeter of 10 with a known side
-        # of 8 leaves -3 for the other side.
+        # Positive inputs that don't fit (perimeter 10, known side 8) go negative.
         return None, f"{scenario} solved to {value}; a measure must be positive"
-    # Positive sides are not yet a triangle: {perimeter 20, sides 2 and 3}
-    # leaves 15 for the third, which is longer than the other two together.
+    # Triangle inequality: positive sides are not yet a triangle.
     sides = {"triangle_perimeter": lambda: [vars["s1"], vars["s2"], vars["s3"]],
              "triangle_perimeter_missing_side": lambda: [vars["s1"], vars["s2"], value],
              }.get(scenario)

@@ -1,83 +1,27 @@
-"""Combine EEG, heart and facial channels into one difficulty signal.
+"""Combine EEG, heart and facial channels into one difficulty signal (pure functions).
 
-Pure functions over already-read values, so the rule can be tested exhaustively.
-It decides how hard a question a child gets, and failures here are quiet ones.
-
-Why the rule is asymmetric
---------------------------
-**Easing off wins; pushing harder defers.** To *raise* difficulty every
-available channel must agree. To *lower* it, any one trusted channel is enough.
-
-This is the only shape that fails safely. A wrong ease-off costs a student one
-question below their level. A wrong push costs a struggling student a harder
-one, and the signals are least reliable exactly when a student is agitated --
-which is when a false `focused` is most likely and most damaging.
-
-What each combination does
---------------------------
-| channels present | behaviour |
-| --- | --- |
-| none | correctness, topic history and manual bias only -- today's behaviour |
-| EEG only | today's behaviour |
-| heart only | can ease difficulty alone; **cannot raise it** |
-| facial only | weak modifier; never decides alone |
-| EEG + heart | full rule |
-
-So adding a channel can only ever make sessions gentler, never more aggressive.
-Correctness still raises difficulty independently; these only modulate it.
-
-The facial caveat, stated where it is enforced
-----------------------------------------------
-FER+ is trained mostly on adult faces, and is least reliable on this product's
-users: children, and children with learning disabilities, whose expressions are
-more variable and more often misclassified. So emotion is deliberately the
-weakest input here -- it can *withhold* a difficulty increase and can never
-cause one, and it cannot trigger an ease-off by itself either.
-
-It should not become a primary adaptation signal without validation on the
-actual user group. `EMOTION_MIN_CONFIDENCE` below is a guess, not a
-measurement; treat it as one.
-
-Absent is not calm
-------------------
-Every "no reading" path returns a state that changes nothing, but the reason
-string distinguishes cases a reader would otherwise conflate: a **revoked**
-channel is a respected refusal, not a hardware fault; a channel **calibrating**
-after a failover is not a calm one; a channel **live but untrusted** is not an
-absent one. Same reasoning as the reporting rules in CLAUDE.md.
+Asymmetric by design: raising difficulty needs every channel with an opinion to
+agree; lowering it needs any one trusted channel. Facial can only withhold an
+increase. Adding a channel can make a session gentler, never harder. See CLAUDE.md.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-# EEG thresholds, shared with the rest of the production code.
 EEG_MIN_CONFIDENCE = 0.45
-# Rescaled with the sidecar's population spans (signal_processing.py) so the
-# Bels of movement each label needs are unchanged: focused was 0.20 of a
-# 1.609 span and is 0.124 of 2.590; stressed was 0.15 of 2.079 and is 0.123
-# of 2.526 (its own fraction, not focus's). Must equal the literals in the
-# sidecar's adaptation.py; a test on each side pins them. Still unmeasured
-# against a task (CLAUDE.md, step 1.7).
+# Must equal the literals in the sidecar's adaptation.py; a test on each side pins them.
 EEG_FOCUSED_FOCUS_MIN = 0.624
 EEG_FOCUSED_CALM_MIN = 0.5
 EEG_STRESSED_CALM_MAX = 0.377
-# The stressed line per calm source. The SDK ratio and the sidecar's local
-# alpha residual are different numbers on different spans, so one line cannot
-# serve both: derived as 0.311 Bels below centre on the SDK span, 0.377 sat
-# 0.148 below centre on the local one and silent arithmetic read stressed.
-# "local" is set from the reference capture (EEG_REFERENCE.md). Must equal
-# the sidecar's adaptation.STRESSED_CALM_MAX; a test on each side pins both.
+# Per calm source: SDK ratio and local alpha residual sit on different spans. Must equal adaptation.STRESSED_CALM_MAX.
 EEG_STRESSED_CALM_MAX_BY_SOURCE = {"sdk": EEG_STRESSED_CALM_MAX, "local": 0.25}
 
-# Facial thresholds. Unvalidated on this user group -- see the module
-# docstring. Only ever used to withhold an increase.
+# Unvalidated on children (FER+ is adult-trained); a guess, only used to withhold an increase.
 EMOTION_MIN_CONFIDENCE = 0.50
 NEGATIVE_EMOTIONS = frozenset({"sad", "fear", "anger", "disgust"})
 
-# Heart stress categories that count as "elevated" for an ease-off. `trusted`
-# is checked separately: an untrusted sample still carries a category, it is
-# just not one worth acting on.
+# `trusted` is checked separately: an untrusted sample still carries a category.
 ELEVATED_STRESS = frozenset({"high"})
 
 
@@ -85,11 +29,8 @@ ELEVATED_STRESS = frozenset({"high"})
 class ChannelState:
     """One channel's contribution, or its absence and why.
 
-    `label` is None whenever the channel says nothing. `reason` always says
-    why, because "no label" has several causes and they are not interchangeable.
-
-    `cause` carries that distinction as a value, not by parsing `reason` text --
-    so a reworded message can't silently change what the code does with it.
+    `label` is None when the channel says nothing; `cause` carries why as a
+    value, so code never parses the human-readable `reason`.
     """
     label: str | None = None
     reason: str = "absent"
@@ -101,9 +42,7 @@ class ChannelState:
 class FusedState:
     """The answer, and enough of its provenance to explain a decision.
 
-    `label` keeps the exact vocabulary the caller already branches on --
-    "focused" | "stressed" | "neutral" | "insufficient_signal" | "no_eeg" --
-    so downstream code and the frontend badge need no changes.
+    `label`: "focused" | "stressed" | "neutral" | "insufficient_signal" | "no_eeg".
     """
     label: str
     reason: str
@@ -111,11 +50,7 @@ class FusedState:
     calm: float | None = None
     confidence: float | None = None
     channels: dict[str, str] = field(default_factory=dict)
-    # True when a channel actively vetoed an increase -- the facial channel's
-    # one power. The label is "neutral" either way, and "no opinion" and
-    # "withheld" must not collapse into the same string: a caller that pushes
-    # harder on its own evidence (a run of correct answers) has to defer to
-    # this exactly as it defers to "stressed".
+    # Facial veto on an increase; callers pushing on their own evidence must defer to it like "stressed".
     increase_withheld: bool = False
 
     @property
@@ -131,11 +66,9 @@ def eeg_channel(
     revoked: bool = False,
     calm_source: str = "sdk",
 ) -> ChannelState:
-    """The EEG channel's label, by the thresholds already in production.
+    """The EEG channel's label.
 
-    `calm_source` picks the stressed line (EEG_STRESSED_CALM_MAX_BY_SOURCE);
-    an unknown source takes the SDK line, which is the one every row
-    predating the field was scored on."""
+    `calm_source` picks the stressed line; an unknown source takes the SDK line."""
     if revoked:
         return ChannelState(None, "eeg revoked", cause="revoked")
     if focus is None or confidence is None:
@@ -146,11 +79,7 @@ def eeg_channel(
         return ChannelState(None, f"eeg confidence {confidence:.2f} below "
                                   f"{EEG_MIN_CONFIDENCE}", cause="low_confidence")
     if calm is None:
-        # Focus and contact were read; calm was not -- a placeholder or a
-        # stale local calm nulled the stress column, or the window holds
-        # calm on two scales. The channel has been read, so it is neutral
-        # and not absent: it cannot be focused (calm is in that test) and
-        # cannot be stressed, but its confidence gate still applies.
+        # Read but calm unmeasured: neutral, not absent -- can be neither focused nor stressed.
         return ChannelState("neutral", "eeg read, calm unmeasured", cause="no_calm")
     if focus >= EEG_FOCUSED_FOCUS_MIN and calm >= EEG_FOCUSED_CALM_MIN:
         return ChannelState("focused", "eeg focused and calm")
@@ -167,15 +96,9 @@ def heart_channel(
     *,
     revoked: bool = False,
 ) -> ChannelState:
-    """The heart channel's label, whatever sensor produced it.
+    """The heart channel's label, source-agnostic (optics, PPG or camera rPPG).
 
-    Source-agnostic: headband optics, headband PPG and camera rPPG all arrive
-    here as the same three fields. The rule doesn't change with the source;
-    only the reason string names it.
-
-    `calibrating` is its own case because it's a *temporary* absence with a
-    known end -- a failover still building a baseline -- and calling it "no
-    reading" would make a recovering sensor look broken.
+    `calibrating` is a temporary absence (a failover building its baseline), not "no reading".
     """
     if revoked:
         return ChannelState(None, "heart revoked", source, cause="revoked")
@@ -185,15 +108,12 @@ def heart_channel(
         return ChannelState(None, f"heart calibrating ({source})", source,
                             cause="calibrating")
     if not trusted:
-        # Present and readable, just not worth acting on. Distinct from absent.
+        # Present but not worth acting on; distinct from absent.
         return ChannelState(None, f"heart untrusted ({source})", source,
                             cause="untrusted")
     if stress_category in ELEVATED_STRESS:
         return ChannelState("stressed", f"heart elevated ({source})", source)
-    # "calm" is kept but `fuse` never reads it: a calm heart alone isn't a
-    # reason to raise difficulty -- EEG must also agree. Kept so the
-    # diagnostic `channels` map can still tell "read it, it was fine" apart
-    # from "could not read it".
+    # `fuse` never reads "calm"; it keeps "read, fine" apart from "could not read" in diagnostics.
     return ChannelState("calm", f"heart {stress_category} ({source})", source)
 
 
@@ -206,16 +126,7 @@ def face_channel(
 ) -> ChannelState:
     """The facial channel, which is only ever allowed to withhold.
 
-    Named `emotion_confidence`, not `confidence`. A similarly-named
-    `identity_confidence` (how sure we are *whose* face this is) used to sit
-    beside it, and the two were once swapped: a clearly identified face with a
-    garbage FER+ label withheld an increase, while a well-classified
-    expression on a poorly identified face was thrown away -- both silently.
-    `identity_confidence` is retired (see CLAUDE.md), but the qualified name
-    stays so that ambiguity can't come back.
-
-    Returns "negative" or "neutral", never "stressed" -- a different
-    vocabulary from the other two channels, so a later edit can't wire this
+    Returns "negative" or "neutral", never "stressed", so it cannot be wired
     into the ease-off branch by matching on a label name.
     """
     if revoked:
@@ -223,9 +134,7 @@ def face_channel(
     if not emotion:
         return ChannelState(None, "no face samples", cause="no_samples")
     if emotion_trusted is False:
-        # Hard reject, same as heart_channel's `trusted`. The classifier
-        # itself says it doesn't stand behind this label, so a confidence
-        # score next to it doesn't help.
+        # Hard reject, like heart's `trusted`; confidence cannot rescue it.
         return ChannelState(None, "face untrusted", cause="untrusted")
     if emotion_confidence is None or emotion_confidence < EMOTION_MIN_CONFIDENCE:
         return ChannelState(None, "face emotion confidence below threshold",
@@ -248,9 +157,7 @@ def fuse(
     channels = {"eeg": eeg.reason, "heart": heart.reason, "face": face.reason}
     common = dict(focus=focus, calm=calm, confidence=confidence, channels=channels)
 
-    # 1. Ease off. Either channel alone is enough. A trusted elevated heart
-    #    overrides a calm EEG reading -- the one case where a channel outranks
-    #    EEG. Checked first so it can't be reached after an increase.
+    # 1. Ease off: either channel alone suffices. Checked first so no increase precedes it.
     if heart.label == "stressed" and eeg.label != "stressed":
         return FusedState("stressed",
                           f"{heart.reason} overriding eeg-{eeg.label or 'absent'}",
@@ -260,14 +167,8 @@ def fuse(
     if heart.label == "stressed":
         return FusedState("stressed", heart.reason, **common)
 
-    # 2. Push harder. Every channel that has an opinion must agree, so any
-    #    single doubt is enough to hold difficulty where it is.
-    #
-    #    The facial veto is carried on *every* state from here down, not only
-    #    the one that turns "focused" into "neutral". The decider can push on
-    #    its own evidence -- a run of correct answers -- from a neutral EEG or
-    #    none at all, and a veto that only existed when EEG happened to read
-    #    focused would be absent exactly where that push fires.
+    # 2. Push harder: every channel with an opinion must agree. The facial veto rides on
+    #    every state below, since the decider can also push on correct answers alone.
     withheld = face.label == "negative"
     common["increase_withheld"] = withheld
     if eeg.label == "focused":
@@ -279,9 +180,7 @@ def fuse(
                               **common)
         return FusedState("focused", eeg.reason, **common)
 
-    # 3. Nothing to act on. An EEG that said nothing is reported as such,
-    #    not as neutral: "couldn't read it" and "read it, it's fine" are
-    #    different, and only one of them is a reason to check the headband.
+    # 3. Nothing to act on. A silent EEG is reported as such, not as neutral.
     if eeg.label is None:
         label = ("insufficient_signal" if eeg.cause == "low_confidence"
                  else "no_eeg")

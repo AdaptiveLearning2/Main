@@ -1,66 +1,29 @@
 """Does the question a student SEES describe the data that gets SCORED?
 
-Every generator here returns two things that are supposed to agree: the
-`question_text` shown to the student, and a structured field (`variables`,
-`values`, `items`/`scenario`) the solver computes the answer from. Nothing
-checked that they agreed, and an 8B model doesn't reliably keep them in step.
-
-Measured 2026-08-19 on llama3.1:8b, 2 wrong answers in 12 generated:
-
-  * mode -- shown "8, 4, 12, 16, 4, 14, 8, 10, 20, 4", answered [8, 4].
-    4 occurs three times and 8 twice, so the only mode is 4; the scored
-    `variables` were not the numbers on screen.
-  * probability -- shown "...what is the probability of selecting an EDM
-    band?" over 17+23+14+15 = 69 bands, answered 18/23. That is 54/69 --
-    the COMPLEMENT. The text asked a positive question and the JSON said
-    `scenario: not_probability_of`.
-
-This is worse than a malformed question: the student sees something
-answerable, answers it correctly, and is marked wrong. So both checks run
-inside the existing retry loops and regenerate rather than patching.
-
-**Both fail OPEN.** They return None whenever the text cannot be read
-confidently, because a false rejection burns retries and is
-indistinguishable from a model that cannot follow instructions -- the same
-reasoning `grade_appropriateness` is built on. These catch a clear
-contradiction; they are not a proof of agreement.
+Compares `question_text` against the structured field the solver uses, inside the retry
+loops, so a mismatch regenerates. Both checks fail OPEN: None whenever the text cannot be
+read confidently, since a false rejection burns retries. They catch clear contradictions only.
 """
 
 import re
 from fractions import Fraction
 
-# A fraction is one token, not two numbers. `ordering` routinely scores "3/4"
-# alongside "0.27", and those ARE comparable -- the values are parsed to floats
-# and sorted on those, so a fraction and a decimal sit on one scale. Reading
-# "3/4" as a bare 3 and 4 made this check inert on half the ordering questions
-# sampled live (2026-08-21).
-#
-# (The parse moved into the bounded worker, so `solve_ordering` now receives
-# numbers rather than calling `float(sympify(v))` itself. What matters here is
-# unchanged: one token, one value.)
+# A fraction is one token, not two numbers ("3/4" is compared with "0.27" by value).
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?(?:\s*/\s*\d+)?")
 
-# "The numbers of hours were: 8, 4, 12" -- these prompts put the dataset
-# after a colon, which is what makes locating it reliable enough to compare.
+# The prompts put the dataset after a colon ("were: 8, 4, 12").
 _LIST_AFTER_COLON = re.compile(
     rf":\s*({_NUMBER.pattern}(?:\s*,\s*{_NUMBER.pattern})+)")
 
-# "1 1/2" is one value to a reader and two tokens to the regex above, so a
-# text using mixed numbers cannot be tokenised confidently -- fail open
-# rather than report the tokenisation as a dataset disagreement.
+# "1 1/2" is two tokens to `_NUMBER`, so mixed numbers fail open.
 _MIXED_NUMBER = re.compile(r"\d+\s+\d+\s*/\s*\d+")
 
-# Wording that makes a question ask for the complement. Bounded to whole
-# words so "cannot" or a category called "Nothing" cannot trip it.
+# Complement wording; whole words, so "cannot" or a category "Nothing" cannot trip it.
 _NEGATION = re.compile(r"\b(not|isn't|is not|other than|neither)\b", re.I)
 
 
 def _as_floats(values):
-    """The values as floats, or None if any one of them is not a number.
-
-    Compared by VALUE, not by token, because that is what the solvers do:
-    a question showing 4/5 and scoring 0.8 agrees, and so does 32/40.
-    """
+    """The values as floats (compared by value, as the solvers do), or None if any is not a number."""
     out = []
     for v in values:
         s = str(v).strip()
@@ -70,26 +33,13 @@ def _as_floats(values):
         try:
             out.append(float(Fraction(s)) if "/" in s else float(s))
         except (ValueError, ZeroDivisionError, OverflowError):
-            # OverflowError is specific to the fraction path: float() of an
-            # absurd decimal degrades to inf, but float() of a Fraction with
-            # an oversized numerator raises. Nothing in this module may raise
-            # -- it runs inside the generation retry loops.
+            # float() of a huge Fraction raises OverflowError; nothing here may raise.
             return None
     return out
 
 
-# Why the dataset check did or did not reach a comparison. `dataset_mismatch`
-# collapses all of these to a reason-or-None, which is the right shape for a
-# caller that only wants to accept or retry -- but it makes "compared and
-# agreed" indistinguishable from "never found anything to compare".
-#
-# CLAUDE.md's rule for this file is to measure how often a fail-open check
-# *engages*, not just how often it fires, because a check that can no longer
-# locate its input reports a perfect false-positive rate while doing nothing.
-# That has already happened here once, with fractions in `ordering`. So the
-# states are exposed from the one implementation rather than re-derived by
-# whatever is measuring -- a second copy of these conditions would drift, and
-# a drifted measurement is worse than none.
+# Why the dataset check did or did not reach a comparison, so measurement can tell
+# "compared and agreed" from "found nothing to compare" (an inert check looks perfect).
 ENGAGED_AGREED = "engaged_agreed"
 ENGAGED_MISMATCH = "engaged_mismatch"
 INERT_NO_INPUT = "inert_no_input"
@@ -100,11 +50,7 @@ INERT_SHOWN_NOT_COMPARABLE = "inert_shown_not_comparable"
 
 
 def dataset_check(question_text, values):
-    """(state, reason) for the dataset comparison -- see the states above.
-
-    `reason` is non-None only for ENGAGED_MISMATCH; every other state means
-    there is nothing to report to the caller.
-    """
+    """(state, reason) for the dataset comparison; `reason` is non-None only for ENGAGED_MISMATCH."""
     if not question_text or not values:
         return INERT_NO_INPUT, None
     scored = _as_floats(values)
@@ -132,22 +78,15 @@ def dataset_check(question_text, values):
 def dataset_mismatch(question_text, values):
     """Reason the dataset in `question_text` differs from `values`, or None.
 
-    `values` is the list the solver will actually compute over. Only the
-    numbers after the last colon are compared, because a question sentence
-    routinely contains numbers that are not data ("during a school year").
-    When no such list is found, this returns None rather than guessing.
+    Only the list after the last colon is compared; no such list returns None.
     """
     return dataset_check(question_text, values)[1]
 
 
 def negation_mismatch(question_text, scenario):
-    """Reason a probability question's wording disagrees with the scenario
-    that will be solved, or None.
+    """Reason a probability question's wording disagrees with its scenario, or None.
 
-    `not_probability_of` computes 1 - p, so it is only correct for a
-    question that actually asks for the complement. The two must agree in
-    both directions: a negated question solved as `probability_of` is wrong
-    by exactly the same amount.
+    `not_probability_of` scores 1 - p, so text and scenario must agree on negation both ways.
     """
     if not question_text or scenario not in ("probability_of", "not_probability_of"):
         return None

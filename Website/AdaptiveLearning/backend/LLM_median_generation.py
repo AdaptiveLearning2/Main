@@ -3,14 +3,14 @@
 import os
 import re
 import random
-from supabase import create_client, Client #pip install supabase
-from dotenv import load_dotenv   #pip install dotenv
+from supabase import create_client, Client
+from dotenv import load_dotenv
 import llm_client
 import question_schemas
 import json
 from flask import Flask, jsonify
-from flask_cors import CORS #pip install flask-cors
-import sympy as sp #pip install sympy
+from flask_cors import CORS
+import sympy as sp
 from sympy import symbols, Eq, solve, sympify, Integer
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
@@ -22,9 +22,7 @@ import question_consistency
 
 
 def format_number(x):
-    """`x` is a float by the time this is reached -- the values are parsed in
-    the bounded worker. The `sympify` fallback is for a plain string a caller
-    might still pass; it never sees the model's text."""
+    """`x` is already a float; the `sympify` fallback never sees model text."""
     if isinstance(x, list):
         x = x[0]
     val = float(x.evalf()) if hasattr(x, "evalf") else float(sympify(x))
@@ -87,12 +85,7 @@ Rules:
 solution = -1
 
 def median(values):
-    """`values` are already numbers -- parsed in the bounded worker.
-
-    They used to be sympified here, which is the one unbounded step on this
-    path: `sympify("9**9**9")` never returns and holds the GIL while it does
-    not. Sorting and averaging floats cannot hang.
-    """
+    """`values` are already numbers, parsed in the bounded worker."""
     vals = sorted(values)
     n = len(vals)
 
@@ -110,20 +103,13 @@ def generate_incorrect_answers(solution, values):
     n = len(vals)
 
     if n % 2 == 1:
-        # Bounded, and with a fallback that can always finish. Whether three
-        # distinct non-median values exist is a property of the dataset, not of
-        # how long you try: `[5, 7, 9]` has a median of 7 and exactly two other
-        # values, so this looped for ever. Reachable by design -- the middle
-        # band's easy tier asks for "3-5 values" in as many words -- and it is
-        # what hung a 650-question audit at 1627 seconds of CPU.
+        # No loop: `[5, 7, 9]` has only two non-median values.
         others = [v for v in dict.fromkeys(vals) if v != solution]
         random.shuffle(others)
         incorrect_answers = others[:3]
 
     if len(incorrect_answers) < 3:
-        # The even-length branch's generator, reused: it is bounded, always
-        # returns three, and is already what this function produces when the
-        # dataset has no middle value to borrow from.
+        # Bounded and always returns three.
         incorrect_answers = (inc_gen.generate_general_incorrect_answers(float(solution))
                              if solution is not None else [])
 
@@ -131,16 +117,11 @@ def generate_incorrect_answers(solution, values):
 
 
 def _grade_band(grade):
-    # Delegated so ten copies of this cannot drift apart, and so an
-    # unreadable grade ("Grade 1") lands in "early" rather than
-    # "advanced" -- profiles.grade_level is free text. See grade_levels.
+    # An unreadable grade ("Grade 1") lands in "early", not "advanced".
     return grade_levels.grade_band(grade)
 
-# Odd-length datasets need no averaging (just pick the middle value);
-# even-length ones require averaging the two middle values -- one genuine
-# extra step, reserved for grades that have division. "median" isn't in
-# LLM_topic_decider's grade-1-3 allowlist, so "early" here is
-# defense-in-depth only.
+# Even-length datasets add an averaging step, reserved for hard tiers. "early"
+# is defense-in-depth: LLM_topic_decider withholds median from grades 1-3.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use an ODD number of values (3 total), whole numbers below 20, so the median is simply the middle value once sorted.",
@@ -157,14 +138,7 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use an ODD number of values (5-7 total). Whole numbers between 1 and 500; negative numbers may be used.",
         "hard":   "Use an EVEN number of values (6-8 total), so finding the median requires averaging the two middle values. Whole numbers between 1 and 500; negative numbers may be used.",
     },
-    # "advanced" is grades 9+. It used to be `upper` with the magnitude
-    # clause deleted -- which reads to the model as no requirement rather
-    # than a harder one, and an audit of 640 questions measured the result:
-    # 83% of grade-9 questions were three or more grades below grade.
-    #
-    # The ceiling here is grade 8, not high school, and that is a solver
-    # limit rather than a prompt one -- see the note above
-    # COMPLEXITY_BY_GRADE in this file's module docstring region.
+    # Grades 9+, capped at grade-8 content: a solver limit, not a prompt one.
     "advanced": {
         "easy":   "Use an ODD number of values (5-7 total) including at least two NEGATIVE numbers.",
         "medium": "Use an ODD number of values (7-9 total) including negatives and at least one value above 100.",
@@ -205,11 +179,7 @@ def generate_median_question(global_questions, prev_questions,difficulty,grade, 
             print(response_text)
             continue
 
-        # After the guard, not before it. `extract_json` returns None when the
-        # response holds no JSON at all -- which is the case this retry loop
-        # exists for -- and `.replace` on that raises AttributeError straight
-        # out of the loop instead of retrying. The nine sibling generators all
-        # check first; this one had the two lines the other way round.
+        # After the None guard, or `.replace` raises instead of retrying.
         raw = raw.replace("\n", " ")
 
         try:
@@ -224,26 +194,20 @@ def generate_median_question(global_questions, prev_questions,difficulty,grade, 
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # Backstop on what the model actually produced, not just on what
-        # the prompt asked for -- see grade_appropriateness.
+        # Backstop on what the model actually produced; see grade_appropriateness.
         if grade_appropriateness.refuse(question_data.get("question_text"),
                                         "median", grade_band, difficulty,
                                         attempt + 1):
             continue
 
-        # The student is shown question_text but scored on the field
-        # above; nothing used to check they agree. See
-        # question_consistency for the measured failure.
+        # The student sees question_text but is scored on `variables`.
         inconsistent = question_consistency.dataset_mismatch(
             question_data.get("question_text"), question_data.get("variables"))
         if inconsistent:
             print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
     
-        # Parsed in the bounded worker, which subsumes the `is_number` check
-        # that used to stand here: that one called `sympify` too, so it was the
-        # hazard rather than a guard against it. The worker refuses anything
-        # that is not a finite number, and nothing after this parses.
+        # The bounded worker refuses anything not a finite number; nothing after parses.
         numbers = safe_solve.safe_sympify_values(question_data['variables'])
         if numbers is None:
             print(f"[Attempt {attempt+1}] Unusable variables:",

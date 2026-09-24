@@ -4,14 +4,14 @@ import re
 import ast
 import itertools
 import random
-from supabase import create_client, Client #pip install supabase
-from dotenv import load_dotenv   #pip install dotenv
+from supabase import create_client, Client
+from dotenv import load_dotenv
 import llm_client
 import question_schemas
 import json
 from flask import Flask, jsonify
-from flask_cors import CORS #pip install flask-cors
-import sympy as sp #pip install sympy
+from flask_cors import CORS
+import sympy as sp
 from sympy import symbols, Eq, solve, sympify, Integer
 import lesson_plan_context
 import safe_solve
@@ -73,15 +73,9 @@ Rules:
 """
 
 def solve_ordering(values, numbers, direction="least_to_greatest"):
-    """`values` in sorted order, sorted by the matching entry in `numbers`.
+    """`values` sorted by the matching entry in `numbers`, returned as the model's own strings.
 
-    The numbers are parsed in the bounded worker and handed in, rather than
-    read here through `normalize`: `sympify` on the model's text is the one
-    unbounded step, and `sympify("9**9**9")` never returns. The sort itself
-    cannot hang, so only the parse had to move.
-
-    The model's own strings are what get returned, so a value shown as "2/5"
-    is still shown that way after ordering.
+    `numbers` is parsed by the bounded worker, since `sympify` on model text can hang.
     """
     normalized = list(zip(values, numbers))
 
@@ -92,32 +86,18 @@ def solve_ordering(values, numbers, direction="least_to_greatest"):
     return [v[0] for v in sorted_vals]
 
 def shuffle_incorrect_answers(solution):
-    """Three orderings that are not the right one.
-
-    Enumerated rather than sampled. The loop here drew random shuffles until it
-    had three distinct ones, and how many exist is a property of the list: two
-    values have exactly one wrong order, so a two-value dataset span for ever.
-    The retry loop rejects those upstream now -- an "order these" question needs
-    at least three values to be a question at all -- and this is bounded anyway,
-    because a guard in one place is not a reason to leave a loop that cannot
-    finish in another.
-    """
+    """Up to three wrong orderings, enumerated rather than sampled so it always terminates."""
     wrong = [list(p) for p in itertools.permutations(solution)
              if list(p) != solution]
     random.shuffle(wrong)
     return wrong[:3]
 
 def _grade_band(grade):
-    # Delegated so ten copies of this cannot drift apart, and so an
-    # unreadable grade ("Grade 1") lands in "early" rather than
-    # "advanced" -- profiles.grade_level is free text. See grade_levels.
+    # Shared so copies can't drift; profiles.grade_level is free text. See grade_levels.
     return grade_levels.grade_band(grade)
 
-# Difficulty changes which math concept is used, not just how big the
-# numbers are. Decimals are roughly a grade-4+ concept and fractions
-# grade-3+, so each grade band defines its own easy/medium/hard tiers --
-# otherwise scaling magnitude alone could put fraction comparisons in
-# front of a 1st grader just because that grade allows bigger numbers.
+# Difficulty changes the concept (decimals, fractions, negatives), not just magnitude,
+# so each grade band has its own tiers.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use 3 values, whole numbers below 20 only. No decimals, no fractions, no negatives.",
@@ -134,14 +114,7 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use 4-5 values. Include a mix of decimals (up to two decimal places) and simple fractions. Magnitude up to 200.",
         "hard":   "Use 5-6 values. Include a mix of decimals (up to two decimal places), fractions, and at least one negative value. Magnitude up to 200.",
     },
-    # "advanced" is grades 9+. It used to be `upper` with the magnitude
-    # clause deleted -- which reads to the model as no requirement rather
-    # than a harder one, and an audit of 640 questions measured the result:
-    # 83% of grade-9 questions were three or more grades below grade.
-    #
-    # The ceiling here is grade 8, not high school, and that is a solver
-    # limit rather than a prompt one -- see the note above
-    # COMPLEXITY_BY_GRADE in this file's module docstring region.
+    # Grades 9+, but content tops out at grade 8: a solver limit, not a prompt one.
     "advanced": {
         "easy":   "Use 4-5 values mixing whole numbers and decimals, including at least one NEGATIVE value.",
         "medium": "Use 5-6 values mixing decimals to two places, simple fractions, and at least one negative.",
@@ -195,31 +168,26 @@ def generate_ordering_question(global_questions, prev_questions,difficulty, grad
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # Backstop on what the model actually produced, not just on what
-        # the prompt asked for -- see grade_appropriateness.
+        # Backstop on what the model produced, not what the prompt asked for.
         if grade_appropriateness.refuse(question_data.get("question_text"),
                                         "ordering", grade_band, difficulty,
                                         attempt + 1):
             continue
 
-        # The student reads question_text but is scored against values --
-        # check the numbers in the text match the scored dataset.
+        # The student reads question_text but is scored against values.
         inconsistent = question_consistency.dataset_mismatch(
             question_data.get("question_text"), question_data.get("values"))
         if inconsistent:
             print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
 
-        # Parsed inside the loop, in the worker, so an unparseable or
-        # unbounded value is another attempt rather than a hang.
-        # Three values minimum: with two there is exactly one wrong order, so
-        # the question has one distractor and `shuffle_incorrect_answers` had
-        # nothing to find. It is also not much of an ordering question.
+        # Two values have only one wrong order, so one distractor at most.
         if len(question_data.get("values") or []) < 3:
             print(f"[Attempt {attempt+1}] Too few values to order:",
                   repr(question_data.get("values"))[:60])
             continue
 
+        # Parsed in the bounded worker, so an unbounded value is a retry, not a hang.
         numbers = safe_solve.safe_sympify_values(question_data["values"])
         if numbers is None:
             print(f"[Attempt {attempt+1}] Unusable values:",

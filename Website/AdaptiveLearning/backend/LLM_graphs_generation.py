@@ -1,23 +1,7 @@
-# Generates a bar-graph reading question and solves it exactly.
+# Generates a bar-graph reading question (1.MD.4, 2.MD.10) and solves it exactly.
 #
-# CCSS 1.MD.4 ("organize, represent and interpret data with up to three
-# categories; ask and answer questions about how many more or less") and
-# 2.MD.10 (a bar graph with up to four categories, and compare problems using
-# the information in it).
-#
-# THIS IS THE ONE TOPIC WHOSE FIGURE IS REQUIRED, NOT AN ENRICHMENT. Everywhere
-# else a figure that cannot be built costs the picture and nothing else,
-# because the question text stands alone: "a rectangle split into 3 rows of 4
-# same-size squares" is answerable read aloud. "How many more cats than dogs?"
-# is not -- the counts live only in the graph. So this generator treats a
-# figure it could not build as an unusable reply and retries, which inverts the
-# fail-open rule in exactly one place. `question_figures.figure_for` keeps its
-# own contract and still returns None rather than raising; the decision that
-# None is fatal belongs to the topic that cannot do without it.
-#
-# It is also the visual precursor to `mean`/`median`/`mode`: a student reads
-# counts off a graph here at grade 1-2, and computes statistics over a listed
-# dataset at grade 6.
+# The one topic whose figure is required: the counts live only in the graph, so
+# a figure that cannot be built is a retry, not a fail-open.
 
 import json
 import random
@@ -51,10 +35,8 @@ def extract_json(text):
     return None
 
 
-# Block number -> the scenario name that block asks for. A literal, like the
-# other three, and cross-checked against the blocks by a test: the prompt names
-# the wanted scenario by number while the reply must carry the matching name,
-# and the solver dispatches on the name it is given.
+# Block number -> scenario name; cross-checked against the blocks by a test,
+# since the solver dispatches on the name.
 _SCENARIO_NAMES = {
     1: "how_many_total",
     2: "how_many_more",
@@ -121,22 +103,18 @@ Rules:
 
 
 def _graphs_prompt(scenario):
-    """Header + the one selected scenario's block + footer, and the scenario
-    restated as a rule. KeyError on an unknown scenario, for the reason
-    `_geometry_prompt` documents."""
+    """Header + the selected block + footer + the scenario as a rule. KeyError if unknown."""
     name = _SCENARIO_NAMES[scenario]
     return (GRAPHS_HEADER + "\n" + SCENARIO_BLOCKS[scenario] + GRAPHS_FOOTER
             + f'- "scenario" MUST be exactly "{name}"\n')
 
 
 def _grade_band(grade):
-    # Delegated so the copies cannot drift apart, and so an unreadable grade
-    # ("Grade 1") lands in "early" rather than "advanced". See grade_levels.
+    # An unreadable grade ("Grade 1") lands in "early", not "advanced".
     return grade_levels.grade_band(grade)
 
 
-# Only "early" is reachable -- TOPIC_MAX_GRADE caps this at grade 3 -- and the
-# rest is defense-in-depth, like the other capped topics.
+# Only "early" is reachable (TOPIC_MAX_GRADE is 3); the rest is defense-in-depth.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use 2 categories with counts of 10 or below.",
@@ -160,9 +138,8 @@ COMPLEXITY_BY_GRADE = {
     },
 }
 
-# 1.MD.4 is "up to three categories". 2.MD.10 is four. Difficulty and grade are
-# independent inputs, so a "hard" 1st grader is a real state and the band's
-# hard tier alone would hand them a grade-2 graph.
+# 1.MD.4 allows three categories, 2.MD.10 four; the early hard tier alone would
+# give a 1st grader a grade-2 graph.
 GRADE_OVERRIDES = {
     1: "This student is in GRADE 1. Use at most THREE categories and counts of 10 or below (1.MD.4).",
 }
@@ -175,20 +152,15 @@ _SCENARIOS_BY_DIFFICULTY = {
 
 
 def _pick_scenario(difficulty):
-    """Reading a total is one addition; comparing two bars is a reading *and* a
-    subtraction, which is the harder half of 1.MD.4. Not ranked through
-    `scenario_tiers` because there are two scenarios and no grade filter
-    removes either -- the ordering cannot invert."""
+    """Total for easy, comparison for harder. No `scenario_tiers`: no grade filter applies."""
     return random.choice(
         _SCENARIOS_BY_DIFFICULTY.get(difficulty, _SCENARIOS_BY_DIFFICULTY["medium"]))
 
 
 def solve_graph(scenario, categories, target):
-    """The answer, or None if the reply does not determine one.
+    """The answer, or None (a retry) if the reply does not determine one.
 
-    `None` rather than a raise: the caller is inside the retry loop. No sympy,
-    so no bounded subprocess -- this is a sum or a subtraction over small
-    integers the figure builder has already bounded.
+    No sympy, so no bounded subprocess: small integers only.
     """
     counts = {}
     for entry in categories:
@@ -210,19 +182,14 @@ def solve_graph(scenario, categories, target):
         if names[0] == names[1] or any(n not in counts for n in names):
             return None
         difference = counts[names[0]] - counts[names[1]]
-        # Negative means the question asked how many more of the *smaller*
-        # category, which reads as a question with no answer for these grades.
-        # Refused rather than answered with an absolute value, which would
-        # score a different question from the one on screen.
+        # Refuse a non-positive difference; abs() would score a different question.
         return difference if difference > 0 else None
 
     return None
 
 
 def generate_incorrect_answers(solution, counts):
-    """Near-misses first -- the individual bars and an off-by-one read are the
-    mistakes this question tests for. Bounded by construction: a fixed
-    candidate list, not a search."""
+    """Near-misses first: individual bars and off-by-one reads."""
     candidates = [solution + 1, solution - 1, *counts, sum(counts),
                   solution + 2, solution + 10]
     wrong = []
@@ -284,8 +251,7 @@ def generate_graphs_question(global_questions, prev_questions, difficulty,
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # The scenario that came back, not the one that was asked for. The
-        # solver dispatches on the name it is given.
+        # Check the scenario returned: the solver dispatches on it.
         if question_data["scenario"] != _SCENARIO_NAMES[scenario]:
             print(f"[Attempt {attempt+1}] Wrong scenario:",
                   question_data["scenario"])
@@ -296,19 +262,14 @@ def generate_graphs_question(global_questions, prev_questions, difficulty,
                                         attempt + 1):
             continue
 
-        # A digit in the text is a count written out, which hands the student
-        # the reading the question exists to ask for. Checked rather than only
-        # requested: it is a prompt rule everywhere else in this codebase that
-        # leaked at least once.
+        # A digit in the text gives away a count; enforced, not just requested.
         text = question_data.get("question_text")
         if not isinstance(text, str) or re.search(r"\d", text):
             print(f"[Attempt {attempt+1}] Digits in the question text:",
                   repr(text)[:80])
             continue
 
-        # THE FIGURE IS REQUIRED HERE. Built before the solve, because a reply
-        # whose categories cannot be drawn is not a graph question at all --
-        # "how many more cats than dogs" with no graph has no answer on screen.
+        # The figure is required here: without it the question has no answer on screen.
         figure = question_figures.figure_for(question_data["scenario"],
                                              question_data)
         if figure is None:
@@ -342,7 +303,6 @@ def generate_graphs_question(global_questions, prev_questions, difficulty,
         "ccss_standard": ccss_standards.ccss_for("graphs", grade),
         "answer_options": answers,
         "correct_answer": correct,
-        # Drawn from the same list the solver summed, so the bar a student
-        # counts is the number being scored.
+        # Drawn from the same list the solver summed.
         "figure": figure,
     }

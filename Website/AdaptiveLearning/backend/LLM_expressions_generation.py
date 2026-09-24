@@ -1,13 +1,13 @@
 ﻿import os
 import re
 import random
-from supabase import create_client, Client #pip install supabase
-from dotenv import load_dotenv   #pip install dotenv
+from supabase import create_client, Client
+from dotenv import load_dotenv
 import llm_client
 import json
 from flask import Flask, jsonify
-from flask_cors import CORS #pip install flask-cors
-import sympy as sp #pip install sympy
+from flask_cors import CORS
+import sympy as sp
 from sympy import symbols, Eq, solve, sympify, Integer
 from sympy.parsing.sympy_parser import (
     parse_expr,
@@ -32,12 +32,7 @@ def is_numeric(expr):
 def answer_text(val):
     """The one string a solved value is shown as.
 
-    Used for the option *and* for `correct_answer`, because the page marks an
-    answer by comparing the two strings. They were formatted separately --
-    `str(solution)` in the options, a float in `correct_answer` -- so `36/8+1`
-    offered `9/2` and expected `4.5`, and every answer to it was marked wrong.
-    A numeric answer takes `answer_format`'s rule, the one its distractors are
-    already written in; a symbolic one (`simplify`) is its sympy string.
+    Used for the option *and* `correct_answer`: the page marks by string equality.
     """
     if is_numeric(val):
         return answer_format.format_value(float(val))
@@ -59,16 +54,8 @@ def extract_json(text):
 
     return None
 
-# Only the selected scenario's block is sent -- see the note in
-# LLM_geometry_generation.py. _pick_scenario has already applied the
-# grade-band restriction (scenarios 2 and 3 are withheld from "early"), so
-# the others were worked examples for questions the model must not write.
-#
-# This narrows the early-band contradiction CLAUDE.md documents but does NOT
-# resolve it: scenario 1's own example is `36/3+(8*2)-(15-7)+4`, which is
-# exactly the parenthesis-heavy older-student shape that beat the textual
-# rule. EARLY_BAND_EXAMPLE below is still what actually fixes that and must
-# stay -- three contradicting examples became one, not none.
+# Only the selected scenario's block is sent. Scenario 1's example is still an
+# older-student shape, so EARLY_BAND_EXAMPLE below must stay.
 EXPR_HEADER = """
 You are to provide a Math question suitable for students. The response must be in JSON format.
 The Question Text, Question Topic, Scenario, and Variables will be displayed. The Question Topic will always be "expressions".
@@ -135,11 +122,8 @@ Return ONLY valid JSON with no text before or after the JSON object.
 """
 
 
-# Block number -> the scenario name that block asks for. A literal, like
-# geometry's and angles', and cross-checked against the blocks by a test for
-# the same reason: the prompt names the wanted scenario by *number* while the
-# reply must carry the matching *name*, and `safe_solve` dispatches on the name
-# it is given rather than the one that was asked for.
+# Block number -> scenario name; cross-checked against the blocks by a test,
+# since `safe_solve` dispatches on the name.
 _SCENARIO_NAMES = {
     1: "evaluate",
     2: "order_of_operations",
@@ -148,26 +132,16 @@ _SCENARIO_NAMES = {
 
 
 def _expr_prompt(scenario):
-    """Header + the one selected scenario's block + footer. KeyError on an
-    unknown scenario, for the reason _geometry_prompt documents."""
+    """Header + the selected scenario's block + footer. KeyError on an unknown scenario."""
     return EXPR_HEADER + "\n" + SCENARIO_BLOCKS[scenario] + EXPR_FOOTER
 
 
 def _grade_band(grade):
-    # Shared with the other generation files so they can't drift apart.
     # An unreadable grade like "Grade 1" falls back to "early", not "advanced".
     return grade_levels.grade_band(grade)
 
-# Scenario 3 ("simplify", e.g. "2x + 3x") uses algebraic notation, so it's
-# withheld until "upper" (grades 7-8) regardless of difficulty -- pre-algebra
-# notation isn't in reach before then. Grade 6 ("middle" band) also misses out
-# on it, even though the topic-selection rule elsewhere treats grade 6 as
-# pre-algebra-ready; that's a deliberate simplification rather than adding a
-# fifth grade bucket for one scenario.
-# Scenario 2 ("order_of_operations") is withheld from "early" too. It's a
-# grade-5 concept (CCSS 5.OA.1) defined by mixing precedence levels, which
-# can't be expressed within the early band's addition-and-subtraction-only
-# rule -- see EARLY_BAND_EXAMPLE for what happened when it wasn't withheld.
+# simplify (algebraic notation) waits for "upper"; order_of_operations (5.OA.1)
+# is withheld from "early", whose tiers are addition and subtraction only.
 def _pick_scenario(grade_band):
     if grade_band == "early":
         return 1
@@ -176,12 +150,8 @@ def _pick_scenario(grade_band):
     return random.randint(1, 3)
 
 
-# The scenario examples in SCENARIO_BLOCKS above are all written for older
-# students (e.g. "36/3+(8*2)-(15-7)+4"), and a few-shot example beats a text
-# rule. Measured on llama3.1:8b with the lesson plans seeded (2026-08-18,
-# grade 1 / easy): 2 of 8 questions came back with parentheses despite
-# COMPLEXITY_BY_GRADE forbidding them. So the early band gets its own worked
-# example below, and `grade_appropriateness` catches whatever still slips through.
+# The scenario examples are written for older students, and a few-shot example
+# beats a text rule, so the early band gets its own.
 EARLY_BAND_EXAMPLE = """
 EXAMPLE OF A CORRECT QUESTION FOR THIS GRADE LEVEL -- follow this shape, NOT
 the scenario examples above, which are written for much older students:
@@ -195,19 +165,8 @@ The question_text must contain ONLY digits, "+", "-", and "?" -- no "*", no
 "/", and no parentheses of any kind.
 """
 
-# Which operations are available changes by grade, not just how many of them
-# or how big the numbers are -- multiplication, division, and parentheses
-# should only appear once a grade has actually been taught them.
-# Two grades inside the "middle" band have not met a concept the band's
-# tiers use. The band spans 4-6 and its tiers are written for its ceiling,
-# so a 4th grader was offered parentheses on 6 of 10 measured questions --
-# order of operations is 5.OA.1.
-#
-# Appended to the prompt rather than folded into COMPLEXITY_BY_GRADE,
-# because the table is keyed by band and this is keyed by grade; giving
-# the table a thirteenth column to express one rule would make every
-# other topic's table wrong by omission. Prompt-level, so it can leak --
-# `grade_appropriateness` is where a code-level check would go if it does.
+# Per-grade rules inside a band: the "middle" tiers are written for grade 6, and
+# grade 4 has not met parentheses (5.OA.1). Prompt-level only, so it can leak.
 GRADE_OVERRIDES = {
     4: "This student is in GRADE 4. Do NOT use parentheses of any kind -- order of operations is a grade-5 standard (5.OA.1).",
 }
@@ -229,14 +188,7 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use 3-4 operations total. You may use up to one set of parentheses. Numbers may be up to three digits (1-200).",
         "hard":   "Use 5-6 operations total. You may use up to two sets of parentheses. Numbers may be up to three digits (1-200).",
     },
-    # "advanced" is grades 9+. It used to be `upper` with the magnitude
-    # clause deleted -- which reads to the model as no requirement rather
-    # than a harder one, and an audit of 640 questions measured the result:
-    # 83% of grade-9 questions were three or more grades below grade.
-    #
-    # The ceiling here is grade 8, not high school, and that is a solver
-    # limit rather than a prompt one -- see the note above
-    # COMPLEXITY_BY_GRADE in this file's module docstring region.
+    # Grades 9+, capped at grade-8 content: a solver limit, not a prompt one.
     "advanced": {
         "easy":   "Use 3-4 operations including at least TWO negative integers (e.g. -15 + 6 - (-8)). No parentheses.",
         "medium": "Use 4-5 operations with one set of parentheses and at least one integer exponent such as 2**3. For a simplify question instead, use at least three like terms with one negative coefficient.",
@@ -249,8 +201,6 @@ solution = -1
 
 def generate_expression_question(global_questions, prev_questions, difficulty, grade, max_retries=3):
     for attempt in range(max_retries):
-        # randomize scenario selection (within what this grade band may see)
-        # to ensure variety; the prompt is built around the result
         grade_band = _grade_band(grade)
         scenario = _pick_scenario(grade_band)
 
@@ -299,29 +249,20 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # The scenario that came back, not the one asked for -- the check the
-        # other scenario topics have. `_solve_worker` reads any name that is
-        # not "simplify" as evaluate, and `ccss_for` reads an unknown name as
-        # the topic's grade-1 rung, so an off-name reply would badge a grade-8
-        # question 1.OA.6. Only the Ollama branch can produce one; the Claude
-        # branch pins the name in its schema.
+        # Check the scenario returned: an off-name reply solves as evaluate and
+        # gets the grade-1 CCSS code. Only Ollama can produce one.
         if question_data["scenario"] != _SCENARIO_NAMES[scenario]:
             print(f"[Attempt {attempt+1}] Wrong scenario:",
                   question_data["scenario"])
             continue
 
-        # Backstop on what the model actually produced, not just on what
-        # the prompt asked for -- see grade_appropriateness.
+        # Backstop on what the model actually produced; see grade_appropriateness.
         if grade_appropriateness.refuse(question_data.get("question_text"),
                                         "expressions", grade_band, difficulty,
                                         attempt + 1):
             continue
 
-        # Solved inside the loop, so an expression that cannot be solved is a
-        # retry rather than a failed question -- the same move CLAUDE.md
-        # records for `angle_relationships`, and for the same reason: whether
-        # the answer is usable is a property of the solved value, not of the
-        # text, so it cannot be checked before solving.
+        # Solved inside the loop, so an unsolvable expression is a retry.
         equation_stra = token_join.join_tokens(question_data["variables"])
         if equation_stra is None:
             print(f"[Attempt {attempt+1}] Unusable variables:",
@@ -340,21 +281,7 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
 
     scenario = question_data["scenario"]
 
-    # `solved` was produced inside the loop above, in a subprocess with a hard
-    # time bound, because the operand comes from the model and `parse_expr`
-    # evaluates eagerly: `9**9**9` never returns -- a number with ~370 million
-    # digits -- and no in-process timeout can stop it, since a thread cannot be
-    # killed and a signal is not delivered while the interpreter is inside a
-    # long integer computation. Measured here: generation span at 100% CPU for
-    # 28 minutes before being killed by hand. On the inline path -- every
-    # question, with QUESTION_QUEUE_SIZE at 0 -- that is a request holding one
-    # of anyio's ~40 threadpool slots until the process restarts.
-    # `GENERATION_LLM_TIMEOUT` bounded the model call; nothing bounded what was
-    # done with the answer.
-    #
-    # Re-parsing here is safe where the original was not: the worker's result
-    # is length-capped, so this is a short string rather than whatever the
-    # model asked for.
+    # Safe to re-parse: `solved` came from the bounded worker and is length-capped.
     solution = sp.sympify(solved)
 
     if scenario == "simplify":

@@ -1,17 +1,17 @@
 ﻿import os
-from supabase import create_client, Client #pip install supabase
-from dotenv import load_dotenv   #pip install dotenv
+from supabase import create_client, Client
+from dotenv import load_dotenv
 from ollama import chat, generate
 from ollama import ChatResponse
 import json
 from flask import Flask, jsonify,request
-from flask_cors import CORS #pip install flask-cors
+from flask_cors import CORS
 # python -m flask --app LLM_supabase_communication run
 
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:5173"])
 
-load_dotenv() # needs a .env file in backend/ with SUPABASE_URL and SUPABASE_KEY
+load_dotenv() # backend/.env: VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY
 url = os.getenv("VITE_SUPABASE_URL")
 key = os.getenv("VITE_SUPABASE_ANON_KEY")
 supabase = create_client(url, key)
@@ -99,6 +99,6 @@ def generate_question():
     return jsonify(parsed)
 
 
-if __name__ == "__main__": # port 5000, separate from the React frontend on 5173
+if __name__ == "__main__":
     app.run(debug=True, port=5000)
 

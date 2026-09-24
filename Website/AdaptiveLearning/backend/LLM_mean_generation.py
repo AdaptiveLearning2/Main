@@ -3,14 +3,14 @@
 import os
 import re
 import random
-from supabase import create_client, Client #pip install supabase
-from dotenv import load_dotenv   #pip install dotenv
+from supabase import create_client, Client
+from dotenv import load_dotenv
 import llm_client
 import question_schemas
 import json
 from flask import Flask, jsonify
-from flask_cors import CORS #pip install flask-cors
-import sympy as sp #pip install sympy
+from flask_cors import CORS
+import sympy as sp
 from sympy import symbols, Eq, solve, sympify, Integer
 import incorrect_solution_generation as inc_gen
 import answer_format
@@ -84,15 +84,10 @@ Rules:
 solution = -1
 
 def _grade_band(grade):
-    # Delegated so ten copies of this cannot drift apart, and so an
-    # unreadable grade ("Grade 1") lands in "early" rather than
-    # "advanced" -- profiles.grade_level is free text. See grade_levels.
+    # An unreadable grade ("Grade 1") lands in "early", not "advanced".
     return grade_levels.grade_band(grade)
 
-# "mean" isn't in LLM_topic_decider's grade-1-3 allowlist (see
-# _allowed_topics() there), so "early" here is defense-in-depth only. It's
-# still kept to whole-number datasets that divide evenly, so a student who
-# hasn't learned division yet still gets a whole-number average.
+# "early" is defense-in-depth: LLM_topic_decider withholds mean from grades 1-3.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use 3 values, one or two-digit whole numbers under 20, that divide evenly (no remainder) for a whole-number average.",
@@ -109,14 +104,7 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use 5-6 values, which may include two-digit or three-digit whole numbers.",
         "hard":   "Use 7-8 values, which may include two-digit or three-digit whole numbers; negative whole numbers may be used (e.g. representing temperatures or scores relative to zero).",
     },
-    # "advanced" is grades 9+. It used to be `upper` with the magnitude
-    # clause deleted -- which reads to the model as no requirement rather
-    # than a harder one, and an audit of 640 questions measured the result:
-    # 83% of grade-9 questions were three or more grades below grade.
-    #
-    # The ceiling here is grade 8, not high school, and that is a solver
-    # limit rather than a prompt one -- see the note above
-    # COMPLEXITY_BY_GRADE in this file's module docstring region.
+    # Grades 9+, capped at grade-8 content: a solver limit, not a prompt one.
     "advanced": {
         "easy":   "Use 4-5 values including at least one NEGATIVE number.",
         "medium": "Use 6-7 values including negatives and at least one value above 100.",
@@ -169,25 +157,20 @@ def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # Backstop on what the model actually produced, not just on what
-        # the prompt asked for -- see grade_appropriateness.
+        # Backstop on what the model actually produced; see grade_appropriateness.
         if grade_appropriateness.refuse(question_data.get("question_text"),
                                         "mean", grade_band, difficulty,
                                         attempt + 1):
             continue
 
-        # The student is shown question_text but scored on the field
-        # above; nothing used to check they agree. See
-        # question_consistency for the measured failure.
+        # The student sees question_text but is scored on `variables`.
         inconsistent = question_consistency.dataset_mismatch(
             question_data.get("question_text"), question_data.get("variables"))
         if inconsistent:
             print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
 
-        # Parsed in the bounded worker, inside the loop: `sympify` on the
-        # model's values is the one unbounded step here, and the mean of a list
-        # of floats cannot hang.
+        # `sympify` on model values is unbounded, so it runs in the bounded worker.
         numbers = safe_solve.safe_sympify_values(question_data["variables"])
         if numbers is None:
             print(f"[Attempt {attempt+1}] Unusable variables:",
@@ -202,11 +185,7 @@ def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_
     solution = sum(numbers) / len(numbers)
 
     incorrect_answers = inc_gen.generate_general_incorrect_answers(float(solution)) if solution is not None else []
-    # Both through the same formatter. `serialize_sympy` does not recognise a
-    # plain Python float -- which is what `sum(numbers)/len(numbers)` now is --
-    # so it fell through to `str()` and produced "6.0" beside distractors of
-    # "31", "11", "12". On a whole-number average, which the easy and medium
-    # tiers ask for, the answer was the only option ending in `.0`.
+    # One formatter for answer and distractors, or a whole mean shows as "6.0".
     solution = answer_format.format_value(solution) if solution is not None else None
     answers = [answer_format.format_value(ans) for ans in incorrect_answers] + [solution]
 

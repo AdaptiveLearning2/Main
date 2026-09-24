@@ -3,14 +3,14 @@
 import os
 import re
 import random
-from supabase import create_client, Client #pip install supabase
-from dotenv import load_dotenv   #pip install dotenv
+from supabase import create_client, Client
+from dotenv import load_dotenv
 import llm_client
 import question_schemas
 import json
 from flask import Flask, jsonify
-from flask_cors import CORS #pip install flask-cors
-import sympy as sp #pip install sympy
+from flask_cors import CORS
+import sympy as sp
 from sympy import symbols, Eq, solve, sympify, Integer
 from sympy.parsing.sympy_parser import (
     parse_expr,
@@ -78,41 +78,15 @@ solution = -1
 def _solve_equation(variables, attempt):
     """The equation's single solution as a string, or None to retry.
 
-    Every rejection here is an equation this topic cannot score, and each one
-    used to be an exception out of a generator rather than another attempt:
-
-    - **No solution.** `x+1 = x+2` makes `solve` return `[]`, which became
-      `None` and then `float(None)` in the distractor generator -- a TypeError
-      from the endpoint. 1 of 3 generations against Haiku 4.5.
-    - **More than one.** CLAUDE.md states the constraint this enforces: this
-      topic is "one linear equation with one solution -- a quadratic would
-      present one root as the answer and mark the other correct choice wrong."
-      That was documented as a limit and enforced nowhere, so `solve(...)[0]`
-      silently picked a root.
-    - **Not a number.** A solution still carrying a symbol cannot be scored
-      against multiple-choice options, and `float()` would raise on it.
-    - **Malformed.** No `=`, two of them, or something `parse_expr` refuses:
-      `split('=')` raised ValueError on unpacking before anything looked.
-    - **Not a list of scalars.** `[3, "+", 2]` is JSON-legal and made
-      `"".join` raise TypeError -- before the solve, so moving the solve into
-      the retry loop did not help. See `token_join`.
+    None for: no solution, more than one (a quadratic would mark a correct root
+    wrong), a non-numeric solution, a malformed equation, or non-scalar tokens.
     """
     equation_str = token_join.join_tokens(variables)
     if equation_str is None:
         print(f"[Attempt {attempt}] Unusable variables: {variables!r:.80}")
         return None
-    # Through the same bounded subprocess `LLM_expressions_generation` uses.
-    # `parse_expr` and `solve` are as unbounded here as they are there, and the
-    # operand is as much the model's: `["9**9**9", "+", "x", "=", "5"]` never
-    # returns. The spin holds the GIL inside CPython's long-integer code, so
-    # nothing in-process can stop it -- a watchdog thread never gets to run,
-    # and the process has to be killed from outside. `safe_solve` was added in
-    # this PR for exactly that and was wired into one of the two topics that
-    # needs it.
-    #
-    # The worker does the split, both parses, the solve and the
-    # one-finite-solution check together, because leaving any of it here would
-    # leave the unbounded half in the request thread.
+    # Bounded subprocess: `9**9**9` spins holding the GIL, so only a kill stops it.
+    # Split, parse, solve and the one-solution check all run in the worker.
     solved = safe_solve.safe_solve(equation_str, "equation")
     if solved is None:
         print(f"[Attempt {attempt}] Unsolvable equation: {equation_str[:80]!r}")
@@ -121,15 +95,11 @@ def _solve_equation(variables, attempt):
 
 
 def _grade_band(grade):
-    # Shared with the other generation files so they can't drift apart.
     # An unreadable grade like "Grade 1" falls back to "early", not "advanced".
     return grade_levels.grade_band(grade)
 
-# "Early" (grades 1-3) students haven't been taught equation-solving
-# notation, so no value of x is "easy" for them -- the question shape itself
-# has to change, not just the numbers. LLM_topic_decider already keeps
-# algebra away from grades below 6, so the "early"/"middle" tiers here exist
-# only as a fallback in case that gate is bypassed.
+# LLM_topic_decider keeps algebra away from grades below 6; "early"/"middle"
+# are a fallback if that gate is bypassed.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use a ONE-STEP equation with a coefficient of 1 and values under 10 (e.g. x + 2 = 5). Frame it as a missing-number fact, not formal algebra.",
@@ -146,14 +116,7 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use up to three operations on the left-hand side. Constants and coefficients between 1 and 200. Negative coefficients are allowed.",
         "hard":   "Use up to three operations on the left-hand side, and the variable x may appear on both sides of the equation (e.g. ax + b = cx + d). Constants and coefficients between 1 and 200. Negative coefficients are allowed.",
     },
-    # "advanced" is grades 9+. It used to be `upper` with the magnitude
-    # clause deleted -- which reads to the model as no requirement rather
-    # than a harder one, and an audit of 640 questions measured the result:
-    # 83% of grade-9 questions were three or more grades below grade.
-    #
-    # The ceiling here is grade 8, not high school, and that is a solver
-    # limit rather than a prompt one -- see the note above
-    # COMPLEXITY_BY_GRADE in this file's module docstring region.
+    # Grades 9+, capped at grade-8 content: a solver limit, not a prompt one.
     "advanced": {
         "easy":   "Use a TWO-STEP equation with at least one NEGATIVE constant (e.g. 5x - 12 = 33). Coefficients and constants between 2 and 60.",
         "medium": "Distribute over one set of parentheses (e.g. 4(x - 3) + 2x = 26) and include at least one negative constant. Coefficients between 2 and 40.",
@@ -209,13 +172,7 @@ def generate_algebra_question(global_questions, prev_questions, difficulty, grad
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # Solved inside the loop, so an equation this cannot score is a retry
-        # rather than a 500. It used to run after the loop, where `solve`
-        # returning `[]` -- an equation with no solution, like `x+1 = x+2` --
-        # became `solution = None` and then `float(None)` inside the distractor
-        # generator, a TypeError out of the endpoint. Measured against Haiku
-        # 4.5: 1 of 3 algebra generations, on the most-served topic in the
-        # product.
+        # Solved inside the loop, so an unscorable equation is a retry, not a 500.
         solution = _solve_equation(question_data["variables"], attempt + 1)
         if solution is None:
             continue

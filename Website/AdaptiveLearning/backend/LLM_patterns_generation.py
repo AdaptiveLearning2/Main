@@ -1,15 +1,6 @@
 # Generates a number-sequence question and solves it exactly.
-#
-# CCSS 1.NBT.1 (count forward from any number), 2.NBT.2 (skip-count by 2s, 5s,
-# 10s, 100s), then 3.OA.9, 4.OA.5 and 5.OA.3, which are all "generate and
-# describe a pattern". Capped at grade 5 by LLM_topic_decider.TOPIC_MAX_GRADE:
-# past that a sequence question is either trivial or is really algebra.
-#
-# Arithmetic sequences only -- a constant step. Geometric and two-rule patterns
-# were considered and left out: each adds a way for the sequence to be
-# ambiguous, and an ambiguous pattern question has more than one defensible
-# answer while the solver scores exactly one of them. That is the same trap as
-# a compound probability event, which cost a wrong answer here before.
+# CCSS 1.NBT.1, 2.NBT.2, 3.OA.9, 4.OA.5, 5.OA.3; capped at grade 5 by TOPIC_MAX_GRADE.
+# Arithmetic sequences only: other rules can be ambiguous, and the solver scores one answer.
 
 import json
 import random
@@ -46,9 +37,7 @@ BLANK = "?"
 MIN_TERMS = 4          # three known terms plus the blank: fewer is not a pattern
 MAX_TERMS = 8
 
-# Bounded by inspection, and nothing here reaches sympy -- the arithmetic is
-# subtraction and multiplication on small integers, so this topic needs no
-# bounded subprocess. See the same note in LLM_missing_number_generation.
+# Small integers only and no sympy, so no bounded subprocess is needed.
 _NUMBER = re.compile(r"^\d{1,5}$")
 
 patterns_prompt = """
@@ -91,14 +80,11 @@ Rules:
 
 
 def _grade_band(grade):
-    # Delegated so the copies cannot drift apart, and so an unreadable grade
-    # ("Grade 1") lands in "early" rather than "advanced". See grade_levels.
+    # Shared so copies can't drift; profiles.grade_level is free text. See grade_levels.
     return grade_levels.grade_band(grade)
 
 
-# "upper" and "advanced" are unreachable -- TOPIC_MAX_GRADE caps this at grade
-# 5 -- and are kept as defense-in-depth, like the "early" tables on the topics
-# that gate to grade 6+.
+# "upper"/"advanced" are unreachable (grade 5 cap), kept as defence in depth.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use 4 or 5 numbers counting up by 1 or by 2, all 20 or below.",
@@ -122,10 +108,7 @@ COMPLEXITY_BY_GRADE = {
     },
 }
 
-# 1.NBT.1 is counting forward within 120; skip-counting by 2s, 5s and 10s is
-# 2.NBT.2, a year later. Difficulty and grade are independent inputs, so a
-# "hard" 1st grader is a real state and the band's hard tier alone would give
-# them a grade-2 sequence.
+# Skip-counting is 2.NBT.2, so a "hard" 1st grader would otherwise get grade-2 content.
 GRADE_OVERRIDES = {
     1: "This student is in GRADE 1. Count up by 1 or by 2 only, and every number must be 20 or below (1.NBT.1).",
 }
@@ -134,13 +117,7 @@ GRADE_OVERRIDES = {
 def solve_pattern(values):
     """The missing term, or None if the sequence does not determine one.
 
-    `None` rather than a raise, because every caller is inside the retry loop.
-
-    The step is derived from the known terms and then *checked against all of
-    them*, rather than taken from the first pair. A sequence like 2, 4, 6, ?, 9
-    has a first-pair step of 2 and is not an arithmetic sequence at all; taking
-    the first pair would answer 8 confidently for a question that has no
-    single right answer.
+    The step is checked against every known term, not just the first pair (2, 4, 6, ?, 9).
     """
     if not isinstance(values, list) or not MIN_TERMS <= len(values) <= MAX_TERMS:
         return None
@@ -165,8 +142,6 @@ def solve_pattern(values):
     if step < 1:
         return None                      # ascending sequences only, per the prompt
 
-    # Every known term must sit on that step, or the sequence is not arithmetic
-    # and the blank is not determined.
     base_index, base_value = known[0]
     for index, value in known:
         if value != base_value + (index - base_index) * step:
@@ -182,12 +157,7 @@ def _sequence_text(values):
 
 
 def shown_matches_scored(question_text, values):
-    """The sequence on screen must be the sequence being scored.
-
-    Same reasoning as `LLM_missing_number_generation.shown_matches_scored`: the
-    question *is* the sequence, so a text that disagrees with the scored values
-    produces a question a student answers correctly and is marked wrong on.
-    """
+    """A reason the on-screen sequence differs from the scored `values`, or None if it matches."""
     if not isinstance(question_text, str):
         return "question_text is not a string"
     shown = re.sub(r"\s+", " ", question_text)
@@ -201,9 +171,7 @@ def shown_matches_scored(question_text, values):
 
 
 def generate_incorrect_answers(solution, values, step):
-    """Off-by-one-step first, since stepping wrong is the mistake this question
-    is testing for. Bounded by construction -- a fixed candidate list.
-    """
+    """Off-by-one-step first, since stepping wrong is the mistake being tested."""
     candidates = [solution + step, solution - step, solution + 1, solution - 1,
                   solution + 2 * step]
     wrong = []
@@ -270,15 +238,13 @@ def generate_patterns_question(global_questions, prev_questions,
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # Backstop on what the model produced, not on what the prompt asked
-        # for -- see grade_appropriateness.
+        # Backstop on what the model produced, not what the prompt asked for.
         if grade_appropriateness.refuse(question_data.get("question_text"),
                                         "patterns", grade_band, difficulty,
                                         attempt + 1):
             continue
 
-        # Solved inside the loop, so a sequence that determines no single
-        # answer is another attempt rather than a wrong answer on screen.
+        # Solved in the loop, so an undetermined sequence is a retry.
         solution = solve_pattern(question_data["values"])
         if solution is None:
             print(f"[Attempt {attempt+1}] Sequence determines no answer:",

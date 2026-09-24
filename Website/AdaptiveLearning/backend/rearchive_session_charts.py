@@ -1,23 +1,9 @@
 """Re-render the archived charts of sessions closed before a chart changed.
 
-Archives are written once, at session close, and nothing revisits them. When
-what a chart draws changes -- the `engagement` series was dropped from the
-cognitive timeline, since it is the focus index under another name -- every
-archive written before that keeps the old picture permanently. This is the
-regeneration path.
+    python rearchive_session_charts.py [--before YYYY-MM-DD] [--apply]   # dry run without --apply
 
-    python rearchive_session_charts.py                      # report only
-    python rearchive_session_charts.py --before 2026-09-14  # sessions closed before the change
-    python rearchive_session_charts.py --before 2026-09-14 --apply
-
-Oldest first, because the archives this exists to fix are the oldest ones.
-Guards, all in `chart_archive.rearchive_sessions`: only charts with a
-recorded path are re-rendered (an erasure's nulls stay null), a session with
-any recorded chart whose rows have expired is skipped (the archive is the
-last copy), a run refuses past a few failed reads, and `--max-rerenders`
-bounds how many live sessions' objects one run overwrites. The target
-project is printed first, since nothing else here tells production from a
-local stack.
+Guards live in `chart_archive.rearchive_sessions`. The target project is
+printed first, since nothing else here tells production from a local stack.
 """
 
 from __future__ import annotations

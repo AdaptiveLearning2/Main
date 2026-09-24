@@ -3,14 +3,14 @@
 import os
 import re
 import random
-from supabase import create_client, Client #pip install supabase
-from dotenv import load_dotenv   #pip install dotenv
+from supabase import create_client, Client
+from dotenv import load_dotenv
 import llm_client
 import question_schemas
 import json
 from flask import Flask, jsonify
-from flask_cors import CORS #pip install flask-cors
-import sympy as sp #pip install sympy
+from flask_cors import CORS
+import sympy as sp
 from sympy import symbols, Eq, solve, sympify, Integer, Rational
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
@@ -79,19 +79,11 @@ Rules:
 solution = -1
 
 def _grade_band(grade):
-    # Delegated so ten copies of this cannot drift apart, and so an
-    # unreadable grade ("Grade 1") lands in "early" rather than
-    # "advanced" -- profiles.grade_level is free text. See grade_levels.
+    # Shared so copies can't drift; profiles.grade_level is free text. See grade_levels.
     return grade_levels.grade_band(grade)
 
-# Grade-band-first. "rationals" isn't in LLM_topic_decider's grade-1-3
-# allowlist (fractions are typically a grade-3+ concept, fraction
-# *operations* grade-4/5+), so "early" here is defense-in-depth only --
-# kept to same-denominator halves/thirds/fourths framed as parts of a whole,
-# not the denominator/operation-count scaling middle band onward uses.
-# See the note in LLM_expressions_generation.GRADE_OVERRIDES. The same
-# band-ceiling effect gave a 4th grader unlike denominators on 7 of 10
-# measured questions; 4.NF.3 is like denominators, 5.NF.1 is unlike.
+# Grade 4 is like denominators (4.NF.3); unlike is 5.NF.1, which the "middle" band allows.
+# "early" is defence in depth: the topic is not offered to grades 1-3.
 GRADE_OVERRIDES = {
     4: "This student is in GRADE 4. Every fraction must share the SAME denominator -- adding fractions with unlike denominators is a grade-5 standard (5.NF.1).",
 }
@@ -113,14 +105,7 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use TWO operations between fractions with different denominators. Negative fractions are allowed.",
         "hard":   "Use up to THREE operations between fractions with different denominators, using larger denominators. Negative fractions are allowed.",
     },
-    # "advanced" is grades 9+. It used to be `upper` with the magnitude
-    # clause deleted -- which reads to the model as no requirement rather
-    # than a harder one, and an audit of 640 questions measured the result:
-    # 83% of grade-9 questions were three or more grades below grade.
-    #
-    # The ceiling here is grade 8, not high school, and that is a solver
-    # limit rather than a prompt one -- see the note above
-    # COMPLEXITY_BY_GRADE in this file's module docstring region.
+    # Grades 9+, but content tops out at grade 8: a solver limit, not a prompt one.
     "advanced": {
         "easy":   "Use TWO fractions with DIFFERENT denominators (e.g. 2/3 + 1/4).",
         "medium": "Use THREE fractions with different denominators, at least one of them NEGATIVE (e.g. -3/4 + 5/6 - 1/3).",
@@ -176,24 +161,14 @@ def generate_rational_question(global_questions, prev_questions,difficulty, grad
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # Backstop on what the model actually produced, not just on what
-        # the prompt asked for -- see grade_appropriateness.
+        # Backstop on what the model produced, not what the prompt asked for.
         if grade_appropriateness.refuse(question_data.get("question_text"),
                                         "rationals", grade_band, difficulty,
                                         attempt + 1):
             continue
 
-        # Through the bounded worker, like algebra and expressions. `sympify`
-        # on the model's expression is the unbounded step -- `sympify("9**9**9")`
-        # never returns -- and this topic joins tokens the model wrote, so the
-        # operand is entirely its choice. `evaluate` returns the canonical form,
-        # which for this topic is the fraction a student is shown ("5/6").
-        #
-        # Inside the loop, and this was the last generator where it was not.
-        # Below the `for/else` both of these were a 500 on attempt 1: tokens
-        # that will not join, and a division by zero, which the worker now
-        # reports as unusable rather than answering "zoo". Neither says the
-        # next reply will be bad, so both are worth a retry.
+        # Solved in the bounded worker, inside the loop, so a bad join or a
+        # division by zero is a retry rather than a 500.
         equation_str = token_join.join_tokens(question_data['variables'])
         if equation_str is None:
             print(f"[Attempt {attempt+1}] Unusable variables:",
@@ -220,17 +195,7 @@ def generate_rational_question(global_questions, prev_questions,difficulty, grad
 
     return {
         "question_text": question_data["question_text"],
-        # The topic this generator is, not the label the model chose. It
-        # reaches `questions.subject`, which `record_topic_attempt` joins
-        # against `math_topics.topic_name` -- so a wrong value here is not a
-        # cosmetic label, it credits the student's work to another topic in
-        # `user_math_performance`, which is what the adaptive engine reads to
-        # decide what to serve next.
-        #
-        # Measured 3 of 3 against Haiku: this stored "algebra" every time,
-        # because the prompt said so in two places. The other nine generators
-        # have always hardcoded their own name; this was the only one that
-        # did not.
+        # Hardcoded, not the model's label: it decides which topic is credited.
         "question_topic": "rationals",
         "ccss_standard": ccss_standards.ccss_for("rationals", grade),
         "answer_options": answers,

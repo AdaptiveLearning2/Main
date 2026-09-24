@@ -1,17 +1,6 @@
 # Generates a "solve the quadratic" question and solves it exactly.
-#
-# CCSS A-REI.4b -- "solve quadratic equations by inspection, taking square
-# roots, completing the square, the quadratic formula and factoring". It exists
-# because grades 9-12 had no content of their own: every other topic here tops
-# out at grade 8 by the CCSS grade of its concept, so an audit of 640 generated
-# questions found 81% of grade-9 questions three or more grades below grade,
-# and writing a harder requirement into every `advanced` tier moved that by two
-# points. Harder numbers inside 8.EE.7b are still 8.EE.7b.
-#
-# It is deliberately NOT `algebra`, which is one linear equation with exactly
-# one solution (8.EE.7b) and whose solver *refuses* a quadratic -- correctly,
-# since presenting one root as the answer marks the other correct choice wrong.
-# Asking which root is what makes a two-root equation scoreable here.
+# CCSS A-REI.4b: high-school content, since every other topic tops out at grade 8.
+# Not `algebra`, whose solver refuses a quadratic; asking which root makes two roots scoreable.
 
 import json
 import random
@@ -43,18 +32,10 @@ def extract_json(text):
     return None
 
 
-# Which root the question asks for. Chosen here rather than by the model, the
-# way `_pick_scenario` is in geometry and probability: the solver has to know
-# which one it is scoring, and a model free to pick would eventually write
-# "smaller" into the text while the reply's field said "larger". Pinning it in
-# the schema's enum makes that reply unrepresentable on the Claude branch and a
-# refusal on the Ollama one.
+# Which root is asked for; chosen in code so the solver knows what it scores.
 TARGETS = ("larger", "smaller")
 
-# The words a question may use for each, and -- the load-bearing half -- the
-# words that mean the *other* one. A text saying "smaller" scored against the
-# larger root is a question answered correctly and marked wrong, which is the
-# failure shape this codebase treats as worse than any refusal.
+# Words for each root; the opposite root's words are what catch a mis-asked question.
 _TARGET_WORDS = {
     "larger":  ("larger", "greater", "bigger", "largest", "greatest"),
     "smaller": ("smaller", "lesser", "smallest", "least"),
@@ -91,11 +72,7 @@ Rules:
 - Do NOT include any characters outside the JSON object.
 """
 
-# How big the roots get, per band. The band scales magnitude only; which
-# *shape* of equation each difficulty gets is `_TIERS` below, exactly as in
-# geometry and probability, where difficulty selects the scenario and the band
-# scales the numbers. Stating the difficulty rule in both places is what a
-# single table avoids.
+# Root magnitude per band; equation shape per difficulty is `_TIERS`.
 _ROOT_RANGE = {
     "early":    (1, 5),
     "middle":   (1, 8),
@@ -103,9 +80,7 @@ _ROOT_RANGE = {
     "advanced": (2, 12),
 }
 
-# `signs` decides whether a root may be negative; `scales` is the leading
-# coefficient. `hard` multiplying through by 2-4 is the step that turns
-# factoring into the AC method, and is the standard Algebra I progression.
+# `signs`: may a root be negative; `scales`: leading coefficient (2-4 means the AC method).
 _TIERS = {
     "easy":   {"signs": "positive", "scales": (1,)},
     "medium": {"signs": "mixed",    "scales": (1,)},
@@ -116,64 +91,29 @@ _TIERS = {
 def _choose_coefficients(difficulty, grade_band):
     """`(a, b, c)` for an equation that is factorable over the integers.
 
-    Built here rather than asked for, which is the whole reason this topic is
-    reliable. Measured on llama3.1:8b across three promptings -- a description
-    of the constraint, a construction recipe, and a construction recipe with a
-    worked example -- the model produced a usable equation 0 of 3, 2 of 3 and
-    1 of 4 times. Almost every refusal was `irrational roots`: it picks b and c
-    freely, and a random pair almost never leaves b^2 - 4ac a perfect square.
-    Of the successes, two silently dropped the constraint they were given and
-    one copied the worked example verbatim, so the tier was also not producing
-    the content it named.
-
-    None of that is a wording problem, so no wording fixed it. Choosing p and q
-    here makes the equation factorable by construction, which:
-
-      * removes the refusal class entirely -- every retry that class caused was
-        a billed model call that could not have succeeded;
-      * makes the `hard` tier possible at all. A leading coefficient of 2-4 is
-        the AC method and the right rung, and it was measured as the *least*
-        achievable thing to ask for;
-      * gives the difficulty tiers a uniform meaning rather than whatever the
-        model happened to reach for.
-
-    It is the same move already made for `target` here, and for the scenario in
-    geometry and probability: the part with a right answer is decided in code,
-    and the model writes the sentence.
+    Built in code, not by the model, which rarely produces integer roots;
+    the model only writes the sentence.
     """
     low, high = _ROOT_RANGE.get(grade_band, _ROOT_RANGE["advanced"])
     tier = _TIERS.get(difficulty, _TIERS["medium"])
     p, q = random.sample(range(low, high + 1), 2)
     if tier["signs"] == "mixed":
-        # One of the two, not both: "both negative" is a narrower question and
-        # `-p` on the larger keeps the pair straddling zero more often.
+        # One root negative, not both, so the pair straddles zero.
         p = -p
     scale = random.choice(tier["scales"])
-    # x^2 - (p + q)x + pq, multiplied through. The roots stay p and q, so they
-    # are whole by construction and the discriminant is a perfect square.
+    # scale * (x^2 - (p + q)x + pq): roots stay p and q.
     return scale, -scale * (p + q), scale * p * q
 
 
 def _grade_band(grade):
-    # Delegated so the copies cannot drift apart, and so an unreadable grade
-    # ("Grade 1") lands in "early" rather than "advanced". See grade_levels.
+    # Shared so copies can't drift; profiles.grade_level is free text. See grade_levels.
     return grade_levels.grade_band(grade)
 
 
 def shown_matches_scored(question_text, a, b, c, target):
-    """The equation on screen must be the equation being scored, and the root
-    it asks for must be the root that will be scored. A reason, or None.
+    """A reason the shown equation or requested root differs from what is scored, or None.
 
-    Two separate ways for this question to be answered correctly and marked
-    wrong, so two checks:
-
-      * the **equation**. Rendered from the coefficients rather than parsed out
-        of the text, which is the direction `question_figures` establishes:
-        derive what is shown from what is scored, and a disagreement stops
-        being representable.
-      * the **root**. `x^2 - 5x + 6 = 0` asked as "the smaller solution" and
-        scored as the larger one is a perfectly well-formed question with the
-        wrong answer attached, and no check on the equation alone can see it.
+    The equation is rendered from the coefficients, not parsed from the text.
     """
     if not isinstance(question_text, str):
         return "question_text is not a string"
@@ -190,21 +130,13 @@ def shown_matches_scored(question_text, a, b, c, target):
 
 
 def generate_incorrect_answers(solution, a, b, c, target):
-    """Near-misses first, the general generator for any gap.
-
-    Bounded by construction -- a fixed candidate list, never a search. Whether
-    three distinct wrong answers exist near a given number is a property of the
-    number, which is what made the unbounded loops elsewhere in this codebase
-    hang rather than merely retry.
-    """
+    """Near-misses first, the general generator for any gap; a fixed list, so bounded."""
     candidates = []
     other = hs_solvers.other_root(a, b, c, target)
     if other is not None:
-        # The best distractor available: a student who solves correctly and
-        # reads "larger" as "smaller" lands exactly here.
+        # Solved correctly, but the other root.
         candidates.append(other)
-    # Sign errors are the other mistake this topic actually produces, since
-    # the roots come out of `-b ± sqrt(...)`.
+    # Sign errors, since roots come from `-b ± sqrt(...)`.
     candidates += [-solution, solution + 1, solution - 1, solution + 2]
     wrong = []
     for candidate in candidates:
@@ -219,18 +151,12 @@ def generate_quadratics_question(global_questions, prev_questions,
                                  difficulty, grade, max_retries=3):
     grade_band = _grade_band(grade)
     target = random.choice(TARGETS)
-    # Both decided before the loop, so every attempt asks for the same
-    # question and a retry is only ever the model failing to write the
-    # sentence -- not a fresh roll of the dice that might land on something
-    # unsolvable. The equation is factorable by construction.
+    # Decided before the loop, so a retry only re-asks for the sentence.
     a, b, c = _choose_coefficients(difficulty, grade_band)
     equation = hs_solvers.render_quadratic(a, b, c)
     solution, reason = hs_solvers.solve_quadratic(a, b, c, target)
     if solution is None:
-        # Unreachable: `_choose_coefficients` builds from two distinct integer
-        # roots. Raising rather than retrying because a retry cannot help --
-        # nothing about the next model call changes these coefficients -- and
-        # this is a bug in the construction, not a bad reply.
+        # Unreachable by construction; a retry would not change the coefficients.
         raise ValueError(f"built an unsolvable quadratic {equation!r}: {reason}")
     for attempt in range(max_retries):
         if attempt > 0:
@@ -273,10 +199,6 @@ def generate_quadratics_question(global_questions, prev_questions,
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # The only thing left to get wrong: the sentence. The equation and the
-        # root were settled before the loop, so this is the model dropping or
-        # altering what it was handed rather than inventing something
-        # unsolvable.
         mismatch = shown_matches_scored(question_data["question_text"],
                                         a, b, c, target)
         if mismatch:

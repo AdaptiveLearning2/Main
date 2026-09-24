@@ -32,15 +32,10 @@ describe('the three states it has to keep apart', () => {
   it('shows what happened, in words rather than column names', async () => {
     render(<AdminSecurityEvents />)
 
-    // Scoped to the row, because "Access refused" is also a filter chip and a
-    // bare findByText matches both -- and a multiple-match error is *retried*
-    // by findBy until the 5 s budget, so it surfaces as a timeout rather than
-    // as the ambiguity it is. Same trap CLAUDE.md records for `getByText('Focus')`.
+    // Scoped to the row: "Access refused" is also a chip, and findBy retries a double match to timeout.
     const row = await screen.findByRole('listitem')
 
-    // Not "authz_denied": accurate, and it tells an admin nothing they can act
-    // on. The actor and the subject both have to be on screen -- "who tried to
-    // read this child's record" is the question this page exists to answer.
+    // Words, not "authz_denied"; both actor and subject on screen.
     expect(within(row).getByText(/Access refused/)).toBeInTheDocument()
     expect(within(row).getByText(/Mr Vance/)).toBeInTheDocument()
     expect(within(row).getByText(/Ada/)).toBeInTheDocument()
@@ -54,9 +49,7 @@ describe('the three states it has to keep apart', () => {
   })
 
   it('never renders a failed read as an empty log', async () => {
-    // The worst available wrong answer on this surface: an empty security log
-    // is exactly what someone covering their tracks would want it to look
-    // like, so "could not be read" and "is empty" must never share a rendering.
+    // An empty log is what someone covering their tracks would want shown.
     overrideApi('/api/admin/security-events',
       () => ({ retrieved: false, events: [], kinds: KINDS }))
     render(<AdminSecurityEvents />)
@@ -68,14 +61,7 @@ describe('the three states it has to keep apart', () => {
 
 describe('filtering', () => {
   it('asks the backend for one kind rather than filtering in the browser', async () => {
-    // Filtering client-side would mean the page holds every kind's rows and
-    // shows a subset -- and the `limit` the backend clamps is per *query*, so
-    // a browser-side filter would silently show fewer than it claims.
-    // A function matcher, not the bare path: the filtered request is
-    // `...?kind=rate_limited`, and the router matches paths exactly, so a
-    // string route would leave the second call *unrouted* -- which throws by
-    // design, and surfaces here as a timeout rather than as the missing route
-    // it is.
+    // Backend `limit` is per query; a function matcher since the router matches the query string exactly.
     const seen = []
     overrideApi(p => p.startsWith('/api/admin/security-events'), (path) => {
       seen.push(path)
@@ -99,9 +85,7 @@ describe('filtering', () => {
 
 describe('a kind this page does not know', () => {
   it('renders visibly instead of being dropped', async () => {
-    // Same rule as AlertFeed: the CHECK constraint makes this near impossible,
-    // and if it happens a visible row is what gets it reported. Dropping it
-    // would make a newer backend's events invisible here with nothing saying so.
+    // As AlertFeed: a visible row is what gets it reported.
     overrideApi('/api/admin/security-events', () => payload({
       events: [event({ id: 9, kind: 'something_new', subject: null })],
       kinds: [...KINDS, 'something_new'],
@@ -116,10 +100,7 @@ describe('a kind this page does not know', () => {
 
 describe('an account this page cannot name', () => {
   it('says the profile is missing rather than inventing a name', async () => {
-    // The backend sends `name: null` instead of a placeholder, because the
-    // shared profile helper substitutes the literal "Student" for a row it
-    // could not read -- a plausible name on an audit row, and on a teacher's
-    // row the wrong one.
+    // `name: null`, not the shared helper's "Student" placeholder.
     overrideApi('/api/admin/security-events', () => payload({
       events: [event({ actor: { id: 'teacher-1', name: null } })],
     }))
@@ -127,15 +108,12 @@ describe('an account this page cannot name', () => {
 
     const row = await screen.findByRole('listitem')
     expect(within(row).getByText(/An unnamed account/)).toBeInTheDocument()
-    // The id is what makes the row actionable without the name.
     expect(within(row).getByText('teacher-1')).toBeInTheDocument()
     expect(within(row).queryByText(/Student/)).not.toBeInTheDocument()
   })
 
   it('keeps a failed name lookup apart from an account with no profile', async () => {
-    // "We could not look this up" and "there is nothing to look up" are two
-    // facts, and the second is a claim the first has not earned. Same rule as
-    // the `Unavailable` tile, one surface up.
+    // "Could not look up" and "nothing to look up" are two facts.
     overrideApi('/api/admin/security-events', () => payload({
       names_retrieved: false,
       events: [event({ actor: { id: 'teacher-1', name: null } })],
@@ -145,14 +123,11 @@ describe('an account this page cannot name', () => {
     const row = await screen.findByRole('listitem')
     expect(within(row).getByText(/name could not be read/)).toBeInTheDocument()
     expect(within(row).queryByText(/unnamed account/)).not.toBeInTheDocument()
-    // And the events themselves still render: the names failing is not the
-    // log failing, so this must not become the "could not be read" screen.
+    // Names failing is not the log failing.
     expect(screen.queryByText(/The security log could not be read/)).not.toBeInTheDocument()
   })
 
   it('does not leave a possessive dangling in the sentence', async () => {
-    // `tried to read ${subject.name}'s data` against a null name rendered
-    // "tried to read 's data".
     overrideApi('/api/admin/security-events', () => payload({
       events: [event({ subject: { id: 'student-1', name: null } })],
     }))

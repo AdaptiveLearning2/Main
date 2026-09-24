@@ -17,9 +17,7 @@ vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'stu-1', email: 'kid@example.com' },
                     displayName: authName }),
 }))
-// Set per test. The provider resolves this from `profiles.display_name`; this
-// page only has to render what it is given rather than deriving a name of its
-// own, which is what it used to do from the email.
+// Set per test; the page renders the given name rather than deriving one.
 let authName = 'Ada Lovelace'
 
 // Mocked because these banners fetch on mount but aren't under test here.
@@ -44,8 +42,7 @@ beforeEach(() => {
   navigate.mockReset()
   mockApi({
     '/api/stats/me': () => STATS,
-    // Keyed with the query string: the router matches exactly, so a page that
-    // stopped asking for four rows would hit no route and fail loudly here.
+    // Keyed with the query string: the router matches exactly.
     [SESSIONS]: () => ({ sessions: [], total: 0, truncated: false }),
     '/api/profile/me': () => ({ practice_reminders: false }),
     [BREAKDOWN]: () => [
@@ -57,7 +54,6 @@ beforeEach(() => {
 
 describe('the topic grid', () => {
   it('shows each measured topic as a number, not only a colour', async () => {
-    // Color alone isn't accessible to everyone, so accuracy must show as text too.
     draw()
 
     expect(await screen.findByText('30%')).toBeInTheDocument()
@@ -68,13 +64,12 @@ describe('the topic grid', () => {
     draw()
     await screen.findByText('30%')
 
-    // `mode` isn't in the payload, so it should still show as a topic but with no figure.
+    // `mode` is not in the payload.
     expect(screen.getByText('mode')).toBeInTheDocument()
     expect(screen.queryByText('0%')).not.toBeInTheDocument()
   })
 
   it('draws the same plain tiles when the breakdown could not be read', async () => {
-    // A failed breakdown read should render the same as an unmeasured tile.
     overrideApi(BREAKDOWN, () => { throw apiError(500, 'down') })
 
     draw()
@@ -97,7 +92,6 @@ describe('the weakest topic', () => {
   })
 
   it('will not call a topic weakest off one or two attempts', async () => {
-    // A single wrong answer is 0% and shouldn't be enough to rank a topic weakest.
     overrideApi(BREAKDOWN, () => ([
       topic('algebra', 0, 1),
       topic('geometry', 70, 10),
@@ -105,7 +99,6 @@ describe('the weakest topic', () => {
 
     draw()
 
-    // Geometry is the only topic with enough attempts to rank.
     const cta = await screen.findByRole('button', { name: /weakest so far/i })
     expect(cta).toHaveTextContent(/geometry/i)
   })
@@ -127,7 +120,6 @@ describe('the streak card', () => {
   })
 
   it('does not repeat the number back while the student is on their best run', async () => {
-    // "best 9" under a 9 would look redundant rather than like an achievement.
     overrideApi('/api/stats/me', () => ({ ...STATS, current_streak: 9, best_streak: 9 }))
 
     draw()
@@ -138,15 +130,7 @@ describe('the streak card', () => {
 })
 
 describe('the topic tiles', () => {
-  // The check that used to live here parsed `TOPICS` and `ICONS` out of
-  // `Dashboard.jsx`, because they were literals in it and disagreed. They are
-  // not any more -- both come from `lib/topics.js`, which is the only place a
-  // topic list is written down -- so this parsed nothing and reported itself
-  // inert, which is the guard it carried for exactly that.
-  //
-  // `lib/topics.test.js` replaces it and is strictly stronger: it checks every
-  // topic has an icon at the source, and additionally that the list matches
-  // the backend's, which no per-page check could.
+  // Both lists come from `lib/topics.js`; `lib/topics.test.js` checks them against the backend.
   it('take their icons from the shared list', async () => {
     const { TOPICS, TOPIC_ICONS } = await import('../../lib/topics')
     const source = readFileSync(
@@ -156,13 +140,6 @@ describe('the topic tiles', () => {
   })
 })
 
-/**
- * The greeting renders the name the provider resolved from the database, not
- * the email local part it used to split itself. Nine surfaces did that, so a
- * student who set their name in Profile saw it there and "kid" everywhere
- * else -- and only after their first edit, since sign-up seeds the stored
- * name from the email prefix and the two agree until then.
- */
 it('greets the student by their stored name, never by their email', async () => {
   authName = 'Ada Lovelace'
   draw()
@@ -171,19 +148,14 @@ it('greets the student by their stored name, never by their email', async () => 
 })
 
 it('greets a nameless account without addressing it as nobody', async () => {
-  // `displayName` is null only for an account with no stored name, no claim
-  // and no email; the greeting still has to read as a sentence.
+  // `displayName` is null only with no stored name, claim or email.
   authName = null
   draw()
   expect(await screen.findByText(/there/)).toBeInTheDocument()
 })
 
 // ── the recent-sessions panel ────────────────────────────────────────────
-//
-// Four rows are shown, so four are asked for: the list is capped server-side
-// and counted exactly, and a dashboard load paying for two hundred rows to
-// draw four is the cost the limit removes. And a read that did not land is
-// not "No sessions yet" -- that sentence is a claim about a child's week.
+// Four rows shown, four asked for; a read that did not land is not "No sessions yet".
 
 describe('the recent-sessions panel', () => {
   it('asks for the four rows it shows and no more', async () => {
@@ -208,8 +180,7 @@ describe('the recent-sessions panel', () => {
 
     expect(await screen.findByText(/sessions couldn.t be loaded/i)).toBeInTheDocument()
     expect(screen.queryByText(/no sessions yet/i)).not.toBeInTheDocument()
-    // Reminders are on, and still no nudge: "you have not practised today"
-    // from a read that never landed is the same false claim, louder.
+    // Reminders are on, and still no nudge from a read that never landed.
     expect(screen.queryByText(/not practised today/i)).not.toBeInTheDocument()
   })
 })

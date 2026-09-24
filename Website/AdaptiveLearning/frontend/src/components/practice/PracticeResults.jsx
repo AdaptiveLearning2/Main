@@ -4,15 +4,9 @@ import { Link } from 'react-router-dom'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 
-/** The wrap-up screen: score (test mode) or cards-reviewed count (flashcard
- * mode), a per-topic breakdown from the closed session's `topic_summary`,
- * and an on-demand AI study-tips panel.
- *
- * Tips are fetched only on request, not on mount -- this reuses
- * `/api/students/{id}/learning-strategies`'s existing bounded LLM pass
- * (rate limit, timeout, waiter cap), and a page that always fired it on
- * every finished session would be the heaviest call on this page happening
- * unconditionally.
+/**
+ * The practice wrap-up: score or cards reviewed, per-topic breakdown, and study
+ * tips fetched only on request (a bounded model call).
  */
 export default function PracticeResults({ session, result, onRestart }) {
   const { user } = useAuth()

@@ -1,14 +1,4 @@
-/**
- * "How many questions?" is a goal, not a cap.
- *
- * The student picks how many they want this sitting and the page checks in
- * when they get there -- it does not stop them. That mirrors the duration
- * reminder beside it, and for the same stated reason: a session ended on a
- * threshold discards the question a child is part way through answering.
- *
- * So the load-bearing assertions here are the negative ones. Reaching the
- * goal must not end the session, and must not stop questions being served.
- */
+/** "How many questions?" is a goal the page checks in at, never a cap that ends the session. */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { it, expect, beforeEach, vi } from 'vitest'
@@ -64,15 +54,12 @@ it('says what picking one will do, without promising to stop', async () => {
   render(<Adaptive />)
   await screen.findByText(/how many questions/i)
   await userEvent.click(screen.getByRole('button', { name: '10' }))
-  // "check in", not "stop after" -- the copy has to match the behaviour, or
-  // the student is told the session ends when it does not.
+  // "check in", not "stop after": the copy matches the behaviour.
   expect(await screen.findByText(/check in after/i)).toBeInTheDocument()
   expect(screen.getByText(/keep going/i)).toBeInTheDocument()
 })
 
 it('never ends the session just because a goal was picked', async () => {
-  // The whole point of a goal rather than a cap. Nothing about choosing a
-  // number may close a session on the student's behalf.
   render(<Adaptive />)
   await screen.findByText(/how many questions/i)
   await userEvent.click(screen.getByRole('button', { name: '5' }))
@@ -80,14 +67,8 @@ it('never ends the session just because a goal was picked', async () => {
 })
 
 // ── a goal silences the duration reminder for the sitting ────────────────────
-//
-// Both are check-ins that end nothing. With a saved duration *and* a goal
-// picked, a student got two of them -- a standing preference they may not
-// remember setting, then the number they just chose. The sitting's explicit
-// choice wins; "No limit" chose nothing over it and keeps the reminder.
-//
-// Real timers: the duration tick is 20s, so each of these costs ~22s. A
-// duration of 0.001 minutes is up on the first tick after the session starts.
+// The sitting's explicit goal wins over the saved duration; "No limit" keeps the reminder.
+// Real timers: the duration tick is 20s, so each of these costs ~22s.
 
 const QUESTION = { question_text: 'What is 1 + 1?', answer_options: ['1', '2'], correct_answer: '2',
                    subject: 'expressions', difficulty: 'easy' }
@@ -140,19 +121,7 @@ it('says which reminder is in force', async () => {
 })
 
 it('counts an answer only once it has been recorded', () => {
-  // `goalReached`'s own comment claims "the count only moves when an answer
-  // is recorded", and it did not: `setSessionCount` sat beside
-  // `setPhase('result')`, before the await, and nothing rolled it back when
-  // the write failed. A student whose answers were all failing to save --
-  // `recordAnswer` returns null and toasts on a missing id or a failed POST
-  // -- still got "you have answered 10 questions" over a database holding
-  // none of them, and the banner is the page's own claim that the sitting is
-  // done.
-  //
-  // A source check because driving the whole answer flow through this page
-  // means standing up the question fetch, the selection and the submit, and
-  // the property worth pinning is an *ordering* that a rendered assertion
-  // would not see anyway. Same trade the test below makes.
+  // A source check: the property is an ordering (count only after a successful `recordAnswer`).
   const src = readFileSync(
     resolve(process.cwd(), 'src/pages/student/Adaptive.jsx'), 'utf8')
   const submit = src.slice(src.indexOf('const handleSubmit'))
@@ -162,19 +131,11 @@ it('counts an answer only once it has been recorded', () => {
   const counted = body.indexOf('setSessionCount')
   expect(recorded).toBeGreaterThan(-1)
   expect(guarded).toBeGreaterThan(recorded)
-  // After the write, and inside the branch that only runs when it succeeded.
   expect(counted).toBeGreaterThan(guarded)
 })
 
 it('re-arms the check-in for the next session in the sitting', async () => {
-  // `goalDismissed` is per-session state and has to clear with the session,
-  // exactly like `timeUpDismissed` beside it. Left standing, one "Keep going"
-  // silenced the reminder for every later session -- and the picker still
-  // showed the number selected, so nothing told the student it was off.
-  //
-  // Asserted on the reset path rather than by driving a whole second session:
-  // the flag is cleared by the effect that every route to "no session" goes
-  // through, so that is the behaviour worth pinning.
+  // `goalDismissed` clears with the session, in the reset every route to "no session" passes through.
   const src = readFileSync(
     resolve(process.cwd(), 'src/pages/student/Adaptive.jsx'), 'utf8')
   const reset = src.slice(src.indexOf('setSessionStartedAt(null)'))

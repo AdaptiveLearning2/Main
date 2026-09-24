@@ -16,11 +16,7 @@ dist
 dist-ssr
 *.local
 *.env
-# ...and anything derived from one. `*.env` does not match `.env.bak`,
-# and a hand-made backup of a .env holds exactly the same secrets as
-# the file it copies. `git add -A` swept one into a commit; GitHub's
-# push protection is what caught it, which is not a control this repo
-# owns.
+# ...and backups of one (`.env.bak` holds the same secrets).
 *.env.*
 .env.*
 

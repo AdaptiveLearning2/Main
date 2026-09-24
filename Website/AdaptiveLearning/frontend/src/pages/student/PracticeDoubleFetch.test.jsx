@@ -1,24 +1,4 @@
-/**
- * One question per session opening, not two.
- *
- * Both practice modes loaded with `useEffect(() => { load() }, [load])` and no
- * guard. `<React.StrictMode>` invokes mount effects twice, so starting practice
- * made two `/question` calls: the student saw the first question appear and
- * vanish before it could be answered, and each call is two billed model calls
- * -- a topic decision and a generation -- so it doubled the cost of opening
- * every session.
- *
- * These render under StrictMode *explicitly*, because the app does
- * (`main.jsx`) and the other test files do not. Without that the guard could
- * be reverted and every existing test would still pass: the symptom is
- * dev-only, so a revert is invisible on a deployed site while costing two
- * generations per session on every developer's machine.
- *
- * Counting requests rather than asserting on the screen is the other half. The
- * `requestRef` guard means the *second* response never renders, so the visible
- * result is correct either way -- only the call count can tell whether the
- * second request was made at all.
- */
+/** One `/question` call per opening under explicit StrictMode, counted by request since the screen looks right either way. */
 import { StrictMode } from 'react'
 import { it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'

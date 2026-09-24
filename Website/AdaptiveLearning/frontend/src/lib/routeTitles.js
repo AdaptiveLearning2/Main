@@ -1,14 +1,6 @@
 import { matchPath } from 'react-router-dom'
 
-// Order matters: the first match wins and patterns overlap, so a more
-// specific route (`/teacher/sessions/:id`) must come before its prefix
-// (`/teacher/sessions`).
-//
-// Kept as one list here instead of a title hook in each of the 25 page
-// components, so it stays easy to check against the route table at a glance.
-//
-// Lives in `lib/`, not beside a component, because a file that exports both
-// a component and a helper breaks fast refresh for the whole file.
+// First match wins: a specific route (`/teacher/sessions/:id`) must precede its prefix.
 const TITLES = [
   ['/login',                        'Sign in'],
   ['/register',                     'Create account'],

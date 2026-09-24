@@ -1,20 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 
 /**
- * Load one admin resource, and mutate it, with the same three states each time.
- *
- * Shared by `AdminFlags` and `AdminSchoolYear`, which each used to write out
- * their own copy of this state machine and drifted (one cleared `error` on
- * save, the other didn't).
- *
- * `error` and `data` are kept independent on purpose: a failed refresh
- * leaves the last good payload in place, so the caller can show the error
- * as a banner over live data instead of blanking the page.
- *
- * @param load    a function returning a promise of the payload. Memoise it, or
- *                the effect below re-runs on every render.
- * @param pollMs  re-read on an interval, for values (like the consent
- *                bypass) that can expire on the clock without a write.
+ * Load and mutate one admin resource (`data`, `busy`, `error`).
+ * A failed refresh keeps the last good `data`, so the error can sit over it.
+ * @param load    returns a promise of the payload; memoise it, or the effect re-runs every render.
+ * @param pollMs  re-read interval, for values (like the consent bypass) that expire without a write.
  */
 export default function useAdminResource({ load, pollMs = 0 }) {
   const [data, setData] = useState(null)
@@ -33,11 +23,7 @@ export default function useAdminResource({ load, pollMs = 0 }) {
     return () => clearInterval(t)
   }, [refresh, pollMs])
 
-  /**
-   * Run a write and adopt what it returns. Resolves to true on success, or
-   * false on failure (never throws), so callers render the error instead of
-   * catching it themselves.
-   */
+  /** Run a write and adopt its result. Resolves true/false; never throws. */
   const mutate = useCallback(async (write) => {
     setBusy(true)
     setError(null)

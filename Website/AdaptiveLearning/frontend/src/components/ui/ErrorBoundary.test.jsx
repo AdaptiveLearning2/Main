@@ -4,8 +4,7 @@ import userEvent from '@testing-library/user-event'
 
 import ErrorBoundary from './ErrorBoundary'
 
-// React logs a caught error to console.error on its own, in addition to the
-// boundary's own line. Silenced so a passing run doesn't look like a failure.
+// React logs caught errors itself; silenced so a passing run looks clean.
 beforeEach(() => { vi.spyOn(console, 'error').mockImplementation(() => {}) })
 afterEach(() => { vi.restoreAllMocks() })
 
@@ -22,8 +21,6 @@ describe('ErrorBoundary', () => {
   })
 
   it('shows the failure instead of unmounting the tree', () => {
-    // Without a boundary, a component that throws during render takes the
-    // whole application down to a blank document.
     render(<ErrorBoundary resetKey="/a"><Boom /></ErrorBoundary>)
 
     expect(screen.getByRole('alert')).toBeInTheDocument()
@@ -31,8 +28,7 @@ describe('ErrorBoundary', () => {
   })
 
   it('clears the error when the reset key changes', async () => {
-    // An error boundary latches -- without this, a student who crashed one
-    // page would keep seeing the error screen on every page after.
+    // A boundary latches, so it must reset on navigation.
     const { rerender } = render(
       <ErrorBoundary resetKey="/practice"><Boom /></ErrorBoundary>)
     expect(screen.getByRole('alert')).toBeInTheDocument()
@@ -44,8 +40,7 @@ describe('ErrorBoundary', () => {
   })
 
   it('does not clear the error while the reset key is unchanged', () => {
-    // Re-rendering in place must not clear a real error, or the boundary
-    // would flicker back to the component still throwing.
+    // Re-rendering in place must not clear a real error.
     const { rerender } = render(
       <ErrorBoundary resetKey="/practice"><Boom /></ErrorBoundary>)
 
@@ -55,8 +50,7 @@ describe('ErrorBoundary', () => {
   })
 
   it('retries in place when asked, without a reload', async () => {
-    // Many render errors come from a transient prop, not a permanent one, so
-    // a click is cheaper than a reload that loses in-memory state.
+    // Many render errors are transient; a click keeps in-memory state a reload loses.
     let shouldThrow = true
     const Flaky = () => {
       if (shouldThrow) throw new Error('once')

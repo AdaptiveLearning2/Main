@@ -10,8 +10,7 @@ import { STALE_AFTER_S, eegWeak, formatAge } from '../../lib/signalAge'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
 
-// POLL_MAX_MS caps the backoff when the endpoint is failing, so a broken
-// backend costs a handful of requests a minute instead of sixty.
+// POLL_MAX_MS caps the backoff while the endpoint is failing.
 const POLL_MS = 1_000
 const POLL_MAX_MS = 30_000
 
@@ -48,13 +47,10 @@ function Gauge({ label, value, color = 'bg-violet-500' }) {
   )
 }
 
-// No `rowKey`, so no table: a 60-point rolling window has no meaningful row
-// labels, and tabulating it would be noise rather than an alternative. The
-// summary is the reading.
+// No `rowKey`, so no table: a rolling window has no meaningful row labels.
 const SPARK_COLUMNS = [
   { key: 'focus',      label: 'Focus',      unit: '%',    scale: asPercent },
-  // No `engagement`: it is the focus index under another name
-  // (signal_mapping.py), so a second series would draw one number twice.
+  // No `engagement`: it is the focus index under another name.
   { key: 'stress',     label: 'Stress',     unit: '%',    scale: asPercent },
   { key: 'bpm',        label: 'Heart rate', unit: ' bpm' },
 ]
@@ -66,20 +62,10 @@ function StudentCard({ student, history, now }) {
   const heart  = student.latest_heart
   const initial = (student.name || '?')[0].toUpperCase()
 
-  // Age of the newest headband row. A binary on/off could not tell "just
-  // went quiet" from "never connected", so a teacher watching a card go
-  // blank had nothing to act on. `now` is a prop so every card ticks
-  // together and a re-render is not needed per card per second.
+  // Age of the newest headband row; `now` is a prop so every card ticks together.
   const cogAgeMs = cog?.ts ? now - Date.parse(cog.ts) : null
   const cogStale = cogAgeMs != null && cogAgeMs > STALE_AFTER_S * 1000
   const cogWeak  = eegWeak(cog)
-
-  // Percentages, because the rolling window holds raw 0..1 ratios -- the chart
-  // plots them against `domain={[0, 1]}`. Unscaled this said "Focus 0 to 1" for
-  // every student on the page, whatever they were doing.
-  //
-  // Named per student: a screen-reader user reaching this card has no other way
-  // to tell whose reading it is, since the heading is several elements back.
 
   return (
     <motion.div
@@ -100,10 +86,7 @@ function StudentCard({ student, history, now }) {
       </div>
 
       <div className="flex gap-2 mb-4 text-[10px] flex-wrap">
-        {/* Three things on one badge, each shown rather than hidden: whether a
-            row exists, how old it is, and whether it was usable. Grey for
-            stale and for weak, like the heart badge, so the card doesn't
-            look dead -- it looks like a headband that needs attention. */}
+        {/* Presence, age and usability on one badge; grey for stale or weak. */}
         <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${
           cog && !cogStale && !cogWeak
             ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300'
@@ -115,8 +98,7 @@ function StudentCard({ student, history, now }) {
         <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${face ? 'bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'}`}>
           <Camera size={11} /> Camera {face ? 'on' : 'off'}
         </span>
-        {/* Names the sensor so a mid-session failover reads as a source change, not a student change.
-            Shown as "weak signal" rather than hidden when untrusted, so the card doesn't look dead. */}
+        {/* Names the sensor so a failover reads as a source change; untrusted shows "weak signal". */}
         {heart && (
           <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${
             heart.trusted === false
@@ -134,7 +116,7 @@ function StudentCard({ student, history, now }) {
         <Gauge label="Stress"     value={cog?.stress}     color="bg-rose-500" />
       </div>
 
-      {/* Shown as a number rather than on the 0..1 gauges above, since bpm isn't a ratio. */}
+      {/* A number, not a gauge: bpm isn't a ratio. */}
       {typeof heart?.heart_rate_bpm === 'number' && (
         <div className="flex items-center gap-2 mb-4 text-sm">
           <Heart size={16} className="text-purple-500" />
@@ -154,16 +136,12 @@ function StudentCard({ student, history, now }) {
         </div>
       )}
 
-      {/* A sparkline is still a chart. It was a bare `<svg>` with no name, so
-          the live monitor announced a student's card and then silence where
-          the reading is. No data table: this is a 60-point rolling window with
-          no meaningful row labels, and a table of it would be noise rather than
-          the alternative the trend chart's is. The summary is the reading. */}
+      {/* A sparkline is still a chart; the summary sentence is its reading. */}
       <AccessibleChart className="h-12 -mx-1"
         headline={`${student.name || 'This student'}: signal trend over the last ${history?.length || 0} readings.`}
         rows={history} columns={SPARK_COLUMNS}>
           <LineChart data={history}>
-            {/* Two axes because bpm and the 0..1 ratios would flatten together on one scale. */}
+            {/* Two axes: bpm and 0..1 ratios can't share a scale. */}
             <YAxis yAxisId="ratio" hide domain={[0, 1]} />
             <YAxis yAxisId="bpm" hide domain={['auto', 'auto']} />
             <Line yAxisId="ratio" type="monotone" dataKey="focus"      stroke="#6366f1" strokeWidth={1.5} dot={false} isAnimationActive={false} />
@@ -190,39 +168,26 @@ export default function Live() {
   const [classes, setClasses]     = useState([])
   const [classId, setClassId]     = useState('')
   const [students, setStudents]   = useState([])
-  // Which class `students` belongs to. `loading` is derived from it rather
-  // than stored (CLAUDE.md, "derived loading"): switching class raises the
-  // skeleton on the render that changes `classId`, so the previous class's
-  // cards are never painted under this one's name -- which they were, for as
-  // long as the new fetch took, and an unfetched class read as "Nobody's
-  // joined yet". Seen driving the page by hand.
+  // Which class `students` belongs to; loading is derived from it, so the
+  // previous class's cards never paint under this one's name.
   const [loadedFor, setLoadedFor] = useState(null)
-  // Which class the last *failed* read was for, and the error. A read that
-  // keeps failing must not leave the skeleton up: with `loadedFor` only ever
-  // advancing on success, "not retrieved" collapsed into "still loading",
-  // the same collapse the class list above got its own state for. Once a
-  // fetch for the selected class has answered either way, the answer wins.
+  // Class of the last failed read, so a failing read doesn't read as "still loading".
   const [failedFor, setFailedFor]       = useState(null)
   const [rosterFailed, setRosterFailed] = useState(null)
   const [retryNonce, setRetryNonce]     = useState(0)
   const [error, setError]         = useState(null)
-  // Separate from classes.length === 0, so loading doesn't briefly show "no classes yet".
+  // Separate from classes.length === 0, so loading doesn't show "no classes yet".
   const [loadingClasses, setLoadingClasses] = useState(true)
   const historyRef = useRef({}) // user_id -> [{focus, stress, bpm}]
-  // One clock for every card's "Xs ago", ticking whether or not a poll
-  // landed -- a reading's age grows while the endpoint is failing too, and
-  // that is exactly when a teacher needs to see it.
+  // One clock for every card's "Xs ago", ticking even while polls fail.
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
   }, [])
 
-  // A failed class-list read is its own state, not an empty list: `classes`
-  // left at [] rendered "No classes yet -- create a class first", which told
-  // a teacher whose read had failed that their classes did not exist and
-  // pointed them at the one action that could not help. Held as the error
-  // object so LoadError can pick the sentence from its status.
+  // A failed class-list read is its own state, not an empty list; the error
+  // object lets LoadError pick its sentence.
   const [classesFailed, setClassesFailed] = useState(null)
   const loadClasses = () => {
     setLoadingClasses(true)
@@ -241,7 +206,7 @@ export default function Live() {
   useEffect(() => {
     if (!classId) return
     let killed = false
-    // Reset so switching class doesn't keep dragging along every student ever viewed.
+    // Reset per class.
     historyRef.current = {}
 
     let delay = POLL_MS
@@ -254,21 +219,17 @@ export default function Live() {
         return
       }
       try {
-        // Deliberately ignores the "Hide sensor data" viewer switch -- that
-        // control covers reporting surfaces, not this live monitor.
+        // Ignores "Hide sensor data": that covers reporting, not this live monitor.
         const rows = await apiFetch(`/api/teacher/classes/${classId}/live`)
         if (killed) return
         rows.forEach(r => {
           const c = r.latest_cognitive
           const h = r.latest_heart
-          // A student can consent to heart without EEG, so c and h can be
-          // independently null -- only skip the tick if both are missing.
+          // Heart and EEG are consented independently; skip only if both are missing.
           if (!c && !h) return
-          // Rebuilt, never mutated: React can freeze an array after it's
-          // rendered, so pushing onto the old one would throw.
+          // Rebuilt, never mutated: React may freeze a rendered array.
           const arr = historyRef.current[r.user_id] || []
-          // Null (not 0) when a measurement is missing or its window was
-          // rejected -- recharts leaves a gap for null instead of drawing a fake reading.
+          // Null, not 0, for a missing or rejected reading: recharts draws a gap.
           const point = {
             focus:      c?.focus ?? null,
             stress:     c?.stress ?? null,
@@ -294,7 +255,7 @@ export default function Live() {
       if (!killed) timer = setTimeout(tick, delay)
     }
 
-    // Resume at full speed when the tab becomes visible again, ignoring any backoff.
+    // Resume at full speed, skipping backoff, when the tab becomes visible.
     const onVisible = () => {
       if (document.hidden || killed) return
       delay = POLL_MS
@@ -309,14 +270,11 @@ export default function Live() {
       clearTimeout(timer)
       document.removeEventListener('visibilitychange', onVisible)
     }
-    // `retryNonce` restarts the poll at once from the LoadError's Try again,
-    // rather than waiting out a backed-off interval.
+    // `retryNonce` restarts the poll at once, skipping any backoff.
   }, [classId, retryNonce])
 
-  // Three states for the roster of the selected class: nothing has answered
-  // yet (skeleton), the last answer was a failure and no rows for this class
-  // are in hand (LoadError), or rows are in hand (cards -- with the banner
-  // above if a later poll failed, since the rows are still worth showing).
+  // Roster states: skeleton (no answer yet), LoadError (failed, no rows), or
+  // cards (rows in hand, with a banner if a later poll failed).
   const rosterMissing = !!classId && loadedFor !== classId && failedFor === classId
   const loadingRoster = !!classId && loadedFor !== classId && !rosterMissing
 
@@ -345,11 +303,7 @@ export default function Live() {
         )}
       </div>
 
-      {/* Scoped to the selected class like the rest of the roster state:
-          `error` is written and cleared together with `failedFor`, so this
-          reads "the last answer for the selected class was a failure". Without
-          the scope, class A's failure banner sat over class B's skeleton until
-          B's first request answered. */}
+      {/* Scoped to the selected class, so A's failure never sits over B. */}
       {error && failedFor === classId && !rosterMissing && (
         <p className="text-sm text-rose-500 mb-4">⚠️ {error}</p>
       )}

@@ -8,9 +8,7 @@ import LoadError from '../../components/ui/LoadError'
 // A figure nobody could establish. Not 0, which is a claim about the student.
 const UNKNOWN = '—'
 
-// A figure still on its way. Drawn differently from UNKNOWN on purpose: the
-// dash says the figure could not be had, and it must not flash up for a read
-// that simply has not landed yet.
+// A figure still on its way; distinct from UNKNOWN so the dash never flashes.
 const PENDING = (
   <span role="status" aria-label="Loading"
         className="inline-block w-10 h-6 align-middle rounded bg-gray-200 dark:bg-gray-700 animate-pulse" />
@@ -20,32 +18,23 @@ const numberOr = v => (typeof v === 'number' ? v : null)
 
 export default function History() {
   const [sessions, setSessions] = useState([])
-  // The real number of sessions, which is not `sessions.length` once the
-  // backend's cap applies. `null` when the backend could not count -- and then
-  // the tile says so rather than falling back to the rows it was sent.
+  // Real session count, not `sessions.length` past the cap; `null` if uncounted.
   const [total, setTotal]       = useState(null)
   const [truncated, setTruncated] = useState(null)
-  // Lifetime figures, from the credited totals rather than from the rows:
-  // the rows are the newest page of a longer history, so summing them
-  // describes a subset while looking like a lifetime. Three states:
-  // `undefined` in flight, `null` failed, else the totals.
+  // Lifetime totals, not a sum of the rows (a page of a longer history).
+  // `undefined` in flight, `null` failed.
   const [stats, setStats]       = useState(undefined)
   const [loading, setLoading]   = useState(true)
   const [failed, setFailed]     = useState(false)
   const [filter, setFilter]     = useState('all')
 
-  // Named so the retry button can call it again.
-  // loading already starts true, so no setState is needed here on mount.
-  // A retry supersedes the load before it, whose reads may still be out: a
-  // slow failure from that one landing after the retry succeeded would put the
-  // tiles back to a dash. Only the newest run writes.
+  // Only the newest run writes, so a slow earlier failure can't undo a retry.
   const run = useRef(0)
   const load = () => {
     const mine = ++run.current
     const current = () => mine === run.current
     apiFetch('/api/stats/me')
-      // No body is a failed read too: left `undefined`, it would read as
-      // still loading for ever.
+      // No body is a failed read too, not "still loading".
       .then(s => { if (current()) setStats(s && s.retrieved !== false ? s : null) })
       .catch(() => { if (current()) setStats(null) })
     fetchSessionList()
@@ -56,17 +45,14 @@ export default function History() {
         setTruncated(r.truncated)
         setFailed(false); setLoading(false)
       })
-      // Also set failed, not just loading: otherwise an empty sessions list
-      // reads as "no sessions" instead of "the request failed".
+      // Set failed, or an empty list reads as "no sessions".
       .catch(e => {
         if (!current()) return
         console.error('Failed to load sessions:', e); setFailed(true); setLoading(false)
       })
   }
 
-  // Back to in-flight here, in the handler, rather than inside `load` -- which
-  // the mount effect also runs, and a synchronous set there is the
-  // set-state-in-effect shape the lint is clear of.
+  // Reset here, not in `load`, which the mount effect also runs (set-state-in-effect).
   const retry = () => { setLoading(true); setStats(undefined); load() }
 
   useEffect(load, [])
@@ -77,8 +63,7 @@ export default function History() {
     return true
   })
 
-  // A field that is missing is not a zero (rule 2), and neither is the accuracy
-  // of no questions at all -- both have nothing to report, so both are a dash.
+  // A missing field, or accuracy of zero questions, is a dash, not 0.
   const totalQ   = numberOr(stats?.total_questions)
   const totalC   = numberOr(stats?.total_correct)
   const overallA = totalQ > 0 && totalC !== null
@@ -95,9 +80,7 @@ export default function History() {
       {sessions.length > 0 && (
         <div className="grid grid-cols-3 gap-4 mb-4">
           {[
-            // The count the backend reports, never the length of what it sent:
-            // past the cap those are different numbers, and the smaller one is
-            // a claim that the student did less work than they did.
+            // The backend's count, never the length of the capped list.
             { label: 'Total Sessions', value: total ?? UNKNOWN,   icon: '📋' },
             { label: 'Questions Done',  value: statTile(totalQ),   icon: '📝' },
             { label: 'Overall Accuracy', value: statTile(overallA), icon: '🎯' },
@@ -114,9 +97,7 @@ export default function History() {
         </div>
       )}
 
-      {/* The cap, said out loud. Without this the list below is a shorter
-          history rather than a shortened view of one. Only on `true`:
-          `null` means the backend could not tell either. */}
+      {/* State the cap; only on `true`, since `null` means unknown. */}
       {truncated === true && (
         <p className="text-xs text-gray-600 dark:text-gray-400 mb-4">
           Showing your {sessions.length} most recent sessions

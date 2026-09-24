@@ -1,10 +1,6 @@
 /**
- * Parent settings — the account, the children linked to it, and what is
- * measured for each.
- *
- * A student can withdraw consent at any time; only a linked parent can
- * re-enable it. Turning a channel back on raises `needs_student_ack`, so the
- * child is told on their next load instead of just noticing data reappear.
+ * Parent settings: the account, linked children, and what is measured for each.
+ * Only a linked parent can re-enable consent; doing so raises `needs_student_ack`.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -32,21 +28,17 @@ export default function ParentSettings() {
   const [children, setChildren] = useState(null)
   const [failed, setFailed]     = useState(false)
 
-  // `null` until the profile lands, so the field never shows a value the
-  // parent did not set.
+  // `null` until the profile lands.
   const [displayName, setDisplayName] = useState(null)
   const [savingName, setSavingName]   = useState(false)
   const [joinedAt, setJoinedAt]       = useState(null)
 
-  // Which child's unlink is awaiting a second click, since unlinking removes
-  // report access and shouldn't happen on a stray click.
+  // Child whose unlink awaits a confirming second click.
   const [confirmingUnlink, setConfirmingUnlink] = useState(null)
   const [unlinking, setUnlinking]               = useState(null)
 
   const loadChildren = useCallback(() => {
-    // include_face=false: this page shows names and consent switches only,
-    // no facial data. Left at the default the endpoint would read
-    // `face_signals` for every linked child.
+    // include_face=false: no facial data is shown here.
     apiFetch('/api/parent/children?include_face=false')
       .then(c => { setChildren(c || []); setFailed(false) })
       .catch(e => { console.error('[parent settings] children not loaded', e); setFailed(true) })
@@ -124,8 +116,7 @@ export default function ParentSettings() {
           <input
             id="parent-display-name"
             value={displayName ?? ''}
-            // Disabled until the profile lands, so a fast typist's input
-            // can't be overwritten by the response arriving late.
+            // Disabled until the profile lands, so a late response can't overwrite typing.
             disabled={displayName === null}
             onChange={e => setDisplayName(e.target.value)}
             placeholder={displayName === null ? 'Loading…' : 'Your name'}
@@ -138,9 +129,7 @@ export default function ParentSettings() {
           <div className="mt-4 grid sm:grid-cols-2 gap-3 text-sm">
             <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
               <Mail size={14} className="flex-shrink-0" />
-              {/* Read-only — changing it needs a verification flow this page
-                  doesn't implement. Shown so a parent can confirm the
-                  account they're signed in to. */}
+              {/* Read-only: changing it needs a verification flow. */}
               <span className="truncate">{user?.email || '—'}</span>
             </div>
             {joined && (
@@ -178,7 +167,7 @@ export default function ParentSettings() {
           )}
 
           <div className="space-y-2">
-            {/* `user_id`, not `id` — matches what /api/parent/children returns. */}
+            {/* `user_id`, not `id`: what /api/parent/children returns. */}
             {children?.map(child => (
               <div key={child.user_id}
                    className="flex items-center justify-between gap-3 flex-wrap rounded-xl border border-gray-100 dark:border-gray-800 px-4 py-3">
@@ -211,8 +200,6 @@ export default function ParentSettings() {
             ))}
           </div>
 
-          {/* Shown whether or not any children are linked, so the empty
-              state has a way forward too. */}
           <Link to="/parent/link"
                 className="mt-4 inline-flex items-center gap-1.5 px-3 py-2.5 min-h-[44px] rounded-lg border border-gray-200 dark:border-gray-700 text-sm font-bold text-gray-600 dark:text-gray-300 hover:border-emerald-300 hover:text-emerald-600 transition">
             <Plus size={14} /> Link another child
@@ -242,8 +229,7 @@ export default function ParentSettings() {
               <h3 className="font-black text-gray-900 dark:text-white mb-4">
                 {child.name || child.email || 'Child'}
               </h3>
-              {/* `role="parent"`: switches are two-way with no confirmation
-                  step, since a parent can reverse their own change here. */}
+              {/* `role="parent"`: two-way switches, no confirmation step. */}
               <ConsentChannels studentId={child.user_id} role="parent"
                                studentName={child.name || null} />
               <p className="text-xs text-gray-600 mt-4 dark:text-gray-400">

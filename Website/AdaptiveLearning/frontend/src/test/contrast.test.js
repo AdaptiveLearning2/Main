@@ -1,23 +1,4 @@
-/**
- * Muted grey text has to clear WCAG AA on the surfaces this app actually uses.
- *
- * Contrast is arithmetic over two hex values, so it is one of the few
- * accessibility properties a source check can decide outright — unlike the
- * `AccessibleChart` rule next door, which can only check that the component
- * was used. What it cannot see is which surface a class lands on when the
- * background comes from a parent, so it judges the cases that fail on *every*
- * surface, plus same-element pairs where both are named together.
- *
- * The numbers, computed below from Tailwind 3.4's stock `gray`:
- *
- *   light  gray-400  2.54 on white .. 1.72 on gray-300   fails everywhere
- *          gray-500  4.83 on white .. 3.28 on gray-300   fails from gray-100 down
- *          gray-600  7.56 on white .. 5.13 on gray-300   passes everywhere
- *   dark   gray-500  4.16 on gray-950 .. 2.13 on gray-700  fails everywhere
- *          gray-400  7.93 on gray-950 .. 5.78 on gray-800  passes
- *
- * So the muted pair is `text-gray-600 dark:text-gray-400`.
- */
+/** Muted grey text clears WCAG AA, computed rather than matched: the pair is `text-gray-600 dark:text-gray-400`. */
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -49,15 +30,7 @@ function contrast(a, b) {
 const LIGHT_SURFACES = ['white', 'slate-50', 'gray-50', 'gray-100', 'gray-200', 'gray-300']
 const DARK_SURFACES  = ['gray-700', 'gray-800', 'gray-900', 'gray-950']
 
-/**
- * Exempt because the surface underneath is not the one this file can infer.
- *
- * `Adaptive.jsx`'s debug readout paints `bg-gray-950` with **no** `dark:`
- * prefix, so it is dark in both modes and every rule above reverses inside it:
- * gray-400 passes at 7.93 and gray-600 would be unreadable. It is the only
- * such panel in the app — the other unprefixed dark backgrounds are tooltips
- * and overlays carrying `text-white` or no text at all.
- */
+/** Unprefixed `bg-gray-950` debug readout: dark in both modes, so every rule reverses inside it. */
 const DARK_IN_BOTH_MODES = ['pages/student/Adaptive.jsx']
 
 function jsxFiles(dir) {
@@ -93,29 +66,19 @@ describe('the contrast numbers this rule rests on', () => {
     for (const s of DARK_SURFACES) {
       expect(contrast(GRAY[500], SURFACES[s])).toBeLessThan(AA)
     }
-    // gray-700 is the exception at 4.06, and is a hover surface rather than a
-    // card — named here rather than glossed over.
+    // gray-700 (a hover surface) is the exception at 4.06.
     for (const s of ['gray-800', 'gray-900', 'gray-950']) {
       expect(contrast(GRAY[400], SURFACES[s])).toBeGreaterThanOrEqual(AA)
     }
   })
 
   it('shows gray-500 is fine on white and not on a gray-100 card', () => {
-    // The reason 134 bare `text-gray-500` are left alone and the badges on
-    // `bg-gray-100` were not.
     expect(contrast(GRAY[500], SURFACES.white)).toBeGreaterThanOrEqual(AA)
     expect(contrast(GRAY[500], SURFACES['gray-100'])).toBeLessThan(AA)
   })
 })
 
-/**
- * The class sets that can apply to one element *together*.
- *
- * A template literal's ternary branches are alternatives, not one set. Treating
- * the whole string as one is what let a regression ship: an element reading
- * `${on ? 'dark:text-indigo-300' : 'bg-gray-100 text-gray-400 dark:bg-gray-800'}`
- * looks like it "has a dark: text class", and the grey branch does not.
- */
+/** The class sets that can apply to one element together: ternary branches are alternatives. */
 function branches(cls) {
   const inner = [...cls.matchAll(/'([^']*)'|"([^"]*)"/g)].map(m => m[1] ?? m[2])
   const outside = cls.replace(/\$\{[^}]*\}/g, ' ')
@@ -124,14 +87,7 @@ function branches(cls) {
 
 const token = (set, re) => (set.match(re) ?? [])[1]
 
-/**
- * What actually paints, per mode.
- *
- * The fallback is the whole point: an element with no `dark:text-` renders its
- * bare colour in dark mode too. A check that only compares `dark:` against
- * `dark:` sees nothing wrong with `text-gray-600 dark:bg-gray-800`, which is
- * grey-on-charcoal at 1.94.
- */
+/** What paints per mode; with no `dark:text-` the bare colour paints in dark mode too. */
 function resolve2(set) {
   const lightFg = token(set, /(?<![:\w-])text-gray-(\d00)\b/)
   const darkFg = token(set, /\bdark:text-gray-(\d00)\b/) ?? lightFg
@@ -147,8 +103,7 @@ describe('muted text in the source', () => {
       if (DARK_IN_BOTH_MODES.includes(rel)) continue
       for (const set of branches(cls)) {
         const fg = token(set, /(?<![:\w-])text-gray-(\d00)\b/)
-        // Only when it fails against *every* light surface, so a class whose
-        // background comes from a parent is still judged safely.
+        // Only when it fails on every light surface, since the background may come from a parent.
         if (fg && LIGHT_SURFACES.every(s => contrast(GRAY[fg], SURFACES[s]) < AA)) {
           offenders.push(`${rel}: gray-${fg} fails on every light surface`)
         }
@@ -158,10 +113,8 @@ describe('muted text in the source', () => {
   })
 
   it('never uses a dark-mode grey that fails on the dark surfaces it paints', () => {
-    // Computed over the shade, not matched against a literal class name. The
-    // first version of this test grepped for `dark:text-gray-500` specifically,
-    // so `dark:text-gray-600` — worse, at 2.35 — went straight through it.
-    const CARDS = ['gray-800', 'gray-900']   // 68 and 123 uses; the dark surfaces
+    // Computed over the shade, never matched against a literal class name.
+    const CARDS = ['gray-800', 'gray-900']   // the dark card surfaces
     const offenders = []
     for (const { rel, cls } of classStrings()) {
       if (DARK_IN_BOTH_MODES.includes(rel)) continue
@@ -176,10 +129,7 @@ describe('muted text in the source', () => {
   })
 
   it('never pairs a grey with a background it fails against, in either mode', () => {
-    // Same element (or same ternary branch), so both halves are known. This is
-    // the check that catches a light-mode fix which forgot its dark half: the
-    // dark foreground falls back to the bare one, and `dark:bg-` moves the
-    // surface out from under it.
+    // Same element or branch, so both halves are known; catches a light fix missing its dark half.
     const offenders = []
     for (const { rel, cls } of classStrings()) {
       if (DARK_IN_BOTH_MODES.includes(rel)) continue
@@ -200,20 +150,7 @@ describe('muted text in the source', () => {
 })
 
 describe('a grey with no dark companion', () => {
-  /**
-   * The class the same-element check cannot see.
-   *
-   * These elements name no background of their own, so nothing above can
-   * resolve what they sit on — but a bare `text-gray-500` with no `dark:`
-   * variant renders gray-500 in dark mode too, and that is 3.67 on the
-   * gray-900 card every one of these pages paints. 37 of them, pre-existing.
-   *
-   * The file-level test is the honest approximation: whether *this file* ever
-   * paints a dark surface. Coarse, and it is what distinguishes a page whose
-   * cards flip from `MainLayout`, the permanently-white marketing shell where
-   * adding a dark companion would put gray-400 on white at 2.54 — a new
-   * failure dressed as a fix.
-   */
+  // No own background, so approximated per file: does this file ever paint a dark surface?
   it('is only allowed where the surface never goes dark', () => {
     const offenders = []
     for (const file of jsxFiles(SRC)) {

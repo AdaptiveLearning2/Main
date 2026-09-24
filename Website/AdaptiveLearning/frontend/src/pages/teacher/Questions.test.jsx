@@ -19,12 +19,7 @@ const QUESTION = {
   difficulty: 'easy',
 }
 
-// **The bank has two rows so that a test can be wrong about which one.** With
-// one, "the row that opened the modal" and "the first `<button>` on the page"
-// are the same element, and the focus-restore test below cannot tell them
-// apart -- mutation found exactly that. Nothing here counts rows: the cache
-// test counts *calls* on the bank path, and the filter tests assert on the
-// text of a named question.
+// A second row so the focus-restore test can tell "the opener" from "the first button".
 const SECOND_QUESTION = {
   ...QUESTION,
   id: 'q-2',
@@ -33,16 +28,11 @@ const SECOND_QUESTION = {
 
 beforeEach(() => {
   resetApi()
-  // The question-bank cache is module-level state shared with Analytics.jsx,
-  // so it has to be cleared between tests too, or a later test can be served
-  // a still-fresh entry left behind by an earlier one.
+  // The bank cache is module-level state shared with Analytics.jsx.
   _resetForTests()
   mockApi({
     '/api/questions?limit=1000': () => [QUESTION, SECOND_QUESTION],
-    // Fetched on mount for the student filter. Registered here rather
-    // than per test because the router double throws on an unrouted
-    // path -- which is what stops a gap in setup arriving dressed as
-    // the bug a test was written to catch.
+    // Fetched on mount for the student filter; the router throws on an unrouted path.
     '/api/classes': () => [],
   })
 })
@@ -82,20 +72,7 @@ describe('the question modal', () => {
   })
 
   it('gives focus back to the row that opened it, not merely somewhere', async () => {
-    // Otherwise a keyboard user closing the modal is returned to the top of
-    // the document and has to tab back down the whole list.
-    //
-    // **Assert the identity, not that focus left `body`.** This checked
-    // `document.body !== document.activeElement` against an `opener` resolved
-    // by `closest('[role="button"], button, div')` from the *text* element --
-    // which matches the wrapper `<div>` two levels inside the row's button, so
-    // it named the wrong element and then only asserted it was truthy, which
-    // `closest('div')` almost always is. A `useDialog` restoring focus to any
-    // live element on the page -- the first filter button, say -- passed.
-    //
-    // **The second row is the one clicked**, because the first is also the
-    // first `<button>` on the page: a restore aimed at `querySelector('button')`
-    // passes against it. Mutation found exactly that.
+    // Assert identity, not that focus left `body`; the second row, since the first is also the first button.
     render(<Questions />, { wrapper: MemoryRouter })
     const text = await screen.findByText('What is 9 x 6?')
     const opener = text.closest('button')
@@ -108,33 +85,18 @@ describe('the question modal', () => {
     await userEvent.keyboard('{Escape}')
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-    // `waitFor` waits on the condition rather than on a duration: the restore
-    // is `useDialog`'s effect cleanup, so it lands with the unmount, and this
-    // only has to tolerate the unmount being a render behind the query above.
-    //
-    // **What this does not cover**: `useDialog` skips the restore when the
-    // opener has left the DOM (`document.contains`), and jsdom then leaves
-    // focus on `body`. That is a real gap -- focus goes nowhere useful -- and
-    // it is the hook's behaviour rather than this page's, so it is not
-    // asserted here in either direction.
+    // The restore is `useDialog`'s effect cleanup, landing with the unmount. Not covered: an opener that left the DOM.
     await waitFor(() => expect(document.activeElement).toBe(opener))
   })
 })
 
 describe('the question-bank cache shared with Analytics', () => {
   it('serves both pages from a single fetch of the bank', async () => {
-    // Both pages independently fetch `?limit=1000` on mount -- this is the
-    // direct regression test for the redundant-fetch problem the shared
-    // cache exists to fix.
     render(<Questions />, { wrapper: MemoryRouter })
     render(<Analytics />, { wrapper: MemoryRouter })
 
     await screen.findByText('What is 7 x 8?')
-    // Counted on the bank path specifically, not on every apiFetch call:
-    // Questions also fetches /api/classes for the student filter, and a bare
-    // call count would make this test fail for a reason unrelated to the
-    // caching it exists to check -- and would fail again for the next
-    // unrelated fetch either page adds.
+    // Counted on the bank path only: the pages make other fetches too.
     await waitFor(() => {
       const bankCalls = apiFetch.mock.calls
         .filter(([path]) => path === '/api/questions?limit=1000')
@@ -145,14 +107,7 @@ describe('the question-bank cache shared with Analytics', () => {
 
 describe('the student filter', () => {
   const CLASSES = [{ id: 'c-1', name: 'Period 1' }]
-  // The shape `/api/classes/{id}/students` really returns. It carries
-  // `user_id` and `name`; it has no `id` and no `display_name`. This fixture
-  // said otherwise for as long as the picker read those keys, so the code and
-  // the test shared one misreading of the backend and the suite stayed green
-  // over a filter that answered 403 on every pick. `email` is here because it
-  // is what the broken version actually sent -- an `<option>` with an
-  // undefined `value` falls back to its text content -- so without it the
-  // failure is not even representable.
+  // The real `/api/classes/{id}/students` shape: `user_id` and `name`, no `id`; `email` so a wrong key is representable.
   const ROSTER  = [{ user_id: 's-1', name: 'Ada', email: 'ada@example.com' }]
   const ASKED = {
     student_id: 's-1',
@@ -185,23 +140,14 @@ describe('the student filter', () => {
     await pickStudent()
 
     expect(await screen.findByText('What is 3 x 4?')).toBeInTheDocument()
-    // The bank's question is gone -- this is a different list, not a filter
-    // applied on top of the one already loaded.
+    // A different list, not a filter over the bank.
     expect(screen.queryByText('What is 7 x 8?')).not.toBeInTheDocument()
     expect(screen.getByText('2/3 correct')).toBeInTheDocument()
     expect(screen.getByText(/1 question asked/)).toBeInTheDocument()
   })
 
   it('asks for the student by id, never by the name on the option', async () => {
-    // `/api/students/{id}/questions` resolves a relationship through
-    // `_verify_can_view_student`, so an identifier that is merely
-    // recognisable -- an email, a display name -- is refused with a 403 by a
-    // backend that is working correctly. The page then reports that the
-    // backend is down, which is the wrong thing to go and check.
-    //
-    // Asserting on the *path* rather than on the rendered rows is the point:
-    // both halves of the option (`key`/`value` and the label) come from the
-    // same row, so a wrong key still names the right student on screen.
+    // Assert on the path: a wrong key still shows the right name, but the backend 403s it.
     mockFilterApi()
     await pickStudent()
 
@@ -212,8 +158,7 @@ describe('the student filter', () => {
   })
 
   it('says when a question has aged out rather than just showing fewer', async () => {
-    // The three-state rule: "answered nothing" and "their questions expired"
-    // both render as a short list otherwise.
+    // Otherwise "answered nothing" and "questions expired" look the same.
     mockFilterApi({
       '/api/students/s-1/questions?limit=200': () => ({
         ...ASKED, questions: [], answers_read: 2, expired_questions: 2,
@@ -232,8 +177,7 @@ describe('the student filter', () => {
   })
 
   it('surfaces a failed student read instead of showing the bank as theirs', async () => {
-    // Falling back to the bank here would attribute every question in the
-    // product to one child.
+    // Falling back to the bank would attribute every question to one child.
     mockFilterApi({
       '/api/students/s-1/questions?limit=200': () => { throw new Error('nope') },
     })
@@ -242,10 +186,7 @@ describe('the student filter', () => {
   })
 
   it('names the student, not the bank, when the refusal is about one student', async () => {
-    // The bank is public-read; a 403 here can only ever be about the student.
-    // Saying "you don't have access to the question bank" would deny access to
-    // something this teacher demonstrably has -- it is on the screen behind
-    // the message.
+    // The bank is public-read; a 403 here can only be about the student.
     mockFilterApi({
       '/api/students/s-1/questions?limit=200': () => {
         throw apiError(403, 'Forbidden')
@@ -258,8 +199,7 @@ describe('the student filter', () => {
   })
 
   it('still blames the backend when the bank itself is unreachable', async () => {
-    // The other direction, and the reason the wording is chosen per read
-    // rather than per page: nothing about the student filter is involved here.
+    // Wording is chosen per read, not per page.
     mockApi({
       '/api/questions?limit=1000': () => { throw new Error('network down') },
       '/api/classes': () => CLASSES,
@@ -288,8 +228,7 @@ describe('a superseded read cannot paint under the wrong name', () => {
   }
 
   it("shows the student the dropdown says, not whichever request lands last", async () => {
-    // Hold Ada's request open, switch to Grace, then release Ada's. Without a
-    // supersede guard Ada's questions arrive last and paint under Grace.
+    // Hold Ada's request open, switch to Grace, then release Ada's.
     let releaseAda
     mockApi({
       '/api/questions?limit=1000': () => [QUESTION],
@@ -315,8 +254,7 @@ describe('a superseded read cannot paint under the wrong name', () => {
   })
 
   it("the bank landing late cannot overwrite a student's list", async () => {
-    // The likelier direction: the bank resolves from the 30s cache, so going
-    // back to "Whole bank" and straight into a student can land bank-last.
+    // The likelier direction: the bank resolves from the 30s cache.
     let releaseStudent
     mockApi({
       '/api/questions?limit=1000': () => [QUESTION],

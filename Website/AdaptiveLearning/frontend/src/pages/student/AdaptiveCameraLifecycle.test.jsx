@@ -1,14 +1,4 @@
-/**
- * A camera switched on from this page is switched off when the page goes.
- *
- * The headband deliberately stays paired across navigation -- the bridge
- * holds the link and re-pairing costs a scan. The webcam has no such cost,
- * and nothing used to stop it: leaving the Adaptive page left the sidecar
- * reading and discarding frames, lens open, until someone came back and
- * pressed Turn off. Two exits, because effect cleanup does not run on a tab
- * close: the route change takes the ordinary stop, `pagehide` the keepalive
- * one.
- */
+/** The camera stops when the page goes (unmount or `pagehide`); the headband stays paired. */
 import { it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 
@@ -21,10 +11,7 @@ vi.mock('../../lib/session', () => ({
   endSession: vi.fn(async () => true),
   recordAnswer: vi.fn(async () => null),
 }))
-// Rewritten per test: the ingest mode, whether the sidecar reports the camera
-// capturing, and how many device-list reads fail before one answers (a
-// sidecar still starting up). Declared above the factories because `vi.mock`
-// is hoisted -- the factories only read it when called.
+// Rewritten per test; the hoisted `vi.mock` factories read it only when called.
 const registry = { mode: 'push', cameraRunning: true, failures: 0, failureShape: 'error' }
 
 vi.mock('../../lib/signals', () => ({
@@ -35,10 +22,7 @@ vi.mock('../../lib/signals', () => ({
     ingest_mode: registry.mode,
   })),
   eegStatus: vi.fn(async () => ({ ingest_mode: registry.mode, service: null, poller: {} })),
-  // The pull-side list. Neither failure shape is a rejection, which is the
-  // whole difficulty: `eegDevices` swallows its own error, and the backend
-  // answers a plain 200 with `available: false` when its own 1.5 s healthz
-  // probe of the sidecar fails.
+  // Pull-side list; neither failure shape is a rejection.
   eegDevices: vi.fn(async () => {
     if (registry.failures > 0) {
       registry.failures -= 1
@@ -120,18 +104,12 @@ it('stops the camera on pagehide with the keepalive stop, since cleanup never ru
   expect(deviceStop).not.toHaveBeenCalled()
 })
 
-// Real timers: the retry is on a 5 s cadence and this component does not
-// survive a fake clock (see AdaptiveReconnect.test.jsx). One retry is enough
-// to show the card appears without a reload; the timeout says what it costs.
+// Real timers: the retry is on a 5 s cadence and this component hangs under a fake clock.
 it('keeps asking for the device list until the sidecar answers, so the camera card appears without a reload', async () => {
   registry.failures = 1
   registry.cameraRunning = false
   render(<Adaptive />)
-  // The failed read must apply nothing. Folded into an empty list it would
-  // set `stationId` to `default` -- which enables Connect, and is what a
-  // session started in this window would bind its recorder to. Not retrieved
-  // is not answered-with-nothing, so Connect stays disabled until a list
-  // actually arrives.
+  // A failed read applies nothing: an empty list would set `stationId` to `default` and enable Connect.
   await waitFor(() => expect(devices).toHaveBeenCalledTimes(1))
   expect(screen.getByRole('button', { name: /connect headband/i })).toBeDisabled()
   // The first read failed; without the retry this never renders.
@@ -140,23 +118,7 @@ it('keeps asking for the device list until the sidecar answers, so the camera ca
   await waitFor(() => expect(screen.getByRole('button', { name: /connect headband/i })).not.toBeDisabled())
 }, 15_000)
 
-// The same property on the pull branch, which is where it is reachable from
-// the default deployment: the health check flips `available` on one slow
-// probe and re-runs discovery at exactly the moment the devices read is
-// likeliest to fail. `eegDevices` swallows, so the failure arrives as a
-// resolved payload with `error` -- the branch's `.catch` never fires, and
-// reading only that left this case exactly as it was before the retry.
-//
-// A stale `stationId` of `default` is not cosmetic: it is what
-// `armRecording` binds `createSignalRecorder` and `/api/eeg/start` to, so a
-// session started in the window records against a station the headband is
-// not on. Connect being enabled is the observable that flips.
-// Both shapes, because neither is a rejection and they fail differently:
-// `error` is the client swallowing its own exception, `available: false` is
-// the backend saying it probed the sidecar and got nothing. The second is
-// the likelier one -- a slow sidecar times out `/api/eeg/devices`'s healthz
-// probe while `/api/eeg/health`'s separate probe succeeds -- and it is what
-// makes `available` flip, which is itself what re-runs discovery.
+// Pull failures resolve rather than reject; a stale `default` station would enable Connect on the wrong one.
 it.each([
   ['the client swallowed its own error', 'error'],
   ['the backend answered 200 with available: false', 'down'],
@@ -179,7 +141,7 @@ it('sends nothing for a camera that is already off', async () => {
   await screen.findByRole('button', { name: /turn on camera/i })
   window.dispatchEvent(new Event('pagehide'))
   unmount()
-  // Give any stray async stop a tick to land before asserting it did not.
+  // Let any stray async stop land first.
   await new Promise(r => setTimeout(r, 50))
   expect(deviceStop).not.toHaveBeenCalled()
   expect(deviceStopOnUnload).not.toHaveBeenCalled()

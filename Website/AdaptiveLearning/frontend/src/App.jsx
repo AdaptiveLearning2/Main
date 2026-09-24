@@ -16,17 +16,7 @@ import ScrollToTop        from './components/ui/ScrollToTop'
 import RouteTitle         from './components/ui/RouteTitle'
 import PageLoader         from './components/ui/PageLoader'
 
-// Pages are split per route. Statically imported, every page landed in one
-// bundle: a student on a school laptop downloaded the teacher's analytics and
-// the parent's consent screens -- which they can never open -- before their
-// own dashboard could paint. The heaviest pages are the ones fewest people
-// see (Recharts on the teacher and parent reporting surfaces, the adaptive
-// session's sidecar client), so the split is worth most exactly where the
-// static bundle cost most.
-//
-// The layouts, the guards and the auth pages stay static. They are on the
-// critical path for every visit, so splitting them would add a network
-// round trip to the first paint to save nothing.
+// Pages are lazy per route; layouts, guards and auth pages stay static (critical path).
 import Login    from './pages/auth/Login'
 import Register from './pages/auth/Register'
 
@@ -56,10 +46,6 @@ const ParentLinkChild  = lazy(() => import('./pages/parent/LinkChild'))
 const ParentChild      = lazy(() => import('./pages/parent/ChildDetail'))
 const ParentSettings   = lazy(() => import('./pages/parent/Settings'))
 
-// Split like every other section. These arrived static, from a branch cut
-// before the split existed -- and they are the pages with the fewest viewers in
-// the whole app, so leaving them eager would put the entire admin console in
-// the bundle every student downloads.
 const AdminOverview    = lazy(() => import('./pages/admin/Overview'))
 const AdminFlags       = lazy(() => import('./pages/admin/Flags'))
 const AdminLiveFlow    = lazy(() => import('./pages/admin/LiveFlow'))
@@ -70,24 +56,8 @@ const NotFound = lazy(() => import('./pages/NotFound'))
 
 export default function App() {
   return (
-    // `reducedMotion="user"` honours the OS "reduce motion" setting, which
-    // nothing here did. Every page animates, and several animate *for ever* --
-    // a rotating icon on both dashboards, a bouncing emoji on the 404 and on
-    // the adaptive session's idle screen -- so a user who has asked their
-    // system for less motion got a permanent, un-stoppable loop instead.
-    //
-    // At the provider rather than per call site, deliberately. The per-site fix
-    // is `useReducedMotion()` and clearing *both* `animate` and `transition`,
-    // which is a rule every future animation has to remember; there are already
-    // eleven infinite loops across ten files. This is one line that covers them
-    // and everything added later.
-    //
-    // "user" disables transform and layout animation while leaving opacity and
-    // colour alone, which is the right cut: the vestibular trigger is movement,
-    // and a fade carries none of it. Loading spinners stop spinning under it --
-    // accepted, and the better trade. `PageLoader` says "Loading..." in text
-    // beside its ring, and a still ring is a smaller harm than motion someone
-    // has explicitly asked not to be shown.
+    // Honours the OS "reduce motion" setting for every animation, at the provider
+    // so new ones are covered too. Fades still run; spinners stop.
     <MotionConfig reducedMotion="user">
     <ThemeProvider>
       <ThemedToaster />
@@ -95,10 +65,7 @@ export default function App() {
         <BrowserRouter>
           <ScrollToTop />
           <RouteTitle />
-          {/* One boundary around the whole table rather than one per route.
-              The fallback only shows while a chunk is in flight, which is once
-              per page per visit; nesting them per route would flash the loader
-              on every navigation within an already-loaded section. */}
+          {/* One boundary for all routes, so loaded sections don't flash the loader. */}
           <Suspense fallback={<PageLoader />}>
           <Routes>
             <Route element={<AuthLayout />}>
@@ -141,9 +108,7 @@ export default function App() {
               <Route path="/parent/settings"     element={<ParentSettings />} />
             </Route>
 
-            {/* AdminGuard, not RoleGuard: admin is `profiles.role`, which the
-                backend reads and the client cannot write, never the
-                `user_metadata.role` claim RoleGuard goes on. */}
+            {/* AdminGuard asks the backend; it never trusts a client-side role. */}
             <Route element={<AdminGuard><AdminLayout /></AdminGuard>}>
               <Route path="/admin"       element={<AdminOverview />} />
               <Route path="/admin/flags" element={<AdminFlags />} />
@@ -152,11 +117,7 @@ export default function App() {
               <Route path="/admin/security" element={<AdminSecurity />} />
             </Route>
 
-            {/* Role-aware, not hardcoded to the student home. Sending every
-                role to /dashboard meant a parent landing on / took a bounce
-                through a route they may not see -- which was an infinite one
-                until RoleGuard learned the third role. There are four now, and
-                `homeFor` knows about the fourth. */}
+            {/* Role-aware home, via `homeFor`. */}
             <Route path="/"  element={<HomeRedirect />} />
             <Route path="*"  element={<NotFound />} />
           </Routes>

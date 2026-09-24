@@ -4,34 +4,20 @@ import AccessibleChart from '../charts/AccessibleChart'
 import Panel from './Panel'
 
 /**
- * Class accuracy per school day.
- *
- * Days with no answers are present in the payload and stay present here, drawn
- * as a gap. A dropped day renders as the days either side sitting adjacent, so
- * a week of half-term reads as an unbroken run of lessons.
- *
- * `connectNulls={false}` is what makes that gap visible rather than a straight
- * line drawn through it — the line would otherwise interpolate a week nobody
- * was in.
+ * Class accuracy per school day. Days with no answers stay in, drawn as gaps
+ * (`connectNulls={false}`), so a holiday never reads as continuous lessons.
  */
 export default function ClassAccuracyTrend({ data, loading, onRetry }) {
   const days = data?.days || []
 
-  // Pre-scaled to percent on the way in, so the column spec below carries a
-  // `%` unit and no `scale`. The two ways to reach a percentage must not be
-  // combined: a `scale: asPercent` on top of this would announce 6700%.
+  // Pre-scaled to percent, so the column has no `scale`.
   const rows = days.map(d => ({
     label: d.day.slice(5),
     accuracy: typeof d.accuracy === 'number' ? d.accuracy * 100 : null,
     attempted: d.attempted,
   }))
 
-  // Mirrors the series the chart actually draws, and only those. `attempted`
-  // was a column here first and is deliberately gone: nothing plots it, so a
-  // screen-reader user would have been read a series no sighted reader can
-  // see. That is the mistake CLAUDE.md records having shipped twice, and it is
-  // invisible on screen by construction — the count lives in the headline
-  // instead, where it is available to both readers.
+  // Only the drawn series; the attempted count is in the headline.
   const COLUMNS = [{ key: 'accuracy', label: 'Accuracy', unit: '%' }]
 
   const withData = days.filter(d => d.attempted).length

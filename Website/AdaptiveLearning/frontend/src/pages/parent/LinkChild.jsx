@@ -6,12 +6,8 @@ import { apiFetch } from '../../lib/api'
 import { toast } from 'sonner'
 
 /**
- * Linking takes a code the child made, not the child's user id.
- *
- * The id was never a secret -- it is on every roster payload a teacher of that
- * child reads, and in the URL of every report page about them -- so possession
- * of one was not the handover this page's instructions described. A code has to
- * be created by the child, lasts half an hour and works once.
+ * Linking takes a code the child made (30 min, single use), not the child's
+ * user id, which is not a secret.
  */
 export default function ParentLinkChild() {
   const [code, setCode] = useState('')
@@ -25,9 +21,7 @@ export default function ParentLinkChild() {
     try {
       const res = await apiFetch('/api/parent/link-child', {
         method: 'POST',
-        // Upper-cased here as well as on the backend: the alphabet has no
-        // lowercase in it, so a typed `a` is the same code as `A` and refusing
-        // it would be a puzzle rather than a safeguard.
+        // The code alphabet has no lowercase, so a typed `a` means `A`.
         body: { link_code: code.trim().toUpperCase() }
       })
       toast.success(`Linked to ${res.child_name}! 🎉`)

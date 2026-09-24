@@ -1,11 +1,4 @@
-/**
- * Profile's Total Sessions tile, and only that.
- *
- * The session list is capped server-side, so its length is not a count: a
- * tile reading `sessions.length` stopped at the cap without saying so -- and
- * before the cap it stopped, just as silently, at PostgREST's thousand rows.
- * The tile reads the backend's `total`, and says nothing when there is none.
- */
+/** Profile's Total Sessions tile reads the backend's `total`, never the capped list's length. */
 import { it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 
@@ -25,8 +18,7 @@ vi.mock('../../components/consent/ConsentChannels', () => ({ default: () => null
 import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
 import Profile from './Profile'
 
-// Profile shows the count and nothing else from this list, so it asks for one
-// row. Keyed with the query string, which the router matches exactly.
+// Profile needs only the count, so it asks for one row; the router matches the query string.
 const ONE = '/api/sessions?limit=1'
 const ROW = { id: 's1', started_at: '2026-09-22T10:00:00Z', questions_answered: 3, correct_answers: 2 }
 
@@ -58,8 +50,7 @@ it.each([
   serve(handler)
   render(<Profile />)
 
-  // The stats tiles land from their own read, so once one shows a figure the
-  // session read has settled too.
+  // Once a stats tile shows a figure, the session read has settled too.
   await screen.findByText('10')
   expect(tile('Total Sessions')).toBe('—')
 })

@@ -1,9 +1,4 @@
-/**
- * `GET /api/signals/session/{id}/charts`, in each state `archivedChart()` reads.
- *
- * Covers three of five states; `pending` and `failed` are the page's own
- * states and come from the mock's timing instead, not a fixture here.
- */
+/** `GET /api/signals/session/{id}/charts` payloads; `pending`/`failed` come from mock timing. */
 
 export const CHART_NAMES = ['cognitive_timeline', 'heart_rate', 'emotion_pie', 'stress_pie']
 
@@ -19,9 +14,7 @@ export function buildChartArchive(overrides = {}) {
   }
 }
 
-/** Archived, but the named objects could not be signed or read — a fault,
- *  not an absence. Per-chart, so a mix of readable and unreadable charts in
- *  one section is a normal case, not an edge case. */
+/** Archived, but the named objects could not be read: a fault, not an absence. */
 export function withUnavailable(payload, names) {
   const list = [].concat(names)
   return {
@@ -42,6 +35,5 @@ export function withEmpty(payload, names) {
   }
 }
 
-/** The archive never ran — an old session, or one with no samples to draw.
- *  Distinct from the failure states above. */
+/** The archive never ran. Distinct from the failure states above. */
 export const ARCHIVE_UNARCHIVED = { archived: false, charts: {}, unavailable: [] }

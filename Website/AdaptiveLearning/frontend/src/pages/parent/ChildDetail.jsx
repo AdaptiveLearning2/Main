@@ -6,9 +6,8 @@ import StudentProgressReport from '../../components/reports/StudentProgressRepor
 export default function ChildDetail() {
   const { id } = useParams()
 
-  // Name comes from the children list, not the report, so the heading survives
-  // a weekly-report failure. include_face=false because this call only wants
-  // a name, not facial data for the whole family.
+  // Name from the children list so the heading survives a report failure;
+  // include_face=false since only the name is wanted.
   const nameFetch = useCallback(
     () => apiFetch('/api/parent/children?include_face=false')
       .then(children => children.find(c => c.user_id === id)?.name || null),
@@ -17,8 +16,7 @@ export default function ChildDetail() {
 
   return (
     <StudentProgressReport
-      // Remount on a new child id so the heading doesn't keep showing the
-      // previous child's name until the fetch resolves.
+      // Remount per child so the previous child's name never shows.
       key={id}
       studentId={id}
       initialName="Child"
@@ -28,8 +26,7 @@ export default function ChildDetail() {
       emptyTopicText="No topic data yet — your child hasn't used AI Adaptive mode."
       nameFetch={nameFetch}
       showStrategies
-      // Not behind a sensor-data switch here, because the parent surface has
-      // none -- see StudentReport.jsx for why the teacher's is gated.
+      // Ungated: the parent surface has no sensor-data switch.
       showChartSummary
     />
   )

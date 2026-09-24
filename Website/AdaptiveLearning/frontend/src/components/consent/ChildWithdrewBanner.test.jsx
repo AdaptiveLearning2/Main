@@ -40,8 +40,7 @@ describe('ChildWithdrewBanner', () => {
   })
 
   it('offers no way to override the decision from here', async () => {
-    // A student's withdrawal stands. A button here would make overriding a
-    // child's decision the default response to hearing about it.
+    // A student's withdrawal stands; no override button.
     apiFetch.mockResolvedValue(ONE)
     draw()
 
@@ -51,8 +50,7 @@ describe('ChildWithdrewBanner', () => {
   })
 
   it('says what is and is not affected', async () => {
-    // Withdrawal stops future recording but keeps what's already stored --
-    // "a sensor is off" alone reads as erasure otherwise.
+    // Withdrawal keeps stored data; "a sensor is off" alone reads as erasure.
     apiFetch.mockResolvedValue(ONE)
     draw()
 
@@ -101,8 +99,7 @@ describe('ChildWithdrewBanner', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: /Got it/ }))
 
-    // Sends back the server's watermark per child -- acking with `now()`
-    // instead would silently mark seen any withdrawal that landed in between.
+    // The server's watermark, not `now()`, or a withdrawal landing in between is lost.
     expect(apiFetch).toHaveBeenLastCalledWith('/api/parent/consent-notices/ack',
       { method: 'POST', body: { through: { 'kid-1': '2026-08-12T09:00:00Z' } } })
     await waitFor(() =>
@@ -134,8 +131,7 @@ it('sends a watermark for every child it displayed', async () => {
   draw()
   await userEvent.click(await screen.findByRole('button', { name: /Got it/ }))
 
-  // Per child, not one stamp for the family -- acking both at the later time
-  // would swallow anything that landed for Basil in between.
+  // Per child, not one stamp for the family.
   expect(apiFetch).toHaveBeenLastCalledWith('/api/parent/consent-notices/ack',
     { method: 'POST', body: { through: {
       'kid-1': '2026-08-12T09:00:00Z', 'kid-2': '2026-08-10T09:00:00Z' } } })

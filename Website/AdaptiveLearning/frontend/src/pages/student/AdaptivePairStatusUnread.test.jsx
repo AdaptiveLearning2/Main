@@ -1,20 +1,4 @@
-/**
- * A status read that did not land is not "no link to adopt".
- *
- * Under pull `hw.status()` was `(await eegStatus(stationId))?.muse || {}`, and
- * `eegStatus` answers with its own fallback rather than throwing -- so the
- * `.catch(() => null)` each caller wraps it in was structurally dead, and an
- * unreachable backend arrived at the adoption check as an empty answer. The
- * fall-through from there disconnects and rescans, so one failed request at
- * the moment of the click tore down a headband that was streaming: the
- * "connects, then immediately disconnects" the adoption block exists to stop,
- * recorded on hardware as three clicks to pair.
- *
- * The same empty answer fed the two loops below it -- twelve unlanded reads
- * read as twelve empty ones, so a reachable-and-fine headband was reported as
- * "No headband found", and the connect poll's failure tells a student to
- * power-cycle hardware that is working.
- */
+/** An unlanded status read during pairing is not an empty answer: no teardown, no blaming the hardware. */
 import { it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 
@@ -26,9 +10,7 @@ vi.mock('../../lib/session', () => ({
   recordAnswer: vi.fn(async () => ({ topic: 'ordering' })),
 }))
 vi.mock('../../lib/signals', () => ({
-  // `start` has to resolve to a running session: the click throws before it
-  // reaches the adoption check otherwise, and the test would pass on the
-  // wrong error.
+  // `start` must resolve running, or the click throws before the adoption check.
   createSignalRecorder: () => ({
     start: vi.fn(async () => ({ ok: true, running: true })), stop: vi.fn(),
   }),
@@ -70,8 +52,7 @@ beforeEach(() => {
     'POST /api/sessions/start': () => ({ id: 'sess-pair' }),
     'GET /api/eeg/health': () => ({ available: true, ingest_mode: 'pull' }),
     'GET /api/eeg/status': () => ({}),
-    // Routed so the teardown *can* happen: unrouted, the double throws and the
-    // assertions below would pass on a crash rather than on the guard.
+    // Routed so the teardown can happen, rather than passing on a crash.
     'POST /api/eeg/muse/disconnect': () => ({ ok: true }),
     'POST /api/eeg/muse/refresh': () => ({ ok: true }),
     'POST /api/eeg/muse/connect': () => ({ ok: true }),
@@ -79,8 +60,7 @@ beforeEach(() => {
 })
 
 it('leaves a live link alone when the status read did not land', async () => {
-  // The swallowed fallback carries no `muse`, which `|| {}` turned into an
-  // answer meaning "nothing is connected".
+  // The swallowed fallback carries no `muse`.
   eegStatus.mockResolvedValue({ answered: false, service: false, poller: { running: false } })
   render(<Adaptive />)
 
@@ -88,16 +68,12 @@ it('leaves a live link alone when the status read did not land', async () => {
   await waitFor(() => expect(button).not.toBeDisabled())
   fireEvent.click(button)
 
-  // The teardown is the damage, so it is what the assertion names -- and the
-  // wait has to outlast the path the bug takes, or the failure is a timeout
-  // rather than the disconnect this test exists to catch. Unguarded, the
-  // click falls through to the 1.5 s settle and the 12 s scan.
+  // The wait outlasts the unguarded path (1.5 s settle + 12 s scan).
   await waitFor(() => expect(toast.error).toHaveBeenCalled(), { timeout: 20000 })
   expect(called('/api/eeg/muse/disconnect')).toBe(false)
   expect(called('/api/eeg/muse/refresh')).toBe(false)
 
-  // And the message names the check rather than the hardware: the other two
-  // send a student to move or power-cycle a headband that is working.
+  // The message names the check, not the hardware.
   const [title, opts] = toast.error.mock.calls.at(-1)
   expect(`${title} ${opts?.description ?? ''}`).toMatch(/EEG service/)
   expect(`${title} ${opts?.description ?? ''}`).not.toMatch(/power|Bluetooth|No headband found/i)
@@ -106,12 +82,7 @@ it('leaves a live link alone when the status read did not land', async () => {
 const UNLANDED = { answered: false, service: false, poller: { running: false } }
 
 it('does not report an empty scan from twelve reads that never landed', async () => {
-  // Past the adoption check this time: the first read lands and says nothing
-  // is connected, so the disconnect and the scan are correct. What follows is
-  // not -- `st?.ingestion?.muse_devices || []` read every unlanded reply as an
-  // empty scan, so the loop ran its full twelve seconds and reported
-  // `no_device`, whose instruction sends a student to check a headband that
-  // is switched on, in range, and fine.
+  // The first read lands (scan is correct); unlanded scan reads must not become `no_device`.
   eegStatus.mockImplementation(async () =>
     called('/api/eeg/muse/refresh') ? UNLANDED : { muse: { ingestion: {} } })
   render(<Adaptive />)
@@ -127,16 +98,11 @@ it('does not report an empty scan from twelve reads that never landed', async ()
   const said = `${title} ${opts?.description ?? ''}`
   expect(said).toMatch(/EEG service/)
   expect(said).not.toMatch(/No headband found/i)
-  // 60 s for ~14 s of real waiting: this file runs on real timers, like
-  // `AdaptiveReconnect.test.jsx`, and the headroom costs nothing on a passing
-  // assertion but is the whole difference under a loaded full-suite run.
+  // 60 s for ~14 s of real-timer waiting: headroom for a loaded full run.
 }, 60000)
 
 it('does not blame the firmware for a connect poll that never landed', async () => {
-  // The last reader, and the one with the most disruptive instruction: ten
-  // unlanded reads read as ten "still not connected" ones, so `not_connected`
-  // told a student to hold the power button until the headband switches off
-  // -- a claim about its firmware that no read here established.
+  // Unlanded connect-poll reads must not become `not_connected`'s power-cycle advice.
   eegStatus.mockImplementation(async () =>
     called('/api/eeg/muse/connect')
       ? UNLANDED

@@ -65,7 +65,7 @@ it('distinguishes a failed request from a missing class', async () => {
 const notFound = (msg) => Object.assign(new Error(msg), { status: 404 })
 
 it('still reports a genuinely missing class as not found', async () => {
-  // Both routes 404, matching what a missing class actually produces (the roster runs the same owner check).
+  // Both routes 404, as a missing class does (same owner check).
   apiFetch.mockReset()
   apiFetch.mockRejectedValue(notFound('Class not found'))
   renderAt()
@@ -87,11 +87,7 @@ it('does not blame the class for a 404 from the roster', async () => {
 })
 
 // ─── the last-active column ───────────────────────────────────────────────
-//
-// Three states, and the two that collapse most easily are the two that matter:
-// a student who has genuinely never worked, and a read that failed. Reporting
-// the second as the first tells a teacher the class has stopped working, which
-// is both wrong and something they would act on.
+// Three states: a timestamp, never active, and a failed read.
 
 it('shows how long ago a student was last active', async () => {
   const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
@@ -123,8 +119,7 @@ it('a failed read says so rather than claiming the student is idle', async () =>
 })
 
 it('survives a roster from before the column existed', async () => {
-  // An older payload carries neither key. Absent must not read as a failure,
-  // and must not read as a timestamp either.
+  // An older payload carries neither key: neither a failure nor a timestamp.
   mockLoad(
     { id: CLASS_ID, name: 'Algebra', join_code: 'ABC123' },
     [{ user_id: 's1', name: 'Ada' }],

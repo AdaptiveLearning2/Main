@@ -7,9 +7,7 @@ import QuestionFigure from './QuestionFigure'
 
 describe('QuestionFigure', () => {
   it('describes the picture with the numbers it draws', () => {
-    // The rule AccessibleChart exists for: the sentence and the drawing come
-    // from one object, so they cannot describe different pictures. A figure
-    // has no text of its own for any other check to compare.
+    // Sentence and drawing come from one object, so they cannot disagree.
     const { container } = render(
       <QuestionFigure figure={{ type: 'rect_grid', rows: 3, columns: 4 }} />)
     expect(screen.getByRole('img')).toHaveAccessibleName(
@@ -24,10 +22,7 @@ describe('QuestionFigure', () => {
   })
 
   it('renders nothing for a type it does not know', () => {
-    // A figure is an enrichment and the question text is complete without it.
-    // Throwing here would take the whole question down to avoid drawing a
-    // picture -- on exactly the deployment running an older bundle against a
-    // newer bank.
+    // An older bundle against a newer bank must not lose the whole question.
     const { container } = render(
       <QuestionFigure figure={{ type: 'number_line', from: 0, to: 10 }} />)
     expect(container).toBeEmptyDOMElement()
@@ -48,8 +43,6 @@ describe('QuestionFigure', () => {
   })
 
   it('draws in the current text colour so it survives both themes', () => {
-    // A figure drawn in one mode's ink is invisible in the other's; the card
-    // this sits in flips.
     const { container } = render(
       <QuestionFigure figure={{ type: 'rect_grid', rows: 2, columns: 2 }} />)
     const strokes = [...container.querySelectorAll('rect')]
@@ -60,8 +53,6 @@ describe('QuestionFigure', () => {
   })
 
   it('hides the svg from the reader that already has the label', () => {
-    // role="img" prunes its children, so an svg left exposed would be a second
-    // announcement of nothing.
     const { container } = render(
       <QuestionFigure figure={{ type: 'rect_grid', rows: 2, columns: 2 }} />)
     expect(container.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
@@ -74,9 +65,7 @@ describe('a bar chart', () => {
   ] }
 
   it('names every bar and its height, not a summary', () => {
-    // The question asks the reader to compare bars, so "a bar graph of two
-    // categories" is not the same information -- a screen-reader user would
-    // have a different question from a sighted one.
+    // A summary would give a screen-reader user a different question.
     render(<QuestionFigure figure={PETS} />)
     expect(screen.getByRole('img')).toHaveAccessibleName(
       'A bar graph showing cats: 6, dogs: 4.')
@@ -91,20 +80,13 @@ describe('a bar chart', () => {
   })
 
   it('rules every unit so the bars can be counted rather than estimated', () => {
-    // Which is the reading 1.MD.4 asks for. Without gridlines a student can
-    // compare two bars but cannot say how many.
+    // 1.MD.4 asks for counts, not comparisons.
     const { container } = render(<QuestionFigure figure={PETS} />)
     expect(container.querySelectorAll('line')).toHaveLength(7)  // 0..6
   })
 
   it('spaces the columns so long labels cannot collide', () => {
-    // Found by rendering it and looking, not by a test: at a fixed column
-    // width "storybooks" and "picture books" printed on top of each other.
-    // Both labels were present and correct in the DOM, so nothing here could
-    // see it -- on a figure whose entire job is to be read.
-    //
-    // The invariant the fix establishes: a column is at least as wide as its
-    // widest label needs.
+    // A column is at least as wide as its widest label needs.
     const bars = [{ label: 'storybooks', value: 5 },
                   { label: 'picture books', value: 7 }]
     const { container } = render(<QuestionFigure figure={{ type: 'bar_chart', bars }} />)
@@ -131,9 +113,7 @@ describe('a bar chart', () => {
 
 describe('a partitioned shape', () => {
   it('says how many parts and how many are shaded, not the fraction', () => {
-    // Naming "three quarters" would answer the question for a screen-reader
-    // user that a sighted one has to read off the picture -- two different
-    // questions from the same page.
+    // Naming the fraction would answer the question for a screen-reader user.
     render(<QuestionFigure figure={{ type: 'part_whole', parts: 4, shaded: 3 }} />)
     expect(screen.getByRole('img')).toHaveAccessibleName(
       'A shape split into 4 equal parts, 3 of them shaded.')
@@ -146,8 +126,7 @@ describe('a partitioned shape', () => {
   })
 
   it('fills the shaded parts and outlines the rest', () => {
-    // Filled versus outlined, not two colours: it survives being printed in
-    // black and white and does not depend on telling two hues apart.
+    // Filled versus outlined, not two colours: survives greyscale print.
     const { container } = render(
       <QuestionFigure figure={{ type: 'part_whole', parts: 4, shaded: 3 }} />)
     const fills = [...container.querySelectorAll('rect')]
@@ -168,17 +147,10 @@ describe('a partitioned shape', () => {
 })
 
 describe('every surface that presents a question', () => {
-  // Exhaustiveness, like the backend's close-site and _MODE_AWARE tests, and
-  // for the same reason: this shipped wired into two of five surfaces. A
-  // question rendered without its figure is not a smaller version of the
-  // question -- "3 rows of 4 same-size squares" with nothing to count is a
-  // different question, and the student answering it in one place and the
-  // teacher reviewing it in another see different things.
+  // Exhaustive: a question without its figure is a different question.
   const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..')
 
-  // Presents a *reference* to a question rather than the question: a
-  // `line-clamp-2` row in a "Recent Questions" list, with no options and no
-  // way to answer. A figure there is noise, not completeness.
+  // A clamped reference to a question, not the question itself.
   const REFERENCES_ONLY = [resolve(root, 'pages', 'teacher', 'Dashboard.jsx')]
 
   const walk = (dir) => readdirSync(dir).flatMap(name => {
@@ -193,11 +165,7 @@ describe('every surface that presents a question', () => {
       .filter(f => /\{(q|data|question)\.(question_text|text)\}/.test(
         readFileSync(f, 'utf8')))
     expect(presenting.length).toBeGreaterThan(0)
-    // `<QuestionFigure`, not `includes('QuestionFigure')`: the name alone is
-    // satisfied by a dangling import, which is precisely what removing the
-    // element leaves behind. The first version of this check passed against a
-    // build with the render deleted and the import kept. `no-unused-vars`
-    // would catch that, but lint is non-blocking in CI here, so it would land.
+    // `<QuestionFigure`, not the bare name, which a dangling import satisfies.
     const missing = presenting.filter(
       f => !readFileSync(f, 'utf8').includes('<QuestionFigure'))
     expect(missing).toEqual([])

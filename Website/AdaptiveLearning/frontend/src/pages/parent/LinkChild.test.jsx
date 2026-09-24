@@ -1,11 +1,4 @@
-/**
- * Linking sends the code the child made, not an id about the child.
- *
- * The page used to ask for the child's user id and tell the parent to have the
- * child read it out -- but that id is on every roster payload a teacher of that
- * child reads and in the URL of every report page about them, so possession was
- * never the handover the instructions described.
- */
+/** Linking sends the code the child made, not the child's id, which is not a secret. */
 import { it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -50,11 +43,9 @@ it('sends the code, and nothing that identifies the child', async () => {
 
   await waitFor(() => expect(apiFetch).toHaveBeenCalled())
   const [, options] = apiFetch.mock.calls.find(([p]) => p === '/api/parent/link-child')
-  // Upper-cased: the alphabet has no lowercase in it, so refusing a typed `a`
-  // would be a puzzle rather than a safeguard.
+  // Upper-cased: the code alphabet has no lowercase.
   expect(options.body).toEqual({ link_code: 'ABCD2345' })
-  // The old field is the whole point of the change -- a request still carrying
-  // it would link on a value the child never had to hand over.
+  // No child id in the request.
   expect(options.body).not.toHaveProperty('child_id')
 })
 
@@ -69,11 +60,7 @@ it('names the child it linked to, from the answer rather than from the input', a
 })
 
 it('shows the backend\'s reason for a refused code and stays on the page', async () => {
-  // "not valid or has expired" is one message on purpose: which of the two it
-  // is would be information about somebody else's account.
-  // `overrideApi` takes the method as its third argument, not as a prefix on
-  // the path the way `mockApi`'s keys do -- prefixed, it registers a route
-  // whose match string never fires, and the happy path answers instead.
+  // One message, so it leaks nothing; `overrideApi` takes the method as its third argument.
   overrideApi('/api/parent/link-child', () => {
     throw apiError(404, 'That code is not valid or has expired. Ask your child to create a new one.')
   }, 'POST')
@@ -87,8 +74,7 @@ it('shows the backend\'s reason for a refused code and stays on the page', async
 })
 
 it('tells the parent the child will know', async () => {
-  // "Notify, not block" is the recorded decision, so the page that creates the
-  // link has to say the notice happens rather than leaving it a surprise.
+  // "Notify, not block": the page says the child is told.
   draw()
 
   expect(screen.getByText(/your child will be told/i)).toBeInTheDocument()

@@ -19,9 +19,7 @@ export default function Login() {
     setLoading(true)
     try {
       await signIn(email, password)
-      // Let HomeRedirect pick the destination from the resolved role, rather
-      // than computing it here from `user_metadata.role`, which an admin
-      // account may not have set.
+      // HomeRedirect picks the destination from the resolved role, not `user_metadata.role`.
       navigate('/')
       toast.success('Welcome back! 👋')
     } catch (err) {

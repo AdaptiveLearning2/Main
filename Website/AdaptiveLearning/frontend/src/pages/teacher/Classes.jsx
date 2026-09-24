@@ -29,8 +29,7 @@ export default function Classes() {
       setClasses(await apiFetch('/api/classes'))
       setFailed(false)
     } catch (e) {
-      // Must set failed, not just leave the list empty, or a failed read
-      // shows "No classes yet" and invites the teacher to recreate them.
+      // Set failed, or a failed read shows "No classes yet".
       console.error('Failed to load classes:', e)
       setFailed(true)
     }
@@ -140,7 +139,7 @@ export default function Classes() {
               <div className="flex items-center justify-between p-5 flex-wrap gap-4">
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-gradient-to-br from-violet-400 to-purple-500 rounded-xl flex items-center justify-center text-white font-black text-lg shadow">
-                    {/* Falls back to '?': an empty name would make `''[0]` undefined and crash on .toUpperCase(). */}
+                    {/* '?' fallback: `''[0]` is undefined and .toUpperCase() would crash. */}
                     {(cls.name || '?')[0].toUpperCase()}
                   </div>
                   <div>

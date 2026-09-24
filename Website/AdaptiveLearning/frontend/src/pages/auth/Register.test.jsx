@@ -38,8 +38,7 @@ describe('the password strength meter', () => {
 })
 
 describe('the role picker', () => {
-  // Matched on the sub-label, not the title: the submit button reads "Create
-  // Student Account" too, so /student/ would match two elements.
+  // The sub-label: /student/ also matches the submit button.
   const STUDENT = { name: /practice & learn/i }
   const TEACHER = { name: /teach & analyze/i }
 
@@ -69,8 +68,7 @@ describe('the password visibility toggle', () => {
 
 describe('a refused sign-up', () => {
   it('does not repeat Supabase saying the address is already registered', async () => {
-    // Its own sentence tells anyone typing an address whether that person has
-    // an account here.
+    // Its own sentence would reveal whether the address has an account.
     signUp.mockRejectedValueOnce(new AuthApiError('User already registered', 422, 'user_already_exists'))
     toast.error.mockClear()
     await userEvent.type(draw(), 'Longenough1!')

@@ -4,8 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
 import Sessions from './Sessions'
 
-// Sessions reads the roster, then a session list per student, so the roster
-// read can succeed while individual per-student reads fail.
+// The roster read can succeed while individual per-student session reads fail.
 
 vi.mock('../../lib/api', () => ({ apiFetch: vi.fn() }))
 const { apiFetch } = await import('../../lib/api')
@@ -47,19 +46,17 @@ const ERROR = /couldn't load this class's sessions/i
 beforeEach(() => { apiFetch.mockReset() })
 
 it('does not call a class with no readable sessions an empty one', async () => {
-  // Every per-student read fails: this should show an error, not "no sessions".
   wire({ students: { a: new Error('down'), b: new Error('down') } })
 
   draw()
 
   expect(await screen.findByText(ERROR)).toBeInTheDocument()
   expect(screen.queryByText(EMPTY)).not.toBeInTheDocument()
-  // Not the partial banner either, since nothing loaded at all.
+  // Not the partial banner either: nothing loaded.
   expect(screen.queryByText(BANNER)).not.toBeInTheDocument()
 })
 
 it('still calls a class that genuinely ran no sessions empty', async () => {
-  // A class can genuinely have no sessions -- not every empty result is a failure.
   wire({ students: { a: [], b: [] } })
 
   draw()
@@ -70,17 +67,12 @@ it('still calls a class that genuinely ran no sessions empty', async () => {
 })
 
 it('reports a partly-loaded class as partly loaded, and shows what it has', async () => {
-  // A partial failure should show the banner and still display what loaded.
   wire({ students: { a: [SESSION], b: new Error('down') } })
 
   draw()
 
   expect(await screen.findByText(BANNER)).toBeInTheDocument()
-  // `findByText`, not `getByText`. The class list resolving and the roster
-  // arriving are two fetches, and the error clears on the first -- so this
-  // assertion sits in a window the next test in this file exists to describe.
-  // Synchronously it passed only because the microtasks happened to land in
-  // one tick locally; on a loaded CI runner they did not.
+  // `findByText`: the class list and roster are two fetches, so rows can trail the banner.
   expect(await screen.findByText('Ada')).toBeInTheDocument()
   expect(screen.queryByText(ERROR)).not.toBeInTheDocument()
   expect(screen.queryByText(EMPTY)).not.toBeInTheDocument()
@@ -96,17 +88,12 @@ it('offers a retry that does not need a page reload', async () => {
   await userEvent.click(screen.getByRole('button', { name: /try again/i }))
 
   await waitFor(() => expect(screen.queryByText(ERROR)).not.toBeInTheDocument())
-  // `findByText`, not `getByText`. The class list resolving and the roster
-  // arriving are two fetches, and the error clears on the first -- so this
-  // assertion sits in a window the next test in this file exists to describe.
-  // Synchronously it passed only because the microtasks happened to land in
-  // one tick locally; on a loaded CI runner they did not.
+  // `findByText`: the error clears before the roster arrives.
   expect(await screen.findByText('Ada')).toBeInTheDocument()
 })
 
 it('retries the class list when that is the read that failed', async () => {
-  // Retry must re-run the class list fetch here, not the per-student one --
-  // with no class selected, there's no roster to retry.
+  // With no class selected there is no roster to retry.
   wire({ classes: new Error('down') })
   draw()
   await screen.findByText(ERROR)
@@ -115,19 +102,12 @@ it('retries the class list when that is the read that failed', async () => {
   await userEvent.click(screen.getByRole('button', { name: /try again/i }))
 
   await waitFor(() => expect(screen.queryByText(ERROR)).not.toBeInTheDocument())
-  // `findByText`, not `getByText`. The class list resolving and the roster
-  // arriving are two fetches, and the error clears on the first -- so this
-  // assertion sits in a window the next test in this file exists to describe.
-  // Synchronously it passed only because the microtasks happened to land in
-  // one tick locally; on a loaded CI runner they did not.
+  // `findByText`: the error clears before the roster arrives.
   expect(await screen.findByText('Ada')).toBeInTheDocument()
 })
 
 it('does not flash "no sessions yet" between a successful retry and the roster', async () => {
-  // The retry path only. `loading` starts true, so the *first* load never showed
-  // this -- which is why it survived. On a retry `loading` is already false, and
-  // `loadClasses` picking a class programmatically left the page with no rows,
-  // no error and no skeleton for as long as the roster took to arrive.
+  // On a retry `loading` is already false, unlike the first load.
   const classes = new Error('down')
   wire({ classes })
 
@@ -144,8 +124,6 @@ it('does not flash "no sessions yet" between a successful retry and the roster',
 
   await userEvent.click(screen.getByRole('button', { name: /try again/i }))
 
-  // The roster has not landed. Whatever is on screen must not be an assertion
-  // that this class has no sessions.
   await waitFor(() => expect(releaseRoster).toBeTypeOf('function'))
   expect(screen.queryByText(EMPTY)).not.toBeInTheDocument()
 
@@ -154,11 +132,7 @@ it('does not flash "no sessions yet" between a successful retry and the roster',
 })
 
 it('does not let a slow class roster repaint the list under a newer class', async () => {
-  // This fetch fans out per student, so it is the slowest on the page by some
-  // margin -- switching class while one is in flight let the *previous* class's
-  // response land last and repaint the list, with the dropdown still reading
-  // the class you picked. The same bug class this file was patched for, one
-  // function further down.
+  // The roster fans out per student, so it is the slowest read to be superseded.
   const releases = {}
   apiFetch.mockImplementation(async (path) => {
     if (path === '/api/classes') return [{ id: 'c1', name: 'Year 7' }, { id: 'c2', name: 'Year 8' }]
@@ -185,12 +159,7 @@ it('does not let a slow class roster repaint the list under a newer class', asyn
 })
 
 // ─── abandoned sessions ────────────────────────────────────────────────────
-//
-// `!ended_at` alone was rendering "● LIVE", with a pulsing dot, for sessions
-// opened two months earlier and never closed — and a duration counted to
-// `Date.now()`, which read "83132m 45s". Both were claims the data does not
-// support. The backend decides which are abandoned so the threshold has one
-// definition.
+// The backend decides `abandoned`, so the threshold has one definition.
 
 const OPEN_RECENT = {
   id: 's-live', started_at: '2026-08-15T10:00:00Z', ended_at: null,
@@ -209,7 +178,7 @@ it('does not call a two-month-old open session live', async () => {
 })
 
 it('still calls a genuinely open session live', async () => {
-  // The negative above passes against a page that never says LIVE at all.
+  // Teeth for the negative above.
   wire({ students: { a: [OPEN_RECENT], b: [] } })
   draw()
   expect(await screen.findByText(/LIVE/)).toBeInTheDocument()
@@ -217,7 +186,6 @@ it('still calls a genuinely open session live', async () => {
 })
 
 it('shows no duration for an abandoned session', async () => {
-  // Counting to now for a session nobody touched since June measures nothing.
   wire({ students: { a: [OPEN_ABANDONED], b: [] } })
   draw()
   await screen.findByText(/never ended/i)
@@ -225,8 +193,7 @@ it('shows no duration for an abandoned session', async () => {
 })
 
 it('an abandoned session is not reported as done either', async () => {
-  // It was never ended, so its questions were never credited. "done" would
-  // claim they were.
+  // Never ended, so its questions were never credited.
   wire({ students: { a: [OPEN_ABANDONED], b: [] } })
   draw()
   await screen.findByText(/never ended/i)
@@ -234,12 +201,7 @@ it('an abandoned session is not reported as done either', async () => {
 })
 
 // ─── idle sessions ─────────────────────────────────────────────────────────
-//
-// `idle` was added as a fourth badge and the Duration cell was left behind, so
-// the badge stopped claiming the session was live while the clock beside it
-// went on counting to `Date.now()` for the up-to-six-hours before `abandoned`
-// takes over. Unlike an abandoned session we are not guessing here:
-// `last_activity_at` is the newest answer, which is when the student stopped.
+// `last_activity_at` is the newest answer, so an idle duration ends there, not at now.
 
 const OPEN_IDLE = {
   id: 's-idle', started_at: '2026-08-15T10:00:00Z', ended_at: null,
@@ -252,14 +214,11 @@ it('measures an idle session to its last activity, not to now', async () => {
   wire({ students: { a: [OPEN_IDLE], b: [] } })
   draw()
   await screen.findByText(/idle/i)
-  // 10:00 -> 10:23 is a fixed 23 minutes however long ago the fixture's day
-  // was; counting to now would grow without bound and never equal this.
+  // 10:00 -> 10:23; counting to now could never equal this.
   expect(screen.getByText('23m 0s')).toBeInTheDocument()
 })
 
 it('shows no duration for an idle session whose last activity is unknown', async () => {
-  // Same rule as `activity_known` gating the badge: an unknown last activity
-  // must not become a measurement, and must not silently resume ticking.
   wire({ students: { a: [{ ...OPEN_IDLE, last_activity_at: null }], b: [] } })
   draw()
   await screen.findByText(/idle/i)
@@ -267,7 +226,7 @@ it('shows no duration for an idle session whose last activity is unknown', async
 })
 
 it('still counts a live session to now', async () => {
-  // The negatives above pass against a page that shows no duration at all.
+  // Teeth for the negatives above.
   wire({ students: { a: [OPEN_RECENT], b: [] } })
   draw()
   await screen.findByText(/LIVE/)
@@ -275,8 +234,7 @@ it('still counts a live session to now', async () => {
 })
 
 it('treats a payload with no abandoned flag as live, not abandoned', async () => {
-  // An older backend does not send the field. Absent must not silently
-  // relabel every open session.
+  // An older backend does not send the field.
   const { abandoned, ...noFlag } = OPEN_RECENT   // eslint-disable-line no-unused-vars
   wire({ students: { a: [noFlag], b: [] } })
   draw()

@@ -1,14 +1,4 @@
-/**
- * The card that makes a link code, and its three states.
- *
- * A code is what a parent now needs to link to this account, so the block
- * replaced the one that showed the student's user id under "share this with a
- * parent to link accounts" -- an instruction that treated an id printed on
- * every roster payload as a shared secret.
- *
- * Only this card is exercised here; the rest of the page has no test file, and
- * a first one covering everything would be a different change.
- */
+/** The link-code card and its three states; a user id is not a secret to share. */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -66,8 +56,7 @@ it('offers to create one when there is none', async () => {
 })
 
 it('shows the outstanding code rather than making the student create another', async () => {
-  // Each new code invalidates the last, so a card that always offered "create"
-  // would hand out a replacement for a code already read out to a parent.
+  // Each new code invalidates the last.
   mockApi(happy({ code: 'ABCD2345', expires_at: IN_TEN_MINUTES(), retrieved: true }))
   render(<Profile />)
 
@@ -79,9 +68,7 @@ it('shows the outstanding code rather than making the student create another', a
 })
 
 it('says the read failed rather than offering to create one', async () => {
-  // The third state, and the one that matters: "we could not check" rendered as
-  // "you have none" puts a Create button in front of a student whose code is
-  // live, and pressing it invalidates the code a parent is about to type.
+  // "Could not check" as "none" offers Create, which would invalidate a live code.
   mockApi(happy({ code: null, expires_at: null, retrieved: false }))
   render(<Profile />)
 
@@ -99,8 +86,7 @@ it('treats a rejected request the same as a failed read', async () => {
 })
 
 it('does not print the user id where the code goes', async () => {
-  // The id is still on the account; what changed is that no surface presents it
-  // as the thing to hand a parent.
+  // No surface presents the id as the thing to hand a parent.
   mockApi(happy({ code: 'ABCD2345', expires_at: IN_TEN_MINUTES(), retrieved: true }))
   render(<Profile />)
 
@@ -110,8 +96,7 @@ it('does not print the user id where the code goes', async () => {
 })
 
 describe('a code on screen that stopped working', () => {
-  // A parent redeemed it, or it expired. The card re-reads it rather than
-  // going on offering a spent code as live until the page reloads.
+  // Redeemed or expired: the card re-reads rather than offering a spent code.
   const live = { code: 'ABCD2345', expires_at: IN_TEN_MINUTES(), retrieved: true }
   const spent = () => overrideApi('/api/student/link-code',
     () => ({ code: null, expires_at: null, retrieved: true }))

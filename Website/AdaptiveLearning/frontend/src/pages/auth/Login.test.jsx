@@ -1,8 +1,4 @@
-/**
- * What the page says when sign-in is refused. The sentence comes from
- * `lib/authErrors`, whose own test covers each kind of refusal; this pins that
- * the page uses it rather than printing Supabase's message.
- */
+/** The page words a refused sign-in via `lib/authErrors`, never Supabase's message. */
 import { it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'

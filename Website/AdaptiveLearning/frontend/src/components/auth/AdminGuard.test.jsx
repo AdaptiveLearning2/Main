@@ -2,9 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { vi } from 'vitest'
 import AdminGuard from './AdminGuard'
 
-// Not the security boundary -- every /api/admin/* endpoint checks again --
-// but it decides what the browser renders while the backend check is in
-// flight.
+// Not the security boundary (every /api/admin/* endpoint re-checks); it decides what renders meanwhile.
 
 const apiFetch = vi.fn()
 let authState
@@ -22,8 +20,7 @@ beforeEach(() => {
 })
 
 it('asks the backend rather than reading a role from the session', async () => {
-  // The role on the session comes from user_metadata, which the client can
-  // rewrite -- so this must ask the backend instead of trusting it.
+  // The session's role is client-writable user_metadata.
   authState = { user: { id: 'u1' }, loading: false, role: 'student' }
   apiFetch.mockResolvedValue({ is_admin: true })
 
@@ -39,8 +36,7 @@ it('renders nothing but a loader while the check is in flight', async () => {
 
   render(<AdminGuard><div>console</div></AdminGuard>)
 
-  // An unanswered check is not a refusal -- treating it as one would bounce
-  // an admin off their own page on every load.
+  // An unanswered check is not a refusal.
   expect(screen.getByText('loading')).toBeInTheDocument()
   expect(screen.queryByText('console')).not.toBeInTheDocument()
   expect(screen.queryByText(/redirected/)).not.toBeInTheDocument()
@@ -50,8 +46,7 @@ it('renders nothing but a loader while the check is in flight', async () => {
 })
 
 it('redirects a non-admin away instead of showing an error', async () => {
-  // They followed a stale link, not a broken feature, so redirect rather than
-  // show an error.
+  // A stale link, not a broken feature: redirect.
   apiFetch.mockRejectedValue(Object.assign(new Error('Forbidden'), { status: 403 }))
 
   render(<AdminGuard><div>console</div></AdminGuard>)

@@ -16,8 +16,7 @@ describe('ScaleNote', () => {
     expect(combineScales([{ score_scale: { min: 1, max: 1 } }, { score_scale: { min: 2, max: 2 } }]))
       .toEqual({ min: 1, max: 2 })
     expect(combineScales([{}, { score_scale: null }])).toBeNull()
-    // A half-populated row is unknown, not a change: filtered on `min`
-    // alone it yielded a NaN maximum that the mixed check accepted.
+    // A half-populated row is unknown, not a change.
     expect(combineScales([{ score_scale: { min: 1 } }])).toBeNull()
     expect(isMixedScale(combineScales([{ score_scale: { min: 1 } }, { score_scale: { min: 1, max: 1 } }]))).toBe(false)
     expect(isMixedScale(combineScales([{ score_scale: { min: 2, max: 2 } }]))).toBe(false)
@@ -27,8 +26,7 @@ describe('ScaleNote', () => {
     const { rerender } = render(<ScaleNote scale={{ min: 1, max: 2 }} what="These" />)
     expect(screen.getByRole('note')).toHaveTextContent(/focus and stress scores/)
     expect(screen.getByRole('note')).toHaveTextContent(/before and after/)
-    // Scale 3 is the local calm source: it moves stress, not focus, and it
-    // runs beside scale 2 rather than after it.
+    // Scale 3 (local calm) moves stress, not focus, and runs beside scale 2.
     rerender(<ScaleNote scale={{ min: 2, max: 3 }} what="These" />)
     expect(screen.getByRole('note')).not.toHaveTextContent(/focus/)
     expect(screen.getByRole('note')).not.toHaveTextContent(/before and after/)

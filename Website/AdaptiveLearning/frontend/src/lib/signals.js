@@ -1,16 +1,9 @@
 import { apiFetch } from './api'
 
 /**
- * The backend does the actual sample writing — it polls the EEGResearch
- * sidecar on :8001 and writes to Supabase. This just toggles that polling
- * on/off for the current session.
- *
- * Bringing the stream up and recording are two calls, not one. Pairing needs
- * the poller (it is what starts the sidecar's device stream, and it feeds
- * contact and battery to the page), but a student who paired and never
- * started a question has not had a lesson recorded -- so `start({record:
- * false})` at Connect, and `start({record: true})` on the first question,
- * which arms the running poller in place. Ending the session stops it.
+ * Toggles the backend's pull-mode poller for a session.
+ * `start({record: false})` at Connect (stream only), `start({record: true})`
+ * on the first question, which arms the running poller in place.
  */
 export function createSignalRecorder({ sessionId, deviceId }) {
   let active = false
@@ -18,7 +11,6 @@ export function createSignalRecorder({ sessionId, deviceId }) {
 
   const start = async ({ record = true } = {}) => {
     if (!sessionId) return { ok: false }
-    // Already up and already in the asked-for state: nothing to send.
     if (active && recording === record) return { ok: true, running: true, already: true }
     try {
       const res = await apiFetch('/api/eeg/start', {
@@ -37,13 +29,12 @@ export function createSignalRecorder({ sessionId, deviceId }) {
     try {
       await apiFetch('/api/eeg/stop', { method: 'POST', body: { session_id: sessionId } })
     } catch {
-      // Releasing a stream that has already gone is not a failure worth a toast.
+      // Already gone: not worth a toast.
     }
     active = false
     recording = false
   }
 
-  // auto-stop on tab close
   const onUnload = () => { stop() }
   window.addEventListener('beforeunload', onUnload)
 
@@ -59,20 +50,9 @@ export function createSignalRecorder({ sessionId, deviceId }) {
 export async function eegHealth() {
   try { return await apiFetch('/api/eeg/health') }
   catch (e) {
-    // A refused probe is not a fact about the headband. `available: false`
-    // says the sidecar could not be reached; a 429 says only that this
-    // endpoint was asked too often, and every open lesson asks it every 5 s.
-    // Collapsed into `available: false`, a rate limit renders as "offline" on
-    // every student's page with nothing saying a limit caused it -- rule 1,
-    // on the state that decides whether Connect is even offered.
+    // A 429 is a third state (status unknown), never "offline".
     if (e.status === 429) return { refused: true, error: e.message }
-    // `answered: false`, the marker `eegStatus` already carries. Without it
-    // this fallback is shape-identical to an answer the backend gives on
-    // purpose: `/api/eeg/health` returns `{available: false, error}` when the
-    // sidecar is *reachable* and the learner token is misconfigured -- "a
-    // config error, not an outage, so report it rather than 500". Read as one
-    // state, a working backend was reported as an unreachable one, naming the
-    // only layer that was demonstrably fine.
+    // `answered: false` tells this apart from the backend's own `{available: false}`.
     return { answered: false, available: false, error: e.message }
   }
 }
@@ -80,11 +60,7 @@ export async function eegHealth() {
 export async function eegStatus(deviceId) {
   const path = deviceId ? `/api/eeg/status?device_id=${encodeURIComponent(deviceId)}` : '/api/eeg/status'
   try { return await apiFetch(path) }
-  // `answered: false` beside the shape callers already read. The poller half
-  // of this fallback is a deliberate claim -- nothing is flowing if we cannot
-  // ask -- but `service: false` is not one this read has earned, and a caller
-  // that treats it as an answer would learn "the sidecar is down" from a
-  // request that never landed.
+  // `answered: false`: callers must not read `service: false` as an answer.
   catch { return { answered: false, service: false, poller: { running: false } } }
 }
 

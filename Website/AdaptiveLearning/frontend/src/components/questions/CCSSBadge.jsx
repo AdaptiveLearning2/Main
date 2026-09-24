@@ -1,13 +1,4 @@
-/**
- * The Common Core code a question is scored against, as a small badge.
- *
- * An enrichment, like `QuestionFigure`: nothing rendered when the code is
- * absent, never a placeholder. A question written before the column existed
- * carries NULL, and "no standard" is not something to announce for a question
- * that has one.
- *
- * One style, no tone map: a standard is a citation, not a good or bad reading.
- */
+/** A question's Common Core code as a badge; renders nothing (never a placeholder) when absent. */
 export default function CCSSBadge({ standard }) {
   if (typeof standard !== 'string' || !standard.trim()) return null
   return (

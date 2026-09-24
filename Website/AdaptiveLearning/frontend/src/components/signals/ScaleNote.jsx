@@ -1,15 +1,7 @@
 import { describeScaleChange } from '../../lib/scoreScale'
 
-// A series measured on two score scales is not one series.
-//
-// When a rollup-backed payload's `score_scale` range straddles a change in
-// the headband's scoring (see lib/scoreScale.js), the numbers on either side
-// are not comparable and the chart cannot show where the split is, so it has
-// to be said in words -- naming which figures it moves (the local calm source
-// moves stress and leaves focus alone) and whether the split is a step in
-// time or two sidecars scoring calm two ways at once. Renders nothing for a
-// single scale or for a payload predating the label: there is nothing true to
-// add, and a permanent caption teaches readers to skip it.
+// Says in words when a `score_scale` range mixes scales (see lib/scoreScale.js).
+// Renders nothing for a single or unlabelled scale.
 export default function ScaleNote({ scale, what = 'These figures' }) {
   const change = describeScaleChange(scale)
   if (!change) return null

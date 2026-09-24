@@ -5,24 +5,14 @@ import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Activity,
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import ChildWithdrewBanner from '../../components/consent/ChildWithdrewBanner'
-// Shared with SignalPanel rather than redefined, so a fix there doesn't miss
-// a duplicate copy here. emotionOn is aliased to faceIncluded, this page's
-// existing name for the same check.
 import { pct, emotionOn as faceIncluded } from '../../components/signals/SignalPanel'
 
-// Only the fields the tiles below actually render. `engagement` and
-// `face_attention` are deliberately excluded — this page has no tile for
-// either, and counting them would show a "something is broken" row of N/As
-// for a child whose only reading is one of those. Keep this list and the
-// tiles below in step.
+// Only the fields the tiles below render; keep in step with them.
 function hasSignalSummary(summary) {
   return Boolean(summary && (summary.sessions > 0 || summary.focus != null || summary.stress != null))
 }
 
-// Whether the aggregate was actually read. A failed summary query still
-// answers 200 with defaults, which would otherwise read as a quiet week
-// instead of a broken read. Absent on older payloads, which came from a
-// working read by definition.
+// A failed summary still answers 200 with defaults; absent on older payloads means read.
 function signalsRetrieved(summary) {
   return summary?.retrieved !== false
 }
@@ -39,13 +29,11 @@ export default function ParentDashboard() {
     apiFetch('/api/parent/children')
       .then(c => { if (!cancelled) { setChildren(c || []); setError(false); setLoading(false) } })
       .catch(() => { if (!cancelled) { setError(true); setLoading(false) } })
-    // Prevents setting state after an unmount mid-flight.
     return () => { cancelled = true }
   }, [])
 
   return (
     <div className="p-6 lg:p-8 pb-12 space-y-8">
-      {/* Notifies the parent when a child withdraws consent for a sensor. */}
       <ChildWithdrewBanner />
 
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
@@ -53,8 +41,7 @@ export default function ParentDashboard() {
         <p className="text-gray-500 dark:text-gray-400 mt-1">Here's how your {children.length === 1 ? 'child is' : 'children are'} doing this week.</p>
       </motion.div>
 
-      {/* A failed refresh with rows already on screen is a banner, not a
-          takeover — don't blank out data that's still valid. */}
+      {/* A failed refresh over existing rows is a banner, not a takeover. */}
       {error && children.length > 0 && (
         <div className="rounded-2xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
           Couldn't refresh this page just now — showing the last data loaded.
@@ -88,7 +75,6 @@ export default function ParentDashboard() {
               : 0
             const signals = child.signal_summary || {}
             const retrieved = signalsRetrieved(signals)
-            // Only render tiles from figures that were actually read.
             const showSignals = retrieved && hasSignalSummary(signals)
             const initial = (child.name || child.email || '?')[0].toUpperCase()
             return (
@@ -146,10 +132,7 @@ export default function ParentDashboard() {
                 ) : (
                   <div className="p-4 border-t border-gray-50 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/20">
                     <div className="rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 p-4 text-sm text-gray-500 dark:text-gray-400">
-                      {/* Say plainly whether facial signals were read or not
-                          — don't imply "no data" when they were never read.
-                          A failed read gets neither claim, since nothing was
-                          measured to report on. */}
+                      {/* Say whether facial signals were read; a failed read gets neither claim. */}
                       {!retrieved
                         ? "This week's signal data couldn't be loaded just now — the figures above are unaffected."
                         : <>

@@ -77,9 +77,8 @@ function ConsentPanel({ flag, active, onSet, busy }) {
   const [minutes, setMinutes] = useState(30)
   const [ack, setAck] = useState(false)
 
-  // Clear the checkbox when enforcement resumes, so it doesn't carry over
-  // into a later bypass. Done during render, not in an effect, so it never
-  // paints still ticked for a frame.
+  // Clear the checkbox when enforcement resumes so it can't carry into a later
+  // bypass. During render, not an effect, so it never paints ticked for a frame.
   useValueChange(active, next => { if (next) setAck(false) })
 
   const until = flag?.bypass_until ? new Date(flag.bypass_until) : null
@@ -162,8 +161,7 @@ function ConsentPanel({ flag, active, onSet, busy }) {
 export default function AdminFlags() {
   const [env, setEnv] = useState([])
 
-  // Poll every 30s: the bypass expires on the clock, not on a write, so
-  // without polling the banner would keep claiming a bypass that's over.
+  // Poll: the bypass expires on the clock, not on a write.
   const { data, busy, error, mutate } = useAdminResource({
     load: useCallback(() => apiFetch('/api/admin/flags'), []),
     pollMs: 30_000,
@@ -171,8 +169,7 @@ export default function AdminFlags() {
   const flags = data?.flags ?? null
   const active = data?.consent_enforcement_active ?? true
 
-  // Separate from the hook's poll: a failure here just empties this list,
-  // not the whole page.
+  // Separate from the hook's poll, so a failure empties this list, not the page.
   useEffect(() => {
     apiFetch('/api/admin/env-flags').then(d => setEnv(d.flags || [])).catch(() => setEnv([]))
   }, [])

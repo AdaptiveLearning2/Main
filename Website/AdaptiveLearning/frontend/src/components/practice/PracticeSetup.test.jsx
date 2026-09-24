@@ -95,19 +95,13 @@ it('passes the picked question count to onStart, and sends nothing extra to the 
   await userEvent.click(screen.getByRole('button', { name: /start practice/i }))
 
   expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ id: 'sess-1' }), 20)
-  // The count is a client-side stopping rule: the backend serves one question
-  // per request and has no view on how many are coming, so a `questionCount`
-  // in this body would be a field nothing reads.
+  // The count is a client-side stopping rule; the backend would not read it.
   const [, opts] = apiFetch.mock.calls.find(([path]) => path === '/api/practice-sessions/start')
   expect(opts.body).not.toHaveProperty('questionCount')
   expect(opts.body).not.toHaveProperty('question_count')
 })
 
-/**
- * Flashcards end on "Done", at any point -- there is no deck size. A count
- * picker on screen while Flashcards is selected would name a limit that does
- * not exist.
- */
+/** Flashcards have no deck size, so no count picker. */
 it('hides the question count in flashcard mode', async () => {
   draw()
   await screen.findByRole('button', { name: /ordering/i })

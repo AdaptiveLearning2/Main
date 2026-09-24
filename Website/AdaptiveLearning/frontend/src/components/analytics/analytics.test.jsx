@@ -10,14 +10,7 @@ import FocusAccuracy from './FocusAccuracy'
 import ClassSignalTrend from './ClassSignalTrend'
 import ClassSignalRoster from './ClassSignalRoster'
 
-/**
- * The teacher analytics panels.
- *
- * Almost everything here is about the states a panel must keep apart. A chart
- * that renders an empty axis for a failed read is the failure this whole
- * section was written to avoid, and it is invisible: the page looks fine, and
- * it is telling a teacher that nobody in the class is working.
- */
+/** Teacher analytics panels: a failed read must never render as an empty class. */
 
 const cell = (accuracy, attempted, correct) => ({ accuracy, attempted, correct })
 
@@ -45,9 +38,7 @@ describe('Panel', () => {
   })
 
   it('a failure outranks an empty payload', () => {
-    // A failed aggregate answers 200 with an empty default payload, so both
-    // flags arrive true together. Rendering "nothing recorded" there is the
-    // exact lie the flag exists to prevent.
+    // A failed aggregate answers 200 with an empty payload, so both flags arrive true.
     render(<Panel title="T" failed empty what="the trend" emptyNote="Nothing yet.">{CHILD}</Panel>)
     expect(screen.getByText(/couldn't load the trend/i)).toBeInTheDocument()
   })
@@ -59,8 +50,6 @@ describe('Heatmap', () => {
   const COLUMNS = [{ key: 1, label: 'algebra' }, { key: 2, label: 'geometry' }]
 
   it('is a real table with row and column headers', () => {
-    // Not an sr-only copy beside a picture: a matrix *is* a table, and a
-    // reader can ask for one cell by its two headers.
     render(<Heatmap caption="c" rowHeader="Student" columns={COLUMNS} rows={[
       { key: 'a', label: 'Ada', cells: [cell(0.5, 10, 5), cell(1, 4, 4)] },
     ]} />)
@@ -70,8 +59,6 @@ describe('Heatmap', () => {
   })
 
   it('reads a cell out with its denominator, not just a percentage', () => {
-    // "75%" and "3 of 4 correct" are different facts, and the second is the
-    // one that says whether to believe the first.
     render(<Heatmap caption="c" rowHeader="Student" columns={COLUMNS} rows={[
       { key: 'a', label: 'Ada', cells: [cell(0.75, 400, 300), null] },
     ]} />)
@@ -79,8 +66,6 @@ describe('Heatmap', () => {
   })
 
   it('an unattempted topic is not the zero colour', () => {
-    // A topic nobody was served is not a topic they failed, and colouring it
-    // as the worst cell on the board says the opposite.
     render(<Heatmap caption="c" rowHeader="Student" columns={COLUMNS} rows={[
       { key: 'a', label: 'Ada', cells: [null, cell(0, 8, 0)] },
     ]} />)
@@ -97,7 +82,6 @@ describe('Heatmap', () => {
     ]} />)
     expect(screen.getByLabelText(/algebra: 100%, 1 of 1 correct, too few attempts/))
       .toBeInTheDocument()
-    // The confident cell carries no such warning.
     expect(screen.getByLabelText(/geometry: 100%, 40 of 40 correct$/)).toBeInTheDocument()
   })
 
@@ -124,8 +108,6 @@ describe('ClassTopicHeatmap', () => {
   }
 
   it('puts the class figure under each topic heading', () => {
-    // A column that is red all the way down is a teaching problem, not several
-    // students having a bad week, and the class figure is what says which.
     render(<ClassTopicHeatmap data={DATA} />)
     const header = screen.getByRole('columnheader', { name: /algebra/ })
     expect(header).toHaveTextContent('50% class')
@@ -163,15 +145,13 @@ describe('ClassAccuracyTrend', () => {
   })
 
   it('a day nobody answered reads as not recorded, never as zero', () => {
-    // The sr-only table is where this shows. A 0% row would be a claim the
-    // class answered and got everything wrong.
+    // The sr-only table is where this shows.
     render(<ClassAccuracyTrend data={{ retrieved: true, days: DAYS, attempted: 10, timezone: 'UTC' }} />)
     expect(screen.getByRole('table')).toHaveTextContent(/not recorded/i)
   })
 
   it('announces percentages as percentages', () => {
-    // The rows are pre-scaled, so the column carries a `%` unit and no
-    // `scale`. Combining the two would announce 7000%.
+    // Rows are pre-scaled: a `%` unit and no `scale`, or it announces 7000%.
     render(<ClassAccuracyTrend data={{ retrieved: true, days: DAYS, attempted: 10, timezone: 'UTC' }} />)
     expect(screen.getByRole('img', { name: /Accuracy 70%/ })).toBeInTheDocument()
   })
@@ -209,7 +189,6 @@ describe('ClassTimeOfDay', () => {
   })
 
   it('only shows the days the class has worked', () => {
-    // 168 cells of which a school uses thirty teaches a reader to skip it.
     render(<ClassTimeOfDay data={DATA} />)
     expect(screen.queryByRole('rowheader', { name: 'Saturday' })).not.toBeInTheDocument()
     expect(screen.getByRole('rowheader', { name: 'Wednesday' })).toBeInTheDocument()
@@ -235,8 +214,7 @@ describe('FocusAccuracy', () => {
   ]
 
   it('withholds a correlation over too few answers but still draws the bars', () => {
-    // r over a dozen answers is noise, and it renders as one objective-looking
-    // number. The bars carry their own sample sizes, which is why they stay.
+    // The bars carry their own sample sizes; a lone r does not.
     render(<FocusAccuracy data={{
       retrieved: true, eeg_enabled: true, sufficient: false,
       correlation: null, pairs: 8, min_pairs: 30, buckets: BUCKETS,
@@ -256,10 +234,6 @@ describe('FocusAccuracy', () => {
   })
 
   it('an exact zero is not a negative relationship', () => {
-    // `corr()` returns 0 whenever the two are perfectly unrelated, which is a
-    // realistic answer rather than an edge case. `r > 0 ? … : 'Negative'`
-    // labelled it "Negative: little or no relationship" — a sentence that
-    // contradicts itself and points a teacher at a trend that is not there.
     render(<FocusAccuracy data={{
       retrieved: true, eeg_enabled: true, sufficient: true,
       correlation: 0, pairs: 400, min_pairs: 30, buckets: BUCKETS,
@@ -270,9 +244,7 @@ describe('FocusAccuracy', () => {
   })
 
   it('a coefficient that rounds to zero agrees with the figure printed beside it', () => {
-    // 0.004 prints as `r = 0.00`, so a signed label would contradict the
-    // number in the same sentence. The direction is decided on the rounded
-    // value for exactly that reason.
+    // Direction is decided on the rounded value, so it agrees with `r = 0.00`.
     render(<FocusAccuracy data={{
       retrieved: true, eeg_enabled: true, sufficient: true,
       correlation: 0.004, pairs: 400, min_pairs: 30, buckets: BUCKETS,
@@ -282,9 +254,7 @@ describe('FocusAccuracy', () => {
   })
 
   it('still names a direction when there is one', () => {
-    // The negative tests above pass against a component that never says
-    // "Positive" or "Negative" at all, so this is what makes them mean
-    // something.
+    // Gives the negative tests above teeth.
     render(<FocusAccuracy data={{
       retrieved: true, eeg_enabled: true, sufficient: true,
       correlation: -0.55, pairs: 400, min_pairs: 30, buckets: BUCKETS,
@@ -294,8 +264,7 @@ describe('FocusAccuracy', () => {
   })
 
   it('enough data with no computable coefficient is not too little data', () => {
-    // `corr()` answers null when an input has no variance. Saying "too few
-    // answers" there sends a teacher looking for the wrong problem.
+    // `corr()` answers null when an input has no variance.
     render(<FocusAccuracy data={{
       retrieved: true, eeg_enabled: true, sufficient: true,
       correlation: null, pairs: 400, min_pairs: 30, buckets: BUCKETS,
@@ -310,16 +279,12 @@ describe('FocusAccuracy', () => {
       retrieved: true, eeg_enabled: false, eeg_revoked_at: '2026-06-01T00:00:00Z',
       consent_retrieved: true, buckets: [],
     }} />)
-    // The month and day are not pinned: `fmtDate` formats in the reader's own
-    // locale and timezone, so a UTC midnight is the previous day for any
-    // runner behind UTC. Pinning it would make this fail on a machine rather
-    // than on a regression.
+    // Date not pinned: `fmtDate` uses the runner's timezone.
     expect(screen.getByText(/headband recording is off since \w+ \d+/i)).toBeInTheDocument()
   })
 
   it('a declined channel with no recorded date still says the sensor is off', () => {
-    // `fmtDate` answers null for a missing or unparseable date, and the
-    // sentence has to survive that rather than reading "off since ".
+    // `fmtDate` answers null for a missing date.
     render(<FocusAccuracy data={{
       retrieved: true, eeg_enabled: false, eeg_revoked_at: null,
       consent_retrieved: true, buckets: [],
@@ -329,8 +294,6 @@ describe('FocusAccuracy', () => {
   })
 
   it('an unreadable consent record is not a withdrawal', () => {
-    // "They turned this off" is a claim about a decision. A failed read has
-    // not earned it.
     render(<FocusAccuracy data={{
       retrieved: true, eeg_enabled: true, consent_retrieved: false, buckets: [],
     }} />)
@@ -361,8 +324,7 @@ describe('AlertFeed', () => {
   })
 
   it('describes a timed-out session and says the work was kept', () => {
-    // The reassurance is load-bearing: "session timed out" alone reads as
-    // "their work was lost", which is the first thing a teacher would ask.
+    // "Timed out" alone reads as "work was lost".
     render(<AlertFeed data={{
       retrieved: true, days: 7,
       alerts: [alert('session_auto_closed', { detail: { questions_answered: 12 } })],
@@ -397,9 +359,7 @@ describe('AlertFeed', () => {
   })
 
   it('shows an unrecognised kind rather than dropping it', () => {
-    // The CHECK constraint means this should be impossible. If it happens, a
-    // visible unstyled row is what gets it reported; skipping it silently
-    // would make a real alert invisible.
+    // The CHECK makes this near-impossible; a visible row is what gets it reported.
     render(<AlertFeed data={{
       retrieved: true, days: 7, alerts: [alert('something_new')],
     }} />)
@@ -407,8 +367,6 @@ describe('AlertFeed', () => {
   })
 
   it('uses the school day from the payload, not the browser', () => {
-    // Re-deriving it here would show a teacher marking from another timezone
-    // the wrong day for the lesson.
     render(<AlertFeed data={{
       retrieved: true, days: 7,
       alerts: [alert('signals_missing', { school_day: '2026-06-10' })],
@@ -434,8 +392,6 @@ describe('AlertFeed', () => {
   })
 
   it('never renders a judgement about the student', () => {
-    // The scope is the feature. If a future kind smuggles an inference in,
-    // this is what should stop it.
     render(<AlertFeed data={{
       retrieved: true, days: 7,
       alerts: [alert('session_auto_closed'), alert('signals_missing')],
@@ -449,12 +405,7 @@ describe('AlertFeed', () => {
 })
 
 // ─── the cohort panels ─────────────────────────────────────────────────────
-//
-// Two surfaces over one payload. What matters here is the same set of
-// distinctions the rest of this file is about, plus one that is only this
-// section's: the per-student rows are withheld by the *backend* below its
-// floor, so these tests pin that the panel explains the absence rather than
-// rendering a blank where a table should be.
+// Per-student rows are withheld by the backend below its floor; the panel must explain the absence.
 
 describe('ClassSignalTrend', () => {
   const day = (d, over) => ({
@@ -477,9 +428,7 @@ describe('ClassSignalTrend', () => {
   })
 
   it('describes the ratio series as percentages, not as 0 to 1', () => {
-    // The scale lives in the column spec, and getting it wrong is invisible on
-    // screen -- the chart looks right while the text alternative announces a
-    // session ranging 42-78% as "Focus 0% to 1%".
+    // A wrong column `scale` is invisible on screen and only shows in the text alternative.
     render(<ClassSignalTrend data={{
       retrieved: true, days: 30, timezone: 'UTC',
       series: [day('2026-06-10'), day('2026-06-11', { avg_focus: 0.78 })],
@@ -490,16 +439,7 @@ describe('ClassSignalTrend', () => {
   })
 
   it('gives the table no heart column when no line is drawn for one', () => {
-    // Asserted on the *table*, not the summary sentence, because the sentence
-    // omits an empty series on its own -- `describeSeries` returns null when
-    // nothing was recorded. So a test reading the aria-label passes whether or
-    // not the column is conditional, which makes it inert against exactly the
-    // bug it names.
-    //
-    // The table is where it shows: an unconditional column renders a
-    // "not recorded" cell on every row, so a class with no headband announces
-    // a heart rate it never had. That is the defect CLAUDE.md records shipping
-    // twice, and this is the assertion that can see it.
+    // Asserted on the table: `describeSeries` drops an empty series from the sentence on its own.
     render(<ClassSignalTrend data={{
       retrieved: true, days: 30, series: [day('2026-06-10')],
     }} />)
@@ -528,13 +468,7 @@ describe('ClassSignalTrend', () => {
   })
 
   it('hides every series when the teacher has hidden sensor data, not just heart', () => {
-    // Focus/stress/engagement are EEG-derived and are sensor data too. An
-    // earlier version gated only the heart line, so the cognitive lines went on
-    // drawing real values underneath a note saying sensor data was hidden.
-    //
-    // The first version of this test asserted on that note, which is rendered
-    // either way -- so it passed against the bug it was written for. Assert on
-    // the data instead: no chart, no sr-only table, no numbers.
+    // EEG series are sensor data too. Assert on the data, not the note, which renders either way.
     render(<ClassSignalTrend hideSensors data={{
       retrieved: true, days: 30,
       series: [day('2026-06-10'), heart('2026-06-10', 72)],
@@ -574,8 +508,7 @@ describe('ClassSignalRoster', () => {
   })
 
   it('says why a figure is missing rather than showing a bare dash', () => {
-    // The four-state rule: a declined channel reads as a decision, an
-    // unreadable consent read as unknown, and neither as "no data".
+    // Declined reads as a decision, unreadable consent as unknown, neither as "no data".
     render(<ClassSignalRoster data={{
       retrieved: true, days: 30, class_size: 5,
       per_student: [
@@ -610,13 +543,7 @@ describe('ClassSignalRoster', () => {
   })
 
   it('says a failed per-student read is unknown, never that nothing was recorded', () => {
-    // The exact payload the backend produces when the totals RPC fails and the
-    // trend's succeeds: rows present, `retrieved: false`, null averages, zero
-    // counts. Zero counts are what `offLabel` reads as "No sensor" -- an
-    // assertion that the student recorded nothing, when nobody asked.
-    //
-    // The backend grew this flag to stop exactly that claim one layer in; it is
-    // only a fix if a consumer reads it.
+    // The backend's payload when the totals RPC fails: zero counts that `offLabel` would read as "No sensor".
     render(<ClassSignalRoster data={{
       retrieved: true, days: 30, class_size: 5, summaries_retrieved: false,
       per_student: [student('a', {
@@ -627,14 +554,11 @@ describe('ClassSignalRoster', () => {
     }} />)
     expect(screen.queryByText(/no sensor/i)).not.toBeInTheDocument()
     expect(screen.getAllByText(/unavailable/i).length).toBeGreaterThanOrEqual(3)
-    // And the day count does not assert zero either.
     expect(screen.queryByRole('cell', { name: '0' })).not.toBeInTheDocument()
   })
 
   it('still separates a real empty channel from an unread one', () => {
-    // Teeth for the test above: with `retrieved: true` the same zero counts are
-    // a genuine finding and must keep saying so, or the fix would have replaced
-    // one wrong label with another.
+    // Teeth for the test above: with `retrieved: true` zero counts are a genuine finding.
     render(<ClassSignalRoster data={{
       retrieved: true, days: 30, class_size: 5,
       per_student: [student('a', {
@@ -648,12 +572,7 @@ describe('ClassSignalRoster', () => {
   })
 
   it('keeps a known revocation ahead of an unread row', () => {
-    // The compound case the two tests above miss by covering `retrieved` false
-    // and true separately. Consent comes from a different query than the
-    // averages, so when the totals read fails the revocation and its date are
-    // still fully known -- and "Unavailable" both discards that and implies a
-    // retry might produce a number, when for a revoked channel none can ever
-    // appear.
+    // Consent comes from a different query, so a revocation is still known when the totals read fails.
     render(<ClassSignalRoster data={{
       retrieved: true, days: 30, class_size: 5, summaries_retrieved: false,
       per_student: [student('a', {
@@ -664,20 +583,16 @@ describe('ClassSignalRoster', () => {
         heart_included: false, heart_revoked_at: '2026-06-03T00:00:00Z',
       })],
     }} />)
-    // Every signal cell knows why it is empty, and none of them blames the outage.
     expect(screen.getAllByText(/off since/i).length).toBe(3)
     expect(screen.queryByText(/unavailable/i)).not.toBeInTheDocument()
   })
 
   it('still reports the outage for a channel that is on', () => {
-    // Teeth for the precedence: the revocation wins only where there is one.
-    // A consented channel on an unread row is genuinely unknown.
+    // The revocation wins only where there is one.
     render(<ClassSignalRoster data={{
       retrieved: true, days: 30, class_size: 5, summaries_retrieved: false,
       per_student: [student('a', {
-        // An unread row carries no averages at all -- the backend nulls every
-        // one of them, so leaving a default in place would test a payload it
-        // never sends.
+        // The backend nulls every average on an unread row.
         focus: null, stress: null, heart_rate_bpm: null,
         cognitive_samples: 0, heart_samples: 0, days_recorded: 0,
         retrieved: false,
@@ -701,9 +616,7 @@ describe('ClassSignalRoster', () => {
 
 describe('ClassSignalTrend does not draw engagement beside focus', () => {
   it('gives the table no Engagement column', () => {
-    // One number under two names (signal_mapping.py). Asserted on the
-    // table, not the aria-label: the sentence omits an empty series on its
-    // own, so re-adding the column would pass a sentence check green.
+    // One number under two names (signal_mapping.py). Asserted on the table, not the aria-label.
     const day = (d) => ({
       day: d, channel: 'cognitive', avg_focus: 0.6, avg_stress: 0.3,
       avg_engagement: 0.6, sample_count: 100, trusted_sample_count: 100, student_count: 3,
@@ -734,8 +647,7 @@ describe('the score-scale caption on the class panels', () => {
   })
 
   it('does not caption series the chart does not draw', () => {
-    // A week of poor contact: the rollup rows exist, carry a scale range,
-    // and produced no average. The note would name lines nobody can see.
+    // Poor contact: rollup rows carry a scale range but no average.
     render(<ClassSignalTrend data={trend({ min: 1, max: 2 }, {
       series: [cog('2026-06-10', { avg_focus: null, avg_stress: null })],
     })} />)
@@ -762,8 +674,7 @@ describe('the score-scale caption on the class panels', () => {
   })
 
   it('captions a roster where one student is on the local calm scale beside sdk classmates', () => {
-    // 3..3 on its own is one scale; beside a 2..2 classmate the outlier flag
-    // compares stress values on two scales, and the caption says stress only.
+    // Beside a 2..2 classmate, 3..3 puts stress on two scales; the caption names stress only.
     const student = (id, score_scale) => ({
       student_id: id, display_name: id,
       summary: { focus: 0.6, stress: 0.3, cognitive_samples: 10, days_recorded: 2,

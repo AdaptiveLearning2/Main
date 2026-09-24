@@ -2,8 +2,7 @@ import { render, screen, cleanup, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { LiveSignalSummary, WeeklySignalReport, SignalTrend, StrategyPanel, pct } from './SignalPanel'
 
-// Signals cross the wire as 0..1 ratios. Guards against rendering them
-// unscaled, which would print focus 0.72 as "1%".
+// Signals cross the wire as 0..1 ratios; unscaled, focus 0.72 prints "1%".
 
 const report = {
   days: 7,
@@ -22,10 +21,7 @@ const report = {
   truncated: false,
 }
 
-// Every metric renders its label and value as sibling <p>s in one wrapper, so
-// scoping to the label's parent pins label -> value rather than asserting a
-// number appears anywhere on the panel. Excludes the screen-reader tables,
-// which share column names with the tiles on purpose.
+// Scopes to the label's wrapper to pin label -> value; excludes the sr-only tables, which share names.
 const VISIBLE = { ignore: 'script, style, .sr-only, .sr-only *' }
 const metric = (label) => within(screen.getByText(label, VISIBLE).parentElement)
 
@@ -35,8 +31,7 @@ describe('WeeklySignalReport', () => {
     // With the scaling bug these read 1%, 0%, 1%.
     expect(metric('Avg Focus').getByText('72%')).toBeInTheDocument()
     expect(metric('Avg Stress').getByText('31%')).toBeInTheDocument()
-    // No Engagement tile: it is the focus index under another name, and
-    // Avg Focus is on this grid.
+    // No Engagement tile: it is the focus index under another name.
     expect(screen.queryByText('Engagement', VISIBLE)).not.toBeInTheDocument()
   })
 
@@ -48,15 +43,13 @@ describe('WeeklySignalReport', () => {
   })
 
   it('renders the session count raw, not as a percentage', () => {
-    // Sessions is a count, so it deliberately bypasses the percent formatter.
     render(<WeeklySignalReport report={report} />)
     expect(metric('Sessions').getByText('5')).toBeInTheDocument()
     expect(metric('Sessions').queryByText('500%')).not.toBeInTheDocument()
   })
 
   it('shows how many sessions there were, not how many rows came back', () => {
-    // sample_counts is rows-retrieved throughout, so under the session row
-    // cap this tile showed the cap instead of the real count.
+    // sample_counts is rows retrieved, which stops at the session row cap.
     const busy = {
       ...report,
       truncated: true,
@@ -77,7 +70,6 @@ describe('WeeklySignalReport', () => {
     const partial = { ...report, averages: { ...report.averages, focus: null } }
     render(<WeeklySignalReport report={partial} />)
     expect(metric('Avg Focus').getByText('N/A')).toBeInTheDocument()
-    // Neighbours unaffected.
     expect(metric('Avg Stress').getByText('31%')).toBeInTheDocument()
   })
 
@@ -95,8 +87,7 @@ describe('WeeklySignalReport', () => {
   })
 
   it('counts a day whose sessions were cut as unretrieved', () => {
-    // Sessions have their own query and cap, so a day can lose only them --
-    // counting the two signal flags alone made it look like a quiet day.
+    // Sessions have their own query and cap, so a day can lose only them.
     const truncated = {
       ...report,
       truncated: true,
@@ -117,9 +108,7 @@ describe('WeeklySignalReport', () => {
   })
 
   it('names the reads that failed rather than showing their defaults as figures', () => {
-    // The backend swallows a failed table read so one broken query doesn't
-    // blank the report, but that leaves N/A and a dash on the tiles, both of
-    // which read as "nothing recorded" alone.
+    // A swallowed read leaves N/A and a dash, which alone read as "nothing recorded".
     const broken = {
       ...report,
       retrieved: { cognitive: false, face: true, sessions: true },
@@ -130,8 +119,6 @@ describe('WeeklySignalReport', () => {
   })
 
   it('shows a dash rather than zero when the sessions read failed', () => {
-    // The fallback chain would otherwise answer a broken query with a
-    // confident "0 sessions this week".
     const broken = {
       ...report,
       sessions_recorded: null,
@@ -144,8 +131,7 @@ describe('WeeklySignalReport', () => {
   })
 
   it('does not read the facial opt-out as a failed facial read', () => {
-    // retrieved.face is null with the opt-out on -- no retrieval happened, so
-    // the failure warning must not fire.
+    // retrieved.face is null under the opt-out: not requested, not failed.
     const off = {
       ...report,
       face_included: false,
@@ -168,8 +154,7 @@ describe('WeeklySignalReport', () => {
   })
 
   it('stays quiet for a report whose reads all succeeded', () => {
-    // Payloads predating the field came from working reads, so an absent
-    // `retrieved` must not raise the warning either.
+    // An absent `retrieved` is a pre-field payload from a working read.
     render(<WeeklySignalReport report={report} />)
     expect(screen.queryByText(/could not be loaded/i)).not.toBeInTheDocument()
   })
@@ -180,23 +165,18 @@ describe('LiveSignalSummary', () => {
     render(<LiveSignalSummary report={report} />)
     expect(metric('Focus').getByText('72%')).toBeInTheDocument()
     expect(metric('Stress').getByText('31%')).toBeInTheDocument()
-    // No Identity Confidence tile -- the column it read was retired.
     expect(screen.queryByText('Identity Confidence')).not.toBeInTheDocument()
   })
 
   it('survives a report with no latest reading', () => {
     render(<LiveSignalSummary report={{}} />)
-    // Was 'N/A'; now goes through `valueOrReason` so an absent channel says
-    // which kind of absence it is.
-    expect(metric('Focus').getByText('No sensor')).toBeInTheDocument()
     // Channel on (no flag says otherwise) and read, but nothing came back.
+    expect(metric('Focus').getByText('No sensor')).toBeInTheDocument()
     expect(metric('Facial Emotion').getByText('No sensor')).toBeInTheDocument()
   })
 
   it('says Calibrating, not No sensor, when rows arrived but none was usable', () => {
-    // Poor electrode contact writes rows with the measurement columns
-    // nulled, so the snapshot could print "N/A" beside a weekly average of
-    // 64% on the same screen -- two true numbers that read as a contradiction.
+    // Poor electrode contact writes rows with the measurement columns nulled.
     render(<LiveSignalSummary report={{
       latest: { cognitive: { focus: null, stress: null, engagement: null } },
       sample_counts: { cognitive: 155 },
@@ -207,9 +187,6 @@ describe('LiveSignalSummary', () => {
   })
 
   it('says Off since <date> when EEG consent was withdrawn', () => {
-    // Before `eeg_enabled` existed, `eegReason` hardcoded `on: true`, so a
-    // parent who switched the headband off read "No sensor" -- a fault, not
-    // what they did.
     render(<LiveSignalSummary report={{
       eeg_enabled: false,
       eeg_revoked_at: '2026-08-05T09:00:00Z',
@@ -222,24 +199,18 @@ describe('LiveSignalSummary', () => {
   })
 
   it('still reports a withdrawn EEG channel as off when it has readings behind it', () => {
-    // Withdrawal stops future recording but keeps what's stored, and the
-    // cognitive channel has no read filter -- so a withdrawn channel can
-    // legitimately still have a value. `eeg_enabled` is consent state, not an
-    // `eeg_included`-style claim that nothing was read.
+    // Withdrawal keeps stored rows and EEG has no read filter, so a value can remain.
     render(<LiveSignalSummary report={{
       latest: { cognitive: { focus: 0.72, stress: 0.31, engagement: 0.5 } },
       eeg_enabled: false,
       eeg_revoked_at: '2026-08-05T09:00:00Z',
       sample_counts: { cognitive: 155 },
     }} />)
-    // The tile is not blanked -- what changes is a date becomes available for
-    // surfaces that render one.
     expect(metric('Focus').getByText('72%')).toBeInTheDocument()
   })
 
   it('treats a payload with no EEG consent field as on, not off', () => {
-    // Absent means a pre-field payload. Defaulting to off would claim a
-    // headband was switched off when nobody made that decision.
+    // Absent means a pre-field payload; off would claim a decision nobody made.
     render(<LiveSignalSummary report={{ sample_counts: { cognitive: 0 } }} />)
     expect(metric('Focus').getByText('No sensor')).toBeInTheDocument()
     expect(metric('Focus').queryByText(/^Off since /)).not.toBeInTheDocument()
@@ -254,16 +225,12 @@ describe('LiveSignalSummary', () => {
   })
 })
 
-// The backend nulls every face field when the viewer opts out, which alone
-// is indistinguishable from "the camera recorded nothing". `face_included`
-// carries the difference, and the panel must show it -- "N/A" for an opt-out
-// would report a missing measurement instead of a respected choice.
+// `face_included: false` separates an opt-out from a camera that recorded nothing.
 describe('facial reporting switched off', () => {
   const faceOff = { ...report, face_included: false }
 
   it('labels the weekly face tiles as off rather than missing', () => {
-    // Goes through the shared offLabel/valueOrReason path. With no
-    // revocation date it degrades to "Not recorded", still not "no data".
+    // With no revocation date offLabel says "Not recorded", still not "no data".
     render(<WeeklySignalReport report={faceOff} />)
     expect(metric('Dominant Emotion').getByText('Not recorded')).toBeInTheDocument()
     expect(screen.getByText(/facial recognition data was not included/i)).toBeInTheDocument()
@@ -281,7 +248,6 @@ describe('facial reporting switched off', () => {
   })
 
   it('still reports face data when the flag is absent', () => {
-    // Payloads predating the flag must keep rendering facial data.
     const { face_included, ...legacy } = faceOff
     render(<WeeklySignalReport report={legacy} />)
   })
@@ -303,8 +269,6 @@ describe('StrategyPanel', () => {
   const strategies = ['Review fractions for ten minutes', 'Take a short break between sets']
 
   it('numbers the strategies and names their source', () => {
-    // Distinguishes the fixed rule set from model output that passed the
-    // backend's safety checks.
     render(<StrategyPanel strategies={strategies} source="rule-based" onGenerate={() => {}} />)
     expect(screen.getByText(strategies[0])).toBeInTheDocument()
     expect(screen.getByText('Source: rule-based')).toBeInTheDocument()
@@ -327,15 +291,12 @@ describe('StrategyPanel', () => {
   })
 
   it('retracts the "built from this week\'s report" claim when the signals did not load', () => {
-    // The endpoint still answers with a usable list, but it's not about this
-    // student's week, and the subtitle would otherwise claim it is.
     render(<StrategyPanel strategies={strategies} source="rule-based"
                           signalsRetrieved={false} onGenerate={() => {}} />)
     expect(screen.getByText(/general practice suggestions/i)).toBeInTheDocument()
     expect(screen.queryByText(/built from this week's report/i)).not.toBeInTheDocument()
-    // Stated above the list too, since it changes how every item reads.
     expect(screen.getByText(/so these are general suggestions/i)).toBeInTheDocument()
-    // Still shows the advice -- a generic list is correct here, not an error.
+    // A generic list is correct here, not an error.
     expect(screen.getByText(strategies[0])).toBeInTheDocument()
   })
 
@@ -346,13 +307,7 @@ describe('StrategyPanel', () => {
     expect(screen.queryByText(/so these are general suggestions/i)).not.toBeInTheDocument()
   })
 
-  /**
-   * The teacher frame changes who the advice is described as being for, and
-   * nothing else. The heading deliberately keeps "At-Home": the prompt behind
-   * this asks for at-home strategies and the rule-based fallback says "ask
-   * your child", so a classroom-sounding label would claim the model had been
-   * asked for something it had not.
-   */
+  // The heading keeps "At-Home": the prompt and fallback are written for a parent.
   it('tells a teacher whose advice this is, without relabelling it as classroom advice', () => {
     render(<StrategyPanel strategies={strategies} source="rule-based"
                           signalsRetrieved={true} viewerRole="teacher" onGenerate={() => {}} />)
@@ -374,9 +329,6 @@ describe('StrategyPanel', () => {
   })
 
   it('reads an absent or unrecognised role as the parent it was written for', () => {
-    // The advice is parent-framed by construction, so that is the safe
-    // default for a caller that says nothing -- and for one that says
-    // something this component does not know.
     render(<StrategyPanel strategies={strategies} source="rule-based"
                           signalsRetrieved={true} viewerRole="admin" onGenerate={() => {}} />)
     expect(screen.queryByText(/written for a family to use at home/i)).not.toBeInTheDocument()
@@ -384,8 +336,6 @@ describe('StrategyPanel', () => {
   })
 
   it('treats a payload predating the field as a working read', () => {
-    // Absent on older responses, from a working read -- undefined must not
-    // read as a failure.
     render(<StrategyPanel strategies={strategies} source="rule-based" onGenerate={() => {}} />)
     expect(screen.getByText(/built from this week's report/i)).toBeInTheDocument()
     expect(screen.queryByText(/so these are general suggestions/i)).not.toBeInTheDocument()
@@ -393,25 +343,23 @@ describe('StrategyPanel', () => {
 })
 
 describe('pct', () => {
-  // Shared with the parent dashboard, which used to have its own copy that a
-  // fix to one didn't reach.
   it('scales a ratio to a whole percent', () => {
     expect(pct(0.72)).toBe('72%')
     expect(pct(0)).toBe('0%')       // a real zero reading still renders
   })
 
   it('reports an empty value as N/A rather than a confident zero', () => {
-    // Number('') and Number('  ') are both 0, so these rendered as "0%".
+    // Number('') and Number('  ') are both 0.
     for (const v of ['', '   ', null, undefined]) expect(pct(v)).toBe('N/A')
   })
 
   it('reports a non-finite number as N/A', () => {
-    // Number.isNaN(Infinity) is false, so this used to reach Math.round.
+    // Number.isNaN(Infinity) is false.
     for (const v of [Infinity, -Infinity, NaN, 'abc']) expect(pct(v)).toBe('N/A')
   })
 })
 
-// ── heart and emotion: two channels where there used to be one ──────────────
+// ── heart and emotion ──────────────
 
 const heartReport = {
   ...report,
@@ -427,12 +375,10 @@ const heartReport = {
 }
 
 test('heart figures render in absolute units, not as percentages', () => {
-  // Every other series is a 0..1 ratio the panel multiplies by 100; putting
-  // 72.4 bpm through the same path would print "7240%".
+  // Through the ratio path 72.4 bpm would print "7240%".
   render(<WeeklySignalReport report={heartReport} />)
 
-  // Scoped to the tile -- a bare queryByText('72%') would collide with the
-  // summary sentence, which legitimately says "average focus was 72%".
+  // Scoped to the tile: the summary sentence legitimately says "72%".
   const bpmTile = screen.getByText(/Avg Heart Rate/i).closest('div')
   expect(within(bpmTile).getByText('72 bpm')).toBeInTheDocument()
   expect(within(bpmTile).queryByText(/%/)).not.toBeInTheDocument()
@@ -450,8 +396,7 @@ test('the heart row is absent entirely when the channel was not read', () => {
 })
 
 test('a payload from before the split does not claim the heart channel is off', () => {
-  // No heart_included at all -- defaulting to true would draw an empty
-  // series claiming a sensor that never existed recorded nothing.
+  // No heart_included at all: nothing true to say about the channel.
   render(<WeeklySignalReport report={report} />)
 
   expect(screen.queryByText(/Avg Heart Rate/i)).not.toBeInTheDocument()
@@ -463,16 +408,13 @@ test('the sensor behind the readings is named', () => {
 })
 
 test('samples recorded but all rejected reads as unusable, not absent', () => {
-  // Three states: measured and fine, measured and unusable, never measured --
-  // a null average with a nonzero count is the middle one.
+  // A null average with a nonzero count is "measured and unusable".
   render(<WeeklySignalReport report={{
     ...heartReport,
     highlights: { ...heartReport.highlights, heart_rate_bpm: null, rmssd_ms: null },
   }} />)
 
   expect(screen.getByText(/none met the quality threshold/i)).toBeInTheDocument()
-  // Not a raw "N/A": the channel was read, so a null average means the
-  // samples were rejected, which offLabel calls Calibrating.
   expect(metric('Avg Heart Rate').getByText('Calibrating')).toBeInTheDocument()
   expect(metric('Avg RMSSD').getByText('Calibrating')).toBeInTheDocument()
 })
@@ -521,8 +463,7 @@ test('the live snapshot shows heart in bpm when the channel was read', () => {
 })
 
 test('the live snapshot omits heart rather than showing an empty tile', () => {
-  // The backend leaves the key out when unread; a tile built from {} would
-  // read as a sensor that recorded nothing.
+  // The backend leaves the key out when unread.
   render(<LiveSignalSummary report={{
     ...heartReport,
     latest: { cognitive: { focus: 0.7 }, face: { attention: 0.8 } },
@@ -533,9 +474,7 @@ test('the live snapshot omits heart rather than showing an empty tile', () => {
 
 
 describe('per-channel off states', () => {
-  // The rule: never render "no data" for something that was not recorded.
-  // "N/A" for a withdrawn channel and "Off" for a failed read both make a
-  // claim that isn't true. Local, since `faceOff` is scoped to the describe above.
+  // Never render "no data" for something that was not recorded.
   const base = { ...report, face_included: false, emotion_included: false,
                  consent_retrieved: true }
 
@@ -544,11 +483,8 @@ describe('per-channel off states', () => {
   })
 
   it('does not claim a withdrawal when the consent read failed', () => {
-    // "The student turned this off" is a claim we haven't earned when we
-    // couldn't find out.
     render(<WeeklySignalReport report={{ ...base, consent_retrieved: false }} />)
-    // A failed read leaves faceOn false exactly as a withdrawal would, so
-    // this must go through offLabel, not a bare faceOn ternary.
+    // A failed read leaves faceOn false like a withdrawal, so this needs offLabel.
     expect(metric('Dominant Emotion').getByText('Unavailable')).toBeInTheDocument()
   })
 
@@ -558,8 +494,7 @@ describe('per-channel off states', () => {
   })
 
   it('distinguishes a channel that read nothing from one that read nothing usable', () => {
-    // The average has to be null too -- with a value present there's nothing
-    // for the reason to replace.
+    // The average must be null too, or there is nothing for the reason to replace.
     const on = { ...report, emotion_included: true, face_included: true,
                  consent_retrieved: true,
                  averages: { ...report.averages, face_attention: null } }
@@ -580,7 +515,6 @@ describe('per-channel off states', () => {
   })
 
   it('omits the heart row entirely for a payload that predates the channel', () => {
-    // Nothing true to say about a channel this payload doesn't know about.
     const { heart_included, ...preSplit } = base
     render(<WeeklySignalReport report={preSplit} />)
     expect(screen.queryByText(/Avg Heart Rate/)).not.toBeInTheDocument()
@@ -589,9 +523,6 @@ describe('per-channel off states', () => {
 })
 
 // ── the charts, for anyone who cannot see them ──────────────────────────────
-//
-// Recharts emits a bare `<svg>` with no accessible name, so the trend and the
-// distribution charts announced as nothing at all.
 
 describe('chart accessibility', () => {
   it('gives the trend a name that says what it shows', () => {
@@ -601,16 +532,12 @@ describe('chart accessibility', () => {
   })
 
   it('states each series as a range rather than only naming it', () => {
-    // "Focus" alone is a legend, not a description -- the range carries what
-    // the picture actually showed.
     render(<WeeklySignalReport report={report} />)
     expect(screen.getByRole('img', { name: /daily signal trend/i }))
       .toHaveAccessibleName(/Focus 70% to 74%/i)
   })
 
   it('leaves a series nobody recorded out of the description', () => {
-    // A gap in the line is not a zero, and the text alternative has to make
-    // the same distinction.
     render(<WeeklySignalReport report={report} />)
     const name = screen.getByRole('img', { name: /daily signal trend/i })
       .getAttribute('aria-label')
@@ -618,10 +545,7 @@ describe('chart accessibility', () => {
   })
 
   it('keeps the data table out of the role="img" subtree', () => {
-    // The bug this replaces: the table nested *inside* the `role="img"`
-    // wrapper. WAI-ARIA prunes every descendant role from an `img`, so the
-    // table was invisible to assistive tech, but Testing Library reads DOM
-    // attributes and found it either way -- so structure is what's asserted.
+    // ARIA prunes roles inside an `img` but jsdom does not, so assert structure.
     render(<WeeklySignalReport report={report} />)
     const chart = screen.getByRole('img', { name: /daily signal trend/i })
     const table = screen.getByRole('table', { name: /daily signal trend/i })
@@ -629,8 +553,6 @@ describe('chart accessibility', () => {
   })
 
   it('carries the days themselves, not just the summary', () => {
-    // Without the table, a screen-reader user gets a range and no way to ask
-    // which day was which.
     render(<WeeklySignalReport report={report} />)
     const table = screen.getByRole('table', { name: /daily signal trend/i })
     expect(within(table).getByRole('rowheader', { name: '07-20' })).toBeInTheDocument()
@@ -638,13 +560,7 @@ describe('chart accessibility', () => {
   })
 
   it('says "not recorded" rather than leaving a cell blank', () => {
-    // A blank cell is indistinguishable from a table that failed to render.
-    //
-    // Needs a column with a genuine gap, which now has to be arranged rather
-    // than inherited from the fixture: the trend's columns are the series the
-    // chart actually draws, and the base report's two are present on every day.
-    // Heart is the one that legitimately comes and goes — a window can be
-    // refused while the cognitive channel keeps recording.
+    // Needs a drawn series with a genuine gap; heart is the one that comes and goes.
     render(<WeeklySignalReport report={{
       ...report,
       heart_included: true,
@@ -678,9 +594,7 @@ describe('chart accessibility', () => {
 })
 
 describe('the trend description matches the trend', () => {
-  // The class of bug this whole component exists to prevent, and the one it
-  // shipped with: an error that is *only* visible on the accessible surface,
-  // where no sighted reviewer will ever meet it.
+  // Errors here are visible only on the accessible surface.
 
   const RATIOS = {
     ...report,
@@ -694,23 +608,15 @@ describe('the trend description matches the trend', () => {
     screen.getByRole('img', { name: /daily signal trend/i }).getAttribute('aria-label')
 
   it('reports percentages as percentages, not as the 0..1 they arrive as', () => {
-    // `chartData` scales `focus` and `stress` and spreads everything else
-    // through unchanged, so a column added without a `scale` announces
-    // "0% to 1%" while the visible lines beside it read 70% and 74%.
+    // `chartData` scales only focus and stress; a column without `scale` announces 0..1.
     render(<WeeklySignalReport report={RATIOS} />)
-    // Both drawn series asserted positively. A negative like
-    // `not.toMatch(/0% to 1%/)` looks like it covers this and does not: an
-    // unscaled 0.64–0.68 rounds to "1%" at both ends and collapses to a single
-    // "Engagement 1%", which that pattern never sees.
+    // Positive matches: an unscaled range can collapse to "1%" and dodge a negative one.
     expect(trendName()).toMatch(/Focus 70% to 74%/)
     expect(trendName()).toMatch(/Stress 30% to 32%/)
   })
 
   it('does not describe a series the chart does not draw', () => {
-    // `engagement` has no `<Line>` on this chart. Describing it gives a
-    // screen-reader user a series no sighted reader can see, which is a
-    // different report rather than an equivalent one -- and it is exactly
-    // where the scaling error hid, because nothing on screen contradicted it.
+    // `engagement` has no `<Line>` on this chart.
     render(<WeeklySignalReport report={RATIOS} />)
     expect(trendName()).not.toMatch(/engagement/i)
     expect(screen.getByRole('table', { name: /daily signal trend/i }))
@@ -741,9 +647,7 @@ describe('SignalTrend', () => {
   afterEach(cleanup)
 
   it('scales the ratio series and leaves heart rate in bpm', () => {
-    // The failure this pins is invisible on screen and invisible to the
-    // chart: the sr-only table is the only place the units are stated, so a
-    // series scaled wrongly announces "0% to 1%" with nothing to contradict it.
+    // The sr-only table is the only place the units are stated.
     render(<SignalTrend trend={trend} />)
 
     const table = screen.getByRole('table')
@@ -752,10 +656,7 @@ describe('SignalTrend', () => {
   })
 
   it('counts the weeks that recorded something, not the weeks in range', () => {
-    // A week of three samples is plotted beside a week of four thousand and
-    // looks equally solid. Coverage goes in the sentence rather than a column,
-    // because a column naming something the chart does not draw would give a
-    // screen-reader user a different report, not an equivalent one.
+    // Coverage goes in the sentence: a column must name a series the chart draws.
     render(<SignalTrend trend={trend} />)
 
     expect(screen.getByRole('img', { name: /across 3 weeks, with data recorded on 2 of them/i }))
@@ -770,7 +671,6 @@ describe('SignalTrend', () => {
   })
 
   it('says a failed read failed, rather than that nothing was recorded', () => {
-    // Both produce an empty series, and only the flag tells them apart.
     render(<SignalTrend trend={{ weeks: [], retrieved: false }} />)
 
     expect(screen.getByText(/could not be loaded/i)).toBeInTheDocument()
@@ -784,12 +684,7 @@ describe('SignalTrend', () => {
   })
 
   it('omits the heart series entirely when the channel is off', () => {
-    // Not drawn as an all-null line: an empty legend entry reads as a
-    // measurement that flatlined.
-    //
-    // Asserted on the column and the toggle rather than on the bare text,
-    // which now matches both. A control for a line that can never appear is
-    // worse than its absence: it offers a choice with one outcome.
+    // Asserted on column and toggle: bare text matches both.
     render(<SignalTrend trend={{ ...trend, heart_included: false }} />)
 
     expect(screen.queryByRole('columnheader', { name: /heart rate/i })).not.toBeInTheDocument()
@@ -823,18 +718,7 @@ describe('the score-scale caption', () => {
 describe('choosing which measurements a chart draws', () => {
   afterEach(cleanup)
 
-  /**
-   * The rule these exist for is CLAUDE.md's: a column must name a series the
-   * chart actually draws. Turning a line off makes that something a teacher
-   * can do at will, so the column has to follow — otherwise the sr-only table
-   * goes on emitting "Heart rate: not recorded" on every row for a series
-   * they chose to hide, in the one surface that cannot be skimmed past.
-   *
-   * Asserted on `columnheader` throughout, never on the summary sentence:
-   * `describeSeries` drops a series with no readings on its own, so an
-   * aria-label assertion passes whether or not the column is gated and is
-   * inert against the exact bug it names.
-   */
+  // A hidden line takes its column with it. Assert on `columnheader`, never the summary sentence.
 
   it('drops both the line and its column when a measurement is switched off', async () => {
     render(<SignalTrend trend={trend} />)
@@ -843,7 +727,6 @@ describe('choosing which measurements a chart draws', () => {
     await userEvent.click(screen.getByRole('switch', { name: /heart rate/i }))
 
     expect(screen.queryByRole('columnheader', { name: /heart rate/i })).not.toBeInTheDocument()
-    // The others are untouched -- this is a filter, not a reset.
     expect(screen.getByRole('columnheader', { name: /focus/i })).toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: /stress/i })).toBeInTheDocument()
   })
@@ -881,10 +764,7 @@ describe('choosing which measurements a chart draws', () => {
   })
 
   it('explains an empty chart and offers a way back, rather than refusing the last click', async () => {
-    // A toggle that silently does nothing is harder to understand than an
-    // empty chart that says what happened. The message is also distinct from
-    // "no signal history yet" and "could not be loaded" beside it: those are
-    // claims about the data, this is a claim about the view.
+    // A claim about the view, distinct from the claims about the data.
     render(<SignalTrend trend={trend} />)
     for (const name of [/focus/i, /stress/i, /heart rate/i]) {
       await userEvent.click(screen.getByRole('switch', { name }))
@@ -892,8 +772,7 @@ describe('choosing which measurements a chart draws', () => {
 
     expect(screen.getByText(/no measurements selected/i)).toBeInTheDocument()
     expect(screen.queryByText(/no signal history yet/i)).not.toBeInTheDocument()
-    // No empty table either -- the chart is not rendered at all, so there are
-    // no columns left to describe.
+    // The chart is not rendered at all, so no empty table.
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /show all/i }))
@@ -901,12 +780,7 @@ describe('choosing which measurements a chart draws', () => {
   })
 
   it('draws a measurement that only becomes available later', () => {
-    // The hook stores what is *hidden*, not what is shown, and this is the
-    // reason. These charts gain series as data resolves -- a report that loads
-    // with no heart readings and then resolves its trend turns the heart
-    // series from unavailable into available. Held as a set of shown keys it
-    // would be missing from a selection made before it existed and would stay
-    // switched off with nothing on screen explaining why.
+    // The hook stores what is *hidden*, so a series that arrives later is shown.
     const { rerender } = render(<SignalTrend trend={{ ...trend, heart_included: false }} />)
     expect(screen.queryByRole('columnheader', { name: /heart rate/i })).not.toBeInTheDocument()
 
@@ -917,8 +791,6 @@ describe('choosing which measurements a chart draws', () => {
   })
 
   it('keeps a hidden measurement hidden across a re-render', async () => {
-    // The other half of the above: an explicit choice is not undone by new
-    // data arriving.
     const { rerender } = render(<SignalTrend trend={trend} />)
     await userEvent.click(screen.getByRole('switch', { name: /stress/i }))
 
@@ -928,15 +800,7 @@ describe('choosing which measurements a chart draws', () => {
   })
 
   it('paints each swatch with the colour its own line is stroked with', () => {
-    // The gap that let the real bug through. The component read `s.color`
-    // while every call site writes `colour`, so the dot painted `undefined`
-    // in both states -- invisible, and the "cannot drift from the line"
-    // property the prop exists for was inoperative.
-    //
-    // Nothing else could catch it: the swatch is `aria-hidden`, so it is not
-    // in the accessibility tree, and jsdom has no stylesheet, so only reading
-    // the inline style sees anything at all. Asserted per chip rather than on
-    // one known hex, so a series added without a colour fails here too.
+    // The swatch is aria-hidden and jsdom has no stylesheet, so only the inline style is checkable.
     render(<SignalTrend trend={trend} />)
 
     for (const name of [/^focus$/i, /stress/i, /heart rate/i]) {
@@ -944,14 +808,13 @@ describe('choosing which measurements a chart draws', () => {
       expect(swatch.getAttribute('style')).toMatch(/#[0-9a-f]{6}|rgb\(/i)
       expect(swatch.getAttribute('style')).not.toMatch(/undefined/)
     }
-    // And it is the palette value, not merely some colour: this is the one
-    // the heart line is stroked with on both this chart and SessionReview.
+    // The heart line's palette value, shared with SessionReview.
     expect(screen.getByRole('switch', { name: /heart rate/i })
       .querySelector('[aria-hidden="true"]')).toHaveStyle({ backgroundColor: '#a855f7' })
   })
 
   it('keeps the swatch colour when the measurement is switched off', async () => {
-    // Hollow rather than gone -- the chip still has to say which line it names.
+    // Hollow rather than gone: the chip still names its line.
     render(<SignalTrend trend={trend} />)
     await userEvent.click(screen.getByRole('switch', { name: /heart rate/i }))
 

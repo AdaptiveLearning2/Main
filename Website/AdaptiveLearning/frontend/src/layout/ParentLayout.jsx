@@ -19,9 +19,7 @@ function SidebarContent({ collapsed, mobile, onClose }) {
   const { displayName, signOut } = useAuth()
   const { dark, toggleTheme } = useTheme()
   const navigate = useNavigate()
-  // From the name beside it, not the email: those are two different
-  // strings now, so deriving them separately lets the letter and the
-  // label disagree -- "A" over "ada.lovelace", or "k" over "Ada".
+  // From `displayName`, so the letter matches the label beside it.
   const initials = (displayName || '?')[0].toUpperCase()
 
   return (
@@ -81,11 +79,8 @@ function SidebarContent({ collapsed, mobile, onClose }) {
 }
 
 export default function ParentLayout() {
-  // Page-transition key. Must come from `useLocation()`, not
-  // `window.location.pathname` directly, or React never sees it change and
-  // the enter animation doesn't replay on navigation.
+  // Transition key from router state, not `window.location`.
   const { pathname } = useLocation()
-  // Scoped key so collapsing this sidebar doesn't collapse the other layouts'.
   const [collapsed, toggleCollapsed] = useCollapsedSidebar('parent')
   const { open: mobileOpen, onOpen: openMobile, onClose: closeMobile } =
     useMobileDrawer()

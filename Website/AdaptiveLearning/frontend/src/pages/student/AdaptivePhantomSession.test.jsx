@@ -1,17 +1,4 @@
-/**
- * A session created only to reserve the headband is not one the student
- * started.
- *
- * `toggleHeadband` has to create a session: under `INGEST_MODE=pull` the EEG
- * reservation is scoped by `session_id`, so connecting needs one to hang off.
- * But a student who connects a headband and walks away has not practised, and
- * the row sat in History as a 0-question "Adaptive Session" until the 6-hour
- * sweep collected it -- which is what "it recorded a session I never started"
- * looks like from the outside.
- *
- * Ending it on the way out hands it to `_discard_if_nothing_recorded`, which
- * *deletes* a session that recorded nothing rather than stamping it closed.
- */
+/** A session made only to reserve the headband is ended on leave, so the backend discards it if empty. */
 import { it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -49,12 +36,7 @@ beforeEach(() => {
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
     'POST /api/sessions/start': () => ({ id: 'sess-phantom' }),
     'GET /api/eeg/health': () => ({ available: false }),
-    // An array, not `{topics: []}`: the page iterates the response
-    // directly (`for (const r of rows || [])`), so an object throws
-    // `(rows || []) is not iterable` *after* the test body finishes --
-    // which vitest counts as a failed run even though every assertion
-    // passed. It surfaced only on CI, where unhandled rejections are
-    // not tolerated.
+    // An array: the page iterates it, and an object throws after the test body.
     'GET /api/performance/student/u1': () => [],
     // The router matches the whole path, query included.
     'GET /api/generate-question?user_id=u1&bias=0&grade=1st+Grade&session_id=sess-phantom': () => ({
@@ -65,9 +47,7 @@ beforeEach(() => {
 })
 
 it('does not end a session that was never created', () => {
-  // Merely visiting the page must not call `/end` on nothing -- and under
-  // StrictMode the unmount runs on the dev double-mount, before any session
-  // could exist.
+  // StrictMode's double-mount unmounts before any session exists.
   const { unmount } = render(<Adaptive />)
   unmount()
   expect(endSession).not.toHaveBeenCalled()
@@ -75,11 +55,7 @@ it('does not end a session that was never created', () => {
 
 
 it('ends the session when the student leaves, recorded or not', async () => {
-  // Two cases, one call. A session that recorded nothing is *deleted* by
-  // `_discard_if_nothing_recorded`, so a bare headband pairing leaves no
-  // trace. One with answers is *closed* properly -- crediting totals, writing
-  // the rollup, archiving charts -- rather than sitting open for six hours
-  // reading `LIVE` on the teacher's screen.
+  // `/end` deletes an empty session and properly closes one with answers.
   const { unmount } = render(<Adaptive />)
   await userEvent.click(await screen.findByRole('button', { name: /generate question/i }))
   await screen.findByText('What is 2 + 2?')

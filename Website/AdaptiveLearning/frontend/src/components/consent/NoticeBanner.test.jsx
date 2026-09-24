@@ -1,11 +1,4 @@
-/**
- * The shell's own behaviour, tested once instead of three times.
- *
- * The three notices keep their own tests for what they *say* and which
- * endpoint they call. What lives here is what they used to each restate: the
- * pending flag, and leaving the banner standing when the acknowledgement does
- * not land.
- */
+/** The shared shell: the pending flag, and staying up when the acknowledgement fails. */
 import { describe, it, expect, vi } from 'vitest'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -29,9 +22,7 @@ describe('NoticeBanner', () => {
   })
 
   it('stays up, and offers the button again, when the acknowledgement fails', async () => {
-    // The reason this is a component rather than a copied div. A notice that
-    // dismisses itself on a failed write is one the person never sees again --
-    // they have not actually been told.
+    // Dismissed on a failed write, the notice is never seen again.
     const onAcknowledge = vi.fn().mockRejectedValue(new Error('offline'))
     draw({ onAcknowledge })
 
@@ -43,20 +34,14 @@ describe('NoticeBanner', () => {
   })
 
   it('handles the rejection rather than letting it escape the click', async () => {
-    // The half the test above does *not* prove: with the `catch` removed, the
-    // banner still stands and the button still re-enables, because the
-    // `finally` does that either way. What changes is that the rejection
-    // escapes an event handler nothing awaits, and an unhandled rejection is
-    // a crash report for a case that was handled on purpose.
+    // The test above passes without the `catch` (the `finally` re-enables); this one does not.
     const seen = []
     const record = e => seen.push(e)
     globalThis.process.on('unhandledRejection', record)
     try {
       draw({ onAcknowledge: vi.fn().mockRejectedValue(new Error('offline')) })
       await userEvent.click(screen.getByRole('button'))
-      // A macrotask, not a microtask: node only reports a rejection unhandled
-      // once the microtask queue that could still have attached a handler has
-      // drained.
+      // A macrotask: node reports unhandled only once the microtask queue drains.
       await new Promise(r => setTimeout(r, 0))
     } finally {
       globalThis.process.off('unhandledRejection', record)
@@ -65,10 +50,7 @@ describe('NoticeBanner', () => {
   })
 
   it('does not leave the button disabled after a successful acknowledgement', async () => {
-    // `onAcknowledge` normally clears whatever made the banner render, so this
-    // unmounts -- but nothing forces it to, and a shell that only cleared the
-    // flag on the failure path would leave a permanently dead button behind
-    // for any caller that did not.
+    // A caller need not unmount the banner, so `busy` clears on success too.
     const onAcknowledge = vi.fn().mockResolvedValue(undefined)
     draw({ onAcknowledge })
 
@@ -88,22 +70,13 @@ describe('NoticeBanner', () => {
     await waitFor(() => expect(screen.getByRole('button')).toBeDisabled())
     expect(screen.getByRole('button')).toHaveTextContent('Saving…')
 
-    // Inside act, or the re-render this resolve triggers happens outside
-    // React's control and the warning it prints is indistinguishable from a
-    // real one in the next person's CI log.
+    // Inside act, or the re-render prints a spurious act() warning.
     await act(async () => { release() })
     expect(screen.getByRole('button')).toBeEnabled()
   })
 
   it.each(['amber', 'indigo', 'emerald'])('gives %s complete class names', tone => {
-    // This catches a tone whose entry is missing or misnamed -- the map is the
-    // only thing standing between `tone="emerald"` and a crash on `t.box`.
-    //
-    // It deliberately does NOT catch the Tailwind problem the component's own
-    // comment describes: an interpolated `bg-${tone}-50` renders the identical
-    // class string, so the DOM is the same and only the generated stylesheet
-    // differs. Nothing in jsdom can see that. Reviewing the source is the
-    // check there; this is not it.
+    // Catches a missing tone entry; cannot catch an interpolated class, which renders identically in jsdom.
     const { container } = render(
       <NoticeBanner tone={tone} icon={Bell} title="t" onAcknowledge={vi.fn()}>
         <p>b</p>

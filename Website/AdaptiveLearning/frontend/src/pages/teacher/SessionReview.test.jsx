@@ -24,14 +24,9 @@ beforeEach(() => {
   apiFetch.mockReset()
 })
 
-// jsdom can't measure layout, so recharts renders its charts at 0x0 with no
-// internals (no legend text, sectors, or series names). These tests can only
-// check the page's own JSX text, not chart contents.
+// jsdom renders recharts at 0x0 with no internals, so only the page's own JSX text is checkable.
 describe('the two stress figures', () => {
   it('titles the heart-derived pie distinctly, never bare "Stress"', async () => {
-    // EEG-derived stress and heart-derived stress are different measurements
-    // and must never share a "Stress" label. Only the pie's heading is
-    // checked here since chart internals aren't reachable (see note above).
     apiFetch.mockResolvedValue({
       cognitive: [
         { ts: '2026-08-10T09:00:00Z', focus: 0.6, engagement: 0.5, stress: 0.4 },
@@ -49,9 +44,7 @@ describe('the two stress figures', () => {
 })
 
 // ── the archived-chart fallback ─────────────────────────────────────────────
-//
-// Per-sample rows expire, but archived chart SVGs don't, so past expiry the
-// archive is the only remaining view of a session.
+// Past row expiry, the archived SVGs are the only remaining view of a session.
 
 const EXPIRED = { cognitive: [], face: [], heart: [], answers: [] }
 
@@ -93,7 +86,7 @@ describe('the archived-chart fallback', () => {
       expect(screen.getByAltText('Cognitive timeline')).toBeInTheDocument())
     expect(screen.getByAltText('Heart rate and HRV')).toBeInTheDocument()
     expect(screen.getByAltText('Emotion mix')).toBeInTheDocument()
-    // Null means that channel drew nothing, so no image should render for it.
+    // Null means that channel drew nothing.
     expect(screen.queryByAltText('Autonomic arousal')).not.toBeInTheDocument()
     expect(screen.getByText(/per-sample rows for this session have expired/i))
       .toBeInTheDocument()
@@ -128,8 +121,6 @@ describe('the archived-chart fallback', () => {
   })
 
   it('reports an unreadable object as a fault, not as an absence', async () => {
-    // A path was recorded but the object couldn't be read -- a fault, not
-    // proof nothing was recorded.
     mockPair({ archived: true, charts: {}, unavailable: ['cognitive_timeline'] })
     renderAt()
 
@@ -148,8 +139,6 @@ describe('the archived-chart fallback', () => {
   })
 
   it('survives the archive call failing without blanking the page', async () => {
-    // The rest of the page doesn't depend on the archive, so a failed
-    // archive fetch must not blank the whole page.
     apiFetch.mockImplementation((url) =>
       String(url).endsWith('/charts')
         ? Promise.reject(new Error('signing failed'))
@@ -164,7 +153,6 @@ describe('the archived-chart fallback', () => {
   })
 
   it('still says a pre-archive session recorded nothing', async () => {
-    // The mirror case: a real "no data" must stay distinct from a failed fetch.
     apiFetch.mockImplementation((url) =>
       String(url).endsWith('/charts')
         ? Promise.resolve({ archived: false, charts: {}, unavailable: [] })
@@ -178,14 +166,11 @@ describe('the archived-chart fallback', () => {
 })
 
 // ── mixed states across a section's charts ──────────────────────────────────
-//
-// Each chart is signed independently and can fail on its own, so one section
-// can have a mix of drawn, empty, and unreadable charts at once.
+// Each chart is signed independently, so a section can mix drawn, empty and unreadable.
 
 describe('a fault is never reported as an absence', () => {
   it('does not call an unreadable heart chart "nothing recorded"', async () => {
-    // cognitive drew nothing (real absence), heart_rate couldn't be read
-    // (a fault). Must not report the fault as an absence too.
+    // cognitive drew nothing (absence); heart_rate couldn't be read (fault).
     mockPair({
       archived: true,
       charts: { cognitive_timeline: null, emotion_pie: null, stress_pie: null },
@@ -201,7 +186,6 @@ describe('a fault is never reported as an absence', () => {
   })
 
   it('flags the fault even when the other chart in the section drew fine', async () => {
-    // One chart rendered, one unreadable -- both must be reported.
     mockPair({
       archived: true,
       charts: { cognitive_timeline: 'https://storage.test/a/cognitive_timeline.svg' },
@@ -225,7 +209,6 @@ describe('a fault is never reported as an absence', () => {
   })
 
   it('keeps the pie section mounted so an unreadable pie is still reported', async () => {
-    // Section must stay mounted so an unreadable pie chart still gets reported.
     mockPair({ archived: true, charts: { emotion_pie: null }, unavailable: ['stress_pie'] })
     renderAt()
 
@@ -235,10 +218,6 @@ describe('a fault is never reported as an absence', () => {
 })
 
 // ─── the answers table ─────────────────────────────────────────────────────
-//
-// It showed a truncated uuid and a bare `selected_index` — both true and
-// neither usable. A teacher scanning the column wants the topic, and "2" is
-// not a fact anyone can act on without the options beside it.
 
 describe('the answers table', () => {
   const QUESTION = {
@@ -255,9 +234,7 @@ describe('the answers table', () => {
   })
 
   function renderWith(answers) {
-    // Resolved by URL, not call order: the page fetches signals and charts in
-    // parallel and a `mockResolvedValueOnce` chain would depend on whichever
-    // Promise.all happened to start first.
+    // Resolved by URL, not call order: signals and charts are fetched in parallel.
     apiFetch.mockImplementation(url =>
       Promise.resolve(String(url).endsWith('/charts')
         ? { archived: false, charts: {} }
@@ -306,8 +283,7 @@ describe('the answers table', () => {
   })
 
   it('still shows an answer whose question has left the bank', async () => {
-    // PostgREST left-joins the embed, so this is a real shape. The answer
-    // happened; dropping the row would change the session's history.
+    // PostgREST left-joins the embed, so `questions: null` is a real shape.
     const user = userEvent.setup()
     renderWith([answerRow({ questions: null })])
     const toggle = await screen.findByRole('button', { name: /unknown topic/i })
@@ -330,9 +306,7 @@ describe('the answers table', () => {
   })
 
   it('resolves the correct option by value, not by position', async () => {
-    // `questions.correct_answer` is text, not an index. Comparing positions
-    // would mark the wrong option on every question whose answer is not
-    // stored in order.
+    // `questions.correct_answer` is text, not an index.
     const user = userEvent.setup()
     renderWith([answerRow({
       selected_index: 0,
@@ -359,8 +333,7 @@ describe('the correct-answer marker', () => {
   }
 
   it('marks only one option when a distractor repeats the answer', async () => {
-    // Not every generator dedupes its distractors, and two options both
-    // ticked "correct answer" reads as a broken panel rather than a result.
+    // Not every generator dedupes its distractors.
     const user = userEvent.setup()
     renderWith([answerRow({
       questions: {
@@ -373,8 +346,7 @@ describe('the correct-answer marker', () => {
   })
 
   it('marks nothing when the answer is not among the options', async () => {
-    // Better to mark none than to mark an arbitrary one. A wrong marker on a
-    // review screen is worse than an absent one.
+    // A wrong marker is worse than none.
     const user = userEvent.setup()
     renderWith([answerRow({
       questions: {
@@ -384,7 +356,6 @@ describe('the correct-answer marker', () => {
     })])
     await user.click(await screen.findByRole('button', { name: /algebra/ }))
     expect(screen.queryByText('(correct answer)')).not.toBeInTheDocument()
-    // The panel still shows the question and the pick.
     expect(screen.getByText('(chosen)')).toBeInTheDocument()
   })
 
@@ -428,9 +399,7 @@ describe('the correct-answer marker', () => {
 
 describe('engagement is not drawn beside focus', () => {
   it('gives the timeline table no Engagement column', async () => {
-    // The two are one number (signal_mapping.py). The sentence omits an
-    // empty series on its own, so the table is the only surface that shows
-    // whether the column is gone; nothing else would fail on its return.
+    // One number (signal_mapping.py); only the table shows whether the column is gone.
     apiFetch.mockResolvedValue({
       cognitive: [
         { ts: '2026-08-10T09:00:00Z', focus: 0.6, engagement: 0.6, stress: 0.4 },
@@ -445,15 +414,7 @@ describe('engagement is not drawn beside focus', () => {
 })
 
 describe('choosing which measurements the timeline draws', () => {
-  /**
-   * This is the chart that carries all four — focus, EEG stress, heart rate
-   * and RMSSD — so it is where a combination is worth anything. The rule under
-   * test is the one this file already followed by hand: a column must name a
-   * series the chart actually draws. Hiding a line makes that a thing a
-   * teacher does, so the column has to follow, or the sr-only table keeps
-   * saying "RMSSD: not recorded" on every row of a session that recorded it
-   * fine and was simply not being shown.
-   */
+  // All four series live here; a hidden line takes its column with it.
   const WITH_HEART = {
     cognitive: [
       { ts: '2026-08-10T09:00:00Z', focus: 0.6, engagement: 0.6, stress: 0.4 },
@@ -483,8 +444,6 @@ describe('choosing which measurements the timeline draws', () => {
   })
 
   it('offers no toggle for a measurement this session never recorded', async () => {
-    // A control whose only outcome is the one already on screen is worse than
-    // its absence.
     apiFetch.mockResolvedValue({ ...WITH_HEART, heart: [] })
     renderAt()
     await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Focus' })).toBeInTheDocument())
@@ -503,7 +462,6 @@ describe('choosing which measurements the timeline draws', () => {
     }
 
     expect(screen.getByText(/no measurements selected/i)).toBeInTheDocument()
-    // Not an empty chart with an empty table beside it.
     expect(screen.queryByRole('table', { name: /session replay/i })).not.toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /show all/i }))
@@ -511,11 +469,7 @@ describe('choosing which measurements the timeline draws', () => {
   })
 
   it('takes the answer-marker legend away with the markers themselves', async () => {
-    // The markers are drawn against the ratio axis, so they go when Focus and
-    // EEG stress are both hidden -- even with Heart rate still on, which keeps
-    // a chart on screen and keeps `shownSeries` non-empty. Gated on that
-    // instead, the page claimed "Vertical lines = answer events" over a chart
-    // with none.
+    // Markers use the ratio axis, so they go with Focus and EEG stress even while heart rate is drawn.
     apiFetch.mockResolvedValue(WITH_HEART)
     renderAt()
     await waitFor(() => expect(screen.getByText(/vertical lines = answer events/i)).toBeInTheDocument())
@@ -523,17 +477,10 @@ describe('choosing which measurements the timeline draws', () => {
     await userEvent.click(screen.getByRole('switch', { name: /^focus$/i }))
     await userEvent.click(screen.getByRole('switch', { name: /eeg stress/i }))
 
-    // The chart is still there -- heart rate is drawn -- so this is not the
-    // empty-selection path.
+    // Heart rate keeps the chart up, so this is not the empty-selection path.
     expect(screen.getByRole('columnheader', { name: /heart rate/i })).toBeInTheDocument()
     expect(screen.queryByText(/vertical lines = answer events/i)).not.toBeInTheDocument()
 
-    // **What this does not check**: that the markers themselves are gated.
-    // Removing `axisShown('ratio')` from the `ReferenceLine` map leaves this
-    // test green — Recharts renders nothing measurable under jsdom, which is
-    // the same blind spot this file already states for chart internals. So the
-    // caption is verified and the gate beneath it is not; it is there because
-    // a `ReferenceLine` naming an axis that was never mounted is a Recharts
-    // error, and only a browser can show that.
+    // Not checked: the `ReferenceLine` gate itself, which jsdom cannot see.
   })
 })

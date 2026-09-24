@@ -12,11 +12,7 @@ import ClassSignalTrend from '../../components/analytics/ClassSignalTrend'
 import ClassSignalRoster from '../../components/analytics/ClassSignalRoster'
 import { readHideSensorData } from '../../lib/viewPrefs'
 
-/** "2 hours ago", or null when there is no timestamp to describe.
- *
- * Null rather than a placeholder, so the caller can say "never" or "unknown"
- * itself — those are different facts and only it knows which applies.
- */
+/** "2h ago", or null so the caller can say "never" or "unknown" itself. */
 function agoLabel(iso) {
   if (!iso) return null
   const then = new Date(iso)
@@ -32,21 +28,16 @@ export default function ClassDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [cls, setCls]           = useState(null)
-  // Always an array, never null, so students.length can't crash the render.
   const [students, setStudents] = useState([])
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState(null)
   const [copied, setCopied]     = useState(false)
 
-  // The three analytics panels load independently of the roster and of each
-  // other. Bundling them into `loadData`'s allSettled would mean one slow
-  // aggregate holding up the student list, and one failed aggregate taking
-  // the whole page to its error state — where the roster is the thing the
-  // page is actually for.
+  // Analytics load separately from the roster, so a slow or failed aggregate
+  // can't hold up or fail the student list.
   const [analytics, setAnalytics] = useState({})
   const [analyticsLoading, setAnalyticsLoading] = useState(true)
-  // The teacher's own decluttering switch, not a privacy boundary — the data
-  // is fetched either way. See `lib/viewPrefs.js`.
+  // Decluttering, not a privacy boundary: the data is fetched either way.
   const hideSensors = readHideSensorData()
   const analyticsRun = useRef(0)
 
@@ -57,15 +48,13 @@ export default function ClassDetail() {
     setLoading(true)
     setError(null)
     try {
-      // allSettled, not all: both requests can 404 for a missing class, and
-      // we need both results before deciding what to tell the teacher.
+      // allSettled: both can 404 for a missing class; decide with both results.
       const [classRes, studentsRes] = await Promise.allSettled([
         apiFetch(`/api/classes/${id}`),
         apiFetch(`/api/classes/${id}/students`)
       ])
 
       // Only a 404 on the class request itself means "class not found".
-      // Any other failure means the class exists but couldn't be shown.
       if (classRes.status === 'rejected') {
         if (classRes.reason?.status !== 404) throw classRes.reason
         setCls(null)
@@ -76,8 +65,6 @@ export default function ClassDetail() {
       setCls(classRes.value)
       setStudents(Array.isArray(studentsRes.value) ? studentsRes.value : [])
     } catch (err) {
-      // Kept separate from "class not found" so a failed request doesn't
-      // send the teacher looking for the wrong problem.
       setError(err.message || 'Could not load class')
       toast.error(err.message || 'Could not load class')
     } finally {
@@ -88,10 +75,8 @@ export default function ClassDetail() {
   async function loadAnalytics() {
     const run = ++analyticsRun.current
     setAnalyticsLoading(true)
-    // Three independent reads. A rejected one becomes `retrieved: false`, the
-    // same flag the backend sets when an aggregate fails behind a 200 — so the
-    // panel has one thing to check rather than two, and a network failure and
-    // a database failure reach it identically. Neither is an empty chart.
+    // Independent reads; a rejected one becomes `retrieved: false`, as the
+    // backend sends for an aggregate failed behind a 200.
     const paths = {
       alerts: `/api/classes/${id}/alerts?days=7`,
       heatmap: `/api/classes/${id}/topic-heatmap`,
@@ -102,10 +87,8 @@ export default function ClassDetail() {
     const settled = await Promise.allSettled(
       Object.values(paths).map(p => apiFetch(p)))
 
-    // A class switched away from mid-flight must not repaint under the new
-    // class's heading. A generation counter rather than a cleanup flag,
-    // because the effect is not the only caller — the retry button is, and a
-    // retry is exactly when someone changes class rather than waiting.
+    // Generation counter, not a cleanup flag: the retry button also calls this,
+    // and a superseded class must not repaint under the new heading.
     if (run !== analyticsRun.current) return
 
     const next = {}
@@ -118,7 +101,6 @@ export default function ClassDetail() {
   }
 
   function copyCode() {
-    // Guard so it doesn't copy the literal string "undefined".
     if (!cls?.join_code) {
       toast.error('This class has no join code yet')
       return
@@ -203,10 +185,7 @@ export default function ClassDetail() {
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {students.map((s, i) => {
-            // Three states, never two. A timestamp, a student who has genuinely
-            // never worked, and a read that failed. Collapsing the last two
-            // tells a teacher nobody is working, which is both wrong and
-            // something they would act on.
+            // Three states: a time, never active, and a failed read (never collapsed).
             const ago = agoLabel(s.last_active)
             const lastActive = s.last_active_retrieved === false
               ? 'Last active unknown'
@@ -230,7 +209,7 @@ export default function ClassDetail() {
       )}
 
       <div className="mt-8 grid lg:grid-cols-2 gap-6">
-        {/* First, because it is the only panel that asks for an action. */}
+        {/* First: the only panel that asks for an action. */}
         <AlertFeed data={analytics.alerts} loading={analyticsLoading}
           onRetry={loadAnalytics} />
         <ClassAccuracyTrend data={analytics.trend} loading={analyticsLoading}
@@ -239,11 +218,7 @@ export default function ClassDetail() {
           onRetry={loadAnalytics} />
         <ClassTimeOfDay data={analytics.timeOfDay} loading={analyticsLoading}
           onRetry={loadAnalytics} />
-        {/* Sensor surfaces, so they honour the teacher's "Hide sensor data"
-            switch — a reporting view like the weekly report, not a live
-            supervision one. Read once per render rather than held in state:
-            it is a localStorage flag with no event to subscribe to, and the
-            page re-renders whenever the analytics land anyway. */}
+        {/* Sensor surfaces, so they honour "Hide sensor data". */}
         <ClassSignalTrend data={analytics.cohortSignals} loading={analyticsLoading}
           onRetry={loadAnalytics} hideSensors={hideSensors} />
         <ClassSignalRoster data={analytics.cohortSignals} loading={analyticsLoading}

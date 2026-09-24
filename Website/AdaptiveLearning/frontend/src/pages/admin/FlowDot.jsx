@@ -1,50 +1,24 @@
 import { useEffect, useState } from 'react'
 
 /**
- * Shows a channel's liveness as a light, not a number.
- *
- * Four states, not a scale: "never reported" (no sensor) and "stale" (sensor
- * stopped) are different facts, not different severities of the same thing.
- *
- *   flowing  green, pulsing on each new sample
- *   stale    amber, steady
- *   seen     slate, steady        (reported once, not recently, not yet stale)
- *   never    hollow outline
- *
- * The pulse fires only when the timestamp changes, not on every poll, so a
- * stopped sensor goes still instead of blinking as if it were healthy.
+ * A channel's liveness as a light: flowing (green, pulses per new sample),
+ * stale (amber), seen (slate: reported, not recently), never (hollow).
+ * Pulses only when the timestamp changes, so a stopped sensor goes still.
  */
 export default function FlowDot({ channel, label }) {
   const { flowing, stale, seen, last_ts: lastTs } = channel || {}
-  // Two states, and they are genuinely different questions:
-  //
-  //   pulsedFor   the newest timestamp we have *ever* lit for. Never cleared.
-  //   pulsingFor  the one currently lit, or null. Cleared by the timer below.
-  //
-  // Collapsing them into one -- and driving it from a generic
-  // previous-value hook -- looked like a simplification and was a bug. The
-  // timer nulls the live one, so after a pulse ends there is nothing left
-  // recording what was already shown: a timestamp that goes transiently
-  // missing and comes back *unchanged* reads as a change, and the dot flashes
-  // "fresh data" on an admin live monitor for data that is not new. A
-  // previous-value hook cannot see that, because the value did change --
-  // twice, back to where it started.
-  //
-  // So the comparison is against what was last *pulsed*, not against what was
-  // last *rendered*, and only `pulsedFor` can answer that.
+  // pulsedFor: newest timestamp ever lit, never cleared. pulsingFor: the one lit
+  // now. Compare against pulsedFor, or a timestamp that blinks out and back re-pulses.
   const [pulsedFor, setPulsedFor] = useState(lastTs)
   const [pulsingFor, setPulsingFor] = useState(null)
 
-  // Started during render, not in an effect, so the dot lights on the same
-  // commit that delivers the new timestamp.
+  // During render, so the dot lights on the commit that delivers the timestamp.
   if (lastTs && lastTs !== pulsedFor) {
     setPulsedFor(lastTs)
     setPulsingFor(lastTs)
   }
 
-  // Ending the pulse needs a timer, so that part is an effect. It depends on
-  // `pulsingFor`, so a timestamp arriving mid-pulse restarts the 600ms rather
-  // than inheriting the remainder.
+  // Keyed on `pulsingFor`, so a mid-pulse timestamp restarts the 600ms.
   useEffect(() => {
     if (!pulsingFor) return
     const t = setTimeout(() => setPulsingFor(null), 600)

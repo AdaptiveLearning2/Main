@@ -14,18 +14,12 @@ import { TOPICS as ALL_TOPICS, TOPIC_ICONS } from '../../lib/topics'
 const TOPICS = ALL_TOPICS
 const ICONS  = TOPIC_ICONS
 
-// Below this many attempts, a topic's accuracy is too noisy to call it the
-// student's "weakest" -- one unlucky question would read as 0%.
+// Below this many attempts, accuracy is too noisy to call a topic "weakest".
 const MIN_ATTEMPTS_TO_RANK = 3
 
-// The recent-sessions panel's length, and all the dashboard asks the backend for.
 const RECENT_SESSIONS = 4
 
-/** How a topic tile is tinted, from the accuracy the backend computed.
- *
- * Each tile also shows the percentage as text, not just the color, since
- * red/green alone isn't readable for everyone.
- */
+/** Topic tile tint; the tile also shows the percentage, since colour alone isn't enough. */
 function toneFor(accuracy) {
   if (accuracy >= 80) return 'bg-green-50 dark:bg-green-950/40 text-green-700 dark:text-green-300'
   if (accuracy >= 50) return 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300'
@@ -43,41 +37,29 @@ function greeting() {
 
 export default function StudentDashboard() {
   const { user, displayName } = useAuth()
-  // Use `navigate`, not `window.location.href` -- assigning to href would
-  // trigger a full page reload instead of an in-app navigation.
   const navigate = useNavigate()
   const [stats, setStats]     = useState(null)
-  // `null` is a failed read, and the panel says so rather than "No sessions yet"
-  // -- which is what a child with a week of work behind them would otherwise
-  // be told whenever this request did not land.
+  // `null` is a failed read, not "No sessions yet".
   const [sessions, setSessions] = useState([])
   const [loading, setLoading] = useState(true)
-  // The practice nudge. Stays `null` until both reads land, so a failed
-  // request can't be read as "you have not practised today".
+  // `null` until both reads land, so a failed one can't mean "not practised today".
   const [nudge, setNudge] = useState(null)
-  // Per-topic accuracy, keyed by `topic_name` (same slug as `TOPICS` above).
-  // Defaults to `{}` on failure, which renders the same plain tile as an
-  // unmeasured topic -- neither state claims anything, so neither is wrong.
+  // Keyed by `topic_name`; `{}` on failure renders plain, unmeasured tiles.
   const [topics, setTopics] = useState({})
 
   useEffect(() => {
     Promise.all([
-      // Use null, not zeros, on failure -- zeros would tell a student who
-      // practised all week that they answered nothing.
+      // null, not zeros, on failure.
       apiFetch('/api/stats/me')
         .then(s => (s?.retrieved === false ? null : s))
         .catch(() => null),
-      // null (failed request, or a body of a shape this page does not read)
-      // vs [] (no sessions) mean different things, and the whole `nudge`
-      // branch turns on it. Four rows, because four are shown: the newest
-      // session is also the only one "practised today" needs.
+      // null (failed) vs [] (no sessions): the `nudge` branch turns on it.
       fetchSessionList({ limit: RECENT_SESSIONS }).then(r => r.sessions).catch(() => null),
       apiFetch('/api/profile/me').catch(() => null),
     ]).then(([s, sess, profile]) => {
       setStats(s)
       setSessions(sess)
-      // The browser's local day, not the school's timezone -- this nudge is
-      // about the student's own afternoon.
+      // The browser's local day, not the school's timezone.
       const today = new Date().toLocaleDateString('en-CA')   // YYYY-MM-DD, local
       const practisedToday = Array.isArray(sess) && sess.some(x =>
         x?.started_at && new Date(x.started_at).toLocaleDateString('en-CA') === today)
@@ -89,8 +71,6 @@ export default function StudentDashboard() {
     })
   }, [])
 
-  // Separate effect because it depends on the student's id, unlike the other
-  // fetches above.
   useEffect(() => {
     if (!user?.id) return
     let cancelled = false
@@ -106,14 +86,10 @@ export default function StudentDashboard() {
 
   const acc  = stats?.total_questions > 0 ? Math.round((stats.total_correct / stats.total_questions) * 100) : 0
   const name = displayName || 'there'
-  // `stats === null` after loading means the read failed, not that the
-  // student has no record (that would be real zeros).
   const statsFailed = !loading && stats === null
   const sub = statsFailed ? "couldn't be loaded" : null
 
-  // Show the personal best only when it beats the current streak -- while a
-  // student is on their best streak, showing "best 6" under a 6 would look
-  // like something's missing rather than like an achievement.
+  // Show the personal best only when it beats the current streak.
   const best = stats?.best_streak ?? 0
   const streakSub = statsFailed
     ? sub
@@ -126,22 +102,18 @@ export default function StudentDashboard() {
     { icon: Flame,      title: 'Streak',     value: statsFailed ? '—' : (stats?.current_streak ?? 0),   sub: streakSub,          color: 'bg-gradient-to-br from-orange-500 to-amber-500',    delay: 0.4 },
   ]
 
-  // The topic the adaptive engine will actually start on. Ranked only among
-  // topics with enough attempts to be meaningful (see MIN_ATTEMPTS_TO_RANK).
+  // The topic the adaptive engine will start on.
   const weakest = Object.values(topics)
     .filter(t => (t.attempted_questions ?? 0) >= MIN_ATTEMPTS_TO_RANK)
     .sort((a, b) => a.accuracy - b.accuracy)[0] || null
 
   return (
     <div className="p-6 lg:p-8 space-y-8 pb-12">
-      {/* Tells the student a sensor was resumed by a parent. */}
       <ParentRestoredBanner studentId={user?.id} />
 
-      {/* Tells the student a parent has linked their account. */}
       <ParentLinkedBanner studentId={user?.id} />
 
-      {/* Show an explicit error instead of zeros, so a failed load doesn't
-          look like "you answered nothing all term". */}
+      {/* An explicit error instead of zeros. */}
       {statsFailed && (
         <div className="rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-5 py-3">
           <p className="text-sm font-bold text-amber-900 dark:text-amber-200">
@@ -150,9 +122,7 @@ export default function StudentDashboard() {
         </div>
       )}
 
-      {/* Only rendered once both reads succeed and the student hasn't
-          practised today -- a nudge from a failed request would wrongly
-          tell a child they skipped a day. */}
+      {/* Only once both reads succeed; a failed read never nudges. */}
       {nudge?.show && (
         <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
           className="bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-2xl px-5 py-4 flex flex-wrap items-center gap-3">
@@ -179,8 +149,7 @@ export default function StudentDashboard() {
         <motion.div
           whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.97 }}
           onClick={() => navigate('/adaptive')}
-          // Wraps under the greeting on a narrow screen rather than being hidden,
-          // since a phone is likely to be a student's main device.
+          // Wraps under the greeting on a phone rather than hiding.
           className="flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-violet-600 text-white px-5 py-2.5 rounded-full text-sm font-bold shadow-lg cursor-pointer shrink-0"
         >
           <Brain size={16} /> Start AI Session
@@ -235,8 +204,7 @@ export default function StudentDashboard() {
               {TOPICS.map((t, i) => {
                 const row = topics[t]
                 const attempted = row?.attempted_questions ?? 0
-                // An unattempted topic and a failed read look the same here --
-                // both draw a plain, untinted tile.
+                // Unattempted and failed-read both draw a plain tile.
                 const measured = attempted > 0
                 return (
                   <motion.div key={t}
@@ -251,7 +219,6 @@ export default function StudentDashboard() {
                       measured ? '' : 'text-gray-600 dark:text-gray-400'}`}>
                       {prettyTopic(t)}
                     </span>
-                    {/* The number, not just the tint. See `toneFor`. */}
                     {measured && (
                       <span className="text-[11px] font-black tabular-nums">
                         {row.accuracy}%
@@ -262,8 +229,7 @@ export default function StudentDashboard() {
               })}
             </div>
 
-            {/* Shows the topic `/adaptive` will actually open on. Hidden until
-                a topic has enough attempts to rank, so this never guesses. */}
+            {/* Hidden until a topic has enough attempts to rank. */}
             {weakest && (
               <button
                 onClick={() => navigate('/adaptive')}

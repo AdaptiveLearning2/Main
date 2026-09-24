@@ -1,13 +1,4 @@
-/**
- * The headband badge on a live card says three things, not one.
- *
- * It was a binary "Headband on/off", derived from whether a cognitive row
- * existed this poll -- so a student whose headband dropped two minutes ago
- * and one who never connected rendered the same, and a row the mapper had
- * nulled for poor electrode contact rendered as a healthy "on". The heart
- * badge already showed "weak signal" for an untrusted reading; this brings
- * the headband badge level with it, and adds the age of the reading.
- */
+/** The live headband badge states on/off, the reading's age, and weak signal. */
 import { it, expect, beforeEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -50,8 +41,7 @@ it('shows how old the newest headband reading is', async () => {
 })
 
 it('marks a reading past the live window as stale rather than dropping it', async () => {
-  // Two minutes old: the session is still open, the row still exists, and a
-  // binary badge would have said "on". The backend's own live window is 90s.
+  // Two minutes old, past the backend's 90s live window.
   const ts = new Date(Date.now() - 120_000).toISOString()
   renderLive([student({ latest_cognitive: { ts, focus: 0.6, engagement: 0.5, stress: 0.3 } })])
   const badge = await screen.findByText(/Headband on/)
@@ -59,9 +49,7 @@ it('marks a reading past the live window as stale rather than dropping it', asyn
 })
 
 it('says weak signal for a row the mapper nulled for poor contact', async () => {
-  // `map_eeg_to_cognitive` keeps the row and nulls the measurements on
-  // `contact_poor`, so this is what a badly-seated headband looks like from
-  // here: on, recent, and empty.
+  // `map_eeg_to_cognitive` keeps the row and nulls the measurements on `contact_poor`.
   const ts = new Date().toISOString()
   renderLive([student({ latest_cognitive: {
     ts, focus: null, engagement: null, stress: null,
@@ -78,13 +66,7 @@ it('keeps a student with no row at all as plain off', async () => {
 })
 
 // ── switching class ──────────────────────────────────────────────────────────
-//
-// `students` used to be whatever the last fetch returned, whichever class it
-// was for, so the previous class's cards stayed on screen under the new
-// class's name until the new response landed -- and before any response, the
-// page read "Nobody's joined yet", which is the wording for a *loaded* empty
-// class. Seen by hand: selecting an empty class showed the other class's
-// student for several seconds.
+// Roster state is scoped to the selected class; "Nobody's joined yet" means a loaded empty class.
 
 it('does not show the previous class under the new class name while it loads', async () => {
   let resolveB
@@ -97,8 +79,7 @@ it('does not show the previous class under the new class name while it loads', a
   await screen.findByText('Sam')
 
   fireEvent.change(screen.getByRole('combobox'), { target: { value: 'c2' } })
-  // Loading, not Sam, and not the empty state either -- nothing has been
-  // fetched for Year 5 yet, so nothing can be claimed about it.
+  // Loading: neither Sam nor the empty state.
   await waitFor(() => expect(screen.queryByText('Sam')).toBeNull())
   expect(screen.queryByText(/Nobody's joined yet/)).toBeNull()
 
@@ -120,9 +101,6 @@ it('shows the empty state only once a fetch for the selected class has answered'
 })
 
 it('says the class list could not be loaded, not that there are no classes', async () => {
-  // A failed read left `classes` at [] and the page said "No classes yet --
-  // create a class first", pointing a teacher whose classes exist at the one
-  // action that could not help. Same failure class as the roster above.
   let calls = 0
   mockApi({
     '/api/classes': () => {
@@ -135,17 +113,13 @@ it('says the class list could not be loaded, not that there are no classes', asy
   render(<MemoryRouter><Live /></MemoryRouter>)
   await screen.findByText(/Couldn't load your classes/)
   expect(screen.queryByText(/No classes yet/)).toBeNull()
-  // Retry is offered for a failure that can pass, and works.
   fireEvent.click(screen.getByRole('button', { name: /try again/i }))
   await screen.findByRole('combobox')
   expect(screen.queryByText(/Couldn't load/)).toBeNull()
 })
 
 it('says the roster could not be loaded instead of leaving the skeleton up', async () => {
-  // `loadedFor` only advanced on success, so a roster read that kept failing
-  // rendered the skeleton for ever under the error banner: "not retrieved"
-  // folded into "still loading". Once a fetch for the selected class has
-  // answered either way, the answer wins; Try again refetches at once.
+  // Once a fetch for the selected class answers either way, the answer wins over the skeleton.
   let calls = 0
   mockApi({
     '/api/classes': () => [{ id: 'c1', name: 'Year 4' }],
@@ -164,8 +138,7 @@ it('says the roster could not be loaded instead of leaving the skeleton up', asy
 })
 
 it('does not carry one class\'s failure banner over another class\'s loading', async () => {
-  // `error` was the one roster state not scoped to the selected class: A's
-  // 500 banner sat above B's skeleton until B's first request answered.
+  // `error` must be scoped to the selected class too.
   let resolveB
   mockApi({
     '/api/classes': () => [{ id: 'c1', name: 'Year 4' }, { id: 'c2', name: 'Year 5' }],
@@ -177,8 +150,6 @@ it('does not carry one class\'s failure banner over another class\'s loading', a
 
   fireEvent.change(screen.getByRole('combobox'), { target: { value: 'c2' } })
   await waitFor(() => expect(screen.queryByText(/Couldn't load/)).toBeNull())
-  // Loading B: no banner, no error state, nothing claimed about a class
-  // that has not answered.
   expect(screen.queryByText(/Internal Server Error/)).toBeNull()
   resolveB([student()])
   await screen.findByText('Sam')
@@ -186,8 +157,7 @@ it('does not carry one class\'s failure banner over another class\'s loading', a
 })
 
 it('does not read a heuristic "poor" as bad electrodes', () => {
-  // The legacy heuristic reports poor for any focused student; only a
-  // contact-backed verdict, or the nulled row it produces, counts.
+  // The heuristic says poor for any focused student; only a contact verdict or nulled row counts.
   expect(eegWeak({ focus: 0.7, engagement: 0.6, stress: 0.2,
                    raw: { signal_quality: 'poor', quality_basis: 'heuristic' } })).toBe(false)
   expect(eegWeak({ focus: null, engagement: null, stress: null })).toBe(true)
@@ -203,18 +173,12 @@ it('formats ages in seconds under a minute and minutes after', () => {
 })
 
 it('does not draw engagement beside focus', async () => {
-  // One number under two names (signal_mapping.py): no gauge, no sparkline
-  // column, and the page copy does not promise it either. The sparkline
-  // passes no rowKey, so it renders no screen-reader table to assert on, and
-  // jsdom draws recharts at 0x0 -- a rendered check passed with both the
-  // column and the line put back. The source is the only surface that shows
-  // them, the same limit AccessibleChart.test.jsx states.
+  // One number (signal_mapping.py). The sparkline has no sr table, so source is the only checkable surface.
   const ts = new Date().toISOString()
   renderLive([student({ latest_cognitive: { ts, focus: 0.6, engagement: 0.6, stress: 0.3 } })])
   await screen.findByText(/Headband on/)
   expect(screen.queryByText(/engagement/i)).not.toBeInTheDocument()
-  // process.cwd(), not import.meta.url: under jsdom the module URL is not a
-  // file: URL, which is how AccessibleChart.test.jsx reaches the sources too.
+  // process.cwd(): under jsdom the module URL is not a file: URL.
   const src = readFileSync(join(process.cwd(), 'src/pages/teacher/Live.jsx'), 'utf8')
   expect(src).not.toMatch(/dataKey="engagement"/)
   expect(src).not.toMatch(/key: 'engagement'/)

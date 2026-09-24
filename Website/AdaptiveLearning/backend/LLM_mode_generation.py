@@ -89,6 +89,22 @@ def mode(values):
 
     return [key for key, value in count.items() if value == max_count]
 
+def _mode_problem(numbers, difficulty):
+    """Why `numbers` has no mode the tier can serve, or None.
+
+    No repeat, or every value tied, is "no mode"; only "hard" tiers ask for two modes.
+    """
+    counts = Counter(numbers)
+    top = max(counts.values())
+    modes = [v for v, c in counts.items() if c == top]
+    if top < 2 or len(modes) == len(counts):
+        return f"no mode: every value appears {top} time(s)"
+    allowed = 2 if difficulty == "hard" else 1
+    if len(modes) > allowed:
+        return f"{len(modes)} modes where the tier allows {allowed}"
+    return None
+
+
 def generate_incorrect_answers(solution, values):
     generated_answers = []
 
@@ -229,6 +245,11 @@ def generate_mode_question(global_questions, prev_questions,difficulty, grade, m
         if numbers is None:
             print(f"[Attempt {attempt+1}] Unusable variables:",
                   repr(question_data["variables"])[:80])
+            continue
+
+        problem = _mode_problem(numbers, difficulty)
+        if problem:
+            print(f"[Attempt {attempt+1}] Unservable dataset: {problem}")
             continue
 
         break

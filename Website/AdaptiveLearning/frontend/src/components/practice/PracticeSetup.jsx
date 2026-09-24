@@ -40,8 +40,8 @@ export default function PracticeSetup({ onStart }) {
     setFailed(null)
     try {
       const profile = await apiFetch('/api/profile/me')
-      // The backend's `grade_levels.DEFAULT_GRADE`, which the test reads.
-      setGrade(profile?.grade_level || '1st Grade')
+      // '' is no grade: the topic list and the session both take the backend's default.
+      setGrade(profile?.grade_level || '')
       // Best-effort: a failed history read shouldn't block starting a session.
       apiFetch('/api/practice-sessions').then(setHistory).catch(() => {})
     } catch (e) {
@@ -68,7 +68,7 @@ export default function PracticeSetup({ onStart }) {
     try {
       const session = await apiFetch('/api/practice-sessions/start', {
         method: 'POST',
-        body: { mode, topics: chosen, difficulty, grade },
+        body: { mode, topics: chosen, difficulty, grade: grade || null },
       })
       onStart(session, questionCount)
     } catch (e) {
@@ -148,6 +148,7 @@ export default function PracticeSetup({ onStart }) {
           </label>
           <select id="practice-grade" value={grade} onChange={e => setGrade(e.target.value)}
             className="w-full px-3 py-2 rounded-xl border-2 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm font-bold">
+            {grade === '' && <option value="">Not set</option>}
             {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
           </select>
         </div>

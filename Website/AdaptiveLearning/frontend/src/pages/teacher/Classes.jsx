@@ -57,6 +57,8 @@ export default function Classes() {
   }
 
   async function saveGrade(classId) {
+    // Still "Not set": nothing was picked, so nothing is written.
+    if (!editGrade) { setEditingId(null); return }
     try {
       const updated = await apiFetch(`/api/classes/${classId}`, {
         method: 'PUT',
@@ -156,6 +158,7 @@ export default function Classes() {
                         <span className="flex items-center gap-1 ml-2" onClick={e => e.stopPropagation()}>
                           <select value={editGrade} onChange={e => setEditGrade(e.target.value)}
                             className="px-2 py-1 text-xs rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 dark:text-white">
+                            {editGrade === '' && <option value="">Not set</option>}
                             {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
                           </select>
                           <button onClick={() => saveGrade(cls.id)} className="p-1 rounded-md text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/30">
@@ -168,7 +171,7 @@ export default function Classes() {
                       ) : (
                         <span className="flex items-center gap-1 ml-2 text-xs font-bold px-2.5 py-1 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">
                           <GraduationCap size={11} /> {cls.grade_level || 'Grade not set'}
-                          <button onClick={(e) => { e.stopPropagation(); setEditingId(cls.id); setEditGrade(cls.grade_level || '5th Grade') }}
+                          <button onClick={(e) => { e.stopPropagation(); setEditingId(cls.id); setEditGrade(cls.grade_level || '') }}
                             className="ml-1 opacity-60 hover:opacity-100"><Pencil size={11} /></button>
                         </span>
                       )}

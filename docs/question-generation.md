@@ -300,9 +300,10 @@ PATCHed past its validator. A lesson plan is dashboard-authored and clamped.
 
 The fourth is `get_user_history`: the model's own previous `question_text`, replayed so the next question is not a
 repeat. All eighteen generators newline-join it — seventeen follow it with *"DO NOT generate a question matching any
-of the above"*, kindergarten with *"Use different wording from all of the above"* — so a reply carrying a newline put a line of its own in instruction position. `_prompt_safe_history` flattens
-and bounds it at the two sites the history is **read** — `question_generation` and the single-prompt decider — not in
-each generator, the chokepoint `grade_for_prompt` already argues for.
+of the above"*, kindergarten with *"Use different wording from all of the above"* — so a reply carrying a newline
+put a line of its own in instruction position. `_prompt_safe_history` flattens and bounds it at the two sites the
+history is **read** — `question_generation` and the single-prompt decider — not in each generator, the chokepoint
+`grade_for_prompt` already argues for.
 
 **It flattens rather than refusing**, the opposite of `validated_grade`: that guards an edge where a bad value is the
 caller's and a 422 names the field, while this runs on the *previous* reply, so raising would fail a generation
@@ -421,8 +422,9 @@ cannot become grade 2026, and answers `None` when it cannot tell, which every ca
 from it, so there is no third way a topic reaches `question_generation()`. **The decider's prompt lists that table
 too, never a list of its own**: one goes stale as topics are added, and a pick outside the grade is replaced at random,
 discarding the choice made from the student's performance. Kindergarten (grade 0) has its own topics and sees no
-other; an unreadable grade is still grade 1, and so is a missing one — `grade_levels.DEFAULT_GRADE`, which generation,
-the session prewarm, practice and `/api/topics` all fall back to, so a list never shows another grade's topics.
+other. An unreadable or missing grade is `grade_levels.DEFAULT_GRADE` (grade 1): every gate reads it through
+`served_grade_number`, and generation, the session prewarm, practice and `/api/topics` all fall back to it. The
+frontend names no default — a picker with no grade shows *Not set* and sends none, so the backend decides.
 
 ### Difficulty and grade are one table, not two independent scales
 

@@ -455,9 +455,7 @@ def _band_scenarios(grade):
     if grade in _BAND_CEILING:
         ceiling = _BAND_CEILING[grade]
     else:
-        number = grade_levels.grade_number(grade)
-        # An unreadable grade is the youngest.
-        ceiling = number if number is not None else 1
+        ceiling = grade_levels.served_grade_number(grade)
     allowed = {number_ for number_, name in _SCENARIO_NAMES.items()
                if SCENARIO_MIN_GRADE[name] <= ceiling}
     if allowed:

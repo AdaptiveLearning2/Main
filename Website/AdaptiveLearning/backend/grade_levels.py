@@ -1,7 +1,7 @@
 """One reading of the free-text `profiles.grade_level`, shared by everything that gates on it.
 
 A grade is read numerically ("Grade 1", "1st Grade" and "1" are one grade), and an
-unreadable grade is treated as grade 1, never the oldest; kindergarten (0) must be named.
+unreadable grade is served `DEFAULT_GRADE`, never the oldest; kindergarten (0) must be named.
 """
 
 import re
@@ -28,7 +28,7 @@ DEFAULT_GRADE = "1st Grade"
 def grade_number(grade):
     """The numeric school grade in `grade`, or None if it cannot be read.
 
-    None is the signal to treat the student as grade 1, not to guess.
+    None is the signal to serve `DEFAULT_GRADE` (`served_grade_number`), not to guess.
     """
     text = (grade or "").strip().lower()
     if not text:
@@ -46,11 +46,15 @@ def grade_number(grade):
     return number if _MIN_GRADE <= number <= _MAX_GRADE else None
 
 
-def grade_band(grade):
-    """The four-band bucket the generation files scale content by; unreadable is "early"."""
+def served_grade_number(grade):
+    """The grade `grade` is served at: its number, or `DEFAULT_GRADE`'s when unreadable or missing."""
     number = grade_number(grade)
-    if number is None:
-        return "early"
+    return grade_number(DEFAULT_GRADE) if number is None else number
+
+
+def grade_band(grade):
+    """The four-band bucket the generation files scale content by; unreadable is `DEFAULT_GRADE`'s."""
+    number = served_grade_number(grade)
     if number <= 3:
         return "early"
     if number <= 6:

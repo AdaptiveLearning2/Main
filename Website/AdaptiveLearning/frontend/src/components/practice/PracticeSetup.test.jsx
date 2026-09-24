@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -149,18 +146,20 @@ it('says a refused profile read was refused, and offers a retry', async () => {
   expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument()
 })
 
-it('starts a student with no grade at the grade the backend defaults to', async () => {
-  // Read from the backend, so the two defaults cannot drift apart again.
-  const backend = resolve(fileURLToPath(import.meta.url), '..', '..', '..', '..', '..', 'backend')
-  const py = readFileSync(resolve(backend, 'grade_levels.py'), 'utf8')
-  const backendDefault = py.match(/^DEFAULT_GRADE = "([^"]+)"/m)?.[1]
-  expect(backendDefault, 'DEFAULT_GRADE not found -- this check is inert').toBeTruthy()
+it('leaves a student with no grade to the backend default, naming no grade itself', async () => {
   overrideApi('/api/profile/me', () => ({ grade_level: null }))
-  overrideApi(`/api/topics?grade=${encodeURIComponent(backendDefault)}`, () => YOUNG_TOPICS, 'GET')
+  // No `grade` parameter: the backend answers for its own default.
+  overrideApi('/api/topics', () => YOUNG_TOPICS, 'GET')
   draw()
 
-  expect(await screen.findByLabelText(/grade/i)).toHaveValue(backendDefault)
-  expect(await screen.findByRole('button', { name: /ordering/i })).toBeEnabled()
+  const picker = await screen.findByLabelText(/grade/i)
+  expect(picker).toHaveValue('')
+  expect(picker).toHaveDisplayValue('Not set')
+  await userEvent.click(await screen.findByRole('button', { name: /ordering/i }))
+  await userEvent.click(screen.getByRole('button', { name: /start practice/i }))
+
+  const [, opts] = apiFetch.mock.calls.find(([path]) => path === '/api/practice-sessions/start')
+  expect(opts.body.grade).toBeNull()
 })
 
 it('never sends a pick the new grade does not allow', async () => {

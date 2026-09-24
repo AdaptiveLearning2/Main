@@ -86,10 +86,8 @@ TOPIC_MAX_GRADE = {
 
 
 def _allowed_topics(grade):
-    # profiles.grade_level is free text; an unreadable grade is treated as grade 1, not kindergarten.
-    number = grade_levels.grade_number(grade)
-    if number is None:
-        number = grade_levels.grade_number(grade_levels.DEFAULT_GRADE)
+    # profiles.grade_level is free text; an unreadable grade is `DEFAULT_GRADE`, not kindergarten.
+    number = grade_levels.served_grade_number(grade)
     return [t for t in ALL_TOPICS
             if TOPIC_MIN_GRADE[t] <= number
             and number <= TOPIC_MAX_GRADE.get(t, number)]

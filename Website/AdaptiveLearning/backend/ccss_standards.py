@@ -133,9 +133,7 @@ def _rung(ladder, number):
 
 def ccss_for(topic, grade, scenario=None):
     """The code for `topic` at `grade`, refined by `scenario`; None for an unknown topic."""
-    number = grade_levels.grade_number(grade)
-    if number is None:
-        number = 1
+    number = grade_levels.served_grade_number(grade)
     ladder = SCENARIO_LADDER.get(topic, {}).get(scenario) or TOPIC_LADDER.get(topic)
     if not ladder:
         return None

@@ -159,9 +159,7 @@ def _grade_scenarios(grade):
 
     Below the lowest minimum (including an unreadable grade), the grade-7 set.
     """
-    number = grade_levels.grade_number(grade)
-    if number is None:
-        number = 1
+    number = grade_levels.served_grade_number(grade)
     allowed = {n for n, name in _SCENARIO_NAMES.items()
                if SCENARIO_MIN_GRADE[name] <= number}
     if allowed:
@@ -204,11 +202,10 @@ GRADE_COMPLEXITY = {
     "advanced": "Use angle measures that are whole numbers NOT divisible by 5 (e.g. 37, 112, 143), so the arithmetic cannot be done by inspection. For the algebraic scenario use coefficients between 2 and 9.",
 }
 
-# Whole degrees through grade 5 (and for an unreadable grade). Keyed on the grade
+# Whole degrees through grade 5 (an unreadable grade is `DEFAULT_GRADE`). Keyed on the grade
 # number, not the band, because the "middle" band spans 4-6.
 def _requires_whole_number_solution(grade):
-    number = grade_levels.grade_number(grade)
-    return number is None or number <= 5
+    return grade_levels.served_grade_number(grade) <= 5
 
 
 def generate_angle_relationship_question(global_questions,prev_questions, difficulty, grade, max_retries=3):

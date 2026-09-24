@@ -116,7 +116,8 @@ describe('the topic grid', () => {
 
     draw()
 
-    await screen.findByText('30%')
+    // Rendered by the same `Promise.all` that sets the grade, so the grade has been decided by now.
+    await screen.findByText(/no sessions yet/i)
     expect(screen.getByText('mode')).toBeInTheDocument()
     expect(apiFetch.mock.calls.some(([p]) => p.startsWith('/api/topics'))).toBe(false)
   })

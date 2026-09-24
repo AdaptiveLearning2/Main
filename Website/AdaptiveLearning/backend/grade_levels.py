@@ -84,13 +84,13 @@ CANONICAL_GRADE_LABELS = {
     13: "College",
 }
 
-# Never a guessed grade, and never the unreadable input echoed back.
-UNKNOWN_GRADE_LABEL = "unspecified"
-
-
 def grade_for_prompt(grade):
-    """The only form of `grade` that may be interpolated into a prompt."""
-    return CANONICAL_GRADE_LABELS.get(grade_number(grade), UNKNOWN_GRADE_LABEL)
+    """The only form of `grade` that may be interpolated into a prompt.
+
+    An unreadable grade becomes `DEFAULT_GRADE`'s label, never the input echoed back, so a
+    generator reading it gets the grade the student is served.
+    """
+    return CANONICAL_GRADE_LABELS[served_grade_number(grade)]
 
 
 # ─── the edge check, layer 1 ─────────────────────────────────────────────

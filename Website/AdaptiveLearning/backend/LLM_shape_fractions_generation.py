@@ -157,7 +157,7 @@ def generate_shape_fractions_question(global_questions, prev_questions,
             f"\nCOMPLEXITY FOR THIS GRADE AND DIFFICULTY: "
             f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
         )
-        override = GRADE_OVERRIDES.get(grade_levels.grade_number(grade))
+        override = GRADE_OVERRIDES.get(grade_levels.served_grade_number(grade))
         if override:
             prompt += "\nGRADE-SPECIFIC RULE: " + override + "\n"
         prompt = lesson_plan_context.append_lesson_context(

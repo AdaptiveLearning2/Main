@@ -99,8 +99,7 @@ GRADE_OVERRIDES = {
 }
 
 # Code-level enforcement of GRADE_OVERRIDES, derived so the two cannot drift.
-# None: an unreadable grade is the youngest.
-_NO_MULTIPLICATION_GRADES = set(GRADE_OVERRIDES) | {None}
+_NO_MULTIPLICATION_GRADES = set(GRADE_OVERRIDES)
 
 
 def solve_missing(tokens):
@@ -144,10 +143,10 @@ def solve_missing(tokens):
 
 
 def _forbidden_operator(tokens, grade):
-    """`"multiplication"` if a grade-1/2 (or unreadable) student would see it, else None."""
+    """`"multiplication"` if a grade-1/2 student would see it, else None; unreadable is `DEFAULT_GRADE`."""
     if not isinstance(tokens, list) or len(tokens) != 5:
         return None
-    if tokens[1] == "*" and grade_levels.grade_number(grade) in _NO_MULTIPLICATION_GRADES:
+    if tokens[1] == "*" and grade_levels.served_grade_number(grade) in _NO_MULTIPLICATION_GRADES:
         return "multiplication"
     return None
 
@@ -209,7 +208,7 @@ def generate_missing_number_question(global_questions, prev_questions,
             f"\nCOMPLEXITY FOR THIS GRADE AND DIFFICULTY: "
             f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
         )
-        override = GRADE_OVERRIDES.get(grade_levels.grade_number(grade))
+        override = GRADE_OVERRIDES.get(grade_levels.served_grade_number(grade))
         if override:
             prompt += "\nGRADE-SPECIFIC RULE: " + override + "\n"
         prompt = lesson_plan_context.append_lesson_context(prompt, "missing_number", grade_band)

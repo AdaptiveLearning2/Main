@@ -209,7 +209,7 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
         )
         if grade_band == "early":
             prompt += EARLY_BAND_EXAMPLE
-        override = GRADE_OVERRIDES.get(grade_levels.grade_number(grade))
+        override = GRADE_OVERRIDES.get(grade_levels.served_grade_number(grade))
         if override:
             prompt += "\nGRADE-SPECIFIC RULE: " + override + "\n"
         prompt = lesson_plan_context.append_lesson_context(prompt, "expressions", grade_band)

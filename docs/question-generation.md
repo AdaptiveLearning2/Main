@@ -264,8 +264,8 @@ followed.
 
 **Escaping it is the weaker answer and is not what is there.** A grade is not free text: the only thing any consumer
 wants from it is the number `grade_levels.grade_number` already reads. So `grade_for_prompt` hands the prompt a label
-**rebuilt from that number** — `CANONICAL_GRADE_LABELS`, fourteen fixed strings, plus `UNKNOWN_GRADE_LABEL`.
-Nothing the caller wrote survives, so injection is unrepresentable rather than filtered for. **Assert membership of
+**rebuilt from that number** — `CANONICAL_GRADE_LABELS`, fourteen fixed strings; an unreadable grade gets
+`DEFAULT_GRADE`'s, so every generator downstream sees the grade the student is served. Nothing the caller wrote survives, so injection is unrepresentable rather than filtered for. **Assert membership of
 the closed set, never the absence of a payload**: an absence test passes against a filter that strips one sequence
 and misses the next.
 
@@ -423,8 +423,8 @@ from it, so there is no third way a topic reaches `question_generation()`. **The
 too, never a list of its own**: one goes stale as topics are added, and a pick outside the grade is replaced at random,
 discarding the choice made from the student's performance. Kindergarten (grade 0) has its own topics and sees no
 other. An unreadable or missing grade is `grade_levels.DEFAULT_GRADE` (grade 1): every gate reads it through
-`served_grade_number`, and generation, the session prewarm, practice and `/api/topics` all fall back to it. The
-frontend names no default — a picker with no grade shows *Not set* and sends none, so the backend decides.
+`served_grade_number` (`test_default_grade.py` fails on any other `grade_number` call outside `grade_levels`), and
+generation, the session prewarm, practice and `/api/topics` all fall back to it. The frontend names no default — a picker with no grade shows *Not set* and sends none, so the backend decides.
 
 ### Difficulty and grade are one table, not two independent scales
 

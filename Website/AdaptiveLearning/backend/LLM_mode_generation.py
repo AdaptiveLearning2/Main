@@ -64,7 +64,7 @@ The JSON must follow this exact structure:
 {{
   "question_text": "A teacher recorded the number of books students finished during a reading challenge. The numbers of books read by the students were: 3, 5, 2, 5, 4, 6, 5, 3. What is the mode of this dataset?",
   "question_topic": "mode",
-  "variables": ["3,"5","2","5","4","6","5", "2"]
+  "variables": ["3", "5", "2", "5", "4", "6", "5", "3"]
 }}
 
 Rules:
@@ -97,7 +97,7 @@ def _mode_problem(numbers, difficulty):
     counts = Counter(numbers)
     top = max(counts.values())
     modes = [v for v, c in counts.items() if c == top]
-    if top < 2 or len(modes) == len(counts):
+    if len(modes) == len(counts):
         return f"no mode: every value appears {top} time(s)"
     allowed = 2 if difficulty == "hard" else 1
     if len(modes) > allowed:

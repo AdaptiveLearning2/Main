@@ -934,11 +934,15 @@ dataset there, which is what makes locating it reliable); `negation_mismatch` re
 `not_probability_of` to imply each other, **in both directions**, since a negated question scored as `probability_of`
 is wrong by the same amount.
 
-**The two checks do not cover the same topics.** `dataset_mismatch` is in `mean`/`median`/`mode`/`ordering` only, and
-`negation_mismatch` is in `probability` only. This file said `dataset_mismatch` covered probability too, for months; it
-never has — probability's counts live in the sentence body, not after a colon, so the check would be inert there
-anyway. But *documented as wired and absent* is the worst of the three states, because it is the one nobody re-checks.
-Verify with `grep -l dataset_mismatch LLM_*_generation.py`, which is cheaper than trusting this paragraph.
+**The checks do not cover the same topics.** `dataset_mismatch` is in `mean`/`median`/`mode`/`ordering` only;
+`negation_mismatch` and `counts_mismatch` are in `probability` only. Probability's counts live in the sentence body,
+not after a colon, so `counts_mismatch` locates each by the label it precedes ("6 red marbles") and leaves a label
+with no number before it alone. *Documented as wired and absent* is the worst of the three states, because it is the
+one nobody re-checks: verify with `grep -l <check> LLM_*_generation.py`, which is cheaper than trusting this paragraph.
+
+**Probability's target and dice faces are validated inside the retry loop** (`_scored_data`): a target that names
+no item scored 0 favourable, serving 0 (or 1 for `not_probability_of`) as correct. It resolves to an item ignoring
+case and spacing, counts are whole and non-zero in total, and dice faces are distinct and in `1..sides`.
 
 **Both fail open**, which is what makes them safe to run on every question: order is ignored (the solvers sort anyway),
 non-numeric `variables` are skipped, and a question with no colon-delimited list is left alone rather than compared

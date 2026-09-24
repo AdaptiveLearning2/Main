@@ -10,6 +10,7 @@ from statistics import fmean
 import signal_fusion
 import grade_levels
 import unicodedata
+import datetime as _dt
 from collections import deque
 
 from supabase_auth import datetime
@@ -97,6 +98,8 @@ def get_user_performance(user_id):
 # Recent in-session answers / EEG samples considered.
 SESSION_PERFORMANCE_WINDOW = 10
 EEG_BIAS_WINDOW = 5
+# A reading older than this (s) no longer steers difficulty; equals main._LIVE_WINDOW_SEC, pinned.
+SIGNAL_MAX_AGE_SEC = 90
 # Focus/calm/confidence thresholds live only in `signal_fusion`.
 
 DIFFS = ["easy", "medium", "hard"]
@@ -224,13 +227,16 @@ def _consent_flags(user_id):
 def _latest(table, columns, session_id, limit=1, sources=None):
     """This session's most recent row(s) from a signals table, newest first.
 
-    `sources` filters in the query, so a declined sensor's rows are never fetched.
+    Only rows from the last SIGNAL_MAX_AGE_SEC, so a sensor that stopped reporting stops
+    steering. `sources` filters in the query, so a declined sensor's rows are never fetched.
     """
+    cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=SIGNAL_MAX_AGE_SEC)
     try:
         q = (
             supabase.table(table)
             .select(columns)
             .eq("session_id", session_id)
+            .gte("ts", cutoff.isoformat())
         )
         if sources is not None:
             q = q.in_("source", sources)

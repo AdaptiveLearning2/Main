@@ -77,13 +77,14 @@ def _plan(topic, scenario, difficulty, rng):
                  example=f"How many {items} are there?", require=[[items]])
     elif scenario == "one_more":
         n = rng.randint(*{"easy": (1, 4), "medium": (1, 9), "hard": (10, 19)}[difficulty])
-        p.update(shown=[n], answer=n + 1, require=[["one more"]],
-                 brief=f"Ask what number is one more than {n}.",
+        # An exact phrase: told only the words, both models wrote a get-one-more story.
+        p.update(shown=[n], answer=n + 1, phrase=f"one more than {n}",
+                 brief=f"Ask what number is one more than {n}. Ask about the number, not a story.",
                  example=f"What number is one more than {n}?")
     elif scenario == "one_less":
         n = rng.randint(*{"easy": (3, 5), "medium": (3, 10), "hard": (11, 20)}[difficulty])
-        p.update(shown=[n], answer=n - 1, require=[["one less", "one fewer"]],
-                 brief=f"Ask what number is one less than {n}.",
+        p.update(shown=[n], answer=n - 1, phrase=f"one less than {n}",
+                 brief=f"Ask what number is one less than {n}. Ask about the number, not a story.",
                  example=f"What number is one less than {n}?")
     elif scenario == "next_number":
         s = rng.randint(*{"easy": (1, 2), "medium": (1, 7), "hard": (8, 17)}[difficulty])
@@ -214,9 +215,10 @@ def wording_problem(text, plan):
     numbers = [int(n) for n in re.findall(r"\d+", lower)]
     if numbers != plan["shown"]:
         return f"shows numbers {numbers}, expected {plan['shown']}"
-    equation = plan.get("equation")
-    if equation and equation not in re.sub(r"\s+", " ", lower):
-        return f"does not contain {equation!r}"
+    spaced = re.sub(r"\s+", " ", lower)
+    for exact in (plan.get("equation"), plan.get("phrase")):
+        if exact and exact not in spaced:
+            return f"does not contain {exact!r}"
     for group in plan["require"]:
         if not any(_has(lower, word) for word in group):
             return f"uses none of {group}"
@@ -232,6 +234,8 @@ def _prompt(topic, plan, grade, global_questions, prev_questions):
     rules = [f"- It MUST use {' or '.join(repr(w) for w in group)}." for group in plan["require"]]
     if plan.get("equation"):
         rules.append(f"- It MUST contain exactly \"{plan['equation']} = ?\".")
+    if plan.get("phrase"):
+        rules.append(f"- It MUST contain exactly \"{plan['phrase']}\".")
     if plan["forbid"]:
         rules.append(f"- Do NOT use these words: {', '.join(plan['forbid'])}.")
     must = "\n".join(rules)

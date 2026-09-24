@@ -1,6 +1,5 @@
 ﻿# Generates ordering questions via LLM and calculates the result.
 import os
-import re
 import ast
 import itertools
 import random
@@ -35,8 +34,8 @@ ordering_prompt = f"""
 You are to provide a Math question suitable for students. The response must be in JSON format. 
 The Question Text, Question Topic, and Variables will be displayed. The Question Topic will be "ordering".
 
-Ordering example question: "Order from least to greatest: 3/6, 0.6, 2/3, 0.75". The question text should display the direction
-(least_to_greatest or greatest_to_least) as well as every value to be ordered. There should not be equivalent values, for example 0.5 and 1/2 should not
+Ordering example question: "Order from least to greatest: 3/6, 0.6, 2/3, 0.75". The question text and the direction are
+written for you from the values you return, so return the values to be ordered. There should not be equivalent values, for example 0.5 and 1/2 should not
 both be values for a single question. All values should be numeric. Values may go to two decimal places.
 The number of values and which value types to use (whole numbers, decimals, fractions, negatives) are given below under COMPLEXITY FOR THIS DIFFICULTY -- follow that.
 Return ONLY valid JSON with no text before or after the JSON object.
@@ -70,25 +69,17 @@ def solve_ordering(values, numbers, direction="least_to_greatest"):
 
     return [v[0] for v in sorted_vals]
 
-# The wordings of each direction a question can use; the text is what the student follows.
-_ASCENDING = re.compile(r"\b(least|smallest|lowest)\s+to\s+(greatest|largest|biggest|highest)\b"
-                        r"|\bascending\b|\bincreasing\b", re.I)
-_DESCENDING = re.compile(r"\b(greatest|largest|biggest|highest)\s+to\s+(least|smallest|lowest)\b"
-                         r"|\bdescending\b|\bdecreasing\b", re.I)
+# Direction -> the words the question uses for it. The code chooses and writes both.
+DIRECTIONS = {"least_to_greatest": "least to greatest", "greatest_to_least": "greatest to least"}
 
 
-def _direction(question_data):
-    """The direction the question text asks for, or None if it names none, both, or not `direction`'s."""
-    text = str(question_data.get("question_text") or "")
-    up, down = bool(_ASCENDING.search(text)), bool(_DESCENDING.search(text))
-    if up == down:
-        return None
-    shown = "least_to_greatest" if up else "greatest_to_least"
-    said = str(question_data.get("direction") or "").replace("_", " ")
-    said_up, said_down = bool(_ASCENDING.search(said)), bool(_DESCENDING.search(said))
-    if (said_up or said_down) and said_up != up:
-        return None
-    return shown
+def _pick_direction():
+    return random.choice(list(DIRECTIONS))
+
+
+def render_question(values, direction):
+    """The question the student reads, from the values scored and the direction chosen."""
+    return f"Order from {DIRECTIONS[direction]}: {', '.join(str(v).strip() for v in values)}"
 
 
 def shuffle_incorrect_answers(solution):
@@ -169,34 +160,25 @@ def generate_ordering_question(global_questions, prev_questions,difficulty, grad
             print(response_text)
             continue
 
-        required_keys = ["values", "question_text", "direction"]
-        if not all(k in question_data for k in required_keys):
-            print(f"[Attempt {attempt+1}] Missing keys:", question_data)
+        values = question_data.get("values")
+        # Two values have only one wrong order, so one distractor at most.
+        if (not isinstance(values, list) or len(values) < 3
+                or not all(isinstance(v, (str, int, float)) and not isinstance(v, bool) for v in values)):
+            print(f"[Attempt {attempt+1}] Not three or more values to order:", repr(values)[:60])
             continue
 
-        # Backstop on what the model produced, not what the prompt asked for.
-        if grade_appropriateness.refuse(question_data.get("question_text"),
-                                        "ordering", grade_band, difficulty,
-                                        attempt + 1):
+        # The code writes the question, so the direction scored is the direction shown.
+        direction = _pick_direction()
+        text = render_question(values, direction)
+
+        # Backstop on the values the model chose, as the student will read them.
+        if grade_appropriateness.refuse(text, "ordering", grade_band, difficulty, attempt + 1):
             continue
 
-        # The student reads question_text but is scored against values.
-        inconsistent = question_consistency.dataset_mismatch(
-            question_data.get("question_text"), question_data.get("values"))
+        # The student reads the text but is scored against values.
+        inconsistent = question_consistency.dataset_mismatch(text, values)
         if inconsistent:
             print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
-            continue
-
-        # Two values have only one wrong order, so one distractor at most.
-        if len(question_data.get("values") or []) < 3:
-            print(f"[Attempt {attempt+1}] Too few values to order:",
-                  repr(question_data.get("values"))[:60])
-            continue
-
-        direction = _direction(question_data)
-        if direction is None:
-            print(f"[Attempt {attempt+1}] No single direction in the text, or it contradicts",
-                  repr(question_data.get("direction"))[:40])
             continue
 
         # Parsed in the bounded worker, so an unbounded value is a retry, not a hang.
@@ -223,7 +205,7 @@ def generate_ordering_question(global_questions, prev_questions,difficulty, grad
     random.shuffle(answers)
 
     return {
-        "question_text": question_data["question_text"],
+        "question_text": text,
         "question_topic": "ordering",
         "ccss_standard": ccss_standards.ccss_for("ordering", grade),
         "answer_options": answers,

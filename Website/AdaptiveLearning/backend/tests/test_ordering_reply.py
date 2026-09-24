@@ -1,4 +1,4 @@
-"""An ordering is scored in the direction the text asks for, over values with one right order."""
+"""An ordering question is written from the values scored, in a direction the code chooses."""
 import json
 import os
 from fractions import Fraction
@@ -24,7 +24,9 @@ def replies(monkeypatch):
     monkeypatch.setattr(lesson_plan_context, "append_lesson_context", lambda p, t, b: p)
     asked = []
 
-    def _use(*payloads):
+    def _use(*payloads, direction="least_to_greatest"):
+        monkeypatch.setattr(ordering, "_pick_direction", lambda: direction)
+
         def generate(*_a, **_k):
             asked.append(1)
             return json.dumps(payloads[min(len(asked), len(payloads)) - 1])
@@ -37,47 +39,56 @@ def _generate():
     return ordering.generate_ordering_question([], [], "medium", "7th Grade")
 
 
-@pytest.mark.parametrize("text,field", [
-    ("Order from greatest to least: 3/4, 0.6, 2/3, 0.2", "greatest to least"),
-    ("Order from greatest to least: 3/4, 0.6, 2/3, 0.2", "descending"),
-    ("Order from greatest to least: 3/4, 0.6, 2/3, 0.2", "Greatest_To_Least"),
-    ("Put these in descending order: 3/4, 0.6, 2/3, 0.2", "greatest_to_least"),
-    ("Order from largest to smallest: 3/4, 0.6, 2/3, 0.2", "sideways"),
+@pytest.mark.parametrize("direction,words,expected", [
+    ("least_to_greatest", "least to greatest", ASCENDING),
+    ("greatest_to_least", "greatest to least", ASCENDING[::-1]),
 ])
-def test_a_descending_question_is_scored_descending_however_the_field_is_written(replies, text, field):
-    """Anything but exactly 'greatest_to_least' used to sort ascending."""
+def test_the_text_states_the_direction_that_is_scored(replies, direction, words, expected):
+    replies(GOOD, direction=direction)
+    question = _generate()
+    assert question["question_text"] == f"Order from {words}: 3/4, 0.6, 2/3, 0.2"
+    assert question["correct_answer"] == expected
+
+
+@pytest.mark.parametrize("text,field", [
+    ("Order from greatest to least: 3/4, 0.6, 2/3, 0.2", "greatest_to_least"),
+    ("Order from least_to_greatest: 1, 2, 3", "sideways"),
+    ("Put these from the largest to the smallest.", "descending"),
+])
+def test_the_models_text_and_direction_are_not_what_is_served(replies, text, field):
+    """Whatever it wrote, the student reads the rendered text and is scored in its direction."""
     replies({**GOOD, "question_text": text, "direction": field})
-    assert _generate()["correct_answer"] == ASCENDING[::-1]
+    question = _generate()
+    assert question["question_text"] == "Order from least to greatest: 3/4, 0.6, 2/3, 0.2"
+    assert question["correct_answer"] == ASCENDING
 
 
-def test_an_ascending_question_is_scored_ascending(replies):
-    replies(GOOD)
+def test_a_reply_without_text_or_direction_is_served(replies):
+    replies({"values": GOOD["values"]})
     assert _generate()["correct_answer"] == ASCENDING
 
 
-@pytest.mark.parametrize("payload", [
-    {**GOOD, "direction": "greatest_to_least"},
-    {**GOOD, "question_text": "Order these numbers: 3/4, 0.6, 2/3, 0.2"},
-    {**GOOD, "question_text": "Order from least to greatest, then greatest to least: 3/4, 0.6, 2/3, 0.2"},
-])
-def test_a_text_and_field_that_disagree_or_say_nothing_are_retried(replies, payload):
-    asked = replies(payload, GOOD)
+@pytest.mark.parametrize("values", [["1", "2"], "3/4, 0.6, 2/3", [["1"], "2", "3"], None])
+def test_values_that_cannot_be_ordered_and_shown_are_retried(replies, values):
+    asked = replies({**GOOD, "values": values}, GOOD)
     assert _generate()["correct_answer"] == ASCENDING
     assert len(asked) == 2
 
 
 def test_equal_values_are_retried_because_they_have_two_right_orders(replies):
     """1/2 and 0.5 parse to one number, so a correct order could be a 'wrong' option."""
-    equal = {**GOOD, "question_text": "Order from least to greatest: 1/2, 0.5, 3",
-             "values": ["1/2", "0.5", "3"]}
-    asked = replies(equal, GOOD)
+    asked = replies({**GOOD, "values": ["1/2", "0.5", "3"]}, GOOD)
     question = _generate()
     assert len(asked) == 2
     assert question["correct_answer"] == ASCENDING
 
 
+def test_both_directions_are_chosen():
+    assert {ordering._pick_direction() for _ in range(200)} == set(ordering.DIRECTIONS)
+
+
 def test_the_prompts_own_example_has_distinct_values_matching_its_text():
-    """The example the model copies may not show the two mistakes this file refuses."""
+    """The example the model copies may not show equal values, or values its text does not."""
     example = json.loads(ordering.extract_json(ordering.ordering_prompt))
     shown = example["question_text"].split(":", 1)[1].replace(" ", "").split(",")
     assert shown == example["values"]

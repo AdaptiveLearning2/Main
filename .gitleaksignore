@@ -1,20 +1,7 @@
-# Findings the `Secret scan` job may skip, by fingerprint.
-#
-# A fingerprint is `commit:path:rule:line`, so an entry here silences exactly
-# one match in one commit -- not the rule, not the file. That is the point: the
-# same rule firing on a real key somewhere else still goes red.
-#
-# Only add a line here for something that is genuinely not a credential. A
-# credential that *was* committed is not silenced, it is rotated: the commit is
-# what GitHub serves, so removing it from the tip changes nothing.
-#
-# Do not quote the matched text in a comment here. The first version of this
-# file explained the entry below by reproducing the placeholder verbatim, which
-# tripped the same rule on this file -- an ignore file that is itself a finding.
-# Describe it instead.
+# Findings the `Secret scan` job may skip, by fingerprint (`commit:path:rule:line`),
+# so an entry silences one match in one commit, not the rule or the file.
+# Only for things that are not credentials; a committed credential is rotated, not silenced.
+# Never quote the matched text here: that makes this file a finding itself.
 
-# A placeholder bearer token in a worked `curl` example in the mac setup guide,
-# showing where the reader's own API_TOKEN goes when calling the sidecar. Never
-# a live value, and the line has since been rewritten; this silences it in the
-# commit that still holds it, which only a history rewrite could remove.
+# Placeholder bearer token in a curl example in the mac setup guide; never a live value.
 b233397c940fba807854946044249a6e11b5d70a:DEVELOPER_SETUP_MAC.md:curl-auth-header:113

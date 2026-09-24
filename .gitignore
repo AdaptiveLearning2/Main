@@ -2,64 +2,18 @@ node_modules/
 package-lock.json
 package.json
 
-# Virtualenvs. Placed in the top-level .gitignore rather than per-subproject
-# because Website/AdaptiveLearning/backend/.venv was missed by the per-directory
-# rules and ended up committed -- 4899 files / 55.7MB, including
-# platform-specific binaries (python.exe, .pyd) that are wrong for anyone on
-# another OS.
-#
-# The patterns are unanchored (no leading slash) so they match at any depth,
-# which is the point -- a venv created in any subproject is covered.
-#
-# Deliberately only these two names. A broader "env/" would also swallow a
-# future config directory called env, and this repo's convention is .venv
-# everywhere, so the extra coverage buys nothing.
+# Virtualenvs, unanchored so they match in any subproject. Deliberately not "env/".
 .venv/
 venv/
 
-# Coverage output. `npm run test:coverage` writes 66 files here, and without
-# this they all land in git status as untracked -- the same shape of gap that
-# put a 4899-file virtualenv in this repo above.
+# Coverage output from `npm run test:coverage`.
 coverage/
 
-# Personal manual-QA working document -- deliberately not part of the shared
-# repo. Anchored with a leading slash, unlike the rules above: this is one
-# specific file at the repository root, not a name that should match at any
-# depth.
+# Personal manual-QA document; anchored, since it is one file at the repo root.
 /MANUAL_QA_CHECKLIST.md
 
-# rPPG capture output and model weights. The capture script rewrites its whole
-# session report every second and downloads a 35MB ONNX model into the working
-# directory, so a single run leaves both behind next to the source. An earlier
-# branch committed them: ~630k lines of session JSON (one file was 582,612
-# lines), the 35MB model, three .pyc, and a .tmp left by a crashed atomic write.
-#
-# These are the scripts' actual --out defaults, read from the source rather than
-# from the README's "Suggested .gitignore" block -- that block listed names no
-# script writes any more (facial_session*.json, emotion_rppg_test.json) and
-# missed rppg_test_output.json, which is the one that rewrites every second and
-# became the 582k-line file. The block has been removed from the README so there
-# is one list, here, and no second copy to drift.
-#
-# Unanchored, so they match at any depth. That is not tidiness -- it is the
-# whole point. Every one of these paths is a bare relative name in the source
-# (JSON_OUTPUT_PATH = "rppg_test_output.json", DEFAULT_EMOTION_MODEL_PATH =
-# "emotion-ferplus-8.onnx"), so the files land in the *working* directory, not
-# next to the script. Running the capture script from the repo root -- the
-# obvious way to invoke it by path -- drops the 35MB model and the growing JSON
-# at the repository root. Anchoring these to /FacialRecg/ leaves exactly that
-# case uncovered, which is the case most likely to happen.
-#
-# The model is named specifically rather than swallowed by a blanket *.onnx: a
-# repo-wide rule on that extension would also silently ignore a small model
-# someone deliberately wants to commit somewhere else, and a gitignore that
-# hides a file you meant to add is its own kind of afternoon.
-#
-# A non-default --out is still not covered. The durable fix is to point every
-# default at an ignored output/ directory so one rule covers all of them, but
-# that changes script behaviour and belongs with the port into the sidecar --
-# where the file export goes away entirely -- not with a commit whose only job
-# is to stop the artifacts landing in git.
+# rPPG capture output and model weights (the scripts' --out defaults, relative to the cwd,
+# hence unanchored). The model is named, not *.onnx, which would hide a deliberate one.
 emotion-ferplus-8.onnx
 rppg_test_output.json
 session_fusion_output.json
@@ -68,38 +22,18 @@ fusion_output*.json
 session_report.html
 .rppg_export_*.tmp
 
-# Python bytecode. Unanchored, like the venv rules above, so it matches at any
-# depth rather than only where someone remembered to add a rule.
+# Python bytecode, at any depth.
 __pycache__/
 *.pyc
 
-# Claude Code's per-developer settings. The file is machine-specific by design
-# -- it accumulates approved tool invocations, and those bake in absolute paths
-# including this machine's home directory and per-session temp directories, so
-# committing it would be both noise and a small leak of local layout.
-#
-# Deliberately this one file rather than the whole .claude/ directory:
-# settings.json (shared project settings) and launch.json (the dev-server
-# config the browser preview reads) are both things a project may legitimately
-# want to check in, and a directory-wide rule would silently make that
-# impossible.
+# Claude Code's per-developer settings (absolute local paths). Only this file:
+# settings.json and launch.json may legitimately be committed.
 .claude/settings.local.json
 
-# Serena's per-machine index and project config. Unlike the rule directly above,
-# this is the whole directory: every file in it is written by the tool, none of
-# it is project source, and there is nothing in there a checkout would want.
-# `.serena/project.yml` looks shareable and is not -- it is regenerated per
-# machine, so committing it means merge conflicts over a file nobody edits.
-#
-# Here rather than only in each developer's global ignore file, because a global
-# rule covers a file only until something tracks it: `.serena/` was committed
-# once on a feature branch and no ignore rule anywhere would have stopped that.
-# This entry is what makes the rule travel with the checkout instead of
-# depending on every clone being configured the same way.
+# Serena's per-machine index and config; all tool-written, including project.yml.
+# Here as well as in global ignores, because a global rule stops nothing once a file is tracked.
 .serena/
 
-# Editor state. `.vscode/settings.json` was committed once by accident with
-# `cmake.sourceDirectory` hardcoded to one machine's absolute path, which
-# silently misconfigures CMake Tools for anyone whose checkout is elsewhere.
+# Editor state; machine-specific paths.
 .vscode/
 .idea/

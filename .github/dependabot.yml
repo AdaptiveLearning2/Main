@@ -1,37 +1,8 @@
 version: 2
 
-# Four ecosystems, because this repo installs from four places and they are
-# genuinely separate: the website backend pins direct dependencies, the sidecar
-# resolves from pyproject, the frontend has its own lockfile, and the workflows
-# pin third-party actions by tag.
-#
-# Weekly rather than daily. Dependabot opens a pull request per update, and CI
-# here is advisory -- a queue nobody reads is the same failure as a lint backlog
-# nobody burns down. `Dependency scan` in ci.yml is what makes an *urgent* one
-# visible without waiting for this schedule.
-#
-# ─── why everything below is grouped ──────────────────────────────────────
-#
-# Ungrouped, this config opened **fourteen** pull requests the moment it
-# merged -- it did not wait for the weekly schedule, because the first run
-# happens on the commit that adds the file. Fourteen is past the point where
-# anyone reads them, which is the same failure the paragraph above is about,
-# arriving by a different route.
-#
-# So: minor and patch updates are one pull request per ecosystem, and a
-# **major stays on its own**. That split is the whole design. A minor or patch
-# bump is the kind of thing worth taking in a batch on a green suite; a major
-# is a decision, and three of the fourteen were majors that should not be
-# rubber-stamped -- `tailwindcss` 3 -> 4 rewrites the config format, `@eslint/js`
-# 9 -> 10 can move the 14-error lint backlog whose *count* CLAUDE.md uses as a
-# check, and widening `opencv-contrib-python` past `<5` touches a cap whose
-# stated reason (`cv2.data.haarcascades`, the `CAP_PROP_*` constants) no test
-# covers.
-#
-# `github-actions` is the exception and groups its majors too. An action major
-# is usually a runner or Node version bump rather than a behaviour change, they
-# arrive for every action at once, and reviewing four of them together is
-# better than four PRs -- which is exactly what happened.
+# Four ecosystems: backend pins, sidecar pyproject, frontend lockfile, workflow actions.
+# Weekly; `Dependency scan` in ci.yml surfaces urgent ones. Minor+patch grouped per
+# ecosystem; a major is its own PR, except github-actions (runner/Node bumps arrive together).
 updates:
   - package-ecosystem: pip
     directory: /Website/AdaptiveLearning/backend
@@ -39,21 +10,15 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
-      # First, because a dependency joins the first group it matches.
-      # `supabase` requires `postgrest` at its own exact version, and main.py
-      # imports postgrest directly, so both are pinned -- bumped alone, either
-      # fails to install. Every update type, majors too: this group is two
-      # packages moving as one, not a batch.
+      # First, since a dependency joins the first matching group. supabase pins postgrest
+      # exactly and main.py imports postgrest, so both move together, majors included.
       supabase:
         patterns: ["supabase", "postgrest"]
       backend-python:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
-  # Reads pyproject.toml. The four `.lock` files beside it are not managed by
-  # Dependabot -- it does not regenerate pip-compile output, so a lock left
-  # behind by a bump here stays stale silently. That is the reason
-  # `Dependency scan` audits the locks separately.
+  # Reads pyproject.toml only; the .lock files are not regenerated, so the scan audits them.
   - package-ecosystem: pip
     directory: /EEGResearch
     schedule:
@@ -74,8 +39,7 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
-  # A third-party action runs with access to the workflow's token, so a tag
-  # that moves is a supply-chain path into CI.
+  # An action runs with the workflow's token, so a moving tag is a supply-chain path into CI.
   - package-ecosystem: github-actions
     directory: /
     schedule:

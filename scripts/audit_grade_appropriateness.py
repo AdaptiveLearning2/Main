@@ -1,27 +1,8 @@
 """Generate a sample of questions per grade and dump them for classification.
 
-The audit that motivated `quadratics` and `functions` -- "81% of grade-9
-questions three or more grades below grade", over 640 questions -- was done by
-hand and left no script, which is why it could not be re-run to say how far
-the two new topics moved it. This is that script.
-
-It deliberately does **not** score anything. Deciding that a question is
-"three grades below grade" means naming the CCSS standard it actually
-exercises, and that is a judgement about mathematics: a `geometry` question
-can be 2.G.2 or 8.G.9 depending on the scenario drawn, and an `algebra` one
-can be 6.EE.7 or 8.EE.7b depending on the tier. A regex over the text would
-produce a number with no defensible meaning, which is worse than no number.
-So it prints the questions, grouped, for a person to classify.
-
-Topics are drawn uniformly from `_allowed_topics(grade)`, which is what
-`randomize_selection` does and is the documented fallback whenever the model's
-own pick fails to parse. The live path weights by performance history instead,
-so this measures the *offering* rather than one student's experience -- which
-is the right unit for "what can this system ask a 12th grader".
-
-Costs one model call per question against whatever `LLM_PROVIDER` says, so it
-bills like any other caller. Run it against `claude` for the number that
-describes production, and `ollama` for a free shape check.
+Deliberately scores nothing: naming a question's CCSS grade is a person's judgement.
+Topics are drawn uniformly from `_allowed_topics(grade)`, so this measures the offering.
+One model call per question via `LLM_PROVIDER`. See docs/question-generation.md.
 
     python scripts/audit_grade_appropriateness.py --grades 9 10 11 12 --per-grade 30
 """
@@ -74,10 +55,7 @@ def main():
         for index in range(args.per_grade):
             topic = random.choice(allowed)
             difficulty = random.choice(DIFFICULTIES)
-            # A fresh id per question, so the repeat-avoidance history stays
-            # empty and every draw is independent. Sharing one would make
-            # later questions in a grade avoid earlier ones, which is right
-            # for a student and wrong for a sample.
+            # Fresh id per question, so repeat-avoidance history keeps draws independent.
             user = f"audit-{number}-{index}"
             try:
                 served = decider.question_generation(topic, difficulty, user, grade)

@@ -2,67 +2,33 @@
     [switch]$Muse,
     [switch]$Camera,
     [int]$CameraIndex = 0,
-    # Gaze is a second detector on the sampled frames and needs its own model
-    # file, so it is opt-in even when the camera is on. Implies -Camera.
+    # Landmark gaze channel; opt-in, needs its own model. Implies -Camera.
     [switch]$Gaze,
-    # Emotion is on whenever the camera is, so turning it off needs a switch.
-    # Worth having: gaze needs no 35 MB FER+ model, so gaze-only is a real and
-    # much cheaper deployment.
+    # FER+ off; gaze-only skips the 35 MB model.
     [switch]$NoEmotion,
-    # The headband's optical channels -- PPG, and therefore heart rate. Off by
-    # default, and a flag rather than a default because turning it on moves a
-    # 2025 Athena off PRESET_21: a bandwidth trade with a measured cliff, and an
-    # EEG risk in its own right, since the preset change moves bit depth 12 -> 14
-    # and a silent EEG regression would be blamed on whatever shipped beside it.
-    #
-    # Unlike every other flag here this one is passed to the bridge process
-    # rather than written to a .env. The bridge is a C++ process that reads its
-    # own environment directly and never loads config.py, so a MUSE_ENABLE_OPTICS
-    # line in EEGResearch/.env is read by nothing -- the version of this mistake
-    # that looks like it worked.
+    # Headband optical channels (PPG, heart rate). Moves a 2025 Athena off PRESET_21 (EEG
+    # bit depth 12 -> 14). Passed to the bridge's environment: it never reads a .env.
     [switch]$Optics,
-    # Which rung: 1031/1032 are 16 CH, 1033/1034 8 CH, 1035/1036 4 CH, odd being
-    # low power. Empty leaves the bridge on its own default (1035, the bottom).
+    # 1031/1032 16 CH, 1033/1034 8 CH, 1035/1036 4 CH, odd = low power. Empty = bridge default 1035.
     [string]$OpticsPreset = "",
-    # Score calm from the sidecar's own spectrum (EEG_SPECTRUM_SOURCE=local)
-    # instead of the SDK band ratio. Off by decision until a second wearer
-    # confirms the alpha separation (CLAUDE.md, Phase 2). The key is written
-    # on every run either way, so this flag is the only way to select it --
-    # a hand-edited .env would otherwise be reverted by the next plain run,
-    # or survive into one nobody chose it for.
+    # EEG_SPECTRUM_SOURCE=local instead of the SDK band ratio; written every run, so only this flag selects it.
     [switch]$LocalCalm
 )
 
 $ErrorActionPreference = "Stop"
 
-# Made real rather than merely documented. Gaze is a channel of the camera
-# device, so every line that provisions or enables it sits inside the -Camera
-# block -- and without this, `./start.ps1 -Gaze` would run to completion having
-# silently done nothing at all, which is the failure this script exists to turn
-# into a message. Promoted rather than refused: the intent is unambiguous.
+# Gaze is provisioned inside the -Camera block, so promote rather than silently do nothing.
 if ($Gaze -and -not $Camera) {
     Write-Host "-Gaze implies -Camera; enabling the camera too." -ForegroundColor Yellow
     $Camera = $true
 }
 
-# The sidecar refuses to construct a camera adapter with every channel off,
-# because a camera that computes nothing is indistinguishable from a student out
-# of shot. Caught here so it reads as a bad combination of flags rather than as
-# a stack trace from a sidecar that started and then would not connect.
-#
-# It has to consult FACE_HEART_ENABLED, which this script never writes: heart is
-# the third channel in the adapter's guard, it is off by default, and it is
-# hand-set in the .env when someone is testing that path. Without this read the
-# two copies of one rule disagree -- PowerShell refusing a heart-only camera the
-# Python underneath would accept.
+# The sidecar refuses a camera with every channel off; refuse the flags here instead.
+# Reads the hand-set FACE_HEART_ENABLED (never written here), the adapter's third channel.
 $heartOn = $false
 $preEnv = Join-Path $PSScriptRoot "EEGResearch\.env"
 if (Test-Path $preEnv) {
-    # Same shape as start.sh's grep: leading space, space around `=`, and any
-    # casing. The two drifted apart the moment they were written by hand --
-    # PowerShell's -match is case-insensitive by default and grep's is not, so
-    # a hand-edited `FACE_HEART_ENABLED=True` was read on Windows and missed on
-    # a Mac. Parity was this guard's whole point.
+    # Same match as start.sh's grep (case-insensitive, spaces allowed); keep them in parity.
     $heartOn = @(Get-Content $preEnv) -match '^\s*FACE_HEART_ENABLED\s*=\s*true\s*$' | ForEach-Object { $true } | Select-Object -First 1
     if (-not $heartOn) { $heartOn = $false }
 }
@@ -72,20 +38,13 @@ if ($Camera -and $NoEmotion -and -not $Gaze -and -not $heartOn) {
     exit 1
 }
 
-# Refused rather than promoted, which is the opposite call to -Gaze above. That
-# promotion was safe because the intent was unambiguous and the cost was a camera
-# nobody asked for. This flag configures a *headband*, and the alternative to one
-# is the simulator -- which models no optical channel at all, so every window
-# would be refused `no_samples` and the run would look exactly like -Optics not
-# working. Guessing here would manufacture that.
+# Refused, not promoted: the simulator has no optical channel, so the run would look like -Optics failing.
 if ($Optics -and -not $Muse) {
     Write-Host "-Optics needs -Muse: the simulator has no optical channel to enable." -ForegroundColor Red
     Write-Host "  Add -Muse, or drop -Optics." -ForegroundColor Yellow
     exit 1
 }
-# Same shape: the spectrum estimator is fed only by a headband, so under the
-# simulator the local calm is a placeholder for the whole session and the run
-# looks exactly like the flag not working.
+# Same: under the simulator the local calm is a placeholder all session.
 if ($LocalCalm -and -not $Muse) {
     Write-Host "-LocalCalm needs -Muse: the simulator delivers no raw stream to score calm from." -ForegroundColor Red
     Write-Host "  Add -Muse, or drop -LocalCalm." -ForegroundColor Yellow
@@ -97,19 +56,13 @@ if ($OpticsPreset -and -not $Optics) {
     Write-Host "  Add -Optics, or drop -OpticsPreset." -ForegroundColor Yellow
     exit 1
 }
-# A value outside the range is a typo, not a preference. The bridge already says
-# so and falls back to 1035 -- but it says so on stderr in its own window, so the
-# session records on a rung nobody chose while the operator believes otherwise.
-# Refusing here is the difference between a wrong number and no number.
+# The bridge would fall back to 1035 and say so only in its own window.
 if ($OpticsPreset -and $OpticsPreset -notmatch '^103[1-6]$') {
     Write-Host "-OpticsPreset '$OpticsPreset' is not a preset (expected 1031-1036)." -ForegroundColor Red
     Write-Host "  16 CH: 1031/1032   8 CH: 1033/1034   4 CH: 1035/1036   (odd = low power)" -ForegroundColor Yellow
     exit 1
 }
-# Warned, not refused. 16 CH at 64Hz was measured dropping the BLE link within
-# ~20s and collapsing electrode contact from [1,1,1,1] to [4,4,4,4] -- it takes
-# EEG down with it. But selecting it is how that was measured, so the rung stays
-# reachable and the script says what is known about it instead.
+# Warned, not refused: reproducing the 16 CH bandwidth cliff needs this rung.
 if ($OpticsPreset -in @("1031", "1032")) {
     Write-Host "  WARNING: PRESET_$OpticsPreset is 16 CH optics." -ForegroundColor Red
     Write-Host "  Measured on hardware: BLE link drops within ~20s and electrode contact" -ForegroundColor Yellow
@@ -128,39 +81,12 @@ $emotionModel = Join-Path $eegDir "models\emotion-ferplus-8.onnx"
 $landmarkModel = Join-Path $eegDir "models\face_landmarker.task"
 
 function Update-DeviceRegistry {
-    # Tidy EEG_DEVICES for a run without the camera: drop the camera entry
-    # this script writes, and rewrite the `default:` headband entry to what
-    # *this* run asked for. Everything else is left alone -- blanking the key
-    # would destroy a hand-written multi-headband registry in a file the docs
-    # tell people to edit -- and a `default:` entry is only rewritten if one
-    # is there: a registry that deliberately omits it is not given one.
-    #
-    # The headband half matters as much as the camera half. A `-Muse -Camera`
-    # run wrote `default:muse@8765,camera:face@N`; stripping only the camera
-    # entry left `default:muse@8765` in place, and the registry wins over
-    # EEG_SOURCE for that device -- so every plain run after it started the
-    # sidecar looking for a bridge that was not running (EEG_SOURCE=sim in the
-    # same file, `eeg_source: muse` on the payload, no_signal throughout).
-    #
-    # With `-camera` given (the -Camera branch), the camera entry is appended
-    # and a `default:` entry is ensured, since that run needs both -- but
-    # still *composed* onto the existing list. The camera branch used to
-    # overwrite the key outright, so a two-station registry that a plain run
-    # was careful to preserve was reduced to one station and a camera by the
-    # next -Camera run.
-    #
-    # -DryRun validates and writes nothing. The launcher calls it that way
-    # before any key is written, so a refusal leaves both .env files exactly
-    # as they were, and applies the composed value only after the camera
-    # model provisioning has succeeded -- applied early, a failed download
-    # exited with a camera entry in the registry and FACE_ENABLED still
-    # false, a camera device with every channel off, which the sidecar
-    # refuses to construct.
+    # Compose EEG_DEVICES: drop the camera entry, re-point an existing `default:` entry to
+    # this run's headband, keep other stations; with -camera, ensure `default:` and append it.
+    # -DryRun validates and writes nothing. See CLAUDE.md, *The device registry is composed*.
     param([string]$path, [string]$headband, [string]$camera = "", [switch]$DryRun)
     if (!(Test-Path $path)) { return $true }
-    # Select-Object -Last 1: Where-Object yields an array if EEG_DEVICES
-    # somehow appears twice, and -split on an array would misparse. The last
-    # occurrence is what a dotenv reader would take.
+    # -Last 1: a duplicated key would make an array; dotenv takes the last.
     $line = @(Get-Content $path) | Where-Object { $_ -match '^EEG_DEVICES=' } | Select-Object -Last 1
     if (!$line) {
         if ($camera -and -not $DryRun) { Set-EnvKey $path "EEG_DEVICES" "$headband,$camera" }
@@ -168,17 +94,8 @@ function Update-DeviceRegistry {
     }
     $current = ($line -split '=', 2)[1]
     $entries = @($current -split ',' | Where-Object { $_ -and ($_ -notmatch ':face(@|$)') })
-    # A *named* station already on the headband's own address (`muse@8765`)
-    # is a conflict this function cannot resolve, so it writes nothing and
-    # returns $false for the caller to refuse the run. The registry parser
-    # refuses two muse devices on one host:port -- `parse_eeg_devices` raises
-    # and the sidecar does not boot -- and the website backend addresses
-    # `default` on every lifecycle call (eeg_client.DEFAULT_DEVICE_ID), so
-    # dropping the `default:` entry instead traded a sidecar that would not
-    # start for a stack that starts clean and 404s on Connect. Only the user
-    # can say whether the station should move to its own port or go. sim has
-    # no process behind it, so two sim entries collide on nothing (config.py
-    # exempts them for the same reason).
+    # A named station on the headband's address cannot share its bridge port, and the backend
+    # drives `default`; only the user can resolve it, so return $false. sim entries are exempt.
     $addr = ($headband -split ':', 2)[1]
     $clash = @($entries | Where-Object {
         ($_ -notmatch '^default:') -and ($addr -ne 'sim') -and (($_ -split ':', 2)[1] -eq $addr) })
@@ -199,10 +116,7 @@ function Update-DeviceRegistry {
 }
 
 function Set-EnvKey {
-    # Rewrite a key in a .env, or append it if absent. Appending matters: a
-    # first-time checkout has no FACE_* lines at all, and a -replace against a
-    # missing key silently does nothing -- the flag would appear to work and
-    # change no behaviour.
+    # Rewrite a key in a .env, or append it if absent (a -replace alone misses a missing key).
     param([string]$path, [string]$key, [string]$value)
     if (!(Test-Path $path)) { return }
     $lines = @(Get-Content $path)
@@ -261,27 +175,14 @@ Write-Host "  AdaptiveLearning -- Starting Stack"    -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. Ollama
-#
-# Skipped entirely when the backend is configured for Claude. This block used
-# to run unconditionally, so `LLM_PROVIDER=claude` still started `ollama serve`
-# in its own window and would `ollama pull llama3.1:8b` if that model was
-# missing -- a multi-gigabyte download for a model the deployment never calls,
-# and a window that says the opposite of what is configured.
-#
-# `Test-Path` first: `Select-String -Path` on a missing file is a *terminating*
-# error under this file's $ErrorActionPreference, so a fresh checkout with no
-# backend .env would abort the launcher here rather than at the step that
-# creates one. Same guard the -Camera path already carries, and for the same
-# reason.
+# 1. Ollama, skipped when the backend is configured for Claude.
+# `Test-Path` first: Select-String on a missing file is terminating under Stop.
 $llmProvider = "ollama"
 $backendEnvPath = Join-Path $backendDir ".env"
 if (Test-Path $backendEnvPath) {
     $providerLine = Select-String -Path $backendEnvPath -Pattern '^\s*LLM_PROVIDER\s*=\s*(\S+)' |
         Select-Object -First 1
-    # Guard the *match* too, not just the file: indexing .Matches[0] on a key
-    # that is not there is a null-array index, which fails the same way one
-    # step later.
+    # Guard the match too: .Matches[0] on an absent key is a null-array index.
     if ($providerLine -and $providerLine.Matches.Count -gt 0) {
         $llmProvider = $providerLine.Matches[0].Groups[1].Value.Trim().ToLower()
     }
@@ -313,11 +214,8 @@ $eegEnv = Join-Path $eegDir ".env"
 $backendEnv = Join-Path $backendDir ".env"
 $frontendEnv = Join-Path $frontendDir ".env"
 
-# The device registry is *validated* first, before any key in either .env is
-# written, so a refusal leaves both files exactly as they were -- placed after
-# the other writes it refused with EEG_SOURCE=muse already standing beside the
-# registry it was refusing. The composed value is applied later, on each
-# branch, once provisioning has succeeded (see Update-DeviceRegistry).
+# Validate the registry before any .env write, so a refusal changes nothing;
+# the composed value is applied on each branch after provisioning.
 $headband = if ($Muse) { "default:muse@8765" } else { "default:sim" }
 $cameraEntry = if ($Camera) { "camera:face@$CameraIndex" } else { "" }
 if (-not (Update-DeviceRegistry $eegEnv $headband $cameraEntry -DryRun)) { exit 1 }
@@ -349,11 +247,8 @@ if ($Muse) {
         Copy-Item $dll $dllDst
     }
 
-    # Set in the window that launches the exe, not in a .env: the bridge reads
-    # getenv directly. Backticked so PowerShell expands them in the *child*.
-    # Run through the supervisor, which restarts the exe a bounded number of
-    # times and prints every exit; it inherits these variables from the same
-    # window, so a restart lands on the configuration chosen here.
+    # Set in the launching window, not a .env: the bridge reads getenv directly. Backticked
+    # to expand in the child. The supervisor's bounded restarts inherit them.
     $bridgeSupervisor = Join-Path $eegDir "scripts\run_bridge_supervised.ps1"
     $bridgeCmd = "& '$bridgeSupervisor' -Exe '$bridgeExe'"
     if ($Optics) {
@@ -383,18 +278,9 @@ if ($Camera) {
     Write-Host "[2/5] Camera (index $CameraIndex)" -ForegroundColor Cyan
     Check-Venv $eegDir
 
-    # The `face` extra is optional, so a machine that has never installed it is
-    # the normal case rather than a broken one. Checked here, at setup, because
-    # the alternative is the sidecar starting cleanly and the camera failing
-    # only when a lesson begins.
+    # The optional `face` extra is checked at setup, not when a lesson begins.
     Push-Location $eegDir
-    # Probed one module at a time, with stderr silenced *inside* Python rather
-    # than by `2>$null`. On PowerShell 5.1 redirecting a native command's stderr
-    # wraps each line in an ErrorRecord, and under the `$ErrorActionPreference =
-    # "Stop"` set at the top of this file that is terminating -- so a missing
-    # module killed the script here, before the message below could explain it,
-    # and surfaced as a bare NativeCommandError naming neither the module nor
-    # the fix. One probe per module so the report can say which one.
+    # One module per probe, stderr silenced inside Python: `2>$null` on a native command is terminating under Stop.
     $missing = @()
     foreach ($mod in @("cv2", "onnxruntime")) {
         & ".\.venv\Scripts\python.exe" -c `
@@ -403,8 +289,7 @@ if ($Camera) {
     }
     if ($missing.Count -gt 0) {
         Pop-Location
-        # `.[face,gaze]` when -Gaze was asked for: sending someone to `.[face]`
-        # here only makes them fail again at the mediapipe check below.
+        # `.[face,gaze]` under -Gaze, or they fail again at the mediapipe check.
         $extra = if ($Gaze) { ".[face,gaze]" } else { ".[face]" }
         Write-Host "  ERROR: the 'face' extra is not installed in EEGResearch/.venv" -ForegroundColor Red
         Write-Host "    could not import: $($missing -join ', ')" -ForegroundColor Red
@@ -416,16 +301,10 @@ if ($Camera) {
         exit 1
     }
 
-    # MediaPipe is its own extra and is not in `.[face]`. Checked here for the
-    # same reason cv2 is: without it the model download below still succeeds --
-    # `ensure_model` imports nothing heavy -- so setup reports success, writes
-    # FACE_GAZE_ENABLED=true, and the channel then fails on the first frame of a
-    # lesson as `landmarker_unavailable`, indistinguishable from a missing
-    # model file. That is precisely the failure this whole block exists to move
-    # from lesson time to setup time.
+    # MediaPipe is its own extra; `ensure_model` imports nothing heavy, so without this
+    # check setup succeeds and gaze dies on the first frame as `landmarker_unavailable`.
     if ($Gaze) {
-        # Same stderr handling as the cv2 probe above, and for the same reason:
-        # `2>$null` here would terminate the script before this message ran.
+        # Same stderr handling as the cv2 probe.
         & ".\.venv\Scripts\python.exe" -c `
             "import sys, os; sys.stderr = open(os.devnull, 'w'); import mediapipe"
         if ($LASTEXITCODE -ne 0) {
@@ -437,10 +316,7 @@ if ($Camera) {
         }
     }
 
-    # Fetch and verify the FER+ model now, not on the first frame. A 35 MB
-    # download in front of a student's first session would look like the
-    # feature being broken, and a checksum failure is an install problem that
-    # should be seen here.
+    # Fetch and verify the 35 MB FER+ model at setup, not on the first frame.
     if (-not $NoEmotion) {
         Write-Host "  Checking emotion model..." -ForegroundColor Gray
         & ".\.venv\Scripts\python.exe" -c "from pathlib import Path; from src.app.services.face_emotion import ensure_model; ensure_model(Path(r'$emotionModel'))"
@@ -450,11 +326,7 @@ if ($Camera) {
             exit 1
         }
     }
-    # Same argument as the emotion model above, and the same failure if it is
-    # skipped: without this the landmarker is built on the first frame of a
-    # lesson, finds nothing, and the gaze channel is dead for the session. The
-    # sidecar deliberately will not fetch it itself -- a student's laptop must
-    # not reach the internet when a camera opens.
+    # Likewise; the sidecar never fetches it, so a student's laptop stays offline when a camera opens.
     if ($Gaze) {
         Write-Host "  Checking face landmark model..." -ForegroundColor Gray
         & ".\.venv\Scripts\python.exe" -c "from src.app.services.face_landmarks import ensure_model; ensure_model(r'$landmarkModel')"
@@ -466,63 +338,27 @@ if ($Camera) {
     }
     Pop-Location
 
-    # Validated before any write at the top of step 2; applied here, after the
-    # model provisioning above has succeeded, and composed onto the existing
-    # registry rather than written over it -- see Update-DeviceRegistry.
+    # Applied only after provisioning succeeded.
     $null = Update-DeviceRegistry $eegEnv $headband $cameraEntry
     Set-EnvKey $eegEnv "FACE_ENABLED" "true"
     Set-EnvKey $eegEnv "FACE_CAMERA_INDEX" "$CameraIndex"
-    # Written on both branches, never left to whatever a previous run set. A
-    # stale "true" here with no -Gaze would enable a channel the operator did
-    # not ask for on this run, which is the same trap the EEG_DEVICES cleanup
-    # below exists to avoid.
+    # Every FACE_* key is written on both branches, so no stale value survives.
     Set-EnvKey $eegEnv "FACE_GAZE_ENABLED" $(if ($Gaze) { "true" } else { "false" })
-    # Written explicitly rather than left to the config default, which is
-    # `true`. The default made emotion silently on whenever the camera was, so
-    # this file described two thirds of the camera's configuration and the rest
-    # lived in a Python default -- and a reader checking what a session recorded
-    # would have had to know that to get the right answer.
+    # Explicit, not the config default (`true`).
     Set-EnvKey $eegEnv "FACE_EMOTION_ENABLED" $(if ($NoEmotion) { "false" } else { "true" })
     Set-EnvKey $eegEnv "FACE_LANDMARK_MODEL_PATH" "$landmarkModel"
-    # Read back rather than rebuilt: the registry is composed onto whatever
-    # stations the file already named, so two variables cannot say what it
-    # holds.
+    # Read back, since the registry is composed onto existing stations.
     Write-Host "  $(@(Get-Content $eegEnv) | Where-Object { $_ -match '^EEG_DEVICES=' } | Select-Object -Last 1)" -ForegroundColor Gray
 
-    # The camera only records under push, so -Camera selects it. `face_signals`
-    # has exactly one writer -- /api/signals/face, which the sidecar POSTs to --
-    # and the poller never writes that table, so a camera configured under pull
-    # captures frames and stores nothing.
-    #
-    # Written on both branches for the same reason FACE_* is: a stale
-    # INGEST_MODE=push left over from a camera run would disable the poller on a
-    # later headband-only run, and a headband that records nothing while the
-    # page says "streaming" is exactly what explicit modes exist to prevent.
+    # The camera records only under push: face_signals' one writer is /api/signals/face.
+    # Mode keys are written on both branches, so a stale push cannot disable a later poller.
     Set-EnvKey $eegEnv "PUSH_ENABLED" "true"
     Set-EnvKey $eegEnv "BACKEND_URL" "http://127.0.0.1:8000"
-    # Written on both branches like every key above, from the -LocalCalm
-    # flag, or a hand-edited `local` survives into a later plain run and
-    # records rows on a scale nobody chose.
+    # From the flag on both branches, so a hand-edited `local` cannot survive.
     Set-EnvKey $eegEnv "EEG_SPECTRUM_SOURCE" $spectrumSource
     Set-EnvKey $backendEnv "INGEST_MODE" "push"
-    # The page talks to the sidecar directly under push, and it authenticates
-    # with the sidecar's own API_TOKEN. Copied here rather than left to a
-    # hand-edit: unset, `call()` omits the Authorization header entirely and
-    # every sidecar request 401s -- while the sidecar looks perfectly healthy
-    # from a terminal, because curl sends the token and the browser does not.
-    #
-    # Guarded on both halves, because a first-ever `-Camera` run on a fresh
-    # checkout has neither. `Set-EnvKey` above returns silently when the file is
-    # missing, so nothing before this line notices; `Select-String -Path` on a
-    # missing file is a *terminating* error under the $ErrorActionPreference at
-    # the top of this script, so the whole launcher aborted here -- before the
-    # sidecar, the backend or the frontend had been started -- over a token that
-    # is not required for any of them to come up. And with the file present but
-    # no `API_TOKEN=` line in it yet, `.Groups[1]` indexes into a null array,
-    # which is the same terminating error one step further along.
-    #
-    # `Select-Object -Last 1` for the same reason the EEG_DEVICES read below
-    # uses it: a duplicated key is what a dotenv reader takes the last of.
+    # The page calls the sidecar with its API_TOKEN; unset, every browser call 401s.
+    # Guard the file and the match: a fresh checkout has neither. -Last 1 as dotenv reads.
     $apiToken = $null
     if (Test-Path $eegEnv) {
         $tokenLine = Select-String -Path $eegEnv -Pattern '^API_TOKEN=(.*)$' | Select-Object -Last 1
@@ -531,10 +367,7 @@ if ($Camera) {
     if ($apiToken) {
         Set-EnvKey $frontendEnv "VITE_EEG_LOCAL_TOKEN" $apiToken
     } else {
-        # Said out loud rather than skipped quietly: without it the page sends
-        # no Authorization header and every sidecar call 401s, while the sidecar
-        # looks healthy from a terminal. The sidecar writes an API_TOKEN on its
-        # first start, so the next run of this script picks it up.
+        # The sidecar writes API_TOKEN on first start, so the next run picks it up.
         Write-Host "  No API_TOKEN in $eegEnv yet -- VITE_EEG_LOCAL_TOKEN not set." -ForegroundColor Yellow
         Write-Host "  The browser will 401 against the sidecar. Re-run this script once it has started." -ForegroundColor Yellow
     }
@@ -543,16 +376,12 @@ if ($Camera) {
     Set-EnvKey $eegEnv "FACE_ENABLED" "false"
     Set-EnvKey $eegEnv "FACE_GAZE_ENABLED" "false"
     Set-EnvKey $eegEnv "FACE_EMOTION_ENABLED" "false"
-    # Back to pull: the backend polls the sidecar, which is what a
-    # single-machine headband deployment wants and what the poller's consent
-    # and rollup paths are exercised against.
+    # Back to pull: the backend polls the sidecar.
     Set-EnvKey $eegEnv "PUSH_ENABLED" "false"
     Set-EnvKey $backendEnv "INGEST_MODE" "pull"
     Set-EnvKey $eegEnv "EEG_SPECTRUM_SOURCE" $spectrumSource
 
-    # Validated before any write at the top of step 2; applied here: the
-    # camera entry dropped and the headband entry re-pointed -- see
-    # Update-DeviceRegistry for why both halves are needed.
+    # Drops the camera entry and re-points the headband entry.
     $null = Update-DeviceRegistry $eegEnv $headband
 }
 

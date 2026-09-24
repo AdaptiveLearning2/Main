@@ -1,40 +1,9 @@
 """Measure how often the fail-open generation checks *engage*, not just fire.
 
-CLAUDE.md records every rate for these checks against `llama3.1:8b`, and says
-in as many words that they stop describing production once a different model
-is generating -- but also that the measurement nobody runs is engagement:
+    python scripts/measure_generation_checks.py --per-topic 3   (bills LLM_PROVIDER)
 
-    Measure how often a fail-open check *engages*, never just how often it
-    fires. A check that never finds anything to compare reports a perfect
-    false-positive rate while doing nothing.
-
-That has already happened once here (`_as_floats` rejecting fractions made the
-dataset check inert on half the `ordering` questions while reporting clean).
-Both `question_consistency` checks and `grade_appropriateness` are fail-open by
-design, so a model that formats its output differently -- a different
-separator, the dataset in a different position -- silently disables them rather
-than failing. This script is what turns that from an assumption into a number.
-
-It was previously done by hand; CLAUDE.md notes `scripts/` had no home for it.
-
-Usage, from the repo root:
-
-    python scripts/measure_generation_checks.py --per-topic 3
-
-Generation goes through `llm_client`, so it obeys `LLM_PROVIDER` -- run it
-against `ollama` for a free baseline and against `claude` for the number that
-describes production. It bills the configured provider like any other caller.
-
-Reports, per topic and per check, four things kept apart:
-
-    engaged/agreed     the check found its input and was satisfied
-    engaged/rejected   the check found its input and refused the question
-    inert              the check could not locate its input at all
-    n/a                the check does not apply to this topic
-
-`inert` is the number to read. A check that is mostly inert is not passing --
-it is absent, and the questions it was meant to catch are reaching students
-unchecked.
+Per topic and check: engaged/agreed, engaged/rejected, inert (input not found), n/a
+(not wired). `inert` is the number to read: a mostly-inert check is absent, not passing.
 """
 
 import argparse
@@ -51,18 +20,9 @@ import question_consistency as qc     # noqa: E402
 import llm_client                     # noqa: E402
 import LLM_topic_decider as decider    # noqa: E402
 
-# No list of "topics the dataset check applies to" is kept here any more, and
-# that is the point: this script observes the real call sites, so which topics
-# wire which check is something it *reports* rather than something it asserts.
-# The list that used to sit here named five topics including `probability`,
-# copied from CLAUDE.md, which was wrong -- `LLM_probability_generation` wires
-# `negation_mismatch` and not `dataset_mismatch`. A harness carrying its own
-# copy of the answer cannot discover that the answer changed.
+# Which topics wire which check is observed at the call sites, not listed here.
 
-# A user id that owns no rows. `question_generation` reads recent questions for
-# it to build the "do not repeat" block; a miss fails open to an empty list,
-# which is what this harness wants -- a real student's history would make each
-# run's prompts depend on whoever was picked.
+# Owns no rows, so the "do not repeat" history is empty and prompts are reproducible.
 MEASURE_USER_ID = "00000000-0000-0000-0000-000000000000"
 
 ALL_TOPICS = ("algebra", "ordering", "rationals", "mean", "median", "mode",
@@ -70,20 +30,8 @@ ALL_TOPICS = ("algebra", "ordering", "rationals", "mean", "median", "mode",
 
 
 # ─── observing the checks where they actually run ────────────────────────
-#
-# The first version of this re-derived each check's inputs from the dict the
-# generator RETURNS, and reported the dataset check inert on 15 of 15 -- which
-# reads exactly like the finding this script was written to produce, and was an
-# artefact. The generators run the check against the raw model JSON, which
-# carries `variables`/`values`/`items`; what they return is
-# question_text/answer_options/correct_answer, with the scored field stripped.
-# So the harness was measuring an object the check never sees, and answering
-# "no input" about its own reconstruction.
-#
-# The lesson is the script's own: a measurement that cannot see its input
-# reports absence, and absence reads as a finding. So observe the real calls
-# instead of rebuilding their arguments -- module attributes, which every
-# generator reaches through the module object, so one swap covers all ten.
+# Spies on the module attributes, since the checks see raw model JSON, not the
+# returned dict; every generator reaches them through the module, so one swap covers all.
 
 _SEEN = collections.defaultdict(list)
 
@@ -117,13 +65,9 @@ def _install_spies():
 
 
 def _classify(topic):
-    """What the checks did during the generation that just finished.
+    """What the checks did during the generation that just finished; clears `_SEEN`.
 
-    Reads `_SEEN`, which the spies filled as the generator ran, then clears it.
-    A check with no entry was never *called* for this topic -- "not wired"
-    ("n/a"), which is a different fact from "called and found no input"
-    ("inert"). Collapsing those two is how a check that was never connected
-    reads as a check that is working.
+    A check never called is "n/a", distinct from "inert" (called, found no input).
     """
     out = {}
 
@@ -136,16 +80,14 @@ def _classify(topic):
         elif qc.ENGAGED_AGREED in states:
             out[name] = "engaged/agreed"
         else:
-            # Carry the specific inert state: "no list in the text" and "the
-            # scored field was not numeric" are different problems.
+            # Carry the specific inert state; the reasons are different problems.
             out[name] = f"inert:{states[-1].removeprefix('inert_')}"
 
     refusals = _SEEN.get("grade") or []
     if not refusals:
         out["grade"] = "n/a"
     else:
-        # Every attempt is recorded, so a question that took two tries shows
-        # the rejection that caused the retry as well as the acceptance.
+        # Every attempt is recorded, so a retried question shows its rejection.
         out["grade"] = "engaged/rejected" if any(refusals) else "engaged/agreed"
 
     _SEEN.clear()
@@ -173,21 +115,14 @@ def main():
     for topic in args.topics:
         for i in range(args.per_topic):
             try:
-                # (topic, difficulty, user_id, grade) -- the history lists are
-                # the generators' own arguments, not this one's. Called with
-                # five positionals this raised TypeError before any request was
-                # made, so the run reported an empty table and zero findings:
-                # this script's own thesis, applied to itself. A harness that
-                # cannot fail loudly measures nothing and says so quietly.
+                # (topic, difficulty, user_id, grade); history lists are the generators' own.
                 data = decider.question_generation(
                     topic, args.difficulty, MEASURE_USER_ID, args.grade)
             except Exception as e:
-                # A generator that exhausts its retries raises; that is a real
-                # outcome to report, not a reason to stop measuring.
+                # Exhausted retries are an outcome to report, not a reason to stop.
                 failures[topic] += 1
                 print(f"  {topic}[{i}] generation failed: {type(e).__name__}: {e}")
-                # Or the checks this question did run would be counted against
-                # the next one.
+                # Or this question's checks count against the next one.
                 _SEEN.clear()
                 continue
             if not isinstance(data, dict):

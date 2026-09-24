@@ -419,6 +419,11 @@ defined`. The app still builds, because that half uses the top-level vite. Keep 
 range equal to the `vite` devDependency, and re-check it whenever either is bumped; it goes away
 only when vitest's own vite range reaches 8.
 
+**A worktree that borrows `node_modules` through a junction must drop the junction first.** `git
+worktree remove` deletes *through* a junction, so it empties the main checkout's `node_modules` from
+the top of the alphabet until a long path stops it. Remove the link with `cmd /c rmdir <link>`
+(which deletes only the link) before removing the worktree; if it already happened, `npm ci` restores it.
+
 ### Two test-writing rules that came from real flakes
 
 **Assert an ordering, not a duration, when a test synchronises on a thread.** Windows' default

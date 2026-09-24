@@ -177,7 +177,7 @@ _COMPARISONS = [
 ]
 _PARITY = {"even": lambda f: f % 2 == 0, "odd": lambda f: f % 2 == 1,
            "prime": lambda f: f > 1 and all(f % d for d in range(2, int(f ** 0.5) + 1))}
-# "neither a 1 nor a 6" is one negation of "1 or 6", so "nor" is only dropped.
+# "neither a 1 nor a 6" is one negation of the faces it lists.
 _NEGATED = re.compile(r"\bnot\b|n['’]t\b|\bcannot\b|\bother\s+than\b|\bexcept\b|\bbut\b|\bneither\b", re.I)
 
 
@@ -194,7 +194,7 @@ def _event_faces(question, sides):
     negations = len(_NEGATED.findall(question))
     if negations > 1:
         return None
-    question = re.sub(r"\bnor\b", " ", _NEGATED.sub(" ", question), flags=re.I)
+    question = _NEGATED.sub(" ", question)
     question = re.sub(r"\b\d+[\s-]*(?:sided|faced)\b", " ", question, flags=re.I)
     found = []
     for pattern, test in _COMPARISONS:

@@ -99,24 +99,22 @@ def test_grade_three_gains_the_formula_scenarios():
                        "rectangle_perimeter", "triangle_perimeter"}
 
 
-def test_a_reply_naming_a_scenario_above_the_grade_is_refused():
-    """`_band_scenarios` gates what is sent; the model can reply with another scenario."""
+def test_a_reply_naming_a_scenario_other_than_the_one_asked_is_refused(monkeypatch):
+    """Grade 8 allows both, but sphere_volume is a harder tier than the rectangle asked for."""
     import json
     import llm_client
 
     payload = {"question_text": "A sphere has a radius of 3 units. "
                                 "What is its volume?",
                "scenario": "sphere_volume", "variables": {"radius": "3"}}
-    original = llm_client.generate_text
-    lesson = geo.lesson_plan_context.append_lesson_context
-    try:
-        llm_client.generate_text = lambda *a, **k: json.dumps(payload)
-        geo.lesson_plan_context.append_lesson_context = lambda p, t, b: p
-        with pytest.raises(ValueError):
-            geo.generate_geometry_question([], [], "medium", "4th Grade")
-        # Grade 8 takes the same reply: the grade is refused, not the scenario.
-        question = geo.generate_geometry_question([], [], "medium", "8th Grade")
-        assert question["question_text"] == payload["question_text"]
-    finally:
-        llm_client.generate_text = original
-        geo.lesson_plan_context.append_lesson_context = lesson
+    number = {name: n for n, name in geo._SCENARIO_NAMES.items()}
+    monkeypatch.setattr(llm_client, "generate_text", lambda *a, **k: json.dumps(payload))
+    monkeypatch.setattr(geo.lesson_plan_context, "append_lesson_context", lambda p, t, b: p)
+
+    monkeypatch.setattr(geo, "_pick_scenario", lambda *a: number["rectangle_area"])
+    with pytest.raises(ValueError):
+        geo.generate_geometry_question([], [], "easy", "8th Grade")
+    # The same reply to the scenario it answers is served, so the refusal is the mismatch.
+    monkeypatch.setattr(geo, "_pick_scenario", lambda *a: number["sphere_volume"])
+    question = geo.generate_geometry_question([], [], "easy", "8th Grade")
+    assert question["question_text"] == payload["question_text"]

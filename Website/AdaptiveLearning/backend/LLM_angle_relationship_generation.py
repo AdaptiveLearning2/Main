@@ -282,10 +282,10 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # Gate the scenario the model returned, not the one asked for: it can differ.
-        if question_data["scenario"] not in {
-                _SCENARIO_NAMES[n] for n in _grade_scenarios(grade)}:
-            print(f"[Attempt {attempt+1}] Scenario above this grade:",
+        # The scenario asked for, not any the grade allows: another is a different tier,
+        # which undoes an ease-off. Implies the grade gate, since the pick came from it.
+        if question_data["scenario"] != _SCENARIO_NAMES[scenario]:
+            print(f"[Attempt {attempt+1}] Wrong scenario:",
                   question_data["scenario"])
             continue
 

@@ -5523,15 +5523,10 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
         supabase.table("sessions").select("user_id").eq("id", session_id), "Session")
     _verify_can_view_student(user, sess["user_id"])
 
-    cog = supabase.table("cognitive_signals").select("*").eq("session_id", session_id)
-    fac = supabase.table("face_signals").select("*").eq("session_id", session_id)
-    hrt = supabase.table("heart_signals").select("*").eq("session_id", session_id)
-    if since:
-        cog = cog.gt("ts", since); fac = fac.gt("ts", since); hrt = hrt.gt("ts", since)
-    cog_data = cog.order("ts").limit(20000).execute().data or []
-    fac_data = fac.order("ts").limit(20000).execute().data or []
-    # `source` on each row shows a mid-session sensor failover.
-    hrt_data = hrt.order("ts").limit(20000).execute().data or []
+    # Paged, through the archive's reader. Heart rows carry `source`: a mid-session
+    # sensor failover must read as a sensor change, not a physiological event.
+    cog_data, fac_data, hrt_data = chart_archive.read_session_signals(
+        supabase, session_id, since)
     # Question embedded (one query, named columns). Left-joined: a deleted
     # question arrives as `questions: null` and the answer still shows.
     answers = (supabase.table("session_answers")

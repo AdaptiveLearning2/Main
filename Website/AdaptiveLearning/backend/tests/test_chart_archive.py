@@ -18,23 +18,48 @@ SESSION = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 # ── a fake client: three signal tables, one sessions row, one bucket ─────────
 
 class _Query:
-    def __init__(self, rows):
-        self._rows = rows
+    """A table read: named columns only, `gt`, `order`, `limit`, and every response cut at
+    `max_rows`, like PostgREST's `db-max-rows`. `on_execute(query)` runs after each read."""
 
-    def select(self, *_a, **_k):
+    def __init__(self, rows, max_rows=1000, on_execute=None):
+        self._rows = rows
+        self._max_rows = max_rows
+        self._on_execute = on_execute
+        self.columns, self._gt, self._order, self._limit = None, [], [], None
+
+    def select(self, spec="*", **_k):
+        if "*" not in spec:
+            self.columns = [c.strip() for c in spec.split(",")]
         return self
 
     def eq(self, *_a, **_k):
         return self
 
-    def order(self, *_a, **_k):
+    def gt(self, col, val):
+        self._gt.append((col, val))
         return self
 
-    def limit(self, *_a, **_k):
+    def order(self, col, **_k):
+        self._order.append(col)
+        return self
+
+    def limit(self, n, **_k):
+        self._limit = n
         return self
 
     def execute(self):
-        return type("R", (), {"data": self._rows})()
+        if self._rows is None:              # an update, which returns nothing here
+            return type("R", (), {"data": None})()
+        rows = [r for r in self._rows
+                if all(r.get(c) is not None and r[c] > v for c, v in self._gt)]
+        for col in reversed(self._order):
+            rows = sorted(rows, key=lambda r, c=col: r.get(c))
+        rows = rows[:min(n for n in (self._limit, self._max_rows) if n is not None)]
+        if self.columns:
+            rows = [{c: r[c] for c in self.columns if c in r} for r in rows]
+        if self._on_execute:
+            self._on_execute(self)
+        return type("R", (), {"data": rows})()
 
 
 class _Update(_Query):
@@ -57,18 +82,24 @@ class _Storage:
 
 
 class _Client:
-    def __init__(self, cognitive=(), face=(), heart=(), fail_storage=False):
-        self._rows = {"cognitive_signals": list(cognitive),
-                      "face_signals": list(face),
-                      "heart_signals": list(heart)}
+    def __init__(self, cognitive=(), face=(), heart=(), fail_storage=False, on_execute=None):
+        # Every stored row has an id, as the tables' own do.
+        self._rows = {name: [r if "id" in r else {"id": i + 1, **r} for i, r in enumerate(rows)]
+                      for name, rows in (("cognitive_signals", cognitive),
+                                         ("face_signals", face), ("heart_signals", heart))}
         self.updates = []
+        self.reads = []
         self._storage = _Storage(fail=fail_storage)
+        self._on_execute = on_execute
 
     def table(self, name):
         if name == "sessions":
             return type("T", (), {
                 "update": lambda _s, values: _Update(self.updates, values)})()
-        return _Query(self._rows[name])
+        query = _Query(self._rows[name], on_execute=self._on_execute)
+        query.table = name
+        self.reads.append(query)
+        return query
 
     @property
     def storage(self):
@@ -241,14 +272,120 @@ def test_scheduling_never_raises_even_with_the_pool_shut_down(capsys):
     chart_archive.shutdown_pool()
 
 
-def test_archiving_reads_no_more_rows_than_session_review_does():
-    """The archive must match what the reviewer saw."""
-    import inspect
+def _long_session(n):
+    start = datetime(2026, 6, 11, 14, 0, tzinfo=timezone.utc).timestamp()
+    return [{"id": i, "ts": datetime.fromtimestamp(start + i, timezone.utc).isoformat(),
+             "focus": 0.5, "stress": 0.3} for i in range(n)]
 
+
+def test_the_archive_reads_past_the_servers_row_cap():
+    """A 45-minute lesson at 1 Hz is 2700 rows, past PostgREST's silent 1000-row cut."""
+    rows = _long_session(2700)
+    cognitive, _, _ = chart_archive._fetch(_Client(cognitive=rows), SESSION)
+    assert [r["id"] for r in cognitive] == list(range(2700))
+
+
+def test_the_row_cap_still_binds():
+    rows = _long_session(chart_archive._ROW_CAP + 1500)
+    cognitive, _, _ = chart_archive._fetch(_Client(cognitive=rows), SESSION)
+    assert len(cognitive) == chart_archive._ROW_CAP
+
+
+def test_session_review_reads_the_same_rows_the_archive_draws(monkeypatch):
+    """The archive must be what the reviewer saw; asserted on returned rows, not source."""
     import main
 
-    source = inspect.getsource(main.session_signals)
-    assert f"limit({chart_archive._ROW_CAP})" in source
+    rows = _long_session(2700)
+
+    class _ReviewClient(_Client):
+        def table(self, name):
+            if name == "sessions":
+                return _Single({"user_id": USER})
+            if name == "session_answers":
+                return _Query([])
+            return super().table(name)
+
+    class _Single(_Query):
+        def __init__(self, row):
+            super().__init__([row])
+
+        def single(self):
+            row = self._rows[0]
+            return type("S", (), {"execute": lambda _s: type("R", (), {"data": row})()})()
+
+    client = _ReviewClient(cognitive=rows)
+    monkeypatch.setattr(main, "supabase", client)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a, **_k: None)
+
+    reviewed = main.session_signals(SESSION, request=None)["cognitive"]
+    archived = chart_archive._fetch(client, SESSION)[0]
+
+    assert len(reviewed) == 2700
+    assert reviewed == archived
+
+
+def test_the_reader_names_its_columns_and_never_fetches_raw():
+    """`raw` is ~1 KB a row and nothing reads it; at 20,000 rows it was tens of MB to a browser."""
+    client = _Client(cognitive=[{**r, "raw": {"blob": "x" * 1000}} for r in COG],
+                     face=[{**r, "raw": {}} for r in FACE], heart=[{**r, "raw": {}} for r in HEART])
+    fetched = chart_archive._fetch(client, SESSION)
+
+    assert {q.table for q in client.reads} == set(chart_archive.SIGNAL_COLUMNS)
+    for query in client.reads:
+        assert query.columns and "raw" not in query.columns, query.table
+    assert not any("raw" in row for rows in fetched for row in rows)
+
+
+def test_the_named_columns_draw_the_same_charts_as_every_column():
+    """A column the archive draws on and the list leaves out would change a chart, not fail."""
+    full = (COG, FACE, HEART)
+    named = tuple([{k: r[k] for k in r if k in cols.replace(" ", "").split(",")} for r in rows]
+                  for rows, cols in zip(full, chart_archive.SIGNAL_COLUMNS.values()))
+    assert chart_archive.build_session_charts(*named) == chart_archive.build_session_charts(*full)
+
+
+@pytest.mark.parametrize("change", ["insert", "delete"])
+def test_a_row_written_or_deleted_mid_read_is_neither_repeated_nor_skipped(change):
+    """Paged by position, a late row shifted every later page by one, repeating one row;
+    a deleted one (an erasure, the expiry) shifted them back and skipped one."""
+    rows = _long_session(2500)
+    done = []
+
+    def mid_read(query):
+        if query.table == "cognitive_signals" and not done:
+            done.append(1)
+            if change == "insert":       # a late batch: an early timestamp, the next id
+                rows.append({"id": 9999, "ts": rows[10]["ts"], "focus": 0.1, "stress": 0.1})
+            else:
+                rows.pop(5)
+
+    client = _Client(cognitive=rows, on_execute=mid_read)
+    client._rows["cognitive_signals"] = rows
+    cognitive, _, _ = chart_archive._fetch(client, SESSION)
+
+    ids = [r["id"] for r in cognitive]
+    assert len(ids) == len(set(ids)), "a row came back twice"
+    expected = set(range(1000, 2500)) | ({9999} if change == "insert" else set())
+    assert expected <= set(ids), "a row past the first page was skipped"
+    assert [r["ts"] for r in cognitive] == sorted(r["ts"] for r in cognitive)
+
+
+def test_the_three_tables_are_read_at_the_same_time():
+    """Asserted as an ordering, not a duration: each table's first read waits until all three
+    have started, which a one-after-another reader can never reach."""
+    import threading
+    started = threading.Barrier(3, timeout=5)
+    first = set()
+
+    def wait_for_the_others(query):
+        if query.table not in first:
+            first.add(query.table)
+            started.wait()
+
+    client = _Client(cognitive=COG, face=FACE, heart=HEART, on_execute=wait_for_the_others)
+    cognitive, face, heart = chart_archive._fetch(client, SESSION)
+    assert (len(cognitive), len(face), len(heart)) == (len(COG), len(FACE), len(HEART))
 
 
 # ── reading them back ───────────────────────────────────────────────────────

@@ -140,13 +140,16 @@ def test_every_generator_stores_its_own_topic_name_not_the_models():
 
     import LLM_topic_decider
 
-    checked = []
+    covered = set()
     for filename in sorted(os.listdir(BACKEND)):
         if not (filename.startswith("LLM_") and filename.endswith("_generation.py")):
             continue
         # utf-8-sig: these files carry a BOM, which `ast.parse` rejects.
         tree = ast.parse(
             open(os.path.join(BACKEND, filename), encoding="utf-8-sig").read())
+        if filename in MULTI_TOPIC_GENERATORS:
+            covered |= _check_multi_topic_generator(filename, tree)
+            continue
         found = [
             value
             for node in ast.walk(tree)
@@ -174,7 +177,27 @@ def test_every_generator_stores_its_own_topic_name_not_the_models():
                 f"{filename} returns subject {topic!r}, which is not one of "
                 f"ALL_TOPICS -- record_topic_attempt's join finds no row and "
                 "the attempt is attributed to nothing, silently.")
-        checked.append(filename)
+        covered.update(returned)
 
-    assert len(checked) == len(LLM_topic_decider.ALL_TOPICS), (
-        f"a generator file per topic; found {checked}")
+    assert covered == set(LLM_topic_decider.ALL_TOPICS), "every topic has a generator"
+
+
+# Serve several topics, so `question_topic` is the caller's `topic`, checked against TOPICS.
+MULTI_TOPIC_GENERATORS = {"LLM_kindergarten_generation.py"}
+
+
+def _check_multi_topic_generator(filename, tree):
+    """Its topic is code's, never the model's: a Name, and a topic outside TOPICS is refused."""
+    import ast
+    import importlib
+
+    import LLM_topic_decider
+    values = [value for node in ast.walk(tree) if isinstance(node, ast.Dict)
+              for key, value in zip(node.keys, node.values)
+              if isinstance(key, ast.Constant) and key.value == "question_topic"]
+    assert values and all(isinstance(v, ast.Name) and v.id == "topic" for v in values), filename
+    module = importlib.import_module(filename[:-3])
+    assert set(module.TOPICS) <= set(LLM_topic_decider.ALL_TOPICS)
+    with pytest.raises(ValueError, match="not a kindergarten topic"):
+        module.generate_kindergarten_question([], [], "easy", "Kindergarten", topic="algebra")
+    return set(module.TOPICS)

@@ -76,14 +76,14 @@ def test_each_topic_is_offered_over_exactly_the_grades_it_declares():
     for topic in decider.ALL_TOPICS:
         low = decider.TOPIC_MIN_GRADE[topic]
         high = decider.TOPIC_MAX_GRADE.get(topic, 12)
-        offered = [g for g in range(1, 13)
+        offered = [g for g in range(0, 13)
                    if topic in decider._allowed_topics(str(g))]
         assert offered == list(range(low, min(high, 12) + 1)), topic
 
 
 def test_every_grade_has_something_to_ask():
-    """`_safe_topic` calls `random.choice` on this list; through 13, which is College."""
-    for g in range(1, 14):
+    """`_safe_topic` calls `random.choice` on this list; 0 is kindergarten, 13 is College."""
+    for g in range(0, 14):
         assert decider._allowed_topics(str(g))
 
 

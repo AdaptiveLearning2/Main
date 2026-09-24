@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Mail, Lock, User, Eye, EyeOff, ArrowRight } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
+import { signUpMessage } from '../../lib/authErrors'
 import { toast } from 'sonner'
 
 const ROLES = [
@@ -58,7 +59,7 @@ export default function Register() {
       navigate('/')
       toast.success('Account created! Welcome 🎉')
     } catch (err) {
-      toast.error(err.message || 'Failed to create account')
+      toast.error(signUpMessage(err))
     } finally {
       setLoading(false)
     }

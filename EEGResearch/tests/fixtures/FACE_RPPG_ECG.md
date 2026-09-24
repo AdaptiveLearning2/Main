@@ -130,7 +130,7 @@ same direction, each for a structural reason:
 | --- | --- | --- |
 | `agreement` | 1.00 | POS emits **one** channel. A term whose job is to catch one badly-seated emitter among four is vacuous by construction against a single waveform. |
 | `margin` | 6.51, capped to 1.0 | "How decisively the chosen period beat its nearest unrelated rival." In flat noise there is no rival structure, so margin is *highest* precisely when there is no pulse. Inverted, not merely weak. |
-| `snr` | 0.314 | `estimate_window`'s own comment says a clear pulse sits around 0.3-0.6. Noise scored as a clear pulse. The raw autocorrelation peak was 0.02, where a real pulse gives 0.3-0.7. |
+| `snr` | 0.314 | For `estimate_window`, a clear pulse sits around 0.3-0.6. Noise scored as a clear pulse. The raw autocorrelation peak was 0.02, where a real pulse gives 0.3-0.7. |
 
 All three were designed and validated against the headband: four channels from a
 contact sensor. None of those properties holds for a single camera-derived

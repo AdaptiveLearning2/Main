@@ -1,11 +1,4 @@
-"""The artifact poison, tested by driving the shipped objects.
-
-A malformed band dict is a fault in the SDK's dict, not in the raw samples:
-the estimator stays ready through it, in the stream loop and in the replay.
-A raw artifact (a clench) poisons both. Behavioural, not a source scan: a
-scan fails on any equivalent rewrite and passes on any regression that
-keeps the text.
-"""
+"""A malformed band dict leaves the estimator ready; a raw artifact (clench) poisons it, live and in replay."""
 
 from __future__ import annotations
 
@@ -32,9 +25,7 @@ def test_the_decision():
 
 
 class _Adapter:
-    """Three ticks: a full buffer on good bands, a short batch on a malformed
-    dict, a short batch on a clench. Records the estimator's state at the
-    start of each tick, which is the state the previous tick left."""
+    """Ticks good, malformed, clench; records the estimator state each previous tick left."""
 
     def __init__(self, session: DeviceSession):
         self.session = session

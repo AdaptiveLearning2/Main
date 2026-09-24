@@ -296,3 +296,34 @@ rate, not from `mono_ts_ms`.** A slow drift between the two cancels almost
 entirely in successive differences; per-sample jitter does not. The stamps are
 kept in the fixture anyway — they are what the device actually sends, and a test
 asserting the derivation does *not* depend on them needs them present.
+
+## RMSSD against ECG — `test_hrv_against_ecg.py`, `test_hrv_against_dense_ecg.py`, `test_optics_rmssd.py`
+
+Watch single-lead ECG (500 Hz) recorded over the same seconds as the optics. Alignment is derived,
+not assumed: each export's `Created time` lands a consistent 35–43 s after the reading's start mark.
+Personal identifiers were removed from the CSV headers.
+
+**Paired capture (`optics_ecg_paired.jsonl.gz`, three windows over 95 s).** Heart rate within 1 bpm
+on all three. RMSSD 33.7 vs 31.5 and 33.2 vs 31.3 (within 7%); the third 49.9 vs 33.3 (50% high),
+with nothing in-window to tell it apart (coverage 0.97 vs 1.01, confidence 1.00 both). That
+outlier did not recur in the dense capture; it stays pinned as a known case.
+
+**Dense capture (six ECGs ~50 s apart over 8 min, final stretch ECG-free as a control):**
+
+| window | ECG | optics 30 s | optics 25 s |
+| --- | --- | --- | --- |
+| t=52 | 41.4 ms | 35.2 ms | 37.1 ms |
+| t=100 | 48.9 ms | 43.0 ms | 42.5 ms |
+| t=150 | 34.2 ms | 31.9 ms | 33.8 ms |
+| t=199 | 41.5 ms | 46.0 ms | 32.8 ms |
+| t=250 | 42.6 ms | rejected (coverage 0.95) | 39.9 ms |
+| t=299 | 29.2 ms | 32.6 ms | 33.4 ms |
+
+- 30 s: n=5, r=0.75, bias −1.3 ms, RMS 4.7 ms, worst 15%. Heart rate within 1 bpm on all six.
+- 25 s (the production window, shared with the rate estimator): n=6, r=0.78, bias −3.1 ms, RMS
+  5.2 ms, worst 21%. The window is shared because `estimate_hrv` takes the rate rather than
+  re-deriving it.
+- True RMSSD moves 29.2–48.9 ms over 4.5 minutes at a near-constant heart rate, so a tolerance
+  from a short capture must not be applied to readings minutes apart.
+- Unvalidated: the ECG-free control stretch reads lower and tighter (18–28 ms) as heart rate rose
+  70 → 76; with no ground truth it is unclear whether that is cleaner signal or real.

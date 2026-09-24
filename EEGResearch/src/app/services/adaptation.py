@@ -6,25 +6,15 @@ from typing import Callable
 from src.app.models import LearnerState
 
 
-# The stressed line per calm source. Must equal signal_fusion's table on the
-# website side; a test on each side pins both. "sdk" is 0.312 Bels below the
-# centre of the SDK ratio's span; "local" is set from the reference capture
-# (EEG_REFERENCE.md, local calm line). Both remain one adult's numbers.
+# Stressed calm line per source. Must equal signal_fusion's table; a test on each side pins both.
 STRESSED_CALM_MAX = {"sdk": 0.377, "local": 0.25}
-# How long a local calm may be carried without a fresh estimate and still
-# be a reading. Must equal signal_mapping.CALM_HOLD_MAX_SECONDS on the
-# website side, which nulls `stress` past it; a test on each side pins both.
-# Without it the sidecar went on labelling from a calm the backend had just
-# declined to record -- the ordinary case, not an edge: calm was held past
-# the cap on 41% of resting ticks on the reference capture.
+# Seconds a local calm may be carried and still label. Must equal signal_mapping.CALM_HOLD_MAX_SECONDS.
 CALM_HOLD_MAX_SECONDS = 10.0
 
 
 class AdaptationEngine:
     """Turns features into a learner-state label. It does **not** choose
-    difficulty -- that's decided by the website backend's `LLM_topic_decider`,
-    from correctness, topic history, grade and manual bias, none of which the
-    sidecar can see.
+    difficulty; the website backend does (see CLAUDE.md, fusion).
     """
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
@@ -32,33 +22,19 @@ class AdaptationEngine:
         # -inf so the first real transition is never blocked by cooldown.
         self.last_change_ts = float("-inf")
         self.cooldown_seconds = 3.0
-        # A new label has to hold for this many consecutive readings before
-        # it is committed. Without it a single spurious tick became the
-        # label, and the cooldown then held it for 3 s: on the reference
-        # captures 90 of 133 "focused" readings were cooldown holds of one
-        # tick (tests/fixtures/EEG_REFERENCE.md, finding 7). Four ticks is
-        # 1 s at the 4 Hz stream rate.
+        # Consecutive readings a new label must hold before commit (1 s at 4 Hz).
         self.persist_ticks = 4
-        # A pending run survives a signal-loss reset -- a gap tick is not a
-        # reading, so it neither agrees nor disagrees -- but not for long:
-        # a run whose last reading is older than this is discarded, so
-        # three readings before a long gap cannot commit on one after it.
-        # Four ticks span 1 s; contact flapping every other tick spans 2 s.
+        # A pending run survives a signal-loss reset, but ages out after this.
         self.pending_max_age_seconds = 5.0
         self._pending_label: str | None = None
         self._pending_count = 0
         self._pending_ts: float | None = None
-        # Injectable for replaying a capture at its own pace; see
-        # SignalProcessor.__init__.
+        # Injectable for replaying a capture at its own pace.
         self._clock = clock
 
     def restart(self) -> None:
         """Forget the label state: a fresh engine. Called when recording is
-        armed, beside the processor's baseline restart -- the label, its
-        cooldown and its pending run were otherwise carried in from
-        pairing, so the opening rows of a lesson wore a label formed while
-        the strap was being fitted, beside scores that had been
-        re-centred."""
+        armed, so no label formed during pairing carries into the lesson."""
         self.last_label = "neutral"
         self.last_change_ts = float("-inf")
         self._pending_label = None
@@ -66,24 +42,15 @@ class AdaptationEngine:
         self._pending_ts = None
 
     def end_session(self) -> None:
-        """The session is over: a fresh engine reporting no signal. Unlike
-        reset_for_signal_loss, the pending run does not survive -- it ages
-        out at 5 s, and a stop followed by a start inside that window let
-        the last student's run count toward the next one's first label."""
+        """Fresh engine reporting no signal; unlike signal loss, the pending run is dropped."""
         self.restart()
         self.last_label = "no_signal"
 
     def reset_for_signal_loss(self) -> None:
-        """After a data gap, the next label is not held under the cooldown --
-        there is no prior state worth holding -- but it still needs
-        persist_ticks readings to agree, since this runs on every no-sample
-        tick and one tick after a gap is not a state.
+        """After a gap, skip the cooldown but still require persist_ticks readings.
 
-        The pending run is left alone. Clearing it here meant contact
-        flapping every other tick -- gap, reading, gap, reading -- never
-        accumulated four readings and a clearly focused student read
-        no_signal for as long as it lasted. The run ages out on its own
-        (pending_max_age_seconds)."""
+        The pending run is kept, or contact flapping every other tick never
+        accumulates a label; it ages out via pending_max_age_seconds."""
         self.last_label = "no_signal"
         self.last_change_ts = float("-inf")
 
@@ -91,24 +58,14 @@ class AdaptationEngine:
         focus = features["focus_score"]
         calm = features["calm_score"]
         confidence = features["confidence"]
-        # Accept either 0..1 or 0..100 feature scales.
+        # Accept either 0..1 or 0..100 scales.
         focus_ratio = focus / 100.0 if focus > 1.0 else focus
         calm_ratio = calm / 100.0 if calm > 1.0 else calm
-        # Accept either 0..1 or 0..100 confidence scales.
         confidence_ratio = confidence / 100.0 if confidence > 1.0 else confidence
         target = LearnerState("neutral", confidence, focus, calm, "Stable but moderate attention")
-        # The stressed line depends on which spectrum calm came from: the
-        # SDK ratio and the local alpha residual are different numbers on
-        # different spans, and a line derived as 0.311 Bels below centre on
-        # the SDK span sat 0.148 below it on the local one, where silent
-        # arithmetic then read stressed. The local line is set from the
-        # reference capture armed at eyes open: 0.25 is crossed by 8% of
-        # resting eyes-open ticks, 0% of arithmetic, 3% eyes closed
-        # (EEG_REFERENCE.md). Same table as signal_fusion.
+        # sdk and local calm live on different spans, so each has its own line.
         stressed_line = STRESSED_CALM_MAX.get(features.get("calm_source") or "sdk", STRESSED_CALM_MAX["sdk"])
-        # A calm that was never measured this session -- the local buffer
-        # still filling, or a gap just reset it -- is a placeholder at the
-        # midpoint, and a placeholder cannot be stressed or focused.
+        # A never-measured calm is a midpoint placeholder: neither stressed nor focused.
         calm_measured = features.get("calm_measured", True) is not False
         held = features.get("calm_held_seconds")
         calm_stale = isinstance(held, (int, float)) and held > CALM_HOLD_MAX_SECONDS
@@ -118,16 +75,7 @@ class AdaptationEngine:
             target = LearnerState("neutral", confidence, focus, calm, "Calm not yet measured")
         elif calm_stale:
             target = LearnerState("neutral", confidence, focus, calm, "Calm carried too long")
-        # The lines are rescaled with the population spans in
-        # signal_processing.py so the *Bels* of movement each label needs
-        # are what they were: focused was 0.20 of a 1.609 span (0.322 Bels
-        # above the centre) and is 0.124 of 2.590; stressed was 0.15 of
-        # 2.079 below (0.312 Bels) and is 0.123 of 2.526 -- its own
-        # fraction, not focus's reused, which made it 0.44% harder. Widening the
-        # bounds without this made focused 61% harder to reach on a capture
-        # where it was reached on zero ticks. Same numbers as
-        # signal_fusion.EEG_FOCUSED_FOCUS_MIN / EEG_STRESSED_CALM_MAX; both
-        # remain unmeasured against a task (CLAUDE.md, step 1.7).
+        # Same numbers as signal_fusion.EEG_FOCUSED_FOCUS_MIN / EEG_STRESSED_CALM_MAX; see docs/signals.md.
         elif focus_ratio >= 0.624 and calm_ratio >= 0.5:
             target = LearnerState("focused", confidence, focus, calm, "Sustained focus")
         elif calm_ratio < stressed_line:
@@ -139,24 +87,9 @@ class AdaptationEngine:
             self._pending_count = 0
             self._pending_ts = None
             return target
-        # A change of label. Two rules, applied in this order:
-        #
-        # Persistence: a content label (focused, stressed, neutral) is
-        # committed only once persist_ticks consecutive readings ask for it.
-        # That holds after a signal loss too -- the stream manager resets
-        # on every no-sample tick, so flapping contact would otherwise
-        # commit whatever single tick follows each gap, which is exactly
-        # the one-tick label the rule exists to stop. insufficient_signal
-        # is exempt: it is a statement about the signal's quality, not
-        # about the student, and losing the signal must apply at once --
-        # while regaining it needs persistence, so a confidence oscillating
-        # across the gate settles on "insufficient" rather than freezing
-        # the last content label for the session.
-        #
-        # Cooldown: a committed content label is held for cooldown_seconds
-        # against the next change. Not after a signal loss, where there is
-        # no prior state worth holding, and not on the way into
-        # insufficient_signal, for the reason above.
+        # A change of label: persistence first, then cooldown. insufficient_signal is
+        # exempt from both -- losing the signal applies at once; regaining it must persist.
+        # Cooldown is also skipped after a signal loss (no prior state worth holding).
         if target.label != "insufficient_signal":
             stale = (self._pending_ts is not None
                      and (now - self._pending_ts) > self.pending_max_age_seconds)

@@ -1,61 +1,10 @@
 #!/usr/bin/env python3
 """Export open-rppg's RhythmMamba.pure to a standalone ONNX model.
 
-Why this exists
----------------
-`open-rppg` costs ~600 MB of dependencies and ~34s of start-up (see
-docs/RPPG_DEPENDENCY_COST.md). Exported to ONNX it costs **nothing new** --
-onnxruntime is already a dependency -- and loads in ~1.5s. The exported file is
-22 MB and agrees with the unpatched package at correlation 0.99985.
-
-The `.onnx` file itself is not committed: it's derived from weights whose
-licence terms belong to their authors, and a binary nobody can regenerate is
-worse than a script that produces it.
-
-**This does not make camera rPPG work.** Accuracy against a reference is
-still unmeasured and needs a synchronised video and ECG capture. This only
-establishes that the plumbing is affordable.
-
-What it patches, and why
--------------------------
-Five edits to a vendored `rppg/models.py`, applied to an installed copy (never
-committed to that package -- run against a throwaway install):
-
-1. **Don't force the JAX backend** (`models.py:2`) -- the module overrides the
-   caller's `KERAS_BACKEND` at import.
-2. **Make the precision policy overridable** (`models.py:18`) -- the model
-   relies on JAX's implicit float16/float32 promotion, which TensorFlow
-   refuses. Running at float32 sidesteps every such site at once.
-3. **`Block_mamba.call`: replace three `.at[].set()` lines** -- JAX-only
-   indexed updates over a static range (a temporal shift and a cumulative
-   average), rewritten as concat-of-slices. The only JAX binding in the
-   forward pass.
-4. **`Mamba.call`: compute the grouped Conv1D explicitly** -- it's really a
-   depthwise convolution (`groups == filters == channels`), but tf2onnx
-   leaves Keras 3's grouped Conv1D unconverted. The layer stays so
-   `load_weights` still matches by structure; only the computation changes.
-5. **`Frequencydomain_FFN.call`: replace `rfft`/`irfft` with constant
-   matmuls** -- tf2onnx can't convert TensorFlow's RFFT. Since the transform
-   length is fixed by the input signature, the DFT is just a constant matrix.
-
-All five are verified together, not by inspection: the script captures the
-unpatched model's output before patching, and the final check compares the
-ONNX graph against that baseline. Measured on the same input at float32, the
-patches alone move the output by 1.1e-04 -- op reordering, not a behaviour
-change.
-
-Usage
------
-    pip install --target /tmp/rppgenv open-rppg "setuptools<81" tensorflow tf2onnx
-    python scripts/export_rhythmmamba_onnx.py --rppg /tmp/rppgenv --out rm.onnx
-
-Then it needs nothing but onnxruntime:
-
-    sess = onnxruntime.InferenceSession("rm.onnx")
-    bvp = sess.run(None, {sess.get_inputs()[0].name: frames})[0]   # (1, 160)
-
-`frames` is `(1, 160, 128, 128, 3)` float32. The shape is static: a different
-window length needs a new export.
+Patches a throwaway open-rppg install (JAX-free, float32, explicit depthwise conv, DFT as
+constant matmuls) so tf2onnx can convert it, then checks the ONNX output against the unpatched
+model (patches alone move it 1.1e-04 at float32). See docs/RPPG_DEPENDENCY_COST.md.
+Input is a static `(1, 160, 128, 128, 3)` float32; output is `(1, 160)`.
 """
 
 from __future__ import annotations
@@ -121,9 +70,7 @@ PATCHES: list[tuple[str, str, str]] = [
     ),
 ]
 
-# Applied separately from PATCHES: the same source line also appears in
-# BiMamba (never called by RhythmMamba, different padding mode), so a blind
-# replace would silently patch the wrong layer.
+# Separate from PATCHES: the same line also appears in BiMamba, which must stay unpatched.
 CONV_ORIGINAL = "        x = self.conv1d(x)[:, :seq_len]"
 CONV_PATCHED = """        # Never called now, but the weights still need to exist for
         # load_weights to populate them.
@@ -293,10 +240,7 @@ def main() -> int:
             f"to measure against. Reinstall open-rppg into a clean target."
         )
 
-    # The reference must come from the UNPATCHED model. Capturing it after
-    # patching would have the patched model grading itself, proving only that
-    # ONNX matches the patched TensorFlow code, not that the patches preserved
-    # the original's behaviour.
+    # Baseline from the UNPATCHED model, or the patched model would grade itself.
     print("capturing the baseline from the unpatched model...")
     base_env = dict(os.environ, PYTHONPATH=args.rppg, KERAS_BACKEND="jax",
                     TF_CPP_MIN_LOG_LEVEL="3")

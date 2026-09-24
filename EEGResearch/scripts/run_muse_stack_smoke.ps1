@@ -29,9 +29,7 @@
     .\scripts\run_muse_stack_smoke.ps1 -BaseUrl "http://127.0.0.1:8001"
 #>
 param(
-    # 8001 is the sidecar (8000 is the website backend): every default here
-    # said 8000, so -StartServer bound the sidecar on the website's port and
-    # without it the probe missed the run_simulator.ps1 it tells you to start.
+    # The sidecar; 8000 is the website backend.
     [string]$BaseUrl = "http://127.0.0.1:8001",
     [string]$LearnerToken = $env:API_TOKEN,
     [string]$AdminToken = $env:ADMIN_TOKEN,

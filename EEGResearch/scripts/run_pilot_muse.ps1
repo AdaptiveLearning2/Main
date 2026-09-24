@@ -211,8 +211,7 @@ try {
         Start-Sleep -Seconds 2
         Write-Host "API logs: $apiOutLog | $apiErrLog"
 
-        # If bind fails because the requested port is occupied, optionally evict that
-        # process and retry the same port once before bumping.
+        # Port occupied: optionally evict and retry once, then bump the port.
         if ($apiProc.HasExited) {
             $errTail = if (Test-Path $apiErrLog) { Get-Content -Raw $apiErrLog } else { "" }
             if ($errTail -match "10048" -or $errTail -match "address already in use") {
@@ -273,9 +272,7 @@ try {
         Write-Host "WARN: quick health probe failed at $baseUrl/healthz : $($_.Exception.Message)"
     }
 
-    # Do NOT actively connect-probe the bridge socket here.
-    # BridgeTcpServer accepts a single client at a time; a probe can occupy that slot
-    # and delay the API's own adapter connection.
+    # Never connect-probe the bridge: it takes one client, and a probe can hold the API's slot.
     Write-Host "==> Bridge configured on 127.0.0.1:$BridgePort (skipping active TCP probe)"
 
     Write-Host "==> Starting session (with retry)"

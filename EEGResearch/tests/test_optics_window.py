@@ -1,11 +1,4 @@
-"""Tests for the optical window buffer in the TCP bridge adapter.
-
-These check the time base. The bridge's `mono_ts_ms` records BLE delivery,
-not sample time (see test_optics_fixture.py), so the window is placed on
-`seq`, and the stamps are used only to measure an average rate. Every test
-below covers a way this could go wrong quietly -- a rate that's plausible
-and wrong rather than an outright error.
-"""
+"""The bridge adapter's optical window: placed on `seq`, with `mono_ts_ms` used only to measure a rate."""
 
 from __future__ import annotations
 
@@ -21,8 +14,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "optics_rest_64hz.jsonl.gz"
 
 
 def _adapter() -> TcpMuseBridgeAdapter:
-    # Never connected: `_store_optics` is what the reader thread calls, and the
-    # buffer is deliberately reachable without a socket.
+    # Never connected: `_store_optics` is what the reader thread calls.
     return TcpMuseBridgeAdapter("127.0.0.1", 8765, 1)
 
 
@@ -46,8 +38,7 @@ def test_window_is_empty_before_anything_arrives():
 
 def test_rate_is_measured_from_the_stamps_not_assumed():
     a = _adapter()
-    # 32Hz, not the preset's nominal 64. A window that assumed the nominal rate
-    # would report every bpm at double the truth, confidently.
+    # 32 Hz, not the nominal 64: assuming it would double every bpm.
     _feed(a, [(1.0, 2.0)] * 640, interval_ms=1000 / 32)
     w = a.optics_window(25.0)
     assert w.fs == pytest.approx(32.0, abs=0.2)
@@ -55,11 +46,7 @@ def test_rate_is_measured_from_the_stamps_not_assumed():
 
 
 def test_rate_counts_dropped_samples_rather_than_rows():
-    """With a tenth of the samples missing, `(len(rows) - 1) / span` would
-    report 57.6Hz for a link still running at 64, silently making every
-    derived rate 10% low. `seq` counts what was sent, so the measured rate
-    stays put and the loss shows up as a gap instead.
-    """
+    """Counting rows would make every derived rate 10% low; `seq` shows the loss as a gap."""
     a = _adapter()
     for i in range(640):
         if i % 10 == 3:
@@ -76,17 +63,12 @@ def test_gaps_are_interpolated_onto_the_sample_grid():
     a._store_optics({"seq": 0, "mono_ts_ms": 0.0, "n": 1, "ch": [0.0]})
     a._store_optics({"seq": 4, "mono_ts_ms": 4 * (1000 / 64), "n": 1, "ch": [4.0]})
     w = a.optics_window(float("inf"))
-    # Five grid points for a span of four sample indices, filled linearly --
-    # the samples are placed where they were taken, not packed together.
+    # Samples placed where they were taken, the gap filled linearly.
     assert [round(float(v), 6) for v in w.channels[:, 0]] == [0.0, 1.0, 2.0, 3.0, 4.0]
 
 
 def test_a_seq_reset_drops_the_earlier_recording():
-    """seq is a per-bridge-run counter, so it going backwards means a restart.
-
-    Keeping both halves would splice two recordings onto one reconstructed
-    clock, inventing a gap the size of however long the bridge was down.
-    """
+    """seq going backwards means a bridge restart; splicing would invent a gap."""
     a = _adapter()
     _feed(a, [(1.0,)] * 100, start_seq=5000, start_ms=0.0)
     _feed(a, [(2.0,)] * 100, start_seq=0, start_ms=60_000.0)
@@ -115,13 +97,7 @@ def test_samples_older_than_the_window_are_left_out():
 
 
 def test_a_sample_with_a_null_channel_is_dropped_whole():
-    """The bridge writes JSON null for a non-finite reading.
-
-    Half a sample cannot be placed on the grid, and keeping the readable half
-    beside a zero would store a measurement nothing measured. The sample goes,
-    and the grid position it left is filled from its neighbours like any other
-    loss -- so the trace stays continuous rather than acquiring a spike.
-    """
+    """A JSON null (non-finite reading) drops the whole sample; its slot is interpolated."""
     a = _adapter()
     _feed(a, [(1.0, 1.0)] * 10, start_seq=0, start_ms=0.0)
     a._store_optics({"seq": 10, "mono_ts_ms": 10 * (1000 / 64), "n": 2,
@@ -155,12 +131,7 @@ def recorded_frames() -> list[dict]:
 
 
 def test_a_real_recording_measures_its_own_rate(recorded_frames):
-    """End to end against the hardware capture, not synthesised timing.
-
-    The stamps in this file are batched -- ~9% of samples share one with their
-    predecessor -- which is exactly the case a median-of-intervals rate reports
-    as 0 and this span-based one gets right.
-    """
+    """Batched stamps (~9% duplicates) break a median-of-intervals rate; span-based gets it right."""
     a = _adapter()
     for frame in recorded_frames:
         a._store_optics(frame)

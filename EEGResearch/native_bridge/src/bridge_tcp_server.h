@@ -16,12 +16,7 @@ public:
     /** Non-blocking: returns true and sets line_out (without trailing newline) if a full line was received. */
     bool poll_command(std::string& line_out);
 
-    /**
-     * Count of whole lines dropped because the send buffer was full.
-     * A partial write closes the client instead of resuming, since resuming
-     * would splice a truncated line onto the next one. Exposed so a consumer
-     * can tell a dropped line apart from the sensor just producing fewer samples.
-     */
+    /** Whole lines dropped on a full send buffer (a partial write closes the client instead). */
     long long dropped_lines() const noexcept { return dropped_lines_; }
 
 private:

@@ -1,11 +1,7 @@
 """Stands in for the website backend's ingest endpoints, recording the wire.
 
-Not a mock of the sidecar's client -- the real sidecar, with a real sampling
-loop, posts to this over real HTTP. Proves what no unit test can: the process
-boots with PUSH_ENABLED on and its payloads actually reach the push client.
-
-Answers like the real endpoint (`inserted` counted server-side, 401 without a
-bearer token), so the client's own accounting gets exercised, not assumed.
+The real sidecar posts here over HTTP with PUSH_ENABLED on. Answers like the real
+endpoint (`inserted` counted, 401 without a bearer) so the client's accounting runs.
 """
 import json
 import sys
@@ -32,7 +28,6 @@ class H(BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "inserted": len(samples)})
 
     def do_GET(self):
-        # Lets the harness drain everything captured so far.
         self._json(200, CAPTURED)
         if self.path == "/__done":
             sys.stderr.flush()

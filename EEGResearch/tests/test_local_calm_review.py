@@ -1,11 +1,4 @@
-"""The local calm source after its first review: what a calm value may claim.
-
-Calm latches on its own coverage and keeps collecting after focus has; a
-placeholder says it is one and a gap makes calm unmeasured again; a carried
-calm reports how long; the stressed line is per source and pinned to the
-backend's table; the simulator never feeds the spectrum and an artifact
-poisons it.
-"""
+"""What a local-source calm value may claim: latch, placeholder, carry, and the stressed line."""
 
 from __future__ import annotations
 
@@ -41,8 +34,7 @@ def test_the_simulator_never_feeds_the_spectrum_and_an_artifact_poisons_it():
 
 
 def test_calm_latches_on_its_own_coverage_and_keeps_collecting_after_focus_has():
-    """A session latched with 181 focus samples and one calm sample, that
-    one value being the calm centre for good."""
+    """A focus latch must not fix the calm centre on a single calm sample."""
     t = _local()
     for _ in range(4 * int(SignalProcessor.BASELINE_SECONDS) + 8):
         _tick(t, _spectrum(None, ready=False))
@@ -64,9 +56,7 @@ def test_calm_latches_on_its_own_coverage_and_keeps_collecting_after_focus_has()
 
 
 def test_a_placeholder_calm_says_so_and_a_gap_makes_calm_unmeasured_again():
-    """The opening fill wrote a fabricated 50, the same value a genuine
-    residual of zero produces; and after every gap, which the SDK path
-    never had."""
+    """A placeholder 50 is the same value a genuine zero residual produces."""
     t = _local()
     f = _tick(t, _spectrum(None, ready=False))
     assert f["calm_score"] == pytest.approx(50.0) and f["calm_measured"] is False
@@ -92,8 +82,7 @@ def test_a_carried_calm_reports_how_long_it_has_been_carried():
 
 
 def test_the_stressed_line_is_per_calm_source_and_pinned_to_the_backend():
-    """0.377 is 0.311 Bels below centre on the SDK span and 0.148 below it
-    on the local one, where silent arithmetic then read stressed."""
+    """0.377 is 0.311 Bels below centre on the SDK span but only 0.148 on the local one."""
     assert STRESSED_CALM_MAX == {"sdk": 0.377, "local": 0.25}
     calm_30 = {"focus_score": 40.0, "calm_score": 30.0, "confidence": 90.0}
 

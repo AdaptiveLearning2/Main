@@ -1,9 +1,4 @@
-"""Tests region selection and colour measurement, without a camera.
-
-Everything here uses plain numpy on synthetic frames. `FaceLocator` needs
-OpenCV, which is deliberately absent from CI and from deployments that never
-enable the camera, so it's covered by manual verification instead.
-"""
+"""Region selection and colour measurement on synthetic frames, without OpenCV or a camera."""
 
 from __future__ import annotations
 
@@ -33,9 +28,7 @@ def test_regions_sit_inside_the_face_box():
 
 
 def test_regions_avoid_the_eyes_and_mouth():
-    """Eyes blink, injecting a step into the pulse band at an unpredictable
-    rate, and the mouth moves with speech -- so regions avoid both. Bands are
-    fractions of face height: eyes near 0.30-0.42, mouth near 0.72-0.85."""
+    """Blinks and speech inject steps into the pulse band; bands are fractions of face height."""
     _, y, _, h = FACE
     eyes = (y + 0.30 * h, y + 0.42 * h)
     mouth = (y + 0.72 * h, y + 0.85 * h)
@@ -58,9 +51,7 @@ def test_rejects_a_frame_that_is_not_rgb():
 
 
 def test_dark_pixels_are_excluded_rather_than_averaged_in():
-    """Hair, shadow and spectacle frames carry no pulse. Averaging them in
-    doesn't just add noise -- it pulls the whole measurement toward a colour
-    that never varies, shrinking the modulation POS depends on."""
+    """Non-skin pixels never vary, shrinking the modulation POS depends on."""
     frame = _frame((180, 120, 110))
     frame[:, :400] = (10, 10, 10)              # dark over the left half
 
@@ -71,9 +62,7 @@ def test_dark_pixels_are_excluded_rather_than_averaged_in():
 
 
 def test_specular_highlights_are_excluded():
-    """A blown-out pixel reflects the light source, not the skin, so it carries
-    the illumination's variation instead of the blood's -- and it's clipped by
-    the sensor, so its variation is actively wrong, not just absent."""
+    """A clipped highlight carries the illumination's variation, not the blood's."""
     frame = _frame((180, 120, 110))
     boxes = region_boxes(FACE)
     x0, y0, x1, y1 = boxes[0]
@@ -86,9 +75,7 @@ def test_specular_highlights_are_excluded():
 
 
 def test_no_measurement_when_too_little_usable_skin():
-    """When too little usable skin is found, the result must be a missing
-    sample, never a zero -- a zero would enter POS as a real measurement and
-    put a step into the waveform."""
+    """A zero would enter POS as a real measurement and step the waveform."""
     frame = _frame((5, 5, 5))                  # everything below MIN_LUMA
     out = mean_rgb(frame, FACE)
     assert not out.ok
@@ -97,9 +84,7 @@ def test_no_measurement_when_too_little_usable_skin():
 
 
 def test_a_face_box_off_the_edge_of_the_frame_is_clipped_not_wrapped():
-    """Negative or oversized coordinates must clip. Numpy slicing with a
-    negative start silently wraps to the far edge of the array, which would
-    measure the wrong pixels instead of failing."""
+    """A negative numpy slice start silently wraps to the far edge."""
     out = mean_rgb(_frame((180, 120, 110)), (-50, -30, 200, 260))
     assert out.ok, "a partially off-frame face should still measure"
     assert out.rgb == pytest.approx((180, 120, 110), abs=0.5), (
@@ -108,10 +93,7 @@ def test_a_face_box_off_the_edge_of_the_frame_is_clipped_not_wrapped():
 
 
 def test_pooling_weights_by_usable_pixels_not_by_region():
-    """Three regions are pooled into one mean, not averaged as three separate
-    means. A cheek half in shadow should contribute proportionally less than a
-    fully lit forehead; averaging per-region first would give the shadowed
-    cheek's surviving pixels a third of the weight regardless of count."""
+    """A half-shadowed cheek must contribute proportionally less than a lit forehead."""
     frame = _frame((200, 200, 200))
     boxes = region_boxes(FACE)
     x0, y0, x1, y1 = boxes[1]                  # left cheek -> a different colour
@@ -129,8 +111,6 @@ def test_pooling_weights_by_usable_pixels_not_by_region():
 
 
 def test_a_pulse_survives_the_measurement_chain():
-    """End to end at this layer: modulate a synthetic face and confirm the
-    measured mean carries that modulation through to POS."""
     from src.app.services.ppg_processing import estimate_window
     from src.app.services.pos_rppg import pos_pulse
 
@@ -153,9 +133,6 @@ def test_a_pulse_survives_the_measurement_chain():
 
 
 # ── the locator, with the cascade injected ───────────────────────────────────
-#
-# `FaceLocator` takes an injectable cascade so its detection logic can be
-# tested in CI without OpenCV or a real Haar cascade.
 
 class FakeCascade:
     """Records what it was given and returns a scripted detection."""
@@ -172,13 +149,10 @@ class FakeCascade:
 
 
 def test_the_cascade_is_only_ever_handed_uint8():
-    """Luma is computed as a weighted channel sum, which is float, but
-    OpenCV's cascade requires `_image.depth() == CV_8U` and raises rather than
-    converting -- so the locator must cast to uint8 before calling it."""
+    """OpenCV's cascade raises on non-CV_8U input rather than converting."""
     from src.app.services.face_roi import FaceLocator
 
-    # redetect_every=0 so every call reaches the cascade instead of the cached
-    # box.
+    # redetect_every=0 so every call reaches the cascade.
     cascade = FakeCascade()
     locator = FaceLocator(redetect_every=0, cascade=cascade)
 
@@ -189,8 +163,7 @@ def test_the_cascade_is_only_ever_handed_uint8():
 
 
 def test_out_of_range_luma_is_clipped_not_wrapped():
-    """A plain cast would wrap 300.0 to 44, turning a blown-out highlight into
-    a mid-grey and inventing detail where the sensor saturated."""
+    """A plain cast wraps 300.0 to 44, turning a saturated highlight mid-grey."""
     from src.app.services.face_roi import FaceLocator
 
     cascade = FakeCascade()
@@ -200,9 +173,7 @@ def test_out_of_range_luma_is_clipped_not_wrapped():
 
 
 def test_detection_is_not_run_on_every_frame():
-    """Detection is slow relative to the frame rate, and re-deriving the box
-    every frame makes it jitter -- walking the measurement regions across
-    different skin and injecting the noise POS exists to remove."""
+    """Per-frame detection jitters the box, walking regions across different skin."""
     from src.app.services.face_roi import FaceLocator
 
     cascade = FakeCascade()
@@ -215,8 +186,6 @@ def test_detection_is_not_run_on_every_frame():
 
 
 def test_a_stale_box_is_forgotten_rather_than_reused_forever():
-    """A student who has left must stop producing samples, not keep emitting
-    the colour of whatever now occupies that rectangle."""
     from src.app.services.face_roi import FaceLocator
 
     cascade = FakeCascade()
@@ -229,8 +198,6 @@ def test_a_stale_box_is_forgotten_rather_than_reused_forever():
 
 
 def test_injecting_a_cascade_keeps_opencv_out_of_the_process():
-    """Confirms the detection logic is testable with no camera stack installed,
-    so CI can cover it instead of skipping it."""
     import subprocess
     import sys
     import textwrap

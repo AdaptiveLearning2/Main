@@ -1,11 +1,4 @@
-"""Tests that the `face` extra stays optional.
-
-The sidecar must install, import, boot, and pass its tests with no camera
-dependency present -- that's CI's state and every headband-only deployment's
-state. A camera dependency leaking into the base install would be invisible
-in development, where it's present anyway, so these checks are cheap
-insurance against an expensive failure.
-"""
+"""The camera extras stay optional: CI and headband-only installs have no camera dependency."""
 
 from __future__ import annotations
 
@@ -28,9 +21,7 @@ def test_no_camera_dependency_is_in_the_base_install():
 
 
 def test_no_camera_dependency_is_in_the_base_or_dev_lock():
-    """A lock is what actually gets installed. An extra declared correctly
-    in pyproject but compiled into the base lock would still put OpenCV on
-    every machine."""
+    """The lock is what gets installed, whatever pyproject declares."""
     for name in ("requirements.lock", "requirements-dev.lock"):
         text = (ROOT / name).read_text(encoding="utf-8").lower()
         for package in CAMERA_PACKAGES:
@@ -47,24 +38,14 @@ def test_the_face_extra_exists_and_is_pinned_in_its_own_lock():
 
 
 def test_opencv_is_held_below_five():
-    """FaceLocator depends on `cv2.data.haarcascades` shipping in the wheel
-    and on the CAP_PROP_* constants used to lock exposure. Neither has been
-    tested against a 5.x release, since OpenCV isn't in CI, so a break here
-    would surface in front of a class instead of in a test run."""
+    """FaceLocator needs `cv2.data.haarcascades` and CAP_PROP_*, untested on 5.x and not in CI."""
     for extra in ("face", "gaze"):
         deps = " ".join(_pyproject()["project"]["optional-dependencies"][extra])
         assert "<5" in deps, f"the opencv major-version cap was removed from {extra}"
 
 
 def test_the_gaze_extra_exists_and_is_pinned_in_its_own_lock():
-    """Its own extra, not folded into `face`: mediapipe is ~50 MB and a
-    second ML runtime for a channel that's off by default.
-
-    Before this existed, mediapipe wasn't declared in any dependency spec, so
-    `pip install -e ".[face]"` (the command the start scripts print) never
-    installed it, and gaze failed at runtime as `landmarker_unavailable`,
-    indistinguishable from a missing model.
-    """
+    """Its own extra: mediapipe is ~50 MB and a second ML runtime for an off-by-default channel."""
     extras = _pyproject()["project"]["optional-dependencies"]
     assert "gaze" in extras
 
@@ -73,9 +54,7 @@ def test_the_gaze_extra_exists_and_is_pinned_in_its_own_lock():
 
 
 def test_the_gaze_lock_covers_the_command_the_scripts_print():
-    """`.[face,gaze]` is what an operator is told to run, so that's what the
-    lock has to describe. A gaze-only resolve wouldn't contain opencv-python
-    at all, and would hide the collision the next test checks for."""
+    """A gaze-only resolve would hide the cv2 collision the next test checks for."""
     text = (ROOT / "requirements-gaze.lock").read_text(encoding="utf-8").lower()
 
     assert "--extra=face" in text and "--extra=gaze" in text
@@ -83,14 +62,6 @@ def test_the_gaze_lock_covers_the_command_the_scripts_print():
 
 
 def test_there_is_exactly_one_cv2_provider():
-    """`opencv-python` and `opencv-contrib-python` install the same `cv2`
-    module, contrib being the superset. With both installed, whichever landed
-    last owns the import -- `.[face,gaze]` once produced exactly that, 4.14
-    of one beside 5.0 of the other, silently defeating the `<5` cap above.
-
-    Fixed by moving `face` onto contrib rather than constraining mediapipe:
-    one package, one version, nothing to race.
-    """
     extras = _pyproject()["project"]["optional-dependencies"]
     both = " ".join(dep for e in ("face", "gaze")
                     for dep in extras[e]).replace(" ", "")
@@ -108,10 +79,7 @@ def test_there_is_exactly_one_cv2_provider():
 
 
 def test_no_rppg_library_is_depended_on():
-    """Pulse extraction is implemented in-house. Every packaged deep-learning
-    rPPG carries weights trained on a dataset behind a per-requester
-    agreement, and the classical ones fail on licence or packaging -- check
-    that before adding one."""
+    """Pulse extraction is in-house: packaged rPPG libraries fail on dataset licence or packaging."""
     project = _pyproject()["project"]
     everything = " ".join(
         project["dependencies"]

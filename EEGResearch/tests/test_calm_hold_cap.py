@@ -1,8 +1,4 @@
-"""A calm carried past the hold cap is not a reading on the sidecar either.
-
-The mapper nulls `stress` past CALM_HOLD_MAX_SECONDS; the engine used to go
-on labelling from the carried value against the local stressed line.
-"""
+"""A calm carried past CALM_HOLD_MAX_SECONDS is not a reading for the engine either."""
 
 from __future__ import annotations
 

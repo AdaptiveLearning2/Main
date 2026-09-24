@@ -1,10 +1,7 @@
 """Feed the wire payloads a live sidecar actually produced through the real
 backend endpoint, with only Supabase stubbed out.
 
-Covers what capture_backend.py cannot: that what the sidecar sends is what
-`/api/signals/cognitive` and `signal_mapping` actually expect. Everything
-between the HTTP body and the database row is real code -- the Pydantic model,
-the consent gate, the mapper, the 0..100 -> 0..1 conversion.
+Checks what the sidecar sends is what `/api/signals/cognitive` and `signal_mapping` expect.
 """
 import json
 import os

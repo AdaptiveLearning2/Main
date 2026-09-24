@@ -1,9 +1,4 @@
-"""Tests for the EEG reference capture script.
-
-The two live sources need a headband. What is tested is where a capture may
-be written, that a row keeps the fields Phase 0 scores on, and that the
-per-segment summary does not fold "no reading" into zero.
-"""
+"""Tests for the EEG reference capture script."""
 
 from __future__ import annotations
 
@@ -81,8 +76,7 @@ def test_a_row_carries_the_unscaled_ratios_and_everything_downstream():
 
 
 def test_a_missing_ratio_is_null_not_zero():
-    """An older sidecar, or a frame with no usable bands, reports no ratio.
-    Zero would read as a real reading at the population midpoint."""
+    """Zero would read as a real reading at the population midpoint."""
     env = _envelope()
     del env["data"]["features"]["focus_log_ratio"]
     env["data"]["features"]["calm_log_ratio"] = None
@@ -126,8 +120,7 @@ def test_a_zero_ratio_is_a_value_not_a_gap():
 
 
 def test_the_baseline_window_reports_what_the_wearer_was_doing():
-    """The processor latches its baseline on the first 60 usable ticks.
-    Which segment those fell in is the question Phase 0 step 4 asks."""
+    """Which segment the first 60 usable ticks (the latched baseline) fell in."""
     rows = [capture.flatten_state(_envelope(focus_log_ratio=None), segment="between", t="0")]
     rows += [capture.flatten_state(_envelope(), segment="between", t=str(i)) for i in range(10)]
     rows += [capture.flatten_state(_envelope(), segment="eyes_closed_rest", t=str(i))
@@ -164,9 +157,7 @@ def test_the_header_records_method_and_no_identity():
 
 
 def test_the_flattened_row_carries_every_feature_field_the_sidecar_declares():
-    """A field added to schemas.FeatureData must reach the capture, or the
-    next hardware recording has no column for the thing it was added to
-    tune. Derived from the model, not from a list here."""
+    """Derived from schemas.FeatureData, so a new field reaches the next hardware capture."""
     from src.app.schemas import FeatureData
     row = capture.flatten_state(_envelope(), segment="x", t="2026-09-13T00:00:00+00:00")
     missing = [f for f in FeatureData.model_fields if f not in row]
@@ -174,29 +165,21 @@ def test_the_flattened_row_carries_every_feature_field_the_sidecar_declares():
 
 
 def test_the_arithmetic_prompt_asks_for_silence():
-    """Aloud, the segment measures speech muscle: beta rose 0.08 with gamma
-    0.10 and good contact halved, and broadband EMG corrupts the temporal
-    alpha residual the local calm is. The method moved to silent for the
-    raw capture while this prompt still said aloud -- and the wearer reads
-    the prompt, not the method note."""
+    """Aloud, speech EMG corrupts the temporal alpha residual the local calm reads."""
     prompt = next(p for s, _, p in capture.DEFAULT_PROTOCOL if s == "arithmetic")
     assert "aloud" not in prompt.lower()
     assert "silent" in prompt.lower()
 
 
 def test_the_short_protocol_is_the_long_one_s_first_two_segments():
-    """Sliced, not restated: the five-minute run is compared against the
-    long one segment by segment, so a prompt or a duration that drifted
-    between them would be an unrecorded difference in method."""
+    """Sliced, not restated, so the short and long runs cannot drift apart in method."""
     assert capture.CLOSED_OPEN_PROTOCOL == capture.DEFAULT_PROTOCOL[:2]
     assert [s for s, _, _ in capture.CLOSED_OPEN_PROTOCOL] == [
         "eyes_closed_rest", "eyes_open_rest"]
 
 
 def test_the_header_records_the_protocol_that_was_selected():
-    """`--protocol closed_open` exists so the file does not claim segments
-    nobody performed -- running the long protocol and stopping after two
-    would write a nine-segment header over a two-segment recording."""
+    """The header must not claim segments nobody performed."""
     args = capture.build_parser().parse_args(
         ["--out", "x", "--source", "bridge", "--protocol", "closed_open"])
     h = capture.header(args, capture.CLOSED_OPEN_PROTOCOL)
@@ -207,7 +190,6 @@ def test_the_header_records_the_protocol_that_was_selected():
 # -- the live slope check --
 
 def _feed(monitor, series):
-    """Push one frame per sample of the temporal pair."""
     for v in series:
         monitor.push({"tp9": float(v), "tp10": float(v)})
 
@@ -218,22 +200,17 @@ def _white(n, seed=0):
 
 
 def test_the_slope_monitor_says_nothing_until_its_window_is_full():
-    """Enough samples for Welch to succeed, fewer than the window asks for:
-    the guard has to be what withholds the number, not an exception from a
-    short buffer, or a half-window slope gets reported as a reading."""
+    """Enough for Welch, short of the window: the guard, not an exception, withholds it."""
     m = capture.SlopeMonitor(window_seconds=8.0)
     half = _white(4 * 256)
     _feed(m, half)
     assert m.slope() is None and m.line() is None, "a partial window is not a reading"
-    # The same samples do produce one once the window is full.
     _feed(m, _white(4 * 256, seed=1))
     assert m.slope() is not None
 
 
 def test_a_flat_spectrum_is_reported_as_flat():
-    """Broadband power flattens the 1/f slope. That is what muscle does, it
-    sits on the alpha band the local calm reads, and on the second wearer's
-    capture nothing on screen said so until it was scored afterwards."""
+    """Muscle's broadband power flattens the 1/f slope under the alpha the local calm reads."""
     m = capture.SlopeMonitor(window_seconds=4.0, warn_above=-1.0)
     _feed(m, _white(4 * 256))
     s = m.slope()
@@ -242,8 +219,7 @@ def test_a_flat_spectrum_is_reported_as_flat():
 
 
 def test_a_steep_spectrum_passes_and_is_measured_as_steeper():
-    """The comparison, not the absolute value, is what the check rests on:
-    a 1/f signal must read steeper than a flat one through this same path."""
+    """The check rests on the comparison, not the absolute value."""
     from tests.test_eeg_spectrum import pink
     steep = capture.SlopeMonitor(window_seconds=4.0, warn_above=-0.5)
     _feed(steep, pink(4 * 256, 0))
@@ -271,16 +247,12 @@ def test_the_slope_check_is_on_by_default_and_can_be_turned_off():
 
 
 def _feed_one(monitor, series, channel):
-    """Only one temporal channel delivers -- a dead or lifted contact."""
     for v in series:
         monitor.push({channel: float(v)})
 
 
 def test_a_starved_temporal_channel_says_so_rather_than_going_quiet():
-    """The state the monitor exists for: calm is an alpha residual at the
-    temporal pair, so a contact that stops delivering both ruins the capture
-    and silences the check. Returning None for it looked exactly like the
-    opening seconds of a recording -- frame counts ticking, no slope."""
+    """A dead temporal contact ruins the calm; silence would look like a recording's start."""
     m = capture.SlopeMonitor(window_seconds=4.0)
     _feed_one(m, _white(3 * 4 * 256), "tp9")
     assert m.slope() is None, "one channel cannot give a pair slope"
@@ -290,8 +262,6 @@ def test_a_starved_temporal_channel_says_so_rather_than_going_quiet():
 
 
 def test_a_channel_delivering_nothing_usable_is_the_same_state():
-    """A contact present but sending None reaches the same place as one
-    sending nothing at all, and must say so the same way."""
     m = capture.SlopeMonitor(window_seconds=4.0)
     for v in _white(4 * 256):
         m.push({"tp9": float(v), "tp10": None})
@@ -299,8 +269,6 @@ def test_a_channel_delivering_nothing_usable_is_the_same_state():
 
 
 def test_a_window_that_cannot_be_fit_is_reported_not_swallowed():
-    """Both channels full, nothing finite in them: the fit resolves to
-    nothing and the operator is told, rather than reading silence as fine."""
     m = capture.SlopeMonitor(window_seconds=4.0)
     nan = [float("nan")] * (4 * 256)
     _feed(m, nan)
@@ -309,8 +277,6 @@ def test_a_window_that_cannot_be_fit_is_reported_not_swallowed():
 
 
 def test_a_filling_window_stays_silent_and_a_starved_one_does_not():
-    """The two states this split exists to separate, asserted together so
-    neither drifts into the other's branch."""
     filling = capture.SlopeMonitor(window_seconds=4.0)
     _feed(filling, _white(256))
     assert filling.line() is None, "an ordinary start has nothing to say"
@@ -320,10 +286,7 @@ def test_a_filling_window_stays_silent_and_a_starved_one_does_not():
 
 
 def test_both_temporal_channels_starved_is_reported_not_read_as_a_start():
-    """The likelier shape and the least recoverable one: a strap off or
-    riding high kills the pair together, and calm is an alpha residual at
-    that pair. Deciding from the fullest channel made this identical to an
-    ordinary start, for the whole capture, while frame counts ticked."""
+    """A strap off or riding high kills the pair together, the likeliest starved shape."""
     m = capture.SlopeMonitor(window_seconds=4.0)
     for _ in range(3 * 4 * 256):
         m.push({"af7": 1.0})          # frames arriving, neither temporal in them
@@ -342,8 +305,7 @@ def test_both_channels_present_but_never_usable_is_the_same():
 
 
 def test_frames_seen_is_what_separates_the_two_states():
-    """Not samples buffered. Below a window of frames nothing is claimed;
-    past it, buffers that have not kept up are the finding."""
+    """Frames seen, not samples buffered: past a window, unfilled buffers are the finding."""
     quiet = capture.SlopeMonitor(window_seconds=4.0)
     for _ in range(4 * 256 - 1):
         quiet.push({})

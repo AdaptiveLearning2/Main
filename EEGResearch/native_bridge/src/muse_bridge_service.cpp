@@ -25,21 +25,14 @@ bool env_flag_off(const char* name) {
     return value == "0" || value == "false" || value == "FALSE" || value == "no" || value == "off";
 }
 
-// Whether a dropped link is retried without a person clicking Connect.
-// On by default: the alternative is a student silently losing the rest of a
-// lesson's recording. MUSE_AUTO_RECONNECT=0 turns it off, for a session that
-// is deliberately testing the manual path.
+// Retry a dropped link without a click. On by default; MUSE_AUTO_RECONNECT=0 disables.
 bool auto_reconnect_enabled() {
     static const bool enabled = !env_flag_off("MUSE_AUTO_RECONNECT");
     return enabled;
 }
 
-// How long CONNECTED with no EEG packet counts as a dead link. Generous:
-// EEG arrives at 220-256Hz, and a preset switch on connect interrupts
-// streaming for a moment, so anything under a few seconds would false-alarm
-// on every fresh connection. Tunable because the number is a judgement, not a
-// measurement, and 0 disables the watchdog while leaving reconnect-on-callback
-// alone.
+// CONNECTED with no EEG for this long is a dead link. Generous, since a preset switch pauses
+// streaming; a judgement, not a measurement. 0 disables the watchdog only.
 long long liveness_timeout_ms() {
     static const long long value = [] {
         const char* raw = std::getenv("MUSE_LIVENESS_TIMEOUT_MS");
@@ -57,24 +50,15 @@ long long liveness_timeout_ms() {
     return value;
 }
 
-// Wait before each attempt, by attempt number. Short first, since most BLE
-// drops are momentary, then backing off so a headband that has genuinely
-// gone (switched off, out of range) is not scanned for every two seconds.
+// Wait before each attempt: short first (most BLE drops are momentary), then backing off.
 constexpr long long RECONNECT_BACKOFF_MS[] = {2000, 4000, 8000, 16000, 30000};
 static_assert(sizeof(RECONNECT_BACKOFF_MS) / sizeof(RECONNECT_BACKOFF_MS[0])
                   >= MuseBridgeService::MAX_RECONNECT_ATTEMPTS,
               "one backoff entry per attempt");
-// How long an attempt may take to reach CONNECTED before it counts as
-// failed. connect_named() returns as soon as run_asynchronously() is called,
-// so the outcome is only knowable from the connection callback.
+// An attempt not CONNECTED by then has failed; connect_named() returns before the outcome is known.
 constexpr long long RECONNECT_ATTEMPT_TIMEOUT_MS = 15000;
-// How long a restored link has to stay up before the attempt budget is
-// reset. Measured at the edge of BLE range: every attempt reached CONNECTED
-// within seconds, no EEG followed, and the watchdog dropped it ~8s later --
-// so with the budget reset on CONNECTED the link flapped for as long as the
-// headband stayed there, a disconnect and a reconnect every ten seconds
-// with no end. A connection that lasts less than this counts against the
-// same sequence, and five of them exhaust it like five failures would.
+// A restored link must stay up this long to reset the attempt budget, not just reach CONNECTED.
+// See docs/signals.md.
 constexpr long long LINK_STABLE_MS = 30000;
 }  // namespace
 
@@ -114,20 +98,15 @@ public:
                                   const std::shared_ptr<interaxon::bridge::Muse>&) override {
         switch (packet->packet_type()) {
         case interaxon::bridge::MuseDataPacketType::NOTCH_FILTERED_EEG:
-            // Same channels as raw EEG with 45-65Hz mains hum removed. Prefer
-            // this when it flows, since hum gets worse as contact worsens.
+            // Raw EEG with 45-65Hz mains hum removed; preferred, since hum grows as contact worsens.
             service_.note_notch_available();
             service_.last_any_eeg_ms_.store(steady_now_ms());
             service_.enqueue_frame(packet);
             break;
         case interaxon::bridge::MuseDataPacketType::EEG:
-            // Stamped on both branches: the watchdog asks whether the link is
-            // delivering at all, which a raw packet answers even when it is
-            // not the one enqueued.
+            // Stamped even when not enqueued: the watchdog asks whether the link delivers at all.
             service_.last_any_eeg_ms_.store(steady_now_ms());
-            // Fall back to raw only while notch-filtered packets aren't
-            // arriving, so a preset without them (or one where they stop
-            // mid-session) still produces data instead of going silent.
+            // Raw only while notch-filtered packets aren't arriving.
             if (!service_.notch_available()) {
                 service_.enqueue_frame(packet);
             }
@@ -145,10 +124,7 @@ public:
             break;
         case interaxon::bridge::MuseDataPacketType::OPTICS:
         case interaxon::bridge::MuseDataPacketType::PPG:
-            // Which one arrives depends on the headband, not this build:
-            // 2025 models carry PPG inside OPTICS and emit no PPG packet,
-            // 2018-2024 models do the reverse. Registering only one would
-            // miss half the hardware.
+            // 2025 models carry PPG inside OPTICS; 2018-2024 models send PPG only.
             service_.update_optical(packet);
             break;
         case interaxon::bridge::MuseDataPacketType::IS_PPG_GOOD:
@@ -175,10 +151,7 @@ public:
     void receive_muse_connection_packet(const interaxon::bridge::MuseConnectionPacket& packet,
                                         const std::shared_ptr<interaxon::bridge::Muse>& muse) override {
         service_.update_connection_state(packet.current_connection_state);
-        // The model is only trustworthy once CONNECTED: get_model() returns
-        // MU_02 for anything from 2018 onwards until then, and connect_named()
-        // sets the preset earlier -- so asking sooner would misread an Athena
-        // as a 2016 Muse.
+        // get_model() returns MU_02 for any 2018+ headband until CONNECTED.
         if (packet.current_connection_state == interaxon::bridge::ConnectionState::CONNECTED) {
             service_.apply_model_preset(muse);
         }
@@ -220,9 +193,7 @@ bool MuseBridgeService::start() {
 
 void MuseBridgeService::stop() {
     running_.store(false);
-    // Before the teardown below: a reconnect thread mid-connect_named() would
-    // otherwise touch manager_ and active_muse_ while they are being freed.
-    // cancel_auto_reconnect() joins it.
+    // Joins the reconnect thread before manager_ and active_muse_ are freed.
     cancel_auto_reconnect();
 
 #if defined(ENABLE_LIBMUSE)
@@ -261,8 +232,7 @@ void MuseBridgeService::refresh_scan() {
     if (!manager_) {
         return;
     }
-    // Re-check on every refresh, not just at startup, so a radio toggled off
-    // mid-session is caught on the next scan instead of relying on a stale flag.
+    // Re-checked every refresh, so a radio toggled off mid-session is caught.
     refresh_bluetooth_state();
     manager_->stop_listening();
     manager_->start_listening();
@@ -272,12 +242,8 @@ void MuseBridgeService::refresh_scan() {
 #if defined(ENABLE_LIBMUSE)
 namespace {
 
-// Whether to move a capable headband onto an Optics-carrying preset.
-//
-// Off by default. Switching off PRESET_21 changes EEG bit depth (12 -> 14)
-// and sometimes channel count, and a silent EEG regression would be blamed
-// on whatever shipped alongside it. Gated behind a flag so it can be turned
-// on for one session and off again.
+// Move a capable headband onto an optics preset. Off by default: leaving PRESET_21
+// changes EEG bit depth (12 -> 14) and sometimes channel count.
 bool optics_preset_enabled() {
     const char* raw = std::getenv("MUSE_ENABLE_OPTICS");
     if (!raw || !*raw) {
@@ -287,8 +253,7 @@ bool optics_preset_enabled() {
     return value == "1" || value == "true" || value == "TRUE" || value == "yes";
 }
 
-// Only presets this bridge actually asks for get names; anything else is
-// reported numerically. The enum has ~90 members, too many to hand-maintain.
+// Names only the presets this bridge asks for; the rest are numeric.
 std::string preset_name(interaxon::bridge::MusePreset preset) {
     switch (preset) {
     case interaxon::bridge::MusePreset::PRESET_21: return "PRESET_21";
@@ -302,17 +267,8 @@ std::string preset_name(interaxon::bridge::MusePreset preset) {
     }
 }
 
-// Which optics preset to ask an Athena for.
-//
-// Configurable because it's a bandwidth trade measured on hardware, not
-// reasoned about: 4 CH EEG at 256Hz plus 16 CH optics at 64Hz broke the BLE
-// link within ~20s and collapsed electrode contact from [1,1,1,1] to
-// [4,4,4,4], while PRESET_21 held for minutes with good contact. Being able
-// to try fewer optical channels without a rebuild matters.
-//
-// Dropping the 16-channel mode loses the Red and Ambient channels. That's
-// fine here: SpO2 needs red for ratio-of-ratios, but heart rate only needs
-// the pulsatile component, and 850nm IR covers that.
+// Which optics preset to ask an Athena for; configurable because of the BLE bandwidth
+// cliff (docs/signals.md). Below 16 CH loses Red/Ambient: fine for HR (850nm IR), not SpO2.
 struct OpticsPresetChoice {
     interaxon::bridge::MusePreset preset;
     const char* label;
@@ -336,25 +292,20 @@ OpticsPresetChoice optics_preset_choice() {
     if (value == "1036") {
         return {interaxon::bridge::MusePreset::PRESET_1036, "PRESET_1036"};  // 4 CH, high power
     }
-    // A value that was set but not recognised is a typo, not a preference, and
-    // silently running the default would present as "my setting had no effect"
-    // with nothing to go on. Says so once rather than every reconnect.
+    // An unrecognised value is a typo: warn once, not every reconnect.
     if (raw && *raw && value != "1035") {
-        // atomic, not a plain bool: this runs on the connection listener
-        // thread, so concurrent reconnects can race it.
+        // atomic: runs on the connection listener thread, which reconnects can race.
         static std::atomic<bool> warned{false};
         if (!warned.exchange(true)) {
             std::cerr << "Unrecognised MUSE_OPTICS_PRESET='" << value
                       << "' (expected 1031-1036); using PRESET_1035\n";
         }
     }
-    // Default: fewest optical channels, lowest power -- least bandwidth that
-    // still carries a pulse, most likely to coexist with EEG.
+    // Default: 4 CH, low power -- least bandwidth that still carries a pulse.
     return {interaxon::bridge::MusePreset::PRESET_1035, "PRESET_1035"};
 }
 
-// The enum names don't match what's printed on the hardware: MU_04/MU_05 are
-// the 2019/2021 Muse S, printed MS-01/MS-02, while MS_03 is the 2025 Muse S.
+// Enum names differ from the hardware label: MU_04/MU_05 are the 2019/2021 Muse S (MS-01/MS-02).
 const char* model_name(interaxon::bridge::MuseModel model) {
     switch (model) {
     case interaxon::bridge::MuseModel::MU_01: return "MU-01";
@@ -368,9 +319,7 @@ const char* model_name(interaxon::bridge::MuseModel model) {
     }
 }
 
-// A capability, not a runtime observation. MU-01/MU-02 have no PPG at all;
-// everything from the 2018 Muse 2 onwards does. Lets a heart channel report
-// "no sensor" instead of "sensor stopped working" -- different situations.
+// Capability, not observation: MU-01/MU-02 have no PPG; the 2018 Muse 2 onwards do.
 bool model_has_optical(interaxon::bridge::MuseModel model) {
     switch (model) {
     case interaxon::bridge::MuseModel::MU_01:
@@ -392,15 +341,10 @@ void MuseBridgeService::apply_model_preset(const std::shared_ptr<interaxon::brid
     const interaxon::bridge::MuseModel model = muse->get_model();
     const bool has_optical = model_has_optical(model);
 
-    // PRESET_21 unless we're deliberately asking for optics. MS_03 is the
-    // only model with a PRESET_10xx range, so it's the only one worth
-    // switching. Keeps EEG at 4 channels, matching what EegFrame emits.
+    // PRESET_21 unless optics are asked for; MS_03 is the only model with a PRESET_10xx range.
     const char* requested = "PRESET_21";
     if (optics_preset_enabled() && model == interaxon::bridge::MuseModel::MS_03) {
-        // libMuse allows changing preset after connection; it interrupts and
-        // then restores streaming. Whether the headband actually honours the
-        // request is separate, which is why active_preset() reads it back
-        // instead of trusting this call.
+        // Interrupts then restores streaming; active_preset() reads back whether it took.
         const OpticsPresetChoice choice = optics_preset_choice();
         muse->set_preset(choice.preset);
         requested = choice.label;
@@ -415,11 +359,7 @@ void MuseBridgeService::apply_model_preset(const std::shared_ptr<interaxon::brid
 }
 
 void MuseBridgeService::reset_device_fields_locked() {
-    // Reset here, in disconnect_muse(), not stop() -- this runs on every
-    // headband swap. Without it, samples numbered contiguously across a gap
-    // with no headband attached, hiding exactly what the seq detector exists
-    // to catch, and the queues would resume a reconnect by emitting the
-    // previous headband's stale samples.
+    // Runs on every headband swap, so seq restarts and no stale samples carry over.
     while (!eeg_queue_.empty()) {
         eeg_queue_.pop();
     }
@@ -430,19 +370,13 @@ void MuseBridgeService::reset_device_fields_locked() {
 
     active_muse_name_.clear();
     firmware_version_.clear();
-    // Model, preset and capability describe the headband that just went away.
-    // Leaving them set would report a device still connected, and
-    // optical_supported specifically is what a heart channel checks before
-    // falling back to the camera.
+    // Everything describing the departed headband goes, so nothing stale reads as current.
     muse_model_.clear();
     requested_preset_.clear();
     optical_supported_ = false;
-    // Cleared for the same reason -- and it's the one number here a student
-    // is asked to act on, so a stale "82%" beside Connect is worse than most.
     battery_percent_ = -1.0;
     latest_bands_ = BandPowers{};
     latest_contact_ = ContactQuality{};
-    // Counters too, so old optics activity can't look like current activity.
     latest_optical_ = OpticalSignals{};
 }
 #endif
@@ -470,30 +404,22 @@ bool MuseBridgeService::connect_named(const std::string& name) {
 
     manager_->stop_listening();
     chosen->register_connection_listener(connection_listener_);
-    // EEG: raw 4-channel samples at 220Hz (PRESET_21). Band absolutes are
-    // computed by libMuse from the raw EEG. All registered before
-    // run_asynchronously().
+    // Raw 4-channel EEG at 220Hz (PRESET_21). All registered before run_asynchronously().
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::EEG);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::DELTA_ABSOLUTE);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::THETA_ABSOLUTE);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::ALPHA_ABSOLUTE);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::BETA_ABSOLUTE);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::GAMMA_ABSOLUTE);
-    // Electrode fit/validity from the headband itself -- the correct basis
-    // for "signal quality", instead of inferring it from calmness.
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::NOTCH_FILTERED_EEG);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::HSI_PRECISION);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_GOOD);
-    // Optical, registered unconditionally: a headband that emits neither
-    // simply never fires these, which is itself useful to know, versus
-    // gating them and not being able to tell "no optics" from "didn't ask".
+    // Optical, unconditionally, so "no optics" differs from "didn't ask".
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::OPTICS);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::PPG);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_PPG_GOOD);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_HEART_GOOD);
-    // Battery is device telemetry libMuse fires on its own schedule, not
-    // preset-dependent, so register it on every preset -- costs nothing on
-    // PRESET_21 and is a reading a student can act on before a lesson.
+    // Battery is preset-independent telemetry.
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::BATTERY);
     chosen->set_preset(interaxon::bridge::MusePreset::PRESET_21);
     {
@@ -558,9 +484,7 @@ std::string MuseBridgeService::firmware_version() const {
 #endif
 }
 
-// Guarded like firmware_version(): queue_mutex_ only exists inside the
-// ENABLE_LIBMUSE block, so an unguarded body would break the OFF build,
-// which is the one CI compiles.
+// Body guarded: queue_mutex_ exists only under ENABLE_LIBMUSE, and CI compiles OFF.
 std::string MuseBridgeService::muse_model() const {
 #if defined(ENABLE_LIBMUSE)
     std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -570,9 +494,7 @@ std::string MuseBridgeService::muse_model() const {
 #endif
 }
 
-// Defined outside the ENABLE_LIBMUSE region, like the accessors below it:
-// main.cpp calls this unconditionally, so nesting it in the guard would leave
-// an unresolved symbol in the OFF build CI compiles.
+// Outside the guard: main.cpp calls it unconditionally, and CI compiles OFF.
 OpticalSignals MuseBridgeService::optical_signals() const {
 #if defined(ENABLE_LIBMUSE)
     std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -619,13 +541,7 @@ DeviceConfig MuseBridgeService::device_config() const {
     if (!muse) {
         return {};
     }
-    // One call for both fields, read live rather than cached: the
-    // configuration is repopulated when settings change, so a preset applied
-    // a moment after set_preset() still shows up.
-    //
-    // Outside the lock deliberately -- get_muse_configuration() is thread-safe
-    // on its own, and calling into libMuse while holding queue_mutex_ would
-    // block the data listener's own use of that lock.
+    // Read live, outside the lock: holding queue_mutex_ into libMuse would block the data listener.
     const auto config = muse->get_muse_configuration();
     if (!config) {
         return {};
@@ -654,8 +570,6 @@ double MuseBridgeService::battery_percent() const {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     return battery_percent_;
 #else
-    // The synthetic build has no battery to report; inventing one would put a
-    // number on screen with nothing behind it.
     return -1.0;
 #endif
 }
@@ -737,7 +651,7 @@ bool MuseBridgeService::poll_frame(EegFrame& frame) {
     return false;
 #endif
 
-    // Temporary synthetic stream keeps the end-to-end pipeline testable.
+    // Synthetic stream keeps the pipeline testable without hardware.
     std::this_thread::sleep_for(std::chrono::milliseconds(4)); // Approx 250 Hz
     const double t = static_cast<double>(frame_counter_) / 250.0;
     frame_counter_ += 1;
@@ -746,8 +660,7 @@ bool MuseBridgeService::poll_frame(EegFrame& frame) {
         static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                    std::chrono::system_clock::now().time_since_epoch())
                                    .count());
-    // Keep synthetic fallback aligned with Python SignalProcessor calibration
-    // (raw Muse-like channel range around 500-850).
+    // Matches SignalProcessor calibration (raw Muse-like range ~500-850).
     frame.tp9 = 700.0 + std::sin(t * 3.14 * 2.0) * 35.0;
     frame.af7 = 704.0 + std::sin(t * 3.14 * 2.0 + 0.3) * 35.0;
     frame.af8 = 698.0 + std::sin(t * 3.14 * 2.0 + 0.6) * 35.0;
@@ -781,8 +694,7 @@ void MuseBridgeService::enqueue_frame(const std::shared_ptr<interaxon::bridge::M
 
 void MuseBridgeService::unregister_data_listeners(
     const std::shared_ptr<interaxon::bridge::Muse>& muse) {
-    // One shared list for both teardown paths, so they can't drift out of
-    // sync and silently leak a listener across reconnects.
+    // Must match the registrations in connect_named().
     static constexpr interaxon::bridge::MuseDataPacketType kTypes[] = {
         interaxon::bridge::MuseDataPacketType::EEG,
         interaxon::bridge::MuseDataPacketType::DELTA_ABSOLUTE,
@@ -805,17 +717,14 @@ void MuseBridgeService::unregister_data_listeners(
 }
 
 void MuseBridgeService::update_optical(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet) {
-    // values() instead of the named Optics/Ppg accessors: it reports how many
-    // channels actually arrived, since named channels not present on a
-    // narrower preset would just return garbage.
+    // values(), not named accessors: absent channels on a narrower preset return garbage.
     const std::vector<double> values = packet->values();
     const bool is_optics = packet->packet_type() == interaxon::bridge::MuseDataPacketType::OPTICS;
     const long long now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
 
     std::lock_guard<std::mutex> lock(queue_mutex_);
-    // Clamped to what's actually stored, so the reported count and the array
-    // can never disagree if a preset delivers more channels than fit.
+    // Count clamped to what's stored, so count and array agree.
     if (is_optics) {
         latest_optical_.optics_packets += 1;
         latest_optical_.last_optics.fill(0.0);
@@ -835,12 +744,10 @@ void MuseBridgeService::update_optical(const std::shared_ptr<interaxon::bridge::
     }
     latest_optical_.last_ms = now_ms;
 
-    // Queue the sample too, not just the counters. OPTICS only -- PPG is a
-    // separate channel mapping for 2018-2024 hardware, and mixing both into
-    // one queue would give a series whose meaning changes with the headband.
+    // Queue OPTICS only: PPG has a different channel mapping (2018-2024 hardware).
     if (is_optics) {
         OpticsFrame frame{};
-        // The packet's own timestamp, in ms. libMuse reports microseconds.
+        // libMuse reports microseconds.
         frame.mono_ts_ms = packet->timestamp() / 1000;
         frame.seq = ++optics_seq_;
         const size_t n = std::min(values.size(), frame.ch.size());
@@ -849,10 +756,7 @@ void MuseBridgeService::update_optical(const std::shared_ptr<interaxon::bridge::
         }
         frame.n = static_cast<int>(n);
         optics_queue_.push(frame);
-        // Same bound as the EEG queue -- ~32s of backlog at 64Hz, far more
-        // than the main loop should ever fall behind by. Counted, not just
-        // dropped: since the time base is rebuilt from sample index, a
-        // silent drop would shift it and show up as an impossible interval.
+        // ~32s at 64Hz. Drops are counted: the time base is rebuilt from sample index.
         if (optics_queue_.size() > 2048) {
             optics_queue_.pop();
             latest_optical_.optics_dropped += 1;
@@ -861,13 +765,9 @@ void MuseBridgeService::update_optical(const std::shared_ptr<interaxon::bridge::
 }
 
 void MuseBridgeService::update_battery(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet) {
-    // Named accessor, not values()[0]: this packet's fields are a fixed
-    // mapping, unlike optics where the channel count itself is the unknown.
     const double pct = packet->get_battery_value(
         interaxon::bridge::Battery::CHARGE_PERCENTAGE_REMAINING);
-    // Range-checked before storing: -1 means "not reported", so a garbage
-    // negative reading must not land there. Dropped rather than clamped --
-    // the previous good reading beats a fabricated 100.
+    // Out of range is dropped, not clamped: -1 means "not reported", and the last good reading wins.
     if (!(pct >= 0.0 && pct <= 100.0)) {
         return;
     }
@@ -880,8 +780,7 @@ void MuseBridgeService::update_optical_quality(const std::shared_ptr<interaxon::
     if (values.empty()) {
         return;
     }
-    // libMuse's own verdict, not a threshold invented here. Non-zero is good,
-    // matching the IS_GOOD convention used for the electrodes.
+    // libMuse's own verdict; non-zero is good, as for IS_GOOD.
     const bool good = values[0] != 0.0;
     const bool is_ppg = packet->packet_type() == interaxon::bridge::MuseDataPacketType::IS_PPG_GOOD;
 
@@ -905,18 +804,13 @@ void MuseBridgeService::update_band_power(const std::shared_ptr<interaxon::bridg
 
     std::lock_guard<std::mutex> lock(queue_mutex_);
 
-    // Average only the electrodes the headband says are usable, so one or two
-    // badly-seated electrodes (commonly the ear contacts) don't contaminate
-    // bands computed from the frontal ones that are reading cleanly.
-    //
-    // Falls back to all four when no contact data has arrived yet.
+    // Average only electrodes the headband calls usable; all four when none are, or no contact data yet.
     double sum = 0.0;
     int used = 0;
     if (latest_contact_.has_is_good || latest_contact_.has_hsi) {
         for (size_t i = 0; i < per_channel.size(); ++i) {
             const bool valid_data = !latest_contact_.has_is_good || latest_contact_.is_good[i] >= 1.0;
-            // HSI: 1 good, 2 mediocre, 4 poor, 0 = not reported. <= 2.0 covers
-            // 0 too, since no reading yet isn't evidence of a bad fit.
+            // <= 2.0 also admits 0 (not reported), which isn't evidence of a bad fit.
             const double fit = latest_contact_.hsi[i];
             const bool seated = !latest_contact_.has_hsi || fit <= 2.0;
             if (valid_data && seated) {
@@ -953,8 +847,7 @@ void MuseBridgeService::update_band_power(const std::shared_ptr<interaxon::bridg
 }
 
 void MuseBridgeService::update_contact_quality(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet) {
-    // Both HSI_PRECISION and IS_GOOD carry one value per EEG electrode and use
-    // the same channel mapping as an EEG packet, so read them the same way.
+    // HSI_PRECISION and IS_GOOD use the EEG packet's channel mapping.
     const std::array<double, 4> values{{
         packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG1),
         packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG2),
@@ -986,35 +879,21 @@ void MuseBridgeService::rebuild_muse_name_list() {
 }
 
 void MuseBridgeService::update_connection_state(interaxon::bridge::ConnectionState state) {
-    // Do NOT call any libMuse API (e.g. get_muse_version) here -- libMuse
-    // holds an internal lock during callbacks, and re-entering the SDK
-    // deadlocks.
-    //
-    // Deliberately doesn't drain the queues or reset optics_seq_: this fires
-    // on every transition including transient blips, and a reset here would
-    // discard good in-flight samples for a link that never really dropped.
-    // Every reconnect the sidecar drives goes through connect_named(), which
-    // calls disconnect_muse() first and resets properly there.
+    // Never call libMuse here: it holds an internal lock during callbacks, so re-entry deadlocks.
+    // No queue/seq reset: this fires on transient blips too; connect_named() resets.
     std::lock_guard<std::mutex> lock(queue_mutex_);
     const bool was_connected = connected_;
     last_connection_state_ = static_cast<int>(state);
     connected_ = (state == interaxon::bridge::ConnectionState::CONNECTED);
     if (connected_) {
-        // A fresh baseline for the watchdog, and the end of any reconnect
-        // sequence: CONNECTED arriving is the one outcome that counts as
-        // success, since connect_named() itself only reports that the
-        // attempt was launched.
+        // Fresh watchdog baseline; CONNECTED is the only sign an attempt succeeded.
         connected_since_ms_.store(steady_now_ms());
         last_any_eeg_ms_.store(0);
         if (reconnect_armed_.load() || reconnect_in_flight_.load()) {
             std::cerr << "auto-reconnect: link restored on attempt "
                       << reconnect_attempt_.load() << "\n";
         }
-        // The attempt count is deliberately *not* reset here. CONNECTED is
-        // the attempt succeeding, not the link being usable: at the edge of
-        // range it arrives every time and lasts eight seconds. The budget
-        // resets once the link has held for LINK_STABLE_MS, in
-        // service_auto_reconnect(), or on a person's command.
+        // Attempt count not reset: that waits for LINK_STABLE_MS or a person's command.
         reconnect_armed_.store(false);
         reconnect_in_flight_.store(false);
         return;
@@ -1022,15 +901,9 @@ void MuseBridgeService::update_connection_state(interaxon::bridge::ConnectionSta
     connected_since_ms_.store(0);
     last_any_eeg_ms_.store(0);
     firmware_version_.clear();
-    // Cleared with firmware, not left standing like the queues: a charge
-    // percentage is a claim about a link that's currently down.
     battery_percent_ = -1.0;
-    // Only a CONNECTED -> not-CONNECTED edge is a drop worth recovering.
-    // disconnect_muse() sets connected_ false *before* asking the SDK to
-    // disconnect, so the callback for a deliberate disconnect -- a person's
-    // command, or connect_named()'s own cleanup -- sees was_connected false
-    // and arms nothing. That ordering is what separates the two cases; no
-    // separate flag is needed, and none is used.
+    // Only a CONNECTED -> not-CONNECTED edge arms recovery. disconnect_muse() clears connected_
+    // before the SDK call, so a deliberate disconnect arms nothing; that ordering is the guard.
     if (was_connected && auto_reconnect_enabled()) {
         std::cerr << "auto-reconnect: link dropped (state " << static_cast<int>(state)
                   << "), will retry\n";
@@ -1039,19 +912,10 @@ void MuseBridgeService::update_connection_state(interaxon::bridge::ConnectionSta
 }
 #endif
 
-// Outside the ENABLE_LIBMUSE guard, like the accessors below: main.cpp calls
-// service_auto_reconnect() and reconnect_status() unconditionally, and the
-// OFF build is the one CI compiles. Everything here is atomics and public
-// methods that already have OFF bodies.
+// Outside the ENABLE_LIBMUSE guard: main.cpp calls these unconditionally, and CI compiles OFF.
 void MuseBridgeService::arm_reconnect() {
-    // Flag-only: this is called from inside the connection callback, where
-    // re-entering libMuse deadlocks. The attempt itself is launched from the
-    // main loop by service_auto_reconnect().
-    //
-    // The attempt count carries over: a drop that follows a short-lived
-    // reconnect is the same sequence continuing, and schedule_next_reconnect()
-    // exhausts it once MAX_RECONNECT_ATTEMPTS have been made. Only a stable
-    // link or a person's command starts the count again.
+    // Flag-only: called inside the connection callback, where re-entering libMuse deadlocks.
+    // The attempt count carries over; only a stable link or a person's command resets it.
     reconnect_in_flight_.store(false);
     schedule_next_reconnect();
 }
@@ -1082,9 +946,7 @@ void MuseBridgeService::launch_reconnect_attempt() {
         reconnect_armed_.store(false);
         return;
     }
-    // Join the previous attempt's thread first. Only ever done once it has
-    // signalled completion, so this never blocks the main loop on a
-    // connect_named() still waiting out wait_for_disconnect().
+    // Only reached once the previous thread signalled done, so this join never blocks.
     if (reconnect_thread_.joinable()) {
         reconnect_thread_.join();
     }
@@ -1097,28 +959,20 @@ void MuseBridgeService::launch_reconnect_attempt() {
     const int generation = reconnect_generation_.load();
     std::cerr << "auto-reconnect: attempt " << attempt << "/" << MAX_RECONNECT_ATTEMPTS
               << " to " << name << "\n";
-    // Its own thread: connect_named() blocks through disconnect_muse()'s
-    // wait_for_disconnect for up to 3s, which inline would stall EEG and
-    // optics draining for every consumer of this process.
+    // Own thread: connect_named() can block up to 3s in wait_for_disconnect.
     reconnect_thread_ = std::thread([this, name, generation] {
         const bool launched = connect_named(name);
         if (reconnect_generation_.load() != generation) {
-            // A person took over while this ran. Their command has already
-            // been applied; a connect landing on top of it would pair a
-            // headband they may just have asked to release.
+            // A person took over meanwhile; undo this connect.
             if (launched) {
                 disconnect_muse();
             }
         } else if (!launched) {
-            // Not in the scan list any more -- the usual case after the
-            // headband was switched off and on, which gives it a fresh BLE
-            // advertisement. Rescan, and let the next attempt find it. What
-            // a person does by clicking Refresh, then Connect.
+            // Gone from the scan list (usually power-cycled, new advertisement): rescan.
             refresh_scan();
             schedule_next_reconnect();
         }
-        // Launched attempts are judged by the connection callback (success)
-        // or the attempt timeout in service_auto_reconnect() (failure).
+        // Launched attempts are judged by the connection callback or the attempt timeout.
         reconnect_thread_done_.store(true);
     });
 }
@@ -1130,7 +984,6 @@ void MuseBridgeService::service_auto_reconnect() {
     const long long now = steady_now_ms();
 
     // ── a restored link that has held ──
-    // Only now is a reconnect a success worth forgetting the attempts for.
     if (is_muse_connected() && reconnect_attempt_.load() > 0) {
         const long long since = connected_since_ms_.load();
         if (since > 0 && now - since > LINK_STABLE_MS) {
@@ -1142,19 +995,14 @@ void MuseBridgeService::service_auto_reconnect() {
     }
 
     // ── watchdog ──
-    // Measured from the later of the last packet and the connect itself, so
-    // the seconds a preset switch takes to restore streaming after CONNECTED
-    // do not read as a dead link.
+    // From the later of last packet and connect, so a preset switch's pause isn't a dead link.
     const long long liveness = liveness_timeout_ms();
     if (liveness > 0 && is_muse_connected() && !reconnect_in_flight_.load()) {
         const long long since = std::max(last_any_eeg_ms_.load(), connected_since_ms_.load());
         if (since > 0 && now - since > liveness) {
             std::cerr << "auto-reconnect: no EEG for " << (now - since)
                       << "ms while CONNECTED; treating the link as dropped\n";
-            // Through disconnect_muse() so the queues and device fields are
-            // reset exactly as for a reported drop. It sets connected_ false
-            // before the SDK call, so the resulting callback arms nothing --
-            // hence the explicit arm here.
+            // disconnect_muse() resets state, but its callback arms nothing, hence the explicit arm.
             disconnect_muse();
             arm_reconnect();
             return;
@@ -1183,14 +1031,8 @@ void MuseBridgeService::cancel_auto_reconnect() {
     reconnect_in_flight_.store(false);
     reconnect_exhausted_.store(false);
     reconnect_attempt_.store(0);
-    // Wait for an attempt in flight, and not only in stop(). Every command
-    // handler calls this and then drives the hardware on the main thread;
-    // without the join, "Stop trying" followed by "Connect" during an attempt
-    // is two concurrent connect_named() calls, and the attempt's compensating
-    // disconnect_muse() -- which is not targeted at the connection it made --
-    // could drop the link the person just established. Blocks the main loop
-    // for at most one connect_named() (~3s) and only on a command that
-    // arrived mid-attempt.
+    // Join, or the attempt's compensating disconnect_muse() could drop the link the person's
+    // next command makes. Blocks at most one connect_named() (~3s), only mid-attempt.
     if (reconnect_thread_.joinable() && reconnect_thread_.get_id() != std::this_thread::get_id()) {
         reconnect_thread_.join();
     }
@@ -1212,8 +1054,7 @@ ReconnectStatus MuseBridgeService::reconnect_status() const {
 
 #if defined(ENABLE_LIBMUSE)
 void MuseBridgeService::refresh_bluetooth_state() {
-    // Blocking .get() is safe here: this process has no message pump to
-    // stall (main() runs winrt::init_apartment() in MTA mode).
+    // Blocking .get() is safe: MTA, no message pump.
     try {
         using namespace winrt::Windows::Devices::Radios;
         for (const auto& radio : Radio::GetRadiosAsync().get()) {
@@ -1223,12 +1064,10 @@ void MuseBridgeService::refresh_bluetooth_state() {
             }
         }
     } catch (const winrt::hresult_error&) {
-        // Radio API unavailable/denied -- keep the last known value rather
-        // than reporting a false "Bluetooth is off".
+        // Radio API unavailable: keep the last known value.
         return;
     }
-    // No Bluetooth radio found: default to enabled so this diagnostic never
-    // masks the real cause of a failed scan.
+    // No radio found: report enabled so this never masks the real cause.
     bluetooth_enabled_.store(true);
 }
 #endif

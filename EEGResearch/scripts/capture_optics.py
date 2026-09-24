@@ -1,26 +1,9 @@
 #!/usr/bin/env python3
 """Capture a raw optical recording from the native bridge to a JSONL fixture.
 
-Lets heart-rate derivation be tested against a real recording instead of live
-hardware, since a headband session is slow and not reproducible.
-
-Talks to the bridge's TCP port directly rather than through the sidecar, so
-this stays a raw capture rather than a second copy of the sidecar's logic.
-
-Usage, with the bridge already running and connected:
-
-    python scripts/capture_optics.py --seconds 120 --out tests/fixtures/optics_rest_64hz.jsonl.gz
-
-`--out` ending in `.gz` is written gzipped, matching the committed fixture
-(a two-minute recording is ~640KB plain, ~97KB compressed).
-
-Each line is one optics frame:
-
-    {"seq": 1234, "mono_ts_ms": ..., "n": 4, "ch": [...]}
-
-`seq` is the bridge's sample counter. A gap means a sample was lost, which
-matters because the derivation rebuilds its time base from sample index --
-see tests/fixtures/README.md. This script warns when it finds a gap.
+Reads the bridge's TCP port directly (bridge running and connected); `.gz` output is gzipped
+(two minutes: ~640KB plain, ~97KB gzipped).
+One {"seq", "mono_ts_ms", "n", "ch"} frame per line; warns on a `seq` gap (time base is by index).
 """
 
 from __future__ import annotations
@@ -42,7 +25,6 @@ def main() -> int:
     ap.add_argument("--connect", default="", help="headband name to connect first")
     args = ap.parse_args()
 
-    # .gz by extension, matching the committed fixture's format.
     opener = gzip.open if args.out.endswith(".gz") else open
 
     count = 0
@@ -58,8 +40,7 @@ def main() -> int:
             sock.sendall(json.dumps({"cmd": "connect", "name": args.connect}).encode() + b"\n")
             print(f"connect requested: {args.connect}", file=sys.stderr)
 
-        # Written as frames arrive, not buffered, so a crash mid-capture
-        # doesn't lose everything recorded before it.
+        # Written as frames arrive, so a crash keeps what came before.
         with opener(args.out, "wt", encoding="utf-8") as fh:
             buf = b""
             started = time.time()
@@ -82,8 +63,7 @@ def main() -> int:
                         continue
                     if msg.get("kind") != "optics":
                         continue
-                    # .get() throughout: skip a malformed line rather than
-                    # abort the capture.
+                    # Skip a malformed line rather than abort.
                     if msg.get("mono_ts_ms") is None or msg.get("ch") is None:
                         continue
                     frame = {

@@ -25,56 +25,19 @@ dev = [
   "httpx>=0.27.0",
   "pip-tools>=7.5.0"
 ]
-# Camera capture. Optional is what keeps CI, the test suite and every
-# headband-only deployment unchanged: the sidecar imports and boots with none of
-# these installed, and only `connect()` on a face device needs them.
-#
-# Two packages, not three. There is deliberately no rPPG library here -- the
-# pulse extraction is ours (`pos_rppg`, POS from Wang et al. 2017), because every
-# packaged deep-learning rPPG carries weights trained on a dataset behind a
-# per-requester agreement and the classical ones fail on licence or packaging.
-# See the plan's Phase 4 dependency section before adding one.
-# opencv is held below 5.0 deliberately. `face_roi.FaceLocator` depends on
-# `cv2.data.haarcascades` shipping inside the wheel and on the CAP_PROP_*
-# constants used to lock exposure, and neither has been exercised against a 5.x
-# release here -- there is no OpenCV in CI, so a break would surface in front of
-# a class rather than in a test run. Lift the cap deliberately, with the manual
-# camera check from the plan's verification step, not by letting a resolver do
-# it silently.
-# **`opencv-contrib-python`, not `opencv-python`** -- one cv2 provider, not two.
-# They install the same `cv2` module, contrib being the superset, so having both
-# on a machine means whichever landed last owns the import. That is exactly what
-# `.[face,gaze]` produced: mediapipe requires opencv-contrib-python, `face`
-# required opencv-python, and the resolver happily installed 4.14 of one beside
-# 5.0 of the other -- silently defeating the cap below.
-#
-# The swap costs nothing this code uses: contrib ships the same
-# `cv2.data.haarcascades` and the same CAP_PROP_* constants. Verified in a clean
-# venv (cascade file present, `CascadeClassifier` non-empty, `FaceLocator`
-# constructs and runs) and then against a real camera -- see the manual check in
-# CLAUDE.md, which had to be re-run because that is the claim this changes.
+# Camera capture; optional, so the sidecar boots without it. No rPPG library: pulse is `pos_rppg`.
+# opencv < 5: `cv2.data.haarcascades` and CAP_PROP_* are unverified on 5.x and CI has no OpenCV.
+# `opencv-contrib-python`, never also `opencv-python`: both install `cv2` and the last one wins.
 face = [
   "opencv-contrib-python>=4.9.0,<5",
   "onnxruntime>=1.17.0"
 ]
 
-# Gaze, separately from `face`, because it is the only channel that needs
-# MediaPipe and it is off by default. Emotion and the colour path do not, and a
-# camera deployment that never enables gaze should not carry ~50 MB and a second
-# ML runtime for a channel it does not run. Install both: `.[face,gaze]`.
-#
-# Held below 2.0 for the same reason opencv is held below 5, and with a worked
-# example rather than a worry: **1.0.0 deleted `mp.solutions`**, the entire
-# legacy Solutions API, which is what `face_landmarks` was originally written
-# against. The symptom was `AttributeError: module 'mediapipe' has no attribute
-# 'solutions'`, which reads as a broken install. There is no MediaPipe in CI, so
-# the next major would surface the same way -- in front of a class.
+# Gaze only needs MediaPipe (~50 MB, off by default). Install `.[face,gaze]`.
+# < 2: majors break the API (1.0 removed `mp.solutions`) and CI has no MediaPipe.
 gaze = [
   "mediapipe>=1.0,<2",
-  # mediapipe's own dependency, restated here so the cap is visible at the point
-  # someone would lift it. `face` now pins the same distribution, so this is one
-  # package with one version rather than two providers of `cv2` racing to own
-  # the import -- which is what an unconstrained mediapipe produced.
+  # mediapipe's own dependency, restated so the cap matches `face`'s.
   "opencv-contrib-python>=4.9.0,<5"
 ]
 

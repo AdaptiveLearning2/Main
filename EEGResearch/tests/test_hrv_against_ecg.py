@@ -1,44 +1,4 @@
-"""Validates heart rate and RMSSD against a simultaneous single-lead ECG at
-500 Hz, recorded over the same seconds as `optics_ecg_paired.jsonl.gz` -- the
-only ground truth in this repo, versus derivations or plausibility checks
-elsewhere.
-
-Alignment was by wall clock: each ECG's `Created time` landed a consistent
-35s after the mark taken when the reading started, across all three, so the
-offset is derived rather than assumed.
-
-Personal identifiers were removed from the CSV headers before committing.
-
-What this establishes
----------------------
-Heart rate is right: within 1 bpm on all three windows.
-
-RMSSD is close on two of three windows (33.7 vs 31.5 and 33.2 vs 31.3, both
-within 7%) and 50% high on the third (49.9 vs 33.3). Nothing in-window
-distinguishes the bad one: coverage 0.97 vs 1.01, rate confidence 1.00 in both.
-
-Two reference spreads give the errors context:
-
-  - **2.0 ms** across the three paired readings, spanning 95 seconds -- the
-    true value is near-constant at that scale, so the 29-63 ms spread the
-    derivation produces over the same recording is its own error.
-  - **9.7 ms** across six readings spanning 19 minutes, as heart rate drifts
-    70 to 75. So "RMSSD is stable" only holds at short timescales; a
-    tolerance from the first number shouldn't be applied to values minutes
-    apart.
-
-**The 9.7 ms figure is an underestimate.** A later, denser capture across
-4.5 minutes (test_hrv_against_dense_ecg.py) measured a 29.2-48.9 ms range. The
-2.0 ms figure here should not be read as evidence that a value varying over
-minutes must be wrong.
-
-Against those references, the two good windows are off by 2.2 and 1.9 ms --
-inside the reference's own short-term noise. The third is off by 16.6 ms.
-
-**The 50% outlier did not recur.** The denser capture found all five reported
-windows within 15%, so this looks like one bad window in one recording rather
-than a characteristic failure. It's still pinned below as a known case.
-"""
+"""Heart rate and RMSSD against a simultaneous 500 Hz single-lead ECG over `optics_ecg_paired.jsonl.gz`."""
 
 from __future__ import annotations
 
@@ -64,11 +24,7 @@ ECG_FS = 500.0
 PAIRS = [("ecg_ref_t40.csv.gz", 40), ("ecg_ref_t93.csv.gz", 93),
          ("ecg_ref_t136.csv.gz", 136)]
 
-# Recorded outside the optics capture, so they pair with nothing -- used only
-# to see how much real RMSSD moves. Six readings over 19 minutes give
-# 24.2-33.9ms; the three paired ones, spanning 95 seconds, give 31.3-33.3ms.
-# The short-term figure says what the estimator must beat; the long-term one
-# says what a session-level average may legitimately drift by.
+# Recorded outside the optics capture: used only to see how much real RMSSD drifts over 19 minutes.
 UNPAIRED = ["ecg_unpaired_before.csv.gz", "ecg_unpaired_after1.csv.gz",
             "ecg_unpaired_after2.csv.gz"]
 WINDOW_S = 30
@@ -81,10 +37,7 @@ def _load_ecg(name: str) -> np.ndarray:
 
 
 def _ecg_beats(x: np.ndarray) -> list[float]:
-    """Finds R-peak times, using a different algorithm than the optical beat
-    detector so a shared bug can't agree with itself. Validated against the
-    watch's own reported average heart rate (71.8 vs 71 on the first
-    recording)."""
+    """Finds R-peak times with a different algorithm than the optical detector, so a shared bug cannot agree with itself."""
     b, a = butter(3, [5 / (ECG_FS / 2), 40 / (ECG_FS / 2)], btype="band")
     y = filtfilt(b, a, x)
     y = np.abs(y / np.std(y))
@@ -107,7 +60,6 @@ def _optics(offset_s: int):
 
 @pytest.mark.parametrize("ecg_name,offset", PAIRS)
 def test_heart_rate_matches_the_ecg(ecg_name, offset):
-    """The strong result, and the one a product could rely on today."""
     beats = _ecg_beats(_load_ecg(ecg_name))
     ecg_bpm = 60.0 / np.median(np.diff(beats))
     rate, _ = _optics(offset)
@@ -115,17 +67,14 @@ def test_heart_rate_matches_the_ecg(ecg_name, offset):
 
 
 def test_the_true_rmssd_barely_moves_over_the_paired_window():
-    """Three readings over 95 seconds agree to within 2ms, so any wider spread
-    in a derived value over the same recording is error, not physiology."""
+    """Over 95 s, wider spread in a derived value is error, not physiology."""
     values = [rmssd_from_beats(_ecg_beats(_load_ecg(name)))[0]
               for name, _ in PAIRS]
     assert max(values) - min(values) < 5.0, f"ECG RMSSD varied: {values}"
 
 
 def test_the_true_rmssd_does_move_over_twenty_minutes():
-    """Six readings over 19 minutes span 24.2-33.9ms while heart rate drifts
-    70 to 75, so "RMSSD is stable" only holds at the timescale the paired
-    windows above cover -- a tolerance from that scale can't apply here."""
+    """A tolerance from the 95 s scale cannot apply to values minutes apart."""
     values = [rmssd_from_beats(_ecg_beats(_load_ecg(name)))[0]
               for name, _ in PAIRS]
     values += [rmssd_from_beats(_ecg_beats(_load_ecg(name)))[0]
@@ -138,12 +87,7 @@ def test_the_true_rmssd_does_move_over_twenty_minutes():
 
 
 def test_the_two_good_windows_are_within_the_references_own_noise():
-    """Absolute errors on the two good windows are 2.2 and 1.9ms, against a
-    reference whose own three readings span 2.0ms over the same period -- the
-    estimator is at the reference's noise floor there; a tighter claim would
-    need a better reference. The third window is off by 16.6ms, larger than
-    the entire 19-minute physiological range -- a bimodal failure, not a bias
-    to calibrate out."""
+    """The outlier is bimodal, not a bias to calibrate out."""
     errors = []
     for name, offset in PAIRS:
         ecg_rmssd, _ = rmssd_from_beats(_ecg_beats(_load_ecg(name)))
@@ -157,13 +101,7 @@ def test_the_two_good_windows_are_within_the_references_own_noise():
 
 
 def test_rmssd_is_close_on_most_windows_and_wrong_on_one():
-    """Two windows land within 7% of a simultaneous ECG; the third is 50%
-    high, with nothing available in the window to distinguish it (coverage
-    0.97 vs 1.01, rate confidence 1.00 in both). A rolling median doesn't
-    rescue it either, since overlapping windows carry one contaminating beat
-    into all of them. Asserted as "most windows, not all" -- a blanket
-    tolerance would either fail on real data or assert nothing. If this ever
-    passes for all three, tighten it."""
+    """Nothing in-window distinguishes the bad one; if all three ever pass, tighten this."""
     errors = []
     for name, offset in PAIRS:
         ecg_rmssd, _ = rmssd_from_beats(_ecg_beats(_load_ecg(name)))
@@ -182,8 +120,6 @@ def test_rmssd_is_close_on_most_windows_and_wrong_on_one():
 
 
 def test_the_relative_filter_is_what_makes_this_close():
-    """Without the relative filter, the same windows are unusable against the
-    same reference."""
     data, fs = _load("optics_ecg_paired.jsonl.gz")
     from src.app.services.hrv_processing import consensus_beats
 

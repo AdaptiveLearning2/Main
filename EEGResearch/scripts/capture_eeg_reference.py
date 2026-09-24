@@ -1,43 +1,9 @@
 #!/usr/bin/env python3
 """Capture a labelled EEG reference for scoring focus / calm / confidence.
 
-Nothing in the shipped pipeline has ground truth for the cognitive scores:
-the simulator emits band values solved *from* the scoring formulas, so every
-green test on that path is the formula agreeing with itself. This script
-records what a real headband produces while the wearer does known things
-(eyes closed, mental arithmetic, a jaw clench, ...) so the formulas can be
-scored against something they did not generate. See HANDOFF.md, Phase 0.
-
-Two sources, because the bridge accepts exactly one TCP client:
-
-* ``--source sidecar`` (default) polls the sidecar's ``/api/v1/state`` and
-  writes one row per sidecar tick -- the SDK band values, contact, the raw
-  log ratios *before* baseline scaling, the scaled scores, confidence,
-  quality and the label. This is what Phase 0 scores. It needs the sidecar
-  running with ``EEG_SOURCE=muse`` (``./start.ps1 -Muse``).
-* ``--source bridge`` connects to the native bridge directly and records
-  every 256 Hz EEG frame, each carrying the band values and contact the
-  bridge stamps on it. The sidecar must **not** be connected to the bridge
-  at the time, because it would hold the one client slot. Features can be
-  recovered from such a capture by replaying it through ``SignalProcessor``.
-
-Each row carries a ``segment`` set by a prompted protocol: the script says
-what to do, waits for Enter, then times the segment. ``--protocol
-closed_open`` runs the two rest segments only, about five minutes, which is
-what the raw capture needs; ``--protocol none`` with ``--seconds N`` records
-a free-running capture instead.
-
-Usage, sidecar running and the headband paired with good contact::
-
-    python scripts/capture_eeg_reference.py --out ../../eeg_captures/2026-09-07_a.jsonl
-
-``--summarize PATH`` re-reads a sidecar capture and prints the per-segment
-figures without recording anything.
-
-**The output must be outside the repository.** A named person's EEG is the
-one artefact here that must never be committable, and ``git add -A`` does
-not ask. Nothing about who the wearer is goes into the file: no name, no
-account, only a date and the protocol.
+``--source sidecar`` polls ``/api/v1/state`` per tick (needs ``./start.ps1 -Muse``); ``--source
+bridge`` records every 256 Hz frame and needs the sidecar off the bridge (one client only).
+Output must be outside the repository, and carries no wearer identity.
 """
 
 from __future__ import annotations
@@ -58,19 +24,11 @@ from typing import Any
 
 SCRIPT_VERSION = 1
 
-# (segment, seconds, instruction). HANDOFF.md Phase 0 step 3. Names are
-# what the summary groups on; keep them stable across captures so two
-# days' numbers line up.
+# (segment, seconds, instruction). The summary groups on these names; keep them stable.
 DEFAULT_PROTOCOL: list[tuple[str, int, str]] = [
     ("eyes_closed_rest", 120, "Close your eyes and rest. Stay still."),
     ("eyes_open_rest", 120, "Eyes open, rest, look at a blank wall."),
-    # Silently, and the prompt has to say so on screen. Aloud on the first
-    # capture, speech muscle raised beta by 0.08 *with gamma by 0.10* and
-    # halved good contact (2.5 channels to 1.5), so the segment measured
-    # talking rather than thinking -- and the local calm is an alpha
-    # residual at the temporal pair, which broadband EMG corrupts outright.
-    # The 2026-09-14 raw capture was done silently for that reason while
-    # this prompt still said aloud; a second wearer reads the prompt.
+    # Silently: speech EMG corrupts beta, gamma and the temporal alpha residual (EEG_REFERENCE.md).
     ("arithmetic", 120, "Mental arithmetic SILENTLY -- do not speak or move your "
                         "jaw: multiply two-digit numbers (47 x 23, 68 x 19, ...), "
                         "one after another. Write nothing down."),
@@ -84,23 +42,13 @@ DEFAULT_PROTOCOL: list[tuple[str, int, str]] = [
 SESSION_SEGMENT: tuple[str, int, str] = (
     "adaptive_session", 120, "Answer questions on the student page as normal.",
 )
-# `--protocol closed_open`: the two rest segments and nothing else, about
-# five minutes on a wearer. Enough on its own for the questions the raw
-# capture is for -- whether the temporal alpha separation holds on a second
-# person, and both local-calm decisions, which read off the eyes-closed and
-# eyes-open columns of `replay_raw_capture.py --matrix`. **Sliced from
-# DEFAULT_PROTOCOL rather than restated**, so the prompt text and the
-# durations cannot drift from the long run this is compared against.
-# Selecting it is what keeps the header honest: `header()` records the
-# protocol it is given, so running the long one and stopping after two
-# segments would write a file claiming seven segments nobody performed.
+# The two rest segments (~5 min), sliced rather than restated so prompts and durations can't drift.
 CLOSED_OPEN_PROTOCOL: list[tuple[str, int, str]] = DEFAULT_PROTOCOL[:2]
 # Rows recorded while waiting for Enter, or with no protocol at all.
 BETWEEN = "between"
 FREE = "free"
 
-# The features the summary reports per segment, in print order. Raw ratios
-# first: they are what Phase 0 exists to look at.
+# Summary columns in print order, raw ratios first.
 SUMMARY_FIELDS = (
     "focus_log_ratio", "calm_log_ratio",
     "focus_log_ratio_smoothed", "calm_log_ratio_smoothed",
@@ -116,8 +64,7 @@ def repo_root() -> pathlib.Path:
 
 
 def refuse_if_inside_repo(out: pathlib.Path) -> None:
-    """A capture must not land anywhere git can reach it -- same guard as
-    capture_face_video_ecg.py, for the same reason."""
+    """A capture must not land anywhere git can reach it."""
     root = repo_root().resolve()
     try:
         out.resolve().relative_to(root)
@@ -136,12 +83,7 @@ def _opener(path: str):
 # -- rows --
 
 def flatten_state(envelope: dict[str, Any], *, segment: str, t: str) -> dict[str, Any]:
-    """One flat row from a /api/v1/state envelope.
-
-    `.get` throughout and None for anything absent: an older sidecar that
-    does not report `focus_log_ratio` produces a column of nulls, which is
-    distinguishable from a ratio of 0.0 -- the summary counts the two apart.
-    """
+    """One flat row from a /api/v1/state envelope; None for absent fields, never 0.0."""
     data = envelope.get("data") or {}
     features = data.get("features") or {}
     state = data.get("state") or {}
@@ -182,11 +124,7 @@ def flatten_state(envelope: dict[str, Any], *, segment: str, t: str) -> dict[str
         "quality_basis": features.get("quality_basis"),
         "samples_rejected": features.get("samples_rejected"),
         "batch_size": features.get("batch_size"),
-        # Phase 1 diagnostics: the smoothed contact behind the quality
-        # verdict, the artifact gate's count and reason, and the smoothed
-        # ratios the scores were scaled from. tests/test_capture_eeg_reference
-        # derives the full list from schemas.FeatureData so a field added
-        # there cannot be missing here.
+        # A test derives this list from schemas.FeatureData, so new fields must be added here.
         "contact_ratio": features.get("contact_ratio"),
         "samples_artifact": features.get("samples_artifact"),
         "samples_no_delta": features.get("samples_no_delta"),
@@ -226,19 +164,9 @@ def header(args: argparse.Namespace, protocol: list[tuple[str, int, str]]) -> di
 class SlopeMonitor:
     """Reports the aperiodic (1/f) slope of the temporal pair while recording.
 
-    The second wearer's capture was scored afterwards and found to carry
-    broadband power that flattened the slope to −0.65 at rest, where the
-    first wearer's rest sat at −1.24 and only a *deliberate jaw clench*
-    reached −0.49. That is what muscle looks like, it sits on top of the
-    alpha band the local calm is built from, and electrode contact was good
-    throughout — so nothing on screen during the session said anything was
-    wrong, and five minutes of a person's time bought an uninterpretable
-    file. A slope read live is the one number that would have caught it.
-
-    Warns rather than aborts. The threshold comes from two adults, which is
-    not enough to refuse someone's recording over, and a flat slope can also
-    be a strap sitting low on the temporalis or an ordinary difference
-    between people. It says what it sees and leaves the call to the operator.
+    A flat slope means broadband muscle power over the calm alpha band, invisible in contact
+    quality (wearer 2 rested at −0.65 vs −1.24; a jaw clench reads −0.49). Warns, never aborts:
+    the threshold comes from two adults.
     """
 
     def __init__(self, window_seconds: float = 8.0, warn_above: float = -1.0) -> None:
@@ -251,8 +179,7 @@ class SlopeMonitor:
         self._pushed = 0
 
     def _load(self) -> bool:
-        """numpy and the sidecar's spectrum helpers, imported on first use so
-        `--summarize` and the sidecar source keep running without them."""
+        """Lazy import of numpy and the spectrum helpers; `--summarize` runs without them."""
         if self._deps is not None:
             return True
         if self._off:
@@ -274,9 +201,7 @@ class SlopeMonitor:
     def push(self, frame: dict[str, Any]) -> None:
         if not self._load():
             return
-        # Every frame, whatever its channels carry. This is the only thing
-        # that separates "the recording has just started" from "frames are
-        # arriving and none of them is usable" -- see line().
+        # Every frame counts, usable or not: separates "just started" from "nothing usable".
         self._pushed += 1
         cap = int(self.window_seconds * (self._fs or 256.0))
         for c in self._buf:
@@ -288,9 +213,7 @@ class SlopeMonitor:
                     del buf[:len(buf) - cap]
 
     def slope(self) -> float | None:
-        """Mean 1/f slope over the temporal pair, or None until the window
-        has filled. Never raises: a diagnostic must not be able to kill the
-        recording it is describing."""
+        """Mean temporal-pair 1/f slope, or None until the window fills. Never raises."""
         if not self._load():
             return None
         np, one_over_f_fit, welch_log_psd, _ = self._deps
@@ -309,33 +232,18 @@ class SlopeMonitor:
         return sum(slopes) / len(slopes) if slopes else None
 
     def _filled(self) -> dict[str, int]:
-        """Buffered samples per temporal channel, for telling a window that
-        is still filling from one a channel has stopped feeding."""
+        """Buffered samples per temporal channel."""
         return {c: len(buf) for c, buf in self._buf.items()} if self._deps else {}
 
     def line(self) -> str | None:
-        """One line for the progress output, or None only while the window is
-        still filling — the one state with nothing to say.
+        """One progress line, or None only while the window is still filling.
 
-        **A slope that cannot be computed gets its own line rather than
-        silence.** Returning None for both left a starved temporal electrode
-        looking exactly like the opening seconds of a recording: frame counts
-        ticking and no slope, which is the experience this class exists to
-        end. It bites hardest here because calm is an alpha residual at the
-        temporal pair, so a dead or badly seated temporal contact is both the
-        likeliest way to ruin a capture and the way to silence the check.
-        `_load()` already speaks up when the imports fail; this is the
-        per-read failure, which had no voice.
+        An uncomputable slope gets its own line, so a starved temporal contact is not silent.
         """
         if not self._load():
             return None
         need = int(self.window_seconds * (self._fs or 256.0))
-        # **Frames seen, never samples buffered.** Deciding from the fullest
-        # channel scoped this to one dead contact: with both starved the
-        # fullest is also empty, so the broken state and an ordinary start
-        # were one output for the whole capture -- and both at once is the
-        # likelier shape, since a strap that is off or riding high kills the
-        # pair together, and calm is an alpha residual at that pair.
+        # Frames seen, not samples buffered: with both contacts starved, buffers never fill.
         if self._pushed < need:
             return None
         s = self.slope()
@@ -430,8 +338,7 @@ def capture_sidecar(args: argparse.Namespace, clock: SegmentClock, fh) -> int:
                 print(f"  state read failed ({errors}): {exc}", file=sys.stderr)
             env = {"status": "error", "message": str(exc), "data": None}
         row = flatten_state(env, segment=clock.segment, t=t)
-        # Polling faster than the sidecar ticks means seeing one tick twice;
-        # the tick's own timestamp says which reads are new.
+        # Polling faster than the tick rate sees ticks twice; the tick timestamp dedupes.
         if row["ts"] is not None and row["ts"] == last_ts and not args.keep_duplicates:
             dupes += 1
         else:
@@ -465,8 +372,7 @@ def capture_bridge(args: argparse.Namespace, clock: SegmentClock, fh) -> int:
     last_ms: float | None = None
     deadline = None if args.seconds is None else time.monotonic() + args.seconds
     last_report = time.monotonic()
-    # Read live, because afterwards is too late: a contaminated capture looks
-    # entirely normal while it is being recorded.
+    # Live, because a contaminated capture looks normal while recording.
     monitor = None if args.no_slope_check else SlopeMonitor(warn_above=args.slope_warn)
     try:
         sock.settimeout(1.0)
@@ -493,8 +399,7 @@ def capture_bridge(args: argparse.Namespace, clock: SegmentClock, fh) -> int:
                 kind = msg.get("kind")
                 if kind not in ("eeg", "status"):
                     continue
-                # The frame as sent, plus when and during what. Band values
-                # and contact ride on every EEG frame already.
+                # The frame as sent, plus when and during which segment.
                 msg["t"] = datetime.now(timezone.utc).isoformat()
                 msg["segment"] = clock.segment
                 fh.write(json.dumps(msg) + "\n")
@@ -537,9 +442,7 @@ def _stats(values: list[float]) -> tuple[float | None, float | None]:
 
 
 def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Per-segment mean and spread of each score, with None counted apart
-    from zero: a null ratio is a frame with no usable bands, and folding it
-    into the mean as 0 would make bad contact read as low focus."""
+    """Per-segment mean and spread of each score; None is counted apart, never averaged as 0."""
     segments: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for row in rows:
@@ -568,11 +471,7 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         out["segments"][seg] = {
             "rows": s["rows"], "labels": s["labels"], "quality": s["quality"], "fields": fields,
         }
-    # What the baseline latched on. Under the pre-Phase-1 processor that was
-    # the first 60 usable ticks, so the first 60 rows with a ratio say what
-    # the wearer was doing then; it is now 45 s of at-least-degraded
-    # contact, which the replay harness reports directly. Kept as the
-    # capture's own approximation.
+    # Approximate baseline window: the first 60 usable ticks (the replay harness reports the real one).
     usable = [r for r in rows if isinstance(r.get("focus_log_ratio"), (int, float))]
     first = usable[:60]
     latch: dict[str, int] = {}
@@ -682,8 +581,7 @@ def main(argv: list[str] | None = None) -> int:
                          kwargs={"prompt": not args.no_prompt}, daemon=True).start()
 
     out.parent.mkdir(parents=True, exist_ok=True)
-    # Written as rows arrive, not buffered, so a crash mid-capture keeps
-    # everything recorded before it.
+    # Written as rows arrive, so a crash keeps everything before it.
     with _opener(args.out)(args.out, "wt", encoding="utf-8") as fh:
         fh.write(json.dumps(header(args, protocol)) + "\n")
         if args.source == "sidecar":

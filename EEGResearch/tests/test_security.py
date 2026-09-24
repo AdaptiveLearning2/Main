@@ -6,13 +6,7 @@ from src.app.main import app
 
 
 def _send_with_raw_authorization(client: TestClient, auth_value: bytes):
-    """Send a request with a raw (possibly non-ASCII) Authorization header.
-
-    httpx's normal header API rejects non-ASCII str values before sending, so
-    a plain `client.get(headers=...)` can't reproduce what a non-Python client
-    puts on the wire. Building the request and replacing its raw header bytes
-    bypasses that client-side validation.
-    """
+    """Send raw Authorization bytes, bypassing httpx's client-side non-ASCII rejection."""
     request = client.build_request("GET", "/api/v1/state")
     raw = list(request.headers.raw)
     raw.append((b"authorization", auth_value))
@@ -21,9 +15,7 @@ def _send_with_raw_authorization(client: TestClient, auth_value: bytes):
 
 
 def test_state_rejects_non_ascii_bearer_token_with_401():
-    # A byte >= 0x80 arrives as a non-ASCII str (Starlette decodes headers as
-    # latin-1), which crashes secrets.compare_digest -- must be a 401, not a
-    # 500.
+    # Starlette decodes latin-1, and a non-ASCII str crashes secrets.compare_digest: 401, not 500.
     client = TestClient(app)
     response = _send_with_raw_authorization(client, b"Bearer caf\xe9")
     assert response.status_code == 401
@@ -36,8 +28,7 @@ def test_state_rejects_high_byte_bearer_token_with_401():
 
 
 def test_state_still_accepts_correct_token_via_raw_path():
-    # Confirms the raw-header send path itself isn't what causes the 401s
-    # above -- a valid token through the same path must succeed.
+    # The raw-header path itself is not what causes the 401s above.
     client = TestClient(app)
     settings = get_settings()
     response = _send_with_raw_authorization(
@@ -47,11 +38,7 @@ def test_state_still_accepts_correct_token_via_raw_path():
 
 
 # ── require_local_controller: the mode decides who may drive the hardware ──
-#
-# Under `pull`, the backend polls this sidecar and drives hardware for the
-# student, so pairing stays admin-only. Under `push` the backend is remote and
-# refuses those operations, so the student's own page must be allowed to
-# reach their headband instead. These tests pin that widening to push only.
+# Pull: pairing is admin-only. Push: the learner token may pair too, since the backend is remote.
 
 import pytest  # noqa: E402
 
@@ -81,8 +68,7 @@ def test_the_admin_token_drives_the_hardware_in_either_mode(monkeypatch, _fresh_
 
 
 def test_under_pull_the_learner_token_may_not_drive_the_hardware(monkeypatch, _fresh_settings):
-    """Under pull, the backend is the legitimate controller and holds the
-    admin token -- the browser gains nothing from this dependency."""
+    """Under pull the backend holds the admin token and is the controller."""
     monkeypatch.setenv("PUSH_ENABLED", "false")
     _fresh_settings()
     s = get_settings()
@@ -93,8 +79,7 @@ def test_under_pull_the_learner_token_may_not_drive_the_hardware(monkeypatch, _f
 
 
 def test_under_push_the_learner_token_may(monkeypatch, _fresh_settings):
-    """Without this, push has no pairing path: the browser holds only the
-    learner token, and every start/scan/connect endpoint would answer 401."""
+    """The browser holds only the learner token; without this, push has no pairing path."""
     monkeypatch.setenv("PUSH_ENABLED", "true")
     _fresh_settings()
     s = get_settings()
@@ -103,8 +88,7 @@ def test_under_push_the_learner_token_may(monkeypatch, _fresh_settings):
 
 
 def test_push_does_not_admit_an_unrelated_token(monkeypatch, _fresh_settings):
-    """Push widens which token is accepted, not whether a valid one is
-    required."""
+    """Push widens which token is accepted, not whether one is required."""
     monkeypatch.setenv("PUSH_ENABLED", "true")
     _fresh_settings()
 
@@ -117,8 +101,7 @@ def test_push_does_not_admit_an_unrelated_token(monkeypatch, _fresh_settings):
 
 
 def test_the_learner_only_routes_did_not_become_admin_routes(monkeypatch, _fresh_settings):
-    """`/api/v1/state` and the push endpoints must stay learner-readable in
-    both modes -- widening the pairing routes must not narrow anything else."""
+    """Widening the pairing routes must not narrow `/api/v1/state`."""
     monkeypatch.setenv("PUSH_ENABLED", "false")
     _fresh_settings()
     s = get_settings()

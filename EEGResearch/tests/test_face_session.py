@@ -1,13 +1,4 @@
-"""Tests that a `face` device produces a payload, tick after tick.
-
-Every piece of the camera pipeline had its own tests and worked in isolation,
-but `DeviceSession` had no face branch: the loop reached for `sample.channel_tp9`
-on a `FaceSample`, raised on every tick, and the generic handler swallowed the
-error into a warning. The session looked alive and produced nothing.
-
-Unit tests over every stage individually can't catch a missing seam between
-them -- these tests cover the seam.
-"""
+"""A `face` device must produce a payload through `DeviceSession`, not just pass each stage alone."""
 
 from __future__ import annotations
 
@@ -40,8 +31,7 @@ class FakeFaceAdapter:
         self.emotion_enabled = emotion_enabled
         self._emotion = emotion
         self._measured = measured
-        # Colour is generated at the rate the adapter reports, so the fake stays
-        # self-consistent (a claimed 22 fps must carry colour sampled at 22 fps).
+        # Colour is sampled at the reported rate, so a claimed 22 fps carries 22 fps colour.
         t = np.arange(int(seconds * measured)) / measured
         base = np.array([180.0, 120.0, 110.0])
         wave = 0.005 * np.sin(2 * np.pi * bpm / 60.0 * t)
@@ -79,12 +69,7 @@ def _session(adapter, **kw) -> DeviceSession:
 
 
 def _tick(session: DeviceSession) -> dict:
-    """Runs the loop until it produces a payload, and snapshots it.
-
-    Snapshotted before stop(), since stop() replaces latest_payload with the
-    no-signal shape -- a stopped session must not keep reporting its last live
-    reading. Reading it after stop() would measure teardown, not the tick.
-    """
+    """Runs the loop until it produces a payload, snapshotted before stop() resets it."""
     captured: dict = {}
 
     async def run():
@@ -101,8 +86,6 @@ def _tick(session: DeviceSession) -> dict:
 
 
 def test_a_face_device_produces_a_payload_rather_than_erroring():
-    """Before the face branch existed, this raised AttributeError every tick
-    and the error was swallowed into a warning."""
     session = _session(FakeFaceAdapter(emotion=EmotionResult("happy", 0.9, True)))
     payload = _tick(session)
 
@@ -121,10 +104,7 @@ def test_the_heart_block_carries_a_rate_from_the_camera():
 
 
 def test_a_camera_running_slow_still_reports_the_right_rate():
-    """A camera configured for 30 fps but delivering 22 must report 72, not 98
-    -- a time base built from sample index instead of timestamps would scale
-    the bpm by 30/22 (+36% error). The camera's actual rate is a valid input,
-    not a fault to gate on."""
+    """An index time base would scale 72 bpm by 30/22."""
     session = _session(FakeFaceAdapter(bpm=72.0, measured=22.0))
     payload = _tick(session)
 
@@ -133,7 +113,6 @@ def test_a_camera_running_slow_still_reports_the_right_rate():
 
 
 def test_a_frame_rate_below_nyquist_is_refused():
-    """Resampling can't manufacture a signal that was never sampled."""
     session = _session(FakeFaceAdapter(bpm=72.0, measured=6.0))
     payload = _tick(session)
 
@@ -142,10 +121,6 @@ def test_a_frame_rate_below_nyquist_is_refused():
 
 
 def test_the_emotion_block_reaches_the_payload():
-    """FER+ was previously unreachable in production: build_ingestion_adapter
-    passed neither emotion_enabled nor a model path, so the classifier was
-    never constructed, even though both launchers downloaded and verified
-    35 MB for it."""
     session = _session(FakeFaceAdapter(emotion=EmotionResult("sad", 0.81, True)))
     payload = _tick(session)
 
@@ -162,8 +137,7 @@ def test_a_disabled_channel_is_absent_from_the_payload():
 
 
 def test_the_payload_omits_eeg_fields_rather_than_faking_them():
-    """A camera has no electrode channels and no cognitive state. Empty fields
-    for them would let a caller average them into an EEG session's numbers."""
+    """Empty EEG fields could be averaged into an EEG session's numbers."""
     payload = _tick(_session(FakeFaceAdapter()))
 
     for absent in ("channels", "features", "state", "question_policy"):
@@ -173,8 +147,6 @@ def test_the_payload_omits_eeg_fields_rather_than_faking_them():
 
 
 def test_the_factory_passes_the_emotion_settings_through():
-    """build_ingestion_adapter previously dropped emotion_enabled, so the
-    setting existed but changed nothing."""
     from src.app.services.eeg_ingestion import build_ingestion_adapter
 
     adapter = build_ingestion_adapter(
@@ -194,13 +166,7 @@ def test_the_factory_passes_the_emotion_settings_through():
 # ── the API boundary ─────────────────────────────────────────────────────────
 
 def test_a_face_device_serves_state_over_the_api_without_a_500():
-    """`_face_payload` deliberately omits channels/features/state/question_policy,
-    but `InterpretedEegData` still declared all four as required, so
-    `Envelope(data=snapshot)` raised a ValidationError and every
-    GET /api/v1/state for a camera returned 500. Unit tests missed this because
-    they asserted on `latest_payload` directly and never went through the
-    envelope.
-    """
+    """Goes through `Envelope`, which a `latest_payload` assertion never reaches."""
     from fastapi.testclient import TestClient
 
     from src.app.config import get_settings
@@ -231,13 +197,7 @@ def test_a_face_device_serves_state_over_the_api_without_a_500():
 
 
 def test_an_eeg_payload_still_serves_as_an_eeg_payload():
-    """The union must not resolve an EEG record to the camera model. It did at
-    first: CameraData had fewer required fields and pydantic ignores extras,
-    so an EEG payload validated as a camera and `channels`/`features`/`state`
-    were silently dropped. The required `kind` discriminator prevents this --
-    a default value wouldn't work, since an EEG payload with no kind would
-    just take it.
-    """
+    """Pydantic ignores extras, so without a required `kind` an EEG payload validates as CameraData."""
     from src.app.schemas import CameraData, Envelope, InterpretedEegData
 
     camera = _tick(_session(FakeFaceAdapter()))

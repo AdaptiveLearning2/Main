@@ -1,40 +1,9 @@
-"""Our own spectrum from the raw 256 Hz stream, and the one number it is for.
+"""Our own spectrum from the raw 256 Hz stream, for the local `calm`.
 
-The SDK's band powers are a four-channel average of raw power, and on this
-headband at the contact the product actually gets they could not see the
-alpha rhythm that is plainly there in the raw stream: eyes closed, TP9 and
-TP10 carry a 10 Hz peak 4.6x above the 1/f background that is absent eyes
-open (tests/fixtures/EEG_REFERENCE.md, raw-stream capture). Two things hide
-it from the SDK figure -- the frontal channels do not carry it and dilute the
-average, and raw band power is dominated by the aperiodic 1/f slope, which
-moves more between the two states than any band does.
-
-So this measures alpha the other way round: per channel, at the temporal pair
-only, as the residual of log10 power over 8-12 Hz above a 1/f fit made with
-the alpha band excluded. That residual separated eyes closed from open at AUC
-0.92 on 4 s epochs -- the same 4 s the ratio smoothing already uses -- and is
-what `calm` reads when `EEG_SPECTRUM_SOURCE=local`. It is a *calm* marker
-only: silent arithmetic raised neither beta nor gamma on the same capture, so
-nothing here claims to measure effort, and `focus` stays on the SDK ratio,
-documented as unmeasured. The 1/f slope separates the two states even more
-than the residual does, and is carried on the payload for comparison, but is
-not scored: whether that separation is neural or the blink rate is not
-something one capture can say.
-
-Welch over 2 s Hann windows with 50% overlap on a 4 s buffer, numpy only, a
-few hundred microseconds per tick. Only the two temporal channels are
-buffered. The buffer is by sample count at the bridge's nominal rate: the
-bridge's timestamps record BLE delivery, not sampling (CLAUDE.md, the heart
-window), so they cannot place a sample and the count is the only index --
-but their *span* over a full buffer is checked against what 256 Hz would
-give, and an estimate is refused when it is far off. Without that the
-simulator's one sample per 4 Hz tick filled the buffer with 256 s of signal
-analysed as four, and published a plausible residual with nothing behind it.
-A signal-loss reset empties the buffer, so two recordings are never windowed
-as one, and an artifact tick poisons the buffer until the samples it landed
-on have left it: measured, one blink moved the residual further than the
-whole eyes-open to eyes-closed effect, and the gate holds only the tick it
-landed on.
+Alpha is measured per channel at the temporal pair only, as the residual of log10
+power over 8-12 Hz above a 1/f fit that excludes the alpha band. A calm marker only;
+the 1/f slope is carried for comparison, not scored. Welch, 2 s Hann, 50% overlap,
+4 s buffer. See docs/signals.md for the measurements and gates.
 """
 
 from __future__ import annotations
@@ -49,10 +18,8 @@ import numpy as np
 SAMPLE_RATE_HZ = 256.0
 EPOCH_SECONDS = 4.0
 WINDOW_SECONDS = 2.0
-# The fit range and the band it must not see: fitting through the alpha
-# band would absorb the peak into the slope, which is the whole mistake a raw
-# band ratio makes. 2 Hz is above the blink and drift power the fit must not
-# chase either; 40 Hz stays under the notch and the EMG-dominated top.
+# Fit range (Hz), excluding alpha so the peak is not absorbed into the slope;
+# 2 Hz clears blink/drift power, 40 Hz stays under the notch and EMG.
 FIT_LO_HZ, FIT_HI_HZ = 2.0, 40.0
 FIT_EXCLUDE_HZ = (7.0, 13.0)
 ALPHA_HZ = (8.0, 12.0)
@@ -60,16 +27,15 @@ ALPHA_HZ = (8.0, 12.0)
 TEMPORAL = ("tp9", "tp10")
 # The bridge's channel order, for indexing hsi/is_good.
 CHANNELS = ("tp9", "af7", "af8", "tp10")
-# A full buffer's timestamp span may differ from (n-1)/fs by this fraction
-# before the samples are judged not to be a 256 Hz stream at all.
+# Allowed fractional mismatch between a full buffer's timestamp span and 256 Hz.
 RATE_TOLERANCE = 0.25
 
 
 def welch_log_psd(x: np.ndarray, fs: float = SAMPLE_RATE_HZ,
                   window_seconds: float = WINDOW_SECONDS) -> tuple[np.ndarray, np.ndarray]:
-    """Welch PSD of one channel: Hann windows, 50% overlap, mean of the
-    periodograms. Returns (frequencies, log10 power). DC removed first, since
-    the raw channels sit at ~800 uV of ADC offset."""
+    """Welch PSD of one channel. Returns (frequencies, log10 power).
+
+    DC is removed first: the raw channels sit at ~800 uV of ADC offset."""
     n = int(round(window_seconds * fs))
     x = np.asarray(x, dtype=float)
     x = x - x.mean()
@@ -93,11 +59,9 @@ def welch_log_psd(x: np.ndarray, fs: float = SAMPLE_RATE_HZ,
 
 
 def one_over_f_fit(f: np.ndarray, log_psd: np.ndarray) -> tuple[float, float]:
-    """(slope, intercept) of a straight-line fit of log10 power against log10
-    frequency over FIT_LO_HZ..FIT_HI_HZ with FIT_EXCLUDE_HZ left out. The one
-    place the fit is written: the analysis script needs the intercept for
-    the other bands, and a second copy of the mask let the shipped fit and
-    the reference table describe two different fits."""
+    """(slope, intercept) of log10 power vs log10 frequency, alpha excluded.
+
+    The one place the fit is written; the analysis script reuses it."""
     lo, hi = FIT_EXCLUDE_HZ
     mask = (f >= FIT_LO_HZ) & (f <= FIT_HI_HZ) & ~((f >= lo) & (f <= hi))
     slope, intercept = np.polyfit(np.log10(f[mask]), log_psd[mask], 1)
@@ -114,26 +78,18 @@ def alpha_residual(f: np.ndarray, log_psd: np.ndarray) -> tuple[float, float]:
 
 
 def poisons_buffer(artifact_reason: str | None) -> bool:
-    """Whether a tick the artifact gate held should poison the raw buffer.
-    Any raw-sample artifact does (a blink, a clench, a jolt); malformed_bands
-    is a fault in the SDK's band dict, not in the samples, and poisoning on
-    it cost 3.9 s of estimates the buffer could have given. One decision,
-    read by the stream manager and by the replay."""
+    """Whether an artifact-held tick poisons the raw buffer.
+
+    malformed_bands does not: it is a fault in the SDK's band dict, not the samples."""
     return artifact_reason not in (None, "malformed_bands")
 
 
 class SpectrumEstimator:
     """Rolling 4 s buffer per temporal channel; `latest()` is the estimate.
 
-    `push()` takes every sample the tick drained -- the sidecar already
-    drains the bridge queue in full and scores only the last sample, so this
-    is where a consumer of the raw stream belongs (CLAUDE.md). A channel the
-    tick's contact data marks unseated is left out of the pair for that
-    estimate rather than averaged in: a railing electrode has power at every
-    frequency and would read as no alpha whatever the other one says.
-
-    `latest()["reason"]` says why an estimate is not ready: `filling`,
-    `sample_rate`, `artifact`, or `no_channel`.
+    `push()` takes every sample the tick drained. A channel the tick's contact data
+    marks unseated is left out rather than averaged in.
+    `latest()["reason"]`: `filling`, `sample_rate`, `artifact`, or `no_channel`.
     """
 
     def __init__(self, sample_rate_hz: float = SAMPLE_RATE_HZ,
@@ -141,19 +97,8 @@ class SpectrumEstimator:
                  poison_seconds: float | None = None) -> None:
         self.sample_rate_hz = sample_rate_hz
         self.capacity = int(round(epoch_seconds * sample_rate_hz))
-        # How long an artifact tick withholds estimates: the full buffer
-        # (default -- every sample the blink landed among has left) or a
-        # shorter span, e.g. the 2 s Welch window, which readmits the buffer
-        # while its older half still holds the blink. One of the two open
-        # decisions for the second wearer's capture (HANDOFF.md); the replay
-        # scores both. EEG_SPECTRUM_POISON_SECONDS selects it in production.
-        # Floored at one sample and required finite, falling back to the
-        # buffer with a warning otherwise (the MUSE_OPTICS_PRESET precedent):
-        # 0 or a value under one sample made poison() a no-op, so a blink
-        # contaminated four seconds of estimates with nothing saying so, and
-        # nan/inf raised here, inside StreamManager() at import, taking the
-        # whole sidecar down over a tuning knob. A non-numeric .env value
-        # never reaches here: config.py's validator falls back before it.
+        # Seconds an artifact withholds estimates (default: the whole buffer). Floored at
+        # one sample and required finite, else it falls back with a warning, never raises.
         requested = float(epoch_seconds if poison_seconds is None else poison_seconds)
         samples = int(round(requested * sample_rate_hz)) if isfinite(requested) else 0
         if samples < 1:
@@ -167,8 +112,7 @@ class SpectrumEstimator:
         self.poison_samples = samples
         self._buf: dict[str, list[float]] = {c: [] for c in TEMPORAL}
         self._ts: list[datetime] = []
-        # Samples pushed so far, and the count at which the most recent
-        # artifact tick's samples will have left the buffer.
+        # Samples pushed, and the count at which the last artifact's samples have left.
         self._pushed = 0
         self._clean_after = 0
         self._latest: dict[str, Any] = self._empty("filling")
@@ -188,14 +132,10 @@ class SpectrumEstimator:
         self._latest = self._empty("filling")
 
     def poison(self) -> None:
-        """The tick just scored was an artifact (a blink, a clench, a jolt):
-        no estimate until every sample now in the buffer has left it. The
-        artifact gate holds one tick; the window would otherwise carry the
-        blink for four seconds of estimates."""
+        """The tick just scored was an artifact: no estimate until its samples
+        have left the buffer (the gate itself holds only one tick)."""
         self._clean_after = self._pushed + self.poison_samples
-        # Whatever the buffer was doing -- ready, or still filling -- the
-        # reason an estimate is absent from here on is the artifact; a poison
-        # while filling reported "filling" for up to 8 s.
+        # Reported as "artifact" even while still filling.
         self._latest = self._empty("artifact")
 
     def push(self, samples: list[Any], meta: dict[str, Any] | None) -> dict[str, Any]:
@@ -223,31 +163,22 @@ class SpectrumEstimator:
 
     def _rate_plausible(self) -> bool:
         """Whether the buffer's timestamp span is what a 256 Hz stream gives.
-        The stamps are bursty (BLE delivery), but over a full buffer the span
-        averages out; a stream delivering one sample per tick spans minutes."""
+
+        Stamps are bursty BLE delivery, but average out over a full buffer."""
         idx = [i for i, t in enumerate(self._ts) if isinstance(t, datetime)]
         if len(idx) < 2:
             return True  # nothing to judge by; the sidecar's adapters stamp every sample
         span = (self._ts[idx[-1]] - self._ts[idx[0]]).total_seconds()
-        # Expected from the *positions* of the two stamps, not from how many
-        # stamps there are: push() admits an unstamped sample, and counting
-        # stamps refused a genuine 256 Hz buffer with half of them absent.
+        # From the stamps' positions, not their count: unstamped samples are admitted.
         expected = (idx[-1] - idx[0]) / self.sample_rate_hz
-        # The bar is a fraction of the *buffer's* duration, not of the gap
-        # between the two stamps: scaled with that gap it collapsed to a
-        # millisecond when the surviving stamps sat in one BLE burst, or
-        # when two adjacent samples shared a delivery stamp, and refused a
-        # genuine 256 Hz buffer as sample_rate. The simulator's one sample
-        # per tick still spans minutes against a 4 s bar.
+        # A fraction of the buffer's duration, not of the stamp gap, which can be ~0 in one burst.
         bar = RATE_TOLERANCE * len(self._ts) / self.sample_rate_hz
         return abs(span - expected) <= bar
 
     def _seated(self, meta: dict[str, Any]) -> dict[str, bool]:
-        """Per channel, whether the tick's contact data vouches for it. With
-        no contact data every channel counts, as _good_channel_values does.
-        The two signals are read independently: a malformed is_good used to
-        erase the hsi verdict along with its own, admitting a railing
-        electrode the docstring says is excluded."""
+        """Per channel, whether the tick's contact data vouches for it.
+
+        No contact data: every channel counts. hsi and is_good are read independently."""
         hsi = meta.get("hsi")
         is_good = meta.get("is_good")
         out = {}
@@ -269,8 +200,7 @@ class SpectrumEstimator:
         return out
 
     def _estimate(self, meta: dict[str, Any]) -> dict[str, Any]:
-        # Artifact before filling: a poison during the fill is the reason
-        # the estimate is absent, and the fill is merely also true.
+        # Artifact is reported before filling.
         if self._pushed < self._clean_after:
             return self._empty("artifact")
         if any(len(self._buf[c]) < self.capacity for c in TEMPORAL):
@@ -284,8 +214,7 @@ class SpectrumEstimator:
                 continue
             x = np.asarray(self._buf[c])
             if not np.all(np.isfinite(x)):
-                # One non-finite sample is a frame the bridge could not
-                # deliver; the FFT of it is NaN everywhere.
+                # One non-finite sample makes the FFT NaN everywhere.
                 continue
             f, log_psd = welch_log_psd(x, self.sample_rate_hz)
             r, s = alpha_residual(f, log_psd)

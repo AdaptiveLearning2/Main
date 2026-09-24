@@ -1,10 +1,4 @@
-"""The verdict logic of `scripts/verify_landmarks.py`.
-
-The camera-reading loop isn't tested here; what matters is the half that turns
-numbers into a pass/fail decision, since that decision is a safety gate against
-a mirrored landmark index table. A false PASS here is worse than no script at
-all -- it would report "verified against a real face" when it wasn't.
-"""
+"""The verdict logic of `scripts/verify_landmarks.py`, a gate against a mirrored landmark table."""
 
 from __future__ import annotations
 
@@ -33,9 +27,7 @@ def _step(frames=120, yaw=0.0, pitch=0.0, roll=0.0, gaze_x=0.0, gaze_y=0.0):
 
 
 def test_a_correct_table_passes():
-    """Looking and turning toward your own left drives both gaze.x and yaw
-    positive: the frame isn't mirrored, so your own left is the image right,
-    and both are measured in image coordinates."""
+    """Own-left drives gaze.x and yaw positive: the frame isn't mirrored, so own-left is image-right."""
     code = verify._verdict(
         _step(),
         _step(gaze_x=+0.6),
@@ -46,12 +38,7 @@ def test_a_correct_table_passes():
 
 
 def test_gaze_tracking_the_wrong_way_fails():
-    """gaze.x negative while looking toward your own left means the iris is
-    moving the wrong way -- a mirrored frame, or an iris index that isn't the
-    iris. Not a left/right label swap: `gaze` averages both eyes in image
-    coordinates, so permuting the labels is invisible to this check
-    (`test_gaze_cannot_see_a_left_right_swap` in test_face_geometry covers
-    that separately)."""
+    """A mirrored frame or wrong iris index; a left/right label swap is invisible here (see test_face_geometry)."""
     code = verify._verdict(
         _step(),
         _step(gaze_x=-0.6),
@@ -62,9 +49,7 @@ def test_gaze_tracking_the_wrong_way_fails():
 
 
 def test_an_inverted_pose_fit_fails_independently_of_the_eyes():
-    """Gaze (iris offsets) and yaw (a handed model fit) are independent, so a
-    check that only looked at gaze would pass a face whose yaw is backwards --
-    gaze can't detect a mirror at all."""
+    """Gaze (iris offsets) and yaw (a handed model fit) are independent."""
     code = verify._verdict(
         _step(),
         _step(gaze_x=+0.6),
@@ -75,8 +60,6 @@ def test_an_inverted_pose_fit_fails_independently_of_the_eyes():
 
 
 def test_a_movement_too_small_to_read_is_not_a_pass():
-    """Treating "did not move" as success would mark a table verified without
-    it ever having been exercised."""
     code = verify._verdict(
         _step(),
         _step(gaze_x=+0.02),
@@ -87,16 +70,14 @@ def test_a_movement_too_small_to_read_is_not_a_pass():
 
 
 def test_no_face_is_inconclusive_not_a_failure_of_the_table():
-    """A camera problem isn't evidence about the index mapping; reporting it
-    as a failure would send someone editing a table that may be fine."""
+    """A camera problem isn't evidence about the index mapping."""
     code = verify._verdict(_step(frames=0), _step(), _step())
 
     assert code == 2
 
 
 def test_a_crooked_sitter_still_passes_the_square_on_step():
-    """Nobody sits like a tripod -- a tolerance tight enough to fail a real
-    person makes the script useless: dismissed rather than acted on."""
+    """A tolerance tight enough to fail a real person gets the script dismissed."""
     code = verify._verdict(
         _step(yaw=-8.0, pitch=6.0, roll=-5.0),
         _step(gaze_x=+0.5),
@@ -113,20 +94,13 @@ def test_a_missing_reading_is_a_failure_not_a_pass():
 
 
 def test_the_median_ignores_refused_frames_rather_than_counting_them_as_zero():
-    """A refused window has no value; averaging it as 0.0 would drag a real
-    look back toward centre, reporting "barely moved" for someone who moved."""
     assert verify._median([None, -0.6, None, -0.5]) == pytest.approx(-0.55)
     assert verify._median([None, None]) is None
     assert verify._median([]) is None
 
 
 def test_a_failed_square_on_skips_the_yaw_check_but_not_the_gaze_check(capsys):
-    """Gaze and yaw depend on different things, so gating them together would
-    throw away a usable answer. `gaze` comes from eye/iris landmarks alone and
-    never touches the rotation fit, so it stays valid even when square-on
-    fails. `yaw` comes straight from that fit, so it's meaningless once
-    square-on has already failed.
-    """
+    """`yaw` comes from the pose fit square-on just failed; `gaze` never touches it."""
     code = verify._verdict(
         _step(yaw=60.0),               # square-on fails: pose fit is wrong
         _step(gaze_x=+0.6),            # eyes are still readable
@@ -140,30 +114,16 @@ def test_a_failed_square_on_skips_the_yaw_check_but_not_the_gaze_check(capsys):
 
 
 def test_nothing_printed_needs_more_than_ascii():
-    """A Windows console can't encode box-drawing characters or arrows, so a
-    non-ASCII string in output would crash with UnicodeEncodeError before the
-    check even runs.
-
-    Checked against `ascii`, not `cp1252` -- cp1252 contains an em dash, which
-    is weaker than what the script needs: cmd.exe codepages like cp437/cp850
-    don't contain it either.
-
-    pytest captures output through a UTF-8 buffer, so this reads the source
-    directly instead of capturing a run.
-    """
+    """ASCII, not cp1252: cp437/cp850 consoles raise UnicodeEncodeError; reads source since pytest captures UTF-8."""
     source = SCRIPT.read_text(encoding="utf-8")
     body = source.split('"""', 2)[2]      # docstring itself is never printed
     body.encode("ascii")                  # raises if any runtime string can't
 
 
-# ── the preview ────────────────────────────────────────────────────────────
+# -- the preview --
 
 def test_the_preview_writes_nothing_to_disk():
-    """The script promises to record nothing; a frame is already decoded and
-    drawn on, so saving one is a single call away. Cheap and coarse on
-    purpose: it can't prove absence, but it fails the moment someone reaches
-    for the obvious save call.
-    """
+    """Coarse on purpose: it can't prove absence, but catches the obvious save call."""
     source = SCRIPT.read_text(encoding="utf-8")
 
     for forbidden in ("imwrite", "imencode", "VideoWriter"):
@@ -171,9 +131,7 @@ def test_the_preview_writes_nothing_to_disk():
 
 
 def test_the_preview_sees_frames_with_no_face_rather_than_freezing():
-    """A stretch with no face usually means the subject left the frame, which
-    they most need to see. Drawing only when a face is found would freeze the
-    preview on the last good frame, looking like a hang."""
+    """Drawing only on a found face would freeze the preview when the subject leaves the frame."""
     class _Source:
         def __init__(self): self.left = 3
         def read(self):
@@ -196,13 +154,11 @@ def test_the_preview_sees_frames_with_no_face_rather_than_freezing():
     assert gui.drawn > 0, "the preview never saw the frames with no face"
 
 
-# ── the emotion path ───────────────────────────────────────────────────────
+# -- the emotion path --
 
 def test_the_emotion_check_is_skipped_rather_than_failed_without_a_model(tmp_path,
                                                                         monkeypatch):
-    """A gaze-only install legitimately has no FER+ model, since it's a
-    separate 35 MB download. Failing here would tie the landmark check to a
-    channel it isn't about."""
+    """A gaze-only install legitimately lacks the separate 35 MB FER+ model."""
     monkeypatch.setenv("FACE_EMOTION_MODEL_PATH", str(tmp_path / "absent.onnx"))
 
     assert verify._emotion_classifier() is None
@@ -210,8 +166,7 @@ def test_the_emotion_check_is_skipped_rather_than_failed_without_a_model(tmp_pat
 
 def test_a_model_that_will_not_load_is_reported_not_raised(tmp_path, monkeypatch,
                                                            capsys):
-    """A corrupt or truncated model must not take the whole camera check down
-    -- the three main steps don't involve emotion at all."""
+    """The three main steps don't involve emotion."""
     bad = tmp_path / "emotion.onnx"
     bad.write_bytes(b"not a model")
     monkeypatch.setenv("FACE_EMOTION_MODEL_PATH", str(bad))
@@ -221,22 +176,14 @@ def test_a_model_that_will_not_load_is_reported_not_raised(tmp_path, monkeypatch
 
 
 def test_the_emotion_check_claims_plumbing_and_not_accuracy():
-    """FER+ has no ground truth you can assert from a chair, and its accuracy
-    on this product's users -- children, including those with learning
-    disabilities -- is a documented weakness no self-check addresses. A check
-    that reads as validating emotion would be worse than no check.
-    """
+    """FER+ accuracy on children is a documented weakness no self-check can validate."""
     source = SCRIPT.read_text(encoding="utf-8")
 
     assert "plumbing only" in source
     assert "says nothing about whether the " in source
 
 
-# ── the cross-check's own verdict ───────────────────────────────────────────
-#
-# These branches were previously reachable only by reproducing the failure on
-# real hardware, so neither a happy-path hardware run nor CI could catch a bug
-# in them.
+# -- the cross-check's own verdict --
 
 
 def _agree(frames=60, mesh=60, haar=60, crops=60, crops_refused=0, labels=60,
@@ -248,8 +195,7 @@ def _agree(frames=60, mesh=60, haar=60, crops=60, crops_refused=0, labels=60,
 
 
 def test_every_crop_refused_reports_rather_than_crashing(capsys):
-    """`to_gray64` will not upsample, so if every Haar box is under 64x64 the
-    emotion channel records nothing -- this check is what reports that."""
+    """`to_gray64` will not upsample, so Haar boxes under 64x64 record nothing."""
     code = verify._cross_check_verdict(_agree(crops=0, crops_refused=60, labels=0))
     out = capsys.readouterr().out
 
@@ -259,8 +205,7 @@ def test_every_crop_refused_reports_rather_than_crashing(capsys):
 
 
 def test_a_model_that_errors_on_a_real_crop_fails():
-    """`inference_failed` means a broken install. `low_confidence` is the
-    model doing its job, and must not fail the run."""
+    """`inference_failed` is a broken install; `low_confidence` is the model doing its job."""
     broken = verify._cross_check_verdict(
         _agree(refusals={"inference_failed": 60}, labels=0, confidences=()))
     unsure = verify._cross_check_verdict(
@@ -282,8 +227,6 @@ def test_no_frames_is_inconclusive_not_a_failure():
 
 
 def test_neither_detector_seeing_a_face_is_not_a_failure(capsys):
-    """A likely lighting or framing issue, not a broken table -- the emotion
-    half has nothing to say without a box."""
     code = verify._cross_check_verdict(_agree(mesh=0, haar=0, crops=0, labels=0))
 
     assert code is None
@@ -309,9 +252,7 @@ def test_the_happy_path_reports_the_confidence_range_and_the_caveat(capsys):
 
 
 def test_a_classifier_that_declines_to_label_is_still_a_pass(capsys):
-    """This checks that crops reach the model. Declining to label them is a
-    valid reading, not a failure -- the check must not depend on the subject
-    pulling a face the model recognizes."""
+    """This checks crops reach the model, not that the subject pulls a recognisable face."""
     code = verify._cross_check_verdict(
         _agree(labels=0, confidences=(), refusals={"low_confidence": 60}))
 

@@ -1,24 +1,9 @@
 """FER+ emotion classification, pinned and verified.
 
-Separate from the heart path on purpose: the two run off the same camera but
-are independently switchable and independently consented (a student may
-permit expression and refuse heart, or the reverse), so nothing here knows
-about POS and nothing in POS knows about this.
-
-Provenance: Apache 2.0, published by the ONNX Model Zoo, commercial use
-permitted with attribution. This is the one third-party model in the facial
-pipeline that passed review; the rPPG networks didn't, which is why
-`pos_rppg` exists instead.
-
-The model download is pinned to a commit (not a moving reference like
-`resolve/main/`), verified by SHA-256 before use, with a size cap and a
-timeout. A checksum mismatch deletes the download rather than leaving a
-partial or substituted model on disk.
-
-A load failure, a crashed inference session, and a face the classifier is
-merely unsure about are three different things and are reported as such:
-`degraded` (surfaced through `get_meta()`) covers a persistent failure, and
-only genuine low confidence is `trusted: false`.
+Independent of the heart path: separately switchable and separately consented.
+Apache 2.0 (ONNX Model Zoo). Download pinned to a commit, SHA-256 verified, size-capped.
+A load failure / crashed session is `degraded` (via `get_meta()`); only genuine low
+confidence is `trusted: false`.
 """
 
 from __future__ import annotations
@@ -34,8 +19,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Pinned to a commit, not `main` -- a moving reference would let the bytes
-# downloaded next term differ from what was reviewed today.
+# Pinned to a commit, not `main`, so the bytes cannot differ from what was reviewed.
 MODEL_REVISION = "4d016bfebdb4122b1f37511c5a9d40b5c87054a8"
 MODEL_URL = (
     "https://huggingface.co/onnxmodelzoo/emotion-ferplus-8/resolve/"
@@ -44,8 +28,7 @@ MODEL_URL = (
 MODEL_SHA256 = "a2a2ba6a335a3b29c21acb6272f962bd3d47f84952aaffa03b60986e04efa61c"
 MODEL_BYTES = 35_040_571
 
-# Caps the download before hashing, so a redirect to something huge can't
-# become an unbounded write -- the checksum alone would only catch it after.
+# Caps the write before hashing, so a redirect to something huge can't be unbounded.
 MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 DOWNLOAD_TIMEOUT_S = 60
 
@@ -55,12 +38,10 @@ EMOTION_LABELS = (
     "angry", "disgust", "fear", "contempt",
 )
 
-# Below this the label is reported but marked untrusted. Distinct from
-# `degraded`: an unsure classifier is still working correctly.
+# Below this the label is reported but untrusted; distinct from `degraded`.
 MIN_CONFIDENCE = 0.50
 
 # Consecutive inference failures before the classifier calls itself degraded.
-# One is a bad crop; a run of them means a broken session.
 FAILURE_TOLERANCE = 5
 
 FACE_INPUT = 64
@@ -71,9 +52,7 @@ class EmotionResult:
     label: str | None
     confidence: float | None
     trusted: bool
-    # Machine-readable cause when there is no usable label: "low_confidence" |
-    # "inference_failed" | "no_face". Control flow matches on this; `reason` is
-    # for display.
+    # "low_confidence" | "inference_failed" | "no_face"; control flow matches on this.
     rejected_by: str | None = None
     reason: str = ""
 
@@ -91,27 +70,17 @@ def softmax(values: np.ndarray) -> np.ndarray:
 def to_gray64(frame: np.ndarray, box: tuple[int, int, int, int]) -> np.ndarray | None:
     """Crop a face out of an RGB frame and box-resample it to 64x64 grayscale.
 
-    Numpy rather than `cv2.resize`: keeps the crop path testable without
-    OpenCV, and avoids a second cv2 call per classified frame.
-
-    Box averaging rather than nearest-neighbour: a face crop is typically
-    150-250 px square, so nearest-neighbour throws away most pixels and makes
-    the result depend on where the sample grid lands -- adding noise on every
-    small head movement.
+    Numpy box averaging: testable without OpenCV, and stable under small head movement.
     """
     x, y, w, h = box
     height, width = frame.shape[:2]
     x0, y0 = max(0, x), max(0, y)
     x1, y1 = min(width, x + w), min(height, y + h)
     if x1 - x0 < FACE_INPUT or y1 - y0 < FACE_INPUT:
-        # Smaller than the model's own input, so reaching 64x64 would mean
-        # upsampling -- inventing detail never captured, which the classifier
-        # would then label with full confidence. Treat a distant or
-        # half-cropped face as a missing measurement, not a low-quality one.
+        # Smaller than the input: upsampling would invent detail. A missing measurement.
         return None
 
-    # Luma-weighted, matching what FER+ was trained on -- a flat RGB mean is a
-    # different, redder image (most of a face is skin tone).
+    # Luma-weighted, matching what FER+ was trained on.
     gray = frame[y0:y1, x0:x1].astype(np.float32) @ np.array(
         [0.299, 0.587, 0.114], dtype=np.float32
     )
@@ -121,8 +90,6 @@ def to_gray64(frame: np.ndarray, box: tuple[int, int, int, int]) -> np.ndarray |
     rows[1:] = np.maximum(rows[1:], rows[:-1] + 1)
     cols[1:] = np.maximum(cols[1:], cols[:-1] + 1)
 
-    # reduceat instead of a nested loop over the 4096 output cells -- the loop
-    # cost 22 ms per crop, meaningful CPU for a few classifications a second.
     row_sums = np.add.reduceat(gray, rows[:-1], axis=0)
     block_sums = np.add.reduceat(row_sums, cols[:-1], axis=1)
     counts = np.outer(np.diff(rows), np.diff(cols))
@@ -151,9 +118,7 @@ def verify(path: Path) -> bool:
 def ensure_model(path: Path, *, allow_download: bool = True) -> Path:
     """Return a verified model path, downloading once if permitted.
 
-    A setup-time step. Calling it at capture time would put a 35 MB transfer
-    in front of a student's first session, and a network failure would look
-    like a broken feature rather than an incomplete install.
+    A setup-time step, never capture-time.
     """
     path = Path(path)
     if verify(path):
@@ -186,8 +151,7 @@ def ensure_model(path: Path, *, allow_download: bool = True) -> Path:
         raise
 
     if not verify(path):
-        # Deleted rather than left behind -- the next run checks existence
-        # before anything else and would trust a partial or substituted file.
+        # Deleted, so a partial or substituted file is never trusted next run.
         path.unlink(missing_ok=True)
         raise ValueError(
             f"emotion model checksum mismatch; expected {MODEL_SHA256[:16]}..."
@@ -198,20 +162,15 @@ def ensure_model(path: Path, *, allow_download: bool = True) -> Path:
 class EmotionClassifier:
     """FER+ over a grayscale face crop, with ONNX Runtime imported lazily.
 
-    Holds no image. A crop is passed in, reduced to a label and a probability,
-    and dropped -- the same contract as the colour path.
+    Holds no image: a crop is reduced to a label and a probability, then dropped.
     """
 
     def __init__(self, model_path: Path, *, session: Any = None) -> None:
-        """`session` is injectable so classification, the confidence gate and
-        the degraded state can be tested without onnxruntime, which is absent
-        from CI by design."""
+        """`session` is injectable for tests without onnxruntime (absent from CI)."""
         if session is not None:
             self._session = session
         else:
-            # Verified before onnxruntime is imported: cheaper, and it means a
-            # bad model reports "unverified model" rather than "onnxruntime
-            # missing" on a machine lacking the extra.
+            # Verified before importing onnxruntime, so the error names the real cause.
             if not verify(Path(model_path)):
                 raise ValueError(f"refusing to load unverified model at {model_path}")
 
@@ -240,9 +199,7 @@ class EmotionClassifier:
             return EmotionResult(None, None, False, "inference_failed", self._last_error)
 
         if logits.size != len(EMOTION_LABELS):
-            # A shape mismatch means a wrong model, not a bad frame -- count it
-            # as a failure so a substituted file becomes degraded rather than
-            # an endless stream of untrusted readings.
+            # A wrong model, not a bad frame: counts toward degraded.
             self._consecutive_failures += 1
             self._last_error = (
                 f"model returned {logits.size} outputs, expected {len(EMOTION_LABELS)}"
@@ -270,11 +227,7 @@ class EmotionClassifier:
         return self._consecutive_failures >= FAILURE_TOLERANCE
 
     def get_meta(self) -> dict[str, Any]:
-        """Emotion-path health, for the ingestion payload.
-
-        `emotion_degraded` keeps a broken session distinguishable from a
-        genuinely calm student -- both would otherwise read as `trusted: false`.
-        """
+        """Emotion-path health; `emotion_degraded` separates a broken session from an unsure one."""
         return {
             "emotion_classified": self._classified,
             "emotion_degraded": self.degraded,

@@ -22,8 +22,7 @@ from src.app.services.stream_manager import StreamManager, UnknownDeviceError
 logger = logging.getLogger(__name__)
 settings = get_settings()
 stream_manager = StreamManager()
-# None when push ingestion is off (the default, co-located dev stack), rather than a
-# disabled instance, so there's no object to accidentally start and duplicate writers.
+# None when push is off, so there is no instance to start by accident and duplicate writers.
 push_client = PushClient(settings.backend_url) if settings.push_enabled else None
 
 app = FastAPI(
@@ -65,12 +64,7 @@ async def request_timing(request: Request, call_next):
 
 @app.on_event("shutdown")
 async def _stop_pushing() -> None:
-    """Flush the queue and drop the token when the process goes down.
-
-    Without this a Ctrl-C loses whatever was queued since the last tick.
-    `stop()` bounds its own flush by the request timeout, so a backend that's
-    already gone only delays exit by seconds, not indefinitely.
-    """
+    """Flush the queue and drop the token on shutdown; the flush is bounded by the request timeout."""
     if push_client is not None:
         stream_manager.set_payload_consumer(None)
         await push_client.stop()
@@ -105,13 +99,9 @@ async def start_session(
 async def arm_session(
     device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_local_controller)
 ) -> JSONResponse:
-    """Recording starts now: take the per-session baseline from here.
+    """Recording starts now: gather the per-session baseline from here, not during pairing.
 
-    The stream is up from Connect and its opening stretch is the strap being
-    adjusted; the backend poller calls this when `record` flips to true on
-    the first question, so the baseline the signal tables are scored against
-    is gathered after that and not during pairing. Idempotent, and safe on a
-    device that is not streaming: it only clears what would be gathered.
+    Idempotent, and safe on a device that is not streaming.
     """
     try:
         stream_manager.arm_baseline(device_id)
@@ -148,9 +138,7 @@ async def get_state(
 
 class PushStartBody(BaseModel):
     session_id: str = Field(..., min_length=1)
-    # The student's own backend bearer token, handed over by the browser. Held in
-    # memory only, never logged or persisted -- this runs on a student's laptop.
-    # Excluded from repr so it can't leak into a log line via an f-string.
+    # The student's bearer token: memory only, never logged; repr=False keeps it out of logs.
     access_token: str = Field(..., min_length=1, repr=False)
 
 
@@ -158,9 +146,7 @@ class PushStartBody(BaseModel):
 async def push_start(body: PushStartBody, _: str = Depends(require_learner_token)) -> JSONResponse:
     """Begin posting this session's samples to the website backend.
 
-    Refuses when push is off, rather than duplicating a poller's writes: under pull
-    ingestion the backend already polls this sidecar, and both running at once
-    would insert every EEG sample twice with no error and no dedupe key to catch it.
+    409 when push is off: the backend's poller already pulls, and both would write every sample twice.
     """
     if push_client is None:
         raise HTTPException(
@@ -169,21 +155,12 @@ async def push_start(body: PushStartBody, _: str = Depends(require_learner_token
                     "polls it instead, and pushing as well would write every sample "
                     "twice. Nothing is wrong with the sensors."),
         )
-    # Under push the browser is the controller and this call is its "first
-    # question": a new session id arms the baseline the way the poller's
-    # /session/arm does under pull. A repeat with the same id is a token
-    # refresh and must not restart it mid-lesson.
-    # Whether this is a new session is decided inside start(), under the
-    # lock that owns the session id -- compared here first, two concurrent
-    # starts could both see "new" and one would restart the baseline
-    # mid-lesson.
+    # A new session id arms the baseline (push's /session/arm); a repeat is a token refresh.
+    # start() decides "new" under its lock, so two concurrent starts cannot both re-arm.
     new_session = await push_client.start(body.session_id, body.access_token)
     stream_manager.set_payload_consumer(push_client.submit_payload)
     if new_session:
-        # Best effort, after push has started: on a registry with no default
-        # device this must not turn a working push into a 500 the browser
-        # reads as failure. The poller's arm is best effort for the same
-        # reason.
+        # Best effort: no default device must not turn a working push into a 500.
         try:
             stream_manager.arm_baseline()
         except UnknownDeviceError:
@@ -198,17 +175,12 @@ async def push_stop(_: str = Depends(require_learner_token)) -> JSONResponse:
     if push_client is None:
         return JSONResponse({"status": "not_configured"})
     stream_manager.set_payload_consumer(None)
-    # Only a session that was pushing has ended. The page fires this from
-    # pagehide and the route takes just the learner token, so unconditional
-    # it wiped a live armed session's baseline under pull (focus stepped
-    # 44.9 -> 61.5 on unchanged input) and nothing re-arms.
+    # End the session only if one was pushing: pagehide fires this under pull too, and
+    # ending there would wipe a live armed baseline that nothing re-arms.
     was_pushing = push_client.session_id is not None
     await push_client.stop()
     if was_pushing:
-        # The stream stays up (the headband stays paired), so this is the
-        # only session end push has. Without it the next student inherited
-        # the baseline, the histories and the counters. Best effort, like
-        # the arm.
+        # Push's only session end (the stream stays up); best effort.
         try:
             stream_manager.end_session()
         except UnknownDeviceError:
@@ -220,10 +192,8 @@ async def push_stop(_: str = Depends(require_learner_token)) -> JSONResponse:
 async def push_status(_: str = Depends(require_learner_token)) -> JSONResponse:
     """Queue depths, delivery counts and the last error.
 
-    `enabled: false` rather than a 404 when push is off. `recorded` counts what
-    the backend said it stored, not what was sent -- the backend drops samples for
-    an unconsented sensor, so counting sent would show a healthy session that
-    recorded nothing.
+    `enabled: false` when push is off. `recorded` counts what the backend stored, not what
+    was sent: it drops samples for an unconsented sensor.
     """
     if push_client is None:
         return JSONResponse({"status": "ok", "data": {"enabled": False}})
@@ -245,10 +215,7 @@ class AnswerBody(BaseModel):
 async def session_answer(body: AnswerBody, _: str = Depends(require_local_controller)) -> JSONResponse:
     """The backend recorded an answer for the student on this device.
 
-    Best effort from the backend, like /session/arm: it lets the simulator
-    move its hidden state with the lesson, so a sim run's signals respond to
-    what the student does. A real headband ignores it (`applied: false`) --
-    nothing here feeds back into scoring on hardware.
+    Moves the simulator's hidden state; a real headband ignores it (`applied: false`).
     """
     try:
         out = stream_manager.report_answer(body.device_id, correct=body.correct, difficulty=body.difficulty)

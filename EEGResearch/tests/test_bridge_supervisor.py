@@ -1,13 +1,4 @@
-"""The bridge supervisor restarts a crashed exe, a bounded number of times.
-
-Nothing else supervises muse_native_bridge.exe; start.ps1 runs it through
-scripts/run_bridge_supervised.ps1. These drive that script against a stand-in
-exe (a .cmd that exits with a chosen code) rather than the bridge, since what
-is under test is the loop: restart on a non-zero exit, stop on a clean one,
-give up past the cap, and say so each time.
-
-Windows only -- the script is PowerShell and so is the bridge.
-"""
+"""run_bridge_supervised.ps1 restarts a crashed exe up to a cap, driven against a stub .cmd."""
 import os
 import shutil
 import subprocess
@@ -26,7 +17,6 @@ pytestmark = pytest.mark.skipif(
 
 
 def _stub_exe(tmp_path: Path, exit_code: int, runs_file: Path) -> Path:
-    """A .cmd that records each run and exits with `exit_code`."""
     exe = tmp_path / "fake_bridge.cmd"
     exe.write_text(f"@echo off\r\necho run>> \"{runs_file}\"\r\nexit /b {exit_code}\r\n")
     return exe
@@ -44,12 +34,11 @@ def test_a_crashing_bridge_is_restarted_up_to_the_cap_then_left_alone(tmp_path):
     runs = tmp_path / "runs.txt"
     exe = _stub_exe(tmp_path, 3, runs)
     res = _run(exe, MaxRestarts=2, RestartWindowSeconds=600, RestartDelaySeconds=0)
-    # First run plus MaxRestarts restarts, then one more exit tips it over the cap.
+    # First run plus MaxRestarts restarts.
     assert runs.read_text().count("run") == 3
     assert res.returncode == 3, res.stdout + res.stderr
     assert "giving up" in res.stdout
-    # Every exit is printed with its code: the crash a restart hides from the
-    # student stays readable in the window.
+    # Every exit is printed with its code, so a restarted crash stays visible.
     assert res.stdout.count("exited at") == 3
     assert "with code 3" in res.stdout
 
@@ -70,10 +59,7 @@ def test_a_missing_exe_is_refused_rather_than_looped(tmp_path):
 
 
 def test_an_exe_that_exists_but_cannot_start_is_a_failure_with_a_code(tmp_path):
-    """Test-Path clears a file that is not runnable -- an interrupted build,
-    an antivirus-truncated binary. Invoking it raises rather than running,
-    and $LASTEXITCODE keeps $null, which printed as a blank code and made
-    `exit $null` report success for a bridge that never started."""
+    """Invoking it raises and leaves $LASTEXITCODE $null; `exit $null` would report success."""
     exe = tmp_path / "broken.exe"
     exe.write_bytes(b"")
     res = _run(exe, MaxRestarts=1, RestartDelaySeconds=0)
@@ -81,13 +67,11 @@ def test_an_exe_that_exists_but_cannot_start_is_a_failure_with_a_code(tmp_path):
     assert "did not start" in res.stdout
     assert "with code 3" in res.stdout
     assert "giving up" in res.stdout
-    # Never printed a blank code.
     assert "with code  after" not in res.stdout
 
 
 def test_start_ps1_launches_the_bridge_through_the_supervisor():
-    """The loop only helps if start.ps1 uses it. The env-var prefixes are built
-    around `$bridgeCmd`, so the supervisor has to be what that command runs."""
+    """The env-var prefixes wrap `$bridgeCmd`, so the supervisor must be what it runs."""
     src = (Path(__file__).resolve().parents[2] / "start.ps1").read_text(encoding="utf-8")
     assert "run_bridge_supervised.ps1" in src
     assert "$bridgeCmd = \"& '$bridgeSupervisor' -Exe '$bridgeExe'\"" in src

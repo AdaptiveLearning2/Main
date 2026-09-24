@@ -3,23 +3,8 @@ how well each feature separates eyes closed from eyes open per epoch.
 
     python scripts/analyze_raw_capture.py C:/eeg_captures/2026-09-14_raw.jsonl
 
-This is the analysis EEG_REFERENCE.md's raw-stream section quotes, committed
-so its numbers can be re-derived. Two caveats it prints with them:
-
-* **The epochs are not independent.** Each segment is one continuous block
-  sliced into adjacent epochs, so an AUC over them is a description of this
-  recording, not an estimate with a confidence interval; it rises as the
-  epoch count falls, and 1.00 computed on seven per class means only that
-  seven adjacent epochs happened to order. Compare epoch lengths by the
-  *medians*, and read the AUC as "how cleanly did this one recording
-  separate", nothing more.
-* **The 1/f slope separates the two states more than any band**, and is
-  scored here beside the alpha residual for exactly that reason. It is not
-  what calm is built on: whether the slope's shift is neural or the blink
-  rate (blinks steepen it) is not something one capture can say, and the
-  residual is the feature with a physiological name.
-
-Nothing here writes inside the repo.
+Re-derives EEG_REFERENCE.md's raw-stream numbers. Adjacent epochs are not independent:
+the AUC describes one recording only. Writes nothing inside the repo.
 """
 
 from __future__ import annotations
@@ -100,8 +85,7 @@ EPOCH_COLUMNS = ("alpha", "slope", "beta", "gamma")
 
 
 def epochs(seg: dict[str, np.ndarray], seconds: float, chans=TEMPORAL) -> np.ndarray:
-    """Per adjacent epoch: (alpha residual, slope, beta residual, gamma
-    residual), averaged over `chans`, all against the one 1/f fit."""
+    """Per adjacent epoch: (alpha residual, slope, beta, gamma residual) over `chans`, one 1/f fit."""
     n = int(seconds * SAMPLE_RATE_HZ)
     out = []
     length = len(seg["tp9"])

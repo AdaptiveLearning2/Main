@@ -1,10 +1,4 @@
-"""The simulator pairs like a headband: refresh finds one, connect holds it.
-
-The page's Connect button runs one sequence on every source -- scan, wait for
-`muse_devices`, connect, poll `muse_connected`, adopt on `eeg_age_ms` -- so
-the simulator has to answer each step the way the bridge does, or a sim run
-fails at "no device" while the sample stream underneath it flows regardless.
-"""
+"""The simulator answers every step of the page's pairing sequence the way the bridge does."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -102,10 +96,7 @@ def test_disconnect_clears_the_pairing_and_the_scan():
 
 
 def test_eeg_age_is_null_while_a_fresh_link_settles_then_counts_from_the_last_packet():
-    # The bridge zeroes its packet clock on CONNECTED and a preset switch
-    # keeps it null for seconds; the page calls that "settling" and refuses
-    # to adopt it. Once the stream delivers, the age is time since the last
-    # read -- under 3 s at the sidecar's 4 Hz, so the link is alive.
+    # Null while settling after CONNECTED (the page won't adopt it), then time since the last read.
     adapter, clock = _adapter()
     adapter.connect()
     _pair(adapter)
@@ -120,10 +111,7 @@ def test_eeg_age_is_null_while_a_fresh_link_settles_then_counts_from_the_last_pa
 
 
 def test_a_silent_stream_lets_the_age_climb_which_is_the_drop():
-    # CONNECTED-but-silent is the hardware state linkAlive and the bridge
-    # watchdog exist for; on the simulator the stopped stream is what stands
-    # in for the headband going quiet. Modelled from the pairing alone the
-    # age wrapped inside 0-3 ms for ever and this state was unreachable.
+    # CONNECTED-but-silent: the stopped stream stands in for the headband going quiet.
     adapter, clock = _adapter()
     adapter.connect()
     _pair(adapter)
@@ -155,8 +143,7 @@ def test_a_link_that_never_delivered_counts_from_the_end_of_the_settle():
 
 
 def test_restarting_the_stream_revives_the_link_before_the_first_read():
-    # Under pull, Connect starts the stream and reads the status before the
-    # first 4 Hz tick; a re-paired link must be adoptable at that moment.
+    # Under pull, Connect reads the status before the first 4 Hz tick.
     adapter, clock = _adapter()
     adapter.connect()
     _pair(adapter)
@@ -170,8 +157,7 @@ def test_restarting_the_stream_revives_the_link_before_the_first_read():
 
 
 def test_reading_samples_does_not_shorten_the_settle_window():
-    # The sidecar's 4 Hz reads must not end the settle within one tick, or
-    # the page's linkSettling state is never observable on the simulator.
+    # Otherwise the page's linkSettling state is never observable on the simulator.
     adapter, clock = _adapter()
     adapter.connect()
     _pair(adapter)
@@ -249,9 +235,7 @@ def _paired_for(adapter, clock, seconds):
 
 
 def test_battery_is_null_before_the_first_report_and_a_charge_after():
-    # libMuse fires BATTERY on its own schedule, so the bridge reports null
-    # for most of the first minute; the badge renders nothing rather than a
-    # broken-looking empty slot. Null, never 0, which is a real reading.
+    # libMuse reports BATTERY late, so null for most of a minute; never 0, which is a real reading.
     adapter, clock = _adapter()
     assert _paired_for(adapter, clock, adapter.BATTERY_FIRST_REPORT_SECONDS - 1.0) is None
     clock.now += 1.0
@@ -287,8 +271,7 @@ def test_unpaired_and_disconnected_links_report_no_battery_and_a_repair_resumes_
 
 
 def test_a_repeat_connect_goes_null_again_but_keeps_the_same_charge():
-    # The bridge's stored value is reset on every connect until the next
-    # BATTERY packet; the headband underneath has not been swapped.
+    # The bridge resets its stored value on connect; the headband has not been swapped.
     adapter, clock = _adapter()
     first = _paired_for(adapter, clock, adapter.BATTERY_FIRST_REPORT_SECONDS)
     adapter.send_bridge_command({"cmd": "connect", "name": adapter.SIM_DEVICE_NAME})
@@ -312,8 +295,7 @@ from src.app.services.signal_processing import SignalProcessor  # noqa: E402
 
 
 def _contact_shares(seed, hours=1.0, hz=4.0):
-    """Drive SignalProcessor._contact_ratio -- smoothing, thresholds and all
-    -- over a simulated run, and return the share of ticks in each verdict."""
+    """Share of ticks in each contact verdict, through SignalProcessor's own smoothing."""
     clock = _Clock()
     adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=seed)
     processor = SignalProcessor(clock=clock)
@@ -332,10 +314,7 @@ def _contact_shares(seed, hours=1.0, hz=4.0):
 
 
 def test_contact_is_mostly_degraded_with_poor_as_an_occasional_minority():
-    # Degraded is the ordinary state on hardware and poor is the fault
-    # (EEG_REFERENCE.md); a simulator pinned at hsi [1,1,1,1] never reached
-    # the contact gate at all. Measured through the processor's own
-    # smoothing and lines, not the raw hsi.
+    # Degraded is ordinary on hardware and poor is the fault (EEG_REFERENCE.md).
     for seed in (1, 2, 3):
         shares = _contact_shares(seed)
         assert 0.35 <= shares["degraded"] <= 0.75, shares
@@ -347,11 +326,11 @@ def test_contact_streaks_are_held_on_the_clock_not_redrawn_per_read():
     clock = _Clock()
     adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=7)
     first = adapter.get_ingestion_meta()["hsi"]
-    # Many reads inside the shortest possible streak: nothing changes.
+    # Inside the shortest streak: nothing changes.
     for _ in range(40):
         clock.now += 0.1
         assert adapter.get_ingestion_meta()["hsi"] == first
-    # Well past the longest streak: at least one electrode has been redrawn.
+    # Past the longest streak: at least one electrode redrawn.
     clock.now += 200.0
     adapter.get_ingestion_meta()
     seen = {tuple(adapter.get_ingestion_meta()["hsi"])}
@@ -446,8 +425,7 @@ def test_the_bias_decays_on_the_clock_towards_the_undisturbed_state():
 
 
 def test_the_bias_reaches_the_bands_the_processor_reads():
-    # The point of the bias is that the processor sees it through its own
-    # path -- so alpha (calm) on the meta moves, not only a hidden number.
+    # The processor must see the bias through its own path, as alpha on the meta.
     clock = _Clock()
     adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=1)
     adapter._focus_state = adapter._calm_state = 0.5
@@ -458,9 +436,7 @@ def test_the_bias_reaches_the_bands_the_processor_reads():
 
 
 def test_no_task_bias_can_look_like_an_artifact_to_the_processor():
-    # The raw spread scales with 1.6 - calm over calm in 0..1, a 2.67x
-    # range end to end, under SPREAD_JUMP_FACTOR; delta and gamma are
-    # constants, so the delta and EMG gates have nothing to trip on either.
+    # Spread scales with 1.6 - calm (2.67x end to end) < SPREAD_JUMP_FACTOR; delta and gamma are constant.
     clock = _Clock()
     adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=1)
     adapter.connect()
@@ -512,8 +488,7 @@ def test_the_focus_bias_is_bounded_too():
 
 
 def test_the_bias_reaches_the_raw_channels_the_artifact_gate_reads(monkeypatch):
-    # The spread the processor's artifact gate measures scales with the
-    # *effective* calm: a stressed student's raw signal is the erratic one.
+    # The artifact gate's spread scales with the *effective* calm.
     clock = _Clock()
     adapter = SimulatedMuseIngestionAdapter(clock=clock, seed=1)
     monkeypatch.setattr(adapter._rng, "uniform", lambda a, b: b)
@@ -569,15 +544,14 @@ def test_no_optics_without_a_paired_streaming_device():
     assert build_heart_record(adapter.optics_window(RATE_WINDOW_SECONDS), tracker, 10)["rejected_by"] == "no_samples"
     _pair(adapter)
     clock.now += 5.0
-    # Paired and streaming, but under the 25 s window: warming up, not absent.
+    # Under the 25 s window: warming up, not absent.
     assert build_heart_record(adapter.optics_window(RATE_WINDOW_SECONDS), tracker, 10)["rejected_by"] == "warming_up"
 
 
 def test_the_pulse_goes_through_the_real_heart_path_anchor_hold_included():
     adapter, clock = _streaming_paired()
     records = _windows(adapter, clock, 6)
-    # The first full window is withheld until a second agrees (the
-    # unconfirmed-anchor rule), never published outright.
+    # The first full window is withheld until a second agrees.
     first_full = next(r for r in records if r["rejected_by"] != "warming_up")
     assert first_full["bpm"] is None and first_full["rejected_by"] == "unconfirmed_anchor"
     accepted = [r for r in records if r["bpm"] is not None]
@@ -593,8 +567,7 @@ def test_rmssd_is_derived_on_the_same_window_when_beats_agree():
     records = _windows(adapter, clock, 8)
     with_rate = [r for r in records if r["bpm"] is not None]
     assert with_rate
-    # Either a value or a named refusal on every accepted window -- the
-    # enrichment's own field, never the rate's.
+    # A value or its own named refusal on every accepted window.
     for r in with_rate:
         assert (r["rmssd_ms"] is not None) != (r["rmssd_rejected_by"] is not None)
     assert any(r["rmssd_ms"] is not None for r in with_rate), [r["rmssd_rejected_by"] for r in with_rate]
@@ -644,8 +617,7 @@ def test_the_device_session_holds_a_heart_block_from_the_simulator():
 
 
 def test_each_optical_channel_carries_its_own_noise():
-    # Four opinions of one heart: the beat consensus and the agreement term
-    # of the confidence are only meaningful when the channels differ.
+    # Beat consensus and the confidence's agreement term need the channels to differ.
     import numpy as np
     adapter, clock = _streaming_paired()
     clock.now += 30.0
@@ -656,12 +628,11 @@ def test_each_optical_channel_carries_its_own_noise():
             assert float(np.std(channels[:, a] - channels[:, b])) > 0.0
 
 
-# --- review on #190 ------------------------------------------------------------
+# --- opt-in pulse, seeding, settings ---------------------------------------------
 
 
 def test_the_pulse_is_opt_in_and_a_plain_simulator_stores_no_heart_rate():
-    # Like MUSE_ENABLE_OPTICS on hardware: off, every window is refused as
-    # no_samples, so no rate is ever recorded from a made-up pulse by default.
+    # Like MUSE_ENABLE_OPTICS: off by default, every window is refused as no_samples.
     adapter, clock = _streaming_paired(sim_optics=False)
     assert adapter.get_ingestion_meta()["optical_supported"] is False
     clock.now += 60.0
@@ -720,8 +691,7 @@ def test_building_optics_windows_does_not_shift_the_contact_or_sample_sequence()
 
 
 def test_a_misspelt_eeg_sim_optics_warns_and_means_off(monkeypatch, caplog):
-    # Read at import inside StreamManager(), like the local-calm settings:
-    # a typo must not refuse the sidecar boot, and off is the safe side.
+    # Read at import: a typo must not refuse the sidecar boot, and off is the safe side.
     import logging
     from src.app.config import Settings
     monkeypatch.setenv("API_TOKEN", "t")

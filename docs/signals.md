@@ -676,6 +676,13 @@ Two halves that have to move together: `_weekly_signal_report`'s raw-day fallbac
 still gates on `count(*) > 0` over all face rows — `expire_signal_rows` refuses a day with no rollup row, so a
 gaze-only day must still get one or its raw rows never expire. Asserted in `scripts/assert_signal_rls.sql`.
 
+**A `latest_*` reading goes when what it describes goes.** Every 4 Hz tick sends the adapter's latest emotion, gaze
+and pose as a new row with a fresh `ts`, so a reading left in place is stored again, not merely shown again: a student
+classified `sad` who left their seat stayed `sad`, trusted, for as long as the camera was open. Emotion is dropped on
+a Haar miss (it reads the Haar crop, and then reports `no_face`); gaze and pose refresh from the full frame and are
+replaced by a `no_frame` refusal only when the camera stops handing frames over. `_forget_readings` in
+`face_ingestion.py`.
+
 ### The geometry half, and what it may not claim
 
 `face_geometry.py` is the arithmetic — named landmarks in, head pose and iris offset out, pure numpy so CI can test it.

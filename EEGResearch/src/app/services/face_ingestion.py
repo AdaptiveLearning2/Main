@@ -413,6 +413,7 @@ class FaceCaptureAdapter:
             with self._lock:
                 self._counters.consecutive_missing += 1
                 self._counters.missing_reason = "camera"
+            self._forget_readings(camera_gone=True)
             return False
 
         with self._lock:
@@ -437,6 +438,7 @@ class FaceCaptureAdapter:
             with self._lock:
                 self._counters.consecutive_missing += 1
                 self._counters.missing_reason = "no_face"
+            self._forget_readings(camera_gone=False)
             return True
 
         if (self.emotion_enabled
@@ -494,6 +496,35 @@ class FaceCaptureAdapter:
         with self._lock:
             self._counters.samples_emitted += 1
         return True
+
+    def _forget_readings(self, *, camera_gone: bool) -> None:
+        """Drop readings that no longer describe the current frame.
+
+        Every stream tick sends `latest_*` as a new row, so a reading left in
+        place after the face or the camera has gone is not "the last value" --
+        it is the same value stored again at 4 Hz with a fresh timestamp. A
+        student classified `sad` who left their seat went on being recorded as
+        `sad`, trusted, for as long as the camera stayed open.
+
+        Emotion goes on a Haar miss, since it is read from the Haar crop; it
+        then reports `no_face`. The emotion cadence is left alone, so a face
+        coming back is classified on the next interval rather than at once --
+        re-classifying on every reappearance would run FER+ at frame rate under
+        a flickering detector. Gaze and pose run their own detection on the
+        full frame and refresh themselves while frames arrive, so they are
+        replaced only when the camera stops handing frames over, and with a
+        named refusal rather than None: None reports `no_reading`, the
+        warming-up state, which a camera that stopped is not.
+        """
+        with self._lock:
+            self._latest_emotion = None
+        if not camera_gone or not self.gaze_enabled:
+            return
+        from src.app.services.face_geometry import Gaze, HeadPose  # noqa: PLC0415
+
+        with self._lock:
+            self._latest_gaze = Gaze(None, None, 0, "no_frame")
+            self._latest_pose = HeadPose(None, None, None, 0, "no_frame")
 
     # ── consumption ──────────────────────────────────────────────────────────
 

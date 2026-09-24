@@ -368,6 +368,11 @@ camera-off run) overrides field defaults and produces a dozen `test_face_*` fail
 code regression. There is no `tests/` at the repo root, so `pytest tests/` from here reports "no
 tests ran" and reads as a clean run.
 
+**From a worktree, the sidecar suite needs `PYTHONPATH=<worktree>/EEGResearch`.** `EEGResearch/.venv` holds an
+editable install pointing at the main checkout, so without it `src.app` imports main's code and the suite tests
+something other than the diff — green against a broken change, red against a fixed one. The backend suite is immune:
+its tests put their own directory on `sys.path`.
+
 Backend tests need `SUPABASE_URL` **URL-shaped** — the client validates it at import, so a
 placeholder like `x` fails collection with "Invalid URL" — and any non-empty
 `SUPABASE_SERVICE_ROLE_KEY`. They never reach a real database. EEGResearch tests need

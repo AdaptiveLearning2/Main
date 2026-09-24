@@ -511,6 +511,69 @@ def test_disconnect_forgets_the_last_emotion():
     assert adapter.latest_emotion() is None
 
 
+class _Toggle:
+    """A locator or a source whose answer the test flips between calls."""
+
+    def __init__(self, on_value):
+        self.on_value, self.on = on_value, True
+
+    def locate(self, gray):
+        return self.on_value if self.on else None
+
+    def read(self):
+        return self.on_value if self.on else None
+
+    def release(self):
+        pass
+
+
+def _emotion_adapter(source, locator, **kwargs):
+    clf = FakeClassifier("sad")
+    adapter = FaceCaptureAdapter(
+        lambda: source, lambda: locator, fps=30.0, buffer_seconds=2.0,
+        emotion_enabled=True, emotion_classifier_factory=lambda: clf,
+        emotion_interval_s=0.0, **kwargs)
+    adapter._source, adapter._locator, adapter._emotion = source, locator, clf
+    return adapter
+
+
+def test_a_face_that_leaves_takes_its_emotion_with_it():
+    """Every tick sends `latest_emotion()` as a new row. Kept past a Haar miss,
+    a student classified `sad` who left their seat was recorded as `sad`,
+    trusted, at 4 Hz for as long as the camera stayed open."""
+    locator = _Toggle(FACE_BOX)
+    adapter = _emotion_adapter(FakeSource(), locator)
+    adapter._capture_once()
+    assert adapter.latest_emotion().label == "sad"
+
+    locator.on = False
+    adapter._capture_once()
+
+    assert adapter.latest_emotion() is None
+
+
+def test_a_camera_that_stops_takes_every_reading_with_it():
+    """Gaze and pose refresh themselves from the full frame while frames
+    arrive, so only a camera that stops sending any can leave them stale. They
+    become a named refusal, not None -- None reads as warming up."""
+    source = _Toggle(_flat_frame())
+    lm = FakeLandmarker(_eyes_looking(+6.0))
+    adapter = _emotion_adapter(source, FakeLocator(), gaze_enabled=True,
+                               landmarker_factory=lambda: lm, gaze_interval_s=0.0)
+    adapter._landmarker = lm
+    adapter._capture_once()
+    assert adapter.latest_emotion() is not None
+    assert adapter.latest_gaze().x is not None
+
+    source.on = False
+    adapter._capture_once()
+
+    assert adapter.latest_emotion() is None
+    assert adapter.latest_gaze().x is None
+    assert adapter.latest_gaze().rejected_by == "no_frame"
+    assert adapter.latest_pose().rejected_by == "no_frame"
+
+
 def test_degraded_names_which_of_three_causes_it_was():
     """A disconnected webcam, a student who left, and bad lighting are three
     different problems and must produce three different reasons."""

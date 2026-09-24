@@ -1037,7 +1037,8 @@ export default function Adaptive() {
       // The duration clock starts on the first question only.
       setSessionStartedAt(prev => prev ?? Date.now())
 
-      const params = new URLSearchParams({ user_id: user.id, bias: String(bias) })
+      // No user id: the backend takes the student from the bearer.
+      const params = new URLSearchParams({ bias: String(bias) })
       if (mode === 'class' && classId) params.set('class_id', classId)
       else                              params.set('grade', grade)
       params.set('session_id', activeSessionId)

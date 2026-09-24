@@ -214,16 +214,22 @@ class MaxBodySizeMiddleware:
 app.add_middleware(MaxBodySizeMiddleware)
 
 
-# ─── the five routes with no caller ──────────────────────────────────────
-# These never call `get_user`, so they are budgeted by address. On
-# /api/generate-question `user_id` is a caller-written query param, not an identity.
+# ─── the four routes with no caller ──────────────────────────────────────
+# The per-user limiters never run on these. `test_network_edge.py` derives the
+# set from the module, so a new public route fails until budgeted.
 _PUBLIC_LIMITER = {
-    "/api/generate-question": "public_generate",
     "/api/questions":         "public_read",
     "/api/questions/count":   "public_read",
     "/api/topics":            "public_read",
     # Own bucket: polled every 5 s per open lesson, so a shared burst would starve it.
     "/api/eeg/health":        "public_probe",
+}
+
+# Routes that resolve their caller *and* keep an address budget: sign-up is
+# self-service, so a per-student limit alone is a new allowance per account.
+# Separate so `_PUBLIC_LIMITER` means exactly "no caller" (tested both ways).
+_AUTHENTICATED_ADDRESS_LIMITER = {
+    "/api/generate-question": "public_generate",
 }
 
 # An address is a school behind one NAT, not a student: 60 students polling
@@ -319,7 +325,8 @@ def _public_rate_limited(limiter: str, address: str) -> int | None:
 # Inside `security_headers` and CORS, so the page can read its 429.
 @app.middleware("http")
 async def public_rate_limit(request: Request, call_next):
-    limiter = _PUBLIC_LIMITER.get(request.url.path)
+    path = request.url.path
+    limiter = _PUBLIC_LIMITER.get(path) or _AUTHENTICATED_ADDRESS_LIMITER.get(path)
     if limiter is None:
         return await call_next(request)
 
@@ -2262,12 +2269,19 @@ def student_questions(student_id: str, request: Request, limit: int = 100):
 
 @app.get("/api/generate-question")
 def generate_question(
-    user_id:    str        = Query(...),
+    request:    Request,
     grade:      str | None = Query(None),
     class_id:   str | None = Query(None),
     bias:       int        = Query(0),
     session_id: str | None = Query(None),
 ):
+    # The student is the caller, never a query parameter: the decider reads
+    # consent by this id and signals by the session. A sent `user_id` is ignored.
+    user = get_user(request)
+    user_id = user["id"]
+    if session_id:
+        _verify_session_owner(session_id, user_id)
+
     # A query param no model checked; an unreadable grade is a 422, not a silent default.
     try:
         grade = grade_levels.validated_grade(grade)
@@ -2295,8 +2309,10 @@ def generate_question(
 
     if not question:
         print(f"[generate] generating inline for {user_id[:8]}")
-        # No security event: `user_id` is caller-written. `public_generate` records refusals.
         if not _claim_generation_slot(user_id):
+            # `get_user` resolved this id, so the refusal has a real actor.
+            _record_security_event("rate_limited", user_id,
+                                   limiter=_GENERATION_LIMITER.name)
             raise HTTPException(
                 429, "Too many questions requested. Try again shortly.",
                 headers={"Retry-After": str(max(1, int(_GENERATION_RATE_WINDOW)))},
@@ -2572,7 +2588,8 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
 
     # Same rate limit, waiter cap and refusals as /api/generate-question.
     if not _claim_generation_slot(user["id"]):
-        # The only generation refusal with a resolved actor, so the only one that records.
+        # Real actor, so it records; `GENERATION_SILENT_SITES` in
+        # `test_security_events.py` pins which sites do not.
         _record_security_event("rate_limited", user["id"],
                                limiter=_GENERATION_LIMITER.name)
         raise HTTPException(

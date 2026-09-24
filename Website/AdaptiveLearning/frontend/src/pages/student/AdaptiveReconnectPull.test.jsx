@@ -75,8 +75,8 @@ beforeEach(() => {
     subject: 'expressions', difficulty: 'easy',
   })
   mockApi({
-    'GET /api/generate-question?user_id=u1&bias=0&grade=4th+Grade&session_id=sess-1': question,
-    'GET /api/generate-question?user_id=u1&bias=0&grade=4th+Grade&session_id=sess-2': question,
+    'GET /api/generate-question?bias=0&grade=4th+Grade&session_id=sess-1': question,
+    'GET /api/generate-question?bias=0&grade=4th+Grade&session_id=sess-2': question,
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '4th Grade' }),
     'GET /api/classes': () => [],
     'GET /api/performance/student/u1': () => [],
@@ -118,7 +118,7 @@ it('brings the stream up at Connect and records only from the first question', a
  */
 it('starts the duration clock at the first question, not at Connect', async () => {
   mockApi({
-    'GET /api/generate-question?user_id=u1&bias=0&grade=4th+Grade&session_id=sess-1': () => ({
+    'GET /api/generate-question?bias=0&grade=4th+Grade&session_id=sess-1': () => ({
       question_text: 'What is 2 + 2?', answer_options: ['3', '4'], correct_answer: '4',
       subject: 'expressions', difficulty: 'easy',
     }),

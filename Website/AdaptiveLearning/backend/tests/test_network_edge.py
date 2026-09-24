@@ -371,8 +371,8 @@ def test_a_name_this_app_knows_is_silent(raw, capsys):
 
 # ─── the routes with no caller ───────────────────────────────────────────
 
-def _public_route_paths() -> set[str]:
-    """Every route handler that never resolves a caller, derived so a new one needs a budget."""
+def _public_route_paths(resolving: bool = False) -> set[str]:
+    """Routes that never resolve a caller, read from the module; `resolving=True`: those that do."""
     tree = ast.parse(pathlib.Path(main.__file__).read_text(encoding="utf-8"))
     paths = set()
     for fn in ast.walk(tree):
@@ -386,7 +386,7 @@ def _public_route_paths() -> set[str]:
         if not routes:
             continue
         body = ast.unparse(fn)
-        if "get_user(" in body or "_require_admin(" in body:
+        if ("get_user(" in body or "_require_admin(" in body) != resolving:
             continue
         paths.update(r.args[0].value for r in routes
                      if r.args and isinstance(r.args[0], ast.Constant))
@@ -400,13 +400,32 @@ def test_every_route_with_no_caller_has_an_address_budget():
 
 def test_the_derivation_found_routes_at_all():
     """Or the comparison above passes against two empty sets."""
-    assert len(_public_route_paths()) >= 5
+    assert len(_public_route_paths()) >= 4
 
 
 def test_every_budgeted_path_names_a_budget_that_exists():
     """A typo'd name is a KeyError, so a 500 on a public route."""
-    for path, limiter in main._PUBLIC_LIMITER.items():
+    for path, limiter in {**main._PUBLIC_LIMITER,
+                          **main._AUTHENTICATED_ADDRESS_LIMITER}.items():
         assert limiter in main._PUBLIC_RATE_LIMITS, path
+
+
+def test_every_authenticated_address_route_resolves_its_caller():
+    """One that stopped calling `get_user` belongs in `_PUBLIC_LIMITER`; a non-route is a typo."""
+    assert main._AUTHENTICATED_ADDRESS_LIMITER, "nothing to check"
+    assert set(main._AUTHENTICATED_ADDRESS_LIMITER) <= _public_route_paths(resolving=True)
+    assert not set(main._AUTHENTICATED_ADDRESS_LIMITER) & set(main._PUBLIC_LIMITER)
+
+
+def test_question_generation_keeps_an_address_budget(monkeypatch):
+    """Sign-up is self-service; the address caps all accounts, even failing requests."""
+    _tighten(monkeypatch, "public_generate", limit=2)
+    unguarded = TestClient(main.app, raise_server_exceptions=False)
+
+    seen = [unguarded.get("/api/generate-question?grade=5th+Grade") for _ in range(3)]
+
+    assert [r.status_code for r in seen[:2]] == [401, 401]
+    assert seen[2].status_code == 429
 
 
 def _tighten(monkeypatch, limiter="public_read", limit=2, window=60.0):
@@ -444,17 +463,18 @@ def test_the_refusal_is_readable_by_the_page_that_caused_it(monkeypatch):
     assert refused.headers["X-Content-Type-Options"] == "nosniff"
 
 
-def test_a_caller_cannot_mint_a_fresh_allowance_out_of_the_query_string(monkeypatch):
-    """Its `user_id` limiter keys on a string the caller writes; the address is not chosen."""
-    _tighten(monkeypatch, "public_generate", limit=2)
-    # The handler body raises here; the allowance is spent before it runs.
-    unguarded = TestClient(main.app, raise_server_exceptions=False)
+def test_question_generation_names_no_one_it_has_not_resolved(monkeypatch):
+    """A query-string `user_id`/`session_id` without a caller is a 401 before anything is read."""
+    reached = []
+    monkeypatch.setattr(main.LLM_topic_decider,
+                        "LLM_single_prompt_topic_and_difficulty_decider",
+                        lambda *a, **k: reached.append(a) or {"question_text": "2+2"})
 
-    seen = [unguarded.get(f"/api/generate-question?user_id=fresh-{i}&grade=5th+Grade")
-            for i in range(3)]
+    refused = client.get("/api/generate-question?user_id=someone-else"
+                         "&session_id=another-childs-session&grade=5th+Grade")
 
-    assert [r.status_code for r in seen[:2]] != [429, 429], "the first two were inside it"
-    assert seen[2].status_code == 429
+    assert refused.status_code == 401
+    assert reached == []
 
 
 def test_two_addresses_do_not_share_one_allowance(monkeypatch):

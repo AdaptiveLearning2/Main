@@ -151,3 +151,33 @@ def test_an_oversized_fraction_fails_open_rather_than_raising():
     huge = "1" + "0" * 400
     assert qc._as_floats([huge + "/1", "2"]) is None
     assert qc.dataset_mismatch("Order these: 3/4, 0.5", [huge + "/1", "2"]) is None
+
+
+# ── counts_mismatch: a bag's counts, located by the label they precede ──────
+
+BAG_TEXT = "A bag contains 6 red marbles, 4 blue marbles, and 2 green marbles."
+
+
+def test_the_counts_the_text_gives_must_be_the_counts_scored():
+    assert qc.counts_mismatch(BAG_TEXT, {"red": 6, "blue": 4, "green": 2}) is None
+    assert "red" in qc.counts_mismatch(BAG_TEXT, {"red": 5, "blue": 4, "green": 2})
+
+
+@pytest.mark.parametrize("text,counts", [
+    ("A jar holds 3 apples and 2 pears.", {"apple": 3, "pear": 2}),
+    ("A spinner has 8 equal parts: 3 are RED and 5 are blue.", {"red": 3, "blue": 5}),
+    ("There are 5 large red counters and 2 blue ones.", {"red": 5, "blue": 2}),
+])
+def test_a_label_is_found_across_case_plurals_and_adjectives(text, counts):
+    assert qc.counts_mismatch(text, counts) is None
+    wrong = {k: v + 1 for k, v in counts.items()}
+    assert qc.counts_mismatch(text, wrong) is not None
+
+
+@pytest.mark.parametrize("text", [
+    "A bag holds some red, blue and green marbles.",
+    "Red: six. Blue: four.",
+    "",
+])
+def test_it_fails_open_where_no_count_precedes_a_label(text):
+    assert qc.counts_mismatch(text, {"red": 6, "blue": 4}) is None

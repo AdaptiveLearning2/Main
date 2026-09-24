@@ -424,8 +424,9 @@ too, never a list of its own**: one goes stale as topics are added, and a pick o
 discarding the choice made from the student's performance. Kindergarten (grade 0) has its own topics and sees no
 other. An unreadable or missing grade is `grade_levels.DEFAULT_GRADE` (grade 1): every gate reads it through
 `served_grade_number` (`test_default_grade.py` fails on any other `grade_number` call outside `grade_levels`), and
-generation, the session prewarm, practice and `/api/topics` all fall back to it. The frontend names no default —
-a picker with no grade shows *Not set* and sends none, so the backend decides.
+`/api/topics` falls back to it. Generation, the session prewarm and practice resolve a grade once, through
+`main._served_grade`: the grade sent, else the student's saved one, else the default; a class's own grade wins over
+all three. The frontend names no default — a picker with no grade shows *Grade not set* and sends none.
 
 ### Difficulty and grade are one table, not two independent scales
 

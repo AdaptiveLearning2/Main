@@ -593,6 +593,10 @@ output verbatim in `question_text` — same direction as `question_figures`: der
 data and a disagreement stops being representable. Sign handling is load-bearing, since `x^2 + -5x + 6 = 0` is
 something the model "corrects", costing a retry on every negative middle coefficient.
 
+**`ordering` goes one step further: the code writes the whole question** (`render_question`) and chooses the direction,
+so the model supplies the values only. Reading a direction out of free text refused the prompt's own
+`least_to_greatest` and every wording without a pattern; a direction the code chose cannot disagree with the one shown.
+
 **A two-root equation is only scoreable because the question names which root**, chosen *before* the call and pinned
 in the prompt — `target` is deliberately absent from the schema. `shown_matches_scored` checks that too, because a
 text asking for "the smaller solution" scored against the larger is a well-formed question, correctly solved, marked

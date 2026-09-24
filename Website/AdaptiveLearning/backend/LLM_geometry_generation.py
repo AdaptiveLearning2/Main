@@ -6,6 +6,7 @@ import random
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import llm_client
+from llm_json import extract_json
 import question_schemas
 import question_figures
 import json
@@ -23,22 +24,6 @@ import scenario_tiers
 import grade_appropriateness
 
 # pi is approximated as 3.14.
-def extract_json(text):
-    start = text.find("{")
-    if start == -1:
-        return None
-
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i+1]
-
-    return None
-
 # The solve path lives in `geometry_solvers`, which the bounded worker imports.
 SCENARIO_VARS = geometry_solvers.SCENARIO_VARS
 SOLVABLE_SCENARIOS = geometry_solvers.SOLVABLE_SCENARIOS

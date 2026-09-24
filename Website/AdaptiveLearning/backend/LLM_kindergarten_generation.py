@@ -288,11 +288,13 @@ Return ONLY valid JSON, with double quotes, and nothing outside the object:
 
 def _wrong_numbers(answer, plan):
     """Three near-misses: off by one and two (by ten when counting by tens), then the numbers shown."""
-    step = 10 if plan["scenario"] == "count_by_tens" else 1
+    tens = plan["scenario"] == "count_by_tens"
+    step = 10 if tens else 1
+    ceiling = 100 if tens else float("inf")       # K.CC.1 counts to 100
     wrong = []
     for candidate in (answer + step, answer - step, answer + 2 * step, answer - 2 * step,
                       *plan["shown"], answer + 3 * step):
-        if candidate >= 0 and candidate != answer and candidate not in wrong:
+        if 0 <= candidate <= ceiling and candidate != answer and candidate not in wrong:
             wrong.append(candidate)
     return wrong[:3]
 

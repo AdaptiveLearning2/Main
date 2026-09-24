@@ -99,6 +99,28 @@ describe('the topic grid', () => {
     expect(within(grid()).getByText('geometry')).toBeInTheDocument()
   })
 
+  it('lists grade 1 for a profile with no grade, as the backend serves it', async () => {
+    // No `grade` parameter: `_allowed_topics(None)` is grade 1's list.
+    overrideApi('/api/topics', () => GRADE_ONE)
+
+    draw()
+
+    await settled('/api/topics')
+    const grid = screen.getByText('Topics in the Curriculum').nextElementSibling
+    expect(within(grid).getByText('ordering')).toBeInTheDocument()
+    expect(within(grid).queryByText('mode')).not.toBeInTheDocument()
+  })
+
+  it('asks for no topic list, and lists every topic, when the profile could not be read', async () => {
+    overrideApi('/api/profile/me', () => { throw apiError(500, 'down') })
+
+    draw()
+
+    await screen.findByText('30%')
+    expect(screen.getByText('mode')).toBeInTheDocument()
+    expect(apiFetch.mock.calls.some(([p]) => p.startsWith('/api/topics'))).toBe(false)
+  })
+
   it('lists every topic when the grade could not be looked up', async () => {
     overrideApi('/api/profile/me', () => ({ practice_reminders: false, grade_level: '1st Grade' }))
     overrideApi('/api/topics?grade=1st%20Grade', () => { throw apiError(500, 'down') })

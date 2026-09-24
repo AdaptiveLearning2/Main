@@ -1089,7 +1089,7 @@ export default function Adaptive() {
 
   const activeClass = classes.find(c => c.id === classId)
   const effectiveGrade = mode === 'class' ? (activeClass?.grade_level || '—') : grade
-  // What this grade is served, plus anything attempted; `null` (unknown) keeps every topic.
+  // What this grade is served, plus anything attempted. A class with no grade is served grade 1.
   const gradeTopics = useGradeTopics(effectiveGrade === '—' ? null : effectiveGrade)
   const shownTopics = topicsToShow(gradeTopics,
     TOPICS.filter(t => (accuracyStats.subjects[t]?.attempts ?? 0) > 0))

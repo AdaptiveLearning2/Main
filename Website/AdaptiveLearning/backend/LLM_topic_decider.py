@@ -4,6 +4,7 @@ from flask_cors import CORS
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import llm_client
+from llm_json import extract_json
 import json
 import random
 from statistics import fmean
@@ -377,7 +378,6 @@ def get_user_history(user_id):
     return user_histories[user_id]
 
 
-from llm_json import extract_json  # noqa: E402  (shared with LLM_kindergarten_generation)
 
 # Rows the duplicate check reads; a match beyond it is just stored again.
 _DEDUPE_CANDIDATES = 50

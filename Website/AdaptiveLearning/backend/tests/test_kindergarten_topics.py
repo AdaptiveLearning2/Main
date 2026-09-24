@@ -194,11 +194,16 @@ def test_square_and_rectangle_are_never_offered_together():
             assert not {"square", "rectangle"} <= set(plan["options"]), plan["options"]
 
 
-def test_counting_by_tens_offers_only_tens():
-    for _, scenario, plan in _every_plan():
+def test_counting_by_tens_offers_only_tens_up_to_100():
+    """K.CC.1 counts to 100; an answer of 90 once offered 110."""
+    starts = set()
+    for _, scenario, plan in _every_plan(200):
         if scenario == "count_by_tens":
+            starts.add(plan["shown"][0])
             options = [plan["answer"], *kg._wrong_numbers(plan["answer"], plan)]
-            assert all(o % 10 == 0 for o in options) and len(set(options)) == 4, options
+            assert all(o % 10 == 0 and o <= 100 for o in options), options
+            assert len(set(options)) == 4, options
+    assert 60 in starts, "no seed reached the start whose answer is 90"
 
 
 @pytest.mark.parametrize("scenario,text", [
@@ -222,9 +227,17 @@ def test_the_json_template_never_hands_back_an_example_it_said_not_to_copy(
     assert (plans[-1]["example"] in template) is bool(fixed)
 
 
-def test_the_generator_and_the_decider_share_one_extract_json():
+def test_every_generator_and_the_decider_share_one_extract_json():
+    """Seventeen copies once; a module defining its own is a copy that can drift."""
+    import glob
+    import importlib
+    import os
     import llm_json
-    assert kg.extract_json is llm_json.extract_json is td.extract_json
+    backend = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    names = [os.path.basename(p)[:-3] for p in glob.glob(os.path.join(backend, "LLM_*_generation.py"))]
+    assert len(names) >= 18
+    own = [n for n in names if importlib.import_module(n).extract_json is not llm_json.extract_json]
+    assert own == [] and td.extract_json is llm_json.extract_json, own
 
 
 # ── the wording the model returns is checked, not trusted ───────────────────

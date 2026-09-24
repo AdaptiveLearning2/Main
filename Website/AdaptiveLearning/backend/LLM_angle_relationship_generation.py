@@ -4,6 +4,7 @@ import random
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import llm_client
+from llm_json import extract_json
 import question_schemas
 import json
 from flask import Flask, jsonify
@@ -26,22 +27,6 @@ import scenario_tiers
 import grade_appropriateness
 
 transformations = (standard_transformations + (implicit_multiplication_application,))
-
-def extract_json(text):
-    start = text.find("{")
-    if start == -1:
-        return None
-
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i+1]
-
-    return None
 
 def normalize_solution(sol):
     if isinstance(sol, list):

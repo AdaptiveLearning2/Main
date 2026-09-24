@@ -84,7 +84,7 @@ limit that does not exist.
 
 `backend/llm_client.py` is the only place either provider is reached. Fourteen call sites used to import `ollama`
 directly, so a provider switch was fourteen edits and the bounds below had nowhere to live. Count the `generate_text(`
-sites rather than trusting a number here — today it is the seventeen generators, the decider and the strategies pass.
+sites rather than trusting a number here — today it is the eighteen generators, the decider and the strategies pass.
 Two of the decider's belonged to `parallel_topic_and_difficulty_calculation`, which spent *two* model calls on what the
 live path does in one and was reachable from nothing; deleted with its sole caller, since dead code that bills twice
 per question is a trap for whoever wires it up next.
@@ -255,7 +255,7 @@ model.
 
 ## `grade` reaches a prompt rebuilt from its number, never as the caller wrote it
 
-`grade` is interpolated into **nineteen** prompts — `Student Grade Level = {grade}` in `LLM_topic_decider`, and one
+`grade` is interpolated into **twenty** prompts — `Student Grade Level = {grade}` in `LLM_topic_decider`, and one
 `a {grade} student` line in each generator — and every one of those strings is client-supplied.
 `GET /api/generate-question?grade=` is a query parameter with no request model behind it; `PUT /api/profile/me`, the
 two class endpoints and `POST /api/practice-sessions/start` all declared it a bare `str | None`. A value carrying a
@@ -274,8 +274,8 @@ behaviour-preserving — `_allowed_topics`, `grade_band` and every generator's `
 never on the string. Break the round-trip and the grade gates move with no other symptom. Two dropdown labels are
 relabelled on the way through ("Highschool" → "9th Grade"), safe for the same reason.
 
-**Applied at two chokepoints, not nineteen**: `question_generation` is the sole dispatch point to all seventeen
-generators, so sanitising there covers eighteen of the sites and the decider covers its own. That is sound only while
+**Applied at two chokepoints, not twenty**: `question_generation` is the sole dispatch point to all eighteen
+generators, so sanitising there covers nineteen of the sites and the decider covers its own. That is sound only while
 it *is* sole — a test walks the module's AST and fails on a generator called from anywhere else.
 
 **The edge checks (`validated_grade`, on all five entry points) are the second layer and are not what stops an
@@ -299,7 +299,7 @@ seeded `math_topics` vocabulary (`record_topic_attempt` refuses to invent a row,
 PATCHed past its validator. A lesson plan is dashboard-authored and clamped.
 
 The fourth is `get_user_history`: the model's own previous `question_text`, replayed so the next question is not a
-repeat. Seventeen generators newline-join it and follow it with *"DO NOT generate a question matching any of the
+repeat. Eighteen generators newline-join it and follow it with *"DO NOT generate a question matching any of the
 above"*, so a reply carrying a newline put a line of its own in instruction position. `_prompt_safe_history` flattens
 and bounds it at the two sites the history is **read** — `question_generation` and the single-prompt decider — not in
 each generator, the chokepoint `grade_for_prompt` already argues for.
@@ -430,11 +430,11 @@ scaled a number's magnitude on top, so "easy" meant "one-step equation with x" a
 `COMPLEXITY_BY_GRADE[grade_band][difficulty]` replaces both with one self-contained instruction per cell, "early"
 grounded in grades 1–3 arithmetic rather than smaller versions of the same structure.
 
-**Eleven of the seventeen topics use it, and the six that do not are not an unfinished migration.** In `geometry`,
+**Eleven of the twenty-two topics use it, and the eleven that do not are not an unfinished migration.** In `geometry`,
 `angle_relationships` and `probability` difficulty already selects a *scenario*, so a second table would state the
 difficulty rule twice in two places that can disagree; they keep `GRADE_COMPLEXITY[band]` for magnitude alone, with
 grade gating their scenarios through `_pick_scenario`. `quadratics`, `functions` and `spread` choose difficulty in
-coefficients in code.
+coefficients in code. The five kindergarten topics pick every number in code, per scenario (`_plan`).
 
 **`GRADE_OVERRIDES` is a per-grade line appended to the prompt**, deliberately not folded into the band-keyed table —
 a thirteenth column for one rule would make every other topic's table wrong by omission. Prompt-level, so it can leak;
@@ -878,8 +878,8 @@ word cannot appear in that file's comments either; the guard reads the file, not
 
 `COMPLEXITY_BY_GRADE` and the lesson-plan text are both **prompt-level** — they ask the model for something and
 nothing verifies it complied. So `find_violation(question_text, topic, grade_band)` runs inside each generation retry
-loop: a violation retries, and exhausting the retries raises, which `_prefetch_worker` already catches. Thirteen of
-the seventeen topics are wired in; `algebra`, `quadratics`, `functions` and `spread` are the exemptions above.
+loop: a violation retries, and exhausting the retries raises, which `_prefetch_worker` already catches. Eighteen of
+the twenty-two topics are wired in; `algebra`, `quadratics`, `functions` and `spread` are the exemptions above.
 
 **It tests one thing — algebraic variable notation reaching a band that must not see it — and the narrowness is the
 design.** A check with a real false-positive rate is worse than no check: it burns retries, and a question rejected

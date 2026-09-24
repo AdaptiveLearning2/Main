@@ -7,6 +7,7 @@ import random
 import re
 
 import llm_client
+from llm_json import extract_json
 import lesson_plan_context
 import question_schemas
 import grade_levels
@@ -14,23 +15,6 @@ import ccss_standards
 import grade_appropriateness
 import incorrect_solution_generation as inc_gen
 import answer_format
-
-
-def extract_json(text):
-    start = text.find("{")
-    if start == -1:
-        return None
-
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i+1]
-
-    return None
 
 
 BLANK = "?"

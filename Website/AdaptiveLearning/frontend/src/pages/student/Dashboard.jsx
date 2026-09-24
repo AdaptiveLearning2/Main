@@ -46,8 +46,9 @@ export default function StudentDashboard() {
   const [nudge, setNudge] = useState(null)
   // Keyed by `topic_name`; `{}` on failure renders plain, unmeasured tiles.
   const [topics, setTopics] = useState({})
-  // The profile's grade decides which topics the grid lists; `null` until it is read.
-  const [grade, setGrade] = useState(null)
+  // The profile's grade decides which topics the grid lists: `undefined` until the profile is
+  // read (or if it could not be), `null` for a profile with no grade, which is served grade 1.
+  const [grade, setGrade] = useState(undefined)
 
   useEffect(() => {
     Promise.all([
@@ -61,7 +62,7 @@ export default function StudentDashboard() {
     ]).then(([s, sess, profile]) => {
       setStats(s)
       setSessions(sess)
-      setGrade(profile?.grade_level || null)
+      setGrade(profile ? (profile.grade_level || null) : undefined)
       // The browser's local day, not the school's timezone.
       const today = new Date().toLocaleDateString('en-CA')   // YYYY-MM-DD, local
       const practisedToday = Array.isArray(sess) && sess.some(x =>

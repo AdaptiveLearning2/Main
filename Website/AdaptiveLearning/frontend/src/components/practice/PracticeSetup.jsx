@@ -4,7 +4,8 @@ import { toast } from 'sonner'
 import { apiFetch } from '../../lib/api'
 import LoadError from '../ui/LoadError'
 import PracticeHistory from './PracticeHistory'
-import { TOPIC_ICONS } from '../../lib/topics'
+import { TOPIC_ICONS, topicLabel } from '../../lib/topics'
+import { useGradeTopicsState } from '../../hooks/useGradeTopics'
 
 const DIFFICULTIES = ['easy', 'medium', 'hard']
 // Adaptive's goal rungs minus "No limit": a test has no Finish button, so the count is a real cap.
@@ -20,8 +21,10 @@ const ICONS = TOPIC_ICONS
  * @param onStart  called with `(session, questionCount)`; the count is frontend-only.
  */
 export default function PracticeSetup({ onStart }) {
-  const [topics, setTopics] = useState([])
-  const [grade, setGrade] = useState('5th Grade')
+  // `undefined` until the profile is read; the topic rows follow it (`useGradeTopicsState`).
+  const [grade, setGrade] = useState(undefined)
+  const [topicsAttempt, setTopicsAttempt] = useState(0)
+  const { rows: topics, failed: topicsFailed } = useGradeTopicsState(grade, topicsAttempt)
   const [selectedTopics, setSelectedTopics] = useState([])
   const [difficulty, setDifficulty] = useState('medium')
   const [mode, setMode] = useState('test')
@@ -36,10 +39,8 @@ export default function PracticeSetup({ onStart }) {
     setFailed(false)
     try {
       const profile = await apiFetch('/api/profile/me')
-      const g = profile?.grade_level || '5th Grade'
-      setGrade(g)
-      const t = await apiFetch(`/api/topics?grade=${encodeURIComponent(g)}`)
-      setTopics(t || [])
+      // 5th Grade, as `start_practice_session` defaults it.
+      setGrade(profile?.grade_level || '5th Grade')
       // Best-effort: a failed history read shouldn't block starting a session.
       apiFetch('/api/practice-sessions').then(setHistory).catch(() => {})
     } catch (e) {
@@ -52,17 +53,8 @@ export default function PracticeSetup({ onStart }) {
 
   useEffect(() => { load() }, [load])
 
-  // Refetches from the event handler, not an effect on `grade`.
-  async function handleGradeChange(newGrade) {
-    setGrade(newGrade)
-    try {
-      const t = await apiFetch(`/api/topics?grade=${encodeURIComponent(newGrade)}`)
-      setTopics(t || [])
-      setSelectedTopics(sel => sel.filter(name => (t || []).some(x => x.name === name && x.allowed)))
-    } catch (e) {
-      console.error('Failed to refresh topics for the new grade:', e)
-    }
-  }
+  // What is sent: a pick the grade no longer allows drops out, derived rather than pruned.
+  const chosen = selectedTopics.filter(name => (topics || []).some(t => t.name === name && t.allowed))
 
   function toggleTopic(name, allowed) {
     if (!allowed) return
@@ -70,12 +62,12 @@ export default function PracticeSetup({ onStart }) {
   }
 
   async function handleStart() {
-    if (!selectedTopics.length || starting) return
+    if (!chosen.length || starting) return
     setStarting(true)
     try {
       const session = await apiFetch('/api/practice-sessions/start', {
         method: 'POST',
-        body: { mode, topics: selectedTopics, difficulty, grade },
+        body: { mode, topics: chosen, difficulty, grade },
       })
       onStart(session, questionCount)
     } catch (e) {
@@ -109,9 +101,13 @@ export default function PracticeSetup({ onStart }) {
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 space-y-6">
         <div>
           <h3 className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3">Topics</h3>
+          {topicsFailed && <LoadError what="topics" onRetry={() => setTopicsAttempt(a => a + 1)} />}
+          {!topicsFailed && topics === null && (
+            <p className="text-sm text-gray-600 dark:text-gray-400">Loading topics…</p>
+          )}
           <div className="flex flex-wrap gap-2">
-            {topics.map(t => {
-              const isSelected = selectedTopics.includes(t.name)
+            {(topics || []).map(t => {
+              const isSelected = chosen.includes(t.name)
               return (
                 <button key={t.name} type="button" onClick={() => toggleTopic(t.name, t.allowed)}
                   disabled={!t.allowed}
@@ -122,7 +118,7 @@ export default function PracticeSetup({ onStart }) {
                         : 'border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:border-indigo-300'}`}
                 >
                   <span>{ICONS[t.name] || '📘'}</span>
-                  {t.name.replace(/_/g, ' ')}
+                  {topicLabel(t.name)}
                 </button>
               )
             })}
@@ -148,7 +144,7 @@ export default function PracticeSetup({ onStart }) {
           <label htmlFor="practice-grade" className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3 block">
             Grade
           </label>
-          <select id="practice-grade" value={grade} onChange={e => handleGradeChange(e.target.value)}
+          <select id="practice-grade" value={grade} onChange={e => setGrade(e.target.value)}
             className="w-full px-3 py-2 rounded-xl border-2 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm font-bold">
             {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
           </select>
@@ -195,9 +191,9 @@ export default function PracticeSetup({ onStart }) {
           </div>
         )}
 
-        <button onClick={handleStart} disabled={!selectedTopics.length || starting}
+        <button onClick={handleStart} disabled={!chosen.length || starting}
           className="w-full py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-xl font-bold hover:from-indigo-700 hover:to-violet-700 transition shadow disabled:opacity-40 disabled:cursor-not-allowed">
-          {starting ? 'Starting…' : selectedTopics.length ? 'Start Practice →' : 'Pick at least one topic'}
+          {starting ? 'Starting…' : chosen.length ? 'Start Practice →' : 'Pick at least one topic'}
         </button>
       </div>
 

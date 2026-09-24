@@ -1,4 +1,4 @@
-"""The first balanced `{...}` in a model's reply; the older `LLM_*_generation.py` files keep their own copies."""
+"""The first balanced `{...}` in a model's reply; every generator and the topic decider import this one."""
 
 
 def extract_json(text):

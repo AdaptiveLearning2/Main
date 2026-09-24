@@ -4,6 +4,7 @@ import random
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import llm_client
+from llm_json import extract_json
 import json
 from flask import Flask, jsonify
 from flask_cors import CORS
@@ -37,22 +38,6 @@ def answer_text(val):
     if is_numeric(val):
         return answer_format.format_value(float(val))
     return str(val)
-
-def extract_json(text):
-    start = text.find("{")
-    if start == -1:
-        return None
-
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i+1]
-
-    return None
 
 # Only the selected scenario's block is sent. Scenario 1's example is still an
 # older-student shape, so EARLY_BAND_EXAMPLE below must stay.

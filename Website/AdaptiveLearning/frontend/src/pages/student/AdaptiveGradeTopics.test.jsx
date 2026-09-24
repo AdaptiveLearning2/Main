@@ -85,6 +85,23 @@ it('lists every topic when the grade could not be looked up', async () => {
   expect(within(sidebar()).getByText(/add and subtract/)).toBeInTheDocument()
 })
 
+it('leaves a student with no grade to the backend default, naming no grade itself', async () => {
+  overrideApi('/api/profile/me', () => ({ id: 'u1', role: 'student', grade_level: null }), 'GET')
+  // No `grade` parameter on either read: the backend answers for its own default.
+  overrideApi('/api/topics', () => TOPICS_ROWS, 'GET')
+  overrideApi('/api/generate-question?bias=0&session_id=sess-k', () => ({
+    id: 'q1', question_text: 'What is 2 + 1 = ?', question_topic: 'add_and_subtract',
+    answer_options: ['2', '3', '4'], correct_answer: '3', difficulty: 'easy',
+  }), 'GET')
+  render(<Adaptive />)
+
+  await settled('/api/profile/me')
+  expect(screen.getByDisplayValue('Not set')).toBeInTheDocument()
+  await userEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  expect(await screen.findByText('What is 2 + 1 = ?')).toBeInTheDocument()
+  expect(apiFetch.mock.calls.some(([p]) => /[?&]grade=/.test(p))).toBe(false)
+})
+
 it('names a two-underscore topic with every underscore a space', async () => {
   render(<Adaptive />)
   await userEvent.click(await screen.findByRole('button', { name: /generate question/i }))

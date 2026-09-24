@@ -81,7 +81,8 @@ export default function Adaptive() {
 
   // mode: 'solo' (pick your own grade) | 'class' (use class grade)
   const [mode, setMode] = useState(() => localStorage.getItem('adaptive_mode') || 'solo')
-  const [grade, setGrade] = useState('1st Grade')
+  // '' is no grade: nothing names one, so the backend serves its default.
+  const [grade, setGrade] = useState('')
   const [classes, setClasses] = useState([])
   const [classId, setClassId] = useState('')
   const [bias, setBias] = useState(0) // -1 easier, 0 auto, +1 harder
@@ -1041,7 +1042,7 @@ export default function Adaptive() {
       // No user id: the backend takes the student from the bearer.
       const params = new URLSearchParams({ bias: String(bias) })
       if (mode === 'class' && classId) params.set('class_id', classId)
-      else                              params.set('grade', grade)
+      else if (grade)                   params.set('grade', grade)
       params.set('session_id', activeSessionId)
 
       const json = await apiFetch(`/api/generate-question?${params.toString()}`)
@@ -1088,8 +1089,8 @@ export default function Adaptive() {
     : headband.samples
 
   const activeClass = classes.find(c => c.id === classId)
-  const effectiveGrade = mode === 'class' ? (activeClass?.grade_level || '—') : grade
-  // What this grade is served, plus anything attempted. A class with no grade is served grade 1.
+  const effectiveGrade = (mode === 'class' ? activeClass?.grade_level : grade) || '—'
+  // What this grade is served, plus anything attempted. No grade ('—') is the backend's default.
   const gradeTopics = useGradeTopics(effectiveGrade === '—' ? null : effectiveGrade)
   const shownTopics = topicsToShow(gradeTopics,
     TOPICS.filter(t => (accuracyStats.subjects[t]?.attempts ?? 0) > 0))
@@ -1373,6 +1374,7 @@ export default function Adaptive() {
                       <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 text-center">Grade Level</label>
                       <select value={grade} onChange={e => setGrade(e.target.value)}
                         className="w-full text-center px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-200 text-sm">
+                        {grade === '' && <option value="">Not set</option>}
                         {GRADES.map(d => <option key={d} value={d}>{d}</option>)}
                       </select>
                     </>

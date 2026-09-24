@@ -84,9 +84,7 @@ it('clears it even when sign-out fails', async () => {
 })
 
 it('runs the sign-out tasks while the token still exists', async () => {
-  // A page's unmount cleanup runs after `supabase.auth.signOut()` has cleared
-  // the session, so anything needing a bearer has to go first -- asserted as
-  // an order, since both calls happen either way.
+  // Asserted as an order, since both calls happen either way.
   const order = []
   signOut.mockImplementation(async () => { order.push('signOut'); return { error: null } })
   const off = onSignOut(async () => { order.push('task') })

@@ -102,8 +102,7 @@ export function AuthProvider({ children }) {
   }
 
   const signOut = async () => {
-    // While the token still exists: a page's unmount cleanup runs after it
-    // is gone. See `lib/signOutTasks.js`.
+    // Before the token is cleared; see `lib/signOutTasks.js`.
     await runSignOutTasks()
     try {
       await supabase.auth.signOut()

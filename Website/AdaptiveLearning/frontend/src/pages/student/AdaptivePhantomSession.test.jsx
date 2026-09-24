@@ -66,10 +66,7 @@ it('ends the session when the student leaves, recorded or not', async () => {
 
 
 it('ends the session before sign-out takes the token, and only once', async () => {
-  // Sign-out clears the session first and navigation unmounts the page
-  // after, so the unmount's `/end` went out with no bearer, 401'd, and left
-  // the session open -- under pull, the poller still recording and holding
-  // the headband. The sign-out tasks run while the token exists.
+  // The unmount's `/end` would go out with no bearer and 401.
   const { unmount } = render(<Adaptive />)
   await userEvent.click(await screen.findByRole('button', { name: /generate question/i }))
   await screen.findByText('What is 2 + 2?')

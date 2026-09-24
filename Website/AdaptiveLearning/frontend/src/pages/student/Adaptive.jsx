@@ -256,8 +256,8 @@ export default function Adaptive() {
     if (sessionIdRef.current) endSession(sessionIdRef.current)
   }, [])
 
-  // Sign-out clears the token before unmount, so end the session now; the ref is
-  // cleared on success so the unmount cleanup sends no second, tokenless `/end`.
+  // Sign-out clears the token before unmount, so the cleanup above would 401.
+  // End the session now; clearing the ref stops a second, tokenless `/end`.
   useEffect(() => onSignOut(async () => {
     const id = sessionIdRef.current
     if (id && await endSession(id)) sessionIdRef.current = null

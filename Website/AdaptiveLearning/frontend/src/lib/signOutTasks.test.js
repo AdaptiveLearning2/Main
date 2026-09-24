@@ -2,8 +2,6 @@ import { it, expect } from 'vitest'
 import { onSignOut, runSignOutTasks } from './signOutTasks'
 
 it('does not hold sign-out on a task that never settles', async () => {
-  // A backend that does not answer must not leave the student unable to
-  // sign out; the page's unmount cleanup is still there as the fallback.
   const off = onSignOut(() => new Promise(() => {}))
   try {
     const started = Date.now()

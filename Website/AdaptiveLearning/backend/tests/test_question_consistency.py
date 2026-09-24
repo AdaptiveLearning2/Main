@@ -194,6 +194,11 @@ def test_every_number_in_the_text_must_be_a_scored_count_or_their_total(text, co
     assert qc.counts_mismatch(text, counts) is not None
 
 
+def test_a_swapped_count_is_caught_through_an_ies_plural():
+    """The same numbers either way, so only reading "cherries" as "cherry" can see the swap."""
+    assert qc.counts_mismatch("A basket has 3 cherries and 4 plums.", {"cherry": 4, "plum": 3}) is not None
+
+
 def test_a_stated_total_that_adds_up_agrees():
     assert qc.counts_mismatch("A bag of 12 marbles has 6 red, 4 blue and 2 green.",
                               {"red": 6, "blue": 4, "green": 2}) is None
@@ -225,6 +230,7 @@ DIE = "A standard six-sided die is rolled. What is the probability of rolling "
 @pytest.mark.parametrize("text,sides,faces", [
     (DIE + "a number greater than 4?", 6, [6]),                         # the event
     (DIE + "a number greater than 4?", 8, [5, 6]),                      # the die
+    (DIE + "a 3?", 8, [3]),                                             # the die, same event
     (DIE + "an even number?", 6, [2, 4]),
     (DIE + "a 2 or a 5?", 6, [2, 3]),
     (DIE + "a number less than 3?", 6, [1, 2, 3]),

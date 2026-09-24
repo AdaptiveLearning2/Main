@@ -154,6 +154,12 @@ def test_a_reply_the_text_does_not_describe_is_retried(replies, difficulty, payl
     assert len(asked) == 2
 
 
+@pytest.mark.parametrize("sides,usable", [("100", True), ("101", False), ("1e20", False)])
+def test_a_die_has_at_most_a_hundred_sides(sides, usable):
+    """Checked on the parse itself: a stated "six-sided" would also refuse these fixtures."""
+    assert isinstance(prob._scored_data({**DICE, "sides": sides}), str) is not usable
+
+
 def test_the_prompt_asks_for_items_as_an_object():
     """The check refuses anything else, so a model following a "list" rule failed every retry."""
     assert '"items" must be an object' in prob.prob_prompt

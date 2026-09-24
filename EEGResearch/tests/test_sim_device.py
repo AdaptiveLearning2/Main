@@ -241,7 +241,9 @@ def test_battery_is_null_before_the_first_report_and_a_charge_after():
     clock.now += 1.0
     pct = adapter.get_ingestion_meta()["battery_percent"]
     lo, hi = adapter.BATTERY_START_RANGE
-    assert isinstance(pct, float) and lo <= pct <= hi
+    # The charge drains from pairing, so a start near `lo` reads below it; 0.05 is the rounding.
+    drained = adapter.BATTERY_DRAIN_PCT_PER_HOUR * adapter.BATTERY_FIRST_REPORT_SECONDS / 3600.0
+    assert isinstance(pct, float) and lo - drained - 0.05 <= pct <= hi
 
 
 def test_battery_drains_on_the_clock_whether_or_not_anything_reads():

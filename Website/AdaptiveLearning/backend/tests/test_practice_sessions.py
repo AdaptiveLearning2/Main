@@ -1,25 +1,4 @@
-"""The self-study practice mode: topic(s)/difficulty/grade picked explicitly,
-questions generated through the same LLM pipeline the live Adaptive session
-uses, no EEG/camera involvement, and tracking kept out of the tables the live
-adaptive engine and its `sessions`-table close machinery read.
-
-Three things this file exists to pin, beyond the ordinary ownership/shape
-checks every endpoint here needs:
-
-1. A topic outside `_allowed_topics(grade)` is refused at `/start`, not just
-   greyed out client-side.
-2. `/answer` and `/view` never touch `user_math_performance` /
-   `record_topic_attempt` -- that table drives the *live* adaptive engine's
-   own topic/difficulty choice, and letting an untimed, explicitly-picked
-   practice answer feed it would defeat the point of a separate mode.
-3. `end_practice_session` must never be discoverable by
-   `conftest.close_sites()`. PR #152 added a background sweep that scans every
-   function in `main` for the literal substring `_close_session(` or
-   `"ended_at":` and, for anything found that isn't `end_session`, demands
-   `CLOSED_BY_SWEEP` appear in its source. Practice sessions are a different
-   table with none of that machinery, so tripping that scan would fail a test
-   this file has no way to satisfy on purpose.
-"""
+"""Practice mode: grade-gated topics, no live topic tables, never a `sessions` close site."""
 import collections
 import os
 
@@ -37,11 +16,7 @@ SESSION = "practice-1"
 
 
 class _Client:
-    """A hand-rolled fake covering exactly the tables/RPC the practice
-    endpoints touch, in the same spirit as test_answer_recording.py's
-    `_Client` -- small and endpoint-specific rather than the large shared
-    fake in test_access_control.py.
-    """
+    """Exactly the tables/RPC the practice endpoints touch; any other table raises."""
 
     def __init__(self, sessions=None, answers=None, questions=None):
         self.sessions = {s["id"]: dict(s) for s in (sessions or [])}
@@ -187,18 +162,7 @@ def test_topics_marks_which_are_allowed_at_a_young_grade():
 
 
 def test_topics_at_eighth_grade_are_those_inside_both_bounds():
-    """Allowed is the grade sitting between a topic's floor and its ceiling.
-
-    This used to read "allowed iff it has no ceiling", which was true only
-    while a ceiling was the *only* way a topic could be withheld from an 8th
-    grader. `quadratics` and `functions` have a floor of 9, so they are
-    correctly not offered here while appearing in no `TOPIC_MAX_GRADE` --
-    which broke the old equivalence rather than the behaviour.
-
-    `missing_number` and `patterns` are still the ceiling half of it: capped
-    at grades 3 and 5, so this surface does not let an 8th grader pick
-    "8 + ? = 11" as practice.
-    """
+    """Allowed is the grade sitting between a topic's floor and its ceiling."""
     import LLM_topic_decider as decider
     topics = main.list_topics(grade="8th Grade")
     for topic in topics:
@@ -307,8 +271,7 @@ def test_question_refuses_over_the_rate_limit(_client, monkeypatch):
 
 
 def test_question_surfaces_a_reached_ceiling_as_503_not_500(_client, monkeypatch):
-    """Same contract as /api/generate-question: a ceiling is a decision this
-    deployment made, not something that broke."""
+    """Same contract as /api/generate-question: a ceiling is a decision, not a fault."""
     _as(monkeypatch, USER)
     _client(sessions=[_OWNED_SESSION])
 
@@ -332,11 +295,7 @@ def test_question_that_genuinely_failed_is_a_500(_client, monkeypatch):
 
 
 def test_question_generates_from_the_sessions_own_settings_and_stores_it(_client, monkeypatch):
-    """The endpoint calls the topic-agnostic generator directly with the
-    session's own topic/difficulty/grade, then attaches a stored id the same
-    way the live decider does -- confirmed by asserting the exact arguments
-    reach `question_generation`, not just that a question came back.
-    """
+    """Asserts the exact arguments reaching `question_generation`, not just that a question came back."""
     _as(monkeypatch, USER)
     _client(sessions=[_OWNED_SESSION])
     calls = []
@@ -355,8 +314,7 @@ def test_question_generates_from_the_sessions_own_settings_and_stores_it(_client
     assert calls == [("ordering", "easy", USER, "5th Grade")]
     assert question["id"] == "generated-1"
     assert question["difficulty"] == "easy"
-    # No EEG/bias fields -- question_generation never sets them, unlike the
-    # live decider, and nothing here should invent them.
+    # No EEG/bias fields: question_generation never sets them.
     assert "eeg_label" not in question
     assert "bias" not in question
 
@@ -373,9 +331,7 @@ def test_question_ends_a_finished_session_with_409(_client, monkeypatch):
 # ─── POST /api/practice-sessions/{id}/answer, /view ─────────────────────
 
 def test_answer_resolves_topic_from_the_question_row_never_the_caller(_client, monkeypatch):
-    """Same principle as `_record_topic_attempt` on the live path: the client
-    already has to be trusted about correctness, so letting it also name the
-    topic would let a page credit the wrong subject."""
+    """As on the live path: a client-named topic would let a page credit the wrong subject."""
     _as(monkeypatch, USER)
     c = _client(sessions=[_OWNED_SESSION],
                 questions=[{"id": "q-1", "subject": "ordering"}])
@@ -417,12 +373,7 @@ def test_view_records_an_ungraded_attempt(_client, monkeypatch):
 
 
 def test_answer_refuses_once_the_session_has_ended(_client, monkeypatch):
-    """A timeout's `postAnswer` fires without the page awaiting it, so a
-    student clicking through to results can otherwise land an answer after
-    `topic_summary` was already computed at close -- permanently stale
-    against a counter bump nothing ever re-summarizes. Same contract as
-    `practice_question`'s 409.
-    """
+    """An unawaited `postAnswer` landing after close would leave `topic_summary` permanently stale."""
     _as(monkeypatch, USER)
     ended = dict(_OWNED_SESSION, ended_at="2026-08-25T00:00:00Z")
     c = _client(sessions=[ended], questions=[{"id": "q-1", "subject": "ordering"}])
@@ -462,8 +413,7 @@ def test_end_summarizes_correct_and_ungraded_topics_separately(_client, monkeypa
     result = main.end_practice_session(SESSION, None)
 
     assert result["topic_summary"]["ordering"] == {"attempted": 2, "correct": 50}
-    # A topic that was only ever viewed has no graded answers -- `correct`
-    # stays null rather than reading as a 0% score nobody actually earned.
+    # Viewed-only: `correct` is null, not a 0% nobody earned.
     assert result["topic_summary"]["geometry"] == {"attempted": 1, "correct": None}
     assert c.sessions[SESSION]["ended_at"] is not None
     assert c.sessions[SESSION]["topic_summary"] == result["topic_summary"]
@@ -482,9 +432,7 @@ def test_end_is_idempotent_and_does_not_recompute(_client, monkeypatch):
 
 
 def test_end_never_touches_sessions_or_its_close_machinery(_client, monkeypatch):
-    """The whole point of a separate table pair: closing a practice session
-    must not run the rollup/chart-archive/alert machinery built for a
-    signal-bearing `sessions` row."""
+    """No rollup/chart-archive/alert machinery built for signal-bearing `sessions` rows."""
     _as(monkeypatch, USER)
     c = _client(sessions=[_OWNED_SESSION])
 
@@ -497,12 +445,7 @@ def test_end_never_touches_sessions_or_its_close_machinery(_client, monkeypatch)
 
 
 def test_end_practice_session_is_not_a_close_site():
-    """Pins the PR #152 gotcha directly: `conftest.close_sites()` scans every
-    function in `main` for `_close_session(` or a literal `"ended_at":`, and
-    demands `CLOSED_BY_SWEEP` from anything it finds that isn't `end_session`.
-    `end_practice_session` deliberately writes its close stamp through a
-    variable so it is never swept in.
-    """
+    """`end_practice_session` writes its close stamp through a variable so `close_sites()` skips it."""
     from conftest import close_sites
     names = [name for name, _ in close_sites()]
     assert "end_practice_session" not in names, (
@@ -525,9 +468,7 @@ def test_list_practice_sessions_is_scoped_to_the_caller(_client, monkeypatch):
 
 
 def test_list_practice_sessions_is_capped(_client, monkeypatch):
-    """Matches `student_sessions`' own cap on the analogous live-session
-    read -- unbounded here would grow with every practice session a student
-    has ever started."""
+    """Matches `student_sessions`' cap on the live-session read."""
     _as(monkeypatch, USER)
     many = [dict(_OWNED_SESSION, id=f"s-{i}", started_at=f"2026-01-{i + 1:02d}T00:00:00Z")
             for i in range(25)]
@@ -552,12 +493,7 @@ def test_topic_rotation_state_is_evicted_when_a_session_ends(_client, monkeypatc
 
 
 def test_topic_rotation_state_is_capped_regardless_of_close(monkeypatch):
-    """Unlike `_prefetch_cache` (bounded by however many students are signed
-    in, keyed per user), this dict is keyed per practice session, which is
-    never reused -- a session a student abandons without ever calling `/end`
-    would otherwise sit here forever. `end_practice_session` evicts its own
-    key, but a hard cap is what protects the sessions that never reach it.
-    """
+    """Keyed per session, never reused: the cap covers sessions abandoned without `/end`."""
     monkeypatch.setattr(main, "_PRACTICE_TOPIC_CAP", 3)
     monkeypatch.setattr(main, "_practice_last_topic", collections.OrderedDict())
 
@@ -565,7 +501,7 @@ def test_topic_rotation_state_is_capped_regardless_of_close(monkeypatch):
         main._pick_practice_topic(f"s-{i}", ["ordering", "geometry"])
 
     assert len(main._practice_last_topic) == 3
-    # The earliest sessions are the ones evicted, not the most recent.
+    # Oldest evicted first.
     assert "s-0" not in main._practice_last_topic
     assert "s-1" not in main._practice_last_topic
     assert "s-4" in main._practice_last_topic
@@ -581,8 +517,7 @@ def test_topics_from_practice_summary_matches_topic_breakdown_shape():
     by_name = {t["topic_name"]: t for t in topics}
     assert by_name["ordering"]["accuracy"] == 75
     assert by_name["ordering"]["attempted_questions"] == 4
-    # A viewed-only topic reads as 0, matching `_weakest_topic`'s convention
-    # for "no graded data" rather than crashing on a None comparison.
+    # Viewed-only reads as 0, `_weakest_topic`'s "no graded data" convention.
     assert by_name["geometry"]["accuracy"] == 0
 
 

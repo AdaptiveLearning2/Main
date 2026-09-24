@@ -1,39 +1,4 @@
-"""What a response carries, and what a caller may ask for.
-
-Two questions, taken from the one endpoint that already asked them of itself.
-`leaderboard`'s docstring says `limit` "is the only thing bounding how much of
-the user base comes back with names attached", and pops `user_id` because "the
-page only needs to know which row is the viewer's own". So:
-
-1. **Is every caller-supplied number bounded?** One was not: `/api/questions`
-   passed `limit` straight into `.limit()`. The rows are not the exposure --
-   `questions` is public-read by policy and reachable through PostgREST with
-   the anon key -- the *cache* was: an unclamped limit put a copy of the whole
-   bank behind every distinct key, so the entry bound that exists to stop a key
-   sweep was holding 256 of them. A bound on the number of entries is not a
-   bound on their size.
-2. **Does a payload carry an identifier nothing renders?** `sessions` was read
-   with `select("*")` on the four paths whose rows reach a browser, and
-   `chart_paths` -- the storage object path of each archived SVG -- appears
-   nowhere in `src/`.
-
-The email fields came out of this audit unchanged, and that is a result rather
-than an omission: `class_students`, `class_live`, `my_children` and
-`admin_student_search` all send `email`, all four are behind the relationship
-check that entitles the viewer to it, and all four are rendered (a roster line,
-a live card, the parent dashboard, and the `<option>` fallback label in
-`Questions.jsx`). `_profile()`'s full dict is returned only for the caller's own
-profile; `link_child` sends the child's `display_name` and nothing else. The raw
-`signal_consent` row never leaves the backend -- `_shape_consent` builds the
-payload field by field, which is why `updated_by` and the per-channel revoker
-uuids are absent rather than needing removing.
-
-**The partition below is the durable half.** Fixing one unclamped limit does not
-stop the next one; classifying every caller-supplied number does. It is a named
-list for the reason `STUDENT_DRIVEN_CLOSERS` is: whether an int is a bound on a
-query or a value to be stored is not a property of its type, and nothing in the
-source separates them.
-"""
+"""Every caller-supplied number is classified and bounded; no payload carries an unrendered id."""
 import ast
 import inspect
 import pathlib
@@ -50,16 +15,9 @@ import main
 from tests.test_access_control import _FakeSupabase, _ts
 
 
-# (handler, param) -> (how it is bounded, why).
-#
-#   "handler"  the handler clamps it as `max(floor, min(it, ceiling))`, or with
-#              `_clamp_days(...)` -- one bound wrapping the other, checked
-#              mechanically below.
-#   "field"    the request model carries `le=` and `ge=`, read off `model_fields`.
-#   "raises"   the handler answers 422 outside the range; cited to the test
-#              that drives it, since a raise has no one shape to match.
-#   "value"    not a bound at all -- a number that is stored or applied, whose
-#              own range is somebody else's business.
+# (handler, param) -> (how it is bounded, why). Named, since bound vs stored value isn't in the type.
+#   "handler" `max(floor, min(it, ceiling))` or `_clamp_days`; "field" `ge=`/`le=` on the model;
+#   "raises" 422 outside the range, cited to its test; "value" stored or applied, not a bound.
 CALLER_NUMBERS = {
     ("get_questions", "limit"):
         ("handler", "Clamped to _QUESTIONS_MAX, which is the largest any "
@@ -126,14 +84,7 @@ CALLER_NUMBERS = {
         ("value", "As record_answer."),
 }
 
-# The floor, named rather than counted, for the reason the limiter partition
-# carries one: a scan that stops seeing parameters reports nothing unclassified
-# and passes having examined nothing.
-#
-# **It covers the scan going quiet, not the scan being blind.** An annotation
-# spelled a way the scan does not recognise produces no entry to be missing, so
-# these four would still be found and the suite would still be green. The
-# spelling tests at the end of this file are what cover that.
+# Floor for the scan going quiet; the spelling tests at the end cover it going blind.
 EXPECTED_NUMBERS = {
     ("get_questions", "limit"),
     ("generate_question", "bias"),
@@ -142,30 +93,15 @@ EXPECTED_NUMBERS = {
 }
 
 
-# The wrappers a type is written inside, and the only ones the scan looks
-# through: `Union` covers `int | None` and `Optional[int]` (one origin since
-# 3.14), and `Annotated` covers `Annotated[int, Query(le=500)]` -- the only way
-# to bound a *query* parameter rather than a model field, and the form current
-# FastAPI documentation recommends -- and `Annotated[Model, Body()]`.
-#
-# **Containers are deliberately not unwrapped**, for numbers or for models.
-# `typing.get_args` hands back `int` from `dict[str, int]`, and a mapping of
-# counts is not a caller-supplied bound. The only models inside a container
-# today are the ingest batches' `list[FaceSample]` / `list[HeartSample]`, whose
-# numbers are sensor readings rather than bounds, and whose volume is bounded by
-# `INGEST_MAX_BATCH` and the body cap instead.
+# The only wrappers the scan looks through: Union (`int | None`, `Optional`) and Annotated.
+# Containers are deliberately not unwrapped: ingest samples are readings, bounded by INGEST_MAX_BATCH.
 _WRAPPERS = (typing.Union, types.UnionType, typing.Annotated)
 
 
 def _mentions_a_number(ann) -> bool:
-    """Whether a caller can put an int or a float here, however it is spelled.
+    """Whether a caller can put an int or float here; one predicate for params and fields.
 
-    One predicate for parameters *and* model fields. There were two: parameters
-    matched `ann in (int, float)` exactly while fields unwrapped unions, so
-    `limit: int | None = None` -- how `get_questions` already writes
-    `subject: str | None` two parameters along -- was invisible on a route and
-    visible in a body. `bool` is not an int here: this compares identity, and
-    `include_face` bounds nothing.
+    Compares identity, so `bool` is not an int.
     """
     if ann is int or ann is float:
         return True
@@ -175,12 +111,7 @@ def _mentions_a_number(ann) -> bool:
 
 
 def _models_in(ann) -> list:
-    """The request models an annotation carries, through the same wrappers.
-
-    A body written `payload: Model | None = None` or
-    `Annotated[Model, Body()]` is still a body; testing `isinstance(ann, type)`
-    alone never looked inside either.
-    """
+    """The request models an annotation carries, through the same wrappers."""
     if isinstance(ann, type) and issubclass(ann, BaseModel):
         return [ann]
     if typing.get_origin(ann) in _WRAPPERS:
@@ -189,10 +120,7 @@ def _models_in(ann) -> list:
 
 
 def _model_numbers(model, prefix="", seen=None):
-    """`(dotted field path)` for every number in a model, including through a
-    field that is itself a model -- `window: Window | None` carries
-    `window.days` as surely as a top-level field does. `seen` stops a model
-    that refers to itself."""
+    """Dotted path of every number in a model, through nested models; `seen` stops self-reference."""
     seen = set() if seen is None else seen
     if model in seen:
         return []
@@ -207,15 +135,7 @@ def _model_numbers(model, prefix="", seen=None):
 
 
 def _caller_numbers():
-    """Every int/float a caller can put in a request outside a container,
-    found at runtime. Inside one -- the ingest samples -- is out of scope on
-    purpose; see `_WRAPPERS`.
-
-    From `app.routes` and `model_fields`, not the AST: the limiter partition's
-    scan was rebuilt this way after an AST match on one assignment shape turned
-    out to be one refactor from seeing nothing, and a route decorated through a
-    helper or a parameter given a `Query(...)` default is the same trap here.
-    """
+    """Every int/float a caller can send outside a container, from `app.routes`, not the AST."""
     found = {}
     for route in main.app.routes:
         endpoint = getattr(route, "endpoint", None)
@@ -249,29 +169,20 @@ def test_every_caller_supplied_number_is_bounded_or_says_why_not():
         "whether they bound anything. Clamp in the handler and add them with "
         "\"handler\", or classify them: " + str(unclassified))
 
-    # The other direction, or the list only grows and a stale entry reads as
-    # evidence the current signature was reviewed.
+    # The other direction, or stale entries accumulate.
     stale = sorted(pair for pair in CALLER_NUMBERS if pair not in found)
     assert not stale, (
         f"these parameters are gone; drop them from CALLER_NUMBERS: {stale}")
 
 
 def _handler(name):
-    """One handler's AST, from its own source.
-
-    `inspect.getsource`, the way `close_sites()` reads a function, rather than
-    re-parsing all of `main.py` per parametrized case -- that was eighteen
-    parses of a nine-thousand-line module, most of the file's runtime.
-    """
+    """One handler's AST, from its own source (re-parsing main.py per case is slow)."""
     fn = getattr(main, name)
     return ast.parse(inspect.getsource(fn)).body[0]
 
 
 def _names_param(node, param) -> bool:
-    """Whether an expression reads the parameter itself: the bare name, or an
-    attribute of that name on a body (`payload.days`). Matched on nodes, not
-    text -- as a substring, `days` is also in `len(school_days)`, and
-    `max(0, len(school_days))` would have counted as a floor for it."""
+    """Whether an expression reads `param` or `payload.param`; nodes, not text (`school_days`)."""
     return any(
         (isinstance(n, ast.Name) and n.id == param)
         or (isinstance(n, ast.Attribute) and n.attr == param)
@@ -286,11 +197,7 @@ def _is_call(node, name) -> bool:
 def _clamps(tree, param) -> bool:
     """`max(floor, min(param, ceiling))`, either way round, or `_clamp_days`.
 
-    **The nesting is the check.** Asking only whether a `max` and a `min` each
-    mention the name counts `max(0, page * size - limit)` as a floor for
-    `limit`, beside any `min` elsewhere -- two calls that bound nothing between
-    them. Its stated limit: the inner call has to *read* the parameter, not be
-    handed it bare, since `generate_question` clamps `int(bias or 0)`.
+    The nesting is the check; the inner call need only read the param (`int(bias or 0)`).
     """
     return bool(_clamp_nodes(tree, param))
 
@@ -314,20 +221,8 @@ def _clamp_nodes(tree, param) -> list:
 def _raw_uses(tree, param) -> list:
     """Reads of `param` that are not the clamped value, as line numbers.
 
-    A clamp that exists and is not what gets used bounds nothing:
-    `clamped = max(1, min(limit, 100))` followed by `.limit(limit)` passes a
-    check that only asks whether the clamp is there. So every read has to be
-    inside a clamp, or come after the parameter was reassigned *to* one --
-    `limit = max(1, min(limit, 100))`, which is how the handlers spell it.
-
-    A body field is read as `payload.days`; that counts, and reassigning a
-    local does not clamp it -- only the attribute inside a clamp does. A method
-    that happens to share the name (`query.limit(...)`) is not a read of it.
-
-    **Only a reassignment that always runs counts**: a statement directly in
-    the function's body, not inside an `if`, loop, `try` or `with`. Line order
-    is execution order only for those -- a clamp in one branch of an `if`
-    leaves the other branch reading the raw value on every later line.
+    Every read must be inside a clamp or follow an unconditional top-level reassignment to one;
+    `payload.days` counts as a read, `query.limit(...)` does not.
     """
     inside = {id(n) for clamp in _clamp_nodes(tree, param) for n in ast.walk(clamp)}
     fn = next((n for n in ast.walk(tree)
@@ -393,22 +288,9 @@ def test_a_clamp_is_one_bound_wrapping_the_other(source, param, clamped):
 @pytest.mark.parametrize("pair", sorted(
     p for p, (how, _why) in CALLER_NUMBERS.items() if how == "handler"))
 def test_a_bound_claimed_clamped_in_the_handler_has_a_ceiling_and_a_floor(pair):
-    """One bound wraps the other around the name, or `_clamp_days` does both.
+    """Both ends: no ceiling lets a caller choose the volume; no floor makes `LIMIT -5` a 500.
 
-    **Both ends, because each fails differently.** Without the ceiling a caller
-    chooses how much comes back; without the floor `?limit=-5` goes through
-    PostgREST as `LIMIT -5`, which Postgres refuses -- a 500 from the caller's
-    own input. Checking only `min` left the second one unguarded on every route
-    this list names.
-
-    **This is a check on the convention, not on the arithmetic**, and that
-    decides what a failure means. All eighteen are spelled
-    `max(floor, min(name, ceiling))` or `_clamp_days`, so a handler bounding its
-    parameter some other correct way -- `name = N if name > N else name` --
-    fails this and is not a bug; conforming or reclassifying are both fine
-    answers. What a ceiling or a floor should *be* is per-endpoint behaviour,
-    asserted on the limit the query received: `test_questions.py`, and
-    `test_a_negative_limit_reaches_the_query_as_the_floor` below.
+    Checks the spelling convention, not the arithmetic; values are tested at the query below.
     """
     handler_name, param = pair
     tree = _handler(handler_name)
@@ -418,8 +300,7 @@ def test_a_bound_claimed_clamped_in_the_handler_has_a_ceiling_and_a_floor(pair):
         "it. Clamp it the way the others do, or -- if it is bounded some other "
         "correct way -- move the entry to the mechanism that describes it. This "
         "checks the spelling, not the arithmetic.")
-    # And the clamped value is the one read. Line numbers are relative to the
-    # handler's own source, `_handler` parsing it on its own.
+    # And the clamped value is the one read (line numbers relative to the handler's source).
     assert not _raw_uses(tree, param), (
         f"{handler_name} clamps `{param}` and then reads it unclamped at "
         f"line(s) {_raw_uses(tree, param)} of its source -- reassign the clamp to "
@@ -429,10 +310,7 @@ def test_a_bound_claimed_clamped_in_the_handler_has_a_ceiling_and_a_floor(pair):
 @pytest.mark.parametrize("pair", sorted(
     p for p, (how, _why) in CALLER_NUMBERS.items() if how == "field"))
 def test_a_bound_claimed_on_the_field_carries_both_ends(pair):
-    """Read off `model_fields`, so an `le=` or `ge=` removed from the model
-    fails here even though the handler is untouched. Both ends for the reason
-    the handler clamps need both: these land in columns with CHECK constraints,
-    and a value outside one is a 500 rather than a 422 that names the field."""
+    """Read off `model_fields`; out of range these hit a CHECK constraint as a 500, not a 422."""
     handler_name, field_name = pair
     endpoint = next(r.endpoint for r in main.app.routes
                     if getattr(getattr(r, "endpoint", None), "__name__", None)
@@ -448,12 +326,7 @@ def test_a_bound_claimed_on_the_field_carries_both_ends(pair):
 
 
 def _field_bounds(field) -> tuple[bool, bool]:
-    """(has a floor, has a ceiling), read off a field's metadata by *value*.
-
-    Not `hasattr`: `conint(le=180)` and `Interval(le=180)` both carry
-    `ge=None`, so an attribute check reads a floor that is not there. And
-    `gt`/`lt` are bounds as much as `ge`/`le` are.
-    """
+    """(has a floor, has a ceiling), by value: `conint`/`Interval` carry `ge=None`, so not `hasattr`."""
     def present(*names):
         return any(getattr(m, n, None) is not None
                    for m in field.metadata for n in names)
@@ -484,12 +357,7 @@ def test_a_field_bound_is_read_by_value_in_every_spelling(name, floor, ceiling):
 
 
 def test_the_bound_enforced_by_raising_still_has_the_test_it_cites():
-    """`bypass_minutes` answers 422 rather than clamping, because a bypass of
-    consent enforcement silently shortened to four hours is a different promise
-    from one refused. A raise has no single shape to match, so this checks the
-    citation rather than the code -- anchored on the opening paren, or a rename
-    that appends still contains the name.
-    """
+    """A raise has no single shape, so this checks the citation (anchored on the opening paren)."""
     _how, cited = CALLER_NUMBERS[("admin_set_flag", "bypass_minutes")]
     admin_tests = (pathlib.Path(__file__).parent / "test_admin.py").read_text(
         encoding="utf-8")
@@ -499,14 +367,7 @@ def test_the_bound_enforced_by_raising_still_has_the_test_it_cites():
 
 
 # ── the payload half ─────────────────────────────────────────────────────
-#
-# Each test asserts on the **query first** (rule 4): the `sessions` read named
-# its columns and `chart_paths` was not among them. The payload assertions
-# follow as the consequence, and each carries a positive one beside the
-# negative, so a read that came back empty -- or a projection that dropped
-# every column -- fails rather than passing for having no `chart_paths` in it.
-# The row is built with the column present, or there would be nothing for a
-# `select("*")` to leak.
+# Query first (rule 4), then payload with a positive assertion beside each negative one.
 
 _SESSION_ROW = {
     "id": "sess-1", "user_id": "kid-1", "class_id": None,
@@ -517,11 +378,7 @@ _SESSION_ROW = {
 
 
 def _assert_sessions_read_names_its_columns(fake):
-    """Every read of `sessions` named columns, and none of them was the path.
-
-    `_FakeSupabase` records `_cols = None` for a `select("*")`, which is the
-    shape this exists to refuse; a list without `chart_paths` is the fix.
-    """
+    """Every `sessions` read named columns (`_cols = None` is `select("*")`), none the path."""
     reads = [q for table, q in zip(fake.table_calls, fake.queries)
              if table == "sessions"]
     assert reads, "nothing read `sessions` at all"
@@ -574,8 +431,7 @@ def test_the_open_session_a_teacher_watches_carries_no_object_paths(monkeypatch)
     assert by_student["kid-1"], "the open session was not found at all"
     session = by_student["kid-1"][0]
     assert "chart_paths" not in session
-    # `class_live` reads these off the row, and the stats merge reads the
-    # counts -- a projection that dropped them would pass the line above.
+    # `class_live` and the stats merge read these; dropping them would pass the line above.
     assert session["id"] == "sess-1"
     assert session["questions_answered"] == 3
 
@@ -602,15 +458,7 @@ def test_a_parents_child_sessions_carry_no_object_paths(monkeypatch):
 
 
 # ── both ends of a limit, at the query ───────────────────────────────────
-#
-# The spelling check above covers every handler clamp; these are the three
-# `limit` routes that had no test driving either end. Asserted on the number the
-# query was handed, not on what came back (rule 4): a fake answers the same
-# rows whatever limit it is asked for.
-#
-# **Every limit that table was sent, not the last one.** A later `.limit(1)`
-# read of the same table -- an existence check, say -- would otherwise stand in
-# for the main read and pass the floor test with the floor removed.
+# Asserted on every limit the table was sent (rule 4), so a later `.limit(1)` can't stand in.
 
 def _limits_sent_to(fake, table):
     return [q._limit for t, q in zip(fake.table_calls, fake.queries) if t == table]
@@ -644,9 +492,7 @@ def _no_gates(monkeypatch):
 @pytest.mark.parametrize("asked", [-5, 0])
 def test_a_negative_limit_reaches_the_query_as_the_floor(monkeypatch, _no_gates,
                                                          route, asked):
-    """`?limit=-5` without a floor reaches Postgres as `LIMIT -5`, which it
-    refuses: a 500 from the caller's own input, on routes whose ceiling was
-    already tested and whose floor was not."""
+    """Without a floor, `LIMIT -5` is a 500 from the caller's own input."""
     call, table, _ceiling = _LIMITED_READS[route]
     fake = _FakeSupabase({})
     monkeypatch.setattr(main, "supabase", fake)
@@ -672,12 +518,7 @@ def test_an_enormous_limit_reaches_the_query_as_the_ceiling(monkeypatch, _no_gat
 
 
 # ── what the scan can see ────────────────────────────────────────────────
-#
-# The floor on EXPECTED_NUMBERS stops the scan seeing nothing. It cannot stop
-# the scan being blind to a *spelling*, because an annotation it does not
-# recognise produces no entry to be missing. The real app writes none of the
-# spellings below, so the partition cannot fail on them either -- hence a
-# predicate table, and a probe app run through `_caller_numbers()` itself.
+# Spellings the real app doesn't use, so only a predicate table and a probe app can cover them.
 
 @pytest.mark.parametrize("annotation,seen", [
     (int,                            True),
@@ -701,16 +542,7 @@ def test_the_predicate_recognises_a_number_however_it_is_written(annotation, see
 def test_the_scan_finds_every_spelling_of_a_caller_number(monkeypatch):
     """`_caller_numbers` itself against a probe app, not a copy of its loop.
 
-    A copy of the loop carries whatever predicate it was written with, so it
-    passes against a scan that has stopped calling the predicate at all -- the
-    first version of this test did exactly that, and reverting the scan's
-    parameter branch to the bug left it green.
-
-    Parameters and bodies in every wrapper, a model nested in a model, and the
-    one thing deliberately *not* found: a model inside a list, whose numbers are
-    readings rather than bounds. FastAPI's own routes on the probe
-    (`/openapi.json`, `/docs`, …) carry no numeric parameter, so exact equality
-    holds with them present.
+    A model inside a list is deliberately not found; FastAPI's own routes add no numbers.
     """
     from fastapi import Body, FastAPI, Query
 
@@ -764,14 +596,7 @@ def test_the_scan_finds_every_spelling_of_a_caller_number(monkeypatch):
 
 
 # ── the cap on a student's own session list ──────────────────────────────
-#
-# Not a caller-supplied bound -- no page offers a longer list and no parameter
-# lifts it -- so it is not in the partition above. It came out of the same
-# audit: `/api/sessions` read every session a student had ever had, and the
-# page it feeds is the only record of itself, counting the rows, summing their
-# questions and dividing for an accuracy. A cap with no way to say it applied
-# would not render as a shorter list; it would render as a student who did
-# less work.
+# A silent cap would render as a student who did less work, so the payload carries `total`.
 
 
 def _sessions(n, *, ended=True):
@@ -806,11 +631,7 @@ def test_a_cut_list_reports_how_many_there_really_are(monkeypatch):
 
 
 def test_a_list_exactly_at_the_cap_is_not_reported_as_cut(monkeypatch):
-    """The case `len(rows) == cap` gets wrong, which is why the count decides.
-
-    It is also the case PostgREST's own `db-max-rows` makes unreliable in the
-    other direction: a short read is not evidence the list was whole.
-    """
+    """The case `len(rows) == cap` gets wrong, which is why the count decides."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid-1"})
     monkeypatch.setattr(main, "_SESSION_LIST_MAX", 3)
     monkeypatch.setattr(main, "supabase", _FakeSupabase({"sessions": _sessions(3)}))
@@ -824,14 +645,7 @@ def test_a_list_exactly_at_the_cap_is_not_reported_as_cut(monkeypatch):
 
 
 def test_a_count_that_did_not_come_back_is_unknown_rather_than_whole(monkeypatch):
-    """Third state. `False` would assert the list is complete on the strength
-    of a number we did not receive, and a page would then present a cut
-    history as a whole one.
-
-    The shared fake with its count withheld, not a hand-written one: that kept
-    the rows whatever the query asked, so dropping the student filter or the
-    cap would have passed it.
-    """
+    """Third state: `False` would claim completeness from a number never received."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid-1"})
     fake = _FakeSupabase(
         {"sessions": [_SESSION_ROW, {**_SESSION_ROW, "id": "other", "user_id": "kid-2"}]},

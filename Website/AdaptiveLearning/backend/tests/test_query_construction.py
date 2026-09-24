@@ -1,33 +1,4 @@
-"""No query string in this backend is built from a value it did not choose.
-
-There is no raw SQL here -- every read and write goes through the Supabase
-client or an RPC, both parameterized -- so the classic injection is already
-absent and this file is not about it. What PostgREST adds is a second
-grammar: `or_`, `filter`, `select`, `order` and `on_conflict` take *strings
-that are parsed as query syntax*, and `rpc` takes a function name. A value
-interpolated into one of those is not a bound parameter, it is structure.
-
-`/api/admin/students/search` is the live example: a teacher's search term
-reaches `.or_(f"display_name.ilike.%{safe}%,...")`, where a bare comma would
-end the first condition and start a second one of the caller's choosing. It
-strips `, ( )` and escapes `\\ %` first, which is why it is allowed below --
-the point of this test is that the stripping cannot quietly disappear, and
-that the next such site has to argue for itself the same way.
-
-**Every dynamic argument is listed, including a bare name.** Flagging only
-f-strings would leave the evasion of assigning to a variable first, and the
-whole set is ten -- small enough that a recorded reason per site costs little
-and buys a re-read whenever one changes. `check_function_grants.py`'s
-ALLOWLIST is the same shape and exists for the same reason.
-
-**The honest limit**: this reads one call at a time and cannot see where a
-variable came from. The eight bare names below are safe because every caller
-passes a literal, and that is a claim this test checks by *listing* them, not
-by proving it -- change what a listed helper is called with and the entry
-still matches. It catches a new site appearing, not an existing one being fed
-something new. Whole-program dataflow is the thing that would, and it is not
-a lint.
-"""
+"""Every non-literal argument to a PostgREST-parsed query method carries a recorded reason."""
 import ast
 import pathlib
 
@@ -35,17 +6,13 @@ import pytest
 
 BACKEND = pathlib.Path(__file__).resolve().parent.parent
 
-# Methods whose string argument PostgREST parses as query syntax, plus `rpc`
-# (its *first* argument names the function to run) and `execute` (which takes
-# no arguments through supabase-py, and would mean a raw driver if it ever
-# did).
+# Parsed-as-syntax methods, `rpc` (first arg names the function) and `execute` (an arg means a raw driver).
 PARSED_ARG_METHODS = {
     "or_", "not_", "filter", "select", "order", "on_conflict", "rpc", "execute",
 }
 
 # (module, enclosing function, method, argument source) -> why it is allowed.
-# The key holds no line number on purpose: these move, and a key that churns
-# is one people re-baseline without reading.
+# No line number in the key: a churning key gets re-baselined without reading.
 ALLOWLIST = {
     ("main.py", "admin_student_search", "or_",
      "f'display_name.ilike.%{safe}%,email.ilike.%{safe}%'"):
@@ -64,9 +31,7 @@ ALLOWLIST = {
      "','.join((f'{c}.not.is.null' for c in columns))"):
         "Same `columns`. The join builds an or-tree from those fixed names.",
 
-    # One constant, four reads, because the alternative to naming it is four
-    # copies of the column list -- and the copy that drifts is the one that
-    # quietly starts returning the column the others stopped returning.
+    # One constant, four reads, so no copy of the column list can drift.
     ("main.py", "list_sessions", "select", "_SESSION_CLIENT_COLUMNS"):
         "A module-level literal: every `sessions` column except `chart_paths`. "
         "No interpolation and nothing from a request reaches it.",
@@ -110,10 +75,7 @@ def _dynamic_kind(node):
 def _sites():
     """Every non-literal argument reaching a parsed-string query method.
 
-    Descends rather than using `ast.walk` per function, so a call inside a
-    nested helper is attributed to that helper and not to whichever enclosing
-    scope happens to also contain it. `ast.walk` sees it under both, and the
-    outer name is the one that goes stale first.
+    Descends rather than `ast.walk`, so a nested helper's call is attributed to it alone.
     """
     found = []
 
@@ -122,8 +84,7 @@ def _sites():
             fname = node.name
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                 and node.func.attr in PARSED_ARG_METHODS):
-            # Only `rpc`'s first argument names anything; its second is a
-            # params dict, which is bound rather than interpolated.
+            # `rpc`'s second argument is a bound params dict.
             args = node.args[:1] if node.func.attr == "rpc" else node.args
             for arg in args:
                 kind = _dynamic_kind(arg)
@@ -134,8 +95,7 @@ def _sites():
             visit(child, module, fname)
 
     for path in sorted(BACKEND.glob("*.py")):
-        # utf-8-sig: several generators carry a BOM, which plain utf-8 reads
-        # as a non-printable character and refuses to parse.
+        # utf-8-sig: several generators carry a BOM.
         visit(ast.parse(path.read_text(encoding="utf-8-sig")),
               path.name, "<module>")
     return sorted(found)
@@ -155,11 +115,7 @@ def test_no_query_string_is_built_from_an_unreviewed_value():
 
 
 def test_the_allowlist_has_no_entry_for_a_site_that_is_gone():
-    """An entry outliving its call site is a reason nobody will re-read.
-
-    Without this the list only grows, and a future reader takes a stale
-    justification as evidence the current code was reviewed.
-    """
+    """An entry outliving its call site is a reason nobody will re-read."""
     live = {(s[0], s[1], s[2], s[3]) for s in _sites()}
     stale = sorted(set(ALLOWLIST) - live)
     assert not stale, (
@@ -168,13 +124,7 @@ def test_the_allowlist_has_no_entry_for_a_site_that_is_gone():
 
 
 def test_a_new_site_in_a_scanned_file_fails_this_check(tmp_path, monkeypatch):
-    """The end of the chain: glob, parse, detect, miss the allowlist, fail.
-
-    The shape tests below drive `_dynamic_kind` directly, which says nothing
-    about whether a file on disk is read or whether an unlisted site actually
-    reaches the assertion. Pointing the scan at a directory of one file is how
-    that gets exercised without editing `main.py` to prove it.
-    """
+    """The end of the chain: glob, parse, detect, miss the allowlist, fail."""
     (tmp_path / "newmodule.py").write_text(
         'def handler(term):\n'
         '    return supabase.table("profiles").or_(f"email.ilike.%{term}%")\n',
@@ -196,12 +146,7 @@ def test_a_new_site_in_a_scanned_file_fails_this_check(tmp_path, monkeypatch):
     ('supabase.rpc(fn_name, {})', "a name as the RPC to run"),
 ])
 def test_the_detector_sees_each_shape(snippet, why):
-    """The check is only worth its allowlist if it catches these.
-
-    Asserted against parsed snippets rather than by editing `main.py`: the
-    thing under test is `_dynamic_kind` plus the method set, and driving it
-    directly is what makes each shape a separate named failure.
-    """
+    """The check is only worth its allowlist if it catches these."""
     tree = ast.parse(snippet)
     call = next(n for n in ast.walk(tree)
                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)

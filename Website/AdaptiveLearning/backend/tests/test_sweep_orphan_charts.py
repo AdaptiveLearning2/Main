@@ -1,15 +1,4 @@
-"""The sweep's command line, which is a monitoring contract.
-
-`chart_archive.sweep_orphan_charts` has a test per guard. This is the layer
-above it: the exit code, which is the only thing a scheduled run communicates.
-It used to have no tests, and that's exactly where a defect sat -- a failed
-batch was printed to stderr and then returned 0, so a cron job watching status
-would call an incomplete sweep clean.
-
-The exit codes are kept distinct because they need different responses. A
-refusal means nothing happened, and re-running changes nothing until someone
-looks; a partial failure means work happened and a re-run will retry it.
-"""
+"""The sweep CLI's exit codes, the only thing a scheduled run communicates."""
 
 import os
 
@@ -32,8 +21,7 @@ def _report(**over):
 
 @pytest.fixture(autouse=True)
 def _no_real_client(monkeypatch):
-    """`main` builds a client before doing anything, so this stops the test
-    from ever reaching a real network."""
+    """`main` builds a client first; this keeps it off the network."""
     import supabase
     monkeypatch.setattr(supabase, "create_client", lambda *_a, **_k: object())
     monkeypatch.setenv("SUPABASE_URL", "http://localhost:54321")
@@ -60,10 +48,7 @@ def test_missing_configuration_exits_two(monkeypatch):
 
 
 def test_objects_that_could_not_be_deleted_exit_nonzero(monkeypatch, capsys):
-    """`remove_objects` reports a failed batch rather than raising, so an
-    incomplete sweep is a real state -- but it used to just print to stderr
-    and return 0, which is the exit-code contract failing in the one case it
-    exists for."""
+    """`remove_objects` reports a failed batch rather than raising, so the exit code must carry it."""
     code = _run(monkeypatch, _report(removed=1, failed=["u/s/heart.svg"]))
 
     assert code != 0, "an incomplete sweep reported success"
@@ -72,21 +57,17 @@ def test_objects_that_could_not_be_deleted_exit_nonzero(monkeypatch, capsys):
 
 
 def test_a_partial_failure_is_distinguishable_from_a_refusal(monkeypatch):
-    """Same alert, different response: a refusal needs a human to look before
-    the next run does anything; a partial failure just needs the next run."""
+    """A refusal needs a human to look; a partial failure just needs the next run."""
     failed = _run(monkeypatch, _report(failed=["u/s/heart.svg"]))
     refused = _run(monkeypatch, _report(refused="could not list the bucket: x"))
 
-    # Check both halves: comparing only `failed != 0` would pass even if both
-    # codes collapsed to 1, which is exactly the bug this guards against.
     assert failed != 0, "a partial failure reported success"
     assert refused != 0, "a refusal reported success"
     assert failed != refused, "the two states are indistinguishable to a monitor"
 
 
 def test_hitting_the_cap_is_not_an_alert(monkeypatch, capsys):
-    """Hitting the cap is normal -- the next run finishes the work. Exiting
-    non-zero here would train whoever reads the alerts to ignore this job."""
+    """Hitting the cap is normal; the next run finishes the work."""
     code = _run(monkeypatch, _report(hit_cap=True))
 
     assert code == 0

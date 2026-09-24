@@ -1,11 +1,4 @@
-"""The Common Core code a question carries.
-
-Two things are checked by reading rather than by generating, because both fail
-silently otherwise: every topic resolves to a code (a topic missing from the
-tables would store NULL for ever and read as "not resolved" on every one of
-its questions), and every generator attaches one (a generator that does not is
-the `figure` omission again -- the column exists and the row never fills it).
-"""
+"""The Common Core code a question carries: every topic resolves, every generator attaches one."""
 import os
 import re
 import sys
@@ -67,25 +60,20 @@ def test_an_unreadable_grade_is_the_youngest():
 
 
 def test_grade_four_is_kept_off_the_grade_five_standard():
-    # `GRADE_OVERRIDES[4]` in the expressions generator forbids parentheses at
-    # grade 4 because 5.OA.1 is a grade-5 standard; the badge must agree.
+    # Matches `GRADE_OVERRIDES[4]` in the expressions generator: 5.OA.1 is grade 5.
     for scenario in ("evaluate", "order_of_operations"):
         assert ccss_standards.ccss_for("expressions", "4th Grade", scenario) != "5.OA.1"
         assert ccss_standards.ccss_for("expressions", "5th Grade", scenario) == "5.OA.1"
 
 
 def test_every_scenario_selecting_generator_checks_the_reply_scenario():
-    # A reply naming a scenario other than the one asked for misses
-    # SCENARIO_LADDER and takes the topic's lowest rung -- a grade-1 code on
-    # a grade-8 question. Expressions was the one topic without this check.
+    # An unchecked reply scenario misses SCENARIO_LADDER and takes the lowest rung's code.
     missing = []
     for filename in sorted(os.listdir(BACKEND)):
         if not (filename.startswith("LLM_") and filename.endswith("_generation.py")):
             continue
         source = open(os.path.join(BACKEND, filename), encoding="utf-8").read()
-        # Equality with the asked-for name, or membership in the grade's
-        # allowed set (geometry, angles) -- either keeps the name inside
-        # SCENARIO_LADDER.
+        # Equality with the asked-for name, or membership in the grade's allowed set.
         checks = ("!= _SCENARIO_NAMES[scenario]", 'question_data["scenario"] not in')
         if "_SCENARIO_NAMES[scenario]" in source \
                 and not any(c in source for c in checks):
@@ -148,8 +136,7 @@ def test_the_same_text_at_a_different_standard_is_a_different_row(monkeypatch):
     assert first == again
     assert other != first
     assert [r["ccss_standard"] for r in fake.store["rows"]] == ["6.EE.7", "8.EE.7b"]
-    # The lookup filters on the code, not just the text -- assert on the
-    # query, since a passing result alone could come from a text mismatch.
+    # Assert on the query: a passing result alone could come from a text mismatch.
     assert ("eq", "ccss_standard", "8.EE.7b") in fake.queries[-2].filters
 
 
@@ -161,15 +148,11 @@ _SHADED = {"question_text": "What fraction of the shape is shaded?",
 
 @pytest.mark.parametrize("change", [
     {"figure": {"kind": "shape", "parts": 4, "shaded": 1}},
-    # The same option set with another answer, so only the answer check can
-    # tell the two apart.
+    # Same option set, another answer: only the answer check tells them apart.
     {"correct_answer": "1/4", "answer_options": ["1/4", "3/4", "1/2"]},
 ], ids=["another figure", "another answer"])
 def test_the_same_text_with_different_content_is_a_different_row(change, monkeypatch):
-    """`shape_fractions` and `graphs` keep digits out of the text, so one text
-    at one grade covers every figure. Deduped on text, a new figure and answer
-    got the first row's id, and the answer was recorded against a picture and
-    an answer key the student never saw."""
+    """`shape_fractions` and `graphs` keep digits out of the text, so text alone can't dedupe."""
     fake = _FakeSupabase()
     monkeypatch.setattr(LLM_topic_decider, "supabase", fake)
     first = LLM_topic_decider.add_question_to_supabase(dict(_SHADED), "easy")
@@ -183,11 +166,7 @@ def test_the_same_text_with_different_content_is_a_different_row(change, monkeyp
     ["2/3", "3/4", "1/5"],
 ], ids=["reshuffled", "other wrong answers"])
 def test_a_repeat_reuses_its_row_and_is_served_the_stored_options(options, monkeypatch):
-    """The generators draw wrong answers at random and shuffle every time, so
-    comparing options -- in order, or even as a set -- almost never matched and
-    put a row in the bank per question served. A repeat is the same text,
-    answer and figure; it reuses the row and is served that row's options,
-    because an answer is recorded as an index into them."""
+    """A repeat is same text, answer and figure; it gets the stored options, since answers index them."""
     fake = _FakeSupabase()
     monkeypatch.setattr(LLM_topic_decider, "supabase", fake)
     first = LLM_topic_decider.add_question_to_supabase(dict(_SHADED), "easy")
@@ -199,10 +178,7 @@ def test_a_repeat_reuses_its_row_and_is_served_the_stored_options(options, monke
 
 
 def test_a_generic_text_finds_its_match_past_the_candidate_cap(monkeypatch):
-    """The lookup reads at most `_DEDUPE_CANDIDATES` rows sharing a text, in no
-    order. Once "What fraction of the shape is shaded?" had more rows than
-    that, later ones stopped matching and were stored again. The answer is a
-    filter now, so rows for other answers do not use up the cap."""
+    """The answer is a filter, so rows for other answers don't use up `_DEDUPE_CANDIDATES`."""
     fake = _FakeSupabase()
     for i in range(LLM_topic_decider._DEDUPE_CANDIDATES + 10):
         fake.store["rows"].append({**_SHADED, "id": f"other-{i}", "correct_answer": f"{i}/99",
@@ -216,8 +192,7 @@ def test_a_generic_text_finds_its_match_past_the_candidate_cap(monkeypatch):
 
 
 def test_a_stored_row_missing_its_answer_is_not_served(monkeypatch):
-    """The page finds the answer among the options to mark it. A stored row
-    whose options lack it would serve a question nobody can get right."""
+    """Options lacking the answer would serve a question nobody can get right."""
     fake = _FakeSupabase()
     fake.store["rows"].append({**_SHADED, "id": "broken", "options": ["1/4", "1/2", "2/3"]})
     monkeypatch.setattr(LLM_topic_decider, "supabase", fake)
@@ -228,9 +203,7 @@ def test_a_stored_row_missing_its_answer_is_not_served(monkeypatch):
 @pytest.mark.parametrize("stored", ['["4", "8"]', '["4","8"]'],
                          ids=["jsonb spacing", "compact"])
 def test_a_list_answer_matches_the_text_it_is_stored_as(stored, monkeypatch):
-    """`correct_answer` is a text column, so a `mode` or `ordering` answer comes
-    back as JSON text and never equalled the list the generator returns: those
-    two topics could never reuse a row at all."""
+    """`correct_answer` is text, so a `mode`/`ordering` list answer comes back as JSON text."""
     fake = _FakeSupabase()
     fake.store["rows"].append({
         "id": "stored", "question_text": "Find the mode: 4, 8, 4, 8, 2",

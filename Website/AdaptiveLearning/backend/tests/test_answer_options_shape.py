@@ -1,23 +1,4 @@
-"""Exactly one option must match `correct_answer` the way the client compares.
-
-`Adaptive.jsx` decides correctness with
-
-    JSON.stringify(answer_options[selected]) === JSON.stringify(correct_answer)
-
-which is type-sensitive: `24` and `"24"` do not match. So the invariant every
-topic has to hold is not "the correct answer is in the list" but "exactly one
-option is JSON-identical to it".
-
-It held before this test existed, and by accident: `correct_answer` is the same
-object that goes into the list, so it matched itself whatever its type.
-`geometry` was shipping `['13.93', 27.86, 5.0, 41.79]` -- the answer a string
-among floats -- and React renders 13.93 and "13.93" identically, so an edit
-that re-serialised the options would have marked every geometry answer wrong
-with nothing on screen to show why.
-
-Two matches is the other failure, and the worse one: two options that a student
-cannot tell apart, one scored right and one wrong.
-"""
+"""Exactly one option is JSON-identical to `correct_answer`, as `Adaptive.jsx` compares."""
 import json
 import os
 
@@ -37,8 +18,7 @@ def test_exactly_one_option_is_json_identical_to_the_correct_answer(
         name, module, entry, payload, monkeypatch):
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
-    # The stub answers `evaluate`; the generator now refuses a reply for a
-    # scenario it did not ask for, and its pick is random at this grade.
+    # The stub answers `evaluate`; pin the otherwise random scenario pick.
     if name == "expressions":
         monkeypatch.setattr(module, "_pick_scenario", lambda band: 1)
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
@@ -67,12 +47,10 @@ def test_exactly_one_option_is_json_identical_to_the_correct_answer(
 @pytest.mark.parametrize("name,module,entry,payload",
                          CASES, ids=[c[0] for c in CASES])
 def test_no_two_options_render_the_same(name, module, entry, payload, monkeypatch):
-    """Distinct in JSON is not enough: `24` and `"24"` are different options
-    and the same thing on screen. React renders both as `24`."""
+    """`24` and `"24"` are distinct in JSON and identical on screen."""
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
-    # The stub answers `evaluate`; the generator now refuses a reply for a
-    # scenario it did not ask for, and its pick is random at this grade.
+    # The stub answers `evaluate`; pin the otherwise random scenario pick.
     if name == "expressions":
         monkeypatch.setattr(module, "_pick_scenario", lambda band: 1)
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
@@ -107,24 +85,10 @@ def test_no_two_options_render_the_same(name, module, entry, payload, monkeypatc
 @pytest.mark.parametrize("name,module,entry,payload",
                          CASES, ids=[c[0] for c in CASES])
 def test_all_options_share_one_type(name, module, entry, payload, monkeypatch):
-    """The consistency the two tests above do not pin.
-
-    They assert what the client needs -- one JSON-identical match, no two
-    options rendering alike -- and both held against geometry's mixed
-    `['13.93', 27.86, 5.0, 41.79]`, correctly, because that list was not
-    broken. So a revert to `round(float(ans), 2)` would keep them green, which
-    makes them the wrong guard for the change they shipped with.
-
-    This is the right one. It fails on a mixed list directly, and it states the
-    property that made the mixed list worth changing: the correct option
-    matched only because it was the same object that went into the list, and
-    one type throughout is what turns that from an accident into a
-    construction.
-    """
+    """A mixed-type list passes the two tests above; one type makes the match a construction."""
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
-    # The stub answers `evaluate`; the generator now refuses a reply for a
-    # scenario it did not ask for, and its pick is random at this grade.
+    # The stub answers `evaluate`; pin the otherwise random scenario pick.
     if name == "expressions":
         monkeypatch.setattr(module, "_pick_scenario", lambda band: 1)
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
@@ -149,30 +113,15 @@ def test_all_options_share_one_type(name, module, entry, payload, monkeypatch):
                          CASES, ids=[c[0] for c in CASES])
 def test_no_option_is_identifiable_by_its_formatting(name, module, entry,
                                                      payload, monkeypatch):
-    """The correct answer must not be the odd one out to look at.
+    """The correct answer must not be the odd one out to look at (e.g. the only `.0`).
 
-    `mean` returned `"6.0"` beside distractors of `"31"`, `"11"`, `"12"` --
-    `serialize_sympy` does not recognise a plain float, which is what the mean
-    became when the parse moved into the worker, so it fell through to
-    `str()`. On a whole-number average, which the easy and medium tiers ask
-    for explicitly, **the answer was the only option ending in `.0` and could
-    be picked without doing the arithmetic.**
-
-    The other three tests in this file all pass against that: every option is
-    a string, they all render distinctly, and exactly one matches
-    `correct_answer`. None of them looks at whether the options were rendered
-    by the *same rule*, which is the property that was broken.
-
-    `answer_format.format_value` is idempotent, so an option already in
-    canonical form passes through unchanged -- an option that changes when
-    re-formatted came from a different rule than its neighbours.
+    `format_value` is idempotent, so an option it changes came from a different rule.
     """
     import answer_format
 
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
-    # The stub answers `evaluate`; the generator now refuses a reply for a
-    # scenario it did not ask for, and its pick is random at this grade.
+    # The stub answers `evaluate`; pin the otherwise random scenario pick.
     if name == "expressions":
         monkeypatch.setattr(module, "_pick_scenario", lambda band: 1)
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
@@ -205,10 +154,7 @@ def test_no_option_is_identifiable_by_its_formatting(name, module, entry,
     ["0.5", "+", "1"],               # a Float rather than a Rational
 ])
 def test_a_fractional_expression_answer_is_one_of_its_options(tokens, monkeypatch):
-    """The shared CASES evaluate to a whole number, which every formatting
-    agrees on -- so they passed while `correct_answer` was a float string and
-    the option carrying it was sympy's `11/2`, and no option could be marked
-    right. The middle band allows `/`, so this is an ordinary reply."""
+    """The shared CASES are whole numbers, which every formatting agrees on."""
     import LLM_expressions_generation as expr_gen
 
     payload = {"question_text": "Evaluate " + " ".join(tokens) + ".",
@@ -235,10 +181,7 @@ def test_a_fractional_expression_answer_is_one_of_its_options(tokens, monkeypatc
     ([4.0, 9.0], [4.0, 9.0], "bimodal with no spare value"),
 ])
 def test_mode_never_offers_the_answer_as_a_distractor(solution, values, why):
-    """Formatting the pool without formatting the solution made the comparison
-    that excludes the answer stop matching -- `str(5.0)` is `"5.0"` and the
-    pool holds `"5"`. Introduced while fixing the formatting, and worse than
-    what it fixed: the correct answer appeared twice."""
+    """The solution must be formatted like the pool, or `"5.0"` fails to exclude `"5"`."""
     import answer_format
     import LLM_mode_generation as mode_gen
 

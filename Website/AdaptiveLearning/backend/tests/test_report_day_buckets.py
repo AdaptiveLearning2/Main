@@ -1,14 +1,4 @@
-"""Report days are the school's local days, not UTC days.
-
-`_weekly_signal_report` buckets rows into calendar days using the school's
-timezone (`retention_window.timezone`). Slicing the raw UTC timestamp instead
-would put a 4pm California lesson on the next day of a parent's chart, and an
-8am Sydney lesson on the previous one.
-
-A UTC-configured school makes every assertion pass whether the timezone logic
-works or not, so every test here uses a zone with a real offset and pins `now`
-so the school's date and UTC's date genuinely differ.
-"""
+"""Report days are the school's local days, not UTC; tests pin `now` where the two dates differ."""
 
 import os
 from datetime import datetime, timezone
@@ -23,8 +13,7 @@ from tests.test_access_control import _FakeSupabase  # noqa: E402
 
 STUDENT = "student-1"
 
-# 03:00 UTC on 12 June 2026 is 20:00 on the 11th in Los Angeles (UTC-7 in
-# June) -- an ordinary evening, but the previous calendar day.
+# 03:00 UTC on 12 June 2026 is 20:00 on the 11th in Los Angeles (UTC-7 in June).
 NOW_UTC = datetime(2026, 6, 12, 3, 0, tzinfo=timezone.utc)
 LA = "America/Los_Angeles"
 
@@ -59,10 +48,6 @@ def _day(report, date_str):
 # ── the bug, directly ────────────────────────────────────────────────────────
 
 def test_an_evening_lesson_lands_on_the_local_day(monkeypatch, at_three_am_utc):
-    """20:00 on the 11th in California, not 03:00 on the 12th in UTC. Without
-    this, a parent looking at Thursday would see a session that actually
-    happened Wednesday evening, and Wednesday would look emptier than it was.
-    """
     _school(monkeypatch, LA)
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
         cog=[{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "focus": 0.8}])))
@@ -77,10 +62,7 @@ def test_an_evening_lesson_lands_on_the_local_day(monkeypatch, at_three_am_utc):
 
 def test_the_same_row_buckets_differently_under_a_different_school(monkeypatch,
                                                                   at_three_am_utc):
-    """Control for the test above: one row, one instant, two schools. It's
-    Wednesday in California and already Friday in Auckland. If both answered
-    the same, the timezone wouldn't be reaching the bucketing at all.
-    """
+    """Control: one instant, two schools, so the timezone must reach the bucketing."""
     rows = _tables(cog=[{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "focus": 0.8}])
 
     _school(monkeypatch, LA)
@@ -98,9 +80,7 @@ def test_the_same_row_buckets_differently_under_a_different_school(monkeypatch,
 
 
 def test_the_week_ends_on_the_schools_today(monkeypatch, at_three_am_utc):
-    """The last bucket is the school's current day. Built from UTC it would
-    run a day ahead, adding a trailing empty column that looks like a day
-    with no activity instead of a day that hasn't happened yet."""
+    """From UTC it would add a trailing empty column for a day that hasn't happened."""
     _school(monkeypatch, LA)
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables()))
 
@@ -114,9 +94,7 @@ def test_the_week_ends_on_the_schools_today(monkeypatch, at_three_am_utc):
 
 def test_the_query_starts_at_the_first_school_days_midnight(monkeypatch,
                                                             at_three_am_utc):
-    """`now - 7 days` in UTC starts after the earliest school day begins when
-    the school is behind UTC, so the oldest chart day would silently lose its
-    first hours and average only the rest."""
+    """`now - 7 days` in UTC would cut the oldest day's first hours behind UTC."""
     _school(monkeypatch, LA)
     fake = _FakeSupabase(_tables())
     monkeypatch.setattr(main, "supabase", fake)
@@ -142,12 +120,7 @@ def test_the_query_starts_at_the_first_school_days_midnight(monkeypatch,
     {"state": main.WINDOW_OPEN, "timezone": "Mars/Olympus_Mons"},
 ])
 def test_an_unusable_timezone_still_produces_a_report(monkeypatch, window):
-    """Unlike `_retention_window`, which denies on exactly these cases, this
-    degrades to UTC instead. A wrong boundary while recording means data
-    collected against a refusal; a wrong boundary while reporting only means
-    a chart column is a few hours off. Blanking a parent's dashboard over a
-    config typo would be the larger harm.
-    """
+    """Reporting degrades to UTC where `_retention_window` denies: a chart hours off is the lesser harm."""
     monkeypatch.setattr(main, "_retention_window", lambda: window)
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables()))
 
@@ -158,8 +131,6 @@ def test_an_unusable_timezone_still_produces_a_report(monkeypatch, window):
 
 
 def test_an_unparseable_timestamp_joins_no_day(monkeypatch, at_three_am_utc):
-    """A row with no valid timestamp is dropped rather than landing silently
-    in some bucket -- it isn't evidence about any particular day."""
     _school(monkeypatch, LA)
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
         cog=[{"user_id": STUDENT, "ts": "not-a-timestamp", "focus": 0.9}])))
@@ -182,11 +153,7 @@ def _with_rollup(cog=(), rollup=()):
 
 
 def test_a_day_with_no_raw_rows_falls_back_to_its_rollup(monkeypatch, at_three_am_utc):
-    """After the delete job runs, the rollup is the only source left. Whether
-    to use it is decided by what data is present, not by re-checking the
-    retention window -- a second copy of that boundary logic could drift from
-    reality, but presence can't.
-    """
+    """Decided by which data is present, not by re-checking the retention window."""
     _school(monkeypatch, LA)
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
         rollup=[_rollup("2026-06-09", "cognitive", avg_focus=0.42,
@@ -203,9 +170,7 @@ def test_a_day_with_no_raw_rows_falls_back_to_its_rollup(monkeypatch, at_three_a
 
 
 def test_raw_rows_win_over_a_rollup_for_the_same_day(monkeypatch, at_three_am_utc):
-    """Raw rows win where they still exist. The rollup is a fallback, not a
-    cache -- preferring it would quietly answer today's chart with
-    yesterday's summary."""
+    """The rollup is a fallback, not a cache."""
     _school(monkeypatch, LA)
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
         cog=[{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "focus": 0.9}],
@@ -220,10 +185,7 @@ def test_raw_rows_win_over_a_rollup_for_the_same_day(monkeypatch, at_three_am_ut
 
 
 def test_a_summarised_day_is_marked_as_one(monkeypatch, at_three_am_utc):
-    """A day averaged from its own samples and a day averaged once and then
-    deleted answer the same question at different precision. The chart has to
-    say which is which, or it invites an unsound comparison.
-    """
+    """Raw and summarised days differ in precision, and the chart has to say which is which."""
     _school(monkeypatch, LA)
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
         cog=[{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "focus": 0.9}],
@@ -233,15 +195,12 @@ def test_a_summarised_day_is_marked_as_one(monkeypatch, at_three_am_utc):
 
     assert _day(report, "2026-06-11")["cognitive_from_rollup"] is False
     assert _day(report, "2026-06-09")["cognitive_from_rollup"] is True
-    # Every day carries the flag, so a consumer never reads "field absent" as
-    # a third state -- same rule the retrieved flags follow.
+    # Every day carries the flag, so "field absent" is never a third state.
     assert all("cognitive_from_rollup" in d for d in report["daily"])
 
 
 def test_a_failed_rollup_read_is_reported_rather_than_read_as_absence(monkeypatch,
                                                                       at_three_am_utc):
-    """Once raw rows are gone, the rollup is the only history there is. A
-    failed read means the week is unreadable, not that it was quiet."""
     _school(monkeypatch, LA)
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _with_rollup(), table_raises={"signal_daily_rollup"}))
@@ -249,19 +208,14 @@ def test_a_failed_rollup_read_is_reported_rather_than_read_as_absence(monkeypatc
     report = main._weekly_signal_report(STUDENT)
 
     assert report["retrieved"]["rollup"] is False
-    # The rest of the report still comes back: one broken read must not
-    # blank the whole dashboard.
+    # One broken read must not blank the whole dashboard.
     assert report["retrieved"]["cognitive"] is True
     assert len(report["daily"]) == 7
 
 
 def test_the_weeks_headline_figures_include_summarised_days(monkeypatch,
                                                             at_three_am_utc):
-    """The chart and the summary figures above it must agree. If `daily` fell
-    back to the rollup while `averages`/`highlights` only used raw rows, a
-    week with its detail deleted would show a full chart above an empty
-    summary -- two answers to one question, on one screen.
-    """
+    """The chart and the summary figures above it must agree."""
     _school(monkeypatch, LA)
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
         rollup=[_rollup("2026-06-09", "cognitive", avg_focus=0.4,
@@ -277,8 +231,7 @@ def test_the_weeks_headline_figures_include_summarised_days(monkeypatch,
     report = main._weekly_signal_report(STUDENT)
 
     assert report["averages"]["focus"] == 0.4
-    # From avg_focus, not the stored avg_engagement (0.6): the stored column
-    # is two different quantities either side of Phase 1 and is never served.
+    # From avg_focus: the stored avg_engagement means two different quantities and is never served.
     assert report["averages"]["engagement"] == 0.4
     assert report["highlights"]["heart_rate_bpm"] == 80.0
     assert report["highlights"]["dominant_emotion"] == "happy"
@@ -288,10 +241,7 @@ def test_the_weeks_headline_figures_include_summarised_days(monkeypatch,
 
 
 def test_the_week_weights_days_by_how_much_they_hold(monkeypatch, at_three_am_utc):
-    """Weighted by sum and count, not a mean of daily means. Days differ in
-    length, so averaging the averages would weight a four-sample day the same
-    as a four-thousand-sample one, letting one quiet evening skew the week.
-    """
+    """Weighted by sum and count, not a mean of daily means."""
     _school(monkeypatch, LA)
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
         rollup=[_rollup("2026-06-09", "cognitive", avg_focus=1.0,
@@ -304,8 +254,6 @@ def test_the_week_weights_days_by_how_much_they_hold(monkeypatch, at_three_am_ut
 
 
 def test_raw_and_summarised_days_combine_into_one_mean(monkeypatch, at_three_am_utc):
-    """The normal state partway through term after the delete job has run
-    once: part of the week still has samples, part has only a summary."""
     _school(monkeypatch, LA)
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
         cog=[{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "focus": 1.0}],
@@ -318,12 +266,7 @@ def test_raw_and_summarised_days_combine_into_one_mean(monkeypatch, at_three_am_
 
 def test_a_failed_raw_read_is_not_papered_over_by_the_rollup(monkeypatch,
                                                              at_three_am_utc):
-    """"No rows" and "the query failed" are not the same evidence -- only the
-    first means the detail is gone. The rollup is written as sessions close,
-    so on a failed raw read it may be stale (today lags the session still in
-    progress), and serving it as complete would present old numbers as
-    current with `retrieved` vouching for them.
-    """
+    """Only "no rows" means the detail is gone; on a failed read the rollup may be stale."""
     _school(monkeypatch, LA)
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _with_rollup(rollup=[_rollup("2026-06-09", "cognitive", avg_focus=0.4,
@@ -349,16 +292,7 @@ def _face_row(ts, emotion, gaze_x=None):
 
 def test_a_gaze_only_row_does_not_count_as_an_emotion_sample(monkeypatch,
                                                              at_three_am_utc):
-    """`face_signals` has two producers, and a row is written when either one
-    succeeds. So a window where the gaze landmarker read a face but FER+
-    refused is a real face row with no emotion in it.
-
-    `face_samples` represents how much data backs the emotion figure, so
-    counting gaze-only rows would make enabling gaze look like improving
-    emotion coverage. The rollup already excludes them; the raw path has to
-    match, or the number means something different depending on whether the
-    day has been rolled up yet.
-    """
+    """Gaze-only rows are real face rows with no emotion; the rollup already excludes them."""
     _school(monkeypatch, LA)
     tables = _tables()
     tables["face_signals"] = [

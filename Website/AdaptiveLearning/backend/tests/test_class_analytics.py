@@ -1,19 +1,4 @@
-"""The teacher analytics aggregates.
-
-Five surfaces over three Postgres functions. What these tests are mostly for is
-the set of distinctions the payloads have to keep, because every one of them
-collapses into a plausible-looking chart if it is dropped:
-
-  * a failed read against a genuinely quiet week,
-  * a topic nobody has attempted against a topic answered wrongly,
-  * a student who has never worked against one whose last-active read failed,
-  * a correlation over 500 answers against one over 8,
-  * a channel that was declined against a channel that recorded nothing.
-
-The aggregation itself happens in SQL, so what is exercised here is the
-reshaping, the bucket filling, and the flags -- `scripts/assert_signal_rls.sql`
-is where the arithmetic runs against a real stack.
-"""
+"""Teacher analytics: reshaping, bucket filling and flags (arithmetic is in assert_signal_rls.sql)."""
 import os
 from datetime import datetime, timezone
 
@@ -74,11 +59,7 @@ def _fake(**kw):
 
 
 # ─── the access check runs before any read ────────────────────────────────
-#
-# These endpoints go through the service-role client, which bypasses RLS, so
-# `_verify_class_owner` is the only thing standing between a teacher and
-# another teacher's class. Asserted per endpoint rather than once against the
-# helper: a handler that forgot to call it would pass a test of the helper.
+# Per endpoint, not once against the helper: a handler that skipped it would pass that.
 
 @pytest.mark.parametrize("call", [
     lambda: main.class_topic_heatmap(CLASS, None),
@@ -99,17 +80,13 @@ def test_a_non_owning_teacher_is_refused(monkeypatch, call):
     lambda: main.class_time_of_day(CLASS, None),
 ])
 def test_the_refusal_happens_before_the_roster_is_read(monkeypatch, call):
-    """A 403 that has already read the class's students has still leaked how
-    many there are through timing, and would leak more the next time someone
-    adds a field to the error path."""
+    """A 403 after reading the roster still leaks its size through timing."""
     fake = _fake()
     monkeypatch.setattr(main, "get_user", lambda _r: OTHER_TEACHER)
     monkeypatch.setattr(main, "supabase", fake)
     with pytest.raises(main.HTTPException):
         call()
-    # Positively: the ownership read did happen. Without this the test would
-    # also pass against a handler that raised before touching the database at
-    # all, which is a different endpoint from the one being described.
+    # The ownership read did happen, so this isn't passing on a handler that never reads.
     assert "classes" in fake.table_calls
     assert "class_memberships" not in fake.table_calls
 
@@ -117,9 +94,7 @@ def test_the_refusal_happens_before_the_roster_is_read(monkeypatch, call):
 # ─── topic heatmap ────────────────────────────────────────────────────────
 
 def test_the_grid_rows_line_up_with_its_headings(monkeypatch):
-    """Cells are a list aligned to `topics`, so the only thing that could
-    misalign them is the server building the two from different orders. Both
-    come out of one pass, and this is what pins that."""
+    """Cells are a list aligned to `topics`, built in one pass."""
     monkeypatch.setattr(main, "supabase", _fake(perf=[
         _perf(ALICE, 1, "algebra", 10, 5),
         _perf(ALICE, 2, "geometry", 4, 4),
@@ -138,9 +113,7 @@ def test_the_grid_rows_line_up_with_its_headings(monkeypatch):
 
 
 def test_a_topic_a_student_has_never_seen_is_null_not_zero(monkeypatch):
-    """Zero means every attempt was wrong, which is a real and bad reading. A
-    topic nobody served is not that, and the grid must not colour it as if it
-    were the worst cell on the board."""
+    """Zero means every attempt was wrong; a topic never served is not that."""
     monkeypatch.setattr(main, "supabase", _fake(perf=[
         _perf(ALICE, 1, "algebra", 10, 5),
         _perf(BOB, 2, "geometry", 8, 0),
@@ -155,8 +128,7 @@ def test_a_topic_a_student_has_never_seen_is_null_not_zero(monkeypatch):
 
 
 def test_a_row_that_exists_with_no_attempts_is_also_null(monkeypatch):
-    """`record_topic_attempt` upserts, so a row can exist at zero attempts.
-    Dividing by it would raise; reporting 0% would invent a result."""
+    """`record_topic_attempt` upserts, so a row can exist at zero attempts."""
     monkeypatch.setattr(main, "supabase", _fake(perf=[
         _perf(ALICE, 1, "algebra", 0, 0),
         _perf(BOB, 1, "algebra", 4, 3),
@@ -167,9 +139,7 @@ def test_a_row_that_exists_with_no_attempts_is_also_null(monkeypatch):
 
 
 def test_only_topics_the_class_has_been_served_appear(monkeypatch):
-    """Topic identity comes from the rows, not from a read of `math_topics`.
-    Three weeks into term a class would otherwise open on a wall of empty
-    columns for topics nobody has reached."""
+    """Topic identity comes from the rows, not from a read of `math_topics`."""
     fake = _fake(perf=[_perf(ALICE, 1, "algebra", 10, 5)])
     monkeypatch.setattr(main, "supabase", fake)
     out = main.class_topic_heatmap(CLASS, None)
@@ -178,8 +148,6 @@ def test_only_topics_the_class_has_been_served_appear(monkeypatch):
 
 
 def test_the_column_total_is_over_answers_not_a_mean_of_students(monkeypatch):
-    """A student who answered four questions must not weigh the same as one
-    who answered four hundred."""
     monkeypatch.setattr(main, "supabase", _fake(perf=[
         _perf(ALICE, 1, "algebra", 100, 100),
         _perf(BOB, 1, "algebra", 4, 0),
@@ -204,9 +172,7 @@ def test_a_class_that_has_answered_nothing_reads_as_retrieved(monkeypatch):
 
 
 def test_the_low_sample_threshold_rides_on_the_payload(monkeypatch):
-    """A four-answer topic reads as 0% or 100%. The figure is still returned --
-    withholding real data is not this layer's call -- but the threshold travels
-    with it so the grid dims a thin cell from one named place."""
+    """The figure is still returned; the threshold travels with it so the grid dims thin cells."""
     monkeypatch.setattr(main, "supabase", _fake(perf=[
         _perf(ALICE, 1, "algebra", 1, 1)]))
     out = main.class_topic_heatmap(CLASS, None)
@@ -223,8 +189,7 @@ def _buckets(*rows):
 
 
 def test_every_day_in_range_appears_including_the_empty_ones(monkeypatch):
-    """A day dropped from the series renders as the days either side sitting
-    adjacent, so a week of half-term reads as a smooth run."""
+    """A dropped day renders its neighbours as adjacent."""
     monkeypatch.setattr(main, "supabase", _fake(
         rpc_results=_buckets(("2026-06-11", 9, 10, 8))))
     out = main.class_accuracy_trend(CLASS, None, days=5)
@@ -239,7 +204,7 @@ def test_a_day_nobody_answered_is_null_accuracy_not_zero(monkeypatch):
     out = main.class_accuracy_trend(CLASS, None, days=2)
     quiet, worked = out["days"]
     assert quiet["accuracy"] is None and quiet["attempted"] == 0
-    # Answered four, got none right. A genuine zero, kept apart from the above.
+    # Answered four, got none right: a genuine zero.
     assert worked["accuracy"] == 0.0
 
 
@@ -265,8 +230,7 @@ def test_a_failed_read_is_not_a_quiet_month(monkeypatch):
     monkeypatch.setattr(main, "supabase", _fake(rpc_raises=_raises))
     out = main.class_accuracy_trend(CLASS, None, days=7)
     assert out["retrieved"] is False
-    # The days are still emitted so the chart has an axis, which is precisely
-    # why the flag has to be read before drawing them as zeroes.
+    # Days are still emitted for the axis, so the flag must be read before drawing.
     assert len(out["days"]) == 7
     assert all(d["accuracy"] is None for d in out["days"])
 
@@ -284,14 +248,7 @@ def test_a_class_with_no_students_is_not_a_failed_read(monkeypatch):
 ])
 def test_a_failed_roster_read_is_not_a_class_with_no_students(monkeypatch,
                                                               call, key):
-    """The roster failing produces an aggregate computed over nobody, which is
-    a well-formed payload describing an empty class. That is a claim about the
-    class, and a failed query has not earned it -- so it folds into the same
-    `retrieved` flag as the aggregate's own failure.
-
-    `student_count: 0` beside `retrieved: false` reads as "could not find
-    out"; beside `retrieved: true` it is a genuinely empty class. The test
-    above is the other half of that pair."""
+    """A failed roster read folds into `retrieved`, not an aggregate over nobody."""
     monkeypatch.setattr(main, "supabase",
                         _fake(table_raises=["class_memberships"]))
     out = call()
@@ -301,18 +258,9 @@ def test_a_failed_roster_read_is_not_a_class_with_no_students(monkeypatch,
 
 
 def test_the_range_is_fixed_by_one_clock_read(monkeypatch):
-    """A request that straddles local midnight must not query one range and
-    bucket another.
+    """A request straddling midnight must not query one range and bucket another.
 
-    `_answer_buckets` read the clock to build the query and the caller read it
-    again after the round trip to lay out the buckets. Cross midnight in
-    between and the second read starts a day later, so the oldest day's rows
-    land in no bucket and are silently dropped -- one day quietly missing from
-    the left edge of a chart, self-healing on the next request, which is
-    exactly why nobody would report it.
-
-    The clock advances on every call here, so a second read cannot go
-    unnoticed."""
+    The clock advances on every call, so a second read cannot go unnoticed."""
     clock = iter([
         datetime(2026, 6, 11, 23, 59, 59, tzinfo=timezone.utc),   # the query
         datetime(2026, 6, 12, 0, 0, 1, tzinfo=timezone.utc),      # any re-read
@@ -326,15 +274,12 @@ def test_the_range_is_fixed_by_one_clock_read(monkeypatch):
     out = main.class_accuracy_trend(CLASS, None, days=3)
     assert [d["day"] for d in out["days"]] == [
         "2026-06-09", "2026-06-10", "2026-06-11"]
-    # The row landed in a bucket rather than being dropped on the floor.
     assert out["days"][0]["attempted"] == 10
     assert out["attempted"] == 10
 
 
 def test_the_window_is_asked_for_in_the_schools_timezone(monkeypatch):
-    """The bucketing happens in SQL, so the timezone has to reach it. Passed
-    rather than left to default, since Postgres would otherwise bucket at UTC
-    and put a late Californian lesson on the following day."""
+    """Bucketing is in SQL, which would otherwise default to UTC."""
     monkeypatch.setattr(main, "_retention_window", lambda: {
         "state": main.WINDOW_OPEN, "starts_on": "2000-01-01",
         "ends_on": "2099-12-31", "timezone": "America/Los_Angeles"})
@@ -344,8 +289,7 @@ def test_the_window_is_asked_for_in_the_schools_timezone(monkeypatch):
     name, params = fake.rpc_calls[-1]
     assert name == "class_answer_buckets"
     assert params["p_timezone"] == "America/Los_Angeles"
-    # Half-open on the far end, and the far end is tomorrow's local midnight --
-    # otherwise today's answers fall outside the range they belong to.
+    # Half-open, ending at tomorrow's local midnight so today is included.
     assert params["p_to"].startswith("2026-06-12T00:00:00")
 
 
@@ -364,8 +308,6 @@ def test_days_collapse_onto_weekday_and_hour(monkeypatch):
 
 
 def test_only_hours_the_class_has_worked_in_are_emitted(monkeypatch):
-    """168 cells of which a school uses thirty is not a finding, it is a wall
-    of blanks with three squares in it."""
     monkeypatch.setattr(main, "supabase", _fake(rpc_results=_buckets(
         ("2026-06-08", 9, 10, 5), ("2026-06-09", 14, 10, 5))))
     out = main.class_time_of_day(CLASS, None, days=30)
@@ -391,8 +333,7 @@ def test_a_failed_read_is_not_an_empty_timetable(monkeypatch):
 # ─── last active ──────────────────────────────────────────────────────────
 
 def test_the_roster_reads_last_active_once_for_everyone(monkeypatch):
-    """"Newest row per student" has no PostgREST form, which is why this goes
-    through an RPC at all. One call for the roster, never one per student."""
+    """One RPC call for the roster, never one per student."""
     fake = _fake(rpc_results={"last_active_for_users": [
         {"user_id": ALICE, "last_active": "2026-06-11T09:00:00Z"}]})
     monkeypatch.setattr(main, "supabase", fake)
@@ -402,15 +343,13 @@ def test_the_roster_reads_last_active_once_for_everyone(monkeypatch):
     alice = next(s for s in out if s["user_id"] == ALICE)
     bob = next(s for s in out if s["user_id"] == BOB)
     assert alice["last_active"] == "2026-06-11T09:00:00Z"
-    # Never started a session. A real fact about the roster, not a failure.
+    # Never started a session: a real fact, not a failure.
     assert bob["last_active"] is None
     assert bob["last_active_retrieved"] is True
 
 
 def test_a_failed_last_active_read_is_not_a_roster_of_idle_students(monkeypatch):
-    """This is the column a teacher scans to decide who has stopped working.
-    Reporting a failed read as "nobody has been active" is the worst available
-    answer, because it is both wrong and actionable."""
+    """Reporting a failed read as nobody active is both wrong and actionable."""
     def _raises(name, _params):
         return RuntimeError("boom") if name == "last_active_for_users" else None
     monkeypatch.setattr(main, "supabase", _fake(rpc_raises=_raises))
@@ -432,15 +371,12 @@ def _viewer_may_see_alice(monkeypatch):
 
 def test_a_correlation_over_too_few_answers_is_withheld(monkeypatch,
                                                         _viewer_may_see_alice):
-    """r reaches a teacher as one number with no visible denominator. Over a
-    dozen answers it is noise wearing the costume of a finding, and the
-    database will happily compute one from two pairs."""
+    """r has no visible denominator, and `corr()` answers from two pairs."""
     monkeypatch.setattr(main, "supabase", _fake(rpc_results=_focus(8, 0.91)))
     out = main.student_focus_accuracy(ALICE, None)
     assert out["correlation"] is None
     assert out["sufficient"] is False
-    # The count rides along so the surface can say *why* it is absent rather
-    # than rendering the same blank as a student with no headband.
+    # The count lets the surface say why it is absent.
     assert out["pairs"] == 8
     assert out["min_pairs"] == main._FOCUS_MIN_PAIRS
 
@@ -456,9 +392,7 @@ def test_a_correlation_over_enough_answers_is_reported(monkeypatch,
 
 def test_a_null_correlation_survives_a_sufficient_sample(monkeypatch,
                                                          _viewer_may_see_alice):
-    """`corr()` answers null when the input has no variance -- every answer
-    correct, say. That is not the same as too few pairs, and rounding it would
-    raise."""
+    """`corr()` is null with no variance, which differs from too few pairs."""
     monkeypatch.setattr(main, "supabase", _fake(rpc_results=_focus(400, None)))
     out = main.student_focus_accuracy(ALICE, None)
     assert out["correlation"] is None
@@ -466,8 +400,7 @@ def test_a_null_correlation_survives_a_sufficient_sample(monkeypatch,
 
 
 def test_buckets_carry_their_own_sample_sizes(monkeypatch, _viewer_may_see_alice):
-    """A bar chart of five bins shows its own denominators, which is why the
-    buckets are still returned below the correlation threshold."""
+    """Buckets show their own denominators, so they're returned below the threshold."""
     monkeypatch.setattr(main, "supabase", _fake(rpc_results=_focus(9, 0.5, [
         {"bucket": 1, "focus_low": 0.0, "focus_high": 0.2, "answered": 4, "correct": 1},
         {"bucket": 5, "focus_low": 0.8, "focus_high": 1.0, "answered": 5, "correct": 5},
@@ -488,10 +421,7 @@ def test_an_empty_bucket_is_null_accuracy(monkeypatch, _viewer_may_see_alice):
 
 def test_without_eeg_consent_the_join_is_never_run(monkeypatch,
                                                    _viewer_may_see_alice):
-    """Assert on the *call*, not on the payload. An absent correlation cannot
-    tell "asked and found nothing" from "never asked", which is the whole
-    distinction CLAUDE.md's rule about the facial opt-out is about -- and a
-    test that checked only the payload would pass either way."""
+    """Assert on the call, not the payload, which is the same either way."""
     tables = _tables()
     tables["signal_consent"] = [{"user_id": ALICE, "eeg_enabled": False,
                                  "headband_optical_enabled": True,
@@ -502,14 +432,12 @@ def test_without_eeg_consent_the_join_is_never_run(monkeypatch,
     assert "focus_accuracy_for_user" not in [c[0] for c in fake.rpc_calls]
     assert out["eeg_enabled"] is False
     assert out["correlation"] is None
-    # And it is not reported as a failed read -- the read succeeded in saying
-    # this student declined.
+    # Not a failed read: the read succeeded in saying this student declined.
     assert out["retrieved"] is True
 
 
 def test_a_consented_student_is_asked_for(monkeypatch, _viewer_may_see_alice):
-    """The negative test above passes against an endpoint that never queries
-    at all, so this is the half that makes it mean something."""
+    """The positive half of the test above."""
     fake = _fake(rpc_results=_focus(400, 0.5))
     monkeypatch.setattr(main, "supabase", fake)
     main.student_focus_accuracy(ALICE, None)
@@ -528,9 +456,7 @@ def test_a_failed_read_is_not_a_student_with_no_readings(monkeypatch,
 
 def test_the_payload_shape_is_the_same_on_every_branch(monkeypatch,
                                                        _viewer_may_see_alice):
-    """A consumer that has to check whether a key exists before reading it will
-    eventually treat "absent" as a fourth state. Same reasoning as
-    `_shape_summary` building its flags on both branches."""
+    """An optional key eventually becomes a fourth state."""
     def _raises(name, _params):
         return RuntimeError("boom") if name == "focus_accuracy_for_user" else None
 

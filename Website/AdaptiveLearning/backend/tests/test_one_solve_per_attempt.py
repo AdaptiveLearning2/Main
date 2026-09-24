@@ -1,25 +1,4 @@
-"""One trip to the solve subprocess per generation attempt.
-
-`LLM_mean_generation` had its guard block pasted twice, so every attempt
-spawned two subprocesses and threw the first result away. Measured at 0.77s for
-one call against 1.47s for two -- on the inline path, which is every question.
-
-The arithmetic behind `SOLVE_TIMEOUT` is what makes that more than waste. That
-value is sized so a hung reply costs about three attempts' worth of the budget;
-a second call per attempt doubles the worst case, so mean's was 18s where every
-other topic's was 9s. A duplicated call is not a slow path, it is a different
-bound.
-
-Counting at runtime rather than grepping: `probability` legitimately has two
-call sites on mutually exclusive branches, so a source count reports it as the
-same defect and reports nothing at all about a duplicate inside one branch.
-
-All four entry points are counted, not just `safe_sympify_values`. Counting one
-of them covered five of the ten topics while the docstring claimed to be about
-the subprocess in general -- so a duplicate in algebra, expressions, rationals,
-geometry or angles, which reach the worker through `safe_solve`,
-`safe_solve_geometry` or `safe_solve_angle`, would have passed it.
-"""
+"""One solve-subprocess call per generation attempt (a second doubles SOLVE_TIMEOUT's worst case)."""
 import json
 import os
 
@@ -42,8 +21,7 @@ import LLM_rationals_generation as rationals_gen  # noqa: E402
 import LLM_geometry_generation as geometry_gen  # noqa: E402
 import LLM_angle_relationship_generation as angle_gen  # noqa: E402
 
-# Every way into the subprocess. A test that counted one of these read as a
-# statement about the worker and was a statement about one of its doors.
+# Every way into the subprocess; counted at runtime, since a source count can't see branches.
 _ENTRY_POINTS = ("safe_sympify_values", "safe_solve", "safe_solve_geometry",
                  "safe_solve_angle")
 
@@ -63,12 +41,7 @@ CASES = [
      {"question_text": "Order from least to greatest: 4, 8, 6, 2, 10.",
       "question_topic": "ordering", "values": _VALUES,
       "direction": "least_to_greatest"}),
-    # A dice reply, because these cases all ask for "medium" and
-    # DIFFICULTY_SCENARIOS maps that to scenario 3. It used to be a bag
-    # question tagged `probability_of` -- a reply answering a scenario other
-    # than the one requested, which the generator accepted because nothing
-    # compared the two. It does now, so the stub has to be a reply that could
-    # really come back.
+    # Dice: "medium" maps to scenario 3, and a reply for another scenario is refused.
     ("probability", prob_gen, "generate_probability_question",
      {"question_text": "A standard six-sided die is rolled. What is the "
                        "probability of rolling a number greater than 4?",
@@ -113,8 +86,7 @@ def test_a_successful_attempt_makes_exactly_one_worker_call(
                             counter(entry_name, getattr(safe_solve, entry_name)))
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
-    # The stub answers `evaluate`; the generator refuses a reply for a
-    # scenario it did not ask for, and its pick is random at this grade.
+    # The stub answers `evaluate`; pin the otherwise-random scenario pick.
     if name == "expressions":
         monkeypatch.setattr(module, "_pick_scenario", lambda band: 1)
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",

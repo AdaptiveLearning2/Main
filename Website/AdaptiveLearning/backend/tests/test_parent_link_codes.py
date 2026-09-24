@@ -1,24 +1,4 @@
-"""Linking a parent takes a code the child made, not a string about the child.
-
-`POST /api/parent/link-child` took the child's **user id**, and the page told
-the parent to have the child read it off their own profile -- so possession of
-the id was standing in for the child's consent to the link. It cannot: the id is
-on every roster payload a teacher of that child reads, in the URL of every
-report page about them, and in the admin student search. Anyone holding one and
-an account with `role = 'parent'` could link themselves, and from that moment
-read the child's reports and re-enable a sensor the child had switched off.
-
-**This does not reverse "notify, not block".** `ParentLinkedBanner` still tells
-the child after the fact and nothing waits on the acknowledgement -- see that
-component for why an approval gate was rejected. What the code changes is that
-the handover is now an act by the child, which is what the id was being trusted
-to prove and did not.
-
-**A student still cannot remove a link; only the parent can.** That is a
-safeguarding decision rather than an engineering one -- a child cutting off a
-legitimate parent is the other failure -- and it is recorded here rather than
-left to be rediscovered as an omission.
-"""
+"""A parent links with a code the child made; a user id is not a secret."""
 import os
 from datetime import timedelta
 
@@ -35,9 +15,7 @@ CODE = "ABCD2345"
 
 
 class _Fake:
-    """`parent_link_codes`, `parent_child_links` and `profiles`, plus a record
-    of every write, so a test can assert on what was *asked* rather than only on
-    the answer."""
+    """Codes, links and profiles, recording every write so tests assert on the request."""
 
     def __init__(self, codes=(), links=(), role="student", code_read_raises=None,
                  profile_raises=None, link_insert_raises=None, link_on_failure=False,
@@ -133,8 +111,7 @@ class _Fake:
                             raise client.code_read_raises
                         client.deletes.append((table, dict(self._filters), dict(self._gt)))
                         client.delete_kwargs.append(kw)
-                        # PostgREST's default for a delete is to return the
-                        # rows it removed, which is what makes it a claim.
+                        # A delete returns the rows it removed, which is what makes it a claim.
                         gone = [c for c in client.codes if self._matches(c)]
                         client.codes = [c for c in client.codes if not self._matches(c)]
                         return type("R", (), {"data": gone})()
@@ -189,21 +166,16 @@ def test_a_code_is_stored_against_the_caller_and_replaces_the_last(monkeypatch, 
 
     table, row, kw = fake.upserts[0]
     assert table == "parent_link_codes"
-    # The caller's own id, never anything from a request: this endpoint takes no
-    # body at all, which is what makes the code's owner unforgeable.
+    # The caller's own id: the endpoint takes no body, so the owner is unforgeable.
     assert row["student_id"] == CHILD
     assert row["code"] == out["code"]
-    # Upserted on the student, or generating a second code leaves both live and
-    # the child has no way to know which one they read out.
+    # Upserted on the student, or a second code leaves both live.
     assert kw.get("on_conflict") == "student_id"
     assert [c["code"] for c in fake.codes] == [out["code"]]
 
 
 def test_only_a_student_can_create_a_code(monkeypatch):
-    """A teacher's code, handed over, would produce a parent linked to a
-    teacher -- which `_verify_can_view_student` would honour. Refused at the
-    source, and checked again on redemption, since a role can change inside a
-    code's lifetime."""
+    """A teacher's code would link a parent to a teacher, which `_verify_can_view_student` honours."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
     monkeypatch.setattr(main, "_role", lambda _uid: "teacher")
     monkeypatch.setattr(main, "supabase", _Fake())
@@ -214,9 +186,7 @@ def test_only_a_student_can_create_a_code(monkeypatch):
 
 
 def test_a_code_is_drawn_from_an_unambiguous_alphabet_and_does_not_repeat():
-    """Read aloud by a child, so no O/0 or I/1; and from `secrets` rather than
-    `random`, because this is the only credential between an account claiming
-    to be a parent and a child's reports."""
+    """Read aloud by a child, so no O/0 or I/1; drawn from `secrets`, not `random`."""
     codes = {main._new_link_code() for _ in range(200)}
 
     assert len(codes) == 200, "two of two hundred codes collided"
@@ -237,8 +207,6 @@ def test_a_stored_code_expires(monkeypatch, student):
 
 
 def test_a_write_that_failed_is_not_reported_as_a_code(monkeypatch, student):
-    """Returning a code that was never stored sends a child to read out eight
-    characters that refuse."""
     class _Broken(_Fake):
         def table(self, name):
             raise RuntimeError("postgrest down")
@@ -253,21 +221,18 @@ def test_a_write_that_failed_is_not_reported_as_a_code(monkeypatch, student):
 # ── reading it back ──────────────────────────────────────────────────────
 
 def test_the_outstanding_code_is_readable_again(monkeypatch, student):
-    """A child who navigated away would otherwise have to make another, and
-    each new one invalidates the last."""
+    """Otherwise a child who navigated away makes another, invalidating the last."""
     monkeypatch.setattr(main, "supabase", _Fake(codes=[_code()]))
 
     out = main.my_parent_link_code(None)
 
     assert out["code"] == CODE
     assert out["retrieved"] is True
-    # The expiry too, or the page cannot say when the code stops working.
     assert main._parse_ts(out["expires_at"]) > main._utc_now()
 
 
 def test_an_expired_code_is_not_offered_back(monkeypatch, student):
-    """The row survives until the nightly sweep and the redemption path refuses
-    it, so reporting it here would be one surface disagreeing with the other."""
+    """The row survives until the nightly sweep, but redemption already refuses it."""
     monkeypatch.setattr(main, "supabase", _Fake(codes=[_code(minutes=-1)]))
 
     out = main.my_parent_link_code(None)
@@ -277,8 +242,7 @@ def test_an_expired_code_is_not_offered_back(monkeypatch, student):
 
 
 def test_a_failed_read_is_not_no_code(monkeypatch, student):
-    """Three states. A page that collapsed them offers `create one` to an
-    account that has one, replacing a code the child may have just read out."""
+    """Collapsed, the page offers `create one` and replaces a code the child may have read out."""
     monkeypatch.setattr(main, "supabase",
                         _Fake(code_read_raises=RuntimeError("down")))
 
@@ -297,8 +261,7 @@ def test_a_valid_code_links_the_parent_to_the_child_it_belongs_to(monkeypatch, p
 
     assert out["ok"] is True
     assert out["child_id"] == CHILD
-    # The child comes off the code row. The request carries no child id at all
-    # now, which is the point -- there is nothing for a caller to put there.
+    # The child comes off the code row; the request carries no child id.
     assert ("parent_child_links", {"parent_id": PARENT, "child_id": CHILD}) in \
         [(t, r) for t, r in fake.inserts]
 
@@ -319,10 +282,7 @@ def test_a_redeemed_code_does_not_work_twice(monkeypatch, parent):
 
 
 def test_the_code_is_claimed_before_the_link_is_written(monkeypatch, parent):
-    """**The delete is the claim.** Two requests carrying one code both read it
-    as valid if the read is the check; only one gets rows back from a delete.
-    So the delete comes first, is conditional on the code being unexpired, and
-    nothing is linked unless it returned the row."""
+    """The conditional delete is the claim: only one racing request gets the row back."""
     fake = _Fake(codes=[_code()])
     monkeypatch.setattr(main, "supabase", fake)
 
@@ -332,17 +292,14 @@ def test_the_code_is_claimed_before_the_link_is_written(monkeypatch, parent):
                             ("insert", "parent_child_links")], fake.ops
     table, filters, gt = fake.deletes[0]
     assert (table, filters) == ("parent_link_codes", {"code": CODE})
-    # Conditional on the expiry, in the same statement -- or an expired code
-    # is deleted and honoured.
+    # Conditional on the expiry in the same statement, or an expired code is honoured.
     assert main._parse_ts(gt["expires_at"]) <= main._utc_now()
-    # And asks for the rows it deleted. Under `returning=minimal` the answer is
-    # empty whatever happened, and every good code would be destroyed as unknown.
+    # Under `returning=minimal` the answer is always empty and every good code reads as unknown.
     assert fake.delete_kwargs[0].get("returning") == main.ReturnMethod.representation
 
 
 def test_a_claim_that_failed_links_nobody(monkeypatch, parent):
-    """A delete that could not run has claimed nothing, so nothing is linked --
-    and it is a 503, not "not valid": the code may be fine."""
+    """503, not "not valid": the code may be fine."""
     fake = _Fake(codes=[_code()], code_read_raises=RuntimeError("down"))
     monkeypatch.setattr(main, "supabase", fake)
 
@@ -354,9 +311,7 @@ def test_a_claim_that_failed_links_nobody(monkeypatch, parent):
 
 
 def test_a_code_for_an_account_that_is_no_longer_a_student_links_nobody(monkeypatch, parent):
-    """Checked when the code was made, and again here: the role can change
-    inside the code's lifetime. Same refusal as any other code that does not
-    work, recorded like one, and spent rather than given back."""
+    """The role can change inside the code's lifetime; refused like any bad code, and spent."""
     fake = _Fake(codes=[_code()], role="teacher")
     monkeypatch.setattr(main, "supabase", fake)
 
@@ -366,16 +321,14 @@ def test_a_code_for_an_account_that_is_no_longer_a_student_links_nobody(monkeypa
     assert e.value.status_code == 404
     assert fake.links == []
     assert fake.codes == []
-    # Recorded, and not as a wrong code: this one was genuine, and a reader of
-    # the log must not count it as guessing.
+    # Recorded under its own check, so the log doesn't count a genuine code as guessing.
     checks = [(ev.get("detail") or {}).get("check") for ev in fake.events
               if ev["kind"] == "authz_denied"]
     assert checks == ["parent_link_code_not_student"], fake.events
 
 
 def test_a_child_profile_that_could_not_be_read_links_nobody(monkeypatch, parent):
-    """Not through `_role`, which answers "student" for a failed read -- the
-    permissive answer on this side. The code goes back: nothing is wrong with it."""
+    """Not via `_role`, which answers "student" on a failed read. The code goes back."""
     fake = _Fake(codes=[_code()], profile_raises=RuntimeError("down"))
     monkeypatch.setattr(main, "supabase", fake)
 
@@ -394,10 +347,7 @@ def test_a_child_profile_that_could_not_be_read_links_nobody(monkeypatch, parent
 ])
 def test_a_link_write_that_raised_never_gives_the_code_back(
         monkeypatch, parent, linked_meanwhile, unreadable):
-    """A write that raised may still commit after any check made now, so no
-    answer to "is it linked?" makes giving the code back safe: a spent code
-    live again is a second adult's link. The cost is a new code after a write
-    that really failed."""
+    """A write that raised may still commit, so a returned code could become a second adult's link."""
     fake = _Fake(codes=[_code()], link_insert_raises=RuntimeError("timeout"),
                  link_on_failure=linked_meanwhile,
                  link_read_raises_after_insert=unreadable)
@@ -419,9 +369,7 @@ def test_a_link_write_that_raised_never_gives_the_code_back(
 ])
 def test_a_link_write_that_raised_is_reported_by_whether_the_link_exists(
         monkeypatch, parent, linked_meanwhile, unreadable, linked):
-    """Made, with the answer lost, is a success: the parent is linked, and
-    "Already linked" shown as an error would say something went wrong. Not
-    made, or unknown, is a 503 that says what to do."""
+    """Made with the answer lost is a success; not made, or unknown, is a 503."""
     fake = _Fake(codes=[_code()], link_insert_raises=RuntimeError("timeout"),
                  link_on_failure=linked_meanwhile,
                  link_read_raises_after_insert=unreadable)
@@ -438,8 +386,7 @@ def test_a_link_write_that_raised_is_reported_by_whether_the_link_exists(
 
 
 def test_a_failed_check_for_an_existing_link_gives_the_code_back(monkeypatch, parent):
-    """Before the write nothing has been written, so the code is safe to give
-    back -- and nothing is written after a check that could not answer."""
+    """Nothing is written yet, so the code is safe to return."""
     fake = _Fake(codes=[_code()], link_read_raises=True)
     monkeypatch.setattr(main, "supabase", fake)
 
@@ -452,8 +399,7 @@ def test_a_failed_check_for_an_existing_link_gives_the_code_back(monkeypatch, pa
 
 
 def test_a_code_given_back_never_replaces_a_newer_one(monkeypatch, parent):
-    """Inserted, not upserted on the student: if the child made a new code while
-    this one was claimed, the new one is what they are reading out."""
+    """Inserted, not upserted: a code the child made meanwhile is the one they're reading out."""
     fake = _Fake(codes=[_code()], profile_raises=RuntimeError("down"))
     monkeypatch.setattr(main, "supabase", fake)
 
@@ -465,8 +411,6 @@ def test_a_code_given_back_never_replaces_a_newer_one(monkeypatch, parent):
 
 
 def test_a_code_is_accepted_however_it_was_typed(monkeypatch, parent):
-    """The alphabet has no lowercase in it, so a typed `a` is the same code as
-    `A`; refusing it would be a puzzle rather than a safeguard."""
     fake = _Fake(codes=[_code()])
     monkeypatch.setattr(main, "supabase", fake)
 
@@ -481,9 +425,7 @@ def test_a_code_is_accepted_however_it_was_typed(monkeypatch, parent):
 ])
 def test_a_code_that_does_not_work_is_refused_the_same_way(monkeypatch, parent,
                                                            codes, label):
-    """One message for both, because the difference is information about
-    somebody else's account -- and the parent's next action is the same either
-    way: ask the child for a new one."""
+    """The difference is information about somebody else's account."""
     monkeypatch.setattr(main, "supabase", _Fake(codes=codes))
 
     with pytest.raises(main.HTTPException) as e:
@@ -494,8 +436,7 @@ def test_a_code_that_does_not_work_is_refused_the_same_way(monkeypatch, parent,
 
 
 def test_a_refused_code_is_recorded(monkeypatch, parent):
-    """A series of these from one account is the only shape guessing has, and
-    `authz_denied` is deliberately not cooled, so every attempt is a row."""
+    """`authz_denied` is not cooled, so every guess is a row."""
     fake = _Fake(codes=[])
     monkeypatch.setattr(main, "supabase", fake)
 
@@ -506,17 +447,13 @@ def test_a_refused_code_is_recorded(monkeypatch, parent):
             if e["kind"] == "authz_denied"
             and (e.get("detail") or {}).get("check") == "parent_link_code"], \
         fake.events
-    # The actor, and no subject: which child's code was being guessed at is not
-    # known on this path, and inventing one would put a child's id on a row
-    # about somebody else's typing.
+    # No subject: whose code was being guessed at is unknown on this path.
     event = fake.events[0]
     assert event["actor_user_id"] == PARENT
     assert event.get("subject_user_id") is None
 
 
 def test_a_failed_lookup_is_not_reported_as_an_invalid_code(monkeypatch, parent):
-    """Telling a parent the code is wrong sends them to ask for another one,
-    which will be refused the same way."""
     monkeypatch.setattr(main, "supabase",
                         _Fake(code_read_raises=RuntimeError("down")))
 
@@ -534,13 +471,10 @@ def test_an_existing_link_is_not_duplicated(monkeypatch, parent):
     with pytest.raises(main.HTTPException) as e:
         main.link_child(main.LinkChildRequest(link_code=CODE), None)
     assert e.value.status_code == 409
-    # And the code is not spent by a link that was not made.
     assert fake.codes, "a refused duplicate consumed the code"
 
 
 def test_attempts_are_bounded_and_the_limiter_is_named(monkeypatch, parent):
-    """Not what makes guessing infeasible -- the alphabet and the TTL are --
-    but what makes trying visible and slow."""
     fake = _Fake(codes=[])
     monkeypatch.setattr(main, "supabase", fake)
     from tests.conftest import tighten

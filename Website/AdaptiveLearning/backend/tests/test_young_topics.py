@@ -1,15 +1,4 @@
-"""`missing_number` and `patterns` -- the two topics grade 1 gained.
-
-Grade 1 could be served exactly two topics, `ordering` and `expressions`, so a
-6-year-old saw the same two on rotation. Both of these are real grade-1
-standards (1.OA.8, 1.NBT.1) whose answer is a single whole number an exact
-solver can produce, which is the constraint that rules out most of 1.G and
-1.OA -- a shape-partitioning question has no number to score.
-
-The solvers are the interesting half. Both refuse rather than guess, and both
-are total: no search, no sympy, so no bounded subprocess and nothing that can
-hang.
-"""
+"""`missing_number` (1.OA.8) and `patterns` (1.NBT.1): total solvers that refuse rather than guess."""
 import json
 import os
 import sys
@@ -38,9 +27,7 @@ BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     (["4", "*", "?", "=", "20"], 5),
 ])
 def test_the_unknown_is_found_wherever_it_sits(tokens, expected):
-    """Rearranged, never searched -- one arithmetic step whichever slot is
-    blank. A search would be a loop whose termination depends on the numbers,
-    which is what hung this codebase before."""
+    """Rearranged, never searched: a search's termination would depend on the numbers."""
     assert missing.solve_missing(tokens) == expected
 
 
@@ -56,15 +43,12 @@ def test_the_unknown_is_found_wherever_it_sits(tokens, expected):
     ("8 + ? = 11", "not a list"),
 ])
 def test_an_equation_that_determines_no_whole_answer_is_refused(tokens, why):
-    """`None`, not a raise: the caller is inside the retry loop, so an unusable
-    reply must cost an attempt rather than leaving the generator as a 500."""
+    """`None`, not a raise: the caller's retry loop spends an attempt on it."""
     assert missing.solve_missing(tokens) is None, why
 
 
 def test_the_equation_on_screen_must_be_the_one_being_scored():
-    """The worst failure available here -- a question answered correctly and
-    marked wrong. The whole question *is* the equation, so a text disagreeing
-    with the scored variables is not a cosmetic slip."""
+    """Otherwise a correct answer is marked wrong; the question *is* the equation."""
     tokens = ["8", "+", "?", "=", "11"]
     assert missing.shown_matches_scored("What goes in the blank? 8 + ? = 11",
                                         tokens) is None
@@ -83,20 +67,13 @@ def test_the_equation_on_screen_must_be_the_one_being_scored():
     ("Grade 1", "multiplication"),   # grade_levels reads the digit either way
 ])
 def test_multiplication_is_forbidden_at_grades_1_and_2_only(grade, expected):
-    """Reproduced in review: `3 * ? = 12` cleared solve_missing (which accepts
-    "*"), grade_appropriateness (which only looks for variable notation) and
-    shown_matches_scored, and was served two years above 1.OA.8. Grade 3 is
-    fine -- 3.OA.4 unknown-factor multiplication is grade-3 content.
-    """
+    """No other check catches `3 * ? = 12`; 3.OA.4 makes it grade-3 content."""
     tokens = ["3", "*", "?", "=", "12"]
     assert missing._forbidden_operator(tokens, grade) == expected
 
 
 def test_an_unreadable_grade_is_treated_as_the_youngest_for_multiplication():
-    """`profiles.grade_level` is free text, so a value carrying no readable
-    grade at all is a real state. `grade_number` answers None there, and None
-    is the signal to treat the student as the youngest rather than to guess --
-    so it must forbid multiplication, not fall through to unrestricted."""
+    """`grade_number` answers None for free text, which means "treat as youngest"."""
     tokens = ["3", "*", "?", "=", "12"]
     assert missing._forbidden_operator(tokens, "not a grade at all") == "multiplication"
 
@@ -131,14 +108,7 @@ def test_the_missing_term_is_found_wherever_it_sits(values, expected):
 
 
 def test_a_sequence_that_is_not_arithmetic_is_refused_rather_than_guessed():
-    """The load-bearing one. `2, 4, 6, ?, 9` has a first-pair step of 2 and is
-    not an arithmetic sequence, so it determines no single answer.
-
-    Deriving the step from the first pair alone would answer 8 confidently for
-    a question with no right answer -- a confident wrong answer, which is worse
-    than a refused question by exactly the margin this codebase keeps
-    rediscovering. The step is checked against every known term instead.
-    """
+    """The first-pair step alone would confidently answer 8; the step is checked against every term."""
     assert patterns.solve_pattern(["2", "4", "6", "?", "9"]) is None
 
 
@@ -209,17 +179,14 @@ def test_a_valid_patterns_reply_is_served_with_its_answer_among_options(reply):
 ])
 def test_a_reply_whose_text_disagrees_with_its_data_retries(module, entry,
                                                             payload, reply):
-    """Not a raise out of the generator -- a retry, which is what
-    `_prefetch_worker` already handles."""
+    """A retry, not a raise out of the generator."""
     reply(payload)
     with pytest.raises(ValueError):
         getattr(module, entry)([], [], "easy", "1st Grade")
 
 
 def test_algebraic_notation_is_refused_at_these_grades(reply):
-    """The topic is one notation away from `algebra` (6.EE.7). `?` is what
-    keeps it at grade 1, so a reply reaching for `2x` has left the topic --
-    and `grade_appropriateness` is what notices, since the prompt only asks."""
+    """`2x` is `algebra` (6.EE.7); `grade_appropriateness` enforces what the prompt only asks."""
     reply({"question_text": "What number goes in the blank? 2x + ? = 11",
            "question_topic": "missing_number",
            "variables": ["8", "+", "?", "=", "11"]})
@@ -230,18 +197,9 @@ def test_algebraic_notation_is_refused_at_these_grades(reply):
 # --- the wiring a new topic needs -----------------------------------------
 
 def test_a_new_topic_carries_a_math_topics_row():
-    """`record_topic_attempt` resolves a question's topic by joining
-    `math_topics.topic_name = questions.subject`, and attributes nothing when
-    that finds no row -- silently, since the helper never raises.
+    """`record_topic_attempt` joins on `math_topics.topic_name` and silently credits nothing without a row.
 
-    So a topic shipped without its row generates, serves and scores questions
-    while crediting the student's work to nothing. That is what
-    `20260907000000` had to repair for `rationals`, and shipping a new topic
-    without a row would be a fresh instance of it rather than a lesson learned.
-
-    The original ten are exempt: they were seeded before migrations tracked
-    this table, so no migration mentions them. Anything added since must bring
-    one.
+    The original ten predate migrations tracking this table.
     """
     SEEDED_BEFORE_MIGRATIONS_TRACKED_THEM = {
         "geometry", "algebra", "expressions", "ordering", "rationals",
@@ -263,10 +221,7 @@ def test_a_new_topic_carries_a_math_topics_row():
 
 
 def test_every_topic_can_be_generated():
-    """`question_generation` dispatches on a `match`. A topic in ALL_TOPICS
-    with no case used to fall through it and raise UnboundLocalError on
-    `return response` -- a 500 naming a variable rather than the topic nobody
-    wired. It raises by name now, and this is what says so."""
+    """`question_generation` dispatches on a `match`; every topic needs a case."""
     source = open(os.path.join(BACKEND, "LLM_topic_decider.py"),
                   encoding="utf-8").read()
     for topic in decider.ALL_TOPICS:

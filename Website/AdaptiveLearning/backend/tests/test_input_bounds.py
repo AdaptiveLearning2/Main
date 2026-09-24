@@ -1,28 +1,4 @@
-"""What a request body may contain, and which columns a write may reach.
-
-Sections 5 and 6 of the security plan, together because they are two halves of
-one question. A model decides which keys survive parsing; a handler decides
-which columns a write touches. Getting only the first right is what made this
-worth doing:
-
-`update_my_profile` and `update_class` name the columns they write, and that is
-what keeps a posted `role` out of `profiles.role`. It has to be: both write
-through the **service-role** client, which bypasses RLS *and* the column grants
-`20260824010000` revoked from `anon`/`authenticated`, so the migration that
-makes `role` non-client-writable does not reach either statement. They used to
-build the update out of `payload.dict()` wholesale, which left that job to the
-model happening not to declare the field.
-
-So the tests here are of two kinds, and the second kind is the one with teeth:
-
-- that the models refuse what they do not declare, and bound their free text;
-- that the handlers write named columns *even when handed a payload carrying
-  more than they declare* -- which is the state the model guard exists to
-  prevent, simulated, because a test against today's model cannot tell a
-  named-column write from `payload.dict()`: both produce exactly the fields the
-  model declares, five for `UpdateProfileRequest` and two for
-  `UpdateClassRequest`.
-"""
+"""What a request body may contain, and which columns a write may reach."""
 
 import os
 from zoneinfo import available_timezones
@@ -69,15 +45,7 @@ def test_every_request_model_forbids_what_it_does_not_declare():
 
 
 def test_the_exempt_models_are_the_ones_a_sidecar_posts_to():
-    """The exemption is a real trade, so it is named rather than derived.
-
-    A sidecar runs on a student's laptop and updates on its own schedule, so a
-    field it gained before this backend did is ordinary version skew. Under
-    `forbid` that skew 422s the *whole batch*, losing every valid sample
-    travelling with it -- which is why `CognitiveBatch.samples` is already
-    `list[Any]` validated per sample. The cost of staying lenient is a column
-    that reads "not measured" forever, and a different test already covers it.
-    """
+    """Sidecar version skew under `forbid` would 422 the whole batch."""
     for name in INGEST_MODELS:
         assert name in _request_models(), f"{name} no longer exists"
 
@@ -121,10 +89,7 @@ class _CapturingClient:
             def eq(self, *_a):            return self
 
             def single(self):
-                # `_row_or_404` unwraps a single() read to the row itself, so
-                # a fake that always hands back a list makes the handler
-                # subscript a list with a column name -- a failure in the
-                # double, dressed as one in the code.
+                # `_row_or_404` unwraps single() to the row; a list here would fail in the double.
                 self._single = True
                 return self
 
@@ -139,12 +104,7 @@ class _CapturingClient:
 
 
 def _declared_fields(model):
-    """Every field the model declares, which is what the handler must write.
-
-    Derived rather than listed, so adding a field to the model and not to the
-    handler's tuple fails here instead of being accepted with 200 and never
-    stored.
-    """
+    """Every field the model declares, which is what the handler must write."""
     return set(model.model_fields)
 
 
@@ -162,23 +122,9 @@ def _sample_value(field):
 
 
 class _PayloadCarryingMore:
-    """A payload with a field the handler's model does not declare.
+    """A payload carrying more than the model declares; `.dict()` would leak the extras.
 
-    This is the future the model guard exists to prevent, and the only way to
-    tell a named-column write from `payload.dict()`: against today's model the
-    two produce identical keys, so a test using the real model passes either
-    way. `.dict()` is provided precisely so the old implementation would work
-    and would leak.
-
-    **`__getattr__` answers `None` for anything not passed**, so this is safe to
-    construct with a partial field set. Without it, a handler reading a field
-    this object was not given raises `AttributeError` at a line in the
-    *handler* -- a failure in the double dressed as one in the code, which is
-    what `_CapturingClient.single()` above exists to prevent.
-
-    `_payload_for` now supplies every declared field, so the two tests below do
-    not reach this fallback; `test_the_payload_double_answers_for_a_field_it_was_not_given`
-    is what keeps it from being an unexercised guard that merely looks live.
+    `__getattr__` answers None for anything not passed.
     """
 
     def __init__(self, **fields):
@@ -194,26 +140,14 @@ class _PayloadCarryingMore:
 
 
 def _payload_for(model, **extra):
-    """A double carrying every field `model` declares, plus `extra`.
-
-    Derived from the model so the correct forward change passes without
-    anyone remembering this file: add a field to the model and to the
-    handler's tuple, and a value for it appears here. Add it to the model
-    alone and the equality assertion still fails, naming it.
-    """
+    """A double carrying every field `model` declares, plus `extra`."""
     declared = {name: _sample_value(field)
                 for name, field in model.model_fields.items()}
     return _PayloadCarryingMore(**declared, **extra)
 
 
 def test_the_payload_double_answers_for_a_field_it_was_not_given():
-    """The double's own contract, pinned so the guard is not unexercised.
-
-    A handler reading a field this object was not constructed with must get
-    `None`, not an `AttributeError` raised from a line in the handler. The two
-    tests below build their payload from the model and so never reach it; this
-    is what makes removing it fail something.
-    """
+    """The double's own contract; the tests below never reach this fallback."""
     payload = _PayloadCarryingMore(display_name="Ada")
     assert payload.display_name == "Ada"
     assert payload.a_field_nobody_passed is None
@@ -236,12 +170,7 @@ def test_a_profile_update_writes_only_the_columns_it_names(monkeypatch):
     for obj in written:
         assert "role" not in obj, "a posted role reached profiles.role"
         assert "email" not in obj
-        # Equality, not `<=`. A subset assertion passes when the handler writes
-        # *fewer* columns than the model declares, which is the other way this
-        # can go wrong: add a field to `UpdateProfileRequest` and forget the
-        # handler's tuple, and the request is accepted with 200 while the value
-        # is silently never stored. Naming columns is what makes that possible,
-        # so the test for it has to cover both directions.
+        # Equality, not `<=`: a declared field missing from the handler is never stored.
         assert set(obj) - {"updated_at"} == _declared_fields(main.UpdateProfileRequest)
 
 
@@ -265,13 +194,7 @@ def test_a_class_update_writes_only_the_columns_it_names(monkeypatch):
 
 
 def test_the_service_role_client_is_why_those_two_tests_exist():
-    """Stated once, so the reasoning is not only in a comment.
-
-    `20260824010000` revokes UPDATE on `profiles.role` from the client roles.
-    Every write in this app goes through the service-role client, which is not
-    one of those roles -- so that migration constrains PostgREST and not this
-    backend, and the handler is the only thing narrowing the column set.
-    """
+    """The service-role client bypasses column grants, so the handler alone narrows columns."""
     assert main.SERVICE_ROLE_KEY is not None
 
 
@@ -280,9 +203,7 @@ def test_the_service_role_client_is_why_those_two_tests_exist():
 UUID = "b7e1c2d3-4f56-7890-abcd-ef0123456789"
 LONG_NAME = "Mrs Abernathy-Whitcombe's Thursday Group"
 
-# The real value each field carries matters: a generic sample long enough to
-# exercise a 100-character name is *over* the 32 a join code or a channel gets,
-# so one shared string would fail the caps that are doing their job.
+# Each field gets a realistic value; caps differ per field.
 CAPPED = [
     ("StartSessionRequest",   "title",        {},                       LONG_NAME),
     ("CreateClassRequest",    "name",         {},                       LONG_NAME),
@@ -309,23 +230,12 @@ def test_a_free_text_field_is_bounded(model_name, field, extra, ordinary):
 
 @pytest.mark.parametrize("model_name,field,extra,ordinary", CAPPED)
 def test_an_ordinary_value_still_fits(model_name, field, extra, ordinary):
-    """A cap that refuses real input is a broken endpoint, not a bound."""
     model = getattr(main, model_name)
     model(**extra, **{field: ordinary})
 
 
 def test_the_timezone_cap_clears_every_name_it_has_to_accept():
-    """Against the installed zone database, not against one sample.
-
-    The cap has deliberate headroom -- IANA adds names -- so a single long
-    example cannot pin it: this test's docstring used to claim the longest name
-    *was* the cap and that tightening it by one would fail, while the constant
-    sat at twice that. Both halves were wrong, and the mutation run reported as
-    killing it had cut the value in half rather than by one.
-
-    Derived from `available_timezones()`, so it fails if the cap is ever set
-    below a name a school could legitimately enter, and says by how much.
-    """
+    """Against the installed zone database; the cap has deliberate headroom."""
     names = available_timezones()
     assert names, "no zone database installed; this test cannot mean anything"
     longest = max(names, key=len)
@@ -340,21 +250,7 @@ def test_the_timezone_cap_clears_every_name_it_has_to_accept():
     ("ChartSummaryRequest",     "weeks"),
 ])
 def test_a_range_parameter_is_clamped_by_its_handler_and_not_refused_here(model_name, field):
-    """A decision, recorded where reversing it means editing a test.
-
-    The obvious §6 move is `Field(ge=..., le=...)` on each of these, and it is
-    wrong: all three are already clamped in their handlers
-    (`max(1, min(payload.days, 30))`), which is this codebase's convention for
-    a caller-supplied range. Adding a field bound turns that clamp into a 422
-    for the same input: two bounds over one number, the stricter winning
-    silently.
-
-    The decision rests on the clamp existing, so each of the three has a test
-    below. It used to cite `test_learning_strategies_clamps_the_day_range`
-    alone, which covers one of them -- deleting either of the chart-summary
-    clamps left this passing, which is the argument resting on something
-    nothing checked.
-    """
+    """Clamped in the handler, so a `Field(ge=, le=)` bound would turn the clamp into a 422."""
     model = getattr(main, model_name)
     for extreme in (0, -1, 999_999):
         model(**{field: extreme})
@@ -367,20 +263,12 @@ def test_a_range_parameter_is_clamped_by_its_handler_and_not_refused_here(model_
 ])
 def test_the_chart_summary_clamps_both_of_its_ranges(monkeypatch, asked,
                                                      expected_days, expected_weeks):
-    """The other two thirds of the decision above.
-
-    Recorded at `_chart_summary_basis`, which is where the clamped values are
-    handed on, so this fails if either clamp is removed rather than only if the
-    endpoint raises.
-    """
+    """Recorded at `_chart_summary_basis`, where the clamped values are handed on."""
     seen = {}
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "viewer-1"})
     monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
     monkeypatch.setattr(main, "_rate_limit_chart_summary", lambda *_a: None)
-    # The response builder reads nine keys off the basis, so the stub carries
-    # all of them. A thinner double fails inside that builder with a KeyError,
-    # which reads as the endpoint being broken rather than as the double being
-    # incomplete -- the same rule as `_CapturingClient.single()` above.
+    # Every key the response builder reads, or the double fails as a KeyError.
     stub_basis = {"face_included": True, "signals_retrieved": True,
                   "trend_retrieved": True, "stats_retrieved": True,
                   "topics_retrieved": True, "consent_retrieved": True,
@@ -400,15 +288,13 @@ def test_the_chart_summary_clamps_both_of_its_ranges(monkeypatch, asked,
         main.ChartSummaryRequest(days=asked, weeks=asked))
 
     assert seen == {"days": expected_days, "weeks": expected_weeks}
-    # And on the way out, since `basis` is what a caller reads back to see what
-    # range it actually got.
+    # And on the way out: `basis` tells the caller what range it got.
     assert answer["basis"]["days"] == expected_days
     assert answer["basis"]["weeks"] == expected_weeks
 
 
 def test_the_acknowledgement_map_is_bounded():
-    """The one field a client may grow freely. The body cap bounds the request;
-    nothing else bounded the number of keys the handler loops over."""
+    """The body cap bounds the request, not the number of keys the handler loops over."""
     main.ConsentNoticeAck(through={str(n): "2026-01-01" for n in range(200)})
     with pytest.raises(ValidationError):
         main.ConsentNoticeAck(through={str(n): "2026-01-01" for n in range(201)})

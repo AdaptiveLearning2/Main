@@ -1,11 +1,4 @@
-"""`get_session_signal_state` -- the database half of fusion.
-
-The fusion rule itself is tested exhaustively in `test_signal_fusion.py`
-without a database. This file tests what gets read, which is the part
-consent governs: a revoked channel must never be queried, not just ignored
-after the fact. An empty result can't tell "asked and got nothing" apart from
-"never asked", so these tests check `table_calls` directly.
-"""
+"""`get_session_signal_state`: what fusion reads; consent gates the query, so tests check `table_calls`."""
 
 from __future__ import annotations
 
@@ -39,8 +32,7 @@ def _install(monkeypatch, consent, **tables):
 
 
 def test_a_revoked_channel_is_never_queried(monkeypatch):
-    """Not read-then-discard. Consent governs the read itself, so a row that
-    was never fetched can't be acted on by a later edit."""
+    """Not read-then-discard: consent governs the read itself."""
     fake = _install(
         monkeypatch,
         {"eeg_enabled": True, "headband_optical_enabled": False,
@@ -56,7 +48,6 @@ def test_a_revoked_channel_is_never_queried(monkeypatch):
 
 
 def test_a_revoked_heart_channel_cannot_change_the_difficulty(monkeypatch):
-    """The row exists and says 'high'. Consent means it does not count."""
     _install(monkeypatch,
              {"eeg_enabled": True, "headband_optical_enabled": False,
               "camera_enabled": False, "user_id": USER},
@@ -66,8 +57,7 @@ def test_a_revoked_heart_channel_cannot_change_the_difficulty(monkeypatch):
 
 
 def test_a_consented_heart_channel_does_change_it(monkeypatch):
-    """Same rows, with consent, must reach the opposite conclusion --
-    otherwise the test above proves nothing about consent."""
+    """Same rows with consent reach the opposite label, so the test above is about consent."""
     _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM, heart=HEART_HIGH)
     state = decider.get_session_signal_state(SESSION, USER)
 
@@ -76,9 +66,6 @@ def test_a_consented_heart_channel_does_change_it(monkeypatch):
 
 
 def test_consent_fails_closed_when_it_cannot_be_read(monkeypatch):
-    """A database problem must suppress signals, never enable ones the
-    student may have refused -- same fail-closed direction as main's
-    `_consent()`, opposite to the reporting helpers."""
     fake = _FakeSupabase({}, table_raises={"signal_consent"})
     monkeypatch.setattr(decider, "supabase", fake)
 
@@ -90,7 +77,6 @@ def test_consent_fails_closed_when_it_cannot_be_read(monkeypatch):
 
 
 def test_an_absent_consent_row_means_the_same_as_all_false(monkeypatch):
-    """No backfill: an unconfigured student records and acts on nothing."""
     fake = _install(monkeypatch, None, eeg=EEG_CALM)
 
     assert decider.get_session_signal_state(SESSION, USER).label == "no_eeg"
@@ -98,8 +84,7 @@ def test_an_absent_consent_row_means_the_same_as_all_false(monkeypatch):
 
 
 def test_heart_consent_follows_the_sensor_that_produced_the_reading(monkeypatch):
-    """One flag per sensor, and the heart channel can arrive from either.
-    Camera consent alone still permits a heart reading, from the camera."""
+    """Camera consent alone permits a camera-sourced heart reading."""
     fake = _install(monkeypatch,
                     {"eeg_enabled": False, "headband_optical_enabled": False,
                      "camera_enabled": True, "user_id": USER},
@@ -112,8 +97,7 @@ def test_heart_consent_follows_the_sensor_that_produced_the_reading(monkeypatch)
 
 
 def test_no_signals_at_all_behaves_as_it_did_before_fusion(monkeypatch):
-    """With only EEG present, the outcome must match the old EEG-only
-    behaviour, before heart and facial fusion were added."""
+    """With only EEG present, the outcome matches EEG-only behaviour."""
     _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM)
     assert decider.get_session_signal_state(SESSION, USER).label == "focused"
 
@@ -130,8 +114,6 @@ def test_no_session_reads_nothing(monkeypatch):
 
 
 def test_a_broken_signals_table_does_not_retract_the_others(monkeypatch):
-    """One failed query must degrade only that channel -- the reporting
-    helpers' rule, applied here to the read side."""
     fake = _FakeSupabase(
         {"signal_consent": [CONSENT_ALL], "cognitive_signals": EEG_CALM},
         table_raises={"heart_signals"},
@@ -143,13 +125,7 @@ def test_a_broken_signals_table_does_not_retract_the_others(monkeypatch):
 
 
 def test_a_heart_row_from_a_declined_sensor_is_never_read(monkeypatch):
-    """Mirrors the test above. Consent is per sensor: a student who allowed
-    the headband and declined the camera must not have an rppg-sourced row
-    acted on. An earlier version ORed the two flags into one boolean and
-    never looked at `source` again, so it did -- a latent bug, since nothing
-    writes rppg today, which is exactly how it would have gone unnoticed
-    until something did.
-    """
+    """Consent is per sensor: headband allowed, camera declined, so an rppg row is not acted on."""
     _install(monkeypatch,
              {"eeg_enabled": False, "headband_optical_enabled": True,
               "camera_enabled": False, "user_id": USER},
@@ -162,8 +138,7 @@ def test_a_heart_row_from_a_declined_sensor_is_never_read(monkeypatch):
 
 
 def test_a_permitted_sensor_is_still_read_when_another_is_declined(monkeypatch):
-    """The consent filter must narrow, not block outright. Same consent as
-    above, but a headband row this time."""
+    """The consent filter narrows rather than blocks."""
     _install(monkeypatch,
              {"eeg_enabled": False, "headband_optical_enabled": True,
               "camera_enabled": False, "user_id": USER},
@@ -174,14 +149,7 @@ def test_a_permitted_sensor_is_still_read_when_another_is_declined(monkeypatch):
 
 
 def test_a_low_confidence_emotion_does_not_withhold_the_increase(monkeypatch):
-    """The gate is `emotion_confidence`; a low-confidence FER+ label must not
-    act. `face_signals` used to also carry `identity_confidence` (how sure we
-    are whose face this is), and reading that here let a clearly-identified
-    face with a garbage label withhold an increase, while a well-classified
-    expression on a poorly identified face was silently discarded. That
-    column is gone now, but the property it was violating is still worth
-    testing on its own.
-    """
+    """The gate is `emotion_confidence`."""
     fake = _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM,
                     face=[{"session_id": SESSION, "emotion": "sad",
                            "emotion_confidence": 0.05, "emotion_trusted": True}])
@@ -194,8 +162,7 @@ def test_a_low_confidence_emotion_does_not_withhold_the_increase(monkeypatch):
 
 
 def test_an_untrusted_emotion_is_rejected_outright(monkeypatch):
-    """Matches how the heart channel treats `trusted`: a classifier saying it
-    doesn't stand behind a label can't be overridden by a confidence figure."""
+    """As with heart `trusted`: a confidence figure can't override an untrusted label."""
     _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM,
              face=[{"session_id": SESSION, "emotion": "sad",
                     "emotion_confidence": 0.99, "emotion_trusted": False}])
@@ -215,9 +182,7 @@ def test_a_trusted_confident_negative_emotion_does_withhold(monkeypatch):
 
 
 def test_the_fusion_gate_reads_raw_confidence_not_engagement(monkeypatch):
-    """`engagement` is the focus index. Read as the confidence, a disengaged
-    student on good contact lost the whole EEG channel -- and with it the
-    stressed ease-off, since the gate returns before the calm branch."""
+    """`engagement` is the focus index, not signal quality."""
     disengaged_good_contact = [{"session_id": SESSION, "focus": 0.2, "stress": 0.8,
                                 "engagement": 0.2, "raw": {"confidence": 0.9}}]
     _install(monkeypatch, CONSENT_ALL, eeg=disengaged_good_contact)
@@ -231,8 +196,7 @@ def test_the_fusion_gate_reads_raw_confidence_not_engagement(monkeypatch):
 
 @pytest.mark.parametrize("bad", ["0.9", True, 7.0, -1.0, None])
 def test_a_garbage_raw_confidence_is_skipped_not_believed(monkeypatch, bad):
-    """`raw` is client-supplied JSON on the push path. A string here 500'd
-    every question until the row aged out; `true` claimed 1.0."""
+    """`raw` is client-supplied JSON on the push path."""
     rows = [{"session_id": SESSION, "focus": 0.9, "stress": 0.2,
              "engagement": 0.9, "raw": {"confidence": bad}}]
     _install(monkeypatch, CONSENT_ALL, eeg=rows)
@@ -244,9 +208,7 @@ def test_a_garbage_raw_confidence_is_skipped_not_believed(monkeypatch, bad):
 
 
 def test_engagement_is_served_from_focus_never_from_the_stored_column():
-    """The stored `engagement`/`avg_engagement` was the confidence before
-    Phase 1 and a copy of focus after it, with nothing marking which. No
-    reader surfaces it."""
+    """The stored column's meaning changed with nothing marking which, so no reader surfaces it."""
     import main as backend_main
     shaped = backend_main._shape_summary({"focus": 0.8, "stress": 0.3, "engagement": 0.2,
                                           "cognitive_samples": 5})
@@ -258,9 +220,6 @@ def test_engagement_is_served_from_focus_never_from_the_stored_column():
 
 
 def test_the_cohort_trend_serves_engagement_from_focus_too():
-    """The roster half of the endpoint was corrected and this half was not,
-    so the class trend blended strap fit and the focus index across the
-    merge date."""
     import main as backend_main
     part = [{"day": "2026-06-10", "channel": "cognitive", "avg_focus": 0.8,
              "avg_stress": 0.3, "avg_engagement": 0.2,
@@ -270,9 +229,7 @@ def test_the_cohort_trend_serves_engagement_from_focus_too():
 
 
 def test_a_derived_none_removes_the_clients_value_under_that_key():
-    """Filtering the None out left the client's `raw.confidence` standing
-    for a tick the sidecar reported none on, straight into the fusion
-    gate."""
+    """Otherwise a client's `raw.confidence` reaches the fusion gate."""
     import signal_mapping
     merged = signal_mapping._raw({"raw": {"confidence": "0.99", "note": "kept"}},
                                  confidence=None, device_id="d1")
@@ -286,8 +243,7 @@ def test_the_cohort_trend_no_longer_fetches_the_stored_engagement():
 
 
 def test_every_cognitive_row_records_the_score_scale_it_was_measured_on():
-    """The bounds widening re-anchored every focus and stress value and
-    nothing recorded the boundary; rows without the key predate it."""
+    """Rows without the key predate the bounds widening that re-anchored the scores."""
     import signal_mapping
     row = signal_mapping.map_eeg_to_cognitive(
         {"timestamp": "t", "features": {"focus_score": 60.0, "calm_score": 50.0,
@@ -297,9 +253,7 @@ def test_every_cognitive_row_records_the_score_scale_it_was_measured_on():
 
 
 def test_the_score_scale_comes_from_the_rollup_rows_never_a_date():
-    """The rollout is per sidecar process, as each student's machine
-    restarts, so no calendar constant labels it; `20260917000000` has the
-    rollup record the range seen each day."""
+    """The rollout is per sidecar process, so no calendar date labels it; the rollup records it."""
     import inspect
     import main as backend_main
     assert not hasattr(backend_main, "_SCORE_SCALE_2_SINCE")
@@ -309,9 +263,7 @@ def test_the_score_scale_comes_from_the_rollup_rows_never_a_date():
     assert backend_main._scale_range(rows) == {"min": 1, "max": 2}
     assert backend_main._scale_range(rows[:1]) == {"min": 1, "max": 1}
     assert backend_main._scale_range([{"channel": "cognitive"}]) is None, "unrecorded is not scale 1"
-    # Carried by every rollup-backed surface: the term trend per week, the
-    # cohort trend for its window, and the weekly summary that collapses
-    # both scales into one number.
+    # Carried by every rollup-backed surface.
     assert '"score_scale": _scale_range(b["scale_rows"])' in inspect.getsource(backend_main._signal_trend)
     assert '"score_scale": _combine_ranges(scale_by_user.values())' in inspect.getsource(backend_main._cohort_signals)
     assert '"score_scale": scale_by_user.get(sid)' in inspect.getsource(backend_main._cohort_signals), \
@@ -321,7 +273,7 @@ def test_the_score_scale_comes_from_the_rollup_rows_never_a_date():
     assert backend_main._combine_ranges([{"min": 1, "max": 1}, None, {"min": 2, "max": 2}]) == {"min": 1, "max": 2}
     assert backend_main._combine_ranges([None]) is None
     assert '"score_scale": _scale_range(rollup_by.values())' in inspect.getsource(backend_main._weekly_signal_report)
-    # And never on a heart or emotion bucket row, which no re-anchoring touched.
+    # Never on a heart or emotion row, which no re-anchoring touched.
     part = [{"day": "2026-09-07", "channel": "heart", "avg_heart_rate_bpm": 70.0,
              "sample_count": 10, "trusted_sample_count": 10, "student_count": 2}]
     assert "score_scale" not in backend_main._merge_cohort_trend([part])[0]

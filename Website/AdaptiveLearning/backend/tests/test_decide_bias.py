@@ -1,13 +1,4 @@
-"""A run of correct answers can raise difficulty without the headband agreeing.
-
-Found on hardware (2026-09-03): five correct answers in a row, every question
-served on easy. The deterministic shift only pushed up on a "focused" reading
-at the moment of choosing, and that is a state a student cannot hold with a
-headband that reads "stressed" through a loose strap and "neutral" the rest
-of the time. Accuracy is the one channel here with no quality gate, so it is
-allowed to push on its own -- under the same asymmetry as everything else:
-stressed still wins, and the manual control still wins over a push.
-"""
+"""A run of correct answers can raise difficulty alone; stressed and the manual control still win."""
 import os
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -33,8 +24,6 @@ def test_a_run_of_correct_answers_pushes_up_on_its_own():
 
 
 def test_stressed_still_eases_whatever_the_answers_say():
-    """The asymmetry signal_fusion documents, unchanged: a wrong push costs a
-    struggling student a harder question."""
     assert td._decide_bias("stressed", GOOD_RUN) == -1
     assert td._decide_bias("stressed", GOOD_RUN, manual_bias=1) == -1
 
@@ -51,9 +40,7 @@ def test_the_push_needs_enough_answers_and_enough_of_them_right():
 
 
 def test_the_push_reads_the_direction_not_only_the_aggregate():
-    """7 of 10 is 0.7 whether the misses were the first three or the last
-    three. Pushing a child who has just failed three in a row is the harm the
-    asymmetry is written against, and an aggregate cannot see it."""
+    """7 of 10 is 0.7 either way; only the order shows three misses just now."""
     assert td._decide_bias("neutral", RISING) == 1
     assert td._decide_bias("neutral", FALLING) == 0
     # One slip on a strong run gates the push until the next right answer.
@@ -63,12 +50,7 @@ def test_the_push_reads_the_direction_not_only_the_aggregate():
 
 
 def test_get_session_performance_keeps_the_order_newest_first(monkeypatch):
-    """`recent[:2]` means "the newest two" only because the query orders
-    `answered_at` descending. That direction was irrelevant while the
-    function returned aggregates and is load-bearing now, so the fake
-    *honours* `order()` rather than passing rows through: the table holds
-    them oldest-first, and a query that asked for ascending would put the
-    two answers from ten questions ago at the front."""
+    """`recent[:2]` is the newest two only because of `desc`, so the fake honours `order()`."""
     class _Q:
         def __init__(self, rows): self.rows = list(rows)
         def select(self, *_a): return self
@@ -92,21 +74,14 @@ def test_get_session_performance_keeps_the_order_newest_first(monkeypatch):
 
 
 def test_a_manual_setting_still_wins_over_a_push():
-    """Pushing harder defers to the control -- a student who asked for Easier
-    is not overruled by their own accuracy, exactly as "focused" never
-    overruled it."""
+    """Pushing harder defers to the control."""
     assert td._decide_bias("neutral", GOOD_RUN, manual_bias=-1) == -1
     assert td._decide_bias("focused", GOOD_RUN, manual_bias=-1) == -1
     assert td._decide_bias("neutral", GOOD_RUN, manual_bias=1) == 1
 
 
 def test_focused_pushes_unless_the_answers_are_falling():
-    """The direction gate was on the accuracy push only, so a child who had
-    just missed three running was still served a harder question whenever
-    the headband read focused -- the sentence used to justify the gate,
-    reachable through the other clause. Correctness has no quality gate and
-    a run of misses is its opinion; every channel with an opinion must agree
-    to raise. With no answers yet there is no opinion, and focused pushes."""
+    """A falling run is an opinion, and every channel with one must agree to raise."""
     assert td._decide_bias("focused", None) == 1
     assert td._decide_bias("focused", RISING) == 1
     assert td._decide_bias("focused", GOOD_RUN) == 1
@@ -133,8 +108,6 @@ def test_a_falling_run_vetoes_a_real_focused_reading_end_to_end():
 @pytest.mark.parametrize("perf", [None, THIN_RUN, MIXED, GOOD_RUN])
 @pytest.mark.parametrize("manual", [-1, 0, 1])
 def test_adding_evidence_never_raises_what_stressed_lowered(label, perf, manual):
-    """Brute force over the inputs: the bias is -1 whenever the label is
-    stressed, and never exceeds the manual setting when one is set."""
     bias = td._decide_bias(label, perf, manual)
     if label == "stressed":
         assert bias == -1
@@ -144,11 +117,7 @@ def test_adding_evidence_never_raises_what_stressed_lowered(label, perf, manual)
 
 
 def test_a_withheld_increase_is_not_overridden_by_the_answers():
-    """The facial channel's one power is to veto an increase, and it does so
-    by downgrading "focused" to "neutral". Keyed on the label alone, the
-    accuracy push turned that veto into a push: "no opinion" and "withheld"
-    were the same string. The fused state now says which, and a push defers
-    to it exactly as it defers to stressed."""
+    """A neutral label may be a withheld increase, and the push defers to that."""
     assert td._decide_bias("neutral", GOOD_RUN, increase_withheld=True) == 0
     assert td._decide_bias("focused", GOOD_RUN, increase_withheld=True) == 0
     # Easing still wins, and a manual setting is still the student's.
@@ -157,8 +126,7 @@ def test_a_withheld_increase_is_not_overridden_by_the_answers():
 
 
 def test_the_veto_reaches_the_decider_from_the_real_fusion():
-    """End to end through `signal_fusion.fuse`, not a hand-built flag: EEG
-    focused, a trusted negative face, five correct answers -- no push."""
+    """End to end through `signal_fusion.fuse`, not a hand-built flag."""
     import signal_fusion as sf
     fused = sf.fuse(sf.ChannelState("focused", "eeg focus high"),
                     face=sf.ChannelState("negative", "face sad"))
@@ -184,12 +152,7 @@ def _eeg_states():
 
 @pytest.mark.parametrize("name,eeg", _eeg_states())
 def test_a_negative_face_withholds_the_accuracy_push_whatever_the_eeg_says(name, eeg):
-    """The veto used to exist only on the branch that turns "focused" into
-    "neutral". The accuracy push fires from a neutral EEG or none at all --
-    no_eeg is the case the push was built for -- so the veto has to ride on
-    every state that reaches the push, or it is absent exactly where the
-    push fires. Measured before this: neutral, no_eeg and insufficient_signal
-    with a trusted negative face all pushed +1 on a 4-of-5 run."""
+    """The push fires from neutral or no EEG, so the veto must ride on every state."""
     import signal_fusion as sf
     fused = sf.fuse(eeg, face=sf.ChannelState("negative", "face sad"))
     assert fused.increase_withheld is True, name
@@ -203,8 +166,7 @@ def test_a_negative_face_withholds_the_accuracy_push_whatever_the_eeg_says(name,
 
 
 def test_a_negative_face_never_stops_an_ease_off():
-    """Withholding is the face's only power. It must not turn a stressed
-    reading into anything else, or carry a flag that reads as one."""
+    """Withholding is the face's only power."""
     import signal_fusion as sf
     fused = sf.fuse(sf.ChannelState("stressed", "eeg calm low"),
                     face=sf.ChannelState("negative", "face sad"))
@@ -214,8 +176,7 @@ def test_a_negative_face_never_stops_an_ease_off():
 
 
 def test_the_decider_applies_the_shared_rule():
-    """The rule lives in one function; the decider must call it rather than
-    carry a second copy that can drift -- and must hand it the veto."""
+    """The decider calls the one rule, not a copy, and hands it the veto."""
     import inspect
     src = inspect.getsource(td.LLM_single_prompt_topic_and_difficulty_decider)
     assert "_decide_bias(" in src

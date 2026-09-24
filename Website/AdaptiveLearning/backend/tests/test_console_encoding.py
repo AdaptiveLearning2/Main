@@ -1,16 +1,4 @@
-"""A diagnostic print must not be able to kill question generation.
-
-Every generator prints the model's raw reply on its error paths. On a Windows
-console those streams are cp1252, so a reply containing `π`, an em-dash, `×` or
-an accented name raised `UnicodeEncodeError` from a *debug* line -- measured
-against Haiku 4.5 at one geometry generation in three, on a `π` in the question
-text.
-
-Two things made it worse than cosmetic: the prints sit on the paths that run
-when a reply is already suspect, so it failed exactly where the retry logic was
-meant to help; and it raised from inside the retry loop, which absorbs bad JSON
-and bad shapes and then died on printing them.
-"""
+"""A diagnostic print on a cp1252 Windows console must not be able to kill question generation."""
 import io
 import os
 
@@ -31,8 +19,7 @@ def _cp1252_stream():
 
 
 def test_the_failure_is_real_on_a_cp1252_stream():
-    """Pins the bug itself. Without this, the test below could pass because
-    the characters are representable rather than because anything was fixed."""
+    """Pins the bug, so the next test can't pass merely because the chars are representable."""
     stream = _cp1252_stream()
     with pytest.raises(UnicodeEncodeError):
         stream.write(OUTSIDE_CP1252)
@@ -47,9 +34,7 @@ def test_reconfiguring_the_stream_stops_it_raising():
 
 
 def test_make_console_safe_is_idempotent_and_survives_odd_streams(monkeypatch):
-    """pytest's capture and a redirected pipe both substitute their own stream
-    object, and neither needs reconfiguring -- so this must not raise on a
-    stream that has no `reconfigure`."""
+    """pytest capture and redirected pipes substitute streams with no `reconfigure`."""
     monkeypatch.setattr(console_encoding, "_APPLIED", False)
     monkeypatch.setattr("sys.stdout", object())
     monkeypatch.setattr("sys.stderr", object())
@@ -58,7 +43,6 @@ def test_make_console_safe_is_idempotent_and_survives_odd_streams(monkeypatch):
 
 
 def test_importing_llm_client_applies_it():
-    """The generators do not call this themselves; they all import llm_client,
-    which is what makes it reach the app, the scripts and a direct call alike."""
+    """Generators don't call it; importing llm_client is what applies it everywhere."""
     import llm_client  # noqa: F401
     assert console_encoding._APPLIED is True

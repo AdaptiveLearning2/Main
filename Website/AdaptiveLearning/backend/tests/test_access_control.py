@@ -1,9 +1,4 @@
-"""Access-control tests for the student/class data endpoints.
-
-These endpoints read through the service-role Supabase client, which bypasses
-RLS. So the checks in main.py are the only thing stopping a caller from
-reading another student's data.
-"""
+"""Access control for student/class data: the service-role client bypasses RLS, so main.py's checks are all there is."""
 import asyncio
 import inspect
 import os
@@ -26,9 +21,7 @@ from conftest import tighten  # noqa: E402
 class _Result:
     def __init__(self, data, count=None):
         self.data = data
-        # PostgREST returns the total matching row count when count="exact" is
-        # requested, regardless of the row limit. _weekly_signal_report uses
-        # this to detect truncation.
+        # count="exact" total, independent of the row limit.
         self.count = count
 
 
@@ -38,9 +31,7 @@ class _Query:
     def __init__(self, rows, max_rows=None, raises=None):
         self._rows = rows
         self._max_rows = max_rows
-        # A read that fails, as opposed to one that returns nothing. Both look
-        # like an empty list downstream, which is why the report's `retrieved`
-        # flags exist -- to tell the two apart.
+        # A read that fails, as opposed to one that returns nothing.
         self._raises = raises
         self._filters = self.filters = []
         self._limit = None
@@ -51,10 +42,8 @@ class _Query:
 
     def select(self, *cols, **kw):
         self._count = kw.get("count")
-        # Mimics PostgREST: only the named columns come back, so a handler
-        # asking for three columns and a test reading a fourth can't both
-        # silently pass. Embedded resources ("a(b)") aren't modelled -- those
-        # fall back to whole rows instead of projecting incorrectly.
+        # Only named columns come back, as in PostgREST. Embeds ("a(b)") aren't
+        # modelled and fall back to whole rows.
         spec = ",".join(cols)
         if spec and "*" not in spec and "(" not in spec:
             self._cols = [c.strip() for c in spec.split(",") if c.strip()]
@@ -94,17 +83,13 @@ class _Query:
         return self
 
     def is_(self, col, val):
-        # PostgREST spells the null check `is_(col, "null")`; the string is
-        # what the real client sends, so the fake matches on it rather than
-        # on Python's None.
+        # Matches the string the real client sends ("null"), not Python's None.
         self._filters.append((col, ("is", val)))
         return self
 
     def or_(self, expr):
-        # Recorded, not evaluated: PostgREST's or-grammar is not modelled here.
-        # So a query carrying one may only run against an empty table -- see
-        # `execute` -- rather than returning rows the real filter would drop,
-        # which is the silently-ignored-filter trap `is_` refuses above.
+        # Recorded, not evaluated, so `execute` refuses it against a non-empty
+        # table rather than silently ignoring the filter.
         self.or_filters = getattr(self, "or_filters", []) + [expr]
         return self
 
@@ -124,9 +109,7 @@ class _Query:
                 if have is None or str(have) >= str(want[1]):
                     return False
             elif isinstance(want, tuple) and want[0] == "is":
-                # Only "null"/"not.null" are used here. Anything else would be
-                # a silently-ignored filter, which is how a test comes to pass
-                # for a reason unrelated to what it claims.
+                # Anything but "null"/"not.null" raises rather than being ignored.
                 if want[1] == "null":
                     if have is not None:
                         return False
@@ -150,10 +133,7 @@ class _Query:
         if self._order:
             rows = sorted(rows, key=lambda r: str(r.get(self._order, "")), reverse=self._desc)
         total = len(rows)
-        # Whichever limit is smaller wins. _max_rows mirrors PostgREST's
-        # db-max-rows: a server-side cap that .limit() cannot raise above --
-        # which is why checking len(rows) >= limit for truncation is
-        # unreliable.
+        # _max_rows mirrors db-max-rows, a server cap .limit() cannot raise.
         ceilings = [n for n in (self._limit, self._max_rows) if n is not None]
         if ceilings:
             rows = rows[:min(ceilings)]
@@ -180,29 +160,19 @@ class _FakeSupabase:
     def __init__(self, tables, max_rows=None, rpc_results=None, rpc_raises=None,
                  table_raises=None, count_missing=False):
         self._tables = tables
-        # A read that asked for `count="exact"` and came back without one: the
-        # third state a surface reporting a total has to be able to show.
+        # count="exact" requested but none returned: a third state for totals.
         self._count_missing = count_missing
-        # Table names whose reads fail. Per table, because the report's
-        # queries fail independently and one broken table must not blank out
-        # what the others read.
+        # Table names whose reads fail, independently of each other.
         self._table_raises = set(table_raises or ())
-        # int applies to every table; dict is per table, for tests that need a
-        # different cap on each (the row cap really is per table).
+        # int: every table; dict: per-table cap.
         self._max_rows = max_rows
         self._rpc_results = rpc_results or {}
-        # (name, params) -> Exception or None. Models a database that has the
-        # function but not the exact signature -- code deployed ahead of its
-        # migration.
+        # (name, params) -> Exception or None, e.g. code ahead of its migration.
         self._rpc_raises = rpc_raises
         self.rpc_calls = []
-        # Which tables were queried, in order. Lets a test assert a query was
-        # never made -- an empty result can't tell "asked and got nothing"
-        # from "never asked", which is the distinction the facial opt-out
-        # depends on.
+        # Tables queried, in order: "never asked" vs "asked and got nothing".
         self.table_calls = []
-        # Every query built, so a test can assert on the filters a read
-        # carried rather than only on what came back.
+        # Every query built, so tests can assert on its filters.
         self.queries = []
 
     def table(self, name):
@@ -227,7 +197,6 @@ class _Rpc:
         self._exc = exc
 
     def execute(self):
-        # supabase-py surfaces PostgREST errors by raising from execute().
         if self._exc:
             raise self._exc
         return _Result(self._data)
@@ -286,7 +255,6 @@ def test_parent_cannot_view_an_unlinked_child():
 
 
 def test_unrelated_student_cannot_view_another_student():
-    # Guards against any authenticated account being able to read anyone's data.
     assert main._can_view_student(OTHER_STUDENT, "student-1") is False
 
 
@@ -307,8 +275,6 @@ def test_owning_teacher_passes_class_check():
 
 
 def test_non_owning_teacher_is_rejected():
-    # Guards against the original check, `owner != user AND role != "teacher"`,
-    # which let any teacher through for any class.
     with pytest.raises(main.HTTPException) as exc:
         main._verify_class_owner("class-1", "teacher-2")
     assert exc.value.status_code == 403
@@ -321,10 +287,7 @@ def test_student_is_rejected_from_class_roster():
 
 
 # ── GET /api/classes/{id} ────────────────────────────────────────────────
-#
-# The helper above is tested on its own; these confirm the route actually
-# calls it -- a handler that skipped the check would still pass every test
-# above.
+# Confirms the route actually calls the helper tested above.
 
 def test_class_detail_returns_the_class_to_its_owner(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
@@ -332,9 +295,7 @@ def test_class_detail_returns_the_class_to_its_owner(monkeypatch):
         "classes": [{"id": "class-1", "teacher_id": "teacher-1", "name": "Algebra",
                      "join_code": "ABC123", "grade_level": "7"}],
     }))
-    # Checks every column the page uses, not just the id -- a typo in a named
-    # select drops a field silently, and the page would render a blank join
-    # code instead of failing.
+    # Every column the page uses: a typo in a named select drops one silently.
     assert main.get_class("class-1", None) == {
         "id": "class-1", "name": "Algebra", "join_code": "ABC123", "grade_level": "7",
     }
@@ -348,8 +309,7 @@ def test_class_detail_rejects_a_non_owning_teacher(monkeypatch):
 
 
 def test_class_detail_404s_an_unknown_class(monkeypatch):
-    # The frontend translates this status, and only this status, into
-    # "Class not found" -- anything else is reported as a failed request.
+    # The frontend shows "Class not found" for this status only.
     monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
     with pytest.raises(main.HTTPException) as exc:
         main.get_class("class-does-not-exist", None)
@@ -357,8 +317,6 @@ def test_class_detail_404s_an_unknown_class(monkeypatch):
 
 
 def test_class_detail_does_not_return_unnamed_columns(monkeypatch):
-    # Named columns rather than "*", so a column added to classes later does
-    # not start reaching the browser on its own.
     monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
     monkeypatch.setattr(main, "supabase", _FakeSupabase({
         "classes": [{"id": "class-1", "teacher_id": "teacher-1",
@@ -408,9 +366,7 @@ def _ts(days_ago: int, hour: int = 12) -> str:
     return d.replace(hour=hour, minute=0, second=0, microsecond=0).isoformat()
 
 
-# `_consent` fails closed, so a fake with no consent row reports nothing --
-# correct behaviour, but useless as a default fixture. This is permissive by
-# default; tests that care about consent set their own.
+# Permissive default: `_consent` fails closed, so no row would report nothing.
 _CONSENT_ALL = {"user_id": "student-1", "eeg_enabled": True,
                 "headband_optical_enabled": True, "camera_enabled": True}
 
@@ -423,17 +379,13 @@ def _signal_tables(cog_rows, face_rows=None, session_rows=None,
         "heart_signals": heart_rows or [],
         "sessions": session_rows or [],
         "signal_consent": consent_rows if consent_rows is not None else [_CONSENT_ALL],
-        # Present and empty by default. The report falls back to the rollup
-        # for days whose per-sample rows are gone; a missing table would read
-        # as a failed read, making every fixture here look like a week whose
-        # history couldn't be checked.
+        # Present and empty: a missing table would read as a failed rollup read.
         "signal_daily_rollup": rollup_rows or [],
     }
 
 
 def test_weekly_report_summary_renders_ratios_as_percentages(monkeypatch):
-    """Signals are stored as 0..1 ratios. Dropping the ratio straight into a
-    "%" sentence produced "average focus was 0.72%"."""
+    """Signals are stored as 0..1 ratios."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_signal_tables([
         {"user_id": "student-1", "ts": _ts(1), "focus": 0.70, "stress": 0.30, "engagement": 0.6},
         {"user_id": "student-1", "ts": _ts(2), "focus": 0.74, "stress": 0.32, "engagement": 0.6},
@@ -445,13 +397,8 @@ def test_weekly_report_summary_renders_ratios_as_percentages(monkeypatch):
 
 
 def test_weekly_report_flags_days_it_could_not_retrieve(monkeypatch):
-    """The row cap is per table, so cognitive can be truncated while face is
-    not. Judging coverage from one oldest-timestamp across both tables let the
-    older face rows hide the cutoff: no days were skipped, and the trimmed
-    cognitive days came back as None -- shown to a parent as "no activity"
-    instead of "not retrieved"."""
-    # Both tables hold the full week, but only cognitive gets capped -- so it
-    # reaches back 3 days while face still covers all 7.
+    """The row cap is per table, so face rows must not hide cognitive's cutoff."""
+    # Only cognitive is capped: it reaches 3 days back while face covers 7.
     cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5, "stress": 0.4, "engagement": 0.5}
            for d in range(0, 7)]
     face = [{"user_id": "student-1", "ts": _ts(d), "attention": 0.8} for d in range(0, 7)]
@@ -461,24 +408,18 @@ def test_weekly_report_flags_days_it_could_not_retrieve(monkeypatch):
 
     assert report["truncated"] is True
     days = {d["date"]: d for d in report["daily"]}
-    # Days beyond cognitive's reach are still reported (face has them), but
-    # marked as not retrieved rather than silently null.
     unretrieved = [d for d in report["daily"] if not d["cognitive_retrieved"]]
     assert unretrieved, "older days must be flagged, not silently nulled"
     for d in unretrieved:
         assert d["focus"] is None
         assert d["face_retrieved"] is True   # face data for that day is real
         assert d["attention"] is not None
-    # The days cognitive does cover are not flagged.
     covered = days[_ts(0)[:10]]
     assert covered["cognitive_retrieved"] is True
 
 
 def test_weekly_report_detects_truncation_from_count_not_row_length(monkeypatch):
-    """PostgREST's db-max-rows can cap below _REPORT_ROW_CAP. If truncation
-    were detected by len(rows) >= _REPORT_ROW_CAP, this case would never fire,
-    so data would be trimmed with truncated=False and the guard silently
-    disabled."""
+    """db-max-rows can cap below _REPORT_ROW_CAP, so row length cannot detect it."""
     cog = [{"user_id": "student-1", "ts": _ts(d % 7), "focus": 0.5} for d in range(50)]
     monkeypatch.setattr(main, "supabase",
                         _FakeSupabase(_signal_tables(cog), max_rows=10))
@@ -489,11 +430,7 @@ def test_weekly_report_detects_truncation_from_count_not_row_length(monkeypatch)
 
 
 def test_weekly_report_reports_session_truncation(monkeypatch):
-    """sample_counts.sessions is rendered as the report's Sessions figure, so
-    its truncation must be reflected in the top-level `truncated` flag too --
-    otherwise a student over the cap is shown a count that silently stopped
-    there, with nothing to say so.
-    """
+    """sample_counts.sessions is rendered, so its truncation must set `truncated`."""
     sessions = [{"id": f"s{i}", "user_id": "student-1", "started_at": _ts(i % 7)}
                 for i in range(40)]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
@@ -505,17 +442,13 @@ def test_weekly_report_reports_session_truncation(monkeypatch):
 
 
 def test_weekly_report_keeps_a_day_whose_sessions_survived_the_cap(monkeypatch):
-    """Sessions come from their own query under their own cap, so a day whose
-    signal rows were trimmed can still have an intact session count. Dropping
-    the whole day would report it as absent rather than partial.
-    """
+    """Sessions have their own cap, so a day with trimmed signals may still count sessions."""
     cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5} for d in range(0, 7)]
     sessions = [{"id": f"s{d}", "user_id": "student-1", "started_at": _ts(d)}
                 for d in range(0, 7)]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _signal_tables(cog, session_rows=sessions), max_rows={"cognitive_signals": 3}))
-    # Face reporting off, so the only thing that could have kept these days
-    # before was the face query -- which is not running.
+    # Face off, so only the session count can keep these days.
     report = main._weekly_signal_report("student-1", include_emotion=False)
 
     trimmed = [d for d in report["daily"] if d["cognitive_retrieved"] is False]
@@ -527,8 +460,7 @@ def test_weekly_report_keeps_a_day_whose_sessions_survived_the_cap(monkeypatch):
 
 
 def test_weekly_report_nulls_a_day_whose_sessions_were_cut(monkeypatch):
-    """A day the cap kept us from reading did not have zero sessions -- same
-    distinction the signal metrics draw, so it gets the same shape."""
+    """A day the cap kept us from reading did not have zero sessions."""
     sessions = [{"id": f"s{d}", "user_id": "student-1", "started_at": _ts(d)}
                 for d in range(0, 7)]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
@@ -542,19 +474,10 @@ def test_weekly_report_nulls_a_day_whose_sessions_were_cut(monkeypatch):
 
 
 # ── the day the cap cut into ─────────────────────────────────────────────
-#
-# The cap trims oldest-first, so the oldest day that came back is the day it
-# cut through: part of it is here, the rest isn't. That day must not be
-# reported as retrieved with a figure computed from whatever fraction
-# survived -- that would look like an exact number.
+# The cap trims oldest-first; the oldest day returned is partial and is withheld.
 
 def test_weekly_report_withholds_the_day_the_cap_cut_into(monkeypatch):
-    """Three readings a day for three days, and a cap of four.
-
-    That keeps all of day 0 and one of day 1's three readings, so day 1 is the
-    day the cap cut through. Averaging its one surviving reading and calling
-    it day 1's focus would read as a measurement of the whole day.
-    """
+    """Three readings a day, cap of four: day 1 keeps one reading and is withheld."""
     cog = [{"user_id": "student-1", "ts": _ts(d, hour=h),
             "focus": 0.5, "stress": 0.4, "engagement": 0.6}
            for d in range(0, 3) for h in (9, 12, 15)]
@@ -566,29 +489,22 @@ def test_weekly_report_withholds_the_day_the_cap_cut_into(monkeypatch):
     days = {d["date"]: d for d in report["daily"]}
     whole, boundary, beyond = _ts(0)[:10], _ts(1)[:10], _ts(2)[:10]
 
-    # The day entirely inside the cap is untouched.
     assert days[whole]["cognitive_retrieved"] is True
     assert days[whole]["focus"] == 0.5
 
-    # The day it cut through is withheld -- but kept in the series, because
-    # something was read for it.
+    # Withheld, but kept in the series because something was read for it.
     assert boundary in days, "a partly-read day must not be dropped as absent"
     assert days[boundary]["cognitive_retrieved"] is False
     assert days[boundary]["focus"] is None
     assert days[boundary]["stress"] is None
     assert days[boundary]["engagement"] is None
 
-    # And the day it never reached is flagged the same way.
     assert days[beyond]["cognitive_retrieved"] is False
     assert days[beyond]["focus"] is None
 
 
 def test_weekly_report_withholds_a_session_count_the_cap_cut_into(monkeypatch):
-    """The clearest case for withholding a partial day: an average over a
-    fraction of a day is at least a biased estimate, but a count over a
-    fraction of a day is just wrong -- one third of the rows gives exactly one
-    third of the sessions, with nothing to say it's a third.
-    """
+    """A count over a fraction of a day is simply wrong, with nothing to say so."""
     sessions = [{"id": f"s{d}-{h}", "user_id": "student-1", "started_at": _ts(d, hour=h)}
                 for d in range(0, 3) for h in (9, 12, 15)]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
@@ -606,15 +522,9 @@ def test_weekly_report_withholds_a_session_count_the_cap_cut_into(monkeypatch):
 
 
 def test_a_cap_landing_on_a_day_boundary_understates_rather_than_overstates(monkeypatch):
-    """One reading a day and a cap of three: the cut falls exactly between two
-    days, so the oldest day retrieved really is complete.
+    """A cut exactly between days is indistinguishable from mid-day, so it resolves conservatively.
 
-    Nothing here can tell that apart from a day cut through the middle --
-    both leave an oldest retrieved row and some trimmed rows older than it,
-    and telling them apart needs another query. So this resolves the
-    conservative way: a complete day may be reported as partial, but a
-    partial day is never reported as complete. That's deliberate, not an
-    off-by-one to fix.
+    A complete day may be reported partial, never the reverse. Deliberate, not an off-by-one.
     """
     cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5} for d in range(0, 5)]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
@@ -628,11 +538,7 @@ def test_a_cap_landing_on_a_day_boundary_understates_rather_than_overstates(monk
 
 
 def test_weekly_report_counts_every_session_not_just_the_retrieved_rows(monkeypatch):
-    """sample_counts is rows-retrieved throughout, so rendering its sessions
-    figure as the headline showed a heavy week as exactly the cap -- while the
-    parent dashboard, counting the same week in Postgres, showed the real
-    number. sessions_recorded is the true count this report should show.
-    """
+    """sample_counts is rows retrieved; sessions_recorded is the true count."""
     sessions = [{"id": f"s{i}", "user_id": "student-1", "started_at": _ts(1, hour=i % 24)}
                 for i in range(137)]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_signal_tables([], [], sessions)))
@@ -643,9 +549,7 @@ def test_weekly_report_counts_every_session_not_just_the_retrieved_rows(monkeypa
 
 
 def test_weekly_report_session_count_falls_back_when_none_is_reported(monkeypatch):
-    """When no exact count is reported, the row count is the only figure
-    available -- same fallback the truncation check makes, rather than a null
-    where a number belongs."""
+    """With no exact count, the row count is the only figure available."""
     class _NoCountQuery(_Query):
         def select(self, *a, **kw):
             kw.pop("count", None)   # simulates a server that answers without one
@@ -663,15 +567,7 @@ def test_weekly_report_session_count_falls_back_when_none_is_reported(monkeypatc
 
 
 def test_a_failed_read_is_not_reported_as_a_quiet_week(monkeypatch):
-    """_fetch swallows its exception so one broken table doesn't blank the
-    whole report -- but that leaves the empty list it returns indistinguishable
-    from a student who genuinely recorded nothing.
-
-    Without `retrieved`, every figure from that table would come back as a
-    default dressed up as a measurement: null averages, a zero sample count,
-    and a summary sentence claiming nothing was recorded. Same distinction the
-    summary payloads draw with `retrieved`, seen from the other side.
-    """
+    """_fetch swallows its exception; `retrieved` is what separates that from recording nothing."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _signal_tables([], [], []), table_raises={"cognitive_signals"}))
     report = main._weekly_signal_report("student-1")
@@ -679,19 +575,12 @@ def test_a_failed_read_is_not_reported_as_a_quiet_week(monkeypatch):
     assert report["retrieved"]["cognitive"] is False
     assert report["retrieved"]["face"] is True        # this one was read
     assert report["retrieved"]["sessions"] is True
-    # The claim the old sentence made on the strength of a query that never ran.
     assert "no eeg" not in report["summary"].lower()
     assert "could not be loaded" in report["summary"]
 
 
 def test_a_failed_read_marks_every_day_unretrieved(monkeypatch):
-    """A failed query is flatter than a capped one: the table wasn't read for
-    any day in the range.
-
-    Judged from the cap logic alone, this looks like an untruncated empty
-    result, so every day would be called complete and its empty average
-    published as a measurement of a quiet day.
-    """
+    """To the cap logic alone, a failed read looks like an untruncated empty one."""
     face = [{"user_id": "student-1", "ts": _ts(d), "attention": 0.8} for d in range(0, 7)]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _signal_tables([], face, []), table_raises={"cognitive_signals"}))
@@ -705,9 +594,7 @@ def test_a_failed_read_marks_every_day_unretrieved(monkeypatch):
 
 
 def test_a_failed_sessions_read_does_not_report_zero_sessions(monkeypatch):
-    """sessions_recorded must not fall back to the length of the empty list a
-    failed read returns -- that would reach the panel as a confident "0
-    sessions this week"."""
+    """sessions_recorded must not fall back to the length of a failed read's empty list."""
     cog = [{"user_id": "student-1", "ts": _ts(1), "focus": 0.5}]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _signal_tables(cog, [], []), table_raises={"sessions"}))
@@ -717,18 +604,12 @@ def test_a_failed_sessions_read_does_not_report_zero_sessions(monkeypatch):
     assert report["retrieved"]["sessions"] is False
     assert all(d["sessions"] is None and d["sessions_retrieved"] is False
                for d in report["daily"])
-    # The EEG read worked, so its figures are still measurements.
     assert report["retrieved"]["cognitive"] is True
     assert report["averages"]["focus"] == 0.5
 
 
 def test_a_failed_face_read_is_not_the_opt_out(monkeypatch):
-    """Both leave every facial field null, but they are different statements.
-
-    retrieved.face is None when the opt-out is on -- there was no retrieval to
-    succeed or fail -- and False when the query was made and broke. A consumer
-    checking `is False` must not read the opt-out as a failure.
-    """
+    """retrieved.face is None when opted out (no read made), False when the read broke."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _signal_tables([], [], []), table_raises={"face_signals"}))
     failed = main._weekly_signal_report("student-1")
@@ -743,11 +624,7 @@ def test_a_failed_face_read_is_not_the_opt_out(monkeypatch):
 
 
 def test_a_read_trimmed_to_nothing_is_not_treated_as_untrimmed(monkeypatch):
-    """A server cap of zero reports a count with no rows behind it -- the
-    least informative case about what was actually retrieved. It must not be
-    folded into the "nothing was trimmed" branch, or every day would be called
-    whole and its empty average published as a measurement of a quiet day.
-    """
+    """A server cap of zero must not fall into the "nothing was trimmed" branch."""
     cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5} for d in range(0, 7)]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _signal_tables(cog, [], []), max_rows={"cognitive_signals": 0}))
@@ -761,9 +638,7 @@ def test_a_read_trimmed_to_nothing_is_not_treated_as_untrimmed(monkeypatch):
 
 
 def test_a_quiet_week_is_still_reported_as_one(monkeypatch):
-    """The retrieved/truncated flags must not turn every empty report into a
-    failure: a read that reached the database and legitimately found nothing
-    is still just an absence, and the sentence saying so is correct."""
+    """A read that succeeded and found nothing is still just an absence."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_signal_tables([], [], [])))
     report = main._weekly_signal_report("student-1")
 
@@ -775,22 +650,12 @@ def test_a_quiet_week_is_still_reported_as_one(monkeypatch):
 
 
 def test_a_failed_rpc_reports_not_retrieved(monkeypatch):
-    """A broken aggregate must not read as a quiet week.
-
-    _signal_summary swallows the exception so one failed read doesn't blank a
-    dashboard, and answers with defaults -- null averages beside zero sample
-    counts, the same shape a student who recorded nothing produces. `retrieved`
-    is the only thing telling the two apart, and every surface that renders
-    "no data" consults it.
-    """
+    """A broken aggregate must not read as a quiet week."""
     fake = _FakeSupabase({}, rpc_raises=lambda *_a: RuntimeError("57014: statement timeout"))
     monkeypatch.setattr(main, "supabase", fake)
 
     out = main._signal_summary("student-1")
-    # dominant_emotion is part of the single-student shape on every path, even
-    # ones that never reached a row. The revocation dates are part of the
-    # shape too, and null here: the channel isn't off, the read failed. A
-    # surface must not render "turned off on <date>" off the back of an outage.
+    # Revocation dates are null: the channel isn't off, the read failed.
     assert out == {**main._EMPTY_SUMMARY, "face_included": True,
                    "retrieved": False, "dominant_emotion": None,
                    "emotion_revoked_at": None, "heart_revoked_at": None}
@@ -841,12 +706,7 @@ def test_signal_summaries_skips_the_round_trip_for_no_children(monkeypatch):
 
 
 # ── a failed aggregate is not a quiet week ───────────────────────────────
-#
-# Both helpers swallow the exception so one broken read doesn't blank a
-# dashboard, and the endpoints answer 200 either way. That makes the payload
-# they return -- null averages, zero samples -- identical to a student who
-# recorded nothing, so every "no data yet" string downstream needs `retrieved`
-# to tell them apart.
+# Both helpers swallow exceptions and answer 200; `retrieved` tells the cases apart.
 
 def test_a_failed_summary_says_so_rather_than_reporting_zero_samples(monkeypatch):
     def boom(name, params):
@@ -855,31 +715,19 @@ def test_a_failed_summary_says_so_rather_than_reporting_zero_samples(monkeypatch
                         _FakeSupabase({}, rpc_results={}, rpc_raises=boom))
     out = main._signal_summary("student-1")
     assert out["retrieved"] is False
-    # The figures are still defaults -- the point is that they're now labelled
-    # as such rather than passed off as measurements.
+    # Still defaults, but labelled as such.
     assert out["cognitive_samples"] == 0
     assert out["focus"] is None
 
 
 def test_a_summary_that_reached_the_database_is_retrieved_even_with_no_rows(monkeypatch):
-    """The flag is about whether the query ran, not whether it found anything.
-
-    A student who genuinely recorded nothing this week must stay
-    distinguishable from a query that failed -- marking an empty result as
-    unretrieved would collapse that distinction from the other side.
-    """
+    """The flag is about whether the query ran, not whether it found anything."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({}, rpc_results={}))
     assert main._signal_summary("student-1")["retrieved"] is True
 
 
 def test_a_failed_batch_summary_is_distinguishable_from_an_empty_one(monkeypatch):
-    """None for a failed read, {} for one that succeeded and found nothing.
-
-    my_children fills in a default for every child missing from the result,
-    and that default has to say which case it stands for -- returning {} for
-    both would let a broken RPC reach a parent as "your child recorded
-    nothing".
-    """
+    """None for a failed read, {} for one that succeeded and found nothing."""
     def boom(name, params):
         return RuntimeError("connection reset")
     monkeypatch.setattr(main, "supabase",
@@ -891,8 +739,7 @@ def test_a_failed_batch_summary_is_distinguishable_from_an_empty_one(monkeypatch
 
 
 def test_children_endpoint_marks_a_failed_batch_summary_as_unretrieved(monkeypatch):
-    """The parent dashboard renders "no data yet" straight off this payload,
-    so a failed batch read has to be marked unretrieved."""
+    """The parent dashboard renders "no data yet" straight off this payload."""
     def boom(name, params):
         return RuntimeError("connection reset")
     monkeypatch.setattr(main, "supabase", _FakeSupabase({
@@ -907,8 +754,7 @@ def test_children_endpoint_marks_a_failed_batch_summary_as_unretrieved(monkeypat
 
 
 def test_children_endpoint_reports_a_working_read_with_no_rows_as_retrieved(monkeypatch):
-    """Mirror of the above: a child the aggregate returned nothing for had a
-    quiet week, and must not be labelled a failure."""
+    """Mirror of the above: an empty result is a quiet week, not a failure."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({
         "parent_child_links": [{"parent_id": "parent-1", "child_id": "student-1",
                                 "created_at": "2026-01-01"}],
@@ -921,15 +767,9 @@ def test_children_endpoint_reports_a_working_read_with_no_rows_as_retrieved(monk
 
 
 def test_strategies_basis_reports_that_its_signals_did_not_load(monkeypatch, set_flag):
-    """A failed aggregate leaves every average None, which the rules already
-    read as "no signal to act on", so the advice correctly degrades to the
-    generic list. What's checked here is that the response a parent reads
-    actually says the signals failed to load.
+    """The advice degrades to generic; the response must say the signals failed to load.
 
-    strategy_llm_enabled is pinned off explicitly rather than left to the
-    suite's default: this test is about the rule-based fallback, not about
-    whether the model pass happens to also fail, and pinning it keeps the
-    test's meaning fixed regardless of what the flag's real-world default is.
+    strategy_llm_enabled is pinned off: this is about the rule-based path.
     """
     def boom(name, params):
         if name == "student_signal_summary":
@@ -951,12 +791,7 @@ def test_strategies_basis_reports_that_its_signals_did_not_load(monkeypatch, set
 # ── the opt-out on the headline summaries (parent dashboard) ─────────────
 
 def test_signal_summaries_pass_the_opt_out_into_the_aggregate(monkeypatch):
-    """The dashboard reads facial attention through this RPC.
-
-    Nulling the field on the way out would leave the rows still being read, so
-    the aggregate takes the opt-out flag itself and skips them -- the same
-    promise the weekly report and the teacher list already make.
-    """
+    """The aggregate takes the opt-out itself; nulling on the way out would still read the rows."""
     fake = _FakeSupabase({}, rpc_results={"student_signal_summary_many": []})
     monkeypatch.setattr(main, "supabase", fake)
     main._signal_summaries(["student-1"], include_emotion=False)
@@ -975,8 +810,7 @@ def test_signal_summary_passes_the_opt_out_into_the_aggregate(monkeypatch):
 
 
 def test_summary_marks_the_opt_out_rather_than_reporting_no_face_data(monkeypatch):
-    """face_attention null beside face_samples 0 looks exactly like a student
-    the camera never saw. face_included is what tells the two cases apart."""
+    """face_included separates the opt-out from a student the camera never saw."""
     fake = _FakeSupabase({}, rpc_results={"student_signal_summary_many": [
         {"student_id": "student-1", "focus": 0.6, "face_attention": None,
          "sessions": 2, "cognitive_samples": 10, "face_samples": 0},
@@ -989,8 +823,7 @@ def test_summary_marks_the_opt_out_rather_than_reporting_no_face_data(monkeypatc
 
 
 def test_children_endpoint_threads_the_opt_out(monkeypatch):
-    """A parent switching facial reporting off on a child's report and going
-    back to the dashboard must not find facial attention on screen again."""
+    """Facial reporting switched off on a report stays off on the dashboard."""
     tables = {**TABLES, "parent_child_links": [
         {"id": "l1", "parent_id": "parent-1", "child_id": "student-1",
          "created_at": "2026-07-01T00:00:00Z"},
@@ -1000,20 +833,13 @@ def test_children_endpoint_threads_the_opt_out(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
     children = main.my_children(None, include_face=False)
     assert fake.rpc_calls[0][1]["p_include_emotion"] is False
-    # The fallback shape for a child the RPC returned no row for must carry
-    # the flag too, or the dashboard renders "N/A" where it should say "Off".
+    # The fallback shape carries the flag too, or the tile reads "N/A", not "Off".
     assert all(c["signal_summary"]["face_included"] is False for c in children)
     assert children, "fixture should link at least one child to this parent"
 
 
 # ── /api/students/{id}/signal-summary ────────────────────────────────────
-#
-# The teacher student list used to read cognitive_signals and face_signals
-# straight from the browser under a 200-row cap. At the poller's 1 Hz default
-# that cap binds after about three minutes, so tiles labelled "last 7d" were
-# actually averaging the newest three minutes of one sitting, with the count
-# pinned at exactly 200 while presented as a week's worth. These tests cover
-# the endpoint that replaced that read.
+# Aggregated in Postgres over the whole window, not a capped row read.
 
 _SUMMARY_ROW = {
     "focus": 0.7, "stress": 0.3, "engagement": 0.5, "face_attention": 0.8,
@@ -1042,8 +868,6 @@ def test_signal_summary_endpoint_rejects_a_viewer_with_no_relationship(monkeypat
 
 
 def test_signal_summary_endpoint_allows_a_teacher_of_the_students_class(monkeypatch):
-    """The same relationship the "cog: teacher read" RLS policy encodes -- what
-    the old browser-client read was leaning on."""
     _summary_fake(monkeypatch, TEACHER)
     out = main.student_signal_summary("student-1", None)
     assert out["focus"] == 0.7
@@ -1057,19 +881,13 @@ def test_signal_summary_endpoint_rejects_a_teacher_of_a_different_class(monkeypa
 
 
 def test_signal_summary_endpoint_allows_a_linked_parent(monkeypatch):
-    """Role-neutral: gated on the relationship, not on the fact that a teacher
-    list happens to be its main caller."""
+    """Gated on the relationship, not the role of its main caller."""
     _summary_fake(monkeypatch, PARENT)
     assert main.student_signal_summary("student-1", None)["focus"] == 0.7
 
 
 def test_signal_summary_endpoint_counts_the_whole_window_not_a_row_cap(monkeypatch):
-    """The figure a teacher sees is Postgres's count over the window.
-
-    51840 is seven days at 1 Hz across a few sittings -- a number the old
-    200-row browser read could never have produced; it would have reported
-    200 and called that the week.
-    """
+    """The figure a teacher sees is Postgres's count over the window."""
     _summary_fake(monkeypatch, TEACHER)
     out = main.student_signal_summary("student-1", None)
     assert out["cognitive_samples"] == 51840
@@ -1087,8 +905,7 @@ def test_signal_summary_endpoint_threads_the_opt_out(monkeypatch):
 
 
 def test_signal_summary_endpoint_clamps_the_day_range(monkeypatch):
-    """Same bounds as the weekly report, so a caller can't trigger an
-    unbounded scan by putting a large number in the query string."""
+    """Same bounds as the weekly report: no unbounded scan from the query string."""
     fake = _summary_fake(monkeypatch, TEACHER)
     main.student_signal_summary("student-1", None, days=9999)
     assert fake.rpc_calls[0][1]["p_days"] == 30
@@ -1099,16 +916,13 @@ def test_signal_summary_endpoint_clamps_the_day_range(monkeypatch):
 
 
 def test_signal_summary_carries_the_dominant_emotion(monkeypatch):
-    """Computed in the aggregate rather than by counting emotions client-side,
-    same reason as the averages: a capped row read only ever saw the newest
-    few minutes."""
+    """Computed in the aggregate, not from a capped client-side row read."""
     _summary_fake(monkeypatch, TEACHER)
     assert main.student_signal_summary("student-1", None)["dominant_emotion"] == "focused"
 
 
 def test_signal_summary_withholds_the_dominant_emotion_when_the_opt_out_is_on(monkeypatch):
-    """emotion is a facial reading, so a stale value surviving the opt-out
-    would put facial data back on screen while the switch reads "off"."""
+    """emotion is a facial reading."""
     _summary_fake(monkeypatch, TEACHER)
     out = main.student_signal_summary("student-1", None, include_face=False)
     assert out["dominant_emotion"] is None
@@ -1116,9 +930,7 @@ def test_signal_summary_withholds_the_dominant_emotion_when_the_opt_out_is_on(mo
 
 
 def test_batch_summaries_carry_no_dominant_emotion(monkeypatch):
-    """Only the single-student RPC computes it. Adding it to the shared shape
-    would report an always-null "no emotion recorded" for every child on the
-    parent dashboard -- a figure that page never asks for or renders."""
+    """Only the single-student RPC computes it; in the batch it would be always-null."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({}, rpc_results={
         "student_signal_summary_many": [
             {"student_id": "student-1", "focus": 0.4, "sessions": 1, "cognitive_samples": 3},
@@ -1128,17 +940,8 @@ def test_batch_summaries_carry_no_dominant_emotion(monkeypatch):
 
 
 # ── where the facial-recognition opt-out reaches, and where it does not ──
-#
-# The control covers the reporting surfaces, each of which renders the switch.
-# Live monitoring and session review deliberately sit outside it: both are
-# teacher-only views built around whether the camera is currently working, and
-# neither renders the switch, so honouring it there would silently change a
-# page the control isn't shown on.
-#
-# That boundary is documented in frontend/src/lib/facePref.js and at both call
-# sites. These two tests make moving it fail loudly instead of leaving the
-# note quietly wrong -- same reason the parent dashboard's hasSignalSummary
-# carries a test for the tile it deliberately omits.
+# Reporting surfaces honour it; live monitoring and session review, which
+# never render the switch, deliberately do not.
 
 def test_every_reporting_endpoint_takes_the_opt_out():
     for fn in (main.student_weekly_report, main.student_signal_summary, main.my_children):
@@ -1148,13 +951,7 @@ def test_every_reporting_endpoint_takes_the_opt_out():
 
 
 def test_the_opt_out_deliberately_does_not_reach_live_or_session_review():
-    """Asserts an absence, on purpose.
-
-    If either of these grows an include_face, the scope note in facePref.js
-    is now wrong and the switch needs to appear on the page too -- this should
-    fail and point whoever added it to that note, rather than letting the two
-    halves drift apart silently.
-    """
+    """Asserts an absence, on purpose: adding one means the page needs the switch too."""
     for fn in (main.class_live, main.session_signals):
         assert "include_face" not in inspect.signature(fn).parameters, (
             f"{fn.__name__} now honours the opt-out; update the scope note in "
@@ -1163,14 +960,7 @@ def test_the_opt_out_deliberately_does_not_reach_live_or_session_review():
 
 
 # ── a session belongs to one student ─────────────────────────────────────
-#
-# `record_answer` and `end_session` write a student's academic history but must
-# check whose session they're writing into, the same way the three
-# `/api/signals/*` endpoints beside them already call `_verify_session_owner`.
-# Without the check, any signed-in student could post answers into a session id
-# they held -- moving another child's counters and crediting the questions to
-# whoever the row said when it closed -- or end a session someone else was
-# still working in, stopping their poller mid-lesson.
+# `record_answer` and `end_session` check ownership before writing anything.
 
 class _OwnedSessionClient:
     """One `sessions` row with a given owner. Records what was written."""
@@ -1239,15 +1029,8 @@ def test_a_student_may_not_touch_another_students_session(monkeypatch, endpoint)
             main.end_session(session_id="session-1", request=None)
 
     assert exc.value.status_code == 403
-    # Must be refused *before* anything is written. If the insert ran first and
-    # the session was checked afterwards, the forged answer row would land no
-    # matter what the later check decided -- and `/end` would stop the poller
-    # before ever looking.
-    #
-    # `security_events` is excluded by name, not by loosening this to "no
-    # product writes": the refusal itself is audited, and that row is the
-    # opposite of a leak. Narrowing it to the one table keeps a genuine early
-    # write -- an answer, a session stamp, anything else -- still tripping this.
+    # Refused before any write. `security_events` is excluded by name: the
+    # refusal's own audit row is expected.
     product_writes = [w for w in client.writes if w[0] != "security_events"]
     assert product_writes == [], f"the refusal came too late: {product_writes}"
     assert stopped == [], "another student's poller was stopped before the check"
@@ -1275,13 +1058,7 @@ def test_the_owner_is_still_allowed(monkeypatch, endpoint):
 
 
 def test_the_two_academic_write_endpoints_check_ownership():
-    """Derived from the source, so a fourth writer can't be added without the
-    ownership check.
-
-    Matching on source code is what makes "the caller owns this session" a
-    fact enforced by the code, rather than a rule someone has to remember to
-    apply per endpoint.
-    """
+    """Derived from the source, so the ownership check can't be dropped silently."""
     for fn in (main.record_answer, main.end_session):
         source = inspect.getsource(fn)
         assert "_session_or_403(" in source or "_verify_session_owner(" in source, (
@@ -1290,12 +1067,7 @@ def test_the_two_academic_write_endpoints_check_ownership():
 
 
 class _RaisingSessions:
-    """`.single()` on zero rows, as PostgREST actually behaves.
-
-    It raises `APIError(PGRST116)` rather than returning an empty result, so a
-    handler's `if not res.data` branch never runs for a missing row -- that
-    branch is dead code standing where the 404 was supposed to be.
-    """
+    """`.single()` on zero rows raises PGRST116, as PostgREST does, rather than returning empty."""
 
     def table(self, _name):
         class _Q:
@@ -1315,19 +1087,7 @@ class _RaisingSessions:
     lambda: main._verify_session_owner("does-not-exist", "someone"),
 ])
 def test_a_missing_session_returns_404_not_500(monkeypatch, call):
-    """Mirror of `test_missing_class_returns_404_not_500`, for the session
-    helper.
-
-    `_verify_class_owner` does the same `.single()` lookup elsewhere in this
-    file, wrapped in a `try`. The session helper instead had `if not res.data`
-    with no `try`, so its 404 was unreachable and a bogus session id came back
-    as an unhandled APIError: a 500 with a stack trace, for input any client
-    can supply.
-
-    This matters more now than for one call site: `record_answer`, `end_session`
-    and the three `/api/signals/*` endpoints all resolve a session through this
-    helper, so the same 500 was reachable five ways.
-    """
+    """Mirror of `test_missing_class_returns_404_not_500`, for the session helper."""
     monkeypatch.setattr(main, "supabase", _RaisingSessions())
 
     with pytest.raises(main.HTTPException) as exc:
@@ -1336,23 +1096,9 @@ def test_a_missing_session_returns_404_not_500(monkeypatch, call):
 
 
 def test_every_single_row_lookup_handles_the_missing_row():
-    """Derived from the source rather than hand-kept, because a hand-kept list
-    is exactly what let several call sites go unguarded before.
+    """Every `.single()` sits inside a `try` body, since zero rows raises rather than returning empty.
 
-    `.single()` raises `APIError(PGRST116)` on zero rows rather than returning
-    an empty result, so `if not res.data: raise HTTPException(404)` never runs
-    for a missing row -- it's dead code standing where the 404 was meant to be,
-    and the id comes back as a 500 with a stack trace instead.
-
-    The rule is structural: a `.single()` call must sit inside a `try`, or the
-    endpoint must go through `_row_or_404` instead of calling it directly.
-    Checked on the source rather than by exercising each endpoint, since a
-    missing handler has no behaviour to drive.
-
-    Parsed with the AST rather than grepped: a text regex also matched mentions
-    of `.single()` inside docstrings, and "is there a `try:` earlier in this
-    function" is the wrong question anyway, since an unrelated `try` above
-    would answer yes. The AST gives real call nodes and real nesting.
+    AST, not grep: a regex matches docstring mentions and can't see real nesting.
     """
     import ast
 
@@ -1378,8 +1124,7 @@ def test_every_single_row_lookup_handles_the_missing_row():
                 and node.func.attr == "single" and not in_try):
             offenders.append(f"{enclosing(node.lineno)} (main.py:{node.lineno})")
         if isinstance(node, ast.Try):
-            # Only the `try` body is protected. A `.single()` in an except or
-            # finally clause is as exposed as one with no try at all.
+            # Only the `try` body is protected, not except/else/finally.
             for child in node.body:
                 walk(child, True)
             for child in [*node.handlers, *node.orelse, *node.finalbody]:
@@ -1397,14 +1142,7 @@ def test_every_single_row_lookup_handles_the_missing_row():
 
 
 def test_the_class_summary_route_is_not_shadowed_by_the_id_route():
-    """A literal path registered after a placeholder route is unreachable.
-
-    FastAPI matches in registration order, so if `/api/classes/{class_id}`
-    came first, a GET of `/api/classes/summary` would bind `class_id="summary"`
-    and come back 404 "Class not found" -- reading as the endpoint not existing
-    rather than a routing mistake. A test of the handler itself wouldn't catch
-    this, since the handler would never be reached.
-    """
+    """FastAPI matches in registration order, so a literal after a placeholder is unreachable."""
     from fastapi.routing import APIRoute
 
     order = [r.endpoint.__name__ for r in main.app.routes
@@ -1445,20 +1183,13 @@ class _ClassSummaryClient:
 
 
 def test_class_summary_averages_accuracy_over_students_who_attempted(monkeypatch):
-    """The arithmetic the page used to do client-side, moved but not changed.
-
-    A student with no attempts is not a 0% student -- they're excluded from
-    the accuracy average entirely -- while the streak average includes the
-    whole roster. Getting that backwards makes every class with a new joiner
-    look worse than it is.
-    """
+    """A student with no attempts is out of the accuracy average but in the streak one."""
     monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
     monkeypatch.setattr(main, "supabase", _ClassSummaryClient(
         classes=[{"id": "c1"}],
         members=[{"class_id": "c1", "student_id": s} for s in ("a", "b", "c")],
         stats=[{"user_id": "a", "total_questions": 10, "total_correct": 8, "current_streak": 4},
                {"user_id": "b", "total_questions": 10, "total_correct": 4, "current_streak": 2},
-               # No attempts: out of the accuracy average, in the streak one.
                {"user_id": "c", "total_questions": 0, "total_correct": 0, "current_streak": 0}],
     ))
 
@@ -1470,8 +1201,7 @@ def test_class_summary_averages_accuracy_over_students_who_attempted(monkeypatch
 
 
 def test_a_class_nobody_has_attempted_reports_null_not_zero(monkeypatch):
-    """`None` is "nobody has tried anything yet", which the card draws as a
-    dash. `0` would be a class that tried and got everything wrong."""
+    """`0` would be a class that tried and got everything wrong."""
     monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
     monkeypatch.setattr(main, "supabase", _ClassSummaryClient(
         classes=[{"id": "c1"}],
@@ -1483,8 +1213,6 @@ def test_a_class_nobody_has_attempted_reports_null_not_zero(monkeypatch):
 
 
 def test_a_failed_membership_read_is_not_a_class_of_zeros(monkeypatch):
-    """Same three-state rule as everywhere else: the page must tell "no
-    attempts yet" apart from "we couldn't find out"."""
     monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
     monkeypatch.setattr(main, "supabase", _ClassSummaryClient(
         classes=[{"id": "c1"}], members=[], stats=[],
@@ -1497,9 +1225,7 @@ def test_a_failed_membership_read_is_not_a_class_of_zeros(monkeypatch):
 
 
 def test_the_summary_does_not_read_a_roster_per_class(monkeypatch):
-    """The point of the endpoint: it replaced one request per class from the
-    browser, so doing one query per class here would just move the N+1
-    problem, not remove it."""
+    """One query per class here would move the N+1, not remove it."""
     monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
     client = _ClassSummaryClient(
         classes=[{"id": f"c{i}"} for i in range(12)],
@@ -1515,19 +1241,14 @@ def test_the_summary_does_not_read_a_roster_per_class(monkeypatch):
 
 
 def test_missing_class_returns_404_not_500():
-    # .single() raises on zero rows, so without handling this surfaced as a 500.
+    # .single() raises on zero rows.
     with pytest.raises(main.HTTPException) as exc:
         main._verify_class_owner("class-does-not-exist", "teacher-1")
     assert exc.value.status_code == 404
 
 
 def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_stale(monkeypatch):
-    """A session with no activity for over ten minutes is marked ended and its
-    cognitive/face readings are nulled, so the teacher's live card stops
-    claiming they're current. heart_signals must be cleared the same way -- a
-    headband that kept producing rows after the rest of the session went
-    quiet must not leave the card showing a live-looking heart rate for a
-    session the backend itself just declared over."""
+    """A stale session's heart reading is nulled like cognitive and face."""
     from datetime import datetime, timedelta
 
     stale_ts = (datetime.utcnow() - timedelta(seconds=700)).isoformat()
@@ -1540,8 +1261,6 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
 
         def select(self, *_a, **_k): return self
         def eq(self, *_a, **_k): return self
-        # Roster reads are batched: one `in_` for the whole class, not one
-        # `eq` per student.
         def in_(self, *_a, **_k): return self
         def is_(self, *_a, **_k): return self
         def order(self, *_a, **_k): return self
@@ -1563,9 +1282,7 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
     tables = {
         "classes":            [{"teacher_id": "teacher-1"}],
         "class_memberships":  [{"student_id": "student-1"}],
-        # `user_id` is required: the open-session read is one query for the
-        # whole roster, grouped back per student, so a row without it belongs
-        # to nobody.
+        # `user_id` groups the batched open-session read back per student.
         "sessions":           [{"id": "session-1", "user_id": "student-1",
                                 "started_at": stale_ts}],
         "cognitive_signals":  [{"ts": stale_ts, "focus": 0.5}],
@@ -1574,9 +1291,7 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
         "session_answers":    [],
         "profiles":           [{"id": "student-1", "display_name": "Ada", "email": "a@x.com"}],
     }
-    # The live monitor reads every open session's four channels through one
-    # RPC, rather than four queries per student in a loop, so the fake answers
-    # it from the same canned tables.
+    # All channels come through one RPC, answered from the same canned tables.
     _CHANNEL_TABLE = {"cognitive": "cognitive_signals", "face": "face_signals",
                       "heart": "heart_signals", "answer": "session_answers"}
 
@@ -1608,9 +1323,7 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
     assert out[0]["latest_heart"] is None, (
         "a stale session still reported a live-looking heart reading"
     )
-    # eeg_poller.stop releases a pre-claim reservation by user_id, and the only
-    # user_id in scope here that can answer "whose reservation" is the
-    # student's -- the teacher reading this view never held one.
+    # stop releases the reservation by user_id: the student's, not the teacher's.
     assert stop_calls == [("session-1", "student-1")], (
         "the stale-session sweep must release the student's reservation, "
         "not the teacher's (or none at all)"
@@ -1620,12 +1333,7 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
 # ── facial-recognition opt-out ───────────────────────────────────────────
 
 def test_report_without_face_never_queries_face_signals(monkeypatch):
-    """The opt-out must mean "not read", not "read and hidden".
-
-    A parent switching facial reporting off is making a statement about what
-    gets looked at, so asserting on the nulled output alone would still pass
-    even if the rows were being fetched anyway.
-    """
+    """The opt-out means "not read", not "read and hidden"."""
     fake = _FakeSupabase(_signal_tables(
         [{"user_id": "student-1", "ts": _ts(1), "focus": 0.7}],
         [{"user_id": "student-1", "ts": _ts(1), "attention": 0.9, "emotion": "happy"}],
@@ -1638,14 +1346,11 @@ def test_report_without_face_never_queries_face_signals(monkeypatch):
     assert report["averages"]["face_attention"] is None
     assert report["highlights"]["dominant_emotion"] is None
     assert report["sample_counts"]["face"] == 0
-    # Cognitive is unaffected.
     assert report["averages"]["focus"] == 0.7
 
 
 def test_report_without_face_marks_days_not_applicable_rather_than_unretrieved(monkeypatch):
-    """face_retrieved=False means "the cap stopped us". With face reporting
-    off, nothing was requested, so False would falsely report a retrieval
-    failure -- and the UI checks `=== false` to warn about gaps."""
+    """False means "the cap stopped us", and the UI checks `=== false`."""
     fake = _FakeSupabase(_signal_tables(
         [{"user_id": "student-1", "ts": _ts(1), "focus": 0.7}]))
     monkeypatch.setattr(main, "supabase", fake)
@@ -1655,8 +1360,7 @@ def test_report_without_face_marks_days_not_applicable_rather_than_unretrieved(m
 
 
 def test_report_without_face_does_not_claim_facial_data_was_absent(monkeypatch):
-    """"No facial recognition samples were recorded" claims an absence that
-    was never actually measured, since the opt-out skipped the read."""
+    """An absence can't be claimed for a read the opt-out skipped."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_signal_tables([])))
     off = main._weekly_signal_report("student-1", include_emotion=False)
     on = main._weekly_signal_report("student-1", include_emotion=True)
@@ -1686,14 +1390,7 @@ def _strategy_tables(topic_rows=None, cog_rows=None):
 
 
 def test_strategy_basis_aggregates_instead_of_reading_signal_rows(monkeypatch, set_flag):
-    """The rules and the prompt use six numbers between them.
-
-    Reading them out of _weekly_signal_report would transfer up to
-    _REPORT_ROW_CAP rows from each signal table just to arrive at six numbers,
-    on the heaviest endpoint a click can trigger. Asserted on the queries
-    rather than the output, since identical numbers can be reached either way
-    -- it's the query cost this test is about.
-    """
+    """Six numbers come from one aggregate, not thousands of rows; asserted on the queries."""
     fake = _FakeSupabase(
         {**TABLES, **_strategy_tables()},
         rpc_results={"student_signal_summary": [{
@@ -1714,12 +1411,7 @@ def test_strategy_basis_aggregates_instead_of_reading_signal_rows(monkeypatch, s
 
 
 def test_strategy_basis_counts_sessions_in_postgres(monkeypatch):
-    """The aggregate's session count is exact.
-
-    The report's own figure is a row count under _SESSION_ROW_CAP, so using it
-    would report a busy week to the model as "practice sessions recorded: 100"
-    no matter how many there really were.
-    """
+    """The aggregate's count is exact; the report's is capped at _SESSION_ROW_CAP."""
     fake = _FakeSupabase(
         {**TABLES, **_strategy_tables()},
         rpc_results={"student_signal_summary": [{"sessions": 137}]},
@@ -1730,11 +1422,7 @@ def test_strategy_basis_counts_sessions_in_postgres(monkeypatch):
 
 
 def test_strategy_basis_averages_are_an_explicit_contract(monkeypatch):
-    """basis.averages is the response contract, so it's built as a named list
-    rather than copied wholesale from the report -- a raw copy is how an
-    unrelated confidence score once leaked into the response. This pins the
-    named-list shape that stops that from happening again.
-    """
+    """basis.averages is a named list, not a wholesale copy that leaks unrelated keys."""
     fake = _FakeSupabase(
         {**TABLES, **_strategy_tables()},
         rpc_results={"student_signal_summary": [{"focus": 0.7}]},
@@ -1745,8 +1433,6 @@ def test_strategy_basis_averages_are_an_explicit_contract(monkeypatch):
 
 
 def test_strategy_basis_threads_the_opt_out_into_the_aggregate(monkeypatch):
-    """Same guarantee the other surfaces make: with the switch off, no facial
-    row gets read here either."""
     fake = _FakeSupabase({**TABLES, **_strategy_tables()},
                          rpc_results={"student_signal_summary": []})
     monkeypatch.setattr(main, "supabase", fake)
@@ -1756,35 +1442,19 @@ def test_strategy_basis_threads_the_opt_out_into_the_aggregate(monkeypatch):
 
 
 def test_strategy_basis_does_not_reuse_the_reports_retrieved_key(monkeypatch):
-    """_strategy_basis is shaped like a weekly report, so it must not reuse a
-    key a real report already defines with a different shape.
-
-    A report's `retrieved` is a dict of three per-table booleans; this one is
-    a single bool. _rule_based_strategies and _strategy_prompt read report
-    keys and get called on both shapes, so one key meaning two different
-    things is a bug waiting for the first consumer to reach into it. Named
-    signals_retrieved instead, matching the response field's actual name.
-    """
+    """A report's `retrieved` is a dict; this is a bool, so it gets its own key."""
     fake = _FakeSupabase({**TABLES, **_strategy_tables()},
                          rpc_results={"student_signal_summary": [{"focus": 0.7}]})
     monkeypatch.setattr(main, "supabase", fake)
     basis = main._strategy_basis("student-1", 7, True)
     assert basis["signals_retrieved"] is True
-    # The collision itself, asserted directly: the two payloads must not both
-    # define `retrieved`.
     assert "retrieved" not in basis
     report = main._weekly_signal_report("student-1", 7)
     assert isinstance(report["retrieved"], dict)
 
 
 def test_learning_strategies_reports_a_bool_for_signals_retrieved(monkeypatch, set_flag):
-    """The response field must be a bool on the success path too, not just on
-    the failure path covered elsewhere.
-
-    It reads the key _strategy_basis sets, and the frontend tests it with
-    `=== false` -- so a report-shaped dict arriving there would be truthy and
-    silently read as "the signals loaded fine".
-    """
+    """A bool on the success path too: the frontend tests it with `=== false`."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         {"user_math_performance": []},
         rpc_results={"student_signal_summary": [{"focus": 0.7, "sessions": 3}]}))
@@ -1797,9 +1467,6 @@ def test_learning_strategies_reports_a_bool_for_signals_retrieved(monkeypatch, s
 
 
 def test_learning_strategies_rejects_a_viewer_with_no_relationship(monkeypatch):
-    """Same gate as every other student-data endpoint: the relationship, not a
-    role claim. The service-role client bypasses RLS, so this check is the
-    only thing in the way."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
     monkeypatch.setattr(main, "get_user", lambda _r: STRANGER)
     with pytest.raises(main.HTTPException) as exc:
@@ -1808,23 +1475,19 @@ def test_learning_strategies_rejects_a_viewer_with_no_relationship(monkeypatch):
 
 
 def test_learning_strategies_allows_a_linked_parent(monkeypatch, set_flag):
-    """strategy_llm_enabled is pinned off: this test is about the access
-    gate and the rule-based shape, not the model pass, so it must not depend
-    on the flag's real-world default."""
+    """strategy_llm_enabled is pinned off: this is about the gate and rule-based shape."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
     monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
     set_flag("strategy_llm_enabled", False)
     out = main.student_learning_strategies("student-1", None, main.LearningStrategyRequest())
     assert out["student_id"] == "student-1"
-    # Four with no signal data: the face-attention rule needs a low reading to
-    # fire, and there is none here. The cap is five, not a quota.
+    # Four with no signal data; the cap is five, not a quota.
     assert len(out["strategies"]) == 4
     assert out["source"] == "rule-based"
 
 
 def test_weakest_topic_ignores_topics_with_no_attempts():
-    """_topic_breakdown reports an unattempted topic at 0%, which would always
-    "win" -- sending a parent to revise a topic never given to their child."""
+    """An unattempted topic reports 0% and would always "win"."""
     topics = [
         {"topic_name": "algebra", "attempted_questions": 0, "accuracy": 0},
         {"topic_name": "geometry", "attempted_questions": 10, "accuracy": 40},
@@ -1836,9 +1499,7 @@ def test_weakest_topic_ignores_topics_with_no_attempts():
 
 
 def test_weakest_topic_summary_carries_only_the_named_fields():
-    """The _topic_breakdown row also holds topic_id, a stress reading and
-    updated_at. Returning it whole would make all of those part of this
-    endpoint's response contract by accident."""
+    """Returning the row whole would make its other fields part of the contract."""
     topics = [{
         "topic_id": 3, "topic_name": "geometry", "attempted_questions": 10,
         "correct_questions": 4, "accuracy": 40, "stress": 0.8,
@@ -1858,16 +1519,7 @@ def test_rule_based_strategies_react_to_elevated_stress():
 
 
 def test_no_strategy_is_derived_from_face_attention():
-    """`attention` has no producer, and this product does not claim it.
-
-    A rule that fires on `face_attention < 0.5` could never actually fire,
-    since the column is always NULL -- dead code that reads as a live feature.
-    Same removal the tiles and chart series got: a metric nothing measures
-    must not reach a parent as advice about their child.
-
-    Asserted with a *populated* attention value, so restoring such a rule
-    fails this test rather than passing on the null the column really holds.
-    """
+    """`attention` has no producer; asserted with a populated value so a restored rule fails."""
     averages = {"face_attention": 0.2, "focus": 0.7, "stress": 0.3}
     for included in (True, False):
         out = main._rule_based_strategies(
@@ -1876,12 +1528,7 @@ def test_no_strategy_is_derived_from_face_attention():
 
 
 def test_the_model_is_never_told_about_attention():
-    """The prompt half of the same rule.
-
-    `_strategy_prompt` must not interpolate `average facial attention {...}` --
-    that would read "unavailable" on every prompt ever sent, naming an
-    unmeasured metric to a model whose output a parent reads as advice.
-    """
+    """The prompt half of the same rule."""
     report = {
         "days": 7, "face_included": True,
         "averages": {"focus": 0.7, "stress": 0.3, "engagement": 0.5,
@@ -1892,13 +1539,11 @@ def test_the_model_is_never_told_about_attention():
 
     assert "attention" not in prompt.lower()
     assert "83%" not in prompt, "the attention average reached the model"
-    # The measurements that do have producers are still there.
     assert "70%" in prompt and "30%" in prompt
 
 
 def test_strategy_prompt_carries_no_identifying_data():
-    """The report holds the student id and raw `latest` rows, but the model
-    only needs the shape of the week, not a record identifying a child."""
+    """The model needs the shape of the week, not the student id or raw rows."""
     report = {
         "student_id": "student-1", "days": 7, "face_included": True,
         "averages": {"focus": 0.7, "stress": 0.3, "engagement": 0.5, "face_attention": 0.8},
@@ -1911,10 +1556,8 @@ def test_strategy_prompt_carries_no_identifying_data():
     assert "70%" in prompt
 
 
-# Three well-formed items. Prefixing the clinical cases with these makes the
-# safety filter the actual reason they get rejected -- as bare one-liners they
-# would also fail the "fewer than three items" check, so the assertions below
-# would pass even with the clinical filter removed entirely.
+# Three valid items, so a rejection below is the clinical filter, not the
+# "fewer than three items" check.
 _THREE_SAFE = (
     "1. Review fractions for ten minutes\n"
     "2. Take a short break between sets\n"
@@ -1938,16 +1581,7 @@ def test_validated_strategies_rejects_clinical_language(bad):
 
 
 @pytest.mark.parametrize("ok", [
-    # A `patient\w*` stem would also match ordinary words like "patiently" and
-    # "patient" the adjective. The filter rejects the *whole* reply on a match,
-    # so that would silently switch the model pass off, with `source` reading
-    # "rule-based (model output rejected)" for good. Over-blocking and a
-    # genuinely unsafe model look identical from outside, which is why this is
-    # worth pinning.
-    #
-    # The third case is the mirror ("patience" has no "t" after "patien", so a
-    # `patient\w*` stem never matched it) -- here so a later widening of the
-    # stem can't quietly start catching it.
+    # Over-blocking rejects the whole reply, indistinguishable from an unsafe model.
     "4. Be patient when they get stuck on a question",
     "4. Working through it slowly and patiently helps more than speed",
     "4. Practising patience with word problems pays off later",
@@ -1959,9 +1593,7 @@ def test_validated_strategies_allows_ordinary_uses_of_patience(ok):
 
 
 def test_validated_strategies_still_rejects_the_clinical_sense_of_patient():
-    """The narrower stem is not a hole in the filter: `patients?` still catches
-    the noun, the clinical sense that has no place in advice about a child's
-    maths practice."""
+    """The narrower stem `patients?` still catches the clinical noun."""
     assert main._validated_strategies(
         f"{_THREE_SAFE}\n4. Treat them as a patient rather than a learner") is None
     assert main._validated_strategies(
@@ -1969,19 +1601,13 @@ def test_validated_strategies_still_rejects_the_clinical_sense_of_patient():
 
 
 def test_validated_strategies_rejects_clinical_language_outside_the_list():
-    """Checked against the whole reply, not just the lines that survive parsing.
-
-    An unmarked preamble is dropped, so a diagnosis there would never reach a
-    parent -- but a model that volunteers one isn't following the prompt, and
-    the items it happened to format correctly haven't earned any more trust.
-    """
+    """Checked against the whole reply: a model volunteering a diagnosis isn't trusted."""
     assert main._validated_strategies(
         f"Note: these results suggest dyslexia.\n{_THREE_SAFE}") is None
 
 
 def test_validated_strategies_drops_an_unmarked_preamble():
-    """If every non-empty line counted as a strategy, a lead-in line would
-    become numbered advice handed to a parent that the model never wrote."""
+    """A lead-in line must not become numbered advice."""
     out = main._validated_strategies(
         "Here are five strategies for your child:\n"
         f"{_THREE_SAFE}\n"
@@ -1995,8 +1621,7 @@ def test_validated_strategies_drops_an_unmarked_preamble():
 
 
 def test_validated_strategies_rejects_prose_with_no_list():
-    """No markers means nothing parses as an item, so there's no reply to
-    accept -- the rule-based list stands."""
+    """No markers means no items, so the rule-based list stands."""
     assert main._validated_strategies(
         "Your child should practise more often.\n"
         "Keep the sessions short.\n"
@@ -2016,26 +1641,20 @@ def test_validated_strategies_rejects_an_overlong_line():
 
 
 def test_validated_strategies_rejects_list_scaffolding_with_nothing_in_it():
-    """"1. a" is well-formed: three marked items, none over the ceiling, no
-    clinical vocabulary. Without a length floor this would pass every check and
-    reach a parent labelled model-refined."""
+    """Without a length floor, "1. a" passes every other check."""
     assert main._validated_strategies("1. a\n2. b\n3. c") is None
     assert main._validated_strategies(
         f"{_THREE_SAFE}\n4. Practice more") is None, "one stub rejects the whole reply"
 
 
 def test_validated_strategies_accepts_ordinary_advice_at_the_floor():
-    """The length floor has to clear real one-liners, or it just disables the
-    model."""
+    """The length floor must clear real one-liners, or it disables the model."""
     out = main._validated_strategies(_THREE_SAFE)
     assert out and len(out) == 3
 
 
 def test_validated_strategies_unwraps_markdown_emphasis():
-    """Nothing between here and the parent renders markdown, so asterisks would
-    arrive as literal punctuation. The whole-item case matters most: the bold
-    marker sits in front of the number, where the list pattern could eat it as
-    a bullet and leave the digits behind as stray text."""
+    """Nothing renders markdown; a bold marker before the number must not read as a bullet."""
     assert main._validated_strategies(
         "1. **Review fractions for ten minutes**\n"
         "**2. Take a short break between sets**\n"
@@ -2048,14 +1667,7 @@ def test_validated_strategies_unwraps_markdown_emphasis():
 
 
 def test_validated_strategies_leaves_snake_case_intact():
-    """Underscores are only emphasis at a word boundary.
-
-    If matched anywhere, the unwrapping would treat two snake_case topic names
-    on one line as one emphasis span and delete both underscores:
-    "angle_relationships and mean_median" would reach a parent as
-    "anglerelationships and meanmedian" -- garbled words that pass every other
-    check, since the line is otherwise well formed and the right length.
-    """
+    """Underscores are only emphasis at a word boundary, or two snake_case names merge."""
     out = main._validated_strategies(
         "1. Review angle_relationships and mean_median for ten minutes each evening\n"
         "2. Alternate practice with a short break between each set of questions\n"
@@ -2070,15 +1682,7 @@ def test_validated_strategies_leaves_snake_case_intact():
 
 
 def test_validated_strategies_leaves_arithmetic_intact():
-    """Asterisks are only emphasis at a word boundary, same as underscores.
-
-    "*" is the multiplication sign, and this is a maths app. If matched
-    anywhere, the unwrapping would treat two products on one line as one
-    emphasis span and delete both asterisks: "practise 7*8 and 9*6" would
-    reach a parent as "practise 78 and 96" -- the same failure snake_case
-    topic names hit, and at least as reachable here since the model is being
-    asked for maths practice advice.
-    """
+    """Asterisks are only emphasis at a word boundary: "7*8 and 9*6" must not become "78 and 96"."""
     out = main._validated_strategies(
         "1. Practise times tables such as 7*8 and 9*6 for five minutes each evening\n"
         "2. Alternate practice with a short break between each set of questions\n"
@@ -2125,8 +1729,7 @@ def test_validated_strategies_accepts_and_strips_list_markers():
 
 
 def test_learning_strategies_skips_the_model_when_not_enabled(monkeypatch, set_flag):
-    """Default deployment has no local Ollama, so the endpoint must answer
-    without opening a socket -- not fail, not hang."""
+    """Off, the endpoint answers without opening a socket."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
     monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
     set_flag("strategy_llm_enabled", False)
@@ -2138,8 +1741,7 @@ def test_learning_strategies_skips_the_model_when_not_enabled(monkeypatch, set_f
 
 
 def test_learning_strategies_keeps_the_safe_list_when_the_model_is_rejected(monkeypatch, set_flag):
-    """The point of validation: rejected model output must not reach a parent,
-    and the response must say the model was tried and discarded."""
+    """Rejected output never reaches a parent, and the response says it was discarded."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
     monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
     set_flag("strategy_llm_enabled", True)
@@ -2165,15 +1767,8 @@ def test_learning_strategies_uses_validated_model_output(monkeypatch, set_flag):
 def _fake_ollama(monkeypatch, generate):
     """Installs a stand-in ollama module exposing a Client with `generate`.
 
-    Pins the provider too, rather than inheriting it. `llm_client.LLM_PROVIDER`
-    is read from the environment at import and `load_dotenv()` picks up
-    `backend/.env`, so a developer whose local .env says `LLM_PROVIDER=claude`
-    ran these against the Claude branch -- the fake module installed here
-    reached nothing. One test failed outright; the neighbouring
-    "returns None when ollama is unreachable" one *passed*, because the Claude
-    branch also returns None when its own client is unavailable. A vacuous pass
-    is the worse half: it claims a fallback works while exercising a different
-    fallback for a different reason.
+    Pins the provider too: a local `.env` with `LLM_PROVIDER=claude` would
+    otherwise bypass this fake and pass vacuously.
     """
     monkeypatch.setattr(llm_client, "LLM_PROVIDER", "ollama")
     class _Client:
@@ -2199,9 +1794,7 @@ def test_llm_strategies_returns_none_when_ollama_is_unreachable(monkeypatch):
 
 
 def test_llm_strategies_bounds_the_call_with_a_timeout(monkeypatch):
-    """A server that accepts the connection and then stalls never raises, so
-    without a client-side deadline this endpoint would hold a worker thread
-    open instead of falling back to the answer it guarantees."""
+    """A server that accepts and then stalls never raises."""
     client = _fake_ollama(monkeypatch, lambda **_k: {"response": _THREE_SAFE})
     monkeypatch.setattr(main, "STRATEGY_LLM_TIMEOUT", 7.5)
     assert main._llm_strategies("prompt") == [
@@ -2209,21 +1802,12 @@ def test_llm_strategies_bounds_the_call_with_a_timeout(monkeypatch):
         "Take a short break between sets",
         "Ask which problem felt hardest",
     ]
-    # At most the budget, and not exactly it: `llm_client` charges the model
-    # call what is *left* after queueing for a concurrency slot, so an
-    # uncontended acquire still costs a few microseconds. Asserting equality
-    # here would pin the double-charge this endpoint was fixed for once already.
+    # At most the budget, not exactly: the call is charged what's left after queueing.
     assert 7.4 < client.last_kwargs.get("timeout") <= 7.5
 
 
 def test_llm_call_is_abandoned_once_it_outlives_the_deadline(monkeypatch, set_flag):
-    """The client-side timeout is per operation, not for the call as a whole.
-
-    A server that keeps resetting it -- dribbling a byte inside every read
-    window -- can hold the request open indefinitely while every individual
-    deadline is honoured. The caller's total wait has to be bounded
-    separately, or the only real guarantee is that no single read stalls.
-    """
+    """The client timeout is per read; a server dribbling bytes needs a total deadline too."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
     monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
     set_flag("strategy_llm_enabled", True)
@@ -2232,8 +1816,7 @@ def test_llm_call_is_abandoned_once_it_outlives_the_deadline(monkeypatch, set_fl
     released = threading.Event()
 
     def _hang(*_a):
-        # Bounded so the pool thread can't outlive the suite, but far longer
-        # than the deadline under test.
+        # Bounded so the thread can't outlive the suite.
         released.wait(timeout=10)
         return ["Model output that arrived far too late to be used"]
 
@@ -2252,14 +1835,7 @@ def test_llm_call_is_abandoned_once_it_outlives_the_deadline(monkeypatch, set_fl
 
 
 def test_abandoned_model_call_is_cancelled_rather_than_left_queued():
-    """max_workers bounds the threads, not the queue behind them.
-
-    With every worker stuck on a stalled server, a submission the caller has
-    given up on still sits in the pool's work queue and runs once a worker
-    frees up. Left uncancelled, a sustained outage accumulates a backlog of
-    prompts nobody is waiting for, then runs every one of them once the server
-    recovers.
-    """
+    """max_workers bounds the threads, not the queue: abandoned prompts would run on recovery."""
     released = threading.Event()
     started = []
 
@@ -2268,8 +1844,7 @@ def test_abandoned_model_call_is_cancelled_rather_than_left_queued():
         released.wait(timeout=10)
         return None
 
-    # A dedicated single-worker pool, so occupying it can't disturb the
-    # module-level one the rest of the suite shares.
+    # A dedicated pool, so occupying it can't disturb the shared one.
     pool = ThreadPoolExecutor(max_workers=1)
     original_pool = main._STRATEGY_LLM_POOL
     original_llm = main._llm_strategies
@@ -2279,8 +1854,8 @@ def test_abandoned_model_call_is_cancelled_rather_than_left_queued():
     main.STRATEGY_LLM_TIMEOUT = 0.05
     try:
         blocker = pool.submit(main._llm_strategies, "occupying")
-        while not started:            # let it actually reach the worker, so
-            time.sleep(0.01)          # the next submission has to queue
+        while not started:            # occupy the worker so the next one queues
+            time.sleep(0.01)
         assert main._llm_strategies_bounded("queued") is None
         released.set()
         blocker.result(timeout=10)
@@ -2296,15 +1871,7 @@ def test_abandoned_model_call_is_cancelled_rather_than_left_queued():
 
 
 def test_a_queued_call_is_charged_the_remaining_budget_not_a_fresh_one():
-    """The wait and the work share one deadline.
-
-    If they were the same duration measured from different moments, a
-    submission that queued behind a busy worker would spend most of the
-    caller's budget waiting, then start with a fresh, full
-    STRATEGY_LLM_TIMEOUT of its own -- so the pool could stay saturated for
-    close to twice the setting, against a deadline nobody was waiting on
-    any more.
-    """
+    """The wait and the work share one deadline, or the pool stays busy for twice the setting."""
     charged = []
     release_blocker = threading.Event()
     blocking = threading.Event()
@@ -2329,8 +1896,7 @@ def test_a_queued_call_is_charged_the_remaining_budget_not_a_fresh_one():
         pool.submit(main._llm_strategies, "occupying")
         assert blocking.wait(timeout=5), "the blocker never reached the worker"
 
-        # Queued behind it for a chunk of the budget, and released with the
-        # rest of it still to run.
+        # Queued for part of the budget, then released.
         main._llm_strategies = _record
         waiter = ThreadPoolExecutor(max_workers=1)
         try:
@@ -2348,15 +1914,12 @@ def test_a_queued_call_is_charged_the_remaining_budget_not_a_fresh_one():
         main.STRATEGY_LLM_TIMEOUT = original_timeout
 
     assert charged, "the queued call never ran"
-    # Strictly less than the full budget: queueing time must come out of it,
-    # not be handed back.
+    # Queueing time comes out of the budget.
     assert 0 < charged[0] < main.STRATEGY_LLM_TIMEOUT
 
 
 def test_a_call_that_starts_after_the_deadline_does_not_open_a_socket():
-    """cancel() catches the items still in the queue; this covers the one a
-    worker had already picked up. Nothing it could return would be used, so
-    the request isn't worth making against the recovered server."""
+    """cancel() catches queued items; this covers one a worker already picked up."""
     called = []
     original_llm = main._llm_strategies
     original_timeout = main.STRATEGY_LLM_TIMEOUT
@@ -2384,18 +1947,9 @@ def test_a_call_that_starts_after_the_deadline_does_not_open_a_socket():
 
 
 def test_waiters_on_the_model_are_capped_and_the_excess_falls_back():
-    """Bounding the workers and the queue does not bound the *waiters*.
+    """Each blocked waiter holds a shared anyio threadpool slot; past the cap, skip the model.
 
-    This endpoint is a sync def, so every caller blocked in future.result()
-    holds one of anyio's threadpool slots -- shared with every other sync
-    endpoint in the app -- for up to STRATEGY_LLM_TIMEOUT. The per-caller rate
-    limit doesn't help here, since it's keyed on user id: distinct parents
-    clicking Generate against a stalled Ollama could take the whole threadpool
-    down with them.
-
-    Past the cap, the model pass is skipped rather than queued -- costing the
-    caller generic advice instead of tuned advice, the same cost a rejected or
-    timed-out reply already has.
+    The per-user rate limit doesn't bound distinct callers.
     """
     admitted = threading.Event()
     release = threading.Event()
@@ -2415,14 +1969,13 @@ def test_waiters_on_the_model_are_capped_and_the_excess_falls_back():
     main._STRATEGY_LLM_POOL = pool
     main._llm_strategies = _blocking
     main.STRATEGY_LLM_TIMEOUT = 5.0
-    # A cap of one, so a single occupant is already enough to close the door.
     main._strategy_llm_waiters = threading.BoundedSemaphore(1)
     waiter = ThreadPoolExecutor(max_workers=1)
     try:
         held = waiter.submit(main._llm_strategies_bounded, "admitted")
         assert admitted.wait(timeout=5), "the first caller never got in"
 
-        # The cap is full. This one must return immediately rather than block.
+        # The cap is full: return at once rather than block.
         started = time.monotonic()
         assert main._llm_strategies_bounded("over-capacity") is None
         elapsed = time.monotonic() - started
@@ -2445,10 +1998,7 @@ def test_waiters_on_the_model_are_capped_and_the_excess_falls_back():
 
 
 def test_the_waiter_cap_is_released_so_it_does_not_leak_a_slot():
-    """A BoundedSemaphore that's acquired and never released degrades to a
-    permanent outage of the model pass -- the silent-disable failure that keeps
-    coming up in this file. Every exit path from the wait must give the slot
-    back, including the timeout and pool-refused paths."""
+    """A leaked slot silently disables the model pass; every exit path must release it."""
     original_sem = main._strategy_llm_waiters
     original_pool = main._STRATEGY_LLM_POOL
     original_timeout = main.STRATEGY_LLM_TIMEOUT
@@ -2457,12 +2007,10 @@ def test_the_waiter_cap_is_released_so_it_does_not_leak_a_slot():
     main._strategy_llm_waiters = threading.BoundedSemaphore(1)
     main.STRATEGY_LLM_TIMEOUT = 0.05
     try:
-        # The pool-refused path, three times over. Without releasing the slot,
-        # the second call would be turned away by the cap rather than the pool.
+        # The pool-refused path, three times over.
         main._STRATEGY_LLM_POOL = dead
         for _ in range(3):
             assert main._llm_strategies_bounded("prompt") is None
-        # The slot is still free afterwards.
         assert main._strategy_llm_waiters.acquire(blocking=False)
         main._strategy_llm_waiters.release()
     finally:
@@ -2472,9 +2020,7 @@ def test_the_waiter_cap_is_released_so_it_does_not_leak_a_slot():
 
 
 def test_the_waiter_cap_has_a_floor_like_the_other_settings(monkeypatch):
-    """Zero would admit nobody, switching the model pass off for good while
-    STRATEGY_LLM_ENABLED still says it's on -- the same silent disable the
-    other strategy settings are floored against."""
+    """Zero would admit nobody, silently disabling the model pass."""
     monkeypatch.setenv("STRATEGY_LLM_MAX_WAITERS", "0")
     assert main._env_number("STRATEGY_LLM_MAX_WAITERS", 4, int, minimum=1) == 1
     monkeypatch.setenv("STRATEGY_LLM_MAX_WAITERS", "-3")
@@ -2482,8 +2028,7 @@ def test_the_waiter_cap_has_a_floor_like_the_other_settings(monkeypatch):
 
 
 def test_pool_refusing_the_work_falls_back_rather_than_raising():
-    """submit() itself raises on a shut-down pool. That must degrade to the
-    rule-based answer like every other model failure, not surface as a 500."""
+    """submit() raises on a shut-down pool; that must degrade, not 500."""
     pool = ThreadPoolExecutor(max_workers=1)
     pool.shutdown(wait=True)
     original_pool = main._STRATEGY_LLM_POOL
@@ -2495,17 +2040,14 @@ def test_pool_refusing_the_work_falls_back_rather_than_raising():
 
 
 def test_the_pool_is_not_built_until_a_model_call_needs_it():
-    """The model pass is opt-in and off by default, so the common deployment --
-    CI, or anything without a local Ollama -- shouldn't carry an executor
-    nothing ever submits to."""
+    """A deployment without the model pass shouldn't carry an idle executor."""
     original_pool = main._STRATEGY_LLM_POOL
     main._STRATEGY_LLM_POOL = None
     try:
         assert main._STRATEGY_LLM_POOL is None
         pool = main._strategy_pool()
         assert pool is main._STRATEGY_LLM_POOL, "the pool must be the shared one"
-        # Built once: a second caller getting its own executor would put its
-        # worker outside both the max_workers ceiling and the shutdown hook.
+        # Built once, or a second executor escapes max_workers and the shutdown hook.
         assert main._strategy_pool() is pool
     finally:
         if main._STRATEGY_LLM_POOL is not None and main._STRATEGY_LLM_POOL is not original_pool:
@@ -2514,16 +2056,12 @@ def test_the_pool_is_not_built_until_a_model_call_needs_it():
 
 
 def test_shutdown_releases_the_pool_rather_than_leaving_it_behind():
-    """The hook must clear the global as well as shut the executor down: a
-    shut-down pool handed to a later caller makes submit() raise, which
-    degrades every strategy request to the rule-based answer for good."""
+    """The hook clears the global too; a shut-down pool handed out would fail forever."""
     original_pool = main._STRATEGY_LLM_POOL
     main._STRATEGY_LLM_POOL = ThreadPoolExecutor(max_workers=1)
     try:
         main._shutdown_strategy_pool()
         assert main._STRATEGY_LLM_POOL is None
-        # A reload in the same process should get a working pool, not the
-        # fallback.
         fresh = main._strategy_pool()
         assert fresh.submit(lambda: 42).result(timeout=5) == 42
         fresh.shutdown(wait=False)
@@ -2532,9 +2070,7 @@ def test_shutdown_releases_the_pool_rather_than_leaving_it_behind():
 
 
 def test_the_app_runs_the_shutdown_on_the_way_out():
-    """The hook is only worth having if it's actually wired to the app's
-    lifespan -- a shutdown handler nobody calls leaves the pool exactly where
-    it was before it was written."""
+    """The hook must actually be wired to the app's lifespan."""
     assert main.app.router.lifespan_context is main._lifespan
 
     original_pool = main._STRATEGY_LLM_POOL
@@ -2553,9 +2089,7 @@ def test_the_app_runs_the_shutdown_on_the_way_out():
 # ── numeric configuration ────────────────────────────────────────────────
 
 def test_bad_numeric_env_falls_back_instead_of_killing_the_process(monkeypatch):
-    """These are read at import, so a typo would raise before the app object
-    exists -- taking down every endpoint over a tuning parameter for one
-    optional feature."""
+    """Read at import, so a typo would take down every endpoint."""
     monkeypatch.setenv("STRATEGY_RATE_LIMIT", "ten")
     assert main._env_number("STRATEGY_RATE_LIMIT", 10, int) == 10
 
@@ -2563,36 +2097,25 @@ def test_bad_numeric_env_falls_back_instead_of_killing_the_process(monkeypatch):
 def test_unset_and_empty_numeric_env_use_the_default(monkeypatch):
     monkeypatch.delenv("STRATEGY_RATE_WINDOW", raising=False)
     assert main._env_number("STRATEGY_RATE_WINDOW", 60.0, float) == 60.0
-    # An exported-but-empty variable is the shape a shell leaves behind, and
-    # float("") raises just as loudly as float("abc") does.
+    # Exported-but-empty: float("") raises like float("abc").
     monkeypatch.setenv("STRATEGY_RATE_WINDOW", "   ")
     assert main._env_number("STRATEGY_RATE_WINDOW", 60.0, float) == 60.0
 
 
 def test_valid_numeric_env_is_still_honoured(monkeypatch):
-    """The fallback must not swallow a correctly configured setting."""
     monkeypatch.setenv("STRATEGY_LLM_TIMEOUT", "2.5")
     assert main._env_number("STRATEGY_LLM_TIMEOUT", 20.0, float) == 2.5
 
 
 @pytest.mark.parametrize("raw", ["0", "-1"])
 def test_out_of_range_numeric_env_is_clamped_not_honoured(raw, monkeypatch):
-    """A number is not automatically a usable setting.
-
-    Each of these parses, so the ValueError fallback never fires -- and each
-    disables its feature: a rate limit of zero makes `len(hits) >= limit` true
-    on the first request and 429s every caller; a window of zero leaves every
-    hit already expired, so nothing is counted and the ceiling silently
-    isn't there; a timeout of zero makes the wait expire before the model can
-    answer, so the pass is off while STRATEGY_LLM_ENABLED still says it's on.
-    """
+    """A number is not automatically a usable setting: these parse, and each disables its feature."""
     monkeypatch.setenv("STRATEGY_RATE_LIMIT", raw)
     assert main._env_number("STRATEGY_RATE_LIMIT", 10, int, minimum=1) == 1
 
 
 def test_clamping_is_to_the_minimum_not_back_to_the_default(monkeypatch):
-    """A deployer who wrote a small number was asking for a small number, so
-    the nearest usable value is a better answer than the shipped default."""
+    """A small number asked for a small number; the nearest usable value honours that."""
     monkeypatch.setenv("STRATEGY_RATE_WINDOW", "0.25")
     assert main._env_number("STRATEGY_RATE_WINDOW", 60.0, float, minimum=1.0) == 1.0
 
@@ -2600,54 +2123,31 @@ def test_clamping_is_to_the_minimum_not_back_to_the_default(monkeypatch):
 def test_in_range_values_are_untouched_by_the_floor(monkeypatch):
     monkeypatch.setenv("STRATEGY_LLM_TIMEOUT", "2.5")
     assert main._env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0) == 2.5
-    # No minimum given: unchanged behaviour for callers that do not want one.
+    # No minimum given: no floor.
     monkeypatch.setenv("STRATEGY_RATE_LIMIT", "0")
     assert main._env_number("STRATEGY_RATE_LIMIT", 10, int) == 0
 
 
 def test_the_shipped_settings_carry_a_floor():
-    """The floors are only worth anything if the real settings ask for them."""
     assert main._STRATEGY_RATE_LIMIT >= 1
     assert main._STRATEGY_RATE_WINDOW >= 1.0
 
 
 @pytest.mark.parametrize("raw", ["inf", "-inf", "nan", "Infinity", "NaN"])
 def test_non_finite_numeric_env_falls_back_to_the_default(raw, monkeypatch):
-    """A third class of unusable value, which neither the parse check nor the
-    floor catches.
-
-    float() accepts all of these, so the ValueError fallback never fires. The
-    floor doesn't catch inf or nan either: inf is above every minimum, and
-    every comparison against nan is False, so `value < minimum` is False for
-    both.
-
-    -inf is the one case the floor would otherwise catch, listed here to pin
-    that it deliberately does not: clamping it to the minimum would treat it
-    as a deployer asking for a small number, but it isn't a magnitude at all,
-    so it belongs on the fallback with its siblings rather than being rounded
-    into a plausible-looking setting.
-    """
+    """float() accepts these and the floor misses inf/nan; -inf falls back too, not clamped."""
     monkeypatch.setenv("STRATEGY_LLM_TIMEOUT", raw)
     assert main._env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0) == 20.0
 
 
 def test_non_finite_rate_window_would_otherwise_turn_a_429_into_a_500():
-    """Why the fallback, not clamping, is the right answer for inf.
-
-    With an infinite window, no recorded hit ever expires, so a caller past
-    the limit stays past it -- and the Retry-After calculation on that path
-    computes int(inf), which raises OverflowError. A value that parses cleanly
-    would make the rate limiter answer 500 instead of 429, permanently.
-    """
+    """An infinite window makes Retry-After compute int(inf): a permanent 500."""
     with pytest.raises(OverflowError):
         int(float("inf") - 1.0)
 
 
 def test_non_finite_timeout_would_otherwise_disable_the_model_pass(monkeypatch):
-    """And why nan is not a timeout either: the wait would expire immediately,
-    turning the model pass off for good while STRATEGY_LLM_ENABLED still says
-    it's on, with every reply coming back "rule-based (model output
-    rejected)"."""
+    """A nan wait expires immediately, silently disabling the model pass."""
     from concurrent.futures import Future
     with pytest.raises(TimeoutError):
         Future().result(timeout=float("nan"))
@@ -2663,9 +2163,7 @@ def test_a_finite_value_below_the_floor_still_clamps(monkeypatch):
 # ── strategy rate limit ──────────────────────────────────────────────────
 
 def _strategies_as(viewer, monkeypatch, set_flag):
-    # These tests are about access/rate-limiting, not the model pass -- pinned
-    # off so they stay fast and deterministic regardless of the flag's
-    # real-world default (see the note on strategy_llm_enabled's default).
+    # Model pass pinned off: these are about access and rate limiting.
     set_flag("strategy_llm_enabled", False)
     monkeypatch.setattr(main, "get_user", lambda _r: viewer)
     return main.student_learning_strategies(
@@ -2673,9 +2171,7 @@ def _strategies_as(viewer, monkeypatch, set_flag):
 
 
 def test_learning_strategies_rate_limits_a_repeating_caller(monkeypatch, set_flag):
-    """This is the heaviest endpoint a click can trigger -- two capped signal
-    reads, a topic breakdown, and optionally a model call -- behind a button
-    that can be pressed as fast as a parent likes."""
+    """The heaviest endpoint a click can trigger."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
     tighten(monkeypatch, main._STRATEGY_LIMITER, limit=3)
 
@@ -2685,13 +2181,10 @@ def test_learning_strategies_rate_limits_a_repeating_caller(monkeypatch, set_fla
     with pytest.raises(main.HTTPException) as exc:
         _strategies_as(PARENT, monkeypatch, set_flag)
     assert exc.value.status_code == 429
-    # Without it the client is told to back off but not for how long.
     assert int(exc.value.headers["Retry-After"]) >= 1
 
 
 def test_learning_strategies_rate_limit_is_per_caller(monkeypatch, set_flag):
-    """Counted per viewer, not globally: one parent exhausting their allowance
-    must not lock out every other parent."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
     tighten(monkeypatch, main._STRATEGY_LIMITER, limit=1)
 
@@ -2704,9 +2197,7 @@ def test_learning_strategies_rate_limit_is_per_caller(monkeypatch, set_flag):
 
 
 def test_learning_strategies_checks_access_before_the_rate_limit(monkeypatch, set_flag):
-    """A caller with no relationship gets 403, not 429. The rate limit
-    protects the work below it; letting it mask the access decision would make
-    an unauthorised caller's result depend on how often they'd asked."""
+    """403, not 429: the access decision must not depend on how often they asked."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
     tighten(monkeypatch, main._STRATEGY_LIMITER, limit=1)
 
@@ -2717,36 +2208,27 @@ def test_learning_strategies_checks_access_before_the_rate_limit(monkeypatch, se
 
 
 def _sweep_is_due(monkeypatch):
-    """Put the last sweep far enough in the past that the interval has elapsed.
+    """Put the last sweep one interval in the past.
 
-    Set explicitly rather than left to the ambient clock. Relying on
-    `sweep_at` being 0.0 plus time.monotonic() already exceeding the interval
-    is true on a machine that's been up for more than a minute, but false on a
-    fresh CI runner where monotonic() is measured from boot and might only have
-    reached ~56s -- a property of the runner, not of anything these tests are
-    actually about.
+    Explicit, since monotonic() counts from boot and a fresh CI runner may be under a minute.
     """
     monkeypatch.setattr(main._STRATEGY_LIMITER, "sweep_at",
                         time.monotonic() - main._STRATEGY_LIMITER._sweep_every)
 
 
 def test_rate_limit_sweep_reclaims_callers_whose_window_has_passed(monkeypatch):
-    """The dict grows with everyone who's ever used the endpoint, so it needs
-    sweeping."""
+    """The dict grows with everyone who's ever used the endpoint."""
     monkeypatch.setattr(main._STRATEGY_LIMITER, "_sweep_above", 2)
     monkeypatch.setattr(main._STRATEGY_LIMITER, "window", 0.0)  # every hit already expired
     _sweep_is_due(monkeypatch)
     for i in range(4):
         main._rate_limit_strategies(f"user-{i}")
-    # The sweep runs on the call that crosses the threshold, so only the
-    # caller being served right now is left behind.
+    # Only the caller being served survives the sweep.
     assert len(main._STRATEGY_LIMITER.hits) == 1
 
 
 def test_rate_limit_sweep_does_not_run_on_every_request(monkeypatch):
-    """Past the size threshold, with that many *active* callers, there's
-    nothing to reclaim -- so a size-only trigger would rescan the whole dict
-    on every request, under the lock, just to find that out each time."""
+    """With many active callers, a size-only trigger would rescan under the lock every request."""
     monkeypatch.setattr(main._STRATEGY_LIMITER, "_sweep_above", 2)
     _sweep_is_due(monkeypatch)
     scans = []
@@ -2770,19 +2252,11 @@ def test_learning_strategies_clamps_the_day_range(monkeypatch, set_flag):
     assert main.student_learning_strategies(
         "student-1", None, main.LearningStrategyRequest(days=0))["basis"]["days"] == 1
 # ── leaderboard ──────────────────────────────────────────────────────────
-#
-# This endpoint reads through the service-role client, so RLS doesn't apply
-# and nothing but the code below bounds what it hands back -- with names on it.
+# Service-role read with names on it; only the code bounds what it returns.
 
 def _leaderboard_tables(n=5):
-    # Scores stay three digits across the range used here: _Query.order sorts
-    # by str(), so mixed-width numbers would rank 99 above 100 and the ordering
-    # assertions below would be testing the fake rather than the endpoint.
-    #
-    # `profiles` is real data, not a monkeypatched `_profile` helper: names are
-    # resolved in one batched read, so patching the single-student helper
-    # wouldn't intercept anything here -- it would look like it pinned the
-    # display name while the endpoint read straight past it.
+    # Scores stay three digits: _Query.order sorts by str().
+    # `profiles` is real data: names come from one batched read, not `_profile`.
     return {
         "user_stats": [
             {"user_id": f"student-{i}", "total_correct": 900 - i, "total_questions": 900,
@@ -2797,10 +2271,8 @@ def _leaderboard_tables(n=5):
 
 
 def test_leaderboard_clamps_an_oversized_limit(monkeypatch):
-    """?limit=999999 must not return every user and their display_name to any
-    signed-in caller -- that would be a full directory of the platform, not a
-    top-N board."""
-    # More rows available than the cap, so a failure to clamp is visible.
+    """An unclamped limit would be a directory of the platform, not a top-N board."""
+    # More rows than the cap, so a failure to clamp is visible.
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(main._LEADERBOARD_MAX + 50)))
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
     assert len(main.leaderboard(None, limit=999999)) == main._LEADERBOARD_MAX
@@ -2814,9 +2286,7 @@ def test_leaderboard_rejects_a_nonsense_limit(monkeypatch):
 
 
 def test_leaderboard_never_returns_user_ids(monkeypatch):
-    """Returning user_id next to display_name would hand every caller a
-    UUID -> name map for the whole board, making the open read on user_stats
-    attributable to named students."""
+    """user_id beside display_name would be a UUID -> name map for every caller."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(3)))
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
     rows = main.leaderboard(None)
@@ -2826,12 +2296,7 @@ def test_leaderboard_never_returns_user_ids(monkeypatch):
 
 
 def test_leaderboard_names_the_board_in_one_read(monkeypatch):
-    """Guards against resolving a display name per row inside a loop.
-
-    Every roster surface had this shape; three were batched first, leaving
-    this one -- the board that's capped at `_LEADERBOARD_MAX` rows precisely
-    because it hands out names -- still doing a round trip per name.
-    """
+    """No display-name lookup per row inside a loop."""
     fake = _FakeSupabase(_leaderboard_tables(30))
     monkeypatch.setattr(main, "supabase", fake)
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
@@ -2840,18 +2305,12 @@ def test_leaderboard_names_the_board_in_one_read(monkeypatch):
 
     assert fake.table_calls.count("profiles") == 1, (
         f"one read for the board, got {fake.table_calls.count('profiles')}")
-    # And the names still land, so the assertion above cannot be satisfied by
-    # not reading profiles at all.
+    # Names still land, so the above can't pass by not reading profiles.
     assert rows[0]["display_name"] == "Name 0"
 
 
 def test_leaderboard_still_names_a_student_with_no_profile_row(monkeypatch):
-    """The batch resolves its fallback per student, not for the whole call.
-
-    A missing row and a failed read are indistinguishable to the caller, and
-    both must come back as the placeholder -- a rank with no name against it
-    reads as bad data rather than as a profile that couldn't be read.
-    """
+    """The placeholder name is resolved per student, not for the whole call."""
     tables = _leaderboard_tables(3)
     tables["profiles"] = [r for r in tables["profiles"] if r["id"] != "student-1"]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(tables))
@@ -2863,8 +2322,7 @@ def test_leaderboard_still_names_a_student_with_no_profile_row(monkeypatch):
 
 
 def test_leaderboard_marks_the_callers_own_row(monkeypatch):
-    """The page needs to know which row is the viewer's -- the only reason it
-    ever needed an id -- so the server answers that directly instead."""
+    """The server marks the viewer's row, so the page needs no ids."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(3)))
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)   # student-1
     rows = main.leaderboard(None)
@@ -2874,10 +2332,7 @@ def test_leaderboard_marks_the_callers_own_row(monkeypatch):
 
 
 # ── the student-scoped question list ─────────────────────────────────────
-#
-# GET /api/questions is deliberately unauthenticated -- the bank identifies
-# nobody and is public-read at the grant layer. Which questions a *named
-# child* was asked is student data, so this endpoint is the gated one.
+# The bank is public; which questions a named child was asked is student data.
 
 def _student_question_rows():
     return {**TABLES, "session_answers": [
@@ -2911,8 +2366,7 @@ def test_student_questions_allows_everyone_with_a_relationship(viewer, monkeypat
 
 
 def test_student_questions_collapses_repeat_attempts(monkeypatch):
-    """One question answered twice is one row carrying both attempts, not two
-    rows -- and the session it links to is the most recent one."""
+    """One row per question, linked to the newest attempt's session."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_student_question_rows()))
     monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
     out = main.student_questions("student-1", None)
@@ -2925,9 +2379,7 @@ def test_student_questions_collapses_repeat_attempts(monkeypatch):
 
 
 def test_student_questions_reports_expired_questions_separately(monkeypatch):
-    """An answer whose question expire_old_questions removed arrives with
-    questions: null. Counting it keeps "answered nothing" apart from "their
-    questions aged out of the bank", which otherwise render identically."""
+    """An expired question arrives as `questions: null`; counting it separates "aged out" from "answered nothing"."""
     rows = {**TABLES, "session_answers": [
         {"question_id": "q-9", "session_id": "session-1", "user_id": "student-1",
          "correct": True, "answered_at": "2026-09-03T10:00:00Z", "questions": None},
@@ -2944,5 +2396,4 @@ def test_student_questions_bounds_the_limit(monkeypatch):
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_student_question_rows()))
     monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
     assert main.student_questions("student-1", None, limit=9999)["truncated"] is False
-    # The cap is applied before the query, so a caller cannot ask for more.
     assert main._STUDENT_QUESTIONS_MAX == 200

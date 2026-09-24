@@ -1,14 +1,4 @@
-"""The question bank's list and count endpoints.
-
-`/api/questions/count` follows the same three-state rule as the reporting
-helpers elsewhere in this codebase: a count that degrades to 0 renders as an
-empty question bank, indistinguishable from a real one, so a failed read must
-be reported as a failure rather than a zero.
-
-`/api/questions` needs an explicit order. Without it, the dashboard's "Recent
-Questions" panel showed an arbitrary five of however many rows Postgres
-returned -- a list that looks chronological but isn't.
-"""
+"""The question bank's list and count endpoints: a failed count is not zero, the list is ordered."""
 import os
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -20,18 +10,10 @@ import main  # noqa: E402
 
 
 class _Questions:
-    """A `questions` table that records how it was queried.
-
-    The count endpoint asks PostgREST for a header rather than rows, so
-    `count` and `data` are kept independent here -- a fake that derived one
-    from the other couldn't tell them apart, which is the whole point of
-    `count="exact"`.
-    """
+    """A `questions` table that records how it was queried; `count` and `data` are independent."""
 
     def __init__(self, rows=(), count=None, raises=None):
-        # `None` is a real answer here and must stay `None`: PostgREST hands
-        # back null `data` often enough that every caller in main.py guards
-        # with `or []`, and normalising it away would defeat that test.
+        # `None` stays `None`: PostgREST returns null `data`, which callers guard with `or []`.
         self.rows = None if rows is None else list(rows)
         self.count = count
         self.raises = raises
@@ -80,13 +62,7 @@ def _questions(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _reset_questions_cache():
-    """`get_questions` now caches by key, and that cache is module-level state
-    shared across every test in this file. Without this, a test asserting on
-    what the fake was asked would instead observe a hit left over from an
-    earlier test with the same (limit, subject, difficulty) -- exactly the
-    kind of stale-answer bug the cache itself must never produce for a real
-    caller either.
-    """
+    """The questions cache is module-level state shared across tests."""
     main._questions_cache._store.clear()
     yield
 
@@ -94,13 +70,7 @@ def _reset_questions_cache():
 # ── /api/questions/count ────────────────────────────────────────────────────
 
 def test_the_count_comes_from_the_header_not_the_rows(_questions):
-    """`count="exact"` is what makes this cheap *and* correct.
-
-    The dashboard used to fetch `?limit=1000` and take the length, which was
-    silently wrong above the cap: a bank that grew past 1000 simply stopped
-    counting. This checks the answer comes from PostgREST's reported count,
-    not the number of rows returned.
-    """
+    """A row count stops counting past the 1000-row cap."""
     c = _questions(rows=[{"id": "q1"}], count=4212)
 
     out = main.count_questions()
@@ -113,9 +83,6 @@ def test_the_count_comes_from_the_header_not_the_rows(_questions):
 
 
 def test_a_failed_count_is_not_an_empty_question_bank(_questions):
-    """`{"total": 0}` and a failed read look the same tile to a teacher -- "no
-    questions" -- but one of them is a claim about the database from a request
-    that never landed."""
     _questions(raises=RuntimeError("postgrest down"))
 
     out = main.count_questions()
@@ -133,12 +100,7 @@ def test_a_genuinely_empty_bank_still_counts_zero(_questions):
 
 
 def test_a_null_count_is_zero_rather_than_null(_questions):
-    """PostgREST omits the count when it wasn't asked for one.
-
-    Distinct from the failure above on purpose: the request succeeded, so
-    `retrieved` stays true and the total falls back to 0 rather than claiming
-    the read didn't happen.
-    """
+    """The request succeeded, so `retrieved` stays true and the total falls back to 0."""
     _questions(rows=[], count=None)
 
     assert main.count_questions() == {"total": 0, "retrieved": True}
@@ -152,7 +114,6 @@ def test_a_null_count_is_zero_rather_than_null(_questions):
     ({}, []),
 ])
 def test_the_count_is_filtered_the_same_way_the_list_is(_questions, kwargs, expected):
-    """A total that ignored the filters would disagree with the list next to it."""
     c = _questions(count=3)
 
     main.count_questions(**kwargs)
@@ -163,14 +124,7 @@ def test_the_count_is_filtered_the_same_way_the_list_is(_questions, kwargs, expe
 # ── /api/questions ──────────────────────────────────────────────────────────
 
 def test_the_list_is_newest_first(_questions):
-    """Without an order this returned whatever Postgres handed back, so the
-    "Recent Questions" panel showed an arbitrary five rows -- a list that
-    looks chronological but isn't.
-
-    Asserted on the query rather than the returned rows: the fake just echoes
-    back whatever it's given, so checking the output would pass even with the
-    ordering removed.
-    """
+    """Asserted on the query: the fake echoes rows, so the output passes unordered."""
     c = _questions(rows=[{"id": "q1"}])
 
     main.get_questions()
@@ -195,16 +149,7 @@ def test_the_list_passes_its_limit_through(_questions):
     (-5, 1),
 ])
 def test_the_list_clamps_the_limit_it_was_handed(_questions, asked, sent):
-    """The leaderboard's rule on the one route with no caller to resolve.
-
-    Asserted on what the *query* was given, not on the rows: the fake echoes
-    back whatever it holds, so an unclamped limit and a clamped one return the
-    same list here (rule 4).
-
-    The floor matters for its own reason -- PostgREST would pass a negative
-    straight through to Postgres, which errors on it, so an unauthenticated
-    caller could turn `?limit=-1` into a 500.
-    """
+    """Asserted on the query (rule 4). Unfloored, `?limit=-1` is a 500."""
     c = _questions(rows=[])
 
     main.get_questions(limit=asked)
@@ -213,8 +158,7 @@ def test_the_list_clamps_the_limit_it_was_handed(_questions, asked, sent):
 
 
 def test_the_cache_is_keyed_on_the_clamped_limit(_questions):
-    """Or the clamp bounds each entry's size and leaves the sweep intact:
-    9999 and 10000 would be two keys holding one identical copy of the bank."""
+    """Otherwise 9999 and 10000 are two keys holding one copy of the bank each."""
     c = _questions(rows=[{"id": "q1"}])
 
     main.get_questions(limit=9999)
@@ -226,9 +170,7 @@ def test_the_cache_is_keyed_on_the_clamped_limit(_questions):
 
 @pytest.mark.parametrize("field", ["subject", "difficulty"])
 def test_an_empty_filter_shares_the_entry_of_no_filter(_questions, field):
-    """`?subject=` filters on nothing, exactly as leaving it out does, so the
-    two must be one entry -- the key has to be built from what decides the
-    query, or the cache holds two copies of one answer."""
+    """The key is built from what decides the query."""
     c = _questions(rows=[{"id": "q1"}])
 
     main.get_questions(limit=100, **{field: ""})
@@ -240,7 +182,7 @@ def test_an_empty_filter_shares_the_entry_of_no_filter(_questions, field):
 
 
 def test_the_list_returns_an_empty_list_rather_than_none(_questions):
-    """`res.data or []` -- the page maps over this result."""
+    """The page maps over this result."""
     _questions(rows=None)
 
     assert main.get_questions() == []
@@ -249,8 +191,7 @@ def test_the_list_returns_an_empty_list_rather_than_none(_questions):
 # ── caching ──────────────────────────────────────────────────────────────
 
 def test_a_repeated_call_within_the_ttl_does_not_requery(_questions):
-    """Analytics.jsx and Questions.jsx both fetch `?limit=1000` on mount --
-    this is what stops the second one from hitting Supabase at all."""
+    """Analytics.jsx and Questions.jsx both fetch `?limit=1000` on mount."""
     c = _questions(rows=[{"id": "q1"}])
 
     first = main.get_questions(limit=1000)
@@ -295,8 +236,6 @@ def test_the_cache_expires_after_its_ttl(_questions, monkeypatch):
 
 
 def test_the_count_endpoint_is_never_cached(_questions):
-    """`/api/questions/count` was added specifically to avoid the cost the
-    list cache targets -- it must keep querying every call."""
     c = _questions(count=3)
 
     main.count_questions()
@@ -307,17 +246,7 @@ def test_the_count_endpoint_is_never_cached(_questions):
 
 
 # ── cache bound ──────────────────────────────────────────────────────────
-#
-# `/api/questions` is unauthenticated and its cache key is taken straight
-# from query params, so without a bound a sweep of distinct
-# (limit, subject, difficulty) combinations plants one permanent entry per
-# combination. These test `_TTLCache` directly rather than through
-# `get_questions`, since exercising the real cap through the endpoint would
-# mean one fake Supabase round trip per entry for no extra coverage.
-#
-# The bound is on the number of entries and says nothing about their size,
-# which is the other half and lives with the clamp above: this cache held 256
-# copies of the whole question bank while every assertion here passed.
+# The key comes from unauthenticated query params, so entries are bounded; size is the clamp's job.
 
 def test_the_cache_evicts_the_least_recently_used_entry_once_full():
     cache = main._TTLCache(ttl=60.0, max_size=2)
@@ -332,8 +261,7 @@ def test_the_cache_evicts_the_least_recently_used_entry_once_full():
 
 
 def test_reading_an_entry_protects_it_from_eviction():
-    """Otherwise this would be a bare FIFO, evicting a key that is still in
-    active use just because it was set first."""
+    """LRU, not FIFO."""
     cache = main._TTLCache(ttl=60.0, max_size=2)
 
     cache.set("a", 1)
@@ -346,9 +274,6 @@ def test_reading_an_entry_protects_it_from_eviction():
 
 
 def test_a_sweep_of_distinct_keys_cannot_grow_the_cache_past_its_bound(_questions):
-    """The end-to-end version: hitting `/api/questions` with many distinct
-    limits (as an unauthenticated caller freely can) must not leave behind
-    one permanent entry per limit."""
     _questions(rows=[{"id": "q1"}])
     max_size = main._questions_cache._max_size
 

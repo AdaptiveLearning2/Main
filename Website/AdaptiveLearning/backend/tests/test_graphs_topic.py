@@ -1,10 +1,4 @@
-"""`graphs` -- reading a bar graph. 1.MD.4, 2.MD.10, 3.MD.3.
-
-The first topic whose figure is *required*. Everywhere else a figure that
-cannot be built costs the picture and nothing else, because the question text
-stands alone. "How many more cats than dogs?" does not: the counts live only in
-the graph.
-"""
+"""`graphs` -- reading a bar graph (1.MD.4, 2.MD.10, 3.MD.3); the only topic whose figure is required."""
 import json
 import os
 import sys
@@ -32,10 +26,7 @@ def test_a_comparison_is_the_difference_between_the_two_named_bars():
 
 
 def test_asking_how_many_more_of_the_smaller_bar_is_refused():
-    """Refused rather than answered with an absolute value. The question on
-    screen asks how many more *dogs* than cats, and there are none -- scoring
-    it as 2 would mark a student right for answering a question nobody asked.
-    """
+    """Refused, not answered with an absolute value: there are no "more dogs than cats"."""
     assert graphs.solve_graph("how_many_more", PETS, ["dogs", "cats"]) is None
 
 
@@ -51,9 +42,7 @@ def test_a_reply_that_determines_no_answer_is_refused(scenario, target, why):
 
 
 def test_the_figure_is_built_from_the_same_list_the_solver_reads():
-    """The design rule, and it binds harder here than anywhere: the numbers
-    exist *only* in the picture, so a figure drawn from a different reading
-    would be unfalsifiable -- there is no text saying what the counts are."""
+    """The counts exist only in the picture, so it must come from the solver's list."""
     figure = question_figures.figure_for("how_many_more", {"categories": PETS})
     assert [bar["value"] for bar in figure["bars"]] == [6, 4, 3]
     assert [bar["label"] for bar in figure["bars"]] == ["cats", "dogs", "fish"]
@@ -88,18 +77,14 @@ def test_a_valid_reply_is_served_with_its_graph(reply):
 
 
 def test_a_question_whose_graph_cannot_be_drawn_is_refused(reply):
-    """The inversion, and the only place it holds. Elsewhere `figure_for`
-    returning None costs the picture; here it costs the question, because
-    without the graph there is nothing on screen to read the counts from.
-    """
+    """Elsewhere a failed figure costs the picture; here it costs the question."""
     reply({**VALID, "categories": [{"name": "cats", "count": "6"}]})
     with pytest.raises(ValueError, match="after retries"):
         graphs.generate_graphs_question([], [], "medium", "1st Grade")
 
 
 def test_a_question_that_writes_the_counts_out_is_refused(reply):
-    """A digit in the text hands the student the reading the question exists
-    to ask for -- it stops being a graph question and becomes arithmetic."""
+    """A digit in the text hands over the reading the question asks for."""
     reply({**VALID, "question_text": "The graph shows 6 cats and 4 dogs. "
                                      "How many more cats than dogs?"})
     with pytest.raises(ValueError, match="after retries"):
@@ -113,9 +98,7 @@ def test_a_reply_answering_a_different_scenario_is_refused(reply):
 
 
 def test_the_names_match_the_blocks_they_send():
-    """The map ties "scenario 2" to the name the reply must carry and the
-    solver dispatches on. A wrong entry sends one block and validates against
-    another, invisible to every other test in this file."""
+    """A wrong map entry sends one block and validates against another."""
     import re
     source = open(graphs.__file__, encoding="utf-8").read()
     from_blocks = {int(n): name for n, name in re.findall(

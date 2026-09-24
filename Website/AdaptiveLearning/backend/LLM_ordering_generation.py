@@ -47,7 +47,7 @@ The JSON must follow this exact structure:
   "question_text": "Order from least to greatest: 3/6, 0.6, 2/3, 0.75",
   "question_topic": "ordering",
   "direction": "least_to_greatest", 
-  "values": ["3/4", "0.6", "2/3", "0.75"]
+  "values": ["3/6", "0.6", "2/3", "0.75"]
 }}
 
 Rules:
@@ -69,6 +69,27 @@ def solve_ordering(values, numbers, direction="least_to_greatest"):
                          reverse=(direction=="greatest_to_least"))
 
     return [v[0] for v in sorted_vals]
+
+# The wordings of each direction a question can use; the text is what the student follows.
+_ASCENDING = re.compile(r"\b(least|smallest|lowest)\s+to\s+(greatest|largest|biggest|highest)\b"
+                        r"|\bascending\b|\bincreasing\b", re.I)
+_DESCENDING = re.compile(r"\b(greatest|largest|biggest|highest)\s+to\s+(least|smallest|lowest)\b"
+                         r"|\bdescending\b|\bdecreasing\b", re.I)
+
+
+def _direction(question_data):
+    """The direction the question text asks for, or None if it names none, both, or not `direction`'s."""
+    text = str(question_data.get("question_text") or "")
+    up, down = bool(_ASCENDING.search(text)), bool(_DESCENDING.search(text))
+    if up == down:
+        return None
+    shown = "least_to_greatest" if up else "greatest_to_least"
+    said = str(question_data.get("direction") or "").replace("_", " ")
+    said_up, said_down = bool(_ASCENDING.search(said)), bool(_DESCENDING.search(said))
+    if (said_up or said_down) and said_up != up:
+        return None
+    return shown
+
 
 def shuffle_incorrect_answers(solution):
     """Up to three wrong orderings, enumerated rather than sampled so it always terminates."""
@@ -172,6 +193,12 @@ def generate_ordering_question(global_questions, prev_questions,difficulty, grad
                   repr(question_data.get("values"))[:60])
             continue
 
+        direction = _direction(question_data)
+        if direction is None:
+            print(f"[Attempt {attempt+1}] No single direction in the text, or it contradicts",
+                  repr(question_data.get("direction"))[:40])
+            continue
+
         # Parsed in the bounded worker, so an unbounded value is a retry, not a hang.
         numbers = safe_solve.safe_sympify_values(question_data["values"])
         if numbers is None:
@@ -179,13 +206,17 @@ def generate_ordering_question(global_questions, prev_questions,difficulty, grad
                   repr(question_data["values"])[:80])
             continue
 
+        # Equal values ("1/2", "0.5") have more than one right order, so one would be marked wrong.
+        if len(set(numbers)) != len(numbers):
+            print(f"[Attempt {attempt+1}] Equal values:", repr(question_data["values"])[:80])
+            continue
+
         break
 
     else:
         raise ValueError("Failed to generate valid JSON after retries")
 
-    solution = solve_ordering(question_data["values"], numbers,
-                              question_data["direction"])
+    solution = solve_ordering(question_data["values"], numbers, direction)
 
     incorrect_answers = shuffle_incorrect_answers(solution)
     answers = incorrect_answers + [solution]

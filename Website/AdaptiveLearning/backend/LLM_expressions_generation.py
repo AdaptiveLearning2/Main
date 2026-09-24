@@ -274,6 +274,13 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
                   equation_stra[:80])
             continue
 
+        # Safe to re-parse: `solved` came from the bounded worker and is length-capped.
+        solution = sp.sympify(solved)
+        # Only simplify answers in x; a variable left in an evaluation had no distractors.
+        if question_data["scenario"] != "simplify" and not is_numeric(solution):
+            print(f"[Attempt {attempt+1}] Evaluation left a variable:", str(solution)[:80])
+            continue
+
         break
 
     else:
@@ -281,17 +288,11 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
 
     scenario = question_data["scenario"]
 
-    # Safe to re-parse: `solved` came from the bounded worker and is length-capped.
-    solution = sp.sympify(solved)
-
     if scenario == "simplify":
         incorrect_answers = inc_gen.generate_symbolic_incorrect_answers(solution)
     else:
-        if is_numeric(solution):
-            incorrect_answers = inc_gen.generate_general_incorrect_answers(float(solution))
-        else:
-            incorrect_answers = []
-    
+        incorrect_answers = inc_gen.generate_general_incorrect_answers(float(solution))
+
     
     correct = answer_text(solution)
     answers = [str(ans) for ans in incorrect_answers] + [correct]

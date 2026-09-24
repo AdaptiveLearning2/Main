@@ -51,6 +51,8 @@ const SETTLE_GRACE_MS = 10_000
 
 // Retry delay for offering the session to a sidecar not yet started.
 const PUSH_RETRY_MS = 5000
+// Waits before re-reading a profile that failed to load; after the last the grade stays unknown.
+const PROFILE_RETRY_MS = [1000, 4000, 15000]
 
 // Labeled by the sensor a student recognizes, not by table name.
 const CHANNEL_LABELS = [
@@ -87,6 +89,7 @@ export default function Adaptive() {
   const [savedGrade, setSavedGrade] = useState('')
   // null while reading, false if the read failed: then "no saved grade" is unknown, not a fact.
   const [profileRead, setProfileRead] = useState(null)
+  const [profileAttempt, setProfileAttempt] = useState(0)
   const [classes, setClasses] = useState([])
   const [classId, setClassId] = useState('')
   const [bias, setBias] = useState(0) // -1 easier, 0 auto, +1 harder
@@ -306,15 +309,30 @@ export default function Adaptive() {
   // Counts only recorded answers, so it never fires mid-question. Asked, not enforced.
   const goalReached = !!questionGoal && !goalDismissed && sessionCount >= questionGoal
 
-  // load profile default grade + classes
+  // load profile default grade; a failed read is retried, or the grade stays "unknown" all visit
   useEffect(() => {
+    let cancelled = false
+    let retry = null
     apiFetch('/api/profile/me').then(p => {
-      if (p?.grade_level) { setGrade(p.grade_level); setSavedGrade(p.grade_level) }
+      if (cancelled) return
+      // A retry landing late must not undo a grade the student has picked since.
+      if (p?.grade_level) { setGrade(g => g || p.grade_level); setSavedGrade(p.grade_level) }
       // `!= null`: 0 (Auto) is a valid bias.
       if (p?.difficulty_bias != null) setBias(p.difficulty_bias)
       if (p?.session_duration_minutes != null) setDurationMin(p.session_duration_minutes)
       setProfileRead(true)
-    }).catch(() => setProfileRead(false))
+    }).catch(() => {
+      if (cancelled) return
+      setProfileRead(false)
+      if (profileAttempt < PROFILE_RETRY_MS.length) {
+        retry = setTimeout(() => setProfileAttempt(a => a + 1), PROFILE_RETRY_MS[profileAttempt])
+      }
+    })
+    return () => { cancelled = true; clearTimeout(retry) }
+  }, [profileAttempt])
+
+  // load classes
+  useEffect(() => {
     apiFetch('/api/classes').then(c => {
       setClasses(c || [])
       if ((c || []).length && !classId) setClassId(c[0].id)
@@ -1382,7 +1400,9 @@ export default function Adaptive() {
                       <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 text-center">Grade Level</label>
                       <select value={grade} onChange={e => setGrade(e.target.value)}
                         className="w-full text-center px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-200 text-sm">
-                        {grade === '' && <option value="">{profileRead === false ? 'Grade unknown' : 'Grade not set'}</option>}
+                        {grade === '' && <option value="">
+                          {profileRead === false ? 'Grade unknown' : profileRead ? 'Grade not set' : 'Loading grade…'}
+                        </option>}
                         {GRADES.map(d => <option key={d} value={d}>{d}</option>)}
                       </select>
                     </>
@@ -1402,7 +1422,8 @@ export default function Adaptive() {
                       {activeClass && !activeClass.grade_level && (
                         <p className="text-xs text-amber-600 mt-2 text-center">
                           ⚠️ Teacher hasn't set this class's grade yet — {savedGrade ? `using your grade, ${savedGrade}.`
-                            : profileRead === false ? 'using your grade, which could not be loaded.' : 'and your grade isn\'t set either.'}
+                            : profileRead === false ? 'using your grade, which could not be loaded.'
+                              : profileRead ? 'and your grade isn\'t set either.' : 'checking your grade…'}
                         </p>
                       )}
                     </>
@@ -1429,7 +1450,8 @@ export default function Adaptive() {
                   <p className="text-[11px] text-gray-600 mt-2 text-center dark:text-gray-400">
                     Generating <strong>{biasLabel}</strong> questions
                     {effectiveGrade ? <> for <strong>{effectiveGrade}</strong></>
-                      : effectiveGrade === undefined ? ' (grade unknown)' : ' (grade not set)'}
+                      : effectiveGrade === '' ? ' (grade not set)'
+                        : profileRead === false ? ' (grade unknown)' : ''}
                   </p>
                 </div>
 

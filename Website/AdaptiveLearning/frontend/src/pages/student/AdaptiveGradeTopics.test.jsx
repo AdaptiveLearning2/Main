@@ -118,12 +118,39 @@ it('says the grade is unknown, and lists no grade\'s topics, when the profile co
   expect(apiFetch.mock.calls.some(([p]) => p.startsWith('/api/topics'))).toBe(false)
 })
 
+it('calls the grade neither unknown nor unset while the profile is still loading', async () => {
+  overrideApi('/api/profile/me', () => new Promise(() => {}), 'GET')
+  render(<Adaptive />)
+
+  await screen.findByDisplayValue('Loading grade…')
+  const line = screen.getByText(/questions/, { selector: 'p' })
+  expect(line).not.toHaveTextContent(/grade unknown|grade not set/)
+})
+
+it('reads a failed profile again, and then names the grade it found', async () => {
+  let calls = 0
+  overrideApi('/api/profile/me', () => {
+    calls += 1
+    if (calls === 1) throw apiError(500, 'down')
+    return { id: 'u1', role: 'student', grade_level: 'Kindergarten' }
+  }, 'GET')
+  render(<Adaptive />)
+
+  expect(await screen.findByText(/questions \(grade unknown\)/)).toBeInTheDocument()
+  // The first retry waits a second.
+  expect(await screen.findByText('Kindergarten', { selector: 'strong' })).toBeInTheDocument()
+  expect(calls).toBe(2)
+  expect(screen.queryByText(/grade unknown/)).not.toBeInTheDocument()
+})
+
 it('says so when a class has no grade and the student\'s could not be read', async () => {
   overrideApi('/api/profile/me', () => { throw apiError(500, 'down') }, 'GET')
   overrideApi('/api/classes', () => [{ id: 'c1', name: 'Maths', grade_level: null }], 'GET')
   render(<Adaptive />)
 
   await settled('/api/profile/me')
+  // The Class button is disabled until the class list lands; a click before then does nothing.
+  await settled('/api/classes')
   await userEvent.click(await screen.findByRole('button', { name: /class/i }))
   expect(await screen.findByText(/using your grade, which could not be loaded/)).toBeInTheDocument()
   expect(screen.getByText(/questions/, { selector: 'p' })).toHaveTextContent(/\(grade unknown\)/)
@@ -139,6 +166,8 @@ it("serves a class with no grade the student's saved grade, not the solo pick", 
   await settled('/api/profile/me')
   // A solo pick is not saved; the backend falls back to the profile's grade.
   await userEvent.selectOptions(screen.getByDisplayValue('4th Grade'), '2nd Grade')
+  // The Class button is disabled until the class list lands; a click before then does nothing.
+  await settled('/api/classes')
   await userEvent.click(await screen.findByRole('button', { name: /class/i }))
 
   expect(await screen.findByText(/using your grade, 4th Grade/)).toBeInTheDocument()

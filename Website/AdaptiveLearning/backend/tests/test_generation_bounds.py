@@ -216,6 +216,25 @@ def test_a_failed_refill_does_not_discard_the_question_already_built(monkeypatch
     assert out["question_text"] == "2+2"
 
 
+def test_a_question_prepared_for_another_grade_is_never_served(monkeypatch):
+    """A prewarm at the default (a failed read at session start) must not reach a 7th grader."""
+    from test_access_control import _FakeSupabase
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        {"profiles": [{"id": "kid", "grade_level": "7th Grade", "display_name": "Kid"}]}))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
+    monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
+                        lambda _uid, grade, *_a, **_k: {"question_text": f"made for {grade}"})
+    main._prefetch_active["kid"] = 2
+    main._prefetch_worker("kid", "1st Grade", 0, None)
+    main._prefetch_worker("kid", "7th Grade", 0, None)
+
+    ask = lambda: main.generate_question(request=None, grade=None, class_id=None,  # noqa: E731
+                                         bias=0, session_id=None)["question_text"]
+    assert ask() == "made for 7th Grade"      # the queued one for this grade
+    assert main._prefetch_cache["kid"] == []  # the 1st-grade one was dropped, not kept for later
+    assert ask() == "made for 7th Grade"      # generated inline, at the grade served
+
+
 def test_a_rate_limited_prefetch_skips_generating_rather_than_raising(monkeypatch):
     tighten(monkeypatch, main._GENERATION_LIMITER, limit=1)
     main._claim_generation_slot("kid")

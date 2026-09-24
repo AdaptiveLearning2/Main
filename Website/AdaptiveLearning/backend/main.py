@@ -2018,7 +2018,9 @@ def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None
         question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(
             user_id, grade, session_id, bias
         )
-        if question:
+        if isinstance(question, dict):
+            # Stamped with the grade it was made for: serving checks it (`generate_question`).
+            question["effective_grade"] = grade
             with _prefetch_lock:
                 _prefetch_cache.setdefault(user_id, []).append(question)
     except Exception as e:
@@ -2326,7 +2328,9 @@ def generate_question(
 
     # Serve from the prefetch queue if available, else generate now.
     with _prefetch_lock:
-        queue    = _prefetch_cache.get(user_id, [])
+        queue = _prefetch_cache.get(user_id, [])
+        # One made for another grade (a failed read at session start, a changed pick) is dropped.
+        queue[:] = [q for q in queue if q.get("effective_grade") == effective_grade]
         question = queue.pop(0) if queue else None
 
     if not question:

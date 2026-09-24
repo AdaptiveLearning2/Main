@@ -27,6 +27,15 @@ _ENTRY_POINTS = ("safe_sympify_values", "safe_solve", "safe_solve_geometry",
 
 _VALUES = ["4", "8", "6", "2", "10"]
 
+
+def pin_scenario(monkeypatch, module, payload):
+    """Pins the random scenario pick to the one `payload` answers; a reply must match the ask."""
+    names = getattr(module, "_SCENARIO_NAMES", None)
+    if names and "scenario" in payload:
+        number, = [n for n, name in names.items() if name == payload["scenario"]]
+        monkeypatch.setattr(module, "_pick_scenario", lambda *a, **k: number)
+
+
 CASES = [
     ("mean", mean_gen, "generate_mean_question",
      {"question_text": "The values were: 4, 8, 6, 2, 10. What is the mean?",
@@ -86,9 +95,7 @@ def test_a_successful_attempt_makes_exactly_one_worker_call(
                             counter(entry_name, getattr(safe_solve, entry_name)))
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
-    # The stub answers `evaluate`; pin the otherwise-random scenario pick.
-    if name == "expressions":
-        monkeypatch.setattr(module, "_pick_scenario", lambda band: 1)
+    pin_scenario(monkeypatch, module, payload)
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
                         lambda prompt, topic, band: prompt)
     if hasattr(module, "grade_appropriateness"):

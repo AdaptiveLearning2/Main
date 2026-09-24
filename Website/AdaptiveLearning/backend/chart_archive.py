@@ -17,10 +17,7 @@ import chart_render
 
 BUCKET = "session-charts"
 
-# What the read is capped at, for `/api/signals/session/{id}` and the archive
-# alike -- both read through `read_session_signals`. Shared on purpose: the
-# archive is meant to be what the reviewer saw, so the two have to truncate a
-# very long session at the same place.
+# Rows per table, shared by session review and the archive so both truncate at the same place.
 _ROW_CAP = 20000
 
 
@@ -103,23 +100,16 @@ def object_path(user_id: str, session_id: str, chart: str) -> str:
     return f"{user_id}/{session_id}/{chart}.svg"
 
 
-# PostgREST cuts every response at `db-max-rows` (1000, `supabase/config.toml`),
-# service role included, and says nothing when it does. A `.limit(20000)` was
-# therefore a limit of 1000: at the default 1 Hz poll, a 45-minute lesson was
-# archived -- and shown in session review -- as its first ~17 minutes.
+# PostgREST silently cuts every response at `db-max-rows` (1000), service role included.
 _PAGE = 1000
 
 
 def read_session_signals(client, session_id: str, since: str | None = None):
-    """A session's cognitive, face and heart rows, in `ts` order, up to
-    `_ROW_CAP` each, read a page at a time.
+    """A session's cognitive, face and heart rows, paged, up to `_ROW_CAP` each.
 
-    The one reader for both session review and the archive, so the two stop at
-    the same row by construction rather than by keeping two literals equal.
-    Ordered on `id` as well as `ts`, because a page boundary inside a run of
-    equal timestamps is only stable under a total order. A page stops the loop
-    only when it comes back empty: a short page cannot be told apart from a
-    server cap lower than `_PAGE`.
+    The one reader for session review and the archive, so both stop at the same row.
+    Ordered on `id` too: pages are only stable under a total order. Only an empty
+    page ends the loop, since a short one may be a server cap below `_PAGE`.
     """
     def rows(table):
         out: list = []
@@ -139,9 +129,7 @@ def read_session_signals(client, session_id: str, since: str | None = None):
 
 
 def _fetch(client, session_id: str):
-    """Service-role, so RLS doesn't apply: this runs with no request behind it,
-    already authorised by the fact that the session belongs to the student
-    whose close triggered it."""
+    """Service-role, no RLS: authorised by the student's own session close."""
     return read_session_signals(client, session_id)
 
 

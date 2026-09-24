@@ -5523,26 +5523,12 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
         supabase.table("sessions").select("user_id").eq("id", session_id), "Session")
     _verify_can_view_student(user, sess["user_id"])
 
-    # Paged, through the reader the archive uses: a single read stopped at
-    # PostgREST's 1000-row cap, so a long lesson was reviewed as its first
-    # ~17 minutes. `source` rides along on every heart row: accuracy differs by
-    # sensor and a session can fail over mid-way, so a reader comparing two
-    # halves of one trace needs to see the sensor changed, not infer a
-    # physiological event.
+    # Paged, through the archive's reader. Heart rows carry `source`: a mid-session
+    # sensor failover must read as a sensor change, not a physiological event.
     cog_data, fac_data, hrt_data = chart_archive.read_session_signals(
         supabase, session_id, since)
-    # The question rides along on the answer, embedded rather than fetched per
-    # row. A bare `session_answers` row carries a question *id* and a
-    # `selected_index`, which is unreadable on a review screen: a teacher was
-    # shown a truncated uuid and the number 2, with no way to know what was
-    # asked or what 2 meant. Named columns, not `questions(*)` -- `id` and
-    # `created_at` add nothing here, and a column added to the bank later
-    # should not start reaching the browser on its own.
-    #
-    # Embedded, so this stays one query however many answers a session has.
-    # It is left-joined by PostgREST, so an answer whose question row was
-    # deleted still appears, with `questions: null` -- the answer happened and
-    # dropping it would change the session's history.
+    # The question is embedded (one query) with named columns. Left-joined, so an
+    # answer whose question was deleted still appears with `questions: null`.
     answers = (supabase.table("session_answers")
                .select("*, questions(question_text, options, correct_answer, "
                        "subject, difficulty, figure, ccss_standard)")

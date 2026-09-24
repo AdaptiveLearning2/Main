@@ -18,10 +18,7 @@ SESSION = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 # ── a fake client: three signal tables, one sessions row, one bucket ─────────
 
 class _Query:
-    """Honours `range` and PostgREST's `db-max-rows`: every response is cut at
-    `max_rows` whatever was asked for, which is what made a `.limit(20000)`
-    read return 1000 rows. A fake that returned everything could not fail
-    against that."""
+    """Honours `range` and cuts every response at `max_rows`, like PostgREST's `db-max-rows`."""
 
     def __init__(self, rows, max_rows=1000):
         self._rows = rows
@@ -264,9 +261,7 @@ def _long_session(n):
 
 
 def test_the_archive_reads_past_the_servers_row_cap():
-    """PostgREST cuts every response at 1000 rows, service role included, and
-    says nothing. At 1 Hz a 45-minute lesson is 2700 rows, and a single
-    `.limit(20000)` read archived its first ~17 minutes as the whole lesson."""
+    """A 45-minute lesson at 1 Hz is 2700 rows, past PostgREST's silent 1000-row cut."""
     rows = _long_session(2700)
     cognitive, _, _ = chart_archive._fetch(_Client(cognitive=rows), SESSION)
     assert [r["id"] for r in cognitive] == list(range(2700))
@@ -279,10 +274,7 @@ def test_the_row_cap_still_binds():
 
 
 def test_session_review_reads_the_same_rows_the_archive_draws(monkeypatch):
-    """The archive is meant to be what the reviewer saw, so the two must stop
-    at the same row. Asserted on what each returns from one table, not on the
-    source: a shared literal said nothing about what either read, and both were
-    cut at 1000 while agreeing on 20000."""
+    """The archive must be what the reviewer saw; asserted on returned rows, not source."""
     import main
 
     rows = _long_session(2700)

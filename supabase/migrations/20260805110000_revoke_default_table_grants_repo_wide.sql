@@ -1,28 +1,8 @@
--- Take back the default table grants on every remaining public table. Supabase
--- grants every table privilege to anon and authenticated by name on every new
--- table, regardless of what its own migration granted. heart_signals and
--- signal_consent were already fixed; this covers the rest.
---
--- RLS already filters INSERT/UPDATE/DELETE, so the wide grant buys nothing
--- there -- but RLS doesn't filter TRUNCATE, and as anon it succeeded on every
--- table here. PostgREST doesn't expose TRUNCATE, so the frontend's anon key
--- can't reach it, but a direct Postgres connection could.
---
--- This does not take DML away from authenticated. Most tables carry a FOR ALL
--- "own" policy, and the frontend relies on one: Adaptive.jsx upserts
--- user_math_performance directly through PostgREST. Revoking INSERT/UPDATE
--- would break that and wouldn't close anything, since RLS already constrains
--- it to the caller's own rows. Only TRUNCATE, which RLS can't constrain, is
--- actually removed.
---
--- REVOKE ALL then re-grant the four DML privileges, rather than revoking just
--- TRUNCATE, so REFERENCES and TRIGGER go too -- neither belongs to a client
--- role either.
+-- Take back the default table grants on every remaining public table. RLS
+-- never filters TRUNCATE. REVOKE ALL then re-grant DML, so TRUNCATE,
+-- REFERENCES and TRIGGER go.
 
--- anon holds nothing anywhere, except the two public-read tables below. Every
--- other policy here is auth.uid()-scoped, which is null for anon, so those
--- grants were returning nothing while reading as an anonymous path into
--- student data.
+-- anon holds nothing, except the two public-read tables below.
 REVOKE ALL ON TABLE "public"."class_memberships" FROM "anon";
 REVOKE ALL ON TABLE "public"."classes" FROM "anon";
 REVOKE ALL ON TABLE "public"."cognitive_signals" FROM "anon";
@@ -36,13 +16,11 @@ REVOKE ALL ON TABLE "public"."sessions" FROM "anon";
 REVOKE ALL ON TABLE "public"."user_math_performance" FROM "anon";
 REVOKE ALL ON TABLE "public"."user_stats" FROM "anon";
 
--- The two exceptions carry a public-read policy meant to work without a
--- session, so revoking anon here would change behavior, not tighten it.
+-- Both carry a USING (true) public-read policy.
 GRANT SELECT ON TABLE "public"."math_topics" TO "anon";
 GRANT SELECT ON TABLE "public"."questions" TO "anon";
 
--- authenticated keeps the DML that RLS filters; loses TRUNCATE, REFERENCES
--- and TRIGGER, which it never needed.
+-- authenticated keeps the DML that RLS filters.
 REVOKE ALL ON TABLE "public"."class_memberships" FROM "authenticated";
 REVOKE ALL ON TABLE "public"."classes" FROM "authenticated";
 REVOKE ALL ON TABLE "public"."cognitive_signals" FROM "authenticated";
@@ -69,12 +47,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "public"."sessions" TO "authentica
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "public"."user_math_performance" TO "authenticated";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "public"."user_stats" TO "authenticated";
 
--- math_topics and questions are reference data with public-read policies and
--- no write policy for anyone, so authenticated gets SELECT only.
-
--- anon has no reason to advance a sequence on a table it can't write to.
--- authenticated is left alone -- it needs USAGE to insert into the tables
--- above that have serial keys, and revoking it would break inserts.
+-- authenticated keeps sequence USAGE for inserts into serial-keyed tables.
 REVOKE ALL ON SEQUENCE "public"."cognitive_signals_id_seq" FROM "anon";
 REVOKE ALL ON SEQUENCE "public"."face_signals_id_seq" FROM "anon";
 REVOKE ALL ON SEQUENCE "public"."math_topics_id_seq" FROM "anon";

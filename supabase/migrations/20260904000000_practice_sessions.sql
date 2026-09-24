@@ -1,24 +1,6 @@
--- A self-study mode: a student picks topic(s), difficulty and grade and gets
--- AI-generated questions with no EEG/camera/biometric involvement at all.
---
--- Deliberately two new tables rather than a `session_type` flag on
--- `sessions`. `sessions` feeds `_close_session` (rollup, lifetime credit,
--- `chart_archive`, `session_alerts`), the stale sweep, `class_live`, and
--- streak crediting -- all built around a session that has real signal-bearing
--- data. Reusing it here would mean adding a conditional branch through every
--- one of those (chart rendering for signals that don't exist, a
--- `signals_missing` alert on a session that was never meant to have signals).
--- A separate, minimal table pair needs none of that, and is trivially
--- auditable as "not a session close site" -- see the note on
--- `end_practice_session` in main.py for why its source must not trip
--- `conftest.close_sites()`'s string scan.
---
--- Practice answers never feed `user_math_performance` / `record_topic_attempt`
--- either: that table drives the live adaptive engine's own topic/difficulty
--- selection, and an untimed, explicitly-picked practice answer biasing it
--- would be exactly the "mixed into live tracking" outcome this feature is
--- meant to avoid. Practice results live only here, summarised into
--- `topic_summary` at close.
+-- Self-study practice with no signal recording. Separate from `sessions`, whose
+-- close sequence assumes signal data. Practice answers never feed
+-- user_math_performance, which drives the adaptive engine.
 CREATE TABLE IF NOT EXISTS "public"."practice_sessions" (
     "id" "uuid" DEFAULT "extensions"."uuid_generate_v4"() NOT NULL,
     "user_id" "uuid" NOT NULL,
@@ -28,14 +10,11 @@ CREATE TABLE IF NOT EXISTS "public"."practice_sessions" (
     "grade_level" "text",
     "started_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "ended_at" timestamp with time zone,
-    -- test mode: graded answers; flashcard mode: cards viewed (see
-    -- practice_session_answers.correct below).
+    -- test: graded answers; flashcard: cards viewed.
     "questions_answered" integer DEFAULT 0 NOT NULL,
-    -- Stays 0 for flashcard sessions -- there is nothing to grade.
+    -- Stays 0 for flashcard sessions.
     "correct_answers" integer DEFAULT 0 NOT NULL,
-    -- {topic: {attempted, correct}}, correct null for a flashcard-only topic.
-    -- Computed once at close from practice_session_answers, so a page never
-    -- has to walk every answer row to show a summary.
+    -- {topic: {attempted, correct}}, correct null for flashcard-only; set at close.
     "topic_summary" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
     CONSTRAINT "practice_sessions_mode_check"
         CHECK ("mode" = ANY (ARRAY['flashcard'::"text", 'test'::"text"])),
@@ -49,8 +28,6 @@ ALTER TABLE "public"."practice_sessions" OWNER TO "postgres";
 ALTER TABLE ONLY "public"."practice_sessions"
     ADD CONSTRAINT "practice_sessions_pkey" PRIMARY KEY ("id");
 
--- The read path is "this student's own sessions, most recent first" (practice
--- history), matching session_alerts' user-scoped index above it.
 CREATE INDEX IF NOT EXISTS "practice_sessions_user_started_idx"
     ON "public"."practice_sessions" USING "btree" ("user_id", "started_at" DESC);
 
@@ -59,16 +36,10 @@ CREATE TABLE IF NOT EXISTS "public"."practice_session_answers" (
     "practice_session_id" "uuid" NOT NULL,
     "user_id" "uuid" NOT NULL,
     "question_id" "uuid",
-    -- Resolved server-side from questions.subject, never trusted from the
-    -- client -- same principle as _record_topic_attempt on the live path.
-    -- Nullable: a question_id the lookup can't resolve (deleted row, bad id)
-    -- still records the attempt/view, just outside topic_summary's per-topic
-    -- breakdown, rather than being rejected or coerced into a fake topic.
+    -- From questions.subject server-side, never the client; null if unresolvable.
     "topic" "text",
     "selected_index" integer,
-    -- NULL means flashcard "viewed" (ungraded); true/false means test-mode
-    -- graded. Never a bool default -- an ungraded view must not read as a
-    -- wrong answer in topic_summary.
+    -- NULL = flashcard viewed (ungraded); no default, or a view reads as wrong.
     "correct" boolean,
     "answered_at" timestamp with time zone DEFAULT "now"() NOT NULL
 );
@@ -78,8 +49,6 @@ ALTER TABLE "public"."practice_session_answers" OWNER TO "postgres";
 ALTER TABLE ONLY "public"."practice_session_answers"
     ADD CONSTRAINT "practice_session_answers_pkey" PRIMARY KEY ("id");
 
--- Cascade: an answer with no session to summarise it into is an orphan
--- nothing reads, same reasoning as session_alerts' FK.
 ALTER TABLE ONLY "public"."practice_session_answers"
     ADD CONSTRAINT "practice_session_answers_session_fkey"
     FOREIGN KEY ("practice_session_id") REFERENCES "public"."practice_sessions"("id") ON DELETE CASCADE;
@@ -87,12 +56,7 @@ ALTER TABLE ONLY "public"."practice_session_answers"
 CREATE INDEX IF NOT EXISTS "practice_session_answers_session_idx"
     ON "public"."practice_session_answers" USING "btree" ("practice_session_id");
 
--- Grants: revoke before granting, since Supabase's ALTER DEFAULT PRIVILEGES
--- hands anon and authenticated every privilege by name before this runs.
--- Nothing is granted to a client role -- a student reaches this only through
--- the backend, which resolves ownership first; there is no PostgREST path to
--- either table. RLS is on with no policies as the second lock, same as
--- session_alerts.
+-- No client grants: reached only through the backend. RLS with no policies.
 REVOKE ALL ON TABLE "public"."practice_sessions" FROM "anon";
 REVOKE ALL ON TABLE "public"."practice_sessions" FROM "authenticated";
 GRANT ALL ON TABLE "public"."practice_sessions" TO "service_role";
@@ -103,9 +67,7 @@ REVOKE ALL ON TABLE "public"."practice_session_answers" FROM "authenticated";
 GRANT ALL ON TABLE "public"."practice_session_answers" TO "service_role";
 ALTER TABLE "public"."practice_session_answers" ENABLE ROW LEVEL SECURITY;
 
--- Mirrors bump_session_counters: an atomic increment rather than a
--- read-modify-write from Python, so two answers landing together cannot both
--- read the same count and drop one on write-back.
+-- Atomic increment, as in bump_session_counters.
 CREATE OR REPLACE FUNCTION "public"."bump_practice_session_counters"(
   "p_session_id" "uuid",
   "p_graded" boolean,

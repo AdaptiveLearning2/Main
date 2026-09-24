@@ -1,37 +1,8 @@
--- One atomic statement for a per-topic attempt, instead of four round trips
--- with a lost-update race in the middle.
---
--- The previous version ran on every answer -- the hottest path in the
--- product -- as four sequential calls, the last two a read-modify-write with
--- no lock: two answers landing together could both read the same counts and
--- the second upsert would overwrite the first, silently losing an attempt
--- from the table the adaptive engine reads to choose what to serve next.
---
--- `ON CONFLICT DO UPDATE SET attempted_questions = <table>.attempted_questions
--- + 1` increments the stored value rather than one the client read a moment
--- ago, which removes the race rather than narrowing it.
---
--- The topic is still derived from the question row, never from the caller --
--- the client is trusted about correctness, but letting it also name the topic
--- would let a page credit one subject for work done in another.
---
--- Returns the topic name, or null when there's nothing to attribute the
--- answer to (an unknown question, or a subject with no `math_topics` row).
--- Null is distinguishable from an error, which raises.
---
--- The name rather than the id: the caller hands it straight to the page,
--- which keys its Topic Accuracy panel by name. Nothing holds an id-to-name
--- map, so returning the id would mean a second query to resolve it.
---
--- SECURITY INVOKER (the default): the backend calls it with the service-role
--- client, and as invoker the row-level policies still apply if a
--- lower-privileged role is ever granted EXECUTE.
---
--- Apply this before deploying the code that calls it. The caller swallows
--- exceptions here, since a failed topic lookup must not cost a student the
--- answer that's already recorded -- so against a database without this
--- function the call fails as PostgREST's PGRST202 and attribution quietly
--- stops.
+-- One atomic per-topic attempt: ON CONFLICT increments the stored value, so
+-- concurrent answers cannot lose an update. The topic comes from the question
+-- row, never the caller. Returns the topic name, or null if unattributable.
+-- Apply before deploying the caller: it swallows PGRST202, so attribution
+-- would stop silently.
 
 CREATE OR REPLACE FUNCTION "public"."record_topic_attempt"(
   "p_user_id" "uuid",
@@ -52,9 +23,7 @@ BEGIN
   WHERE q."id" = p_question_id;
 
   IF v_topic_id IS NULL THEN
-    -- No question, no subject on it, or a subject that isn't a topic --
-    -- nothing to attribute this to. Inventing a `math_topics` row here would
-    -- put a subject in the table that the question generator can't pick from.
+    -- Never invent a math_topics row the generator cannot pick from.
     RETURN NULL;
   END IF;
 

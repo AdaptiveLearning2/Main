@@ -1,56 +1,8 @@
--- Lesson-plan content for the seven topics that are NOT reachable before
--- grade 6, seeded at `upper` and `advanced` only.
---
--- Run this in the Supabase dashboard SQL editor. Deliberately NOT a
--- migration, for the same reason as lesson_plans_priority_topics.sql: this
--- is reference content the backend never mutates, and a migration would
--- re-apply it over any later dashboard edit on every rebuild.
---
--- Idempotent: re-running updates existing rows rather than erroring, via
--- the (topic_name, grade_band) unique constraint from 20260827010000.
---
--- Scope, and why `early`/`middle` are absent. `LLM_topic_decider._allowed_topics()`
--- keeps all seven of these out of grade 1-5 sessions entirely, and algebra
--- and probability out of everything below grade 6. Their `early`/`middle`
--- rows would be defense-in-depth padding for a gate that already holds, and
--- an unseeded cell fails open to the difficulty/grade heuristics -- which is
--- the better default for content nobody is meant to see. Leaving them
--- unseeded is the decision, not an omission.
---
--- IMPORTANT -- these objectives are bounded by what each generator can
--- actually emit, not by what the grade band could cover in a classroom. A
--- lesson plan describing a question shape the JSON contract cannot produce
--- would push the model toward output the solver then mis-scores, which is
--- worse than no grounding at all. The binding limits, read off the code:
---
---   * algebra -- LLM_algebra_generation solves with sympy and takes
---     `solution[0]`, and splits `question_text` on a single "=". So: ONE
---     linear equation, ONE unknown, exactly one solution. A quadratic would
---     present one root as the answer and mark the other correct choice
---     wrong. No systems, no inequalities, no quadratics at any band.
---   * probability -- only three scenarios exist (probability_of,
---     not_probability_of, dice). Single-event probability over a stated
---     sample space, plus the complement. No compound or conditional
---     probability, no permutations or combinations.
---   * rationals -- values are proper fractions in "a/b" form; the prompt
---     explicitly forbids mixed numbers. Arithmetic on fractions only, not
---     algebraic rational expressions.
---   * mean / median / mode -- the contract is a listed dataset and the one
---     statistic. No box plots, no mean absolute deviation, no comparing two
---     distributions -- none of those can be expressed in the JSON.
---   * angle_relationships -- five scenarios: complementary, supplementary,
---     linear pair, triangle sum, and solve-for-x complementary. No circle
---     theorems, no trigonometry, no transversal diagrams (a question about
---     a diagram has no diagram to show).
---
--- So `advanced` here means harder numbers and an extra reasoning step
--- inside the same question shape -- not a different kind of mathematics.
--- That is a real limitation of the generators, and the honest place to
--- record it is here, next to the text it constrains.
---
--- Objectives are Common Core-based (thecorestandards.org progressions).
--- Kept well under lesson_plan_context._MAX_CONTEXT_CHARS (2000), which
--- truncates silently.
+-- Lesson plans for the seven topics unreachable before grade 6, at `upper`
+-- and `advanced` only. Run in the dashboard SQL editor; idempotent.
+-- Bounded by what each generator can emit, so `advanced` means harder numbers
+-- in the same question shape; per-topic limits in docs/question-generation.md.
+-- Keep under the 2000-char _MAX_CONTEXT_CHARS, which truncates silently.
 
 INSERT INTO "public"."lesson_plans" ("topic_name", "grade_band", "objectives", "notes")
 VALUES

@@ -1,13 +1,9 @@
--- Fixes an "infinite recursion detected in policy" error caused by the
--- classes/class_memberships SELECT policies referencing each other, and adds
--- a policy letting a teacher read the profiles of students in their classes
--- (needed for the teacher Students/Classes tabs, which otherwise show empty
--- lists).
+-- Breaks the classes/class_memberships policy recursion, and lets a teacher
+-- read the profiles of students in their classes.
 
 -- 1. Helper functions -------------------------------------------------------
--- SECURITY DEFINER + a fixed search_path lets these bypass RLS on the tables
--- they query, which breaks the recursive cycle between classes and
--- class_memberships.
+-- SECURITY DEFINER + pinned search_path bypasses RLS on the queried tables,
+-- which breaks the recursive cycle.
 
 CREATE OR REPLACE FUNCTION "public"."is_member_of_class"("p_class_id" "uuid") RETURNS boolean
     LANGUAGE "sql" STABLE SECURITY DEFINER
@@ -60,5 +56,4 @@ CREATE POLICY "profiles: teacher reads students" ON "public"."profiles"
        JOIN "public"."classes" "c" ON (("c"."id" = "cm"."class_id")))
     WHERE (("cm"."student_id" = "profiles"."id") AND ("c"."teacher_id" = "auth"."uid"())))));
 
--- Reload the PostgREST schema cache so the new policies take effect immediately.
 NOTIFY pgrst, 'reload schema';

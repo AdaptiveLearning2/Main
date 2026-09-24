@@ -1,22 +1,7 @@
--- The daily rollup records how many rows carried a stress value, so the
--- weighted averages over days and students divide by the rows the stored
--- average actually saw.
---
--- `trusted_sample_count` for the cognitive channel is `count(*) FILTER
--- (WHERE focus IS NOT NULL)`, and every rollup-backed average is weighted on
--- it. `avg_stress` was already an approximation under that weight -- focus
--- and calm are derived independently and `contact_poor` is the only thing
--- that nulls both together -- but the local calm's hold rule makes stress
--- absent while focus stands the *ordinary* case: a placeholder calm (the
--- buffer filling, every gap) and a stale one (carried past the hold cap)
--- both null `stress` and keep `focus`. A day of 4000 focus rows with 200
--- fresh calm readings then weighed its stress average as 4000 in the term
--- trend, reading 0.32 against a true 0.70.
---
--- Nullable with no default: a row rolled before this column has no count,
--- and the readers fall back to `trusted_sample_count` for it -- the old
--- approximation, on the rows it was always applied to -- rather than a
--- fabricated zero that would drop the day from every stress average.
+-- stress_sample_count: cognitive rows with a stress value, so stress averages
+-- weight on their own denominator (stress-absent, focus-present is ordinary
+-- under the local calm's hold rule). No default: readers fall back per row to
+-- trusted_sample_count rather than a fabricated zero.
 
 ALTER TABLE "public"."signal_daily_rollup"
     ADD COLUMN IF NOT EXISTS "stress_sample_count" bigint;
@@ -24,9 +9,8 @@ ALTER TABLE "public"."signal_daily_rollup"
 COMMENT ON COLUMN "public"."signal_daily_rollup"."stress_sample_count" IS
     'cognitive rows with a stress value; NULL on rows rolled before 20260918.';
 
--- rollup_signal_day: signature unchanged, so a genuine CREATE OR REPLACE.
--- The cognitive INSERT gains the count; heart and emotion are unchanged
--- from 20260917000000.
+-- rollup_signal_day: the cognitive INSERT gains the count; heart and emotion
+-- unchanged from 20260917000000.
 CREATE OR REPLACE FUNCTION "public"."rollup_signal_day"(
     "p_user_id" "uuid",
     "p_day" date,
@@ -51,20 +35,8 @@ BEGIN
            avg(focus), avg(stress), avg(engagement),
            count(*), count(*) FILTER (WHERE focus IS NOT NULL),
            count(*) FILTER (WHERE stress IS NOT NULL),
-           -- Scale 3 is scale 2 with calm from the local spectrum: it moves
-           -- stress and not focus. A row on it whose stress is NULL (a
-           -- placeholder or a held calm) contributed only a focus, which is
-           -- on scale 2, and reads as 2 -- unless the day also holds a
-           -- scale-3 row *with* a stress, in which case 3 already covers it
-           -- and reading it as 2 would fabricate a split: every local
-           -- session's first ticks hold calm while the buffer fills, and
-           -- mapped to 2 unconditionally every such session read 2..3 on its
-           -- own. Read as 2 only when no local stress was scored, a day of
-           -- placeholder calms beside an sdk day reads 2..2 (no caption --
-           -- the local source scored no stress), and a day of pre-label
-           -- rows beside held local rows reads 1..2 (a caption -- the focus
-           -- average did mix two scales). Excluding the held rows instead
-           -- gave that last day 1..1.
+           -- A scale-3 row with NULL stress reads as 2 only when the day has
+           -- no scored scale-3 stress; see docs/signals.md.
            min(CASE WHEN sc = 3 AND stress IS NULL AND NOT scored_local THEN 2 ELSE sc END)
                FILTER (WHERE focus IS NOT NULL),
            max(CASE WHEN sc = 3 AND stress IS NULL AND NOT scored_local THEN 2 ELSE sc END)
@@ -73,10 +45,8 @@ BEGIN
     FROM (SELECT focus, stress, engagement, sc,
                  COALESCE(bool_or(sc = 3 AND stress IS NOT NULL) OVER (), false) AS scored_local
             FROM (SELECT focus, stress, engagement,
-                         -- A row with no key, and a row with no `raw` at
-                         -- all, predates the label: scale 1.
-                         -- `raw ? 'score_scale'` is NULL on a NULL raw, so
-                         -- the null test comes first.
+                         -- No key or NULL raw is scale 1; the null test
+                         -- comes first, as `?` is NULL on a NULL raw.
                          CASE WHEN raw IS NULL OR NOT (raw ? 'score_scale') THEN 1
                               ELSE public.score_scale_of(raw) END AS sc
                     FROM cognitive_signals
@@ -156,10 +126,8 @@ REVOKE ALL ON FUNCTION "public"."rollup_signal_day"("uuid", date, "text") FROM "
 REVOKE ALL ON FUNCTION "public"."rollup_signal_day"("uuid", date, "text") FROM "authenticated";
 GRANT EXECUTE ON FUNCTION "public"."rollup_signal_day"("uuid", date, "text") TO "service_role";
 
--- class_signal_daily_trend: the return table gains `stress_sample_count`,
--- which is a new signature, so the old one is dropped rather than left as
--- an overload. `avg_stress` is weighted on the stress count, falling back
--- per row to `trusted_sample_count` where the row predates the column.
+-- class_signal_daily_trend gains stress_sample_count (new return type, so
+-- dropped and recreated); avg_stress weighs on it, per-row fallback.
 DROP FUNCTION IF EXISTS "public"."class_signal_daily_trend"("uuid"[], integer, boolean, boolean, "text");
 
 CREATE FUNCTION "public"."class_signal_daily_trend"(
@@ -205,8 +173,7 @@ AS $$
                       FILTER (WHERE "r"."avg_rmssd_ms" IS NOT NULL), 0) AS "avg_rmssd_ms",
          sum("r"."sample_count")::bigint                              AS "sample_count",
          sum("r"."trusted_sample_count")::bigint                      AS "trusted_sample_count",
-         -- Summed over the rows that carry a stress average, so the caller
-         -- can re-weight across consent buckets on the same denominator.
+         -- Lets the caller re-weight across consent buckets.
          sum(COALESCE("r"."stress_sample_count", "r"."trusted_sample_count"))
            FILTER (WHERE "r"."avg_stress" IS NOT NULL)::bigint         AS "stress_sample_count",
          count(DISTINCT "r"."user_id")::bigint                        AS "student_count"

@@ -1,33 +1,14 @@
--- The rollup records which score scale its cognitive averages were measured on.
---
--- The sidecar's population bounds -- the scale every focus and stress value is
--- measured on -- were widened in the EEG accuracy work, which re-anchors every
--- stored value: 14-30 points before a session's baseline latches, ~38% of gain
--- after. `signal_mapping` stamps `raw.score_scale` on each per-sample row from
--- then on (rows without the key predate it and are scale 1), but the rollup is
--- the copy that outlives the raw rows and carried no provenance, so a term
--- trend read after expiry could not say where the step was.
---
--- The rollout is per sidecar process, not per calendar day: each student's
--- machine picks the new scale up when it restarts, so a date constant cannot
--- label it and the label has to come from the rows. `score_scale_min` and
--- `score_scale_max` are the range seen that day; a day where they differ
--- straddles the change.
---
--- Signature unchanged, so this is a genuine CREATE OR REPLACE with nothing to
--- drop. The revokes are still repeated, since the grant check matches by
--- function name. Recomputes rather than accumulates, so a day re-rolled after
--- this lands fills the new columns; days rolled before it carry NULL, which
--- readers treat as "not recorded", distinct from scale 1.
+-- The rollup records the score-scale range (min/max) its cognitive averages
+-- were measured on; widened bounds moved values 14-30 points pre-latch, ~38%
+-- of gain after. Per sidecar process, never a date. See docs/signals.md.
+-- Days rolled before this carry NULL ("not recorded"), distinct from scale 1.
 
 ALTER TABLE "public"."signal_daily_rollup"
     ADD COLUMN IF NOT EXISTS "score_scale_min" smallint,
     ADD COLUMN IF NOT EXISTS "score_scale_max" smallint;
 
--- The score scale a per-sample row's `raw` claims, as a smallint, or NULL for
--- anything that is not a number in range. Its own function so the rule is
--- written once and testable on its own; IMMUTABLE and STRICT so the planner
--- can fold it. Never raises: `raw` is client-supplied on the push path.
+-- raw.score_scale as a smallint, or NULL if not a number in range. Never
+-- raises: `raw` is client-supplied on the push path.
 CREATE OR REPLACE FUNCTION "public"."score_scale_of"("raw" jsonb)
 RETURNS smallint
 LANGUAGE sql
@@ -63,11 +44,8 @@ BEGIN
     day_start := (("p_day")::timestamp AT TIME ZONE "p_timezone");
     day_end   := (("p_day" + 1)::timestamp AT TIME ZONE "p_timezone");
 
-    -- cognitive: `focus IS NOT NULL` is the usable count. Poor contact writes
-    -- a row with every measurement nulled on purpose, and counting those as
-    -- trusted would report a day of bad contact as a day of good data.
-    -- `score_scale_*` over the rows that carry a measurement: a nulled row
-    -- has no score to be on a scale.
+    -- cognitive: `focus IS NOT NULL` is the usable count, and the scale range
+    -- is over those rows only.
     INSERT INTO signal_daily_rollup AS r (
         user_id, day, channel, avg_focus, avg_stress, avg_engagement,
         sample_count, trusted_sample_count, score_scale_min, score_scale_max,
@@ -75,14 +53,8 @@ BEGIN
     SELECT p_user_id, p_day, 'cognitive',
            avg(focus), avg(stress), avg(engagement),
            count(*), count(*) FILTER (WHERE focus IS NOT NULL),
-           -- `raw` is client-supplied JSON on the push path and the flat
-           -- ingest shape stores it verbatim, so the value is never hard-cast:
-           -- a non-numeric `score_scale` raised out of this INSERT, the
-           -- first of three, and one posted sample aborted the whole
-           -- student-day's rollup -- which the close swallows and the expiry
-           -- job then refuses for ever. Absent is scale 1 (predates the
-           -- key); anything that is not a number in range is NULL, which the
-           -- aggregate skips, so garbage can neither abort nor mislabel.
+           -- Never hard-cast client-supplied raw: one bad sample would abort
+           -- the day's rollup. Absent key is scale 1; garbage is NULL, skipped.
            min(CASE WHEN raw ? 'score_scale' THEN public.score_scale_of(raw) ELSE 1 END)
                FILTER (WHERE focus IS NOT NULL),
            max(CASE WHEN raw ? 'score_scale' THEN public.score_scale_of(raw) ELSE 1 END)

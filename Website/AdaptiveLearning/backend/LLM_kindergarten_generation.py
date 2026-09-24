@@ -76,7 +76,8 @@ def _plan(topic, scenario, difficulty, rng):
                  brief=f"The picture shows some {items}. Ask how many {items} there are.",
                  example=f"How many {items} are there?", require=[[items]])
     elif scenario == "one_more":
-        n = rng.randint(*{"easy": (1, 4), "medium": (1, 9), "hard": (10, 19)}[difficulty])
+        # From 2: at 1 the model writes "one more than one" and fails the digit rule.
+        n = rng.randint(*{"easy": (2, 4), "medium": (2, 9), "hard": (10, 19)}[difficulty])
         # An exact phrase: told only the words, both models wrote a get-one-more story.
         p.update(shown=[n], answer=n + 1, phrase=f"one more than {n}",
                  brief=f"Ask what number is one more than {n}. Ask about the number, not a story.",

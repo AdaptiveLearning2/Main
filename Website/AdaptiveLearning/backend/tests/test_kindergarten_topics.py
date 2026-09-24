@@ -153,6 +153,14 @@ def test_numbers_stay_inside_each_tier(model, monkeypatch, difficulty, top):
                     assert max(plan["options"]) <= min(top, 10)
 
 
+@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
+def test_one_more_never_starts_from_one(difficulty):
+    """At 1 the live model wrote "one more than one" and was refused on every attempt."""
+    starts = {kg._plan("counting", "one_more", difficulty, random.Random(seed))["shown"][0]
+              for seed in range(200)}
+    assert min(starts) >= 2
+
+
 # ── the wording the model returns is checked, not trusted ───────────────────
 
 def _plan_for(scenario, seed=3):

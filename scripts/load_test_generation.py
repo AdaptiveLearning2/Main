@@ -1,27 +1,10 @@
 """Drive a class-sized burst of question generation at a real server.
 
-CLAUDE.md states four bounds around generation, and until this script every
-one of them was checked by calling a helper directly. That leaves the claim
-they exist to support untested: that when thirty students press start at
-once, the requests that cannot be served are *refused* rather than parked in
-anyio's shared threadpool, and the rest of the API keeps answering.
-
-Threadpool starvation is the hazard, so the victim probe is `/api/topics`:
-sync, no database, no auth, pure CPU. If it slows down while generation is
-saturated, the threadpool is starved -- and that is exactly what
-`GENERATION_MAX_WAITERS` exists to prevent. Ingest is the surface CLAUDE.md
-names, but it shares the same threadpool and needs a session, consent and a
-token to reach; `/api/topics` measures the same mechanism with nothing else
-in the way. Say "threadpool", not "ingest", when quoting these numbers.
-
-**No model is called and nothing is billed.** The fake stands in for the
-network peer only: `llm_client.generate_text` runs for real, so the
-semaphore, the budget arithmetic, the timeout and the refusals are the
-shipped code. `FAKE_LATENCY` is what a model call costs.
+Checks that excess requests are refused rather than parked in the threadpool, and that
+`/api/topics` (sync, no DB) keeps answering. Only the model peer is faked, so nothing is
+billed. Exit status is non-zero if a bound did not hold.
 
     python scripts/load_test_generation.py --students 30 --latency 2.0
-
-Exit status is non-zero if a bound did not hold.
 """
 import argparse
 import json
@@ -65,12 +48,7 @@ _concurrent = {"now": 0, "peak": 0}
 
 
 class _FakeOllamaClient:
-    """Sleeps like a model and answers like one.
-
-    Tracks its own concurrency, which is the direct measurement of
-    `GENERATION_MAX_CONCURRENCY`: nothing downstream of the semaphore can
-    exceed it, so a peak above the cap means the cap does not work.
-    """
+    """Sleeps like a model and answers like one; its peak concurrency measures the cap."""
 
     def __init__(self, *a, **k):
         pass
@@ -85,8 +63,7 @@ class _FakeOllamaClient:
             if "TOPIC SELECTION RULES" in prompt:
                 body = {"topic": "patterns", "difficulty": "easy"}
             else:
-                # Strings, not ints: `solve_pattern` refuses a list that is
-                # not all strings, which is how the model actually replies.
+                # Strings, not ints: `solve_pattern` requires them, as the model replies.
                 body = {"values": ["2", "4", "?", "8", "10"],
                         "question_text":
                             "What number replaces ? in the sequence "
@@ -165,16 +142,13 @@ def _probe_once(timeout=30):
 
 def _generate(i):
     if args.stagger:
-        # Spread arrival across the window rather than firing together: a
-        # room of students does not press start on the same millisecond, and
-        # the burst is the worst case rather than the expected one.
+        # Spread arrival across the window; a simultaneous burst is the worst case.
         time.sleep(args.stagger * i / max(1, args.students - 1))
     t0 = time.monotonic()
     attempts = 2 if args.client_retry else 0
     try:
         for attempt in range(attempts + 1):
-            # A distinct student each, so the per-user rate limit cannot be
-            # what refuses them -- this is about the process-wide bounds.
+            # Distinct students, so the per-user rate limit is not what refuses them.
             r = requests.get(f"{BASE}/api/generate-question",
                              params={"user_id": f"kid-{i:03d}",
                                      "grade": args.grade},
@@ -182,9 +156,7 @@ def _generate(i):
             after = r.headers.get("Retry-After")
             if r.status_code != 503 or after is None or attempt == attempts:
                 break
-            # Full jitter over [0, delay], as `jittered()` does in api.js.
-            # Honouring the delay exactly would bring every refused student
-            # back at the same instant and reform the burst.
+            # Full jitter over [0, delay], as `jittered()` in api.js, so retries do not reform the burst.
             time.sleep(random.random() * min(float(after), 10.0))
         return r.status_code, time.monotonic() - t0
     except Exception as e:
@@ -264,12 +236,7 @@ def main_():
     check("concurrency cap holds",
           _concurrent["peak"] <= llm_client.GENERATION_MAX_CONCURRENCY,
           f"peak {_concurrent['peak']} <= {llm_client.GENERATION_MAX_CONCURRENCY}")
-    # The waiter cap *subsumes* the concurrency cap rather than adding to it:
-    # `_generation_waiter` wraps the whole call, so it bounds requests
-    # in flight, and the semaphore bounds model calls inside that. The
-    # ceiling is therefore the waiter cap alone -- 12, not 8 + 12, which is
-    # what this check asserted until a 30-student run showed 12 admitted
-    # against a ceiling it had computed as 20.
+    # The waiter cap subsumes the concurrency cap (it wraps the whole call), so it alone is the ceiling.
     admitted = sum(v for k, v in codes.items() if k != 503)
     check("requests in flight are bounded by the waiter cap",
           admitted <= main._GENERATION_MAX_WAITERS,

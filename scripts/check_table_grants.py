@@ -2,40 +2,9 @@
 """Fail if a migration creates a public-schema table without revoking the
 default grants.
 
-The table-level twin of check_function_grants.py, and the same trap: Supabase
-ships ALTER DEFAULT PRIVILEGES granting every table privilege to anon and
-authenticated **by name** in public, so a new table arrives as
-anon=arwdDxtm,authenticated=arwdDxtm before its own migration grants anything.
-Adding a narrow GRANT SELECT on top is a no-op that reads like a restriction --
-which is exactly what heart_signals and signal_consent both shipped with before
-this check existed.
-
-Why it matters when RLS is already on
--------------------------------------
-RLS covers INSERT, UPDATE and DELETE: with no policy for a command, the command
-is denied whatever the grant says. It does **not** cover TRUNCATE. Probed on a
-local stack: as anon, INSERT was blocked and TRUNCATE succeeded on every table
-in the schema.
-
-PostgREST does not expose TRUNCATE, so the anon key in the frontend bundle is
-not a path to it -- it needs a direct Postgres connection. That makes this a
-defence-in-depth issue rather than an open door, but "not reachable from the
-client we happen to ship" is a weaker property than the one a narrow GRANT
-appears to promise, and the promise is what the next person reads.
-
-What it requires
-----------------
-For every CREATE TABLE in public, a REVOKE ... FROM anon and a REVOKE ... FROM
-authenticated somewhere in the migrations. It does not check what is granted
-back afterwards -- that is per-table judgement (user_math_performance genuinely
-needs INSERT/UPDATE for the frontend's upsert under "perf: own"; heart_signals
-needs SELECT and nothing else) and encoding it here would mean encoding the
-whole access model in a lint.
-
-Matching is by table NAME, cumulative across migrations, and comments are
-stripped first -- same shape, and same limitations, as the function check.
-
-Run with --self-test to exercise the parser against its own cases.
+Every public CREATE TABLE needs a REVOKE from anon and from authenticated: a new table
+arrives fully granted, and RLS does not filter TRUNCATE (see CLAUDE.md, *Database*).
+What is granted back is not checked. Same matching and limits as check_function_grants.py.
 """
 
 from __future__ import annotations

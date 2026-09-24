@@ -28,8 +28,7 @@ JSON_OUTPUT_PATH = "rppg_test_output.json"
 SCHEMA_VERSION = "1.0"
 EXPORT_SOURCE = "facial_rppg"
 
-# Optional backend ingestion. The script still works and saves JSON locally
-# when backend posting is disabled or temporarily unavailable.
+# Optional backend ingestion; local JSON export works without it.
 DEFAULT_BACKEND_URL = "http://127.0.0.1:8000"
 DEFAULT_FACE_BATCH_SIZE = 5
 ACCESS_TOKEN_ENV_VAR = "SUPABASE_ACCESS_TOKEN"
@@ -53,8 +52,7 @@ EMOTION_LABELS = [
     "contempt",
 ]
 
-# Provisional quality thresholds based on current webcam tests.
-# Keep these configurable and validate them with more test sessions.
+# Provisional quality thresholds from webcam tests; not yet validated.
 SQI_MIN_USABLE = 0.40
 SQI_GOOD = 0.55
 QUALITY_RULE_VERSION = "facial-quality-v0.1"
@@ -200,16 +198,9 @@ def utc_now_iso():
 
 
 def sanitize_number(value):
-    """Convert a value to a plain Python int/float, or None if it is missing,
-    NaN, Infinity, a NumPy scalar with a non-finite value, or otherwise not a
-    safe finite number for JSON export.
+    """Convert a value to a plain Python int/float, or None if missing, non-numeric or non-finite.
 
-    - None stays None.
-    - NumPy scalar types (np.floating / np.integer) are converted to native
-      Python float/int via float()/int() (this also correctly handles plain
-      Python int/float, since those support the same calls).
-    - NaN / Infinity (in either native or NumPy form) become None, since
-      json.dumps(..., allow_nan=False) would otherwise raise on them.
+    NaN/Infinity become None, since json.dumps(..., allow_nan=False) would raise on them.
     """
     if value is None:
         return None
@@ -228,9 +219,7 @@ def sanitize_number(value):
 def classify_quality(heart_rate, sqi, rmssd):
     """Classify whether one facial/rPPG snapshot is trustworthy.
 
-    These thresholds are provisional project defaults, not clinical cutoffs.
-    A snapshot is trusted only when HR and RMSSD are available and SQI is at
-    least SQI_MIN_USABLE.
+    Trusted only with HR and RMSSD present and SQI >= SQI_MIN_USABLE (provisional, not clinical).
     """
     heart_rate = sanitize_number(heart_rate)
     sqi = sanitize_number(sqi)
@@ -451,11 +440,7 @@ def classify_stress_category(score):
 
 
 def calculate_facial_stress_support(report, hr, rmssd, quality):
-    """Calculate an experimental facial stress-support score.
-
-    This is a provisional engineering heuristic, not a clinical stress measure.
-    It compares trusted current HR/RMSSD values with the frozen session baseline.
-    """
+    """Calculate an experimental (non-clinical) facial stress-support score against the session baseline."""
     baseline = report["session"]["baseline"]
 
     if baseline["status"] != "ready":
@@ -500,8 +485,7 @@ def calculate_facial_stress_support(report, hr, rmssd, quality):
     hr_change_pct = ((hr - baseline_hr) / baseline_hr) * 100.0
     rmssd_drop_pct = ((baseline_rmssd - rmssd) / baseline_rmssd) * 100.0
 
-    # Neutral starts at 50. HR increases and RMSSD decreases raise support.
-    # HR decreases and RMSSD increases lower support.
+    # Neutral is 50; rising HR and falling RMSSD raise support.
     hr_component = clamp(50.0 + (hr_change_pct * 2.0))
     rmssd_component = clamp(50.0 + (rmssd_drop_pct * 1.5))
 
@@ -644,10 +628,7 @@ def build_report(started_at, session_id=None, student_id=None):
 
 
 def update_summary(report):
-    """Recompute summary.* in place from the valid numeric values currently
-    present in report['snapshots']. Non-numeric / None values are ignored
-    when averaging, so a run with some missing readings still produces a
-    usable summary from whatever valid data exists."""
+    """Recompute summary.* in place from report['snapshots'], ignoring non-numeric values."""
     snapshots = report["snapshots"]
     report["summary"]["snapshotCount"] = len(snapshots)
 
@@ -666,8 +647,7 @@ def update_summary(report):
             return None
         return sum(values) / len(values)
 
-    # Report averages are based only on trusted snapshots so low-quality
-    # readings do not influence teacher/parent summaries.
+    # Report averages use trusted snapshots only.
     report["summary"]["averageHeartRateBpm"] = sanitize_number(
         _average_raw_signal("heartRateBpm", trusted_snapshots)
     )
@@ -701,9 +681,7 @@ def update_summary(report):
 
 
 def write_json_atomically(report, output_path):
-    """Write report as JSON to output_path atomically: write to a temp file
-    in the same directory, then os.replace() it into place, so a partially
-    written file is never visible at output_path."""
+    """Write report as JSON to output_path atomically (temp file + os.replace)."""
     directory = os.path.dirname(os.path.abspath(output_path)) or "."
     fd, temp_path = tempfile.mkstemp(prefix=".rppg_export_", suffix=".tmp", dir=directory)
     try:
@@ -717,11 +695,9 @@ def write_json_atomically(report, output_path):
 
 
 def snapshot_to_face_sample(snapshot):
-    """Convert one local rPPG snapshot to the existing FaceSample API shape.
+    """Convert one local rPPG snapshot to the FaceSample API shape.
 
-    Emotion, attention, gaze, and identity confidence remain null until those
-    features are genuinely measured. The complete rPPG snapshot is retained in
-    raw so no HR, RMSSD, quality, baseline, or stress-support information is lost.
+    Unmeasured features stay null; the full snapshot is kept in raw.
     """
     emotion = snapshot.get("features", {}).get("emotion", {})
     emotion_label = emotion.get("label") if emotion.get("trusted") else None
@@ -738,11 +714,7 @@ def snapshot_to_face_sample(snapshot):
 
 
 def post_face_samples(backend_url, access_token, session_id, samples, timeout=10):
-    """POST a batch to the existing /api/signals/face endpoint.
-
-    Returns (success, message). Failed batches stay queued so the caller may
-    retry on the next interval or at shutdown.
-    """
+    """POST a batch to /api/signals/face. Returns (success, message)."""
     if not samples:
         return True, "Nothing to send."
 
@@ -783,11 +755,7 @@ def flush_face_queue(
     force=False,
     batch_size=DEFAULT_FACE_BATCH_SIZE,
 ):
-    """Send queued samples in batches.
-
-    Samples are removed only after a successful POST. On failure, they remain
-    queued and local JSON export continues unaffected.
-    """
+    """Send queued samples in batches; samples leave the queue only after a successful POST."""
     if not backend_url or not access_token or not session_id:
         return
 
@@ -1008,10 +976,7 @@ def main(
                         current_rmssd = rmssd
                     last_update = time.time()
 
-                    # ── Export snapshot (new) ──
-                    # Same update block that refreshes HR/SQI/RMSSD, so the
-                    # exported snapshot cadence matches the existing ~1s
-                    # recompute cadence exactly (see RMSSD_UPDATE_INTERVAL).
+                    # ── Export snapshot: same cadence as the RMSSD recompute ──
                     quality = classify_quality(hr, sqi, rmssd)
                     snapshot = build_eeg_compatible_snapshot(
                         timestamp=utc_now_iso(),
@@ -1080,10 +1045,7 @@ def main(
         except KeyboardInterrupt:
             print("\nStopped by user.")
         finally:
-            # ── Export finalization (new) ──
-            # Runs on normal loop exit, 'q' break, and KeyboardInterrupt,
-            # while still inside the `with model.video_capture(0):` block,
-            # so the webcam release below happens exactly as it did before.
+            # ── Export finalization: on every exit path, inside the video_capture block ──
             report["session"]["endedAt"] = utc_now_iso()
             update_baseline(report)
             update_summary(report)

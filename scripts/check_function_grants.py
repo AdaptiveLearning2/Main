@@ -1,58 +1,9 @@
 #!/usr/bin/env python3
 """Fail if a migration creates a public-schema function without revoking EXECUTE.
 
-Postgres grants EXECUTE on a new function to PUBLIC automatically -- unlike
-tables, which are deny-by-default -- and Supabase additionally grants it to anon
-and authenticated by name. An explicit grant to a named role survives a revoke
-aimed at the PUBLIC pseudo-role, so all three revokes are needed and the usual
-one-liner is not enough.
-
-That matters more here than in most projects: the backend reads through the
-service-role client, which bypasses RLS, so the checks in main.py are the only
-thing between a caller and another student's data. A function left at the
-default is reachable by any authenticated user holding the anon key, and the
-anon key ships in the frontend bundle.
-
-Why this is a lint and not a database default
----------------------------------------------
-The obvious fix is ALTER DEFAULT PRIVILEGES ... REVOKE EXECUTE ON FUNCTIONS FROM
-PUBLIC, anon, authenticated. It was tried on a local Supabase stack on
-2026-08-04 and it does not work: the pg_default_acl row is recorded correctly
-and the anon/authenticated named grants do disappear, but new functions still
-come back with `=X/postgres` -- the PUBLIC grant -- and both anon and
-authenticated can still execute them. Verified with three throwaway functions,
-with the grantees combined in one statement and separated, and with no event
-trigger re-granting. A default that silently fails to deny is worse than none,
-because it invites trust it has not earned.
-
-So the enforcement lives here, where it is deterministic and visible at review
-time.
-
-What it does and does not catch
--------------------------------
-Comments are stripped before matching, so neither a commented-out CREATE nor a
-commented-out REVOKE counts. An unqualified `CREATE FUNCTION foo()` is treated
-as public, because that is where it lands under the default search_path -- and
-it is world-executable there exactly like a qualified one. A function created in
-a schema that is named and is not public is ignored.
-
-Functions are matched by NAME, not by full signature. Reconstructing a signature
-from `CREATE FUNCTION` (named parameters with types, often across several lines)
-and matching it against `REVOKE ... ON FUNCTION` (types only) is more fragile
-than the problem warrants. The consequence is a real gap: a migration that adds
-an overload and revokes only the previous signature passes this check. That is a
-narrower mistake than forgetting the revokes altogether, which is what this
-catches, but it is not covered -- review still has to.
-
-The check is cumulative across all migrations rather than per-file, so a
-function created in one migration and revoked in a later one passes. That is
-deliberate: handle_new_user was created in the initial schema and revoked many
-migrations later, and rewriting history to satisfy a lint would be worse than
-the lint understanding it.
-
-Run `python scripts/check_function_grants.py --self-test` to exercise the parser
-against its own known cases. Stdlib only, so it runs anywhere the repo is
-checked out.
+Needs revokes from PUBLIC, anon and authenticated (see CLAUDE.md, *Database*). Cumulative
+across migrations; matched by NAME, so an overload revoking only the old signature passes.
+`--self-test` exercises the parser. Stdlib only.
 """
 
 from __future__ import annotations
@@ -63,9 +14,7 @@ from pathlib import Path
 
 MIGRATIONS = Path(__file__).resolve().parent.parent / "supabase" / "migrations"
 
-# Functions that are deliberately callable by anon and authenticated, and why.
-# Anything added here needs a reason that survives someone reading it cold in a
-# year; "it broke without it" is a symptom, not a reason.
+# Functions deliberately callable by anon and authenticated; each needs a real reason.
 ALLOWLIST = {
     "is_member_of_class": (
         "RLS policies evaluate it as the calling user, so it must be granted to "
@@ -81,10 +30,7 @@ ALLOWLIST = {
 
 REQUIRED_GRANTEES = ("PUBLIC", "anon", "authenticated")
 
-# The schema prefix is OPTIONAL. An unqualified CREATE FUNCTION lands in public
-# under the default search_path and is world-executable there just the same, so
-# requiring "public". would make the most dangerous case -- the one where the
-# author was not thinking about schemas at all -- the one the check cannot see.
+# Schema prefix OPTIONAL: an unqualified CREATE FUNCTION lands in public too.
 CREATE_RE = re.compile(
     r'CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+'
     r'(?:(?P<schema>"?\w+"?)\s*\.\s*)?'
@@ -92,11 +38,7 @@ CREATE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# [^;]* rather than .*? with DOTALL: bounding each match to its own statement
-# stops a REVOKE naming one function from binding to a FROM clause in a later
-# one. Everything between FROM and the semicolon is captured, so a
-# comma-separated grantee list -- valid SQL that does exactly the right thing --
-# is read as the three revokes it is, rather than reported as two missing ones.
+# [^;]* bounds each match to one statement; the grantees capture takes a comma list.
 REVOKE_RE = re.compile(
     r'REVOKE\s+[^;]*?\bON\s+FUNCTION\s+'
     r'(?:"?\w+"?\s*\.\s*)?'
@@ -108,21 +50,12 @@ REVOKE_RE = re.compile(
 BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 LINE_COMMENT_RE = re.compile(r"--[^\n]*")
 
-# REVOKE ... FROM a, b, c CASCADE; -- the drop-behaviour keyword rides on the
-# last grantee, so without this "authenticated CASCADE" is not "authenticated"
-# and correct SQL gets reported as a missing revoke.
+# Strips a trailing CASCADE/RESTRICT from the last grantee.
 DROP_BEHAVIOUR_RE = re.compile(r"\s+(?:CASCADE|RESTRICT)\s*$", re.IGNORECASE)
 
 
 def strip_sql_comments(sql: str) -> str:
-    """Remove -- and /* */ comments.
-
-    Naive about string literals and dollar-quoted bodies, which is fine for what
-    this reads: a `--` inside a function body can only blank the rest of that
-    line of body text, and nothing here matches on bodies. Getting it wrong the
-    other way -- counting a commented-out REVOKE as real -- is the failure that
-    would matter.
-    """
+    """Remove -- and /* */ comments. Naive about literals and bodies, which nothing here matches on."""
     return LINE_COMMENT_RE.sub("", BLOCK_COMMENT_RE.sub("", sql))
 
 
@@ -194,9 +127,7 @@ def main() -> int:
 
     paths = sorted(MIGRATIONS.glob("*.sql"))
     if not paths:
-        # A glob matching nothing used to report "ok: 0 functions", so a wrong
-        # path or a partial checkout read as a pass. There is always at least
-        # the initial schema.
+        # An empty glob must not read as a pass.
         print(f"error: no .sql files found in {MIGRATIONS}", file=sys.stderr)
         return 2
 

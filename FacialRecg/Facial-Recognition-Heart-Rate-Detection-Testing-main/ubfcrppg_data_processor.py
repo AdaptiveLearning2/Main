@@ -6,11 +6,9 @@ import matplotlib.pyplot as plt
 
 # Simple code to read video and ground truth of the UBFC-RPPG DATASET
 
-# If you use the dataset, please cite: 
-# S. Bobbia, R. Macwan, Y. Benezeth, A. Mansouri, J. Dubois, 
-# Unsupervised skin tissue segmentation for remote photoplethysmography, 
-# Pattern Recognition Letters, Elsevier, 2017. 
-# yannick.benezeth@u-bourgogne.fr
+# If you use the dataset, please cite: S. Bobbia, R. Macwan, Y. Benezeth, A. Mansouri, J. Dubois,
+# Unsupervised skin tissue segmentation for remote photoplethysmography,
+# Pattern Recognition Letters, Elsevier, 2017. yannick.benezeth@u-bourgogne.fr
 
 def process_ubfc_dataset(root_folder='DATASET_2/'):
     """
@@ -41,9 +39,7 @@ def process_ubfc_dataset(root_folder='DATASET_2/'):
         gt_trace = None # PPG signal
         gt_time = None # time steps
         gt_hr = None # Heart rate values provided directly by the sensor.
-        # gt_hr values were not used for evaluating our heart rate estimation method.
-        # Instead, our evaluation compared heart rate estimations derived from the remote PPG signal 
-        # with estimations calculated from the contact PPG signal in gt_trace.
+        # gt_hr was not used for evaluation; HR from the remote PPG was compared against gt_trace.
         
         # Load ground truth
         # Try DATASET_1 format first

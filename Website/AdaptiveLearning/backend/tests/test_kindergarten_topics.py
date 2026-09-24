@@ -160,25 +160,27 @@ def _plan_for(scenario, seed=3):
     return kg._plan(topic, scenario, difficulty, random.Random(seed))
 
 
-@pytest.mark.parametrize("scenario,bad", [
-    ("add", "Add. {a} + {b} = ? Hint: it is more than {extra}."),
-    ("add", "Add the numbers."),
-    ("one_more", "What number is one more than {a}? It is {answer}."),
-    ("one_more", "What number is one more than {a}? It is {answer_word}."),
-    ("add_story", "There are {a} {items}. {b} more come, then they all go away. How many are left?"),
-    ("subtract_story", "There are {a} {items}. Then {b} more come. How many are there now?"),
-    ("name_shape", "What is the name of this {answer}?"),
-    ("count_objects", "How many are there?"),
-    ("larger_number", "Which number is smaller?"),
+@pytest.mark.parametrize("scenario,bad,why", [
+    ("add", "Add. {a} + {b} = ? Hint: it is more than {extra}.", "shows numbers"),
+    ("add", "Add the numbers.", "shows numbers"),
+    ("one_more", "What number is one more than {a}? It is {answer}.", "shows numbers"),
+    ("one_more", "What number is one more than {a}? It is {answer_word}.", "uses '{answer_word}'"),
+    ("add_story", "There are {a} {items}. {b} more come, then they go away. How many now?", "uses 'away'"),
+    ("subtract_story", "There are {a} {items}. Then {b} more come. How many are there now?", "uses none of"),
+    ("name_shape", "What is the name of this {answer} shape?", "uses '{answer}'"),
+    ("count_objects", "How many are there?", "uses none of"),
+    ("larger_number", "Which number is smaller?", "uses none of"),
 ])
-def test_a_reply_that_does_not_match_the_plan_is_refused(scenario, bad):
+def test_a_reply_that_does_not_match_the_plan_is_refused(scenario, bad, why):
     plan = _plan_for(scenario)
     shown = plan["shown"] + [0, 0]
     answer = plan["answer"]
-    text = bad.format(a=shown[0], b=shown[1], extra=99, answer=answer,
-                      answer_word=kg.NUMBER_WORDS[answer] if isinstance(answer, int) else answer,
-                      items=kg.plural(kg.FIGURE_ITEMS[0]))
-    assert kg.wording_problem(text, plan) is not None, text
+    # The plan's own item, so a story is refused for its verb and not for a missing noun.
+    items = plan["require"][0][0] if plan["require"] else "apples"
+    values = dict(a=shown[0], b=shown[1], extra=99, answer=answer, items=items,
+                  answer_word=kg.NUMBER_WORDS[answer] if isinstance(answer, int) else answer)
+    text = bad.format(**values)
+    assert why.format(**values) in (kg.wording_problem(text, plan) or ""), text
 
 
 def test_a_long_reply_is_refused():

@@ -153,27 +153,63 @@ def test_the_same_text_at_a_different_standard_is_a_different_row(monkeypatch):
     assert ("eq", "ccss_standard", "8.EE.7b") in fake.queries[-2].filters
 
 
+_SHADED = {"question_text": "What fraction of the shape is shaded?",
+           "question_topic": "shape_fractions", "ccss_standard": "3.NF.1",
+           "figure": {"kind": "shape", "parts": 4, "shaded": 3},
+           "answer_options": ["3/4", "1/4", "1/2"], "correct_answer": "3/4"}
+
+
 @pytest.mark.parametrize("change", [
     {"figure": {"kind": "shape", "parts": 4, "shaded": 1}},
+    # The same option set with another answer, so only the answer check can
+    # tell the two apart.
     {"correct_answer": "1/4", "answer_options": ["1/4", "3/4", "1/2"]},
-    {"answer_options": ["1/2", "3/4", "1/4"]},
-], ids=["another figure", "another answer", "same options, another order"])
+    {"answer_options": ["3/4", "1/3", "1/2"]},
+], ids=["another figure", "another answer", "another option"])
 def test_the_same_text_with_different_content_is_a_different_row(change, monkeypatch):
     """`shape_fractions` and `graphs` keep digits out of the text, so one text
     at one grade covers every figure. Deduped on text, a new figure and answer
     got the first row's id, and the answer was recorded against a picture and
-    an answer key the student never saw. Option order counts too: an answer is
-    stored as an index into the options."""
+    an answer key the student never saw."""
     fake = _FakeSupabase()
     monkeypatch.setattr(LLM_topic_decider, "supabase", fake)
-    q = {"question_text": "What fraction of the shape is shaded?",
-         "question_topic": "shape_fractions", "ccss_standard": "3.NF.1",
-         "figure": {"kind": "shape", "parts": 4, "shaded": 3},
-         "answer_options": ["3/4", "1/4", "1/2"], "correct_answer": "3/4"}
-    first = LLM_topic_decider.add_question_to_supabase(q, "easy")
-    second = LLM_topic_decider.add_question_to_supabase({**q, **change}, "easy")
+    first = LLM_topic_decider.add_question_to_supabase(dict(_SHADED), "easy")
+    second = LLM_topic_decider.add_question_to_supabase({**_SHADED, **change}, "easy")
     assert second != first
     assert fake.store["rows"][-1]["id"] == second
+
+
+def test_a_reshuffled_repeat_reuses_its_row_and_is_served_in_the_stored_order(monkeypatch):
+    """The generators shuffle per generation. Requiring the same order made a
+    repeat a 1-in-24 match and put a row in the bank per question served.
+    Matched as a set, the repeat reuses the row -- and must be served in that
+    row's order, because an answer is recorded as an index into it."""
+    fake = _FakeSupabase()
+    monkeypatch.setattr(LLM_topic_decider, "supabase", fake)
+    first = LLM_topic_decider.add_question_to_supabase(dict(_SHADED), "easy")
+
+    again = {**_SHADED, "answer_options": ["1/2", "3/4", "1/4"]}
+    assert LLM_topic_decider.add_question_to_supabase(again, "easy") == first
+    assert again["answer_options"] == ["3/4", "1/4", "1/2"]
+    assert len(fake.store["rows"]) == 1
+
+
+@pytest.mark.parametrize("stored", ['["4", "8"]', '["4","8"]'],
+                         ids=["jsonb spacing", "compact"])
+def test_a_list_answer_matches_the_text_it_is_stored_as(stored, monkeypatch):
+    """`correct_answer` is a text column, so a `mode` or `ordering` answer comes
+    back as JSON text and never equalled the list the generator returns: those
+    two topics could never reuse a row at all."""
+    fake = _FakeSupabase()
+    fake.store["rows"].append({
+        "id": "stored", "question_text": "Find the mode: 4, 8, 4, 8, 2",
+        "ccss_standard": "6.SP.5c", "figure": None,
+        "options": [["4", "8"], ["2"], ["4"], ["8"]], "correct_answer": stored})
+    monkeypatch.setattr(LLM_topic_decider, "supabase", fake)
+    q = {"question_text": "Find the mode: 4, 8, 4, 8, 2", "question_topic": "mode",
+         "ccss_standard": "6.SP.5c",
+         "answer_options": [["4"], ["4", "8"], ["8"], ["2"]], "correct_answer": ["4", "8"]}
+    assert LLM_topic_decider.add_question_to_supabase(q, "easy") == "stored"
 
 
 def test_a_question_with_no_standard_dedupes_against_null_not_the_string_none(monkeypatch):

@@ -151,6 +151,12 @@ def solve_scenario(scenario, raw_vars):
         return None, f"{scenario} is missing variables: {missing}"
     try:
         vars = preprocess_variables(raw_vars)
+        # Every value here is a length, an area or a volume. A non-positive
+        # one is a figure that does not exist, and `rectangle_area` with
+        # {-5, 3} still solved -- to -15.
+        given = [k for k, v in vars.items() if v.is_number and v <= 0]
+        if given:
+            return None, f"{scenario} was given non-positive {given}"
         match (scenario):
             case "rectangle_area_by_counting":
                 # 2.G.2 is rows x columns counted, the same arithmetic as
@@ -210,4 +216,19 @@ def solve_scenario(scenario, raw_vars):
         # `1e200` cubed is `1e600`, and `float()` of that is `inf`. There is no
         # question here, and no set of distractors around it.
         return None, f"{scenario} solved to a non-finite value"
+    if value <= 0:
+        # The answer is a measure too. Positive inputs can still produce one
+        # when they do not fit together: a perimeter of 10 with a known side
+        # of 8 leaves -3 for the other side.
+        return None, f"{scenario} solved to {value}; a measure must be positive"
+    # Positive sides are not yet a triangle: {perimeter 20, sides 2 and 3}
+    # leaves 15 for the third, which is longer than the other two together.
+    sides = {"triangle_perimeter": lambda: [vars["s1"], vars["s2"], vars["s3"]],
+             "triangle_perimeter_missing_side": lambda: [vars["s1"], vars["s2"], value],
+             }.get(scenario)
+    if sides:
+        a, b, c = sorted(float(s) for s in sides())
+        if a + b <= c:
+            return None, (f"{scenario}: sides {a}, {b} and {c} do not make a "
+                          f"triangle")
     return value, None

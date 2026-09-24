@@ -3871,9 +3871,9 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
         raise HTTPException(500, "Failed to generate question")
 
     # `question_generation` is topic-agnostic and does not store or attach an
-    # id itself -- `_attach_stored_id` is the same dedup-by-text storage path
-    # the live decider uses, so a practice question and a live one that
-    # happen to match text share one row in `questions`.
+    # id itself -- `_attach_stored_id` is the same deduplicating storage path
+    # the live decider uses, so a practice question and a live one with the
+    # same content share one row in `questions`.
     LLM_topic_decider._attach_stored_id(question, session["difficulty"])
     question["difficulty"] = session["difficulty"]
     return question

@@ -179,6 +179,26 @@ def test_every_blocks_own_example_solves_to_a_positive_measure(number):
     assert value > 0, f"{example['scenario']} {example['variables']} -> {value}"
 
 
+@pytest.mark.parametrize("scenario,variables,why", [
+    ("rect_perimeter_missing_side", {"perimeter": "10", "known_side": "8"},
+     "positive inputs that leave -3 for the other side"),
+    ("rectangle_area", {"length": "-5", "width": "3"}, "a negative side"),
+    ("rectangle_area", {"length": "-5", "width": "-3"},
+     "two negative sides whose product is positive"),
+    ("cube_volume", {"side": "0"}, "a zero side"),
+    ("triangle_perimeter_missing_side", {"perimeter": "20", "s1": "2", "s2": "3"},
+     "a third side of 15, longer than the other two together"),
+    ("triangle_perimeter", {"s1": "2", "s2": "3", "s3": "5"},
+     "sides that lie flat: 2 + 3 is exactly 5"),
+])
+def test_a_measure_that_is_no_figure_is_refused(scenario, variables, why):
+    """Every answer and every input here is a length, area or volume of a real
+    figure. The solver only refused non-finite values, so these were served as
+    correct."""
+    value, reason = geometry_solvers.solve_scenario(scenario, variables)
+    assert value is None and reason, why
+
+
 def test_a_missing_radius_is_the_positive_root():
     assert geometry_solvers.solve_scenario(
         "circle_area_missing_side", {"area": "78.5"}) == (5.0, None)

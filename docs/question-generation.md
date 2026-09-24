@@ -418,7 +418,10 @@ cannot become grade 2026, and answers `None` when it cannot tell, which every ca
 `_grade_band` in every generation file delegates to it.
 
 `_safe_topic(topic, grade)` checks the LLM's own selection against the same table and `randomize_selection()` draws
-from it, so there is no third way a topic reaches `question_generation()`.
+from it, so there is no third way a topic reaches `question_generation()`. **The decider's prompt lists that table
+too, never a list of its own**: one goes stale as topics are added, and a pick outside the grade is replaced at random,
+discarding the choice made from the student's performance. Grade 0 (kindergarten) is served grade 1's topics, since
+none starts earlier and an empty list has nothing to draw from.
 
 ### Difficulty and grade are one table, not two independent scales
 

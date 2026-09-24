@@ -70,9 +70,10 @@ TOPIC_MAX_GRADE = {
 
 
 def _allowed_topics(grade):
-    # profiles.grade_level is free text; an unreadable grade is treated as the youngest.
+    # profiles.grade_level is free text; an unreadable grade or kindergarten (0) is served
+    # grade 1, since no topic starts earlier and an empty list has nothing to choose from.
     number = grade_levels.grade_number(grade)
-    if number is None:
+    if number is None or number < 1:
         number = 1
     return [t for t in ALL_TOPICS
             if TOPIC_MIN_GRADE[t] <= number
@@ -674,6 +675,8 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
     session_perf = get_session_performance(session_id)
     signal_state = get_session_signal_state(session_id, user_id)
     eeg_label    = signal_state.label if signal_state else "no_eeg"
+    # Only what the grade may see: a pick outside it is replaced at random by `_safe_topic`.
+    topic_list   = ", ".join(_allowed_topics(grade))
 
     prompt = f"""
         You are a function that returns ONLY valid JSON.
@@ -691,7 +694,7 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
         Select a math topic and difficulty level.
 
         TOPICS:
-        geometry, algebra, expressions, ordering, rationals, mean, median, mode, probability, angle_relationships
+        {topic_list}
 
         DIFFICULTY LEVELS:
         easy, medium, hard
@@ -757,7 +760,9 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
 
     if topic_data:
         topic = _safe_topic(topic_data["topic"], grade)
-        difficulty = topic_data["difficulty"]
+        difficulty = str(topic_data["difficulty"]).strip().lower()
+        if difficulty not in DIFFS:
+            difficulty = _difficulty_from_accuracy(accuracy_response, topic)
     else: #backup if generation failed.
         print("LLM selection generation failed, fallback to randomized selection")
         topic,difficulty = randomize_selection(accuracy_response, grade)
@@ -791,26 +796,24 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
 def randomize_selection(accuracy_response, grade):
     # Fallback for a failed LLM call; draws only from the grade's allowed topics.
     topic = random.choice(_allowed_topics(grade))
+    return topic, _difficulty_from_accuracy(accuracy_response, topic)
 
+
+def _difficulty_from_accuracy(accuracy_response, topic):
+    """The prompt's accuracy rule for `topic`; a topic never attempted counts as 0%."""
+    correct = attempted = 0
     for row in accuracy_response.data or []:
-        if row.get("math_topics", {}).get("topic_name") == topic:
+        if (row.get("math_topics") or {}).get("topic_name") == topic:
             correct = row.get("correct_questions") or 0
             attempted = row.get("attempted_questions") or 0
-            break 
+            break
 
-    if attempted == 0:
-        accuracy = 0
-    else:
-        accuracy = correct / attempted
-
+    accuracy = correct / attempted if attempted else 0
     if accuracy < 0.4:
-        difficulty = "easy"
-    elif accuracy < 0.7:
-        difficulty = "medium"
-    else:
-        difficulty = "hard"
-    
-    return topic, difficulty
+        return "easy"
+    if accuracy < 0.7:
+        return "medium"
+    return "hard"
 
 
 app= Flask(__name__)

@@ -54,6 +54,13 @@ describe('sign-in', () => {
     // "Incorrect" sends someone to reset a password that is fine.
     expect(signInMessage(err)).not.toMatch(/incorrect/i)
   })
+
+  it('points everyone at the school, not at a teacher', () => {
+    // Parents and teachers sign in here too.
+    const msg = signInMessage(refused('User is banned', 400, 'user_banned'))
+    expect(msg).toMatch(/contact your school/i)
+    expect(msg).not.toMatch(/teacher/i)
+  })
 })
 
 describe('sign-up', () => {
@@ -64,7 +71,19 @@ describe('sign-up', () => {
     // One sentence for every refusal about the account, so this one cannot be
     // told apart from the others by its wording.
     expect(signUpMessage(refused('Email exists', 422, 'email_exists'))).toBe(taken)
-    expect(signUpMessage(refused('Signups not allowed', 422, 'signup_disabled'))).toBe(taken)
+    // And a code nobody has seen yet, so a new spelling of "taken" is covered.
+    expect(signUpMessage(refused('Something new', 422, 'not_yet_invented'))).toBe(taken)
+  })
+
+  it.each([
+    ['a failed captcha', refused('captcha protection', 400, 'captcha_failed'), /verification check/i],
+    ['a hook refusing', refused('Hook timed out', 422, 'hook_timeout'), /right now/i],
+    ['sign-ups switched off', refused('Signups not allowed', 422, 'signup_disabled'), /right now/i],
+  ])('does not answer %s with "sign in instead"', (_name, err, expected) => {
+    // Not about the account, so nothing is given away by saying what happened.
+    const msg = signUpMessage(err)
+    expect(msg).toMatch(expected)
+    expect(msg).not.toMatch(/already have one/i)
   })
 
   it('says which password rule failed, when Supabase says', () => {

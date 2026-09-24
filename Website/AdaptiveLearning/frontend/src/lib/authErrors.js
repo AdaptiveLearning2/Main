@@ -12,6 +12,7 @@
 // turning confirmation on closes it -- Supabase then answers both the same way.
 
 const TOO_MANY = 'Too many attempts. Wait a few minutes and try again.'
+const CAPTCHA  = 'The verification check did not pass. Complete it and try again.'
 
 // No status is a request that never got an answer; 5xx is a service that failed
 // to give one. Neither is a statement about the email or the password, and
@@ -34,10 +35,10 @@ export function signInMessage(err) {
   // Only reachable with the right password, so it tells nobody anything they
   // could not find out by signing in.
   if (err.code === 'email_not_confirmed') return 'Confirm your email address first. The link is in your inbox.'
-  if (err.code === 'captcha_failed') return 'The verification check did not pass. Complete it and try again.'
+  if (err.code === 'captcha_failed') return CAPTCHA
   // Anything else -- a banned account, a hook refusing -- is not a wrong
   // password, and saying so sends someone to reset one that is fine.
-  return "Couldn't sign you in. Try again, and if it keeps happening ask your teacher or administrator."
+  return "Couldn't sign you in. If this keeps happening, contact your school."
 }
 
 // GoTrue's `weak_password.reasons`, which auth-js carries on the error.
@@ -60,6 +61,14 @@ export function signUpMessage(err) {
   // About the input, not about whether an account exists.
   if (err.code === 'weak_password') return weakPasswordMessage(err)
   if (err.code === 'email_address_invalid') return 'Enter a valid email address.'
-  // "Already registered" among them, worded so it does not say which it was.
+  if (err.code === 'captcha_failed') return CAPTCHA
+  // Refusals that are about the service, not the account, so saying what
+  // happened gives nothing away.
+  if (err.code === 'signup_disabled' || String(err.code || '').startsWith('hook_')) {
+    return "Couldn't create an account right now. If this keeps happening, contact your school."
+  }
+  // "Already registered", and any code not recognised above, worded so it does
+  // not say which it was. The default rather than a list, so a new code for a
+  // taken address cannot arrive with a sentence of its own.
   return "We couldn't create an account with those details. If you already have one, sign in instead."
 }

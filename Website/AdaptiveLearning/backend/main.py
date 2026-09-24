@@ -8682,21 +8682,19 @@ def link_child(payload: LinkChildRequest, request: Request):
         }).execute()
     except Exception as e:                                     # noqa: BLE001
         # A unique violation (this parent's other request got there first), or
-        # a write that landed and only the answer was lost. So the link's
-        # existence decides, and the code goes back only when the link certainly
-        # does not exist: a spent code live again is a second adult's link.
+        # a write whose answer was lost. **Never given back from here**: a write
+        # that raised may still commit after any check made now, and a spent
+        # code live again is a second adult's link. The cost is a child making
+        # a new code after a write that really failed.
         print(f"[link-child] the link write raised: {e}")
         try:
             exists = _linked()
         except Exception:                                      # noqa: BLE001
-            exists = None
-        if exists:
-            raise HTTPException(409, "Already linked to this child")
-        if exists is False:
-            _give_back()
-            raise unavailable
-        raise HTTPException(503, "Could not confirm the link. If this child is "
-                                 "not in your list, ask them for a new code.")
+            exists = False
+        if not exists:
+            raise HTTPException(503, "Could not confirm the link. If this child "
+                                     "is not in your list, ask them for a new code.")
+        # Linked, whichever request wrote it: that is what the parent asked for.
 
     return {"ok": True, "child_id": child_id,
             "child_name": prof.get("display_name") or "Student"}

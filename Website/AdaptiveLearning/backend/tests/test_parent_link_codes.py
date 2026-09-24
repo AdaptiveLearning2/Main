@@ -41,7 +41,7 @@ class _Fake:
 
     def __init__(self, codes=(), links=(), role="student", code_read_raises=None,
                  profile_raises=None, link_insert_raises=None, link_on_failure=False,
-                 link_read_raises_after_insert=False):
+                 link_read_raises_after_insert=False, link_read_raises=False):
         self.codes = [dict(c) for c in codes]
         self.links = [dict(l) for l in links]
         self.role = role       # the *child's* profile: the one link_child reads
@@ -52,6 +52,7 @@ class _Fake:
         self.link_on_failure = link_on_failure
         # Whether the link exists cannot be found out after the write failed.
         self.link_read_raises_after_insert = link_read_raises_after_insert
+        self.link_read_raises = link_read_raises
         self.insert_attempted = False
         self.delete_kwargs = []
         self.upserts = []      # (table, row, kwargs)
@@ -144,7 +145,8 @@ class _Fake:
                         raise client.code_read_raises
                     rows = [c for c in client.codes if self._matches(c)]
                 elif table == "parent_child_links":
-                    if client.link_read_raises_after_insert and client.insert_attempted:
+                    if client.link_read_raises or (
+                            client.link_read_raises_after_insert and client.insert_attempted):
                         raise RuntimeError("links unreadable")
                     rows = [l for l in client.links if self._matches(l)]
                 elif table == "profiles":
@@ -385,30 +387,68 @@ def test_a_child_profile_that_could_not_be_read_links_nobody(monkeypatch, parent
     assert [c["code"] for c in fake.codes] == [CODE], "a good code was spent"
 
 
-@pytest.mark.parametrize("linked_meanwhile,unreadable,status,given_back", [
-    # The link exists: the unique constraint (this parent's other request won),
-    # or a write that landed and whose answer was lost. Spent either way -- a
-    # code live again after its link was made is a second adult's link.
-    (True,  False, 409, False),
-    # The link certainly does not exist: nothing was used, so it goes back.
-    (False, False, 503, True),
-    # Nobody can say: spent, since giving back is the direction that can hurt.
-    (False, True,  503, False),
+@pytest.mark.parametrize("linked_meanwhile,unreadable", [
+    (False, False),   # no link to be seen now -- but the write may yet commit
+    (False, True),    # nobody can say
+    (True,  False),   # the unique constraint, or a write whose answer was lost
 ])
-def test_a_link_write_that_raised_gives_the_code_back_only_if_no_link_exists(
-        monkeypatch, parent, linked_meanwhile, unreadable, status, given_back):
-    """A failed insert was an unhandled 500. It is asked what happened rather
-    than guessed from the error text, and the answer decides the code."""
+def test_a_link_write_that_raised_never_gives_the_code_back(
+        monkeypatch, parent, linked_meanwhile, unreadable):
+    """A write that raised may still commit after any check made now, so no
+    answer to "is it linked?" makes giving the code back safe: a spent code
+    live again is a second adult's link. The cost is a new code after a write
+    that really failed."""
     fake = _Fake(codes=[_code()], link_insert_raises=RuntimeError("timeout"),
                  link_on_failure=linked_meanwhile,
                  link_read_raises_after_insert=unreadable)
     monkeypatch.setattr(main, "supabase", fake)
 
+    try:
+        main.link_child(main.LinkChildRequest(link_code=CODE), None)
+    except main.HTTPException:
+        pass
+
+    assert fake.codes == [], "a code whose link may have been written went back"
+    assert ("insert", "parent_link_codes") not in fake.ops
+
+
+@pytest.mark.parametrize("linked_meanwhile,unreadable,linked", [
+    (True,  False, True),
+    (False, False, False),
+    (False, True,  False),
+])
+def test_a_link_write_that_raised_is_reported_by_whether_the_link_exists(
+        monkeypatch, parent, linked_meanwhile, unreadable, linked):
+    """Made, with the answer lost, is a success: the parent is linked, and
+    "Already linked" shown as an error would say something went wrong. Not
+    made, or unknown, is a 503 that says what to do."""
+    fake = _Fake(codes=[_code()], link_insert_raises=RuntimeError("timeout"),
+                 link_on_failure=linked_meanwhile,
+                 link_read_raises_after_insert=unreadable)
+    monkeypatch.setattr(main, "supabase", fake)
+
+    if linked:
+        out = main.link_child(main.LinkChildRequest(link_code=CODE), None)
+        assert out["ok"] is True and out["child_id"] == CHILD
+    else:
+        with pytest.raises(main.HTTPException) as e:
+            main.link_child(main.LinkChildRequest(link_code=CODE), None)
+        assert e.value.status_code == 503
+        assert "new code" in e.value.detail
+
+
+def test_a_failed_check_for_an_existing_link_gives_the_code_back(monkeypatch, parent):
+    """Before the write nothing has been written, so the code is safe to give
+    back -- and nothing is written after a check that could not answer."""
+    fake = _Fake(codes=[_code()], link_read_raises=True)
+    monkeypatch.setattr(main, "supabase", fake)
+
     with pytest.raises(main.HTTPException) as e:
         main.link_child(main.LinkChildRequest(link_code=CODE), None)
 
-    assert e.value.status_code == status
-    assert bool(fake.codes) is given_back, fake.codes
+    assert e.value.status_code == 503
+    assert not fake.insert_attempted, "linked after a check that could not answer"
+    assert [c["code"] for c in fake.codes] == [CODE], "a good code was spent"
 
 
 def test_a_code_given_back_never_replaces_a_newer_one(monkeypatch, parent):

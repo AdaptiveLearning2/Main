@@ -1028,9 +1028,9 @@ O/0/I/1, 30 minutes, one per student. `parent_link_codes` has RLS on, no policie
 reading a code is enough to become that child's parent.
 
 **The conditional delete is the claim**: the unexpired code is deleted (`returning` named), and the link written only
-if a row came back. The code goes back, by insert, only when its link certainly does not exist — a write that raised
-may have landed. The child's role is re-read (not via `_role`, which answers `student` on a failed read). Unknown,
-expired and spent are one 404, a failed read is 503. Still "notify, not block", and **a student cannot remove a
+if a row came back. It goes back (by insert) only if the write was never tried: one that raised may still commit. The
+child's role is re-read (not via `_role`, which answers `student` on a failed read). Unknown, expired and spent are one
+404 and write `authz_denied`; a failed read is 503. Still "notify, not block", and **a student cannot remove a
 link** — a safeguarding decision, not an omission. Tests: `test_parent_link_codes.py`.
 
 ## Consent — `signal_consent` decides what may be recorded

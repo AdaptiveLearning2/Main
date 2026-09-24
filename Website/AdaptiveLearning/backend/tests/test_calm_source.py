@@ -1,10 +1,4 @@
-"""Calm has two sources on two scales, and every reader has to know which.
-
-The sidecar's SDK ratio and its local alpha residual are different numbers
-on different spans: the stressed line is per source in both packages, the
-decider reads the source off the rows, and the row records the source, its
-scale and whether the calm was measured at all.
-"""
+"""Calm has two sources (SDK, local) on two scales, and every reader has to know which."""
 
 from __future__ import annotations
 

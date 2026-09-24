@@ -1,16 +1,4 @@
-"""Tests for the admin dashboard: who can reach it, and what the flags can do.
-
-Two things matter most here.
-
-A flag can only ever turn recording off, never on. The kill switches are ANDed
-into `_may_record`, so no combination of them can record something a student
-declined.
-
-The consent bypass is the one control that deliberately records without
-consent. It needs an explicit, capped duration, and expiry is checked on every
-read rather than by a job that could fail to run. The important tests prove it
-turns itself off.
-"""
+"""Admin dashboard: who can reach it, flags that only say no, and a self-expiring consent bypass."""
 
 import os
 from datetime import timedelta
@@ -118,9 +106,7 @@ def _flag_rows(**overrides):
     return rows
 
 
-# Saved at import time, before conftest's autouse fixture replaces it for each
-# test. `real_flags` restores this for tests about the reader itself, not about
-# what the flags decide.
+# Saved before conftest's autouse fixture replaces it; `real_flags` restores it.
 _REAL_FEATURE_FLAGS = main._feature_flags
 
 
@@ -152,8 +138,6 @@ ADMIN_GETS = [
 
 @pytest.mark.parametrize("name,call", ADMIN_GETS, ids=[n for n, _ in ADMIN_GETS])
 def test_a_non_admin_is_refused_by_every_admin_endpoint(monkeypatch, name, call):
-    """Covers every admin endpoint, not just a sample, so a new one that
-    forgets `_require_admin` gets caught."""
     monkeypatch.setattr(main, "supabase", _Fake(admins=[], flags=_flag_rows()))
     monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
 
@@ -188,16 +172,14 @@ def test_every_admin_route_is_covered_by_the_refusal_test():
 
 
 def test_an_unreadable_admin_table_denies(monkeypatch):
-    """Fails closed, like `_consent`. This guards the switch that turns off
-    consent enforcement, so a database blip must not open it."""
+    """Fails closed: this guards the switch that turns off consent enforcement."""
     monkeypatch.setattr(main, "supabase", _Fake(admins=["admin-1"],
                                                 raises=["profiles"]))
     assert main._is_admin("admin-1") is False
 
 
 def test_an_admin_may_view_any_student(monkeypatch):
-    """Admin is a fourth relationship on the shared helper, so every endpoint
-    already gating on it picks this up automatically."""
+    """Admin is a fourth relationship on the shared helper."""
     monkeypatch.setattr(main, "supabase", _Fake(admins=["admin-1"]))
     assert main._can_view_student(ADMIN, STUDENT) is True
 
@@ -205,8 +187,7 @@ def test_an_admin_may_view_any_student(monkeypatch):
 # ── the flags ───────────────────────────────────────────────────────────────
 
 def test_an_unknown_flag_is_refused_rather_than_created(monkeypatch):
-    """`_feature_flags` ignores unrecognised rows, so writing one would make a
-    switch that reads back as set and controls nothing."""
+    """An unrecognised row is inert, so writing one would be a switch that controls nothing."""
     monkeypatch.setattr(main, "supabase", _Fake(admins=["admin-1"], flags=_flag_rows()))
     monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
 
@@ -232,8 +213,7 @@ def test_a_flag_write_is_audited(monkeypatch):
 
 
 def test_a_failed_audit_does_not_undo_the_flag(monkeypatch):
-    """The flag is already written by then. Raising would invite a retry that
-    changes nothing and audits nothing."""
+    """The flag is already written; raising would invite a retry that audits nothing."""
     monkeypatch.setattr(main, "supabase",
                         c := _Fake(admins=["admin-1"], flags=_flag_rows(),
                                    raises=["feature_flag_changes"]))
@@ -262,8 +242,7 @@ def test_a_recording_switch_denies_its_channel_for_a_consenting_student(
 
 
 def test_a_recording_switch_cannot_grant_what_consent_refused(monkeypatch, set_flag):
-    """ANDed, never ORed: turning every switch on must not record for a
-    student who said no."""
+    """ANDed, never ORed."""
     monkeypatch.setattr(main, "supabase", _Fake(consent={
         "user_id": STUDENT, "eeg_enabled": False,
         "headband_optical_enabled": False, "camera_enabled": False}))
@@ -278,8 +257,7 @@ def test_a_recording_switch_cannot_grant_what_consent_refused(monkeypatch, set_f
 # ── the consent bypass ──────────────────────────────────────────────────────
 
 def test_disabling_consent_enforcement_requires_a_duration(monkeypatch):
-    """No default duration -- that decision must be made explicitly, not
-    silently chosen by the code."""
+    """No default: how long consent goes unenforced is not the code's choice."""
     monkeypatch.setattr(main, "supabase", _Fake(admins=["admin-1"], flags=_flag_rows()))
     monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
 
@@ -302,7 +280,7 @@ def test_the_bypass_duration_is_bounded(monkeypatch, minutes):
 
 
 def test_a_live_bypass_records_for_a_student_who_never_consented(monkeypatch, set_flag):
-    """This is what the bypass switch is meant to do, not a bug."""
+    """The bypass's intended effect, not a bug."""
     monkeypatch.setattr(main, "supabase", _Fake(consent=None))
     set_flag(main.CONSENT_ENFORCEMENT_FLAG, False,
              bypass_until=(main._utc_now() + timedelta(minutes=30)).isoformat())
@@ -316,8 +294,7 @@ def test_a_live_bypass_records_for_a_student_who_never_consented(monkeypatch, se
 
 
 def test_an_expired_bypass_denies_again_with_no_write(monkeypatch, set_flag):
-    """Expiry is checked on read, so enforcement resumes with no job needed. A
-    failed job would otherwise leave consent unenforced forever."""
+    """Expiry is checked on read, so no job has to run for enforcement to resume."""
     monkeypatch.setattr(main, "supabase", _Fake(consent=None))
     set_flag(main.CONSENT_ENFORCEMENT_FLAG, False,
              bypass_until=(main._utc_now() - timedelta(seconds=1)).isoformat())
@@ -328,8 +305,7 @@ def test_an_expired_bypass_denies_again_with_no_write(monkeypatch, set_flag):
 
 
 def test_a_bypass_with_no_expiry_is_treated_as_expired(monkeypatch, set_flag):
-    """An unbounded bypass is what this column exists to prevent, so a row
-    with no expiry resumes enforcement instead of running forever."""
+    """A row with no expiry resumes enforcement rather than running forever."""
     monkeypatch.setattr(main, "supabase", _Fake(consent=None))
     set_flag(main.CONSENT_ENFORCEMENT_FLAG, False, bypass_until=None)
 
@@ -338,9 +314,7 @@ def test_a_bypass_with_no_expiry_is_treated_as_expired(monkeypatch, set_flag):
 
 
 def test_the_bypass_does_not_reach_the_consent_screen(monkeypatch, set_flag):
-    """`_consent` feeds the consent screen, reports, and poller status. The
-    bypass only decides whether to skip asking -- it must not change what
-    those show as agreed."""
+    """The bypass skips asking; it must not change what `_consent` reports as agreed."""
     monkeypatch.setattr(main, "supabase", _Fake(consent=None))
     set_flag(main.CONSENT_ENFORCEMENT_FLAG, False,
              bypass_until=(main._utc_now() + timedelta(minutes=30)).isoformat())
@@ -349,8 +323,6 @@ def test_the_bypass_does_not_reach_the_consent_screen(monkeypatch, set_flag):
 
 
 def test_the_bypass_does_not_override_the_school_year(monkeypatch, set_flag):
-    """The school-year window is a separate gate. Bypassing consent must not
-    also start recording outside term."""
     monkeypatch.setattr(main, "supabase", _Fake(consent=None))
     monkeypatch.setattr(main, "_retention_window",
                         lambda: {"state": main.WINDOW_AFTER, "starts_on": None,
@@ -365,9 +337,7 @@ def test_the_bypass_does_not_override_the_school_year(monkeypatch, set_flag):
 
 def test_an_unreadable_flag_table_falls_back_to_the_declared_defaults(
         monkeypatch, real_flags):
-    """An unreadable table falls back to the declared defaults, not to fully
-    off or fully on -- a database blip must not be why consent stops being
-    enforced."""
+    """A database blip must not be why consent stops being enforced."""
     monkeypatch.setattr(main, "supabase", _Fake(raises=["feature_flags"]))
 
     flags = main._feature_flags()
@@ -384,8 +354,7 @@ def test_an_unknown_row_in_the_table_is_ignored(monkeypatch, real_flags):
 
 
 def test_a_missing_row_still_has_its_default(monkeypatch, real_flags):
-    """The defaults are the contract: a key absent from the table has the value
-    the system had before the table existed."""
+    """The declared defaults are the contract for an absent key."""
     monkeypatch.setattr(main, "supabase", _Fake(flags=[]))
 
     assert main._feature_flags()["recording_eeg_enabled"]["enabled"] is True
@@ -399,12 +368,7 @@ _SIGNAL_CONTENT = {"alpha", "beta", "theta", "delta", "gamma", "focus_score",
 
 
 class _LiveFake(_Fake):
-    """`_Fake` plus one open session, and a record of every select it saw.
-
-    The tests below check the selects themselves: an endpoint that asks the
-    database for fewer columns is safer than one that fetches everything and
-    filters afterward, and only the query shows which one is happening.
-    """
+    """`_Fake` plus open sessions, recording every select so tests can assert on the query."""
 
     def __init__(self, sessions=(), signals=None, **kw):
         super().__init__(**kw)
@@ -452,17 +416,14 @@ class _LiveFake(_Fake):
 
 
 def test_live_signals_asks_the_database_for_no_readings(monkeypatch):
-    """The readings never leave the database -- they aren't fetched and then
-    dropped. An admin has no relationship to these students that entitles
-    them to the values, only to whether data is arriving."""
+    """An admin is entitled to whether data arrives, not the values; they are never fetched."""
     ts = main._utc_now().isoformat()
     monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
     monkeypatch.setattr(main, "_display_names", lambda _ids: {STUDENT: "Ada"})
     fake = _LiveFake(
         admins=["admin-1"],
         sessions=[{"id": "s-1", "user_id": STUDENT, "started_at": ts}],
-        # Loaded with real content on purpose, so a `select *` mistake would
-        # leak into the payload and get caught below.
+        # Real content, so a `select *` would leak into the payload below.
         signals={"cognitive_signals": [{"ts": ts, "focus_score": 88,
                                         "alpha": 0.5, "stress": 0.2}],
                  "face_signals": [{"ts": ts, "emotion": "negative",
@@ -482,21 +443,16 @@ def test_live_signals_asks_the_database_for_no_readings(monkeypatch):
     flat = repr(out)
     for field in _SIGNAL_CONTENT:
         assert field not in flat, f"{field} reached an admin payload"
-    # Checks a value, not just a field name -- a payload could carry the
-    # reading without naming it. Uses a distinctive string rather than a
-    # number: a number like "88" can also match digits inside the timestamp.
+    # A value, not a field name; a string, since "88" could match the timestamp.
     assert "negative" not in flat
     session = out["sessions"][0]
     assert session["eeg"]["flowing"] is True
-    # The exact key set is what pins the numbers out: any extra key here is a
-    # reading that escaped.
+    # The exact key set pins the numbers out.
     assert set(session["eeg"]) == {"flowing", "stale", "seen", "last_ts"}
     assert set(session["camera"]) == {"flowing", "stale", "seen", "last_ts"}
 
 
 def test_a_channel_that_never_reported_is_not_the_same_as_stale(monkeypatch):
-    """A sensor that stopped and a session that never had one are different
-    facts, and must not be reported the same way."""
     old = (main._utc_now() - timedelta(hours=2)).isoformat()
     monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
     monkeypatch.setattr(main, "_display_names", lambda _ids: {STUDENT: "Ada"})
@@ -511,9 +467,7 @@ def test_a_channel_that_never_reported_is_not_the_same_as_stale(monkeypatch):
 
 
 def test_an_unreadable_channel_is_not_reported_as_never_reported(monkeypatch):
-    """A failed read is a third state, not "never had a camera" -- reporting
-    it that way would send someone chasing a hardware fault that's really a
-    database blip."""
+    """A failed read is a third state, not a hardware fault."""
     ts = main._utc_now().isoformat()
     monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
     monkeypatch.setattr(main, "_display_names", lambda _ids: {STUDENT: "Ada"})
@@ -528,14 +482,7 @@ def test_an_unreadable_channel_is_not_reported_as_never_reported(monkeypatch):
 
 
 def test_live_signals_submits_every_read_before_waiting_on_any():
-    """Nothing submitted to `_admin_live_pool` may wait on something else in
-    the same pool.
-
-    If a task submitted to a fixed-size pool blocks on another task in that
-    same pool, and the pool fills up with waiters, it deadlocks rather than
-    just running slowly. This checks that all reads are submitted before any
-    result is awaited, so that can't happen.
-    """
+    """A task waiting on another in the same fixed-size pool can deadlock it."""
     import inspect
 
     source = inspect.getsource(main._latest_signal_ts)
@@ -589,8 +536,7 @@ def test_health_says_so_while_consent_is_bypassed(monkeypatch, set_flag):
 
 def test_env_flags_are_marked_uneditable_and_never_enumerate_the_environment(
         monkeypatch):
-    """Named rather than discovered: `os.environ` also holds the service-role
-    key, and a dashboard that enumerated it would eventually render a secret."""
+    """Named, not enumerated: `os.environ` also holds the service-role key."""
     monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
     monkeypatch.setattr(main, "supabase", _Fake(admins=["admin-1"]))
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "super-secret")
@@ -604,8 +550,7 @@ def test_env_flags_are_marked_uneditable_and_never_enumerate_the_environment(
 # ── the school year ─────────────────────────────────────────────────────────
 
 def test_an_unknown_timezone_is_refused(monkeypatch):
-    """The one field whose typo is invisible: it denies all recording, and it
-    is edited twice a year."""
+    """A typo here silently denies all recording."""
     monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
     monkeypatch.setattr(main, "supabase", _Fake(admins=["admin-1"]))
 
@@ -638,8 +583,7 @@ def test_an_inverted_year_is_refused(monkeypatch):
 
 
 def test_an_unenforced_year_may_omit_the_dates(monkeypatch):
-    """They are nullable for exactly this case -- an unenforced row should not
-    have to carry invented term dates."""
+    """An unenforced row need not carry invented term dates."""
     monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
     monkeypatch.setattr(main, "supabase",
                         c := _Fake(admins=["admin-1"]))

@@ -1,12 +1,4 @@
-"""Tests that the EEG status endpoints tolerate a missing or misconfigured
-token.
-
-eeg_client's header helpers raise RuntimeError when EEG_API_TOKEN /
-EEG_ADMIN_TOKEN are unset, and get_state / get_muse_status let that
-propagate rather than mask a config error as an outage. These endpoints
-must catch it and report a status, not turn a missing-token setup into a
-bare 500.
-"""
+"""EEG endpoints: a missing token reports a status rather than a 500, and cross-user station guards."""
 import os
 
 # main.py builds a Supabase client at import time and raises without these.
@@ -22,10 +14,7 @@ import main  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _clean_poller_state(monkeypatch):
-    """Isolates eeg_poller._active for this file and stubs out real sidecar
-    calls. Without the eeg_client stubs, the poller's background thread
-    would hit the real _learner_headers() call, which raises when
-    EEG_API_TOKEN isn't set, silently killing the thread under a test."""
+    """Isolates eeg_poller._active and stubs sidecar calls, which raise without EEG_API_TOKEN."""
     monkeypatch.setattr(eeg_client, "start_session", lambda device_id=eeg_client.DEFAULT_DEVICE_ID: {"ok": True})
     monkeypatch.setattr(eeg_client, "stop_session", lambda device_id=eeg_client.DEFAULT_DEVICE_ID: {"ok": True})
     monkeypatch.setattr(eeg_client, "get_state", lambda device_id=eeg_client.DEFAULT_DEVICE_ID, timeout=2.0: None)
@@ -83,8 +72,7 @@ def test_health_reports_unavailable_when_sidecar_is_down(monkeypatch):
 
 
 def test_health_reports_error_instead_of_500_on_missing_token(monkeypatch):
-    # Sidecar reachable, but the learner token is unset, so get_muse_status
-    # raises. This used to 500 the health check.
+    # Sidecar reachable, but the learner token is unset, so get_muse_status raises.
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
 
     def _raise():
@@ -121,9 +109,7 @@ def test_debug_reports_error_instead_of_500_on_missing_token(monkeypatch):
 
 
 # ── cross-user guard on /api/eeg/status & /api/eeg/debug ────────────────
-#
-# Uses the real eeg_poller._active registry, not a mocked can_use_device,
-# so a refactor breaking that wiring shows up here too.
+# Real eeg_poller._active registry, not a mocked can_use_device.
 
 def test_status_blocks_user_b_from_user_as_claimed_station(monkeypatch):
     eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-x")
@@ -157,12 +143,7 @@ def test_debug_blocks_user_b_from_user_as_claimed_station(monkeypatch):
 
 
 # ── the pre-claim pairing window, exercised end to end ───────────────────
-#
-# The tests above cover a station a live poller already owns. This covers
-# the gap before that: the few seconds where two users both reach for the
-# same unclaimed station before either has a poller. Real registry
-# throughout, so this proves the endpoint wiring, not just
-# eeg_poller.reserve_device in isolation.
+# Two users reaching for one unclaimed station before either has a poller.
 
 def test_two_users_racing_an_unclaimed_station_the_second_is_blocked(monkeypatch):
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
@@ -172,10 +153,7 @@ def test_two_users_racing_an_unclaimed_station_the_second_is_blocked(monkeypatch
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
     assert main.eeg_muse_refresh(request=None, body={"device_id": "station-race"}) == {"ok": True}
 
-    # user-b, racing a moment later, is refused -- not just on a second
-    # refresh, but on reading the station too. Previously this read the
-    # station's live snapshot freely, since no live poller existed yet to
-    # trip can_use_device.
+    # user-b is refused on refresh and on reading the station too.
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
     with pytest.raises(main.HTTPException) as exc_info:
         main.eeg_muse_refresh(request=None, body={"device_id": "station-race"})
@@ -188,17 +166,13 @@ def test_two_users_racing_an_unclaimed_station_the_second_is_blocked(monkeypatch
         "available": False, "reason": "in_use_by_other",
     }
 
-    # user-a, meanwhile, can keep interacting with the station they reserved.
+    # user-a keeps the station they reserved.
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
     assert main.eeg_muse_refresh(request=None, body={"device_id": "station-race"}) == {"ok": True}
 
 
 def test_a_failed_refresh_releases_its_reservation_instead_of_squatting(monkeypatch):
-    """reserve_device claims the station before the endpoint knows whether the
-    attempt will actually go anywhere. A request that never reaches the
-    bridge (sidecar down) is not evidence of active pairing worth protecting
-    -- squatting the claim for it would lock a *different* user out of a
-    station neither of them is doing anything with."""
+    """A request that never reaches the bridge is not active pairing worth protecting."""
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: False)
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
     with pytest.raises(main.HTTPException) as exc_info:
@@ -229,15 +203,13 @@ def test_a_bridge_error_on_connect_releases_its_reservation(monkeypatch):
 
 
 def test_a_successful_scan_still_holds_its_reservation_through_a_later_failure(monkeypatch):
-    """The release above must not overreach: it is scoped to the caller who
-    just failed, not to every reservation the module knows about."""
+    """The release is scoped to the caller who just failed."""
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
     monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
     main.eeg_muse_refresh(request=None, body={"device_id": "station-a"})
 
-    # A second, unrelated user's failed attempt on a *different* station must
-    # not touch user-a's still-active claim on station-a.
+    # user-b failing on station-b must not touch user-a's claim on station-a.
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: False)
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
     with pytest.raises(main.HTTPException):
@@ -251,9 +223,7 @@ def test_a_successful_scan_still_holds_its_reservation_through_a_later_failure(m
 
 
 def test_the_same_users_failed_attempt_on_one_device_spares_their_other(monkeypatch):
-    """A narrower case than the cross-user test above: one user holding two
-    reservations at once. A release scoped only to user_id, not device_id,
-    would drop both when only one had a failure."""
+    """One user, two reservations: the release is scoped to device_id, not just user_id."""
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
     monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
@@ -271,19 +241,13 @@ def test_the_same_users_failed_attempt_on_one_device_spares_their_other(monkeypa
     with pytest.raises(main.HTTPException) as exc_info:
         main.eeg_muse_refresh(request=None, body={"device_id": "station-a"})
     assert exc_info.value.status_code == 403
-    # station-b, meanwhile, is genuinely free again -- the failed connect
-    # released only what it had just claimed.
+    # station-b is free again.
     monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
     assert main.eeg_muse_refresh(request=None, body={"device_id": "station-b"}) == {"ok": True}
 
 
 def test_closing_one_session_spares_another_sessions_reservation(monkeypatch):
-    """A student is mid-pairing station B under session S2 when a reload calls
-    /api/sessions/start, finds S1 stale, and stops it. S1's close must not
-    release S2's station: the release used to be keyed on user_id alone, so
-    it dropped every reservation the student held. Worth closing even
-    though bounded -- station B could become claimable by another student
-    up to RESERVATION_TTL_SECONDS early, mid-pairing."""
+    """Stopping stale S1 must not release the station S2 is mid-pairing on."""
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
     monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
@@ -297,23 +261,19 @@ def test_closing_one_session_spares_another_sessions_reservation(monkeypatch):
     monkeypatch.setattr(main, "supabase", _SessionsTable("user-a"))
     main.eeg_stop(main.EegSessionRequest(session_id="S1"), request=None)
 
-    # S1's station is free, which is the point of the close.
+    # S1's station is free.
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
     assert main.eeg_muse_refresh(
         request=None, body={"device_id": "station-a"}) == {"ok": True}
 
-    # S2's is not. Without the fix this 200s and a stranger takes the station
-    # out from under an active pairing flow.
+    # S2's is not.
     with pytest.raises(main.HTTPException) as exc_info:
         main.eeg_muse_refresh(request=None, body={"device_id": "station-b"})
     assert exc_info.value.status_code == 403
 
 
 def test_a_reservation_with_no_session_is_still_released(monkeypatch):
-    """The compatibility path: a frontend that hasn't been updated sends no
-    session_id. Sparing those entries would look safer but is worse -- no
-    session close could ever name one, so an abandoned pairing would hold
-    the station until its TTL instead of releasing a little early."""
+    """No session close could ever name a session-less entry, so it must be released."""
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
     monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
@@ -328,10 +288,7 @@ def test_a_reservation_with_no_session_is_still_released(monkeypatch):
 
 
 def test_refreshing_without_a_session_id_keeps_the_one_already_recorded(monkeypatch):
-    """A pairing flow calls refresh repeatedly. If a later call with no
-    session_id overwrote the recorded one with None, the scoping would
-    decay mid-flow instead of failing outright -- a harder bug to notice
-    since it depends on call order."""
+    """A later refresh with no session_id must not overwrite the recorded one with None."""
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
     monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
@@ -355,9 +312,7 @@ def test_stop_releases_the_reservation_for_another_user(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
     main.eeg_muse_refresh(request=None, body={"device_id": "station-race"})
 
-    # user-a gave up on pairing without ever reaching /start -- no live
-    # poller exists for eeg_poller.stop to find, but the reservation from the
-    # scan above is still theirs to release.
+    # No live poller exists, but the scan's reservation is still theirs to release.
     monkeypatch.setattr(main, "supabase", _SessionsTable("user-a"))
     main.eeg_stop(main.EegSessionRequest(session_id="session-1"), request=None)
 
@@ -369,10 +324,7 @@ def test_stop_releases_the_reservation_for_another_user(monkeypatch):
 
 def test_start_rejects_unknown_device_id(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
-    # The sessions stub answers for one table. /api/eeg/start also gates on
-    # consent and the retention window (from conftest's autouse fixture);
-    # only consent is stubbed here since these tests are about device
-    # handling, not the gates themselves.
+    # Consent stubbed open; the retention window is open via conftest.
     monkeypatch.setattr(main, "_consent",
                         lambda _s: {"eeg_enabled": True, "retrieved": True})
     monkeypatch.setattr(main, "supabase", _SessionsTable("user-a"))
@@ -387,10 +339,7 @@ def test_start_rejects_unknown_device_id(monkeypatch):
 
 def test_start_allows_known_device_id(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
-    # The sessions stub answers for one table. /api/eeg/start also gates on
-    # consent and the retention window (from conftest's autouse fixture);
-    # only consent is stubbed here since these tests are about device
-    # handling, not the gates themselves.
+    # Consent stubbed open; the retention window is open via conftest.
     monkeypatch.setattr(main, "_consent",
                         lambda _s: {"eeg_enabled": True, "retrieved": True})
     monkeypatch.setattr(main, "supabase", _SessionsTable("user-a"))
@@ -404,14 +353,9 @@ def test_start_allows_known_device_id(monkeypatch):
 
 
 def test_start_falls_back_to_permissive_when_list_devices_unreachable(monkeypatch):
-    """An empty known_ids (list_devices() erroring even though is_alive() just
-    succeeded -- a transient sidecar glitch) must not block a legitimate
-    start; see the comment in eeg_start."""
+    """An empty known_ids (a transient list_devices() error) must not block a start."""
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
-    # The sessions stub answers for one table. /api/eeg/start also gates on
-    # consent and the retention window (from conftest's autouse fixture);
-    # only consent is stubbed here since these tests are about device
-    # handling, not the gates themselves.
+    # Consent stubbed open; the retention window is open via conftest.
     monkeypatch.setattr(main, "_consent",
                         lambda _s: {"eeg_enabled": True, "retrieved": True})
     monkeypatch.setattr(main, "supabase", _SessionsTable("user-a"))
@@ -425,11 +369,7 @@ def test_start_falls_back_to_permissive_when_list_devices_unreachable(monkeypatc
 
 
 # ── /api/eeg/muse/refresh|connect|disconnect: cross-user guard ──────────
-#
-# Same real-registry approach as the status/debug tests above. A stranger
-# disconnecting/reconnecting someone else's live station is griefing, not
-# just an unwanted side effect, so each handler gets owner-allowed /
-# stranger-403 / unclaimed-open coverage.
+# Each handler: owner allowed, stranger 403, unclaimed open.
 
 def test_muse_refresh_blocks_stranger_allows_owner(monkeypatch):
     eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-x")
@@ -497,11 +437,7 @@ def test_muse_disconnect_allows_unclaimed_station(monkeypatch):
 
 
 def test_muse_disconnect_does_not_reserve_the_station(monkeypatch):
-    """Unlike refresh/connect, disconnect is teardown, not the start of a
-    pairing attempt -- calling it on a free station must not claim it. An
-    earlier version used reserve_device here too, so a disconnect on
-    nobody's station locked it out for the TTL, renewable indefinitely by
-    repeating the call."""
+    """Disconnect is teardown, not the start of a pairing attempt."""
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
     monkeypatch.setattr(eeg_client, "muse_disconnect", lambda device_id: {"ok": True})
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
@@ -514,10 +450,7 @@ def test_muse_disconnect_does_not_reserve_the_station(monkeypatch):
 
 
 def test_muse_disconnect_releases_the_callers_own_reservation(monkeypatch):
-    """A user who scanned/connected and then disconnects instead of pairing is
-    giving up on the station just as explicitly as calling /api/eeg/stop.
-    Without a release here, the station stayed locked to them for up to
-    the TTL after they moved on."""
+    """Disconnecting gives up the station as explicitly as /api/eeg/stop."""
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
     monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
     monkeypatch.setattr(eeg_client, "muse_disconnect", lambda device_id: {"ok": True})

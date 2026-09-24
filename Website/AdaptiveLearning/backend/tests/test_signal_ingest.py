@@ -1,17 +1,4 @@
-"""Tests ingestion, the trust boundary: the client posting these rows is
-not trusted.
-
-The sidecar runs on the student's own machine and posts with the
-student's own bearer token. `_verify_session_owner` answers "whose
-session"; this file answers the two questions it does not: may this be
-recorded, and how much of it.
-
-The consent check matters most, and is deliberately redundant with the
-sidecar's own -- a stale sidecar that kept sending after a withdrawal
-would otherwise keep recording, invisible to every surface that reads.
-Getting this wrong doesn't leak data to the wrong reader; it records a
-child's body against their refusal.
-"""
+"""Ingestion trust boundary: may this be recorded (consent), and how much of it (bounds)."""
 
 import os
 import time
@@ -55,9 +42,7 @@ class _Query:
         return self
 
     def single(self):
-        # Records nothing on purpose: nothing on these paths uses it, and a
-        # half-implemented single() would diverge from the real builder's
-        # behaviour. Implement it properly when a path needs it.
+        # Unused on these paths; implement properly when one needs it.
         return self
 
     def insert(self, rows, **_k):
@@ -105,8 +90,7 @@ def store(monkeypatch):
     st = {"signal_consent": [], "heart_signals": [], "face_signals": []}
     monkeypatch.setattr(main, "supabase", _FakeSupabase(st))
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
-    # Recorded rather than merely stubbed, so a test can assert it was *not*
-    # reached -- which is the point of putting the rate limit in front of it.
+    # Recorded, so a test can assert the rate limit kept it from being reached.
     st["_owner_checks"] = []
     monkeypatch.setattr(main, "_verify_session_owner",
                         lambda *a: st["_owner_checks"].append(a))
@@ -136,9 +120,7 @@ def _post_heart(samples):
 # ── consent decides what is written ──────────────────────────────────────────
 
 def test_a_heart_sample_from_a_declined_sensor_is_not_stored(store):
-    """Per *sample*, against the sensor named in `source`. One channel, two
-    sensors, two separate permissions -- which is why the table carries
-    `source` at all."""
+    """Per sample, against the sensor named in `source`."""
     _consent(store, headband_optical_enabled=True)      # camera declined
 
     out = _post_heart([_heart(source="rppg")])
@@ -149,8 +131,6 @@ def test_a_heart_sample_from_a_declined_sensor_is_not_stored(store):
 
 
 def test_a_mixed_batch_keeps_the_consented_samples(store):
-    """Dropping the batch would take the permitted samples with it, and a mixed
-    batch is a legitimate thing for a client to send."""
     _consent(store, headband_optical_enabled=True)
 
     out = _post_heart([
@@ -164,7 +144,6 @@ def test_a_mixed_batch_keeps_the_consented_samples(store):
 
 
 def test_no_consent_row_records_nothing(store):
-    """Absent means the same as all-false. No backfill, no default-on."""
     out = _post_heart([_heart()])
     assert (out["inserted"], out["dropped"]) == (0, 1)
 
@@ -179,8 +158,7 @@ def test_camera_consent_alone_permits_only_the_camera_source(store):
 
 
 def test_face_ingestion_stops_when_the_camera_is_declined(store):
-    """The stale-sidecar case: it kept sending, and the withdrawal must still
-    hold at the boundary."""
+    """A stale sidecar keeps sending; the withdrawal must hold at the boundary."""
     _consent(store, eeg_enabled=True)                    # camera declined
 
     out = main.ingest_face(
@@ -193,8 +171,7 @@ def test_face_ingestion_stops_when_the_camera_is_declined(store):
 
 
 def test_face_ingestion_stores_both_emotion_fields(store):
-    """`emotion_confidence` and `emotion_trusted` are what the fusion gate
-    reads; dropping them on the way in would make the gate unreachable."""
+    """`emotion_confidence` and `emotion_trusted` are what the fusion gate reads."""
     _consent(store, camera_enabled=True)
 
     main.ingest_face(
@@ -207,16 +184,11 @@ def test_face_ingestion_stores_both_emotion_fields(store):
     row = store["face_signals"][0]
     assert row["emotion_confidence"] == 0.81
     assert row["emotion_trusted"] is True
-    # Sent by the caller and deliberately not stored: the column was retired,
-    # and Pydantic drops unknown fields rather than erroring. Asserted
-    # because a row still carrying the key would fail the INSERT at the
-    # database instead of here.
+    # Retired column: Pydantic drops it, or the INSERT would fail at the database.
     assert "identity_confidence" not in row
 
 
 def test_consent_failing_to_read_records_nothing(store, monkeypatch):
-    """`_consent` fails closed. A database problem must not become an
-    unrecorded-permission grant."""
     monkeypatch.setattr(main, "_consent",
                         lambda _uid: {**main._CONSENT_DENIED, "retrieved": False})
     out = _post_heart([_heart()])
@@ -226,10 +198,7 @@ def test_consent_failing_to_read_records_nothing(store, monkeypatch):
 # ── the retry that would otherwise double every average ──────────────────────
 
 def test_replaying_a_batch_inserts_nothing_the_second_time(store):
-    """ON CONFLICT DO NOTHING against (session_id, source, ts). A
-    retried batch is the normal consequence of a flaky connection; the
-    failure it used to cause is silent -- nothing about a doubled row is
-    visible except that the chart's average is wrong."""
+    """ON CONFLICT DO NOTHING on (session_id, source, ts); a doubled row only shows as a wrong average."""
     _consent(store, headband_optical_enabled=True)
     batch = [_heart(ts="2026-08-09T10:00:00Z"), _heart(ts="2026-08-09T10:00:01Z")]
 
@@ -238,24 +207,13 @@ def test_replaying_a_batch_inserts_nothing_the_second_time(store):
 
     assert first["inserted"] == 2
     assert len(store["heart_signals"]) == 2, "the replay doubled the rows"
-    # Counted from what the database wrote, not from what was sent. Reporting
-    # the batch size here would tell a retrying client its retry worked.
+    # Counted from what the database wrote, not from what was sent.
     assert second["inserted"] == 0
     assert second["duplicates"] == 2
 
 
 def test_replaying_a_cognitive_batch_inserts_nothing_the_second_time(store):
-    """`cog_session_ts_key` (20260914000000), and this is the channel with two
-    live writers rather than one.
-
-    `eeg_poller` writes `cognitive_signals` with the service-role client under
-    `INGEST_MODE=pull` while the sidecar's push client posts here, so an
-    overlapping deployment wrote every EEG sample twice -- silently, because a
-    duplicate is not an error and surfaces only as a wrong average, carried
-    forward by the rollup that outlives the raw rows. `/api/v1/push/start`
-    refuses under `pull` precisely because there was no key to make the
-    overlap harmless.
-    """
+    """`cog_session_ts_key`: this channel has two writers (the poller and push)."""
     store["cognitive_signals"] = []
     _consent(store, eeg_enabled=True)
     batch = [{"ts": "2026-08-10T10:00:00Z", "focus": 0.7},
@@ -268,16 +226,12 @@ def test_replaying_a_cognitive_batch_inserts_nothing_the_second_time(store):
 
     assert first["inserted"] == 2
     assert len(store["cognitive_signals"]) == 2, "the replay doubled the rows"
-    # From what the database wrote, not from what was sent -- `push_client`
-    # counts delivery off this number, so reporting the batch size would tell
-    # a retrying client its retry landed.
+    # From what the database wrote: `push_client` counts delivery off this number.
     assert second["inserted"] == 0
 
 
 def test_replaying_a_face_batch_inserts_nothing_the_second_time(store):
-    """`face_session_ts_key` (20260914000000). 20260809120000 deferred this
-    one pending a duplicate count against production; it came back clean (961
-    rows, 961 distinct) and the key went on."""
+    """`face_session_ts_key`; production had no duplicates (961 rows, 961 distinct)."""
     _consent(store, camera_enabled=True)
     batch = [{"ts": "2026-08-10T10:00:00Z", "emotion": "neutral"},
              {"ts": "2026-08-10T10:00:01Z", "emotion": "happy"}]
@@ -293,10 +247,7 @@ def test_replaying_a_face_batch_inserts_nothing_the_second_time(store):
 
 
 def test_two_samples_a_second_apart_are_both_kept(store):
-    """The teeth for both keys above. A key that deduped on `session_id`
-    alone, or a mapper that stamped rows at insertion time instead of taking
-    the sidecar's `timestamp`, would collapse a whole session into one row --
-    and the replay tests would still pass."""
+    """A key on `session_id` alone would pass the replay tests and collapse a session to one row."""
     store["cognitive_signals"] = []
     _consent(store, eeg_enabled=True)
 
@@ -311,8 +262,7 @@ def test_two_samples_a_second_apart_are_both_kept(store):
 
 
 def test_two_sources_may_report_the_same_instant(store):
-    """Which is why `source` is in the key. A key without it would discard the
-    second reading as a duplicate of the first."""
+    """Which is why `source` is in the key."""
     _consent(store, headband_optical_enabled=True, camera_enabled=True)
 
     out = _post_heart([_heart(source="muse_optics", ts="2026-08-09T10:00:00Z"),
@@ -334,8 +284,7 @@ def test_an_oversized_batch_is_refused_by_the_model(store):
 
 
 def test_a_flooding_client_is_rate_limited(store, monkeypatch):
-    """`_verify_session_owner` answers whose session and consent answers whether
-    to record. Neither bounds volume, and volume is its own denial of service."""
+    """Neither the owner check nor consent bounds volume."""
     from fastapi import HTTPException
 
     _consent(store, headband_optical_enabled=True)
@@ -351,7 +300,6 @@ def test_a_flooding_client_is_rate_limited(store, monkeypatch):
 
 
 def test_the_limit_is_per_caller(store, monkeypatch):
-    """One student exhausting their allowance must not lock out another."""
     _consent(store, headband_optical_enabled=True)
     tighten(monkeypatch, main._INGEST_LIMITER, limit=2)
 
@@ -366,9 +314,7 @@ def test_the_limit_is_per_caller(store, monkeypatch):
 
 
 def test_the_rate_limit_runs_before_the_session_lookup(store, monkeypatch):
-    """A flooding client should cost nothing but the limiter. With
-    the checks reversed, every refused request still paid for a
-    `sessions` query first -- exactly the cost the limit exists to avoid."""
+    """A flooding client should cost nothing but the limiter."""
     from fastapi import HTTPException
 
     _consent(store, headband_optical_enabled=True)
@@ -384,8 +330,7 @@ def test_the_rate_limit_runs_before_the_session_lookup(store, monkeypatch):
 
 
 def test_an_unreadable_consent_row_is_not_reported_as_a_refusal(store, monkeypatch):
-    """"Every sensor declined" and "we could not find out" both record nothing,
-    and only one of them is a fault worth chasing."""
+    """Both record nothing; only the unreadable one is a fault."""
     monkeypatch.setattr(main, "_consent",
                         lambda _uid: {**main._CONSENT_DENIED, "retrieved": False})
     assert _post_heart([_heart()])["reason"] == "consent unavailable"
@@ -416,9 +361,7 @@ def test_a_fully_consented_batch_reports_no_reason(store):
 
 
 def test_stale_callers_are_evicted_rather_than_accumulating(store, monkeypatch):
-    """Otherwise every student who posts once and stops leaves a list behind for
-    the process lifetime. Entries are pruned on that caller's *next* request,
-    which for a caller who never returns is never."""
+    """Entries prune on the caller's next request, which never comes for one who left."""
     _consent(store, headband_optical_enabled=True)
     monkeypatch.setattr(main._INGEST_LIMITER, "_sweep_above", 5)
     monkeypatch.setattr(main._INGEST_LIMITER, "_sweep_every", 0.0)
@@ -450,10 +393,6 @@ def test_an_active_caller_is_never_swept(store, monkeypatch):
 
 
 def test_a_clients_raw_blob_survives_the_mapper(store):
-    """The endpoints accepted a `raw` blob from the client and stored it
-    verbatim before the shared mappers existed. Building a fresh dict
-    there dropped it silently -- a data loss no test noticed, since
-    nothing asserted on a field only being passed through."""
     _consent(store, headband_optical_enabled=True, camera_enabled=True)
 
     _post_heart([_heart(raw={"probe": "kept"})])
@@ -468,11 +407,7 @@ def test_a_clients_raw_blob_survives_the_mapper(store):
 
 
 def test_rmssd_gating_fields_reach_the_stored_row(store):
-    """`beat_coverage` and `rmssd_rejected_by` are RMSSD's own gates,
-    kept apart from `rejected_by`: a row can have a good heart rate and no
-    RMSSD, and these say which was refused. They must survive the push
-    endpoint the same way the pull mapper carries them, or a push-mode row
-    loses the reason a null rmssd_ms is null."""
+    """RMSSD's own gates, apart from `rejected_by`: they say why a null rmssd_ms is null."""
     _consent(store, headband_optical_enabled=True)
 
     _post_heart([_heart(rmssd_ms=None, beat_coverage=0.91,
@@ -483,10 +418,7 @@ def test_rmssd_gating_fields_reach_the_stored_row(store):
 
 
 def test_a_non_finite_heart_value_is_refused_by_the_model(store):
-    """Same check as `CognitiveSample._finite`: a `float | None` annotation
-    alone does not reject NaN/Infinity, both survive JSON and Pydantic,
-    and `double precision` can't hold either -- so an unvalidated one
-    fails the insert and takes the whole batch down."""
+    """NaN/Infinity pass `float | None`, then fail the insert and take the batch down."""
     from pydantic import ValidationError
 
     for field in ("heart_rate_bpm", "rmssd_ms", "beat_coverage",
@@ -497,21 +429,14 @@ def test_a_non_finite_heart_value_is_refused_by_the_model(store):
 
 
 def test_derived_fields_win_over_a_client_supplied_key(store):
-    """A client should not be able to overwrite what this backend observed by
-    picking a key name."""
     _consent(store, headband_optical_enabled=True)
 
     _post_heart([_heart(raw={"rejected_by": "client says none"})])
-    # The sample carries no rejected_by, so the derived value is None -- and
-    # the client's value under that key goes with it rather than surviving.
-    # Letting it stand let a posted `raw.confidence` speak for a tick the
-    # sidecar reported none on, straight into the fusion gate.
+    # Derived None removes the key; the client's value must not survive.
     assert "rejected_by" not in store["heart_signals"][0]["raw"]
 
 
 def test_gaze_survives_the_face_mapper(store):
-    """It was dropped by the mapper while the endpoint wrote it -- the two
-    copies had already drifted before either was wired up."""
     _consent(store, camera_enabled=True)
 
     main.ingest_face(
@@ -524,25 +449,13 @@ def test_gaze_survives_the_face_mapper(store):
 
 
 def test_every_column_the_mapper_writes_can_be_supplied_by_the_endpoint(store):
-    """The boundary that silently ate head pose. `FaceSample` is
-    Pydantic, so a key it doesn't declare is dropped before the handler
-    runs. The whole chain behind this -- landmarker, `build_face_record`,
-    `push_client`, `map_face_to_face_signal` -- was tested per hop, yet
-    `head_yaw`/`head_pitch`/`head_roll` still couldn't reach the database,
-    because this endpoint is the only writer and nothing exercised it.
-
-    Derived rather than a list, so the next column added to the mapper
-    can't quietly fail the same way. Columns the endpoint supplies itself
-    are excluded by name; everything else has to be a field a client can
-    actually send.
-    """
+    """`FaceSample` drops undeclared keys, so every mapper column must be a declared field."""
     supplied_by_the_endpoint = {"session_id", "user_id", "ts", "raw"}
     written = set(signal_mapping.map_face_to_face_signal(
         {"timestamp": "t", "face": {"emotion": "happy"}}, SESSION, "u"))
 
     missing = (written - supplied_by_the_endpoint) - set(main.FaceSample.model_fields)
-    # `trusted` is the sidecar's name for it; the endpoint calls the field
-    # `emotion_trusted` and renames on the way through.
+    # The endpoint's field is `emotion_trusted`, renamed on the way through.
     missing -= {"emotion_trusted"}
     assert not missing, (
         f"{sorted(missing)} are written by the mapper but cannot be sent: "
@@ -550,8 +463,7 @@ def test_every_column_the_mapper_writes_can_be_supplied_by_the_endpoint(store):
 
 
 def test_head_pose_survives_the_round_trip(store):
-    """The end-to-end the finding needed. Values are distinct so a mix-up
-    between the three axes is visible rather than plausible."""
+    """Distinct values, so an axis mix-up is visible."""
     _consent(store, camera_enabled=True)
 
     main.ingest_face(
@@ -569,9 +481,7 @@ def test_head_pose_survives_the_round_trip(store):
 
 
 def test_the_synthetic_mark_is_derived_from_the_sample_never_from_the_posted_raw(store):
-    """The simulator's pulse (EEG_SIM_OPTICS) is marked on the push path the
-    way the poller marks it: a top-level field the shared mapper turns into
-    `raw.synthetic`. A client cannot mark or unmark a row through `raw`."""
+    """A client cannot mark or unmark a synthetic (EEG_SIM_OPTICS) row through `raw`."""
     _consent(store, headband_optical_enabled=True)
 
     out = _post_heart([

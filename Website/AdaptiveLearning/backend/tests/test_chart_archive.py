@@ -1,16 +1,4 @@
-"""Tests for archiving a closed session's charts to private storage.
-
-The renderer has its own tests (`test_chart_render.py`). What's asserted here
-is everything around it: which rows become which chart, that a channel with
-nothing to show produces no object rather than an empty one, that a replay
-overwrites instead of duplicating, and that a storage failure cannot cost a
-student their session close.
-
-That last property is why this runs off the request path. These objects are
-the human-readable record that outlives the end-of-year delete, which makes
-them worth retrying and logging loudly, but never worth more than the session
-row itself.
-"""
+"""Archiving a closed session's charts to private storage, and reading them back."""
 
 import os
 from datetime import datetime, timezone
@@ -130,17 +118,13 @@ def test_every_chart_is_rendered_and_uploaded_under_its_own_path():
 
 
 def test_the_user_id_comes_first_in_the_object_path():
-    """The prefix a storage RLS policy would have to be written against. No
-    policy exists today, but a different layout would mean migrating every
-    object to add one later."""
+    """The prefix any future storage RLS policy would key on."""
     assert chart_archive.object_path(USER, SESSION, "heart_rate") \
         == f"{USER}/{SESSION}/heart_rate.svg"
 
 
 def test_a_channel_that_recorded_nothing_gets_no_object():
-    """Null on `chart_paths`, not an empty chart. An empty chart would claim the
-    session had that channel and it read flat -- absence rendered as data,
-    which is what the whole reporting layer is built to avoid."""
+    """Null on `chart_paths`, not an empty chart, which would render absence as data."""
     client = _Client(cognitive=COG)          # no face rows, no heart rows
 
     paths = chart_archive.archive_session(client, SESSION, USER)
@@ -153,9 +137,7 @@ def test_a_channel_that_recorded_nothing_gets_no_object():
 
 
 def test_a_session_with_nothing_at_all_still_records_that_it_tried():
-    """Four nulls is a different fact from a NULL column, which means the
-    archive never ran. A reader has to tell "recorded nothing" apart from
-    "archive never ran on this session"."""
+    """Four nulls ("recorded nothing") differs from a NULL column ("archive never ran")."""
     client = _Client()
 
     paths = chart_archive.archive_session(client, SESSION, USER)
@@ -174,10 +156,7 @@ def test_the_paths_are_written_to_the_session_row():
 
 
 def test_a_replayed_close_overwrites_rather_than_colliding():
-    """`/end` and the stale-session sweep can both close one session. Paths are
-    derived from the ids, so the second run rewrites the same four objects.
-    `upsert` has to be the string "true": storage-py passes file_options
-    through as HTTP headers, and a bool would arrive as "True"."""
+    """Paths derive from ids; `upsert` must be the string "true" since file_options become headers."""
     client = _Client(cognitive=COG)
 
     first = chart_archive.archive_session(client, SESSION, USER)
@@ -192,26 +171,21 @@ def test_a_replayed_close_overwrites_rather_than_colliding():
 # ── what the charts are made of ─────────────────────────────────────────────
 
 def test_a_rejected_facial_window_is_not_counted_as_an_emotion():
-    """`emotion: None` is a window the quality gate refused. Counting it would
-    inflate every slice for a session that mostly failed that gate."""
+    """`emotion: None` is a window the quality gate refused."""
     counts = chart_archive._counts(FACE, "emotion")
 
     assert counts == {"neutral": 1, "happy": 1}
 
 
 def test_a_heart_row_with_no_stress_category_is_counted_as_unknown():
-    """Unlike the facial case, the window did produce a heart rate, so this row
-    is a real reading. Dropping it would understate how much of the session had
-    a measurement whose category was still calibrating."""
+    """Unlike the facial case, the row is a real heart-rate reading still calibrating."""
     counts = chart_archive._counts(HEART, "stress_category", default="unknown")
 
     assert counts == {"low": 1, "unknown": 1}
 
 
 def test_an_unparseable_timestamp_drops_the_point_rather_than_placing_it_at_zero():
-    """A row at epoch zero would drag the x axis back to 1970 and flatten the
-    whole session against the right edge -- one bad stamp destroying the whole
-    chart instead of costing it one point."""
+    """A point at epoch zero would stretch the x axis to 1970 and flatten the session."""
     rows = [{"ts": _ts(0), "focus": 0.6}, {"ts": "not a date", "focus": 0.9}]
 
     points = chart_archive._line_points(rows, ("focus",))
@@ -220,9 +194,7 @@ def test_an_unparseable_timestamp_drops_the_point_rather_than_placing_it_at_zero
 
 
 def test_the_two_pies_use_the_palettes_they_are_named_for():
-    """Wired by hand, so worth pinning: `stress_pie` drawn with the emotion
-    palette would colour "high" as an emotion nobody felt.
-    """
+    """Wired by hand, so pinned."""
     client = _Client(face=FACE, heart=HEART)
     chart_archive.archive_session(client, SESSION, USER)
 
@@ -231,16 +203,12 @@ def test_the_two_pies_use_the_palettes_they_are_named_for():
 
     assert chart_render.EMOTION_COLOURS["happy"] in emotion
     assert chart_render.STRESS_COLOURS["low"] in stress
-    # "Autonomic arousal", not "Stress" -- "Stress" alone would invite a reader
-    # to average this against the cognitive `stress` value, which is `1.0 - calm`
-    # and measures something different.
+    # Not "Stress": that would invite averaging against cognitive `stress` (1 - calm).
     assert "Autonomic arousal" in stress
 
 
 def test_untrusted_rows_are_drawn_too():
-    """Deliberately unlike `signal_daily_rollup`, which only averages trusted
-    rows. The rollup publishes a number that outlives its evidence; this is a
-    picture of what the reviewer was shown, and it has to match."""
+    """Unlike the rollup: this is a picture of what the reviewer was shown."""
     rows = HEART + [{"ts": _ts(3), "heart_rate_bpm": 130.0,
                      "stress_category": "high", "trusted": False}]
 
@@ -252,9 +220,7 @@ def test_untrusted_rows_are_drawn_too():
 # ── failure containment ─────────────────────────────────────────────────────
 
 def test_a_storage_failure_is_logged_and_does_not_escape(capsys):
-    """`_run` is what the pool executes. By the time this runs, a session close
-    has already written the session row, stats, and rollup -- none of those may
-    be lost just because the bucket is down."""
+    """`_run` is what the pool executes; the session close has already been written."""
     client = _Client(cognitive=COG, fail_storage=True)
 
     chart_archive._run(client, SESSION, USER)          # must not raise
@@ -264,8 +230,7 @@ def test_a_storage_failure_is_logged_and_does_not_escape(capsys):
 
 
 def test_scheduling_never_raises_even_with_the_pool_shut_down(capsys):
-    """Submit itself can fail -- a shut-down pool, an interpreter tearing down --
-    and a successful session close must not become a 500 over a picture."""
+    """Submit itself can fail; a session close must not become a 500 over a picture."""
     chart_archive.shutdown_pool()
     pool = chart_archive._pool()
     pool.shutdown(wait=True)
@@ -277,8 +242,7 @@ def test_scheduling_never_raises_even_with_the_pool_shut_down(capsys):
 
 
 def test_archiving_reads_no_more_rows_than_session_review_does():
-    """The archive is meant to be what the reviewer saw. A larger cap here would
-    let the archive show a chart nobody was ever shown."""
+    """The archive must match what the reviewer saw."""
     import inspect
 
     import main
@@ -290,11 +254,7 @@ def test_archiving_reads_no_more_rows_than_session_review_does():
 # ── reading them back ───────────────────────────────────────────────────────
 
 class _SigningStorage(_Storage):
-    """Signs anything it was given, and refuses anything it was not.
-
-    Modelling the refusal is the point: an object recorded on `chart_paths` and
-    absent from the bucket is a fault, and the endpoint has to report it as one
-    rather than as a channel that recorded nothing."""
+    """Signs anything it was given, and refuses anything it was not."""
 
     def create_signed_url(self, path, expires_in):
         if path not in self.uploaded:
@@ -312,10 +272,7 @@ class _SigningClient(_Client):
 
 
 def test_signing_separates_nothing_recorded_from_nothing_readable():
-    """The core property this payload shape exists for. A null and a missing
-    object both leave a blank tile, but only the null means the sensor was
-    never used -- a bucket half-emptied by hand must not read the same way as a
-    term where nobody wore a headband."""
+    """Only a null means the sensor was never used; a missing object is a fault."""
     client = _SigningClient(cognitive=COG)
     paths = chart_archive.archive_session(client, SESSION, USER)
     # Recorded, but the object is not there.
@@ -330,17 +287,7 @@ def test_signing_separates_nothing_recorded_from_nothing_readable():
 
 
 def test_a_tampered_path_cannot_reach_another_students_object():
-    """`chart_paths` is ordinary jsonb on `sessions`, which used to carry a
-    `FOR ALL` own-row policy -- so a student could PATCH their own row through
-    PostgREST and point it at another child's object. Signing whatever is
-    stored would then hand it over, through an endpoint whose access check had
-    just correctly confirmed they own this session.
-
-    So presence is all the stored value decides; the path itself is derived.
-    A migration revokes the write too, but this must hold without it: a grant
-    is one migration away from being widened back, and the endpoint is the
-    layer that must not be.
-    """
+    """The stored value decides presence only; the path is derived, even if the write grant returns."""
     victim = "99999999-8888-7777-6666-555555555555"
     client = _SigningClient(cognitive=COG)
     chart_archive.archive_session(client, SESSION, USER)
@@ -356,8 +303,7 @@ def test_a_tampered_path_cannot_reach_another_students_object():
 
 
 def test_a_chart_never_attempted_appears_in_neither_half():
-    """An absent key means the archive never ran on this session. Reporting it
-    as a null would wrongly claim that channel was on and drew nothing."""
+    """An absent key means never attempted; a null would claim the channel drew nothing."""
     client = _SigningClient()
 
     urls, missing = chart_archive.signed_chart_urls(client, {}, USER, SESSION)
@@ -366,9 +312,7 @@ def test_a_chart_never_attempted_appears_in_neither_half():
 
 
 def test_signed_urls_are_short_lived():
-    """There is no revocation: a signed URL stays valid until it expires,
-    whatever happens to consent in between, so the TTL is the only bound on a
-    leaked one."""
+    """A signed URL can't be revoked, so the TTL is the only bound on a leaked one."""
     client = _SigningClient(cognitive=COG)
     paths = chart_archive.archive_session(client, SESSION, USER)
 
@@ -421,9 +365,7 @@ def _charts(monkeypatch, row, viewer="viewer", **kw):
 
 
 def test_the_endpoint_checks_the_relationship_not_the_role(monkeypatch):
-    """The only thing between a caller and another child's charts. Unlike the
-    rows next door, these objects sit in a bucket with no policies at all, so
-    there's no second line of defense if this check is wrong."""
+    """The bucket has no policies, so this check is the only defence."""
     import main
 
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "a-stranger"})
@@ -436,9 +378,7 @@ def test_the_endpoint_checks_the_relationship_not_the_role(monkeypatch):
 
 
 def test_a_session_that_was_never_archived_says_so(monkeypatch):
-    """Column-NULL, no storage call at all. `archived: false` is a different
-    fact from four nulls -- a viewer must not be told a student recorded
-    nothing when the archive simply never ran."""
+    """Column-NULL means no storage call, and `archived: false` rather than four nulls."""
     import main
 
     monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
@@ -454,9 +394,7 @@ def test_the_endpoint_returns_a_url_per_recorded_chart(monkeypatch):
     import main
 
     monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
-    # Archive with the plain client, then read back through one that serves the
-    # sessions row -- the same objects, reached the same way the endpoint
-    # reaches them, not a hand-written path map that could drift from reality.
+    # Real archived objects, not a hand-written path map that could drift.
     archiver = _SigningClient(cognitive=COG)
     paths = chart_archive.archive_session(archiver, SESSION, USER)
     client = _SessionsClient({"user_id": USER, "chart_paths": paths})
@@ -473,8 +411,7 @@ def test_the_endpoint_returns_a_url_per_recorded_chart(monkeypatch):
 
 
 def test_an_unreadable_session_row_is_a_404_not_an_empty_payload(monkeypatch):
-    """Matches the endpoint next door. Degrading to "no charts" here would
-    report an absence the read never actually established."""
+    """An empty payload would report an absence the read never established."""
     import main
 
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
@@ -488,17 +425,7 @@ def test_an_unreadable_session_row_is_a_404_not_an_empty_payload(monkeypatch):
 # ── every close site archives ───────────────────────────────────────────────
 
 def test_every_session_close_schedules_an_archive():
-    """Derived, not a hand-kept list. A close site missing this would leave
-    sessions whose raw rows expire on `ends_on` with no picture behind them,
-    and `chart_paths` would be NULL -- reading as "archive never ran" rather
-    than as a bug.
-
-    The close sequence now lives in `_close_session`, so the check is that
-    every site reaches it and that it still archives. Before that, the three
-    sites each carried their own copy and each dropped a different step; the
-    archive was one that `class_live` and the stale sweep were both missing at
-    different times.
-    """
+    """Derived close sites: each reaches `_close_session`, and that still archives."""
     import inspect
 
     import main
@@ -518,10 +445,7 @@ def test_every_session_close_schedules_an_archive():
 
 
 # ── the orphan sweep ──────────────────────────────────────────────────────
-#
-# Storage does not cascade, so a session deleted through the dashboard leaves
-# its SVGs behind. The sweep is the only thing that catches that, and it deletes
-# on absence -- so most of what is asserted here is that it refuses.
+# It deletes on absence, so most of what is asserted here is that it refuses.
 
 USER2 = "99999999-8888-7777-6666-555555555555"
 GONE = "12121212-3434-5656-7878-909090909090"
@@ -629,14 +553,7 @@ def test_a_deleted_session_loses_its_charts():
 
 
 def test_a_failed_sessions_read_refuses_instead_of_emptying_the_bucket():
-    """The whole reason this job is dangerous: every object looks orphaned when
-    the table can't be read, and treating that as a real result is a bucket
-    wipe.
-
-    `max_orphan_fraction=1.0` is deliberate: a failed read always leaves
-    nothing live, so the fraction guard would also catch this and the test
-    could pass even with the read guard removed. Disabling that backstop keeps
-    this test focused on the guard it names."""
+    """`max_orphan_fraction=1.0` disables the backstop, so only the read guard can pass this."""
     storage = _SweepStorage(_tree((USER, SESSION), (USER2, GONE)))
     client = _SweepClient(storage, live_ids=[SESSION], fail_sessions=True)
 
@@ -651,8 +568,7 @@ def test_a_failed_sessions_read_refuses_instead_of_emptying_the_bucket():
 
 
 def test_too_many_orphans_refuses_rather_than_proceeding():
-    """A read that returns nothing without raising is the same danger in a
-    different shape, with no exception to mark it."""
+    """A read that returns nothing without raising is the same danger."""
     storage = _SweepStorage(_tree((USER, SESSION), (USER, GONE), (USER2, GONE)))
     client = _SweepClient(storage, live_ids=[])          # everything looks gone
 
@@ -685,9 +601,7 @@ def test_dry_run_is_the_default_and_deletes_nothing():
 
 
 def test_the_bucket_is_listed_before_sessions_is_read():
-    """Order is a guard, not a detail. Reading the table first would mean a
-    session created in between has objects missing from the snapshot -- deleted
-    as an orphan while its row still exists."""
+    """Reading sessions first would orphan objects of a session created in between."""
     storage = _SweepStorage(_tree((USER, SESSION)))
     client = _SweepClient(storage, live_ids=[SESSION])
 
@@ -698,9 +612,7 @@ def test_the_bucket_is_listed_before_sessions_is_read():
 
 
 def test_more_than_one_page_of_students_is_swept():
-    """`list` caps at 100 with no truncation flag, so a single call would make a
-    bucket look like just its first 100 students forever, reporting the rest as
-    nothing to do."""
+    """`list` caps at 100 with no truncation flag."""
     users = [f"{i:08d}-0000-0000-0000-000000000000" for i in range(150)]
     storage = _SweepStorage({u: {SESSION: ["heart.svg"]} for u in users})
     client = _SweepClient(storage, live_ids=[SESSION])
@@ -711,7 +623,6 @@ def test_more_than_one_page_of_students_is_swept():
 
 
 def test_a_path_it_cannot_parse_is_left_alone():
-    """Deleting what you cannot identify is how a sweep becomes an incident."""
     tree = _tree((USER, GONE))
     tree["not-a-uuid"] = {SESSION: ["heart.svg"]}
     tree[USER]["also-not-a-uuid"] = ["heart.svg"]
@@ -726,8 +637,7 @@ def test_a_path_it_cannot_parse_is_left_alone():
 
 
 def test_hitting_the_cap_says_so():
-    """`removed: 500` with nothing saying more was waiting reads as a clean
-    bucket."""
+    """Without the flag, a capped run reads as a clean bucket."""
     tree = {USER: {f"{i:08d}-1111-1111-1111-111111111111": ["heart.svg"]
                    for i in range(5)}}
     storage = _SweepStorage(tree)
@@ -752,9 +662,7 @@ def test_a_bucket_that_never_stops_paging_raises_rather_than_looping():
 
 
 def test_the_archived_cognitive_chart_does_not_draw_engagement_beside_focus(monkeypatch):
-    """`engagement` is the focus index under another name. Drawn as a
-    second line it is baked into a permanent picture as two measurements
-    agreeing."""
+    """`engagement` is the focus index; drawn beside it, it reads as a second measurement."""
     seen = {}
     real = chart_render.line_svg
 

@@ -1,12 +1,4 @@
-"""Re-rendering archives written before a chart changed.
-
-The guards are the point. A session whose per-sample rows have expired must
-never be re-rendered, because the archive is then the last picture of it;
-expiry is per channel, so the check is per chart; a chart an erasure nulled
-must stay null; a failed read looks exactly like an expired session and so
-refuses the run rather than skipping; and one run may only overwrite so many
-live sessions' objects.
-"""
+"""Re-rendering old archives: expired or erased charts are never redrawn, and failed reads refuse."""
 
 from __future__ import annotations
 
@@ -48,8 +40,7 @@ def _spy_archive(monkeypatch):
 
 
 def test_only_sessions_with_every_recorded_charts_rows_left_are_rerendered(monkeypatch):
-    """Partial expiry: heart rows gone, cognitive rows remain. Re-rendering
-    would null the heart paths and orphan the objects, the last copy."""
+    """Partial expiry: re-rendering would null the heart paths and orphan the last copy."""
     monkeypatch.setattr(chart_archive, "_fetch", _fetch_for({
         "s-live": (COG, [], HEART),
         "s-heart-expired": (COG, [], []),
@@ -66,8 +57,7 @@ def test_only_sessions_with_every_recorded_charts_rows_left_are_rerendered(monke
 
 
 def test_a_chart_an_erasure_nulled_stays_null_even_though_its_rows_exist(monkeypatch):
-    """A camera erasure removes both heart charts and leaves the headband's
-    heart rows. Re-rendered from the rows, the erased pictures come back."""
+    """A camera erasure nulls both heart charts but leaves the headband's heart rows."""
     monkeypatch.setattr(chart_archive, "_fetch", _fetch_for({"s": (COG, [], HEART)}))
     calls = _spy_archive(monkeypatch)
     erased = {**ALL_PATHS, "heart_rate": None, "stress_pie": None}
@@ -120,8 +110,7 @@ def test_a_dry_run_renders_nothing_and_names_what_it_would(monkeypatch):
 
 
 def test_a_failed_read_is_counted_and_refuses_the_run_past_the_cap(monkeypatch):
-    """A failed read is indistinguishable from an expired session, which is
-    the skip case -- so it must not be skipped."""
+    """A failed read looks like an expired session, so it must not be skipped."""
     def fetch(_c, _sid):
         raise RuntimeError("db down")
 
@@ -132,8 +121,7 @@ def test_a_failed_read_is_counted_and_refuses_the_run_past_the_cap(monkeypatch):
                                               max_read_failures=2)
     assert calls == []
     assert report["skipped_expired"] == 0
-    # Refused *at* the cap: five failing reads against a cap of five used to
-    # return refused unset and exit 0, exactly what a run with no work does.
+    # Refused *at* the cap, not only past it.
     assert report["read_failures"] == 2 and report["refused"]
 
 
@@ -183,8 +171,7 @@ def test_a_capped_run_reports_its_cursor_and_the_tool_resumes_from_it(monkeypatc
 
 
 def test_the_cursor_does_not_pass_a_session_whose_read_failed(monkeypatch):
-    """Recorded before the read, a session whose read failed was passed
-    over by the resume and dropped from the backfill for good."""
+    """Otherwise the resume skips it and it drops from the backfill for good."""
     def fetch(_c, sid):
         if sid == "s0":
             raise RuntimeError("db down")
@@ -201,8 +188,7 @@ def test_the_cursor_does_not_pass_a_session_whose_read_failed(monkeypatch):
 
 
 def test_the_cursor_does_not_pass_a_session_whose_render_failed(monkeypatch):
-    """Moved below the read, the cursor still sat above the archive call, so
-    a failed re-render was passed over by the resume the same way."""
+    """The cursor advances only after the archive call succeeds."""
     monkeypatch.setattr(chart_archive, "_fetch", lambda _c, _s: (COG, [], HEART))
 
     def flaky(_c, sid, _u, **_k):

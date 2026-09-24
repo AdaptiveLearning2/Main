@@ -1,18 +1,4 @@
-"""The cohort panels: a class-wide signal trend and the roster behind it.
-
-The aggregation itself is SQL, so what these cover is the composition around
-it -- and that composition is where every distinction this surface depends on
-can quietly collapse:
-
-  * a failed read against a class that recorded nothing,
-  * a student who declined a channel against one whose sensor produced nothing,
-  * a bucket of one student weighted like a bucket of twenty,
-  * a roster of four whose rows must never reach the response at all.
-
-`scripts/assert_signal_rls.sql` is where the RPC's own arithmetic runs against
-a real stack; the weighting asserted here is the merge *across* consent
-buckets, which is Python and has no other cover.
-"""
+"""The cohort panels: class-wide signal trend and roster (RPC arithmetic is in assert_signal_rls.sql)."""
 import os
 from datetime import datetime, timezone
 
@@ -51,13 +37,7 @@ def _student(n):
 
 
 def _consent(user, *, eeg=True, heart=True, camera=True):
-    """A consent row.
-
-    `heart=False` turns the camera off with the headband, because the heart
-    channel is `headband_optical OR camera` -- the camera carries the rPPG
-    fallback, so leaving it on keeps the channel readable and the student in
-    the permitting bucket.
-    """
+    """A consent row; `heart=False` also turns the camera off, since heart is `optical OR camera`."""
     return {"user_id": user, "eeg_enabled": eeg,
             "headband_optical_enabled": heart,
             "camera_enabled": camera and heart}
@@ -85,15 +65,9 @@ def _row(day="2026-06-11", channel="cognitive", focus=None, bpm=None,
 
 
 class _BucketedFake(_FakeSupabase):
-    """A fake that answers the trend RPC per call rather than per name.
+    """A fake that answers the trend RPC per consent bucket rather than per name.
 
-    The endpoint calls one RPC once per consent bucket, so a single canned
-    result per name cannot express "this bucket returned these rows and that
-    one returned those" -- which is exactly what the cross-bucket weighting
-    has to be tested against.
-
-    `trend_by_ids` maps a frozenset of student ids to the rows that call
-    returns, or to an Exception to raise. Anything unmatched answers [].
+    `trend_by_ids`: frozenset of student ids -> rows, or an Exception to raise. Unmatched -> [].
     """
 
     def __init__(self, tables, trend_by_ids=None, **kw):
@@ -122,11 +96,6 @@ def _totals_calls(fake):
 
 
 # ─── the access check runs before any read ────────────────────────────────
-#
-# This endpoint reads signal data for a whole roster through the service-role
-# client, which bypasses RLS. `_verify_class_owner` is the only thing between a
-# teacher and another teacher's class, and it has to run before the roster is
-# even resolved.
 
 def test_a_non_owning_teacher_is_refused(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: OTHER_TEACHER)
@@ -136,16 +105,12 @@ def test_a_non_owning_teacher_is_refused(monkeypatch):
     with pytest.raises(main.HTTPException) as e:
         main.class_cohort_signals(CLASS, None)
     assert e.value.status_code == 403
-    # Refused before anything was read, not after the rows were fetched and
-    # then withheld.
+    # Refused before anything was read, not fetched and then withheld.
     assert not fake.rpc_calls
 
 
 # ─── the min-N floor ──────────────────────────────────────────────────────
-#
-# The rows must never reach the response for an under-floor roster, which is
-# what makes this a privacy property rather than a rendering preference. A
-# client-side hide would put them in the payload for anyone reading it.
+# Under the floor the rows never reach the payload; a client-side hide would leak them.
 
 def test_the_per_student_rows_are_withheld_below_the_floor(monkeypatch):
     roster = [_student(n) for n in range(1, 5)]           # four
@@ -156,8 +121,7 @@ def test_the_per_student_rows_are_withheld_below_the_floor(monkeypatch):
     assert out["class_size"] == 4
     assert out["per_student"] is None
     assert out["min_students"] == main._COHORT_MIN_STUDENTS
-    # The class-wide trend is still served -- it is the aggregate the floor
-    # exists to protect, not another thing to withhold.
+    # The class-wide trend is still served: it is what the floor protects.
     assert out["series"]
 
 
@@ -172,11 +136,7 @@ def test_the_per_student_rows_appear_at_exactly_the_floor(monkeypatch):
 
 
 def test_the_floor_counts_the_roster_not_the_students_who_recorded(monkeypatch):
-    """A class of six where two wore a headband is still a class of six.
-
-    Gating on the students who produced data would expose that pair at exactly
-    the moment they are most identifiable.
-    """
+    """Gating on who recorded would expose a small recording group when most identifiable."""
     roster = [_student(n) for n in range(1, 7)]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _tables(roster),
@@ -187,20 +147,14 @@ def test_the_floor_counts_the_roster_not_the_students_who_recorded(monkeypatch):
 
     out = main.class_cohort_signals(CLASS, None)
     assert len(out["per_student"]) == 6
-    # And the four with nothing recorded still get a row, rather than being
-    # dropped into a shorter list that reads as a smaller class.
+    # The four with nothing recorded still get a row.
     assert all(r["summary"] is not None for r in out["per_student"])
 
 
 # ─── consent ──────────────────────────────────────────────────────────────
 
 def test_students_are_bucketed_by_consent_flags_not_read_as_one_roster(monkeypatch):
-    """One roster, two consent shapes, two calls -- never one call with a merged flag.
-
-    A single call for the whole class would either read the declining student's
-    heart rows under a classmate's permission, or hide the channel from every
-    student who did permit it. The bucket is what avoids choosing.
-    """
+    """One roster, two consent shapes, two calls -- never one call with a merged flag."""
     permits, declines = _student(1), _student(2)
     fake = _BucketedFake(
         _tables([permits, declines],
@@ -220,12 +174,7 @@ def test_students_are_bucketed_by_consent_flags_not_read_as_one_roster(monkeypat
 
 
 def test_a_declined_channel_is_never_requested_for_that_student(monkeypatch):
-    """Asserted on the call, not the payload.
-
-    An absent heart average cannot tell "asked and found nothing" from "never
-    asked", which is the whole distinction -- so a test reading only the
-    response would pass against a version that read the rows and dropped them.
-    """
+    """Asserted on the call, not the payload."""
     declines = _student(1)
     fake = _BucketedFake(
         _tables([declines], consent=[_consent(declines, heart=False, camera=False)]),
@@ -242,14 +191,7 @@ def test_a_declined_channel_is_never_requested_for_that_student(monkeypatch):
 # ─── the cross-bucket merge ───────────────────────────────────────────────
 
 def test_the_merge_weights_buckets_by_samples_not_by_bucket(monkeypatch):
-    """Two buckets, one twenty times the other, merged on the same day.
-
-    Averaging the two bucket means would answer 0.50; weighting on
-    `trusted_sample_count` answers close to the larger bucket. The buckets
-    exist because of consent, so a class where one student declined the camera
-    would otherwise have that student's average count as much as everyone
-    else's put together.
-    """
+    """Two buckets, one twenty times the other: weighted on `trusted_sample_count`, not 0.50."""
     big = [_student(n) for n in range(1, 4)]
     small = [_student(9)]
     fake = _BucketedFake(
@@ -273,12 +215,7 @@ def test_the_merge_weights_buckets_by_samples_not_by_bucket(monkeypatch):
 
 
 def test_a_null_average_contributes_no_weight_rather_than_a_zero(monkeypatch):
-    """A day a channel measured nothing must not drag the class mean down.
-
-    The row still exists -- the student had a session -- so its count is real
-    while its average is null. Folding that count in with a zero would put the
-    class average below every student in it.
-    """
+    """A null-average row keeps its real count but must not drag the mean down."""
     measured, blank = _student(1), _student(2)
     fake = _BucketedFake(
         _tables([measured, blank],
@@ -292,20 +229,14 @@ def test_a_null_average_contributes_no_weight_rather_than_a_zero(monkeypatch):
     out = main.class_cohort_signals(CLASS, None)
     day = [r for r in out["series"] if r["channel"] == "cognitive"][0]
     assert day["avg_focus"] == pytest.approx(0.6)
-    # The count is still the day's real coverage, which is what makes a thin
-    # day legible beside a busy one.
+    # The count is still the day's real coverage.
     assert day["trusted_sample_count"] == 200
 
 
 # ─── failed reads ─────────────────────────────────────────────────────────
 
 def test_one_failed_bucket_marks_the_whole_trend_unretrieved(monkeypatch):
-    """Never a partial series presented as complete.
-
-    The payload carries one `retrieved` flag for the trend, so a merge of the
-    buckets that succeeded would report the missing students as a quiet
-    fortnight -- the one claim a failed read has not earned.
-    """
+    """Never a partial series presented as complete."""
     ok, broken = _student(1), _student(2)
     fake = _BucketedFake(
         _tables([ok, broken],
@@ -327,17 +258,12 @@ def test_a_failed_roster_read_is_not_an_empty_class(monkeypatch):
 
     out = main.class_cohort_signals(CLASS, None)
     assert out["retrieved"] is False
-    # `class_size: 0` beside `retrieved: false` reads as "we could not find
-    # out"; beside `retrieved: true` it would be a genuinely empty class.
+    # `class_size: 0` with `retrieved: false` means "could not find out".
     assert out["class_size"] == 0
 
 
 def test_a_failed_summary_read_does_not_blank_the_trend(monkeypatch):
-    """The two halves fail independently.
-
-    They are one request so they cannot disagree about when they were taken,
-    but a broken summary RPC must still leave the class trend standing.
-    """
+    """The two halves fail independently."""
     roster = [_student(n) for n in range(1, 6)]
 
     def _boom(name, _params):
@@ -350,8 +276,7 @@ def test_a_failed_summary_read_does_not_blank_the_trend(monkeypatch):
     out = main.class_cohort_signals(CLASS, None)
     assert out["retrieved"] is True and out["series"]
     assert out["summaries_retrieved"] is False
-    # Rows are still built, carrying the flag -- a shorter list would read as a
-    # smaller class, and an absent one as a roster below the floor.
+    # Rows are still built, carrying the flag.
     assert len(out["per_student"]) == 5
 
 
@@ -380,22 +305,10 @@ def test_the_trend_is_bucketed_in_the_schools_timezone(monkeypatch):
 
 
 # ─── both panels read one source ──────────────────────────────────────────
-#
-# The roster used to come from `student_signal_summary_many`, which reads the
-# per-sample tables. Beside a chart built on the rollup that is a pair which
-# disagrees on a fixed date: `expire_signal_rows` deletes the per-sample rows
-# at the end of a school year and leaves the rollup standing, so the panel pair
-# would have shown a full term of class averages above a table reading
-# "No sensor" for every student in it.
+# Both read the rollup, which outlives `expire_signal_rows`; the per-sample tables do not.
 
 def test_the_roster_reads_the_rollup_and_never_the_per_sample_tables(monkeypatch):
-    """Asserted on what was *not* read, which is the only way to see this.
-
-    A payload built from the rollup and one built from the per-sample tables
-    look identical while both sources hold the same data -- which is every day
-    of a school year except the ones after expiry. So the test has to name the
-    tables that must not be touched rather than check the numbers.
-    """
+    """Asserted on what was not read: both sources agree until expiry."""
     roster = [_student(n) for n in range(1, 6)]
     fake = _FakeSupabase(_tables(roster), rpc_results={
         TREND_RPC: [_row(focus=0.5)],
@@ -416,12 +329,7 @@ def test_the_roster_reads_the_rollup_and_never_the_per_sample_tables(monkeypatch
 
 
 def test_a_student_the_rollup_has_nothing_for_still_gets_a_row(monkeypatch):
-    """And it says which of the two silences it is.
-
-    A row of nulls with a zero count reads as "no sensor"; the same nulls with
-    a nonzero count read as "calibrating". Dropping the student instead would
-    make the class look smaller than it is.
-    """
+    """Zero counts read as "no sensor", nonzero as "calibrating"."""
     roster = [_student(n) for n in range(1, 6)]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _tables(roster), rpc_results={
@@ -436,17 +344,12 @@ def test_a_student_the_rollup_has_nothing_for_still_gets_a_row(monkeypatch):
     assert quiet["focus"] is None
     assert quiet["cognitive_samples"] == 0
     assert quiet["days_recorded"] == 0
-    # The flags still describe the deployment rather than the absence.
     assert quiet["eeg_enabled"] is True
     assert quiet["retrieved"] is True
 
 
 def test_the_roster_carries_days_recorded_rather_than_a_session_count(monkeypatch):
-    """Sessions live in another table with another lifetime.
-
-    Counting them here would put one column of this row back on the per-sample
-    side of the expiry, which is the split this reads one source to remove.
-    """
+    """Sessions live in another table with another lifetime."""
     roster = [_student(n) for n in range(1, 6)]
     fake = _FakeSupabase(_tables(roster), rpc_results={
         TREND_RPC: [_row(focus=0.5)],
@@ -461,11 +364,7 @@ def test_the_roster_carries_days_recorded_rather_than_a_session_count(monkeypatc
 
 
 def test_the_per_student_read_is_bucketed_by_consent_like_the_trend(monkeypatch):
-    """The second RPC is consent-agnostic too, so the bucketing has to hold for it.
-
-    Asserted on the call rather than the payload: an absent heart average
-    cannot tell "asked and found nothing" from "never asked".
-    """
+    """The totals RPC is consent-agnostic too; asserted on the call."""
     permits, declines = _student(1), _student(2)
     fake = _BucketedFake(
         _tables([permits, declines],
@@ -484,13 +383,7 @@ def test_the_per_student_read_is_bucketed_by_consent_like_the_trend(monkeypatch)
 # ─── what a failed bucket does to the roster ──────────────────────────────
 
 def test_a_failed_trend_bucket_leaves_the_roster_unretrieved_too(monkeypatch):
-    """Breaking out of the bucket loop skips every totals call after it.
-
-    Those students were never asked about, so reporting them with zero counts
-    and `retrieved: True` says "recorded nothing" -- which is the one thing the
-    read did not establish. It renders as "No sensor", a fault indistinguishable
-    from a class that left the headbands in the cupboard.
-    """
+    """Breaking out of the bucket loop skips every totals call after it."""
     ok, broken = _student(1), _student(2)
     roster = [ok, broken] + [_student(n) for n in range(3, 7)]
     fake = _BucketedFake(
@@ -513,12 +406,6 @@ def test_a_failed_trend_bucket_leaves_the_roster_unretrieved_too(monkeypatch):
 # ─── the roster's consent is one read, not one per student ────────────────
 
 def test_consent_for_the_roster_is_read_in_one_query(monkeypatch):
-    """A class of thirty was thirty sequential reads on a page load.
-
-    `my_children` keeps a per-student loop and can -- a family has a handful of
-    children. A roster is an order of magnitude larger, so the same shape is a
-    different cost.
-    """
     roster = [_student(n) for n in range(1, 7)]
     fake = _FakeSupabase(_tables(roster), rpc_results={TREND_RPC: [_row(focus=0.5)]})
     monkeypatch.setattr(main, "supabase", fake)
@@ -530,11 +417,7 @@ def test_consent_for_the_roster_is_read_in_one_query(monkeypatch):
 
 
 def test_a_failed_consent_read_denies_every_student_rather_than_none(monkeypatch):
-    """Fails closed for a roster exactly as `_consent` does for one student.
-
-    The opposite direction would read channels nobody was confirmed to have
-    agreed to, which is the one mistake this helper may not make.
-    """
+    """Fails closed for a roster exactly as `_consent` does for one student."""
     roster = [_student(n) for n in range(1, 7)]
     fake = _FakeSupabase(_tables(roster), table_raises={"signal_consent"},
                          rpc_results={TREND_RPC: [_row(focus=0.5)]})
@@ -545,8 +428,7 @@ def test_a_failed_consent_read_denies_every_student_rather_than_none(monkeypatch
     for row in out["per_student"]:
         s = row["summary"]
         assert s["consent_retrieved"] is False
-        # Denied, not permitted -- and every channel, not just the ones a
-        # partial row would have covered.
+        # Every channel denied.
         assert s["heart_included"] is False
         assert s["emotion_included"] is False
         assert s["eeg_enabled"] is False
@@ -557,11 +439,7 @@ def test_a_failed_consent_read_denies_every_student_rather_than_none(monkeypatch
 
 
 def test_a_student_with_no_consent_row_is_denied_but_read_successfully(monkeypatch):
-    """The two silences stay apart in the batch form.
-
-    No row means nobody has consented yet, which the read established. A failed
-    read means we could not find out. Both deny; only the first is a fact.
-    """
+    """No row and a failed read both deny; only no-row is `consent_retrieved`."""
     roster = [_student(n) for n in range(1, 7)]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         # Only student 1 has a row; the rest are absent.

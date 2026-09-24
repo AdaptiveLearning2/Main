@@ -1,15 +1,4 @@
-"""The schemas the Claude branch constrains its replies with.
-
-`extract_json` exists because `llama3.1:8b` wraps JSON in fences and preamble.
-It was carried to Claude untouched, so the retry loop still absorbed malformed
-JSON from a provider that can be told not to produce any.
-
-The tests that matter here are the two that cannot be checked by reading:
-whether a schema is accepted by the API at all, and whether every generator
-sends one. The first is a real constraint with two teeth -- both were found by
-sending requests, not by reasoning -- and a violation is a 400 on a student's
-first question, which is why it is pinned locally.
-"""
+"""The schemas the Claude branch constrains its replies with. See docs/question-generation.md."""
 import os
 import re
 import sys
@@ -53,19 +42,7 @@ def _walk(node):
 
 @pytest.mark.parametrize("name,schema", ALL_SCHEMAS, ids=[n for n, _ in ALL_SCHEMAS])
 def test_no_schema_uses_a_keyword_the_api_refuses(name, schema):
-    """Two restrictions, both found by sending a request and reading the 400.
-
-        For 'array' type, 'minItems' values other than 0 or 1 are not supported
-        For 'object' type, 'additionalProperties: object' is not supported.
-            Please set 'additionalProperties' to false
-
-    Neither is guessable from the JSON Schema spec -- both are valid schema and
-    refused by this endpoint. A violation is not a degraded question, it is a
-    400 on the first question of whatever topic carries it, so it is worth
-    catching here rather than in production. This is the local half of a
-    property whose real check is a live call; it cannot confirm a schema is
-    *accepted*, only that it avoids the two things known to be rejected.
-    """
+    """The API 400s on minItems > 1 and non-false additionalProperties (valid JSON Schema, refused)."""
     for node in _walk(schema):
         if node.get("type") == "array" and "minItems" in node:
             assert node["minItems"] in (0, 1), (
@@ -77,12 +54,7 @@ def test_no_schema_uses_a_keyword_the_api_refuses(name, schema):
 
 
 def test_every_generator_sends_a_schema():
-    """Exhaustiveness, like `_MODE_AWARE` and the close-site tests.
-
-    A generator added without one keeps the `extract_json` path silently -- it
-    would work, and nothing would say that one topic in eleven is still
-    absorbing malformed JSON on a provider that need not produce any.
-    """
+    """Exhaustive: a generator without one silently keeps the `extract_json` path."""
     missing = []
     for filename in sorted(os.listdir(BACKEND)):
         if not (filename.startswith("LLM_") and filename.endswith("_generation.py")):
@@ -96,13 +68,7 @@ def test_every_generator_sends_a_schema():
 
 
 def test_geometrys_variable_keys_come_from_the_solvers_table():
-    """Derived from `geometry_solvers.SCENARIO_VARS`, not restated.
-
-    The schema tells the model which keys to produce and the solver indexes
-    them; a second copy is how those two drift and the model is told to emit
-    something the solver cannot read. Haiku has already returned a
-    `rect_perimeter_missing_side` carrying `rect_area_missing_side`'s keys.
-    """
+    """Derived from `geometry_solvers.SCENARIO_VARS`, not restated, so schema and solver cannot drift."""
     for scenario in geometry_solvers.SOLVABLE_SCENARIOS:
         variables = qs.geometry(scenario)["properties"]["variables"]
         assert set(variables["properties"]) == set(
@@ -112,13 +78,7 @@ def test_geometrys_variable_keys_come_from_the_solvers_table():
 
 
 def test_the_angle_arity_is_deliberately_not_in_the_schema():
-    """`SCENARIO_ARITY` cannot be expressed -- `minItems` above 1 is refused.
-
-    Pinned because the gap is invisible: every other shape here is constrained,
-    so a reader would reasonably assume this one is, and stop checking the
-    arity at runtime. It is still checked there, and that check is the only
-    one.
-    """
+    """`minItems` above 1 is refused, so the runtime arity check is the only one."""
     for scenario in angle_solvers.SOLVABLE_SCENARIOS:
         variables = qs.angles(scenario)["properties"]["variables"]
         assert "minItems" not in variables and "maxItems" not in variables
@@ -127,15 +87,7 @@ def test_the_angle_arity_is_deliberately_not_in_the_schema():
 
 
 def test_every_angle_blocks_own_example_is_allowed_by_its_schema_and_solves():
-    """The schema must admit the reply the prompt asks for.
-
-    `angles` pinned every scenario's variables to a numeral, and
-    `algebra_complementary`'s own example is `["x + 10", "2x - 20"]` -- so on
-    Claude the only admissible reply was a pair of bare numbers, which has no
-    `x` to solve for. Every attempt failed, billed, the same way. Read from
-    the blocks rather than listed here, so a new scenario is covered by being
-    added.
-    """
+    """The schema must admit the reply the prompt asks for; read from the blocks, so new ones are covered."""
     import json
     os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
     os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
@@ -155,13 +107,7 @@ def test_every_angle_blocks_own_example_is_allowed_by_its_schema_and_solves():
 
 
 def test_the_two_bag_scenarios_get_no_schema_rather_than_a_permissive_one():
-    """`items` maps invented category names to counts, so the object must stay
-    open, and the API refuses an open object.
-
-    `None` rather than a schema with `items` dropped: a schema listing every
-    key *except* the one carrying the data would be accepted, would constrain
-    nothing that matters, and would read as covered.
-    """
+    """`items` needs an open object, which the API refuses; a schema without it would read as covered."""
     assert qs.probability("probability_of") is None
     assert qs.probability("not_probability_of") is None
     assert qs.probability("dice") is not None
@@ -170,19 +116,7 @@ def test_the_two_bag_scenarios_get_no_schema_rather_than_a_permissive_one():
 @pytest.mark.parametrize("module", ["LLM_expressions_generation.py",
                                    "LLM_probability_generation.py"])
 def test_the_new_name_maps_match_the_blocks_they_send(module):
-    """Both prompts name the wanted scenario by *number* and the reply must
-    carry the matching *name*, which the solver then dispatches on. The map is
-    the only thing tying those together, so a wrong entry pins the schema's
-    enum to one scenario while the prompt asks for another -- every reply
-    refused, on a topic that reads as the model simply failing.
-
-    Compared against the module's own `_SCENARIO_NAMES`, never against a copy
-    written here. The first version of this test did the latter -- blocks
-    against a literal in the test file -- so it compared two things the map
-    does not appear in, and passed unchanged with `3: "dice"` mutated to
-    `3: "probability_of"`. It asserted the prompt was self-consistent, which
-    nothing doubted.
-    """
+    """The prompt names a scenario by number; the map ties it to the name. Compared to the live map."""
     import importlib
     live = importlib.import_module(module[:-3])._SCENARIO_NAMES
 
@@ -198,22 +132,9 @@ def test_the_new_name_maps_match_the_blocks_they_send(module):
 
 
 def test_every_generator_stores_its_own_topic_name_not_the_models():
-    """`question_topic` becomes `questions.subject`, which
-    `record_topic_attempt` joins against `math_topics.topic_name`.
+    """`question_topic` is what `record_topic_attempt` joins on; the model must not name it.
 
-    So a wrong value is not a cosmetic label: it credits the student's answer
-    to a different topic in `user_math_performance`, which is what the adaptive
-    engine reads to choose what to serve next. CLAUDE.md already states the
-    rule one layer down -- the topic is derived from the question row, never
-    from the caller, or a page could credit one subject for work done in
-    another. Letting the model name it is the same hazard one layer up.
-
-    `rationals` returned `question_data["question_topic"]` and its prompt named
-    "algebra" in prose and "rations" in the JSON example. Measured 3 of 3
-    against Haiku: every fractions question was stored as algebra.
-
-    Two halves, and the literal is the load-bearing one -- a generator reading
-    the model's value could still pass a membership check on any given run.
+    The literal half is load-bearing: a model-read value can pass the membership check on any run.
     """
     import ast
 
@@ -223,8 +144,7 @@ def test_every_generator_stores_its_own_topic_name_not_the_models():
     for filename in sorted(os.listdir(BACKEND)):
         if not (filename.startswith("LLM_") and filename.endswith("_generation.py")):
             continue
-        # utf-8-sig: these files carry a BOM, and `ast.parse` rejects it as an
-        # invalid non-printable character rather than skipping it.
+        # utf-8-sig: these files carry a BOM, which `ast.parse` rejects.
         tree = ast.parse(
             open(os.path.join(BACKEND, filename), encoding="utf-8-sig").read())
         found = [

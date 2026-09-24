@@ -1,19 +1,4 @@
-"""A probability reply is read after the retry loop, so a bad one must be
-refused inside it.
-
-`sides` and `items` belong to one scenario each, so neither can go in
-`required_keys` unconditionally -- and both are read *below* the `for/else`.
-A missing one was a KeyError escaping the generator on attempt 1 and reaching
-the student as a 500, where every other malformed reply costs a retry.
-
-The same read takes `scenario` from the reply. This prompt sends all three
-blocks and names the wanted one by number, so a reply is free to answer a
-different scenario -- the hole geometry and angles had, still open here.
-
-The schema does not cover this: it closes the dice half only, and only on
-Claude. The two bag scenarios get no schema at all, and `LLM_PROVIDER` defaults
-to ollama.
-"""
+"""A probability reply is read after the retry loop, so a bad shape or scenario is refused inside it."""
 import json
 import os
 import sys
@@ -54,17 +39,14 @@ def reply(monkeypatch):
 ])
 def test_an_unusable_reply_retries_instead_of_raising_keyerror(label, payload,
                                                                reply):
-    """All three reached the student as a 500 before this. The assertion is on
-    the *type*: a ValueError after the retries is the path `_prefetch_worker`
-    already catches, and a KeyError is not."""
+    """`_prefetch_worker` catches ValueError; a KeyError reaches the student as a 500."""
     reply(payload)
     with pytest.raises(ValueError):
         prob.generate_probability_question([], [], "medium", "7th Grade")
 
 
 def test_a_reply_answering_the_scenario_that_was_asked_for_is_served(reply):
-    """The teeth. Without this, refusing everything would pass the three
-    above."""
+    """Without this, refusing everything would pass the three above."""
     reply(DICE)
     question = prob.generate_probability_question([], [], "medium", "7th Grade")
     assert question["question_text"] == DICE["question_text"]

@@ -1,13 +1,4 @@
-"""Consent stops future recording on the pull path too.
-
-The rule: historical rows stay, and nothing new is written until consent is
-given again. Withdrawal is not deletion.
-
-The push path has always had this -- `/api/signals/*` calls `_consent()` per
-request. The poller had nothing: it writes `cognitive_signals` directly with
-the service-role client, bypassing both RLS and the ingest endpoint, so under
-`INGEST_MODE=pull` a withdrawal used to stop nothing at all.
-"""
+"""Consent stops future recording on the pull path too; withdrawal is not deletion."""
 import os
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -51,16 +42,12 @@ def test_a_withdrawn_student_cannot_start_a_poller(monkeypatch):
         main.eeg_start(_payload(), None)
 
     assert exc.value.status_code == 403
-    # 403, not the 409 push uses: one says this student said no, the other
-    # says this deployment doesn't work that way. Merging them would make a
-    # refusal look like a misconfiguration.
+    # 403, not push's 409: a refusal, not a misconfiguration.
     assert "switched off" in exc.value.detail
 
 
 def test_an_unreadable_consent_row_does_not_start_one_either(monkeypatch):
-    """`_consent` fails closed, unlike the reporting helpers. A dashboard
-    degrading to empty is fine, but a consent check degrading to "enabled"
-    would record against a refusal."""
+    """`_consent` fails closed, unlike the reporting helpers."""
     _endpoint_stubs(monkeypatch)
     monkeypatch.setattr(main, "_consent", lambda _s: {"retrieved": False})
 
@@ -72,8 +59,7 @@ def test_an_unreadable_consent_row_does_not_start_one_either(monkeypatch):
 
 
 def test_the_poller_refuses_when_no_check_is_wired(monkeypatch):
-    """No default of "assume yes" -- an unwired deployment would otherwise
-    record against every refusal and look identical to a wired one."""
+    """No "assume yes" default: unwired would look identical to wired."""
     monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
     monkeypatch.setattr(eeg_poller, "_consent_check", None)
 
@@ -86,11 +72,7 @@ def test_the_poller_refuses_when_no_check_is_wired(monkeypatch):
 def test_the_poller_refuses_a_withdrawn_student(monkeypatch):
     monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
     monkeypatch.setattr(eeg_poller, "_consent_check", lambda _u: False)
-    # The reason hook needs stubbing too. Left unstubbed, `start()` refuses and
-    # then asks the real `main` callback for the message, which reads
-    # `_may_record` against a real Supabase client -- that read fails fast
-    # here, and a failed read is also a refusal, so the test would still pass
-    # but for the wrong reason.
+    # Unstubbed, the real reason hook's failed read also refuses: right result, wrong reason.
     monkeypatch.setattr(eeg_poller, "_consent_reason_check",
                         lambda _u: "EEG recording is switched off for this student.")
 
@@ -99,14 +81,9 @@ def test_the_poller_refuses_a_withdrawn_student(monkeypatch):
 
 
 def test_the_wiring_is_live_not_just_available(monkeypatch):
-    """`main` must actually call `set_consent_check` at import time. If it
-    were wired wrongly, every test above would still pass and production
-    would record against refusals.
+    """`main` must call `set_consent_check` at import.
 
-    Only `main` gets reloaded here. Reloading `eeg_poller` too rebinds
-    `_active`, `_lock` and `_Poller` for the rest of the session, which is a
-    registry-identity hazard for every later test -- clearing the fixture's
-    permissive value is enough, and monkeypatch restores it after.
+    Only `main` is reloaded: reloading `eeg_poller` would rebind its registry for later tests.
     """
     monkeypatch.setattr(eeg_poller, "_consent_check", None)
     import importlib
@@ -116,10 +93,7 @@ def test_the_wiring_is_live_not_just_available(monkeypatch):
 
 
 def test_a_self_terminated_poller_deregisters_itself(monkeypatch):
-    """A poller can stop itself (on a withdrawal) with no caller around to
-    clean up after it, unlike `stop`, `stop_for_user`, `start`'s replacement
-    path, or `stop_all` -- all of which pop `_active` and clear the warning.
-    A self-terminated poller must do the same or both outlive it."""
+    """With no caller to clean up, it must pop `_active` and clear the warning itself."""
     import threading
     import time as _time
 
@@ -151,13 +125,7 @@ def test_a_self_terminated_poller_deregisters_itself(monkeypatch):
 
 
 def test_the_status_endpoint_says_why_it_is_not_running(monkeypatch):
-    """"Stopped because the student withdrew" and "stopped because the headband
-    dropped" are different sentences, but the frontend used to render both as
-    a poller that's simply not running.
-
-    The reason is derived from current consent, not remembered on the poller
-    -- a remembered reason would need the dead poller left in `_active` to
-    stay readable, and could go stale the moment a parent re-enabled it."""
+    """The reason is derived from current consent, not remembered on the poller, so it can't go stale."""
     monkeypatch.setattr(eeg_poller, "status", lambda _u: {"running": False})
     monkeypatch.setattr(main, "_consent",
                         lambda _s: {"eeg_enabled": False, "retrieved": True,
@@ -170,9 +138,7 @@ def test_the_status_endpoint_says_why_it_is_not_running(monkeypatch):
 
 
 def test_an_unreadable_consent_row_is_not_reported_as_a_withdrawal(monkeypatch):
-    """The three-state rule: a failed read is not a refusal. Telling a parent
-    their child withdrew, when the truth is we couldn't find out, is worse
-    than saying nothing."""
+    """A failed read is not a refusal."""
     monkeypatch.setattr(eeg_poller, "status", lambda _u: {"running": False})
     monkeypatch.setattr(main, "_consent", lambda _s: {"retrieved": False})
 
@@ -193,11 +159,7 @@ def test_a_running_poller_is_not_annotated(monkeypatch):
 
 
 def test_an_actual_withdrawal_deletes_nothing(monkeypatch):
-    """Drives the real write endpoint, not just a read. An earlier version of
-    this test called `_consent()` -- a read -- while its docstring claimed
-    "nothing in the consent write path issues a delete", so a change adding a
-    delete to the update endpoint would have passed it untouched.
-    """
+    """Drives the real write endpoint, not just a read."""
     calls = []
 
     class _Tbl:
@@ -229,16 +191,14 @@ def test_an_actual_withdrawal_deletes_nothing(monkeypatch):
     main.update_consent("u1", main.ConsentUpdate(eeg_enabled=False), None)
 
     assert not any(c[0] == "delete" for c in calls),         f"withdrawal deleted stored data: {calls}"
-    # Confirms the update actually ran, so the assertion above isn't passing
-    # just because nothing happened.
+    # The update ran, so the assertion above isn't vacuous.
     wrote = [c for c in calls if c[0] in ("update", "insert")]
     assert wrote, "the withdrawal never reached the database"
     assert wrote[0][2]["eeg_enabled"] is False
 
 
 def test_signal_tables_are_never_touched_by_a_consent_write(monkeypatch):
-    """Not just "no delete" -- no write to the signal tables at all.
-    Withdrawal changes what happens next, not what was already recorded."""
+    """Not just "no delete" -- no write to the signal tables at all."""
     touched = []
 
     class _Tbl:
@@ -268,30 +228,11 @@ def test_signal_tables_are_never_touched_by_a_consent_write(monkeypatch):
 
 
 def test_a_dying_poller_does_not_deregister_its_replacement(monkeypatch):
-    """Disconnect then reconnect on the same session id.
-
-    The old thread is mid-`get_state` (a real HTTP call, so this is the
-    normal case, not a tight race) when `start()` registers a replacement
-    under the same key. An unconditional pop in the old thread's teardown
-    would then deregister the live poller: it would keep writing
-    `cognitive_signals` while `stop()` could no longer reach it,
-    `can_use_device` would hand its device to another user, and the
-    teardown's liveness scan would stop the sidecar stream out from under it.
-
-    The pop is guarded by `is self`, which leaves the consent path unchanged
-    -- there, `self` is the registered poller.
-    """
+    """Reconnect while the old thread is mid-`get_state`: its teardown pop is guarded by `is self`."""
     import threading
     import time as _time
 
-    # Gated, not slept. A fixed sleep to hit "the old thread is inside a read
-    # while the replacement registers" only works if the scheduler cooperates
-    # -- on CI the old thread sometimes reached its teardown between reads
-    # instead, making the test fail on behavior that was actually correct.
-    #
-    # The gate makes the ordering guaranteed instead of probabilistic: the
-    # first read blocks until the test has registered the replacement, so the
-    # old thread is guaranteed to still be inside it.
+    # Gated, not slept: the first read blocks until the replacement is registered.
     entered_read = threading.Event()
     may_finish_read = threading.Event()
 
@@ -313,18 +254,14 @@ def test_a_dying_poller_does_not_deregister_its_replacement(monkeypatch):
     old = eeg_poller._active["s1"]
     assert entered_read.wait(5), "the poller never reached a read"
 
-    # Disconnect, then reconnect the same session while the old thread is
-    # still inside that read.
+    # Disconnect and reconnect while the old thread is still inside that read.
     eeg_poller.stop("s1")
     eeg_poller.start(None, "u1", "s1", "devA")
     new = eeg_poller._active["s1"]
     assert new is not old
 
-    # Only now let the read return, so the old thread's teardown runs after
-    # the replacement is already registered.
     may_finish_read.set()
 
-    # Let the old thread reach its teardown.
     deadline = _time.monotonic() + 5
     while _time.monotonic() < deadline and old.is_alive():
         _time.sleep(0.02)
@@ -332,22 +269,15 @@ def test_a_dying_poller_does_not_deregister_its_replacement(monkeypatch):
 
     assert eeg_poller._active.get("s1") is new, "the replacement was deregistered"
     assert eeg_poller.is_polling("s1"), "a live poller became invisible to the registry"
-    # These are the consequences the registry exists to prevent.
     assert not eeg_poller.can_use_device("u2", "devA"), \
         "another user could claim a device with a live poller on it"
     assert eeg_poller.status("u1")["running"] is True
-    # A refactor of the liveness scan could break this without tripping any
-    # of the checks above: the dying thread must not tear down the sidecar
-    # stream the replacement is reading. It holds because the scan runs after
-    # the guarded pop and so sees the live replacement -- assert it directly
-    # rather than relying on that ordering staying put.
+    # The dying thread must not stop the sidecar stream the replacement reads.
     assert stopped_streams == [],         f"the sidecar stream was stopped under a live poller: {stopped_streams}"
 
-    # Still stoppable, which is what ending the session relies on.
     eeg_poller.stop("s1")
     assert not eeg_poller.is_polling("s1")
     for t in threading.enumerate():
         if type(t).__name__ == "_Poller":
             t.join(timeout=2)
-    # Now it is right to stop it: nothing is reading it any more.
     assert stopped_streams == ["devA"]

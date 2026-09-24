@@ -1,9 +1,4 @@
-"""`shape_fractions` -- reading a fraction off a partitioned shape.
-
-1.G.3, 2.G.3, 3.NF.1. Distinct from `rationals`, which is 4.NF.3 arithmetic:
-this is recognition, and the answer is read from a picture rather than
-computed. The second topic whose figure is required.
-"""
+"""`shape_fractions`: reading a fraction off a partitioned shape (1.G.3, 2.G.3, 3.NF.1)."""
 import json
 import math
 import os
@@ -29,16 +24,7 @@ def test_the_fraction_is_what_the_picture_shows(parts, shaded, expected):
 
 @pytest.mark.parametrize("parts,shaded", [(4, 2), (6, 2), (6, 3), (6, 4), (8, 2), (8, 4), (8, 6)])
 def test_a_reducible_fraction_is_refused_because_it_has_two_right_answers(parts, shaded):
-    """The decisive rule. Two shaded parts in four is a perfectly good picture
-    and an ambiguous question: `2/4` and `1/2` are both correct readings, and
-    whichever the solver picked, a student giving the other is marked wrong for
-    a right answer.
-
-    That is the failure this codebase treats as the worst available -- worse
-    than a refused question, which costs one retry. Reducing the answer instead
-    is the other option and is worse: the student is asked to read the picture,
-    and the picture says two of four.
-    """
+    """`2/4` and `1/2` are both right, so either key marks a right answer wrong."""
     assert math.gcd(shaded, parts) != 1, "this case is meant to be reducible"
     assert shapes.solve_shape_fraction(parts, shaded) is None
 
@@ -55,8 +41,7 @@ def test_a_picture_that_asks_nothing_is_refused(parts, shaded, why):
 
 
 def test_the_distractors_lead_with_the_mistake_a_child_makes():
-    """Counting the unshaded parts is the misreading this question is for, so
-    it is the first distractor rather than an arbitrary near-miss."""
+    """Counting the unshaded parts is the misreading, so it is the first distractor."""
     wrong = shapes.generate_incorrect_answers(4, 3)
     assert wrong[0] == "1/4"                     # the complement
     assert "3/4" not in wrong
@@ -102,27 +87,14 @@ def test_an_unusable_reply_retries(override, why, reply):
 
 
 def test_the_figure_and_the_answer_come_from_the_same_two_numbers():
-    """There is no text saying what the fractions are, so a picture drawn from
-    a different reading would be unfalsifiable."""
+    """No text states the fraction, so a mismatched picture would be unfalsifiable."""
     figure = question_figures.figure_for("part_whole", {"parts": "8", "shaded": "3"})
     assert figure == {"type": "part_whole", "parts": 8, "shaded": 3}
     assert shapes.solve_shape_fraction(figure["parts"], figure["shaded"]) == "3/8"
 
 
 def test_every_reachable_question_gets_three_usable_distractors():
-    """The whole space is 21 fractions, so it is checked rather than sampled.
-
-    Two properties, and both were violated before. A fraction of one or more
-    cannot be part of a shape, so `2/1` is not a misreading a child could make
-    -- it is an option nobody considers, which quietly makes a three-way choice
-    a two-way one. And two options of equal value (`1/1` and `2/2` were both
-    offered against `1/2`) can be ruled out with a single thought, which does
-    the same thing.
-
-    Halves is the case that forced neighbouring denominators into the candidate
-    list: with only the near-misses of 2, the sole proper distractor available
-    was `1/3`.
-    """
+    """Exhaustive over 21 fractions: distractors are proper (< 1) and of distinct value."""
     from fractions import Fraction
 
     checked = 0

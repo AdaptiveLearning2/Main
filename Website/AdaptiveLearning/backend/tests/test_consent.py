@@ -1,14 +1,4 @@
-"""Consent rules for the three signal channels.
-
-`signal_consent` has no insert/update RLS policy for anyone, so PostgREST can't
-write it. Every write goes through the service-role client here, which makes
-these checks the actual enforcement, not just a convenience layer -- getting
-this wrong doesn't leak data, it records a child's body against their refusal.
-
-The key asymmetry: a student can withdraw consent at any time and it stands
-until a parent revisits it. A student cannot re-enable a channel themselves,
-or the parent's control would be meaningless. Both directions are tested.
-"""
+"""Consent rules for the three signal channels; main.py is the only enforcement of the writes."""
 import os
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -100,8 +90,7 @@ def _fake(monkeypatch, viewer, consent_row=None, links=True, raises_on=()):
     fake = _FakeSupabase(store, raises_on=raises_on)
     monkeypatch.setattr(main, "supabase", fake)
     monkeypatch.setattr(main, "get_user", lambda _r: viewer)
-    # The shared relationship helper has its own tests; this file only tests
-    # the consent rules built on top of it.
+    # The relationship helper has its own tests.
     monkeypatch.setattr(main, "_can_view_student", lambda v, s: v["id"] != "stranger-1")
     return fake
 
@@ -122,8 +111,6 @@ def _row(**over):
 # ── defaults: nothing is recorded until someone says so ──────────────────────
 
 def test_absent_row_denies_every_channel(monkeypatch):
-    """A student with no row records nothing. A missing row must read as a
-    denial, not as unset and defaulting to "on"."""
     _fake(monkeypatch, STUDENT, consent_row=None)
     out = main.get_consent("student-1", None)
     assert [c["enabled"] for c in out["channels"].values()] == [False, False, False]
@@ -131,10 +118,7 @@ def test_absent_row_denies_every_channel(monkeypatch):
 
 
 def test_failed_read_denies_and_says_so(monkeypatch):
-    """Fails closed, and says why. Reporting dashboards elsewhere swallow
-    errors and return an empty payload, which is fine there but wrong here --
-    defaulting to enabled on a failed read would record data against a
-    refusal while looking like a working system."""
+    """Fails closed, unlike the reporting helpers, and says why."""
     _fake(monkeypatch, STUDENT, consent_row=_row(), raises_on={"signal_consent"})
     out = main.get_consent("student-1", None)
     assert [c["enabled"] for c in out["channels"].values()] == [False, False, False]
@@ -152,7 +136,6 @@ def test_student_may_turn_a_channel_off(monkeypatch):
 
 
 def test_student_may_not_turn_a_channel_back_on(monkeypatch):
-    """This is what makes parent control real rather than nominal."""
     fake = _fake(monkeypatch, STUDENT,
                  consent_row=_row(camera_enabled=False, camera_revoked_at="2026-08-02T00:00:00+00:00"))
     with pytest.raises(main.HTTPException) as exc:
@@ -166,17 +149,14 @@ def test_parent_may_turn_a_channel_back_on(monkeypatch):
                  consent_row=_row(camera_enabled=False, camera_revoked_at="2026-08-02T00:00:00+00:00"))
     out = main.update_consent("student-1", main.ConsentUpdate(camera_enabled=True), None)
     assert out["channels"]["camera"]["enabled"] is True
-    # revoked_at must clear too: a CHECK constraint forbids a channel being
-    # both enabled and revoked, so leaving it set would fail the write.
+    # A CHECK forbids a channel being both enabled and revoked.
     assert fake.store["signal_consent"][0]["camera_revoked_at"] is None
 
 
 # ── who may write at all ─────────────────────────────────────────────────────
 
 def test_teacher_may_read_but_not_write(monkeypatch):
-    """Reading and writing are different relationships. A teacher needs to see
-    that a channel is off, or a blank tile looks like a broken query -- but
-    changing it is not theirs to do."""
+    """Reading and writing are different relationships."""
     _fake(monkeypatch, TEACHER, consent_row=_row())
     assert main.get_consent("student-1", None)["channels"]["camera"]["enabled"] is True
     with pytest.raises(main.HTTPException) as exc:
@@ -210,8 +190,7 @@ def test_write_is_refused_when_the_current_state_could_not_be_read(monkeypatch):
 # ── what a teacher is told, and what the student is told ─────────────────────
 
 def test_revoked_by_is_a_role_not_an_identity(monkeypatch):
-    """A teacher learns which role made a decision, not which guardian --
-    no id should reach the payload."""
+    """No id should reach the payload."""
     _fake(monkeypatch, TEACHER,
           consent_row=_row(camera_enabled=False, camera_revoked_at="2026-08-02T00:00:00+00:00",
                            camera_revoked_by="parent-1"))
@@ -228,10 +207,7 @@ def test_revoked_by_reports_the_student_when_they_withdrew(monkeypatch):
 
 
 def test_revoked_by_is_per_channel_not_per_row(monkeypatch):
-    """The row has one updated_by, but channels are revoked independently.
-    Student turns the camera off, parent later turns eeg on -- deriving the
-    role from updated_by would wrongly report the parent as having withdrawn
-    the camera."""
+    """The row has one updated_by, but channels are revoked independently."""
     _fake(monkeypatch, TEACHER, consent_row=_row(
         camera_enabled=False,
         camera_revoked_at="2026-08-02T00:00:00+00:00",
@@ -243,8 +219,7 @@ def test_revoked_by_is_per_channel_not_per_row(monkeypatch):
 
 
 def test_enabled_channel_reports_no_revoker(monkeypatch):
-    """A role on an enabled channel would read as "turned on by" -- a
-    different claim than what this field is supposed to mean."""
+    """A role on an enabled channel would read as "turned on by"."""
     _fake(monkeypatch, TEACHER, consent_row=_row(updated_by="parent-1"))
     assert main.get_consent("student-1", None)["channels"]["camera"]["revoked_by"] is None
 
@@ -256,8 +231,7 @@ def test_a_disable_records_who_did_it(monkeypatch):
 
 
 def test_re_enabling_clears_the_revoker(monkeypatch):
-    """A CHECK constraint forbids an enabled channel from having a revoker,
-    so leaving it set would fail the write."""
+    """A CHECK forbids an enabled channel from having a revoker."""
     fake = _fake(monkeypatch, PARENT, consent_row=_row(
         camera_enabled=False, camera_revoked_at="2026-08-02T00:00:00+00:00",
         camera_revoked_by="student-1"))
@@ -276,8 +250,7 @@ def test_parent_re_enabling_raises_a_notice_for_the_student(monkeypatch):
 
 
 def test_parent_disabling_raises_no_notice(monkeypatch):
-    """Only a re-enable needs a notice, not any parent write -- the student
-    loses nothing here, and can see the state in settings."""
+    """Only a re-enable needs a notice, not any parent write."""
     _fake(monkeypatch, PARENT, consent_row=_row())
     out = main.update_consent("student-1", main.ConsentUpdate(camera_enabled=False), None)
     assert out["needs_student_ack"] is False
@@ -294,8 +267,7 @@ def test_acknowledging_clears_the_notice(monkeypatch):
 
 
 def test_ack_with_no_consent_row_is_not_a_success(monkeypatch):
-    """Reporting success for a write that matched nothing would make the
-    client believe it dismissed a notice that's still there."""
+    """A write that matched nothing is not a dismissed notice."""
     _fake(monkeypatch, STUDENT, consent_row=None)
     with pytest.raises(main.HTTPException) as exc:
         main.ack_consent(None)
@@ -310,9 +282,7 @@ def test_a_students_own_change_does_not_notify_them(monkeypatch):
 
 
 def test_ack_comparison_tolerates_mixed_timestamp_spellings(monkeypatch):
-    """`Z` and `+00:00` mean the same instant but sort differently as strings.
-    This comparison decides whether a student sees a notice, so it parses the
-    timestamps rather than assuming both sides use the same format."""
+    """`Z` and `+00:00` are the same instant but sort differently as strings."""
     _fake(monkeypatch, STUDENT,
           consent_row=_row(parent_enabled_at="2026-08-03T00:00:00Z",
                            student_ack_at="2026-08-04T00:00:00+00:00"))
@@ -322,9 +292,7 @@ def test_ack_comparison_tolerates_mixed_timestamp_spellings(monkeypatch):
 # ── concurrency ──────────────────────────────────────────────────────────────
 
 def test_write_is_refused_when_the_state_moved_underneath_it(monkeypatch):
-    """Read-then-write is not atomic. The race here is a student's withdrawal
-    against a parent's re-enable on the same channel -- losing it silently
-    would mean recording against a refusal."""
+    """Read-then-write is not atomic; a lost race would record against a refusal."""
     fake = _fake(monkeypatch, PARENT, consent_row=_row(
         camera_enabled=False, camera_revoked_at="2026-08-02T00:00:00+00:00",
         camera_revoked_by="student-1"))
@@ -358,8 +326,7 @@ def test_write_is_refused_when_the_state_moved_underneath_it(monkeypatch):
     RuntimeError({"code": "23505", "message": "duplicate key"}),
 ])
 def test_losing_the_insert_race_answers_409_like_the_update_race(monkeypatch, boom):
-    """Same race, same answer. If one lost race answered 500 and the other
-    409, a client couldn't tell that "reload and try again" fits both."""
+    """Same race, same answer."""
     fake = _fake(monkeypatch, PARENT, consent_row=None)
 
     real_table = fake.table
@@ -399,8 +366,7 @@ def test_a_non_duplicate_insert_failure_is_still_a_500(monkeypatch):
 
 
 def test_unparseable_timestamp_is_logged_not_swallowed(monkeypatch, capsys):
-    """An unparseable timestamp suppresses the notice, so that must be
-    logged, not silent."""
+    """An unparseable timestamp suppresses the notice, so it must be logged."""
     _fake(monkeypatch, STUDENT, consent_row=_row(parent_enabled_at="not-a-timestamp"))
     assert main.get_consent("student-1", None)["needs_student_ack"] is False
     assert "unparseable timestamp" in capsys.readouterr().out
@@ -409,8 +375,7 @@ def test_unparseable_timestamp_is_logged_not_swallowed(monkeypatch, capsys):
 # ── no-op writes ─────────────────────────────────────────────────────────────
 
 def test_setting_a_channel_to_its_current_value_touches_nothing(monkeypatch):
-    """Otherwise a re-save would restamp updated_by/updated_at and raise a
-    notice about a change that never happened."""
+    """A re-save must not restamp updated_by/updated_at."""
     fake = _fake(monkeypatch, PARENT, consent_row=_row(updated_at="2026-08-01T00:00:00+00:00"))
     main.update_consent("student-1", main.ConsentUpdate(camera_enabled=True), None)
     assert fake.store["signal_consent"][0]["updated_at"] == "2026-08-01T00:00:00+00:00"

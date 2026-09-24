@@ -11,21 +11,14 @@ import question_figures as figures  # noqa: E402
 
 
 def test_the_grid_is_built_from_the_numbers_the_solver_multiplies():
-    """The whole design. `question_consistency` exists because a model free to
-    write the text and the scored data separately eventually disagrees with
-    itself; a picture is the same hazard with no text for a check to read.
-
-    Reading `variables` -- the dict `geometry_solvers` indexes -- makes that
-    disagreement unrepresentable rather than unlikely.
-    """
+    """Reading the `variables` the solver indexes makes a picture/score disagreement unrepresentable."""
     spec = figures.figure_for("rectangle_area_by_counting",
                               {"rows": "3", "columns": "4"})
     assert spec == {"type": "rect_grid", "rows": 3, "columns": 4}
 
 
 def test_it_reads_exactly_the_keys_that_scenario_declares():
-    """Derived, not restated: a figure keyed on a name the solver does not use
-    would draw one thing and score another, and nothing would notice."""
+    """A key the solver does not use would draw one thing and score another."""
     assert set(geometry_solvers.SCENARIO_VARS["rectangle_area_by_counting"]) == {
         "rows", "columns"}
 
@@ -40,23 +33,17 @@ def test_it_reads_exactly_the_keys_that_scenario_declares():
     ("not a dict", "not a variables mapping"),
 ])
 def test_a_figure_it_cannot_draw_is_no_figure_rather_than_an_error(variables, why):
-    """Fail open, like `lesson_plan_context`. The question was complete without
-    a picture -- the text still reads "3 rows of 4 same-size squares" -- so a
-    figure that cannot be built must cost the picture and nothing else."""
+    """Fail open: the question text is complete without the picture."""
     assert figures.figure_for("rectangle_area_by_counting", variables) is None, why
 
 
 def test_a_scenario_with_no_figure_gets_none():
-    """Most questions here are text, and that is the ordinary case rather than
-    a gap."""
     assert figures.figure_for("circle_area", {"radius": "3"}) is None
     assert figures.figure_for("no_such_scenario", {}) is None
 
 
 def test_a_builder_that_raises_costs_the_picture_and_not_the_question(monkeypatch):
-    """It runs on the hot generation path, after the solve. An escaping
-    exception there would turn a solved, checked, grade-appropriate question
-    into a 500 over a decoration."""
+    """On the generation hot path, an escaping exception would 500 a good question."""
     def _boom(_variables):
         raise RuntimeError("boom")
 
@@ -66,8 +53,7 @@ def test_a_builder_that_raises_costs_the_picture_and_not_the_question(monkeypatc
 
 
 def test_the_generator_attaches_it_without_asking_the_model(monkeypatch):
-    """End to end through the retry loop: the served question carries a figure
-    built from its own variables, and the model was never asked for one."""
+    """End to end through the retry loop."""
     import json
 
     import llm_client
@@ -90,9 +76,7 @@ def test_the_generator_attaches_it_without_asking_the_model(monkeypatch):
 
 
 def test_a_question_with_no_figure_carries_the_key_as_none(monkeypatch):
-    """Present-and-null, not absent. The three states downstream are a spec,
-    no figure, and a payload predating figures entirely -- and a key that
-    disappears collapses the first two."""
+    """Present-and-null, not absent: absent means a payload predating figures."""
     import json
 
     import llm_client

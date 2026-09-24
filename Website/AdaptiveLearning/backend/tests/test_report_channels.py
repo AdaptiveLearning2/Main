@@ -1,14 +1,4 @@
-"""Tests which channels a report may read, now that there are two optional
-ones.
-
-Heart and emotion are consented separately -- a student may permit the
-headband and refuse the camera, or the reverse -- so the request flag can
-only narrow within what consent already allows, never widen past it.
-
-Properties to protect: a declined channel is never queried, a viewer
-cannot widen past consent, and one sibling's refusal cannot suppress
-another's data.
-"""
+"""Which channels a report may read: consent decides, the viewer only narrows, siblings stay apart."""
 
 import os
 
@@ -41,14 +31,11 @@ def _tables(consent, **rows):
 # ── consent decides, the viewer only narrows ─────────────────────────────────
 
 def test_a_declined_channel_is_never_queried(monkeypatch):
-    """Not read-then-null. An unfetched row cannot reach a report by a later
-    edit, and a stale row written before a withdrawal cannot resurface."""
+    """Not read-then-null."""
     fake = _FakeSupabase(_tables(_consent_row(headband=False, camera=False)))
     monkeypatch.setattr(main, "supabase", fake)
 
-    # By name, not by position -- positional unpacking is what this
-    # NamedTuple exists to prevent, and it broke the moment two defaulted
-    # fields were added.
+    # By name, not by position: the NamedTuple has defaulted fields.
     channels = main._reportable_channels(STUDENT)
     assert (channels.heart, channels.emotion) == (False, False)
 
@@ -67,7 +54,6 @@ def test_a_viewer_cannot_widen_past_consent(monkeypatch):
 
 
 def test_a_viewer_can_narrow_within_consent(monkeypatch):
-    """The existing opt-out still works where consent permits the channel."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(_consent_row())))
 
     assert main._reportable_channels(STUDENT, want_emotion=False)[:2] == (True, False)
@@ -75,8 +61,7 @@ def test_a_viewer_can_narrow_within_consent(monkeypatch):
 
 
 def test_heart_consent_follows_either_sensor(monkeypatch):
-    """One channel, two sensors. Camera-only consent still permits a heart
-    reading -- from the camera."""
+    """Camera-only consent still permits a heart reading, from the camera."""
     monkeypatch.setattr(main, "supabase",
                         _FakeSupabase(_tables(_consent_row(headband=False, camera=True))))
     assert main._reportable_channels(STUDENT)[0] is True
@@ -87,8 +72,7 @@ def test_heart_consent_follows_either_sensor(monkeypatch):
 
 
 def test_unreadable_consent_reports_nothing(monkeypatch):
-    """Fails closed, like `_consent` itself. A consent table that is down must
-    not become a licence to read every channel."""
+    """Fails closed, like `_consent` itself."""
     monkeypatch.setattr(main, "supabase",
                         _FakeSupabase({}, table_raises={"signal_consent"}))
     assert main._reportable_channels(STUDENT)[:2] == (False, False)
@@ -107,9 +91,7 @@ def _report_with_heart(monkeypatch, heart_rows):
 
 
 def test_an_untrusted_heart_sample_never_moves_the_average(monkeypatch):
-    """It carries a rate; it is just not one worth putting in front of a parent.
-    The same rule runs in the SQL aggregate so the two surfaces cannot
-    disagree."""
+    """The SQL aggregate applies the same rule, so the two surfaces agree."""
     report = _report_with_heart(monkeypatch, [
         {"user_id": STUDENT, "ts": _ts(1), "source": "muse_optics",
          "heart_rate_bpm": 72.0, "trusted": True},
@@ -120,8 +102,7 @@ def test_an_untrusted_heart_sample_never_moves_the_average(monkeypatch):
 
 
 def test_a_null_trusted_flag_is_not_treated_as_trusted(monkeypatch):
-    """Rows written before the producer set the column must not slip in on
-    falsiness. `is True`, not truthiness."""
+    """`is True`, not truthiness."""
     report = _report_with_heart(monkeypatch, [
         {"user_id": STUDENT, "ts": _ts(1), "source": "muse_optics",
          "heart_rate_bpm": 200.0, "trusted": None},
@@ -130,8 +111,7 @@ def test_a_null_trusted_flag_is_not_treated_as_trusted(monkeypatch):
 
 
 def test_the_report_names_which_sensor_produced_the_readings(monkeypatch):
-    """Accuracy differs materially by source, and currently only the
-    headband is validated at all."""
+    """Accuracy differs materially by source."""
     report = _report_with_heart(monkeypatch, [
         {"user_id": STUDENT, "ts": _ts(1), "source": "muse_optics",
          "heart_rate_bpm": 70.0, "trusted": True},
@@ -142,8 +122,6 @@ def test_the_report_names_which_sensor_produced_the_readings(monkeypatch):
 
 
 def test_the_emotion_distribution_is_exposed_not_just_its_argmax(monkeypatch):
-    """Nothing on the frontend could render a pie before this: emotion reached
-    it only as a scalar `dominant_emotion`."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
         _consent_row(),
         cog=[{"user_id": STUDENT, "ts": _ts(1), "focus": 0.7, "stress": 0.3,
@@ -172,9 +150,7 @@ def test_an_excluded_channel_reports_none_rather_than_an_empty_tally(monkeypatch
 # ── the parent dashboard, where consent differs per child ────────────────────
 
 def test_one_childs_refusal_does_not_suppress_a_siblings_data(monkeypatch):
-    """The batch RPC takes one flag pair for the whole call, so a single pair
-    would either read a channel one child declined or hide one the other
-    permitted. Grouped by consent instead."""
+    """The batch RPC takes one flag pair per call, so children are grouped by consent."""
     calls = []
 
     def _fake_summaries(ids, days=7, include_heart=True, include_emotion=True,
@@ -207,11 +183,7 @@ def test_one_childs_refusal_does_not_suppress_a_siblings_data(monkeypatch):
 # ── the endpoint, not just the helper ────────────────────────────────────────
 
 def test_the_weekly_endpoint_does_not_read_a_declined_camera(monkeypatch):
-    """Every consent test above calls `_weekly_signal_report` directly with
-    keywords, so none of them go through the endpoint. There the resolved
-    pair used to be unpacked with `*reversed(...)`, swapping the two flags
-    -- a student who allowed the headband and declined the camera had
-    `face_signals` read for them, invisible whenever both flags agreed."""
+    """Through the endpoint, where a swapped flag pair would read `face_signals`."""
     fake = _FakeSupabase(_tables(_consent_row(headband=True, camera=False)))
     monkeypatch.setattr(main, "supabase", fake)
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
@@ -243,8 +215,7 @@ def test_the_weekly_endpoint_reads_a_declined_headband_neither_way(monkeypatch):
 
 
 def test_a_failed_consent_read_is_not_reported_as_a_refusal(monkeypatch):
-    """"We could not find out" and "the student declined" both suppress every
-    optional channel, and only one of them is a fault."""
+    """Both suppress every optional channel; only one is a fault."""
     fake = _FakeSupabase(_tables(_consent_row()), table_raises={"signal_consent"})
     monkeypatch.setattr(main, "supabase", fake)
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
@@ -258,8 +229,6 @@ def test_a_failed_consent_read_is_not_reported_as_a_refusal(monkeypatch):
 
 
 def test_heart_truncation_sets_the_truncated_flag(monkeypatch):
-    """A capped heart read reported truncated: False -- the same failure the
-    comment beside that flag documents for the other tables."""
     monkeypatch.setattr(main, "_REPORT_ROW_CAP", 2)
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
         _consent_row(),
@@ -271,8 +240,7 @@ def test_heart_truncation_sets_the_truncated_flag(monkeypatch):
 
 
 def test_untrusted_only_weeks_report_a_count_beside_a_null_average(monkeypatch):
-    """Three states, not two: "measured, unusable" must not read as "the sensor
-    was off". The count is rows retrieved; the average is rows trusted."""
+    """"Measured, unusable" is not "sensor off": count is rows retrieved, average is rows trusted."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
         _consent_row(),
         heart=[{"user_id": STUDENT, "ts": _ts(1), "source": "muse_optics",
@@ -288,10 +256,7 @@ def test_untrusted_only_weeks_report_a_count_beside_a_null_average(monkeypatch):
 
 
 def test_the_summary_payload_also_distinguishes_declined_from_unknown(monkeypatch):
-    """The parent dashboard reads the summary, not the weekly report, so
-    `consent_retrieved` has to reach both. `retrieved` is about the
-    aggregate query; this is about the consent read that decided which
-    channels could be asked for."""
+    """The parent dashboard reads the summary, so `consent_retrieved` must reach it too."""
     fake = _FakeSupabase(_tables(_consent_row()), table_raises={"signal_consent"})
     monkeypatch.setattr(main, "supabase", fake)
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
@@ -307,17 +272,13 @@ def test_the_summary_payload_also_distinguishes_declined_from_unknown(monkeypatc
 
 
 def test_children_are_grouped_on_the_flags_not_the_consent_outcome(monkeypatch):
-    """Two children with identical flags but different consent-read outcomes
-    belong in one RPC call -- `consent_retrieved` does not change what is asked
-    for, and keying on it would break the "at most four groups" bound."""
+    """`consent_retrieved` doesn't change what is asked for; keying on it breaks the four-group bound."""
     calls = []
 
     def _fake_summaries(ids, days=7, include_heart=True, include_emotion=True,
                         channels_by_student=None):
         calls.append(sorted(ids))
-        # The per-child stamping lives inside `_signal_summaries` now, so
-        # this checks that the map reaches the batch and is applied per
-        # child rather than per group.
+        # Per-child stamping lives inside `_signal_summaries`; the map must reach the batch.
         return {str(i): {
             "face_included": include_emotion,
             "consent_retrieved": (channels_by_student or {})[i].consent_retrieved,
@@ -347,10 +308,7 @@ def test_children_are_grouped_on_the_flags_not_the_consent_outcome(monkeypatch):
 
 
 def test_daily_buckets_carry_heart_in_absolute_units(monkeypatch):
-    """The chart needs a per-day series, and it is not a 0..1 ratio. Every
-    other daily metric is a ratio the frontend multiplies by 100 --
-    scaling this the same way would draw a 72 bpm day at 7200%, so it
-    gets its own axis."""
+    """bpm, not a 0..1 ratio: scaled by 100 like the others, 72 bpm would draw at 7200%."""
     day = _ts(1)[:10]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
         _consent_row(),
@@ -371,8 +329,7 @@ def test_daily_buckets_carry_heart_in_absolute_units(monkeypatch):
 
 
 def test_a_day_of_only_untrusted_samples_is_null_not_absent(monkeypatch):
-    """`heart_retrieved: True` beside a null average is "measured, unusable".
-    A gap alone would read as the sensor being off."""
+    """`heart_retrieved: True` beside a null average is "measured, unusable"."""
     day = _ts(1)[:10]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
         _consent_row(),
@@ -401,9 +358,7 @@ def test_an_excluded_heart_channel_leaves_the_daily_series_null(monkeypatch):
 
 
 def test_a_nan_score_is_dropped_rather_than_stored_as_full_engagement(monkeypatch):
-    """Every comparison against NaN is False, so `min(1.0, nan)` is 1.0 and
-    the clamp stored a NaN focus as 100% focus, pushing difficulty up.
-    stdlib json parses NaN, so a sidecar can send one."""
+    """`min(1.0, nan)` is 1.0, and stdlib json parses NaN, so a sidecar can send one."""
     import signal_mapping
 
     row = signal_mapping.map_eeg_to_cognitive(
@@ -416,9 +371,7 @@ def test_a_nan_score_is_dropped_rather_than_stored_as_full_engagement(monkeypatc
 
 
 def test_a_capped_heart_read_does_not_blank_the_days_that_came_back(monkeypatch):
-    """Coverage is per day, like the other three tables. It was table-wide, so
-    one heart read over the row cap marked *every* day unretrieved and the chart
-    drew nothing -- including for days that were complete."""
+    """Coverage is per day, like the other three tables."""
     monkeypatch.setattr(main, "_REPORT_ROW_CAP", 2)
     rows = [{"user_id": STUDENT, "ts": _ts(i), "source": "muse_optics",
              "heart_rate_bpm": 70.0, "trusted": True} for i in range(1, 5)]
@@ -432,9 +385,7 @@ def test_a_capped_heart_read_does_not_blank_the_days_that_came_back(monkeypatch)
 
 
 def test_a_day_with_only_heart_data_is_not_dropped(monkeypatch):
-    """The skip guard listed cognitive, face and sessions. If those three failed
-    and heart succeeded, the day vanished from `daily` and the heart data that
-    *was* retrieved never reached the chart."""
+    """The skip guard must count heart, or a heart-only day vanishes from `daily`."""
     fake = _FakeSupabase(
         _tables(_consent_row(),
                 heart=[{"user_id": STUDENT, "ts": _ts(1), "source": "muse_optics",
@@ -458,8 +409,7 @@ def _revoked(headband_at, camera_at):
 
 
 def test_the_heart_revocation_date_is_the_later_of_the_two_sensors(monkeypatch):
-    """Heart comes from either sensor, so it stopped being recorded when the
-    *second* one went off, not the first."""
+    """Heart stopped when the *second* sensor went off."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _revoked("2026-08-01T10:00:00+00:00", "2026-08-05T09:00:00+00:00")))
 
@@ -470,15 +420,7 @@ def test_the_heart_revocation_date_is_the_later_of_the_two_sensors(monkeypatch):
 
 
 def test_the_later_instant_wins_when_only_the_spelling_separates_them(monkeypatch):
-    """Compared as instants, not as text. Both stamps here are written by
-    `_utc_now().isoformat()`, so lexical order happens to agree today --
-    but that's a property of the writer, not the column, and PostgREST can
-    hand back either spelling.
-
-    The two timestamps below differ only in their last character (`.` vs
-    `Z`), so a string comparison picks the wrong one. Using dates that
-    differ instead would let a string-max pass for the wrong reason, as
-    an earlier version of this test did."""
+    """Compared as instants, not text: these differ only in `.` vs `Z`, so a string max picks wrong."""
     later   = "2026-08-05T09:00:00.500000+00:00"   # the true maximum
     earlier = "2026-08-05T09:00:00Z"               # wins a string comparison
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_revoked(later, earlier)))
@@ -487,8 +429,6 @@ def test_the_later_instant_wins_when_only_the_spelling_separates_them(monkeypatc
 
 
 def test_an_unparseable_stamp_does_not_outrank_a_real_one(monkeypatch):
-    """A bad value has to lose. Sorting it high would replace a correct date
-    with a string no surface can render."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _revoked("not-a-timestamp", "2026-08-01T10:00:00+00:00")))
 
@@ -514,12 +454,7 @@ class _SummaryRpc:
 
 
 def test_the_batch_summary_stamps_each_childs_own_consent(monkeypatch):
-    """The batch RPC groups children by flag pair, so it cannot carry a
-    per-child revocation date or `consent_retrieved`. Without the map,
-    every row came back with `_shape_summary`'s defaults regardless of
-    what the family had decided -- masked because the one caller patched
-    all five fields back in by hand; a second caller would have inherited
-    the wrong defaults silently."""
+    """The RPC groups by flag pair, so per-child revocation dates are stamped from the map."""
     monkeypatch.setattr(main, "supabase", _SummaryRpc([
         {"student_id": "kid-a", "focus": 0.5},
         {"student_id": "kid-b", "focus": 0.4},
@@ -537,17 +472,13 @@ def test_the_batch_summary_stamps_each_childs_own_consent(monkeypatch):
 
     assert out["kid-a"]["eeg_enabled"] is False
     assert out["kid-a"]["eeg_revoked_at"] == "2026-08-05T09:00:00Z"
-    # The sibling in the same RPC call is untouched by that -- per child, not
-    # per group, which is the whole reason this cannot live in the SQL.
+    # The sibling in the same RPC call is untouched: per child, not per group.
     assert out["kid-b"]["eeg_enabled"] is True
     assert out["kid-b"]["eeg_revoked_at"] is None
 
 
 def test_the_batch_summary_without_a_consent_map_still_returns_a_payload(monkeypatch):
-    """Omitted, the defaults stand rather than the call failing. The map is
-    optional on purpose: a caller with no consent state gets a
-    well-formed summary with empty "off since" fields, not a crash or a
-    partial dict."""
+    """The map is optional: omitted, the defaults stand."""
     monkeypatch.setattr(main, "supabase",
                         _SummaryRpc([{"student_id": "kid-a", "focus": 0.5}]))
     monkeypatch.setattr(main, "_retention_window", lambda: {"timezone": "UTC"})

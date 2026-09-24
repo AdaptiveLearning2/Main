@@ -1,23 +1,4 @@
-"""Every distractor generator terminates on a dataset that cannot supply three.
-
-Five unbounded `while len(...) < 3` loops, across three topic files, all the
-same shape as the one already fixed in `incorrect_solution_generation`: draw
-randomly until you have three distinct wrong answers, where whether three
-*exist* is a property of the dataset rather than of how long you try.
-
-Found by a 650-question audit hanging at 1627 seconds of CPU inside `median`.
-Every case here is reachable from the prompts as written:
-
-- median, odd length: `[5, 7, 9]` has a median of 7 and two other values. The
-  middle band's easy tier asks for "3-5 values" in as many words.
-- mode, single: a dataset with two non-modal values.
-- mode, multiple: the nested loop could not finish even one answer when the
-  dataset held fewer distinct values than the mode has members.
-- ordering: two values have exactly one wrong order.
-
-The bound is the fix, not better sampling. A test that only checked the common
-case would pass against every one of these.
-"""
+"""Every distractor generator terminates on a dataset that cannot supply three."""
 import os
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -76,9 +57,7 @@ def test_ordering_distractors_terminate(solution, expected, why):
 
 
 def test_a_two_value_ordering_question_is_rejected_upstream():
-    """`shuffle_incorrect_answers` returning one distractor is honest but not
-    a usable question, so the retry loop refuses the dataset first. Both
-    guards, because one of them being enough is how the other gets removed."""
+    """One distractor is not a usable question, so the retry loop refuses the dataset first."""
     import inspect
     source = inspect.getsource(ordering_gen.generate_ordering_question)
     assert "Too few values to order" in source

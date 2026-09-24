@@ -1,15 +1,4 @@
-"""A response with no JSON in it must cost a retry, not crash the loop.
-
-`extract_json` answers `None` when the model wrapped its answer in prose, or
-refused, or returned nothing usable -- which is precisely the case the
-`for attempt in range(3)` loop exists to absorb. Anything that touches `raw`
-before the `if not raw:` guard turns that into an `AttributeError` escaping the
-loop, so the retry never happens and the caller sees a crash instead of a
-second attempt.
-
-Nine of the ten generators check first. `LLM_median_generation` had the two
-lines the other way round.
-"""
+"""A reply with no JSON in it (`extract_json` -> None) must cost a retry, not crash the loop."""
 import os
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -25,16 +14,8 @@ import llm_client  # noqa: E402
 
 BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Derived from the generator files rather than written out. It was a hand-kept
-# list of the original ten, so the four topics added for grades 1-3 and the two
-# for grades 9-12 were never covered by it -- the same shape as the endpoint
-# list in `test_ingest_mode.py` before it was parametrised, where the test
-# listed only what someone had already remembered.
-#
-# Keyed on the *filename* rather than on `ALL_TOPICS`, because the two do not
-# always match: the `angle_relationships` topic lives in
-# `LLM_angle_relationship_generation.py`, singular. The filename is what the
-# import needs.
+# Derived from filenames, not ALL_TOPICS: `angle_relationships` lives in
+# LLM_angle_relationship_generation.py.
 TOPICS = sorted(
     name[len("LLM_"):-len("_generation.py")]
     for name in os.listdir(BACKEND)
@@ -43,26 +24,16 @@ TOPICS = sorted(
 
 
 def test_the_topic_list_is_not_empty():
-    """A glob that matches nothing turns every test below into zero tests, and
-    a parametrised suite with no parameters passes silently."""
+    """An empty glob would make the parametrised test below pass with zero cases."""
     assert len(TOPICS) >= 16, TOPICS
 
 
 @pytest.mark.parametrize("topic", TOPICS)
 def test_a_response_with_no_json_is_retried_rather_than_raising(topic, monkeypatch):
-    """Parametrised over all ten so the next copy of this cannot be a one-off.
-
-    Asserts on the *number of attempts*: the loop is what proves a retry
-    happened, and `ValueError("Failed to generate valid JSON after retries")`
-    at the end is the honest way to run out -- an AttributeError on attempt one
-    is not.
-    """
+    """Counts attempts: running out after three is honest, an AttributeError on one is not."""
     module = importlib.import_module(f"LLM_{topic}_generation")
 
-    # Every generator calls this before the model, and it fails open by
-    # reaching for Supabase -- three attempts per topic against a database
-    # that is not there took this file to two minutes. It is also not what is
-    # under test here.
+    # Otherwise it reaches for Supabase on every attempt; not under test.
     monkeypatch.setattr(lesson_plan_context, "append_lesson_context",
                         lambda prompt, *_a, **_k: prompt)
 
@@ -99,17 +70,7 @@ def test_rationals_retries_an_unsolvable_reply_rather_than_raising(variables,
                                                                    branch,
                                                                    monkeypatch,
                                                                    capsys):
-    """`rationals` was the last generator solving below its `for/else`, so each
-    of these was a 500 on attempt 1 -- and the division by zero was worse than
-    that before the worker guard, since "zoo" came back as a usable result and
-    was *served* as the correct answer.
-
-    Asserted on which branch fired, not only that it raised. The first version
-    of this test claimed to cover both and covered one: `["!!"]` joins fine
-    (`join_tokens` returns `'!!'`) and fails at the solve, so both its cases
-    exercised the same path and the `equation_str is None` branch had no test
-    at all. Two cases that cannot be told apart are one case.
-    """
+    """Asserts which branch fired, so each branch has a case of its own."""
     import LLM_rationals_generation as rationals
 
     payload = {"question_text": "Solve it", "question_topic": "rationals",

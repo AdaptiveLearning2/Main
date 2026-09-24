@@ -1090,6 +1090,14 @@ build with the bound removed, because the pool happened to start its threads in 
 peak is not deterministic, and a mutation check that passes is worse than no check. What *is* deterministic is that a
 caller finding no free slot is refused rather than run.
 
+### One solve per attempt
+
+A second worker call per attempt is a different bound, not a slow path: one call measured 0.77 s against 1.47 s for
+two, and since `SOLVE_TIMEOUT` is sized so a hung reply costs about three attempts, doubling the calls took mean's
+worst case to 18 s where every other topic's was 9 s. `tests/test_one_solve_per_attempt.py` counts calls at runtime,
+across all four entry points, because `probability` has two call sites on exclusive branches and a source count
+cannot tell those from a duplicate.
+
 ### `SolverUnavailable`: a solver that could not run is not a bad reply
 
 Five things in `_run` returned `None` and only one was the model's fault. A timeout, a failure to spawn, a non-zero

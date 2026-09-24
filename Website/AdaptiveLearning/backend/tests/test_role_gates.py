@@ -1,16 +1,4 @@
-"""Role gates read `profiles.role`, never `user_metadata.role`.
-
-`user_metadata` is set by the client at sign-up and can be rewritten anytime
-with `supabase.auth.updateUser({data: {role: 'teacher'}})`, which talks to
-GoTrue directly and bypasses this backend entirely. Three endpoints used to
-gate on it, letting any student self-elevate and create classes.
-
-Switching to `profiles.role` is only half the fix. `profiles` had a `FOR ALL`
-own-row policy plus UPDATE for `authenticated`, so that column was just as
-writable by the client until `20260824010000` revoked UPDATE/INSERT on it.
-Both halves are tested here: the code reads the right column, and the
-migration blocks writing it.
-"""
+"""Role gates read `profiles.role` (never `user_metadata.role`), and a migration makes it client-unwritable."""
 
 import io
 import os
@@ -80,8 +68,6 @@ class _Profiles:
 
 def test_claiming_teacher_in_user_metadata_does_not_let_a_student_create_a_class(
         monkeypatch):
-    """The vulnerability, stated directly: `user_metadata` says teacher and
-    `profiles` says student, and the endpoint must believe `profiles`."""
     monkeypatch.setattr(main, "supabase", _Profiles(role="student"))
     monkeypatch.setattr(main, "get_user", lambda _r: _claiming("teacher"))
 
@@ -101,9 +87,7 @@ def test_claiming_parent_in_user_metadata_does_not_let_a_student_link_a_child(
 
 
 def test_my_classes_reads_the_profile_not_the_claim(monkeypatch):
-    """Not a privilege boundary by itself -- a self-elevated student would
-    just get an empty list -- but it must agree with the other gates about
-    what the role is, or the app answers the same question two ways."""
+    """Not a privilege boundary, but must agree with the other gates about the role."""
     monkeypatch.setattr(main, "supabase", _Profiles(role="student"))
     monkeypatch.setattr(main, "get_user", lambda _r: _claiming("teacher"))
     seen = []
@@ -116,8 +100,7 @@ def test_my_classes_reads_the_profile_not_the_claim(monkeypatch):
 # ── the gate still admits the people it should ──────────────────────────────
 
 def test_a_real_teacher_may_still_create_a_class(monkeypatch):
-    """The fix must not be "refuse everyone" -- every test above would also
-    pass against that."""
+    """Every test above would also pass against "refuse everyone"."""
     monkeypatch.setattr(main, "supabase", _Profiles(role="teacher"))
     # Claims nothing: the profile alone is the basis for admitting them.
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": UID})
@@ -139,9 +122,7 @@ def test_a_real_parent_reaches_the_code_lookup(monkeypatch):
 # ── failing closed ──────────────────────────────────────────────────────────
 
 def test_an_unreadable_profile_denies_rather_than_admitting(monkeypatch):
-    """`_profile` falls back to a student-shaped dict on a failed read --
-    the safe direction, since a database blip must not be a way past a role
-    check."""
+    """`_profile` falls back to a student-shaped dict on a failed read."""
     monkeypatch.setattr(main, "supabase", _Profiles(raises=True))
     monkeypatch.setattr(main, "get_user", lambda _r: _claiming("teacher"))
 
@@ -164,10 +145,6 @@ def _migration_sql() -> str:
 @pytest.mark.parametrize("command", ["UPDATE", "INSERT"])
 @pytest.mark.parametrize("grantee", ["anon", "authenticated"])
 def test_the_role_column_write_is_revoked_from_the_client_roles(command, grantee):
-    """Reading `profiles.role` only works as a fix if the client can't write
-    it. `profiles` has a FOR ALL own-row policy and `authenticated` holds
-    UPDATE, so without these revokes the gate would read a column the caller
-    controls."""
     sql = _migration_sql()
     pattern = re.compile(
         rf'REVOKE\s+{command}\s*\(\s*"?role"?\s*\)\s+ON\s+(?:TABLE\s+)?'
@@ -180,16 +157,7 @@ def test_the_role_column_write_is_revoked_from_the_client_roles(command, grantee
 
 
 def test_signup_cannot_choose_the_admin_role():
-    """Widening the CHECK to admit 'admin' is only safe because the sign-up
-    trigger no longer allows that value through. `handle_new_user` copies
-    `raw_user_meta_data->>'role'` straight into the column, and that metadata
-    is whatever the registration form sent -- so without a whitelist,
-    `signUp({data:{role:'admin'}})` from a browser console would make an
-    administrator.
-
-    Checked as a whitelist rather than "'admin' is absent", because a
-    blacklist would admit every future privileged role by default.
-    """
+    """`handle_new_user` copies client metadata into the role; checked as a whitelist, not a blacklist."""
     sql = _migration_sql()
     # The newest definition of the function wins, so read the last one.
     bodies = re.findall(
@@ -207,10 +175,6 @@ def test_signup_cannot_choose_the_admin_role():
 
 
 def test_the_signup_trigger_is_created_by_a_migration():
-    """`handle_new_user` was written for a trigger that no migration ever
-    created. That was harmless while `profiles` was unused, but `_role` now
-    gates three endpoints on it -- a profiles row that never gets written
-    means a teacher who cannot create a class."""
     sql = _migration_sql()
     assert re.search(
         r'CREATE\s+TRIGGER\s+"?on_auth_user_created"?\s+AFTER\s+INSERT\s+ON\s+'
@@ -220,17 +184,12 @@ def test_the_signup_trigger_is_created_by_a_migration():
 
 
 def test_the_backfill_applies_the_same_role_whitelist_as_the_trigger():
-    """The backfill reads the same client-supplied metadata as the trigger, so
-    trusting it without a whitelist would be exactly the escalation this is
-    meant to prevent -- one INSERT granting whatever anyone typed at sign-up."""
+    """The backfill reads the same client-supplied metadata as the trigger."""
     sql = _migration_sql()
     inserts = re.findall(
         r'INSERT INTO\s+"?public"?\.\s*"?profiles"?(.*?);', sql,
         re.IGNORECASE | re.DOTALL)
-    # `NOT EXISTS` is the backfill's signature. Without it this would also
-    # match the trigger's own INSERT, including old definitions that predate
-    # the whitelist -- which would fail for historical reasons rather than a
-    # real live hole. The trigger has its own test above.
+    # `NOT EXISTS` marks the backfill, excluding the trigger's older INSERTs.
     backfills = [i for i in inserts
                  if "raw_user_meta_data" in i and re.search(r"NOT\s+EXISTS", i, re.I)]
     assert backfills, "no profiles backfill found"
@@ -242,7 +201,6 @@ def test_the_backfill_applies_the_same_role_whitelist_as_the_trigger():
 
 
 def test_the_role_check_constraint_admits_admin():
-    """The other half. Without it, promoting someone in the SQL editor fails."""
     sql = _migration_sql()
     checks = re.findall(r'CONSTRAINT\s+"?profiles_role_check"?\s+CHECK\s*\((.*?)\)\s*;',
                         sql, re.IGNORECASE | re.DOTALL)
@@ -252,12 +210,7 @@ def test_the_role_check_constraint_admits_admin():
 
 
 def test_no_endpoint_gates_on_user_metadata(monkeypatch):
-    """The three fixed call sites were found by hand; this catches a fourth.
-
-    `user_metadata` is legitimately written on profile update to keep the
-    display name in sync, so this looks for reads of `role` specifically,
-    not for the field in general.
-    """
+    """Matches `role` reads only; `user_metadata` is legitimately written for the display name."""
     import inspect
     source = inspect.getsource(main)
     hits = re.findall(r'user_metadata.{0,40}?["\']role["\']', source)

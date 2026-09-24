@@ -1,16 +1,4 @@
-"""Operational alerts for teachers.
-
-The scope is the point of the feature, so most of these tests are about what
-the feed must *not* say. An alert here is a checkable fact about a session --
-it timed out, or recording was expected and nothing arrived. It is never a
-claim about the student, which is why `signal_fusion`'s "stressed" label is
-deliberately not a producer.
-
-The rest is the usual three-state discipline, which bites unusually hard here:
-a failed read of "did any signal arrive" must not become an accusation that
-recording is broken, and a student who declined the headband must not be
-reported as a fault.
-"""
+"""Session alerts for teachers: checkable facts about a session, never a claim about the student."""
 import os
 from datetime import datetime, timezone
 
@@ -97,7 +85,6 @@ def _kinds(sink):
 
 
 def test_a_session_the_student_ended_raises_no_timeout_alert(monkeypatch):
-    """Finishing a lesson is the ordinary case and is not news."""
     sink = _emit(monkeypatch, closed_by=main.CLOSED_BY_STUDENT)
     assert main.ALERT_SESSION_AUTO_CLOSED not in _kinds(sink)
 
@@ -112,9 +99,7 @@ def test_a_session_the_sweep_ended_raises_one(monkeypatch):
 
 
 def test_the_default_close_reason_is_the_student(monkeypatch):
-    """A new close site has to opt *in* to raising an alert. A wrongly-raised
-    alert is worse than a missing one on a surface whose value is that every
-    row means something happened."""
+    """A new close site has to opt in; a wrongly-raised alert is worse than a missing one."""
     import inspect
     sig = inspect.signature(main._close_session)
     assert sig.parameters["closed_by"].default == main.CLOSED_BY_STUDENT
@@ -131,16 +116,13 @@ def test_no_alert_when_signals_arrived(monkeypatch):
 
 
 def test_a_student_who_declined_the_headband_is_not_a_fault(monkeypatch):
-    """Working exactly as configured. Alerting on it would train a teacher to
-    ignore the feed, and it would also leak a consent decision as an incident."""
+    """Alerting here would leak a consent decision as an incident."""
     sink = _emit(monkeypatch, record_eeg=False, has_signals=False)
     assert main.ALERT_SIGNALS_MISSING not in _kinds(sink)
 
 
 def test_the_consent_read_is_what_decides_not_the_raw_flags(monkeypatch):
-    """`_may_record`, not `_consent` -- so a closed school year or a disabled
-    recording flag is not reported as a broken headband. Nothing was supposed
-    to arrive in either case."""
+    """`_may_record`, not `_consent`, so a closed year or disabled flag is not a broken headband."""
     sink = _AlertSink(has_signals=False)
     monkeypatch.setattr(main, "supabase", sink)
     seen = []
@@ -152,9 +134,7 @@ def test_the_consent_read_is_what_decides_not_the_raw_flags(monkeypatch):
 
 
 def test_an_unreadable_signal_count_is_not_an_accusation(monkeypatch):
-    """`None` means the count failed. Reporting that as "recording is broken"
-    is the same error as reporting a failed read as a quiet week -- and this
-    one sends a teacher to check hardware that is fine."""
+    """`None` means the count failed, not that recording is broken."""
     sink = _emit(monkeypatch, record_eeg=True, signals_raise=True)
     assert main.ALERT_SIGNALS_MISSING not in _kinds(sink)
 
@@ -171,24 +151,15 @@ def test_an_unreadable_consent_state_raises_nothing(monkeypatch):
     assert sink.written == []
 
 
-# `_recording_was_expected` is its own function because a try/except cannot
-# see either of these: both helpers fail closed by *returning*, not raising.
-# Read as a plain bool, an outage is indistinguishable from a student who
-# declined the headband -- and the outage is the likelier of the two.
+# Both helpers fail closed by returning, not raising, so a try/except cannot see an outage.
 
 def test_an_unreadable_consent_record_is_unknown_not_a_decline(monkeypatch):
-    """`_consent()` catches its own read failure and returns a fail-closed
-    dict, which `_may_record` spreads straight through. Nothing is thrown, so
-    the surrounding try never fires and `record_eeg` is False for a reason
-    that is not a decision anyone made."""
     monkeypatch.setattr(main, "_may_record", lambda _u: {
         "record_eeg": False, "retrieved": False, "window_state": main.WINDOW_OPEN})
     assert main._recording_was_expected(ALICE) is None
 
 
 def test_an_unreadable_school_year_is_unknown_too(monkeypatch):
-    """`WINDOW_UNREADABLE` denies, so a failed read of the retention window
-    lands as `record_eeg: False` by the same route."""
     monkeypatch.setattr(main, "_may_record", lambda _u: {
         "record_eeg": False, "retrieved": True,
         "window_state": main.WINDOW_UNREADABLE})
@@ -198,8 +169,6 @@ def test_an_unreadable_school_year_is_unknown_too(monkeypatch):
 @pytest.mark.parametrize("window_state", [
     main.WINDOW_AFTER, main.WINDOW_BEFORE, main.WINDOW_UNCONFIGURED])
 def test_a_closed_year_is_a_real_no_not_an_unknown(monkeypatch, window_state):
-    """The distinction the fix must not blur: these are all states where
-    nothing was *supposed* to arrive, so they stay False and stay silent."""
     monkeypatch.setattr(main, "_may_record", lambda _u: {
         "record_eeg": False, "retrieved": True, "window_state": window_state})
     assert main._recording_was_expected(ALICE) is False
@@ -219,15 +188,7 @@ def test_a_payload_with_no_retrieved_flag_is_not_read_as_a_failure(monkeypatch):
 
 
 def test_an_unknown_recording_state_is_logged_not_just_withheld(monkeypatch, capsys):
-    """The *outcome* is the same either way -- no alert -- which is why the
-    log line is what this test asserts on.
-
-    Withholding is correct: a teacher cannot act on a database blip, and an
-    alert kind for it would be noise. What was wrong before is that the
-    unknown was silently spelled as a decline, so a real recording outage
-    during a consent-read failure left no trace anywhere. Assert on the
-    outcome alone and this test passes against the bug it exists to catch.
-    """
+    """The outcome (no alert) is the same either way, so assert on the log line."""
     sink = _AlertSink(has_signals=False)
     monkeypatch.setattr(main, "supabase", sink)
     monkeypatch.setattr(main, "_may_record", lambda _u: {
@@ -235,7 +196,7 @@ def test_an_unknown_recording_state_is_logged_not_just_withheld(monkeypatch, cap
     main._raise_session_alerts(ALICE, SESSION, main.CLOSED_BY_STUDENT, 5)
 
     assert sink.written == []
-    # And it did not go and count signals for a session it cannot judge.
+    # It did not count signals for a session it cannot judge.
     assert "cognitive_signals" not in sink.tables
     out = capsys.readouterr().out
     assert "cannot tell whether recording was expected" in out
@@ -243,8 +204,7 @@ def test_an_unknown_recording_state_is_logged_not_just_withheld(monkeypatch, cap
 
 
 def test_a_real_decline_is_not_logged_as_an_unknown(monkeypatch, capsys):
-    """The other half: an ordinary declined channel must stay quiet, or the
-    log fills with one line per closed session and stops being read."""
+    """Or the log fills with one line per closed session."""
     sink = _AlertSink(has_signals=False)
     monkeypatch.setattr(main, "supabase", sink)
     monkeypatch.setattr(main, "_may_record", lambda _u: {
@@ -254,9 +214,7 @@ def test_a_real_decline_is_not_logged_as_an_unknown(monkeypatch, capsys):
 
 
 def test_the_real_consent_helper_fails_closed_without_raising(monkeypatch):
-    """The premise of all of the above, asserted against the real `_consent`
-    rather than assumed. If it ever starts raising, the tests above go on
-    passing while describing a function that no longer behaves that way."""
+    """The premise of the tests above, checked against the real `_consent`."""
     monkeypatch.setattr(main, "supabase",
                         _FakeSupabase({}, table_raises=["signal_consent"]))
     out = main._consent(ALICE)
@@ -272,16 +230,14 @@ def test_both_kinds_can_fire_for_one_session(monkeypatch):
 
 
 def test_the_write_is_deduped_on_session_and_kind(monkeypatch):
-    """A replayed close must not double-report. `_claim_session_close` is the
-    primary guard; this is the backstop that survives a second emitter."""
+    """Backstop behind `_claim_session_close` against a replayed close."""
     sink = _emit(monkeypatch, closed_by=main.CLOSED_BY_SWEEP)
     assert sink.conflict.get("on_conflict") == "session_id,kind"
     assert sink.conflict.get("ignore_duplicates") is True
 
 
 def test_a_failed_alert_write_never_breaks_the_close(monkeypatch):
-    """It runs after the credit and the rollup. A session's record must not be
-    lost because a notification could not be filed."""
+    """It runs after the credit and the rollup, so it must not raise."""
     _emit(monkeypatch, closed_by=main.CLOSED_BY_SWEEP, alerts_raise=True)
 
 
@@ -296,9 +252,6 @@ def test_a_session_with_no_id_is_left_alone(monkeypatch):
 # ─── wiring into the close sequence ───────────────────────────────────────
 
 def test_alerts_are_raised_after_the_discard_not_before(monkeypatch):
-    """An alert about a session that is about to be deleted would be removed
-    by the cascade a moment later, and an empty session is not an operational
-    fault worth anyone's attention."""
     calls = []
     monkeypatch.setattr(main, "_claim_session_close", lambda *_a: True)
     monkeypatch.setattr(main, "_answer_counts", lambda *_a: (0, 0, True))
@@ -330,23 +283,12 @@ def test_the_close_site_reason_reaches_the_emitter(monkeypatch):
     assert calls == [(ALICE, SESSION, main.CLOSED_BY_SWEEP, 7)]
 
 
-# Close sites where the *student* ended the session. Everything else is a
-# sweep closing a session they walked away from. Listed by name rather than
-# detected, because no property of the source separates them -- `/end` and the
-# stale sweeps all stop the poller and call the same helper -- and the whole
-# content of `session_auto_closed` is which of the two happened.
+# Close sites where the student ended the session; by name, since no source property separates them.
 STUDENT_DRIVEN_CLOSERS = {"end_session"}
 
 
 def test_every_close_site_says_who_ended_the_session():
-    """`closed_by` defaults to the student, so a sweep that forgets to pass it
-    raises no alert and nothing anywhere says so.
-
-    A partition rather than a search: every close site must be either a named
-    student-driven one or a sweep that says so, which means a new site fails
-    this test until someone classifies it. Same shape as `_MODE_AWARE` listing
-    its endpoints -- the enumeration is the point.
-    """
+    """`closed_by` defaults to the student, so a new site fails until classified."""
     from conftest import close_sites
 
     closers = close_sites()
@@ -366,8 +308,6 @@ def test_every_close_site_says_who_ended_the_session():
 
 
 def test_the_student_driven_list_still_names_real_functions():
-    """A renamed endpoint would otherwise leave a dead name in the set above
-    and silently move that site into the sweep branch."""
     import inspect
     for name in STUDENT_DRIVEN_CLOSERS:
         assert inspect.isfunction(getattr(main, name, None)), (
@@ -399,8 +339,7 @@ def _teacher_owns_the_class(monkeypatch):
 
 
 def test_a_non_owning_teacher_is_refused(monkeypatch):
-    """Narrower than `_verify_can_view_student` on purpose: these are
-    classroom-operations facts for the person who can walk over and fix it."""
+    """Owner only, narrower than `_verify_can_view_student` on purpose."""
     monkeypatch.setattr(main, "get_user", lambda _r: OTHER_TEACHER)
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables()))
     with pytest.raises(main.HTTPException) as exc:
@@ -428,8 +367,6 @@ def test_alerts_carry_the_student_name_and_school_day(monkeypatch):
 
 
 def test_the_day_is_the_schools_not_the_viewers(monkeypatch):
-    """A late Californian lesson belongs to the day it was taught on. Against
-    a UTC clock a 5pm session lands on the following day."""
     monkeypatch.setattr(main, "_retention_window", lambda: {
         "state": main.WINDOW_OPEN, "starts_on": "2000-01-01",
         "ends_on": "2099-12-31", "timezone": "America/Los_Angeles"})
@@ -468,7 +405,6 @@ def test_a_class_with_no_students_reads_nothing(monkeypatch):
 
 
 def test_truncation_is_disclosed_rather_than_inferred(monkeypatch):
-    """Silent truncation reads as "that is all of them"."""
     many = [_alert(ALICE, main.ALERT_SESSION_AUTO_CLOSED,
                    f"2026-06-11T09:{i:02d}:00Z", session=f"s-{i}")
             for i in range(main._ALERT_FEED_CAP + 10)]
@@ -491,8 +427,7 @@ def test_the_window_is_bounded(monkeypatch):
 
 
 def test_the_feed_is_scoped_to_the_roster_and_the_window(monkeypatch):
-    """Assert on the filters, not the payload. An empty result cannot tell
-    "asked and found nothing" from "asked for the wrong thing"."""
+    """Assert on the filters: an empty result can't tell "found nothing" from "asked wrongly"."""
     fake = _FakeSupabase(_tables())
     monkeypatch.setattr(main, "supabase", fake)
     main.class_alerts(CLASS, None, days=7)
@@ -503,11 +438,7 @@ def test_the_feed_is_scoped_to_the_roster_and_the_window(monkeypatch):
 
 
 # ─── abandoned sessions ───────────────────────────────────────────────────
-#
-# Two on-demand sweeps existed -- `start_session` collects a student's strays
-# when they next start one, `class_live` collects a class's when a teacher
-# opens the monitor -- and a student who never comes back is collected by
-# neither. Seen in production as sessions still open two months on.
+# The on-demand sweeps never collect a student who never comes back.
 
 def _open_session(sid, started_at, user=ALICE, answered=0):
     return {"id": sid, "user_id": user, "started_at": started_at,
@@ -533,7 +464,6 @@ def test_a_session_open_for_minutes_is_not_abandoned(monkeypatch):
 
 
 def test_a_closed_session_is_never_abandoned(monkeypatch):
-    """It ended. However long ago it started, there is nothing open."""
     monkeypatch.setattr(main, "_can_view_student", lambda _v, _s: True)
     row = _open_session("s-done", "2026-01-01T00:00:00Z")
     row["ended_at"] = "2026-01-01T00:30:00Z"
@@ -542,8 +472,7 @@ def test_a_closed_session_is_never_abandoned(monkeypatch):
 
 
 def test_an_unparseable_start_is_not_called_abandoned(monkeypatch):
-    """A bad timestamp is not evidence. Relabelling on one would close a
-    session the sweep should never touch."""
+    """A bad timestamp is not evidence of abandonment."""
     monkeypatch.setattr(main, "_can_view_student", lambda _v, _s: True)
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         {"sessions": [_open_session("s-bad", "not-a-date")]}))
@@ -553,9 +482,7 @@ def test_an_unparseable_start_is_not_called_abandoned(monkeypatch):
 # ─── the background sweeper ───────────────────────────────────────────────
 
 def test_the_sweep_closes_an_abandoned_session_through_the_shared_helper(monkeypatch):
-    """Not a hand-rolled stamp. The full sequence -- credit, rollup, archive,
-    alerts -- is what a close means, and SQL cannot do any of it, which is why
-    this is a backend thread rather than a pg_cron job."""
+    """Not a hand-rolled stamp: credit, rollup, archive and alerts are what a close means."""
     calls = []
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         {"sessions": [_open_session("s-old", "2026-06-01T00:00:00Z")]}))
@@ -570,9 +497,7 @@ def test_the_sweep_closes_an_abandoned_session_through_the_shared_helper(monkeyp
 
 
 def test_the_sweep_leaves_a_session_that_is_merely_running(monkeypatch):
-    """Asserted on the *filter*, since the fake returns whatever matches. A
-    sweep that closed a lesson in progress would discard the question a child
-    is part way through answering."""
+    """Asserted on the filter, since the fake returns whatever matches."""
     fake = _FakeSupabase({"sessions": []})
     monkeypatch.setattr(main, "supabase", fake)
     main._sweep_abandoned_sessions()
@@ -615,15 +540,12 @@ def test_an_empty_session_is_discarded_rather_than_counted_closed(monkeypatch):
 
 
 def test_the_sweeper_can_be_switched_off(monkeypatch):
-    """Zero disables it, which is what the test suite and any deployment
-    preferring the on-demand sweeps use."""
     monkeypatch.setattr(main, "_STALE_SWEEP_INTERVAL_SEC", 0)
     assert main.start_stale_sweeper() is False
 
 
 def test_the_sweeper_starts_and_is_joinable(monkeypatch):
-    """A thread that prints must be joined before the process exits, or a
-    print landing during interpreter shutdown is a fatal stdout-lock abort."""
+    """A printing thread must be joined, or shutdown can hit a fatal stdout-lock abort."""
     monkeypatch.setattr(main, "_STALE_SWEEP_INTERVAL_SEC", 30)
     assert main.start_stale_sweeper() is True
     # Starting twice must not leave a second thread running.

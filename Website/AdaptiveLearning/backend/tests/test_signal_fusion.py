@@ -1,10 +1,4 @@
-"""The fusion rule, exhaustively -- it decides how hard a child's next question
-is, and every failure here is a quiet one.
-
-The property this file really tests: **adding a channel can make sessions
-gentler and can never make them harder.** If a change to `signal_fusion`
-breaks that, something in here fails.
-"""
+"""Fusion: adding a channel can make sessions gentler and never harder."""
 
 from __future__ import annotations
 
@@ -35,7 +29,6 @@ def test_eeg_labels_match_the_thresholds_already_in_production():
 
 
 def test_poor_electrode_contact_is_not_a_calm_student():
-    """The distinction the confidence gate exists for."""
     weak = eeg_channel(0.8, 0.7, 0.1)
     assert weak.label is None
     assert "confidence" in weak.reason
@@ -43,17 +36,13 @@ def test_poor_electrode_contact_is_not_a_calm_student():
 
 
 def test_a_revoked_channel_is_not_a_hardware_fault():
-    """A respected refusal must not look like a broken sensor to whoever is
-    checking why adaptation stopped responding."""
     assert eeg_channel(0.8, 0.7, 0.9, revoked=True).reason == "eeg revoked"
     assert heart_channel("high", True, "muse_optics", revoked=True).label is None
     assert face_channel("sad", 0.9, revoked=True).label is None
 
 
 def test_a_calibrating_heart_channel_is_not_a_calm_one():
-    """A failover that hasn't built a baseline yet is a temporary absence with
-    a known end. Reporting it as "no reading" would make recovery look like
-    failure."""
+    """A baseline still forming is a temporary absence, not "no reading"."""
     ch = heart_channel("calibrating", True, "rppg")
     assert ch.label is None
     assert "calibrating" in ch.reason
@@ -82,8 +71,6 @@ def test_heart_alone_can_ease_difficulty():
 
 
 def test_heart_alone_can_never_raise_difficulty():
-    """The asymmetry stated directly: no heart value produces "focused"
-    without EEG agreeing."""
     for category in ("low", "moderate", "high", "calibrating", None):
         for trusted in (True, False, None):
             state = fuse(ABSENT, heart_channel(category, trusted, "muse_ppg"))
@@ -99,8 +86,7 @@ def test_raising_difficulty_needs_every_opinion_to_agree():
 
 
 def test_a_negative_expression_withholds_an_increase_without_causing_a_decrease():
-    """Facial is the weakest input: it can hold difficulty where it is but can
-    never lower it on its own. FER+ is unvalidated on children."""
+    """Facial is the weakest input; FER+ is unvalidated on children."""
     held = fuse(FOCUSED, ABSENT, face_channel("sad", 0.9))
     assert held.label == "neutral"
     assert "withholding" in held.reason
@@ -114,9 +100,7 @@ def test_a_low_confidence_expression_is_ignored_entirely():
 
 
 def test_facial_labels_do_not_share_vocabulary_with_the_other_channels():
-    """Deliberate: "negative", never "stressed". A later edit that wires facial
-    into the ease-off branch by matching on a label name should not silently
-    compile into a behaviour change."""
+    """So facial cannot be wired into the ease-off branch by matching a label name."""
     assert face_channel("sad", 0.9).label == "negative"
     assert face_channel("happy", 0.9).label == "neutral"
 
@@ -124,12 +108,7 @@ def test_facial_labels_do_not_share_vocabulary_with_the_other_channels():
 # ── the property, over every combination ─────────────────────────────────────
 
 def test_no_combination_of_added_channels_makes_a_session_harder():
-    """The safety property, brute-forced.
-
-    For every EEG state, adding any heart and any facial reading must never
-    turn a non-focused outcome into a focused one. A sensor is allowed to ease
-    difficulty and never to push it.
-    """
+    """Brute-forced: no added heart/face reading turns a non-focused outcome focused."""
     hearts = [ABSENT] + [heart_channel(c, t, s)
                          for c in ("low", "moderate", "high", "calibrating")
                          for t in (True, False)
@@ -138,9 +117,7 @@ def test_no_combination_of_added_channels_makes_a_session_harder():
                         for e in ("happy", "sad", "anger", "neutral", "surprise")
                         for c in (0.2, 0.9)]
 
-    # The last is read with calm withdrawn (cause no_calm): focus and contact
-    # present, no stress on the rows. It is neutral today; a later edit that
-    # reads eeg.label into the withhold term has to stay under this property.
+    # The last has calm withdrawn (cause no_calm): focus and contact, no stress.
     for eeg in (FOCUSED, STRESSED, NEUTRAL_EEG, eeg_channel(None, None, None),
                 eeg_channel(0.9, None, 0.9)):
         assert eeg.cause != "no_calm" or eeg.label == "neutral"
@@ -155,9 +132,6 @@ def test_no_combination_of_added_channels_makes_a_session_harder():
 
 
 def test_no_channels_at_all_behaves_exactly_as_today():
-    """Fusion can be wired in before any channel actually feeds it. With
-    nothing present, the caller must see the same label it saw before fusion
-    existed."""
     state = fuse(eeg_channel(None, None, None))
     assert state.label == "no_eeg"
     assert not state.adjusted
@@ -168,15 +142,12 @@ def test_no_channels_at_all_behaves_exactly_as_today():
     ("neutral", False), ("no_eeg", False), ("insufficient_signal", False),
 ])
 def test_adjusted_matches_the_frontend_badge_contract(label, expected):
-    """`eeg_adjusted` drives an "EEG eased/raised difficulty" badge. It must
-    be true only when something actually moved."""
+    """`eeg_adjusted` drives the "EEG eased/raised difficulty" badge."""
     from signal_fusion import FusedState
     assert FusedState(label, "").adjusted is expected
 
 
 def test_every_outcome_explains_which_channel_decided_it():
-    """A reason that doesn't name its cause is exactly what this file guards
-    against -- three different absences would otherwise look identical."""
     for state in (
         fuse(FOCUSED),
         fuse(STRESSED),
@@ -191,9 +162,6 @@ def test_every_outcome_explains_which_channel_decided_it():
 # ── the cause field, which control flow now reads instead of the reason text ──
 
 def test_insufficient_signal_is_classified_structurally_not_by_wording():
-    """`fuse` used to decide this by sniffing for "confidence" in the reason
-    string -- correct against every message at the time, but one reword away
-    from silently reclassifying an outcome."""
     from signal_fusion import ChannelState
 
     low_conf = eeg_channel(0.8, 0.7, 0.1)
@@ -211,8 +179,6 @@ def test_insufficient_signal_is_classified_structurally_not_by_wording():
 
 
 def test_every_absence_carries_a_machine_readable_cause():
-    """Three absences that are not the same thing, told apart without parsing
-    prose."""
     assert eeg_channel(0.8, 0.7, 0.9, revoked=True).cause == "revoked"
     assert heart_channel("calibrating", True, "muse_ppg").cause == "calibrating"
     assert heart_channel("high", False, "muse_ppg").cause == "untrusted"
@@ -221,17 +187,13 @@ def test_every_absence_carries_a_machine_readable_cause():
 
 
 def test_an_untrusted_expression_is_rejected_before_its_confidence_is_read():
-    """A classifier that doesn't stand behind a label shouldn't be trusted just
-    because it reports high confidence. Matches how `heart_channel` treats
-    `trusted`."""
+    """High confidence doesn't redeem an untrusted label, as with `heart_channel`."""
     assert face_channel("sad", 0.99, False).label is None
     assert fuse(FOCUSED, ABSENT, face_channel("sad", 0.99, False)).label == "focused"
 
 
 def test_the_eeg_lines_match_the_sidecars_rescaled_literals():
-    """The sidecar's population spans were widened; the lines moved with
-    them so the Bels each label needs are unchanged. Both packages carry
-    the literals and neither can import the other."""
+    """Both packages carry these literals and neither can import the other."""
     import signal_fusion
     assert signal_fusion.EEG_FOCUSED_FOCUS_MIN == 0.624
     assert signal_fusion.EEG_STRESSED_CALM_MAX == 0.377

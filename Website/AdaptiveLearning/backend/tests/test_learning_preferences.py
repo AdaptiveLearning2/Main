@@ -1,15 +1,4 @@
-"""The Preferences tab controls something now.
-
-All three settings used to write `al_prefs` to localStorage with nothing
-reading it back: difficulty never reached the LLM decider, duration was
-enforced by nothing, and there was no notification system for the toggle to
-switch. Pure decoration.
-
-What's asserted here is the half that can silently regress -- the endpoint's
-bounds, the failed-read fallback, and the prewarm, which serves the *first*
-questions of every session and is exactly where a difficulty setting would
-appear not to work.
-"""
+"""Learning preferences: endpoint bounds, the failed-read fallback, and the session prewarm."""
 
 import os
 
@@ -78,17 +67,7 @@ def _with_profile(monkeypatch, **fields):
 
 @pytest.mark.parametrize("saved", [-1, 0, 1])
 def test_a_session_prewarms_at_the_students_own_difficulty(_stubbed, monkeypatch, saved):
-    """The prewarm used to run at a hardcoded 0.
-
-    QUEUE_SIZE questions are generated before the student answers anything and
-    served first, so ignoring the setting here means it does nothing for the
-    opening of every session -- the part of a lesson most likely to be the
-    only part.
-
-    QUEUE_SIZE is deliberately *not* pinned here, despite now defaulting to 0:
-    this test stubs `_ensure_queue` wholesale, so the value is never read and a
-    pin would claim a protection that is not operating.
-    """
+    """QUEUE_SIZE is not pinned: `_ensure_queue` is stubbed, so it is never read."""
     _with_profile(monkeypatch, difficulty_bias=saved)
 
     main.start_session(main.StartSessionRequest(title=None), request=None)
@@ -97,10 +76,7 @@ def test_a_session_prewarms_at_the_students_own_difficulty(_stubbed, monkeypatch
 
 
 def test_a_corrupt_saved_bias_cannot_shift_difficulty_off_the_end(_stubbed, monkeypatch):
-    """`profiles` carries a FOR ALL own-row policy, so a student can reach this
-    column through PostgREST directly. The CHECK constraint is the real guard;
-    this is the second one, because `_shift_difficulty` clamps rather than
-    raising -- a bias of 7 would silently mean "always hard" forever."""
+    """Second guard behind the CHECK: `_shift_difficulty` clamps rather than raising."""
     _with_profile(monkeypatch, difficulty_bias=7)
 
     main.start_session(main.StartSessionRequest(title=None), request=None)
@@ -109,10 +85,7 @@ def test_a_corrupt_saved_bias_cannot_shift_difficulty_off_the_end(_stubbed, monk
 
 
 def test_a_failed_profile_read_still_carries_usable_preferences():
-    """`_profile` swallows its exception and returns a default that the caller
-    can't tell apart from a real profile. Without the preference keys, the page
-    gets `undefined` for three controls and renders them unset -- which reads
-    as a student who turned everything off."""
+    """Missing keys would render as a student who turned everything off."""
     fallback = main._profile("nobody")
 
     assert fallback["difficulty_bias"] == 0
@@ -127,8 +100,7 @@ def test_a_failed_profile_read_still_carries_usable_preferences():
     ("session_duration_minutes", 10_000),
 ])
 def test_the_endpoint_refuses_values_the_column_would_refuse(field, value):
-    """Bounded here as well as by the database CHECK, so a bad value gets a
-    422 naming the field instead of a 500 from the client library."""
+    """A 422 naming the field, rather than a 500 from the database CHECK."""
     with pytest.raises(ValidationError):
         main.UpdateProfileRequest(**{field: value})
 
@@ -138,17 +110,7 @@ def test_the_endpoint_refuses_values_the_column_would_refuse(field, value):
     ("practice_reminders", False),
 ])
 def test_the_falsy_settings_are_sent_rather_than_filtered_out(field, value, monkeypatch):
-    """`update_my_profile` drops fields that are None, which is right -- but 0
-    is the adaptive bias and False is reminders off, and both are real choices.
-    Filtering them as falsy would mean neither could ever be saved: a student
-    could turn reminders on and never off again.
-
-    Driven through the handler, not by restating its filter here. This test
-    used to rebuild the `payload.dict()` line beside it and assert on that --
-    so once the handler stopped using that line it was asserting nothing about
-    the handler at all, and `is not None` becoming `if value` kept the suite
-    green while reminders could never be turned off again.
-    """
+    """0 and False are real choices; driven through the handler, not a restated filter."""
     written = []
 
     class _Recording:

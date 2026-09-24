@@ -3,11 +3,14 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
+const signUp = vi.fn().mockResolvedValue({})
 vi.mock('../../context/AuthContext', () => ({
-  useAuth: () => ({ signUp: vi.fn().mockResolvedValue({}) }),
+  useAuth: () => ({ signUp: (...a) => signUp(...a) }),
 }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
+import { AuthApiError } from '@supabase/supabase-js'
+import { toast } from 'sonner'
 import Register from './Register'
 
 function draw() {
@@ -61,5 +64,23 @@ describe('the password visibility toggle', () => {
     await userEvent.click(screen.getByRole('button', { name: /show password/i }))
 
     expect(screen.getByRole('button', { name: /hide password/i })).toBeInTheDocument()
+  })
+})
+
+describe('a refused sign-up', () => {
+  it('does not repeat Supabase saying the address is already registered', async () => {
+    // Its own sentence tells anyone typing an address whether that person has
+    // an account here.
+    signUp.mockRejectedValueOnce(new AuthApiError('User already registered', 422, 'user_already_exists'))
+    toast.error.mockClear()
+    await userEvent.type(draw(), 'Longenough1!')
+    await userEvent.type(screen.getByPlaceholderText('you@example.com'), 'ada@example.com')
+    await userEvent.type(screen.getByPlaceholderText('••••••••'), 'Longenough1!')
+
+    await userEvent.click(screen.getByRole('button', { name: /create student account/i }))
+
+    expect(toast.error).toHaveBeenCalledTimes(1)
+    expect(toast.error.mock.calls[0][0]).toMatch(/couldn't create an account/i)
+    expect(toast.error.mock.calls[0][0]).not.toMatch(/already registered/i)
   })
 })

@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
+import { signInMessage } from '../../lib/authErrors'
 import { toast } from 'sonner'
 
 export default function Login() {
@@ -24,7 +25,7 @@ export default function Login() {
       navigate('/')
       toast.success('Welcome back! 👋')
     } catch (err) {
-      toast.error(err.message || 'Sign in failed')
+      toast.error(signInMessage(err))
     } finally {
       setLoading(false)
     }

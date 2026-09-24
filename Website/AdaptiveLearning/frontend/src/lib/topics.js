@@ -54,6 +54,15 @@ export const TOPIC_ICONS = {
   spread: '📉',
 }
 
+/**
+ * The topics a page lists for one student: the grade's, plus any already attempted, in `TOPICS` order.
+ * `allowed` null (not known) lists every topic rather than hide one the student may be served.
+ */
+export function topicsToShow(allowed, attempted = []) {
+  if (!allowed) return TOPICS
+  return TOPICS.filter(t => allowed.includes(t) || attempted.includes(t))
+}
+
 /** A topic slug for display: every underscore becomes a space. */
 export function topicLabel(topic) {
   return topic.replaceAll('_', ' ')

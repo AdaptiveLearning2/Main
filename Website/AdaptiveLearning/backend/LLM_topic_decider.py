@@ -377,21 +377,7 @@ def get_user_history(user_id):
     return user_histories[user_id]
 
 
-def extract_json(text):
-    start = text.find("{")
-    if start == -1:
-        return None
-
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i+1]
-
-    return None
+from llm_json import extract_json  # noqa: E402  (shared with LLM_kindergarten_generation)
 
 # Rows the duplicate check reads; a match beyond it is just stored again.
 _DEDUPE_CANDIDATES = 50

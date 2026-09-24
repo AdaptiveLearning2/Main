@@ -272,17 +272,19 @@ function describe(figure) {
       return 'A picture of ' + figure.groups.map(g =>
         `${itemPlural(g.item)}: ${Array(g.count).fill(g.item).join(', ')}`).join('. ') + '.'
     case 'ten_frames': {
+      // The loose dots named one at a time: a count would answer "14 is 10 and how many more?".
       const frames = chunks(figure.count, 10)
-      if (frames.length === 1) return `A ten frame with ${plural(figure.count, 'dot')}.`
-      return `Two ten frames: the first full with 10 dots, the second with ${plural(frames[1], 'dot')}.`
+      const dots = Array(frames[frames.length - 1]).fill('dot').join(', ')
+      if (frames.length === 1) return `A ten frame with dots: ${dots}.`
+      return `Two ten frames: the first full with 10 dots, the second with dots: ${dots}.`
     }
     case 'shape': {
-      // Unnamed when the question asks for the name.
+      // Unnamed when the question asks for the name; a square and a rectangle must sound different.
       if (figure.named) return `A picture of a ${figure.shape}.`
       const sides = SHAPE_SIDES[figure.shape]
-      return sides
-        ? `A picture of a flat shape with ${plural(sides, 'straight side')}.`
-        : 'A picture of a round flat shape with no straight sides.'
+      if (!sides) return 'A picture of a round flat shape with no straight sides.'
+      const detail = { square: ', all the same length', rectangle: ', two long and two short' }
+      return `A picture of a flat shape with ${plural(sides, 'straight side')}${detail[figure.shape] ?? ''}.`
     }
     default:
       return null

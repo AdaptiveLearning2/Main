@@ -13,6 +13,7 @@ import ccss_standards
 import grade_appropriateness
 import answer_format
 import question_figures
+from llm_json import extract_json
 from question_figures import FIGURE_ITEMS, SHAPE_SIDES
 
 TOPICS = ("counting", "comparing_numbers", "add_and_subtract", "teen_numbers", "shapes")
@@ -31,7 +32,7 @@ SCENARIOS = {
     },
     "add_and_subtract": {
         "easy":   ["add", "subtract"],
-        "medium": ["add", "subtract", "add_story", "subtract_story"],
+        "medium": ["add_within_10", "subtract_within_10", "add_story", "subtract_story"],
         "hard":   ["add_story", "subtract_story", "make_ten"],
     },
     "teen_numbers": {
@@ -48,8 +49,12 @@ SCENARIOS = {
 
 NUMBER_WORDS = ("zero one two three four five six seven eight nine ten eleven twelve thirteen "
                 "fourteen fifteen sixteen seventeen eighteen nineteen twenty").split()
-# Words that make a story take-away (K.OA.2); an addition story must use none of them.
+# Words that make a story take-away (K.OA.2); a subtraction story needs one of them.
 TAKE_AWAY = ("left", "away", "ate", "gave", "lost", "fell", "flew", "popped", "broke", "sold")
+# An addition story may use none of these; "flew" and "fell" go either way ("3 birds flew in").
+ADDITION_REFUSES = tuple(w for w in TAKE_AWAY if w not in ("flew", "fell"))
+# Square and rectangle are never offered together: a square is a rectangle too.
+SAME_KIND = {"square": "rectangle", "rectangle": "square"}
 MAX_WORDS = 40
 
 
@@ -130,9 +135,10 @@ def _plan(topic, scenario, difficulty, rng):
                  example=f"Are there {word} {plural(first)} or {word} {plural(second)}?",
                  require=[[plural(first)], [plural(second)], [word]],
                  forbid=[other, "less", "same", "how many"])
-    elif scenario in ("add", "subtract"):
-        total = 5 if difficulty == "easy" else 10
-        if scenario == "add":
+    elif scenario in ("add", "subtract", "add_within_10", "subtract_within_10"):
+        # Within 5 is K.OA.5; within 10 is K.OA.2, so the range is the scenario's, not the tier's.
+        total = 5 if scenario in ("add", "subtract") else 10
+        if scenario.startswith("add"):
             a = rng.randint(1, total - 1)
             b = rng.randint(1, total - a)
             sign, answer = "+", a + b
@@ -147,7 +153,7 @@ def _plan(topic, scenario, difficulty, rng):
     elif scenario == "add_story":
         a = rng.randint(2, 8)
         b = rng.randint(2, 10 - a)
-        p.update(shown=[a, b], answer=a + b, sentences=3, require=[[items]], forbid=list(TAKE_AWAY),
+        p.update(shown=[a, b], answer=a + b, sentences=3, require=[[items]], forbid=list(ADDITION_REFUSES),
                  brief=f"Write a very short story: there are {a} {items}, then {b} more {items} join them. "
                        f"Ask how many {items} there are now.",
                  example=f"There are {a} {items} in the yard. Then {b} more {items} come. "
@@ -183,7 +189,9 @@ def _plan(topic, scenario, difficulty, rng):
                  example=f"{n} is 10 and how many more?")
     elif scenario == "name_shape":
         shape = rng.choice(list(SHAPE_SIDES))
-        others = rng.sample([s for s in SHAPE_SIDES if s != shape], 3)
+        four = shape if shape in SAME_KIND else rng.choice(sorted(SAME_KIND))
+        others = rng.sample([s for s in SHAPE_SIDES
+                             if s != shape and (s not in SAME_KIND or s == four)], 3)
         p.update(answer=shape, options=[shape, *others], figure={"shape": shape},
                  require=[["shape"]], forbid=[*SHAPE_SIDES, *(plural(s) for s in SHAPE_SIDES)],
                  brief="The picture shows a flat shape. Ask what the shape is called. Do not name it.",
@@ -246,9 +254,11 @@ def _prompt(topic, plan, grade, global_questions, prev_questions):
         rules.append(f"- Do NOT use these words: {', '.join(plan['forbid'])}.")
     must = "\n".join(rules)
     # "Do not copy" beside a fixed phrase is a contradiction haiku settled by dropping the phrase.
-    style = ("AN EXAMPLE, which you may use exactly as written"
-             if plan.get("equation") or plan.get("phrase")
+    fixed = plan.get("equation") or plan.get("phrase")
+    style = ("AN EXAMPLE, which you may use exactly as written" if fixed
              else "THE STYLE, not to be copied word for word")
+    # The JSON template must not hand back, verbatim, an example it just said not to copy.
+    template = plan["example"] if fixed else "<your question>"
     return f"""
 You write one maths question for a {grade} student, who is five years old.
 The Question Topic is "{topic}".
@@ -272,29 +282,16 @@ Recent global questions:
 Use different wording from all of the above where you can; every MUST rule still applies.
 
 Return ONLY valid JSON, with double quotes, and nothing outside the object:
-{{"question_text": "{plan['example']}", "question_topic": "{topic}"}}
+{{"question_text": "{template}", "question_topic": "{topic}"}}
 """
 
 
-def extract_json(text):
-    start = text.find("{")
-    if start == -1:
-        return None
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i + 1]
-    return None
-
-
 def _wrong_numbers(answer, plan):
-    """Three near-misses: off by one and two, then the numbers shown."""
+    """Three near-misses: off by one and two (by ten when counting by tens), then the numbers shown."""
+    step = 10 if plan["scenario"] == "count_by_tens" else 1
     wrong = []
-    for candidate in (answer + 1, answer - 1, answer + 2, answer - 2, *plan["shown"], answer + 3):
+    for candidate in (answer + step, answer - step, answer + 2 * step, answer - 2 * step,
+                      *plan["shown"], answer + 3 * step):
         if candidate >= 0 and candidate != answer and candidate not in wrong:
             wrong.append(candidate)
     return wrong[:3]

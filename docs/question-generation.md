@@ -575,8 +575,17 @@ a model can pass them.
 
 **Its pictures are three new figure types**: `objects` (countable emoji, in rows of five), `ten_frames` and `shape`.
 The description names each picture once rather than giving the count, so a screen-reader user counts as a sighted
-one does; a `shape` asked for by name is described by its sides, never its name. The item and shape lists are Python
-constants that `QuestionFigure.test.jsx` reads, so a picture the browser cannot draw fails a test.
+one does. That holds for the dots after a full ten frame too: their number is the answer to "14 is 10 and how many
+more?". A `shape` asked for by name is described by its sides, never its name, and a square ("all the same length")
+must sound different from a rectangle; the two are never offered together, since a square is a rectangle too. The
+item and shape lists are Python constants that `QuestionFigure.test.jsx` reads, so a picture the browser cannot draw
+fails a test.
+
+**A standard is a scenario's, so a range that changes the standard is its own scenario.** The resolver does not see
+the difficulty tier. Adding within 5 is K.OA.5 and within 10 is K.OA.2, as IXL aligns them, so they are `add` and
+`add_within_10`; counting dots in ten frames is K.CC.5, not K.NBT.1. Two carry the nearest standard, not an exact one:
+`one_less` (K.CC.4c is "one larger"; IXL aligns its one-less skills to no standard) and `largest_of_three` (K.CC.7
+compares two). The code is stored on every row and used to spot duplicates, so a wrong one outlives its fix.
 
 **It is one generator serving five topics**, so `question_topic` is the caller's `topic` checked against `TOPICS`
 rather than a literal; `test_question_schemas.py` names it as the one such generator.

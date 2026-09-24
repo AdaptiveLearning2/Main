@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -67,6 +67,40 @@ describe('the topic grid', () => {
     // `mode` is not in the payload.
     expect(screen.getByText('mode')).toBeInTheDocument()
     expect(screen.queryByText('0%')).not.toBeInTheDocument()
+  })
+
+  // `/api/topics` answers for every topic; `allowed` is the backend's grade gate.
+  const GRADE_ONE = [
+    { name: 'ordering', allowed: true }, { name: 'algebra', allowed: false },
+    { name: 'geometry', allowed: false }, { name: 'mode', allowed: false },
+    { name: 'counting', allowed: false },
+  ]
+
+  it("lists the grade's topics, and keeps any the student has already attempted", async () => {
+    overrideApi('/api/profile/me', () => ({ practice_reminders: false, grade_level: '1st Grade' }))
+    overrideApi('/api/topics?grade=1st%20Grade', () => GRADE_ONE)
+
+    draw()
+
+    // The tiles only: the weakest-topic panel in the same card also names a topic.
+    const grid = () => screen.getByText('Topics in the Curriculum').nextElementSibling
+    expect(await screen.findByText('ordering')).toBeInTheDocument()
+    await waitFor(() => expect(within(grid()).queryByText('mode')).not.toBeInTheDocument())
+    expect(within(grid()).queryByText('counting')).not.toBeInTheDocument()
+    // Not grade 1's, but attempted: a student's own record never disappears.
+    expect(within(grid()).getByText('algebra')).toBeInTheDocument()
+    expect(within(grid()).getByText('geometry')).toBeInTheDocument()
+  })
+
+  it('lists every topic when the grade could not be looked up', async () => {
+    overrideApi('/api/profile/me', () => ({ practice_reminders: false, grade_level: '1st Grade' }))
+    overrideApi('/api/topics?grade=1st%20Grade', () => { throw apiError(500, 'down') })
+
+    draw()
+
+    await screen.findByText('30%')
+    expect(screen.getByText('mode')).toBeInTheDocument()
+    expect(screen.getByText('counting')).toBeInTheDocument()
   })
 
   it('draws the same plain tiles when the breakdown could not be read', async () => {

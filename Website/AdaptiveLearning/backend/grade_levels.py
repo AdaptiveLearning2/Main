@@ -1,7 +1,7 @@
 """One reading of the free-text `profiles.grade_level`, shared by everything that gates on it.
 
 A grade is read numerically ("Grade 1", "1st Grade" and "1" are one grade), and an
-unreadable grade is treated as the youngest, never the oldest.
+unreadable grade is treated as grade 1, never the oldest; kindergarten (0) must be named.
 """
 
 import re
@@ -25,7 +25,7 @@ _MIN_GRADE, _MAX_GRADE = 0, 13
 def grade_number(grade):
     """The numeric school grade in `grade`, or None if it cannot be read.
 
-    None is the signal to treat the student as the youngest, not to guess.
+    None is the signal to treat the student as grade 1, not to guess.
     """
     text = (grade or "").strip().lower()
     if not text:

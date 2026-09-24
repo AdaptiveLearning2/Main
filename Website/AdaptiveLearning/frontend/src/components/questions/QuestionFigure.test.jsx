@@ -193,17 +193,28 @@ describe('a kindergarten picture to count', () => {
 })
 
 describe('ten frames', () => {
-  it('fills a whole frame before the next and says so', () => {
+  it('fills a whole frame before the next and names the loose dots one at a time', () => {
     const { container } = render(<QuestionFigure figure={{ type: 'ten_frames', count: 14 }} />)
     expect(screen.getByRole('img')).toHaveAccessibleName(
-      'Two ten frames: the first full with 10 dots, the second with 4 dots.')
+      'Two ten frames: the first full with 10 dots, the second with dots: dot, dot, dot, dot.')
     expect(container.querySelectorAll('rect')).toHaveLength(20)
     expect(container.querySelectorAll('circle')).toHaveLength(14)
   })
 
+  it('never states how many loose dots there are, which is the answer to taking a teen number apart', () => {
+    // "14 is 10 and how many more?": only the 10 may be a numeral, as only the full frame is at a glance.
+    for (let count = 11; count <= 19; count++) {
+      const { unmount } = render(<QuestionFigure figure={{ type: 'ten_frames', count }} />)
+      const label = screen.getByRole('img').getAttribute('aria-label')
+      expect(label.match(/\d+/g), label).toEqual(['10'])
+      expect(label.match(/\bdot\b/g), label).toHaveLength(count - 10)
+      unmount()
+    }
+  })
+
   it('draws one frame for ten or fewer', () => {
     const { container } = render(<QuestionFigure figure={{ type: 'ten_frames', count: 1 }} />)
-    expect(screen.getByRole('img')).toHaveAccessibleName('A ten frame with 1 dot.')
+    expect(screen.getByRole('img')).toHaveAccessibleName('A ten frame with dots: dot.')
     expect(container.querySelectorAll('rect')).toHaveLength(10)
   })
 
@@ -230,6 +241,18 @@ describe('a flat shape', () => {
     const img = screen.getByRole('img')
     expect(img).toHaveAccessibleName('A picture of a flat shape with 6 straight sides.')
     expect(img.getAttribute('aria-label')).not.toMatch(/hexagon/)
+  })
+
+  it('tells a square from a rectangle by ear when neither is named', () => {
+    // A square is a rectangle too; described alike, "name the shape" had two answers.
+    const label = shape => {
+      const { unmount } = render(<QuestionFigure figure={{ type: 'shape', shape, named: false }} />)
+      const text = screen.getByRole('img').getAttribute('aria-label')
+      unmount()
+      return text
+    }
+    expect(label('square')).toBe('A picture of a flat shape with 4 straight sides, all the same length.')
+    expect(label('rectangle')).toBe('A picture of a flat shape with 4 straight sides, two long and two short.')
   })
 
   it('names the shape when the question asks about its sides', () => {

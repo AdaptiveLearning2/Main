@@ -43,6 +43,19 @@ async function openModal() {
   return screen.getByRole('dialog')
 }
 
+it("names a row's topic with every underscore a space", async () => {
+  // `replace('_', ' ')` changed only the first: "add and_subtract".
+  mockApi({
+    '/api/questions?limit=1000': () => [{ ...QUESTION, subject: 'add_and_subtract' }],
+    '/api/classes': () => [],
+  })
+  render(<Questions />, { wrapper: MemoryRouter })
+  await screen.findByText('What is 7 x 8?')
+  expect(screen.queryByText(/and_subtract/)).not.toBeInTheDocument()
+  // The filter's <option> carries the label too; the row's badge is the <span>.
+  expect(screen.getAllByText('add and subtract').some(el => el.tagName === 'SPAN')).toBe(true)
+})
+
 describe('the question modal', () => {
   it('is a dialog, and names itself', async () => {
     // role="dialog" is what tells a screen reader the page behind is no longer in front.

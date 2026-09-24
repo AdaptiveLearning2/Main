@@ -9,9 +9,9 @@ import ParentRestoredBanner from '../../components/consent/ParentRestoredBanner'
 import ParentLinkedBanner from '../../components/consent/ParentLinkedBanner'
 import SkeletonList from '../../components/ui/Skeleton'
 import StatCard from '../../components/ui/StatCard'
-import { TOPICS as ALL_TOPICS, TOPIC_ICONS } from '../../lib/topics'
+import { TOPIC_ICONS, topicsToShow } from '../../lib/topics'
+import useGradeTopics from '../../hooks/useGradeTopics'
 
-const TOPICS = ALL_TOPICS
 const ICONS  = TOPIC_ICONS
 
 // Below this many attempts, accuracy is too noisy to call a topic "weakest".
@@ -46,6 +46,8 @@ export default function StudentDashboard() {
   const [nudge, setNudge] = useState(null)
   // Keyed by `topic_name`; `{}` on failure renders plain, unmeasured tiles.
   const [topics, setTopics] = useState({})
+  // The profile's grade decides which topics the grid lists; `null` until it is read.
+  const [grade, setGrade] = useState(null)
 
   useEffect(() => {
     Promise.all([
@@ -59,6 +61,7 @@ export default function StudentDashboard() {
     ]).then(([s, sess, profile]) => {
       setStats(s)
       setSessions(sess)
+      setGrade(profile?.grade_level || null)
       // The browser's local day, not the school's timezone.
       const today = new Date().toLocaleDateString('en-CA')   // YYYY-MM-DD, local
       const practisedToday = Array.isArray(sess) && sess.some(x =>
@@ -101,6 +104,10 @@ export default function StudentDashboard() {
     { icon: TrendingUp, title: 'Accuracy',   value: statsFailed ? '—' : `${acc}%`,                      sub: sub ?? 'overall',   color: 'bg-gradient-to-br from-violet-500 to-purple-600',   delay: 0.3 },
     { icon: Flame,      title: 'Streak',     value: statsFailed ? '—' : (stats?.current_streak ?? 0),   sub: streakSub,          color: 'bg-gradient-to-br from-orange-500 to-amber-500',    delay: 0.4 },
   ]
+
+  const gradeTopics = useGradeTopics(grade)
+  const shownTopics = topicsToShow(gradeTopics, Object.values(topics)
+    .filter(t => (t.attempted_questions ?? 0) > 0).map(t => t.topic_name))
 
   // The topic the adaptive engine will start on.
   const weakest = Object.values(topics)
@@ -201,7 +208,7 @@ export default function StudentDashboard() {
               <BookOpen size={16} className="text-indigo-600" /> Topics in the Curriculum
             </h3>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-              {TOPICS.map((t, i) => {
+              {shownTopics.map((t, i) => {
                 const row = topics[t]
                 const attempted = row?.attempted_questions ?? 0
                 // Unattempted and failed-read both draw a plain tile.

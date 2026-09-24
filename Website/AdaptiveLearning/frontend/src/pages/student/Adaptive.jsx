@@ -16,7 +16,8 @@ import { GraduationCap, User, Minus, Plus, Sparkles, Brain, BatteryFull, Battery
 import { toast } from 'sonner'
 import QuestionFigure from '../../components/questions/QuestionFigure'
 import CCSSBadge from '../../components/questions/CCSSBadge'
-import { TOPICS as ALL_TOPICS, TOPIC_ICONS } from '../../lib/topics'
+import { TOPICS as ALL_TOPICS, TOPIC_ICONS, topicLabel, topicsToShow } from '../../lib/topics'
+import useGradeTopics from '../../hooks/useGradeTopics'
 import { contactQuality } from '../../lib/contactQuality'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
@@ -1088,6 +1089,10 @@ export default function Adaptive() {
 
   const activeClass = classes.find(c => c.id === classId)
   const effectiveGrade = mode === 'class' ? (activeClass?.grade_level || '—') : grade
+  // What this grade is served, plus anything attempted; `null` (unknown) keeps every topic.
+  const gradeTopics = useGradeTopics(effectiveGrade === '—' ? null : effectiveGrade)
+  const shownTopics = topicsToShow(gradeTopics,
+    TOPICS.filter(t => (accuracyStats.subjects[t]?.attempts ?? 0) > 0))
   const biasLabel = bias === -1 ? 'Easier' : bias === 1 ? 'Harder' : 'Auto'
 
   return (
@@ -1343,7 +1348,7 @@ export default function Adaptive() {
                   className="text-6xl mb-4 text-center">🚀</motion.div>
                 <h2 className="text-xl font-black text-gray-900 dark:text-white mb-2 text-center">Ready to practice?</h2>
                 <p className="text-gray-500 dark:text-gray-400 text-sm mb-6 max-w-sm mx-auto text-center">
-                  The AI analyses your performance across {TOPICS.length} topics and picks the one you need most.
+                  The AI analyses your performance across {(gradeTopics ?? TOPICS).length} topics and picks the one you need most.
                 </p>
 
                 {/* Mode toggle */}
@@ -1458,7 +1463,7 @@ export default function Adaptive() {
                 <div className="flex gap-2 mb-4 flex-wrap">
                   {data.question_topic && (
                     <span className="text-xs font-bold px-2.5 py-1 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full capitalize flex items-center gap-1">
-                      {ICONS[data.question_topic]} {data.question_topic.replace('_', ' ')}
+                      {ICONS[data.question_topic]} {topicLabel(data.question_topic)}
                     </span>
                   )}
                   {data.difficulty && (
@@ -1557,14 +1562,14 @@ export default function Adaptive() {
         <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm h-fit">
           <h3 className="font-black text-gray-900 dark:text-white mb-4">Topic Accuracy</h3>
           <div className="space-y-3">
-            {TOPICS.map(topic => {
+            {shownTopics.map(topic => {
               const acc = getAcc(topic)
               const s   = accuracyStats.subjects[topic]
               return (
                 <div key={topic}>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs font-medium text-gray-600 dark:text-gray-400 flex items-center gap-1">
-                      {ICONS[topic]} {SHORT[topic] || topic.replace('_', ' ')}
+                      {ICONS[topic]} {SHORT[topic] || topicLabel(topic)}
                     </span>
                     <span className={`text-xs font-black ${acc === null ? 'text-gray-600' : acc >= 70 ? 'text-green-600 dark:text-green-400' : acc >= 40 ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400'}`}>
                       {acc === null ? '—' : `${acc}%`}

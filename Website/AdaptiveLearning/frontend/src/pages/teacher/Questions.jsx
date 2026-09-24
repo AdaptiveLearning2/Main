@@ -281,7 +281,7 @@ export default function Questions() {
                   <p className="text-sm font-semibold text-gray-900 dark:text-white line-clamp-1">{q.question_text}</p>
                   <div className="flex gap-2 mt-1.5">
                     {q.subject && (
-                      <span className="text-[10px] font-bold px-2 py-0.5 bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300 rounded-full capitalize">{q.subject.replace('_', ' ')}</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300 rounded-full capitalize">{topicLabel(q.subject)}</span>
                     )}
                     {q.difficulty && (
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full capitalize ${DIFF_STYLE[q.difficulty] || ''}`}>{q.difficulty}</span>

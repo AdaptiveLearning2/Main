@@ -111,9 +111,9 @@ def _assert_answer_is_right(scenario, plan, q):
               "teen_take_apart": lambda: figure["count"] - 10}
     if scenario in counts:
         assert answer == str(counts[scenario]())
-    elif scenario in ("add", "add_story"):
+    elif scenario in ("add", "add_within_10", "add_story"):
         assert answer == str(shown[0] + shown[1]) and sum(shown) <= 10
-    elif scenario in ("subtract", "subtract_story"):
+    elif scenario in ("subtract", "subtract_within_10", "subtract_story"):
         assert answer == str(shown[0] - shown[1]) and 0 < int(answer)
     elif scenario in ("larger_number", "largest_of_three"):
         assert answer == max(q["answer_options"], key=int)
@@ -169,6 +169,62 @@ def test_one_more_never_starts_from_one(difficulty):
     starts = {kg._plan("counting", "one_more", difficulty, random.Random(seed))["shown"][0]
               for seed in range(200)}
     assert min(starts) >= 2
+
+
+def _every_plan(seeds=40):
+    for topic, difficulty, scenario in CELLS:
+        for seed in range(seeds):
+            yield topic, scenario, kg._plan(topic, scenario, difficulty, random.Random(seed))
+
+
+def test_a_question_tagged_k_oa_5_stays_within_5():
+    """K.OA.5 is fluency within 5; within 10 is K.OA.2, as IXL aligns them."""
+    for topic, scenario, plan in _every_plan():
+        code = ccss_standards.ccss_for(topic, "Kindergarten", scenario)
+        if code == "K.OA.5":
+            assert max(plan["shown"] + [plan["answer"]]) <= 5, (scenario, plan["shown"])
+    assert ccss_standards.ccss_for("add_and_subtract", "Kindergarten", "add_within_10") == "K.OA.2"
+    assert ccss_standards.ccss_for("teen_numbers", "Kindergarten", "count_ten_frames") == "K.CC.5"
+
+
+def test_square_and_rectangle_are_never_offered_together():
+    """A square is a rectangle too, so offering both marks a right answer wrong."""
+    for _, scenario, plan in _every_plan(200):
+        if scenario == "name_shape":
+            assert not {"square", "rectangle"} <= set(plan["options"]), plan["options"]
+
+
+def test_counting_by_tens_offers_only_tens():
+    for _, scenario, plan in _every_plan():
+        if scenario == "count_by_tens":
+            options = [plan["answer"], *kg._wrong_numbers(plan["answer"], plan)]
+            assert all(o % 10 == 0 for o in options) and len(set(options)) == 4, options
+
+
+@pytest.mark.parametrize("scenario,text", [
+    ("add_story", "There are {a} birds on a branch. {b} more birds flew in. How many birds are there now?"),
+    ("subtract_story", "There are {a} birds on a branch. {b} birds flew away. How many birds are left?"),
+])
+def test_flew_and_fell_are_allowed_either_way(scenario, text):
+    plan = _plan_for(scenario)
+    plan["require"] = [["birds"]] + plan["require"][1:]
+    a, b = plan["shown"]
+    assert kg.wording_problem(text.format(a=a, b=b), plan) is None
+
+
+@pytest.mark.parametrize("topic,difficulty,scenario", CELLS)
+def test_the_json_template_never_hands_back_an_example_it_said_not_to_copy(
+        model, monkeypatch, topic, difficulty, scenario):
+    plans, prompts, _ = model
+    _generate(topic, difficulty, scenario, 2, monkeypatch)
+    template = prompts[-1].split("nothing outside the object:")[1]
+    fixed = plans[-1].get("equation") or plans[-1].get("phrase")
+    assert (plans[-1]["example"] in template) is bool(fixed)
+
+
+def test_the_generator_and_the_decider_share_one_extract_json():
+    import llm_json
+    assert kg.extract_json is llm_json.extract_json is td.extract_json
 
 
 # ── the wording the model returns is checked, not trusted ───────────────────

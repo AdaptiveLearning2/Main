@@ -86,6 +86,7 @@ SCENARIO_LADDER = {
     "counting": {
         "count_objects": [(0, "K.CC.5")],
         "one_more":      [(0, "K.CC.4c")],
+        # Nearest, not exact: K.CC.4c is "one larger", and IXL aligns its one-less skills to none.
         "one_less":      [(0, "K.CC.4c")],
         "next_number":   [(0, "K.CC.2")],
         "count_by_tens": [(0, "K.CC.1")],
@@ -93,18 +94,23 @@ SCENARIO_LADDER = {
     "comparing_numbers": {
         "larger_number":    [(0, "K.CC.7")],
         "smaller_number":   [(0, "K.CC.7")],
+        # Nearest, not exact: K.CC.7 compares two numerals.
         "largest_of_three": [(0, "K.CC.7")],
         "compare_groups":   [(0, "K.CC.6")],
     },
     "add_and_subtract": {
-        "add":            [(0, "K.OA.5")],
-        "subtract":       [(0, "K.OA.5")],
+        # Within 5 is K.OA.5 fluency; within 10 is K.OA.2, as IXL aligns them.
+        "add":                [(0, "K.OA.5")],
+        "subtract":           [(0, "K.OA.5")],
+        "add_within_10":      [(0, "K.OA.2")],
+        "subtract_within_10": [(0, "K.OA.2")],
         "add_story":      [(0, "K.OA.2")],
         "subtract_story": [(0, "K.OA.2")],
         "make_ten":       [(0, "K.OA.4")],
     },
     "teen_numbers": {
-        "count_ten_frames": [(0, "K.NBT.1")],
+        # Counting dots in ten frames is K.CC.5; composing a teen number is K.NBT.1.
+        "count_ten_frames": [(0, "K.CC.5")],
         "teen_make":        [(0, "K.NBT.1")],
         "teen_take_apart":  [(0, "K.NBT.1")],
     },

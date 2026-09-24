@@ -1,6 +1,6 @@
 /** A session made only to reserve the headband is ended on leave, so the backend discards it if empty. */
 import { it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
@@ -26,7 +26,8 @@ vi.mock('../../context/AuthContext', () => ({
 }))
 
 import { endSession } from '../../lib/session'
-import { mockApi, resetApi } from '../../test/mocks/apiFetch'
+import { mockApi, overrideApi, resetApi } from '../../test/mocks/apiFetch'
+import { runSignOutTasks } from '../../lib/signOutTasks'
 import Adaptive from './Adaptive'
 
 beforeEach(() => {
@@ -61,4 +62,56 @@ it('ends the session when the student leaves, recorded or not', async () => {
   await screen.findByText('What is 2 + 2?')
   unmount()
   await waitFor(() => expect(endSession).toHaveBeenCalledWith('sess-phantom'))
+})
+
+
+it('ends the session before sign-out takes the token, and only once', async () => {
+  // The unmount's `/end` would go out with no bearer and 401.
+  const { unmount } = render(<Adaptive />)
+  await userEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+
+  await runSignOutTasks()
+  expect(endSession).toHaveBeenCalledWith('sess-phantom')
+
+  unmount()
+  expect(endSession).toHaveBeenCalledTimes(1)
+})
+
+
+it('does not retry a failed sign-out end on unmount, when the token is gone', async () => {
+  // The retry could only 401, and it showed the failure message a second time.
+  const { unmount } = render(<Adaptive />)
+  await userEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+
+  endSession.mockResolvedValueOnce(false)
+  await runSignOutTasks()
+  unmount()
+
+  expect(endSession).toHaveBeenCalledTimes(1)
+})
+
+
+it('starts a new session if a failed sign-out leaves the page up', async () => {
+  // Answering on would post into the session sign-out already ended.
+  let started = 0
+  overrideApi('/api/sessions/start', () => ({ id: `sess-${++started}` }), 'POST')
+  for (const id of ['sess-1', 'sess-2']) {
+    overrideApi(`/api/generate-question?user_id=u1&bias=0&grade=1st+Grade&session_id=${id}`, () => ({
+      id: `q-${id}`, question_text: `Question for ${id}`, question_topic: 'ordering',
+      answer_options: ['3', '4', '5'], correct_answer: '4', difficulty: 'easy',
+    }))
+  }
+  render(<Adaptive />)
+  await userEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText('Question for sess-1')
+
+  await act(async () => { await runSignOutTasks() })
+  await userEvent.click(screen.getByRole('button', { name: /^B\s*4$/ }))
+  await userEvent.click(screen.getByRole('button', { name: /submit answer/i }))
+  await userEvent.click(await screen.findByRole('button', { name: /next question/i }))
+
+  expect(await screen.findByText('Question for sess-2')).toBeInTheDocument()
+  expect(started).toBe(2)
 })

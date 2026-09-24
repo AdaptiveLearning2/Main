@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { supabase } from '../lib/supabase'
 import { apiFetch } from '../lib/api'
 import { clearViewPrefs } from '../lib/viewPrefs'
+import { runSignOutTasks } from '../lib/signOutTasks'
 
 const AuthContext = createContext()
 
@@ -100,13 +101,20 @@ export function AuthProvider({ children }) {
     if (error) throw error
   }
 
-  const signOut = async () => {
-    try {
-      await supabase.auth.signOut()
-    } finally {
-      // Even on a failed sign-out, for shared machines.
-      clearViewPrefs()
-    }
+  // One sign-out at a time: a repeat click joins the one in progress.
+  const signingOut = useRef(null)
+  const signOut = () => {
+    signingOut.current ??= (async () => {
+      // Before the token is cleared; see `lib/signOutTasks.js`.
+      await runSignOutTasks()
+      try {
+        await supabase.auth.signOut()
+      } finally {
+        // Even on a failed sign-out, for shared machines.
+        clearViewPrefs()
+      }
+    })().finally(() => { signingOut.current = null })
+    return signingOut.current
   }
 
   return (

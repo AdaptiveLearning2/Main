@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { vi } from 'vitest'
@@ -482,5 +482,26 @@ describe('choosing which measurements the timeline draws', () => {
     expect(screen.queryByText(/vertical lines = answer events/i)).not.toBeInTheDocument()
 
     // Not checked: the `ReferenceLine` gate itself, which jsdom cannot see.
+  })
+})
+
+// ── the emotion ribbon ──────────────────────────────────────────────────────
+
+describe('the emotion ribbon', () => {
+  it('draws the labels FER+ stores, and never a stand-in face for one it does not know', async () => {
+    const labels = ['fear', 'angry', 'contempt', 'surprise', 'disgust', 'confused']
+    apiFetch.mockResolvedValue({
+      cognitive: [], heart: [], answers: [],
+      face: labels.map((emotion, i) => ({
+        ts: new Date(Date.UTC(2026, 7, 10, 9, 0, i * 20)).toISOString(), emotion })),
+    })
+    renderAt()
+
+    for (const face of ['😨', '😠', '😒', '😮', '🤢']) {
+      expect(await screen.findByText(face)).toBeInTheDocument()
+    }
+    // The pie's sr-only table names it too; this is the ribbon's cell.
+    expect(within(screen.getByTitle(/— confused$/)).getByText('confused')).toBeInTheDocument()
+    expect(screen.queryByText('🙂')).not.toBeInTheDocument()
   })
 })

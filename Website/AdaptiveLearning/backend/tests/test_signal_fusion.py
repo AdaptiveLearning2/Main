@@ -7,6 +7,7 @@ import itertools
 import pytest
 
 from signal_fusion import (
+    FER_LABELS,
     ChannelState,
     eeg_channel,
     face_channel,
@@ -105,6 +106,39 @@ def test_facial_labels_do_not_share_vocabulary_with_the_other_channels():
     assert face_channel("happy", 0.9).label == "neutral"
 
 
+def test_the_backend_names_exactly_the_labels_the_sidecar_emits():
+    """Read from the sidecar's source: neither package can import the other."""
+    import ast
+    from pathlib import Path
+    import signal_fusion
+    src = Path(__file__).resolve().parents[4] / "EEGResearch/src/app/services/face_emotion.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    emitted, = [ast.literal_eval(node.value) for node in tree.body
+                if isinstance(node, ast.Assign)
+                and any(getattr(t, "id", None) == "EMOTION_LABELS" for t in node.targets)]
+    assert signal_fusion.FER_LABELS == emitted
+    assert signal_fusion.NEGATIVE_EMOTIONS <= set(emitted)
+
+
+# Every FER+ label, and whether it withholds; a label added on either side fails until listed.
+WITHHOLDS = {"neutral": False, "happy": False, "surprise": False, "sad": True,
+             "angry": True, "disgust": True, "fear": True, "contempt": True}
+
+
+def test_every_fer_label_is_classified():
+    assert set(WITHHOLDS) == set(FER_LABELS)
+
+
+@pytest.mark.parametrize("emotion,withholds", sorted(WITHHOLDS.items()))
+def test_each_fer_label_withholds_an_increase_or_does_nothing(emotion, withholds):
+    face = face_channel(emotion, 0.9)
+    assert face.label == ("negative" if withholds else "neutral")
+    assert fuse(FOCUSED, ABSENT, face).label == ("neutral" if withholds else "focused")
+    # Never an ease-off on its own, whatever the label.
+    for eeg in (ABSENT, NEUTRAL_EEG):
+        assert fuse(eeg, ABSENT, face).label == fuse(eeg).label
+
+
 # ── the property, over every combination ─────────────────────────────────────
 
 def test_no_combination_of_added_channels_makes_a_session_harder():
@@ -114,7 +148,7 @@ def test_no_combination_of_added_channels_makes_a_session_harder():
                          for t in (True, False)
                          for s in ("muse_optics", "muse_ppg", "rppg")]
     faces = [ABSENT] + [face_channel(e, c)
-                        for e in ("happy", "sad", "anger", "neutral", "surprise")
+                        for e in FER_LABELS
                         for c in (0.2, 0.9)]
 
     # The last has calm withdrawn (cause no_calm): focus and contact, no stress.

@@ -12,8 +12,8 @@ import html
 import math
 
 # ── palette ────────────────────────────────────────────────────────────────
-# Mirrors `frontend/src/pages/teacher/SessionReview.jsx`. Fixed per label, not
-# by position, so a label keeps its colour whatever else is present.
+# Mirrors `frontend/src/lib/emotions.js` and `SessionReview.jsx`, pinned. Fixed per
+# label, not by position, so a label keeps its colour whatever else is present.
 
 EMOTION_COLOURS = {
     "neutral": "#94a3b8", "happy": "#10b981", "surprise": "#38bdf8",

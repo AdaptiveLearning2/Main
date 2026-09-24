@@ -566,6 +566,13 @@ the numbers would need a solver and a shown-versus-scored check per scenario; th
 tiers stay inside each standard's own limit — to 20 for counting (K.CC.5), within 10 for adding (K.OA.2, K.OA.5 to 5
 on easy), numerals to 10 for comparing (K.CC.7) — and a test holds every tier to it.
 
+**Every check is stated in the prompt, and a fixed phrase is never paired with "do not copy".** A requirement the
+prompt does not name is met by chance. Told only "one less", both models wrote a take-away story. Told "one more than
+3" beside "not to be copied word for word", `claude-haiku-4-5` dropped the phrase. A scenario with a fixed number
+sentence or phrase ("one more than 3") offers its example to use as written. After any change to a brief, re-run
+`scripts/trial_kindergarten_prompts.py` against the deployed provider: the stub-model tests prove the checks, not that
+a model can pass them.
+
 **Its pictures are three new figure types**: `objects` (countable emoji, in rows of five), `ten_frames` and `shape`.
 The description names each picture once rather than giving the count, so a screen-reader user counts as a sighted
 one does; a `shape` asked for by name is described by its sides, never its name. The item and shape lists are Python

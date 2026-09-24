@@ -110,10 +110,13 @@ def _plan(topic, scenario, difficulty, rng):
                        f"so do not write any number in the question.",
                  example=f"Which number is {word}?",
                  require=[["which number"],
-                          ["larger", "greater", "bigger", "largest", "greatest", "biggest"]
+                          ["largest", "greatest", "biggest"] if scenario == "largest_of_three"
+                          else ["larger", "greater", "bigger", "largest", "greatest", "biggest"]
                           if larger else ["smaller", "less", "smallest", "least"]],
-                 forbid=["smaller", "smallest", "less", "least"] if larger
-                        else ["larger", "greater", "bigger", "largest", "greatest"])
+                 # Three numbers take the superlative: haiku asked "which is bigger?" of three.
+                 forbid=(["larger", "greater", "bigger"] if scenario == "largest_of_three" else [])
+                        + (["smaller", "smallest", "less", "least"] if larger
+                           else ["larger", "greater", "bigger", "largest", "greatest"]))
     elif scenario == "compare_groups":
         first, second = rng.sample(FIGURE_ITEMS, 2)
         a, b = rng.sample(range(1, min(limit, 10) + 1), 2)

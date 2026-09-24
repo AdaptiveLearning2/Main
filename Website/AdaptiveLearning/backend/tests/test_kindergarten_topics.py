@@ -191,6 +191,8 @@ def _plan_for(scenario, seed=3):
     # Replies llama3.1:8b gave in a live trial, which passed before `which number` was required.
     ("larger_number", "Choose the bigger dot.", "uses none of ['which number']"),
     ("largest_of_three", "Big one is bigger than little one?", "uses none of ['which number']"),
+    ("largest_of_three", "Which number is bigger?", "uses none of ['largest', 'greatest', 'biggest']"),
+    ("largest_of_three", "Which number is the biggest, or just bigger?", "uses 'bigger'"),
     # claude-haiku-4-5 turned both into stories in a live trial.
     ("one_less", "If you have {a} {items} and take away one, how many are left?", "does not contain 'one less than"),
     ("one_more", "If you have {a} {items} and get one more, how many do you have?", "does not contain 'one more than"),

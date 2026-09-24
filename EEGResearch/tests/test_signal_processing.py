@@ -1,10 +1,4 @@
-"""SignalProcessor after the Phase 0 captures (tests/fixtures/EEG_REFERENCE.md).
-
-Each test here pins one Phase 1 change and was checked by reverting that
-change: the test must fail against the code it replaces. The older processor
-tests in test_app.py still run; where a change moved their premise they were
-updated there.
-"""
+"""SignalProcessor rules derived from the reference captures (tests/fixtures/EEG_REFERENCE.md)."""
 
 from __future__ import annotations
 
@@ -22,8 +16,7 @@ CONTACT_POOR = {"hsi": [4.0, 4.0, 4.0, 4.0], "is_good": [1.0, 0.0, 0.0, 0.0]}
 
 
 class Ticker:
-    """Feeds samples at a fixed tick rate on a clock the processor shares, so
-    every time-based window in the processor sees real elapsed seconds."""
+    """Feeds samples at a fixed rate on a clock shared with the processor."""
 
     def __init__(self, window_size: int = 20, hz: float = 4.0):
         self.now = 0.0
@@ -53,8 +46,7 @@ class Ticker:
 # -- 1.1 the amplitude terms are out of the scores -----------------------------
 
 def test_raw_level_and_spread_do_not_move_focus_or_calm_when_bands_are_present():
-    """Rest spread was 147 uV on one strap fitting and 23 uV on another for
-    the same person; a score that read that as calm was reading the strap."""
+    """Raw spread depends on the strap fitting (EEG_REFERENCE.md), not the brain."""
     bands = {**RELAXED, **CONTACT_GOOD}
     tight = Ticker().run(bands, 30, level=800.0, spread=20.0)
     loose = Ticker().run(bands, 30, level=950.0, spread=150.0)
@@ -63,7 +55,7 @@ def test_raw_level_and_spread_do_not_move_focus_or_calm_when_bands_are_present()
 
 
 def test_without_bands_the_amplitude_fallback_still_scores():
-    """An older bridge reports no band powers; the fallback is what it gets."""
+    """An older bridge reports no band powers."""
     tight = Ticker().run(None, 30, spread=20.0)
     loose = Ticker().run(None, 30, spread=150.0)
     assert tight["calm_score"] > loose["calm_score"]
@@ -73,9 +65,7 @@ def test_without_bands_the_amplitude_fallback_still_scores():
 # -- 1.2 confidence is signal quality, and calm is not in it ------------------
 
 def test_a_stressed_spectrum_on_good_contact_is_not_low_confidence():
-    """Calm was 32% of confidence, so the stressed student -- low calm -- was
-    the one most likely to be discarded as insufficient_signal and treated
-    by fusion as no opinion. Same contact, same stability: same confidence."""
+    """Same contact, same stability: same confidence, whatever the calm."""
     relaxed = Ticker().run({**RELAXED, **CONTACT_GOOD}, 30)
     aroused = Ticker().run({**ENGAGED, "alpha": -0.6, "gamma": 0.7, **CONTACT_GOOD}, 30)
     assert aroused["calm_score"] < relaxed["calm_score"] - 20
@@ -83,9 +73,7 @@ def test_a_stressed_spectrum_on_good_contact_is_not_low_confidence():
 
 
 def test_poor_contact_takes_a_steady_signal_below_the_gate_and_degraded_does_not():
-    """The gate is 0.45 in adaptation.py and signal_fusion.py. On hardware
-    the old confidence crossed it on 2 ticks in ~5000, poor contact
-    included; it has to mean something about the electrodes."""
+    """The 0.45 gate in adaptation.py and signal_fusion.py must mean something about the electrodes."""
     good = Ticker().run({**RELAXED, **CONTACT_GOOD}, 30)
     degraded = Ticker().run({**RELAXED, "hsi": [1.0, 1.0, 4.0, 4.0],
                              "is_good": [1.0, 1.0, 0.0, 0.0]}, 30)
@@ -107,8 +95,7 @@ def test_a_jumping_spectrum_lowers_confidence_on_the_same_contact():
 
 
 def test_quality_and_confidence_read_the_same_contact():
-    """One smoothed contact per tick feeds both, so the verdict and the score
-    cannot disagree about the same electrodes."""
+    """One smoothed contact per tick feeds both, so they cannot disagree."""
     f = Ticker().run({**RELAXED, **CONTACT_POOR}, 30)
     assert f["signal_quality"] == "poor" and f["quality_basis"] == "contact"
     assert f["contact_ratio"] is not None and f["contact_ratio"] < 0.4
@@ -123,9 +110,7 @@ def _warm(t: Ticker, ticks: int = 20):
 
 
 def test_a_delta_spike_holds_the_previous_scores_and_is_counted_not_rejected():
-    """Delta doubles on a blink. A blink is not a change in focus, so the
-    tick holds the last admitted scores -- not zero, not a fresh score off
-    an eye movement -- and says so."""
+    """A blink doubles delta; the tick holds the last admitted scores and says so."""
     t = Ticker()
     before = _warm(t)
     blink = t.tick({**ENGAGED, "delta": RELAXED["delta"] + 0.6, **CONTACT_GOOD})
@@ -134,7 +119,7 @@ def test_a_delta_spike_holds_the_previous_scores_and_is_counted_not_rejected():
     assert blink["samples_rejected"] == before["samples_rejected"]
     assert blink["focus_score"] == pytest.approx(before["focus_score"])
     assert blink["calm_score"] == pytest.approx(before["calm_score"])
-    # Contact is still judged on the held tick: quality is its own fact.
+    # Contact is still judged on the held tick.
     assert blink["signal_quality"] == "good" and blink["quality_basis"] == "contact"
 
 
@@ -147,9 +132,7 @@ def test_a_jaw_clench_is_held_on_gamma_exceeding_beta():
 
 
 def test_a_spread_jump_is_relative_to_the_sessions_own_spread():
-    """Rest spread was 147 uV on one fitting and 23 on another, so an
-    absolute bound would reject one wearer's every tick and the other's
-    none."""
+    """Rest spread varies ~6x between fittings, so an absolute bound fits nobody."""
     tight = Ticker()
     tight.run({**RELAXED, **CONTACT_GOOD}, 20, spread=20.0)
     assert tight.tick({**RELAXED, **CONTACT_GOOD}, spread=80.0)["artifact_reason"] == "spread_jump"
@@ -159,8 +142,7 @@ def test_a_spread_jump_is_relative_to_the_sessions_own_spread():
 
 
 def test_held_ticks_enter_neither_the_baseline_nor_the_window():
-    # A window wider than the warm-up, so its length can still grow: at
-    # maxlen a deque's length is the same whether or not a tick was added.
+    # Wider than the warm-up: at maxlen a deque's length can't show an added tick.
     t = Ticker(window_size=40)
     _warm(t)
     n_base = len(t.processor._baseline_focus)
@@ -195,7 +177,7 @@ def test_three_states_are_distinguishable_on_the_payload():
 def test_a_one_tick_excursion_moves_the_score_less_than_the_ratio_moved():
     t = Ticker()
     steady = _warm(t, 40)
-    # A large but non-artifact swing for one tick, then back.
+    # A large non-artifact swing for one tick, then back.
     spike = t.tick({**ENGAGED, **CONTACT_GOOD})
     back = t.tick({**RELAXED, **CONTACT_GOOD})
     raw_move = abs(spike["focus_log_ratio"] - steady["focus_log_ratio"])
@@ -206,9 +188,7 @@ def test_a_one_tick_excursion_moves_the_score_less_than_the_ratio_moved():
 
 
 def test_a_sustained_change_converges_and_within_the_deciders_cadence():
-    """The topic decider reads the label about every 10 s. 4 s of smoothing
-    reaches 92% of a step in 10 s; a relaxed-to-aroused step must cross the
-    stressed line (calm < 35) inside 40 ticks at 4 Hz."""
+    """The topic decider reads every ~10 s: a step must cross calm < 35 inside 40 ticks at 4 Hz."""
     t = Ticker()
     _warm(t, 40)
     aroused = {**ENGAGED, "alpha": -0.6, "gamma": 0.7, **CONTACT_GOOD}
@@ -223,9 +203,6 @@ def test_a_sustained_change_converges_and_within_the_deciders_cadence():
 
 
 def test_smoothing_is_time_based_not_tick_based():
-    """The same ticks at 1 Hz and 4 Hz cover different spans, so the value
-    after N ticks differs; a count-based smoother could not tell them
-    apart."""
     fast, slow = Ticker(hz=4.0), Ticker(hz=1.0)
     for tk in (fast, slow):
         _warm(tk, 40)
@@ -256,9 +233,7 @@ def _run_until_latched(t: Ticker, bands: dict, limit: int = 400) -> int:
 
 
 def test_the_baseline_ignores_poor_contact_ticks_and_its_clock_starts_on_the_first_good_one():
-    """Both captures latched the old baseline inside the loose-strap settling
-    period. On poor contact nothing is collected and the 45 s have not
-    begun."""
+    """On poor contact nothing is collected and the 45 s have not begun."""
     t = Ticker()
     t.run({**RELAXED, **CONTACT_POOR}, 400)  # 100 s of poor contact
     assert not t.processor._baseline_ready
@@ -278,9 +253,7 @@ def test_the_latch_needs_elapsed_time_not_a_tick_count():
 
 
 def test_a_steady_signal_crosses_the_latch_without_a_step():
-    """The centre ramps from the population midpoint to the session mean
-    over BASELINE_RAMP_SECONDS, on one scale, so the latch is not visible as
-    a jump in the scores."""
+    """The centre ramps to the session mean over BASELINE_RAMP_SECONDS, so the latch never jumps."""
     t = Ticker()
     bands = {**ENGAGED, **CONTACT_GOOD}  # far from the population midpoint
     scores = []
@@ -289,28 +262,22 @@ def test_a_steady_signal_crosses_the_latch_without_a_step():
     assert t.processor._baseline_ready
     steps = [abs(b - a) for a, b in zip(scores, scores[1:])]
     assert max(steps) < 3.0
-    # And it did move: from the population reading to the session's own 50.
+    # It did move: from the population reading to the session's own 50.
     assert abs(scores[0] - scores[-1]) > 10.0
     assert scores[-1] == pytest.approx(50.0, abs=1.0)
 
 
 def test_the_gain_is_the_same_on_both_sides_of_the_latch():
-    """A raw excursion of the same size scores the same distance whether or
-    not the baseline has latched -- the old path doubled the gain at latch."""
     # Before: a fresh processor on the population path.
     fresh = Ticker()
     ts0 = fresh.sample().timestamp
     p0 = fresh.processor
     before = (p0._score_against_baseline(0.3, "focus", ts0)
               - p0._score_against_baseline(0.0, "focus", ts0))
-    # After: a baseline the collector produced, well past its ramp -- the
-    # timestamp matters, since omitting it skips the ramp entirely.
+    # After: a collected baseline past its ramp (omitting the timestamp skips the ramp).
     t = Ticker()
     _run_until_latched(t, {**ENGAGED, **CONTACT_GOOD})
-    # Past the ramp: its progress is covered time over admitted ticks, so a
-    # later timestamp alone does not complete it, and mid-ramp the centre
-    # sits far enough from the session mean for one of the two scores to
-    # clamp.
+    # Ramp progress needs admitted ticks, not just a later timestamp; mid-ramp one score would clamp.
     t.run({**ENGAGED, **CONTACT_GOOD}, 4 * int(SignalProcessor.BASELINE_RAMP_SECONDS) + 8)
     p = t.processor
     mean = p._baseline_focus_mean
@@ -339,8 +306,7 @@ def _feat(label: str) -> dict:
 
 
 def test_a_single_tick_excursion_never_changes_the_label():
-    """On the captures 90 of 133 focused readings were the cooldown holding
-    one spurious tick. One tick must not become the label at all."""
+    """The cooldown must not hold one spurious tick as the label (EEG_REFERENCE.md)."""
     eng, clock = _engine()
     for _ in range(8):
         assert eng.infer_state(_feat("neutral")).label == "neutral"
@@ -355,8 +321,7 @@ def test_a_single_tick_excursion_never_changes_the_label():
 
 def test_four_consecutive_ticks_commit_the_label_and_the_cooldown_then_holds_it():
     eng, clock = _engine()
-    # Pinned, not read: driven from the attribute this went vacuous at the
-    # pre-change value of 1.
+    # Pinned, not read from the attribute, which would go vacuous at 1.
     assert eng.persist_ticks == 4
     clock[0] = 10.0
     eng.infer_state(_feat("neutral"))
@@ -365,8 +330,7 @@ def test_four_consecutive_ticks_commit_the_label_and_the_cooldown_then_holds_it(
         labels.append(eng.infer_state(_feat("focused")).label)
         clock[0] += 0.25
     assert labels == ["neutral", "neutral", "neutral", "focused"]
-    # Now a run of neutral ticks inside the cooldown: persistence is met
-    # after four, but the cooldown still holds focused until it lapses.
+    # Persistence is met after four neutral ticks, but the cooldown holds focused until it lapses.
     held = [eng.infer_state(_feat("neutral")) for _ in range(eng.persist_ticks + 2)]
     assert all(h.label == "focused" for h in held)
     assert "Cooldown" in held[-1].reason
@@ -375,8 +339,7 @@ def test_four_consecutive_ticks_commit_the_label_and_the_cooldown_then_holds_it(
 
 
 def test_after_signal_loss_a_label_still_needs_persistence_but_not_the_cooldown():
-    """The stream manager resets on every no-sample tick, so flapping
-    contact would otherwise commit whatever single tick follows each gap."""
+    """Otherwise flapping contact commits whatever single tick follows each gap."""
     eng, clock = _engine()
     eng.cooldown_seconds = 1000.0
     eng.infer_state(_feat("neutral"))
@@ -384,14 +347,12 @@ def test_after_signal_loss_a_label_still_needs_persistence_but_not_the_cooldown(
     first_three = [eng.infer_state(_feat("stressed")) for _ in range(3)]
     assert [s.label for s in first_three] == ["no_signal"] * 3
     assert all("persistence" in s.reason for s in first_three)
-    # The fourth commits, with no cooldown standing in the way.
+    # The fourth commits, with no cooldown.
     assert eng.infer_state(_feat("stressed")).label == "stressed"
 
 
 def test_losing_signal_quality_applies_at_once_and_regaining_it_needs_persistence():
-    """insufficient_signal is a statement about the signal, not the
-    student. Made to compete for persistence, a confidence oscillating
-    across the gate froze the last content label for the session."""
+    """insufficient_signal is about the signal, not the student, so it doesn't compete for persistence."""
     eng, clock = _engine()
     eng.infer_state(_feat("neutral"))
     weak = {**_feat("neutral"), "confidence": 30.0}
@@ -417,8 +378,7 @@ def test_a_change_of_mind_mid_run_restarts_the_count():
 # -- the baseline restarts when recording is armed ------------------------------
 
 def test_restart_baseline_gathers_a_fresh_reference_from_the_next_ticks():
-    """The stream is up from Connect; arming recording on the first question
-    restarts the baseline so the reference is not the strap being adjusted."""
+    """Arming on the first question keeps strap adjustment out of the reference."""
     t = Ticker()
     settling = {**ENGAGED, **CONTACT_GOOD}  # muscle-high opening stretch
     _run_until_latched(t, settling)
@@ -443,22 +403,17 @@ def test_a_restart_ramps_from_the_centre_in_use_without_a_step():
     scores = []
     for _ in range(4 * int(SignalProcessor.BASELINE_SECONDS + SignalProcessor.BASELINE_RAMP_SECONDS) + 20):
         scores.append(t.tick({**RELAXED, **CONTACT_GOOD})["focus_score"])
-    # The first ten seconds are the smoother tracking the change of spectrum,
-    # which is a real move; what must not step is the latch, ~45 s in.
+    # Skip the smoother's first 10 s (a real move); the latch ~45 s in must not step.
     settled = scores[40:]
     steps = [abs(b - a) for a, b in zip(settled, settled[1:])]
-    # The two spectra here sit further apart than the whole scale, so the
-    # ramp moves the centre by ~130 points over its 40 ticks: ~3.3 a tick,
-    # against the 130 a single step would be.
+    # The ramp moves the centre ~130 points over 40 ticks: ~3.3 a tick, not one 130 step.
     assert max(steps) < 4.0
     assert scores[-1] == pytest.approx(50.0, abs=1.0)
     assert scores[40] < 10.0, "before the new latch the old centre still applies"
 
 
 def test_a_tick_with_no_delta_still_scores_and_does_not_feed_the_gate():
-    """delta is not among the bands the ratios read, so band features can be
-    usable with delta absent or null. That must cost the delta gate its
-    reference for that tick, not the tick."""
+    """The ratios don't read delta, so a missing delta costs only the delta gate's reference."""
     t = Ticker()
     _warm(t, 12)
     for bands in ({**RELAXED, "delta": None, **CONTACT_GOOD},
@@ -471,8 +426,7 @@ def test_a_tick_with_no_delta_still_scores_and_does_not_feed_the_gate():
 
 
 def test_a_stream_with_no_delta_still_holds_a_clench_and_a_spread_jump():
-    """Each gate waits for its own history. Keyed on delta's, a stream that
-    never reports delta disabled all three and reported zero artifacts."""
+    """Each gate waits for its own history, not delta's."""
     no_delta = {k: v for k, v in RELAXED.items() if k != "delta"}
     t = Ticker()
     t.run({**no_delta, **CONTACT_GOOD}, 20, spread=20.0)
@@ -483,9 +437,7 @@ def test_a_stream_with_no_delta_still_holds_a_clench_and_a_spread_jump():
 
 
 def test_a_signal_gap_does_not_rebaseline_from_the_recovery_stretch():
-    """reset() is what the stream manager calls on a no-sample tick. After
-    a latch, a gap followed by a muscle-heavy re-fitting stretch must leave
-    the reference where the session put it."""
+    """reset() runs on each no-sample tick; a re-fitting stretch after it must not move the reference."""
     t = Ticker()
     _run_until_latched(t, {**RELAXED, **CONTACT_GOOD})
     before = t.processor._baseline_focus_mean
@@ -494,12 +446,10 @@ def test_a_signal_gap_does_not_rebaseline_from_the_recovery_stretch():
     assert t.processor._baseline_focus_mean == before
 
 
-# -- third review: gaps, coverage, and the degraded regime ---------------------
+# -- gaps, coverage, and the degraded regime -----------------------------------
 
 def test_contact_flapping_every_other_tick_still_commits_a_label():
-    """A gap tick is not a reading. Clearing the pending run on every
-    signal-loss reset meant gap, reading, gap, reading never reached four
-    and a focused student read no_signal for as long as it lasted."""
+    """A gap tick is not a reading, so it must not clear the pending run."""
     eng, clock = _engine()
     labels = []
     for _ in range(6):
@@ -512,8 +462,6 @@ def test_contact_flapping_every_other_tick_still_commits_a_label():
 
 
 def test_a_pending_run_does_not_survive_a_long_gap():
-    """Three readings, a minute of nothing, one reading: that one is a
-    first reading, not a fourth."""
     eng, clock = _engine()
     eng.infer_state(_feat("neutral"))
     for _ in range(3):
@@ -525,8 +473,7 @@ def test_a_pending_run_does_not_survive_a_long_gap():
 
 
 def test_the_baseline_counts_covered_seconds_so_a_gap_is_worth_one():
-    """21 ticks, a ten-minute gap, one tick: elapsed time said 45 s had
-    passed and latched on 22 samples. Covered time says 6 s have."""
+    """21 ticks, a ten-minute gap, one tick: covered time is 6 s, not 45."""
     t = Ticker()
     bands = {**RELAXED, "hsi": [1.0, 1.0, 4.0, 4.0], "is_good": [1.0, 1.0, 0.0, 0.0]}
     t.run(bands, 21)
@@ -539,9 +486,7 @@ def test_the_baseline_counts_covered_seconds_so_a_gap_is_worth_one():
 
 
 def test_reset_keeps_the_contact_history_so_one_blip_after_a_gap_is_not_good_contact():
-    """The histories are time-windowed and prune themselves. Cleared on
-    reset, the first frame after a gap was judged on itself: one blip with
-    every electrode good read contact 1.0 and entered the baseline."""
+    """The histories are time-windowed and prune themselves, so reset keeps them."""
     t = Ticker()
     t.run({**RELAXED, **CONTACT_POOR}, 20)
     assert len(t.processor._baseline_focus) == 0
@@ -553,9 +498,7 @@ def test_reset_keeps_the_contact_history_so_one_blip_after_a_gap_is_not_good_con
 
 
 def test_degraded_contact_clears_the_gate_whatever_the_spectrum_does():
-    """Two of four electrodes is the ordinary state. On a ramp from zero
-    at the degraded line it sat at exactly 50 on a constant spectrum and
-    fell under 45 on any jitter -- the operating regime gated on luck."""
+    """Two of four electrodes is the ordinary state and must clear the 45 gate under jitter."""
     degraded = {"hsi": [1.0, 1.0, 4.0, 4.0], "is_good": [1.0, 1.0, 0.0, 0.0]}
     t = Ticker()
     for i in range(30):
@@ -570,19 +513,16 @@ def test_degraded_contact_clears_the_gate_whatever_the_spectrum_does():
 
 
 def test_good_is_reachable_on_a_bridge_that_reports_no_contact():
-    """With no contact data confidence tops out at 0.70, and the heuristic
-    asked for 0.75, so good was unreachable on that path."""
+    """With no contact data, confidence tops out at 0.70."""
     f = Ticker().run(RELAXED, 30)  # no hsi / is_good at all, before the latch
     assert f["quality_basis"] == "heuristic"
     assert f["signal_quality"] == "good"
 
 
-# -- fifth review: what a gap keeps, and what a session end forgets ------------
+# -- what a gap keeps, and what a session end forgets --------------------------
 
 def test_a_gap_does_not_disarm_the_artifact_gate():
-    """The delta and spread gates need ARTIFACT_MIN_HISTORY usable ticks.
-    Cleared on every no-sample tick, flapping contact kept them from ever
-    reaching it: 0 of 20 blinks held with a reset every fifth tick."""
+    """The gates need ARTIFACT_MIN_HISTORY ticks, which flapping contact must not keep clearing."""
     t = Ticker()
     held = 0
     for i in range(100):
@@ -611,8 +551,7 @@ def test_the_held_and_rejected_counts_are_session_totals_across_gaps():
 
 
 def test_clear_session_forgets_the_baseline_where_reset_keeps_it():
-    """stop() is a real end of session; on a shared station the next
-    student must not be scored against the last one's resting spectrum."""
+    """On a shared station the next student must not be scored against the last one's baseline."""
     t = Ticker()
     _run_until_latched(t, {**ENGAGED, **CONTACT_GOOD})
     t.processor.reset()
@@ -635,8 +574,7 @@ def test_the_smoothed_ratios_are_null_on_a_tick_with_no_bands():
 
 
 def test_a_sample_clock_that_goes_backwards_does_not_freeze_the_ramp():
-    """A device clock that rebases on reconnect. The clamp read a negative
-    age as fraction 0 and held every later score at the ramp's start."""
+    """A device clock that rebases on reconnect must not hold the ramp at its start."""
     t = Ticker()
     bands = {**ENGAGED, **CONTACT_GOOD}
     _run_until_latched(t, bands)
@@ -645,8 +583,7 @@ def test_a_sample_clock_that_goes_backwards_does_not_freeze_the_ramp():
     t.now -= 600.0
     scores += [t.tick(bands)["focus_score"] for _ in range(8)]
     steps = [abs(b - a) for a, b in zip(scores, scores[1:])]
-    # Neither frozen (the ramp keeps moving) nor jumped (no step larger than
-    # the ramp's own per-tick move, ~3.3 points here).
+    # Neither frozen nor jumped past the ramp's ~3.3-point per-tick move.
     assert max(steps) < 4.0
     assert scores[-1] != pytest.approx(scores[7], abs=0.5)
     ramped = t.run(bands, 4 * int(SignalProcessor.BASELINE_RAMP_SECONDS))
@@ -654,9 +591,7 @@ def test_a_sample_clock_that_goes_backwards_does_not_freeze_the_ramp():
 
 
 def test_arming_restarts_the_label_engine_too():
-    """The label, its cooldown and its pending run were carried in from
-    pairing, so a lesson opened on a label formed while the strap was
-    being fitted, beside scores that had been re-centred."""
+    """A lesson must not open on a label formed while the strap was being fitted."""
     import inspect
     from src.app.services.stream_manager import StreamManager
     eng, clock = _engine()
@@ -678,11 +613,10 @@ def test_a_fourth_artifact_reason_survives_the_envelope():
     assert f.artifact_reason == "something_new"
 
 
-# -- sixth review: session ends on push, and what the medians remember ----------
+# -- session ends on push, and what the medians remember -----------------------
 
 def test_end_session_forgets_the_pending_run_where_a_gap_keeps_it():
-    """A stop followed by a start inside the 5 s ageing window let the last
-    student's run count toward the next one's first label."""
+    """The last student's run must not count toward the next one's first label."""
     eng, clock = _engine()
     eng.infer_state(_feat("neutral"))
     for _ in range(3):
@@ -695,8 +629,7 @@ def test_end_session_forgets_the_pending_run_where_a_gap_keeps_it():
 
 
 def test_stop_and_the_push_session_end_both_reach_clear_session_and_end_session():
-    """push/stop is the only session end push has -- the stream stays up --
-    and it reached neither the processor nor the engine."""
+    """push/stop is push's only session end; the stream stays up."""
     import inspect
     from src.app import main as sidecar_main
     from src.app.services.stream_manager import DeviceSession, StreamManager
@@ -708,26 +641,21 @@ def test_stop_and_the_push_session_end_both_reach_clear_session_and_end_session(
 
 
 def test_the_artifact_medians_expire_by_wall_clock_not_by_count():
-    """Kept across a reset, a count-bounded median outlived a ten-minute
-    gap and judged the first forty ticks after a refit against the strap
-    as it was before."""
+    """After a long gap, a refit must not be judged against the strap as it was."""
     t = Ticker()
     t.run({**RELAXED, **CONTACT_GOOD}, 40, spread=20.0)
     t.processor.reset()
     t.now += 600.0
-    # The refit sits at four times the old spread: against the old median
-    # every tick is a spread jump; against nothing, none is.
+    # 4x the old spread: every tick would jump against the old median.
     held = sum(t.tick({**RELAXED, **CONTACT_GOOD}, spread=80.0)["artifact_reason"] == "spread_jump"
                for _ in range(8))
     assert held == 0
 
 
-# -- seventh review: bounds, NaN, a stalled clock, and a faster stream ---------
+# -- bounds, NaN, a stalled clock, and a faster stream -------------------------
 
 def test_a_nan_band_is_a_tick_with_no_bands_not_a_dead_headband():
-    """NaN and inf pass float() and the exponentiation and raise further
-    down update(); the stream manager read that as no data, reset every
-    tick and published a dead-headband payload for a live one."""
+    """NaN and inf pass float(); raising later would read as no data and reset every tick."""
     t = Ticker()
     _warm(t)
     for bad in (float("nan"), float("inf"), -float("inf")):
@@ -737,18 +665,14 @@ def test_a_nan_band_is_a_tick_with_no_bands_not_a_dead_headband():
 
 
 def test_the_population_bounds_bracket_the_reference_capture():
-    """Focus log-ratios on the capture ran -1.53..-0.21 per segment. The old
-    floor of ln(0.40) = -0.92 sat above three of its four labelled
-    segments, so eyes-closed replayed as focus exactly 0 on every pre-latch
-    tick. The bounds are the population scale before and after the latch."""
+    """The bounds are the population scale either side of the latch; values are per-segment capture ratios."""
     lo, hi = SignalProcessor.FOCUS_LOG_RATIO_MIN, SignalProcessor.FOCUS_LOG_RATIO_MAX
     for segment_ratio in (-1.53, -1.37, -0.91, -0.83, -0.21):
         assert lo < segment_ratio < hi
     clo, chi = SignalProcessor.CALM_LOG_RATIO_MIN, SignalProcessor.CALM_LOG_RATIO_MAX
     for segment_ratio in (-0.87, -0.18, 0.29, 0.47):
         assert clo < segment_ratio < chi
-    # Scored, not just bracketed: an eyes-closed-like spectrum before the
-    # latch is a low number, not the floor.
+    # Pre-latch eyes-closed scores low, not at the floor.
     eyes_closed = {"delta": 0.5, "theta": 0.2, "alpha": 0.15, "beta": -0.2, "gamma": -0.4}
     f = Ticker().run({**eyes_closed, **CONTACT_GOOD}, 30)
     assert 0.0 < f["focus_score"] < 40.0
@@ -761,8 +685,6 @@ def test_the_push_session_end_resets_the_heart_channel_too():
 
 
 def test_a_stalled_sample_clock_still_latches_and_the_lists_stay_bounded():
-    """A bridge delivering with a frozen timestamp covered nothing, so the
-    baseline never latched and the lists grew for as long as it ran."""
     t = Ticker()
     bands = {**RELAXED, **CONTACT_GOOD}
     sample = t.sample()
@@ -774,8 +696,6 @@ def test_a_stalled_sample_clock_still_latches_and_the_lists_stay_bounded():
 
 
 def test_the_artifact_window_is_twenty_seconds_at_sixteen_hertz_too():
-    """At 80 entries the cap equalled the window at 4 Hz and silently
-    shrank it to 5 s on a faster stream."""
     t = Ticker(hz=16.0)
     t.run({**RELAXED, **CONTACT_GOOD}, 16 * 15)  # 15 s
     assert len(t.processor._delta_history) == 16 * 15
@@ -784,12 +704,10 @@ def test_the_artifact_window_is_twenty_seconds_at_sixteen_hertz_too():
     assert 16 * 19 <= len(t.processor._delta_history) <= 16 * 20 + 1
 
 
-# -- eighth review: what push/stop may end, malformed bands, a frozen clock --
+# -- what push/stop may end, malformed bands, a frozen clock -------------------
 
 def test_push_stop_ends_a_session_only_if_one_was_pushing():
-    """The route takes the learner token and the page fires it from
-    pagehide; unconditional, it wiped a live armed session's baseline
-    under pull."""
+    """The page fires it from pagehide; under pull it must not wipe an armed baseline."""
     import inspect
     from src.app import main as sidecar_main
     src = inspect.getsource(sidecar_main.push_stop)
@@ -799,8 +717,7 @@ def test_push_stop_ends_a_session_only_if_one_was_pushing():
 
 
 def test_a_malformed_band_is_a_held_tick_below_the_gate_not_a_no_bands_tick():
-    """Returning (None, None) sent a NaN tick down the amplitude fallback,
-    above the fusion gate and byte-identical to a genuine no-bands tick."""
+    """A malformed tick must not look like a genuine no-bands tick above the fusion gate."""
     t = Ticker()
     before = _warm(t)
     nan = t.tick({**RELAXED, "alpha": float("nan"), **CONTACT_GOOD})
@@ -812,8 +729,7 @@ def test_a_malformed_band_is_a_held_tick_below_the_gate_not_a_no_bands_tick():
 
 
 def test_a_frozen_clock_latches_a_baseline_that_is_applied():
-    """The stalled-clock fix reached the coverage and not the ramp: latched,
-    a real mean, ramp elapsed zero, every score still on the midpoint."""
+    """A frozen clock must advance the ramp as well as the coverage."""
     t = Ticker()
     bands = {**ENGAGED, **CONTACT_GOOD}
     sample = t.sample()
@@ -826,9 +742,7 @@ def test_a_frozen_clock_latches_a_baseline_that_is_applied():
 
 
 def test_the_calm_midpoint_did_not_move_so_strap_settling_is_not_stressed():
-    """Widening calm at the ceiling alone moved the pre-latch centre and put
-    the capture's strap-settling segment (calm log-ratio -0.87) under the
-    stressed line, easing difficulty on the opening questions."""
+    """The capture's strap-settling segment (calm log-ratio -0.87) must stay above the stressed line."""
     lo, hi = SignalProcessor.CALM_LOG_RATIO_MIN, SignalProcessor.CALM_LOG_RATIO_MAX
     assert (lo + hi) / 2.0 == pytest.approx(-0.57, abs=0.01)
     p = SignalProcessor()
@@ -836,9 +750,7 @@ def test_the_calm_midpoint_did_not_move_so_strap_settling_is_not_stressed():
 
 
 def test_the_label_lines_are_the_same_bels_as_before_and_match_the_backend():
-    """0.322 Bels above centre for focused, 0.312 below for stressed, on the
-    old spans; the widened spans kept the Bels by moving the lines. The
-    backend's signal_fusion carries the same two literals."""
+    """0.322 Bels above centre for focused, 0.312 below for stressed; signal_fusion carries the same literals."""
     import inspect
     from src.app.services.adaptation import AdaptationEngine
     src = inspect.getsource(AdaptationEngine.infer_state)
@@ -860,12 +772,10 @@ def test_the_push_session_end_clears_the_optical_buffer_without_disconnecting():
     assert "disconnect" not in inspect.getsource(StreamManager.end_session)
 
 
-# -- ninth review: what a malformed tick may reach, and what counts as one ------
+# -- what a malformed tick may reach, and what counts as one --------------------
 
 def test_a_nan_band_serialises_out_of_the_state_endpoint():
-    """The renderer refuses non-finite floats, so the held tick, its reason
-    and the confidence floor were all correct inside the sidecar and
-    500'd on the way out; under pull the poller recorded nothing."""
+    """The JSON renderer refuses non-finite floats, so they must be nulled first."""
     from src.app.schemas import BandData
     from src.app.services.stream_manager import _finite_or_none
     assert _finite_or_none(float("nan")) is None
@@ -877,9 +787,7 @@ def test_a_nan_band_serialises_out_of_the_state_endpoint():
 
 
 def test_a_nan_in_delta_costs_the_blink_gate_its_reference_and_nothing_else():
-    """Treating it as malformed held every tick of a session with four
-    perfect ratio bands, pinned focus at the midpoint and never latched the
-    baseline. NaN has no ordering, so it must not reach the median either."""
+    """The ratio bands are fine, so the tick scores; NaN has no ordering, so it skips the median."""
     t = Ticker()
     before = _warm(t)
     n = len(t.processor._delta_history)
@@ -893,21 +801,18 @@ def test_a_nan_in_delta_costs_the_blink_gate_its_reference_and_nothing_else():
 
 
 def test_a_partial_band_dict_is_malformed_not_zero_bels():
-    """The extractor defaulted a missing band to 0 Bels and scored it."""
     t = Ticker()
     before = _warm(t)
     partial = {k: v for k, v in RELAXED.items() if k != "alpha"}
     f = t.tick({**partial, **CONTACT_GOOD})
     assert f["artifact_reason"] == "malformed_bands"
     assert f["focus_score"] == pytest.approx(before["focus_score"])
-    # And a bridge with no ratio bands at all is still the fallback, not malformed.
+    # No ratio bands at all is the fallback, not malformed.
     assert Ticker().run(CONTACT_GOOD, 5)["artifact_reason"] is None
 
 
 def test_malformed_ticks_do_not_starve_the_spread_gate():
-    """The spread comes from the raw channels, so a malformed band tick still
-    feeds it; kept inside the band branch, twenty-five seconds of malformed
-    ticks let a genuine jolt after them through as clean."""
+    """The spread comes from the raw channels, so a malformed band tick still feeds it."""
     t = Ticker()
     t.run({**RELAXED, **CONTACT_GOOD}, 8, spread=20.0)
     partial = {k: v for k, v in RELAXED.items() if k != "alpha"}
@@ -916,8 +821,7 @@ def test_malformed_ticks_do_not_starve_the_spread_gate():
 
 
 def test_an_absent_band_is_published_as_null_not_zero():
-    """The zero default survived the nullable change, so a missing band went
-    out as a measurement of 0 Bels on the tick the processor refused."""
+    """A missing band is not a measurement of 0 Bels."""
     from src.app.services.stream_manager import _finite_or_none
     assert _finite_or_none(None) is None
     import inspect
@@ -927,7 +831,7 @@ def test_an_absent_band_is_published_as_null_not_zero():
 
 
 def test_the_push_client_accounts_for_samples_the_backend_could_not_read():
-    """A count with no reader turned a loud 422 into a silent 200."""
+    """Otherwise the backend's `malformed` count turns a loud 422 into a silent 200."""
     import inspect
     from src.app.services.push_client import PushClient
     src = inspect.getsource(PushClient)
@@ -936,9 +840,6 @@ def test_the_push_client_accounts_for_samples_the_backend_could_not_read():
 
 
 def test_a_nan_channel_spread_never_reaches_the_spread_median():
-    """Moving the append to every usable tick widened this from band ticks
-    to all of them: one NaN channel poisoned the median and a 900 uV jolt
-    was admitted as clean."""
     t = Ticker()
     t.run({**RELAXED, **CONTACT_GOOD}, 20, spread=20.0)
     n = len(t.processor._spread_history)
@@ -948,8 +849,7 @@ def test_a_nan_channel_spread_never_reaches_the_spread_median():
 
 
 def test_ticks_the_blink_gate_had_no_delta_for_are_counted():
-    """Right trade against holding the tick, but silent it read as a
-    flawless recording while the detector never armed."""
+    """Uncounted, a never-armed blink gate reads as a flawless recording."""
     t = Ticker()
     _warm(t)
     for bands in ({**RELAXED, "delta": float("nan")}, {k: v for k, v in RELAXED.items() if k != "delta"}):
@@ -960,9 +860,7 @@ def test_ticks_the_blink_gate_had_no_delta_for_are_counted():
 
 
 def test_ticks_the_spread_gate_had_no_spread_for_are_counted():
-    """The delta counter's sibling: a non-finite channel drops the spread,
-    and silently the gate lost its reference while the diagnostics read
-    flawless. A single-electrode frame is a contact fact, not counted here."""
+    """A non-finite channel drops the spread; a single-electrode frame is a contact fact, not counted."""
     t = Ticker()
     _warm(t)
     f = t.tick({**RELAXED, **CONTACT_GOOD}, spread=float("nan"))
@@ -973,7 +871,7 @@ def test_ticks_the_spread_gate_had_no_spread_for_are_counted():
     assert t.tick({**RELAXED, **CONTACT_GOOD})["samples_no_spread"] == 0
 
 
-# -- Phase 2: calm from the local spectrum, behind EEG_SPECTRUM_SOURCE ----------
+# -- calm from the local spectrum, behind EEG_SPECTRUM_SOURCE -------------------
 
 def _spectrum(residual, ready=True):
     return {"ready": ready, "reason": None if ready else "filling",
@@ -982,8 +880,7 @@ def _spectrum(residual, ready=True):
 
 
 def test_on_the_sdk_source_the_spectrum_is_carried_and_not_scored():
-    """The default. The local figure rides on the payload for comparison;
-    calm is the SDK ratio exactly as before."""
+    """The default: the local figure rides along for comparison; calm is the SDK ratio."""
     plain = Ticker().run({**RELAXED, **CONTACT_GOOD}, 30)
     t = Ticker()
     for _ in range(30):
@@ -996,9 +893,7 @@ def test_on_the_sdk_source_the_spectrum_is_carried_and_not_scored():
 
 
 def test_on_the_local_source_calm_is_the_alpha_residual_and_focus_stays_the_ratio():
-    """Eyes closed on the capture: a temporal alpha residual of +0.3 against
-    -0.16 open. On the local source that is what calm reads, on its own
-    scale; focus is untouched, since no spectral marker of effort exists."""
+    """Capture residuals: eyes closed 0.32, open -0.16. Focus is untouched: no spectral marker of effort exists."""
     def run(residual):
         t = Ticker()
         t.processor = SignalProcessor(clock=lambda: t.now, calm_source="local")
@@ -1015,9 +910,7 @@ def test_on_the_local_source_calm_is_the_alpha_residual_and_focus_stays_the_rati
 
 
 def test_on_the_local_source_calm_is_held_until_the_buffer_fills_and_the_baseline_takes_only_ticks_that_had_one():
-    """No calm this tick is not the SDK ratio for this tick: the two are
-    different numbers on different scales, and one baseline cannot hold
-    both. Focus proceeds; calm holds, or sits at the midpoint."""
+    """Never substitutes the SDK ratio: a different scale, and one baseline cannot hold both."""
     t = Ticker()
     t.processor = SignalProcessor(clock=lambda: t.now, calm_source="local")
     warming = None

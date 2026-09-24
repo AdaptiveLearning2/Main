@@ -1,13 +1,4 @@
-"""Device liveness as the status endpoints report it, and the bridge's own
-recovery of a dropped link as the sidecar passes it through.
-
-Two layers, both new. The native bridge now retries a BLE link that dropped
-on its own and says so on every status line; `_apply_bridge_ingestion_fields`
-has to carry those fields or a consumer sees a headband vanish and come back
-with nothing in between. And `DeviceSession` now tracks when it last produced
-a real reading, so a consumer can tell "went quiet ten seconds ago" from
-"never had a sensor" without keeping its own clock.
-"""
+"""Device liveness in the status payloads, and the bridge's reconnect fields passed through."""
 
 from __future__ import annotations
 
@@ -45,9 +36,7 @@ def test_reconnect_fields_are_carried_with_their_types():
 
 
 def test_eeg_age_null_is_kept_apart_from_zero_and_from_absent():
-    """null: connected, nothing arrived yet. 0: arrived this instant. Absent:
-    an older bridge that does not report it. Three states, and collapsing any
-    two would make a stalled link look like a fresh one."""
+    """null: nothing arrived yet; 0: arrived this instant; absent: an older bridge."""
     fresh: dict = {}
     _apply_bridge_ingestion_fields(fresh, {"eeg_age_ms": None})
     assert fresh["eeg_age_ms"] is None
@@ -92,8 +81,7 @@ def test_a_refused_connection_is_not_retried_until_the_backoff_elapses():
     assert adapter._try_connect() is False
     assert adapter.connect_failures == 1
 
-    # drain_samples says how long, so the log line reads as "waiting", not
-    # as a fresh failure every 250ms.
+    # Says how long, so the log reads as waiting, not a failure every 250ms.
     with pytest.raises(RuntimeError, match=r"next attempt in \d+\.\ds"):
         adapter.drain_samples(1)
 
@@ -105,8 +93,7 @@ def test_the_backoff_doubles_to_a_cap_and_never_past_it():
         adapter._next_connect_at = 0.0  # let the next attempt through
         assert adapter._try_connect() is False
         waits.append(adapter.connect_wait_remaining())
-    # Each attempt's wait is at least the previous one's up to the cap: the
-    # sequence is 0.5, 1, 2, 4, 5, 5 minus however long the assertions took.
+    # 0.5, 1, 2, 4, 5, 5, minus however long the assertions took.
     for earlier, later in zip(waits, waits[1:]):
         assert later >= earlier - 0.05
     assert waits[-1] <= TcpMuseBridgeAdapter.CONNECT_BACKOFF_MAX_S
@@ -121,7 +108,6 @@ def test_a_successful_connection_resets_the_backoff():
     port = listener.getsockname()[1]
     adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=port, timeout_seconds=1)
     try:
-        # Pretend a run of failures happened first.
         adapter._connect_backoff_s = TcpMuseBridgeAdapter.CONNECT_BACKOFF_MAX_S
         adapter._next_connect_at = 0.0
         assert adapter._try_connect() is True
@@ -165,7 +151,6 @@ def _session() -> DeviceSession:
 
 
 async def _tick(session: DeviceSession, n: int = 1) -> None:
-    """Run the loop for n iterations and stop."""
     period = 1 / max(1, session.settings.eeg_sample_hz)
     session.running = True
     task = asyncio.create_task(session._loop())
@@ -197,9 +182,7 @@ def test_a_good_tick_stamps_the_reading_and_clears_the_error_run():
 
 
 def test_failed_reads_count_up_and_the_last_good_stamp_stands():
-    """The stamp is the point: it keeps saying when the last real reading was
-    while the errors climb, which is what lets a consumer say "quiet for 8s"
-    rather than reporting each failed tick as the newest fact."""
+    """The stamp lets a consumer say "quiet for 8s" while the errors climb."""
     session = _session()
     asyncio.run(_tick(session))
     stamp = session.last_good_ts
@@ -219,18 +202,14 @@ def test_the_age_grows_between_reads_rather_than_being_frozen():
 
 
 def test_a_preset_mismatch_is_reported_only_after_it_has_settled():
-    """A preset switch after CONNECTED interrupts streaming and the
-    configuration is re-read live, so the two disagree for a moment on every
-    good connection. Only a disagreement that outlasts the settle window is a
-    request the headband ignored."""
+    """Requested and active disagree briefly on every good connection after a preset switch."""
     session = _session()
     session._note_preset({"requested_preset": "PRESET_1035", "active_preset": "PRESET_21"})
     assert session.health_fields()["preset_mismatch"] is False
     session._preset_mismatch_since -= DeviceSession.PRESET_SETTLE_SECONDS + 1
     assert session.health_fields()["preset_mismatch"] is True
 
-    # Agreement clears it outright, and so does either side going unknown --
-    # no headband is not a headband on the wrong preset.
+    # Agreement clears it, and so does either side going unknown.
     session._note_preset({"requested_preset": "PRESET_1035", "active_preset": "PRESET_1035"})
     assert session._preset_mismatch_since is None
     session._note_preset({"requested_preset": "PRESET_1035", "active_preset": ""})
@@ -238,9 +217,7 @@ def test_a_preset_mismatch_is_reported_only_after_it_has_settled():
 
 
 def test_both_status_shapes_carry_the_same_health_fields():
-    """/api/v1/muse/status reads muse_ingestion_snapshot(); /api/v1/state and
-    the push client read snapshot()['ingestion']. One source, so the two
-    cannot answer differently about whether a device is alive."""
+    """/api/v1/muse/status and /api/v1/state (and the push client) must agree on liveness."""
     session = _session()
     asyncio.run(_tick(session))
     a = session.snapshot()["ingestion"]

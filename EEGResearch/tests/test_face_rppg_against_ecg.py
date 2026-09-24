@@ -1,19 +1,4 @@
-"""Checks camera heart rate against the recording that showed it doesn't work.
-
-`tests/fixtures/face_rgb_ecg_20260808.jsonl.gz` is five minutes of face colour
-captured through the shipped path, alongside Galaxy Watch ECG readings putting
-the true rate at 85-88 bpm throughout. Scored as the product scores it, the
-pipeline reports 47.7 bpm at confidence 0.74.
-
-Anyone claiming to have fixed camera heart rate needs a changed number against
-this exact recording, not a new one of their choosing -- a fresh capture on a
-quiet ten seconds already fooled someone into thinking the method worked.
-
-These tests deliberately assert the wrong answers. A failure here is news, not
-a regression -- see the docstrings for what to do about it.
-
-Full analysis: tests/fixtures/FACE_RPPG_ECG.md
-"""
+"""Pins camera heart rate's known-wrong answer against an ECG-referenced capture; see tests/fixtures/FACE_RPPG_ECG.md."""
 
 from __future__ import annotations
 
@@ -28,8 +13,7 @@ from src.app.services.face_processing import RATE_WINDOW_SECONDS, build_heart_re
 
 FIXTURE = Path(__file__).parent / "fixtures" / "face_rgb_ecg_20260808.jsonl.gz"
 
-# What the watch measured across the whole capture. Every reading landed in
-# this range, so the comparison doesn't depend on precise alignment.
+# Every watch ECG reading in the capture fell in this range.
 ECG_BPM_LOW, ECG_BPM_HIGH = 85, 88
 
 
@@ -60,8 +44,6 @@ def _score_windows(recording, step=5.0):
 
 
 def test_the_recording_is_clean_so_the_failure_cannot_be_blamed_on_it(recording):
-    """Rules out lighting, wrong duration, and camera speed as explanations
-    before the harder claim below."""
     t, rgb, q = recording
     assert len(t) > 8000
     assert t[-1] - t[0] == pytest.approx(300, abs=5), "not the five-minute capture"
@@ -70,12 +52,7 @@ def test_the_recording_is_clean_so_the_failure_cannot_be_blamed_on_it(recording)
 
 
 def test_the_pipeline_still_reports_a_confidently_wrong_rate(recording):
-    """Pins the finding: camera heart rate reports ~48.7 bpm against a true
-    85-88. If this fails, camera heart rate behaves differently than when it
-    was rejected -- investigate, and update the numbers only alongside
-    FACE_RPPG_ECG.md and a fresh ECG comparison. Don't widen the tolerances to
-    make it pass.
-    """
+    """A failure is news: update only with FACE_RPPG_ECG.md and a fresh ECG comparison, never by widening."""
     accepted = [r for r in _score_windows(recording) if r["bpm"] is not None]
     assert accepted, "no window was accepted; the pipeline changed shape"
 
@@ -87,12 +64,7 @@ def test_the_pipeline_still_reports_a_confidently_wrong_rate(recording):
 
 
 def test_the_confidence_gate_does_not_catch_it(recording):
-    """A gate that lets a 40 bpm error through a third of the time isn't a
-    gate. Its three terms assume the headband's four contact channels:
-    `agreement` is 1.00 by construction against POS's single waveform, and
-    `margin` peaks exactly when there's no rival structure to beat. This
-    applies beyond this one webcam.
-    """
+    """The gate's terms assume four headband channels; against one POS waveform they pass noise."""
     windows = _score_windows(recording)
     accepted = [r for r in windows if r["bpm"] is not None]
 
@@ -109,11 +81,7 @@ def test_the_confidence_gate_does_not_catch_it(recording):
 
 
 def test_the_pulse_is_absent_rather_than_mis_derived(recording):
-    """Confirms why POS is kept rather than deleted: 87 bpm is 1.45 Hz. If the
-    pulse were present and the derivation wrong, the band around 1.45 Hz would
-    hold most of the in-band power. It holds under 15%, so there's no pulse
-    signal for the projection to have lost.
-    """
+    """Under 15% of in-band power sits near the true 1.45 Hz, so POS has no pulse to lose."""
     t, rgb, _ = recording
     fps = 1.0 / float(np.median(np.diff(t)))
     m = (t >= 0) & (t < 30)

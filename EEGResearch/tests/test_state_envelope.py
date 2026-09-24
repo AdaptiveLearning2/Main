@@ -1,20 +1,4 @@
-"""What `DeviceSession` puts on the payload has to survive `/api/v1/state`.
-
-`Envelope.data` is typed `InterpretedEegData | CameraData | None`, so a
-snapshot serialized through it silently drops any key the model doesn't
-declare. `heart` was missing from `InterpretedEegData`, so a headband's
-optical block was deleted from the one endpoint the pull poller reads
-(`eeg_client.get_state`) -- a headband on an optics preset never recorded a
-heart rate, with nothing raised anywhere.
-
-Every heart test asserts on `session.latest_payload` (the dict before the
-response model), and the push path posts `snapshot()` directly, bypassing the
-envelope -- so both existing test paths missed the layer that was eating it.
-
-The exhaustiveness test below derives its key list from `stream_manager`'s own
-source rather than a hand-kept list, so a field added later can't go missing
-here silently.
-"""
+"""Every payload key survives `/api/v1/state`: the response model silently drops undeclared keys."""
 
 import re
 
@@ -41,9 +25,7 @@ EEG_SNAPSHOT = {
     "ingestion": {"eeg_source": "muse", "optics_packets": 2697},
 }
 
-# What `build_heart_record` returns for an accepted window, trimmed to the
-# fields a consumer uses. `map_heart_to_heart_signal` reads `ts` and `source`;
-# the poller dedupes on them.
+# `build_heart_record` for an accepted window; the poller dedupes on `ts` and `source`.
 HEART_BLOCK = {
     "source": "muse_optics",
     "ts": "2026-08-15T22:00:00+00:00",
@@ -64,7 +46,6 @@ def _through_envelope(snapshot):
 
 
 def test_the_headband_heart_block_survives_the_state_endpoint():
-    """Without `heart` declared on the model, this returns None."""
     out = _through_envelope({**EEG_SNAPSHOT, "heart": HEART_BLOCK})
 
     assert out.get("heart") is not None, (
@@ -73,15 +54,12 @@ def test_the_headband_heart_block_survives_the_state_endpoint():
     )
     assert out["heart"]["bpm"] == pytest.approx(68.4)
     assert out["heart"]["source"] == "muse_optics"
-    # The timestamp lets both writers dedupe a reading; without it, dedup
-    # would fall back to the tick clock instead.
+    # Without it, dedup falls back to the tick clock.
     assert out["heart"]["ts"] == HEART_BLOCK["ts"]
 
 
 def test_a_refused_window_keeps_its_reason_rather_than_becoming_an_absent_block():
-    """`bpm: None` with a reason means a refused measurement; an absent block
-    means no optical channel. Collapsing the two would hide a failing headband
-    behind one that was never asked to measure."""
+    """`bpm: None` with a reason is a refused measurement; an absent block is no optical channel."""
     refused = {**HEART_BLOCK, "bpm": None, "trusted": False,
                "rejected_by": "unconfirmed_anchor"}
 
@@ -100,20 +78,13 @@ def test_an_eeg_payload_with_no_optics_still_validates():
 
 
 def test_every_key_the_eeg_payload_carries_is_declared_on_the_model():
-    """Any key assigned into `latest_payload` (or added by `snapshot`) that the
-    model doesn't declare is dropped silently at the HTTP boundary -- invisible
-    to the session tests (which read `latest_payload` directly) and to push
-    (which never crosses the envelope). Key list is derived from
-    `stream_manager`'s source, not hand-kept.
-    """
+    """Key list is derived from `stream_manager`'s source, not hand-kept."""
     import inspect
 
     source = inspect.getsource(sm)
 
     keys = set()
-    # The dict literal assigned to self.latest_payload on the EEG path. Only
-    # keys at the literal's own indentation -- `channels` nests its own dict,
-    # and pulling tp9/af7 to the top level would compare the wrong names.
+    # Top-level keys of the latest_payload literal only; `channels` nests its own dict.
     literal = re.search(r"self\.latest_payload = \{(.*?)\n                \}",
                         source, re.DOTALL)
     if literal:
@@ -139,12 +110,7 @@ def test_every_key_the_eeg_payload_carries_is_declared_on_the_model():
 
 
 def test_every_feature_key_the_processor_returns_is_declared_on_the_model():
-    """The sibling test above sees top-level keys only. `features` is its
-    own nested model, and a diagnostic added to `SignalProcessor.update`'s
-    return dict -- `focus_log_ratio` was the first -- is dropped there by
-    the same mechanism. Derived by calling the processor, not by reading
-    its source, so a key built up conditionally still counts.
-    """
+    """`features` is its own nested model; keys come from calling the processor, so conditional ones count."""
     from datetime import datetime, timezone
 
     from src.app.models import EegSample

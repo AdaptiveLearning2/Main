@@ -1,10 +1,4 @@
-"""Tests converting camera samples into payload records.
-
-The gates matter more than the arithmetic here. Each state -- "switched off",
-"warming up", "no face", "poor light", "not confident", "a real reading" --
-must stay distinct, since a downstream viewer can't recover a distinction lost
-at this layer.
-"""
+"""Camera samples to payload records: each gate state must stay distinct, since a viewer cannot recover it."""
 
 from __future__ import annotations
 
@@ -48,9 +42,7 @@ def test_a_clean_window_reports_a_rate():
 
 
 def test_the_source_is_on_every_payload_including_failures():
-    """A headband rate and a webcam rate are different measurements, so a
-    consumer needs to know which one it has. The source field must survive the
-    failure paths too, not just successful readings."""
+    """A headband rate and a webcam rate are different measurements."""
     for record in (
         build_heart_record(np.empty((0, 3)), FPS),
         build_heart_record(_rgb_window(seconds=5.0), FPS),
@@ -60,9 +52,6 @@ def test_the_source_is_on_every_payload_including_failures():
 
 
 def test_warming_up_is_distinguishable_from_no_samples():
-    """The first 25s of a session, and any gap after the student looks away,
-    are partial windows, not faults -- and neither is the same as a camera that
-    produced nothing at all."""
     assert build_heart_record(np.empty((0, 3)), FPS)["rejected_by"] == "no_samples"
     partial = build_heart_record(_rgb_window(seconds=5.0), FPS)
     assert partial["rejected_by"] == "warming_up"
@@ -70,15 +59,12 @@ def test_warming_up_is_distinguishable_from_no_samples():
 
 
 def test_a_partial_window_never_reports_a_rate():
-    """A gap is a missing measurement, not a slow heart rate. A time base built
-    from sample index alone would silently read it as one."""
+    """A gap is a missing measurement, not a slow heart rate."""
     record = build_heart_record(_rgb_window(seconds=15.0), FPS)
     assert record["bpm"] is None
 
 
 def test_poor_face_quality_stops_the_estimate_before_it_is_made():
-    """Cheaper than deriving a rate and discarding it, and names the real
-    problem -- poor lighting, not the heart."""
     record = build_heart_record(
         _rgb_window(72.0), FPS, measured_fps=FPS, timestamps=_stamps(FPS),
         samples=_samples(750, quality=MIN_MEAN_USABLE_FRACTION / 2)
@@ -88,9 +74,7 @@ def test_poor_face_quality_stops_the_estimate_before_it_is_made():
 
 
 def test_face_quality_is_reported_separately_from_confidence():
-    """Two different quantities: how much usable skin the camera saw, versus
-    how decisive the autocorrelation was. They must not be collapsed into one
-    field."""
+    """Usable skin seen versus how decisive the autocorrelation was."""
     record = build_heart_record(_rgb_window(72.0), FPS, measured_fps=FPS, timestamps=_stamps(FPS), samples=_samples(750, 0.77))
     assert record["face_quality"] == pytest.approx(0.77, abs=0.01)
     assert record["confidence"] != record["face_quality"]
@@ -105,8 +89,6 @@ def test_noise_is_rejected_rather_than_reported():
 
 
 def test_a_rejected_estimate_never_reports_zero():
-    """A zero would be read downstream as a real rate, so every failure path
-    must leave bpm as None."""
     for record in (
         build_heart_record(np.empty((0, 3)), FPS),
         build_heart_record(_rgb_window(seconds=2.0), FPS),
@@ -125,8 +107,6 @@ def test_a_trusted_emotion_is_reported():
 
 
 def test_confidence_is_named_for_what_it_is():
-    """Field is named `emotion_confidence`, not `confidence`, so it can't be
-    confused with an unrelated quality score sharing the generic name."""
     record = build_face_record(EmotionResult("sad", 0.7, True))
     assert "emotion_confidence" in record
     assert "confidence" not in record
@@ -142,8 +122,6 @@ def test_low_confidence_keeps_the_label_but_not_the_trust():
 
 
 def test_a_degraded_classifier_is_distinguishable_from_an_unsure_one():
-    """A broken classifier session and a genuinely unsure reading both set
-    `trusted: false`, but they need to stay distinguishable via `degraded`."""
     unsure = build_face_record(EmotionResult("neutral", 0.4, False, "low_confidence", ""))
     broken = build_face_record(
         EmotionResult(None, None, False, "inference_failed", "boom"),
@@ -172,9 +150,7 @@ def test_both_blocks_are_present_when_both_are_enabled():
 
 
 def test_a_disabled_channel_is_absent_rather_than_null():
-    """A channel switched off is not a channel that failed. `heart: null` for a
-    student who declined heart-rate recording would look the same as a camera
-    that failed to get a reading."""
+    """A declined channel must not read like one that failed."""
     heart_only = build_camera_payload(
         rgb_window=_rgb_window(72.0), fps=FPS, measured_fps=FPS, timestamps=_stamps(FPS), samples=_samples(750),
         emotion_enabled=False,
@@ -191,9 +167,7 @@ def test_a_disabled_channel_is_absent_rather_than_null():
 
 
 def test_the_common_case_is_emotion_on_and_heart_idle():
-    """Normal standby: the camera is open and FER+ runs, but POS only starts
-    scoring on failover from the headband. Heart is enabled with no window yet,
-    which should read as warming up, not as a fault."""
+    """Standby: FER+ runs, POS waits for headband failover; heart with no window is not a fault."""
     payload = build_camera_payload(
         rgb_window=np.empty((0, 3)), fps=FPS,
         emotion=EmotionResult("neutral", 0.88, True),
@@ -210,8 +184,6 @@ def test_both_disabled_yields_an_empty_payload_not_a_payload_of_nulls():
 
 
 def test_one_channel_failing_does_not_suppress_the_other():
-    """The two channels are independent measurements, so a broken emotion model
-    must not take the heart rate down with it."""
     payload = build_camera_payload(
         rgb_window=_rgb_window(72.0), fps=FPS, measured_fps=FPS, timestamps=_stamps(FPS), samples=_samples(750),
         emotion=EmotionResult(None, None, False, "inference_failed", "boom"),
@@ -231,11 +203,7 @@ def _stamps(fps: float, n: int | None = None) -> np.ndarray:
 
 
 def test_a_camera_delivering_fewer_frames_than_configured_still_reads_true():
-    """If the time base came from sample index instead of timestamps, a camera
-    configured for 30 fps but delivering 22 would produce a bpm scaled by
-    30/22 -- a confident +36% error with nothing to flag it. Placing samples by
-    their own timestamps avoids that: 22 fps is not a fault, and 72 bpm at
-    22 fps is still 72 bpm."""
+    """An index time base would scale bpm by 30/22 with nothing to flag it."""
     rgb = _rgb_window(72.0, fps=22.0)
     record = build_heart_record(
         rgb, FPS, measured_fps=22.0, timestamps=_stamps(22.0, len(rgb)),
@@ -247,17 +215,13 @@ def test_a_camera_delivering_fewer_frames_than_configured_still_reads_true():
 
 
 def test_unevenly_spaced_samples_are_placed_by_their_timestamps():
-    """A real webcam asked for 30 fps delivered bimodal intervals: 78% at 31 ms
-    and 21% at 47 ms. Treated as evenly spaced, the 47 ms samples get stretched
-    and the derived rate comes out wrong. Read by their own timestamps, they
-    land where they actually occurred."""
+    """Real webcams deliver bimodal intervals (31 ms / 47 ms) when asked for 30 fps."""
     rng = np.random.default_rng(11)
     n = int(RATE_WINDOW_SECONDS * 32.0)
     intervals = np.where(rng.random(n) < 0.21, 0.047, 0.031)
     stamps = np.cumsum(intervals) - intervals[0]
 
-    # Colour is generated against the real clock, so 72 bpm is the true rate
-    # regardless of how the samples are spaced.
+    # Generated against the real clock, so 72 bpm is the true rate.
     wave = 0.005 * np.sin(2 * np.pi * 72.0 / 60.0 * stamps)
     rgb = np.array([180.0, 120.0, 110.0]) * (
         1.0 + np.outer(wave, np.array([0.10, 0.60, 0.30]))
@@ -272,9 +236,7 @@ def test_unevenly_spaced_samples_are_placed_by_their_timestamps():
 
 
 def test_a_long_gap_is_refused_rather_than_interpolated_across():
-    """Interpolating across a single dropped frame is reasonable; across a
-    four-second gap it is invention, and the straight line lands in the pulse
-    band as a slow ramp."""
+    """A line across a 4 s gap lands in the pulse band as a slow ramp."""
     rgb = _rgb_window(72.0)
     stamps = _stamps(FPS, len(rgb))
     stamps[len(stamps) // 2:] += 4.0          # student looked away
@@ -297,7 +259,6 @@ def test_a_rate_below_nyquist_is_refused():
 
 
 def test_a_clock_that_does_not_match_the_colour_is_refused():
-    """Should refuse rather than silently scoring against sample index."""
     record = build_heart_record(_rgb_window(72.0), FPS, measured_fps=FPS,
                                 timestamps=np.arange(5) / FPS,
                                 samples=_samples(750))
@@ -305,8 +266,6 @@ def test_a_clock_that_does_not_match_the_colour_is_refused():
 
 
 def test_an_unmeasurable_rate_does_not_fall_back_to_nominal():
-    """Falling back to the configured rate would reintroduce the exact
-    assumption the measurement exists to remove."""
     record = build_heart_record(_rgb_window(72.0), FPS, measured_fps=None,
                                 samples=_samples(750))
     assert record["bpm"] is None
@@ -314,8 +273,6 @@ def test_an_unmeasurable_rate_does_not_fall_back_to_nominal():
 
 
 def test_the_measured_rate_is_what_the_estimate_uses():
-    """A camera running slightly slow should still report a correct bpm, using
-    the measured rate rather than the configured one."""
     slow = 27.0
     rgb = _rgb_window(72.0, fps=slow)
     record = build_heart_record(rgb, FPS, measured_fps=slow,
@@ -326,8 +283,6 @@ def test_the_measured_rate_is_what_the_estimate_uses():
 
 
 def test_a_small_frame_rate_wobble_is_tolerated():
-    """Every webcam jitters slightly, so rejecting on any deviation would
-    reject everything."""
     rgb = _rgb_window(72.0, fps=29.0)
     record = build_heart_record(
         rgb, FPS, measured_fps=29.0, timestamps=_stamps(29.0, len(rgb)),
@@ -337,10 +292,7 @@ def test_a_small_frame_rate_wobble_is_tolerated():
 
 
 def test_quality_gating_uses_the_window_not_the_tick():
-    """A tick that drained no samples must not skip the gate. If quality were
-    derived only from samples drained since the last tick, a tick that drained
-    nothing would leave face_quality None even while the 25s colour buffer was
-    full and scored -- silently skipping the gate."""
+    """A tick that drained nothing must not skip the gate while the 25 s buffer is scored."""
     record = build_heart_record(
         _rgb_window(72.0), FPS, measured_fps=FPS, timestamps=_stamps(FPS),
         window_quality=MIN_MEAN_USABLE_FRACTION / 2,
@@ -351,8 +303,6 @@ def test_quality_gating_uses_the_window_not_the_tick():
 
 
 def test_the_window_quality_wins_over_the_tick_samples():
-    """Window quality and tick quality can disagree -- the window spans 25s,
-    the tick spans one frame interval -- and the window is what gets used."""
     record = build_heart_record(
         _rgb_window(72.0), FPS, measured_fps=FPS, timestamps=_stamps(FPS),
         window_quality=0.91, samples=_samples(750, quality=0.10),
@@ -362,8 +312,7 @@ def test_the_window_quality_wins_over_the_tick_samples():
 
 
 def test_a_zero_frame_rate_is_reported_rather_than_hidden():
-    """A plain `if measured_fps` check would treat 0.0 as None -- calling
-    "unmeasurable" a camera that has clearly stopped."""
+    """A falsy `if measured_fps` would call a stopped camera "unmeasurable"."""
     record = build_heart_record(_rgb_window(72.0), FPS, measured_fps=0.0,
                                 window_quality=0.9)
     assert record["measured_fps"] == 0.0
@@ -371,17 +320,13 @@ def test_a_zero_frame_rate_is_reported_rather_than_hidden():
 
 
 # ── gaze ─────────────────────────────────────────────────────────────────
-#
-# These cover the record layer only; the geometry itself has its own tests
-# and was verified separately against a camera.
+# Record layer only; the geometry has its own tests.
 
 from src.app.services.face_geometry import Gaze          # noqa: E402
 
 
 def test_gaze_keys_are_absent_when_the_channel_is_off():
-    """A channel switched off is not a channel that failed. Emitting `gaze_x:
-    null` for a deployment with no landmark model would look the same as a
-    camera that couldn't get a reading."""
+    """A switched-off channel must not read like one that failed."""
     record = build_face_record(EmotionResult("happy", 0.82, True))
 
     assert "gaze_x" not in record
@@ -400,9 +345,7 @@ def test_a_gaze_reading_reaches_the_record():
 
 
 def test_a_refused_gaze_is_null_with_a_reason_never_zero():
-    """0.0 is a valid gaze reading (dead centre). Recording a refusal as 0.0
-    would make aggregates read it as "looking straight ahead" instead of no
-    data."""
+    """0.0 is a valid gaze reading (dead centre)."""
     record = build_face_record(EmotionResult("happy", 0.82, True),
                                gaze=Gaze(None, None, 0, "no_eye"),
                                gaze_enabled=True)
@@ -413,8 +356,6 @@ def test_a_refused_gaze_is_null_with_a_reason_never_zero():
 
 
 def test_before_the_first_reading_is_not_a_refusal():
-    """At start-up the landmarker hasn't run yet. Treating that as a rejection
-    would report a warming-up camera as a broken one."""
     record = build_face_record(EmotionResult("happy", 0.82, True),
                                gaze=None, gaze_enabled=True)
 
@@ -423,10 +364,7 @@ def test_before_the_first_reading_is_not_a_refusal():
 
 
 def test_attention_stays_null_and_is_nobody_s_to_fill():
-    """`attention` is blocked on getting a labelled reference, not on code -- it
-    would render to a parent as an objective-looking percentage, and head
-    direction is a weak proxy for attention. The key is still emitted so a
-    consumer can tell "no producer yet" from "a key I forgot to read"."""
+    """Blocked on a labelled reference; the key is emitted so "no producer" differs from "unread"."""
     record = build_face_record(EmotionResult("happy", 0.82, True),
                                gaze=Gaze(0.42, -0.03, 2), gaze_enabled=True)
 
@@ -434,8 +372,6 @@ def test_attention_stays_null_and_is_nobody_s_to_fill():
 
 
 def test_emotion_and_gaze_refusals_do_not_share_a_field():
-    """Two measurements need two refusal fields; one shared field couldn't say
-    which one failed."""
     record = build_face_record(
         EmotionResult(None, None, False, "low_confidence", ""),
         gaze=Gaze(0.42, -0.03, 2), gaze_enabled=True)
@@ -447,8 +383,7 @@ def test_emotion_and_gaze_refusals_do_not_share_a_field():
 
 
 def test_gaze_alone_still_produces_a_face_block():
-    """Gaze needs no 35 MB FER+ model, so gaze without emotion is a valid
-    deployment. Gating the block on emotion would make it emit nothing."""
+    """Gaze without the FER+ model is a valid deployment."""
     payload = build_camera_payload(
         rgb_window=None, fps=FPS, heart_enabled=False, emotion_enabled=False,
         gaze=Gaze(0.42, -0.03, 2), gaze_enabled=True)
@@ -458,10 +393,7 @@ def test_gaze_alone_still_produces_a_face_block():
 
 
 # ── head pose ────────────────────────────────────────────────────────────
-#
-# `gaze_x`/`gaze_y` are eye-in-head, so without pose they say nothing about
-# where the head points -- a student turned away with centred eyes would read
-# the same as one facing the screen.
+# Gaze is eye-in-head; without pose, a turned-away head with centred eyes reads as facing the screen.
 
 from src.app.services.face_geometry import HeadPose      # noqa: E402
 
@@ -478,8 +410,7 @@ def test_a_pose_reading_reaches_the_record():
 
 
 def test_pose_keys_are_absent_when_gaze_is_off():
-    """Pose uses the same landmark set and enable flag as gaze, so it's absent
-    for the same reason gaze is -- not nulled."""
+    """Pose shares gaze's enable flag."""
     record = build_face_record(EmotionResult("happy", 0.82, True))
 
     for key in ("head_yaw", "head_pitch", "head_roll", "pose_rejected_by"):
@@ -487,9 +418,7 @@ def test_pose_keys_are_absent_when_gaze_is_off():
 
 
 def test_a_refused_pose_is_null_with_a_reason_never_zero():
-    """0.0 yaw means facing the camera square on -- the most common real
-    reading. Recording a refusal as 0.0 would misreport a window the fit
-    couldn't solve at all as "facing the camera"."""
+    """0.0 yaw means facing the camera, the most common real reading."""
     record = build_face_record(EmotionResult("happy", 0.82, True),
                                gaze=Gaze(0.1, 0.0, 2), gaze_enabled=True,
                                pose=HeadPose(None, None, None, 3,
@@ -500,9 +429,6 @@ def test_a_refused_pose_is_null_with_a_reason_never_zero():
 
 
 def test_pose_and_gaze_refuse_independently():
-    """Near profile the pose fit can refuse while the eyes are still readable;
-    a closed eye can refuse gaze while the pose is fine. Sharing one field
-    would misattribute a null to the wrong cause."""
     eyes_only = build_face_record(
         EmotionResult("happy", 0.82, True), gaze=Gaze(0.44, 0.0, 2),
         gaze_enabled=True, pose=HeadPose(None, None, None, 3, "implausible_pose"))

@@ -6,10 +6,7 @@ __pycache__/
 *.so
 *.egg-info/
 build/
-# Also the suffixed variants. Building the native bridge both ways side by side
-# -- ENABLE_LIBMUSE=OFF for what CI compiles, ON against the vendored SDK for
-# the packet handling CI cannot reach -- needs two directories, and `build/`
-# alone matches neither build_on/ nor build_off/.
+# build_on/ and build_off/: the native bridge with ENABLE_LIBMUSE on and off.
 build*/
 dist/
 
@@ -45,8 +42,5 @@ logs/
 # Vendor SDK (excluded from repository)
 libmuse_windows_8.0.5/
 
-# Downloaded model bundles. MediaPipe 1.0.0 ships no landmark model, so the
-# Tasks API loads one from a file -- fetched on first use, not committed:
-# it is Google's binary, it is a few MB, and the URL in face_landmarks.py is
-# the authoritative copy.
+# Downloaded model bundles; the URL in face_landmarks.py is the source.
 models/

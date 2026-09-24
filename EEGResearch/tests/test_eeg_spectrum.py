@@ -1,11 +1,4 @@
-"""The local spectrum: 1/f-relative alpha at the temporal pair.
-
-Synthetic signals, built so the answer is known: pink noise with and without
-a 10 Hz sinusoid on the temporal channels. The reference numbers the design
-rests on -- a 10 Hz peak 4.6x above the 1/f fit eyes closed, none eyes open,
-AUC 0.92 at 4 s -- are from a recording of a person and live in
-tests/fixtures/EEG_REFERENCE.md, not here.
-"""
+"""Local spectrum (1/f-relative temporal alpha) on synthetic pink noise; real numbers: fixtures/EEG_REFERENCE.md."""
 
 from __future__ import annotations
 
@@ -24,8 +17,7 @@ GOOD = {"hsi": [1.0, 1.0, 1.0, 1.0], "is_good": [1.0, 1.0, 1.0, 1.0]}
 
 
 def pink(n: int, seed: int, fs: float = SAMPLE_RATE_HZ) -> np.ndarray:
-    """1/f^2 in power (slope -2, roughly the eyes-open capture), unit-ish
-    scale, DC offset like the bridge's ~800 uV."""
+    """1/f^2 power noise with the bridge's ~800 uV DC offset."""
     rng = np.random.default_rng(seed)
     white = rng.standard_normal(n)
     spec = np.fft.rfft(white)
@@ -57,9 +49,7 @@ def test_a_10hz_rhythm_reads_as_alpha_above_the_background_and_pink_noise_does_n
     r_loud, s_loud = alpha_residual(f, loud)
     assert abs(r_quiet) < 0.15, "pink noise alone is on the 1/f fit"
     assert r_loud > 0.7, "a rhythm is a residual above it"
-    # The fit excludes the alpha band, so the peak does not steal the slope:
-    # measured, the two slopes agree to 1e-5 with the exclusion and differ
-    # by 0.21 without it, which also costs the residual 0.14.
+    # The fit excludes the alpha band, so the peak does not steal the slope.
     assert s_loud == pytest.approx(s_quiet, abs=0.02)
 
 
@@ -67,8 +57,7 @@ def test_the_estimator_needs_a_full_epoch_then_reads_the_temporal_pair_only():
     est = SpectrumEstimator()
     n = int(EPOCH_SECONDS * SAMPLE_RATE_HZ)
     chans = {c: pink(n, i) for i, c in enumerate(CHANNELS)}
-    # Alpha on the temporal pair only; the frontal pair gets a rhythm too,
-    # which must not be what is read.
+    # A frontal rhythm too, which must not be what is read.
     chans["tp9"] = with_alpha(chans["tp9"], 15.0)
     chans["tp10"] = with_alpha(chans["tp10"], 15.0)
     chans["af7"] = with_alpha(chans["af7"], -30.0)
@@ -84,8 +73,7 @@ def test_the_estimator_needs_a_full_epoch_then_reads_the_temporal_pair_only():
 
 
 def test_an_unseated_or_non_finite_temporal_channel_is_left_out_not_averaged_in():
-    """A railing electrode has power at every frequency and reads as no
-    alpha whatever the other one says."""
+    """A railing electrode has power at every frequency, so it would dilute the other's alpha."""
     est = SpectrumEstimator()
     n = int(EPOCH_SECONDS * SAMPLE_RATE_HZ)
     chans = {c: pink(n, i) for i, c in enumerate(CHANNELS)}

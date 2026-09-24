@@ -17,59 +17,37 @@ class FeatureData(BaseModel):
     calm_score: float
     confidence: float
     signal_quality: Literal["good", "degraded", "poor", "no_signal"]
-    # Whether signal_quality came from the headband's electrode data
-    # ("contact") or the legacy calm-based fallback ("heuristic").
+    # "contact" (electrode data) or the calm-based "heuristic" fallback.
     quality_basis: Literal["contact", "heuristic"] | None = None
-    # Diagnostics: frames dropped by the contact filter this session, how many
-    # electrodes the bridge averaged into the band values (4 = all), and how
-    # many samples were drained from the bridge queue this tick (0 on a
-    # no-signal tick).
+    # Session contact-filter drops; electrodes averaged into bands (4 = all); samples drained this tick.
     samples_rejected: int | None = None
     band_channels_used: int | None = None
     batch_size: int | None = None
-    # Raw, pre-baseline log ratios (linear power, ln beta/(alpha+theta) and
-    # ln alpha/(beta+gamma)) -- diagnostics for the accuracy capture
-    # (HANDOFF.md Phase 0). None on a frame with no usable bands.
+    # Raw pre-baseline ln ratios (linear power); None on a frame with no usable bands.
     focus_log_ratio: float | None = None
     calm_log_ratio: float | None = None
-    # Smoothed 0..1 electrode contact behind signal_quality and confidence;
-    # None when the bridge reports no contact data.
+    # Smoothed 0..1 electrode contact; None when the bridge reports none.
     contact_ratio: float | None = None
-    # Artifact gate: ticks held this session (delta jump, EMG gamma, spread
-    # jump), and why this tick was held -- None when it was scored.
+    # Artifact-held ticks this session; None reason means this tick was scored.
     samples_artifact: int | None = None
-    # Usable ticks whose delta could not be read, so the blink gate had no
-    # reference for them. Distinct from an artifact count of zero.
+    # Ticks the blink / spread gates could not check -- distinct from zero artifacts.
     samples_no_delta: int | None = None
-    # Its sibling for the spread gate: usable multi-electrode ticks whose
-    # spread could not be taken (a non-finite channel).
     samples_no_spread: int | None = None
-    # A plain str, not a Literal of the three reasons: the processor writes
-    # them as unshared string literals, and a fourth would have made every
-    # /api/v1/state call 500 -- a harder failure than the silent key drop
-    # this model exists to guard against.
+    # Plain str, not a Literal: an unlisted reason would 500 every /api/v1/state call.
     artifact_reason: str | None = None
-    # The exponentially smoothed ratios the scores were scaled from.
     focus_log_ratio_smoothed: float | None = None
     calm_log_ratio_smoothed: float | None = None
-    # Which spectrum calm was scored from ("sdk" | "local"), the local
-    # spectrum's 1/f-relative temporal alpha residual (carried on both
-    # sources for comparison), and whether its 4 s buffer was full.
+    # calm_source is "sdk" | "local"; the residual is carried on both for comparison.
     calm_source: str | None = None
     calm_alpha_residual: float | None = None
     spectrum_ready: bool | None = None
-    # Why the spectrum was not ready (filling, sample_rate, artifact,
-    # no_channel), and its 1/f slope, carried for comparison and not scored.
+    # spectrum_slope is carried for comparison, not scored.
     spectrum_reason: str | None = None
     spectrum_slope: float | None = None
-    # Whether this tick's calm is a measurement at all -- a placeholder at
-    # the midpoint before any estimate is not -- and how long a local calm
-    # has been carried since the last fresh estimate.
+    # False for the midpoint placeholder before any estimate.
     calm_measured: bool | None = None
     calm_held_seconds: float | None = None
-    # Whether each score is centred on the session's own baseline yet or
-    # still on the population midpoint (the calm latch can take a whole
-    # session on the local source).
+    # Centred on the session baseline yet, or still on the population midpoint.
     focus_centred: bool | None = None
     calm_centred: bool | None = None
 
@@ -83,10 +61,7 @@ class StateData(BaseModel):
 
 
 class BandData(BaseModel):
-    # None for a band the bridge reported as NaN or infinite: the renderer
-    # refuses non-finite floats, so a malformed band made /api/v1/state 500
-    # on exactly the tick the processor had correctly held -- under pull the
-    # poller then recorded nothing, indistinguishable from a sidecar down.
+    # None for a non-finite band: the JSON renderer refuses NaN/inf and would 500.
     delta: float | None
     theta: float | None
     alpha: float | None
@@ -105,29 +80,18 @@ class InterpretedEegData(BaseModel):
     state: StateData
     bands: BandData | None = None
     ingestion: dict[str, Any] | None = None
-    # The headband's optical heart block, exactly as `CameraData` carries the camera's.
-    # This field must stay declared: pydantic silently drops undeclared keys, so
-    # without it `/api/v1/state` deleted the heart block before the poller (pull mode,
-    # the default) ever saw it -- confirmed on hardware, 227 consecutive polls with no
-    # `heart` key despite 2697 optics packets/s reaching the adapter. Push was
-    # unaffected since `push_client` posts `snapshot()` directly, bypassing this model.
+    # Headband optical heart block. Must stay declared: pydantic drops undeclared keys,
+    # so pull mode would never see it.
     heart: dict[str, Any] | None = None
 
 
 class CameraData(BaseModel):
-    """Interpreted camera snapshot.
+    """Interpreted camera snapshot; separate so the EEG fields stay required.
 
-    A separate model rather than making the EEG fields optional: `channels`,
-    `features` and `state` are genuinely required of an EEG payload, and relaxing
-    them for the camera's sake would let a malformed EEG record validate silently.
-
-    `heart` and `face` are absent -- not null -- when that channel is switched off,
-    so a consumer can tell a respected refusal from a sensor that failed.
+    `heart` / `face` are absent, not null, when switched off: a refusal, not a failure.
     """
 
-    # Required, with no default, so it works as a discriminator: without it an EEG
-    # payload (which carries no `kind`) would validate as a camera and silently
-    # drop `channels`/`features`/`state` instead of raising.
+    # Required, no default: the discriminator that stops an EEG payload validating as camera.
     kind: Literal["camera"]
     contract_version: str
     device_id: str
@@ -139,7 +103,5 @@ class CameraData(BaseModel):
 
 class Envelope(BaseModel):
     status: Literal["ok", "idle"]
-    # EEG first: it carries no `kind`, CameraData requires one, so the two
-    # can't be confused either way.
     data: InterpretedEegData | CameraData | None
     message: str

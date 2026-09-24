@@ -1,11 +1,4 @@
-"""The replay harness reproduces the scores a capture recorded.
-
-A capture is the shipped path's own output, so replaying it through the
-same code on the same clock must give the same numbers -- that round trip is
-what makes a *difference* after a formula change attributable to the change.
-The rows here are synthetic and built by running the processor, never a
-recording of a person.
-"""
+"""The replay harness reproduces a capture's own scores (synthetic rows, never a person's recording)."""
 
 from __future__ import annotations
 
@@ -34,9 +27,10 @@ replay = _module()
 
 
 def _synthetic_capture(n: int = 40, tick_s: float = 0.25, aroused_at=None) -> list[dict]:
-    """Rows in the capture's shape, scored by the shipped path on a clock that
-    advances with the rows, as the sidecar's would. `aroused_at(i)` picks
-    the spectrum per row; the default alternates in 20-row blocks."""
+    """Capture-shaped rows scored by the shipped path on a row-advancing clock.
+
+    `aroused_at(i)` picks the spectrum per row; the default alternates in 20-row blocks.
+    """
     t0 = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
     clock = [0.0]
     processor = SignalProcessor(window_size=8, clock=lambda: clock[0])
@@ -45,9 +39,7 @@ def _synthetic_capture(n: int = 40, tick_s: float = 0.25, aroused_at=None) -> li
     for i in range(n):
         clock[0] = i * tick_s
         t = t0 + timedelta(seconds=i * tick_s)
-        # A slow swing between a relaxed and an aroused spectrum, in blocks
-        # longer than the label cooldown, so the labels move and the cooldown
-        # has work to do.
+        # Blocks longer than the label cooldown, so labels move and the cooldown has work to do.
         aroused = aroused_at(i) if aroused_at else (i // 20) % 2 == 1
         bands = {"delta": 0.4, "theta": 0.1,
                  "alpha": -0.5 if aroused else 0.5,
@@ -96,9 +88,7 @@ def test_a_no_data_tick_resets_and_is_replayed_as_no_signal():
 
 
 def test_the_replay_runs_on_the_captures_clock_not_the_wall_clock():
-    """Replayed in milliseconds against monotonic(), the cooldown would hold
-    the first label for the whole file. On the capture's clock the swing in
-    beta must produce more than one distinct label."""
+    """On monotonic(), the cooldown would hold the first label for the whole file."""
     rows = _synthetic_capture(n=60)
     out = replay.replay(rows, window_size=8)
     assert len({r["label"] for r in out}) >= 2
@@ -117,11 +107,7 @@ def test_main_reads_a_file_and_prints_a_summary(tmp_path, capsys):
 
 
 def test_arm_at_restarts_the_baseline_at_that_segment():
-    """A settling stretch (relaxed, 5 s) then a lesson (aroused, 95 s).
-    Armed at the lesson's first row the baseline is the lesson's own
-    spectrum and the late scores sit at 50; taken from row 0 it includes
-    the settling stretch and they do not. Long enough for both to latch
-    and ramp (45 s + 10 s from their respective starts)."""
+    """Relaxed 5 s then aroused 95 s: armed at the lesson, late scores sit at 50; from row 0 they do not."""
     rows = _synthetic_capture(n=400, aroused_at=lambda i: i >= 20)
     plain = replay.replay(rows, window_size=8)
     armed = replay.replay(rows, window_size=8, arm_at="arithmetic")
@@ -134,10 +120,7 @@ def test_arm_at_restarts_the_baseline_at_that_segment():
 
 
 def test_a_real_gap_is_an_ok_row_with_the_no_signal_payload():
-    """The sidecar answers a no-data tick with status ok and its no-signal
-    payload -- zeroed scores and channels, signal_quality "no_signal" --
-    not an error row. The replay must reset there, or it scores a
-    zero-microvolt sample the live path never scored."""
+    """A no-data tick is status ok with zeroed scores; replay must reset, not score a 0 uV sample."""
     rows = _synthetic_capture(n=12)
     gap = dict(rows[6], status="ok", tp9=0.0, af7=0.0, af8=0.0, tp10=0.0,
                focus_score=0.0, calm_score=0.0, confidence=0.0,
@@ -151,9 +134,7 @@ def test_a_real_gap_is_an_ok_row_with_the_no_signal_payload():
 
 
 def test_a_held_no_signal_label_on_a_real_row_is_not_a_gap():
-    """The engine holds "no_signal" through the persistence run after a
-    gap, on ticks carrying real bands. Keyed on the label, a capture with
-    25 gaps replayed as 64 and each pass compounded the last."""
+    """The engine holds "no_signal" after a gap on ticks with real bands; keying on the label compounds gaps."""
     rows = _synthetic_capture(n=12)
     rows[6] = dict(rows[6], status="error", message="no data", tp9=None,
                    signal_quality="no_signal", label="no_signal")
@@ -182,13 +163,11 @@ def test_arm_at_an_unknown_segment_is_refused_not_ignored(tmp_path, capsys):
 
 
 def test_arm_at_restarts_the_label_engine_as_the_live_arm_does():
-    """StreamManager.arm_baseline restarts both; a replay restarting only
-    the baseline carried the pairing-period label across the arm."""
+    """StreamManager.arm_baseline restarts both baseline and label engine."""
     import inspect
     src = inspect.getsource(replay.replay)
     assert "processor.restart_baseline()" in src and "adaptation.restart()" in src
-    # And it shows: a cooldown-held focused label at the arm point is gone
-    # on the arm row itself.
+    # A cooldown-held focused label is gone on the arm row itself.
     rows = _synthetic_capture(n=60, aroused_at=lambda i: i < 20)
     for r in rows[16:20]:
         r["label"] = "focused"

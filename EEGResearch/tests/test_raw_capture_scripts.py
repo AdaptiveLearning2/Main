@@ -1,9 +1,4 @@
-"""The two raw-capture scripts run the shipped path, not a copy of it.
-
-The analysis takes its 1/f fit from the one helper, or the printed
-slope and the other bands follow a local copy while alpha follows the
-shipped fit.
-"""
+"""The raw-capture scripts take the 1/f fit from the shipped helper, not a local copy."""
 
 from __future__ import annotations
 

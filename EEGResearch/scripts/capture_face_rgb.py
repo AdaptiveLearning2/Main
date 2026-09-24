@@ -1,31 +1,9 @@
 #!/usr/bin/env python3
 """Capture mean face colour to a fixture, for validating POS against ECG.
 
-Records **no video**. Each frame is reduced to three numbers and a quality
-figure, then dropped, exactly as the live adapter does -- so the fixture is
-safe to commit and read in a test.
-
-Uses the product's own `FaceLocator` and `mean_rgb`, so a result here is a
-statement about the shipped path, not a separate reimplementation of it.
-
-Usage, with a camera attached:
-
-    python scripts/capture_face_rgb.py --seconds 300 --out tests/fixtures/face_rgb_ecg.jsonl.gz
-
-One JSON object per line:
-
-    {"wall_start": "2026-08-07T15:04:11.882+01:00", "nominal_fps": 30.0}
-    {"t": 12.34, "rgb": [181.2, 120.7, 110.4], "q": 0.93}
-
-The first line is a header carrying the absolute start; every line after it is
-a sample.
-
-`t` is seconds since capture start, from the same `perf_counter` clock the
-adapter stamps samples with, so samples are placed by timestamp rather than by
-index -- matching how the shipped path works.
-
-Uses `perf_counter`, not `time.monotonic()`: on Windows the latter resolves
-only 15.625 ms, which can make an evenly-running camera look like it stutters.
+Records no video: each frame becomes mean RGB + quality via the shipped `FaceLocator`/`mean_rgb`.
+Output: a {"wall_start", "nominal_fps"} header line, then {"t", "rgb", "q"} per sample, `t` in
+`perf_counter` seconds (Windows `monotonic()` resolves only 15.625 ms).
 """
 
 from __future__ import annotations
@@ -55,8 +33,6 @@ def main() -> int:
     ap.add_argument("--seconds", type=float, default=300.0)
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--fps", type=float, default=30.0)
-    # Defaults from the adapter's own constant, not a repeated number, so this
-    # script cannot drift from what production actually does.
     ap.add_argument("--warmup", type=float, default=WARMUP_SECONDS,
                     help="seconds of frames to discard before recording")
     ap.add_argument("--out", required=True)
@@ -70,9 +46,7 @@ def main() -> int:
     locator = FaceLocator()
     print(f"camera {args.camera} open; locked: {source.locked}", flush=True)
 
-    # Discard the camera's auto-exposure convergence, exactly as
-    # FaceCaptureAdapter._capture_loop does. See WARMUP_SECONDS for why the
-    # exposure can't just be locked instead.
+    # Discard auto-exposure convergence, as FaceCaptureAdapter._capture_loop does.
     if args.warmup > 0:
         warm_until = time.perf_counter() + args.warmup
         while time.perf_counter() < warm_until:
@@ -82,14 +56,11 @@ def main() -> int:
     frames = faces = written = 0
     started = time.perf_counter()
 
-    # Wall clock, written once as the header. The watch's ECG export carries
-    # an absolute start time too, so aligning the two recordings later is
-    # arithmetic instead of manually marking when a reading began.
+    # Absolute start, for aligning with the ECG export's own start time.
     wall_start = datetime.now().astimezone()
     last_report = started
 
-    # Written incrementally, not buffered to the end, so an interrupted
-    # capture still leaves the minutes recorded so far on disk.
+    # Written incrementally, so an interrupted capture keeps what it recorded.
     with opener(out, "wt", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps({"wall_start": wall_start.isoformat(),
                              "nominal_fps": args.fps}) + "\n")
@@ -102,9 +73,7 @@ def main() -> int:
                     continue
                 frames += 1
 
-                # Luma weights, matching the adapter exactly -- a flat channel
-                # mean would be a different (redder) image and would break
-                # detection the same way it would in production.
+                # Same luma weights as the adapter, so detection matches production.
                 gray = frame.astype(np.float32) @ LUMA_WEIGHTS
                 box = locator.locate(gray)
                 if box is None:
@@ -131,9 +100,7 @@ def main() -> int:
                           f"face {faces}/{frames}", flush=True)
                     last_report = now
 
-                # Deliberately no sleep: `read()` already blocks until the
-                # sensor has a frame, so the camera is the clock and a sleep on
-                # top would only discard frames it overshoots.
+                # No sleep: `read()` blocks on the sensor, so the camera is the clock.
         except KeyboardInterrupt:
             print("interrupted", flush=True)
         finally:

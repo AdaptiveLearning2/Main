@@ -1,5 +1,4 @@
-"""The rate check's bar is a fraction of the buffer, not of the gap between
-the stamps it happens to hold."""
+"""The rate check's tolerance scales with the buffer, not the gap between its stamps."""
 
 from __future__ import annotations
 
@@ -10,10 +9,7 @@ from tests.test_eeg_spectrum_review2 import _full
 
 
 def test_stamps_clustered_in_one_burst_do_not_refuse_a_full_buffer():
-    """Scaled with the gap between the outermost stamps, the tolerance was
-    0.0107 s for stamps inside one 12-sample BLE burst, and 0.00098 s for
-    two adjacent samples sharing a delivery stamp -- the case the module's
-    own docstring says happens. Both refused a genuine 256 Hz buffer."""
+    """Stamps inside one BLE burst, or two samples sharing a delivery stamp."""
     samples = _full()
     keep = set(range(500, 512))
     for i, s in enumerate(samples):

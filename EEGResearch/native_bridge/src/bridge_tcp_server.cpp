@@ -113,17 +113,14 @@ void BridgeTcpServer::send_json_line(const std::string& payload) {
                 return;
             }
             if (offset == 0) {
-                // Nothing sent yet, so we're still on a line boundary. Drop
-                // the whole line and count it instead of leaving it silent.
+                // Still on a line boundary: drop the whole line and count it.
                 dropped_lines_ += 1;
                 return;
             }
-            // Part of the line already went out. Resuming later would splice
-            // the rest onto the next line, so close the connection instead.
+            // Mid-line: resuming would splice the rest onto the next line.
             close_client();
             return;
         }
-        // A short send is normal for a non-blocking socket, not an error.
         offset += static_cast<size_t>(sent);
     }
 }

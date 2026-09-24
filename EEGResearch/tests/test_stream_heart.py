@@ -1,10 +1,4 @@
-"""Where the `heart` block meets the sampling loop.
-
-The block is recomputed on a cadence and held between recomputes. Recomputing
-every tick would waste cycles re-running autocorrelation on nearly identical
-windows; not holding the result would leave a 1Hz poller missing most
-readings.
-"""
+"""The `heart` block is recomputed on a cadence and held between recomputes so a 1 Hz poller sees it."""
 
 from __future__ import annotations
 
@@ -47,11 +41,7 @@ def _flat_window(samples=1600):
 
 
 def test_a_device_without_optics_produces_no_block():
-    """An adapter with no `optics_window` -- the camera's shape -- yields no
-    heart block at all, rather than a block that says `no_samples`. The
-    simulator used to be here deliberately; since 2026-09-16 it synthesises
-    a pulse for the classroom simulation (tests/test_sim_device.py), so a
-    sim-kind session does produce one."""
+    """No `optics_window` (the camera's shape) yields no block, not a `no_samples` one."""
     class _NoOptics:
         def disconnect(self):
             pass
@@ -59,8 +49,7 @@ def test_a_device_without_optics_produces_no_block():
     session = _session()
     session.adapter = _NoOptics()
     assert session._optical_heart_block() is None
-    # The simulator, unpaired, still answers through the real path: a block
-    # refused as no_samples, which is a different fact from no block.
+    # The unpaired simulator answers a no_samples block, a different fact from no block.
     fresh = _session()
     assert fresh.adapter.__class__.__name__ == "SimulatedMuseIngestionAdapter"
     assert fresh._optical_heart_block()["rejected_by"] == "no_samples"
@@ -76,8 +65,7 @@ def test_the_block_is_computed_once_and_then_held():
 
 
 def test_losing_the_signal_drops_the_held_block():
-    """Otherwise the last rate keeps being published, and recorded under fresh
-    timestamps, for a headband that's off."""
+    """Otherwise the last rate is recorded under fresh timestamps for a headband that's off."""
     session = _session(_flat_window())
     assert session._optical_heart_block() is not None
 
@@ -87,12 +75,7 @@ def test_losing_the_signal_drops_the_held_block():
 
 
 def test_eeg_flapping_does_not_restart_the_heart_cadence():
-    """`drain_samples` raises whenever no EEG sample arrives in its timeout, so
-    flapping contact takes the no-data path repeatedly. Clearing the emit
-    clock there would make the next good tick recompute immediately, minting
-    a new `ts` for materially the same 25s window -- and since both writers
-    dedupe on `ts`, that would write up to four near-identical rows a second.
-    """
+    """Resetting the emit clock on each no-data tick would mint a new `ts` for the same window."""
     session = _session(_flat_window())
     first = session._optical_heart_block()
 
@@ -100,18 +83,15 @@ def test_eeg_flapping_does_not_restart_the_heart_cadence():
         session._drop_held_heart_block()
         session._optical_heart_block()
 
-    # One window read, so one stamp: the cadence survived the flap.
     assert session.adapter.reads == 1
     assert session._heart_emitted_at is not None
 
-    # The tracker's anchor survives too -- EEG dropping out says nothing about
-    # the optical emitters, and the anchor is what catches octave errors.
+    # The anchor (which catches octave errors) survives too: EEG dropout says nothing about optics.
     assert session._heart_tracker is not None
     assert first is not None
 
 
 def test_stopping_forgets_everything():
-    """Unlike a flap, a real stop clears everything."""
     session = _session(_flat_window())
     session._optical_heart_block()
 
@@ -126,11 +106,7 @@ def test_stopping_forgets_everything():
 
 
 def test_the_continuity_anchor_ages_from_the_last_accepted_rate(monkeypatch):
-    """The tracker sizes allowed movement from the last *accepted* rate, not
-    the last recompute -- otherwise a run of refusals still reports one step's
-    worth, so the first good window after a minute of silence would be judged
-    against only 30 bpm of allowed movement.
-    """
+    """Otherwise a run of refusals judges the next good window against one step's allowed movement."""
     seen = []
 
     def _spy(_window, _tracker, since):
@@ -143,15 +119,13 @@ def test_the_continuity_anchor_ages_from_the_last_accepted_rate(monkeypatch):
     for _ in range(3):
         session._optical_heart_block()
 
-    # Never accepted, so every window reports "nothing measured yet" rather
-    # than a step that shrinks back to one interval.
+    # Never accepted, so every window reports "nothing measured yet".
     assert seen == [0.0, 0.0, 0.0]
     assert session._heart_accepted_at is None
 
 
 def test_the_cadence_is_the_step_the_estimator_was_validated_on():
-    """`MAX_BPM_CHANGE_PER_S`, the continuity rule that rejects octave errors,
-    is calibrated against a 10s step between 25s windows."""
+    """`MAX_BPM_CHANGE_PER_S` is calibrated against a 10 s step between 25 s windows."""
     from src.app.services import optics_processing
 
     assert optics_processing.EMIT_EVERY_SECONDS == 10.0
@@ -169,8 +143,6 @@ def test_a_recomputed_block_replaces_the_held_one(monkeypatch):
 
 
 def test_the_tracker_survives_between_windows(monkeypatch):
-    """Continuity needs the previous window to compare against, so the tracker
-    lives on the session, per device, not per call."""
     session = _session(_flat_window())
     session._optical_heart_block()
     tracker = session._heart_tracker
@@ -182,13 +154,11 @@ def test_the_tracker_survives_between_windows(monkeypatch):
 
 @pytest.mark.anyio
 async def test_a_stopped_stream_publishes_no_rate():
-    """Stopping is itself a no-data condition. Otherwise `snapshot()` keeps
-    serving the last rate from before `stop()`, indistinguishable from a live
-    session, and it keeps being written under pull."""
+    """Otherwise `snapshot()` serves the pre-stop rate, which pull keeps writing."""
     session = _session(_flat_window())
     session._optical_heart_block()
     session.running = True
-    # `stop()` only resets if a stream was running; this is the started case.
+    # `stop()` only resets if a stream was running.
     session._task = asyncio.create_task(asyncio.sleep(60))
     await session.stop()
 

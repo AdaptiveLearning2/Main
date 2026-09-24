@@ -1,11 +1,4 @@
-"""A plain launcher run re-points the `default:` headband entry.
-
-A `-Muse -Camera` run writes `default:muse@8765,camera:face@N`; the cleanup
-on a later plain run stripped only the camera entry, and the registry wins
-over EEG_SOURCE for that device, so every plain run after it started the
-sidecar looking for a bridge that was not running. Both launchers' cleanup
-functions are extracted from the scripts and driven against a temp .env.
-"""
+"""Both launchers' registry functions, extracted and driven against a temp .env; see CLAUDE.md "The device registry"."""
 
 from __future__ import annotations
 
@@ -21,8 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 POWERSHELL = shutil.which("powershell")
 BASH = shutil.which("bash")
 
-# Expected value meaning: the function refused, returned false / non-zero,
-# and left the file exactly as it was.
+# The function refused (false / non-zero) and left the file exactly as it was.
 REFUSED = "REFUSED"
 
 CASES = [
@@ -38,19 +30,13 @@ CASES = [
      "EEG_DEVICES=default:sim,station2:muse@8766"),
     # No registry line: none is added (the sidecar synthesises one from EEG_SOURCE).
     (None, "default:sim", None),
-    # A plain -Muse run over a registry whose named station already holds the
-    # bridge address: the run is refused and the file is untouched. Two muse
-    # devices on one host:port make parse_eeg_devices raise and the sidecar
-    # does not boot; dropping the default: entry instead left the backend,
-    # which drives the `default` device on every lifecycle call, with a stack
-    # that started clean and 404'd on Connect.
+    # A named station already on the bridge address: refused, file untouched.
     ("EEG_DEVICES=default:sim,station1:muse@8765", "default:muse@8765", REFUSED),
 ]
 
 
 CAMERA_CASES = [
-    # (line, headband, camera, expected): the -Camera branch composes onto the
-    # registry rather than overwriting it.
+    # (line, headband, camera, expected): -Camera composes onto the registry, never overwrites.
     ("EEG_DEVICES=station1:muse@8765,station2:muse@8766", "default:sim", "camera:face@0",
      "EEG_DEVICES=default:sim,station1:muse@8765,station2:muse@8766,camera:face@0"),
     ("EEG_DEVICES=default:sim,camera:face@1", "default:muse@8765", "camera:face@0",
@@ -59,11 +45,7 @@ CAMERA_CASES = [
      "EEG_DEVICES=default:sim,station2:muse@8766,camera:face@2"),
     # A fresh file with no registry line gets the pair the run needs.
     (None, "default:sim", "camera:face@0", "EEG_DEVICES=default:sim,camera:face@0"),
-    # A named station already on the headband's bridge port, with or without
-    # an existing default: entry: the run is refused and the file untouched.
-    # The second is reachable from an ordinary sequence -- a plain run writes
-    # default:sim, the user hand-adds station1:muse@8765, then runs
-    # -Muse -Camera.
+    # A named station on the headband's bridge port, with or without a default: entry: refused.
     ("EEG_DEVICES=station1:muse@8765,station2:muse@8766", "default:muse@8765", "camera:face@0", REFUSED),
     ("EEG_DEVICES=default:sim,station1:muse@8765", "default:muse@8765", "camera:face@0", REFUSED),
     # ...but a station on a different port does not stand in for the headband.
@@ -99,13 +81,7 @@ def _body_after_functions(text: str, last_fn: str) -> str:
 
 
 def test_the_registry_is_validated_before_any_write_and_applied_after_provisioning():
-    """Two properties, one call each. A refusal says neither .env was changed,
-    which is only true if the check precedes every write -- placed after
-    them, a refused -Muse run left EEG_SOURCE=muse beside the registry it had
-    just refused. And the *write* must follow the camera model provisioning:
-    applied early, a failed download exited with a camera entry in the
-    registry and FACE_ENABLED still false, a camera device with every channel
-    off, which the sidecar refuses to construct."""
+    """The check precedes every .env write; the apply follows camera model provisioning."""
     ps1 = _body_after_functions((ROOT / "start.ps1").read_text(encoding="utf-8"), "function Set-EnvKey {")
     check = _first_line(ps1, r"Update-DeviceRegistry \$eegEnv .*-DryRun")
     writes = [_first_line(ps1, p) for p in (
@@ -137,9 +113,7 @@ def test_the_registry_is_validated_before_any_write_and_applied_after_provisioni
     exits_between = [i for i in range(check, camera_apply) if re.search(r"^\s*exit 1", lines[i - 1])]
     assert exits_between and all(i < camera_apply for i in exits_between)
 
-    # And the summary reads the key back: rebuilt from two variables it
-    # printed default:muse@8765,camera:face@0 for a registry that also held
-    # station2:muse@8766.
+    # The summary reads the key back rather than rebuilding it from two variables.
     assert "EEG_DEVICES = $headband" not in ps1 and "EEG_DEVICES = default:sim,camera" not in sh
 
 
@@ -211,10 +185,7 @@ def test_start_ps1_camera_branch_composes_onto_the_registry(tmp_path, line, head
 
 def _sh_functions() -> str:
     src = (ROOT / "start.sh").read_text(encoding="utf-8")
-    # The real set_env_key uses BSD `sed -i ''` (the script is macOS-only by
-    # design), which GNU sed on a Windows Git Bash misreads. A portable
-    # stand-in with the same contract keeps the function under test the real
-    # one and the helper out of the way.
+    # The real set_env_key uses BSD `sed -i ''`, which Git Bash's GNU sed misreads; same-contract stand-in.
     shim = (
         "set_env_key() {\n"
         "    local path=\"$1\" key=\"$2\" value=\"$3\" tmp\n"

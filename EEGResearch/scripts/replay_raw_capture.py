@@ -3,12 +3,8 @@ processor on the "local" calm source, and print the per-segment result.
 
     python scripts/replay_raw_capture.py C:/eeg_captures/2026-09-14_raw.jsonl
 
-Feeds every frame to `SpectrumEstimator` in order at the bridge's nominal
-rate and scores one tick per `--hz` through `SignalProcessor(calm_source=
-"local")` with the frame's SDK bands and contact, as the sidecar would. The
-per-segment medians of the alpha residual are the numbers EEG_REFERENCE.md
-quotes for the capture; a change to the estimator is scored by whether they
-move. Nothing here writes inside the repo.
+Scores one tick per `--hz` as the sidecar would; the per-segment alpha-residual medians are
+EEG_REFERENCE.md's numbers. Writes nothing inside the repo.
 """
 
 from __future__ import annotations
@@ -44,9 +40,7 @@ def read_frames(path: str):
 
 def replay(path: str, hz: float = 4.0, arm_at: str | None = None,
            poison_seconds: float | None = None, calm_centre_on_arm: str = "keep") -> dict[str, dict]:
-    """Replay under one setting of the two open decisions: how long an
-    artifact poisons the buffer, and what calm is centred on between the arm
-    and its new latch. Defaults are the shipped behaviour."""
+    """Replay under one poison duration and arm-centring choice; defaults are the shipped behaviour."""
     est = SpectrumEstimator(poison_seconds=poison_seconds)
     clock = [0.0]
     proc = SignalProcessor(calm_source="local", clock=lambda: clock[0],
@@ -73,17 +67,13 @@ def replay(path: str, hz: float = 4.0, arm_at: str | None = None,
         last, pending = pending[-1], []
         f = proc.update(last, meta, spectrum=spectrum)
         if poisons_buffer(f.get("artifact_reason")):
-            # As DeviceSession._loop does: the gate held this tick and the
-            # window still holds the blink. Without it a blink contaminated
-            # four seconds of estimates here that the sidecar withholds.
+            # As DeviceSession._loop does: the window still holds the artifact.
             est.poison()
         state = eng.infer_state(f)
         bucket = out.setdefault(seg, {"alpha": [], "calm": [], "focus": [], "labels": {}, "n": 0,
                                       "fresh": 0, "artifact": 0, "poisoned": 0, "stale": 0})
         bucket["n"] += 1
-        # Availability under the gate: how often the local calm was a fresh
-        # estimate, held by an artifact tick, withheld by the poison, and
-        # carried past the hold cap (the mapper nulls stress there).
+        # Local-calm availability: fresh, artifact-held, poison-withheld, past the hold cap.
         bucket["fresh"] += bool(f["spectrum_ready"])
         bucket["artifact"] += poisons_buffer(f.get("artifact_reason"))
         bucket["poisoned"] += f.get("spectrum_reason") == "artifact"
@@ -130,9 +120,7 @@ def print_report(out: dict[str, dict]) -> None:
         med = lambda xs: f"{statistics.median(xs):+.3f}" if xs else "   --"
         pct = lambda k: f"{100 * b[k] / b['n']:4.0f}%"
         calm = [c / 100 for c in b["calm"]]
-        # Share of ticks under each candidate stressed line: the table the
-        # local line is set from, so it is printed by the same run as the
-        # availability it depends on.
+        # Share of ticks under each candidate stressed line.
         under = " ".join(f"{100 * sum(c < l for c in calm) / len(calm):5.0f}%" for l in LINES)
         print(f"{seg:20} {b['n']:5d} {med(b['alpha']):>11} {statistics.median(b['calm']):6.1f} "
               f"{statistics.median(b['focus']):6.1f} | {pct('fresh')} {pct('artifact')} "

@@ -1,10 +1,4 @@
-"""The payload says whether each score is centred on the session yet.
-
-Pre-latch was a 45-second opening window. On the local source the calm
-latch needs 45 covered seconds of ticks that carried a calm, and a poisoned
-tick carries none, so a session can run to its end scored against the
-population midpoint -- indistinguishable on the row from a centred one.
-"""
+"""The payload says whether each score is centred on the session yet."""
 
 from __future__ import annotations
 
@@ -35,10 +29,7 @@ def test_on_the_sdk_source_both_scores_centre_together():
 
 
 def test_calm_centred_is_the_calm_latch_on_every_source():
-    """`_centre("calm")` reads `_calm_ready` on both sources, so the flag
-    reports that and never focus's latch as a proxy: with the calm latch
-    withheld on the sdk source, the row must say calm is not centred while
-    the scorer is still returning the population midpoint."""
+    """The flag reports `_calm_ready`, never focus's latch as a proxy."""
     t = Ticker()
     t.run(BANDS, 4 * int(SignalProcessor.BASELINE_SECONDS) + 8)
     p = t.processor

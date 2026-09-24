@@ -1,63 +1,13 @@
 #!/usr/bin/env python3
 """Confirm the face-mesh index table against a real face.
 
-`face_landmarks.MEDIAPIPE_INDICES` maps mesh indices onto named face parts and
-**has never been checked against hardware** -- MediaPipe 1.0.0 ships no
-canonical mesh file and CI has no camera. `check_topology` catches a grossly
-wrong index, but not the mistake that matters most: a left/right swap, which a
-mirrored face satisfies just as well.
-
-That check needs a person, a webcam and about two minutes, so this script is
-that check as one command rather than twenty minutes of assembling a camera
-loop first.
-
-Records **no video**, like `capture_face_rgb.py`: each frame is reduced to
-angles and offsets, then dropped.
-
-    python scripts/verify_landmarks.py
-
-Needs both camera extras:
-
-    pip install -e ".[face,gaze]"
-
-Also cross-checks the **Haar cascade** against the mesh on the same frames
-before the three steps, since `face_roi.FaceLocator` had no camera check at
-all and depends on `cv2.data.haarcascades` shipping inside the wheel -- which a
-packaging change can move silently (and did, when `face` moved from
-`opencv-python` to `opencv-contrib-python`).
-
-What it decides
----------------
-Three prompted steps, each with an automatic verdict:
-
-1. **Square on** -- pose should read near zero on all three angles. Failing
-   here means the canonical model or the pose maths is wrong, or the index
-   table is mirrored -- both make the fit unresolvable and surface as
-   `implausible_pose`. Confirmed against hardware 2026-08-12: a wrong-handed
-   model refused all 120 frames.
-2. **Eyes hard left, head still** -- `gaze.x` must go positive, since the
-   frame isn't mirrored and gaze is measured in image x. Checks iris tracking
-   and sign convention. **Cannot detect a left/right swap** -- both eyes are
-   averaged in image coordinates, so permuting the labels returns the same
-   number.
-3. **Turn your head left** -- `yaw` must go positive, for the same reason.
-   This is the step that actually adjudicates the mapping, because yaw comes
-   from a pose fit that has a handedness -- a mirrored table makes that fit
-   fail rather than just read wrong. A modest turn: the bar is 10 degrees, and
-   past roughly 70 degrees the landmark set stops being usable at all
-   (`check_topology` refuses as `nose_outside_eyes`).
-
-Steps 2 and 3 test different things over different parts of the table -- iris
-tracking and sign for one, the pose fit's handedness for the other.
-
-**Don't judge direction from another app's camera preview** -- video-call
-software usually mirrors the image; this reads the raw, unmirrored frame.
-"My left" below always means the left side of your own body.
+Needs `pip install -e ".[face,gaze]"`, a webcam and a person; records no video. Cross-checks the
+Haar cascade against the mesh, then three steps: square on (pose near zero), eyes hard left
+(`gaze.x` positive; blind to a left/right swap), head left (`yaw` positive; the step that catches a
+mirrored table). The frame is unmirrored: "left" means the subject's own left.
 """
 
-# ASCII only in everything this prints. A Windows console defaults to cp1252,
-# which can't encode box-drawing characters or arrows, and would crash with a
-# traceback before the check even runs.
+# ASCII only in everything this prints: a cp1252 Windows console crashes on anything else.
 
 from __future__ import annotations
 
@@ -73,35 +23,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.app.services.face_geometry import gaze, head_pose      # noqa: E402
 from src.app.services.face_landmarks import FaceMeshLandmarker  # noqa: E402
 
-# How far a value has to move to count as a deliberate look, not noise. Gaze
-# is -1..1 across the eye opening; 0.15 is well above landmark wobble and well
-# below what a hard look reaches, so pass/fail stays unambiguous.
+# Gaze is -1..1; 0.15 is above landmark wobble and well below a hard look.
 GAZE_THRESHOLD = 0.15
 YAW_THRESHOLD = 10.0
 
-# Loose on purpose: this step checks the maths is sane, not that the subject
-# is a tripod.
+# Degrees; loose on purpose, this checks the maths, not a steady head.
 SQUARE_ON_TOLERANCE = 20.0
 
 
 class Gui:
     """A live preview of the three steps, drawn with OpenCV. Opt-in (`--gui`).
 
-    This check hunts a sign error, and the headless version asks you to move
-    blind and reads the verdict back four seconds later -- a FAIL can't tell a
-    wrong mapping from someone who looked the wrong way. Watching the number
-    move live fixes that.
-
-    Two properties it must not break:
-
-    * **The preview is never mirrored.** The whole question is which way is
-      left, so a mirrored preview here would be the exact trap the docstring
-      warns against, with this script's authority behind it.
-    * **Nothing is written to disk.** Frames are drawn and dropped, same as
-      the headless path; a test asserts no persisting call appears here.
-
-    Degrades rather than fails: a headless OpenCV build has no `imshow`, so
-    the constructor raises and `main` falls back to the terminal flow.
+    Never mirrored, and never writes to disk (a test asserts it). A headless OpenCV build
+    raises in the constructor and `main` falls back to the terminal flow.
     """
 
     WINDOW = "verify_landmarks -- NOT MIRRORED"
@@ -138,21 +72,11 @@ class Gui:
                           scale, colour, weight, self._cv2.LINE_AA)
 
     def _canvas(self, frame):
-        """RGB in, BGR out.
-
-        Every layer above `OpenCvFrameSource.read()` assumes RGB, but `imshow`
-        wants BGR -- skip the conversion and the preview looks blue-tinted in
-        a way that gets blamed on the camera.
-        """
+        """RGB in (as from `OpenCvFrameSource.read()`), BGR out for `imshow`."""
         return self._cv2.cvtColor(frame, self._cv2.COLOR_RGB2BGR)
 
     def _landmarks(self, img, named) -> None:
-        """Every named point, with the irises picked out.
-
-        "the iris landmarks are not tracking" is a possible verdict, and it's
-        one a reader can't act on without seeing whether the dots sit on the
-        eyes.
-        """
+        """Every named point, with the irises picked out."""
         for name, (x, y) in named.items():
             iris = name.endswith("_iris")
             self._cv2.circle(img, (int(x), int(y)), 4 if iris else 2,
@@ -199,10 +123,7 @@ class Gui:
             self._text(img, "NO FACE", (w // 2 - 60, img.shape[0] // 2),
                        self.BAD, 1.0, 2)
         else:
-            # A face WAS found but the landmark set was refused (e.g. near
-            # profile, where the nose crosses the far eye corner). Different
-            # from "no face" and shown as such, or it reads as a lighting
-            # problem.
+            # Face found but landmarks refused (e.g. near profile): not "no face".
             self._text(img, "FACE FOUND, LANDMARKS REFUSED",
                        (w // 2 - 240, img.shape[0] // 2 - 16), self.BAD, 0.85, 2)
             self._text(img, reason, (w // 2 - 100, img.shape[0] // 2 + 14),
@@ -252,12 +173,9 @@ class Gui:
 
 def _collect(landmarker, source, seconds: float, width: int, height: int,
              reasons: dict | None = None, gui=None, **render) -> list:
-    """Poses and gazes over a few seconds, with the refusals counted.
+    """Poses and gazes over a few seconds.
 
-    `reasons`, when given, tallies why each empty frame was empty (`no_face`
-    from the detector, vs. a `check_topology` refusal). Without it, a step
-    that measured nothing would report no refusals either, since the other
-    tallies only cover usable samples.
+    `reasons`, when given, tallies why each empty frame was empty (`no_face` vs a topology refusal).
     """
     samples = []
     deadline = time.perf_counter() + seconds
@@ -271,8 +189,7 @@ def _collect(landmarker, source, seconds: float, width: int, height: int,
             reasons[why] = reasons.get(why, 0) + 1
         pose, gz = (head_pose(named), gaze(named)) if named else (None, None)
         if gui is not None:
-            # Drawn before `continue`, so a no-face stretch shows as NO FACE
-            # rather than a frozen window.
+            # Before `continue`, so a no-face stretch doesn't freeze the window.
             gui.frame(frame, named, pose or head_pose({}), gz or gaze({}),
                       progress=1.0 - (deadline - time.perf_counter()) / seconds,
                       reason=None if named else why, **render)
@@ -311,8 +228,6 @@ def _step(name: str, instruction: str, landmarker, source, seconds, w, h,
         "roll": _median([p.roll for p in poses]),
         "gaze_x": _median([g.x for g in gazes]),
         "gaze_y": _median([g.y for g in gazes]),
-        # Says which gate stopped a step that measured nothing, rather than
-        # just reporting no data.
         "pose_refusals": sorted({p.rejected_by for p in poses if p.rejected_by}),
         "gaze_refusals": sorted({g.rejected_by for g in gazes if g.rejected_by}),
     }
@@ -323,8 +238,6 @@ def _step(name: str, instruction: str, landmarker, source, seconds, w, h,
         print(f"   refusals: pose={measured['pose_refusals'] or '-'} "
               f"gaze={measured['gaze_refusals'] or '-'}")
     if empty:
-        # These are the frames that produced no face at all, and why -- a
-        # detector miss reads differently from a topology refusal.
         print("   empty frames: "
               + ", ".join(f"{why}={n}" for why, n in sorted(empty.items())))
     return measured
@@ -333,15 +246,7 @@ def _step(name: str, instruction: str, landmarker, source, seconds, w, h,
 def _cascade_agrees(source, landmarker, width, height, seconds=2.0) -> dict:
     """Do the Haar cascade and the mesh find a face on the same frames?
 
-    Run against both detectors deliberately. A Haar miss on its own is
-    ambiguous (bad light, a turned head), so it can't support a verdict. A
-    Haar miss on frames where the mesh *did* find a face is not ambiguous:
-    the cascade itself is broken.
-
-    `face_roi.FaceLocator` gates the colour sample and the emotion crop and
-    had no camera check at all, despite depending on `cv2.data.haarcascades`
-    shipping inside the wheel -- something a packaging change can move
-    silently.
+    A Haar miss alone is ambiguous; a Haar miss where the mesh found a face means the cascade is broken.
     """
     from src.app.services.face_roi import FaceLocator      # noqa: PLC0415
     import numpy as np                                     # noqa: PLC0415
@@ -367,15 +272,12 @@ def _cascade_agrees(source, landmarker, width, height, seconds=2.0) -> dict:
         out["haar"] += 1
         if classifier is None:
             continue
-        # The emotion path, end to end, on a real box -- otherwise only
-        # exercised against an injected fake session.
+        # The emotion path end to end on a real box.
         from src.app.services.face_emotion import to_gray64  # noqa: PLC0415
 
         crop = to_gray64(frame, box)
         if crop is None:
-            # `to_gray64` refuses rather than upsampling a box smaller than
-            # the model's input. If this fired often, the channel would be
-            # quietly thin instead of obviously broken.
+            # `to_gray64` refuses to upsample a box smaller than the model input.
             out["crops_refused"] += 1
             continue
         out["crops"] += 1
@@ -391,12 +293,7 @@ def _cascade_agrees(source, landmarker, width, height, seconds=2.0) -> dict:
 
 
 def _emotion_classifier():
-    """A real FER+ classifier, or None if this machine hasn't provisioned one.
-
-    None rather than a failure: the emotion model is a separate 35 MB download
-    and a gaze-only install legitimately lacks it. Failing here would make
-    the landmark check depend on a channel it isn't about.
-    """
+    """A real FER+ classifier, or None if not provisioned (a gaze-only install lacks it)."""
     from pathlib import Path as _Path                       # noqa: PLC0415
 
     model = _Path(os.environ.get("FACE_EMOTION_MODEL_PATH")
@@ -431,8 +328,7 @@ def _cross_check_verdict(agree: dict) -> int | None:
     else:
         print("   OK  both detectors agree there is a face")
 
-    # The emotion path, on the same frames. FER+ is on by default and reaches
-    # a parent's report, so it deserves the same camera check as gaze.
+    # The emotion path, on the same frames.
     if not agree["emotion_available"]:
         print("   SKIP  no FER+ model here, so the emotion path is "
               "unchecked (./start.ps1 -Camera provisions it)")
@@ -462,9 +358,7 @@ def _cross_check_verdict(agree: dict) -> int | None:
     else:
         print("   OK  crops reach the model; it declined to label them, "
               "which is a reading it is entitled to make")
-    # Deliberately no claim about the label itself. FER+ has no ground truth
-    # you can assert from a chair, and its accuracy on this product's users
-    # is a separate, documented weakness. This only confirms the plumbing.
+    # No claim about label accuracy: FER+ on children is a documented weakness.
     print("   (plumbing only -- this says nothing about whether the "
           "label is correct)")
     return None
@@ -508,9 +402,7 @@ def _verdict(square, eyes, head) -> int:
         report(False, f"gaze.x barely moved ({gx}) - look harder, or the iris "
                       f"landmarks are not tracking")
 
-    # Step 3 is skipped when step 1 fails; step 2 is not. `gaze` never touches
-    # the rotation fit, so it's unaffected by a wrong canonical model. `yaw`
-    # comes straight out of that fit, so it's meaningless until step 1 passes.
+    # A step 1 failure skips step 3 (yaw comes from the pose fit) but not step 2 (gaze doesn't).
     if not square_ok:
         print("   SKIP  turning left: yaw comes from the pose fit, which step 1 "
               "says is wrong")
@@ -569,10 +461,7 @@ def main() -> int:
               f"install it:  pip install mediapipe", file=sys.stderr)
         return 2
 
-    # The constructor opens the camera; there's no separate open(). Wrapped
-    # like the two setup steps above it, since a missing/busy/denied camera
-    # is the likeliest failure here and deserves a clear message, not a raw
-    # traceback.
+    # The constructor opens the camera.
     try:
         source = OpenCvFrameSource(camera_index=args.camera, fps=args.fps)
     except Exception as exc:                                   # noqa: BLE001
@@ -586,8 +475,7 @@ def main() -> int:
         try:
             gui = Gui()
         except Exception as exc:                               # noqa: BLE001
-            # A headless OpenCV build has no imshow. Fall back to the
-            # terminal instead of refusing -- the check itself is unaffected.
+            # Headless OpenCV has no imshow; the terminal flow still works.
             print(f"no GUI available ({exc}); continuing without the preview",
                   file=sys.stderr)
 

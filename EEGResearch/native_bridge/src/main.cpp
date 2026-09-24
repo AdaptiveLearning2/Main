@@ -37,8 +37,7 @@ void append_json_quoted_string(std::ostringstream& o, const std::string& s) {
 void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService& svc,
                                  const BridgeTcpServer* server = nullptr) {
     if (server) {
-        // Lines dropped by the transport, distinct from samples dropped by
-        // the queue. Neither shows up in the samples themselves.
+        // Dropped by the transport, distinct from samples dropped by the queue.
         o << ",\"tcp_dropped_lines\":" << server->dropped_lines();
     }
     o << ",\"bridge_mode\":\"" << svc.bridge_mode() << "\""
@@ -59,17 +58,12 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
     append_json_quoted_string(o, svc.active_muse_name());
     o << ",\"firmware_version\":";
     append_json_quoted_string(o, svc.firmware_version());
-    // optical_supported tells a consumer a headband with no PPG hardware
-    // apart from one whose PPG just stopped.
     o << ",\"muse_model\":";
     append_json_quoted_string(o, svc.muse_model());
-    // requested_preset is what we asked for; active_preset (below) is what the
-    // headband reports back. set_preset() returns void, so comparing the two
-    // is the only way to notice a request the device ignored.
+    // set_preset() returns void, so requested vs active is the only way to see an ignored request.
     o << ",\"requested_preset\":";
     append_json_quoted_string(o, svc.requested_preset());
-    // One fetch for both fields so a preset change mid-status can't split a
-    // preset and channel count from either side of the change onto one line.
+    // One fetch, so preset and channel count can't straddle a preset change.
     const DeviceConfig device = svc.device_config();
     o << ",\"active_preset\":";
     append_json_quoted_string(o, device.preset);
@@ -81,9 +75,7 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
         o << "null";
     }
     o << ",\"optical_supported\":" << (svc.optical_supported() ? "true" : "false");
-    // null until the first BATTERY packet arrives (libMuse fires it on its own
-    // schedule, not on connect) -- most of the first minute of a session.
-    // null, not 0: 0% is a real reading a student needs to act on.
+    // null until the first BATTERY packet (libMuse's own schedule, not on connect); 0% is real.
     o << ",\"battery_percent\":";
     const double battery = svc.battery_percent();
     if (battery >= 0.0) {
@@ -92,18 +84,14 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
         o << "null";
     }
 
-    // Optical evidence: counts, latest sample, and libMuse's own quality
-    // verdicts -- counters rather than a stream, since what we need to know
-    // first is whether a given preset emits OPTICS at all and how many channels.
+    // Optical counters, latest sample and libMuse's quality verdicts.
     const OpticalSignals optical = svc.optical_signals();
     o << ",\"optics_packets\":" << optical.optics_packets
       << ",\"optics_dropped\":" << optical.optics_dropped
       << ",\"ppg_packets\":" << optical.ppg_packets
       << ",\"optics_values\":" << optical.optics_values
       << ",\"ppg_values\":" << optical.ppg_values;
-    // Age, not the raw steady_clock stamp (which is process-local and means
-    // nothing to a reader). Lets a consumer tell a live stream from a burst
-    // that stopped. null before the first packet, distinct from "just arrived".
+    // Age, not the process-local steady_clock stamp; null before the first packet.
     const long long optical_age = svc.optical_age_ms();
     o << ",\"optics_age_ms\":";
     if (optical_age < 0) {
@@ -137,8 +125,7 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
     } else {
         o << "null";
     }
-    // null until the headband reports anything -- "bad signal" and "no report
-    // yet" are different, and only one of them justifies falling back.
+    // null until reported: "bad signal" and "no report yet" differ.
     o << ",\"is_ppg_good\":";
     if (optical.has_ppg_good) {
         o << (optical.ppg_good ? "true" : "false");
@@ -158,8 +145,7 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
       << ",\"beta\":" << bands.beta
       << ",\"gamma\":" << bands.gamma;
 
-    // Per-electrode contact quality from the headband. null when the packet
-    // hasn't arrived yet, so "not reported" stays distinct from a real reading.
+    // Per-electrode contact quality; null until the packet arrives.
     const ContactQuality contact = svc.contact_quality();
     o << ",\"hsi\":";
     if (contact.has_hsi) {
@@ -178,18 +164,14 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
         o << "null";
     }
 
-    // Additive: muse_connected keeps meaning "the link is up right now", and
-    // these say whether the bridge is busy bringing it back. A consumer that
-    // reads only muse_connected sees a drop; one that reads these can show
-    // "reconnecting" instead of "gone" and hold off its own retry.
+    // muse_connected still means "link up now"; these say whether the bridge is bringing it back.
     const ReconnectStatus rs = svc.reconnect_status();
     o << ",\"auto_reconnect\":" << (rs.enabled ? "true" : "false")
       << ",\"reconnecting\":" << (rs.reconnecting ? "true" : "false")
       << ",\"reconnect_attempt\":" << rs.attempt
       << ",\"reconnect_max_attempts\":" << rs.max_attempts
       << ",\"reconnect_exhausted\":" << (rs.exhausted ? "true" : "false");
-    // null before the first packet of a connection, and whenever not
-    // connected -- "never arrived" is not "arrived 0ms ago".
+    // null before a connection's first packet and whenever not connected.
     o << ",\"eeg_age_ms\":";
     if (rs.eeg_age_ms < 0) {
         o << "null";
@@ -251,9 +233,7 @@ void handle_bridge_command_line(const std::string& line, MuseBridgeService& svc,
     if (cmd.empty()) {
         return;
     }
-    // Every command from a person cancels the automatic recovery first: a
-    // click means they are driving now, and a reconnect landing after their
-    // disconnect would re-pair a headband they just released.
+    // Every command cancels auto-reconnect first, or it could re-pair a headband just released.
     if (cmd == "refresh") {
         svc.cancel_auto_reconnect();
         svc.refresh_scan();
@@ -303,8 +283,7 @@ int main() {
     std::signal(SIGTERM, handle_signal);
 
 #if defined(ENABLE_LIBMUSE)
-    // MTA lets refresh_bluetooth_state() block on Radio::GetRadiosAsync().get()
-    // safely -- this process has no message pump to deadlock, unlike a UI app.
+    // MTA: refresh_bluetooth_state() may block on GetRadiosAsync().get(); no message pump here.
     try {
         winrt::init_apartment();
     } catch (const winrt::hresult_error& e) {
@@ -357,19 +336,14 @@ int main() {
             last_status = clock::now();
         }
 
-        // Before the EEG branch below, which `continue`s: while samples are
-        // flowing nothing here is due, but the watchdog and a pending attempt
-        // both have to be looked at on every iteration regardless.
+        // Before the EEG branch, which `continue`s: the watchdog must run every iteration.
         muse_service.service_auto_reconnect();
 
-        // Drain optics fully, not one per loop: at 64Hz they arrive in bursts
-        // between 256Hz EEG samples, and queuing them behind poll_frame's
-        // 200ms wait would jitter the timestamps RMSSD is computed from.
+        // Drain optics fully: behind poll_frame's 200ms wait, 64Hz bursts would jitter RMSSD timestamps.
         OpticsFrame optics{};
         while (muse_service.poll_optics(optics)) {
             std::ostringstream payload;
-            // 12 significant digits, not ostringstream's default 6 -- the
-            // signal lives in low-order bits that 6 digits would truncate.
+            // 12 significant digits: the signal lives in low-order bits the default 6 truncate.
             payload << std::setprecision(12);
             payload << "{\"kind\":\"optics\",\"seq\":" << optics.seq
                     << ",\"mono_ts_ms\":" << optics.mono_ts_ms
@@ -379,8 +353,7 @@ int main() {
                     payload << ',';
                 }
                 const double v = optics.ch[static_cast<size_t>(i)];
-                // nan/inf aren't valid JSON; emitting them would break parsing
-                // of the whole line over one bad sample.
+                // nan/inf aren't valid JSON and would break the whole line.
                 if (std::isfinite(v)) {
                     payload << v;
                 } else {
@@ -388,9 +361,7 @@ int main() {
                 }
             }
             payload << "]}";
-            // No append_bridge_device_fields here: at 64Hz that would repeat
-            // every status field 64 times a second; the status line already
-            // carries them at 5Hz.
+            // No device fields at 64Hz; the 5Hz status line carries them.
             server.send_json_line(payload.str());
         }
 

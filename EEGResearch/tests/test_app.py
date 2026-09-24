@@ -68,9 +68,7 @@ def test_muse_status_returns_ingestion_shape():
 
 
 def test_state_endpoint_serializes_no_signal_payload():
-    # signal_quality is a strict Pydantic Literal, so a "no_signal" payload
-    # must actually serialize through /api/v1/state, not just be valid as an
-    # in-memory dict, or a real disconnect would 500 instead of zeroing scores.
+    # signal_quality is a strict Literal; a failed serialize would 500 on disconnect.
     client = TestClient(app)
     settings = get_settings()
     learner_headers = {"Authorization": f"Bearer {settings.api_token}"}
@@ -90,8 +88,7 @@ def test_state_endpoint_serializes_no_signal_payload():
 
 
 def test_muse_refresh_returns_ok_false_when_the_adapter_has_no_command_channel():
-    # The simulator now answers these commands (tests/test_sim_device.py);
-    # what still refuses is a device with nothing to command -- a camera.
+    # A device with nothing to command, e.g. a camera.
     client = TestClient(app)
     settings = get_settings()
     admin_headers = {"Authorization": f"Bearer {settings.admin_token}"}
@@ -152,9 +149,7 @@ def test_session_lifecycle_and_state():
 
 def test_adaptation_cooldown_holds_previous_state():
     engine = AdaptationEngine()
-    # A label needs persist_ticks consecutive readings before the cooldown
-    # or the scale is what's under test; that rule has its own tests in
-    # test_signal_processing.py, so it is switched off here.
+    # Persistence has its own tests in test_signal_processing.py.
     engine.persist_ticks = 1
     engine.cooldown_seconds = 1000.0
     first = engine.infer_state({"focus_score": 0.9, "calm_score": 0.8, "confidence": 0.9})
@@ -166,9 +161,6 @@ def test_adaptation_cooldown_holds_previous_state():
 
 def test_adaptation_accepts_percentage_confidence_scale():
     engine = AdaptationEngine()
-    # A label needs persist_ticks consecutive readings before the cooldown
-    # or the scale is what's under test; that rule has its own tests in
-    # test_signal_processing.py, so it is switched off here.
     engine.persist_ticks = 1
     engine.cooldown_seconds = 0.0
     low = engine.infer_state({"focus_score": 0.6, "calm_score": 0.6, "confidence": 30.0})
@@ -179,9 +171,6 @@ def test_adaptation_accepts_percentage_confidence_scale():
 
 def test_adaptation_accepts_percentage_focus_and_calm_scales():
     engine = AdaptationEngine()
-    # A label needs persist_ticks consecutive readings before the cooldown
-    # or the scale is what's under test; that rule has its own tests in
-    # test_signal_processing.py, so it is switched off here.
     engine.persist_ticks = 1
     engine.cooldown_seconds = 0.0
     focused = engine.infer_state({"focus_score": 80.0, "calm_score": 70.0, "confidence": 90.0})
@@ -241,9 +230,7 @@ def test_apply_bridge_ingestion_fields_ignores_malformed_numeric_values():
 
 
 def test_apply_bridge_ingestion_fields_passes_optical_fields_through():
-    """A field the bridge emits but the whitelist omits is dropped silently
-    and looks from outside like a bridge that never sent it. That's why every
-    field the bridge sends has to be named here."""
+    """A field the whitelist omits is dropped silently, like a bridge that never sent it."""
     target: dict = {}
     _apply_bridge_ingestion_fields(target, {
         "muse_model": "MS-03",
@@ -270,10 +257,7 @@ def test_apply_bridge_ingestion_fields_passes_optical_fields_through():
 
 
 def test_apply_bridge_ingestion_fields_keeps_unknown_distinct_from_false_and_zero():
-    """null means the headband hasn't reported yet; False means it reported a
-    bad signal. Only False justifies falling back to another source, so the
-    two must stay distinct. Same reasoning for eeg_channel_count and
-    optics_age_ms, where 0 is a real reading, not a sentinel."""
+    """null is not yet reported; only a reported False justifies falling back. 0 is real."""
     target: dict = {}
     _apply_bridge_ingestion_fields(target, {
         "is_ppg_good": None,
@@ -293,10 +277,7 @@ def test_apply_bridge_ingestion_fields_keeps_unknown_distinct_from_false_and_zer
 
 
 def test_apply_bridge_ingestion_fields_carries_battery_and_keeps_zero_from_unknown():
-    """0% is a real charge and the reading the badge exists to show. The
-    bridge sends null until a BATTERY packet arrives, which can take most of
-    the first minute -- collapsing null and 0 would draw an empty battery for
-    a headband that just hasn't reported yet."""
+    """null until a BATTERY packet arrives (up to a minute); 0% is a real charge."""
     measured: dict = {}
     _apply_bridge_ingestion_fields(measured, {"battery_percent": 82.0})
     assert measured["battery_percent"] == 82.0
@@ -309,8 +290,7 @@ def test_apply_bridge_ingestion_fields_carries_battery_and_keeps_zero_from_unkno
     _apply_bridge_ingestion_fields(unreported, {"battery_percent": None})
     assert unreported["battery_percent"] is None
 
-    # An old bridge predating the field leaves the key absent entirely -- a
-    # third state, distinct from both null and 0.
+    # An older bridge leaves the key absent: a third state.
     absent: dict = {}
     _apply_bridge_ingestion_fields(absent, {"muse_model": "MS-03"})
     assert "battery_percent" not in absent
@@ -340,11 +320,7 @@ def test_enrich_ingestion_dict_excludes_band_fields():
 
 
 class _ReaderThreadStub:
-    """Stand-in for TcpMuseBridgeAdapter's reader thread.
-
-    read_sample() calls is_alive() on the timeout path and disconnect() joins
-    the thread, so a bare object() won't work as a stand-in.
-    """
+    """Stand-in for TcpMuseBridgeAdapter's reader thread (is_alive() and join())."""
 
     def __init__(self, alive=True):
         self._alive = alive
@@ -359,8 +335,7 @@ class _ReaderThreadStub:
 
 def test_tcp_bridge_read_sample_times_out_instead_of_blocking_forever():
     adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=8765, timeout_seconds=1)
-    # Reader alive but no data arriving: should time out rather than block
-    # forever, and leave the connection in place for the next poll.
+    # Reader alive, no data: time out and keep the connection for the next poll.
     adapter._reader_thread = _ReaderThreadStub(alive=True)
     started = time.monotonic()
     with pytest.raises(RuntimeError, match="No EEG sample received from bridge"):
@@ -370,9 +345,7 @@ def test_tcp_bridge_read_sample_times_out_instead_of_blocking_forever():
 
 
 def test_tcp_bridge_read_sample_resets_connection_when_reader_died():
-    # Reader thread exited (bridge disconnected): read_sample() should raise a
-    # recoverable error and tear the connection down so the next call
-    # reconnects instead of waiting on a queue nothing feeds.
+    # Reader exited: tear down so the next call reconnects rather than waiting forever.
     adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=8765, timeout_seconds=1)
     stub = _ReaderThreadStub(alive=False)
     adapter._reader_thread = stub
@@ -415,9 +388,7 @@ def test_signal_processor_muse_range_produces_non_saturated_features():
 
 
 def test_signal_processor_uses_band_features_when_available():
-    # The ratios are smoothed over ~4 s before scaling (Phase 1 step 1.5),
-    # so each profile is held for long enough to settle, on advancing
-    # timestamps.
+    # Ratios are smoothed over ~4 s, so each profile is held long enough to settle.
     processor = SignalProcessor(window_size=4)
     t0 = datetime.now(timezone.utc)
     tick = [0]
@@ -444,19 +415,13 @@ def test_signal_processor_uses_band_features_when_available():
 
 
 def test_band_powers_are_treated_as_logarithmic_not_linear():
-    """libMuse ABSOLUTE band powers are Bels (logarithms), so they must be
-    converted with 10**x before being combined. Feeding them straight into
-    log() -- a logarithm of a logarithm -- and summing in log space made the
-    ratios meaningless, and could take log() of a negative sum since theta is
-    routinely negative."""
+    """libMuse ABSOLUTE band powers are Bels, so they are combined as 10**x."""
     processor = SignalProcessor(window_size=2)
-    # Real capture from a Muse S. theta is negative, which is normal on a log
-    # scale.
+    # A real Muse S capture; negative theta is normal on a log scale.
     live = {"delta": 0.360908, "theta": -0.0567422, "alpha": 0.205242,
             "beta": 0.212698, "gamma": 0.00128006}
     focus_lr, calm_lr = processor._extract_band_log_ratios(live)
 
-    # Expected values, computed on linear power (10**bels):
     #   focus = ln(10**0.2127) - ln(10**0.2052 + 10**-0.0567) ~= -0.419
     #   calm  = ln(10**0.2052) - ln(10**0.2127 + 10**0.00128) ~= -0.497
     assert focus_lr == pytest.approx(-0.419, abs=0.01)
@@ -474,15 +439,7 @@ def test_negative_band_values_do_not_break_ratio_extraction():
 
 
 def test_simulator_bands_stay_within_processor_ratio_bounds():
-    """The simulator produces band powers, so it must emit them on the same
-    scale the processor reads (Bels), across its whole state range.
-
-    Emitting linear magnitudes instead fails silently: the processor
-    exponentiates them to ~10**40, the log-ratios blow past their bounds, and
-    every spectral term clamps -- but scores still land in 0..100 with
-    nothing raising an error. Asserting on the raw ratios (not the scores)
-    is what actually catches this.
-    """
+    """Linear magnitudes would clamp every term silently; only the raw ratios show it."""
     processor = SignalProcessor(window_size=4)
     adapter = SimulatedMuseIngestionAdapter()
     adapter.connect()
@@ -508,10 +465,7 @@ def test_simulator_bands_stay_within_processor_ratio_bounds():
 
 
 def test_simulator_focus_and_calm_are_not_mirror_images():
-    """Under linear (not log) band values, alpha/beta would dominate theta/gamma
-    so heavily that focus and calm collapse to exact negations of each other,
-    and AdaptationEngine couldn't tell states apart. Moving calm_state must
-    move calm and leave focus alone."""
+    """Under linear band values focus and calm collapse to negations of each other."""
     processor = SignalProcessor(window_size=4)
     adapter = SimulatedMuseIngestionAdapter()
     adapter.connect()
@@ -524,15 +478,11 @@ def test_simulator_focus_and_calm_are_not_mirror_images():
 
     assert calm_hi > calm_lo + 0.1, "calm_state must move the calm ratio"
     assert focus_hi == pytest.approx(focus_lo, abs=0.01), "calm_state must not move the focus ratio"
-    # The mirroring failure mode: focus == -calm for every input.
     assert abs(focus_lo + calm_lo) > 0.1
 
 
 def test_absurd_band_values_fall_back_instead_of_raising():
-    """10.0**x overflows past ~308, meaning an upstream producer isn't
-    emitting Bels. This must be handled here rather than raising, or the
-    error escapes to stream_manager's broad except, which drops the tick and
-    freezes latest_payload at a stale value."""
+    """Raising here would drop the tick and freeze latest_payload at a stale value."""
     processor = SignalProcessor(window_size=2)
     assert processor._extract_band_log_ratios(
         {"alpha": 400.0, "beta": 1.0, "theta": 0.5, "gamma": 0.2}
@@ -547,7 +497,6 @@ def test_all_zero_bands_still_ignored_but_negative_bands_are_kept():
     assert processor._extract_band_log_ratios(
         {"theta": 0.0, "alpha": 0.0, "beta": 0.0, "gamma": 0.0}
     ) == (None, None)
-    # A frame where one band is negative is valid data, not an empty frame.
     focus_lr, _ = processor._extract_band_log_ratios(
         {"theta": -0.2, "alpha": 0.1, "beta": 0.3, "gamma": 0.0}
     )
@@ -555,15 +504,7 @@ def test_all_zero_bands_still_ignored_but_negative_bands_are_kept():
 
 
 def test_an_engaged_eyes_open_profile_reads_below_the_stressed_line_on_the_spectrum_alone():
-    """Alpha is suppressed during focused mental effort, so on the spectral
-    ratio alone, against the population bounds, an engaged eyes-open
-    profile scores calm *below* the AdaptationEngine "stressed" line
-    (calm_ratio < 0.35). Until Phase 1 step 1.1 it cleared the line only
-    because a quarter of the score was the raw-channel spread -- the strap,
-    not the spectrum. This pins the true state so that step 1.7, which sets
-    the line and the bounds from the reference capture, changes a test that
-    says why rather than one that hid it. The aroused profile must still
-    read lower: the ordering is the part that has to hold now."""
+    """Focused effort suppresses alpha; the aroused profile must still read lower."""
     processor = SignalProcessor(window_size=4)
     engaged = {"theta": -0.10, "alpha": 0.10, "beta": 0.45, "gamma": 0.05}
     features = None
@@ -579,7 +520,6 @@ def test_an_engaged_eyes_open_profile_reads_below_the_stressed_line_on_the_spect
     assert features["calm_score"] < 35.0, (
         "an engaged eyes-open profile now clears the stressed line -- if step "
         "1.7 moved the line or the bounds, retitle this test to say so")
-    # ...and a genuinely aroused/stressed profile reads lower still.
     stressed_processor = SignalProcessor(window_size=4)
     stressed = {"theta": -0.05, "alpha": -0.20, "beta": 0.60, "gamma": 0.35}
     stressed_features = None
@@ -597,8 +537,7 @@ def test_an_engaged_eyes_open_profile_reads_below_the_stressed_line_on_the_spect
 
 
 def _quality_for(meta, window_size=4):
-    """Run a steady, well-formed sample through the processor and return the
-    resulting signal_quality for the given ingestion metadata."""
+    """Features after a steady, well-formed window under the given ingestion metadata."""
     processor = SignalProcessor(window_size=window_size)
     features = None
     for _ in range(window_size):
@@ -615,17 +554,13 @@ def _quality_for(meta, window_size=4):
     return features
 
 
-# An engaged, eyes-open student: beta dominant, alpha suppressed. This is
-# normal while working through problems, but it drives calm_ratio below the
-# legacy "degraded" gate -- so signal_quality must come from electrode
-# contact, not calmness, or a well-fitted headband reports "poor".
+# Engaged, eyes open: low calm, so quality must come from contact, not calmness.
 _ENGAGED_BANDS = {"alpha": 20.0, "beta": 40.0, "theta": 5.0, "gamma": 5.0}
 
 
 def test_signal_quality_uses_electrode_contact_not_calmness():
     good = _quality_for({**_ENGAGED_BANDS, "hsi": [1, 1, 1, 1], "is_good": [1, 1, 1, 1]})
-    # Calm is genuinely low here (alpha suppressed) -- a calm-based rule would
-    # wrongly report this as "poor".
+    # Calm is genuinely low; a calm-based rule would say "poor".
     assert good["calm_score"] < 30.0
     assert good["signal_quality"] == "good"
 
@@ -641,16 +576,13 @@ def test_signal_quality_degrades_as_electrode_fit_worsens():
 
 
 def test_signal_quality_takes_worse_of_fit_and_validity():
-    # Electrodes seated well (hsi good) but most channels report bad data --
-    # the noisy signal must win over the optimistic fit reading.
+    # Seated well but mostly bad data: the noisy signal wins.
     features = _quality_for({**_ENGAGED_BANDS, "hsi": [1, 1, 1, 1], "is_good": [1, 0, 0, 0]})
     assert features["signal_quality"] == "poor"
 
 
 def test_signal_quality_is_not_flipped_by_a_single_blink():
-    """IS_GOOD dips on eye blinks and muscle movement, briefly zeroing the
-    frontal channels. A well-seated headband must not drop out of "good"
-    every time the student blinks."""
+    """IS_GOOD dips on blinks, briefly zeroing the frontal channels."""
     processor = SignalProcessor(window_size=8)
     seated = {**_ENGAGED_BANDS, "hsi": [1, 1, 1, 1]}
     sample = EegSample(
@@ -658,7 +590,6 @@ def test_signal_quality_is_not_flipped_by_a_single_blink():
         channel_tp9=740.0, channel_af7=760.0,
         channel_af8=755.0, channel_tp10=745.0,
     )
-    # Steady clean data, then one blink frame with both frontals bad.
     for _ in range(6):
         processor.update(sample, {**seated, "is_good": [1, 1, 1, 1]})
     blink = processor.update(sample, {**seated, "is_good": [1, 0, 0, 1]})
@@ -666,8 +597,6 @@ def test_signal_quality_is_not_flipped_by_a_single_blink():
 
 
 def test_sustained_bad_data_still_degrades_quality():
-    # Smoothing must not hide a genuinely bad channel: enough consecutive bad
-    # frames should still pull quality down.
     processor = SignalProcessor(window_size=8)
     seated = {**_ENGAGED_BANDS, "hsi": [1, 1, 1, 1]}
     sample = EegSample(
@@ -682,24 +611,18 @@ def test_sustained_bad_data_still_degrades_quality():
 
 
 def test_signal_quality_falls_back_when_contact_data_absent():
-    # Older bridge with no HSI/IS_GOOD: the legacy calm/confidence heuristic
-    # applies and must be labelled as such, so callers don't mistake it for a
-    # statement about the electrodes.
+    # No HSI/IS_GOOD: the heuristic applies and is labelled so.
     explicit_none = _quality_for({**_ENGAGED_BANDS, "hsi": None, "is_good": None})
     absent = _quality_for(_ENGAGED_BANDS)
     assert explicit_none["signal_quality"] == absent["signal_quality"]
     assert explicit_none["quality_basis"] == "heuristic"
     assert absent["quality_basis"] == "heuristic"
-    # An engaged learner trips the heuristic's calm gate, so it reports "poor"
-    # for a perfectly good signal -- why quality_basis exists.
+    # The heuristic's calm gate calls an engaged learner "poor".
     assert absent["signal_quality"] == "poor"
 
 
 def test_heuristic_poor_is_distinguishable_from_contact_poor():
-    """Both report "poor", but only one means the electrodes are bad.
-    Consumers gate data collection on this distinction; collapsing it would
-    make an outdated bridge silently record nothing for a whole session.
-    """
+    """Consumers gate collection on this; collapsing it would record nothing on an old bridge."""
     heuristic = _quality_for(_ENGAGED_BANDS)
     contact = _quality_for({**_ENGAGED_BANDS, "hsi": [4, 4, 4, 4], "is_good": [0, 0, 0, 0]})
     assert heuristic["signal_quality"] == contact["signal_quality"] == "poor"
@@ -708,18 +631,14 @@ def test_heuristic_poor_is_distinguishable_from_contact_poor():
 
 
 def test_signal_quality_ignores_malformed_contact_values():
-    # Garbage in the contact fields must not be read as a contact verdict --
-    # it should fall through to the heuristic, not be treated as "contact
-    # says poor".
+    # Garbage falls through to the heuristic, not a contact verdict.
     features = _quality_for({**_ENGAGED_BANDS, "hsi": ["x", None], "is_good": "nope"})
     assert features["quality_basis"] == "heuristic"
     assert features["signal_quality"] == _quality_for(_ENGAGED_BANDS)["signal_quality"]
 
 
 def test_a_single_hsi_blip_does_not_drop_quality_to_poor():
-    """HSI must be smoothed the same way IS_GOOD is, or one bad HSI frame
-    bypasses the smoothing entirely and drops quality straight to poor.
-    """
+    """HSI is smoothed like IS_GOOD."""
     processor = SignalProcessor(window_size=8)
     seated = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]}
     sample = EegSample(
@@ -745,9 +664,7 @@ _T0 = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
 
 
 def _until_baseline(processor, bands_for_tick, *, hz=4.0, limit=400):
-    """Feed ticks on advancing timestamps until the baseline latches. The
-    baseline is time-based (BASELINE_SECONDS on the sample clock), so a loop
-    on datetime.now() would never get there."""
+    """Ticks on advancing timestamps until the time-based baseline latches."""
     for i in range(limit):
         if processor._baseline_ready:
             return i
@@ -758,25 +675,21 @@ def _until_baseline(processor, bands_for_tick, *, hz=4.0, limit=400):
 
 
 def test_unusable_samples_are_kept_out_of_the_rolling_window():
-    """A frame where every electrode reports bad data must not enter the
-    window, or it skews the mean/spread/stability for the window's whole
-    length."""
+    """An all-bad frame would skew the window for its whole length."""
     processor = SignalProcessor(window_size=8)
     processor.update(_sample(), {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]})
     assert len(processor.window) == 1
 
-    # Wildly different amplitude, flagged entirely invalid -- must not be kept.
     processor.update(_sample(5000.0), {**_ENGAGED_BANDS, "is_good": [0, 0, 0, 0]})
     assert len(processor.window) == 1
 
-    # A partially-good frame is still real data and should be kept.
+    # A partially-good frame is kept.
     processor.update(_sample(), {**_ENGAGED_BANDS, "is_good": [0, 1, 1, 0]})
     assert len(processor.window) == 2
 
 
 def test_window_filtering_never_empties_the_window():
-    # The feature math needs at least one sample; a run of bad frames should
-    # hold the last known-good reading rather than leave nothing to compute.
+    # A run of bad frames holds the last good sample.
     processor = SignalProcessor(window_size=4)
     for _ in range(6):
         features = processor.update(_sample(), {**_ENGAGED_BANDS, "is_good": [0, 0, 0, 0]})
@@ -792,16 +705,9 @@ def test_samples_without_contact_data_are_never_discarded():
 
 
 def test_baseline_ignores_the_frames_the_window_rejects():
-    """The baseline must reject the same frames the window rejects. It
-    latches once and is never revisited, so an artifact during warm-up
-    would shift every score for the rest of the session, not just one
-    window's worth.
-    """
+    """The baseline latches once, so a warm-up artifact would shift the whole session."""
     good = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1], "hsi": [1, 1, 1, 1]}
-    # The rejected frames carry a very different spectrum, not just a
-    # different amplitude: with the same band values as the good frames,
-    # admitting them would leave the mean unchanged and this test would
-    # pass with both guards deleted.
+    # A different spectrum too, or admitting them would leave the mean unchanged.
     bad = {"theta": 2.0, "alpha": 2.0, "beta": -2.0, "gamma": -2.0, "delta": 0.4,
            "is_good": [0, 0, 0, 0], "hsi": [4, 4, 4, 4]}
 
@@ -809,8 +715,7 @@ def test_baseline_ignores_the_frames_the_window_rejects():
     n_clean = _until_baseline(clean, lambda i: (740.0, good))
 
     polluted = SignalProcessor(window_size=8)
-    # Every third frame is a fully invalid artifact at a wildly different
-    # amplitude -- the same kind the window already refuses.
+    # Every third frame is a fully invalid artifact.
     n_polluted = _until_baseline(
         polluted, lambda i: (5000.0, bad) if i % 3 == 2 else (740.0, good))
 
@@ -818,7 +723,6 @@ def test_baseline_ignores_the_frames_the_window_rejects():
     assert polluted._baseline_focus_mean == pytest.approx(clean._baseline_focus_mean, abs=1e-9)
     assert polluted._baseline_calm_mean == pytest.approx(clean._baseline_calm_mean, abs=1e-9)
 
-    # The observable consequence: an identical good frame must score the same.
     at = _T0 + timedelta(seconds=max(n_clean, n_polluted) / 4.0)
     c = clean.update(_sample(at=at), good)
     p = polluted.update(_sample(at=at), good)
@@ -827,14 +731,8 @@ def test_baseline_ignores_the_frames_the_window_rejects():
 
 
 def test_amplitude_path_excludes_electrodes_the_headband_flagged():
-    """_sample_is_usable only rejects a frame when *every* electrode is bad,
-    so ear contacts failing while the frontals read cleanly still reach the
-    amplitude math. mean_spread is max-min across channels, so one railing
-    electrode would dominate it. Since step 1.1 the amplitude terms only
-    score the no-bands fallback, so this runs without band powers -- with
-    them present the ears cannot reach the scores at all."""
+    """One railing electrode would dominate max-min spread; run without bands (the fallback)."""
     def ears(tp9, tp10):
-        # Identical clean frontals; only the flagged ear electrodes differ.
         return EegSample(
             timestamp=datetime.now(timezone.utc),
             channel_tp9=tp9, channel_af7=720.0, channel_af8=715.0, channel_tp10=tp10,
@@ -849,37 +747,28 @@ def test_amplitude_path_excludes_electrodes_the_headband_flagged():
             features = processor.update(sample, meta)
         return processor, features
 
-    # Two different readings on the flagged ear electrodes, kept inside
-    # CALM_MIN_SPREAD..CALM_MAX_SPREAD rather than fully railing, so the
-    # unflagged control below lands on distinct scores instead of both
-    # clamping to 0.
+    # Inside CALM_MIN_SPREAD..CALM_MAX_SPREAD, so the unflagged control does not clamp.
     proc_a, a = run(ears(730.0, 700.0), flagged_meta)
     _, b = run(ears(800.0, 650.0), flagged_meta)
 
-    # The frames were admitted (not all-bad), but only the vouched-for
-    # electrodes were stored, so what the ears read cannot matter.
+    # Admitted, but only the vouched-for electrodes stored.
     assert len(proc_a.window) == 8
     assert len(proc_a.window[0]) == 2
     for key in ("focus_score", "calm_score", "confidence"):
         assert a[key] == pytest.approx(b[key], abs=0.01), f"{key} moved with a flagged electrode"
 
-    # With the same two readings *unflagged*, the scores must diverge -- this
-    # confirms the assertion above isn't passing vacuously.
+    # Unflagged, the scores diverge, so the above is not vacuous.
     _, a_raw = run(ears(730.0, 700.0), unflagged_meta)
     _, b_raw = run(ears(800.0, 650.0), unflagged_meta)
     assert abs(a_raw["calm_score"] - b_raw["calm_score"]) > 5.0
 
 
 def test_mean_level_weights_frames_equally_regardless_of_channel_count():
-    """Window entries vary in width since bad electrodes are dropped. Pooling
-    every channel value would weight a 4-channel frame twice as heavily as a
-    2-channel one, drifting the level toward whichever regime contributed
-    more channels."""
+    """Pooling channel values would weight a 4-channel frame twice a 2-channel one."""
     now = datetime.now(timezone.utc)
     all_good = {"is_good": [1, 1, 1, 1], "hsi": [1, 1, 1, 1]}
     ears_bad = {"is_good": [0, 1, 1, 0], "hsi": [4, 1, 1, 4]}
-    # Frontals sit at 800, ears at 600, so the two regimes have genuinely
-    # different means and any weighting error is visible.
+    # Frontals 800, ears 600, so a weighting error is visible.
     sample = EegSample(timestamp=now, channel_tp9=600.0, channel_af7=800.0,
                        channel_af8=800.0, channel_tp10=600.0)
 
@@ -894,24 +783,18 @@ def test_mean_level_weights_frames_equally_regardless_of_channel_count():
             / (SignalProcessor.FOCUS_MAX_LEVEL - SignalProcessor.FOCUS_MIN_LEVEL)
         ) * 100.0
 
-    # Equal weight per frame: (700 + 800) / 2 = 750.
     per_frame = fmean([700.0, 800.0])
-    # Pooling all six channel values instead gives 4400 / 6 = 733.3, dragged
-    # toward the 4-channel frame purely because it has more values.
     pooled = fmean([600.0, 800.0, 800.0, 600.0, 800.0, 800.0])
     assert per_frame == pytest.approx(750.0, abs=0.01)
     assert pooled == pytest.approx(733.33, abs=0.01)
 
-    # No band data here, so focus_score is 100% amplitude.
+    # No band data, so focus_score is all amplitude.
     assert features["focus_score"] == pytest.approx(to_score(per_frame), abs=0.01)
     assert features["focus_score"] != pytest.approx(to_score(pooled), abs=0.01)
 
 
 def test_contradictory_contact_flags_keep_all_four_channels():
-    """is_good says every channel is usable, hsi says nothing is seated.
-    _good_channel_values would exclude everything on that disagreement, so it
-    falls back to all four rather than discarding data on the more
-    pessimistic of two conflicting signals."""
+    """is_good all usable, hsi nothing seated: fall back to all four, not to nothing."""
     now = datetime.now(timezone.utc)
     sample = EegSample(timestamp=now, channel_tp9=700.0, channel_af7=705.0,
                        channel_af8=695.0, channel_tp10=702.0)
@@ -922,9 +805,7 @@ def test_contradictory_contact_flags_keep_all_four_channels():
 
 
 def test_single_good_electrode_does_not_fabricate_perfect_calm():
-    """With one usable channel, max-min is 0, which the calm amplitude term
-    would read as a perfectly steady signal -- inventing "maximally calm"
-    from an almost-dead headband."""
+    """One channel gives max-min 0, which would read as maximally calm."""
     one_good = {"is_good": [0, 1, 0, 0], "hsi": [4, 1, 4, 4]}
     processor = SignalProcessor(window_size=4)
     for _ in range(4):
@@ -945,15 +826,11 @@ def test_diagnostics_are_surfaced_in_the_feature_payload():
 
 
 def test_scores_center_on_baseline_once_it_is_established():
-    """After the baseline period, holding steady at the learner's own resting
-    level should read mid-scale, not wherever fixed population bounds happen
-    to place that individual."""
+    """A steady signal at the learner's own level reads mid-scale once past the ramp."""
     processor = SignalProcessor(window_size=8)
     steady = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]}
     n = _until_baseline(processor, lambda i: (740.0, steady))
     assert processor._baseline_ready is True
-    # Past the ramp after the latch, a steady signal at its own level reads
-    # mid-scale rather than wherever the population bounds put it.
     features = None
     for i in range(n, n + 4 * int(SignalProcessor.BASELINE_RAMP_SECONDS) + 8):
         features = processor.update(_sample(at=_T0 + timedelta(seconds=i / 4.0)), steady)
@@ -965,15 +842,11 @@ def test_baseline_falls_back_to_population_bounds_before_it_is_ready():
     processor = SignalProcessor(window_size=8)
     features = processor.update(_sample(), {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]})
     assert processor._baseline_ready is False
-    # Still produces a usable score from the very first sample.
     assert 0.0 <= features["focus_score"] <= 100.0
 
 
 def test_reset_keeps_the_session_baseline_and_only_arming_replaces_it():
-    """The stream manager calls reset() on every tick with no sample, which
-    flapping contact does repeatedly. Clearing the baseline there made a
-    strap slipping at minute 20 the session's new zero point, through a
-    path nothing arms. The baseline belongs to the session."""
+    """reset() runs on every sample-less tick; the baseline belongs to the session."""
     processor = SignalProcessor(window_size=8)
     steady = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]}
     _until_baseline(processor, lambda i: (740.0, steady))
@@ -1005,9 +878,7 @@ def test_signal_processor_reset_clears_window():
 
 def test_adaptation_reset_for_signal_loss_bypasses_cooldown():
     engine = AdaptationEngine()
-    # A label needs persist_ticks consecutive readings before the cooldown
-    # or the scale is what's under test; that rule has its own tests in
-    # test_signal_processing.py, so it is switched off here.
+    # Persistence has its own tests in test_signal_processing.py.
     engine.persist_ticks = 1
     engine.cooldown_seconds = 1000.0
     focused = engine.infer_state({"focus_score": 90.0, "calm_score": 80.0, "confidence": 90.0})
@@ -1016,7 +887,7 @@ def test_adaptation_reset_for_signal_loss_bypasses_cooldown():
     engine.reset_for_signal_loss()
     assert engine.last_label == "no_signal"
 
-    # Without the reset, the 1000s cooldown would hold the stale "focused" label.
+    # Otherwise the 1000s cooldown would hold the stale label.
     next_state = engine.infer_state({"focus_score": 10.0, "calm_score": 90.0, "confidence": 90.0})
     assert "Cooldown" not in next_state.reason
 
@@ -1029,9 +900,7 @@ def test_stream_manager_no_signal_payload_zeroes_scores():
     assert payload["features"]["confidence"] == 0.0
     assert payload["features"]["signal_quality"] == "no_signal"
     assert payload["state"]["label"] == "no_signal"
-    # No question_policy anywhere. Difficulty is decided in the backend from
-    # correctness, topic history and grade -- the sidecar can't see any of
-    # that, so it must not compute its own policy.
+    # Difficulty is decided in the backend; the sidecar cannot see correctness.
     assert "question_policy" not in payload
 
 
@@ -1084,7 +953,6 @@ def test_stream_manager_stop_zeroes_stale_scores_instead_of_freezing_them():
         manager = _make_session()
         manager.adapter = SimulatedMuseIngestionAdapter()
         await manager.start()
-        # Let a couple of real samples land so latest_payload has non-zero scores.
         for _ in range(5):
             await asyncio.sleep(0.05)
         assert manager.latest_payload["features"]["focus_score"] != 0.0
@@ -1099,10 +967,7 @@ def test_stream_manager_stop_zeroes_stale_scores_instead_of_freezing_them():
 
 
 def test_snapshot_zeroes_bands_on_no_signal_instead_of_stale_adapter_meta():
-    # Adapters (real and simulated) cache their last-known band values and
-    # don't reset them on disconnect. snapshot() must zero the bands on
-    # no-signal rather than pulling them live from the adapter, or the EEG
-    # Bands display would show stale non-zero values after a disconnect.
+    # Adapters keep their last bands after a disconnect, so snapshot() must zero them.
     async def run_case():
         manager = _make_session()
         manager.adapter = SimulatedMuseIngestionAdapter()
@@ -1219,8 +1084,7 @@ def test_stream_manager_loop_does_not_block_event_loop_on_get_ingestion_meta():
             )
 
         def get_ingestion_meta(self):
-            # Simulate a lock/contention delay inside metadata retrieval.
-            time.sleep(0.2)
+            time.sleep(0.2)  # lock contention
             return {"alpha": 1.0, "beta": 1.0, "theta": 1.0, "gamma": 1.0}
 
     async def run_case() -> int:
@@ -1254,14 +1118,7 @@ def test_stream_manager_loop_does_not_block_event_loop_on_get_ingestion_meta():
 
 
 def test_stream_manager_loop_batch_drain_does_not_recalibrate_baseline_or_window():
-    """SignalProcessor.window and the per-session baseline are calibrated in
-    *ticks*, not raw samples. If stream_manager._loop called processor.update()
-    once per drained sample instead of once per tick, draining dozens of
-    samples in one tick would collapse the ~15s baseline warmup and ~5s window
-    into a single tick, latching the baseline on one band reading instead of a
-    real resting-state average. Feeding only the freshest drained sample per
-    tick keeps update() at one call per tick regardless of batch size.
-    """
+    """The window and baseline are calibrated in ticks, so update() runs once per tick."""
     batch_size = 64
 
     class BatchAdapter:
@@ -1290,8 +1147,7 @@ def test_stream_manager_loop_batch_drain_does_not_recalibrate_baseline_or_window
             return samples
 
         def get_ingestion_meta(self):
-            # Same values for the whole tick, as real adapters do -- metadata
-            # is fetched once per tick, not once per drained sample.
+            # Fetched once per tick, as real adapters do.
             return {"alpha": 0.30, "beta": 0.20, "theta": 0.10, "gamma": 0.05}
 
     async def run_case():
@@ -1309,12 +1165,10 @@ def test_stream_manager_loop_batch_drain_does_not_recalibrate_baseline_or_window
         return manager
 
     manager = asyncio.run(run_case())
-    # A tick's worth of drained samples must count as ONE tick toward the
-    # window/baseline, not `batch_size` ticks.
     assert len(manager.processor.window) < batch_size
     assert len(manager.processor._baseline_focus) < batch_size
     assert not manager.processor._baseline_ready
-    # But the full batch is still visible for diagnostics.
+    # The full batch is still visible for diagnostics.
     assert manager.latest_payload["features"]["batch_size"] == batch_size
 
 
@@ -1356,16 +1210,14 @@ def test_parse_eeg_devices_rejects_malformed_entries():
 
 
 def test_parse_eeg_devices_rejects_two_muse_devices_on_the_same_bridge():
-    # No explicit port on either entry -- both would silently resolve to the
-    # same default host:port and contend for one single-client bridge process.
+    # Both resolve to the default host:port of one single-client bridge.
     with pytest.raises(ValueError, match="already used by another muse device"):
         parse_eeg_devices(get_settings().model_copy(update={"eeg_devices": "station1:muse,station2:muse"}))
-    # Same failure with explicit matching ports.
     with pytest.raises(ValueError, match="already used by another muse device"):
         parse_eeg_devices(
             get_settings().model_copy(update={"eeg_devices": "station1:muse@8766,station2:muse@8766"})
         )
-    # sim devices share no underlying process, so no such constraint applies.
+    # sim devices share no process.
     devices = parse_eeg_devices(get_settings().model_copy(update={"eeg_devices": "station1:sim,station2:sim"}))
     assert set(devices) == {"station1", "station2"}
 
@@ -1403,17 +1255,7 @@ def test_unknown_device_id_returns_404_across_endpoints():
 
 
 async def _counter_advances(manager, baseline: int, timeout: float = 5.0) -> bool:
-    """Whether `manager.samples_processed` gets past `baseline` within timeout.
-
-    Waits for the counter to move rather than sleeping a fixed window. The
-    stream loop ticks once per 1 / settings.eeg_sample_hz seconds (0.25s at
-    the default 4 Hz), so a fixed window close to one tick can miss a tick on
-    timing jitter alone and fail flakily.
-
-    The timeout is generous on purpose: the callers below are testing that a
-    loop keeps running at all, so only a genuinely frozen one should reach the
-    deadline. A slow runner still passes.
-    """
+    """Whether `samples_processed` passes `baseline`; polls rather than sleeping one tick."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while manager.samples_processed <= baseline:
@@ -1424,11 +1266,7 @@ async def _counter_advances(manager, baseline: int, timeout: float = 5.0) -> boo
 
 
 def test_counter_advance_helper_detects_a_stopped_loop():
-    """Confirms _counter_advances can actually fail, so the progress
-    assertions elsewhere in this file aren't vacuous. A stopped manager's
-    counter never moves, and the timeout is short since it's expected to
-    expire.
-    """
+    """So the progress assertions elsewhere are not vacuous."""
     async def run_case():
         manager = _make_session("dev-stopped")
         manager.adapter = SimulatedMuseIngestionAdapter()
@@ -1453,10 +1291,8 @@ def test_two_sim_devices_run_independently():
         b_started = await _counter_advances(manager_b, 0)
         b_before = manager_b.samples_processed
         await manager_a.stop()
-        # Stopping A must not freeze or reset B's counter.
         b_kept_going = await _counter_advances(manager_b, b_before)
-        # Snapshot B's state before stopping it too -- stop() zeroes
-        # latest_payload, so capturing after both stops would prove nothing.
+        # Before stopping B: stop() zeroes latest_payload.
         b_signal_quality = manager_b.latest_payload["features"]["signal_quality"]
         await manager_b.stop()
         return (manager_a, manager_b, a_started, b_started,
@@ -1466,8 +1302,6 @@ def test_two_sim_devices_run_independently():
      b_kept_going, b_signal_quality) = asyncio.run(run_case())
     assert a_started, "device A never processed a sample"
     assert b_started, "device B never processed a sample"
-    # Independent counters -- stopping device A doesn't freeze or reset
-    # device B's tally.
     assert b_kept_going, "device B's counter stopped advancing when A was stopped"
     assert manager_a.latest_payload["features"]["signal_quality"] == "no_signal"
     assert b_signal_quality != "no_signal"

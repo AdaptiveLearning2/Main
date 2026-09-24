@@ -42,12 +42,7 @@ while ($true) {
     $run += 1
     $started = Get-Date
     Write-Host ("bridge supervisor: run {0} starting at {1:HH:mm:ss}" -f $run, $started) -ForegroundColor Cyan
-    # Cleared first: an exe that exists but cannot start (a build interrupted
-    # mid-cmake, an antivirus-truncated file, a wrong-architecture binary)
-    # raises instead of running, and $LASTEXITCODE keeps whatever it held --
-    # $null on the first run, the previous run's code after that. Either
-    # would have printed as a blank or stale code and `exit $null` reports
-    # success for a bridge that never started.
+    # Cleared first: an exe that can't start raises and leaves $LASTEXITCODE stale.
     $LASTEXITCODE = $null
     & $Exe
     $code = $LASTEXITCODE
@@ -60,8 +55,7 @@ while ($true) {
     }
     Write-Host ("bridge supervisor: exited at {0:HH:mm:ss} with code {1} after {2}s" -f $ended, $code, $lived) -ForegroundColor Yellow
 
-    # Ctrl+C in the window reaches the exe first and reads as a clean exit;
-    # a person stopping it is not a crash to recover from.
+    # Ctrl+C reaches the exe first and reads as a clean exit: not a crash.
     if ($code -eq 0) {
         Write-Host "bridge supervisor: clean exit; not restarting" -ForegroundColor Gray
         exit 0

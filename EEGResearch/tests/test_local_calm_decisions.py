@@ -1,11 +1,4 @@
-"""The two open decisions on the local calm, exposed as settings.
-
-How long an artifact poisons the spectrum buffer, and what calm is centred
-on between the arm and its new latch. Defaults are the shipped behaviour;
-the second wearer's capture is replayed under both alternatives in one run
-(`replay_raw_capture.py --matrix`), and a session can run under either
-without a code change.
-"""
+"""The local calm's two open decisions as settings: poison length, and the calm centre on arm."""
 
 from __future__ import annotations
 
@@ -29,8 +22,7 @@ def _n():
 
 
 def test_a_shorter_poison_readmits_the_buffer_sooner():
-    """4 s waits for every sample the blink landed among to leave; 2 s
-    readmits after the Welch window it landed in."""
+    """4 s waits for the whole buffer to turn over; 2 s only for the Welch window."""
     n = _n()
     samples = samples_from({c: pink(2 * n, i) for i, c in enumerate(CHANNELS)})
     full, short = SpectrumEstimator(), SpectrumEstimator(poison_seconds=2.0)
@@ -53,8 +45,7 @@ def test_midpoint_on_arm_drops_the_pre_arm_calm_centre_and_keep_carries_it():
         for _ in range(4 * int(SignalProcessor.BASELINE_SECONDS) + 8):
             f = _tick(t, _spectrum(0.4))
         assert f["calm_centred"] is True and t.processor._baseline_calm_mean == pytest.approx(0.4)
-        # The centre in effect just before the arm -- part way up the ramp
-        # from the midpoint to 0.4, which is exactly what "keep" carries.
+        # Part way up the ramp from the midpoint to 0.4: what "keep" carries.
         before = t.processor._centre("calm", t.processor._calm_last_ts)
         assert midpoint < before <= 0.4
         t.processor.restart_baseline()
@@ -92,8 +83,7 @@ def test_the_settings_reach_the_objects_the_stream_manager_builds(monkeypatch):
 
 
 def _capture(tmp_path):
-    """8 s: 4 s good, one clench second, 3 s good -- enough for the poison
-    length to show in the poisoned count."""
+    """8 s: 4 s good, one clench second, 3 s good."""
     n = _n()
     total = 2 * n
     chans = {c: pink(total, i) for i, c in enumerate(CHANNELS)}
@@ -121,9 +111,7 @@ def test_the_replay_scores_both_poison_lengths(tmp_path):
 
 @pytest.mark.parametrize("bad", [0, -1, 0.001, float("nan"), float("inf")])
 def test_an_unusable_poison_length_falls_back_to_the_buffer_with_a_warning(bad, caplog):
-    """0 and anything under a sample made poison() a no-op, so a blink
-    contaminated four seconds of estimates with nothing saying so; nan and
-    inf raised inside StreamManager() at import and took the sidecar down."""
+    """Under one sample makes poison() a no-op; nan and inf would raise at import."""
     import logging
     with caplog.at_level(logging.WARNING, logger="src.app.services.eeg_spectrum"):
         est = SpectrumEstimator(poison_seconds=bad)
@@ -141,8 +129,7 @@ def test_an_unusable_poison_length_falls_back_to_the_buffer_with_a_warning(bad, 
 
 
 def test_the_settings_survive_an_unusable_poison_length_end_to_end():
-    """The value reaches the estimator through Settings and DeviceSession
-    without raising -- the path that ran at import and took the sidecar down."""
+    """Through Settings and DeviceSession, the path that runs at import."""
     for value in ("nan", "inf", "0", "abc", ""):
         s = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a", EEG_SPECTRUM_POISON_SECONDS=value)
         session = DeviceSession("station1", s, DeviceConfig(device_id="station1", kind="sim",
@@ -151,9 +138,7 @@ def test_the_settings_survive_an_unusable_poison_length_end_to_end():
 
 
 def test_midpoint_on_arm_is_inert_on_the_sdk_source():
-    """On sdk, calm latches beside focus in 45 s, so the arm keeps its
-    centre and ramps to the new one exactly as focus does; the setting was
-    written for the local latch the poison starves."""
+    """On sdk calm latches beside focus, so the arm ramps as focus does."""
     t = Ticker()
     t.processor = SignalProcessor(clock=lambda: t.now, calm_source="sdk", calm_centre_on_arm="midpoint")
     t.run(BANDS, 4 * int(SignalProcessor.BASELINE_SECONDS) + 8)
@@ -166,9 +151,7 @@ def test_midpoint_on_arm_is_inert_on_the_sdk_source():
 
 
 def test_a_misspelt_centre_setting_boots_the_sidecar_on_keep_with_a_warning(caplog):
-    """EEG_CALM_CENTRE_ON_ARM=midpont raised ValueError inside StreamManager()
-    at import: no server, over a knob whose fallback is the shipped default.
-    Case and whitespace are forgiven; a misspelling warns and means keep."""
+    """Case and whitespace are forgiven; a misspelling warns and means keep."""
     import logging
     with caplog.at_level(logging.WARNING, logger="src.app.config"):
         s = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a", EEG_CALM_CENTRE_ON_ARM="midpont")
@@ -201,9 +184,7 @@ def test_a_non_numeric_poison_length_warns_at_settings_not_at_import(caplog):
 
 
 def test_a_misspelt_spectrum_source_warns_rather_than_silently_meaning_sdk(caplog):
-    """locl and sdkk both booted and recorded sdk calm on scale 2 under the
-    0.377 line, indistinguishable from a deliberate sdk run -- on the one
-    setting that decides what unit every stored calm value is in."""
+    """This setting decides the unit of every stored calm value."""
     import logging
     with caplog.at_level(logging.WARNING, logger="src.app.config"):
         s = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a", EEG_SPECTRUM_SOURCE="locl")

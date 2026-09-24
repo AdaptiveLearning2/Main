@@ -128,3 +128,12 @@ def test_a_reply_that_never_agrees_is_refused_not_served(replies):
     replies({**BAG, "target": "purple"})
     with pytest.raises(ValueError):
         _generate("easy")
+
+
+@pytest.mark.parametrize("items", [
+    {"red": "6", "blue": "4.5"}, {"red": "0", "blue": "0"}, {"red": "6", "blue": "-2"},
+])
+def test_counts_must_be_whole_and_add_up_to_something(items):
+    """Checked on the parse itself: the text comparison would also catch these fixtures."""
+    assert isinstance(prob._scored_data({**BAG, "items": items}), str)
+    assert prob._scored_data(BAG) == ({"red": 6, "blue": 4, "green": 2}, "red")

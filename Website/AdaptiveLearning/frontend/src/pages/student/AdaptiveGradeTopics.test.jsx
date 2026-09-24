@@ -106,6 +106,29 @@ it('leaves a student with no grade to the backend default, naming no grade itsel
   expect(apiFetch.mock.calls.some(([p]) => /[?&]grade=/.test(p))).toBe(false)
 })
 
+it('says the grade is unknown, and lists no grade\'s topics, when the profile could not be read', async () => {
+  // The backend reads the profile itself and may serve 7th grade; "not set" would be a guess.
+  overrideApi('/api/profile/me', () => { throw apiError(500, 'down') }, 'GET')
+  render(<Adaptive />)
+
+  await settled('/api/profile/me')
+  expect(screen.getByDisplayValue('Grade unknown')).toBeInTheDocument()
+  expect(screen.getByText(/questions \(grade unknown\)/)).toBeInTheDocument()
+  expect(screen.queryByText(/grade not set/)).not.toBeInTheDocument()
+  expect(apiFetch.mock.calls.some(([p]) => p.startsWith('/api/topics'))).toBe(false)
+})
+
+it('says so when a class has no grade and the student\'s could not be read', async () => {
+  overrideApi('/api/profile/me', () => { throw apiError(500, 'down') }, 'GET')
+  overrideApi('/api/classes', () => [{ id: 'c1', name: 'Maths', grade_level: null }], 'GET')
+  render(<Adaptive />)
+
+  await settled('/api/profile/me')
+  await userEvent.click(await screen.findByRole('button', { name: /class/i }))
+  expect(await screen.findByText(/using your grade, which could not be loaded/)).toBeInTheDocument()
+  expect(screen.getByText(/questions/, { selector: 'p' })).toHaveTextContent(/\(grade unknown\)/)
+})
+
 it("serves a class with no grade the student's saved grade, not the solo pick", async () => {
   overrideApi('/api/profile/me', () => ({ id: 'u1', role: 'student', grade_level: '4th Grade' }), 'GET')
   overrideApi('/api/classes', () => [{ id: 'c1', name: 'Maths', grade_level: null }], 'GET')

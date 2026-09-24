@@ -513,6 +513,16 @@ def _profile(uid: str) -> dict:
     return _placeholder_profile(uid)
 
 
+def _saved_grade(uid: str) -> str | None:
+    """The student's saved grade, read alone: generation asks per question. None if unreadable."""
+    try:
+        row = supabase.table("profiles").select("grade_level").eq("id", uid).single().execute()
+        return (row.data or {}).get("grade_level")
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[grade] could not read {uid[:8]}'s saved grade: {e}")
+        return None
+
+
 def _served_grade(uid: str, sent: str | None = None, profile: dict | None = None) -> str:
     """The grade a student is served: the one sent, else their saved one, else `DEFAULT_GRADE`.
 
@@ -520,7 +530,7 @@ def _served_grade(uid: str, sent: str | None = None, profile: dict | None = None
     """
     if sent:
         return sent
-    saved = (profile if profile is not None else _profile(uid)).get("grade_level")
+    saved = profile.get("grade_level") if profile is not None else _saved_grade(uid)
     return saved or grade_levels.DEFAULT_GRADE
 
 

@@ -81,8 +81,8 @@ def _grade_generated(monkeypatch, *, sent=None, saved=None, class_id=None, class
     """The grade the decider was handed, for a student whose profile holds `saved`."""
     from test_access_control import _FakeSupabase
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
-        {"classes": [{"id": "c1", "grade_level": class_grade}]}))
-    monkeypatch.setattr(main, "_profile", lambda _uid: {"grade_level": saved})
+        {"classes": [{"id": "c1", "grade_level": class_grade}],
+         "profiles": [{"id": "kid", "grade_level": saved, "display_name": "Kid", "role": "student"}]}))
     seen = []
     monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
                         lambda *a, **_k: seen.append(a) or {"question_text": "2+2"})
@@ -101,6 +101,21 @@ def test_no_grade_sent_is_generated_at_the_students_saved_grade(monkeypatch):
     """As the session prewarm and practice resolve it: a failed read in the page is not grade 1."""
     assert _grade_generated(monkeypatch, saved="7th Grade") == "7th Grade"
     assert _grade_generated(monkeypatch, sent="3rd Grade", saved="7th Grade") == "3rd Grade"
+
+
+def test_the_saved_grade_is_read_alone_and_only_when_none_is_sent(monkeypatch):
+    """Generation asks per question, so the fallback reads one column, not the profile row."""
+    from test_access_control import _FakeSupabase
+    fake = _FakeSupabase({"profiles": [{"id": "kid", "grade_level": "7th Grade", "display_name": "Kid"}]})
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
+                        lambda *a, **_k: {"question_text": "2+2"})
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
+    main.generate_question(request=None, grade=None, class_id=None, bias=0, session_id=None)
+    reads = [q for name, q in zip(fake.table_calls, fake.queries) if name == "profiles"]
+    assert len(reads) == 1 and reads[0]._cols == ["grade_level"]
+    main.generate_question(request=None, grade="3rd Grade", class_id=None, bias=0, session_id=None)
+    assert fake.table_calls.count("profiles") == 1
 
 
 def test_a_class_grade_wins_and_a_class_with_none_falls_back_to_the_students(monkeypatch):

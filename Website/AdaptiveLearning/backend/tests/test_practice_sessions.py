@@ -205,7 +205,7 @@ def test_a_student_with_no_grade_practises_the_grade_the_topic_list_shows(_clien
     """No grade sent or saved: stored at the grade `/api/topics` answers for, with no grade."""
     _as(monkeypatch, USER)
     c = _client()
-    monkeypatch.setattr(main, "_profile", lambda _uid: {"grade_level": None})
+    monkeypatch.setattr(main, "_saved_grade", lambda _uid: None)
     payload = main.StartPracticeSessionRequest(mode="test", topics=["ordering"], difficulty="easy")
     main.start_practice_session(payload, None)
     stored = c.inserted_sessions[0]["grade_level"]

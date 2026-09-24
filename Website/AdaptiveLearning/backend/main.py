@@ -513,6 +513,17 @@ def _profile(uid: str) -> dict:
     return _placeholder_profile(uid)
 
 
+def _served_grade(uid: str, sent: str | None = None, profile: dict | None = None) -> str:
+    """The grade a student is served: the one sent, else their saved one, else `DEFAULT_GRADE`.
+
+    `profile` saves a read when the caller already holds it; an unreadable one reads as no grade.
+    """
+    if sent:
+        return sent
+    saved = (profile if profile is not None else _profile(uid)).get("grade_level")
+    return saved or grade_levels.DEFAULT_GRADE
+
+
 def _profiles_many(uids) -> dict[str, dict]:
     """`_profile` for a roster in one query; absent or unreadable rows get the placeholder."""
     ids = _unique_ids(uids)
@@ -2288,17 +2299,18 @@ def generate_question(
     except ValueError as e:
         raise HTTPException(422, str(e))
 
-    effective_grade = grade or grade_levels.DEFAULT_GRADE
+    class_grade = None
     if class_id:
-        # Not `_row_or_404`: an unknown class falls back to the default grade.
+        # Not `_row_or_404`: an unknown class falls back to the student's own grade.
         try:
             cls = supabase.table("classes").select("grade_level") \
                 .eq("id", class_id).single().execute()
         except Exception as e:                                 # noqa: BLE001
             print(f"[question] could not read class {class_id}: {e}")
             cls = None
-        if cls and cls.data and cls.data.get("grade_level"):
-            effective_grade = cls.data["grade_level"]
+        if cls and cls.data:
+            class_grade = cls.data.get("grade_level")
+    effective_grade = class_grade or _served_grade(user_id, grade)
 
     manual_bias = max(-1, min(1, int(bias or 0)))
 
@@ -2373,7 +2385,7 @@ def start_session(payload: StartSessionRequest, request: Request):
 
     # Pre-warm the queue at the student's own difficulty bias.
     profile = _profile(user["id"])
-    grade   = profile.get("grade_level") or grade_levels.DEFAULT_GRADE
+    grade   = _served_grade(user["id"], profile=profile)
     bias    = max(-1, min(1, int(profile.get("difficulty_bias") or 0)))
     _ensure_queue(user["id"], grade, bias, res.data[0]["id"])
 
@@ -2538,7 +2550,7 @@ def start_practice_session(payload: StartPracticeSessionRequest, request: Reques
     if not payload.topics:
         raise HTTPException(400, "Pick at least one topic")
 
-    grade = payload.grade or _profile(user["id"]).get("grade_level") or grade_levels.DEFAULT_GRADE
+    grade = _served_grade(user["id"], payload.grade)
     # Server-side grade gate, the same one auto-selection uses.
     allowed = set(LLM_topic_decider._allowed_topics(grade))
     bad = [t for t in payload.topics if t not in allowed]

@@ -83,6 +83,8 @@ export default function Adaptive() {
   const [mode, setMode] = useState(() => localStorage.getItem('adaptive_mode') || 'solo')
   // '' is no grade: nothing names one, so the backend serves its default.
   const [grade, setGrade] = useState('')
+  // The profile's grade, which class mode is served when the class has none (`_served_grade`).
+  const [savedGrade, setSavedGrade] = useState('')
   const [classes, setClasses] = useState([])
   const [classId, setClassId] = useState('')
   const [bias, setBias] = useState(0) // -1 easier, 0 auto, +1 harder
@@ -305,7 +307,7 @@ export default function Adaptive() {
   // load profile default grade + classes
   useEffect(() => {
     apiFetch('/api/profile/me').then(p => {
-      if (p?.grade_level) setGrade(p.grade_level)
+      if (p?.grade_level) { setGrade(p.grade_level); setSavedGrade(p.grade_level) }
       // `!= null`: 0 (Auto) is a valid bias.
       if (p?.difficulty_bias != null) setBias(p.difficulty_bias)
       if (p?.session_duration_minutes != null) setDurationMin(p.session_duration_minutes)
@@ -1089,9 +1091,10 @@ export default function Adaptive() {
     : headband.samples
 
   const activeClass = classes.find(c => c.id === classId)
-  const effectiveGrade = (mode === 'class' ? activeClass?.grade_level : grade) || '—'
-  // What this grade is served, plus anything attempted. No grade ('—') is the backend's default.
-  const gradeTopics = useGradeTopics(effectiveGrade === '—' ? null : effectiveGrade)
+  // The grade the backend serves: '' is none set anywhere, so its default.
+  const effectiveGrade = (mode === 'class' ? (activeClass?.grade_level || savedGrade) : grade) || ''
+  // What this grade is served, plus anything attempted.
+  const gradeTopics = useGradeTopics(effectiveGrade || null)
   const shownTopics = topicsToShow(gradeTopics,
     TOPICS.filter(t => (accuracyStats.subjects[t]?.attempts ?? 0) > 0))
   const biasLabel = bias === -1 ? 'Easier' : bias === 1 ? 'Harder' : 'Auto'
@@ -1374,7 +1377,7 @@ export default function Adaptive() {
                       <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 text-center">Grade Level</label>
                       <select value={grade} onChange={e => setGrade(e.target.value)}
                         className="w-full text-center px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-200 text-sm">
-                        {grade === '' && <option value="">Not set</option>}
+                        {grade === '' && <option value="">Grade not set</option>}
                         {GRADES.map(d => <option key={d} value={d}>{d}</option>)}
                       </select>
                     </>
@@ -1392,7 +1395,9 @@ export default function Adaptive() {
                         ))}
                       </select>
                       {activeClass && !activeClass.grade_level && (
-                        <p className="text-xs text-amber-600 mt-2 text-center">⚠️ Teacher hasn't set this class's grade yet — using AI default.</p>
+                        <p className="text-xs text-amber-600 mt-2 text-center">
+                          ⚠️ Teacher hasn't set this class's grade yet — {savedGrade ? `using your grade, ${savedGrade}.` : 'and your grade isn\'t set either.'}
+                        </p>
                       )}
                     </>
                   )}
@@ -1416,7 +1421,8 @@ export default function Adaptive() {
                     </button>
                   </div>
                   <p className="text-[11px] text-gray-600 mt-2 text-center dark:text-gray-400">
-                    Generating <strong>{biasLabel}</strong> questions for <strong>{effectiveGrade}</strong>
+                    Generating <strong>{biasLabel}</strong> questions
+                    {effectiveGrade ? <> for <strong>{effectiveGrade}</strong></> : ' (grade not set)'}
                   </p>
                 </div>
 

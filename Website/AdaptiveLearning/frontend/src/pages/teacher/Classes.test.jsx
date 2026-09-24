@@ -74,7 +74,7 @@ describe('creating a class', () => {
 })
 
 describe('editing a grade', () => {
-  it('opens a class with no grade on "Not set", and saving that untouched writes nothing', async () => {
+  it('opens a class with no grade on "Grade not set", and saving that untouched writes nothing', async () => {
     overrideApi('/api/classes', () => ([{ ...CLASS, grade_level: null }]))
     draw()
     await screen.findByText('Grade not set')
@@ -84,14 +84,14 @@ describe('editing a grade', () => {
     await userEvent.click(within(badge).getByRole('button'))
     const picker = screen.getByRole('combobox')
     expect(picker).toHaveValue('')
-    expect(picker).toHaveDisplayValue('Not set')
+    expect(picker).toHaveDisplayValue('Grade not set')
     await userEvent.click(picker.nextElementSibling)
 
     expect(apiFetch.mock.calls.some(([, opts]) => opts?.method === 'PUT')).toBe(false)
     expect(await screen.findByText('Grade not set')).toBeInTheDocument()
   })
 
-  it('writes a grade picked from "Not set"', async () => {
+  it('writes a grade picked from "Grade not set"', async () => {
     overrideApi('/api/classes', () => ([{ ...CLASS, grade_level: null }]))
     overrideApi('/api/classes/c-1', () => ({ ...CLASS, grade_level: '2nd Grade' }), 'PUT')
     draw()

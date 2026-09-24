@@ -154,7 +154,7 @@ it('leaves a student with no grade to the backend default, naming no grade itsel
 
   const picker = await screen.findByLabelText(/grade/i)
   expect(picker).toHaveValue('')
-  expect(picker).toHaveDisplayValue('Not set')
+  expect(picker).toHaveDisplayValue('Grade not set')
   await userEvent.click(await screen.findByRole('button', { name: /ordering/i }))
   await userEvent.click(screen.getByRole('button', { name: /start practice/i }))
 

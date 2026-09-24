@@ -77,14 +77,36 @@ def test_the_question_is_generated_for_the_caller_and_their_session(monkeypatch)
     assert seen[0][2] == "mine"
 
 
-def test_no_grade_is_generated_at_the_grade_the_topic_list_shows(monkeypatch):
-    """No grade and no class: the decider gets the grade `/api/topics` answers for, with no grade."""
+def _grade_generated(monkeypatch, *, sent=None, saved=None, class_id=None, class_grade=None):
+    """The grade the decider was handed, for a student whose profile holds `saved`."""
+    from test_access_control import _FakeSupabase
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        {"classes": [{"id": "c1", "grade_level": class_grade}]}))
+    monkeypatch.setattr(main, "_profile", lambda _uid: {"grade_level": saved})
     seen = []
     monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
                         lambda *a, **_k: seen.append(a) or {"question_text": "2+2"})
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
-    main.generate_question(request=None, grade=None, class_id=None, bias=0, session_id=None)
-    assert main.list_topics(grade=seen[0][1]) == main.list_topics(grade=None)
+    main.generate_question(request=None, grade=sent, class_id=class_id, bias=0, session_id=None)
+    return seen[0][1]
+
+
+def test_no_grade_is_generated_at_the_grade_the_topic_list_shows(monkeypatch):
+    """No grade sent, saved or on a class: the grade `/api/topics` answers for, with no grade."""
+    grade = _grade_generated(monkeypatch)
+    assert main.list_topics(grade=grade) == main.list_topics(grade=None)
+
+
+def test_no_grade_sent_is_generated_at_the_students_saved_grade(monkeypatch):
+    """As the session prewarm and practice resolve it: a failed read in the page is not grade 1."""
+    assert _grade_generated(monkeypatch, saved="7th Grade") == "7th Grade"
+    assert _grade_generated(monkeypatch, sent="3rd Grade", saved="7th Grade") == "3rd Grade"
+
+
+def test_a_class_grade_wins_and_a_class_with_none_falls_back_to_the_students(monkeypatch):
+    assert _grade_generated(monkeypatch, saved="7th Grade", class_id="c1", class_grade="2nd Grade") \
+        == "2nd Grade"
+    assert _grade_generated(monkeypatch, saved="7th Grade", class_id="c1") == "7th Grade"
 
 
 def test_another_students_session_is_refused_before_anything_is_read(monkeypatch):

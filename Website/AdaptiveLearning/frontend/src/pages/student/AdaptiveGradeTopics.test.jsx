@@ -36,6 +36,8 @@ const TOPICS_ROWS = [...KINDERGARTEN.map(name => ({ name, allowed: true })),
 beforeEach(() => {
   resetApi()
   vi.clearAllMocks()
+  // The page persists its mode; the class-mode test would leave every later one in it.
+  localStorage.removeItem('adaptive_mode')
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: 'Kindergarten' }),
     'GET /api/performance/student/u1': () => [],
@@ -96,10 +98,28 @@ it('leaves a student with no grade to the backend default, naming no grade itsel
   render(<Adaptive />)
 
   await settled('/api/profile/me')
-  expect(screen.getByDisplayValue('Not set')).toBeInTheDocument()
+  expect(screen.getByDisplayValue('Grade not set')).toBeInTheDocument()
+  // Names no grade rather than one it would have to copy from the backend.
+  expect(screen.getByText(/questions \(grade not set\)/)).toBeInTheDocument()
   await userEvent.click(await screen.findByRole('button', { name: /generate question/i }))
   expect(await screen.findByText('What is 2 + 1 = ?')).toBeInTheDocument()
   expect(apiFetch.mock.calls.some(([p]) => /[?&]grade=/.test(p))).toBe(false)
+})
+
+it("serves a class with no grade the student's saved grade, not the solo pick", async () => {
+  overrideApi('/api/profile/me', () => ({ id: 'u1', role: 'student', grade_level: '4th Grade' }), 'GET')
+  overrideApi('/api/classes', () => [{ id: 'c1', name: 'Maths', grade_level: null }], 'GET')
+  overrideApi('/api/topics?grade=4th%20Grade', () => TOPICS_ROWS, 'GET')
+  overrideApi('/api/topics?grade=2nd%20Grade', () => TOPICS_ROWS, 'GET')
+  render(<Adaptive />)
+
+  await settled('/api/profile/me')
+  // A solo pick is not saved; the backend falls back to the profile's grade.
+  await userEvent.selectOptions(screen.getByDisplayValue('4th Grade'), '2nd Grade')
+  await userEvent.click(await screen.findByRole('button', { name: /class/i }))
+
+  expect(await screen.findByText(/using your grade, 4th Grade/)).toBeInTheDocument()
+  expect(screen.getByText(/questions/, { selector: 'p' })).toHaveTextContent(/for 4th Grade/)
 })
 
 it('names a two-underscore topic with every underscore a space', async () => {

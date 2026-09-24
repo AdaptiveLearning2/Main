@@ -64,6 +64,19 @@ Two backends, deliberately: the website backend never reads a headband directly,
 gates on `eeg_client.is_alive()` first, so the whole EEG stack is optional at runtime. Don't add a
 hard dependency on port 8001 to a path that must work without hardware.
 
+## Comments are short and say only what the code can't
+
+A comment carries an invariant, a unit, a trap, or the reason for a surprising choice — one line,
+two at most. Docstrings are a one-line summary plus at most three lines of contract. No history
+("used to", dates, "before this fix" — git has it), no rejected alternatives, no restating this
+file or `docs/`: point at the section instead. Measurements go in the fixture docs, not in
+comments. Reasoning that needs a paragraph belongs in `docs/` beside the code.
+
+`scripts/check_comment_length.py` enforces the sizes in the blocking `Comment length` CI job: runs
+of more than three comment lines, docstrings over four, file headers over five, and multi-line JSX
+comments fail. Licence headers and PowerShell `.SYNOPSIS` help are exempt; there is no opt-out
+marker, because one would become the new home for essays.
+
 ## Canary: is this session still working properly?
 
 Long sessions degrade before they fail, and the agent cannot feel it from the inside. So before
@@ -307,9 +320,9 @@ measurements were always done in a throwaway `pip install --target ... "setuptoo
 
 ### The suites
 
-CI (`.github/workflows/ci.yml`) runs **eight** jobs on PRs and pushes to `main`: `EEGResearch tests`,
-`Native bridge build`, `Website backend tests`, `Database grants`, `Database migrations`,
-`Frontend tests, build & lint`, `Dependency scan`, `Secret scan`. Counted by name, so a ninth on the
+CI (`.github/workflows/ci.yml`) runs **nine** jobs on PRs and pushes to `main`: `EEGResearch tests`,
+`Native bridge build`, `Website backend tests`, `Database grants`, `Comment length`, `Database migrations`,
+`Frontend tests, build & lint`, `Dependency scan`, `Secret scan`. Counted by name, so a tenth on the
 PR page is new or undocumented rather than a stale number. (The `Supabase Preview` check is the
 integration's, not CI's, and is always skipped.)
 

@@ -113,7 +113,8 @@ lesson_plan_context.get_lesson_context = lambda t, b: None
 
 import main                                                   # noqa: E402
 main.supabase = _FakeSupabase()
-main.get_user = lambda request: {"id": "loadtest-user"}
+# The bearer is the student id, so each simulated student gets its own per-user allowance.
+main.get_user = lambda request: {"id": request.headers.get("authorization", "").split()[-1]}
 
 import llm_client                                             # noqa: E402
 import LLM_topic_decider                                      # noqa: E402
@@ -150,8 +151,8 @@ def _generate(i):
         for attempt in range(attempts + 1):
             # Distinct students, so the per-user rate limit is not what refuses them.
             r = requests.get(f"{BASE}/api/generate-question",
-                             params={"user_id": f"kid-{i:03d}",
-                                     "grade": args.grade},
+                             params={"grade": args.grade},
+                             headers={"Authorization": f"Bearer kid-{i:03d}"},
                              timeout=180)
             after = r.headers.get("Retry-After")
             if r.status_code != 503 or after is None or attempt == attempts:

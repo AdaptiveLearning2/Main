@@ -40,7 +40,7 @@ beforeEach(() => {
     // An array: the page iterates it, and an object throws after the test body.
     'GET /api/performance/student/u1': () => [],
     // The router matches the whole path, query included.
-    'GET /api/generate-question?user_id=u1&bias=0&grade=1st+Grade&session_id=sess-phantom': () => ({
+    'GET /api/generate-question?bias=0&grade=1st+Grade&session_id=sess-phantom': () => ({
       id: 'q1', question_text: 'What is 2 + 2?', question_topic: 'ordering',
       answer_options: ['3', '4', '5'], correct_answer: '4', difficulty: 'easy',
     }),
@@ -98,7 +98,7 @@ it('starts a new session if a failed sign-out leaves the page up', async () => {
   let started = 0
   overrideApi('/api/sessions/start', () => ({ id: `sess-${++started}` }), 'POST')
   for (const id of ['sess-1', 'sess-2']) {
-    overrideApi(`/api/generate-question?user_id=u1&bias=0&grade=1st+Grade&session_id=${id}`, () => ({
+    overrideApi(`/api/generate-question?bias=0&grade=1st+Grade&session_id=${id}`, () => ({
       id: `q-${id}`, question_text: `Question for ${id}`, question_topic: 'ordering',
       answer_options: ['3', '4', '5'], correct_answer: '4', difficulty: 'easy',
     }))

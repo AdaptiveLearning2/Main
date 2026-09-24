@@ -830,14 +830,11 @@ getting that backwards is silent.
 
 **Four GET routes resolve no caller, and every other limiter here keys on the id `get_user` returns** —
 so on the question bank, its count, the topic list and the sidecar health probe, none of them runs. A
-middleware inside `security_headers` and CORS budgets those four by **address**, which is the only identity
-an unauthenticated caller cannot choose. `test_network_edge.py` derives the public set from the module, so
-a fifth such route fails until it is given a budget. **A route that names a student resolves its caller
-instead**: `/api/generate-question` took `user_id` and `session_id` from the query string, so anyone could
-have another child's session signals read into a prompt, and its per-user limiter keyed on a string the
-caller chose. It keeps an address budget as well, in `_AUTHENTICATED_ADDRESS_LIMITER`: sign-up is
-self-service, so a per-student limit alone is a new allowance per account. That map is separate so
-`_PUBLIC_LIMITER` still means exactly "no caller", and a test requires every route in it to call `get_user`.
+middleware inside `security_headers` and CORS budgets those four by **address**, the only identity an
+unauthenticated caller cannot choose; `test_network_edge.py` derives the set, so a fifth fails until budgeted.
+**A route that names a student resolves its caller**, never a `user_id` query parameter. `/api/generate-question`
+also keeps an address budget, in `_AUTHENTICATED_ADDRESS_LIMITER` (apart, so `_PUBLIC_LIMITER` means exactly "no
+caller"): sign-up is self-service, so a per-student limit alone is a new allowance per account.
 
 **An address is a school, not a student**, and that sets the numbers. A class leaves through one NAT and
 `Adaptive.jsx` polls the health route every 5 s per open page, so sixty students behind one address is

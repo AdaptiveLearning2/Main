@@ -85,7 +85,7 @@ async function startWithDuration(goal) {
     ...ROUTES,
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade',
                                     session_duration_minutes: 0.001 }),
-    'GET /api/generate-question?user_id=u1&bias=0&grade=1st+Grade&session_id=sess-goal': () => QUESTION,
+    'GET /api/generate-question?bias=0&grade=1st+Grade&session_id=sess-goal': () => QUESTION,
   })
   render(<Adaptive />)
   await screen.findByText(/how many questions/i)

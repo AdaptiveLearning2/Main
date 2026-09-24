@@ -349,7 +349,9 @@ def test_a_list_that_leads_with_the_colour_agrees(text):
 ])
 def test_a_colour_led_list_that_swaps_two_counts_is_refused(text):
     """Every number is still shown, so only reading "red 4" as red's count catches it."""
-    assert qc.counts_mismatch(text, {"red": 6, "blue": 4, "green": 2}) is not None
+    reason = qc.counts_mismatch(text, {"red": 6, "blue": 4, "green": 2})
+    # Named for red: "6 and green" misread as green's count would refuse for another reason.
+    assert reason and "'red' as [4]" in reason
 
 
 def test_a_colon_that_starts_no_list_does_not_make_a_count_the_total():

@@ -137,3 +137,24 @@ def test_counts_must_be_whole_and_add_up_to_something(items):
     """Checked on the parse itself: the text comparison would also catch these fixtures."""
     assert isinstance(prob._scored_data({**BAG, "items": items}), str)
     assert prob._scored_data(BAG) == ({"red": 6, "blue": 4, "green": 2}, "red")
+
+
+@pytest.mark.parametrize("difficulty,payload,good,answer", [
+    ("easy", {**BAG, "target": "blue"}, BAG, "1/2"),                               # asks about red
+    ("easy", {**BAG, "items": {"red": "6", "blue": "4"}}, BAG, "1/2"),             # green left out
+    ("medium", {**DICE, "target": ["6"]}, DICE, "1/3"),                            # "greater than 4"
+    ("medium", {**DICE, "sides": "8"}, DICE, "1/3"),                               # a six-sided die
+    ("medium", {**DICE, "sides": "100000000000000000000"}, DICE, "1/3"),           # no such die
+    ("easy", {**BAG, "items": {"red": "6000", "blue": "4", "green": "2"},
+              "question_text": BAG["question_text"].replace("6 red", "6000 red")}, BAG, "1/2"),
+])
+def test_a_reply_the_text_does_not_describe_is_retried(replies, difficulty, payload, good, answer):
+    asked = replies(payload, good)
+    assert _generate(difficulty)["correct_answer"] == answer
+    assert len(asked) == 2
+
+
+def test_the_prompt_asks_for_items_as_an_object():
+    """The check refuses anything else, so a model following a "list" rule failed every retry."""
+    assert '"items" must be an object' in prob.prob_prompt
+    assert '"items" must be a list' not in prob.prob_prompt

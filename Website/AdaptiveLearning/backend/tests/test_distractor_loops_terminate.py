@@ -56,8 +56,11 @@ def test_ordering_distractors_terminate(solution, expected, why):
     assert solution not in answers
 
 
-def test_a_two_value_ordering_question_is_rejected_upstream():
+def test_a_two_value_ordering_question_is_rejected_upstream(monkeypatch):
     """One distractor is not a usable question, so the retry loop refuses the dataset first."""
-    import inspect
-    source = inspect.getsource(ordering_gen.generate_ordering_question)
-    assert "Too few values to order" in source
+    import json
+    import llm_client
+    monkeypatch.setattr(ordering_gen.lesson_plan_context, "append_lesson_context", lambda p, t, b: p)
+    monkeypatch.setattr(llm_client, "generate_text", lambda *a, **k: json.dumps({"values": ["1", "2"]}))
+    with pytest.raises(ValueError, match="after retries"):
+        ordering_gen.generate_ordering_question([], [], "medium", "7th Grade")

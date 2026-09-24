@@ -143,6 +143,23 @@ it('reads a failed profile again, and then names the grade it found', async () =
   expect(screen.queryByText(/grade unknown/)).not.toBeInTheDocument()
 })
 
+it('keeps a grade the student picked while the profile was being read again', async () => {
+  let calls = 0
+  overrideApi('/api/profile/me', () => {
+    calls += 1
+    if (calls === 1) throw apiError(500, 'down')
+    return { id: 'u1', role: 'student', grade_level: 'Kindergarten' }
+  }, 'GET')
+  overrideApi('/api/topics?grade=3rd%20Grade', () => TOPICS_ROWS, 'GET')
+  render(<Adaptive />)
+
+  await userEvent.selectOptions(await screen.findByDisplayValue('Grade unknown'), '3rd Grade')
+  await waitFor(() => expect(calls).toBe(2))
+  const retry = apiFetch.mock.calls.findLastIndex(([p]) => p === '/api/profile/me')
+  await act(async () => { await apiFetch.mock.results[retry].value })
+  expect(screen.getByDisplayValue('3rd Grade')).toBeInTheDocument()
+})
+
 it('says so when a class has no grade and the student\'s could not be read', async () => {
   overrideApi('/api/profile/me', () => { throw apiError(500, 'down') }, 'GET')
   overrideApi('/api/classes', () => [{ id: 'c1', name: 'Maths', grade_level: null }], 'GET')

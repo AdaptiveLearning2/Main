@@ -69,6 +69,11 @@ def solve_dice(sides, target):
     return Rational(len(target), sides)
 
 
+# Past these a die or a bag is not a question a student can picture; the model has no bound.
+MAX_SIDES = 100
+MAX_COUNT = 1000
+
+
 def _whole(value):
     """`value` as an int if the parsed float is a whole number, else None."""
     return int(value) if isinstance(value, (int, float)) and float(value).is_integer() else None
@@ -77,8 +82,9 @@ def _whole(value):
 def _scored_data(question_data):
     """(items, target) the solvers can score, or the reason the reply cannot be.
 
-    Dice: `items` is the side count, `target` distinct faces in 1..sides. Bags: whole counts,
-    and a target naming items that exist (case and spacing ignored), so no target scores 0.
+    Dice: `items` is the side count (2..MAX_SIDES), `target` distinct faces in 1..sides. Bags:
+    whole counts up to MAX_COUNT, and a target that names items (case and spacing ignored);
+    a named item may have a count of 0, a probability of 0.
     """
     target = question_data["target"]
     targets = target if isinstance(target, list) else [target]
@@ -91,8 +97,8 @@ def _scored_data(question_data):
         if parsed is None:
             return f"unusable dice values: {question_data['sides']!r}, {target!r}"
         sides, faces = _whole(parsed[0]), [_whole(f) for f in parsed[1:]]
-        if sides is None or sides < 2:
-            return f"a die needs a whole number of sides, not {question_data['sides']!r}"
+        if sides is None or not 2 <= sides <= MAX_SIDES:
+            return f"a die needs 2 to {MAX_SIDES} whole sides, not {question_data['sides']!r}"
         if any(f is None or not 1 <= f <= sides for f in faces) or len(set(faces)) != len(faces):
             return f"target faces {target!r} are not distinct faces of a {sides}-sided die"
         return sides, faces
@@ -102,7 +108,8 @@ def _scored_data(question_data):
         return "items is not a non-empty object"
     parsed = safe_solve.safe_sympify_values(list(raw_items.values()))
     counts = [_whole(c) for c in parsed] if parsed is not None else None
-    if counts is None or any(c is None or c < 0 for c in counts) or sum(counts) == 0:
+    if (counts is None or any(c is None or not 0 <= c <= MAX_COUNT for c in counts)
+            or sum(counts) == 0):
         return f"unusable item counts: {raw_items!r}"
     items = dict(zip(raw_items.keys(), counts))
 
@@ -165,7 +172,8 @@ The JSON must follow this exact structure:
 Rules:
 - Use ONLY double quotes for all strings.
 - The JSON object must contain the keys "question_text", "question_topic", "scenario", "items" or "sides", and "target".
-- "items" must be a list of strings.
+- "items" must be an object mapping each item to its count, written as a string ({{"red": "6"}}).
+- Every count in "question_text" must be one of "items", and the question must ask about the target.
 - Do NOT include any characters outside the JSON object.
 """
 
@@ -288,12 +296,17 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
             continue
         items, target = scored
 
-        if question_data["scenario"] != "dice":
-            inconsistent = question_consistency.counts_mismatch(
-                question_data.get("question_text"), items)
-            if inconsistent:
-                print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
-                continue
+        # The student answers the text, so the scored die, counts and target must be the ones it states.
+        text = question_data.get("question_text")
+        if question_data["scenario"] == "dice":
+            inconsistent = question_consistency.dice_mismatch(text, items, target)
+        else:
+            targets = target if isinstance(target, list) else [target]
+            inconsistent = (question_consistency.counts_mismatch(text, items)
+                            or question_consistency.target_mismatch(text, list(items), targets))
+        if inconsistent:
+            print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
+            continue
 
         break
 

@@ -181,3 +181,76 @@ def test_a_label_is_found_across_case_plurals_and_adjectives(text, counts):
 ])
 def test_it_fails_open_where_no_count_precedes_a_label(text):
     assert qc.counts_mismatch(text, {"red": 6, "blue": 4}) is None
+
+
+@pytest.mark.parametrize("text,counts", [
+    (BAG_TEXT, {"red": 6, "blue": 4}),                                  # green left out of items
+    ("A bag of 13 marbles has 6 red, 4 blue and 2 green.", {"red": 6, "blue": 4, "green": 2}),
+    ("A bag has 6 red and 4 blue. After 1 red is removed, what is the probability of red?",
+     {"red": 6, "blue": 4}),                                            # a second number for red
+    ("A basket has 3 cherries and 2 plums.", {"cherry": 4, "plum": 2}),  # -ies plural
+])
+def test_every_number_in_the_text_must_be_a_scored_count_or_their_total(text, counts):
+    assert qc.counts_mismatch(text, counts) is not None
+
+
+def test_a_stated_total_that_adds_up_agrees():
+    assert qc.counts_mismatch("A bag of 12 marbles has 6 red, 4 blue and 2 green.",
+                              {"red": 6, "blue": 4, "green": 2}) is None
+    assert qc.counts_mismatch("A basket has 3 cherries and 2 plums.", {"cherry": 3, "plum": 2}) is None
+
+
+# ── target_mismatch: the item the question asks about ──────────────────────
+
+LABELS = ["red", "blue", "green"]
+
+
+@pytest.mark.parametrize("text,targets,agrees", [
+    (BAG_TEXT + " What is the probability of drawing a red marble?", ["red"], True),
+    (BAG_TEXT + " What is the probability of drawing a red marble?", ["blue"], False),
+    (BAG_TEXT + " What is the probability of drawing a red or blue marble?", ["red", "blue"], True),
+    (BAG_TEXT + " What is the probability of drawing a red or blue marble?", ["red"], False),
+    (BAG_TEXT + " What is the probability of NOT drawing a green marble?", ["green"], True),
+    (BAG_TEXT + " What are the chances of red?", ["blue"], True),               # no "probability"
+])
+def test_the_items_asked_about_must_be_the_target(text, targets, agrees):
+    assert (qc.target_mismatch(text, LABELS, targets) is None) is agrees
+
+
+# ── dice_mismatch: the die and the event the question describes ────────────
+
+DIE = "A standard six-sided die is rolled. What is the probability of rolling "
+
+
+@pytest.mark.parametrize("text,sides,faces", [
+    (DIE + "a number greater than 4?", 6, [6]),                         # the event
+    (DIE + "a number greater than 4?", 8, [5, 6]),                      # the die
+    (DIE + "an even number?", 6, [2, 4]),
+    (DIE + "a 2 or a 5?", 6, [2, 3]),
+    (DIE + "a number less than 3?", 6, [1, 2, 3]),
+    ("An 8-sided die is rolled. What is the probability of rolling at least 7?", 8, [8]),
+])
+def test_a_die_or_event_the_text_does_not_describe_is_caught(text, sides, faces):
+    assert qc.dice_mismatch(text, sides, faces) is not None
+
+
+@pytest.mark.parametrize("text,sides,faces", [
+    (DIE + "a number greater than 4?", 6, [5, 6]),
+    (DIE + "an even number?", 6, [2, 4, 6]),
+    (DIE + "a prime number?", 6, [2, 3, 5]),
+    (DIE + "a 2 or a 5?", 6, [2, 5]),
+    (DIE + "a multiple of 3?", 6, [3, 6]),
+    ("An 8-sided die is rolled. What is the probability of rolling a 3 on the 8-sided die?", 8, [3]),
+    ("A die is rolled. What is the probability of rolling 5 or more?", 6, [5, 6]),
+])
+def test_the_die_and_event_described_agree(text, sides, faces):
+    assert qc.dice_mismatch(text, sides, faces) is None
+
+
+@pytest.mark.parametrize("text", [
+    DIE + "an even number greater than 2?",                             # two events at once
+    DIE + "a number that is not 3?",                                    # a negated event
+    "A die is rolled. What are the chances of a four?",                 # no "probability", words
+])
+def test_it_fails_open_on_an_event_it_cannot_read(text):
+    assert qc.dice_mismatch(text, 6, [1]) is None

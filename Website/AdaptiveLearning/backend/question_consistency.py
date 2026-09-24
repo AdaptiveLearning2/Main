@@ -83,19 +83,113 @@ def dataset_mismatch(question_text, values):
     return dataset_check(question_text, values)[1]
 
 
-def counts_mismatch(question_text, counts):
-    """Reason a count the text gives an item differs from the scored count, or None.
+def _label_pattern(label):
+    """A label in the singular or plural it may be written in ("cherry", "cherries", "boxes")."""
+    n = re.escape(str(label).strip().lower())
+    stem = n[:-1] if n.endswith("y") else n[:-3] if n.endswith("ies") else None
+    forms = [n, n + "s", n + "es"] + ([stem + "y", stem + "ies"] if stem else [])
+    forms += [n[:-len(end)] for end in ("es", "s") if n.endswith(end) and len(n) > len(end)]
+    return r"\b(?:" + "|".join(forms) + r")\b"
 
-    Reads "<n> <up to two words> <label>" ("6 red marbles"); a label with no number is left alone.
+
+def counts_mismatch(question_text, counts):
+    """Reason the counts in the text differ from the scored `counts`, or None.
+
+    Each "<n> <up to two words> <label>" must be that label's count, and the text's numbers must
+    be exactly the counts plus at most their total. No digits at all ("six red") fails open.
     """
-    if not question_text or not isinstance(counts, dict):
+    if not isinstance(question_text, str) or not isinstance(counts, dict) or not counts:
         return None
     for label, count in counts.items():
-        pattern = rf"\b(\d+)\s+(?:[A-Za-z-]+\s+){{0,2}}?{re.escape(str(label))}(?:e?s)?\b"
+        pattern = rf"\b(\d+)\s+(?:[A-Za-z-]+\s+){{0,2}}?{_label_pattern(label)}"
         shown = {int(n) for n in re.findall(pattern, question_text, re.I)}
         if shown and count not in shown:
             return (f"the question gives {label!r} as {sorted(shown)} but {count} is "
                     f"scored -- the student would be marked against counts they were not given")
+    numbers = [int(n) for n in re.findall(r"(?<![\d.])\d+(?![\d.])", question_text)]
+    if not numbers:
+        return None
+    extra = list(numbers)
+    for count in counts.values():
+        if count in extra:
+            extra.remove(count)
+    if extra and extra != [sum(counts.values())]:
+        return (f"the question also gives {extra}, which no scored count or their total "
+                f"({sum(counts.values())}) accounts for -- an item left out, or a count changed")
+    return None
+
+
+def target_mismatch(question_text, labels, targets):
+    """Reason the items the question asks about are not the scored `targets`, or None.
+
+    Read after the last "probability": the item labels named there must be exactly the targets.
+    """
+    if not isinstance(question_text, str):
+        return None
+    asks = list(re.finditer(r"\bprobability\b", question_text, re.I))
+    if not asks:
+        return None
+    question = question_text[asks[-1].end():]
+    named = {label for label in labels if re.search(_label_pattern(label), question, re.I)}
+    if named and named != set(targets):
+        return f"the question asks about {sorted(named)} but {sorted(targets)} is scored"
+    return None
+
+
+_SIDE_WORDS = {"four": 4, "six": 6, "eight": 8, "ten": 10, "twelve": 12, "twenty": 20}
+_COMPARISONS = [
+    (r"\b(?:greater|more|higher|larger|bigger)\s+than\s+(\d+)", lambda f, n: f > n),
+    (r"\b(?:less|fewer|lower|smaller)\s+than\s+(\d+)", lambda f, n: f < n),
+    (r"\bat\s+least\s+(\d+)|\b(\d+)\s+or\s+(?:more|higher|greater|above)\b", lambda f, n: f >= n),
+    (r"\bat\s+most\s+(\d+)|\b(\d+)\s+or\s+(?:less|lower|fewer|below)\b", lambda f, n: f <= n),
+    (r"\bmultiple\s+of\s+(\d+)", lambda f, n: f % n == 0),
+]
+_PARITY = {"even": lambda f: f % 2 == 0, "odd": lambda f: f % 2 == 1,
+           "prime": lambda f: f in {2, 3, 5, 7, 11, 13, 17, 19}}
+
+
+def _sides_in_text(text):
+    m = re.search(r"\b(\d+|" + "|".join(_SIDE_WORDS) + r")[\s-]*(?:sided|faced)\b", text, re.I)
+    if m:
+        word = m.group(1).lower()
+        return int(word) if word.isdigit() else _SIDE_WORDS[word]
+    return 6 if re.search(r"\bstandard\s+die\b|\bnumber\s+cube\b", text, re.I) else None
+
+
+def _event_faces(question, sides):
+    """The faces one recognised event names, or None if there is none, several, or a negation."""
+    if re.search(r"\bnot\b|\bn't\b", question, re.I):
+        return None
+    question = re.sub(r"\b\d+[\s-]*(?:sided|faced)\b", " ", question, flags=re.I)
+    found = []
+    for pattern, test in _COMPARISONS:
+        for m in re.finditer(pattern, question, re.I):
+            n = int(next(g for g in m.groups() if g))
+            found.append({f for f in range(1, sides + 1) if test(f, n)})
+    found += [{f for f in range(1, sides + 1) if test(f)} for word, test in _PARITY.items()
+              if re.search(rf"\b{word}\b", question, re.I)]
+    if not found:
+        found = [{int(n) for n in re.findall(r"\b\d+\b", question)}] if re.search(r"\d", question) else []
+    return found[0] if len(found) == 1 and found[0] else None
+
+
+def dice_mismatch(question_text, sides, faces):
+    """Reason the die or the event the text describes is not the scored one, or None.
+
+    Sides from "six-sided", "8-sided", "standard die"; the event after the last "probability"
+    from one comparison, even/odd/prime or listed faces. Anything else fails open.
+    """
+    if not isinstance(question_text, str):
+        return None
+    shown_sides = _sides_in_text(question_text)
+    if shown_sides is not None and shown_sides != sides:
+        return f"the question shows a {shown_sides}-sided die but {sides} sides are scored"
+    asks = list(re.finditer(r"\bprobability\b", question_text, re.I))
+    if not asks:
+        return None
+    event = _event_faces(question_text[asks[-1].end():], sides)
+    if event is not None and event != set(faces):
+        return f"the question's event is faces {sorted(event)} but {sorted(faces)} is scored"
     return None
 
 

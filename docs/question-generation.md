@@ -935,14 +935,17 @@ dataset there, which is what makes locating it reliable); `negation_mismatch` re
 is wrong by the same amount.
 
 **The checks do not cover the same topics.** `dataset_mismatch` is in `mean`/`median`/`mode`/`ordering` only;
-`negation_mismatch` and `counts_mismatch` are in `probability` only. Probability's counts live in the sentence body,
-not after a colon, so `counts_mismatch` locates each by the label it precedes ("6 red marbles") and leaves a label
-with no number before it alone. *Documented as wired and absent* is the worst of the three states, because it is the
-one nobody re-checks: verify with `grep -l <check> LLM_*_generation.py`, which is cheaper than trusting this paragraph.
+`negation_mismatch`, `counts_mismatch`, `target_mismatch` and `dice_mismatch` are in `probability` only. *Documented
+as wired and absent* is the worst of the three states, because it is the one nobody re-checks: verify with
+`grep -l <check> LLM_*_generation.py`, which is cheaper than trusting this paragraph.
 
-**Probability's target and dice faces are validated inside the retry loop** (`_scored_data`): a target that names
-no item scored 0 favourable, serving 0 (or 1 for `not_probability_of`) as correct. It resolves to an item ignoring
-case and spacing, counts are whole and non-zero in total, and dice faces are distinct and in `1..sides`.
+**A probability question is scored only from what its text states.** Its counts live in the sentence body, not
+after a colon: each "<n> … <label>" must be that item's count, and the text's numbers must be exactly the scored
+counts plus at most their total, so an item left out of `items` or a changed count is a retry. The items named after
+the last "probability" must be exactly the target. For dice, the sides ("six-sided", "standard die") and one
+recognised event (a comparison, even/odd/prime, or listed faces) must be the scored ones. Counts in words, several
+events at once, and a negated event fail open. `_scored_data` also requires a target that names items, whole counts
+up to 1000, and distinct faces on a die of 2 to 100 sides.
 
 **Both fail open**, which is what makes them safe to run on every question: order is ignored (the solvers sort anyway),
 non-numeric `variables` are skipped, and a question with no colon-delimited list is left alone rather than compared

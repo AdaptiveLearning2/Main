@@ -172,6 +172,8 @@ def test_an_expression_shown_differently_from_the_one_scored_is_caught(text, tok
     ("Evaluate −3/4 + 1/2", ["-3/4", "+", "1/2"]),
     ("A number minus 7 is 12. Solve x - 7 = 12.", ["x", "-", "7", "=", "12"]),
     ("Maria has 3/4 of a pizza and eats 1/8 of it. How much is left?", ["3/4", "-", "1/8"]),
+    # A lone fraction is a number in a sentence, not a displayed expression.
+    ("A recipe needs 3/4 cup of flour. How much flour for 2 recipes?", ["3/4", "*", "2"]),
 ])
 def test_the_same_expression_however_it_is_spaced_or_bracketed_agrees(text, tokens):
     assert qc.expression_mismatch(text, tokens) is None

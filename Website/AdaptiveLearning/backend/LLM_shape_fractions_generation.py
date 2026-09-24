@@ -5,7 +5,6 @@
 import json
 import math
 import random
-import re
 
 import llm_client
 import lesson_plan_context
@@ -13,7 +12,6 @@ import question_figures
 import question_schemas
 import grade_levels
 import ccss_standards
-import grade_appropriateness
 import answer_format
 
 
@@ -60,8 +58,8 @@ Rules:
 - "shaded" and "parts" must share no common factor. 2 out of 4 is NOT allowed,
   because it can be read as one half or as two fourths and both are right.
   1 out of 2, 1 out of 4, 3 out of 4, 1 out of 3, 2 out of 3, 3 out of 8 are all fine.
-- "question_text" must NOT contain any digits. The parts are in the picture --
-  writing them in the question is giving away the reading being asked for.
+- "question_text" is always exactly "What fraction of the shape is shaded?" -- the
+  question is fixed; only "parts" and "shaded" vary.
 - "scenario" MUST be exactly "part_whole".
 - Use ONLY double quotes for all strings.
 - Do NOT include any characters outside the JSON object.
@@ -120,14 +118,9 @@ def solve_shape_fraction(parts, shaded):
     return f"{shaded}/{parts}"
 
 
-# The answer is shaded/parts, so the text must ask for the shaded part and not its complement.
-_ASKS_SHADED = re.compile(r"\bshaded\b", re.I)
-_ASKS_COMPLEMENT = re.compile(
-    r"\bun-?shaded\b|\bnot\b|\bisn't\b|\bwhite\b|\bempty\b|\bblank\b|\bleft\b|\bremain", re.I)
-
-
-def _asks_for_shaded(text):
-    return bool(_ASKS_SHADED.search(text)) and not _ASKS_COMPLEMENT.search(text)
+# The one question this scenario asks, written here: the answer is shaded/parts, so model
+# wording could only ever ask something else ("not shaded") or give the count away.
+QUESTION_TEXT = "What fraction of the shape is shaded?"
 
 
 def generate_incorrect_answers(parts, shaded):
@@ -206,7 +199,7 @@ def generate_shape_fractions_question(global_questions, prev_questions,
             print(response_text)
             continue
 
-        required_keys = ["scenario", "question_text", "parts", "shaded"]
+        required_keys = ["scenario", "parts", "shaded"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
@@ -214,24 +207,6 @@ def generate_shape_fractions_question(global_questions, prev_questions,
         if question_data["scenario"] != "part_whole":
             print(f"[Attempt {attempt+1}] Wrong scenario:",
                   question_data["scenario"])
-            continue
-
-        if grade_appropriateness.refuse(question_data.get("question_text"),
-                                        "shape_fractions", grade_band,
-                                        difficulty, attempt + 1):
-            continue
-
-        # A digit in the text gives away the count the picture is for.
-        text = question_data.get("question_text")
-        if not isinstance(text, str) or re.search(r"\d", text):
-            print(f"[Attempt {attempt+1}] Digits in the question text:",
-                  repr(text)[:80])
-            continue
-
-        # "What fraction is NOT shaded?" scored as shaded/parts made the complement "correct".
-        if not _asks_for_shaded(text):
-            print(f"[Attempt {attempt+1}] Text does not ask for the shaded part:",
-                  repr(text)[:80])
             continue
 
         # Required, like `graphs`.
@@ -258,7 +233,7 @@ def generate_shape_fractions_question(global_questions, prev_questions,
     random.shuffle(answers)
 
     return {
-        "question_text": question_data["question_text"],
+        "question_text": QUESTION_TEXT,
         "question_topic": "shape_fractions",
         "ccss_standard": ccss_standards.ccss_for("shape_fractions", grade),
         "answer_options": answers,

@@ -167,7 +167,11 @@ def generate_algebra_question(global_questions, prev_questions, difficulty, grad
     else:
         raise ValueError("Failed to generate valid JSON after retries")
 
-    incorrect_answers = inc_gen.generate_general_incorrect_answers(solution)
+    # The worker answers exactly ("3/2"); decimal distractors would leave it the only fraction.
+    if "/" in str(solution):
+        incorrect_answers = inc_gen.generate_incorrect_rational(solution)
+    else:
+        incorrect_answers = inc_gen.generate_general_incorrect_answers(solution)
     answers = [str(ans) for ans in incorrect_answers] + [str(solution)]
 
     random.shuffle(answers)

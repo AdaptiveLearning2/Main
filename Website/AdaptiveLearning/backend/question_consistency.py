@@ -122,15 +122,16 @@ def counts_mismatch(question_text, counts):
     return None
 
 
-_ONE_DRAWN = re.compile(
-    r"\b1\s+(?:[A-Za-z-]+\s+){0,2}?(?:is|are|was)\s+(?:drawn|picked|chosen|selected|pulled)\b", re.I)
+_DRAW_VERB = r"(?:drawn|picked|chosen|selected|pulled)\b"
+_ONE_DRAWN = re.compile(rf"\b1\s+(?:[A-Za-z-]+\s+){{0,2}}?(?:is|are|was)\s+{_DRAW_VERB}"
+                        rf"|\b(?:if|when)\s+1\s+(?:[A-Za-z-]+\s+){{0,2}}?{_DRAW_VERB}", re.I)
 
 
 def _states_total(text, total):
     """True if `total` reads as the whole bag ("a bag of 12", "12 marbles in a bag: ...", "12 in total")."""
     before = rf"\b(?:of|contains|holds|has|with)\s+{total}\b"
     in_total = rf"\b{total}\s+(?:[A-Za-z-]+\s+){{0,2}}?(?:in\s+(?:all|total)|altogether)\b"
-    before_list = rf"\b{total}\s+(?:[A-Za-z-]+\s+){{0,4}}?[A-Za-z-]+\s*:"
+    before_list = rf"\b{total}\s+(?:[A-Za-z-]+\s+){{0,4}}?[A-Za-z-]+\s*:\s*\d"
     return any(re.search(p, text, re.I) for p in (before, in_total, before_list))
 
 
@@ -178,7 +179,8 @@ _COMPARISONS = [
 _PARITY = {"even": lambda f: f % 2 == 0, "odd": lambda f: f % 2 == 1,
            "prime": lambda f: f > 1 and all(f % d for d in range(2, int(f ** 0.5) + 1))}
 # "neither a 1 nor a 6" is one negation of the faces it lists.
-_NEGATED = re.compile(r"\bnot\b|n['’]t\b|\bcannot\b|\bother\s+than\b|\bexcept\b|\bbut\b|\bneither\b", re.I)
+_NEGATED = re.compile(r"\bnot\b|n['’]t\b|\bcannot\b|\bother\s+than\b|\bexcept\b"
+                      r"|\b(?:anything|everything|all)\s+but\b|\bneither\b", re.I)
 
 
 def _sides_in_text(text):

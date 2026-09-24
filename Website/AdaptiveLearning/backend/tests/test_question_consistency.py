@@ -332,10 +332,25 @@ def test_a_total_before_a_listing_colon_is_stated():
                               {"red": 6, "blue": 4, "green": 2}) is None
 
 
+def test_a_colon_that_starts_no_list_does_not_make_a_count_the_total():
+    """The left-out green's 10 is the others' sum; only a list after the colon makes it the bag."""
+    text = "A bag has 6 red, 4 blue and 10 green marbles in the bag: what is the probability of red?"
+    assert qc.counts_mismatch(text, {"red": 6, "blue": 4}) is not None
+
+
 def test_a_count_of_one_is_not_taken_for_the_draw():
-    """Only "1 … is drawn" is the draw; "1 red marble picked" still has to be scored."""
+    """Only "1 … is drawn", or "if 1 … drawn", is the draw; "1 red marble picked" is scored."""
     assert qc.counts_mismatch("1 red marble picked from a tray of 6 red and 4 blue.",
                               {"red": 6, "blue": 4}) is not None
+    assert qc.counts_mismatch("A bag has 6 red and 4 blue. If 1 marble drawn at random, what is "
+                              "the probability of red?", {"red": 6, "blue": 4}) is None
+
+
+def test_only_anything_but_negates():
+    """A bare "but" is a clause, not a negation: "a 3, but only on the first roll" is faces [3]."""
+    text = DIE + "a 3, but only on the first roll?"
+    assert qc.dice_mismatch(text, 6, [3]) is None
+    assert qc.dice_mismatch(text, 6, [1, 2, 4, 5, 6]) is not None
 
 
 def test_chances_and_likely_ask_the_question_too():

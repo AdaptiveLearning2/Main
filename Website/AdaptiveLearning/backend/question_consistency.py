@@ -179,8 +179,8 @@ def dice_mismatch(question_text, sides, faces):
     Sides from "six-sided", "8-sided", "standard die"; the event after the last "probability"
     from one comparison, even/odd/prime or listed faces. Anything else fails open.
     """
-    if not isinstance(question_text, str):
-        return None
+    if not isinstance(question_text, str) or not isinstance(sides, int) or not 1 < sides <= 1000:
+        return None          # the events are enumerated face by face
     shown_sides = _sides_in_text(question_text)
     if shown_sides is not None and shown_sides != sides:
         return f"the question shows a {shown_sides}-sided die but {sides} sides are scored"

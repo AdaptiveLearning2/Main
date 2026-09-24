@@ -20,6 +20,7 @@ import token_join
 import grade_levels
 import ccss_standards
 import grade_appropriateness
+import question_consistency
 
 
 def serialize_sympy(obj):
@@ -150,6 +151,13 @@ def generate_rational_question(global_questions, prev_questions,difficulty, grad
         if grade_appropriateness.refuse(question_data.get("question_text"),
                                         "rationals", grade_band, difficulty,
                                         attempt + 1):
+            continue
+
+        # The student reads question_text but is scored against variables.
+        inconsistent = question_consistency.expression_mismatch(
+            question_data.get("question_text"), question_data.get("variables"))
+        if inconsistent:
+            print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
 
         # Solved in the bounded worker, inside the loop, so a bad join or a

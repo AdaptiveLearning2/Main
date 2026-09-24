@@ -151,3 +151,39 @@ def test_an_oversized_fraction_fails_open_rather_than_raising():
     huge = "1" + "0" * 400
     assert qc._as_floats([huge + "/1", "2"]) is None
     assert qc.dataset_mismatch("Order these: 3/4, 0.5", [huge + "/1", "2"]) is None
+
+
+# ── expression_mismatch: the expression shown against the tokens scored ────
+
+@pytest.mark.parametrize("text,tokens", [
+    ("Solve for x: 3x + 5 = 20", ["3x", "+", "5", "=", "26"]),        # a changed value
+    ("Solve 3/4 + 1/8", ["3/4", "-", "1/8"]),                          # a changed operator
+    ("Maria has 3/4 of a pizza and eats 1/8 of it. How much is left?", ["3/4", "-", "1/6"]),
+])
+def test_an_expression_shown_differently_from_the_one_scored_is_caught(text, tokens):
+    assert qc.expression_mismatch(text, tokens) is not None
+
+
+@pytest.mark.parametrize("text,tokens", [
+    ("Solve for x: 2x + 3 = 7.", ["2x", "+", "3", "=", "7"]),
+    ("Solve 4/5 - 1/10", ["4/5", "-", "1/10"]),
+    ("What is (3/4) × (1/2)?", ["3/4", "*", "1/2"]),
+    ("Solve 3(x + 2) = 12 for x", ["3", "*", "(", "x", "+", "2", ")", "=", "12"]),
+    ("Evaluate −3/4 + 1/2", ["-3/4", "+", "1/2"]),
+    ("A number minus 7 is 12. Solve x - 7 = 12.", ["x", "-", "7", "=", "12"]),
+    ("Maria has 3/4 of a pizza and eats 1/8 of it. How much is left?", ["3/4", "-", "1/8"]),
+    # A lone fraction is a number in a sentence, not a displayed expression.
+    ("A recipe needs 3/4 cup of flour. How much flour for 2 recipes?", ["3/4", "*", "2"]),
+])
+def test_the_same_expression_however_it_is_spaced_or_bracketed_agrees(text, tokens):
+    assert qc.expression_mismatch(text, tokens) is None
+
+
+@pytest.mark.parametrize("text,tokens", [
+    ("Add 1 1/2 and 3/4.", ["3/2", "+", "3/4"]),
+    ("What is three quarters plus one eighth?", ["3/4", "+", "1/8"]),
+    ("", ["3/4"]),
+    ("Solve 3/4 + 1/8", "3/4+1/8"),
+])
+def test_it_fails_open_on_mixed_numbers_words_and_unusable_input(text, tokens):
+    assert qc.expression_mismatch(text, tokens) is None

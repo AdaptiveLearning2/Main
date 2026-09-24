@@ -42,6 +42,7 @@ def _generate(difficulty):
 @pytest.mark.parametrize("difficulty,values", [
     ("easy", ["3", "5", "2", "8"]),                     # nothing repeats
     ("hard", ["2", "2", "5", "5", "7", "7"]),           # every value tied
+    ("hard", ["2", "2", "5", "5"]),                     # tied, and within the tier's two
     ("medium", ["2", "2", "5", "5", "7", "9"]),         # two modes on a single-mode tier
     ("hard", ["2", "2", "5", "5", "7", "7", "9"]),      # three modes
 ])
@@ -62,3 +63,11 @@ def test_a_single_mode_is_served_on_every_tier(replies):
     for difficulty in ("easy", "medium", "hard"):
         replies(GOOD)
         assert _generate(difficulty)["correct_answer"] == ["4"]
+
+
+def test_the_prompts_own_example_is_valid_json_matching_its_text():
+    """The example the model copies was malformed, and its values differed from its text."""
+    example = json.loads(mode_gen.extract_json(mode_gen.mode_prompt))
+    shown = example["question_text"].split(":", 1)[1].split(".")[0].replace(" ", "").split(",")
+    assert shown == example["variables"]
+    assert mode_gen._mode_problem([float(v) for v in shown], "easy") is None

@@ -143,6 +143,7 @@ def test_counts_must_be_whole_and_add_up_to_something(items):
     ("easy", {**BAG, "target": "blue"}, BAG, "1/2"),                               # asks about red
     ("easy", {**BAG, "items": {"red": "6", "blue": "4"}}, BAG, "1/2"),             # green left out
     ("medium", {**DICE, "target": ["6"]}, DICE, "1/3"),                            # "greater than 4"
+    ("easy", {**BAG, "question_text": BAG["question_text"].replace("probability", "odds")}, BAG, "1/2"),
     ("medium", {**DICE, "sides": "8"}, DICE, "1/3"),                               # a six-sided die
     ("medium", {**DICE, "sides": "100000000000000000000"}, DICE, "1/3"),           # no such die
     ("easy", {**BAG, "items": {"red": "6000", "blue": "4", "green": "2"},

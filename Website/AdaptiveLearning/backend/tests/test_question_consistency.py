@@ -305,6 +305,39 @@ def test_prime_is_computed_for_any_die():
     assert qc.dice_mismatch(text, 30, [2, 3, 5, 7, 11, 13, 17, 19]) is not None
 
 
+@pytest.mark.parametrize("event,faces", [
+    ("a number other than 6?", [1, 2, 3, 4, 5]),
+    ("anything except a 6?", [1, 2, 3, 4, 5]),
+    ("anything but a 6?", [1, 2, 3, 4, 5]),
+    ("a number that cannot be 6?", [1, 2, 3, 4, 5]),
+    ("neither a 1 nor a 6?", [2, 3, 4, 5]),
+])
+def test_every_negation_wording_takes_the_complement(event, faces):
+    """Each was served as the event itself: 1/6 for "other than 6", 1/3 for "neither a 1 nor a 6"."""
+    text = DIE + event
+    assert qc.dice_mismatch(text, 6, faces) is None
+    assert qc.dice_mismatch(text, 6, [f for f in range(1, 7) if f not in faces]) is not None
+
+
+@pytest.mark.parametrize("text,refused", [
+    ("A bag has 6 red and 4 blue. What are the odds of drawing a red marble?", True),
+    ("A bag has 6 red and 4 blue. What is the probability of drawing a red marble?", False),
+])
+def test_an_odds_question_is_refused_because_a_probability_is_not_odds(text, refused):
+    assert (qc.odds_mismatch(text) is not None) is refused
+
+
+def test_a_total_before_a_listing_colon_is_stated():
+    assert qc.counts_mismatch("There are 12 marbles in a bag: 6 red, 4 blue and 2 green.",
+                              {"red": 6, "blue": 4, "green": 2}) is None
+
+
+def test_a_count_of_one_is_not_taken_for_the_draw():
+    """Only "1 … is drawn" is the draw; "1 red marble picked" still has to be scored."""
+    assert qc.counts_mismatch("1 red marble picked from a tray of 6 red and 4 blue.",
+                              {"red": 6, "blue": 4}) is not None
+
+
 def test_chances_and_likely_ask_the_question_too():
     text = "A standard six-sided die is rolled. What are the chances of rolling a number greater than 4?"
     assert qc.dice_mismatch(text, 6, [6]) is not None

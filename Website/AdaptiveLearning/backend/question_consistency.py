@@ -123,18 +123,26 @@ def counts_mismatch(question_text, counts):
 
 
 _ONE_DRAWN = re.compile(
-    r"\b1\s+(?:[A-Za-z-]+\s+){0,2}?(?:is\s+|are\s+)?(?:drawn|picked|chosen|selected|pulled)\b", re.I)
+    r"\b1\s+(?:[A-Za-z-]+\s+){0,2}?(?:is|are|was)\s+(?:drawn|picked|chosen|selected|pulled)\b", re.I)
 
 
 def _states_total(text, total):
-    """True if `total` reads as the whole bag ("a bag of 12", "12 marbles: ...", "12 in total")."""
+    """True if `total` reads as the whole bag ("a bag of 12", "12 marbles in a bag: ...", "12 in total")."""
     before = rf"\b(?:of|contains|holds|has|with)\s+{total}\b"
-    after = rf"\b{total}\s+(?:[A-Za-z-]+\s+){{0,2}}?(?:in\s+(?:all|total)|altogether)\b|\b{total}\s+[A-Za-z-]+\s*:"
-    return bool(re.search(before, text, re.I) or re.search(after, text, re.I))
+    in_total = rf"\b{total}\s+(?:[A-Za-z-]+\s+){{0,2}}?(?:in\s+(?:all|total)|altogether)\b"
+    before_list = rf"\b{total}\s+(?:[A-Za-z-]+\s+){{0,4}}?[A-Za-z-]+\s*:"
+    return any(re.search(p, text, re.I) for p in (before, in_total, before_list))
 
 
 # Where a question asks: after the last of these is the item or event it is about.
-_ASKS = re.compile(r"\b(?:probability|chances?|likely|likelihood|odds)\b", re.I)
+_ASKS = re.compile(r"\b(?:probability|chances?|likely|likelihood)\b", re.I)
+
+
+def odds_mismatch(question_text):
+    """Reason the question asks for odds, which a probability answer does not give, or None."""
+    if isinstance(question_text, str) and re.search(r"\bodds\b", question_text, re.I):
+        return "the question asks for odds, but a probability is scored"
+    return None
 
 
 def _question_part(text):
@@ -169,7 +177,8 @@ _COMPARISONS = [
 ]
 _PARITY = {"even": lambda f: f % 2 == 0, "odd": lambda f: f % 2 == 1,
            "prime": lambda f: f > 1 and all(f % d for d in range(2, int(f ** 0.5) + 1))}
-_NEGATED = re.compile(r"\bnot\b|n['’]t\b", re.I)
+# "neither a 1 nor a 6" is one negation of "1 or 6", so "nor" is only dropped.
+_NEGATED = re.compile(r"\bnot\b|n['’]t\b|\bcannot\b|\bother\s+than\b|\bexcept\b|\bbut\b|\bneither\b", re.I)
 
 
 def _sides_in_text(text):
@@ -185,7 +194,7 @@ def _event_faces(question, sides):
     negations = len(_NEGATED.findall(question))
     if negations > 1:
         return None
-    question = _NEGATED.sub(" ", question)
+    question = re.sub(r"\bnor\b", " ", _NEGATED.sub(" ", question), flags=re.I)
     question = re.sub(r"\b\d+[\s-]*(?:sided|faced)\b", " ", question, flags=re.I)
     found = []
     for pattern, test in _COMPARISONS:

@@ -898,8 +898,8 @@ counts plus a total the text states as one ("a bag of 12", "12 in total"), so an
 changed count is a retry; the single draw ("1 marble is drawn") is not a count. The items named after the last
 "probability", "chance" or "likely" must be exactly the target, and a question asking for odds is refused, since a
 probability is not odds. For dice, the sides ("six-sided", "standard die") and one recognised event (a comparison,
-even/odd/prime, or listed faces) must be the scored ones; one negation ("not", "other than", "except", "but",
-"cannot", "neither … nor") takes the complement. Counts in words, several events at once, and a double negation fail
+even/odd/prime, or listed faces) must be the scored ones; one negation ("not", "other than", "except", "anything
+but", "cannot", "neither … nor") takes the complement. Counts in words, several events at once, and a double negation fail
 open. `_scored_data` also requires a target that names items, whole counts up to 1000, and distinct faces on a die of
 2 to 100 sides.
 

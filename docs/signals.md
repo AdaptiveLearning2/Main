@@ -9,6 +9,13 @@ ingestion in either mode (`eeg_poller`, `push_client`, `/api/signals/*`, `signal
 heart or optics path, the camera, gaze or FER+, or anything that writes `cognitive_signals`,
 `heart_signals` or `face_signals`.
 
+## From a worktree, the sidecar suite needs `PYTHONPATH`
+
+`EEGResearch/.venv` holds an editable install pointing at the main checkout, so without
+`PYTHONPATH=<worktree>/EEGResearch` the suite imports main's `src.app` and tests something other
+than the diff — green against a broken change, red against a fixed one. The backend suite is
+immune: its tests put their own directory on `sys.path`.
+
 ## Ingestion is push or pull, and which one is a setting rather than a guess
 
 `eeg_poller` runs **inside the backend** and polls the sidecar over HTTP. That works only because
@@ -675,6 +682,15 @@ Two halves that have to move together: `_weekly_signal_report`'s raw-day fallbac
 `face_samples` means something different depending on whether the day has been rolled up yet. The row's *existence*
 still gates on `count(*) > 0` over all face rows — `expire_signal_rows` refuses a day with no rollup row, so a
 gaze-only day must still get one or its raw rows never expire. Asserted in `scripts/assert_signal_rls.sql`.
+
+**A `latest_*` reading goes when what it describes goes.** Every 4 Hz tick sends the adapter's latest emotion, gaze
+and pose as a new row with a fresh `ts`, so a reading left in place is stored again, not merely shown again: a student
+classified `sad` who left their seat stayed `sad`, trusted, for as long as the camera was open. Emotion is dropped
+once no face has been found for a whole emotion interval, and at once when the face cannot be cropped (it then
+reports `no_face`); gaze and pose refresh from the full frame and become a `no_frame` refusal once no frame has
+arrived for a whole gaze interval. **The wait is the other half**: one missed detection is a flicker, and clearing on
+it wrote `no_face` rows for a student who never moved. Measured in time, not frames, since a frame count is a
+different duration at every rate. `_forget_readings` in `face_ingestion.py`.
 
 ### The geometry half, and what it may not claim
 

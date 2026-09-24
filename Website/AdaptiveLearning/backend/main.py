@@ -214,11 +214,10 @@ class MaxBodySizeMiddleware:
 app.add_middleware(MaxBodySizeMiddleware)
 
 
-# ─── the five routes with no caller ──────────────────────────────────────
-# These never call `get_user`, so they are budgeted by address. On
-# /api/generate-question `user_id` is a caller-written query param, not an identity.
+# ─── the four routes with no caller ──────────────────────────────────────
+# The per-user limiters never run on these. `test_network_edge.py` derives the
+# set from the module, so a new public route fails until budgeted.
 _PUBLIC_LIMITER = {
-    "/api/generate-question": "public_generate",
     "/api/questions":         "public_read",
     "/api/questions/count":   "public_read",
     "/api/topics":            "public_read",
@@ -229,9 +228,6 @@ _PUBLIC_LIMITER = {
 # An address is a school behind one NAT, not a student: 60 students polling
 # health is 720/min at rest. These refuse runaway clients, not a class.
 _PUBLIC_RATE_LIMITS = {
-    "public_generate": (
-        _env_number("PUBLIC_GENERATE_RATE_LIMIT", 600, int, minimum=1),
-        _env_number("PUBLIC_GENERATE_RATE_WINDOW", 60.0, float, minimum=1.0)),
     "public_read": (
         _env_number("PUBLIC_READ_RATE_LIMIT", 1800, int, minimum=1),
         _env_number("PUBLIC_READ_RATE_WINDOW", 60.0, float, minimum=1.0)),
@@ -2262,12 +2258,19 @@ def student_questions(student_id: str, request: Request, limit: int = 100):
 
 @app.get("/api/generate-question")
 def generate_question(
-    user_id:    str        = Query(...),
+    request:    Request,
     grade:      str | None = Query(None),
     class_id:   str | None = Query(None),
     bias:       int        = Query(0),
     session_id: str | None = Query(None),
 ):
+    # The student is the caller, never a query parameter: the decider reads
+    # consent by this id and signals by the session. A sent `user_id` is ignored.
+    user = get_user(request)
+    user_id = user["id"]
+    if session_id:
+        _verify_session_owner(session_id, user_id)
+
     # A query param no model checked; an unreadable grade is a 422, not a silent default.
     try:
         grade = grade_levels.validated_grade(grade)
@@ -2295,8 +2298,10 @@ def generate_question(
 
     if not question:
         print(f"[generate] generating inline for {user_id[:8]}")
-        # No security event: `user_id` is caller-written. `public_generate` records refusals.
         if not _claim_generation_slot(user_id):
+            # `get_user` resolved this id, so the refusal has a real actor.
+            _record_security_event("rate_limited", user_id,
+                                   limiter=_GENERATION_LIMITER.name)
             raise HTTPException(
                 429, "Too many questions requested. Try again shortly.",
                 headers={"Retry-After": str(max(1, int(_GENERATION_RATE_WINDOW)))},
@@ -2572,7 +2577,8 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
 
     # Same rate limit, waiter cap and refusals as /api/generate-question.
     if not _claim_generation_slot(user["id"]):
-        # The only generation refusal with a resolved actor, so the only one that records.
+        # Real actor, so it records; `GENERATION_SILENT_SITES` in
+        # `test_security_events.py` pins which sites do not.
         _record_security_event("rate_limited", user["id"],
                                limiter=_GENERATION_LIMITER.name)
         raise HTTPException(

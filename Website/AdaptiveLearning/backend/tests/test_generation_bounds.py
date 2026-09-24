@@ -54,12 +54,51 @@ def test_the_limit_bounds_volume_where_the_queue_bounds_concurrency(monkeypatch)
 
 # ─── what a refusal looks like from outside ──────────────────────────────
 
-def _generate(monkeypatch, *, decider):
+def _generate(monkeypatch, *, decider, session_id=None):
     monkeypatch.setattr(main.LLM_topic_decider,
                         "LLM_single_prompt_topic_and_difficulty_decider", decider)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
     # Called directly, unfilled Query defaults arrive as truthy Query objects.
-    return main.generate_question(user_id="kid", grade="5th Grade",
-                                  class_id=None, bias=0, session_id=None)
+    return main.generate_question(request=None, grade="5th Grade",
+                                  class_id=None, bias=0, session_id=session_id)
+
+
+# ─── whose question it is ────────────────────────────────────────────────
+
+def test_the_question_is_generated_for_the_caller_and_their_session(monkeypatch):
+    """The decider reads consent by student id and signals by session id."""
+    from test_access_control import _FakeSupabase
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        {"sessions": [{"id": "mine", "user_id": "kid"}]}))
+    seen = []
+    _generate(monkeypatch, session_id="mine",
+              decider=lambda *a, **_k: seen.append(a) or {"question_text": "2+2"})
+    assert seen[0][0] == "kid"
+    assert seen[0][2] == "mine"
+
+
+def test_another_students_session_is_refused_before_anything_is_read(monkeypatch):
+    from test_access_control import _FakeSupabase
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        {"sessions": [{"id": "theirs", "user_id": "another-child"}]}))
+    reached = []
+    with pytest.raises(HTTPException) as exc:
+        _generate(monkeypatch, session_id="theirs",
+                  decider=lambda *a, **_k: reached.append(a) or {"question_text": "2+2"})
+    assert exc.value.status_code == 403
+    assert reached == []
+
+
+def test_a_generation_refusal_names_the_caller_in_the_security_log(monkeypatch):
+    tighten(monkeypatch, main._GENERATION_LIMITER, limit=1)
+    rows = []
+    monkeypatch.setattr(main, "_record_security_event",
+                        lambda kind, actor, subject=None, **d: rows.append((kind, actor, d)))
+    decider = lambda *_a, **_k: {"question_text": "2+2"}  # noqa: E731
+    _generate(monkeypatch, decider=decider)
+    with pytest.raises(HTTPException):
+        _generate(monkeypatch, decider=decider)
+    assert rows == [("rate_limited", "kid", {"limiter": "generation"})]
 
 
 def test_a_reached_ceiling_is_a_503_not_a_500(monkeypatch):

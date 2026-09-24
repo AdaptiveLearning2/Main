@@ -828,13 +828,14 @@ CORS last (outermost). A 413 carrying no CORS header reaches the browser as a ge
 limit indistinguishable from the backend being down. **`add_middleware` prepends, so *added last* means *outermost*** —
 getting that backwards is silent.
 
-**Five GET routes resolve no caller, and every other limiter here keys on the id `get_user` returns** —
-so on the question bank, the topic list, the sidecar health probe and question generation, none of them
-runs. A middleware inside `security_headers` and CORS budgets those five by **address**, which is the only
-identity an unauthenticated caller cannot choose: `/api/generate-question` already had a limiter keyed on
-its `user_id` *query parameter*, so a new string per request bought a new allowance on the shortest path in
-the product to a model call. `test_network_edge.py` derives the public set from the module, so a sixth such
-route fails until it is given a budget.
+**Four GET routes resolve no caller, and every other limiter here keys on the id `get_user` returns** —
+so on the question bank, its count, the topic list and the sidecar health probe, none of them runs. A
+middleware inside `security_headers` and CORS budgets those four by **address**, which is the only identity
+an unauthenticated caller cannot choose. `test_network_edge.py` derives the public set from the module, so
+a fifth such route fails until it is given a budget. **A route that names a student resolves its caller
+instead**: `/api/generate-question` took `user_id` and `session_id` from the query string, so anyone could
+have another child's session signals read into a prompt, and its per-user limiter keyed on a string the
+caller chose.
 
 **An address is a school, not a student**, and that sets the numbers. A class leaves through one NAT and
 `Adaptive.jsx` polls the health route every 5 s per open page, so sixty students behind one address is
@@ -1374,12 +1375,10 @@ whether that was a decision. **It finds the limiters at runtime and carries a na
 partition over a scan is only as good as the scan: an AST match on one assignment shape misses an
 annotated one, and collecting the five into a registry — which `_PUBLIC_BUDGETS` already is — would
 have left it reporting nothing unclassified while examining nothing. Same countermeasure as the
-chart-render palette scraper's refusal of an empty result. The generation limiter is the one with **three call sites that differ**,
-so it is pinned per site too: `practice_question` records, because `get_user` resolved a real actor;
-`/api/generate-question` does not, because `user_id` there is a query parameter the caller writes and
-an actor from it is an invented id in an append-only log (its refusals are recorded by the address
-budget instead, with no actor at all); and `_prefetch_worker` does not, because no refusal reaches
-anybody — a skipped refill leaves the queue short and the next question is generated inline. `rate_limited` is cooled (300 s) because a limiter fires once per
+chart-render palette scraper's refusal of an empty result. The generation limiter's call sites differ,
+so it is pinned per site too: `practice_question` and `generate_question` record, because `get_user`
+resolved a real actor; `_prefetch_worker` does not, because no refusal reaches anybody — a skipped
+refill leaves the queue short and the next question is generated inline. `rate_limited` is cooled (300 s) because a limiter fires once per
 *request* past the allowance; denials are not, since deduplicating them would hide a caller probing a
 series of different students. **The cooldown key carries what makes two of that kind's events different** —
 `_COOLED_KINDS` names the `detail` fields, `limiter` here. On `(kind, actor)` alone the first limiter to

@@ -180,11 +180,12 @@ def test_clearing_the_field_is_not_a_bad_grade():
     assert main.UpdateProfileRequest(grade_level="   ").grade_level is None
 
 
-def test_the_query_parameter_is_checked_too():
+def test_the_query_parameter_is_checked_too(monkeypatch):
     """`GET /api/generate-question?grade=` has no request model to check it."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "student-1"})
     for payload in PAYLOADS:
         with pytest.raises(main.HTTPException) as caught:
-            main.generate_question(user_id="student-1", grade=payload)
+            main.generate_question(request=None, grade=payload, session_id=None)
         assert caught.value.status_code == 422
 
 

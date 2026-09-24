@@ -400,7 +400,7 @@ def test_every_route_with_no_caller_has_an_address_budget():
 
 def test_the_derivation_found_routes_at_all():
     """Or the comparison above passes against two empty sets."""
-    assert len(_public_route_paths()) >= 5
+    assert len(_public_route_paths()) >= 4
 
 
 def test_every_budgeted_path_names_a_budget_that_exists():
@@ -444,17 +444,18 @@ def test_the_refusal_is_readable_by_the_page_that_caused_it(monkeypatch):
     assert refused.headers["X-Content-Type-Options"] == "nosniff"
 
 
-def test_a_caller_cannot_mint_a_fresh_allowance_out_of_the_query_string(monkeypatch):
-    """Its `user_id` limiter keys on a string the caller writes; the address is not chosen."""
-    _tighten(monkeypatch, "public_generate", limit=2)
-    # The handler body raises here; the allowance is spent before it runs.
-    unguarded = TestClient(main.app, raise_server_exceptions=False)
+def test_question_generation_names_no_one_it_has_not_resolved(monkeypatch):
+    """A query-string `user_id`/`session_id` without a caller is a 401 before anything is read."""
+    reached = []
+    monkeypatch.setattr(main.LLM_topic_decider,
+                        "LLM_single_prompt_topic_and_difficulty_decider",
+                        lambda *a, **k: reached.append(a) or {"question_text": "2+2"})
 
-    seen = [unguarded.get(f"/api/generate-question?user_id=fresh-{i}&grade=5th+Grade")
-            for i in range(3)]
+    refused = client.get("/api/generate-question?user_id=someone-else"
+                         "&session_id=another-childs-session&grade=5th+Grade")
 
-    assert [r.status_code for r in seen[:2]] != [429, 429], "the first two were inside it"
-    assert seen[2].status_code == 429
+    assert refused.status_code == 401
+    assert reached == []
 
 
 def test_two_addresses_do_not_share_one_allowance(monkeypatch):

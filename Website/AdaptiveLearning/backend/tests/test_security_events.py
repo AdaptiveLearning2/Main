@@ -473,10 +473,6 @@ SILENT_LIMITERS = {}
 
 # `_claim_generation_slot` call site -> why it records nothing (per site, not per limiter).
 GENERATION_SILENT_SITES = {
-    "generate_question":
-        "`user_id` is a query parameter the caller writes, so an actor from it "
-        "is an invented id in an append-only log. This route's recorded "
-        "refusals come from the address budget instead, with no actor.",
     "_prefetch_worker":
         "No refusal reaches anybody -- a skipped refill leaves the queue short "
         "and the next question is generated inline, so there is no denial to "
@@ -487,7 +483,7 @@ GENERATION_SILENT_SITES = {
 # Named floor, not a count, so a rename fails too.
 EXPECTED_LIMITERS = {
     "strategies", "chart_summary", "ingest", "generation",
-    "public_generate", "public_read", "public_probe",
+    "public_read", "public_probe",
     "parent_link_code",
 }
 
@@ -559,7 +555,7 @@ def test_every_limiter_either_records_or_is_classified_as_silent():
         encoding="utf-8")
     # Anchored on the paren, so a rename that appends still fails.
     assert "def test_the_refusal_is_recorded_without_saying_who(" in cited, (
-        "the test this exclusion rests on is gone or renamed -- the three public "
+        "the test this exclusion rests on is gone or renamed -- the public "
         "budgets are now unchecked by anything")
     recording |= set(main._PUBLIC_BUDGETS)
 

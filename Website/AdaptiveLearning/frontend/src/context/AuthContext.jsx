@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { supabase } from '../lib/supabase'
 import { apiFetch } from '../lib/api'
 import { clearViewPrefs } from '../lib/viewPrefs'
+import { runSignOutTasks } from '../lib/signOutTasks'
 
 const AuthContext = createContext()
 
@@ -101,6 +102,9 @@ export function AuthProvider({ children }) {
   }
 
   const signOut = async () => {
+    // While the token still exists: a page's unmount cleanup runs after it
+    // is gone. See `lib/signOutTasks.js`.
+    await runSignOutTasks()
     try {
       await supabase.auth.signOut()
     } finally {

@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import { AuthProvider, useAuth } from './AuthContext'
+import { onSignOut } from '../lib/signOutTasks'
 
 // The display preference is per browser, so every sign-out path clears it for shared machines.
 
@@ -80,6 +81,22 @@ it('clears it even when sign-out fails', async () => {
   renderAuth()
   await userEvent.click(await screen.findByText('Sign out'))
   await waitFor(() => expect(localStorage.getItem('teacher_hide_sensor_data')).toBeNull())
+})
+
+it('runs the sign-out tasks while the token still exists', async () => {
+  // A page's unmount cleanup runs after `supabase.auth.signOut()` has cleared
+  // the session, so anything needing a bearer has to go first -- asserted as
+  // an order, since both calls happen either way.
+  const order = []
+  signOut.mockImplementation(async () => { order.push('signOut'); return { error: null } })
+  const off = onSignOut(async () => { order.push('task') })
+  try {
+    renderAuth()
+    await userEvent.click(await screen.findByText('Sign out'))
+    await waitFor(() => expect(order).toEqual(['task', 'signOut']))
+  } finally {
+    off()
+  }
 })
 
 it('clears it on a sign-out this tab did not perform', async () => {

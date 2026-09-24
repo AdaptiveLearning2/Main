@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
 import { endSession, recordAnswer } from '../../lib/session'
+import { onSignOut } from '../../lib/signOutTasks'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { startPush, stopPush, stopPushOnUnload, pushStatus,
          deviceStart, deviceStop, deviceStopOnUnload, museRefresh, museConnect,
@@ -254,6 +255,16 @@ export default function Adaptive() {
   useEffect(() => () => {
     if (sessionIdRef.current) endSession(sessionIdRef.current)
   }, [])
+
+  // Sign-out clears the token before unmount, so the cleanup above would 401.
+  // The last attempt: cleared first so a failure is not retried tokenless, and state too so
+  // a page left up by a failed sign-out starts a new session rather than answering into this one.
+  useEffect(() => onSignOut(async () => {
+    const id = sessionIdRef.current
+    sessionIdRef.current = null
+    setSessionId(null)
+    if (id) await endSession(id)
+  }), [])
 
   // Unmount: stop the 30s connect safety timer and drop the global session id.
   useEffect(() => () => {

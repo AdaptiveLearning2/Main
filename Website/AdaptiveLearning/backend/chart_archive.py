@@ -17,7 +17,7 @@ import chart_render
 
 BUCKET = "session-charts"
 
-# Must equal `/api/signals/session/{id}`'s cap: the archive is what the reviewer saw.
+# Rows per table, shared by session review and the archive so both truncate at the same place.
 _ROW_CAP = 20000
 
 
@@ -100,13 +100,51 @@ def object_path(user_id: str, session_id: str, chart: str) -> str:
     return f"{user_id}/{session_id}/{chart}.svg"
 
 
-def _fetch(client, session_id: str):
-    """The same three reads `/api/signals/session/{id}` makes, same order and cap (service-role)."""
-    def rows(table):
-        return client.table(table).select("*").eq("session_id", session_id) \
-            .order("ts").limit(_ROW_CAP).execute().data or []
+# PostgREST silently cuts every response at `db-max-rows` (1000), service role included.
+_PAGE = 1000
 
-    return rows("cognitive_signals"), rows("face_signals"), rows("heart_signals")
+# What session review and the archive read; `raw` (~1 KB a row) stays in the database.
+# A column a surface renders must be added here, or it arrives missing.
+SIGNAL_COLUMNS = {
+    "cognitive_signals": "id, ts, focus, stress",
+    "face_signals": "id, ts, emotion",
+    "heart_signals": "id, ts, source, heart_rate_bpm, rmssd_ms, stress_category",
+}
+
+
+def read_session_signals(client, session_id: str, since: str | None = None):
+    """A session's cognitive, face and heart rows in `ts` order, up to `_ROW_CAP` each.
+
+    The one reader for session review and the archive, so both stop at the same row.
+    Paged by id, not position, so a row written or deleted mid-read is neither repeated
+    nor skipped; only an empty page ends a table, as a short one may be a lower server cap.
+    """
+    def rows(table):
+        out: list = []
+        last_id = None
+        while len(out) < _ROW_CAP:
+            query = client.table(table).select(SIGNAL_COLUMNS[table]) \
+                .eq("session_id", session_id)
+            if since:
+                query = query.gt("ts", since)
+            if last_id is not None:
+                query = query.gt("id", last_id)
+            page = query.order("id").limit(min(_PAGE, _ROW_CAP - len(out))) \
+                .execute().data or []
+            if not page:
+                break
+            out.extend(page)
+            last_id = page[-1]["id"]
+        return sorted(out, key=lambda r: (str(r.get("ts")), r["id"]))
+
+    # The three tables at once, so review waits for the longest, not the sum.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        return tuple(pool.map(rows, SIGNAL_COLUMNS))
+
+
+def _fetch(client, session_id: str):
+    """Service-role, no RLS: authorised by the student's own session close."""
+    return read_session_signals(client, session_id)
 
 
 def archive_session(client, session_id: str, user_id: str, *,

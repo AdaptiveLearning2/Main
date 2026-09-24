@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import { AuthProvider, useAuth } from './AuthContext'
+import { onSignOut } from '../lib/signOutTasks'
 
 // The display preference is per browser, so every sign-out path clears it for shared machines.
 
@@ -80,6 +81,38 @@ it('clears it even when sign-out fails', async () => {
   renderAuth()
   await userEvent.click(await screen.findByText('Sign out'))
   await waitFor(() => expect(localStorage.getItem('teacher_hide_sensor_data')).toBeNull())
+})
+
+it('runs the sign-out tasks while the token still exists', async () => {
+  // Asserted as an order, since both calls happen either way.
+  const order = []
+  signOut.mockImplementation(async () => { order.push('signOut'); return { error: null } })
+  const off = onSignOut(async () => { order.push('task') })
+  try {
+    renderAuth()
+    await userEvent.click(await screen.findByText('Sign out'))
+    await waitFor(() => expect(order).toEqual(['task', 'signOut']))
+  } finally {
+    off()
+  }
+})
+
+it('joins a sign-out already in progress rather than starting a second', async () => {
+  // A slow task leaves the button live; a second click must not rerun the tasks.
+  let release
+  const task = vi.fn(() => new Promise(r => { release = r }))
+  const off = onSignOut(task)
+  try {
+    renderAuth()
+    const button = await screen.findByText('Sign out')
+    await userEvent.click(button)
+    await userEvent.click(button)
+    release()
+    await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
+    expect(task).toHaveBeenCalledTimes(1)
+  } finally {
+    off()
+  }
 })
 
 it('clears it on a sign-out this tab did not perform', async () => {

@@ -23,6 +23,7 @@ import safe_solve
 import token_join
 import grade_levels
 import ccss_standards
+import question_consistency
 
 transformations = (standard_transformations + (implicit_multiplication_application,))
 
@@ -170,6 +171,13 @@ def generate_algebra_question(global_questions, prev_questions, difficulty, grad
         required_keys = ["variables", "question_text"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
+            continue
+
+        # The student reads question_text but is scored against variables.
+        inconsistent = question_consistency.expression_mismatch(
+            question_data.get("question_text"), question_data.get("variables"))
+        if inconsistent:
+            print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
 
         # Solved inside the loop, so an unscorable equation is a retry, not a 500.

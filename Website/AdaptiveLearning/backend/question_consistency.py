@@ -83,6 +83,64 @@ def dataset_mismatch(question_text, values):
     return dataset_check(question_text, values)[1]
 
 
+_OPERATION = frozenset("+-=*^")
+
+
+def _atoms(text, letters):
+    """Numbers, operators and the scored expression's own letters, as runs split by any other text."""
+    letter = rf"|(?<![A-Za-z])[{re.escape(''.join(letters))}](?![A-Za-z])" if letters else ""
+    pattern = re.compile(rf"\d+(?:\.\d+)?|[-+*/=^()]{letter}")
+    text = text.replace("−", "-").replace("×", "*").replace("÷", "/").replace("·", "*")
+    runs, current, end = [], [], 0
+    for m in pattern.finditer(text):
+        if current and text[end:m.start()].strip():
+            runs.append(current)
+            current = []
+        current.append(m.group())
+        end = m.end()
+    if current:
+        runs.append(current)
+    return runs
+
+
+def _comparable(atoms):
+    """Parentheses and `*` dropped: "3(x+2)" and "3*(x+2)" are the same display."""
+    return [a for a in atoms if a not in "()*"]
+
+
+def expression_mismatch(question_text, tokens):
+    """Reason the expression shown differs from the scored `tokens`, or None.
+
+    One displayed expression (an operation, not just a fraction bar) must match token for
+    token; otherwise every scored number must appear in the text. Mixed numbers fail open.
+    """
+    if not isinstance(question_text, str) or not isinstance(tokens, list) or not tokens:
+        return None
+    scored_text = "".join(str(t) for t in tokens)
+    if _MIXED_NUMBER.search(question_text) or _MIXED_NUMBER.search(scored_text):
+        return None
+    letters = set(re.findall(r"[a-z]", scored_text.lower()))
+    scored = [a for run in _atoms(scored_text, letters) for a in run]
+    shown = [run for run in _atoms(question_text, letters) if _OPERATION & set(run)
+             and sum(a[0].isdigit() for a in run) >= 2]
+    if len(shown) == 1:
+        if _comparable(shown[0]) != _comparable(scored):
+            return (f"the question shows {''.join(shown[0])} but "
+                    f"{scored_text} is scored -- the student would be marked against "
+                    f"an expression they were not given")
+        return None
+    in_text = [a for run in _atoms(question_text, set()) for a in run if a[0].isdigit()]
+    if not in_text:
+        return None          # numbers written in words: nothing to compare against
+    missing = [n for n in scored if n[0].isdigit()]
+    for n in in_text:
+        if n in missing:
+            missing.remove(n)
+    if missing:
+        return f"{missing} are scored but not in the question -- the student was not given them"
+    return None
+
+
 def negation_mismatch(question_text, scenario):
     """Reason a probability question's wording disagrees with its scenario, or None.
 

@@ -6,7 +6,7 @@
  * page that still printed Supabase's own sentence.
  */
 import { describe, it, expect } from 'vitest'
-import { AuthApiError, AuthRetryableFetchError } from '@supabase/supabase-js'
+import { AuthApiError, AuthRetryableFetchError, AuthWeakPasswordError } from '@supabase/supabase-js'
 import { signInMessage, signUpMessage } from './authErrors'
 
 const refused = (message, status, code) => new AuthApiError(message, status, code)
@@ -40,6 +40,20 @@ describe('sign-in', () => {
     expect(signInMessage(refused('Email not confirmed', 400, 'email_not_confirmed')))
       .toMatch(/confirm your email/i)
   })
+
+  it('reads a refusal with no code as bad credentials, as an older server means it', () => {
+    expect(signInMessage(refused('Invalid login credentials', 400, undefined)))
+      .toBe('Email or password is incorrect.')
+  })
+
+  it.each([
+    ['a banned account', refused('User is banned', 400, 'user_banned')],
+    ['a failed captcha', refused('captcha protection', 400, 'captcha_failed')],
+    ['a hook refusing', refused('Hook timed out', 422, 'hook_timeout')],
+  ])('does not call %s a wrong password', (_name, err) => {
+    // "Incorrect" sends someone to reset a password that is fine.
+    expect(signInMessage(err)).not.toMatch(/incorrect/i)
+  })
 })
 
 describe('sign-up', () => {
@@ -53,10 +67,20 @@ describe('sign-up', () => {
     expect(signUpMessage(refused('Signups not allowed', 422, 'signup_disabled'))).toBe(taken)
   })
 
+  it('says which password rule failed, when Supabase says', () => {
+    // Stricter rules in production than the page's own 6-character check would
+    // otherwise refuse a password with no hint of what to change.
+    const msg = signUpMessage(new AuthWeakPasswordError('Password is weak', 422, ['length', 'pwned']))
+
+    expect(msg).toMatch(/too short/i)
+    expect(msg).toMatch(/data breach/i)
+    expect(msg).not.toMatch(/kinds of character/i)
+  })
+
   it('still says what is wrong with the input', () => {
     // About the password or the address typed, not about an account.
     expect(signUpMessage(refused('Password is too weak', 422, 'weak_password')))
-      .toMatch(/stronger password/i)
+      .toBe('Choose a stronger password.')
     expect(signUpMessage(refused('Invalid email', 400, 'email_address_invalid')))
       .toMatch(/valid email/i)
   })

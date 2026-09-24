@@ -26,5 +26,6 @@ it('creates the client with the auth settings written out', async () => {
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: true,
+    flowType: 'implicit',
   })
 })

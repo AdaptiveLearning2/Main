@@ -16,10 +16,17 @@ if (!supabaseUrl || !supabaseAnonKey) {
 //    run injected script -- see "The XSS sinks" in CLAUDE.md.
 //  - detectSessionInUrl: reads a session out of an auth redirect, which email
 //    confirmation and password-reset links arrive as.
+//  - flowType: how that redirect carries the session. 'implicit' puts the
+//    tokens in the URL fragment; 'pkce' sends a one-time code that only the
+//    browser which started the flow can exchange, which is stronger and also
+//    means a link opened on another device (a confirmation email read on a
+//    phone) fails. No redirect flow is in use yet, so this stays on today's
+//    default -- choose deliberately when email links are switched on.
 const SUPABASE_AUTH_OPTIONS = {
   autoRefreshToken: true,
   persistSession: true,
   detectSessionInUrl: true,
+  flowType: 'implicit',
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {

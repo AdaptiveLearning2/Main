@@ -20,21 +20,45 @@ const unanswered = err => !err?.status || err.status >= 500
 
 const throttled = err => err.status === 429 || String(err.code || '').startsWith('over_')
 
+// Supabase answers an unknown email and a wrong password alike, with
+// `invalid_credentials`. A refusal with no code is an older server saying the
+// same thing.
+const badCredentials = err =>
+  err.code === 'invalid_credentials' || err.code === 'user_not_found'
+  || (!err.code && err.status === 400)
+
 export function signInMessage(err) {
   if (unanswered(err)) return "Couldn't reach the sign-in service. Check your connection and try again."
   if (throttled(err)) return TOO_MANY
+  if (badCredentials(err)) return 'Email or password is incorrect.'
   // Only reachable with the right password, so it tells nobody anything they
   // could not find out by signing in.
   if (err.code === 'email_not_confirmed') return 'Confirm your email address first. The link is in your inbox.'
-  // Unknown email and wrong password alike.
-  return 'Email or password is incorrect.'
+  if (err.code === 'captcha_failed') return 'The verification check did not pass. Complete it and try again.'
+  // Anything else -- a banned account, a hook refusing -- is not a wrong
+  // password, and saying so sends someone to reset one that is fine.
+  return "Couldn't sign you in. Try again, and if it keeps happening ask your teacher or administrator."
+}
+
+// GoTrue's `weak_password.reasons`, which auth-js carries on the error.
+const WEAK_REASONS = {
+  length:     'it is too short',
+  characters: 'it needs more kinds of character (letters, digits, symbols)',
+  pwned:      'it has appeared in a known data breach',
+}
+
+function weakPasswordMessage(err) {
+  const why = (err.reasons || []).map(r => WEAK_REASONS[r]).filter(Boolean)
+  return why.length
+    ? `Choose a stronger password: ${why.join('; ')}.`
+    : 'Choose a stronger password.'
 }
 
 export function signUpMessage(err) {
   if (unanswered(err)) return "Couldn't reach the sign-up service. Check your connection and try again."
   if (throttled(err)) return TOO_MANY
   // About the input, not about whether an account exists.
-  if (err.code === 'weak_password') return 'Choose a stronger password.'
+  if (err.code === 'weak_password') return weakPasswordMessage(err)
   if (err.code === 'email_address_invalid') return 'Enter a valid email address.'
   // "Already registered" among them, worded so it does not say which it was.
   return "We couldn't create an account with those details. If you already have one, sign in instead."

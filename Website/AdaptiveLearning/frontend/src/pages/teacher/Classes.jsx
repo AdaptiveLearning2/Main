@@ -15,7 +15,8 @@ export default function Classes() {
   const [loading, setLoading]     = useState(true)
   const [creating, setCreating]   = useState(false)
   const [newName, setNewName]     = useState('')
-  const [newGrade, setNewGrade]   = useState('5th Grade')
+  // '' is no grade: the class is served the backend's default until one is picked.
+  const [newGrade, setNewGrade]   = useState('')
   const [showForm, setShowForm]   = useState(false)
   const [failed, setFailed]       = useState(false)
   const [copiedId, setCopiedId]   = useState(null)
@@ -43,7 +44,7 @@ export default function Classes() {
     try {
       const cls = await apiFetch('/api/classes', {
         method: 'POST',
-        body: { name: newName.trim(), grade_level: newGrade }
+        body: { name: newName.trim(), grade_level: newGrade || null }
       })
       setClasses(prev => [cls, ...prev])
       setNewName('')
@@ -104,8 +105,9 @@ export default function Classes() {
               <input value={newName} onChange={e => setNewName(e.target.value)}
                 className="px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-violet-500"
                 placeholder='Class name, e.g. "Period 3 Math"' autoFocus required />
-              <select value={newGrade} onChange={e => setNewGrade(e.target.value)}
+              <select value={newGrade} onChange={e => setNewGrade(e.target.value)} aria-label="Grade level"
                 className="px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-violet-500">
+                <option value="">Grade not set</option>
                 {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
               </select>
               <button type="submit" disabled={creating || !newName.trim()}

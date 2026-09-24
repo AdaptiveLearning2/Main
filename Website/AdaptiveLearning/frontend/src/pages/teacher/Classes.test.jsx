@@ -43,6 +43,36 @@ describe('the class list', () => {
   })
 })
 
+describe('creating a class', () => {
+  beforeEach(() => {
+    overrideApi('/api/classes', () => ({ ...CLASS, id: 'c-new', name: 'Period 3' }), 'POST')
+  })
+
+  const openForm = async () => {
+    draw()
+    await userEvent.click(await screen.findByRole('button', { name: /new class/i }))
+    return screen.getByRole('combobox', { name: /grade level/i })
+  }
+  const submit = async () => {
+    await userEvent.type(screen.getByPlaceholderText(/class name/i), 'Period 3')
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+    return apiFetch.mock.calls.find(([p, opts]) => p === '/api/classes' && opts?.method === 'POST')[1]
+  }
+
+  it('starts on "Grade not set" and sends no grade, so the backend decides', async () => {
+    const picker = await openForm()
+    expect(picker).toHaveValue('')
+    expect(picker).toHaveDisplayValue('Grade not set')
+
+    expect((await submit()).body.grade_level).toBeNull()
+  })
+
+  it('sends a grade the teacher picked', async () => {
+    await userEvent.selectOptions(await openForm(), '3rd Grade')
+    expect((await submit()).body.grade_level).toBe('3rd Grade')
+  })
+})
+
 describe('editing a grade', () => {
   it('opens a class with no grade on "Not set", and saving that untouched writes nothing', async () => {
     overrideApi('/api/classes', () => ([{ ...CLASS, grade_level: null }]))

@@ -138,6 +138,16 @@ def set_flag(monkeypatch):
     return _set
 
 
+def website_topics():
+    """`TOPICS` from the frontend's `lib/topics.js`: the topics the website can show."""
+    import pathlib
+    import re
+    src = pathlib.Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "topics.js"
+    block = re.search(r"export const TOPICS = \[([\s\S]*?)\]", src.read_text(encoding="utf-8"))
+    assert block, "TOPICS not found in lib/topics.js -- a check on it would be inert"
+    return re.findall(r"'([a-z_]+)'", block.group(1))
+
+
 def tighten(monkeypatch, limiter, *, limit=None, window=None):
     """Shrink one `_SlidingWindowLimiter`'s budget for a test, and reset it.
 

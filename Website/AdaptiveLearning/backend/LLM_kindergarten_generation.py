@@ -105,7 +105,8 @@ def _plan(topic, scenario, difficulty, rng):
                  brief=f"Ask which number is {word}. The numbers are the answer choices, "
                        f"so do not write any number in the question.",
                  example=f"Which number is {word}?",
-                 require=[["larger", "greater", "bigger", "largest", "greatest", "biggest"]
+                 require=[["which number"],
+                          ["larger", "greater", "bigger", "largest", "greatest", "biggest"]
                           if larger else ["smaller", "less", "smallest", "least"]],
                  forbid=["smaller", "smallest", "less", "least"] if larger
                         else ["larger", "greater", "bigger", "largest", "greatest"])
@@ -120,7 +121,8 @@ def _plan(topic, scenario, difficulty, rng):
                  brief=f"The picture shows some {plural(first)} and some {plural(second)}. "
                        f"Ask whether there are {word} {plural(first)} or {word} {plural(second)}.",
                  example=f"Are there {word} {plural(first)} or {word} {plural(second)}?",
-                 require=[[plural(first)], [plural(second)], [word]], forbid=[other, "less"])
+                 require=[[plural(first)], [plural(second)], [word]],
+                 forbid=[other, "less", "same", "how many"])
     elif scenario in ("add", "subtract"):
         total = 5 if difficulty == "easy" else 10
         if scenario == "add":
@@ -226,6 +228,13 @@ def wording_problem(text, plan):
 
 def _prompt(topic, plan, grade, global_questions, prev_questions):
     shown = ", ".join(str(n) for n in plan["shown"]) or "none -- do not write any number"
+    # The checks in `wording_problem`, stated: an 8B model left out an unstated word most often.
+    rules = [f"- It MUST use {' or '.join(repr(w) for w in group)}." for group in plan["require"]]
+    if plan.get("equation"):
+        rules.append(f"- It MUST contain exactly \"{plan['equation']} = ?\".")
+    if plan["forbid"]:
+        rules.append(f"- Do NOT use these words: {', '.join(plan['forbid'])}.")
+    must = "\n".join(rules)
     return f"""
 You write one maths question for a {grade} student, who is five years old.
 The Question Topic is "{topic}".
@@ -238,6 +247,7 @@ Rules for "question_text":
 - Write numbers as digits. The ONLY numbers in the question are: {shown}, in that order.
 - Do NOT give the answer, in digits or in words.
 - Do NOT use a letter such as x or n for a number.
+{must}
 
 Previously generated questions:
 {chr(10).join(q["text"] for q in prev_questions)}

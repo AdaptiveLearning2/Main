@@ -60,6 +60,20 @@ def test_the_prompt_offers_exactly_the_grades_topics(decider, grade):
     assert set(offered) == set(td._allowed_topics(grade))
 
 
+def test_every_prompt_offers_only_website_topics_and_together_all_of_them(decider):
+    """Kindergarten (0) through College (13): no prompt names a topic the website cannot show."""
+    from conftest import website_topics
+    run, prompts, _ = decider
+    website = set(website_topics())
+    offered = set()
+    for grade in range(0, 14):
+        run('{"topic": "ordering", "difficulty": "easy"}', grade=str(grade))
+        listed = {t.strip() for t in _topics_line(prompts[-1]).split(",")}
+        assert listed <= website, (grade, listed - website)
+        offered |= listed
+    assert offered == website, website - offered
+
+
 def test_a_newer_topic_the_model_picks_is_served(decider):
     run, _, served = decider
     run('{"topic": "quadratics", "difficulty": "hard"}', grade="9th Grade")

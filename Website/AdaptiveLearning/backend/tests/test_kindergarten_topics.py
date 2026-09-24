@@ -170,6 +170,10 @@ def _plan_for(scenario, seed=3):
     ("name_shape", "What is the name of this {answer} shape?", "uses '{answer}'"),
     ("count_objects", "How many are there?", "uses none of"),
     ("larger_number", "Which number is smaller?", "uses none of"),
+    # Replies llama3.1:8b gave in a live trial, which passed before `which number` was required.
+    ("larger_number", "Choose the bigger dot.", "uses none of ['which number']"),
+    ("largest_of_three", "Big one is bigger than little one?", "uses none of ['which number']"),
+    ("compare_groups", "How many {first} do you see? Is that more or the same as the {second}?", "uses 'same'"),
 ])
 def test_a_reply_that_does_not_match_the_plan_is_refused(scenario, bad, why):
     plan = _plan_for(scenario)
@@ -177,7 +181,9 @@ def test_a_reply_that_does_not_match_the_plan_is_refused(scenario, bad, why):
     answer = plan["answer"]
     # The plan's own item, so a story is refused for its verb and not for a missing noun.
     items = plan["require"][0][0] if plan["require"] else "apples"
+    first, second = (plan["options"] if scenario == "compare_groups" else ["", ""])
     values = dict(a=shown[0], b=shown[1], extra=99, answer=answer, items=items,
+                  first=first, second=second,
                   answer_word=kg.NUMBER_WORDS[answer] if isinstance(answer, int) else answer)
     text = bad.format(**values)
     assert why.format(**values) in (kg.wording_problem(text, plan) or ""), text
@@ -201,6 +207,30 @@ def test_three_refused_replies_raise_rather_than_serve(model, monkeypatch):
     with pytest.raises(ValueError):
         _generate("counting", "easy", "one_more", 1, monkeypatch)
     assert len(prompts) == 3
+
+
+def test_every_kindergarten_prompt_names_a_topic_the_website_shows(model, monkeypatch):
+    from conftest import website_topics
+    _, prompts, _ = model
+    for topic, difficulty, scenario in CELLS:
+        _generate(topic, difficulty, scenario, 0, monkeypatch)
+        assert f'The Question Topic is "{topic}"' in prompts[-1]
+    assert set(kg.TOPICS) <= set(website_topics())
+
+
+@pytest.mark.parametrize("topic,difficulty,scenario", CELLS)
+def test_the_prompt_states_every_word_the_check_requires_and_refuses(model, monkeypatch,
+                                                                    topic, difficulty, scenario):
+    """An unstated requirement is one the model meets by chance; the live trial measured that."""
+    plans, prompts, _ = model
+    _generate(topic, difficulty, scenario, 5, monkeypatch)
+    plan, prompt = plans[-1], prompts[-1]
+    for group in plan["require"]:
+        assert f"MUST use {' or '.join(repr(w) for w in group)}." in prompt, group
+    if plan.get("equation"):
+        assert f'MUST contain exactly "{plan["equation"]} = ?"' in prompt
+    for word in plan["forbid"]:
+        assert word in prompt.split("Do NOT use these words:")[1].splitlines()[0], word
 
 
 def test_the_prompt_names_the_numbers_and_the_grade(model, monkeypatch):

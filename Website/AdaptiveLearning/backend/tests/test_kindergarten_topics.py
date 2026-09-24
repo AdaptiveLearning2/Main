@@ -173,6 +173,9 @@ def _plan_for(scenario, seed=3):
     # Replies llama3.1:8b gave in a live trial, which passed before `which number` was required.
     ("larger_number", "Choose the bigger dot.", "uses none of ['which number']"),
     ("largest_of_three", "Big one is bigger than little one?", "uses none of ['which number']"),
+    # claude-haiku-4-5 turned both into stories in a live trial.
+    ("one_less", "If you have {a} {items} and take away one, how many are left?", "does not contain 'one less than"),
+    ("one_more", "If you have {a} {items} and get one more, how many do you have?", "does not contain 'one more than"),
     ("compare_groups", "How many {first} do you see? Is that more or the same as the {second}?", "uses 'same'"),
 ])
 def test_a_reply_that_does_not_match_the_plan_is_refused(scenario, bad, why):
@@ -229,6 +232,8 @@ def test_the_prompt_states_every_word_the_check_requires_and_refuses(model, monk
         assert f"MUST use {' or '.join(repr(w) for w in group)}." in prompt, group
     if plan.get("equation"):
         assert f'MUST contain exactly "{plan["equation"]} = ?"' in prompt
+    if plan.get("phrase"):
+        assert f'MUST contain exactly "{plan["phrase"]}"' in prompt
     for word in plan["forbid"]:
         assert word in prompt.split("Do NOT use these words:")[1].splitlines()[0], word
 

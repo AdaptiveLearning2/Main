@@ -77,12 +77,13 @@ def mode(values):
 def _mode_problem(numbers, difficulty):
     """Why `numbers` has no mode the tier can serve, or None.
 
-    No repeat, or every value tied, is "no mode"; only "hard" tiers ask for two modes.
+    No repeat, or several values all tied, is "no mode"; [5, 5, 5] has mode 5.
+    Only "hard" tiers ask for two modes.
     """
     counts = Counter(numbers)
     top = max(counts.values())
     modes = [v for v, c in counts.items() if c == top]
-    if len(modes) == len(counts):
+    if len(modes) == len(counts) and (len(counts) > 1 or top == 1):
         return f"no mode: every value appears {top} time(s)"
     allowed = 2 if difficulty == "hard" else 1
     if len(modes) > allowed:

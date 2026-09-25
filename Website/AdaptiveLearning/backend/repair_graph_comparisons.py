@@ -1,7 +1,8 @@
 """Re-score stored "how many more" graph questions from their text, as generation now does.
 
 Run to report; --apply rewrites `correct_answer` and `options` on rows whose stored answer
-differs. Rows whose text compares no two bars larger-first are reported, never changed.
+differs. Rows whose text compares no two bars larger-first, and rows a student has answered
+(each answer stores an option's position), are reported, never changed.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import answer_format
 import LLM_graphs_generation as graphs
 
 _PAGE = 1000   # PostgREST's db-max-rows; keyset-paged on id so no row is skipped
+_ANSWER_TABLES = ("session_answers", "practice_session_answers")
 
 
 def _rows(client):
@@ -26,6 +28,12 @@ def _rows(client):
         if len(page) < _PAGE:
             return
         last = page[-1]["id"]
+
+
+def _answered(client, question_id):
+    """True if a lesson or practice answer points at this question; raises if a read fails."""
+    return any(client.table(table).select("id").eq("question_id", question_id)
+               .limit(1).execute().data for table in _ANSWER_TABLES)
 
 
 def rescore(row):
@@ -51,12 +59,14 @@ def rescore(row):
 
 def repair(client, dry_run=True):
     """Counts per outcome, and the ids behind every one but "ok"; raises if the read fails."""
-    report = {"ok": 0, "fix": [], "unanswerable": [], "skip": 0, "applied": 0}
+    report = {"ok": 0, "fix": [], "unanswerable": [], "answered": [], "skip": 0, "applied": 0}
     for row in _rows(client):
         outcome, correct, options = rescore(row)
         if outcome in ("ok", "skip"):
             report[outcome] += 1
             continue
+        if outcome == "fix" and _answered(client, row["id"]):
+            outcome = "answered"
         report[outcome].append(row["id"])
         if outcome == "fix" and not dry_run:
             client.table("questions").update({"correct_answer": correct, "options": options}) \
@@ -77,6 +87,8 @@ def main(argv=None) -> int:
     report = repair(create_client(url, key), dry_run=not args.apply)
     print(f"ok {report['ok']}, skipped {report['skip']}, applied {report['applied']}")
     print(f"wrong answer stored ({len(report['fix'])}): {report['fix']}")
+    print(f"wrong answer stored, already answered, left alone ({len(report['answered'])}): "
+          f"{report['answered']}")
     print(f"text compares no two bars larger-first ({len(report['unanswerable'])}): "
           f"{report['unanswerable']}")
     return 0

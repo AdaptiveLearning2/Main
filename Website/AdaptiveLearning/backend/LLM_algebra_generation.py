@@ -169,6 +169,11 @@ def generate_algebra_question(global_questions, prev_questions, difficulty, grad
         solution = _solve_equation(question_data["variables"], attempt + 1)
         if solution is None:
             continue
+        # "sqrt(2)/2" would be the only option with a root, whatever the distractors.
+        exact = sp.sympify(solution)
+        if not exact.is_Rational:
+            print(f"[Attempt {attempt+1}] Irrational solution: {solution[:40]!r}")
+            continue
 
         break
 
@@ -176,7 +181,7 @@ def generate_algebra_question(global_questions, prev_questions, difficulty, grad
         raise ValueError("Failed to generate valid JSON after retries")
 
     # The worker answers exactly ("3/2"); decimal distractors would leave it the only fraction.
-    if "/" in str(solution):
+    if not exact.is_Integer:
         incorrect_answers = inc_gen.generate_incorrect_rational(solution)
     else:
         incorrect_answers = inc_gen.generate_general_incorrect_answers(solution)

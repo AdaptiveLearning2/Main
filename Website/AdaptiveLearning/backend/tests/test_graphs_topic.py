@@ -135,7 +135,8 @@ def test_a_comparison_naming_three_bars_has_no_answer():
     assert graphs.comparison_in_text("How many more cats than dogs?", names) == ["cats", "dogs"]
 
 
-@pytest.mark.parametrize("name,said", [("apples", "apple"), ("boxes", "box"), ("fish", "fish")])
+@pytest.mark.parametrize("name,said", [("apples", "apple"), ("boxes", "box"), ("fish", "fish"),
+                                       ("puppy", "puppies"), ("cherries", "cherry")])
 def test_a_bar_is_found_by_its_singular_or_plural(name, said):
     assert graphs.comparison_in_text(f"How many more {said} than cats?", [name, "cats"]) == [name, "cats"]
 

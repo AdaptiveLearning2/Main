@@ -54,6 +54,18 @@ def test_a_dataset_without_the_tiers_mode_is_retried_not_served(replies, difficu
     assert question["correct_answer"] == ["4"]
 
 
+def test_one_repeated_value_is_its_own_mode(replies):
+    """[5, 5, 5] was refused as "no mode"."""
+    asked = replies(_reply(["5", "5", "5"]))
+    question = _generate("easy")
+    assert len(asked) == 1 and question["correct_answer"] == ["5"]
+    assert len(set(map(str, question["answer_options"]))) == 4
+
+
+def test_a_single_value_is_retried():
+    assert mode_gen._mode_problem([5.0], "easy") is not None
+
+
 def test_two_modes_are_served_on_a_hard_tier(replies):
     replies(_reply(["2", "2", "5", "5", "7", "9"]))
     assert sorted(_generate("hard")["correct_answer"]) == ["2", "5"]

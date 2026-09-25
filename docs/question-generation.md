@@ -899,8 +899,9 @@ word cannot appear in that file's comments either; the guard reads the file, not
 
 `COMPLEXITY_BY_GRADE` and the lesson-plan text are both **prompt-level** — they ask the model for something and
 nothing verifies it complied. So `find_violation(question_text, topic, grade_band)` runs inside each generation retry
-loop: a violation retries, and exhausting the retries raises, which `_prefetch_worker` already catches. Eighteen of
-the twenty-two topics are wired in; `algebra`, `quadratics`, `functions` and `spread` are the exemptions above.
+loop: a violation retries, and exhausting the retries raises, which `_prefetch_worker` already catches. Seventeen of
+the twenty-two topics are wired in; `algebra`, `quadratics`, `functions` and `spread` are the exemptions above, and
+`shape_fractions` has no model text to check, since the code writes its one sentence.
 
 **It tests one thing — algebraic variable notation reaching a band that must not see it — and the narrowness is the
 design.** A check with a real false-positive rate is worse than no check: it burns retries, and a question rejected

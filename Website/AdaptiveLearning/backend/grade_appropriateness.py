@@ -24,7 +24,6 @@ FORBIDDEN_BANDS = {
     "missing_number":      {"early", "middle"},
     "patterns":            {"early", "middle"},
     "graphs":              {"early", "middle"},
-    "shape_fractions":     {"early", "middle"},
     "counting":            {"early", "middle"},
     "comparing_numbers":   {"early", "middle"},
     "add_and_subtract":    {"early", "middle"},

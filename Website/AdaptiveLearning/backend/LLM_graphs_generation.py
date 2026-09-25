@@ -16,6 +16,7 @@ import grade_levels
 import ccss_standards
 import grade_appropriateness
 import incorrect_solution_generation as inc_gen
+import question_consistency
 import answer_format
 
 
@@ -176,14 +177,6 @@ def solve_graph(scenario, categories, target):
 _HOW_MANY_MORE = re.compile(r"\bhow\s+many\s+more\b", re.I)
 
 
-def _forms(name):
-    """A category name and its singular or plural: a question may say "apple" of "apples"."""
-    n = name.strip().lower()
-    forms = {n, n + "s", n + "es"}
-    forms.update(n[:-len(end)] for end in ("es", "s") if n.endswith(end) and len(n) > len(end))
-    return forms
-
-
 def comparison_in_text(text, names):
     """[larger, smaller] as the text asks it, from `names`, or None if it names other than two.
 
@@ -197,8 +190,7 @@ def comparison_in_text(text, names):
     question = text[asks[-1].end():]
     first_seen = {}
     for name in names:
-        pattern = r"\b(?:" + "|".join(re.escape(f) for f in _forms(name)) + r")\b"
-        found = re.search(pattern, question, re.I)
+        found = re.search(question_consistency.label_pattern(name), question, re.I)
         if found:
             first_seen[name] = found.start()
     if len(first_seen) != 2:

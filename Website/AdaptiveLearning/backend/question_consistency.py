@@ -84,6 +84,7 @@ def dataset_mismatch(question_text, values):
 
 
 _OPERATION = frozenset("+-=*^")
+_SUPERSCRIPT = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789")
 
 
 def _atoms(text, letters):
@@ -91,6 +92,9 @@ def _atoms(text, letters):
     letter = rf"|(?<![A-Za-z])[{re.escape(''.join(letters))}](?![A-Za-z])" if letters else ""
     pattern = re.compile(rf"\d+(?:\.\d+)?|[-+*/=^()]{letter}")
     text = text.replace("−", "-").replace("×", "*").replace("÷", "/").replace("·", "*")
+    # "3²", "3^2" and "3**2" are one power.
+    text = re.sub(r"[⁰¹²³⁴⁵⁶⁷⁸⁹]+", lambda m: "^" + m.group().translate(_SUPERSCRIPT), text)
+    text = text.replace("**", "^")
     runs, current, end = [], [], 0
     for m in pattern.finditer(text):
         if current and text[end:m.start()].strip():
@@ -140,7 +144,7 @@ def expression_mismatch(question_text, tokens):
         return f"{missing} are scored but not in the question -- the student was not given them"
 
 
-def _label_pattern(label):
+def label_pattern(label):
     """A label in the singular or plural it may be written in ("cherry", "cherries", "boxes")."""
     n = re.escape(str(label).strip().lower())
     stem = n[:-1] if n.endswith("y") else n[:-3] if n.endswith("ies") else None
@@ -158,7 +162,7 @@ def counts_mismatch(question_text, counts):
     if not isinstance(question_text, str) or not isinstance(counts, dict) or not counts:
         return None
     for label, count in counts.items():
-        name = _label_pattern(label)
+        name = label_pattern(label)
         # Both readings: in "blue 4 and green 2" green's "4 and green" is blue's, and its own is after.
         before = rf"\b(\d+)\s+(?:[A-Za-z-]+\s+){{0,2}}?{name}"
         after = rf"{name}\s*[:=]?\s*(\d+)\b"
@@ -223,7 +227,7 @@ def target_mismatch(question_text, labels, targets):
     question = _question_part(question_text)
     if question is None:
         return None
-    named = {label for label in labels if re.search(_label_pattern(label), question, re.I)}
+    named = {label for label in labels if re.search(label_pattern(label), question, re.I)}
     if named and named != set(targets):
         return f"the question asks about {sorted(named)} but {sorted(targets)} is scored"
     return None

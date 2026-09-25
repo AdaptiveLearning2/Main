@@ -83,10 +83,11 @@ def main():
                     "ok": False,
                     "error": f"{len(solutions)} solutions; this topic scores exactly one"}))
                 return
-            if not solutions[0].is_number or not solutions[0].is_finite:
+            # Real too: "I/2" is a finite number no distractor generator can place.
+            if not (solutions[0].is_number and solutions[0].is_finite and solutions[0].is_real):
                 print(json.dumps({
                     "ok": False,
-                    "error": f"solution is not a finite number: {solutions[0]}"}))
+                    "error": f"solution is not a finite real number: {solutions[0]}"}))
                 return
             print(json.dumps({"ok": True, "result": str(solutions[0])}))
             return

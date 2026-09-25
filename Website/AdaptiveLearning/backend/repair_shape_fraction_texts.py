@@ -1,7 +1,8 @@
 """Give stored shape-fraction questions the one sentence generation now writes.
 
 Run to report; --apply sets `question_text` on rows that differ, which makes their stored
-shaded/parts answer correct. A row whose answer is not its figure's shaded/parts is reported only.
+shaded/parts answer correct. A row whose answer is not its figure's shaded/parts, and a row a
+student has answered (their mark was for the old text), are reported only.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import sys
 import LLM_shape_fractions_generation as shapes
 
 _PAGE = 1000   # PostgREST's db-max-rows; keyset-paged on id so no row is skipped
+_ANSWER_TABLES = ("session_answers", "practice_session_answers")
 
 
 def _rows(client):
@@ -26,6 +28,12 @@ def _rows(client):
         last = page[-1]["id"]
 
 
+def _answered(client, question_id):
+    """True if a lesson or practice answer points at this question; raises if a read fails."""
+    return any(client.table(table).select("id").eq("question_id", question_id)
+               .limit(1).execute().data for table in _ANSWER_TABLES)
+
+
 def check(row):
     """"ok", "fix" (the text asks something else) or "mismatch" (the answer is not the figure's)."""
     figure = row.get("figure") if isinstance(row.get("figure"), dict) else {}
@@ -36,13 +44,18 @@ def check(row):
 
 
 def repair(client, dry_run=True):
-    """Counts of "ok", ids for "fix" and "mismatch", and how many were written; raises if the read fails."""
-    report = {"ok": 0, "fix": [], "mismatch": [], "applied": 0}
+    """Count of "ok", ids for "fix", "mismatch" and "answered", and how many were written.
+
+    Raises if a read fails.
+    """
+    report = {"ok": 0, "fix": [], "mismatch": [], "answered": [], "applied": 0}
     for row in _rows(client):
         outcome = check(row)
         if outcome == "ok":
             report["ok"] += 1
             continue
+        if outcome == "fix" and _answered(client, row["id"]):
+            outcome = "answered"
         report[outcome].append(row["id"])
         if outcome == "fix" and not dry_run:
             client.table("questions").update({"question_text": shapes.QUESTION_TEXT}) \
@@ -63,6 +76,8 @@ def main(argv=None) -> int:
     report = repair(create_client(url, key), dry_run=not args.apply)
     print(f"ok {report['ok']}, applied {report['applied']}")
     print(f"text asks something else ({len(report['fix'])}): {report['fix']}")
+    print(f"text asks something else, already answered, left alone ({len(report['answered'])}): "
+          f"{report['answered']}")
     print(f"answer is not the figure's ({len(report['mismatch'])}): {report['mismatch']}")
     return 0
 

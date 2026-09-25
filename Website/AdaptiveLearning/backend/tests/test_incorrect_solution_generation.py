@@ -92,6 +92,21 @@ def test_a_fractional_algebra_answer_is_offered_among_fractions(monkeypatch):
     assert all("/" in option for option in question["answer_options"]), question["answer_options"]
 
 
+def test_an_irrational_algebra_answer_is_retried(monkeypatch):
+    """"sqrt(2)/2" took the fraction branch on its "/" and stood out as the only root."""
+    import json
+    import llm_client
+    import lesson_plan_context
+    import LLM_algebra_generation as algebra
+    payload = {"question_text": "Solve for x: 2x = 3", "question_topic": "algebra",
+               "variables": ["2x", "=", "3"]}
+    monkeypatch.setattr(llm_client, "generate_text", lambda *a, **k: json.dumps(payload))
+    monkeypatch.setattr(lesson_plan_context, "append_lesson_context", lambda p, t, b: p)
+    solved = iter(["sqrt(2)/2", "3/2"])
+    monkeypatch.setattr(algebra, "_solve_equation", lambda *a: next(solved))
+    assert algebra.generate_algebra_question([], [], "hard", "8th Grade")["correct_answer"] == "3/2"
+
+
 @pytest.mark.parametrize("answer", ["1/2", "-7/3"])
 def test_a_fractional_answer_gets_no_whole_number_distractor(answer, monkeypatch):
     """Every draw is 6/3, so without the guard the first distractor would be "2"."""

@@ -278,7 +278,7 @@ def test_a_question_prepared_in_another_session_is_never_served(monkeypatch):
 
 
 def test_flipping_the_difficulty_cannot_hold_more_than_one_queues_worth_in_flight(monkeypatch):
-    """Each queue has its own count, so the student's total across them needs its own cap."""
+    """Each queue has its own count, so the session's total across them needs its own cap."""
     monkeypatch.setattr(main, "QUEUE_SIZE", 2)
     submitted = []
     # A pool that never runs the work, so every worker stays in flight.
@@ -293,6 +293,20 @@ def test_flipping_the_difficulty_cannot_hold_more_than_one_queues_worth_in_fligh
     # Another student is not held back by this one.
     main._ensure_queue("kid2", "5th Grade", 0, "s2")
     assert len(submitted) == 2 * main.QUEUE_SIZE
+
+
+def test_work_for_a_queue_the_cap_pushed_out_does_not_hold_back_the_one_in_use(monkeypatch):
+    """Its results will be dropped, so counting it would only force inline generation meanwhile."""
+    monkeypatch.setattr(main, "QUEUE_SIZE", 2)
+    submitted = []
+    monkeypatch.setattr(main, "_prefetch_pool",
+                        lambda: type("P", (), {"submit": lambda _s, *a: submitted.append(a)})())
+    main._ensure_queue("kid", "5th Grade", 1, "s1")
+    # The state the three-queue cap in `generate_question` leaves: the queue gone, its work still running.
+    del main._prefetch_cache["kid"][main._prefetch_key("5th Grade", 1, "s1")]
+    main._ensure_queue("kid", "5th Grade", -1, "s1")
+    # Each submit is (worker, user, grade, bias, session).
+    assert [a[3] for a in submitted] == [1, 1, -1, -1]
 
 
 def test_an_ended_sessions_work_does_not_hold_back_the_next_session(monkeypatch):

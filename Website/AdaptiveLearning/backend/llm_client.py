@@ -50,7 +50,7 @@ CLAUDE_TEMPERATURE = min(1.0, _env_number("CLAUDE_TEMPERATURE", 1.0, float, mini
 # Seconds per model call, including queueing; the SDK's own 10-minute default would stall prefetch.
 GENERATION_LLM_TIMEOUT = _env_number("GENERATION_LLM_TIMEOUT", 30.0, float, minimum=1.0)
 
-# Process-wide in-flight model calls, both providers; `main._ensure_queue` bounds only per student.
+# Process-wide in-flight model calls, both providers; `main._ensure_queue` bounds only per session.
 GENERATION_MAX_CONCURRENCY = _env_number("GENERATION_MAX_CONCURRENCY", 8, int, minimum=1)
 _generation_slots = threading.BoundedSemaphore(GENERATION_MAX_CONCURRENCY)
 

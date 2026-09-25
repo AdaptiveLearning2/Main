@@ -2070,10 +2070,12 @@ def _ensure_queue(user_id: str, grade: str, bias: int, session_id: str | None = 
     """
     key = _prefetch_key(grade, bias, session_id)
     with _prefetch_lock:
-        queued   = len(_prefetch_cache.get(user_id, {}).get(key, []))
+        queues   = _prefetch_cache.get(user_id, {})
+        queued   = len(queues.get(key, []))
         counts   = _prefetch_active.get(user_id, {})
         inflight = counts.get(key, 0)
-        session  = sum(n for k, n in counts.items() if k[2] == session_id)
+        # A queue the cap pushed out is gone, and its results will be dropped: its work does not count.
+        session  = sum(n for k, n in counts.items() if k[2] == session_id and k in queues)
         needed   = min(QUEUE_SIZE - queued - inflight, QUEUE_SIZE - session)
         if needed <= 0:
             return

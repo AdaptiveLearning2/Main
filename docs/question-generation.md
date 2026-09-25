@@ -123,7 +123,7 @@ Verification stops at the network boundary without credits, and that boundary is
 | Bound | Setting | Why the existing one was not it |
 | --- | --- | --- |
 | Per-call deadline | `GENERATION_LLM_TIMEOUT` (30 s) | The SDK's default is **ten minutes**; a prefetch worker blocked that long never refills the queue |
-| Concurrency | `GENERATION_MAX_CONCURRENCY` (8) | `_ensure_queue` bounds *per student*, so the peak was however many children pressed start at once |
+| Concurrency | `GENERATION_MAX_CONCURRENCY` (8) | `_ensure_queue` bounds *per session*, so the peak was however many children pressed start at once |
 | Per-student volume | `GENERATION_RATE_LIMIT` / `_WINDOW` (60/min) | The queue bounds calls *in flight*, not calls *over time* |
 | Waiting callers | `GENERATION_MAX_WAITERS` (30) | The fourth bound, and it was missing |
 | Spend | `GENERATION_DAILY_CALL_LIMIT` (2500/24 h, Claude only) | Nothing bounded it; free against a local model |

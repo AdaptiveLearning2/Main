@@ -114,7 +114,7 @@ def test_a_dry_run_writes_nothing():
 
 def test_every_row_is_read_past_the_row_cap(monkeypatch):
     """db-max-rows cuts a read silently; keyset paging must reach the rest."""
-    monkeypatch.setattr(repair, "_PAGE", 2)
+    monkeypatch.setattr(repair.repair_common, "PAGE", 2)
     db = _Questions([_row(f"r{i}", "What fraction is not shaded?") for i in range(5)])
     assert len(repair.repair(db)["fix"]) == 5
     assert db.pages == 3

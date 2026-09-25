@@ -13,27 +13,7 @@ import sys
 
 import answer_format
 import LLM_graphs_generation as graphs
-
-_PAGE = 1000   # PostgREST's db-max-rows; keyset-paged on id so no row is skipped
-_ANSWER_TABLES = ("session_answers", "practice_session_answers")
-
-
-def _rows(client):
-    last = None
-    while True:
-        q = (client.table("questions").select("id, question_text, correct_answer, options, figure")
-             .eq("subject", "graphs").order("id").limit(_PAGE))
-        page = (q.gt("id", last) if last is not None else q).execute().data or []
-        yield from page
-        if len(page) < _PAGE:
-            return
-        last = page[-1]["id"]
-
-
-def _answered(client, question_id):
-    """True if a lesson or practice answer points at this question; raises if a read fails."""
-    return any(client.table(table).select("id").eq("question_id", question_id)
-               .limit(1).execute().data for table in _ANSWER_TABLES)
+import repair_common
 
 
 def rescore(row):
@@ -60,12 +40,13 @@ def rescore(row):
 def repair(client, dry_run=True):
     """Counts per outcome, and the ids behind every one but "ok"; raises if the read fails."""
     report = {"ok": 0, "fix": [], "unanswerable": [], "answered": [], "skip": 0, "applied": 0}
-    for row in _rows(client):
+    for row in repair_common.rows(client, "graphs",
+                                  "id, question_text, correct_answer, options, figure"):
         outcome, correct, options = rescore(row)
         if outcome in ("ok", "skip"):
             report[outcome] += 1
             continue
-        if outcome == "fix" and _answered(client, row["id"]):
+        if outcome == "fix" and repair_common.answered(client, row["id"]):
             outcome = "answered"
         report[outcome].append(row["id"])
         if outcome == "fix" and not dry_run:

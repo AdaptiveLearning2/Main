@@ -107,6 +107,26 @@ def test_an_irrational_algebra_answer_is_retried(monkeypatch):
     assert algebra.generate_algebra_question([], [], "hard", "8th Grade")["correct_answer"] == "3/2"
 
 
+@pytest.mark.parametrize("text,variables,value", [
+    ("Solve for x: x + 2.5 = 7", ["x", "+", "2.5", "=", "7"], 4.5),
+    ("Solve for x: 0.5x = 2", ["0.5x", "=", "2"], 4.0),
+])
+def test_a_decimal_algebra_answer_is_served_among_decimals(monkeypatch, text, variables, value):
+    """The solver answers these as Floats, which the irrational retry refused on every attempt."""
+    import json
+    import llm_client
+    import lesson_plan_context
+    import LLM_algebra_generation as algebra
+    payload = {"question_text": text, "question_topic": "algebra", "variables": variables}
+    asked = []
+    monkeypatch.setattr(llm_client, "generate_text",
+                        lambda *a, **k: asked.append(1) or json.dumps(payload))
+    monkeypatch.setattr(lesson_plan_context, "append_lesson_context", lambda p, t, b: p)
+    question = algebra.generate_algebra_question([], [], "hard", "8th Grade")
+    assert len(asked) == 1 and float(question["correct_answer"]) == value
+    assert not any("/" in option for option in question["answer_options"]), question["answer_options"]
+
+
 @pytest.mark.parametrize("answer", ["1/2", "-7/3"])
 def test_a_fractional_answer_gets_no_whole_number_distractor(answer, monkeypatch):
     """Every draw is 6/3, so without the guard the first distractor would be "2"."""

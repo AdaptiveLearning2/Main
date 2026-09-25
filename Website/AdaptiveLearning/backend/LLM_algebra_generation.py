@@ -19,11 +19,13 @@ from sympy.parsing.sympy_parser import (
     implicit_multiplication_application
 ) # treat 2x as 2*x for sympy parsing
 import incorrect_solution_generation as inc_gen
+import answer_format
 import lesson_plan_context
 import safe_solve
 import token_join
 import grade_levels
 import ccss_standards
+import question_consistency
 
 transformations = (standard_transformations + (implicit_multiplication_application,))
 
@@ -157,9 +159,21 @@ def generate_algebra_question(global_questions, prev_questions, difficulty, grad
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
+        # The student reads question_text but is scored against variables.
+        inconsistent = question_consistency.expression_mismatch(
+            question_data.get("question_text"), question_data.get("variables"))
+        if inconsistent:
+            print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
+            continue
+
         # Solved inside the loop, so an unscorable equation is a retry, not a 500.
         solution = _solve_equation(question_data["variables"], attempt + 1)
         if solution is None:
+            continue
+        # "sqrt(2)/2" would be the only option with a root. A decimal ("4.5") is a Float, not irrational.
+        exact = sp.sympify(solution)
+        if exact.is_irrational:
+            print(f"[Attempt {attempt+1}] Irrational solution: {solution[:40]!r}")
             continue
 
         break
@@ -167,7 +181,13 @@ def generate_algebra_question(global_questions, prev_questions, difficulty, grad
     else:
         raise ValueError("Failed to generate valid JSON after retries")
 
-    incorrect_answers = inc_gen.generate_general_incorrect_answers(solution)
+    # The worker answers exactly ("3/2"); decimal distractors would leave it the only fraction.
+    if exact.is_Rational and not exact.is_Integer:
+        incorrect_answers = inc_gen.generate_incorrect_rational(solution)
+    else:
+        incorrect_answers = inc_gen.generate_general_incorrect_answers(solution)
+        # A Float prints "4.50000000000000"; the distractors are written "5.5".
+        solution = answer_format.format_value(solution)
     answers = [str(ans) for ans in incorrect_answers] + [str(solution)]
 
     random.shuffle(answers)

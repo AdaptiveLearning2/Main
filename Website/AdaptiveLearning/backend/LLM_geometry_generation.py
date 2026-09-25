@@ -571,10 +571,10 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
                   question_data["scenario"])
             continue
 
-        # Gate the scenario returned, not just the block sent: the model can switch.
-        if question_data["scenario"] not in {
-                _SCENARIO_NAMES[n] for n in _band_scenarios(grade)}:
-            print(f"[Attempt {attempt+1}] Scenario above this grade:",
+        # The scenario asked for, not any the grade allows: another is a different tier,
+        # which undoes an ease-off. Implies the grade gate, since the pick came from it.
+        if question_data["scenario"] != _SCENARIO_NAMES[scenario]:
+            print(f"[Attempt {attempt+1}] Wrong scenario:",
                   question_data["scenario"])
             continue
 

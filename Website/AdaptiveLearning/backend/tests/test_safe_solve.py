@@ -84,6 +84,7 @@ def test_an_ordinary_equation_solves_in_the_worker(equation, expected):
     ("2*x+3", "no equals sign"),
     ("1=x=2", "two equals signs"),
     ("a+b=c", "solution is not a number"),
+    ("2*x=I", "solution is not real"),
 ])
 def test_an_unscorable_equation_comes_back_none(equation, why):
     assert safe_solve.safe_solve(equation, "equation") is None, why

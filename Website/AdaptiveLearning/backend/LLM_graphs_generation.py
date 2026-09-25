@@ -16,6 +16,7 @@ import grade_levels
 import ccss_standards
 import grade_appropriateness
 import incorrect_solution_generation as inc_gen
+import question_consistency
 import answer_format
 
 
@@ -74,8 +75,9 @@ Rules:
 - Each "count" must be a whole number from 1 to 20, written as a string.
 - Every "name" must be different, and must be a simple plural noun a young
   child knows (cats, apples, books, cars).
-- For "how_many_more", "target" must name EXACTLY TWO of the categories, the
-  larger one first. For "how_many_total", "target" must be an empty list.
+- For "how_many_more", the question asks how many more of the LARGER category
+  than the smaller, and "target" names EXACTLY TWO categories in the order the
+  question names them. For "how_many_total", "target" must be an empty list.
 - "question_text" must NOT contain any digits. The counts are in the graph --
   writing them in the question is giving away the reading the student is
   being asked to do.
@@ -172,6 +174,30 @@ def solve_graph(scenario, categories, target):
     return None
 
 
+_HOW_MANY_MORE = re.compile(r"\bhow\s+many\s+more\b", re.I)
+
+
+def comparison_in_text(text, names):
+    """[larger, smaller] as the text asks it, from `names`, or None if it names other than two.
+
+    Read after the last "how many more": that is the comparison asked, not an earlier mention.
+    """
+    if not isinstance(text, str):
+        return None
+    asks = list(_HOW_MANY_MORE.finditer(text))
+    if not asks:
+        return None
+    question = text[asks[-1].end():]
+    first_seen = {}
+    for name in names:
+        found = re.search(question_consistency.label_pattern(name), question, re.I)
+        if found:
+            first_seen[name] = found.start()
+    if len(first_seen) != 2:
+        return None
+    return sorted(first_seen, key=first_seen.get)
+
+
 def generate_incorrect_answers(solution, counts):
     """Near-misses first: individual bars and off-by-one reads."""
     candidates = [solution + 1, solution - 1, *counts, sum(counts),
@@ -261,12 +287,19 @@ def generate_graphs_question(global_questions, prev_questions, difficulty,
                   repr(question_data.get("categories"))[:80])
             continue
 
+        # A comparison is read from the text the student answers, never the model's `target`.
+        target = question_data.get("target")
+        if question_data["scenario"] == "how_many_more":
+            target = comparison_in_text(text, [bar["label"] for bar in figure["bars"]])
+            if target is None:
+                print(f"[Attempt {attempt+1}] The text does not compare exactly two bars:",
+                      repr(text)[:80])
+                continue
+
         solution = solve_graph(question_data["scenario"],
-                               question_data["categories"],
-                               question_data.get("target"))
+                               question_data["categories"], target)
         if solution is None:
-            print(f"[Attempt {attempt+1}] No single answer:",
-                  repr(question_data.get("target"))[:60])
+            print(f"[Attempt {attempt+1}] No single answer:", repr(target)[:60])
             continue
 
         break

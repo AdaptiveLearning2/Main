@@ -55,6 +55,8 @@ ALLOWLIST = {
         "Column list passed by internal callers as a literal.",
     ("chart_archive.py", "rows", "select", "SIGNAL_COLUMNS[table]"):
         "A module-level literal keyed by the three table names it iterates itself.",
+    ("repair_common.py", "rows", "select", "columns"):
+        "Column list passed as a literal by the two repair scripts, run by hand.",
 }
 
 

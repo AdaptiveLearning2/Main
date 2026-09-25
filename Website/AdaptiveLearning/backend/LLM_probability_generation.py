@@ -68,6 +68,57 @@ def solve_not_probability_of(items, target):
 def solve_dice(sides, target):
     return Rational(len(target), sides)
 
+
+# Past these a die or a bag is not a question a student can picture; the model has no bound.
+MAX_SIDES = 100
+MAX_COUNT = 1000
+
+
+def _whole(value):
+    """`value` as an int if the parsed float is a whole number, else None."""
+    return int(value) if isinstance(value, (int, float)) and float(value).is_integer() else None
+
+
+def _scored_data(question_data):
+    """(items, target) the solvers can score, or the reason the reply cannot be.
+
+    Dice: `items` is the side count (2..MAX_SIDES), `target` distinct faces in 1..sides. Bags:
+    whole counts up to MAX_COUNT, and a target that names items (case and spacing ignored);
+    a named item may have a count of 0, a probability of 0.
+    """
+    target = question_data["target"]
+    targets = target if isinstance(target, list) else [target]
+    if not targets:
+        return "no target"
+
+    # Parsed in the bounded worker, since `sympify` on model text can hang.
+    if question_data["scenario"] == "dice":
+        parsed = safe_solve.safe_sympify_values([question_data["sides"], *targets])
+        if parsed is None:
+            return f"unusable dice values: {question_data['sides']!r}, {target!r}"
+        sides, faces = _whole(parsed[0]), [_whole(f) for f in parsed[1:]]
+        if sides is None or not 2 <= sides <= MAX_SIDES:
+            return f"a die needs 2 to {MAX_SIDES} whole sides, not {question_data['sides']!r}"
+        if any(f is None or not 1 <= f <= sides for f in faces) or len(set(faces)) != len(faces):
+            return f"target faces {target!r} are not distinct faces of a {sides}-sided die"
+        return sides, faces
+
+    raw_items = question_data["items"]
+    if not isinstance(raw_items, dict) or not raw_items:
+        return "items is not a non-empty object"
+    parsed = safe_solve.safe_sympify_values(list(raw_items.values()))
+    counts = [_whole(c) for c in parsed] if parsed is not None else None
+    if (counts is None or any(c is None or not 0 <= c <= MAX_COUNT for c in counts)
+            or sum(counts) == 0):
+        return f"unusable item counts: {raw_items!r}"
+    items = dict(zip(raw_items.keys(), counts))
+
+    by_name = {str(k).strip().lower(): k for k in items}
+    resolved = [by_name.get(str(t).strip().lower()) for t in targets]
+    if None in resolved or len(set(resolved)) != len(resolved):
+        return f"target {target!r} does not name distinct items of {list(items)!r}"
+    return items, resolved if isinstance(target, list) else resolved[0]
+
 prob_prompt = f"""
 You are to provide a Math question suitable for students. The response must be in JSON format. 
 The Question Text, Question Topic, Scenario, Items, and Target will be displayed. The Question Topic will always be "probability"
@@ -121,7 +172,8 @@ The JSON must follow this exact structure:
 Rules:
 - Use ONLY double quotes for all strings.
 - The JSON object must contain the keys "question_text", "question_topic", "scenario", "items" or "sides", and "target".
-- "items" must be a list of strings.
+- "items" must be an object mapping each item to its count, written as a string ({{"red": "6"}}).
+- Every count in "question_text" must be one of "items", and the question must ask about the target.
 - Do NOT include any characters outside the JSON object.
 """
 
@@ -238,33 +290,31 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
             print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
 
+        scored = _scored_data(question_data)
+        if isinstance(scored, str):
+            print(f"[Attempt {attempt+1}] Unusable scored data: {scored}")
+            continue
+        items, target = scored
+
+        # The student answers the text, so the scored die, counts and target must be the ones it states.
+        text = question_data.get("question_text")
+        inconsistent = question_consistency.odds_mismatch(text)
+        if not inconsistent and question_data["scenario"] == "dice":
+            inconsistent = question_consistency.dice_mismatch(text, items, target)
+        elif not inconsistent:
+            targets = target if isinstance(target, list) else [target]
+            inconsistent = (question_consistency.counts_mismatch(text, items)
+                            or question_consistency.target_mismatch(text, list(items), targets))
+        if inconsistent:
+            print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
+            continue
+
         break
 
     else:
         raise ValueError("Failed to generate valid JSON after retries")
 
     scenario = question_data["scenario"]
-    target = question_data["target"]
-
-    # Parsed in the bounded worker, since `sympify` on model text can hang.
-    if scenario == "dice":
-        parsed = safe_solve.safe_sympify_values([question_data["sides"], *target])
-        if parsed is None:
-            raise ValueError(f"unusable dice values: {question_data['sides']!r}")
-        items = parsed[0]
-        target = parsed[1:]
-    else:
-        raw_items = question_data["items"]
-        if not isinstance(raw_items, dict) or not raw_items:
-            raise ValueError("Invalid items in question data")
-        counts = safe_solve.safe_sympify_values(list(raw_items.values()))
-        if counts is None:
-            raise ValueError(f"unusable item counts: {raw_items!r}")
-        items = dict(zip(raw_items.keys(), counts))
-
-    if not items or not target:
-        raise ValueError("Invalid items or target in question data")
-
 
     solution = solve_probability(scenario, items, target)
 

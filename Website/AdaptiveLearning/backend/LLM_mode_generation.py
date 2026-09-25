@@ -49,7 +49,7 @@ The JSON must follow this exact structure:
 {{
   "question_text": "A teacher recorded the number of books students finished during a reading challenge. The numbers of books read by the students were: 3, 5, 2, 5, 4, 6, 5, 3. What is the mode of this dataset?",
   "question_topic": "mode",
-  "variables": ["3,"5","2","5","4","6","5", "2"]
+  "variables": ["3", "5", "2", "5", "4", "6", "5", "3"]
 }}
 
 Rules:
@@ -73,6 +73,23 @@ def mode(values):
     max_count = max(count.values())
 
     return [key for key, value in count.items() if value == max_count]
+
+def _mode_problem(numbers, difficulty):
+    """Why `numbers` has no mode the tier can serve, or None.
+
+    No repeat, or several values all tied, is "no mode"; [5, 5, 5] has mode 5.
+    Only "hard" tiers ask for two modes.
+    """
+    counts = Counter(numbers)
+    top = max(counts.values())
+    modes = [v for v, c in counts.items() if c == top]
+    if len(modes) == len(counts) and (len(counts) > 1 or top == 1):
+        return f"no mode: every value appears {top} time(s)"
+    allowed = 2 if difficulty == "hard" else 1
+    if len(modes) > allowed:
+        return f"{len(modes)} modes where the tier allows {allowed}"
+    return None
+
 
 def generate_incorrect_answers(solution, values):
     generated_answers = []
@@ -214,6 +231,11 @@ def generate_mode_question(global_questions, prev_questions,difficulty, grade, m
         if numbers is None:
             print(f"[Attempt {attempt+1}] Unusable variables:",
                   repr(question_data["variables"])[:80])
+            continue
+
+        problem = _mode_problem(numbers, difficulty)
+        if problem:
+            print(f"[Attempt {attempt+1}] Unservable dataset: {problem}")
             continue
 
         break

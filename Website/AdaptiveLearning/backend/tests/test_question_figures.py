@@ -90,6 +90,8 @@ def test_a_question_with_no_figure_carries_the_key_as_none(monkeypatch):
                         lambda *a, **k: json.dumps(payload))
     monkeypatch.setattr(geo.lesson_plan_context, "append_lesson_context",
                         lambda p, t, b: p)
+    from test_one_solve_per_attempt import pin_scenario
+    pin_scenario(monkeypatch, geo, payload)
 
     question = geo.generate_geometry_question([], [], "hard", "8th Grade")
     assert "figure" in question and question["figure"] is None

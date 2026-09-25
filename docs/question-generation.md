@@ -640,6 +640,10 @@ output verbatim in `question_text` — same direction as `question_figures`: der
 data and a disagreement stops being representable. Sign handling is load-bearing, since `x^2 + -5x + 6 = 0` is
 something the model "corrects", costing a retry on every negative middle coefficient.
 
+**`ordering` goes one step further: the code writes the whole question** (`render_question`) and chooses the direction,
+so the model supplies the values only. Reading a direction out of free text refused the prompt's own
+`least_to_greatest` and every wording without a pattern; a direction the code chose cannot disagree with the one shown.
+
 **A two-root equation is only scoreable because the question names which root**, chosen *before* the call and pinned
 in the prompt — `target` is deliberately absent from the schema. `shown_matches_scored` checks that too, because a
 text asking for "the smaller solution" scored against the larger is a well-formed question, correctly solved, marked
@@ -819,6 +823,11 @@ rung.
 4.NF.3 onward and is fraction *arithmetic*** — this is recognition, which is why it sits at grade 1 while `rationals`
 starts at 4. Its figure is required, for the same reason `graphs`' is.
 
+**The code writes the question, not the model** (`QUESTION_TEXT`). The answer is always shaded/parts, so the one right
+sentence asks for the shaded part; any other wording the model chooses can only ask something else ("not shaded",
+"outside the shaded part") or give a count away, and no word list covers them all. The model supplies the two numbers
+only. `backend/repair_shape_fraction_texts.py` gives stored rows the same sentence (dry run by default).
+
 **Lowest terms is required, and refusing otherwise is the point.** Two shaded parts in four is a perfectly good
 picture and an ambiguous question: `2/4` and `1/2` are both correct readings, and whichever the solver picked, a
 student giving the other is marked wrong for a right answer — the failure this codebase treats as the worst
@@ -862,6 +871,11 @@ cannot do without it**, so a new figure type does not inherit a requirement it d
 **A digit in the question text is refused.** Writing the counts out hands the student the reading the question exists
 to ask for — it stops being a graph question and becomes arithmetic. Checked, not merely requested.
 
+**A comparison is read from the question text, never from the model's `target`.** The student answers the sentence,
+so `comparison_in_text` takes the bars named after the last "how many more", singular or plural, and scores the first
+minus the second. Anything but exactly two named bars is a retry, and so is a smaller-first comparison (a false premise).
+`backend/repair_graph_comparisons.py` checks stored rows against the same rule.
+
 **`categories` is a list of `{name, count}`, not a map.** The obvious `{"cats": "7"}` cannot be schema'd at all — the
 API refuses an open `additionalProperties`. Choosing a shape that *can* be schema'd costs the generator one
 indirection and is cheaper than accepting the gap.
@@ -885,8 +899,9 @@ word cannot appear in that file's comments either; the guard reads the file, not
 
 `COMPLEXITY_BY_GRADE` and the lesson-plan text are both **prompt-level** — they ask the model for something and
 nothing verifies it complied. So `find_violation(question_text, topic, grade_band)` runs inside each generation retry
-loop: a violation retries, and exhausting the retries raises, which `_prefetch_worker` already catches. Eighteen of
-the twenty-two topics are wired in; `algebra`, `quadratics`, `functions` and `spread` are the exemptions above.
+loop: a violation retries, and exhausting the retries raises, which `_prefetch_worker` already catches. Seventeen of
+the twenty-two topics are wired in; `algebra`, `quadratics`, `functions` and `spread` are the exemptions above, and
+`shape_fractions` has no model text to check, since the code writes its one sentence.
 
 **It tests one thing — algebraic variable notation reaching a band that must not see it — and the narrowness is the
 design.** A check with a real false-positive rate is worse than no check: it burns retries, and a question rejected
@@ -934,18 +949,32 @@ dataset there, which is what makes locating it reliable); `negation_mismatch` re
 `not_probability_of` to imply each other, **in both directions**, since a negated question scored as `probability_of`
 is wrong by the same amount.
 
-**The two checks do not cover the same topics.** `dataset_mismatch` is in `mean`/`median`/`mode`/`ordering` only, and
-`negation_mismatch` is in `probability` only. This file said `dataset_mismatch` covered probability too, for months; it
-never has — probability's counts live in the sentence body, not after a colon, so the check would be inert there
-anyway. But *documented as wired and absent* is the worst of the three states, because it is the one nobody re-checks.
-Verify with `grep -l dataset_mismatch LLM_*_generation.py`, which is cheaper than trusting this paragraph.
+**The checks do not cover the same topics.** `dataset_mismatch` is in `mean`/`median`/`mode`/`ordering` only;
+`negation_mismatch`, `counts_mismatch`, `target_mismatch` and `dice_mismatch` are in `probability` only. *Documented
+as wired and absent* is the worst of the three states, because it is the one nobody re-checks: verify with
+`grep -l <check> LLM_*_generation.py`, which is cheaper than trusting this paragraph.
+
+**A probability question is scored only from what its text states.** Its counts live in the sentence body, not
+after a colon: each "<n> … <label>" must be that item's count, and the text's numbers must be exactly the scored
+counts plus a total the text states as one ("a bag of 12", "12 in total"), so an item left out of `items` or a
+changed count is a retry; the single draw ("1 marble is drawn") is not a count. The items named after the last
+"probability", "chance" or "likely" must be exactly the target, and a question asking for odds is refused, since a
+probability is not odds. For dice, the sides ("six-sided", "standard die") and one recognised event (a comparison,
+even/odd/prime, or listed faces) must be the scored ones; one negation ("not", "other than", "except", "anything
+but", "cannot", "neither … nor") takes the complement. Counts in words, several events at once, and a double negation fail
+open. `_scored_data` also requires a target that names items, whole counts up to 1000, and distinct faces on a die of
+2 to 100 sides.
 
 **Both fail open**, which is what makes them safe to run on every question: order is ignored (the solvers sort anyway),
 non-numeric `variables` are skipped, and a question with no colon-delimited list is left alone rather than compared
 against stray numbers in the sentence. A false rejection burns retries and looks exactly like a model that cannot
-follow instructions. They catch a clear contradiction; they are not a proof of agreement. `algebra`, `expressions`,
-`geometry` and `angle_relationships` are **not** covered: their scored fields mix operators and labels with numbers, so
-there is no comparable multiset.
+follow instructions. They catch a clear contradiction; they are not a proof of agreement.
+
+**`expression_mismatch` covers `rationals` and `algebra`**, whose scored field is a token list with operators in it, so
+it compares a sequence rather than a multiset: one displayed expression (an operation, not just a fraction bar) must
+match the tokens atom for atom, ignoring spacing, parentheses and `*`; a word problem instead needs every scored number
+in the text. It fails open on mixed numbers and on a text with no digits. `expressions`, `geometry` and
+`angle_relationships` are still **not** covered.
 
 **Measure how often a fail-open check *engages*, never just how often it fires.** A check that never finds anything to
 compare reports a perfect false-positive rate while doing nothing, and reads as evidence that it works. The dataset

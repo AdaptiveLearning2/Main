@@ -9,7 +9,7 @@ import pytest  # noqa: E402
 
 import llm_client  # noqa: E402
 
-from test_one_solve_per_attempt import CASES  # noqa: E402
+from test_one_solve_per_attempt import CASES, pin_scenario  # noqa: E402
 
 
 @pytest.mark.parametrize("name,module,entry,payload",
@@ -18,9 +18,7 @@ def test_exactly_one_option_is_json_identical_to_the_correct_answer(
         name, module, entry, payload, monkeypatch):
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
-    # The stub answers `evaluate`; pin the otherwise random scenario pick.
-    if name == "expressions":
-        monkeypatch.setattr(module, "_pick_scenario", lambda band: 1)
+    pin_scenario(monkeypatch, module, payload)
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
                         lambda prompt, topic, band: prompt)
     if hasattr(module, "grade_appropriateness"):
@@ -50,9 +48,7 @@ def test_no_two_options_render_the_same(name, module, entry, payload, monkeypatc
     """`24` and `"24"` are distinct in JSON and identical on screen."""
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
-    # The stub answers `evaluate`; pin the otherwise random scenario pick.
-    if name == "expressions":
-        monkeypatch.setattr(module, "_pick_scenario", lambda band: 1)
+    pin_scenario(monkeypatch, module, payload)
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
                         lambda prompt, topic, band: prompt)
     if hasattr(module, "grade_appropriateness"):
@@ -88,9 +84,7 @@ def test_all_options_share_one_type(name, module, entry, payload, monkeypatch):
     """A mixed-type list passes the two tests above; one type makes the match a construction."""
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
-    # The stub answers `evaluate`; pin the otherwise random scenario pick.
-    if name == "expressions":
-        monkeypatch.setattr(module, "_pick_scenario", lambda band: 1)
+    pin_scenario(monkeypatch, module, payload)
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
                         lambda prompt, topic, band: prompt)
     if hasattr(module, "grade_appropriateness"):
@@ -121,9 +115,7 @@ def test_no_option_is_identifiable_by_its_formatting(name, module, entry,
 
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
-    # The stub answers `evaluate`; pin the otherwise random scenario pick.
-    if name == "expressions":
-        monkeypatch.setattr(module, "_pick_scenario", lambda band: 1)
+    pin_scenario(monkeypatch, module, payload)
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
                         lambda prompt, topic, band: prompt)
     if hasattr(module, "grade_appropriateness"):

@@ -52,6 +52,29 @@ def test_algebra_is_exempt_at_every_band():
         assert ga.find_violation("Solve for x: x + 2 = 5.", "algebra", band) is None
 
 
+def test_the_band_table_names_exactly_the_topics_that_call_the_check():
+    """An entry no generator reaches reads as a check that is wired and is not.
+
+    A topic passed as a variable is read from that module's `TOPICS` literal.
+    """
+    import ast
+    import pathlib
+    called = set()
+    for path in pathlib.Path(ga.__file__).parent.glob("LLM_*_generation.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        topics = {n.targets[0].id: n.value for n in tree.body if isinstance(n, ast.Assign)
+                  and isinstance(n.targets[0], ast.Name)}.get("TOPICS")
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "refuse" and len(node.args) > 1):
+                if isinstance(node.args[1], ast.Constant):
+                    called.add(node.args[1].value)
+                else:
+                    assert topics is not None, f"{path.name} passes a topic with no TOPICS"
+                    called.update(ast.literal_eval(topics))
+    assert called == set(ga.FORBIDDEN_BANDS)
+
+
 # --- early-band expressions: forbidden operators -------------------------
 
 @pytest.mark.parametrize("text,difficulty", [

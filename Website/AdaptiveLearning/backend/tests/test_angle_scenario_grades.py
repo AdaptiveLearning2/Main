@@ -67,25 +67,22 @@ def test_the_names_match_the_blocks_they_send():
     assert {int(n): name for n, name in from_blocks.items()} == angles._SCENARIO_NAMES
 
 
-def test_a_reply_naming_a_scenario_above_the_grade_is_refused():
-    """`SCENARIO_MIN_GRADE` gates the block sent; the model can reply with another scenario."""
+def test_a_reply_naming_a_scenario_other_than_the_one_asked_is_refused(monkeypatch):
+    """The grade allows both, but another scenario is another tier; the pick is always in-grade."""
     import json
     import llm_client
 
     payload = {"question_text": "In a triangle two angles measure 75 and 60 "
                                 "degrees. What is the third?",
                "scenario": "triangle_sum", "variables": ["75", "60"]}
-    original = llm_client.generate_text
-    lesson = angles.lesson_plan_context.append_lesson_context
-    try:
-        llm_client.generate_text = lambda *a, **k: json.dumps(payload)
-        angles.lesson_plan_context.append_lesson_context = lambda p, t, b: p
-        with pytest.raises(ValueError):
-            angles.generate_angle_relationship_question([], [], "medium", "7th Grade")
-        # Grade 8 accepts the same reply, so the refusal is the grade.
-        question = angles.generate_angle_relationship_question(
-            [], [], "medium", "8th Grade")
-        assert question["question_text"] == payload["question_text"]
-    finally:
-        llm_client.generate_text = original
-        angles.lesson_plan_context.append_lesson_context = lesson
+    number = {name: n for n, name in angles._SCENARIO_NAMES.items()}
+    monkeypatch.setattr(llm_client, "generate_text", lambda *a, **k: json.dumps(payload))
+    monkeypatch.setattr(angles.lesson_plan_context, "append_lesson_context", lambda p, t, b: p)
+
+    monkeypatch.setattr(angles, "_pick_scenario", lambda *a: number["complementary"])
+    with pytest.raises(ValueError):
+        angles.generate_angle_relationship_question([], [], "medium", "8th Grade")
+    # The same reply to the scenario it answers is served, so the refusal is the mismatch.
+    monkeypatch.setattr(angles, "_pick_scenario", lambda *a: number["triangle_sum"])
+    question = angles.generate_angle_relationship_question([], [], "medium", "8th Grade")
+    assert question["question_text"] == payload["question_text"]

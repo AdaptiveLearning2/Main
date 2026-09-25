@@ -31,6 +31,12 @@ TOPIC_LADDER = {
     "expressions":         [(1, "1.OA.6")],
     "geometry":            [(1, "2.G.2")],
     "functions":           [(1, "F-IF.2")],
+    # Kindergarten only (grade 0); refined per scenario below.
+    "counting":            [(0, "K.CC.5")],
+    "comparing_numbers":   [(0, "K.CC.7")],
+    "add_and_subtract":    [(0, "K.OA.2")],
+    "teen_numbers":        [(0, "K.NBT.1")],
+    "shapes":              [(0, "K.G.2")],
 }
 
 SCENARIO_LADDER = {
@@ -77,6 +83,42 @@ SCENARIO_LADDER = {
         "evaluate": [(1, "F-IF.2")],
         "compose":  [(1, "F-BF.1c")],
     },
+    "counting": {
+        "count_objects": [(0, "K.CC.5")],
+        "one_more":      [(0, "K.CC.4c")],
+        # Nearest, not exact: K.CC.4c is "one larger", and IXL aligns its one-less skills to none.
+        "one_less":      [(0, "K.CC.4c")],
+        "next_number":   [(0, "K.CC.2")],
+        "count_by_tens": [(0, "K.CC.1")],
+    },
+    "comparing_numbers": {
+        "larger_number":    [(0, "K.CC.7")],
+        "smaller_number":   [(0, "K.CC.7")],
+        # Nearest, not exact: K.CC.7 compares two numerals.
+        "largest_of_three": [(0, "K.CC.7")],
+        "compare_groups":   [(0, "K.CC.6")],
+    },
+    "add_and_subtract": {
+        # Within 5 is K.OA.5 fluency; within 10 is K.OA.2, as IXL aligns them.
+        "add":                [(0, "K.OA.5")],
+        "subtract":           [(0, "K.OA.5")],
+        "add_within_10":      [(0, "K.OA.2")],
+        "subtract_within_10": [(0, "K.OA.2")],
+        "add_story":      [(0, "K.OA.2")],
+        "subtract_story": [(0, "K.OA.2")],
+        "make_ten":       [(0, "K.OA.4")],
+    },
+    "teen_numbers": {
+        # Counting dots in ten frames is K.CC.5; composing a teen number is K.NBT.1.
+        "count_ten_frames": [(0, "K.CC.5")],
+        "teen_make":        [(0, "K.NBT.1")],
+        "teen_take_apart":  [(0, "K.NBT.1")],
+    },
+    "shapes": {
+        "name_shape":    [(0, "K.G.2")],
+        "count_sides":   [(0, "K.G.4")],
+        "count_corners": [(0, "K.G.4")],
+    },
 }
 # fmt: on
 
@@ -91,9 +133,7 @@ def _rung(ladder, number):
 
 def ccss_for(topic, grade, scenario=None):
     """The code for `topic` at `grade`, refined by `scenario`; None for an unknown topic."""
-    number = grade_levels.grade_number(grade)
-    if number is None:
-        number = 1
+    number = grade_levels.served_grade_number(grade)
     ladder = SCENARIO_LADDER.get(topic, {}).get(scenario) or TOPIC_LADDER.get(topic)
     if not ladder:
         return None

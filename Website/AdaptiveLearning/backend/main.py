@@ -513,6 +513,27 @@ def _profile(uid: str) -> dict:
     return _placeholder_profile(uid)
 
 
+def _saved_grade(uid: str) -> str | None:
+    """The student's saved grade, read alone: generation asks per question. None if unreadable."""
+    try:
+        row = supabase.table("profiles").select("grade_level").eq("id", uid).single().execute()
+        return (row.data or {}).get("grade_level")
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[grade] could not read {uid[:8]}'s saved grade: {e}")
+        return None
+
+
+def _served_grade(uid: str, sent: str | None = None, profile: dict | None = None) -> str:
+    """The grade a student is served: the one sent, else their saved one, else `DEFAULT_GRADE`.
+
+    `profile` saves a read when the caller already holds it; an unreadable one reads as no grade.
+    """
+    if sent:
+        return sent
+    saved = profile.get("grade_level") if profile is not None else _saved_grade(uid)
+    return saved or grade_levels.DEFAULT_GRADE
+
+
 def _profiles_many(uids) -> dict[str, dict]:
     """`_profile` for a roster in one query; absent or unreadable rows get the placeholder."""
     ids = _unique_ids(uids)
@@ -1031,6 +1052,8 @@ def _close_session(user_id: str, session: dict, ended_at: str,
         # Already closed; running again would double-credit the answers.
         return {"discarded": False, "already_closed": True}
 
+    # Questions prepared for it can never be served now.
+    _drop_prefetched(user_id, sid)
     total_q, correct, counted = _answer_counts(sid, session)
 
     if _discard_if_nothing_recorded(sid, total_q, answers_counted=counted):
@@ -1927,9 +1950,39 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
 # billed model, questions an abandoned session never answers are wasted spend.
 QUESTION_QUEUE_SIZE_DEFAULT = 0
 QUEUE_SIZE = _env_number("QUESTION_QUEUE_SIZE", QUESTION_QUEUE_SIZE_DEFAULT, int, minimum=0)
-_prefetch_cache: dict[str, list] = {}   # user_id → list of questions
+_prefetch_cache: dict[str, dict[tuple, list]] = {}   # user_id → {`_prefetch_key`: questions}
 _prefetch_lock = threading.Lock()
-_prefetch_active: dict[str, int] = {}   # user_id → count of in-flight workers
+_prefetch_active: dict[str, dict[tuple, int]] = {}   # user_id → {`_prefetch_key`: in-flight workers}
+# Idle queues kept per student, most recently served last: a switch back reuses one. Busy ones stay
+# until their work lands; the session's in-flight cap bounds how many that can be.
+_PREFETCH_KEPT_QUEUES = 3
+
+
+def _prefetch_key(grade, bias: int, session_id: str | None) -> tuple:
+    """What a prepared question must match to be served: grade by number ("Grade 7" is "7th Grade"),
+    bias, and session, since it was chosen from that session's accuracy and signals."""
+    return (grade_levels.served_grade_number(grade), bias, session_id)
+
+
+def _prefetch_done(user_id: str, key: tuple):
+    """One in-flight worker for this queue has finished, or never started."""
+    with _prefetch_lock:
+        counts = _prefetch_active.get(user_id, {})
+        left = counts.get(key, 0) - 1
+        if left > 0:
+            counts[key] = left
+            return
+        counts.pop(key, None)
+        if not counts:
+            _prefetch_active.pop(user_id, None)
+
+
+def _drop_prefetched(user_id: str, session_id: str):
+    """A closed session's queues, which nothing can serve; its in-flight results then have nowhere to land."""
+    with _prefetch_lock:
+        queues = _prefetch_cache.get(user_id, {})
+        for key in [k for k in queues if k[2] == session_id]:
+            del queues[key]
 
 # Sized to `GENERATION_MAX_CONCURRENCY`; more workers would only block on its semaphore.
 _PREFETCH_POOL: ThreadPoolExecutor | None = None
@@ -1989,6 +2042,7 @@ def _claim_generation_slot(user_id: str) -> bool:
 
 
 def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None):
+    key = _prefetch_key(grade, bias, session_id)
     try:
         # No security event: a skipped refill refuses nobody.
         if not _claim_generation_slot(user_id):
@@ -1997,33 +2051,43 @@ def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None
         question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(
             user_id, grade, session_id, bias
         )
-        if question:
+        if isinstance(question, dict):
             with _prefetch_lock:
-                _prefetch_cache.setdefault(user_id, []).append(question)
+                # `_ensure_queue` made the queue; gone means its session closed or the cap pushed it out.
+                queue = _prefetch_cache.get(user_id, {}).get(key)
+                if queue is not None:
+                    queue.append(question)
     except Exception as e:
         print(f"[prefetch] failed for {user_id[:8]}: {e}")
     finally:
         # A count, not a flag: one worker finishing must not clear the others.
-        with _prefetch_lock:
-            _prefetch_active[user_id] = max(0, _prefetch_active.get(user_id, 0) - 1)
+        _prefetch_done(user_id, key)
 
 def _ensure_queue(user_id: str, grade: str, bias: int, session_id: str | None = None):
-    """Spawn workers until the queue + in-flight workers reach QUEUE_SIZE."""
+    """Spawn workers until this queue + its in-flight workers reach QUEUE_SIZE.
+
+    The session's in-flight workers across all its queues are capped at QUEUE_SIZE too, so flipping
+    Easier/Harder cannot hold more of the shared slots; an ended session's do not count against it.
+    """
+    key = _prefetch_key(grade, bias, session_id)
     with _prefetch_lock:
-        queued   = len(_prefetch_cache.get(user_id, []))
-        inflight = _prefetch_active.get(user_id, 0)
-        needed   = QUEUE_SIZE - queued - inflight
+        queues   = _prefetch_cache.get(user_id, {})
+        queued   = len(queues.get(key, []))
+        counts   = _prefetch_active.get(user_id, {})
+        inflight = counts.get(key, 0)
+        session  = sum(n for k, n in counts.items() if k[2] == session_id)
+        needed   = min(QUEUE_SIZE - queued - inflight, QUEUE_SIZE - session)
         if needed <= 0:
             return
-        _prefetch_active[user_id] = inflight + needed
+        _prefetch_active.setdefault(user_id, {})[key] = inflight + needed
+        _prefetch_cache.setdefault(user_id, {}).setdefault(key, [])
     for _ in range(needed):
         try:
             _prefetch_pool().submit(_prefetch_worker, user_id, grade, bias, session_id)
         except Exception as e:                                 # noqa: BLE001
             # E.g. the pool shut down. Roll back the count: a worker that never
             # starts never decrements, and the queue would never refill.
-            with _prefetch_lock:
-                _prefetch_active[user_id] = max(0, _prefetch_active.get(user_id, 0) - 1)
+            _prefetch_done(user_id, key)
             print(f"[prefetch] could not queue for {user_id[:8]}: {e}")
 
 # ─── models ──────────────────────────────────────────────────────────────
@@ -2288,24 +2352,36 @@ def generate_question(
     except ValueError as e:
         raise HTTPException(422, str(e))
 
-    effective_grade = grade or "5th Grade"
+    class_grade = None
     if class_id:
-        # Not `_row_or_404`: an unknown class falls back to the default grade.
+        # Not `_row_or_404`: an unknown class falls back to the student's own grade.
         try:
             cls = supabase.table("classes").select("grade_level") \
                 .eq("id", class_id).single().execute()
         except Exception as e:                                 # noqa: BLE001
             print(f"[question] could not read class {class_id}: {e}")
             cls = None
-        if cls and cls.data and cls.data.get("grade_level"):
-            effective_grade = cls.data["grade_level"]
+        if cls and cls.data:
+            class_grade = cls.data.get("grade_level")
+    effective_grade = class_grade or _served_grade(user_id, grade)
 
     manual_bias = max(-1, min(1, int(bias or 0)))
 
     # Serve from the prefetch queue if available, else generate now.
+    # Only a question made for this grade, bias and session: another's (a failed read at session
+    # start, a changed pick, "Easier") waits in its own queue; an old session's ages out of the cap.
+    key = _prefetch_key(effective_grade, manual_bias, session_id)
     with _prefetch_lock:
-        queue    = _prefetch_cache.get(user_id, [])
+        queues   = _prefetch_cache.setdefault(user_id, {})
+        queue    = queues.pop(key, [])
         question = queue.pop(0) if queue else None
+        queues[key] = queue
+        # Only an idle queue goes: a busy one's work still counts against the session's cap,
+        # so dropping it would free nothing, and its results would be thrown away on arrival.
+        counts = _prefetch_active.get(user_id, {})
+        idle = [k for k in queues if k != key and not counts.get(k)]
+        while len(queues) > _PREFETCH_KEPT_QUEUES and idle:
+            queues.pop(idle.pop(0))
 
     if not question:
         print(f"[generate] generating inline for {user_id[:8]}")
@@ -2373,7 +2449,7 @@ def start_session(payload: StartSessionRequest, request: Request):
 
     # Pre-warm the queue at the student's own difficulty bias.
     profile = _profile(user["id"])
-    grade   = profile.get("grade_level") or "5th Grade"
+    grade   = _served_grade(user["id"], profile=profile)
     bias    = max(-1, min(1, int(profile.get("difficulty_bias") or 0)))
     _ensure_queue(user["id"], grade, bias, res.data[0]["id"])
 
@@ -2538,7 +2614,7 @@ def start_practice_session(payload: StartPracticeSessionRequest, request: Reques
     if not payload.topics:
         raise HTTPException(400, "Pick at least one topic")
 
-    grade = payload.grade or _profile(user["id"]).get("grade_level") or "5th Grade"
+    grade = _served_grade(user["id"], payload.grade)
     # Server-side grade gate, the same one auto-selection uses.
     allowed = set(LLM_topic_decider._allowed_topics(grade))
     bad = [t for t in payload.topics if t not in allowed]

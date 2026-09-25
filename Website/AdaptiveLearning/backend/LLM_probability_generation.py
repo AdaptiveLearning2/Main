@@ -6,6 +6,7 @@ import random
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import llm_client
+from llm_json import extract_json
 import question_schemas
 import json
 from flask import Flask, jsonify
@@ -22,22 +23,6 @@ import question_consistency
 
 
 # Scenarios: probability_of, not_probability_of, dice.
-def extract_json(text):
-    start = text.find("{")
-    if start == -1:
-        return None
-
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i+1]
-
-    return None
-
 def serialize_sympy(x):
     if isinstance(x, sp.Rational):
         return str(x)

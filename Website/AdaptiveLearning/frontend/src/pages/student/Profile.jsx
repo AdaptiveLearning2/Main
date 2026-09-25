@@ -19,7 +19,7 @@ const prefsFrom = (p) => ({
 const CODE_RECHECK_MS = 15_000
 
 const TABS  = ['Overview', 'Account', 'Preferences', 'Devices']
-const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
+const GRADES = ['Kindergarten','1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 
 export default function Profile() {
   const { user, displayName, refreshProfile, signOut } = useAuth()
@@ -281,10 +281,10 @@ export default function Profile() {
                   <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Default Grade Level</label>
                   <select value={editGrade} onChange={e => setEditGrade(e.target.value)}
                     className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-indigo-500">
-                    <option value="">— not set —</option>
+                    <option value="">Grade not set</option>
                     {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
                   </select>
-                  <p className="text-[11px] text-gray-600 mt-1 dark:text-gray-400">Used in Solo mode. Class mode uses the class's grade instead.</p>
+                  <p className="text-[11px] text-gray-600 mt-1 dark:text-gray-400">Used in Solo mode, and in Class mode when the class has no grade of its own.</p>
                 </div>
 
                 <button onClick={saveProfile} disabled={saving}

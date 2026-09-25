@@ -6,6 +6,7 @@ import random
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import llm_client
+from llm_json import extract_json
 import question_schemas
 import json
 from flask import Flask, jsonify
@@ -20,22 +21,6 @@ import grade_levels
 import ccss_standards
 import grade_appropriateness
 
-
-def extract_json(text):
-    start = text.find("{")
-    if start == -1:
-        return None
-
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i+1]
-
-    return None
 
 def serialize_sympy(obj):
     if isinstance(obj, sp.Rational):
@@ -135,7 +120,7 @@ def generate_rational_question(global_questions, prev_questions,difficulty, grad
             f"\nCOMPLEXITY FOR THIS GRADE AND DIFFICULTY: "
             f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
         )
-        override = GRADE_OVERRIDES.get(grade_levels.grade_number(grade))
+        override = GRADE_OVERRIDES.get(grade_levels.served_grade_number(grade))
         if override:
             prompt += "\nGRADE-SPECIFIC RULE: " + override + "\n"
         prompt = lesson_plan_context.append_lesson_context(prompt, "rationals", grade_band)

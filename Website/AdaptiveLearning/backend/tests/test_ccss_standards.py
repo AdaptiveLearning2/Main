@@ -12,7 +12,7 @@ import LLM_topic_decider  # noqa: E402
 
 BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-_CODE = re.compile(r"^([1-8]\.[A-Z]{1,3}\.[0-9]+[a-d]?|[A-Z]-[A-Z]{2,3}\.[0-9]+[a-d]?)$")
+_CODE = re.compile(r"^([K1-8]\.[A-Z]{1,3}\.[0-9]+[a-d]?|[A-Z]-[A-Z]{2,3}\.[0-9]+[a-d]?)$")
 
 
 def test_every_topic_resolves_at_every_grade_it_is_offered():

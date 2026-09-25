@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
-import { mockApi, overrideApi, resetApi } from '../../test/mocks/apiFetch'
+import { apiFetch, mockApi, overrideApi, resetApi } from '../../test/mocks/apiFetch'
 import Classes from './Classes'
 
 const CLASS = { id: 'c-1', name: 'Year 7 Maths', join_code: 'AB12CD', grade_level: '7th Grade' }
@@ -39,5 +40,67 @@ describe('the class list', () => {
     draw()
 
     expect(await screen.findByText('Untitled class')).toBeInTheDocument()
+  })
+})
+
+describe('creating a class', () => {
+  beforeEach(() => {
+    overrideApi('/api/classes', () => ({ ...CLASS, id: 'c-new', name: 'Period 3' }), 'POST')
+  })
+
+  const openForm = async () => {
+    draw()
+    await userEvent.click(await screen.findByRole('button', { name: /new class/i }))
+    return screen.getByRole('combobox', { name: /grade level/i })
+  }
+  const submit = async () => {
+    await userEvent.type(screen.getByPlaceholderText(/class name/i), 'Period 3')
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+    return apiFetch.mock.calls.find(([p, opts]) => p === '/api/classes' && opts?.method === 'POST')[1]
+  }
+
+  it('starts on "Grade not set" and sends no grade, so the backend decides', async () => {
+    const picker = await openForm()
+    expect(picker).toHaveValue('')
+    expect(picker).toHaveDisplayValue('Grade not set')
+
+    expect((await submit()).body.grade_level).toBeNull()
+  })
+
+  it('sends a grade the teacher picked', async () => {
+    await userEvent.selectOptions(await openForm(), '3rd Grade')
+    expect((await submit()).body.grade_level).toBe('3rd Grade')
+  })
+})
+
+describe('editing a grade', () => {
+  it('opens a class with no grade on "Grade not set", and saving that untouched writes nothing', async () => {
+    overrideApi('/api/classes', () => ([{ ...CLASS, grade_level: null }]))
+    draw()
+    await screen.findByText('Grade not set')
+
+    // The pencil and save buttons carry icons only; they are the ones beside the grade.
+    const badge = screen.getByText('Grade not set')
+    await userEvent.click(within(badge).getByRole('button'))
+    const picker = screen.getByRole('combobox')
+    expect(picker).toHaveValue('')
+    expect(picker).toHaveDisplayValue('Grade not set')
+    await userEvent.click(picker.nextElementSibling)
+
+    expect(apiFetch.mock.calls.some(([, opts]) => opts?.method === 'PUT')).toBe(false)
+    expect(await screen.findByText('Grade not set')).toBeInTheDocument()
+  })
+
+  it('writes a grade picked from "Grade not set"', async () => {
+    overrideApi('/api/classes', () => ([{ ...CLASS, grade_level: null }]))
+    overrideApi('/api/classes/c-1', () => ({ ...CLASS, grade_level: '2nd Grade' }), 'PUT')
+    draw()
+    await userEvent.click(within(await screen.findByText('Grade not set')).getByRole('button'))
+
+    await userEvent.selectOptions(screen.getByRole('combobox'), '2nd Grade')
+    await userEvent.click(screen.getByRole('combobox').nextElementSibling)
+
+    expect(apiFetch).toHaveBeenCalledWith('/api/classes/c-1',
+      { method: 'PUT', body: { grade_level: '2nd Grade' } })
   })
 })

@@ -64,7 +64,6 @@ def test_the_dropdown_the_product_ships_survives_the_round_trip():
 def test_nothing_the_caller_wrote_reaches_a_prompt(payload):
     """Membership of a closed set, which no filter can satisfy; only rebuilding can."""
     allowed = set(grade_levels.CANONICAL_GRADE_LABELS.values())
-    allowed.add(grade_levels.UNKNOWN_GRADE_LABEL)
     assert grade_levels.grade_for_prompt(payload) in allowed
 
 
@@ -75,10 +74,13 @@ def test_a_payload_carries_no_newline_or_length_into_a_prompt(payload):
     assert len(out) <= len("Kindergarten")
 
 
-def test_an_unreadable_grade_is_named_rather_than_echoed():
-    assert grade_levels.grade_for_prompt("2026 cohort") == grade_levels.UNKNOWN_GRADE_LABEL
-    assert grade_levels.grade_for_prompt(None) == grade_levels.UNKNOWN_GRADE_LABEL
-    assert grade_levels.grade_for_prompt("") == grade_levels.UNKNOWN_GRADE_LABEL
+DEFAULT_LABEL = grade_levels.CANONICAL_GRADE_LABELS[grade_levels.grade_number(grade_levels.DEFAULT_GRADE)]
+
+
+def test_an_unreadable_grade_is_the_default_label_rather_than_echoed():
+    assert grade_levels.grade_for_prompt("2026 cohort") == DEFAULT_LABEL
+    assert grade_levels.grade_for_prompt(None) == DEFAULT_LABEL
+    assert grade_levels.grade_for_prompt("") == DEFAULT_LABEL
 
 
 def test_canonicalising_twice_is_canonicalising_once():
@@ -195,5 +197,4 @@ def test_the_length_cap_is_not_the_security_property():
     assert len(short_but_wrong) <= grade_levels.GRADE_MAX_LENGTH
     with pytest.raises(ValueError):
         grade_levels.validated_grade(short_but_wrong)
-    assert grade_levels.grade_for_prompt(short_but_wrong) \
-        == grade_levels.UNKNOWN_GRADE_LABEL
+    assert grade_levels.grade_for_prompt(short_but_wrong) == DEFAULT_LABEL

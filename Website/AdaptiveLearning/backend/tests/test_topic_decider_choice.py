@@ -60,6 +60,20 @@ def test_the_prompt_offers_exactly_the_grades_topics(decider, grade):
     assert set(offered) == set(td._allowed_topics(grade))
 
 
+def test_every_prompt_offers_only_website_topics_and_together_all_of_them(decider):
+    """Kindergarten (0) through College (13): no prompt names a topic the website cannot show."""
+    from conftest import website_topics
+    run, prompts, _ = decider
+    website = set(website_topics())
+    offered = set()
+    for grade in range(0, 14):
+        run('{"topic": "ordering", "difficulty": "easy"}', grade=str(grade))
+        listed = {t.strip() for t in _topics_line(prompts[-1]).split(",")}
+        assert listed <= website, (grade, listed - website)
+        offered |= listed
+    assert offered == website, website - offered
+
+
 def test_a_newer_topic_the_model_picks_is_served(decider):
     run, _, served = decider
     run('{"topic": "quadratics", "difficulty": "hard"}', grade="9th Grade")
@@ -92,13 +106,12 @@ def test_the_fallback_serves_a_topic_the_student_never_attempted(decider):
     assert question["difficulty"] == "easy"
 
 
-@pytest.mark.parametrize("grade", ["Kindergarten", "Pre-K", "Grade 0"])
-def test_kindergarten_is_served_grade_ones_topics(grade):
-    assert set(td._allowed_topics(grade)) == set(td._allowed_topics("1"))
-
-
-def test_kindergarten_gets_a_question_either_way(decider):
-    run, _, served = decider
+def test_kindergarten_gets_a_kindergarten_question_either_way(decider):
+    """Its list is not empty, so neither the model's pick nor the fallback can raise."""
+    run, prompts, served = decider
     run('{"topic": "algebra", "difficulty": "easy"}', grade="Kindergarten")
     run("not json at all", grade="Kindergarten")
-    assert [topic in td._allowed_topics("1") for topic, _ in served] == [True, True]
+    kindergarten = set(td._allowed_topics("Kindergarten"))
+    assert kindergarten and kindergarten.isdisjoint(td._allowed_topics("1"))
+    assert [topic in kindergarten for topic, _ in served] == [True, True]
+    assert set(t.strip() for t in _topics_line(prompts[0]).split(",")) == kindergarten

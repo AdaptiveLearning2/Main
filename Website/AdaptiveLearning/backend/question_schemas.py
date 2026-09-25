@@ -118,6 +118,11 @@ def missing_number():
                                             "pattern": r"^(\d{1,4}|[+\-*]|=|\?)$"}}})
 
 
+def kindergarten():
+    """Wording only: every number and the answer are chosen in code."""
+    return _object({"question_text": _TEXT, "question_topic": _TEXT})
+
+
 def patterns():
     """A number sequence with the term to find marked `?`."""
     return _object({"question_text": _TEXT,

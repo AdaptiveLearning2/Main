@@ -4,6 +4,7 @@ import random
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import llm_client
+from llm_json import extract_json
 import json
 from flask import Flask, jsonify
 from flask_cors import CORS
@@ -37,22 +38,6 @@ def answer_text(val):
     if is_numeric(val):
         return answer_format.format_value(float(val))
     return str(val)
-
-def extract_json(text):
-    start = text.find("{")
-    if start == -1:
-        return None
-
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i+1]
-
-    return None
 
 # Only the selected scenario's block is sent. Scenario 1's example is still an
 # older-student shape, so EARLY_BAND_EXAMPLE below must stay.
@@ -224,7 +209,7 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
         )
         if grade_band == "early":
             prompt += EARLY_BAND_EXAMPLE
-        override = GRADE_OVERRIDES.get(grade_levels.grade_number(grade))
+        override = GRADE_OVERRIDES.get(grade_levels.served_grade_number(grade))
         if override:
             prompt += "\nGRADE-SPECIFIC RULE: " + override + "\n"
         prompt = lesson_plan_context.append_lesson_context(prompt, "expressions", grade_band)

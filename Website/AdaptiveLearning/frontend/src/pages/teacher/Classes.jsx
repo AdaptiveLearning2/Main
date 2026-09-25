@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
 
-const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
+const GRADES = ['Kindergarten','1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 
 export default function Classes() {
   const navigate = useNavigate()
@@ -15,7 +15,8 @@ export default function Classes() {
   const [loading, setLoading]     = useState(true)
   const [creating, setCreating]   = useState(false)
   const [newName, setNewName]     = useState('')
-  const [newGrade, setNewGrade]   = useState('5th Grade')
+  // '' is no grade: the class is served the backend's default until one is picked.
+  const [newGrade, setNewGrade]   = useState('')
   const [showForm, setShowForm]   = useState(false)
   const [failed, setFailed]       = useState(false)
   const [copiedId, setCopiedId]   = useState(null)
@@ -43,7 +44,7 @@ export default function Classes() {
     try {
       const cls = await apiFetch('/api/classes', {
         method: 'POST',
-        body: { name: newName.trim(), grade_level: newGrade }
+        body: { name: newName.trim(), grade_level: newGrade || null }
       })
       setClasses(prev => [cls, ...prev])
       setNewName('')
@@ -57,6 +58,8 @@ export default function Classes() {
   }
 
   async function saveGrade(classId) {
+    // Still "Grade not set": nothing was picked, so nothing is written.
+    if (!editGrade) { setEditingId(null); return }
     try {
       const updated = await apiFetch(`/api/classes/${classId}`, {
         method: 'PUT',
@@ -102,8 +105,9 @@ export default function Classes() {
               <input value={newName} onChange={e => setNewName(e.target.value)}
                 className="px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-violet-500"
                 placeholder='Class name, e.g. "Period 3 Math"' autoFocus required />
-              <select value={newGrade} onChange={e => setNewGrade(e.target.value)}
+              <select value={newGrade} onChange={e => setNewGrade(e.target.value)} aria-label="Grade level"
                 className="px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-violet-500">
+                <option value="">Grade not set</option>
                 {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
               </select>
               <button type="submit" disabled={creating || !newName.trim()}
@@ -156,6 +160,7 @@ export default function Classes() {
                         <span className="flex items-center gap-1 ml-2" onClick={e => e.stopPropagation()}>
                           <select value={editGrade} onChange={e => setEditGrade(e.target.value)}
                             className="px-2 py-1 text-xs rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 dark:text-white">
+                            {editGrade === '' && <option value="">Grade not set</option>}
                             {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
                           </select>
                           <button onClick={() => saveGrade(cls.id)} className="p-1 rounded-md text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/30">
@@ -168,7 +173,7 @@ export default function Classes() {
                       ) : (
                         <span className="flex items-center gap-1 ml-2 text-xs font-bold px-2.5 py-1 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">
                           <GraduationCap size={11} /> {cls.grade_level || 'Grade not set'}
-                          <button onClick={(e) => { e.stopPropagation(); setEditingId(cls.id); setEditGrade(cls.grade_level || '5th Grade') }}
+                          <button onClick={(e) => { e.stopPropagation(); setEditingId(cls.id); setEditGrade(cls.grade_level || '') }}
                             className="ml-1 opacity-60 hover:opacity-100"><Pencil size={11} /></button>
                         </span>
                       )}

@@ -2,9 +2,21 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it, expect } from 'vitest'
-import { TOPICS, TOPIC_ICONS, topicLabel } from './topics'
+import { TOPICS, TOPIC_ICONS, topicLabel, topicsToShow } from './topics'
 
 const SRC = resolve(fileURLToPath(import.meta.url), '..', '..')
+
+describe('topicsToShow', () => {
+  it('lists every topic while the grade is not known', () => {
+    expect(topicsToShow(null)).toEqual(TOPICS)
+  })
+
+  it("keeps the grade's topics and any already attempted, in the shared order", () => {
+    const shown = topicsToShow(['shapes', 'counting'], ['algebra'])
+    expect(shown).toEqual(TOPICS.filter(t => ['shapes', 'counting', 'algebra'].includes(t)))
+    expect(shown.indexOf('counting')).toBeLessThan(shown.indexOf('shapes'))
+  })
+})
 
 describe('the topic list', () => {
   it('matches the backend, which is the only list that decides anything', () => {

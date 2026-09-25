@@ -66,8 +66,10 @@ to raise; a focused reading over that run is the false-focused case the asymmetr
 opinion, and focused pushes. The asymmetry is untouched — stressed still eases whatever the answers say, and a manual
 Easier/Harder still wins — and `test_decide_bias.py` brute-forces it.
 
-**`start_session` prewarms at the student's bias, not 0.** `QUEUE_SIZE` questions are generated before the first
-answer and served first, so a hardcoded default there makes the setting do nothing for the opening of every session.
+**`start_session` prewarms at the student's bias, not 0**, or the setting does nothing for a session's opening. The
+queue is one per grade number, bias and session (`_prefetch_key`): a question made for another is never served,
+`_PREFETCH_KEPT_QUEUES` (3) bounds the idle ones kept (a busy one waits), in-flight work is capped per session, and
+`_close_session` drops the session's queues, so a result arriving after the close has nowhere to land.
 
 ### A practice test's length is a prop, and flashcards have none
 
@@ -84,7 +86,7 @@ limit that does not exist.
 
 `backend/llm_client.py` is the only place either provider is reached. Fourteen call sites used to import `ollama`
 directly, so a provider switch was fourteen edits and the bounds below had nowhere to live. Count the `generate_text(`
-sites rather than trusting a number here — today it is the seventeen generators, the decider and the strategies pass.
+sites rather than trusting a number here — today it is the eighteen generators, the decider and the strategies pass.
 Two of the decider's belonged to `parallel_topic_and_difficulty_calculation`, which spent *two* model calls on what the
 live path does in one and was reachable from nothing; deleted with its sole caller, since dead code that bills twice
 per question is a trap for whoever wires it up next.
@@ -121,7 +123,7 @@ Verification stops at the network boundary without credits, and that boundary is
 | Bound | Setting | Why the existing one was not it |
 | --- | --- | --- |
 | Per-call deadline | `GENERATION_LLM_TIMEOUT` (30 s) | The SDK's default is **ten minutes**; a prefetch worker blocked that long never refills the queue |
-| Concurrency | `GENERATION_MAX_CONCURRENCY` (8) | `_prefetch_active` bounds *per user*, so the peak was however many children pressed start at once |
+| Concurrency | `GENERATION_MAX_CONCURRENCY` (8) | `_ensure_queue` bounds *per session*, so the peak was however many children pressed start at once |
 | Per-student volume | `GENERATION_RATE_LIMIT` / `_WINDOW` (60/min) | The queue bounds calls *in flight*, not calls *over time* |
 | Waiting callers | `GENERATION_MAX_WAITERS` (30) | The fourth bound, and it was missing |
 | Spend | `GENERATION_DAILY_CALL_LIMIT` (2500/24 h, Claude only) | Nothing bounded it; free against a local model |
@@ -255,7 +257,7 @@ model.
 
 ## `grade` reaches a prompt rebuilt from its number, never as the caller wrote it
 
-`grade` is interpolated into **nineteen** prompts — `Student Grade Level = {grade}` in `LLM_topic_decider`, and one
+`grade` is interpolated into **twenty** prompts — `Student Grade Level = {grade}` in `LLM_topic_decider`, and one
 `a {grade} student` line in each generator — and every one of those strings is client-supplied.
 `GET /api/generate-question?grade=` is a query parameter with no request model behind it; `PUT /api/profile/me`, the
 two class endpoints and `POST /api/practice-sessions/start` all declared it a bare `str | None`. A value carrying a
@@ -264,18 +266,18 @@ followed.
 
 **Escaping it is the weaker answer and is not what is there.** A grade is not free text: the only thing any consumer
 wants from it is the number `grade_levels.grade_number` already reads. So `grade_for_prompt` hands the prompt a label
-**rebuilt from that number** — `CANONICAL_GRADE_LABELS`, fourteen fixed strings, plus `UNKNOWN_GRADE_LABEL`.
-Nothing the caller wrote survives, so injection is unrepresentable rather than filtered for. **Assert membership of
-the closed set, never the absence of a payload**: an absence test passes against a filter that strips one sequence
-and misses the next.
+**rebuilt from that number** — `CANONICAL_GRADE_LABELS`, fourteen fixed strings; an unreadable grade gets
+`DEFAULT_GRADE`'s, so every generator downstream sees the grade the student is served. Nothing the caller wrote
+survives, so injection is unrepresentable rather than filtered for. **Assert membership of the closed set, never
+the absence of a payload**: an absence test passes against a filter that strips one sequence and misses the next.
 
 **The labels round-trip** (`grade_number(CANONICAL_GRADE_LABELS[n]) == n`), which is why the substitution is
 behaviour-preserving — `_allowed_topics`, `grade_band` and every generator's `GRADE_OVERRIDES` key on the number and
 never on the string. Break the round-trip and the grade gates move with no other symptom. Two dropdown labels are
 relabelled on the way through ("Highschool" → "9th Grade"), safe for the same reason.
 
-**Applied at two chokepoints, not nineteen**: `question_generation` is the sole dispatch point to all seventeen
-generators, so sanitising there covers eighteen of the sites and the decider covers its own. That is sound only while
+**Applied at two chokepoints, not twenty**: `question_generation` is the sole dispatch point to all eighteen
+generators, so sanitising there covers nineteen of the sites and the decider covers its own. That is sound only while
 it *is* sole — a test walks the module's AST and fails on a generator called from anywhere else.
 
 **The edge checks (`validated_grade`, on all five entry points) are the second layer and are not what stops an
@@ -299,10 +301,11 @@ seeded `math_topics` vocabulary (`record_topic_attempt` refuses to invent a row,
 PATCHed past its validator. A lesson plan is dashboard-authored and clamped.
 
 The fourth is `get_user_history`: the model's own previous `question_text`, replayed so the next question is not a
-repeat. Seventeen generators newline-join it and follow it with *"DO NOT generate a question matching any of the
-above"*, so a reply carrying a newline put a line of its own in instruction position. `_prompt_safe_history` flattens
-and bounds it at the two sites the history is **read** — `question_generation` and the single-prompt decider — not in
-each generator, the chokepoint `grade_for_prompt` already argues for.
+repeat. All eighteen generators newline-join it — seventeen follow it with *"DO NOT generate a question matching any
+of the above"*, kindergarten with *"Use different wording from all of the above"* — so a reply carrying a newline
+put a line of its own in instruction position. `_prompt_safe_history` flattens and bounds it at the two sites the
+history is **read** — `question_generation` and the single-prompt decider — not in each generator, the chokepoint
+`grade_for_prompt` already argues for.
 
 **It flattens rather than refusing**, the opposite of `validated_grade`: that guards an edge where a bad value is the
 caller's and a 422 names the field, while this runs on the *previous* reply, so raising would fail a generation
@@ -420,8 +423,12 @@ cannot become grade 2026, and answers `None` when it cannot tell, which every ca
 `_safe_topic(topic, grade)` checks the LLM's own selection against the same table and `randomize_selection()` draws
 from it, so there is no third way a topic reaches `question_generation()`. **The decider's prompt lists that table
 too, never a list of its own**: one goes stale as topics are added, and a pick outside the grade is replaced at random,
-discarding the choice made from the student's performance. Grade 0 (kindergarten) is served grade 1's topics, since
-none starts earlier and an empty list has nothing to draw from.
+discarding the choice made from the student's performance. Kindergarten (grade 0) has its own topics and sees no
+other. An unreadable or missing grade is `grade_levels.DEFAULT_GRADE` (grade 1): every gate reads it through
+`served_grade_number` (`test_default_grade.py` fails on any other `grade_number` call outside `grade_levels`), and
+`/api/topics` falls back to it. Generation, the session prewarm and practice resolve a grade once, through
+`main._served_grade`: the grade sent, else the student's saved one, else the default; a class's own grade wins over
+all three. The frontend names no default — a picker with no grade shows *Grade not set* and sends none.
 
 ### Difficulty and grade are one table, not two independent scales
 
@@ -430,11 +437,11 @@ scaled a number's magnitude on top, so "easy" meant "one-step equation with x" a
 `COMPLEXITY_BY_GRADE[grade_band][difficulty]` replaces both with one self-contained instruction per cell, "early"
 grounded in grades 1–3 arithmetic rather than smaller versions of the same structure.
 
-**Eleven of the seventeen topics use it, and the six that do not are not an unfinished migration.** In `geometry`,
+**Eleven of the twenty-two topics use it, and the eleven that do not are not an unfinished migration.** In `geometry`,
 `angle_relationships` and `probability` difficulty already selects a *scenario*, so a second table would state the
 difficulty rule twice in two places that can disagree; they keep `GRADE_COMPLEXITY[band]` for magnitude alone, with
 grade gating their scenarios through `_pick_scenario`. `quadratics`, `functions` and `spread` choose difficulty in
-coefficients in code.
+coefficients in code. The five kindergarten topics pick every number in code, per scenario (`_plan`).
 
 **`GRADE_OVERRIDES` is a per-grade line appended to the prompt**, deliberately not folded into the band-keyed table —
 a thirteenth column for one rule would make every other topic's table wrong by omission. Prompt-level, so it can leak;
@@ -549,6 +556,46 @@ disagree** — a React bundle cannot import Python, so the copy is checked rathe
 any new file that writes a list of its own. `get_user_history` derives its per-topic history from `ALL_TOPICS` rather
 than listing them again: `question_generation` reads `history[topic] if topic in history else []`, which fails *open*,
 so a forgotten topic quietly lost its repeat-avoidance.
+
+### Kindergarten has its own five topics, and code picks every number
+
+`counting` (K.CC), `comparing_numbers` (K.CC.6–7), `add_and_subtract` (K.OA), `teen_numbers` (K.NBT.1) and `shapes`
+(K.G.2, K.G.4), each gated to exactly grade 0, all served by `LLM_kindergarten_generation`. The question types and
+their wording follow IXL's kindergarten skill list: "How many ducks are there?", "What number is one more than 6?",
+"Which number is larger?", short join and take-away stories, "14 is 10 and how many more?". Measurement, position,
+time, money and sorting are not covered yet.
+
+**The model writes the sentence and nothing else.** `_plan` picks the scenario, every number, the answer, the options
+and the figure; the model is told which numbers it may write, and `wording_problem` refuses a reply that shows any
+other number, in any other order, names the answer in digits or words, leaves out the word the question turns on
+("more", "sides", the item), or tells an addition story with a take-away word. A generator that let the model choose
+the numbers would need a solver and a shown-versus-scored check per scenario; this one has neither to get wrong. The
+tiers stay inside each standard's own limit — to 20 for counting (K.CC.5), within 10 for adding (K.OA.2, K.OA.5 to 5
+on easy), numerals to 10 for comparing (K.CC.7) — and a test holds every tier to it.
+
+**Every check is stated in the prompt, and a fixed phrase is never paired with "do not copy".** A requirement the
+prompt does not name is met by chance. Told only "one less", both models wrote a take-away story. Told "one more than
+3" beside "not to be copied word for word", `claude-haiku-4-5` dropped the phrase. A scenario with a fixed number
+sentence or phrase ("one more than 3") offers its example to use as written. After any change to a brief, re-run
+`scripts/trial_kindergarten_prompts.py` against the deployed provider: the stub-model tests prove the checks, not that
+a model can pass them.
+
+**Its pictures are three new figure types**: `objects` (countable emoji, in rows of five), `ten_frames` and `shape`.
+The description names each picture once rather than giving the count, so a screen-reader user counts as a sighted
+one does. That holds for the dots after a full ten frame too: their number is the answer to "14 is 10 and how many
+more?". A `shape` asked for by name is described by its sides, never its name, and a square ("all the same length")
+must sound different from a rectangle; the two are never offered together, since a square is a rectangle too. The
+item and shape lists are Python constants that `QuestionFigure.test.jsx` reads, so a picture the browser cannot draw
+fails a test.
+
+**A standard is a scenario's, so a range that changes the standard is its own scenario.** The resolver does not see
+the difficulty tier. Adding within 5 is K.OA.5 and within 10 is K.OA.2, as IXL aligns them, so they are `add` and
+`add_within_10`; counting dots in ten frames is K.CC.5, not K.NBT.1. Two carry the nearest standard, not an exact one:
+`one_less` (K.CC.4c is "one larger"; IXL aligns its one-less skills to no standard) and `largest_of_three` (K.CC.7
+compares two). The code is stored on every row and used to spot duplicates, so a wrong one outlives its fix.
+
+**It is one generator serving five topics**, so `question_topic` is the caller's `topic` checked against `TOPICS`
+rather than a literal; `test_question_schemas.py` names it as the one such generator.
 
 ### Grades 9+ have no content of their own, and prompts cannot give them any
 
@@ -838,8 +885,8 @@ word cannot appear in that file's comments either; the guard reads the file, not
 
 `COMPLEXITY_BY_GRADE` and the lesson-plan text are both **prompt-level** — they ask the model for something and
 nothing verifies it complied. So `find_violation(question_text, topic, grade_band)` runs inside each generation retry
-loop: a violation retries, and exhausting the retries raises, which `_prefetch_worker` already catches. Thirteen of
-the seventeen topics are wired in; `algebra`, `quadratics`, `functions` and `spread` are the exemptions above.
+loop: a violation retries, and exhausting the retries raises, which `_prefetch_worker` already catches. Eighteen of
+the twenty-two topics are wired in; `algebra`, `quadratics`, `functions` and `spread` are the exemptions above.
 
 **It tests one thing — algebraic variable notation reaching a band that must not see it — and the narrowness is the
 design.** A check with a real false-positive rate is worse than no check: it burns retries, and a question rejected

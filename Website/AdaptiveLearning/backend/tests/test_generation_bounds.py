@@ -77,6 +77,53 @@ def test_the_question_is_generated_for_the_caller_and_their_session(monkeypatch)
     assert seen[0][2] == "mine"
 
 
+def _grade_generated(monkeypatch, *, sent=None, saved=None, class_id=None, class_grade=None):
+    """The grade the decider was handed, for a student whose profile holds `saved`."""
+    from test_access_control import _FakeSupabase
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        {"classes": [{"id": "c1", "grade_level": class_grade}],
+         "profiles": [{"id": "kid", "grade_level": saved, "display_name": "Kid", "role": "student"}]}))
+    seen = []
+    monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
+                        lambda *a, **_k: seen.append(a) or {"question_text": "2+2"})
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
+    main.generate_question(request=None, grade=sent, class_id=class_id, bias=0, session_id=None)
+    return seen[0][1]
+
+
+def test_no_grade_is_generated_at_the_grade_the_topic_list_shows(monkeypatch):
+    """No grade sent, saved or on a class: the grade `/api/topics` answers for, with no grade."""
+    grade = _grade_generated(monkeypatch)
+    assert main.list_topics(grade=grade) == main.list_topics(grade=None)
+
+
+def test_no_grade_sent_is_generated_at_the_students_saved_grade(monkeypatch):
+    """As the session prewarm and practice resolve it: a failed read in the page is not grade 1."""
+    assert _grade_generated(monkeypatch, saved="7th Grade") == "7th Grade"
+    assert _grade_generated(monkeypatch, sent="3rd Grade", saved="7th Grade") == "3rd Grade"
+
+
+def test_the_saved_grade_is_read_alone_and_only_when_none_is_sent(monkeypatch):
+    """Generation asks per question, so the fallback reads one column, not the profile row."""
+    from test_access_control import _FakeSupabase
+    fake = _FakeSupabase({"profiles": [{"id": "kid", "grade_level": "7th Grade", "display_name": "Kid"}]})
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
+                        lambda *a, **_k: {"question_text": "2+2"})
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
+    main.generate_question(request=None, grade=None, class_id=None, bias=0, session_id=None)
+    reads = [q for name, q in zip(fake.table_calls, fake.queries) if name == "profiles"]
+    assert len(reads) == 1 and reads[0]._cols == ["grade_level"]
+    main.generate_question(request=None, grade="3rd Grade", class_id=None, bias=0, session_id=None)
+    assert fake.table_calls.count("profiles") == 1
+
+
+def test_a_class_grade_wins_and_a_class_with_none_falls_back_to_the_students(monkeypatch):
+    assert _grade_generated(monkeypatch, saved="7th Grade", class_id="c1", class_grade="2nd Grade") \
+        == "2nd Grade"
+    assert _grade_generated(monkeypatch, saved="7th Grade", class_id="c1") == "7th Grade"
+
+
 def test_another_students_session_is_refused_before_anything_is_read(monkeypatch):
     from test_access_control import _FakeSupabase
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
@@ -159,7 +206,7 @@ def test_a_pool_that_refuses_the_work_does_not_leak_the_in_flight_count(monkeypa
     """A worker that never starts never decrements, so the queue would never refill."""
     monkeypatch.setattr(main, "_prefetch_pool", _DeadPool)
     main._ensure_queue("kid", "5th Grade", 0, None)
-    assert main._prefetch_active.get("kid", 0) == 0
+    assert main._prefetch_active == {}
 
 
 def test_a_failed_refill_does_not_discard_the_question_already_built(monkeypatch):
@@ -169,6 +216,144 @@ def test_a_failed_refill_does_not_discard_the_question_already_built(monkeypatch
     assert out["question_text"] == "2+2"
 
 
+def _queued_then_inline(monkeypatch, saved, prepared):
+    """`ask(grade=, bias=, session=)` for a student saved at `saved`, after preparing one question
+    per (grade, bias[, session]) in `prepared`."""
+    from test_access_control import _FakeSupabase
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        {"profiles": [{"id": "kid", "grade_level": saved, "display_name": "Kid"}],
+         "sessions": [{"id": "monday", "user_id": "kid"}, {"id": "thursday", "user_id": "kid"}]}))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
+    monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
+                        lambda _uid, grade, _sid, bias, **_k: {"question_text": f"made for {grade} {bias}"})
+    # The real path, one question per queue, with a pool that runs the work as it is submitted.
+    monkeypatch.setattr(main, "QUEUE_SIZE", 1)
+    monkeypatch.setattr(main, "_prefetch_pool",
+                        lambda: type("P", (), {"submit": lambda _s, fn, *a: fn(*a)})())
+    for grade, bias, *session in prepared:
+        main._ensure_queue("kid", grade, bias, session[0] if session else None)
+    monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
+                        lambda _uid, grade, _sid, bias, **_k: {"question_text": f"inline for {grade} {bias}"})
+    return lambda grade=None, bias=0, session=None: main.generate_question(
+        request=None, grade=grade, class_id=None, bias=bias, session_id=session)["question_text"]
+
+
+def test_a_question_prepared_for_another_grade_is_never_served(monkeypatch):
+    """A prewarm at the default (a failed read at session start) must not reach a 7th grader."""
+    ask = _queued_then_inline(monkeypatch, "7th Grade", [("1st Grade", 0), ("7th Grade", 0)])
+    assert ask() == "made for 7th Grade 0"
+    assert ask() == "inline for 7th Grade 0"
+    # Kept for a switch back, not thrown away.
+    assert ask(grade="1st Grade") == "made for 1st Grade 0"
+
+
+def test_a_grade_written_another_way_is_the_same_grade(monkeypatch):
+    """An old saved "Grade 7" and a prepared "7th Grade" are one grade, so the queue still serves."""
+    ask = _queued_then_inline(monkeypatch, "Grade 7", [("7th Grade", 0)])
+    assert ask() == "made for 7th Grade 0"
+
+
+def test_a_question_prepared_at_another_difficulty_is_never_served(monkeypatch):
+    """After "Easier", a question made while "Harder" was on is not served and labelled easy."""
+    ask = _queued_then_inline(monkeypatch, "7th Grade", [("7th Grade", 1)])
+    assert ask(bias=-1) == "inline for 7th Grade -1"
+    assert ask(bias=1) == "made for 7th Grade 1"
+
+
+def test_only_a_few_queues_are_kept_per_student(monkeypatch):
+    """One per grade and bias ever picked would grow for the whole process; the served one stays."""
+    prepared = [(f"{n}th Grade", 0) for n in (4, 5, 6, 7, 8)]
+    ask = _queued_then_inline(monkeypatch, "8th Grade", prepared)
+    ask(grade="4th Grade")
+    queues = main._prefetch_cache["kid"]
+    assert len(queues) == main._PREFETCH_KEPT_QUEUES
+    assert list(queues)[-1] == main._prefetch_key("4th Grade", 0, None)
+
+
+def test_a_question_prepared_in_another_session_is_never_served(monkeypatch):
+    """Monday's question was chosen from Monday's accuracy and signals, so Thursday does not get it."""
+    ask = _queued_then_inline(monkeypatch, "7th Grade", [("7th Grade", 0, "monday")])
+    assert ask(session="thursday") == "inline for 7th Grade 0"
+    assert ask(session="monday") == "made for 7th Grade 0"
+
+
+def test_flipping_the_difficulty_cannot_hold_more_than_one_queues_worth_in_flight(monkeypatch):
+    """Each queue has its own count, so the session's total across them needs its own cap."""
+    monkeypatch.setattr(main, "QUEUE_SIZE", 2)
+    submitted = []
+    # A pool that never runs the work, so every worker stays in flight.
+    monkeypatch.setattr(main, "_prefetch_pool",
+                        lambda: type("P", (), {"submit": lambda _s, *a: submitted.append(a)})())
+    for bias in (1, 0, -1):
+        main._ensure_queue("kid", "5th Grade", bias, "s1")
+    assert len(submitted) == main.QUEUE_SIZE
+    # Held per student, so the cap reads this student's counts alone.
+    assert list(main._prefetch_active) == ["kid"]
+    assert sum(main._prefetch_active["kid"].values()) == main.QUEUE_SIZE
+    # Another student is not held back by this one.
+    main._ensure_queue("kid2", "5th Grade", 0, "s2")
+    assert len(submitted) == 2 * main.QUEUE_SIZE
+
+
+def test_switching_through_many_grades_holds_one_batch_and_keeps_the_busy_queue(monkeypatch):
+    """Dropping a busy queue would free its slots while its calls still ran, one more batch per drop."""
+    from test_access_control import _FakeSupabase
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({"sessions": [{"id": "s1", "user_id": "kid"}]}))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
+    monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
+                        lambda _uid, grade, *_a, **_k: {"question_text": f"made for {grade}"})
+    monkeypatch.setattr(main, "QUEUE_SIZE", 2)
+    submitted = []
+    # A pool that holds the work, so every worker stays in flight until run by hand.
+    monkeypatch.setattr(main, "_prefetch_pool",
+                        lambda: type("P", (), {"submit": lambda _s, fn, *a: submitted.append((fn, a))})())
+    for n in range(2, 8):
+        main.generate_question(request=None, grade=f"Grade {n}", class_id=None, bias=0, session_id="s1")
+    assert len(submitted) == main.QUEUE_SIZE
+    busy = main._prefetch_key("Grade 2", 0, "s1")
+    assert busy in main._prefetch_cache["kid"]
+    fn, args = submitted[0]
+    fn(*args)                                   # its work lands in the queue it was made for
+    assert len(main._prefetch_cache["kid"][busy]) == 1
+
+
+def test_an_ended_sessions_work_does_not_hold_back_the_next_session(monkeypatch):
+    """Its calls still running must not leave the new session's opening with nothing prepared."""
+    monkeypatch.setattr(main, "QUEUE_SIZE", 2)
+    submitted = []
+    monkeypatch.setattr(main, "_prefetch_pool",
+                        lambda: type("P", (), {"submit": lambda _s, *a: submitted.append(a)})())
+    main._ensure_queue("kid", "5th Grade", 0, "monday")
+    main._ensure_queue("kid", "5th Grade", 0, "tuesday")
+    # Each submit is (worker, user, grade, bias, session).
+    assert [a[4] for a in submitted] == ["monday"] * 2 + ["tuesday"] * 2
+
+
+def test_closing_a_session_drops_its_questions_and_any_still_arriving(monkeypatch):
+    monkeypatch.setattr(main, "QUEUE_SIZE", 1)
+    submitted = []
+    monkeypatch.setattr(main, "_prefetch_pool",
+                        lambda: type("P", (), {"submit": lambda _s, fn, *a: submitted.append((fn, a))})())
+    monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
+                        lambda *_a, **_k: {"question_text": "2+2"})
+    main._ensure_queue("kid", "5th Grade", 0, "monday")
+    main._ensure_queue("kid", "5th Grade", 0, "tuesday")
+    fn, args = submitted[1]
+    fn(*args)                                  # tuesday's lands; monday's is still running
+    # Everything the close does after dropping them is stubbed; the discard returns early.
+    monkeypatch.setattr(main, "_claim_session_close", lambda *_a: True)
+    monkeypatch.setattr(main, "_answer_counts", lambda *_a: (0, 0, 0))
+    monkeypatch.setattr(main, "_discard_if_nothing_recorded", lambda *_a, **_k: True)
+
+    main._close_session("kid", {"id": "monday"}, "2026-09-25T10:00:00+00:00")
+    fn, args = submitted[0]
+    fn(*args)                                  # monday's arrives after the close
+
+    queues = main._prefetch_cache["kid"]
+    assert [k[2] for k in queues] == ["tuesday"]
+    assert len(queues[main._prefetch_key("5th Grade", 0, "tuesday")]) == 1
+
+
 def test_a_rate_limited_prefetch_skips_generating_rather_than_raising(monkeypatch):
     tighten(monkeypatch, main._GENERATION_LIMITER, limit=1)
     main._claim_generation_slot("kid")
@@ -176,11 +361,11 @@ def test_a_rate_limited_prefetch_skips_generating_rather_than_raising(monkeypatc
     monkeypatch.setattr(main.LLM_topic_decider,
                         "LLM_single_prompt_topic_and_difficulty_decider",
                         lambda *_a, **_k: called.append(1))
-    main._prefetch_active["kid"] = 1
+    main._prefetch_active["kid"] = {main._prefetch_key("5th Grade", 0, None): 1}
     main._prefetch_worker("kid", "5th Grade", 0, None)
     assert called == []
     # The in-flight counter is still released.
-    assert main._prefetch_active["kid"] == 0
+    assert main._prefetch_active == {}
 
 
 def test_the_queue_is_off_by_default_so_nothing_is_generated_before_it_is_asked_for(monkeypatch):
@@ -196,7 +381,7 @@ def test_the_queue_is_off_by_default_so_nothing_is_generated_before_it_is_asked_
     main._ensure_queue("kid", "5th Grade", 0, None)
     assert submitted == []
     # A count left raised here would block the queue if later turned back on.
-    assert main._prefetch_active.get("kid", 0) == 0
+    assert main._prefetch_active == {}
 
 
 def test_raising_the_queue_turns_prefetching_back_on(monkeypatch):

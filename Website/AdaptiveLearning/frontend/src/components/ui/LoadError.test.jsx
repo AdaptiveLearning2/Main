@@ -42,6 +42,15 @@ describe('LoadError', () => {
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
   })
 
+  it('calls a 429 a busy moment, not a backend that is down, and keeps Try again', () => {
+    // A school shares one address, so the address budget is the likely 429.
+    render(<LoadError what="topics" error={err(429)} onRetry={vi.fn()} />)
+    const box = screen.getByRole('status')
+    expect(box).toHaveTextContent(/too many requests/i)
+    expect(box).not.toHaveTextContent(/backend/i)
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+  })
+
   it('keeps Try again for a status it has no special sentence for', () => {
     render(<LoadError what="your classes" error={err(500)} onRetry={vi.fn()} />)
     expect(screen.getByRole('status')).toHaveTextContent(/backend is running/)

@@ -1,7 +1,7 @@
 """One reading of the free-text `profiles.grade_level`, shared by everything that gates on it.
 
 A grade is read numerically ("Grade 1", "1st Grade" and "1" are one grade), and an
-unreadable grade is treated as the youngest, never the oldest.
+unreadable grade is served `DEFAULT_GRADE`, never the oldest; kindergarten (0) must be named.
 """
 
 import re
@@ -21,11 +21,14 @@ _NAMED_GRADES = {
 # Outside this range a number is not a grade ("2026 cohort").
 _MIN_GRADE, _MAX_GRADE = 0, 13
 
+# What a student or class with no grade is served, everywhere: the same grade 1 as an unreadable one.
+DEFAULT_GRADE = "1st Grade"
+
 
 def grade_number(grade):
     """The numeric school grade in `grade`, or None if it cannot be read.
 
-    None is the signal to treat the student as the youngest, not to guess.
+    None is the signal to serve `DEFAULT_GRADE` (`served_grade_number`), not to guess.
     """
     text = (grade or "").strip().lower()
     if not text:
@@ -43,11 +46,15 @@ def grade_number(grade):
     return number if _MIN_GRADE <= number <= _MAX_GRADE else None
 
 
-def grade_band(grade):
-    """The four-band bucket the generation files scale content by; unreadable is "early"."""
+def served_grade_number(grade):
+    """The grade `grade` is served at: its number, or `DEFAULT_GRADE`'s when unreadable or missing."""
     number = grade_number(grade)
-    if number is None:
-        return "early"
+    return grade_number(DEFAULT_GRADE) if number is None else number
+
+
+def grade_band(grade):
+    """The four-band bucket the generation files scale content by; unreadable is `DEFAULT_GRADE`'s."""
+    number = served_grade_number(grade)
     if number <= 3:
         return "early"
     if number <= 6:
@@ -77,13 +84,13 @@ CANONICAL_GRADE_LABELS = {
     13: "College",
 }
 
-# Never a guessed grade, and never the unreadable input echoed back.
-UNKNOWN_GRADE_LABEL = "unspecified"
-
-
 def grade_for_prompt(grade):
-    """The only form of `grade` that may be interpolated into a prompt."""
-    return CANONICAL_GRADE_LABELS.get(grade_number(grade), UNKNOWN_GRADE_LABEL)
+    """The only form of `grade` that may be interpolated into a prompt.
+
+    An unreadable grade becomes `DEFAULT_GRADE`'s label, never the input echoed back, so a
+    generator reading it gets the grade the student is served.
+    """
+    return CANONICAL_GRADE_LABELS[served_grade_number(grade)]
 
 
 # ─── the edge check, layer 1 ─────────────────────────────────────────────

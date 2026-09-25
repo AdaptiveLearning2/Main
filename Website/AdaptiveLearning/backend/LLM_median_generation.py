@@ -6,6 +6,7 @@ import random
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import llm_client
+from llm_json import extract_json
 import question_schemas
 import json
 from flask import Flask, jsonify
@@ -30,21 +31,7 @@ def format_number(x):
         return str(int(val))
     return f"{val:.2f}"
 
-def extract_json(text):
-    start = text.find("{")
-    if start == -1:
-        return None
 
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i+1]
-
-    return None
 median_prompt = f"""
 You are to provide a Math question suitable for students. The response must be in JSON format. 
 The Question Text, Question Topic, and Variables will be displayed. The Question Topic will be "median".

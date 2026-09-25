@@ -146,6 +146,129 @@ describe('a partitioned shape', () => {
   })
 })
 
+// The backend's kindergarten tables, read from source: a bundle cannot import Python.
+const FIGURES_PY = readFileSync(resolve(fileURLToPath(import.meta.url),
+  '..', '..', '..', '..', '..', 'backend', 'question_figures.py'), 'utf8')
+const BACKEND_ITEMS = [...(FIGURES_PY.match(/^FIGURE_ITEMS = \(([\s\S]*?)\)/m)?.[1] ?? '')
+  .matchAll(/"([a-z]+)"/g)].map(m => m[1])
+const BACKEND_SIDES = Object.fromEntries([...(FIGURES_PY.match(/^SHAPE_SIDES = \{(.*)\}/m)?.[1] ?? '')
+  .matchAll(/"([a-z]+)": (\d+)/g)].map(m => [m[1], Number(m[2])]))
+
+describe('a kindergarten picture to count', () => {
+  it('names each picture once, so a listener counts them as a looker does', () => {
+    // A number would answer the question for a screen-reader user.
+    const { container } = render(<QuestionFigure figure={{ type: 'objects',
+      groups: [{ item: 'apple', count: 3 }] }} />)
+    expect(screen.getByRole('img')).toHaveAccessibleName('A picture of apples: apple, apple, apple.')
+    expect(container.querySelectorAll('span')).toHaveLength(3)
+  })
+
+  it('draws two groups for a comparison, each counted separately', () => {
+    const { container } = render(<QuestionFigure figure={{ type: 'objects',
+      groups: [{ item: 'fish', count: 2 }, { item: 'star', count: 1 }] }} />)
+    expect(screen.getByRole('img')).toHaveAccessibleName(
+      'A picture of fish: fish, fish. stars: star.')
+    expect(container.querySelectorAll('span')).toHaveLength(3)
+  })
+
+  it('has a picture for every item the backend can ask about', () => {
+    expect(BACKEND_ITEMS.length, 'FIGURE_ITEMS not found -- this check is inert').toBeGreaterThan(0)
+    for (const item of BACKEND_ITEMS) {
+      const { unmount } = render(<QuestionFigure figure={{ type: 'objects', groups: [{ item, count: 1 }] }} />)
+      expect(screen.getByRole('img'), item).toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it.each([
+    ['an item it has no picture for', { type: 'objects', groups: [{ item: 'dragon', count: 2 }] }],
+    ['more than it will draw', { type: 'objects', groups: [{ item: 'apple', count: 21 }] }],
+    ['a group of nothing', { type: 'objects', groups: [{ item: 'apple', count: 0 }] }],
+    ['two groups of one item', { type: 'objects', groups: [{ item: 'apple', count: 2 }, { item: 'apple', count: 3 }] }],
+    ['three groups', { type: 'objects', groups: [{ item: 'apple', count: 1 }, { item: 'star', count: 1 }, { item: 'car', count: 1 }] }],
+  ])('renders nothing for %s', (_label, figure) => {
+    const { container } = render(<QuestionFigure figure={figure} />)
+    expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe('ten frames', () => {
+  it('fills a whole frame before the next and names the loose dots one at a time', () => {
+    const { container } = render(<QuestionFigure figure={{ type: 'ten_frames', count: 14 }} />)
+    expect(screen.getByRole('img')).toHaveAccessibleName(
+      'Two ten frames: the first full with 10 dots, the second with dots: dot, dot, dot, dot.')
+    expect(container.querySelectorAll('rect')).toHaveLength(20)
+    expect(container.querySelectorAll('circle')).toHaveLength(14)
+  })
+
+  it('never states how many loose dots there are, which is the answer to taking a teen number apart', () => {
+    // "14 is 10 and how many more?": only the 10 may be a numeral, as only the full frame is at a glance.
+    for (let count = 11; count <= 19; count++) {
+      const { unmount } = render(<QuestionFigure figure={{ type: 'ten_frames', count }} />)
+      const label = screen.getByRole('img').getAttribute('aria-label')
+      expect(label.match(/\d+/g), label).toEqual(['10'])
+      expect(label.match(/\bdot\b/g), label).toHaveLength(count - 10)
+      unmount()
+    }
+  })
+
+  it('draws one frame for ten or fewer', () => {
+    const { container } = render(<QuestionFigure figure={{ type: 'ten_frames', count: 1 }} />)
+    expect(screen.getByRole('img')).toHaveAccessibleName('A ten frame with dots: dot.')
+    expect(container.querySelectorAll('rect')).toHaveLength(10)
+  })
+
+  it.each([0, 21, 2.5])('renders nothing for a count of %s', count => {
+    const { container } = render(<QuestionFigure figure={{ type: 'ten_frames', count }} />)
+    expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe('a flat shape', () => {
+  it('draws every shape the backend can ask about, with its own number of sides', () => {
+    expect(Object.keys(BACKEND_SIDES).length, 'SHAPE_SIDES not found').toBeGreaterThan(0)
+    for (const [shape, sides] of Object.entries(BACKEND_SIDES)) {
+      const { container, unmount } = render(
+        <QuestionFigure figure={{ type: 'shape', shape, named: false }} />)
+      const polygon = container.querySelector('polygon')
+      expect(polygon ? polygon.getAttribute('points').split(' ').length : 0, shape).toBe(sides)
+      unmount()
+    }
+  })
+
+  it('keeps the name out of the description when the question asks for it', () => {
+    render(<QuestionFigure figure={{ type: 'shape', shape: 'hexagon', named: false }} />)
+    const img = screen.getByRole('img')
+    expect(img).toHaveAccessibleName('A picture of a flat shape with 6 straight sides.')
+    expect(img.getAttribute('aria-label')).not.toMatch(/hexagon/)
+  })
+
+  it('tells a square from a rectangle by ear when neither is named', () => {
+    // A square is a rectangle too; described alike, "name the shape" had two answers.
+    const label = shape => {
+      const { unmount } = render(<QuestionFigure figure={{ type: 'shape', shape, named: false }} />)
+      const text = screen.getByRole('img').getAttribute('aria-label')
+      unmount()
+      return text
+    }
+    expect(label('square')).toBe('A picture of a flat shape with 4 straight sides, all the same length.')
+    expect(label('rectangle')).toBe('A picture of a flat shape with 4 straight sides, two long and two short.')
+  })
+
+  it('names the shape when the question asks about its sides', () => {
+    render(<QuestionFigure figure={{ type: 'shape', shape: 'triangle', named: true }} />)
+    expect(screen.getByRole('img')).toHaveAccessibleName('A picture of a triangle.')
+  })
+
+  it.each([
+    ['a shape it does not draw', { type: 'shape', shape: 'star', named: true }],
+    ['no word on naming it', { type: 'shape', shape: 'square' }],
+  ])('renders nothing for %s', (_label, figure) => {
+    const { container } = render(<QuestionFigure figure={figure} />)
+    expect(container).toBeEmptyDOMElement()
+  })
+})
+
 describe('every surface that presents a question', () => {
   // Exhaustive: a question without its figure is a different question.
   const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..')

@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
-import { apiFetch, mockApi, resetApi } from '../../test/mocks/apiFetch'
+import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
 import PracticeSetup from './PracticeSetup'
 
 const YOUNG_TOPICS = [
@@ -110,4 +110,69 @@ it('hides the question count in flashcard mode', async () => {
   await userEvent.click(screen.getByRole('button', { name: /flashcards/i }))
   expect(screen.queryByRole('button', { name: '10 questions' })).not.toBeInTheDocument()
   expect(screen.queryByText(/how many questions/i)).not.toBeInTheDocument()
+})
+
+it('says the topics could not be loaded, and a retry asks again', async () => {
+  let fail = true
+  overrideApi('/api/topics?grade=3rd%20Grade', () => {
+    if (fail) throw apiError(500, 'down')
+    return YOUNG_TOPICS
+  }, 'GET')
+  draw()
+
+  expect(await screen.findByText(/couldn't load topics/i)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /pick at least one topic/i })).toBeDisabled()
+
+  fail = false
+  await userEvent.click(screen.getByRole('button', { name: /try again/i }))
+  expect(await screen.findByRole('button', { name: /ordering/i })).toBeEnabled()
+})
+
+it('says a refused topics read was refused, not that the backend is down', async () => {
+  overrideApi('/api/topics?grade=3rd%20Grade', () => { throw apiError(429, 'slow down') }, 'GET')
+  draw()
+
+  const box = await screen.findByText(/too many requests/i)
+  expect(box).not.toHaveTextContent(/backend/i)
+})
+
+it('says a refused profile read was refused, and offers a retry', async () => {
+  overrideApi('/api/profile/me', () => { throw apiError(429, 'slow down') })
+  draw()
+
+  const box = await screen.findByText(/too many requests/i)
+  expect(box).toHaveTextContent(/practice setup/i)
+  expect(box).not.toHaveTextContent(/backend/i)
+  expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument()
+})
+
+it('leaves a student with no grade to the backend default, naming no grade itself', async () => {
+  overrideApi('/api/profile/me', () => ({ grade_level: null }))
+  // No `grade` parameter: the backend answers for its own default.
+  overrideApi('/api/topics', () => YOUNG_TOPICS, 'GET')
+  draw()
+
+  const picker = await screen.findByLabelText(/grade/i)
+  expect(picker).toHaveValue('')
+  expect(picker).toHaveDisplayValue('Grade not set')
+  await userEvent.click(await screen.findByRole('button', { name: /ordering/i }))
+  await userEvent.click(screen.getByRole('button', { name: /start practice/i }))
+
+  const [, opts] = apiFetch.mock.calls.find(([path]) => path === '/api/practice-sessions/start')
+  expect(opts.body.grade).toBeNull()
+})
+
+it('never sends a pick the new grade does not allow', async () => {
+  overrideApi('/api/topics?grade=8th%20Grade', () => [
+    { name: 'ordering', allowed: false }, { name: 'algebra', allowed: true },
+  ], 'GET')
+  draw()
+  await userEvent.click(await screen.findByRole('button', { name: /ordering/i }))
+
+  await userEvent.selectOptions(screen.getByLabelText(/grade/i), '8th Grade')
+  await userEvent.click(await screen.findByRole('button', { name: /algebra/i, disabled: false }))
+  await userEvent.click(screen.getByRole('button', { name: /start practice/i }))
+
+  const [, opts] = apiFetch.mock.calls.find(([path]) => path === '/api/practice-sessions/start')
+  expect(opts.body.topics).toEqual(['algebra'])
 })

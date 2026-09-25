@@ -4,6 +4,7 @@ from flask_cors import CORS
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import llm_client
+from llm_json import extract_json
 import json
 import random
 from statistics import fmean
@@ -20,6 +21,7 @@ import LLM_missing_number_generation, LLM_patterns_generation, LLM_graphs_genera
 import LLM_shape_fractions_generation
 import LLM_quadratics_generation, LLM_functions_generation
 import LLM_spread_generation
+import LLM_kindergarten_generation
 # python -m flask --app LLM_topic_decider run
 
 load_dotenv()
@@ -32,6 +34,8 @@ ALL_TOPICS = [
     "mean", "median", "mode", "probability", "angle_relationships",
     "missing_number", "patterns", "graphs", "shape_fractions",
     "quadratics", "functions", "spread",
+    # Kindergarten; LLM_kindergarten_generation.TOPICS, and a test pins the two.
+    "counting", "comparing_numbers", "add_and_subtract", "teen_numbers", "shapes",
 ]
 
 # The grade at which each topic's core concept is introduced, by CCSS code.
@@ -58,6 +62,12 @@ TOPIC_MIN_GRADE = {
     "quadratics":          9,   # A-REI.4b, solving a quadratic by factoring
     "functions":           9,   # F-IF.2 notation, F-BF.1c composition
     "spread":              9,   # S-ID.2, standard deviation only
+    # Kindergarten has its own topics and sees no other (K.CC, K.OA, K.NBT, K.G).
+    "counting":            0,
+    "comparing_numbers":   0,
+    "add_and_subtract":    0,
+    "teen_numbers":        0,
+    "shapes":              0,
 }
 
 # Grade past which a topic stops being worth serving; absent means no ceiling.
@@ -67,15 +77,17 @@ TOPIC_MAX_GRADE = {
     "patterns":            5,   # 4.OA.5 and 5.OA.3 still generate patterns
     "graphs":              3,   # 3.MD.3 is the last bar-graph standard
     "shape_fractions":     3,   # 3.NF.1; 4.NF.3 is `rationals`
+    "counting":            0,
+    "comparing_numbers":   0,
+    "add_and_subtract":    0,
+    "teen_numbers":        0,
+    "shapes":              0,
 }
 
 
 def _allowed_topics(grade):
-    # profiles.grade_level is free text; an unreadable grade or kindergarten (0) is served
-    # grade 1, since no topic starts earlier and an empty list has nothing to choose from.
-    number = grade_levels.grade_number(grade)
-    if number is None or number < 1:
-        number = 1
+    # profiles.grade_level is free text; an unreadable grade is `DEFAULT_GRADE`, not kindergarten.
+    number = grade_levels.served_grade_number(grade)
     return [t for t in ALL_TOPICS
             if TOPIC_MIN_GRADE[t] <= number
             and number <= TOPIC_MAX_GRADE.get(t, number)]
@@ -364,21 +376,6 @@ def get_user_history(user_id):
     return user_histories[user_id]
 
 
-def extract_json(text):
-    start = text.find("{")
-    if start == -1:
-        return None
-
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i+1]
-
-    return None
 
 # Rows the duplicate check reads; a match beyond it is just stored again.
 _DEDUPE_CANDIDATES = 50
@@ -661,6 +658,16 @@ def question_generation(topic, difficulty, user_id, grade):
                     "text": response["question_text"],
                     "topic": "spread"})
 
+        case "counting" | "comparing_numbers" | "add_and_subtract" | "teen_numbers" | "shapes":
+            response = LLM_kindergarten_generation.generate_kindergarten_question(
+                recent_global, recent_topic, difficulty=difficulty, grade=grade, topic=topic)
+            history["global"].append({
+                    "text": response["question_text"],
+                    "topic": topic})
+            history[topic].append({
+                    "text": response["question_text"],
+                    "topic": topic})
+
         case _:
             # Names the unwired topic instead of an UnboundLocalError on `response`.
             raise ValueError(f"no generator wired for topic {topic!r}")
@@ -729,7 +736,7 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
         - If Student's Current Cognitive State is "no_eeg" or "insufficient_signal", ignore it and use accuracy alone
 
         GRADE RULES:
-        - Grades 1–4 → mostly easy
+        - Kindergarten and grades 1–4 → mostly easy
         - Grades 5–6 → easy/medium mix
         - Grades 7+ → balanced mix of all difficulties
 

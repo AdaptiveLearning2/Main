@@ -7,6 +7,7 @@ import random
 import re
 
 import llm_client
+from llm_json import extract_json
 import lesson_plan_context
 import question_schemas
 import grade_levels
@@ -14,23 +15,6 @@ import ccss_standards
 import grade_appropriateness
 import incorrect_solution_generation as inc_gen
 import answer_format
-
-
-def extract_json(text):
-    start = text.find("{")
-    if start == -1:
-        return None
-
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i+1]
-
-    return None
 
 
 BLANK = "?"
@@ -211,7 +195,7 @@ def generate_patterns_question(global_questions, prev_questions,
             f"\nCOMPLEXITY FOR THIS GRADE AND DIFFICULTY: "
             f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
         )
-        override = GRADE_OVERRIDES.get(grade_levels.grade_number(grade))
+        override = GRADE_OVERRIDES.get(grade_levels.served_grade_number(grade))
         if override:
             prompt += "\nGRADE-SPECIFIC RULE: " + override + "\n"
         prompt = lesson_plan_context.append_lesson_context(prompt, "patterns", grade_band)

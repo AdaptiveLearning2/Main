@@ -16,7 +16,8 @@ import { GraduationCap, User, Minus, Plus, Sparkles, Brain, BatteryFull, Battery
 import { toast } from 'sonner'
 import QuestionFigure from '../../components/questions/QuestionFigure'
 import CCSSBadge from '../../components/questions/CCSSBadge'
-import { TOPICS as ALL_TOPICS, TOPIC_ICONS } from '../../lib/topics'
+import { TOPICS as ALL_TOPICS, TOPIC_ICONS, topicLabel, topicsToShow } from '../../lib/topics'
+import useGradeTopics from '../../hooks/useGradeTopics'
 import { contactQuality } from '../../lib/contactQuality'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
@@ -50,6 +51,8 @@ const SETTLE_GRACE_MS = 10_000
 
 // Retry delay for offering the session to a sidecar not yet started.
 const PUSH_RETRY_MS = 5000
+// Waits before re-reading a profile that failed to load; after the last the grade stays unknown.
+const PROFILE_RETRY_MS = [1000, 4000, 15000]
 
 // Labeled by the sensor a student recognizes, not by table name.
 const CHANNEL_LABELS = [
@@ -61,7 +64,7 @@ const CHANNEL_LABELS = [
 const TOPICS = ALL_TOPICS
 const ICONS  = TOPIC_ICONS
 const SHORT  = { angle_relationships: 'Angle Rel.' }
-const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
+const GRADES = ['Kindergarten','1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 
 /** An error as a toast description. */
 const errorDetail = (e) => e?.message || String(e)
@@ -80,7 +83,13 @@ export default function Adaptive() {
 
   // mode: 'solo' (pick your own grade) | 'class' (use class grade)
   const [mode, setMode] = useState(() => localStorage.getItem('adaptive_mode') || 'solo')
-  const [grade, setGrade] = useState('1st Grade')
+  // '' is no grade: nothing names one, so the backend serves its default.
+  const [grade, setGrade] = useState('')
+  // The profile's grade, which class mode is served when the class has none (`_served_grade`).
+  const [savedGrade, setSavedGrade] = useState('')
+  // null while reading, false if the read failed: then "no saved grade" is unknown, not a fact.
+  const [profileRead, setProfileRead] = useState(null)
+  const [profileAttempt, setProfileAttempt] = useState(0)
   const [classes, setClasses] = useState([])
   const [classId, setClassId] = useState('')
   const [bias, setBias] = useState(0) // -1 easier, 0 auto, +1 harder
@@ -300,14 +309,30 @@ export default function Adaptive() {
   // Counts only recorded answers, so it never fires mid-question. Asked, not enforced.
   const goalReached = !!questionGoal && !goalDismissed && sessionCount >= questionGoal
 
-  // load profile default grade + classes
+  // load profile default grade; a failed read is retried, or the grade stays "unknown" all visit
   useEffect(() => {
+    let cancelled = false
+    let retry = null
     apiFetch('/api/profile/me').then(p => {
-      if (p?.grade_level) setGrade(p.grade_level)
+      if (cancelled) return
+      // A retry landing late must not undo a grade the student has picked since.
+      if (p?.grade_level) { setGrade(g => g || p.grade_level); setSavedGrade(p.grade_level) }
       // `!= null`: 0 (Auto) is a valid bias.
       if (p?.difficulty_bias != null) setBias(p.difficulty_bias)
       if (p?.session_duration_minutes != null) setDurationMin(p.session_duration_minutes)
-    }).catch(()=>{})
+      setProfileRead(true)
+    }).catch(() => {
+      if (cancelled) return
+      setProfileRead(false)
+      if (profileAttempt < PROFILE_RETRY_MS.length) {
+        retry = setTimeout(() => setProfileAttempt(a => a + 1), PROFILE_RETRY_MS[profileAttempt])
+      }
+    })
+    return () => { cancelled = true; clearTimeout(retry) }
+  }, [profileAttempt])
+
+  // load classes
+  useEffect(() => {
     apiFetch('/api/classes').then(c => {
       setClasses(c || [])
       if ((c || []).length && !classId) setClassId(c[0].id)
@@ -1040,7 +1065,7 @@ export default function Adaptive() {
       // No user id: the backend takes the student from the bearer.
       const params = new URLSearchParams({ bias: String(bias) })
       if (mode === 'class' && classId) params.set('class_id', classId)
-      else                              params.set('grade', grade)
+      else if (grade)                   params.set('grade', grade)
       params.set('session_id', activeSessionId)
 
       const json = await apiFetch(`/api/generate-question?${params.toString()}`)
@@ -1087,7 +1112,14 @@ export default function Adaptive() {
     : headband.samples
 
   const activeClass = classes.find(c => c.id === classId)
-  const effectiveGrade = mode === 'class' ? (activeClass?.grade_level || '—') : grade
+  // The grade the backend serves: '' is none set anywhere, so its default; undefined is not
+  // known, since with no grade chosen the backend reads the profile this page could not.
+  const chosenGrade = mode === 'class' ? (activeClass?.grade_level || savedGrade) : grade
+  const effectiveGrade = chosenGrade || (profileRead ? '' : undefined)
+  // What this grade is served, plus anything attempted.
+  const gradeTopics = useGradeTopics(effectiveGrade === undefined ? undefined : effectiveGrade || null)
+  const shownTopics = topicsToShow(gradeTopics,
+    TOPICS.filter(t => (accuracyStats.subjects[t]?.attempts ?? 0) > 0))
   const biasLabel = bias === -1 ? 'Easier' : bias === 1 ? 'Harder' : 'Auto'
 
   return (
@@ -1343,7 +1375,7 @@ export default function Adaptive() {
                   className="text-6xl mb-4 text-center">🚀</motion.div>
                 <h2 className="text-xl font-black text-gray-900 dark:text-white mb-2 text-center">Ready to practice?</h2>
                 <p className="text-gray-500 dark:text-gray-400 text-sm mb-6 max-w-sm mx-auto text-center">
-                  The AI analyses your performance across {TOPICS.length} topics and picks the one you need most.
+                  The AI analyses your performance across {(gradeTopics ?? TOPICS).length} topics and picks the one you need most.
                 </p>
 
                 {/* Mode toggle */}
@@ -1368,6 +1400,9 @@ export default function Adaptive() {
                       <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 text-center">Grade Level</label>
                       <select value={grade} onChange={e => setGrade(e.target.value)}
                         className="w-full text-center px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-200 text-sm">
+                        {grade === '' && <option value="">
+                          {profileRead === false ? 'Grade unknown' : profileRead ? 'Grade not set' : 'Loading grade…'}
+                        </option>}
                         {GRADES.map(d => <option key={d} value={d}>{d}</option>)}
                       </select>
                     </>
@@ -1385,7 +1420,11 @@ export default function Adaptive() {
                         ))}
                       </select>
                       {activeClass && !activeClass.grade_level && (
-                        <p className="text-xs text-amber-600 mt-2 text-center">⚠️ Teacher hasn't set this class's grade yet — using AI default.</p>
+                        <p className="text-xs text-amber-600 mt-2 text-center">
+                          ⚠️ Teacher hasn't set this class's grade yet — {savedGrade ? `using your grade, ${savedGrade}.`
+                            : profileRead === false ? 'using your grade, which could not be loaded.'
+                              : profileRead ? 'and your grade isn\'t set either.' : 'checking your grade…'}
+                        </p>
                       )}
                     </>
                   )}
@@ -1409,7 +1448,10 @@ export default function Adaptive() {
                     </button>
                   </div>
                   <p className="text-[11px] text-gray-600 mt-2 text-center dark:text-gray-400">
-                    Generating <strong>{biasLabel}</strong> questions for <strong>{effectiveGrade}</strong>
+                    Generating <strong>{biasLabel}</strong> questions
+                    {effectiveGrade ? <> for <strong>{effectiveGrade}</strong></>
+                      : effectiveGrade === '' ? ' (grade not set)'
+                        : profileRead === false ? ' (grade unknown)' : ''}
                   </p>
                 </div>
 
@@ -1458,7 +1500,7 @@ export default function Adaptive() {
                 <div className="flex gap-2 mb-4 flex-wrap">
                   {data.question_topic && (
                     <span className="text-xs font-bold px-2.5 py-1 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full capitalize flex items-center gap-1">
-                      {ICONS[data.question_topic]} {data.question_topic.replace('_', ' ')}
+                      {ICONS[data.question_topic]} {topicLabel(data.question_topic)}
                     </span>
                   )}
                   {data.difficulty && (
@@ -1557,14 +1599,14 @@ export default function Adaptive() {
         <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm h-fit">
           <h3 className="font-black text-gray-900 dark:text-white mb-4">Topic Accuracy</h3>
           <div className="space-y-3">
-            {TOPICS.map(topic => {
+            {shownTopics.map(topic => {
               const acc = getAcc(topic)
               const s   = accuracyStats.subjects[topic]
               return (
                 <div key={topic}>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs font-medium text-gray-600 dark:text-gray-400 flex items-center gap-1">
-                      {ICONS[topic]} {SHORT[topic] || topic.replace('_', ' ')}
+                      {ICONS[topic]} {SHORT[topic] || topicLabel(topic)}
                     </span>
                     <span className={`text-xs font-black ${acc === null ? 'text-gray-600' : acc >= 70 ? 'text-green-600 dark:text-green-400' : acc >= 40 ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400'}`}>
                       {acc === null ? '—' : `${acc}%`}

@@ -226,8 +226,12 @@ def _queued_then_inline(monkeypatch, saved, prepared):
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
     monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
                         lambda _uid, grade, _sid, bias, **_k: {"question_text": f"made for {grade} {bias}"})
+    # The real path, one question per queue, with a pool that runs the work as it is submitted.
+    monkeypatch.setattr(main, "QUEUE_SIZE", 1)
+    monkeypatch.setattr(main, "_prefetch_pool",
+                        lambda: type("P", (), {"submit": lambda _s, fn, *a: fn(*a)})())
     for grade, bias, *session in prepared:
-        main._prefetch_worker("kid", grade, bias, session[0] if session else None)
+        main._ensure_queue("kid", grade, bias, session[0] if session else None)
     monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
                         lambda _uid, grade, _sid, bias, **_k: {"question_text": f"inline for {grade} {bias}"})
     return lambda grade=None, bias=0, session=None: main.generate_question(
@@ -283,10 +287,49 @@ def test_flipping_the_difficulty_cannot_hold_more_than_one_queues_worth_in_fligh
     for bias in (1, 0, -1):
         main._ensure_queue("kid", "5th Grade", bias, "s1")
     assert len(submitted) == main.QUEUE_SIZE
-    assert sum(main._prefetch_active.values()) == main.QUEUE_SIZE
+    # Held per student, so the cap reads this student's counts alone.
+    assert list(main._prefetch_active) == ["kid"]
+    assert sum(main._prefetch_active["kid"].values()) == main.QUEUE_SIZE
     # Another student is not held back by this one.
     main._ensure_queue("kid2", "5th Grade", 0, "s2")
     assert len(submitted) == 2 * main.QUEUE_SIZE
+
+
+def test_an_ended_sessions_work_does_not_hold_back_the_next_session(monkeypatch):
+    """Its calls still running must not leave the new session's opening with nothing prepared."""
+    monkeypatch.setattr(main, "QUEUE_SIZE", 2)
+    submitted = []
+    monkeypatch.setattr(main, "_prefetch_pool",
+                        lambda: type("P", (), {"submit": lambda _s, *a: submitted.append(a)})())
+    main._ensure_queue("kid", "5th Grade", 0, "monday")
+    main._ensure_queue("kid", "5th Grade", 0, "tuesday")
+    # Each submit is (worker, user, grade, bias, session).
+    assert [a[4] for a in submitted] == ["monday"] * 2 + ["tuesday"] * 2
+
+
+def test_closing_a_session_drops_its_questions_and_any_still_arriving(monkeypatch):
+    monkeypatch.setattr(main, "QUEUE_SIZE", 1)
+    submitted = []
+    monkeypatch.setattr(main, "_prefetch_pool",
+                        lambda: type("P", (), {"submit": lambda _s, fn, *a: submitted.append((fn, a))})())
+    monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
+                        lambda *_a, **_k: {"question_text": "2+2"})
+    main._ensure_queue("kid", "5th Grade", 0, "monday")
+    main._ensure_queue("kid", "5th Grade", 0, "tuesday")
+    fn, args = submitted[1]
+    fn(*args)                                  # tuesday's lands; monday's is still running
+    # Everything the close does after dropping them is stubbed; the discard returns early.
+    monkeypatch.setattr(main, "_claim_session_close", lambda *_a: True)
+    monkeypatch.setattr(main, "_answer_counts", lambda *_a: (0, 0, 0))
+    monkeypatch.setattr(main, "_discard_if_nothing_recorded", lambda *_a, **_k: True)
+
+    main._close_session("kid", {"id": "monday"}, "2026-09-25T10:00:00+00:00")
+    fn, args = submitted[0]
+    fn(*args)                                  # monday's arrives after the close
+
+    queues = main._prefetch_cache["kid"]
+    assert [k[2] for k in queues] == ["tuesday"]
+    assert len(queues[main._prefetch_key("5th Grade", 0, "tuesday")]) == 1
 
 
 def test_a_rate_limited_prefetch_skips_generating_rather_than_raising(monkeypatch):
@@ -296,7 +339,7 @@ def test_a_rate_limited_prefetch_skips_generating_rather_than_raising(monkeypatc
     monkeypatch.setattr(main.LLM_topic_decider,
                         "LLM_single_prompt_topic_and_difficulty_decider",
                         lambda *_a, **_k: called.append(1))
-    main._prefetch_active[("kid", main._prefetch_key("5th Grade", 0, None))] = 1
+    main._prefetch_active["kid"] = {main._prefetch_key("5th Grade", 0, None): 1}
     main._prefetch_worker("kid", "5th Grade", 0, None)
     assert called == []
     # The in-flight counter is still released.

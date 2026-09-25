@@ -68,7 +68,8 @@ Easier/Harder still wins — and `test_decide_bias.py` brute-forces it.
 
 **`start_session` prewarms at the student's bias, not 0**, or the setting does nothing for a session's opening. The
 queue is one per grade number, bias and session (`_prefetch_key`): a question made for another is never served,
-`_PREFETCH_KEPT_QUEUES` (3) bounds how many a student keeps, and in-flight workers are capped per student too.
+`_PREFETCH_KEPT_QUEUES` (3) bounds how many a student keeps, in-flight workers are capped per session, and
+`_close_session` drops the session's queues, so a result arriving after the close has nowhere to land.
 
 ### A practice test's length is a prop, and flashcards have none
 

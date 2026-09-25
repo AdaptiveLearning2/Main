@@ -1052,6 +1052,8 @@ def _close_session(user_id: str, session: dict, ended_at: str,
         # Already closed; running again would double-credit the answers.
         return {"discarded": False, "already_closed": True}
 
+    # Questions prepared for it can never be served now.
+    _drop_prefetched(user_id, sid)
     total_q, correct, counted = _answer_counts(sid, session)
 
     if _discard_if_nothing_recorded(sid, total_q, answers_counted=counted):
@@ -1950,7 +1952,7 @@ QUESTION_QUEUE_SIZE_DEFAULT = 0
 QUEUE_SIZE = _env_number("QUESTION_QUEUE_SIZE", QUESTION_QUEUE_SIZE_DEFAULT, int, minimum=0)
 _prefetch_cache: dict[str, dict[tuple, list]] = {}   # user_id → {`_prefetch_key`: questions}
 _prefetch_lock = threading.Lock()
-_prefetch_active: dict[tuple, int] = {}   # (user_id, `_prefetch_key`) → in-flight workers
+_prefetch_active: dict[str, dict[tuple, int]] = {}   # user_id → {`_prefetch_key`: in-flight workers}
 # Queues kept per student, most recently served last: a switch back reuses one, and the cap bounds them.
 _PREFETCH_KEPT_QUEUES = 3
 
@@ -1964,11 +1966,22 @@ def _prefetch_key(grade, bias: int, session_id: str | None) -> tuple:
 def _prefetch_done(user_id: str, key: tuple):
     """One in-flight worker for this queue has finished, or never started."""
     with _prefetch_lock:
-        left = _prefetch_active.get((user_id, key), 0) - 1
+        counts = _prefetch_active.get(user_id, {})
+        left = counts.get(key, 0) - 1
         if left > 0:
-            _prefetch_active[(user_id, key)] = left
-        else:
-            _prefetch_active.pop((user_id, key), None)
+            counts[key] = left
+            return
+        counts.pop(key, None)
+        if not counts:
+            _prefetch_active.pop(user_id, None)
+
+
+def _drop_prefetched(user_id: str, session_id: str):
+    """A closed session's queues, which nothing can serve; its in-flight results then have nowhere to land."""
+    with _prefetch_lock:
+        queues = _prefetch_cache.get(user_id, {})
+        for key in [k for k in queues if k[2] == session_id]:
+            del queues[key]
 
 # Sized to `GENERATION_MAX_CONCURRENCY`; more workers would only block on its semaphore.
 _PREFETCH_POOL: ThreadPoolExecutor | None = None
@@ -2039,7 +2052,10 @@ def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None
         )
         if isinstance(question, dict):
             with _prefetch_lock:
-                _prefetch_cache.setdefault(user_id, {}).setdefault(key, []).append(question)
+                # `_ensure_queue` made the queue; gone means its session closed or the cap pushed it out.
+                queue = _prefetch_cache.get(user_id, {}).get(key)
+                if queue is not None:
+                    queue.append(question)
     except Exception as e:
         print(f"[prefetch] failed for {user_id[:8]}: {e}")
     finally:
@@ -2049,18 +2065,20 @@ def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None
 def _ensure_queue(user_id: str, grade: str, bias: int, session_id: str | None = None):
     """Spawn workers until this queue + its in-flight workers reach QUEUE_SIZE.
 
-    A student's in-flight workers across all their queues are capped at QUEUE_SIZE too, so
-    flipping Easier/Harder cannot hold more of the shared generation slots.
+    The session's in-flight workers across all its queues are capped at QUEUE_SIZE too, so flipping
+    Easier/Harder cannot hold more of the shared slots; an ended session's do not count against it.
     """
     key = _prefetch_key(grade, bias, session_id)
     with _prefetch_lock:
         queued   = len(_prefetch_cache.get(user_id, {}).get(key, []))
-        inflight = _prefetch_active.get((user_id, key), 0)
-        student  = sum(n for (uid, _k), n in _prefetch_active.items() if uid == user_id)
-        needed   = min(QUEUE_SIZE - queued - inflight, QUEUE_SIZE - student)
+        counts   = _prefetch_active.get(user_id, {})
+        inflight = counts.get(key, 0)
+        session  = sum(n for k, n in counts.items() if k[2] == session_id)
+        needed   = min(QUEUE_SIZE - queued - inflight, QUEUE_SIZE - session)
         if needed <= 0:
             return
-        _prefetch_active[(user_id, key)] = inflight + needed
+        _prefetch_active.setdefault(user_id, {})[key] = inflight + needed
+        _prefetch_cache.setdefault(user_id, {}).setdefault(key, [])
     for _ in range(needed):
         try:
             _prefetch_pool().submit(_prefetch_worker, user_id, grade, bias, session_id)

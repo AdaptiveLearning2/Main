@@ -206,7 +206,7 @@ def test_a_pool_that_refuses_the_work_does_not_leak_the_in_flight_count(monkeypa
     """A worker that never starts never decrements, so the queue would never refill."""
     monkeypatch.setattr(main, "_prefetch_pool", _DeadPool)
     main._ensure_queue("kid", "5th Grade", 0, None)
-    assert main._prefetch_active.get("kid", 0) == 0
+    assert main._prefetch_active == {}
 
 
 def test_a_failed_refill_does_not_discard_the_question_already_built(monkeypatch):
@@ -216,25 +216,52 @@ def test_a_failed_refill_does_not_discard_the_question_already_built(monkeypatch
     assert out["question_text"] == "2+2"
 
 
-def test_a_question_prepared_for_another_grade_is_never_served(monkeypatch):
-    """A prewarm at the default (a failed read at session start) must not reach a 7th grader."""
+def _queued_then_inline(monkeypatch, saved, prepared):
+    """`ask(grade=, bias=)` for a student saved at `saved`, after preparing one question per (grade, bias)."""
     from test_access_control import _FakeSupabase
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
-        {"profiles": [{"id": "kid", "grade_level": "7th Grade", "display_name": "Kid"}]}))
+        {"profiles": [{"id": "kid", "grade_level": saved, "display_name": "Kid"}]}))
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
     monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
-                        lambda _uid, grade, *_a, **_k: {"question_text": f"made for {grade}"})
-    main._prefetch_active["kid"] = 2
-    main._prefetch_worker("kid", "1st Grade", 0, None)
-    main._prefetch_worker("kid", "7th Grade", 0, None)
+                        lambda _uid, grade, _sid, bias, **_k: {"question_text": f"made for {grade} {bias}"})
+    for grade, bias in prepared:
+        main._prefetch_worker("kid", grade, bias, None)
     monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
-                        lambda _uid, grade, *_a, **_k: {"question_text": f"inline for {grade}"})
+                        lambda _uid, grade, _sid, bias, **_k: {"question_text": f"inline for {grade} {bias}"})
+    return lambda grade=None, bias=0: main.generate_question(
+        request=None, grade=grade, class_id=None, bias=bias, session_id=None)["question_text"]
 
-    ask = lambda: main.generate_question(request=None, grade=None, class_id=None,  # noqa: E731
-                                         bias=0, session_id=None)["question_text"]
-    assert ask() == "made for 7th Grade"      # the queued one for this grade
-    assert main._prefetch_cache["kid"] == []  # the 1st-grade one was dropped, not kept for later
-    assert ask() == "inline for 7th Grade"
+
+def test_a_question_prepared_for_another_grade_is_never_served(monkeypatch):
+    """A prewarm at the default (a failed read at session start) must not reach a 7th grader."""
+    ask = _queued_then_inline(monkeypatch, "7th Grade", [("1st Grade", 0), ("7th Grade", 0)])
+    assert ask() == "made for 7th Grade 0"
+    assert ask() == "inline for 7th Grade 0"
+    # Kept for a switch back, not thrown away.
+    assert ask(grade="1st Grade") == "made for 1st Grade 0"
+
+
+def test_a_grade_written_another_way_is_the_same_grade(monkeypatch):
+    """An old saved "Grade 7" and a prepared "7th Grade" are one grade, so the queue still serves."""
+    ask = _queued_then_inline(monkeypatch, "Grade 7", [("7th Grade", 0)])
+    assert ask() == "made for 7th Grade 0"
+
+
+def test_a_question_prepared_at_another_difficulty_is_never_served(monkeypatch):
+    """After "Easier", a question made while "Harder" was on is not served and labelled easy."""
+    ask = _queued_then_inline(monkeypatch, "7th Grade", [("7th Grade", 1)])
+    assert ask(bias=-1) == "inline for 7th Grade -1"
+    assert ask(bias=1) == "made for 7th Grade 1"
+
+
+def test_only_a_few_queues_are_kept_per_student(monkeypatch):
+    """One per grade and bias ever picked would grow for the whole process; the served one stays."""
+    prepared = [(f"{n}th Grade", 0) for n in (4, 5, 6, 7, 8)]
+    ask = _queued_then_inline(monkeypatch, "8th Grade", prepared)
+    ask(grade="4th Grade")
+    queues = main._prefetch_cache["kid"]
+    assert len(queues) == main._PREFETCH_KEPT_QUEUES
+    assert list(queues)[-1] == main._prefetch_key("4th Grade", 0)
 
 
 def test_a_rate_limited_prefetch_skips_generating_rather_than_raising(monkeypatch):
@@ -244,11 +271,11 @@ def test_a_rate_limited_prefetch_skips_generating_rather_than_raising(monkeypatc
     monkeypatch.setattr(main.LLM_topic_decider,
                         "LLM_single_prompt_topic_and_difficulty_decider",
                         lambda *_a, **_k: called.append(1))
-    main._prefetch_active["kid"] = 1
+    main._prefetch_active[("kid", main._prefetch_key("5th Grade", 0))] = 1
     main._prefetch_worker("kid", "5th Grade", 0, None)
     assert called == []
     # The in-flight counter is still released.
-    assert main._prefetch_active["kid"] == 0
+    assert main._prefetch_active == {}
 
 
 def test_the_queue_is_off_by_default_so_nothing_is_generated_before_it_is_asked_for(monkeypatch):
@@ -264,7 +291,7 @@ def test_the_queue_is_off_by_default_so_nothing_is_generated_before_it_is_asked_
     main._ensure_queue("kid", "5th Grade", 0, None)
     assert submitted == []
     # A count left raised here would block the queue if later turned back on.
-    assert main._prefetch_active.get("kid", 0) == 0
+    assert main._prefetch_active == {}
 
 
 def test_raising_the_queue_turns_prefetching_back_on(monkeypatch):

@@ -66,8 +66,9 @@ to raise; a focused reading over that run is the false-focused case the asymmetr
 opinion, and focused pushes. The asymmetry is untouched — stressed still eases whatever the answers say, and a manual
 Easier/Harder still wins — and `test_decide_bias.py` brute-forces it.
 
-**`start_session` prewarms at the student's bias, not 0.** `QUEUE_SIZE` questions are generated before the first
-answer and served first, so a hardcoded default there makes the setting do nothing for the opening of every session.
+**`start_session` prewarms at the student's bias, not 0**, or the setting does nothing for a session's opening. The
+queue is one per grade number and bias (`_prefetch_key`): a question made for another is never served and waits for
+a switch back, and `_PREFETCH_KEPT_QUEUES` (3) bounds how many a student keeps.
 
 ### A practice test's length is a prop, and flashcards have none
 

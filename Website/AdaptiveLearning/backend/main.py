@@ -1948,9 +1948,26 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
 # billed model, questions an abandoned session never answers are wasted spend.
 QUESTION_QUEUE_SIZE_DEFAULT = 0
 QUEUE_SIZE = _env_number("QUESTION_QUEUE_SIZE", QUESTION_QUEUE_SIZE_DEFAULT, int, minimum=0)
-_prefetch_cache: dict[str, list] = {}   # user_id → list of questions
+_prefetch_cache: dict[str, dict[tuple, list]] = {}   # user_id → {`_prefetch_key`: questions}
 _prefetch_lock = threading.Lock()
-_prefetch_active: dict[str, int] = {}   # user_id → count of in-flight workers
+_prefetch_active: dict[tuple, int] = {}   # (user_id, `_prefetch_key`) → in-flight workers
+# Queues kept per student, most recently served last: a switch back reuses one, and the cap bounds them.
+_PREFETCH_KEPT_QUEUES = 3
+
+
+def _prefetch_key(grade, bias: int) -> tuple:
+    """What a prepared question must match to be served: grade by number ("Grade 7" is "7th Grade"), and bias."""
+    return (grade_levels.served_grade_number(grade), bias)
+
+
+def _prefetch_done(user_id: str, key: tuple):
+    """One in-flight worker for this queue has finished, or never started."""
+    with _prefetch_lock:
+        left = _prefetch_active.get((user_id, key), 0) - 1
+        if left > 0:
+            _prefetch_active[(user_id, key)] = left
+        else:
+            _prefetch_active.pop((user_id, key), None)
 
 # Sized to `GENERATION_MAX_CONCURRENCY`; more workers would only block on its semaphore.
 _PREFETCH_POOL: ThreadPoolExecutor | None = None
@@ -2010,6 +2027,7 @@ def _claim_generation_slot(user_id: str) -> bool:
 
 
 def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None):
+    key = _prefetch_key(grade, bias)
     try:
         # No security event: a skipped refill refuses nobody.
         if not _claim_generation_slot(user_id):
@@ -2019,34 +2037,31 @@ def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None
             user_id, grade, session_id, bias
         )
         if isinstance(question, dict):
-            # Stamped with the grade it was made for: serving checks it (`generate_question`).
-            question["effective_grade"] = grade
             with _prefetch_lock:
-                _prefetch_cache.setdefault(user_id, []).append(question)
+                _prefetch_cache.setdefault(user_id, {}).setdefault(key, []).append(question)
     except Exception as e:
         print(f"[prefetch] failed for {user_id[:8]}: {e}")
     finally:
         # A count, not a flag: one worker finishing must not clear the others.
-        with _prefetch_lock:
-            _prefetch_active[user_id] = max(0, _prefetch_active.get(user_id, 0) - 1)
+        _prefetch_done(user_id, key)
 
 def _ensure_queue(user_id: str, grade: str, bias: int, session_id: str | None = None):
-    """Spawn workers until the queue + in-flight workers reach QUEUE_SIZE."""
+    """Spawn workers until this grade and bias's queue + in-flight workers reach QUEUE_SIZE."""
+    key = _prefetch_key(grade, bias)
     with _prefetch_lock:
-        queued   = len(_prefetch_cache.get(user_id, []))
-        inflight = _prefetch_active.get(user_id, 0)
+        queued   = len(_prefetch_cache.get(user_id, {}).get(key, []))
+        inflight = _prefetch_active.get((user_id, key), 0)
         needed   = QUEUE_SIZE - queued - inflight
         if needed <= 0:
             return
-        _prefetch_active[user_id] = inflight + needed
+        _prefetch_active[(user_id, key)] = inflight + needed
     for _ in range(needed):
         try:
             _prefetch_pool().submit(_prefetch_worker, user_id, grade, bias, session_id)
         except Exception as e:                                 # noqa: BLE001
             # E.g. the pool shut down. Roll back the count: a worker that never
             # starts never decrements, and the queue would never refill.
-            with _prefetch_lock:
-                _prefetch_active[user_id] = max(0, _prefetch_active.get(user_id, 0) - 1)
+            _prefetch_done(user_id, key)
             print(f"[prefetch] could not queue for {user_id[:8]}: {e}")
 
 # ─── models ──────────────────────────────────────────────────────────────
@@ -2327,11 +2342,16 @@ def generate_question(
     manual_bias = max(-1, min(1, int(bias or 0)))
 
     # Serve from the prefetch queue if available, else generate now.
+    # Only a question made for this grade and bias: another's (a failed read at session start, a
+    # changed pick, "Easier") waits in its own queue for a switch back.
+    key = _prefetch_key(effective_grade, manual_bias)
     with _prefetch_lock:
-        queue = _prefetch_cache.get(user_id, [])
-        # One made for another grade (a failed read at session start, a changed pick) is dropped.
-        queue[:] = [q for q in queue if q.get("effective_grade") == effective_grade]
+        queues   = _prefetch_cache.setdefault(user_id, {})
+        queue    = queues.pop(key, [])
         question = queue.pop(0) if queue else None
+        queues[key] = queue
+        while len(queues) > _PREFETCH_KEPT_QUEUES:
+            queues.pop(next(iter(queues)))
 
     if not question:
         print(f"[generate] generating inline for {user_id[:8]}")

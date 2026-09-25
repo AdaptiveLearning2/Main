@@ -1213,5 +1213,20 @@ BEGIN
     END IF;
 END $$;
 
+-- The display name reaches every roster and report; a profile edit caps it at 100 (_NAME_MAX).
+DO $$
+DECLARE
+    usr uuid := gen_random_uuid();
+    len int;
+BEGIN
+    INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES
+        (usr, 'long-name@test.invalid',
+         jsonb_build_object('role', 'student', 'display_name', repeat('x', 5000)));
+    SELECT length(display_name) INTO len FROM public.profiles WHERE id = usr;
+    IF len IS DISTINCT FROM 100 THEN
+        RAISE EXCEPTION 'sign-up stored a display name of % characters (expected 100)', len;
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

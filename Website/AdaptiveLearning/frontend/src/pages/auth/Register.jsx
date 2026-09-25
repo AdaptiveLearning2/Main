@@ -113,7 +113,8 @@ export default function Register() {
               <label htmlFor="signup-grade" className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5">Grade</label>
               <select id="signup-grade" value={grade} onChange={e => setGrade(e.target.value)} required
                 className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:text-white outline-none transition text-sm">
-                <option value="" disabled>Grade not set</option>
+                {/* A prompt, not a saved state: the field is required, so the error says the same. */}
+                <option value="" disabled>Choose your grade</option>
                 {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
               </select>
             </div>

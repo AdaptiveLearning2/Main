@@ -223,6 +223,17 @@ def test_signup_keeps_only_a_grade_from_the_pickers_list():
         assert main.grade_levels.validated_grade(label) == label
 
 
+def test_signup_cuts_the_display_name_to_the_profile_edits_cap():
+    """Both write `profiles.display_name`; the trigger's cut is asserted in `assert_signal_rls.sql`."""
+    bodies = re.findall(
+        r'CREATE OR REPLACE FUNCTION\s+"?public"?\.\s*"?handle_new_user"?.*?\$\$(.*?)\$\$',
+        _migration_sql(), re.IGNORECASE | re.DOTALL)
+    cut = re.search(r"left\(\s*coalesce\(\s*new\.raw_user_meta_data->>'display_name'.*?\),\s*(\d+)\)",
+                    bodies[-1], re.IGNORECASE | re.DOTALL)
+    assert cut, "the newest handle_new_user copies the display name uncut"
+    assert int(cut.group(1)) == main._NAME_MAX
+
+
 def test_the_role_check_constraint_admits_admin():
     sql = _migration_sql()
     checks = re.findall(r'CONSTRAINT\s+"?profiles_role_check"?\s+CHECK\s*\((.*?)\)\s*;',

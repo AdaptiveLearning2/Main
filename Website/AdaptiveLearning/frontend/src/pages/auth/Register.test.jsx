@@ -104,17 +104,17 @@ describe('the parent tip', () => {
 describe('the grade picker', () => {
   beforeEach(() => { signUp.mockClear(); toast.error.mockClear() })
 
-  it('offers the shared grade list, starting on "Grade not set"', async () => {
+  it('offers the shared grade list, starting on a prompt that matches the error', async () => {
     const { GRADES } = await import('../../lib/grades')
     draw()
     const options = [...screen.getByLabelText('Grade').options].map(o => o.textContent)
-    expect(options).toEqual(['Grade not set', ...GRADES])
-    expect(screen.getByLabelText('Grade')).toHaveDisplayValue('Grade not set')
+    expect(options).toEqual(['Choose your grade', ...GRADES])
+    expect(screen.getByLabelText('Grade')).toHaveDisplayValue('Choose your grade')
   })
 
   it('will not sign a student up without a grade', async () => {
     await fillIn()
-    // The browser's own check: a required picker left on "Grade not set" blocks the submit.
+    // The browser's own check: a required picker left on its prompt blocks the submit.
     expect(screen.getByLabelText('Grade')).toBeRequired()
     await userEvent.click(screen.getByRole('button', { name: /create student account/i }))
     expect(signUp).not.toHaveBeenCalled()

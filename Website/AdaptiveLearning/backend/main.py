@@ -1953,7 +1953,8 @@ QUEUE_SIZE = _env_number("QUESTION_QUEUE_SIZE", QUESTION_QUEUE_SIZE_DEFAULT, int
 _prefetch_cache: dict[str, dict[tuple, list]] = {}   # user_id → {`_prefetch_key`: questions}
 _prefetch_lock = threading.Lock()
 _prefetch_active: dict[str, dict[tuple, int]] = {}   # user_id → {`_prefetch_key`: in-flight workers}
-# Queues kept per student, most recently served last: a switch back reuses one, and the cap bounds them.
+# Idle queues kept per student, most recently served last: a switch back reuses one. Busy ones stay
+# until their work lands; the session's in-flight cap bounds how many that can be.
 _PREFETCH_KEPT_QUEUES = 3
 
 
@@ -2074,8 +2075,7 @@ def _ensure_queue(user_id: str, grade: str, bias: int, session_id: str | None = 
         queued   = len(queues.get(key, []))
         counts   = _prefetch_active.get(user_id, {})
         inflight = counts.get(key, 0)
-        # A queue the cap pushed out is gone, and its results will be dropped: its work does not count.
-        session  = sum(n for k, n in counts.items() if k[2] == session_id and k in queues)
+        session  = sum(n for k, n in counts.items() if k[2] == session_id)
         needed   = min(QUEUE_SIZE - queued - inflight, QUEUE_SIZE - session)
         if needed <= 0:
             return
@@ -2376,8 +2376,12 @@ def generate_question(
         queue    = queues.pop(key, [])
         question = queue.pop(0) if queue else None
         queues[key] = queue
-        while len(queues) > _PREFETCH_KEPT_QUEUES:
-            queues.pop(next(iter(queues)))
+        # Only an idle queue goes: a busy one's work still counts against the session's cap,
+        # so dropping it would free nothing, and its results would be thrown away on arrival.
+        counts = _prefetch_active.get(user_id, {})
+        idle = [k for k in queues if k != key and not counts.get(k)]
+        while len(queues) > _PREFETCH_KEPT_QUEUES and idle:
+            queues.pop(idle.pop(0))
 
     if not question:
         print(f"[generate] generating inline for {user_id[:8]}")

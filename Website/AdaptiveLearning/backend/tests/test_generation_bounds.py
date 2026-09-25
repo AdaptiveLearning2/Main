@@ -295,18 +295,26 @@ def test_flipping_the_difficulty_cannot_hold_more_than_one_queues_worth_in_fligh
     assert len(submitted) == 2 * main.QUEUE_SIZE
 
 
-def test_work_for_a_queue_the_cap_pushed_out_does_not_hold_back_the_one_in_use(monkeypatch):
-    """Its results will be dropped, so counting it would only force inline generation meanwhile."""
+def test_switching_through_many_grades_holds_one_batch_and_keeps_the_busy_queue(monkeypatch):
+    """Dropping a busy queue would free its slots while its calls still ran, one more batch per drop."""
+    from test_access_control import _FakeSupabase
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({"sessions": [{"id": "s1", "user_id": "kid"}]}))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
+    monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
+                        lambda _uid, grade, *_a, **_k: {"question_text": f"made for {grade}"})
     monkeypatch.setattr(main, "QUEUE_SIZE", 2)
     submitted = []
+    # A pool that holds the work, so every worker stays in flight until run by hand.
     monkeypatch.setattr(main, "_prefetch_pool",
-                        lambda: type("P", (), {"submit": lambda _s, *a: submitted.append(a)})())
-    main._ensure_queue("kid", "5th Grade", 1, "s1")
-    # The state the three-queue cap in `generate_question` leaves: the queue gone, its work still running.
-    del main._prefetch_cache["kid"][main._prefetch_key("5th Grade", 1, "s1")]
-    main._ensure_queue("kid", "5th Grade", -1, "s1")
-    # Each submit is (worker, user, grade, bias, session).
-    assert [a[3] for a in submitted] == [1, 1, -1, -1]
+                        lambda: type("P", (), {"submit": lambda _s, fn, *a: submitted.append((fn, a))})())
+    for n in range(2, 8):
+        main.generate_question(request=None, grade=f"Grade {n}", class_id=None, bias=0, session_id="s1")
+    assert len(submitted) == main.QUEUE_SIZE
+    busy = main._prefetch_key("Grade 2", 0, "s1")
+    assert busy in main._prefetch_cache["kid"]
+    fn, args = submitted[0]
+    fn(*args)                                   # its work lands in the queue it was made for
+    assert len(main._prefetch_cache["kid"][busy]) == 1
 
 
 def test_an_ended_sessions_work_does_not_hold_back_the_next_session(monkeypatch):

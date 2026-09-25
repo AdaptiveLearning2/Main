@@ -109,7 +109,12 @@ describe('a code on screen that stopped working', () => {
   beforeEach(() => { listeners = vi.spyOn(window, 'addEventListener') })
   afterEach(() => { listeners.mockRestore() })
   async function returnToThePageOnce() {
-    await waitFor(() => expect(listeners.mock.calls.some(([type]) => type === 'focus')).toBe(true))
+    // 2 s, under the test's own 5 s, so a page that never listens fails with this message.
+    await waitFor(() => expect(
+      listeners.mock.calls.some(([type]) => type === 'focus'),
+      'Profile never listened for window "focus". If it now notices a return some other way '
+        + '(e.g. visibilitychange), make this helper fire that event instead.',
+    ).toBe(true), { timeout: 2000 })
     window.dispatchEvent(new Event('focus'))
   }
 

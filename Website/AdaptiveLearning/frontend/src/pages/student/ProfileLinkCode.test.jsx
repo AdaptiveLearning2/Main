@@ -1,5 +1,5 @@
 /** The link-code card and its three states; a user id is not a secret to share. */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
@@ -103,14 +103,14 @@ describe('a code on screen that stopped working', () => {
   const rereads = () => apiFetch.mock.calls.flatMap(([p, o], i) =>
     p === '/api/student/link-code' && !o?.method ? [apiFetch.mock.results[i]] : [])
 
-  // The focus listener attaches in an effect after the code renders, so one early event can be
-  // lost; focus until a re-read goes out, and return every re-read since `before`.
-  async function focusUntilReread(before) {
-    await waitFor(() => {
-      window.dispatchEvent(new Event('focus'))
-      expect(rereads().length).toBeGreaterThan(before)
-    })
-    return rereads().slice(before)
+  // The focus listener attaches in an effect after the code renders, so an event fired straight
+  // after it appears can be lost. Wait for the listener, then return to the page exactly once.
+  let listeners
+  beforeEach(() => { listeners = vi.spyOn(window, 'addEventListener') })
+  afterEach(() => { listeners.mockRestore() })
+  async function returnToThePageOnce() {
+    await waitFor(() => expect(listeners.mock.calls.some(([type]) => type === 'focus')).toBe(true))
+    window.dispatchEvent(new Event('focus'))
   }
 
   it('is dropped when the student comes back to the page', async () => {
@@ -119,11 +119,10 @@ describe('a code on screen that stopped working', () => {
     await screen.findByText('ABCD2345')
 
     spent()
-    // Focus until the page has re-read and dropped it, not merely until some read went out.
-    await waitFor(() => {
-      window.dispatchEvent(new Event('focus'))
-      expect(screen.getByRole('button', { name: /create a link code/i })).toBeInTheDocument()
-    })
+    await returnToThePageOnce()
+
+    expect(await screen.findByRole('button', { name: /create a link code/i }))
+      .toBeInTheDocument()
     expect(screen.queryByText('ABCD2345')).not.toBeInTheDocument()
   })
 
@@ -152,9 +151,11 @@ describe('a code on screen that stopped working', () => {
 
     overrideApi('/api/student/link-code',
       () => ({ code: null, expires_at: null, retrieved: false }))
-    const sent = await focusUntilReread(rereads().length)
-    // Let every answer land before looking.
-    await act(async () => { await Promise.allSettled(sent.map(r => r.value)) })
+    const before = rereads().length
+    await returnToThePageOnce()
+    // One return is one re-read; let its answer land before looking.
+    await waitFor(() => expect(rereads().length).toBe(before + 1))
+    await act(async () => { await rereads()[before].value })
 
     expect(screen.getByText('ABCD2345')).toBeInTheDocument()
   })

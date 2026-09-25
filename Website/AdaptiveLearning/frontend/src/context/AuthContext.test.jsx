@@ -73,14 +73,21 @@ beforeEach(() => {
 })
 
 it("sends a student's grade with the sign-up, and no grade for anyone else", async () => {
-  let signUp
-  function Grab() { signUp = useAuth().signUp; return null }
-  render(<AuthProvider><Grab /></AuthProvider>)
-  await waitFor(() => expect(signUp).toBeTypeOf('function'))
+  function SignUps() {
+    const { signUp } = useAuth()
+    return (
+      <>
+        <button onClick={() => signUp('kid@school.org', 'pw123456', 'student', 'Kid', '5th Grade')}>student</button>
+        <button onClick={() => signUp('t@school.org', 'pw123456', 'teacher', 'T', '5th Grade')}>teacher</button>
+      </>
+    )
+  }
+  render(<AuthProvider><SignUps /></AuthProvider>)
 
-  await act(() => signUp('kid@school.org', 'pw123456', 'student', 'Kid', '5th Grade'))
-  await act(() => signUp('t@school.org', 'pw123456', 'teacher', 'T', '5th Grade'))
+  await userEvent.click(await screen.findByText('student'))
+  await userEvent.click(screen.getByText('teacher'))
 
+  await waitFor(() => expect(authSignUp).toHaveBeenCalledTimes(2))
   const data = authSignUp.mock.calls.map(([arg]) => arg.options.data)
   expect(data[0]).toEqual({ role: 'student', display_name: 'Kid', grade_level: '5th Grade' })
   expect(data[1]).toEqual({ role: 'teacher', display_name: 'T' })

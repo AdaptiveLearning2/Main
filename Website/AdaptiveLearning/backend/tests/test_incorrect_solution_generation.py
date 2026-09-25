@@ -108,11 +108,12 @@ def test_an_irrational_algebra_answer_is_retried(monkeypatch):
 
 
 @pytest.mark.parametrize("text,variables,value", [
-    ("Solve for x: x + 2.5 = 7", ["x", "+", "2.5", "=", "7"], 4.5),
-    ("Solve for x: 0.5x = 2", ["0.5x", "=", "2"], 4.0),
+    ("Solve for x: x + 2.5 = 7", ["x", "+", "2.5", "=", "7"], "4.5"),
+    ("Solve for x: 0.5x = 2", ["0.5x", "=", "2"], "4"),
 ])
 def test_a_decimal_algebra_answer_is_served_among_decimals(monkeypatch, text, variables, value):
-    """The solver answers these as Floats, which the irrational retry refused on every attempt."""
+    """Floats: refused by the irrational retry, then shown as "4.50000000000000" beside "5.5"."""
+    import answer_format
     import json
     import llm_client
     import lesson_plan_context
@@ -123,8 +124,10 @@ def test_a_decimal_algebra_answer_is_served_among_decimals(monkeypatch, text, va
                         lambda *a, **k: asked.append(1) or json.dumps(payload))
     monkeypatch.setattr(lesson_plan_context, "append_lesson_context", lambda p, t, b: p)
     question = algebra.generate_algebra_question([], [], "hard", "8th Grade")
-    assert len(asked) == 1 and float(question["correct_answer"]) == value
-    assert not any("/" in option for option in question["answer_options"]), question["answer_options"]
+    options = question["answer_options"]
+    assert len(asked) == 1 and question["correct_answer"] == value and value in options
+    assert len(set(options)) == 4
+    assert all(answer_format.format_value(o) == o and "/" not in o for o in options), options
 
 
 @pytest.mark.parametrize("answer", ["1/2", "-7/3"])

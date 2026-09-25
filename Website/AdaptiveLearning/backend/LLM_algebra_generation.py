@@ -19,6 +19,7 @@ from sympy.parsing.sympy_parser import (
     implicit_multiplication_application
 ) # treat 2x as 2*x for sympy parsing
 import incorrect_solution_generation as inc_gen
+import answer_format
 import lesson_plan_context
 import safe_solve
 import token_join
@@ -185,6 +186,8 @@ def generate_algebra_question(global_questions, prev_questions, difficulty, grad
         incorrect_answers = inc_gen.generate_incorrect_rational(solution)
     else:
         incorrect_answers = inc_gen.generate_general_incorrect_answers(solution)
+        # A Float prints "4.50000000000000"; the distractors are written "5.5".
+        solution = answer_format.format_value(solution)
     answers = [str(ans) for ans in incorrect_answers] + [str(solution)]
 
     random.shuffle(answers)

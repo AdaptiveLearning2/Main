@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -102,9 +102,15 @@ describe('the grade picker', () => {
 
   it('will not sign a student up without a grade', async () => {
     await fillIn()
+    // The browser's own check: a required picker left on "Grade not set" blocks the submit.
+    expect(screen.getByLabelText('Grade')).toBeRequired()
     await userEvent.click(screen.getByRole('button', { name: /create student account/i }))
-
     expect(signUp).not.toHaveBeenCalled()
+
+    // And the handler's, for a submit that skips the browser's validation.
+    fireEvent.submit(screen.getByLabelText('Grade').closest('form'))
+    expect(signUp).not.toHaveBeenCalled()
+    expect(toast.error).toHaveBeenCalledWith('Choose your grade')
   })
 
   it("sends the student's grade with the sign-up", async () => {

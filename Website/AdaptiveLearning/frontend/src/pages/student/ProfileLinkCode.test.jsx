@@ -100,6 +100,18 @@ describe('a code on screen that stopped working', () => {
   const live = { code: 'ABCD2345', expires_at: IN_TEN_MINUTES(), retrieved: true }
   const spent = () => overrideApi('/api/student/link-code',
     () => ({ code: null, expires_at: null, retrieved: true }))
+  const rereads = () => apiFetch.mock.calls.flatMap(([p, o], i) =>
+    p === '/api/student/link-code' && !o?.method ? [apiFetch.mock.results[i]] : [])
+
+  // The focus listener attaches in an effect after the code renders, so one early event can be
+  // lost; focus until a re-read goes out, and return every re-read since `before`.
+  async function focusUntilReread(before) {
+    await waitFor(() => {
+      window.dispatchEvent(new Event('focus'))
+      expect(rereads().length).toBeGreaterThan(before)
+    })
+    return rereads().slice(before)
+  }
 
   it('is dropped when the student comes back to the page', async () => {
     mockApi(happy(live))
@@ -107,10 +119,11 @@ describe('a code on screen that stopped working', () => {
     await screen.findByText('ABCD2345')
 
     spent()
-    window.dispatchEvent(new Event('focus'))
-
-    expect(await screen.findByRole('button', { name: /create a link code/i }))
-      .toBeInTheDocument()
+    // Focus until the page has re-read and dropped it, not merely until some read went out.
+    await waitFor(() => {
+      window.dispatchEvent(new Event('focus'))
+      expect(screen.getByRole('button', { name: /create a link code/i })).toBeInTheDocument()
+    })
     expect(screen.queryByText('ABCD2345')).not.toBeInTheDocument()
   })
 
@@ -139,13 +152,9 @@ describe('a code on screen that stopped working', () => {
 
     overrideApi('/api/student/link-code',
       () => ({ code: null, expires_at: null, retrieved: false }))
-    const reads = () => apiFetch.mock.calls.filter(([p, o]) =>
-      p === '/api/student/link-code' && !o?.method).length
-    const before = reads()
-    window.dispatchEvent(new Event('focus'))
-    await waitFor(() => expect(reads()).toBe(before + 1))
-    // Let its answer land before looking.
-    await act(async () => { await new Promise(r => setTimeout(r, 0)) })
+    const sent = await focusUntilReread(rereads().length)
+    // Let every answer land before looking.
+    await act(async () => { await Promise.allSettled(sent.map(r => r.value)) })
 
     expect(screen.getByText('ABCD2345')).toBeInTheDocument()
   })

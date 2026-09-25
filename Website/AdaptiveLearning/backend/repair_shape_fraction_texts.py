@@ -2,7 +2,7 @@
 
 Run to report; --apply sets `question_text` on rows that differ, which makes their stored
 shaded/parts answer correct. A row a student has answered is retired instead (their mark was
-for the old text). A row whose answer is not its figure's shaded/parts is reported only.
+for the old text), and so is a row whose answer is not its figure's shaded/parts.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def check(row):
 def repair(client, dry_run=True):
     """Count of "ok", ids for "fix", "mismatch" and "answered", and how many were written.
 
-    "applied" counts rewrites, "retired" answered rows retired. Raises if a read fails.
+    "applied" counts rewrites, "retired" answered and mismatched rows retired. Raises if a read fails.
     """
     report = {"ok": 0, "fix": [], "mismatch": [], "answered": [], "applied": 0, "retired": 0}
     for row in repair_common.rows(client, "shape_fractions",
@@ -42,7 +42,7 @@ def repair(client, dry_run=True):
             client.table("questions").update({"question_text": shapes.QUESTION_TEXT}) \
                 .eq("id", row["id"]).execute()
             report["applied"] += 1
-        elif outcome == "answered" and not dry_run:
+        elif outcome in ("answered", "mismatch") and not dry_run:
             repair_common.retire(client, row["id"])
             report["retired"] += 1
     return report
@@ -62,7 +62,7 @@ def main(argv=None) -> int:
     print(f"text asks something else ({len(report['fix'])}): {report['fix']}")
     print(f"text asks something else, already answered, to retire ({len(report['answered'])}): "
           f"{report['answered']}")
-    print(f"answer is not the figure's ({len(report['mismatch'])}): {report['mismatch']}")
+    print(f"answer is not the figure's, to retire ({len(report['mismatch'])}): {report['mismatch']}")
     return 0
 
 

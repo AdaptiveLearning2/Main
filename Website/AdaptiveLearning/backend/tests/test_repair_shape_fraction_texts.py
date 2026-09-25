@@ -85,7 +85,10 @@ def test_a_row_asking_something_else_is_given_the_shaded_question():
     report = repair.repair(db, dry_run=False)
     assert report["ok"] == 1
     assert report["fix"] == ["b"] and report["mismatch"] == ["c"]
-    assert db.updates == [("b", {"question_text": shapes.QUESTION_TEXT})]
+    (b_id, b_patch), (c_id, c_patch) = db.updates
+    assert (b_id, b_patch) == ("b", {"question_text": shapes.QUESTION_TEXT})
+    # 1/4 stored against a 3/4 figure: no sentence makes that key right, so the row is retired.
+    assert c_id == "c" and list(c_patch) == ["retired_at"] and report["retired"] == 1
 
 
 @pytest.mark.parametrize("table", ["session_answers", "practice_session_answers"])

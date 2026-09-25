@@ -85,9 +85,11 @@ def test_a_stored_answer_scored_the_wrong_way_round_is_found_and_fixed():
     report = repair.repair(db, dry_run=False)
     assert report["ok"] == 1 and report["skip"] == 1
     assert report["fix"] == ["b"] and report["unanswerable"] == ["c"]
-    (id_, patch), = db.updates
+    (id_, patch), (c_id, c_patch) = db.updates
     assert id_ == "b" and patch["correct_answer"] == "1"
     assert "1" in patch["options"] and len(set(patch["options"])) == 4
+    # No right answer exists to store, so the false premise is retired rather than served.
+    assert c_id == "c" and list(c_patch) == ["retired_at"] and report["retired"] == 1
 
 
 @pytest.mark.parametrize("table", ["session_answers", "practice_session_answers"])

@@ -2,8 +2,8 @@
 
 Run to report; --apply rewrites `correct_answer` and `options` on rows whose stored answer
 differs. A row a student has answered is retired instead (each answer stores an option's
-position, so reshuffling would repoint it). Rows whose text compares no two bars larger-first
-are reported, never changed.
+position, so reshuffling would repoint it). So is a row whose text compares no two bars
+larger-first, which has no right answer to store.
 """
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ def repair(client, dry_run=True):
             client.table("questions").update({"correct_answer": correct, "options": options}) \
                 .eq("id", row["id"]).execute()
             report["applied"] += 1
-        elif outcome == "answered" and not dry_run:
+        elif outcome in ("answered", "unanswerable") and not dry_run:
             repair_common.retire(client, row["id"])
             report["retired"] += 1
     return report
@@ -76,7 +76,7 @@ def main(argv=None) -> int:
     print(f"wrong answer stored ({len(report['fix'])}): {report['fix']}")
     print(f"wrong answer stored, already answered, to retire ({len(report['answered'])}): "
           f"{report['answered']}")
-    print(f"text compares no two bars larger-first ({len(report['unanswerable'])}): "
+    print(f"text compares no two bars larger-first, to retire ({len(report['unanswerable'])}): "
           f"{report['unanswerable']}")
     return 0
 

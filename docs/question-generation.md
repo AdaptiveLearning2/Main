@@ -828,7 +828,8 @@ starts at 4. Its figure is required, for the same reason `graphs`' is.
 sentence asks for the shaded part; any other wording the model chooses can only ask something else ("not shaded",
 "outside the shaded part") or give a count away, and no word list covers them all. The model supplies the two numbers
 only. `backend/repair_shape_fraction_texts.py` gives stored rows the same sentence (dry run by default). A row a
-student has answered is retired instead of rewritten, since their mark was for the old text.
+student has answered is retired instead of rewritten, since their mark was for the old text, and so is a row whose
+stored answer is not its own figure's.
 
 **Lowest terms is required, and refusing otherwise is the point.** Two shaded parts in four is a perfectly good
 picture and an ambiguous question: `2/4` and `1/2` are both correct readings, and whichever the solver picked, a
@@ -877,7 +878,8 @@ to ask for — it stops being a graph question and becomes arithmetic. Checked, 
 so `comparison_in_text` takes the bars named after the last "how many more", singular or plural, and scores the first
 minus the second. Anything but exactly two named bars is a retry, and so is a smaller-first comparison (a false premise).
 `backend/repair_graph_comparisons.py` checks stored rows against the same rule. A wrong row a student has answered is
-retired rather than re-scored, because an answer stores the position of the option chosen. A retired row leaves the
+retired rather than re-scored, because an answer stores the position of the option chosen. So is a row whose text has
+no right answer: it compares a smaller bar first, or names other than two bars. A retired row leaves the
 bank and its count, and is never reused. Past answers and the review screen still show it as it was served.
 
 **`categories` is a list of `{name, count}`, not a map.** The obvious `{"cats": "7"}` cannot be schema'd at all — the

@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { Mail, Lock, User, Eye, EyeOff, ArrowRight } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { signUpMessage } from '../../lib/authErrors'
+import { GRADES } from '../../lib/grades'
 import { toast } from 'sonner'
 
 const ROLES = [
@@ -41,6 +42,8 @@ export default function Register() {
   const [password, setPassword]   = useState('')
   const [confirm, setConfirm]     = useState('')
   const [role, setRole]           = useState('student')
+  // Students only: teachers set a grade per class, and a parent has none.
+  const [grade, setGrade]         = useState('')
   const [showPw, setShowPw]       = useState(false)
   const [loading, setLoading]     = useState(false)
   const { signUp } = useAuth()
@@ -50,9 +53,10 @@ export default function Register() {
     e.preventDefault()
     if (password !== confirm) return toast.error('Passwords do not match')
     if (password.length < 6)  return toast.error('Password must be at least 6 characters')
+    if (role === 'student' && !grade) return toast.error('Choose your grade')
     setLoading(true)
     try {
-      await signUp(email, password, role, displayName)
+      await signUp(email, password, role, displayName, role === 'student' ? grade : '')
       // HomeRedirect picks the destination once the role resolves.
       navigate('/')
       toast.success('Account created! Welcome 🎉')
@@ -104,6 +108,16 @@ export default function Register() {
                 placeholder="Your name" />
             </div>
           </div>
+          {role === 'student' && (
+            <div>
+              <label htmlFor="signup-grade" className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5">Grade</label>
+              <select id="signup-grade" value={grade} onChange={e => setGrade(e.target.value)} required
+                className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:text-white outline-none transition text-sm">
+                <option value="" disabled>Grade not set</option>
+                {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
+              </select>
+            </div>
+          )}
           <div>
             <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5">Email</label>
             <div className="relative">

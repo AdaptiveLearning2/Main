@@ -9,6 +9,7 @@ import { onSignOut } from '../lib/signOutTasks'
 const signOut = vi.fn()
 const getSession = vi.fn()
 const apiFetch = vi.fn()
+const authSignUp = vi.fn(async () => ({ error: null }))
 let authCallback
 
 vi.mock('../lib/supabase', () => ({
@@ -20,6 +21,7 @@ vi.mock('../lib/supabase', () => ({
         return { data: { subscription: { unsubscribe: () => {} } } }
       },
       signOut: (...args) => signOut(...args),
+      signUp: (...args) => authSignUp(...args),
     },
   },
 }))
@@ -68,6 +70,20 @@ beforeEach(() => {
   getSession.mockResolvedValue({ data: { session: null } })
   apiFetch.mockReset()
   apiFetch.mockResolvedValue({ role: 'student' })
+})
+
+it("sends a student's grade with the sign-up, and no grade for anyone else", async () => {
+  let signUp
+  function Grab() { signUp = useAuth().signUp; return null }
+  render(<AuthProvider><Grab /></AuthProvider>)
+  await waitFor(() => expect(signUp).toBeTypeOf('function'))
+
+  await act(() => signUp('kid@school.org', 'pw123456', 'student', 'Kid', '5th Grade'))
+  await act(() => signUp('t@school.org', 'pw123456', 'teacher', 'T', '5th Grade'))
+
+  const data = authSignUp.mock.calls.map(([arg]) => arg.options.data)
+  expect(data[0]).toEqual({ role: 'student', display_name: 'Kid', grade_level: '5th Grade' })
+  expect(data[1]).toEqual({ role: 'teacher', display_name: 'T' })
 })
 
 it('clears the teacher display preference on sign-out', async () => {

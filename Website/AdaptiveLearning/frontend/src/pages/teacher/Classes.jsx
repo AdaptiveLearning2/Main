@@ -6,8 +6,8 @@ import { apiFetch } from '../../lib/api'
 import { toast } from 'sonner'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
+import { GRADES } from '../../lib/grades'
 
-const GRADES = ['Kindergarten','1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 
 export default function Classes() {
   const navigate = useNavigate()

@@ -200,6 +200,29 @@ def test_the_backfill_applies_the_same_role_whitelist_as_the_trigger():
             "must match the trigger's and must not admit 'admin'")
 
 
+def test_signup_keeps_only_a_grade_from_the_pickers_list():
+    """The trigger's grade whitelist is the frontend's list, and each label is one the backend reads.
+
+    The behaviour (a junk or teacher's grade stored as none) is asserted in `assert_signal_rls.sql`.
+    """
+    bodies = re.findall(
+        r'CREATE OR REPLACE FUNCTION\s+"?public"?\.\s*"?handle_new_user"?.*?\$\$(.*?)\$\$',
+        _migration_sql(), re.IGNORECASE | re.DOTALL)
+    match = re.search(r"grade\s+in\s*\((.*?)\)", bodies[-1], re.IGNORECASE | re.DOTALL)
+    assert match, "the newest handle_new_user keeps no grade whitelist"
+    trigger = re.findall(r"'([^']+)'", match.group(1))
+
+    grades_js = (_MIGRATIONS.parent.parent / "Website" / "AdaptiveLearning" / "frontend" / "src"
+                 / "lib" / "grades.js").read_text(encoding="utf-8")
+    block = re.search(r"export const GRADES = \[(.*?)\]", grades_js, re.DOTALL)
+    assert block, "GRADES not found in lib/grades.js -- this check is inert"
+    frontend = re.findall(r"'([^']+)'", block.group(1))
+
+    assert trigger == frontend
+    for label in trigger:
+        assert main.grade_levels.validated_grade(label) == label
+
+
 def test_the_role_check_constraint_admits_admin():
     sql = _migration_sql()
     checks = re.findall(r'CONSTRAINT\s+"?profiles_role_check"?\s+CHECK\s*\((.*?)\)\s*;',

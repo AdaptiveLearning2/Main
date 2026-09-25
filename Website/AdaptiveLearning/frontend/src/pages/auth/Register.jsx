@@ -154,7 +154,7 @@ export default function Register() {
           {/* parent tip */}
           {role === 'parent' && (
             <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-3 text-xs text-amber-800 dark:text-amber-200">
-              👪 After signing up, go to your dashboard and enter your child's <strong>User ID</strong> to link their account. They can find their ID in their Profile page.
+              👪 After signing up, open <strong>Link Child</strong> and enter your child's <strong>link code</strong>. They create one on their Profile page with <strong>Create a link code</strong>.
             </div>
           )}
 

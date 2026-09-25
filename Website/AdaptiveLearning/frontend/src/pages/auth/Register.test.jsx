@@ -89,6 +89,18 @@ async function fillIn({ grade } = {}) {
   if (grade) await userEvent.selectOptions(screen.getByLabelText('Grade'), grade)
 }
 
+describe('the parent tip', () => {
+  it('sends a parent to a link code, not a user id, which is not a secret', async () => {
+    draw()
+    await userEvent.click(screen.getByRole('button', { name: /monitor your child/i }))
+
+    const tip = screen.getByText(/after signing up/i)
+    expect(tip).toHaveTextContent(/link code/i)
+    expect(tip).toHaveTextContent('Create a link code')
+    expect(tip).not.toHaveTextContent(/user id/i)
+  })
+})
+
 describe('the grade picker', () => {
   beforeEach(() => { signUp.mockClear(); toast.error.mockClear() })
 

@@ -402,9 +402,10 @@ def add_question_to_supabase(question, difficulty):
     # List answers and figures are compared in Python; a missed match costs one extra row.
     answer = question["correct_answer"]
     code = question.get("ccss_standard")
+    # A retired row's key is wrong; a repeat of it is stored afresh rather than served from it.
     lookup = supabase.table("questions") \
         .select("id, options, correct_answer, figure") \
-        .eq("question_text", question["question_text"])
+        .eq("question_text", question["question_text"]).is_("retired_at", "null")
     lookup = lookup.is_("ccss_standard", "null") if code is None \
         else lookup.eq("ccss_standard", code)
     if isinstance(answer, str):

@@ -177,6 +177,17 @@ def test_a_repeat_reuses_its_row_and_is_served_the_stored_options(options, monke
     assert len(fake.store["rows"]) == 1
 
 
+def test_a_repeat_of_a_retired_row_is_stored_afresh(monkeypatch):
+    """A retired row's key was wrong; serving from it would bring the wrong key back."""
+    fake = _FakeSupabase()
+    fake.store["rows"].append({**_SHADED, "id": "retired", "options": _SHADED["answer_options"],
+                               "retired_at": "2026-09-25T00:00:00+00:00"})
+    monkeypatch.setattr(LLM_topic_decider, "supabase", fake)
+    stored = LLM_topic_decider.add_question_to_supabase(dict(_SHADED), "easy")
+    assert stored != "retired" and fake.store["rows"][-1]["id"] == stored
+    assert ("is", "retired_at", "null") in fake.queries[0].filters
+
+
 def test_a_generic_text_finds_its_match_past_the_candidate_cap(monkeypatch):
     """The answer is a filter, so rows for other answers don't use up `_DEDUPE_CANDIDATES`."""
     fake = _FakeSupabase()

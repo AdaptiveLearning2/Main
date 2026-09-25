@@ -1955,9 +1955,10 @@ _prefetch_active: dict[tuple, int] = {}   # (user_id, `_prefetch_key`) → in-fl
 _PREFETCH_KEPT_QUEUES = 3
 
 
-def _prefetch_key(grade, bias: int) -> tuple:
-    """What a prepared question must match to be served: grade by number ("Grade 7" is "7th Grade"), and bias."""
-    return (grade_levels.served_grade_number(grade), bias)
+def _prefetch_key(grade, bias: int, session_id: str | None) -> tuple:
+    """What a prepared question must match to be served: grade by number ("Grade 7" is "7th Grade"),
+    bias, and session, since it was chosen from that session's accuracy and signals."""
+    return (grade_levels.served_grade_number(grade), bias, session_id)
 
 
 def _prefetch_done(user_id: str, key: tuple):
@@ -2027,7 +2028,7 @@ def _claim_generation_slot(user_id: str) -> bool:
 
 
 def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None):
-    key = _prefetch_key(grade, bias)
+    key = _prefetch_key(grade, bias, session_id)
     try:
         # No security event: a skipped refill refuses nobody.
         if not _claim_generation_slot(user_id):
@@ -2046,12 +2047,17 @@ def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None
         _prefetch_done(user_id, key)
 
 def _ensure_queue(user_id: str, grade: str, bias: int, session_id: str | None = None):
-    """Spawn workers until this grade and bias's queue + in-flight workers reach QUEUE_SIZE."""
-    key = _prefetch_key(grade, bias)
+    """Spawn workers until this queue + its in-flight workers reach QUEUE_SIZE.
+
+    A student's in-flight workers across all their queues are capped at QUEUE_SIZE too, so
+    flipping Easier/Harder cannot hold more of the shared generation slots.
+    """
+    key = _prefetch_key(grade, bias, session_id)
     with _prefetch_lock:
         queued   = len(_prefetch_cache.get(user_id, {}).get(key, []))
         inflight = _prefetch_active.get((user_id, key), 0)
-        needed   = QUEUE_SIZE - queued - inflight
+        student  = sum(n for (uid, _k), n in _prefetch_active.items() if uid == user_id)
+        needed   = min(QUEUE_SIZE - queued - inflight, QUEUE_SIZE - student)
         if needed <= 0:
             return
         _prefetch_active[(user_id, key)] = inflight + needed
@@ -2342,9 +2348,9 @@ def generate_question(
     manual_bias = max(-1, min(1, int(bias or 0)))
 
     # Serve from the prefetch queue if available, else generate now.
-    # Only a question made for this grade and bias: another's (a failed read at session start, a
-    # changed pick, "Easier") waits in its own queue for a switch back.
-    key = _prefetch_key(effective_grade, manual_bias)
+    # Only a question made for this grade, bias and session: another's (a failed read at session
+    # start, a changed pick, "Easier") waits in its own queue; an old session's ages out of the cap.
+    key = _prefetch_key(effective_grade, manual_bias, session_id)
     with _prefetch_lock:
         queues   = _prefetch_cache.setdefault(user_id, {})
         queue    = queues.pop(key, [])

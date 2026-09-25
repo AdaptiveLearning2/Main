@@ -217,19 +217,21 @@ def test_a_failed_refill_does_not_discard_the_question_already_built(monkeypatch
 
 
 def _queued_then_inline(monkeypatch, saved, prepared):
-    """`ask(grade=, bias=)` for a student saved at `saved`, after preparing one question per (grade, bias)."""
+    """`ask(grade=, bias=, session=)` for a student saved at `saved`, after preparing one question
+    per (grade, bias[, session]) in `prepared`."""
     from test_access_control import _FakeSupabase
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
-        {"profiles": [{"id": "kid", "grade_level": saved, "display_name": "Kid"}]}))
+        {"profiles": [{"id": "kid", "grade_level": saved, "display_name": "Kid"}],
+         "sessions": [{"id": "monday", "user_id": "kid"}, {"id": "thursday", "user_id": "kid"}]}))
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
     monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
                         lambda _uid, grade, _sid, bias, **_k: {"question_text": f"made for {grade} {bias}"})
-    for grade, bias in prepared:
-        main._prefetch_worker("kid", grade, bias, None)
+    for grade, bias, *session in prepared:
+        main._prefetch_worker("kid", grade, bias, session[0] if session else None)
     monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
                         lambda _uid, grade, _sid, bias, **_k: {"question_text": f"inline for {grade} {bias}"})
-    return lambda grade=None, bias=0: main.generate_question(
-        request=None, grade=grade, class_id=None, bias=bias, session_id=None)["question_text"]
+    return lambda grade=None, bias=0, session=None: main.generate_question(
+        request=None, grade=grade, class_id=None, bias=bias, session_id=session)["question_text"]
 
 
 def test_a_question_prepared_for_another_grade_is_never_served(monkeypatch):
@@ -261,7 +263,30 @@ def test_only_a_few_queues_are_kept_per_student(monkeypatch):
     ask(grade="4th Grade")
     queues = main._prefetch_cache["kid"]
     assert len(queues) == main._PREFETCH_KEPT_QUEUES
-    assert list(queues)[-1] == main._prefetch_key("4th Grade", 0)
+    assert list(queues)[-1] == main._prefetch_key("4th Grade", 0, None)
+
+
+def test_a_question_prepared_in_another_session_is_never_served(monkeypatch):
+    """Monday's question was chosen from Monday's accuracy and signals, so Thursday does not get it."""
+    ask = _queued_then_inline(monkeypatch, "7th Grade", [("7th Grade", 0, "monday")])
+    assert ask(session="thursday") == "inline for 7th Grade 0"
+    assert ask(session="monday") == "made for 7th Grade 0"
+
+
+def test_flipping_the_difficulty_cannot_hold_more_than_one_queues_worth_in_flight(monkeypatch):
+    """Each queue has its own count, so the student's total across them needs its own cap."""
+    monkeypatch.setattr(main, "QUEUE_SIZE", 2)
+    submitted = []
+    # A pool that never runs the work, so every worker stays in flight.
+    monkeypatch.setattr(main, "_prefetch_pool",
+                        lambda: type("P", (), {"submit": lambda _s, *a: submitted.append(a)})())
+    for bias in (1, 0, -1):
+        main._ensure_queue("kid", "5th Grade", bias, "s1")
+    assert len(submitted) == main.QUEUE_SIZE
+    assert sum(main._prefetch_active.values()) == main.QUEUE_SIZE
+    # Another student is not held back by this one.
+    main._ensure_queue("kid2", "5th Grade", 0, "s2")
+    assert len(submitted) == 2 * main.QUEUE_SIZE
 
 
 def test_a_rate_limited_prefetch_skips_generating_rather_than_raising(monkeypatch):
@@ -271,7 +296,7 @@ def test_a_rate_limited_prefetch_skips_generating_rather_than_raising(monkeypatc
     monkeypatch.setattr(main.LLM_topic_decider,
                         "LLM_single_prompt_topic_and_difficulty_decider",
                         lambda *_a, **_k: called.append(1))
-    main._prefetch_active[("kid", main._prefetch_key("5th Grade", 0))] = 1
+    main._prefetch_active[("kid", main._prefetch_key("5th Grade", 0, None))] = 1
     main._prefetch_worker("kid", "5th Grade", 0, None)
     assert called == []
     # The in-flight counter is still released.

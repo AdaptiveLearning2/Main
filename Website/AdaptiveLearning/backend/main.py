@@ -793,6 +793,16 @@ def _school_timezone() -> tzinfo:
             return timezone.utc
 
 
+def _tz_name(tz: tzinfo) -> str:
+    """The zone's IANA name for an RPC; `timezone.utc` (the last-resort fallback) has no `.key`."""
+    return getattr(tz, "key", None) or "UTC"
+
+
+def _school_timezone_name() -> str:
+    """`_school_timezone()`'s name: a mistyped zone reaches Postgres as UTC, never raw."""
+    return _tz_name(_school_timezone())
+
+
 def _school_date(ts, tz: tzinfo) -> date | None:
     """The calendar day `ts` falls on *at the school*. None if unparseable.
 
@@ -935,7 +945,7 @@ def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
                 supabase.rpc("rollup_signal_day", {
                     "p_user_id": user_id,
                     "p_day": day.isoformat(),
-                    "p_timezone": tz.key,
+                    "p_timezone": _tz_name(tz),
                 }).execute()
             except Exception as e:
                 failures += 1
@@ -1386,7 +1396,7 @@ def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: 
                                "p_include_heart": include_heart,
                                "p_include_emotion": include_emotion,
                                # School timezone, matching `_weekly_signal_report`.
-                               "p_timezone": _retention_window().get("timezone") or "UTC"}).execute()
+                               "p_timezone": _school_timezone_name()}).execute()
 
 
 def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
@@ -4652,7 +4662,7 @@ def _class_signal_totals(student_ids: list[str], days: int,
             "p_days": days,
             "p_include_heart": include_heart,
             "p_include_emotion": include_emotion,
-            "p_timezone": _retention_window().get("timezone") or "UTC",
+            "p_timezone": _school_timezone_name(),
         }).execute()
     except Exception as e:                                     # noqa: BLE001
         print(f"[cohort_signals] per-student read failed: {e}")
@@ -4704,7 +4714,7 @@ def _class_signal_trend(student_ids: list[str], days: int,
             "p_days": days,
             "p_include_heart": include_heart,
             "p_include_emotion": include_emotion,
-            "p_timezone": _retention_window().get("timezone") or "UTC",
+            "p_timezone": _school_timezone_name(),
         }).execute()
     except Exception as e:                                     # noqa: BLE001
         print(f"[cohort_signals] trend read failed: {e}")
@@ -4867,7 +4877,8 @@ def _cohort_signals(class_id: str, days: int) -> dict:
         "summaries_retrieved": summaries_retrieved,
         "per_student": per_student,
         "min_students": _COHORT_MIN_STUDENTS,
-        "timezone": _retention_window().get("timezone") or "UTC",
+        # The zone the days were bucketed in, which a mistyped setting makes UTC.
+        "timezone": _school_timezone_name(),
     }
 
 
@@ -5331,8 +5342,8 @@ def erase_consent_channel(student_id: str, payload: ErasureRequest,
             "p_user_id": student_id,
             "p_channel": payload.channel,
             "p_erased_by": user["id"],
-            # `.key`: RPC params go through `json.dumps`, which can't serialise a ZoneInfo.
-            "p_timezone": _school_timezone().key,
+            # A name: RPC params go through `json.dumps`, which can't serialise a ZoneInfo.
+            "p_timezone": _school_timezone_name(),
         }).execute().data or {}
     except Exception as e:
         # One transaction, so nothing partial to describe.

@@ -1,7 +1,6 @@
 import { supabase } from './supabase'
-import { DEFAULT_API_URL } from './origins'
 
-const API_URL = import.meta.env.VITE_API_URL || DEFAULT_API_URL
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 async function getAccessToken() {
   try {

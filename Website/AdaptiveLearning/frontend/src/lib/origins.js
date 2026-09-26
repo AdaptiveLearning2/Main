@@ -1,4 +1,3 @@
-// Where the page connects when its env names nothing. `pagesHeaders.js` builds the CSP from
-// these same values, so the policy allows exactly what the bundle calls.
-export const DEFAULT_API_URL = 'http://localhost:8000'
+// The sidecar the page calls when its env names none. `pagesHeaders.js` builds `connect-src` from
+// this same value, so the policy allows the loopback call the bundle makes.
 export const DEFAULT_SIDECAR_URL = 'http://127.0.0.1:8001'

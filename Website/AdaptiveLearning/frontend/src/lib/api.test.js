@@ -6,6 +6,7 @@ vi.mock('./supabase', async () => await import('../test/mocks/supabase'))
 
 import { apiFetch } from './api'
 import { authFns, buildAuthSession, resetSupabaseMock, setSession } from '../test/mocks/supabase'
+import { DEFAULT_API_URL } from './origins'
 
 const BASE = 'http://localhost:8000'
 
@@ -38,6 +39,18 @@ describe('the request it builds', () => {
   it('prefixes the path with the API base', async () => {
     await apiFetch('/api/sessions')
     expect(lastCall()[0]).toBe(`${BASE}/api/sessions`)
+  })
+
+  it('falls back to the default the Pages CSP allows, whatever a local .env says', async () => {
+    vi.stubEnv('VITE_API_URL', '')
+    vi.resetModules()
+    try {
+      const { apiFetch: fresh } = await import('./api')
+      await fresh('/api/sessions')
+      expect(lastCall()[0]).toBe(`${DEFAULT_API_URL}/api/sessions`)
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('attaches the session access token as a bearer', async () => {

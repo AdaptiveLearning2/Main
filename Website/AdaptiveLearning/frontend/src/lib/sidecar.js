@@ -6,8 +6,9 @@
  */
 
 import { supabase } from './supabase'
+import { DEFAULT_SIDECAR_URL } from './origins'
 
-const SIDECAR_URL = import.meta.env.VITE_EEG_LOCAL_URL || 'http://127.0.0.1:8001'
+const SIDECAR_URL = import.meta.env.VITE_EEG_LOCAL_URL || DEFAULT_SIDECAR_URL
 const SIDECAR_TOKEN = import.meta.env.VITE_EEG_LOCAL_TOKEN || ''
 
 /** Same-machine process: an absent sidecar should fail fast. */

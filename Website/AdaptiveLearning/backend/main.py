@@ -2319,6 +2319,11 @@ class EegSessionRequest(StrictModel):
 
 # ─── profiles ────────────────────────────────────────────────────────────
 
+# What the account's own pages read; named, so a new profiles column does not reach them by existing.
+_PROFILE_SELF_COLUMNS = ("id, display_name, email, role, grade_level, difficulty_bias, "
+                         "session_duration_minutes, practice_reminders, created_at")
+
+
 @app.get("/api/profile/me")
 def get_my_profile(request: Request):
     """The caller's own row. A failed or missing read is an error, never `_profile`'s placeholder.
@@ -2328,7 +2333,8 @@ def get_my_profile(request: Request):
     """
     user = get_user(request)
     try:
-        rows = supabase.table("profiles").select("*").eq("id", user["id"]).limit(1).execute().data
+        rows = supabase.table("profiles").select(_PROFILE_SELF_COLUMNS) \
+            .eq("id", user["id"]).limit(1).execute().data
     except Exception as e:                                     # noqa: BLE001
         print(f"[profile] could not read {user['id'][:8]}: {e}")
         raise HTTPException(503, "Your profile could not be loaded")

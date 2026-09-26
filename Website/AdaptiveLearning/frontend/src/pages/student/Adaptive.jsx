@@ -321,8 +321,10 @@ export default function Adaptive() {
       if (p?.difficulty_bias != null) setBias(p.difficulty_bias)
       if (p?.session_duration_minutes != null) setDurationMin(p.session_duration_minutes)
       setProfileRead(true)
-    }).catch(() => {
+    }).catch(e => {
       if (cancelled) return
+      // 404: no profile row, which is a known "no saved grade", not an unknown one.
+      if (e?.status === 404) { setProfileRead(true); return }
       setProfileRead(false)
       if (profileAttempt < PROFILE_RETRY_MS.length) {
         retry = setTimeout(() => setProfileAttempt(a => a + 1), PROFILE_RETRY_MS[profileAttempt])

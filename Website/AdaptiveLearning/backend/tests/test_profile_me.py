@@ -13,13 +13,13 @@ TEACHER = {"id": "teacher-1"}
 
 class _Profiles:
     def __init__(self, rows=(), raises=False):
-        self.rows, self.raises, self.filters = list(rows), raises, []
+        self.rows, self.raises, self.filters, self.selects = list(rows), raises, [], []
 
     def table(self, name):
         db = self
         assert name == "profiles"
         q = type("Q", (), {})()
-        q.select = lambda *a: q
+        q.select = lambda *a: (db.selects.append(a), q)[1]
         q.limit = lambda *a: q
         q.eq = lambda col, val: (db.filters.append((col, val)), q)[1]
         q.execute = lambda: (_ for _ in ()).throw(RuntimeError("down")) if db.raises \
@@ -37,6 +37,9 @@ def test_the_callers_own_row_is_returned(monkeypatch):
     monkeypatch.setattr(main, "supabase", db)
     assert main.get_my_profile(None)["role"] == "teacher"
     assert db.filters == [("id", "teacher-1")]
+    # Named columns: this row reaches the browser, and a new column must not ride along.
+    (cols,), = db.selects
+    assert "*" not in cols and "role" in cols and "grade_level" in cols
 
 
 @pytest.mark.parametrize("db,status", [

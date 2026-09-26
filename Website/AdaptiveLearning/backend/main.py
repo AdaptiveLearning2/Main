@@ -6806,6 +6806,8 @@ class RetentionWindowUpdate(StrictModel):
     starts_on: str | None = Field(None, max_length=_SHORT_MAX)
     ends_on: str | None = Field(None, max_length=_SHORT_MAX)
     timezone: str = Field("UTC", max_length=_TIMEZONE_MAX)
+    # Sent only after the 409 that names the delete cutoff this save would move.
+    confirm_expiry: bool = False
 
 
 @app.get("/api/admin/retention-window")
@@ -6825,6 +6827,28 @@ def admin_get_retention_window(request: Request):
             "starts_on": row.get("starts_on"),
             "ends_on": row.get("ends_on"),
             "timezone": row.get("timezone") or "UTC"}
+
+
+def _confirm_expiry_move(starts, ends, tz_name: str, confirmed: bool) -> None:
+    """409 unless confirmed, when these dates move the delete cutoff later with today outside them.
+
+    `expired_signal_cutoff` reads the dates whether or not the year is enforced, and the
+    nightly delete it drives cannot be undone: a mistyped year would clear this year's rows.
+    """
+    try:
+        starts_d, ends_d = date.fromisoformat(str(starts)), date.fromisoformat(str(ends))
+    except ValueError:
+        return                      # no usable dates: the cutoff is NULL, nothing is deleted
+    today = _utc_now().astimezone(ZoneInfo(tz_name)).date()
+    new_cutoff = ends_d if today >= ends_d else starts_d - timedelta(days=1)
+    current = _expired_through(today)
+    moves_later = current in (None, date.max) or new_cutoff > current
+    if confirmed or not moves_later or starts_d <= today <= ends_d:
+        return
+    raise HTTPException(409, (
+        f"Today is outside these dates, so saving them lets the nightly job delete "
+        f"per-sample signal rows up to {new_cutoff.isoformat()}; that cannot be undone. "
+        "Check the years, then confirm to save anyway."))
 
 
 @app.put("/api/admin/retention-window")
@@ -6849,6 +6873,7 @@ def admin_set_retention_window(request: Request, payload: RetentionWindowUpdate)
             raise HTTPException(422, "starts_on and ends_on must be YYYY-MM-DD")
         if ends_d <= starts_d:
             raise HTTPException(422, "ends_on must be after starts_on")
+    _confirm_expiry_move(starts, ends, payload.timezone, payload.confirm_expiry)
 
     row = {"id": True, "enforced": payload.enforced,
            "starts_on": starts or None, "ends_on": ends or None,

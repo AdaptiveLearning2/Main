@@ -660,21 +660,27 @@ def _retention_window() -> dict:
     return _resolve_window(rows[0])
 
 
+def _expiry_cutoff(starts_on, ends_on, today: date) -> date | None:
+    """`expired_signal_cutoff`'s rule in Python, its only copy here: None without usable dates.
+
+    Enforced is ignored, as in the SQL.
+    """
+    try:
+        starts, ends = date.fromisoformat(str(starts_on)), date.fromisoformat(str(ends_on))
+    except ValueError:
+        return None                 # no dates: the SQL cutoff is NULL and deletes nothing
+    return ends if today >= ends else starts - timedelta(days=1)
+
+
 def _expired_through(today: date) -> date | None:
     """The last day whose raw signal rows the expiry job may have deleted, or None.
 
-    Mirrors `expired_signal_cutoff` (enforced ignored, as there). Unreadable is `date.max`:
-    unknown, so every day may have expired.
+    Unreadable is `date.max`: unknown, so every day may have expired.
     """
     window = _retention_window()
     if window.get("state") == WINDOW_UNREADABLE:
         return date.max
-    try:
-        starts = date.fromisoformat(str(window.get("starts_on")))
-        ends = date.fromisoformat(str(window.get("ends_on")))
-    except ValueError:
-        return None                 # no dates: the SQL cutoff is NULL and deletes nothing
-    return ends if today >= ends else starts - timedelta(days=1)
+    return _expiry_cutoff(window.get("starts_on"), window.get("ends_on"), today)
 
 
 def _resolve_window(row: dict) -> dict:
@@ -6874,15 +6880,14 @@ def _confirm_expiry_move(starts, ends, tz_name: str, confirmed: bool) -> None:
     `expired_signal_cutoff` reads the dates whether or not the year is enforced, and the
     nightly delete it drives cannot be undone: a mistyped year would clear this year's rows.
     """
-    try:
-        starts_d, ends_d = date.fromisoformat(str(starts)), date.fromisoformat(str(ends))
-    except ValueError:
-        return                      # no usable dates: the cutoff is NULL, nothing is deleted
     today = _utc_now().astimezone(ZoneInfo(tz_name)).date()
-    new_cutoff = ends_d if today >= ends_d else starts_d - timedelta(days=1)
+    new_cutoff = _expiry_cutoff(starts, ends, today)
+    if new_cutoff is None:
+        return                      # no usable dates: nothing is deleted
     current = _expired_through(today)
     moves_later = current in (None, date.max) or new_cutoff > current
-    if confirmed or not moves_later or starts_d <= today <= ends_d:
+    inside = date.fromisoformat(str(starts)) <= today <= date.fromisoformat(str(ends))
+    if confirmed or not moves_later or inside:
         return
     raise HTTPException(409, (
         f"Today is outside these dates, so saving them lets the nightly job delete "

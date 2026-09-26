@@ -2030,7 +2030,8 @@ would be a fifth close site that skipped all of it.
 is named for what it can support. A two-hour session with a student answering throughout is not abandoned by this
 measure and is correctly untouched; `class_live` keeps its own much tighter `_STALE_AFTER_SEC` computed from real
 last activity, and applies it only to a session with sensor rows: with no sensor, a student reading one question
-sends nothing, so silence proves nothing and the session waits for this sweep. This one only has to catch the session nobody has touched since June, so it errs long — closing a
+sends nothing, so silence proves nothing and the session waits for this sweep. This one only has to catch the
+session nobody has touched since June, so it errs long — closing a
 live one would discard the question a child is part way through answering. `STALE_SWEEP_INTERVAL_SECONDS=0`
 disables it.
 
@@ -2046,9 +2047,10 @@ within the hour; an abandoned session shows a dash, because we do not know when 
 ## Session alerts are operations, never a judgement about a student
 
 `session_alerts` is a teacher-facing feed of things that went wrong with a *session*: `session_auto_closed` (the
-stale sweep ended it, the student did not) and `signals_missing` (EEG recording was permitted, `/api/eeg/start`
-stamped `sessions.eeg_started_at`, and no cognitive row arrived — without the stamp every sensorless session of a
-consented student raised one; under push nothing stamps it, so the alert is withheld there). Read at `GET /api/classes/{id}/alerts`, rendered by `AlertFeed`.
+stale sweep ended it, the student did not) and `signals_missing` (EEG recording was permitted, a headband was
+started — `sessions.eeg_started_at`, stamped by `/api/eeg/start` — and no cognitive row arrived; a session with no
+headband is not a fault, and under push nothing stamps it, so the alert is withheld there). Read at
+`GET /api/classes/{id}/alerts`, rendered by `AlertFeed`.
 
 **The scope is the feature.** `signal_fusion` produces a `stressed` label that no teacher surface consumes, and
 routing it here was considered and rejected: it is an inference from signals this codebase already treats as weak,

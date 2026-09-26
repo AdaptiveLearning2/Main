@@ -54,6 +54,8 @@ const SETTLE_GRACE_MS = 10_000
 const PUSH_RETRY_MS = 5000
 // Waits before re-reading a profile that failed to load; after the last the grade stays unknown.
 const PROFILE_RETRY_MS = [1000, 4000, 15000]
+// Backoff for a failed push EEG-start report, per session.
+const EEG_START_RETRY_MS = [5000, 30000, 120000]
 
 // Labeled by the sensor a student recognizes, not by table name.
 const CHANNEL_LABELS = [
@@ -742,15 +744,24 @@ export default function Adaptive() {
   // Push only: once the sidecar holds this session and a headband is streaming, say so, since
   // the backend never sees a push start. A camera-only session never gets here.
   const eegStartReported = useRef(null)
+  // Failures for the current session, and the pending retry; the timer outlives effect re-runs.
+  const eegStartFailures = useRef({ sessionId: null, count: 0 })
+  const eegStartTimer = useRef(null)
+  const [eegStartRetry, setEegStartRetry] = useState(0)
+  useEffect(() => () => clearTimeout(eegStartTimer.current), [])
   useEffect(() => {
     if (!headband.pushMode || !headband.connected || !push?.running || !sessionId) return
     if (eegStartReported.current === sessionId) return
     eegStartReported.current = sessionId
+    if (eegStartFailures.current.sessionId !== sessionId) eegStartFailures.current = { sessionId, count: 0 }
     markEegStarted(sessionId).then(ok => {
-      // Cleared, so the next change of any of the above tries again.
-      if (!ok && eegStartReported.current === sessionId) eegStartReported.current = null
+      if (ok || eegStartReported.current !== sessionId) return
+      // One brief outage must not leave the lesson unstamped: back off, then wait for a change.
+      eegStartReported.current = null
+      const wait = EEG_START_RETRY_MS[eegStartFailures.current.count++]
+      if (wait != null) eegStartTimer.current = setTimeout(() => setEegStartRetry(n => n + 1), wait)
     })
-  }, [headband.pushMode, headband.connected, push?.running, sessionId])
+  }, [headband.pushMode, headband.connected, push?.running, sessionId, eegStartRetry])
 
   // Delivery counts for the panel and recording chip; a slower poll.
   useEffect(() => {

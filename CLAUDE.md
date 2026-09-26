@@ -537,8 +537,8 @@ on `limit`: the entry count bounds how many, the clamp how big, and the key is b
 normalised values that decide the query. The ingest bounds matter because the sidecar posts with the *student's* token:
 that endpoint is a trust boundary, and neither the session check nor the consent check bounds volume.
 
-**Frontend.** `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`, `VITE_EEG_DEBUG`,
-`VITE_EEG_LOCAL_TOKEN`.
+**Frontend.** `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`, `VITE_EEG_LOCAL_URL`, `VITE_EEG_DEBUG`,
+`VITE_EEG_LOCAL_TOKEN`. A build refuses to run without the first and third; the CSP is made from the URLs.
 
 **EEGResearch** reads `.env` through `src/app/config.py`: `API_TOKEN` and `ADMIN_TOKEN` required,
 `EEG_SOURCE` picks sim vs muse, `EEG_DEVICES` (`station1:muse@8765,...`) drives the multi-headband
@@ -799,13 +799,12 @@ configured.
 
 **The CSP says this server is not a document, and that is the honest policy rather than a weak one.** `main.py` serves
 no HTML — no `StaticFiles`, no template, no `HTMLResponse` — so
-`default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` is exactly right for it. **The
-`default-src 'self'; connect-src <supabase> <sidecar>` form is a *frontend* policy**: it describes what a page may
-fetch, and this server has no page. That one belongs with the Vite build's hosting config and is still an open
-decision. A test asserts the three HTML sinks stay absent, since the policy stops being honest the moment one appears —
+`default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` is exactly right for it. A backend
+test asserts `main.py`'s three HTML sinks stay absent, since the policy stops being honest the moment one appears —
 **and it walks the AST, because a source scan cannot tell a use from a mention**: read as text it failed on the comment
-beside the CSP, which names all three to explain why none is there. Same trap as `AccessibleChart.test.jsx`'s stated
-blind spot, from the other side.
+beside the CSP, which names all three. **The page's policy is the frontend's `pagesHeaders.js`**, built into Cloudflare
+Pages' `_headers` from the build env (which must name the API and Supabase) and served as built by `vite preview`. It
+never sets `upgrade-insecure-requests`, which would rewrite the loopback sidecar call to https.
 
 **`Permissions-Policy` denies the camera here, and that is not a mistake.** The product does open a webcam — on the
 *frontend* origin, through the sidecar. A `camera=(self)` carve-out on an origin with no document permits a capability
@@ -874,14 +873,15 @@ and every other call site is in a `def` handler that FastAPI already runs in a w
 is not: measured at **0.95 s** of starvation for every other request against a 1 s insert, with httpx's 5 s
 timeout as the ceiling, so this one goes through `run_in_threadpool`. The cooldown makes it rare, which is
 the wrong comfort — it fires under exactly the load that made it fire. **`X-Forwarded-For` is read only as far right as `TRUSTED_PROXY_HOPS`
-says a proxy wrote it**, default 0 — trusting it with nothing in front is the query-parameter hole again,
-and not trusting it behind a proxy puts every caller in the world in one bucket. **The 429 records the
+says a proxy wrote it**, default 0 (with nothing in front, trusting it is the query-parameter hole). It is the count of
+appending proxies: 1 with Cloudflare straight to the app, +1 per load balancer between, or every school behind the
+edge shares one budget; and only while the origin admits Cloudflare's ranges alone. **The 429 records the
 limiter and never the address**, so these events cool per endpoint rather than per caller: the log says
 the public path is being hammered, not by whom, and whoever holds addresses is whatever sits in front.
 
-Not here, deliberately: **no `TrustedHostMiddleware`** (the production host is an open decision, and an allowlist with
-no known host either breaks everything or is a no-op), and **no HSTS** — one line in `security_headers` when the
-hosting question is settled.
+Not here, deliberately: **no `TrustedHostMiddleware`** until the production host names are chosen (an allowlist with no
+known host breaks everything or is a no-op), and **no HSTS or HTTPS redirect**: both are Cloudflare zone settings,
+which cover the Pages frontend and the proxied API at once.
 
 ## The archived SVGs are an HTML sink, and `colour` was the one field not escaped
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { DEFAULT_SIDECAR_URL } from './origins'
 
 const getSession = vi.fn()
 vi.mock('./supabase', () => ({ supabase: { auth: { getSession: () => getSession() } } }))
@@ -34,6 +35,19 @@ describe('startPush', () => {
     expect(JSON.parse(opts.body)).toEqual({
       session_id: 'sess-1', access_token: 'student-jwt',
     })
+  })
+
+  it('falls back to the default the Pages CSP allows, whatever a local .env says', async () => {
+    vi.stubEnv('VITE_EEG_LOCAL_URL', '')
+    vi.resetModules()
+    try {
+      const fresh = await import('./sidecar')
+      const fetchSpy = mockFetch(async () => ok({ status: 'pushing' }))
+      await fresh.startPush('sess-1')
+      expect(fetchSpy.mock.calls[0][0]).toBe(`${DEFAULT_SIDECAR_URL}/api/v1/push/start`)
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('refuses to start when nobody is signed in', async () => {

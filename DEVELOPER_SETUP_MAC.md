@@ -32,7 +32,7 @@ Supabase (PostgreSQL + Auth)
 | Tool | Version | Install |
 |------|---------|---------|
 | Python | 3.11+ | https://python.org/downloads or `brew install python` |
-| Node.js | 24 (or 22.12+) | https://nodejs.org or `brew install node` |
+| Node.js | 24.15+ (or 22.22+) | https://nodejs.org or `brew install node` |
 | Ollama | latest | https://ollama.com |
 | Git | any | Xcode Command Line Tools: `xcode-select --install` |
 

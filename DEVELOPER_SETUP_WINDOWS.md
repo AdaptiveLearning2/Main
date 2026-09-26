@@ -37,7 +37,7 @@ Supabase (PostgreSQL + Auth)
 | Tool | Version | Install |
 |------|---------|---------|
 | Python | 3.11+ | https://python.org/downloads |
-| Node.js | 24 (or 22.12+) | https://nodejs.org |
+| Node.js | 24.15+ (or 22.22+) | https://nodejs.org |
 | Ollama | latest | https://ollama.com |
 | Git | any | https://git-scm.com |
 

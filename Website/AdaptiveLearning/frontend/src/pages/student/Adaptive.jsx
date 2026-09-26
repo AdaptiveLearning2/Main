@@ -629,11 +629,12 @@ export default function Adaptive() {
 
   const creating = useRef(null)
 
+  // The ref, not the state: a handler that just dropped a closed session must not get it back.
   const getOrCreateSession = async () => {
-    if (sessionId) return sessionId
+    if (sessionIdRef.current) return sessionIdRef.current
     if (creating.current) return creating.current
     creating.current = apiFetch('/api/sessions/start', { method: 'POST', body: { title: 'Adaptive Session' } })
-      .then(s => { setSessionId(s.id); return s.id })
+      .then(s => { sessionIdRef.current = s.id; setSessionId(s.id); return s.id })
       .finally(() => { creating.current = null })
     return creating.current
   }
@@ -1083,12 +1084,16 @@ export default function Adaptive() {
     setCorrect(isCorrect)
     setPhase('result')
 
-    const res = await recordAnswer({
-      sessionId: sessionIdRef.current,
-      questionId: data?.id,
-      selectedIndex: selectedAnswer,
-      correct: isCorrect,
-    })
+    const answer = { questionId: data?.id, selectedIndex: selectedAnswer, correct: isCorrect }
+    let res = await recordAnswer({ sessionId: sessionIdRef.current, ...answer })
+    if (res?.ended) {
+      // Closed server-side while this page held it: the answer goes into a fresh session.
+      sessionIdRef.current = null
+      setSessionId(null)
+      const fresh = await getOrCreateSession().catch(e => { console.error('[session]', e); return null })
+      res = await recordAnswer({ sessionId: fresh, ...answer })
+      if (res?.ended) res = null
+    }
     if (res) {
       // Counted only once the answer is stored; failures already toasted.
       setSessionCount(n => n + 1)

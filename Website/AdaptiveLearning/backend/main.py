@@ -2617,7 +2617,11 @@ def start_session(payload: StartSessionRequest, request: Request):
 def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...), request: Request = None):
     user = get_user(request)
     # Ownership before any write.
-    _session_or_403(session_id, user["id"])
+    session = _session_or_403(session_id, user["id"], "user_id, ended_at")
+    if session.get("ended_at"):
+        # Closed by the sweep, the live monitor or another tab: its totals are already
+        # credited, so an answer here would count nowhere. The page starts a new session.
+        raise HTTPException(409, "This session has ended")
     supabase.table("session_answers").insert({
         "session_id":     session_id,
         "user_id":        user["id"],

@@ -15,7 +15,8 @@ QUESTION = "q-1"
 
 class _Client:
     def __init__(self, subject="algebra", prior=None, topics=("algebra",), raises=(),
-                 rpc_error=None, session_user=USER):
+                 rpc_error=None, session_user=USER, session_ended=None):
+        self.session_ended = session_ended
         self.subject = subject
         self.prior = prior
         self.topics = topics
@@ -81,7 +82,8 @@ class _Client:
                     return type("R", (), {"data": []})()
                 if table == "sessions":
                     row = {"id": "s-1", "user_id": client.session_user,
-                           "questions_answered": 0, "correct_answers": 0}
+                           "questions_answered": 0, "correct_answers": 0,
+                           "ended_at": client.session_ended}
                     return type("R", (), {"data": row if getattr(self, "_single", False) else [row]})()
                 if table == "questions":
                     return type("R", (), {"data": [{"subject": client.subject}]})()
@@ -640,6 +642,21 @@ def test_the_close_reads_every_column_it_credits():
         "no explicit `sessions` select was scanned inside a function that closes "
         "a session -- either the selects moved, or the pattern above stopped "
         "matching how they are written")
+
+
+def test_an_answer_to_a_closed_session_is_refused_before_any_write(monkeypatch):
+    """The close already credited the totals; an answer here would count nowhere."""
+    client = _Client(session_ended="2026-09-25T10:00:00+00:00")
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
+    monkeypatch.setattr(main, "supabase", client)
+    with pytest.raises(main.HTTPException) as caught:
+        main.record_answer(
+            session_id="s-1",
+            payload=main.AnswerPayload(question_id=QUESTION, selected_index=2, correct=True),
+            request=None,
+        )
+    assert caught.value.status_code == 409
+    assert client.inserts == [] and client.rpcs == []
 
 
 def test_the_answer_endpoint_tells_the_sidecar_after_the_writes(monkeypatch):

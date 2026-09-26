@@ -3362,11 +3362,15 @@ def _strip_emphasis(line: str) -> str:
 
 
 def _weakest_topic(topics: list[dict]):
-    """Lowest-accuracy topic the student has attempted (unattempted ones read 0%)."""
-    attempted = [t for t in topics if (t.get("attempted_questions") or 0) > 0]
-    if not attempted:
+    """Lowest-accuracy topic the student has attempted and been scored on.
+
+    A None accuracy (flashcards viewed, nothing answered) is skipped, never read as 0%.
+    """
+    scored = [t for t in topics if (t.get("attempted_questions") or 0) > 0
+              and t.get("accuracy") is not None]
+    if not scored:
         return None
-    return min(attempted, key=lambda t: t.get("accuracy") or 0)
+    return min(scored, key=lambda t: t["accuracy"])
 
 
 def _topic_summary(row: dict | None) -> dict | None:
@@ -3612,17 +3616,16 @@ class LearningStrategyRequest(StrictModel):
 def _topics_from_practice_summary(topic_summary: dict) -> list[dict]:
     """A practice session's `topic_summary` in `_topic_breakdown`'s shape.
 
-    `accuracy` is 0, not None, for a flashcard-only topic, per `_weakest_topic`.
+    `accuracy` is None for a flashcard-only topic: viewed, never scored, so it is not a 0%.
     """
     out = []
     for topic, stats in (topic_summary or {}).items():
-        accuracy = stats.get("correct")
         out.append({
             "topic_id": None,
             "topic_name": topic,
             "attempted_questions": stats.get("attempted") or 0,
             "correct_questions": None,
-            "accuracy": accuracy if accuracy is not None else 0,
+            "accuracy": stats.get("correct"),
             "stress": None,
             "updated_at": None,
         })

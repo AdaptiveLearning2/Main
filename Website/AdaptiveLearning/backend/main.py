@@ -5998,8 +5998,11 @@ def class_live(class_id: str, request: Request):
             if a and a[0].get("answered_at"):             candidates.append(a[0]["answered_at"])
             if sess.get("started_at"):                    candidates.append(sess["started_at"])
             last_activity = max(candidates) if candidates else sess.get("started_at")
+            # With no sensor, a student reading one question sends nothing for minutes; only a
+            # sensor that went quiet says they left. A sensorless one waits for the sweep.
+            sensed = bool(latest_cog or latest_face or latest_heart)
 
-            if last_activity and last_activity < stale_cutoff:
+            if sensed and last_activity and last_activity < stale_cutoff:
                 # `sid` is the student. Stop the poller before closing, or a tick
                 # can land a row after the discard check looked.
                 eeg_poller.stop(sid2, sid)

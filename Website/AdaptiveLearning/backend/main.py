@@ -2321,8 +2321,20 @@ class EegSessionRequest(StrictModel):
 
 @app.get("/api/profile/me")
 def get_my_profile(request: Request):
+    """The caller's own row. A failed or missing read is an error, never `_profile`'s placeholder.
+
+    The placeholder is role "student": a teacher greeted by it was routed into the student app,
+    where an error lets AuthContext fall back to the sign-up claim.
+    """
     user = get_user(request)
-    return _profile(user["id"])
+    try:
+        rows = supabase.table("profiles").select("*").eq("id", user["id"]).limit(1).execute().data
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[profile] could not read {user['id'][:8]}: {e}")
+        raise HTTPException(503, "Your profile could not be loaded")
+    if not rows:
+        raise HTTPException(404, "No profile exists for this account")
+    return rows[0]
 
 @app.put("/api/profile/me")
 def update_my_profile(payload: UpdateProfileRequest, request: Request):

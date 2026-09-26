@@ -5,7 +5,7 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 import { toast } from 'sonner'
 import { apiError, apiFetch, mockApi, resetApi } from '../test/mocks/apiFetch'
-import { fetchSessionList, recordAnswer } from './session'
+import { fetchSessionList, markEegStarted, recordAnswer } from './session'
 
 beforeEach(() => { resetApi(); vi.mocked(toast.error).mockClear() })
 
@@ -16,6 +16,22 @@ it('reports a session closed under the page as ended, without a toast', async ()
 
   await expect(recordAnswer(ANSWER)).resolves.toEqual({ ended: true })
   expect(toast.error).not.toHaveBeenCalled()
+})
+
+it('reports a push EEG start for the session it names', async () => {
+  mockApi({ 'POST /api/sessions/s1/eeg-started': () => ({ ok: true }) })
+
+  await expect(markEegStarted('s1')).resolves.toBe(true)
+  expect(apiFetch).toHaveBeenCalledWith('/api/sessions/s1/eeg-started', { method: 'POST' })
+})
+
+it('answers false for a failed EEG-start report, without a toast', async () => {
+  mockApi({ 'POST /api/sessions/s1/eeg-started': () => { throw apiError(503) } })
+
+  await expect(markEegStarted('s1')).resolves.toBe(false)
+  await expect(markEegStarted(null)).resolves.toBe(false)
+  expect(toast.error).not.toHaveBeenCalled()
+  expect(apiFetch).toHaveBeenCalledTimes(1)
 })
 
 it('still toasts and returns null for any other failure', async () => {

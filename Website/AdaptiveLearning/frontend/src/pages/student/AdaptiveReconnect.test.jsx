@@ -9,6 +9,7 @@ vi.mock('sonner', () => ({
 }))
 vi.mock('../../lib/session', () => ({
   endSession: vi.fn(async () => true),
+  markEegStarted: vi.fn(async () => true),
   recordAnswer: vi.fn(async () => null),
 }))
 vi.mock('../../lib/signals', () => ({
@@ -40,8 +41,9 @@ vi.mock('../../context/AuthContext', () => ({
 }))
 
 import { toast } from 'sonner'
-import { museRefresh, museConnect, museDisconnect, museState, deviceStart } from '../../lib/sidecar'
-import { mockApi, resetApi } from '../../test/mocks/apiFetch'
+import { museRefresh, museConnect, museDisconnect, museState, deviceStart, startPush } from '../../lib/sidecar'
+import { markEegStarted } from '../../lib/session'
+import { mockApi, overrideApi, resetApi } from '../../test/mocks/apiFetch'
 import Adaptive from './Adaptive'
 
 // `eeg_age_ms` is required for "connected": a link counts only with EEG flowing.
@@ -351,4 +353,38 @@ it('shows a contact hint only after two poor readings in a row, and clears it on
 
   bridge.ingestion = { ...CONNECTED, hsi: [1, 1, 1, 1], is_good: [1, 1, 1, 1] }
   await waitFor(() => expect(screen.queryByText(hint)).not.toBeInTheDocument(), POLL)
+}, TEST_TIMEOUT)
+
+
+// ── the push EEG start the backend cannot see ───────────────────────────────
+
+function withQuestions() {
+  overrideApi('/api/sessions/start', () => ({ id: 'sess-push' }), 'POST')
+  overrideApi(/^\/api\/generate-question\?/, () => ({
+    id: 'q1', question_text: 'What is 2 + 2?', question_topic: 'ordering',
+    answer_options: ['3', '4', '5'], correct_answer: '4', difficulty: 'easy',
+  }))
+}
+
+it('reports the EEG start once a headband streams into the handed-over session', async () => {
+  // Under push the backend never sees the start, and its signals_missing alert needs it.
+  withQuestions()
+  await connect()
+  fireEvent.click(screen.getByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+
+  await waitFor(() => expect(markEegStarted).toHaveBeenCalledWith('sess-push'), POLL)
+  expect(markEegStarted).toHaveBeenCalledTimes(1)
+}, TEST_TIMEOUT)
+
+it('reports nothing for a session with no headband streaming', async () => {
+  // A camera-only push session would otherwise raise signals_missing for EEG it never had.
+  withQuestions()
+  render(<Adaptive />)
+  fireEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+  await waitFor(() => expect(startPush).toHaveBeenCalledWith('sess-push'))
+  await sleep(500)
+
+  expect(markEegStarted).not.toHaveBeenCalled()
 }, TEST_TIMEOUT)

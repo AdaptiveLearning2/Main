@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
-import { endSession, recordAnswer } from '../../lib/session'
+import { endSession, markEegStarted, recordAnswer } from '../../lib/session'
 import { onSignOut } from '../../lib/signOutTasks'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { startPush, stopPush, stopPushOnUnload, pushStatus,
@@ -738,6 +738,19 @@ export default function Adaptive() {
       setPush(null)
     }
   }, [sessionId, headband.pushMode])
+
+  // Push only: once the sidecar holds this session and a headband is streaming, say so, since
+  // the backend never sees a push start. A camera-only session never gets here.
+  const eegStartReported = useRef(null)
+  useEffect(() => {
+    if (!headband.pushMode || !headband.connected || !push?.running || !sessionId) return
+    if (eegStartReported.current === sessionId) return
+    eegStartReported.current = sessionId
+    markEegStarted(sessionId).then(ok => {
+      // Cleared, so the next change of any of the above tries again.
+      if (!ok && eegStartReported.current === sessionId) eegStartReported.current = null
+    })
+  }, [headband.pushMode, headband.connected, push?.running, sessionId])
 
   // Delivery counts for the panel and recording chip; a slower poll.
   useEffect(() => {

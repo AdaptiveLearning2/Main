@@ -8,6 +8,7 @@ vi.mock('../../lib/supabase', async () => await import('../../test/mocks/supabas
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 vi.mock('../../lib/session', () => ({
   endSession: vi.fn(async () => true),
+  markEegStarted: vi.fn(async () => true),
   recordAnswer: vi.fn(async () => ({ topic: 'ordering' })),
 }))
 vi.mock('../../lib/signals', () => ({

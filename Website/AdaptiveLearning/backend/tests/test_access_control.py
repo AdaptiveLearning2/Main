@@ -1225,6 +1225,30 @@ def test_a_failed_membership_read_is_not_a_class_of_zeros(monkeypatch):
 
     assert out["c1"]["retrieved"] is False
     assert out["c1"]["avgAccuracy"] is None
+    # 0 beside `retrieved: false` rendered as a real average streak of 0.
+    assert out["c1"]["avgStreak"] is None
+
+
+def test_a_failed_stats_read_carries_no_placeholder_averages(monkeypatch):
+    """The batch read's placeholders are zeros; averaged, they read as a class on no streak."""
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    monkeypatch.setattr(main, "supabase", _ClassSummaryClient(
+        classes=[{"id": "c1"}], members=[{"class_id": "c1", "student_id": "a"}], stats=[],
+        raises=["user_stats"]))
+
+    out = main.class_summaries(None)["c1"]
+
+    assert out == {"avgAccuracy": None, "avgStreak": None, "retrieved": False}
+
+
+def test_an_empty_class_has_no_average_streak(monkeypatch):
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    monkeypatch.setattr(main, "supabase", _ClassSummaryClient(
+        classes=[{"id": "c1"}], members=[], stats=[]))
+
+    out = main.class_summaries(None)["c1"]
+
+    assert out["avgStreak"] is None and out["retrieved"] is True
 
 
 def test_the_summary_does_not_read_a_roster_per_class(monkeypatch):

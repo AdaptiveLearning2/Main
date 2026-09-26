@@ -220,9 +220,16 @@ export default function TeacherDashboard() {
                           <p className="text-[10px] text-gray-600 uppercase tracking-wide dark:text-gray-400">Avg accuracy</p>
                         </div>
                         <div>
-                          <p className="text-xl font-black text-amber-600">{avg.avgStreak}</p>
+                          <p className="text-xl font-black text-amber-600">
+                            {avg.avgStreak == null ? '—' : avg.avgStreak}
+                          </p>
                           <p className="text-[10px] text-gray-600 uppercase tracking-wide dark:text-gray-400">Avg streak</p>
                         </div>
+                        {avg.retrieved === false && (
+                          <p className="col-span-2 text-xs text-gray-600 dark:text-gray-400">
+                            These figures could not be loaded.
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>

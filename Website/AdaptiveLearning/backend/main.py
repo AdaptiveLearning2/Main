@@ -4316,7 +4316,8 @@ def class_summaries(request: Request):
     """Per-class headline averages for the teacher's dashboard, in three reads.
 
     Accuracy averages over students who attempted something (`None` if none);
-    streak over the whole roster. `retrieved` rides on each class.
+    streak over the whole roster (`None` if empty). `retrieved` rides on each class, and
+    an unretrieved class carries no averages: its zeros would be placeholders.
     """
     user = get_user(request)
     classes = supabase.table("classes").select("id") \
@@ -4330,7 +4331,7 @@ def class_summaries(request: Request):
             .in_("class_id", ids).execute().data or []
     except Exception as e:                                     # noqa: BLE001
         print(f"[classes] could not read memberships for {len(ids)} classes: {e}")
-        return {cid: {"avgAccuracy": None, "avgStreak": 0, "retrieved": False}
+        return {cid: {"avgAccuracy": None, "avgStreak": None, "retrieved": False}
                 for cid in ids}
 
     by_class: dict[str, list] = {}
@@ -4345,12 +4346,15 @@ def class_summaries(request: Request):
         roster = [stats.get(sid) or {} for sid in by_class.get(cid, [])]
         # One unretrieved student makes the class average unretrieved.
         retrieved = all(s.get("retrieved", False) for s in roster) if roster else True
+        if not retrieved:
+            out[cid] = {"avgAccuracy": None, "avgStreak": None, "retrieved": False}
+            continue
         attempted = [s for s in roster if (s.get("total_questions") or 0) > 0]
         avg_accuracy = round(sum(
             (s.get("total_correct") or 0) / s["total_questions"] * 100
             for s in attempted) / len(attempted)) if attempted else None
         avg_streak = round(sum(s.get("current_streak") or 0
-                               for s in roster) / len(roster)) if roster else 0
+                               for s in roster) / len(roster)) if roster else None
         out[cid] = {"avgAccuracy": avg_accuracy, "avgStreak": avg_streak,
                     "retrieved": retrieved}
     return out

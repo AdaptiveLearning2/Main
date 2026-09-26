@@ -374,9 +374,12 @@ it('reports the EEG start once a headband streams into the handed-over session',
   await screen.findByText('What is 2 + 2?')
 
   await waitFor(() => expect(markEegStarted).toHaveBeenCalledWith('sess-push'), POLL)
-  // Through a whole status poll, which re-renders every input the effect reads.
-  const reads = museState.mock.calls.length
-  await waitFor(() => expect(museState.mock.calls.length).toBeGreaterThan(reads), POLL)
+  // A drop and recovery re-runs the effect: the session is still reported only once.
+  bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: true,
+                       reconnect_attempt: 1, battery_percent: null }
+  await screen.findByText(/reconnecting \(attempt 1 of 5\)/, {}, POLL)
+  bridge.ingestion = { ...CONNECTED }
+  await screen.findByText(/STREAMING/, {}, { timeout: 5000 })
   await sleep(250)
   expect(markEegStarted).toHaveBeenCalledTimes(1)
 }, TEST_TIMEOUT)

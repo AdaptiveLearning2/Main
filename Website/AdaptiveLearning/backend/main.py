@@ -3762,15 +3762,17 @@ _THOUSANDS_SEP = re.compile(r"(?<=\d),(?=\d)")
 def _trend_direction(weeks: list[dict], key: str) -> dict:
     """Which way one series moved across the weeks that have a reading.
 
-    Always a dict: `direction` is None below two weeks, and `weeks_with_data`
-    still tells zero weeks from one. Anchored on the first and last weeks
-    *with* a reading, so trailing null weeks don't hide a trend.
+    Always a dict: `direction` is None below two weeks or across a score-scale change
+    (`mixed_scale`), and `weeks_with_data` tells zero weeks from one. Anchored on the
+    first and last weeks *with* a reading, so trailing null weeks don't hide a trend.
     """
-    points = [w.get(key) for w in (weeks or [])
-              if isinstance(w.get(key), (int, float))]
-    if len(points) < 2:
+    readings = [w for w in (weeks or []) if isinstance(w.get(key), (int, float))]
+    points = [w[key] for w in readings]
+    scales = _combine_ranges(w.get("score_scale") for w in readings)
+    mixed = bool(scales) and scales["min"] != scales["max"]
+    if len(points) < 2 or mixed:
         return {"direction": None, "first": None, "last": None,
-                "weeks_with_data": len(points)}
+                "weeks_with_data": len(points), "mixed_scale": mixed}
     first, last = float(points[0]), float(points[-1])
     delta = last - first
     if abs(delta) < _CHART_SUMMARY_TREND_MIN_DELTA:
@@ -3778,7 +3780,7 @@ def _trend_direction(weeks: list[dict], key: str) -> dict:
     else:
         direction = "up" if delta > 0 else "down"
     return {"direction": direction, "first": round(first, 4),
-            "last": round(last, 4), "weeks_with_data": len(points)}
+            "last": round(last, 4), "weeks_with_data": len(points), "mixed_scale": False}
 
 
 def _chart_summary_basis(student_id: str, days: int, weeks: int,
@@ -3806,6 +3808,15 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
 
     total = stats.get("total_questions") or 0
     correct = stats.get("total_correct") or 0
+
+    def _channel(enabled: bool, revoked_at, samples, table: str) -> dict:
+        info = {"enabled": enabled, "revoked_at": revoked_at, "samples": samples}
+        # Only a permitted, read, empty channel needs to know whether rows arrived at all.
+        if enabled and summary["retrieved"] and not samples:
+            info["any_rows"] = _any_rows_since(table, student_id, days)
+        return info
+
+    scored = [t for t in attempted if t.get("accuracy") is not None]
     return {
         "days": days,
         "weeks": weeks,
@@ -3819,10 +3830,10 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
         "consent_retrieved": channels.consent_retrieved,
         "channels": {
             # No `emotion`: the report states no facial number.
-            "eeg":   {"enabled": channels.eeg,   "revoked_at": channels.eeg_revoked_at,
-                      "samples": summary["cognitive_samples"]},
-            "heart": {"enabled": channels.heart, "revoked_at": channels.heart_revoked_at,
-                      "samples": summary["heart_samples"]},
+            "eeg": _channel(channels.eeg, channels.eeg_revoked_at,
+                            summary["cognitive_samples"], "cognitive_signals"),
+            "heart": _channel(channels.heart, channels.heart_revoked_at,
+                              summary["heart_samples"], "heart_signals"),
         },
         "averages": {
             "focus": summary["focus"],
@@ -3843,11 +3854,12 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
         },
         "topics": {
             "weakest": _weakest_topic_summary(topics),
-            # Attempted topics only: an untouched one reports 0%.
+            # Scored topics only: an untouched one reports 0%.
             "strongest": _topic_summary(
-                max(attempted, key=lambda t: t.get("accuracy") or 0)
-                if attempted else None),
+                max(scored, key=lambda t: t["accuracy"]) if scored else None),
             "attempted_count": len(attempted),
+            # Ties make max() and min() return one topic; this tells that from a lone topic.
+            "scored_count": len(scored),
         },
     }
 
@@ -3879,23 +3891,48 @@ _CHART_SUMMARY_CHANNEL_NAMES = {"eeg": "Focus and stress", "heart": "Heart rate"
 def _channel_absence(channel: str, basis: dict) -> str | None:
     """Why a channel has no figure to state, or None if it has one.
 
-    Ordered as `cellLabel`: consent unreadable, revoked, unread, no samples.
+    Ordered as `cellLabel`: consent unreadable, revoked, unread, no samples. A revoked
+    channel with samples (EEG is read regardless) has figures, from before it was turned off.
+    `samples` counts usable rows, so `any_rows` is what tells "unusable" from "nothing".
     """
     info = (basis.get("channels") or {}).get(channel) or {}
     name = _CHART_SUMMARY_CHANNEL_NAMES.get(channel, channel)
     if not basis.get("consent_retrieved", True):
         return (f"{name} is not described here: whether this sensor was "
                 "permitted could not be read, so nothing is claimed about it.")
-    if not info.get("enabled"):
+    if not info.get("enabled") and not info.get("samples"):
         revoked = _local_date_text(info.get("revoked_at"))
         return (f"{name} was not recorded because the sensor was turned off"
                 + (f" on {revoked}." if revoked else "."))
     if not basis.get("signals_retrieved", True):
         return f"{name} could not be read this time, so no figure is given for it."
     if not info.get("samples"):
+        if info.get("any_rows"):
+            return None             # recorded, none usable: the caller says so
+        if "any_rows" in info and info["any_rows"] is None:
+            return (f"{name} has no usable reading here, and whether anything was "
+                    "recorded could not be read.")
         return (f"{name} was permitted but nothing was recorded, so there is "
                 "no reading to describe.")
     return None
+
+
+def _any_rows_since(table: str, student_id: str, days: int) -> bool | None:
+    """Whether any row of `table` landed for the student in the last `days` school days.
+
+    Usable or not: the summary RPC counts only usable ones. None if the read failed.
+    """
+    tz = _school_timezone()
+    today = _utc_now().astimezone(tz).date()
+    since = datetime.combine(today - timedelta(days=days - 1), datetime.min.time(),
+                             tzinfo=tz).astimezone(timezone.utc).isoformat()
+    try:
+        rows = supabase.table(table).select("ts").eq("user_id", student_id) \
+            .gte("ts", since).limit(1).execute().data or []
+        return bool(rows)
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[chart_summary] could not check {table} for {student_id[:8]}: {e}")
+        return None
 
 
 _MONTHS = ("January", "February", "March", "April", "May", "June", "July",
@@ -3989,6 +4026,10 @@ def _rule_based_chart_summary(basis: dict) -> list[str]:
                 f"{label} is {value}%, and across the weeks with readings it has "
                 f"{_TREND_WORDS[move['direction']]} from "
                 f"{_pct_int(move['first'])}% to {_pct_int(move['last'])}%.")
+        elif move.get("mixed_scale"):
+            # A sidecar restart can change the scale; the two ends are not comparable.
+            out.append(f"{label} is {value}%. Its weekly readings were scored on different "
+                       "scales, so no direction is given for it.")
         elif not basis.get("trend_retrieved", True):
             # A failed trend read must not read as a first week.
             out.append(f"{label} is {value}%. The term trend could not be read, "
@@ -4000,6 +4041,12 @@ def _rule_based_chart_summary(basis: dict) -> list[str]:
             # Zero weeks: several causes are indistinguishable here, so name none.
             out.append(f"{label} is {value}%. No week has a reading for it yet, "
                        "so the term chart cannot show a direction.")
+
+    eeg = (basis.get("channels") or {}).get("eeg") or {}
+    if not eeg.get("enabled") and eeg.get("samples") and not _channel_absence("eeg", basis):
+        revoked = _local_date_text(eeg.get("revoked_at"))
+        out.append("These focus and stress figures are from before the sensor was turned off"
+                   + (f" on {revoked}." if revoked else "."))
 
     heart_absent = _channel_absence("heart", basis)
     bpm = averages.get("heart_rate_bpm")
@@ -4022,6 +4069,10 @@ def _rule_based_chart_summary(basis: dict) -> list[str]:
             f"topic at {strongest.get('accuracy')}%, and "
             f"{_topic_prose(weakest.get('topic_name'))} the weakest at "
             f"{weakest.get('accuracy')}%.")
+    elif weakest and (topics.get("scored_count") or 0) > 1:
+        # One topic from both ends means every scored topic ties.
+        out.append(f"All {topics['scored_count']} attempted topics are at "
+                   f"{weakest.get('accuracy')}%, so none stands out as strongest or weakest.")
     elif weakest:
         out.append(f"Only {_topic_prose(weakest.get('topic_name'))} has been attempted "
                    f"so far, at {weakest.get('accuracy')}%.")

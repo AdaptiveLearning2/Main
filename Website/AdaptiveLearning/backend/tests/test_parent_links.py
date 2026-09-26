@@ -241,7 +241,8 @@ class _WithdrawalClient(_Client):
                 def select(_self, *_cols, **_kw):
                     class _Q:
                         def in_(_s, col, vals):
-                            _s.rows = [r for r in rows if r.get(col) in vals]
+                            # Narrows: a second filter must not start again from every row.
+                            _s.rows = [r for r in getattr(_s, "rows", rows) if r.get(col) in vals]
                             return _s
 
                         def order(_s, col, desc=False):
@@ -261,8 +262,10 @@ class _WithdrawalClient(_Client):
         return super().table(name)
 
 
-def _w(user_id, channel, at):
-    return {"user_id": user_id, "channel": channel, "withdrawn_at": at}
+def _w(user_id, channel, at, by=None):
+    """A withdrawal row as the log stores it; `by` defaults to the child's own switch."""
+    return {"user_id": user_id, "channel": channel, "withdrawn_at": at,
+            "withdrawn_by": by or user_id}
 
 
 @pytest.fixture
@@ -286,6 +289,22 @@ def test_a_withdrawal_after_the_last_look_is_reported(notices):
     assert out["retrieved"] is True
     assert [c["channel"] for c in out["notices"][0]["channels"]] == ["camera"]
     assert out["notices"][0]["child_name"] == "Ada"
+
+
+def test_a_withdrawal_a_parent_made_is_not_reported_as_the_childs(notices):
+    """ChildWithdrewBanner said '<child> turned off the camera' when a parent had."""
+    notices.withdrawals += [_w(CHILD, "camera", "2026-08-12T09:00:00Z", by=PARENT),
+                            _w(CHILD, "eeg", "2026-08-12T09:05:00Z", by="co-parent-2")]
+    assert main.parent_consent_notices(None)["notices"] == []
+
+
+def test_a_parents_withdrawals_do_not_use_up_the_cap(notices, monkeypatch):
+    """Filtered in the query, not after it, or a parent's rows could push the child's out."""
+    monkeypatch.setattr(main, "_MAX_WITHDRAWAL_NOTICES", 1)
+    notices.withdrawals += [_w(CHILD, "camera", "2026-08-12T10:00:00Z", by=PARENT),
+                            _w(CHILD, "eeg", "2026-08-12T09:00:00Z")]
+    out = main.parent_consent_notices(None)
+    assert [c["channel"] for c in out["notices"][0]["channels"]] == ["eeg"]
 
 
 def test_a_withdrawal_the_parent_has_already_seen_is_not_repeated(notices):

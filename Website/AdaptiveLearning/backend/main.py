@@ -6505,7 +6505,9 @@ def parent_consent_notices(request: Request):
 
     ids = [l["child_id"] for l in links]
     try:
-        rows = supabase.table("consent_withdrawals")             .select("user_id, channel, withdrawn_at")             .in_("user_id", ids)             .order("withdrawn_at", desc=True)             .limit(_MAX_WITHDRAWAL_NOTICES).execute().data or []
+        # The child's own withdrawals only: one a parent made is not "<child> turned off".
+        # A student can withdraw only their own consent, so both filters on `ids` are exact.
+        rows = supabase.table("consent_withdrawals")             .select("user_id, channel, withdrawn_at, withdrawn_by")             .in_("user_id", ids).in_("withdrawn_by", ids)             .order("withdrawn_at", desc=True)             .limit(_MAX_WITHDRAWAL_NOTICES).execute().data or []
     except Exception as e:
         print(f"[consent-notices] {user['id']}: {e}")
         return {"notices": [], "retrieved": False}

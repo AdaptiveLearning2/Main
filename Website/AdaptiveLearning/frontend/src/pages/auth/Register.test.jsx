@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -71,14 +71,74 @@ describe('a refused sign-up', () => {
     // Its own sentence would reveal whether the address has an account.
     signUp.mockRejectedValueOnce(new AuthApiError('User already registered', 422, 'user_already_exists'))
     toast.error.mockClear()
-    await userEvent.type(draw(), 'Longenough1!')
-    await userEvent.type(screen.getByPlaceholderText('you@example.com'), 'ada@example.com')
-    await userEvent.type(screen.getByPlaceholderText('••••••••'), 'Longenough1!')
+    await fillIn({ grade: '5th Grade' })
 
     await userEvent.click(screen.getByRole('button', { name: /create student account/i }))
 
     expect(toast.error).toHaveBeenCalledTimes(1)
     expect(toast.error.mock.calls[0][0]).toMatch(/couldn't create an account/i)
     expect(toast.error.mock.calls[0][0]).not.toMatch(/already registered/i)
+  })
+})
+
+/** Fills every field a sign-up needs, picking `grade` when one is given. */
+async function fillIn({ grade } = {}) {
+  await userEvent.type(draw(), 'Longenough1!')
+  await userEvent.type(screen.getByPlaceholderText('you@example.com'), 'ada@example.com')
+  await userEvent.type(screen.getByPlaceholderText('••••••••'), 'Longenough1!')
+  if (grade) await userEvent.selectOptions(screen.getByLabelText('Grade'), grade)
+}
+
+describe('the parent tip', () => {
+  it('sends a parent to a link code, not a user id, which is not a secret', async () => {
+    draw()
+    await userEvent.click(screen.getByRole('button', { name: /monitor your child/i }))
+
+    const tip = screen.getByText(/after signing up/i)
+    expect(tip).toHaveTextContent(/link code/i)
+    expect(tip).toHaveTextContent('Create a link code')
+    expect(tip).not.toHaveTextContent(/user id/i)
+  })
+})
+
+describe('the grade picker', () => {
+  beforeEach(() => { signUp.mockClear(); toast.error.mockClear() })
+
+  it('offers the shared grade list, starting on a prompt that matches the error', async () => {
+    const { GRADES } = await import('../../lib/grades')
+    draw()
+    const options = [...screen.getByLabelText('Grade').options].map(o => o.textContent)
+    expect(options).toEqual(['Choose your grade', ...GRADES])
+    expect(screen.getByLabelText('Grade')).toHaveDisplayValue('Choose your grade')
+  })
+
+  it('will not sign a student up without a grade', async () => {
+    await fillIn()
+    // The browser's own check: a required picker left on its prompt blocks the submit.
+    expect(screen.getByLabelText('Grade')).toBeRequired()
+    await userEvent.click(screen.getByRole('button', { name: /create student account/i }))
+    expect(signUp).not.toHaveBeenCalled()
+
+    // And the handler's, for a submit that skips the browser's validation.
+    fireEvent.submit(screen.getByLabelText('Grade').closest('form'))
+    expect(signUp).not.toHaveBeenCalled()
+    expect(toast.error).toHaveBeenCalledWith('Choose your grade')
+  })
+
+  it("sends the student's grade with the sign-up", async () => {
+    await fillIn({ grade: '5th Grade' })
+    await userEvent.click(screen.getByRole('button', { name: /create student account/i }))
+
+    expect(signUp).toHaveBeenCalledWith('ada@example.com', 'Longenough1!', 'student', '', '5th Grade')
+  })
+
+  it('asks a teacher for no grade, and sends none even if one was picked first', async () => {
+    await fillIn({ grade: '5th Grade' })
+    await userEvent.click(screen.getByRole('button', { name: /teach & analyze/i }))
+    expect(screen.queryByLabelText('Grade')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /create teacher account/i }))
+
+    expect(signUp).toHaveBeenCalledWith('ada@example.com', 'Longenough1!', 'teacher', '', '')
   })
 })

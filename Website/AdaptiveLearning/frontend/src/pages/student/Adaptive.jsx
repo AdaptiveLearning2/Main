@@ -19,6 +19,7 @@ import CCSSBadge from '../../components/questions/CCSSBadge'
 import { TOPICS as ALL_TOPICS, TOPIC_ICONS, topicLabel, topicsToShow } from '../../lib/topics'
 import useGradeTopics from '../../hooks/useGradeTopics'
 import { contactQuality } from '../../lib/contactQuality'
+import { GRADES } from '../../lib/grades'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
 // Device-list retry while empty (the sidecar often starts later); matches the health check.
@@ -64,7 +65,6 @@ const CHANNEL_LABELS = [
 const TOPICS = ALL_TOPICS
 const ICONS  = TOPIC_ICONS
 const SHORT  = { angle_relationships: 'Angle Rel.' }
-const GRADES = ['Kindergarten','1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 
 /** An error as a toast description. */
 const errorDetail = (e) => e?.message || String(e)

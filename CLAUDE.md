@@ -1258,7 +1258,9 @@ both are load-bearing: one migration revokes UPDATE/INSERT on it from the client
 whitelist would have been a self-service admin signup — the trigger copies `raw_user_meta_data->>'role'`
 straight into the column, so `signUp({data:{role:'admin'}})` from a console would have made an
 administrator. The backfill migration repeats the whitelist for the same reason: it reads the same
-client-supplied metadata.
+client-supplied metadata. **A student's sign-up grade is whitelisted the same way** — only the picker's labels
+(`lib/grades.js`, held equal by `test_role_gates.py`), else no grade — because the backend's `validated_grade`
+never sees a value the trigger writes.
 
 `AdminGuard` asks `GET /api/admin/me` rather than reading a role client-side; it is a UI convenience, and
 every `/api/admin/*` endpoint re-checks.

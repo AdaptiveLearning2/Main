@@ -6,12 +6,11 @@ import LoadError from '../ui/LoadError'
 import PracticeHistory from './PracticeHistory'
 import { TOPIC_ICONS, topicLabel } from '../../lib/topics'
 import { useGradeTopicsState } from '../../hooks/useGradeTopics'
+import { GRADES } from '../../lib/grades'
 
 const DIFFICULTIES = ['easy', 'medium', 'hard']
 // Adaptive's goal rungs minus "No limit": a test has no Finish button, so the count is a real cap.
 const QUESTION_COUNTS = [5, 10, 15, 20]
-const GRADES = ['Kindergarten', '1st Grade', '2nd Grade', '3rd Grade', '4th Grade', '5th Grade',
-  '6th Grade', '7th Grade', '8th Grade', 'Highschool', 'College']
 const ICONS = TOPIC_ICONS
 
 /**

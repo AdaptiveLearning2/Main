@@ -1,5 +1,5 @@
 /** The link-code card and its three states; a user id is not a secret to share. */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
@@ -100,6 +100,23 @@ describe('a code on screen that stopped working', () => {
   const live = { code: 'ABCD2345', expires_at: IN_TEN_MINUTES(), retrieved: true }
   const spent = () => overrideApi('/api/student/link-code',
     () => ({ code: null, expires_at: null, retrieved: true }))
+  const rereads = () => apiFetch.mock.calls.flatMap(([p, o], i) =>
+    p === '/api/student/link-code' && !o?.method ? [apiFetch.mock.results[i]] : [])
+
+  // The focus listener attaches in an effect after the code renders, so an event fired straight
+  // after it appears can be lost. Wait for the listener, then return to the page exactly once.
+  let listeners
+  beforeEach(() => { listeners = vi.spyOn(window, 'addEventListener') })
+  afterEach(() => { listeners.mockRestore() })
+  async function returnToThePageOnce() {
+    // 2 s, under the test's own 5 s, so a page that never listens fails with this message.
+    await waitFor(() => expect(
+      listeners.mock.calls.some(([type]) => type === 'focus'),
+      'Profile never listened for window "focus". If it now notices a return some other way '
+        + '(e.g. visibilitychange), make this helper fire that event instead.',
+    ).toBe(true), { timeout: 2000 })
+    window.dispatchEvent(new Event('focus'))
+  }
 
   it('is dropped when the student comes back to the page', async () => {
     mockApi(happy(live))
@@ -107,7 +124,7 @@ describe('a code on screen that stopped working', () => {
     await screen.findByText('ABCD2345')
 
     spent()
-    window.dispatchEvent(new Event('focus'))
+    await returnToThePageOnce()
 
     expect(await screen.findByRole('button', { name: /create a link code/i }))
       .toBeInTheDocument()
@@ -139,13 +156,11 @@ describe('a code on screen that stopped working', () => {
 
     overrideApi('/api/student/link-code',
       () => ({ code: null, expires_at: null, retrieved: false }))
-    const reads = () => apiFetch.mock.calls.filter(([p, o]) =>
-      p === '/api/student/link-code' && !o?.method).length
-    const before = reads()
-    window.dispatchEvent(new Event('focus'))
-    await waitFor(() => expect(reads()).toBe(before + 1))
-    // Let its answer land before looking.
-    await act(async () => { await new Promise(r => setTimeout(r, 0)) })
+    const before = rereads().length
+    await returnToThePageOnce()
+    // One return is one re-read; let its answer land before looking.
+    await waitFor(() => expect(rereads().length).toBe(before + 1))
+    await act(async () => { await rereads()[before].value })
 
     expect(screen.getByText('ABCD2345')).toBeInTheDocument()
   })

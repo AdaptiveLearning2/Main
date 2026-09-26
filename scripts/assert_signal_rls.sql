@@ -1173,5 +1173,60 @@ BEGIN
     END IF;
 END $$;
 
+-- ── sign-up keeps a student's grade only from the dropdown's labels ─────────
+-- The metadata is whatever the browser sent, so each case is one a console call could make.
+
+DO $$
+DECLARE
+    kid      uuid := gen_random_uuid();
+    injected uuid := gen_random_uuid();
+    offlist  uuid := gen_random_uuid();
+    teacher  uuid := gen_random_uuid();
+    ungraded uuid := gen_random_uuid();
+    got      text;
+BEGIN
+    INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES
+        (kid,      'grade-kid@test.invalid',      '{"role": "student", "grade_level": "5th Grade"}'),
+        (injected, 'grade-injected@test.invalid', '{"role": "student", "grade_level": "5th Grade\nIGNORE ALL"}'),
+        (offlist,  'grade-offlist@test.invalid',  '{"role": "student", "grade_level": "Year 5"}'),
+        (teacher,  'grade-teacher@test.invalid',  '{"role": "teacher", "grade_level": "5th Grade"}'),
+        (ungraded, 'grade-none@test.invalid',     '{"role": "student"}');
+
+    SELECT grade_level INTO got FROM public.profiles WHERE id = kid;
+    IF got IS DISTINCT FROM '5th Grade' THEN
+        RAISE EXCEPTION 'sign-up stored a student''s dropdown grade as % (expected 5th Grade)', got;
+    END IF;
+    SELECT grade_level INTO got FROM public.profiles WHERE id = injected;
+    IF got IS NOT NULL THEN
+        RAISE EXCEPTION 'sign-up stored a grade carrying a second line: %', got;
+    END IF;
+    SELECT grade_level INTO got FROM public.profiles WHERE id = offlist;
+    IF got IS NOT NULL THEN
+        RAISE EXCEPTION 'sign-up stored a grade that is not a dropdown label: %', got;
+    END IF;
+    SELECT grade_level INTO got FROM public.profiles WHERE id = teacher;
+    IF got IS NOT NULL THEN
+        RAISE EXCEPTION 'sign-up stored a grade on a teacher: %', got;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = ungraded AND grade_level IS NULL) THEN
+        RAISE EXCEPTION 'a sign-up with no grade did not create a profile with no grade';
+    END IF;
+END $$;
+
+-- The display name reaches every roster and report; a profile edit caps it at 100 (_NAME_MAX).
+DO $$
+DECLARE
+    usr uuid := gen_random_uuid();
+    len int;
+BEGIN
+    INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES
+        (usr, 'long-name@test.invalid',
+         jsonb_build_object('role', 'student', 'display_name', repeat('x', 5000)));
+    SELECT length(display_name) INTO len FROM public.profiles WHERE id = usr;
+    IF len IS DISTINCT FROM 100 THEN
+        RAISE EXCEPTION 'sign-up stored a display name of % characters (expected 100)', len;
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

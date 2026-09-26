@@ -87,12 +87,11 @@ export function AuthProvider({ children }) {
   const loading = authLoading || (!!user && role === null)
 
   // `chosenName`, not `displayName`, to avoid shadowing the current user's name.
-  const signUp = async (email, password, selectedRole = 'student', chosenName = '') => {
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { role: selectedRole, display_name: chosenName || email.split('@')[0] } },
-    })
+  const signUp = async (email, password, selectedRole = 'student', chosenName = '', grade = '') => {
+    const data = { role: selectedRole, display_name: chosenName || email.split('@')[0] }
+    // Only a student has a grade of their own; `handle_new_user` keeps only a dropdown label.
+    if (selectedRole === 'student' && grade) data.grade_level = grade
+    const { error } = await supabase.auth.signUp({ email, password, options: { data } })
     if (error) throw error
   }
 

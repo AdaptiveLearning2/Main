@@ -903,6 +903,10 @@ def _discard_if_nothing_recorded(session_id: str, questions,
     return True
 
 
+# Days rolled up from a session's start when it spans more; bounds a corrupt `started_at`.
+_ROLLUP_MAX_SPAN_DAYS = 7
+
+
 def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
     """Recompute the daily rollup for the school days this session touched. Never raises.
 
@@ -914,14 +918,18 @@ def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
         now = _utc_now()
         day = _school_date(started_at, tz) or _school_date(now, tz)
         end_day = _school_date(ended_at, tz) or _school_date(now, tz)
-        # An implausible span (corrupt or reversed timestamps) rolls up the closing day only.
         span = (end_day - day).days
-        if span < 0 or span > 7:
-            print(f"[rollup] {user_id[:8]}: implausible span {day}..{end_day} "
-                  f"({span}d), rolling up the closing day only")
-            day = end_day
+        if span < 0:
+            print(f"[rollup] {user_id[:8]}: reversed span {day}..{end_day}, "
+                  f"rolling up the closing day only")
+            days = [end_day]
+        elif span > _ROLLUP_MAX_SPAN_DAYS:
+            # An abandoned session's rows are near its start; the day the sweep closes it has none.
+            days = [day + timedelta(days=i) for i in range(_ROLLUP_MAX_SPAN_DAYS + 1)] + [end_day]
+        else:
+            days = [day + timedelta(days=i) for i in range(span + 1)]
         failures = 0
-        while day <= end_day:
+        for day in days:
             # Per day, so a failure on day one cannot skip the closing day.
             try:
                 supabase.rpc("rollup_signal_day", {
@@ -932,7 +940,6 @@ def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
             except Exception as e:
                 failures += 1
                 print(f"[rollup] {user_id[:8]} {day}: {e}")
-            day += timedelta(days=1)
         if failures:
             print(f"[rollup] {user_id[:8]}: {failures} day(s) not rolled up")
     except Exception as e:
@@ -1022,6 +1029,30 @@ def _session_had_signals(session_id: str) -> bool | None:
         return None
 
 
+def _eeg_was_started(session_id: str) -> bool | None:
+    """Whether /api/eeg/start ran for this session. None if unreadable.
+
+    Without it, a session answered with no headband paired read as a broken recording.
+    Under push nothing stamps it, so the alert is withheld there.
+    """
+    try:
+        rows = supabase.table("sessions").select("eeg_started_at") \
+            .eq("id", session_id).limit(1).execute().data or []
+        return bool(rows and rows[0].get("eeg_started_at"))
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[alerts] could not tell whether EEG started for {session_id}: {e}")
+        return None
+
+
+def _mark_eeg_started(session_id: str) -> None:
+    """Stamp the first EEG start on the session. Never raises; a start must not fail on it."""
+    try:
+        supabase.table("sessions").update({"eeg_started_at": _utc_now().isoformat()}) \
+            .eq("id", session_id).is_("eeg_started_at", "null").execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[eeg] could not stamp the EEG start on {session_id}: {e}")
+
+
 def _recording_was_expected(user_id: str) -> bool | None:
     """Whether EEG *should* have been recording. None when that cannot be told.
 
@@ -1066,7 +1097,9 @@ def _raise_session_alerts(user_id: str, session: dict,
         print(f"[alerts] cannot tell whether recording was expected for "
               f"{user_id[:8]}; withholding {ALERT_SIGNALS_MISSING}")
     elif expected:
-        had = _session_had_signals(sid)
+        started = _eeg_was_started(sid)
+        # A headband nobody started is not a fault; None (unreadable) withholds too.
+        had = _session_had_signals(sid) if started else None
         # `is False`: None means the count failed.
         if had is False:
             alerts.append({
@@ -5998,6 +6031,7 @@ def eeg_start(payload: EegSessionRequest, request: Request):
             "This headband is already in use by another user. Ask them to "
             "disconnect, or wait a few seconds and try again.",
         )
+    _mark_eeg_started(payload.session_id)
     return {"ok": True, **out}
 
 @app.post("/api/eeg/stop")

@@ -35,6 +35,9 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
+      # First: a dependency joins the first group it matches. @vitest/* pin vitest's exact version.
+      vitest:
+        patterns: ["vitest", "@vitest/*"]
       frontend-npm:
         patterns: ["*"]
         update-types: ["minor", "patch"]

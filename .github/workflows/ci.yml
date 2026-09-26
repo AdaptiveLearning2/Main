@@ -193,7 +193,8 @@ jobs:
       # The plugin's hooks are unit-tested; this proves a real build wires them and writes the file.
       - name: Check the Pages headers were emitted
         working-directory: Website/AdaptiveLearning/frontend
-        run: grep -q "^  Content-Security-Policy: default-src 'self'" dist/_headers
+        run: |
+          grep -q "^  Content-Security-Policy: default-src 'self'" dist/_headers
 
   # Known vulnerabilities in what we install. Blocking: a CVE is not a style backlog.
   # Three Python sets, since they are separate installs: backend, sidecar, and the committed .lock files.

@@ -38,6 +38,10 @@ updates:
       frontend-npm:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+    # 7.1's compiler rules flag 14 existing sites (5 set-state-in-effect); lift once they are fixed.
+    ignore:
+      - dependency-name: "eslint-plugin-react-hooks"
+        versions: [">=7.1.0"]
 
   # An action runs with the workflow's token, so a moving tag is a supply-chain path into CI.
   - package-ecosystem: github-actions

@@ -554,9 +554,93 @@ def test_the_basis_carries_the_read_state_it_was_given(monkeypatch):
                         lambda *a, **k: {"weeks": [], "retrieved": True})
     monkeypatch.setattr(main, "_stats_including_open_session",
                         lambda sid: {"total_questions": 0, "total_correct": 0, "retrieved": True})
+    # An empty permitted channel asks whether rows arrived; answered here, not by a database.
+    monkeypatch.setattr(main, "_any_rows_since", lambda *a: False)
 
     monkeypatch.setattr(main, "_topic_breakdown_with_state", lambda sid: ([], False))
     assert main._chart_summary_basis("s", 7, 8, True)["topics_retrieved"] is False
 
     monkeypatch.setattr(main, "_topic_breakdown_with_state", lambda sid: ([], True))
     assert main._chart_summary_basis("s", 7, 8, True)["topics_retrieved"] is True
+
+
+# ── a scale change, a withdrawn channel with data, unusable rows, a tie ──
+
+def test_a_trend_across_a_score_scale_change_has_no_direction():
+    """Scale 1 early and scale 2 late were reported as a rise from one to the other."""
+    weeks = [{"focus": 0.3, "score_scale": {"min": 1, "max": 1}},
+             {"focus": 0.7, "score_scale": {"min": 2, "max": 2}}]
+    move = main._trend_direction(weeks, "focus")
+    assert move["direction"] is None and move["mixed_scale"] is True
+    basis = _basis(trend={"focus": move, "stress": move})
+    lines = main._rule_based_chart_summary(basis)
+    assert any("scored on different scales" in line for line in lines)
+    assert not any("risen" in line for line in lines)
+
+
+def test_one_scale_throughout_still_has_a_direction():
+    weeks = [{"focus": 0.3, "score_scale": {"min": 2, "max": 2}},
+             {"focus": 0.7, "score_scale": {"min": 2, "max": 2}}, {"focus": 0.8}]
+    assert main._trend_direction(weeks, "focus")["direction"] == "up"
+
+
+def test_a_withdrawn_eeg_channel_with_readings_states_them():
+    """EEG is read regardless of withdrawal; its figures were dropped as 'not recorded'."""
+    basis = _basis(channels={
+        "eeg": {"enabled": False, "revoked_at": "2026-09-19T12:00:00+00:00", "samples": 400},
+        "heart": {"enabled": True, "revoked_at": None, "samples": 120}})
+    lines = main._rule_based_chart_summary(basis)
+    assert any(line.startswith("Average focus is 63%") for line in lines)
+    assert any("from before the sensor was turned off on 19 September" in line for line in lines)
+    assert not any("was not recorded because" in line for line in lines)
+
+
+def test_a_withdrawn_channel_with_no_readings_still_says_it_was_off():
+    basis = _basis(channels={
+        "eeg": {"enabled": False, "revoked_at": None, "samples": 0},
+        "heart": {"enabled": True, "revoked_at": None, "samples": 120}},
+        averages={"focus": None, "stress": None, "heart_rate_bpm": 72.4})
+    lines = main._rule_based_chart_summary(basis)
+    assert "Focus and stress was not recorded because the sensor was turned off." in lines
+
+
+@pytest.mark.parametrize("any_rows,expected", [
+    (True, "the readings were rejected rather than missing"),
+    (False, "was permitted but nothing was recorded"),
+    (None, "whether anything was recorded could not be read"),
+])
+def test_unusable_rows_are_told_from_none_and_from_unknown(any_rows, expected):
+    """The RPC counts usable samples, so zero could not tell 'unusable' from 'nothing'."""
+    basis = _basis(channels={
+        "eeg": {"enabled": True, "revoked_at": None, "samples": 0, "any_rows": any_rows},
+        "heart": {"enabled": True, "revoked_at": None, "samples": 120}},
+        averages={"focus": None, "stress": None, "heart_rate_bpm": 72.4})
+    assert any(expected in line for line in main._rule_based_chart_summary(basis))
+
+
+def test_the_basis_asks_for_rows_only_when_a_permitted_channel_has_no_samples(monkeypatch):
+    asked = []
+    monkeypatch.setattr(main, "_reportable_channels",
+                        lambda sid, inc=True: main.ReportChannels(
+                            heart=True, emotion=False, consent_retrieved=True))
+    monkeypatch.setattr(main, "_signal_summary",
+                        lambda *a, **k: {**main._EMPTY_SUMMARY, "cognitive_samples": 40})
+    monkeypatch.setattr(main, "_signal_trend", lambda *a, **k: {"weeks": [], "retrieved": True})
+    monkeypatch.setattr(main, "_stats_including_open_session",
+                        lambda sid: {"total_questions": 0, "total_correct": 0, "retrieved": True})
+    monkeypatch.setattr(main, "_topic_breakdown_with_state", lambda sid: ([], True))
+    monkeypatch.setattr(main, "_any_rows_since", lambda table, *a: asked.append(table) or True)
+    basis = main._chart_summary_basis("s", 7, 8, True)
+    assert asked == ["heart_signals"]
+    assert basis["channels"]["heart"]["any_rows"] is True
+    assert "any_rows" not in basis["channels"]["eeg"]
+
+
+def test_a_tie_between_every_topic_is_not_read_as_one_topic():
+    """Both at 100%: min() and max() returned the first, and the summary said 'Only ordering'."""
+    tied = {"topic_name": "ordering", "accuracy": 100, "attempted_questions": 4}
+    basis = _basis(topics={"weakest": tied, "strongest": tied, "attempted_count": 2,
+                           "scored_count": 2})
+    lines = main._rule_based_chart_summary(basis)
+    assert "All 2 attempted topics are at 100%, so none stands out as strongest or weakest." in lines
+    assert not any(line.startswith("Only ") for line in lines)

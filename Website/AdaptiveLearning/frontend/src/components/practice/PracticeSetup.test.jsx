@@ -146,6 +146,16 @@ it('says a refused profile read was refused, and offers a retry', async () => {
   expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument()
 })
 
+it('treats an account with no profile row as having no grade, not as a failed screen', async () => {
+  // `/api/profile/me` answers 404 for a missing row; the student can still practise.
+  overrideApi('/api/profile/me', () => { throw apiError(404, 'No profile exists for this account') })
+  overrideApi('/api/topics', () => YOUNG_TOPICS, 'GET')
+  draw()
+
+  expect(await screen.findByLabelText(/grade/i)).toHaveValue('')
+  expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument()
+})
+
 it('leaves a student with no grade to the backend default, naming no grade itself', async () => {
   overrideApi('/api/profile/me', () => ({ grade_level: null }))
   // No `grade` parameter: the backend answers for its own default.

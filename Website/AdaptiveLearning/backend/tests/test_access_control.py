@@ -1188,8 +1188,11 @@ def test_class_summary_averages_accuracy_over_students_who_attempted(monkeypatch
     monkeypatch.setattr(main, "supabase", _ClassSummaryClient(
         classes=[{"id": "c1"}],
         members=[{"class_id": "c1", "student_id": s} for s in ("a", "b", "c")],
-        stats=[{"user_id": "a", "total_questions": 10, "total_correct": 8, "current_streak": 4},
-               {"user_id": "b", "total_questions": 10, "total_correct": 4, "current_streak": 2},
+        # A credited row always carries `last_session_at`; the streak decays without a recent one.
+        stats=[{"user_id": "a", "total_questions": 10, "total_correct": 8, "current_streak": 4,
+                "last_session_at": main._utc_now().isoformat()},
+               {"user_id": "b", "total_questions": 10, "total_correct": 4, "current_streak": 2,
+                "last_session_at": main._utc_now().isoformat()},
                {"user_id": "c", "total_questions": 0, "total_correct": 0, "current_streak": 0}],
     ))
 
@@ -1222,6 +1225,30 @@ def test_a_failed_membership_read_is_not_a_class_of_zeros(monkeypatch):
 
     assert out["c1"]["retrieved"] is False
     assert out["c1"]["avgAccuracy"] is None
+    # 0 beside `retrieved: false` rendered as a real average streak of 0.
+    assert out["c1"]["avgStreak"] is None
+
+
+def test_a_failed_stats_read_carries_no_placeholder_averages(monkeypatch):
+    """The batch read's placeholders are zeros; averaged, they read as a class on no streak."""
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    monkeypatch.setattr(main, "supabase", _ClassSummaryClient(
+        classes=[{"id": "c1"}], members=[{"class_id": "c1", "student_id": "a"}], stats=[],
+        raises=["user_stats"]))
+
+    out = main.class_summaries(None)["c1"]
+
+    assert out == {"avgAccuracy": None, "avgStreak": None, "retrieved": False}
+
+
+def test_an_empty_class_has_no_average_streak(monkeypatch):
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    monkeypatch.setattr(main, "supabase", _ClassSummaryClient(
+        classes=[{"id": "c1"}], members=[], stats=[]))
+
+    out = main.class_summaries(None)["c1"]
+
+    assert out["avgStreak"] is None and out["retrieved"] is True
 
 
 def test_the_summary_does_not_read_a_roster_per_class(monkeypatch):

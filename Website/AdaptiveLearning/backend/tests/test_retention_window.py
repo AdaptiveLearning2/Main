@@ -396,3 +396,22 @@ def test_turning_enforcement_off_does_not_bypass_consent(monkeypatch):
     verdict = main._may_record(STUDENT)
 
     assert not verdict.get("record_eeg")
+
+
+@pytest.mark.parametrize("today,expected", [
+    ("2026-10-01", "2026-08-31"),       # inside the year: everything before its start
+    ("2027-06-30", "2027-06-30"),       # the last day: the year itself, from tonight
+    ("2027-08-01", "2027-06-30"),       # after the year
+    ("2026-07-01", "2026-08-31"),       # before it starts: the day before the start
+])
+def test_the_delete_cutoff_follows_expired_signal_cutoff(today, expected):
+    """The one Python copy of the SQL rule; the report and the school-year form both use it."""
+    from datetime import date
+    assert main._expiry_cutoff("2026-09-01", "2027-06-30",
+                               date.fromisoformat(today)).isoformat() == expected
+
+
+def test_no_usable_dates_have_no_cutoff():
+    from datetime import date
+    assert main._expiry_cutoff(None, None, date(2026, 9, 26)) is None
+    assert main._expiry_cutoff("2026-09-01", "not a date", date(2026, 9, 26)) is None

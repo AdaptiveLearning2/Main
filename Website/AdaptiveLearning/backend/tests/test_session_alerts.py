@@ -32,10 +32,13 @@ def _fixed_now(monkeypatch):
 class _AlertSink:
     """Records what reached `session_alerts`, and what was asked about signals."""
 
-    def __init__(self, has_signals=True, alerts_raise=False, signals_raise=False):
+    def __init__(self, has_signals=True, alerts_raise=False, signals_raise=False,
+                 eeg_started=True, sessions_raise=False):
         self.has_signals = has_signals
         self.alerts_raise = alerts_raise
         self.signals_raise = signals_raise
+        self.eeg_started = eeg_started
+        self.sessions_raise = sessions_raise
         self.written = []
         self.tables = []
 
@@ -66,6 +69,11 @@ class _AlertSink:
                         raise RuntimeError("cognitive_signals unavailable")
                     return type("R", (), {
                         "data": [{"id": 1}] if sink.has_signals else []})()
+                if table == "sessions":
+                    if sink.sessions_raise:
+                        raise RuntimeError("sessions unavailable")
+                    return type("R", (), {"data": [{"eeg_started_at":
+                                                    NOW_UTC.isoformat() if sink.eeg_started else None}]})()
                 return type("R", (), {"data": []})()
 
         return _Q()
@@ -112,6 +120,18 @@ def test_signals_missing_when_recording_was_expected_and_nothing_arrived(monkeyp
 
 def test_no_alert_when_signals_arrived(monkeypatch):
     sink = _emit(monkeypatch, record_eeg=True, has_signals=True)
+    assert main.ALERT_SIGNALS_MISSING not in _kinds(sink)
+
+
+def test_a_session_with_no_headband_started_is_not_a_fault(monkeypatch):
+    """Adaptive.jsx opens a session on the first question, headband or not."""
+    sink = _emit(monkeypatch, record_eeg=True, has_signals=False, eeg_started=False)
+    assert main.ALERT_SIGNALS_MISSING not in _kinds(sink)
+    assert "cognitive_signals" not in sink.tables
+
+
+def test_an_unreadable_start_stamp_withholds_the_alert(monkeypatch):
+    sink = _emit(monkeypatch, record_eeg=True, has_signals=False, sessions_raise=True)
     assert main.ALERT_SIGNALS_MISSING not in _kinds(sink)
 
 

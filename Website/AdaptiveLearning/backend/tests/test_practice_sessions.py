@@ -528,8 +528,19 @@ def test_topics_from_practice_summary_matches_topic_breakdown_shape():
     by_name = {t["topic_name"]: t for t in topics}
     assert by_name["ordering"]["accuracy"] == 75
     assert by_name["ordering"]["attempted_questions"] == 4
-    # Viewed-only reads as 0, `_weakest_topic`'s "no graded data" convention.
-    assert by_name["geometry"]["accuracy"] == 0
+    # Viewed-only was never scored: None, not a 0% the strategies then called the weakest.
+    assert by_name["geometry"]["accuracy"] is None
+
+
+def test_a_flashcard_only_topic_is_never_the_weakest():
+    """It was named 'the lowest-scoring topic at 0%' beside a topic answered at 60%."""
+    topics = main._topics_from_practice_summary({
+        "geometry": {"attempted": 4, "correct": None},
+        "algebra": {"attempted": 5, "correct": 60},
+    })
+    assert main._weakest_topic(topics)["topic_name"] == "algebra"
+    only_viewed = main._topics_from_practice_summary({"geometry": {"attempted": 4, "correct": None}})
+    assert main._weakest_topic(only_viewed) is None
 
 
 def test_learning_strategies_rejects_a_practice_session_owned_by_someone_else(_client, monkeypatch):

@@ -321,8 +321,10 @@ export default function Adaptive() {
       if (p?.difficulty_bias != null) setBias(p.difficulty_bias)
       if (p?.session_duration_minutes != null) setDurationMin(p.session_duration_minutes)
       setProfileRead(true)
-    }).catch(() => {
+    }).catch(e => {
       if (cancelled) return
+      // 404: no profile row, which is a known "no saved grade", not an unknown one.
+      if (e?.status === 404) { setProfileRead(true); return }
       setProfileRead(false)
       if (profileAttempt < PROFILE_RETRY_MS.length) {
         retry = setTimeout(() => setProfileAttempt(a => a + 1), PROFILE_RETRY_MS[profileAttempt])
@@ -629,11 +631,12 @@ export default function Adaptive() {
 
   const creating = useRef(null)
 
+  // The ref, not the state: a handler that just dropped a closed session must not get it back.
   const getOrCreateSession = async () => {
-    if (sessionId) return sessionId
+    if (sessionIdRef.current) return sessionIdRef.current
     if (creating.current) return creating.current
     creating.current = apiFetch('/api/sessions/start', { method: 'POST', body: { title: 'Adaptive Session' } })
-      .then(s => { setSessionId(s.id); return s.id })
+      .then(s => { sessionIdRef.current = s.id; setSessionId(s.id); return s.id })
       .finally(() => { creating.current = null })
     return creating.current
   }
@@ -1083,12 +1086,22 @@ export default function Adaptive() {
     setCorrect(isCorrect)
     setPhase('result')
 
-    const res = await recordAnswer({
-      sessionId: sessionIdRef.current,
-      questionId: data?.id,
-      selectedIndex: selectedAnswer,
-      correct: isCorrect,
-    })
+    const answer = { questionId: data?.id, selectedIndex: selectedAnswer, correct: isCorrect }
+    let res = await recordAnswer({ sessionId: sessionIdRef.current, ...answer })
+    if (res?.ended) {
+      // Closed server-side while this page held it: the answer goes into a fresh session.
+      sessionIdRef.current = null
+      setSessionId(null)
+      const fresh = await getOrCreateSession().catch(e => { console.error('[session]', e); return null })
+      // Pull: the poller was writing the closed session; push re-hands over on `sessionId`.
+      if (fresh) armRecording(fresh).catch(e => console.error('[headband]', e))
+      res = await recordAnswer({ sessionId: fresh, ...answer })
+      if (res?.ended) {
+        // Refused twice: say so, as every other unsaved answer does.
+        toast.error('That answer could not be saved.')
+        res = null
+      }
+    }
     if (res) {
       // Counted only once the answer is stored; failures already toasted.
       setSessionCount(n => n + 1)

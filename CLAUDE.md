@@ -524,7 +524,7 @@ that look like the feature being off) and clamps below the floor. **Give every o
 number is not automatically a usable setting. The sidecar's boot settings take the same tolerant
 treatment in `config.py` — a validator warns and falls back rather than refusing the boot.
 
-**Backend.** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `BACKEND_PORT`, `EEG_API_URL`,
+**Backend.** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `AUTH_CHECK_TIMEOUT`, `BACKEND_PORT`, `EEG_API_URL`,
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MODE`, `INGEST_MAX_BATCH` /
 `INGEST_RATE_LIMIT` / `INGEST_RATE_WINDOW`, `SESSION_ABANDONED_AFTER_HOURS` /
 `STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep), `QUESTIONS_CACHE_TTL`,
@@ -2029,7 +2029,9 @@ would be a fifth close site that skipped all of it.
 `_SESSION_ABANDONED_AFTER_SEC` (6 h, `SESSION_ABANDONED_AFTER_HOURS`) is **an age, not an idleness**, and the flag
 is named for what it can support. A two-hour session with a student answering throughout is not abandoned by this
 measure and is correctly untouched; `class_live` keeps its own much tighter `_STALE_AFTER_SEC` computed from real
-last activity. This one only has to catch the session nobody has touched since June, so it errs long — closing a
+last activity, and applies it only to a session with sensor rows: with no sensor, a student reading one question
+sends nothing, so silence proves nothing and the session waits for this sweep. This one only has to catch the
+session nobody has touched since June, so it errs long — closing a
 live one would discard the question a child is part way through answering. `STALE_SWEEP_INTERVAL_SECONDS=0`
 disables it.
 
@@ -2045,8 +2047,10 @@ within the hour; an abandoned session shows a dash, because we do not know when 
 ## Session alerts are operations, never a judgement about a student
 
 `session_alerts` is a teacher-facing feed of things that went wrong with a *session*: `session_auto_closed` (the
-stale sweep ended it, the student did not) and `signals_missing` (EEG recording was permitted and no cognitive row
-arrived). Read at `GET /api/classes/{id}/alerts`, rendered by `AlertFeed`.
+stale sweep ended it, the student did not) and `signals_missing` (EEG recording was permitted, a headband was
+started — `sessions.eeg_started_at`, stamped by `/api/eeg/start` — and no cognitive row arrived; a session with no
+headband is not a fault, and under push nothing stamps it, so the alert is withheld there). Read at
+`GET /api/classes/{id}/alerts`, rendered by `AlertFeed`.
 
 **The scope is the feature.** `signal_fusion` produces a `stressed` label that no teacher surface consumes, and
 routing it here was considered and rejected: it is an inference from signals this codebase already treats as weak,

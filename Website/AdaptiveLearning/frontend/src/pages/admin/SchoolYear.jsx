@@ -27,12 +27,16 @@ export default function AdminSchoolYear() {
   // The user's unsaved edits, or `null` for "showing what the server said".
   const [draft, setDraft] = useState(null)
 
-  // Edit through this, not `setDraft`, so "Saved." clears on a new change.
+  // Edit through this, not `setDraft`, so "Saved." and a pending confirmation clear on a change.
   const edit = (patch) => {
     setSaved(false)
+    setExpiryWarning(null)
     setDraft(patch)
   }
   const [saved, setSaved] = useState(false)
+  // The backend's 409 when these dates would let the nightly delete reach further: shown, and
+  // saved only by a second, explicit press.
+  const [expiryWarning, setExpiryWarning] = useState(null)
 
   const { data, busy, error, mutate } = useAdminResource({
     load: useCallback(() => apiFetch('/api/admin/retention-window'), []),
@@ -48,10 +52,14 @@ export default function AdminSchoolYear() {
   })
 
   // A bad timezone makes the backend deny recording for every student.
-  const save = async () => {
+  const save = async (confirmExpiry = false) => {
     setSaved(false)
+    let warning = null
     const ok = await mutate(() =>
-      apiFetch('/api/admin/retention-window', { method: 'PUT', body: form }))
+      apiFetch('/api/admin/retention-window', {
+        method: 'PUT', body: { ...form, confirm_expiry: confirmExpiry },
+      }).catch(e => { if (e.status === 409) warning = e.message; throw e }))
+    setExpiryWarning(warning)
     // Re-derive from the saved row: the endpoint clamps values.
     if (ok) { setDraft(null); setSaved(true) }
   }
@@ -80,8 +88,20 @@ export default function AdminSchoolYear() {
         <p className="text-xs text-gray-600 dark:text-gray-400">{detail}</p>
       </div>
 
-      {error && <p className="text-sm text-rose-600">{error}</p>}
+      {error && !expiryWarning && <p className="text-sm text-rose-600">{error}</p>}
       {saved && <p className="text-sm text-emerald-600">Saved.</p>}
+      {expiryWarning && (
+        <div role="alert" className="rounded-xl px-4 py-3 border bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 space-y-2">
+          <p className="text-sm text-gray-900 dark:text-white">{expiryWarning}</p>
+          <button
+            onClick={() => save(true)}
+            disabled={busy}
+            className="px-3 py-1.5 rounded-lg bg-amber-700 text-white text-xs font-bold disabled:opacity-40"
+          >
+            Save anyway
+          </button>
+        </div>
+      )}
 
       <div className="space-y-4 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl p-5">
         <label className="flex items-start gap-2">
@@ -159,7 +179,7 @@ export default function AdminSchoolYear() {
         </div>
 
         <button
-          onClick={save}
+          onClick={() => save()}
           disabled={busy || !tzValid}
           className="px-4 py-2 rounded-xl bg-slate-700 text-white text-sm font-bold disabled:opacity-40 hover:bg-slate-800 transition"
         >

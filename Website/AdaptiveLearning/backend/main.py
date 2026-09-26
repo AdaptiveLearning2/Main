@@ -376,14 +376,23 @@ app.add_middleware(
 
 # ─── helpers ──────────────────────────────────────────────────────────────
 
+# Seconds for the GoTrue check behind every authenticated request; unbounded, a stall holds a worker.
+AUTH_CHECK_TIMEOUT = _env_number("AUTH_CHECK_TIMEOUT", 5.0, float, minimum=0.5)
+
+
 def get_user(request: Request):
     token = request.headers.get("authorization", "").replace("Bearer ", "").strip()
     if not token:
         raise HTTPException(401, "Missing token")
-    resp = requests.get(f"{SUPABASE_URL}/auth/v1/user", headers={
-        "Authorization": f"Bearer {token}",
-        "apikey": SERVICE_ROLE_KEY
-    })
+    try:
+        resp = requests.get(f"{SUPABASE_URL}/auth/v1/user", headers={
+            "Authorization": f"Bearer {token}",
+            "apikey": SERVICE_ROLE_KEY
+        }, timeout=AUTH_CHECK_TIMEOUT)
+    except requests.RequestException as e:
+        # 503, not 401: the token was never judged, and a 401 reads as an expired session.
+        print(f"[auth] could not reach the auth server: {type(e).__name__}")
+        raise HTTPException(503, "Sign-in could not be checked right now")
     if resp.status_code != 200:
         raise HTTPException(401, "Invalid token")
     return resp.json()
@@ -651,6 +660,29 @@ def _retention_window() -> dict:
     return _resolve_window(rows[0])
 
 
+def _expiry_cutoff(starts_on, ends_on, today: date) -> date | None:
+    """`expired_signal_cutoff`'s rule in Python, its only copy here: None without usable dates.
+
+    Enforced is ignored, as in the SQL.
+    """
+    try:
+        starts, ends = date.fromisoformat(str(starts_on)), date.fromisoformat(str(ends_on))
+    except ValueError:
+        return None                 # no dates: the SQL cutoff is NULL and deletes nothing
+    return ends if today >= ends else starts - timedelta(days=1)
+
+
+def _expired_through(today: date) -> date | None:
+    """The last day whose raw signal rows the expiry job may have deleted, or None.
+
+    Unreadable is `date.max`: unknown, so every day may have expired.
+    """
+    window = _retention_window()
+    if window.get("state") == WINDOW_UNREADABLE:
+        return date.max
+    return _expiry_cutoff(window.get("starts_on"), window.get("ends_on"), today)
+
+
 def _resolve_window(row: dict) -> dict:
     """Today's position in a window row (the cache stores the row, not this verdict)."""
     name = row.get("timezone") or "UTC"
@@ -784,6 +816,16 @@ def _school_timezone() -> tzinfo:
             return timezone.utc
 
 
+def _tz_name(tz: tzinfo) -> str:
+    """The zone's IANA name for an RPC; `timezone.utc` (the last-resort fallback) has no `.key`."""
+    return getattr(tz, "key", None) or "UTC"
+
+
+def _school_timezone_name() -> str:
+    """`_school_timezone()`'s name: a mistyped zone reaches Postgres as UTC, never raw."""
+    return _tz_name(_school_timezone())
+
+
 def _school_date(ts, tz: tzinfo) -> date | None:
     """The calendar day `ts` falls on *at the school*. None if unparseable.
 
@@ -800,20 +842,70 @@ def _school_day(ts, tz: tzinfo) -> str:
     return "" if resolved is None else resolved.isoformat()
 
 
-def _credit_session_to_user_stats(user_id: str, total_q: int, correct: int) -> None:
-    """Add one closed session's answers to the student's lifetime totals. Never raises."""
+def _missed_a_school_day(last: date, day: date) -> bool:
+    """Whether a weekday falls strictly between `last` and `day`. Weekends never break a streak.
+
+    Holidays are not modelled: `retention_window` holds a term, not a calendar.
+    """
+    gap = (day - last).days
+    if gap > 7:
+        return True
+    return any((last + timedelta(days=i)).weekday() < 5 for i in range(1, gap))
+
+
+def _streak_update(stats: dict, started_at, tz: tzinfo) -> dict:
+    """The streak fields after crediting a session that began at `started_at`.
+
+    A streak counts school days with an answered session and no weekday missed between them,
+    keyed on the day the work began (the sweep closes sessions hours later). A weekend session
+    counts; an older session changes nothing.
+    """
+    day, last = _school_date(started_at, tz), _school_date(stats.get("last_session_at"), tz)
+    current, best = stats.get("current_streak") or 0, stats.get("best_streak") or 0
+    if day is None or (last is not None and day < last):
+        return {}
+    if last is not None and day == last:
+        current = max(current, 1)
+    elif last is not None and not _missed_a_school_day(last, day):
+        current += 1
+    else:
+        current = 1
+    return {"current_streak": current, "best_streak": max(best, current),
+            "last_session_at": _parse_ts(started_at).isoformat()}
+
+
+def _live_streak(stats: dict, tz: tzinfo) -> dict:
+    """`stats` with `current_streak` 0 once a whole weekday has passed without a session.
+
+    Today is not missed yet: there is still time to practise.
+    """
+    last = _school_date(stats.get("last_session_at"), tz)
+    today = _utc_now().astimezone(tz).date()
+    if stats.get("current_streak") and (last is None or _missed_a_school_day(last, today)):
+        return {**stats, "current_streak": 0}
+    return stats
+
+
+def _credit_session_to_user_stats(user_id: str, total_q: int, correct: int,
+                                  started_at=None) -> None:
+    """Add one closed session's answers to the lifetime totals and the streak. Never raises.
+
+    `last_session_at` is when the latest credited session began; the streak is read from it.
+    """
     if not total_q:
         # No zero row: an absent `user_stats` row already reads as "no data yet".
         return
     try:
         existing = supabase.table("user_stats").select("*").eq("user_id", user_id).execute()
         now = _utc_now().isoformat()
+        streak = _streak_update(existing.data[0] if existing.data else {},
+                                started_at or now, _school_timezone())
         if existing.data:
             s = existing.data[0]
             supabase.table("user_stats").update({
                 "total_questions": (s.get("total_questions") or 0) + total_q,
                 "total_correct":   (s.get("total_correct")   or 0) + correct,
-                "last_session_at": now,
+                **streak,
                 "updated_at":      now,
             }).eq("user_id", user_id).execute()
         else:
@@ -824,6 +916,7 @@ def _credit_session_to_user_stats(user_id: str, total_q: int, correct: int) -> N
                 "current_streak":   0,
                 "best_streak":      0,
                 "last_session_at":  now,
+                **streak,
             }).execute()
     except Exception as e:                                     # noqa: BLE001
         print(f"[stats] could not credit {total_q} answers for {user_id[:8]}: {e}")
@@ -858,6 +951,10 @@ def _discard_if_nothing_recorded(session_id: str, questions,
     return True
 
 
+# Days rolled up from a session's start when it spans more; bounds a corrupt `started_at`.
+_ROLLUP_MAX_SPAN_DAYS = 7
+
+
 def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
     """Recompute the daily rollup for the school days this session touched. Never raises.
 
@@ -869,25 +966,28 @@ def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
         now = _utc_now()
         day = _school_date(started_at, tz) or _school_date(now, tz)
         end_day = _school_date(ended_at, tz) or _school_date(now, tz)
-        # An implausible span (corrupt or reversed timestamps) rolls up the closing day only.
         span = (end_day - day).days
-        if span < 0 or span > 7:
-            print(f"[rollup] {user_id[:8]}: implausible span {day}..{end_day} "
-                  f"({span}d), rolling up the closing day only")
-            day = end_day
+        if span < 0:
+            print(f"[rollup] {user_id[:8]}: reversed span {day}..{end_day}, "
+                  f"rolling up the closing day only")
+            days = [end_day]
+        elif span > _ROLLUP_MAX_SPAN_DAYS:
+            # An abandoned session's rows are near its start; the day the sweep closes it has none.
+            days = [day + timedelta(days=i) for i in range(_ROLLUP_MAX_SPAN_DAYS + 1)] + [end_day]
+        else:
+            days = [day + timedelta(days=i) for i in range(span + 1)]
         failures = 0
-        while day <= end_day:
+        for day in days:
             # Per day, so a failure on day one cannot skip the closing day.
             try:
                 supabase.rpc("rollup_signal_day", {
                     "p_user_id": user_id,
                     "p_day": day.isoformat(),
-                    "p_timezone": tz.key,
+                    "p_timezone": _tz_name(tz),
                 }).execute()
             except Exception as e:
                 failures += 1
                 print(f"[rollup] {user_id[:8]} {day}: {e}")
-            day += timedelta(days=1)
         if failures:
             print(f"[rollup] {user_id[:8]}: {failures} day(s) not rolled up")
     except Exception as e:
@@ -977,6 +1077,30 @@ def _session_had_signals(session_id: str) -> bool | None:
         return None
 
 
+def _eeg_was_started(session_id: str) -> bool | None:
+    """Whether /api/eeg/start ran for this session. None if unreadable.
+
+    Without it, a session answered with no headband paired read as a broken recording.
+    Under push nothing stamps it, so the alert is withheld there.
+    """
+    try:
+        rows = supabase.table("sessions").select("eeg_started_at") \
+            .eq("id", session_id).limit(1).execute().data or []
+        return bool(rows and rows[0].get("eeg_started_at"))
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[alerts] could not tell whether EEG started for {session_id}: {e}")
+        return None
+
+
+def _mark_eeg_started(session_id: str) -> None:
+    """Stamp the first EEG start on the session. Never raises; a start must not fail on it."""
+    try:
+        supabase.table("sessions").update({"eeg_started_at": _utc_now().isoformat()}) \
+            .eq("id", session_id).is_("eeg_started_at", "null").execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[eeg] could not stamp the EEG start on {session_id}: {e}")
+
+
 def _recording_was_expected(user_id: str) -> bool | None:
     """Whether EEG *should* have been recording. None when that cannot be told.
 
@@ -1021,7 +1145,9 @@ def _raise_session_alerts(user_id: str, session: dict,
         print(f"[alerts] cannot tell whether recording was expected for "
               f"{user_id[:8]}; withholding {ALERT_SIGNALS_MISSING}")
     elif expected:
-        had = _session_had_signals(sid)
+        started = _eeg_was_started(sid)
+        # A headband nobody started is not a fault; None (unreadable) withholds too.
+        had = _session_had_signals(sid) if started else None
         # `is False`: None means the count failed.
         if had is False:
             alerts.append({
@@ -1059,7 +1185,7 @@ def _close_session(user_id: str, session: dict, ended_at: str,
     if _discard_if_nothing_recorded(sid, total_q, answers_counted=counted):
         return {"discarded": True}
 
-    _credit_session_to_user_stats(user_id, total_q, correct)
+    _credit_session_to_user_stats(user_id, total_q, correct, session.get("started_at"))
     _rollup_session_days(user_id, session.get("started_at"), ended_at)
     # After the discard: an empty session is not a fault worth an alert.
     _raise_session_alerts(user_id, session, closed_by, total_q)
@@ -1308,7 +1434,7 @@ def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: 
                                "p_include_heart": include_heart,
                                "p_include_emotion": include_emotion,
                                # School timezone, matching `_weekly_signal_report`.
-                               "p_timezone": _retention_window().get("timezone") or "UTC"}).execute()
+                               "p_timezone": _school_timezone_name()}).execute()
 
 
 def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
@@ -1614,7 +1740,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                           include_emotion: bool = True,
                           consent_retrieved: bool = True,
                           emotion_revoked_at: str | None = None,
-                          heart_revoked_at: str | None = None):
+                          heart_revoked_at: str | None = None,
+                          eeg_enabled: bool = True):
     """Averages, highlights and per-day buckets of a student's recent signals.
 
     Callers must already have authorised the viewer. A false flag skips that
@@ -1683,9 +1810,12 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
 
     rollup_by: dict[tuple[str, str], dict] = {}
     rollup_ok = True
+    # A declined channel's rollup is not read, as its raw rows are not.
+    rollup_channels = ["cognitive"] + (["heart"] if include_heart else []) \
+        + (["emotion"] if include_emotion else [])
     try:
         for r in (supabase.table("signal_daily_rollup").select("*")
-                  .eq("user_id", student_id)
+                  .eq("user_id", student_id).in_("channel", rollup_channels)
                   .gte("day", (school_today - timedelta(days=days - 1)).isoformat())
                   .lte("day", school_today.isoformat())
                   .execute().data or []):
@@ -1693,6 +1823,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     except Exception as e:
         print(f"[weekly_report:rollup] {student_id}: {e}")
         rollup_ok = False
+    # Days whose raw rows the expiry job may have deleted: with the rollup unread, an
+    # empty day there is unknown, not quiet.
+    expired_through = _expired_through(school_today)
 
     cog_by_day = _by_school_day(cog, "ts")
     face_by_day = _by_school_day(face, "ts")
@@ -1724,12 +1857,27 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         return False, day > oldest_day  # == oldest_day is the day it cut into
 
     daily = []
+    # Days whose rollup is counted: their raw rows must not be counted a second time.
+    rolled_days: dict[str, set] = {"cognitive": set(), "emotion": set(), "heart": set()}
+    # Channels with a day that may have expired and could not be read from the rollup.
+    lost_channels: set[str] = set()
     for i in range(days - 1, -1, -1):
         day = (school_today - timedelta(days=i)).isoformat()
         cog_missing, cog_whole = _coverage(cog_ok, cog_cut, cog_oldest_day, day)
         face_missing, face_whole = _coverage(face_ok, face_cut, face_oldest_day, day)
         ses_missing, ses_whole = _coverage(ses_ok, ses_cut, ses_oldest_day, day)
         heart_missing, heart_whole = _coverage(heart_ok, heart_cut, heart_oldest_day, day)
+        if (not rollup_ok and expired_through is not None
+                and date.fromisoformat(day) <= expired_through):
+            # The raw rows may be gone and the rollup is unread: an empty day is unknown.
+            for channel, by_day, included in (("cognitive", cog_by_day, True),
+                                              ("emotion", face_by_day, include_emotion),
+                                              ("heart", heart_by_day, include_heart)):
+                if included and not by_day.get(day):
+                    lost_channels.add(channel)
+            cog_whole = cog_whole and bool(cog_by_day.get(day))
+            face_whole = face_whole and bool(face_by_day.get(day))
+            heart_whole = heart_whole and bool(heart_by_day.get(day))
         # Skip only when nothing asked for was retrieved; sessions have their own cap.
         if (cog_missing and (face_missing or not include_emotion)
                 and (heart_missing or not include_heart) and ses_missing):
@@ -1754,6 +1902,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         day_heart = [r for r in heart_by_day.get(day, []) if r.get("trusted") is True]
         heart_roll = (_rolled("heart", heart_by_day.get(day, []), heart_whole, heart_ok)
                       if include_heart else None)
+        for channel, roll in (("cognitive", cog_roll), ("emotion", face_roll), ("heart", heart_roll)):
+            if roll:
+                rolled_days[channel].add(day)
 
         daily.append({
             "date": day,
@@ -1829,10 +1980,16 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         n += len(nums)
         return (total / n) if n else None
 
+    def _unrolled(rows: list, channel: str) -> list:
+        """Raw rows on days the rollup did not supply; the cap's cut day is supplied by it."""
+        return [r for r in rows if _school_day(r.get("ts"), tz) not in rolled_days[channel]]
+
+    cog_week, face_week, heart_week = (_unrolled(cog, "cognitive"), _unrolled(face, "emotion"),
+                                       _unrolled(heart, "heart"))
     # Only trusted heart samples are averaged, as in the SQL aggregate.
-    heart_rates = [r["heart_rate_bpm"] for r in heart
+    heart_rates = [r["heart_rate_bpm"] for r in heart_week
                    if r.get("heart_rate_bpm") is not None and r.get("trusted") is True]
-    rmssd_values = [r["rmssd_ms"] for r in heart
+    rmssd_values = [r["rmssd_ms"] for r in heart_week
                     if r.get("rmssd_ms") is not None and r.get("trusted") is True]
     # Which sensor produced the readings (accuracy differs); trusted rows plus rollup days.
     heart_sources = sorted({r["source"] for r in heart
@@ -1841,15 +1998,15 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
 
     # Seeded from the rollup's full distribution, then raw rows on top.
     emotion_counts: dict[str, int] = dict(rolled_emotions)
-    for r in face:
+    for r in face_week:
         if r.get("emotion"):
             emotion_counts[r["emotion"]] = emotion_counts.get(r["emotion"], 0) + 1
 
     def _round2(value):
         return None if value is None else round(value, 2)
 
-    avg_focus = _round2(_week("focus", [r.get("focus") for r in cog]))
-    avg_stress = _round2(_week("stress", [r.get("stress") for r in cog]))
+    avg_focus = _round2(_week("focus", [r.get("focus") for r in cog_week]))
+    avg_stress = _round2(_week("stress", [r.get("stress") for r in cog_week]))
     avg_attention = _avg([r.get("attention") for r in face])
     highest_stress = max([float(r["stress"]) for r in cog if r.get("stress") is not None], default=None)
     lowest_focus = min([float(r["focus"]) for r in cog if r.get("focus") is not None], default=None)
@@ -1867,13 +2024,26 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     if bits:
         summary = "This week, " + ", ".join(bits) + "."
     else:
-        # "Nothing recorded" only for tables that read successfully.
-        measured, unread = [], []
-        (measured if cog_ok else unread).append("EEG")
+        # Each channel is one of: has readings, recorded nothing, or could not be read.
+        # "Nothing recorded" needs a successful read and no readings, rollup included.
+        has_heart = bool(heart_rates) or rolled_totals["heart_rate_bpm"][1] > 0
+        channels = [("EEG", bool(cog), cog_ok and "cognitive" not in lost_channels,
+                     eeg_enabled or bool(cog))]
         if include_emotion:
-            (measured if face_ok else unread).append("facial recognition")
+            channels.append(("facial recognition", bool(emotion_counts),
+                             face_ok and "emotion" not in lost_channels, True))
         if include_heart:
-            (measured if heart_ok else unread).append("heart rate")
+            channels.append(("heart rate", has_heart,
+                             heart_ok and "heart" not in lost_channels, True))
+        recorded, measured, unread = [], [], []
+        for name, has_data, read_ok, asked in channels:
+            if has_data:
+                recorded.append(name)
+            elif not read_ok:
+                unread.append(name)
+            elif asked:
+                # A declined EEG channel recorded nothing by decision, not by fault.
+                measured.append(name)
 
         def _join(items: list[str], conjunction: str) -> str:
             # "a, b or c" rather than "a or b or c" once there are 3+ items.
@@ -1882,6 +2052,13 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             return ", ".join(items[:-1]) + f" {conjunction} " + items[-1]
 
         parts = []
+        if "EEG" in recorded:
+            # Rows with no average: poor contact nulls the measurement it would have given.
+            parts.append("EEG readings were recorded this week, but none gave a usable "
+                         "focus or stress score.")
+        others = [name for name in recorded if name != "EEG"]
+        if others:
+            parts.append(_as_sentence(f"{_join(others, 'and')} readings were recorded this week"))
         if measured:
             parts.append(f"No {_join(measured, 'or')} samples were recorded this week.")
         if unread:
@@ -1925,7 +2102,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             "stress": avg_stress,
             # From focus, not the stored engagement -- see `_shape_summary`.
             "engagement": _round2(_week("engagement",
-                                        [r.get("focus") for r in cog])),
+                                        [r.get("focus") for r in cog_week])),
             "face_attention": avg_attention,
             # The score scale(s) the averages above span; see `_scale_range`.
             "score_scale": _scale_range(rollup_by.values()) if rollup_ok else None,
@@ -2163,10 +2340,28 @@ class EegSessionRequest(StrictModel):
 
 # ─── profiles ────────────────────────────────────────────────────────────
 
+# What the account's own pages read; named, so a new profiles column does not reach them by existing.
+_PROFILE_SELF_COLUMNS = ("id, display_name, email, role, grade_level, difficulty_bias, "
+                         "session_duration_minutes, practice_reminders, created_at")
+
+
 @app.get("/api/profile/me")
 def get_my_profile(request: Request):
+    """The caller's own row. A failed or missing read is an error, never `_profile`'s placeholder.
+
+    The placeholder is role "student": a teacher greeted by it was routed into the student app,
+    where an error lets AuthContext fall back to the sign-up claim.
+    """
     user = get_user(request)
-    return _profile(user["id"])
+    try:
+        rows = supabase.table("profiles").select(_PROFILE_SELF_COLUMNS) \
+            .eq("id", user["id"]).limit(1).execute().data
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[profile] could not read {user['id'][:8]}: {e}")
+        raise HTTPException(503, "Your profile could not be loaded")
+    if not rows:
+        raise HTTPException(404, "No profile exists for this account")
+    return rows[0]
 
 @app.put("/api/profile/me")
 def update_my_profile(payload: UpdateProfileRequest, request: Request):
@@ -2461,7 +2656,11 @@ def start_session(payload: StartSessionRequest, request: Request):
 def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...), request: Request = None):
     user = get_user(request)
     # Ownership before any write.
-    _session_or_403(session_id, user["id"])
+    session = _session_or_403(session_id, user["id"], "user_id, ended_at")
+    if session.get("ended_at"):
+        # Closed by the sweep, the live monitor or another tab: its totals are already
+        # credited, so an answer here would count nowhere. The page starts a new session.
+        raise HTTPException(409, "This session has ended")
     supabase.table("session_answers").insert({
         "session_id":     session_id,
         "user_id":        user["id"],
@@ -2904,9 +3103,10 @@ def _stats_including_open_session_many(student_ids: list[str]) -> dict[str, dict
     try:
         rows = supabase.table("user_stats").select("*") \
             .in_("user_id", lookup).execute().data or []
+        tz = _school_timezone() if rows else None
         for r in rows:
             if r.get("user_id") in base:
-                base[r["user_id"]] = {**r, "retrieved": True}
+                base[r["user_id"]] = {**_live_streak(r, tz), "retrieved": True}
     except Exception as e:                                     # noqa: BLE001
         print(f"[stats] could not batch-read user_stats for {len(student_ids)}: {e}")
         return {sid: {**v, "retrieved": False} for sid, v in base.items()}
@@ -3062,7 +3262,8 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
                                 include_emotion=channels.emotion,
                                 consent_retrieved=channels.consent_retrieved,
                                 emotion_revoked_at=channels.emotion_revoked_at,
-                                heart_revoked_at=channels.heart_revoked_at),
+                                heart_revoked_at=channels.heart_revoked_at,
+                                eeg_enabled=channels.eeg),
     }
 
 
@@ -3200,11 +3401,15 @@ def _strip_emphasis(line: str) -> str:
 
 
 def _weakest_topic(topics: list[dict]):
-    """Lowest-accuracy topic the student has attempted (unattempted ones read 0%)."""
-    attempted = [t for t in topics if (t.get("attempted_questions") or 0) > 0]
-    if not attempted:
+    """Lowest-accuracy topic the student has attempted and been scored on.
+
+    A None accuracy (flashcards viewed, nothing answered) is skipped, never read as 0%.
+    """
+    scored = [t for t in topics if (t.get("attempted_questions") or 0) > 0
+              and t.get("accuracy") is not None]
+    if not scored:
         return None
-    return min(attempted, key=lambda t: t.get("accuracy") or 0)
+    return min(scored, key=lambda t: t["accuracy"])
 
 
 def _topic_summary(row: dict | None) -> dict | None:
@@ -3450,17 +3655,16 @@ class LearningStrategyRequest(StrictModel):
 def _topics_from_practice_summary(topic_summary: dict) -> list[dict]:
     """A practice session's `topic_summary` in `_topic_breakdown`'s shape.
 
-    `accuracy` is 0, not None, for a flashcard-only topic, per `_weakest_topic`.
+    `accuracy` is None for a flashcard-only topic: viewed, never scored, so it is not a 0%.
     """
     out = []
     for topic, stats in (topic_summary or {}).items():
-        accuracy = stats.get("correct")
         out.append({
             "topic_id": None,
             "topic_name": topic,
             "attempted_questions": stats.get("attempted") or 0,
             "correct_questions": None,
-            "accuracy": accuracy if accuracy is not None else 0,
+            "accuracy": stats.get("correct"),
             "stress": None,
             "updated_at": None,
         })
@@ -3597,15 +3801,17 @@ _THOUSANDS_SEP = re.compile(r"(?<=\d),(?=\d)")
 def _trend_direction(weeks: list[dict], key: str) -> dict:
     """Which way one series moved across the weeks that have a reading.
 
-    Always a dict: `direction` is None below two weeks, and `weeks_with_data`
-    still tells zero weeks from one. Anchored on the first and last weeks
-    *with* a reading, so trailing null weeks don't hide a trend.
+    Always a dict: `direction` is None below two weeks or across a score-scale change
+    (`mixed_scale`), and `weeks_with_data` tells zero weeks from one. Anchored on the
+    first and last weeks *with* a reading, so trailing null weeks don't hide a trend.
     """
-    points = [w.get(key) for w in (weeks or [])
-              if isinstance(w.get(key), (int, float))]
-    if len(points) < 2:
+    readings = [w for w in (weeks or []) if isinstance(w.get(key), (int, float))]
+    points = [w[key] for w in readings]
+    scales = _combine_ranges(w.get("score_scale") for w in readings)
+    mixed = bool(scales) and scales["min"] != scales["max"]
+    if len(points) < 2 or mixed:
         return {"direction": None, "first": None, "last": None,
-                "weeks_with_data": len(points)}
+                "weeks_with_data": len(points), "mixed_scale": mixed}
     first, last = float(points[0]), float(points[-1])
     delta = last - first
     if abs(delta) < _CHART_SUMMARY_TREND_MIN_DELTA:
@@ -3613,7 +3819,7 @@ def _trend_direction(weeks: list[dict], key: str) -> dict:
     else:
         direction = "up" if delta > 0 else "down"
     return {"direction": direction, "first": round(first, 4),
-            "last": round(last, 4), "weeks_with_data": len(points)}
+            "last": round(last, 4), "weeks_with_data": len(points), "mixed_scale": False}
 
 
 def _chart_summary_basis(student_id: str, days: int, weeks: int,
@@ -3641,6 +3847,15 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
 
     total = stats.get("total_questions") or 0
     correct = stats.get("total_correct") or 0
+
+    def _channel(enabled: bool, revoked_at, samples, table: str) -> dict:
+        info = {"enabled": enabled, "revoked_at": revoked_at, "samples": samples}
+        # Only a permitted, read, empty channel needs to know whether rows arrived at all.
+        if enabled and summary["retrieved"] and not samples:
+            info["any_rows"] = _any_rows_since(table, student_id, days)
+        return info
+
+    scored = [t for t in attempted if t.get("accuracy") is not None]
     return {
         "days": days,
         "weeks": weeks,
@@ -3654,10 +3869,10 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
         "consent_retrieved": channels.consent_retrieved,
         "channels": {
             # No `emotion`: the report states no facial number.
-            "eeg":   {"enabled": channels.eeg,   "revoked_at": channels.eeg_revoked_at,
-                      "samples": summary["cognitive_samples"]},
-            "heart": {"enabled": channels.heart, "revoked_at": channels.heart_revoked_at,
-                      "samples": summary["heart_samples"]},
+            "eeg": _channel(channels.eeg, channels.eeg_revoked_at,
+                            summary["cognitive_samples"], "cognitive_signals"),
+            "heart": _channel(channels.heart, channels.heart_revoked_at,
+                              summary["heart_samples"], "heart_signals"),
         },
         "averages": {
             "focus": summary["focus"],
@@ -3678,11 +3893,12 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
         },
         "topics": {
             "weakest": _weakest_topic_summary(topics),
-            # Attempted topics only: an untouched one reports 0%.
+            # Scored topics only: an untouched one reports 0%.
             "strongest": _topic_summary(
-                max(attempted, key=lambda t: t.get("accuracy") or 0)
-                if attempted else None),
+                max(scored, key=lambda t: t["accuracy"]) if scored else None),
             "attempted_count": len(attempted),
+            # Ties make max() and min() return one topic; this tells that from a lone topic.
+            "scored_count": len(scored),
         },
     }
 
@@ -3714,23 +3930,48 @@ _CHART_SUMMARY_CHANNEL_NAMES = {"eeg": "Focus and stress", "heart": "Heart rate"
 def _channel_absence(channel: str, basis: dict) -> str | None:
     """Why a channel has no figure to state, or None if it has one.
 
-    Ordered as `cellLabel`: consent unreadable, revoked, unread, no samples.
+    Ordered as `cellLabel`: consent unreadable, revoked, unread, no samples. A revoked
+    channel with samples (EEG is read regardless) has figures, from before it was turned off.
+    `samples` counts usable rows, so `any_rows` is what tells "unusable" from "nothing".
     """
     info = (basis.get("channels") or {}).get(channel) or {}
     name = _CHART_SUMMARY_CHANNEL_NAMES.get(channel, channel)
     if not basis.get("consent_retrieved", True):
         return (f"{name} is not described here: whether this sensor was "
                 "permitted could not be read, so nothing is claimed about it.")
-    if not info.get("enabled"):
+    if not info.get("enabled") and not info.get("samples"):
         revoked = _local_date_text(info.get("revoked_at"))
         return (f"{name} was not recorded because the sensor was turned off"
                 + (f" on {revoked}." if revoked else "."))
     if not basis.get("signals_retrieved", True):
         return f"{name} could not be read this time, so no figure is given for it."
     if not info.get("samples"):
+        if info.get("any_rows"):
+            return None             # recorded, none usable: the caller says so
+        if "any_rows" in info and info["any_rows"] is None:
+            return (f"{name} has no usable reading here, and whether anything was "
+                    "recorded could not be read.")
         return (f"{name} was permitted but nothing was recorded, so there is "
                 "no reading to describe.")
     return None
+
+
+def _any_rows_since(table: str, student_id: str, days: int) -> bool | None:
+    """Whether any row of `table` landed for the student in the last `days` school days.
+
+    Usable or not: the summary RPC counts only usable ones. None if the read failed.
+    """
+    tz = _school_timezone()
+    today = _utc_now().astimezone(tz).date()
+    since = datetime.combine(today - timedelta(days=days - 1), datetime.min.time(),
+                             tzinfo=tz).astimezone(timezone.utc).isoformat()
+    try:
+        rows = supabase.table(table).select("ts").eq("user_id", student_id) \
+            .gte("ts", since).limit(1).execute().data or []
+        return bool(rows)
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[chart_summary] could not check {table} for {student_id[:8]}: {e}")
+        return None
 
 
 _MONTHS = ("January", "February", "March", "April", "May", "June", "July",
@@ -3824,6 +4065,10 @@ def _rule_based_chart_summary(basis: dict) -> list[str]:
                 f"{label} is {value}%, and across the weeks with readings it has "
                 f"{_TREND_WORDS[move['direction']]} from "
                 f"{_pct_int(move['first'])}% to {_pct_int(move['last'])}%.")
+        elif move.get("mixed_scale"):
+            # A sidecar restart can change the scale; the two ends are not comparable.
+            out.append(f"{label} is {value}%. Its weekly readings were scored on different "
+                       "scales, so no direction is given for it.")
         elif not basis.get("trend_retrieved", True):
             # A failed trend read must not read as a first week.
             out.append(f"{label} is {value}%. The term trend could not be read, "
@@ -3835,6 +4080,12 @@ def _rule_based_chart_summary(basis: dict) -> list[str]:
             # Zero weeks: several causes are indistinguishable here, so name none.
             out.append(f"{label} is {value}%. No week has a reading for it yet, "
                        "so the term chart cannot show a direction.")
+
+    eeg = (basis.get("channels") or {}).get("eeg") or {}
+    if not eeg.get("enabled") and eeg.get("samples") and not _channel_absence("eeg", basis):
+        revoked = _local_date_text(eeg.get("revoked_at"))
+        out.append("These focus and stress figures are from before the sensor was turned off"
+                   + (f" on {revoked}." if revoked else "."))
 
     heart_absent = _channel_absence("heart", basis)
     bpm = averages.get("heart_rate_bpm")
@@ -3857,6 +4108,10 @@ def _rule_based_chart_summary(basis: dict) -> list[str]:
             f"topic at {strongest.get('accuracy')}%, and "
             f"{_topic_prose(weakest.get('topic_name'))} the weakest at "
             f"{weakest.get('accuracy')}%.")
+    elif weakest and (topics.get("scored_count") or 0) > 1:
+        # One topic from both ends means every scored topic ties.
+        out.append(f"All {topics['scored_count']} attempted topics are at "
+                   f"{weakest.get('accuracy')}%, so none stands out as strongest or weakest.")
     elif weakest:
         out.append(f"Only {_topic_prose(weakest.get('topic_name'))} has been attempted "
                    f"so far, at {weakest.get('accuracy')}%.")
@@ -4040,12 +4295,16 @@ def leaderboard(request: Request, limit: int = 20):
     """
     user = get_user(request)
     res = supabase.table("user_stats") \
-        .select("user_id, total_correct, total_questions, current_streak, best_streak") \
+        .select("user_id, total_correct, total_questions, current_streak, best_streak, "
+                "last_session_at") \
         .order("total_correct", desc=True).limit(max(1, min(limit, _LEADERBOARD_MAX))).execute()
     rows = res.data or []
     profiles = _profiles_many(r.get("user_id") for r in rows)
+    tz = _school_timezone() if rows else None
     enriched = []
     for i, row in enumerate(rows):
+        row = _live_streak(row, tz)
+        row.pop("last_session_at", None)
         uid = row.pop("user_id", None)
         p = profiles.get(uid) or {}
         enriched.append({
@@ -4084,7 +4343,8 @@ def class_summaries(request: Request):
     """Per-class headline averages for the teacher's dashboard, in three reads.
 
     Accuracy averages over students who attempted something (`None` if none);
-    streak over the whole roster. `retrieved` rides on each class.
+    streak over the whole roster (`None` if empty). `retrieved` rides on each class, and
+    an unretrieved class carries no averages: its zeros would be placeholders.
     """
     user = get_user(request)
     classes = supabase.table("classes").select("id") \
@@ -4098,7 +4358,7 @@ def class_summaries(request: Request):
             .in_("class_id", ids).execute().data or []
     except Exception as e:                                     # noqa: BLE001
         print(f"[classes] could not read memberships for {len(ids)} classes: {e}")
-        return {cid: {"avgAccuracy": None, "avgStreak": 0, "retrieved": False}
+        return {cid: {"avgAccuracy": None, "avgStreak": None, "retrieved": False}
                 for cid in ids}
 
     by_class: dict[str, list] = {}
@@ -4113,12 +4373,15 @@ def class_summaries(request: Request):
         roster = [stats.get(sid) or {} for sid in by_class.get(cid, [])]
         # One unretrieved student makes the class average unretrieved.
         retrieved = all(s.get("retrieved", False) for s in roster) if roster else True
+        if not retrieved:
+            out[cid] = {"avgAccuracy": None, "avgStreak": None, "retrieved": False}
+            continue
         attempted = [s for s in roster if (s.get("total_questions") or 0) > 0]
         avg_accuracy = round(sum(
             (s.get("total_correct") or 0) / s["total_questions"] * 100
             for s in attempted) / len(attempted)) if attempted else None
         avg_streak = round(sum(s.get("current_streak") or 0
-                               for s in roster) / len(roster)) if roster else 0
+                               for s in roster) / len(roster)) if roster else None
         out[cid] = {"avgAccuracy": avg_accuracy, "avgStreak": avg_streak,
                     "retrieved": retrieved}
     return out
@@ -4569,7 +4832,7 @@ def _class_signal_totals(student_ids: list[str], days: int,
             "p_days": days,
             "p_include_heart": include_heart,
             "p_include_emotion": include_emotion,
-            "p_timezone": _retention_window().get("timezone") or "UTC",
+            "p_timezone": _school_timezone_name(),
         }).execute()
     except Exception as e:                                     # noqa: BLE001
         print(f"[cohort_signals] per-student read failed: {e}")
@@ -4621,7 +4884,7 @@ def _class_signal_trend(student_ids: list[str], days: int,
             "p_days": days,
             "p_include_heart": include_heart,
             "p_include_emotion": include_emotion,
-            "p_timezone": _retention_window().get("timezone") or "UTC",
+            "p_timezone": _school_timezone_name(),
         }).execute()
     except Exception as e:                                     # noqa: BLE001
         print(f"[cohort_signals] trend read failed: {e}")
@@ -4784,7 +5047,8 @@ def _cohort_signals(class_id: str, days: int) -> dict:
         "summaries_retrieved": summaries_retrieved,
         "per_student": per_student,
         "min_students": _COHORT_MIN_STUDENTS,
-        "timezone": _retention_window().get("timezone") or "UTC",
+        # The zone the days were bucketed in, which a mistyped setting makes UTC.
+        "timezone": _school_timezone_name(),
     }
 
 
@@ -5248,8 +5512,8 @@ def erase_consent_channel(student_id: str, payload: ErasureRequest,
             "p_user_id": student_id,
             "p_channel": payload.channel,
             "p_erased_by": user["id"],
-            # `.key`: RPC params go through `json.dumps`, which can't serialise a ZoneInfo.
-            "p_timezone": _school_timezone().key,
+            # A name: RPC params go through `json.dumps`, which can't serialise a ZoneInfo.
+            "p_timezone": _school_timezone_name(),
         }).execute().data or {}
     except Exception as e:
         # One transaction, so nothing partial to describe.
@@ -5450,16 +5714,43 @@ def _session_or_403(session_id: str, user_id: str, columns: str = "user_id") -> 
     return row
 
 
-def _verify_session_owner(session_id: str, user_id: str):
-    """`_session_or_403` for the callers that want only the refusal."""
-    _session_or_403(session_id, user_id)
+def _verify_session_owner(session_id: str, user_id: str, columns: str = "user_id") -> dict:
+    """`_session_or_403`: the refusal, and the row for a caller that names more columns."""
+    return _session_or_403(session_id, user_id, columns)
+
+
+# Clock drift tolerated between a sidecar's sample stamps and this server's session bounds.
+_INGEST_TS_SLACK = timedelta(minutes=10)
+_INGEST_SESSION_COLUMNS = "user_id, started_at, ended_at"
+
+
+def _ingest_ts_filter(session: dict):
+    """A predicate: is a sample's `ts` inside the session, give or take `_INGEST_TS_SLACK`?
+
+    The stamp comes from the student's laptop clock. One outside the session lands on a
+    day its rollup never covers, which the expiry job then deletes unsummarised.
+    A missing `ts` is stamped server-side and passes; an unparseable one does not.
+    """
+    session = session or {}
+    started = _parse_ts(session.get("started_at"))
+    ended = _parse_ts(session.get("ended_at")) or _utc_now()
+    if started is None:
+        return lambda ts: True      # no bound to check against; never refuse on our gap
+    lo, hi = started - _INGEST_TS_SLACK, ended + _INGEST_TS_SLACK
+
+    def inside(ts) -> bool:
+        if ts is None:
+            return True
+        parsed = _parse_ts(ts)
+        return parsed is not None and lo <= parsed <= hi
+    return inside
 
 @app.post("/api/signals/cognitive")
 def ingest_cognitive(payload: CognitiveBatch, request: Request):
     user = get_user(request)
     # Rate-limit first: spares a flooding client a `sessions` query.
     _rate_limit_ingest(user["id"])
-    _verify_session_owner(payload.session_id, user["id"])
+    session = _verify_session_owner(payload.session_id, user["id"], _INGEST_SESSION_COLUMNS)
 
     # Last line of defence against a stale sidecar; fails closed, reason says which gate.
     consent = _may_record(user["id"])
@@ -5506,6 +5797,10 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
             samples.append(CognitiveSample.model_validate(raw_sample))
         except Exception:  # noqa: BLE001 -- pydantic's ValidationError, plus a non-dict entry
             malformed += 1
+    inside = _ingest_ts_filter(session)
+    placed = [s for s in samples if inside(s.ts)]
+    out_of_window = len(samples) - len(placed)
+    samples = placed
     rows = [r for r in (_row(s) for s in samples) if r is not None]
     # Upsert on `cog_session_ts_key`: a replayed batch is a no-op.
     inserted = 0
@@ -5518,13 +5813,14 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     return {"ok": True, "inserted": inserted,
             "dropped": len(samples) - len(rows),
             "malformed": malformed,
+            "out_of_window": out_of_window,
             "duplicates": len(rows) - inserted}
 
 @app.post("/api/signals/face")
 def ingest_face(payload: FaceBatch, request: Request):
     user = get_user(request)
     _rate_limit_ingest(user["id"])
-    _verify_session_owner(payload.session_id, user["id"])
+    session = _verify_session_owner(payload.session_id, user["id"], _INGEST_SESSION_COLUMNS)
 
     # Last line of defence against a stale sidecar; fails closed.
     consent = _may_record(user["id"])
@@ -5532,6 +5828,8 @@ def ingest_face(payload: FaceBatch, request: Request):
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
                 "reason": _not_recording_reason(consent, "camera not consented")}
 
+    inside = _ingest_ts_filter(session)
+    placed = [s for s in payload.samples if inside(s.ts)]
     # Through the shared mapper, so the field list can't drift.
     rows = [r for r in (
         signal_mapping.map_face_to_face_signal(
@@ -5544,7 +5842,7 @@ def ingest_face(payload: FaceBatch, request: Request):
                       "trusted": s.emotion_trusted},
              "raw": s.raw},
             payload.session_id, user["id"])
-        for s in payload.samples
+        for s in placed
     ) if r is not None]
     # Upsert on `face_session_ts_key`: a replayed batch is a no-op.
     inserted = 0
@@ -5556,7 +5854,8 @@ def ingest_face(payload: FaceBatch, request: Request):
         inserted = len(resp.data or [])
     # Separate counts: push_client tells a quiet camera from a replay by them.
     return {"ok": True, "inserted": inserted,
-            "dropped": len(payload.samples) - len(rows),
+            "dropped": len(placed) - len(rows),
+            "out_of_window": len(payload.samples) - len(placed),
             "duplicates": len(rows) - inserted}
 
 
@@ -5569,12 +5868,16 @@ def ingest_heart(payload: HeartBatch, request: Request):
     """
     user = get_user(request)
     _rate_limit_ingest(user["id"])
-    _verify_session_owner(payload.session_id, user["id"])
+    session = _verify_session_owner(payload.session_id, user["id"], _INGEST_SESSION_COLUMNS)
 
     consent = _may_record(user["id"])
     allowed = _permitted_heart_sources(consent)
     kept = [s for s in payload.samples if s.source in allowed]
     dropped = len(payload.samples) - len(kept)
+    inside = _ingest_ts_filter(session)
+    placed = [s for s in kept if inside(s.ts)]
+    out_of_window = len(kept) - len(placed)
+    kept = placed
 
     # Tells "every sensor declined" from "could not find out".
     reason = None
@@ -5607,6 +5910,7 @@ def ingest_heart(payload: HeartBatch, request: Request):
         # What the database wrote; needs return=representation (the default).
         written = len(resp.data or [])
     return {"ok": True, "inserted": written, "dropped": dropped,
+            "out_of_window": out_of_window,
             "duplicates": len(rows) - written, "reason": reason}
 
 @app.get("/api/signals/session/{session_id}")
@@ -5737,8 +6041,11 @@ def class_live(class_id: str, request: Request):
             if a and a[0].get("answered_at"):             candidates.append(a[0]["answered_at"])
             if sess.get("started_at"):                    candidates.append(sess["started_at"])
             last_activity = max(candidates) if candidates else sess.get("started_at")
+            # With no sensor, a student reading one question sends nothing for minutes; only a
+            # sensor that went quiet says they left. A sensorless one waits for the sweep.
+            sensed = bool(latest_cog or latest_face or latest_heart)
 
-            if last_activity and last_activity < stale_cutoff:
+            if sensed and last_activity and last_activity < stale_cutoff:
                 # `sid` is the student. Stop the poller before closing, or a tick
                 # can land a row after the discard check looked.
                 eeg_poller.stop(sid2, sid)
@@ -5948,6 +6255,7 @@ def eeg_start(payload: EegSessionRequest, request: Request):
             "This headband is already in use by another user. Ask them to "
             "disconnect, or wait a few seconds and try again.",
         )
+    _mark_eeg_started(payload.session_id)
     return {"ok": True, **out}
 
 @app.post("/api/eeg/stop")
@@ -6224,7 +6532,9 @@ def parent_consent_notices(request: Request):
 
     ids = [l["child_id"] for l in links]
     try:
-        rows = supabase.table("consent_withdrawals")             .select("user_id, channel, withdrawn_at")             .in_("user_id", ids)             .order("withdrawn_at", desc=True)             .limit(_MAX_WITHDRAWAL_NOTICES).execute().data or []
+        # The child's own withdrawals only: one a parent made is not "<child> turned off".
+        # A student can withdraw only their own consent, so both filters on `ids` are exact.
+        rows = supabase.table("consent_withdrawals")             .select("user_id, channel, withdrawn_at, withdrawn_by")             .in_("user_id", ids).in_("withdrawn_by", ids)             .order("withdrawn_at", desc=True)             .limit(_MAX_WITHDRAWAL_NOTICES).execute().data or []
     except Exception as e:
         print(f"[consent-notices] {user['id']}: {e}")
         return {"notices": [], "retrieved": False}
@@ -6541,6 +6851,8 @@ class RetentionWindowUpdate(StrictModel):
     starts_on: str | None = Field(None, max_length=_SHORT_MAX)
     ends_on: str | None = Field(None, max_length=_SHORT_MAX)
     timezone: str = Field("UTC", max_length=_TIMEZONE_MAX)
+    # Sent only after the 409 that names the delete cutoff this save would move.
+    confirm_expiry: bool = False
 
 
 @app.get("/api/admin/retention-window")
@@ -6560,6 +6872,27 @@ def admin_get_retention_window(request: Request):
             "starts_on": row.get("starts_on"),
             "ends_on": row.get("ends_on"),
             "timezone": row.get("timezone") or "UTC"}
+
+
+def _confirm_expiry_move(starts, ends, tz_name: str, confirmed: bool) -> None:
+    """409 unless confirmed, when these dates move the delete cutoff later with today outside them.
+
+    `expired_signal_cutoff` reads the dates whether or not the year is enforced, and the
+    nightly delete it drives cannot be undone: a mistyped year would clear this year's rows.
+    """
+    today = _utc_now().astimezone(ZoneInfo(tz_name)).date()
+    new_cutoff = _expiry_cutoff(starts, ends, today)
+    if new_cutoff is None:
+        return                      # no usable dates: nothing is deleted
+    current = _expired_through(today)
+    moves_later = current in (None, date.max) or new_cutoff > current
+    inside = date.fromisoformat(str(starts)) <= today <= date.fromisoformat(str(ends))
+    if confirmed or not moves_later or inside:
+        return
+    raise HTTPException(409, (
+        f"Today is outside these dates, so saving them lets the nightly job delete "
+        f"per-sample signal rows up to {new_cutoff.isoformat()}; that cannot be undone. "
+        "Check the years, then confirm to save anyway."))
 
 
 @app.put("/api/admin/retention-window")
@@ -6584,6 +6917,7 @@ def admin_set_retention_window(request: Request, payload: RetentionWindowUpdate)
             raise HTTPException(422, "starts_on and ends_on must be YYYY-MM-DD")
         if ends_d <= starts_d:
             raise HTTPException(422, "ends_on must be after starts_on")
+    _confirm_expiry_move(starts, ends, payload.timezone, payload.confirm_expiry)
 
     row = {"id": True, "enforced": payload.enforced,
            "starts_on": starts or None, "ends_on": ends or None,

@@ -410,14 +410,13 @@ Dependencies are pinned: `backend/requirements.txt` (runtime, direct deps only, 
 design — no `pip freeze`), `requirements-dev.txt` adds pytest. EEGResearch uses `pyproject.toml`
 plus `requirements*.lock`.
 
-**The frontend's `overrides: { vite }` is what puts vitest on the app's vite, and removing it
-breaks the suite in a way that does not name it.** `vitest` depends on `vite ^5 || ^6 || ^7`, so
-without the override npm installs a *second*, older vite under `node_modules/vitest/` — and
-`@vitejs/plugin-react` (peer `vite ^8`) then does not apply to the test transform, so every JSX
-file compiles to the classic runtime and 613 tests fail with `ReferenceError: React is not
-defined`. The app still builds, because that half uses the top-level vite. Keep the override's
-range equal to the `vite` devDependency, and re-check it whenever either is bumped; it goes away
-only when vitest's own vite range reaches 8.
+**There must be exactly one vite, and `npm ls vite` is the check.** A second, older vite under
+`node_modules/vitest/` leaves `@vitejs/plugin-react` off the test transform, so every JSX file
+compiles to the classic runtime and hundreds of tests fail with `ReferenceError: React is not
+defined` while the app still builds. vitest 5 takes vite as a peer, so no override is needed; one
+comes back only if a vitest bump drops vite 8 from that range. vitest and `@vitest/*` pin each
+other exactly, so they move as one (the `vitest` Dependabot group). **Resolve with npm 11** (Node
+24): npm 10's arborist crashes on vitest 5's peer set with `reading 'edgesOut'`; `npm ci` is fine.
 
 **A worktree that borrows `node_modules` through a junction must drop the junction first.** `git
 worktree remove` deletes *through* a junction, so it empties the main checkout's `node_modules` from

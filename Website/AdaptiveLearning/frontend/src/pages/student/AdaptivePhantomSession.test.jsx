@@ -25,6 +25,7 @@ vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u1', email: 'a@b.c' }, role: 'student', loading: false }),
 }))
 
+import { toast } from 'sonner'
 import { endSession, recordAnswer } from '../../lib/session'
 import { mockApi, overrideApi, resetApi } from '../../test/mocks/apiFetch'
 import { runSignOutTasks } from '../../lib/signOutTasks'
@@ -138,4 +139,25 @@ it('records the answer in a new session when the backend closed this one', async
   expect(recordAnswer.mock.calls.map(([a]) => a.sessionId)).toEqual(['sess-1', 'sess-2'])
   expect(recordAnswer.mock.calls[1][0]).toMatchObject({ questionId: 'q1', selectedIndex: 1, correct: true })
   expect(started).toBe(2)
+  expect(toast.error).not.toHaveBeenCalled()
+})
+
+
+it('tells the student when the answer is refused in the new session too', async () => {
+  let started = 0
+  overrideApi('/api/sessions/start', () => ({ id: `sess-${++started}` }), 'POST')
+  overrideApi('/api/generate-question?bias=0&grade=1st+Grade&session_id=sess-1', () => ({
+    id: 'q1', question_text: 'What is 2 + 2?', question_topic: 'ordering',
+    answer_options: ['3', '4', '5'], correct_answer: '4', difficulty: 'easy',
+  }))
+  recordAnswer.mockResolvedValueOnce({ ended: true }).mockResolvedValueOnce({ ended: true })
+  render(<Adaptive />)
+  await userEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+
+  await userEvent.click(screen.getByRole('button', { name: /^B\s*4$/ }))
+  await userEvent.click(screen.getByRole('button', { name: /submit answer/i }))
+
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('That answer could not be saved.'))
+  expect(recordAnswer).toHaveBeenCalledTimes(2)
 })

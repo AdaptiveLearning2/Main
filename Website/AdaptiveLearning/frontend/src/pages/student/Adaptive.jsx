@@ -1093,8 +1093,14 @@ export default function Adaptive() {
       sessionIdRef.current = null
       setSessionId(null)
       const fresh = await getOrCreateSession().catch(e => { console.error('[session]', e); return null })
+      // Pull: the poller was writing the closed session; push re-hands over on `sessionId`.
+      if (fresh) armRecording(fresh).catch(e => console.error('[headband]', e))
       res = await recordAnswer({ sessionId: fresh, ...answer })
-      if (res?.ended) res = null
+      if (res?.ended) {
+        // Refused twice: say so, as every other unsaved answer does.
+        toast.error('That answer could not be saved.')
+        res = null
+      }
     }
     if (res) {
       // Counted only once the answer is stored; failures already toasted.

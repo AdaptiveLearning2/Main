@@ -10,11 +10,11 @@ jobs:
     name: EEGResearch tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 3.14, matching the local venvs. The minor, not the patch: setup-python
       # fails outright on an exact version the runner image lacks.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 
@@ -36,7 +36,7 @@ jobs:
     # ENABLE_LIBMUSE=OFF (the SDK cannot ship to CI): code inside those guards is not compiled.
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure
         working-directory: EEGResearch/native_bridge
@@ -50,9 +50,9 @@ jobs:
     name: Website backend tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 
@@ -87,8 +87,8 @@ jobs:
     # explicit REVOKE narrows them. A lint, because ALTER DEFAULT PRIVILEGES does not work.
     # Own job: stdlib text analysis, no Docker, under a second.
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
       # The parser first: a regex over SQL fails quietly in both directions.
@@ -109,8 +109,8 @@ jobs:
     runs-on: ubuntu-latest
     # A written limit on comment size had already failed once; this makes it a gate.
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
       - name: Self-test the parser
@@ -124,7 +124,7 @@ jobs:
     # The only CI step that applies migrations ("Supabase Preview" is always skipped).
     # A local Supabase stack, not bare postgres: migrations need auth.uid() and the Supabase roles.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Matches the repo-local CLI in package.json; bump both together.
       - uses: supabase/setup-cli@v1
@@ -153,9 +153,9 @@ jobs:
     name: Frontend tests, build & lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: "npm"
@@ -196,9 +196,9 @@ jobs:
     name: Dependency scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 
@@ -253,7 +253,7 @@ jobs:
           done
           exit $status
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: "npm"
@@ -302,7 +302,7 @@ jobs:
     name: Secret scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Whole history: a removed key is still served by its commit.
           fetch-depth: 0

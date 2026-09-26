@@ -374,7 +374,23 @@ it('reports the EEG start once a headband streams into the handed-over session',
   await screen.findByText('What is 2 + 2?')
 
   await waitFor(() => expect(markEegStarted).toHaveBeenCalledWith('sess-push'), POLL)
+  // Through a whole status poll, which re-renders every input the effect reads.
+  const reads = museState.mock.calls.length
+  await waitFor(() => expect(museState.mock.calls.length).toBeGreaterThan(reads), POLL)
+  await sleep(250)
   expect(markEegStarted).toHaveBeenCalledTimes(1)
+}, TEST_TIMEOUT)
+
+it('retries a failed EEG-start report on its own, without waiting for the link to change', async () => {
+  // One brief backend error left the whole lesson unstamped, so a silent headband raised no alert.
+  withQuestions()
+  markEegStarted.mockResolvedValueOnce(false)
+  await connect()
+  fireEvent.click(screen.getByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+
+  await waitFor(() => expect(markEegStarted).toHaveBeenCalledTimes(2), POLL)
+  expect(markEegStarted.mock.calls.map(([sid]) => sid)).toEqual(['sess-push', 'sess-push'])
 }, TEST_TIMEOUT)
 
 it('reports nothing for a session with no headband streaming', async () => {

@@ -9,6 +9,7 @@ vi.mock('sonner', () => ({
 }))
 vi.mock('../../lib/session', () => ({
   endSession: vi.fn(async () => true),
+  markEegStarted: vi.fn(async () => true),
   recordAnswer: vi.fn(async () => null),
 }))
 // Rewritten per test; the hoisted `vi.mock` factories read it only when called.

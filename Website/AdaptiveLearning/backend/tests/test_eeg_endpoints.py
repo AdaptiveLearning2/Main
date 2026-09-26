@@ -395,6 +395,26 @@ def test_the_stamp_is_written_once_and_never_raises(monkeypatch):
     main._mark_eeg_started("session-1")
 
 
+@pytest.mark.parametrize("owner,ended_at,status", [
+    ("user-a", None, None),
+    ("user-a", "2026-09-26T10:00:00Z", 409),      # closed: its alerts are already decided
+    ("user-b", None, 403),                        # someone else's session
+], ids=["owner, open", "closed", "stranger"])
+def test_the_push_report_stamps_only_the_owners_open_session(monkeypatch, owner, ended_at, status):
+    """Under push the backend never sees a start; without this, signals_missing never fires."""
+    stamped = []
+    monkeypatch.setattr(main, "_mark_eeg_started", stamped.append)
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    monkeypatch.setattr(main, "supabase", _SessionsTable(owner, ended_at))
+    if status is None:
+        assert main.session_eeg_started("session-1", request=None) == {"ok": True}
+        assert stamped == ["session-1"]
+        return
+    with pytest.raises(main.HTTPException) as caught:
+        main.session_eeg_started("session-1", request=None)
+    assert caught.value.status_code == status and stamped == []
+
+
 def test_start_falls_back_to_permissive_when_list_devices_unreachable(monkeypatch):
     """An empty known_ids (a transient list_devices() error) must not block a start."""
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})

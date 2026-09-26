@@ -2048,9 +2048,12 @@ within the hour; an abandoned session shows a dash, because we do not know when 
 
 `session_alerts` is a teacher-facing feed of things that went wrong with a *session*: `session_auto_closed` (the
 stale sweep ended it, the student did not) and `signals_missing` (EEG recording was permitted, a headband was
-started — `sessions.eeg_started_at`, stamped by `/api/eeg/start` — and no cognitive row arrived; a session with no
-headband is not a fault, and under push nothing stamps it, so the alert is withheld there). Read at
-`GET /api/classes/{id}/alerts`, rendered by `AlertFeed`.
+started — `sessions.eeg_started_at` — and no cognitive row arrived; a session with no headband is not a fault).
+Under pull `/api/eeg/start` stamps it. Under push the backend sees no start, so `Adaptive.jsx` reports one through
+`POST /api/sessions/{id}/eeg-started` once the sidecar holds the session and a headband streams. **That report is
+the client's claim**: a student can stamp their own sensorless session and earn it a false alert. Accepted, since
+the alert is about that session only and gates nothing. Read at `GET /api/classes/{id}/alerts`, rendered by
+`AlertFeed`.
 
 **The scope is the feature.** `signal_fusion` produces a `stressed` label that no teacher surface consumes, and
 routing it here was considered and rejected: it is an inference from signals this codebase already treats as weak,

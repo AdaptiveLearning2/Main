@@ -117,6 +117,44 @@ def _post_heart(samples):
     )
 
 
+# ── a sample's time must fall inside its session ────────────────────────────
+
+_BOUNDED = {"user_id": STUDENT["id"], "started_at": "2026-08-09T10:00:00+00:00",
+            "ended_at": "2026-08-09T11:00:00+00:00"}
+
+
+@pytest.mark.parametrize("ts,inside", [
+    ("2026-08-09T10:30:00Z", True),
+    ("2026-08-09T09:51:00Z", True),         # within the slack before the start
+    ("2026-08-09T11:09:00Z", True),         # and after the end
+    ("2026-08-08T10:30:00Z", False),        # a laptop clock a day behind
+    ("2026-08-09T11:30:00Z", False),
+    (None, True),                           # stamped server-side
+    ("not a time", False),
+])
+def test_a_sample_is_placed_only_inside_its_session(ts, inside):
+    assert main._ingest_ts_filter(_BOUNDED)(ts) is inside
+
+
+def test_an_open_session_is_bounded_by_now(monkeypatch):
+    from datetime import datetime, timezone
+    monkeypatch.setattr(main, "_utc_now", lambda: datetime(2026, 8, 9, 10, 30, tzinfo=timezone.utc))
+    inside = main._ingest_ts_filter({**_BOUNDED, "ended_at": None})
+    assert inside("2026-08-09T10:35:00Z") and not inside("2026-08-09T12:00:00Z")
+
+
+def test_the_endpoint_drops_and_counts_what_falls_outside(store, monkeypatch):
+    """Rows a day off land on a day no rollup covers, and expire unsummarised."""
+    _consent(store, headband_optical_enabled=True)
+    asked = []
+    monkeypatch.setattr(main, "_verify_session_owner",
+                        lambda sid, uid, columns="user_id": asked.append(columns) or _BOUNDED)
+    out = _post_heart([_heart(ts="2026-08-09T10:30:00Z"), _heart(ts="2026-08-08T10:30:00Z")])
+    assert (out["inserted"], out["out_of_window"]) == (1, 1)
+    assert [r["ts"] for r in store["heart_signals"]] == ["2026-08-09T10:30:00Z"]
+    assert asked == [main._INGEST_SESSION_COLUMNS]
+
+
 # ── consent decides what is written ──────────────────────────────────────────
 
 def test_a_heart_sample_from_a_declined_sensor_is_not_stored(store):

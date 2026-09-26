@@ -5671,16 +5671,43 @@ def _session_or_403(session_id: str, user_id: str, columns: str = "user_id") -> 
     return row
 
 
-def _verify_session_owner(session_id: str, user_id: str):
-    """`_session_or_403` for the callers that want only the refusal."""
-    _session_or_403(session_id, user_id)
+def _verify_session_owner(session_id: str, user_id: str, columns: str = "user_id") -> dict:
+    """`_session_or_403`: the refusal, and the row for a caller that names more columns."""
+    return _session_or_403(session_id, user_id, columns)
+
+
+# Clock drift tolerated between a sidecar's sample stamps and this server's session bounds.
+_INGEST_TS_SLACK = timedelta(minutes=10)
+_INGEST_SESSION_COLUMNS = "user_id, started_at, ended_at"
+
+
+def _ingest_ts_filter(session: dict):
+    """A predicate: is a sample's `ts` inside the session, give or take `_INGEST_TS_SLACK`?
+
+    The stamp comes from the student's laptop clock. One outside the session lands on a
+    day its rollup never covers, which the expiry job then deletes unsummarised.
+    A missing `ts` is stamped server-side and passes; an unparseable one does not.
+    """
+    session = session or {}
+    started = _parse_ts(session.get("started_at"))
+    ended = _parse_ts(session.get("ended_at")) or _utc_now()
+    if started is None:
+        return lambda ts: True      # no bound to check against; never refuse on our gap
+    lo, hi = started - _INGEST_TS_SLACK, ended + _INGEST_TS_SLACK
+
+    def inside(ts) -> bool:
+        if ts is None:
+            return True
+        parsed = _parse_ts(ts)
+        return parsed is not None and lo <= parsed <= hi
+    return inside
 
 @app.post("/api/signals/cognitive")
 def ingest_cognitive(payload: CognitiveBatch, request: Request):
     user = get_user(request)
     # Rate-limit first: spares a flooding client a `sessions` query.
     _rate_limit_ingest(user["id"])
-    _verify_session_owner(payload.session_id, user["id"])
+    session = _verify_session_owner(payload.session_id, user["id"], _INGEST_SESSION_COLUMNS)
 
     # Last line of defence against a stale sidecar; fails closed, reason says which gate.
     consent = _may_record(user["id"])
@@ -5727,6 +5754,10 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
             samples.append(CognitiveSample.model_validate(raw_sample))
         except Exception:  # noqa: BLE001 -- pydantic's ValidationError, plus a non-dict entry
             malformed += 1
+    inside = _ingest_ts_filter(session)
+    placed = [s for s in samples if inside(s.ts)]
+    out_of_window = len(samples) - len(placed)
+    samples = placed
     rows = [r for r in (_row(s) for s in samples) if r is not None]
     # Upsert on `cog_session_ts_key`: a replayed batch is a no-op.
     inserted = 0
@@ -5739,13 +5770,14 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     return {"ok": True, "inserted": inserted,
             "dropped": len(samples) - len(rows),
             "malformed": malformed,
+            "out_of_window": out_of_window,
             "duplicates": len(rows) - inserted}
 
 @app.post("/api/signals/face")
 def ingest_face(payload: FaceBatch, request: Request):
     user = get_user(request)
     _rate_limit_ingest(user["id"])
-    _verify_session_owner(payload.session_id, user["id"])
+    session = _verify_session_owner(payload.session_id, user["id"], _INGEST_SESSION_COLUMNS)
 
     # Last line of defence against a stale sidecar; fails closed.
     consent = _may_record(user["id"])
@@ -5753,6 +5785,8 @@ def ingest_face(payload: FaceBatch, request: Request):
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
                 "reason": _not_recording_reason(consent, "camera not consented")}
 
+    inside = _ingest_ts_filter(session)
+    placed = [s for s in payload.samples if inside(s.ts)]
     # Through the shared mapper, so the field list can't drift.
     rows = [r for r in (
         signal_mapping.map_face_to_face_signal(
@@ -5765,7 +5799,7 @@ def ingest_face(payload: FaceBatch, request: Request):
                       "trusted": s.emotion_trusted},
              "raw": s.raw},
             payload.session_id, user["id"])
-        for s in payload.samples
+        for s in placed
     ) if r is not None]
     # Upsert on `face_session_ts_key`: a replayed batch is a no-op.
     inserted = 0
@@ -5777,7 +5811,8 @@ def ingest_face(payload: FaceBatch, request: Request):
         inserted = len(resp.data or [])
     # Separate counts: push_client tells a quiet camera from a replay by them.
     return {"ok": True, "inserted": inserted,
-            "dropped": len(payload.samples) - len(rows),
+            "dropped": len(placed) - len(rows),
+            "out_of_window": len(payload.samples) - len(placed),
             "duplicates": len(rows) - inserted}
 
 
@@ -5790,12 +5825,16 @@ def ingest_heart(payload: HeartBatch, request: Request):
     """
     user = get_user(request)
     _rate_limit_ingest(user["id"])
-    _verify_session_owner(payload.session_id, user["id"])
+    session = _verify_session_owner(payload.session_id, user["id"], _INGEST_SESSION_COLUMNS)
 
     consent = _may_record(user["id"])
     allowed = _permitted_heart_sources(consent)
     kept = [s for s in payload.samples if s.source in allowed]
     dropped = len(payload.samples) - len(kept)
+    inside = _ingest_ts_filter(session)
+    placed = [s for s in kept if inside(s.ts)]
+    out_of_window = len(kept) - len(placed)
+    kept = placed
 
     # Tells "every sensor declined" from "could not find out".
     reason = None
@@ -5828,6 +5867,7 @@ def ingest_heart(payload: HeartBatch, request: Request):
         # What the database wrote; needs return=representation (the default).
         written = len(resp.data or [])
     return {"ok": True, "inserted": written, "dropped": dropped,
+            "out_of_window": out_of_window,
             "duplicates": len(rows) - written, "reason": reason}
 
 @app.get("/api/signals/session/{session_id}")

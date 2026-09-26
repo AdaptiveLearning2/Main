@@ -30,6 +30,26 @@ def test_a_credit_moves_the_streak_by_school_day(stats, started, expected):
     assert out["last_session_at"] == started
 
 
+@pytest.mark.parametrize("last,day,expected", [
+    (11, 14, 4),        # Friday then Monday: only the weekend between
+    (11, 12, 4),        # Friday then Saturday: a weekend session counts
+    (12, 14, 4),        # Saturday then Monday
+    (10, 14, 1),        # Thursday then Monday: Friday was missed
+], ids=["fri-mon", "fri-sat", "sat-mon", "thu-mon"])
+def test_a_weekend_never_breaks_a_streak(last, day, expected):
+    """Every class read 'Avg streak 0' on a Monday morning when the streak counted calendar days."""
+    stats = {"current_streak": 3, "best_streak": 3, "last_session_at": _at(last)}
+    assert main._streak_update(stats, _at(day), UTC)["current_streak"] == expected
+
+
+@pytest.mark.parametrize("last,today,current", [(11, 14, 3), (10, 14, 0), (11, 15, 0)],
+                         ids=["fri, read monday", "thu, read monday", "fri, read tuesday"])
+def test_the_read_decays_only_over_a_missed_weekday(monkeypatch, last, today, current):
+    monkeypatch.setattr(main, "_utc_now", lambda: datetime(2026, 9, today, 8, tzinfo=UTC))
+    stats = {"current_streak": 3, "best_streak": 3, "last_session_at": _at(last)}
+    assert main._live_streak(stats, UTC)["current_streak"] == current
+
+
 def test_an_older_session_closed_late_changes_no_streak():
     """The sweep closes an abandoned Monday session after Tuesday's was credited."""
     stats = {"current_streak": 2, "best_streak": 2, "last_session_at": _at(10)}

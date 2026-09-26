@@ -836,11 +836,23 @@ def _school_day(ts, tz: tzinfo) -> str:
     return "" if resolved is None else resolved.isoformat()
 
 
+def _missed_a_school_day(last: date, day: date) -> bool:
+    """Whether a weekday falls strictly between `last` and `day`. Weekends never break a streak.
+
+    Holidays are not modelled: `retention_window` holds a term, not a calendar.
+    """
+    gap = (day - last).days
+    if gap > 7:
+        return True
+    return any((last + timedelta(days=i)).weekday() < 5 for i in range(1, gap))
+
+
 def _streak_update(stats: dict, started_at, tz: tzinfo) -> dict:
     """The streak fields after crediting a session that began at `started_at`.
 
-    A streak counts consecutive school days with an answered session, keyed on the day the
-    work began (the sweep closes sessions hours later). An older session changes nothing.
+    A streak counts school days with an answered session and no weekday missed between them,
+    keyed on the day the work began (the sweep closes sessions hours later). A weekend session
+    counts; an older session changes nothing.
     """
     day, last = _school_date(started_at, tz), _school_date(stats.get("last_session_at"), tz)
     current, best = stats.get("current_streak") or 0, stats.get("best_streak") or 0
@@ -848,7 +860,7 @@ def _streak_update(stats: dict, started_at, tz: tzinfo) -> dict:
         return {}
     if last is not None and day == last:
         current = max(current, 1)
-    elif last is not None and day == last + timedelta(days=1):
+    elif last is not None and not _missed_a_school_day(last, day):
         current += 1
     else:
         current = 1
@@ -857,10 +869,13 @@ def _streak_update(stats: dict, started_at, tz: tzinfo) -> dict:
 
 
 def _live_streak(stats: dict, tz: tzinfo) -> dict:
-    """`stats` with `current_streak` 0 once a whole school day has passed without a session."""
+    """`stats` with `current_streak` 0 once a whole weekday has passed without a session.
+
+    Today is not missed yet: there is still time to practise.
+    """
     last = _school_date(stats.get("last_session_at"), tz)
     today = _utc_now().astimezone(tz).date()
-    if stats.get("current_streak") and (last is None or last < today - timedelta(days=1)):
+    if stats.get("current_streak") and (last is None or _missed_a_school_day(last, today)):
         return {**stats, "current_streak": 0}
     return stats
 

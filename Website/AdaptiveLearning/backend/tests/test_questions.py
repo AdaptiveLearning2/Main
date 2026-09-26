@@ -21,6 +21,7 @@ class _Questions:
         self.orders = []      # (column, desc)
         self.limits = []
         self.filters = []
+        self.nulls = []       # columns an `.is_(col, "null")` requires to be null
 
     def table(self, name):
         client = self
@@ -41,6 +42,11 @@ class _Questions:
 
             def eq(self, col, val):
                 client.filters.append((col, val))
+                return self
+
+            def is_(self, col, val):
+                assert val == "null"
+                client.nulls.append(col)
                 return self
 
             def execute(self):
@@ -131,6 +137,15 @@ def test_the_list_is_newest_first(_questions):
 
     assert ("created_at", True) in c.orders, (
         f"the question list is not ordered newest-first: {c.orders}")
+
+
+@pytest.mark.parametrize("call", [main.get_questions, main.count_questions],
+                         ids=["list", "count"])
+def test_a_retired_question_is_left_out_of_the_bank(_questions, call):
+    """A retired row keeps the wrong key its past answers were marked against."""
+    c = _questions(rows=[], count=0)
+    call()
+    assert c.nulls == ["retired_at"]
 
 
 def test_the_list_passes_its_limit_through(_questions):

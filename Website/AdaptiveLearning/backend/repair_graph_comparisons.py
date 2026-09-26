@@ -1,8 +1,9 @@
 """Re-score stored "how many more" graph questions from their text, as generation now does.
 
 Run to report; --apply rewrites `correct_answer` and `options` on rows whose stored answer
-differs. Rows whose text compares no two bars larger-first, and rows a student has answered
-(each answer stores an option's position), are reported, never changed.
+differs. A row a student has answered is retired instead (each answer stores an option's
+position, so reshuffling would repoint it). So is a row whose text compares no two bars
+larger-first, which has no right answer to store.
 """
 from __future__ import annotations
 
@@ -39,7 +40,8 @@ def rescore(row):
 
 def repair(client, dry_run=True):
     """Counts per outcome, and the ids behind every one but "ok"; raises if the read fails."""
-    report = {"ok": 0, "fix": [], "unanswerable": [], "answered": [], "skip": 0, "applied": 0}
+    report = {"ok": 0, "fix": [], "unanswerable": [], "answered": [], "skip": 0, "applied": 0,
+              "retired": 0}
     for row in repair_common.rows(client, "graphs",
                                   "id, question_text, correct_answer, options, figure"):
         outcome, correct, options = rescore(row)
@@ -53,6 +55,9 @@ def repair(client, dry_run=True):
             client.table("questions").update({"correct_answer": correct, "options": options}) \
                 .eq("id", row["id"]).execute()
             report["applied"] += 1
+        elif outcome in ("answered", "unanswerable") and not dry_run:
+            repair_common.retire(client, row["id"])
+            report["retired"] += 1
     return report
 
 
@@ -66,11 +71,12 @@ def main(argv=None) -> int:
         return 2
     from supabase import create_client
     report = repair(create_client(url, key), dry_run=not args.apply)
-    print(f"ok {report['ok']}, skipped {report['skip']}, applied {report['applied']}")
+    print(f"ok {report['ok']}, skipped {report['skip']}, applied {report['applied']}, "
+          f"retired {report['retired']}")
     print(f"wrong answer stored ({len(report['fix'])}): {report['fix']}")
-    print(f"wrong answer stored, already answered, left alone ({len(report['answered'])}): "
+    print(f"wrong answer stored, already answered, to retire ({len(report['answered'])}): "
           f"{report['answered']}")
-    print(f"text compares no two bars larger-first ({len(report['unanswerable'])}): "
+    print(f"text compares no two bars larger-first, to retire ({len(report['unanswerable'])}): "
           f"{report['unanswerable']}")
     return 0
 

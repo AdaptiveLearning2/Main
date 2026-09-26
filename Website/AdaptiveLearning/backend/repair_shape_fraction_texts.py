@@ -1,8 +1,8 @@
 """Give stored shape-fraction questions the one sentence generation now writes.
 
 Run to report; --apply sets `question_text` on rows that differ, which makes their stored
-shaded/parts answer correct. A row whose answer is not its figure's shaded/parts, and a row a
-student has answered (their mark was for the old text), are reported only.
+shaded/parts answer correct. A row a student has answered is retired instead (their mark was
+for the old text), and so is a row whose answer is not its figure's shaded/parts.
 """
 from __future__ import annotations
 
@@ -26,9 +26,9 @@ def check(row):
 def repair(client, dry_run=True):
     """Count of "ok", ids for "fix", "mismatch" and "answered", and how many were written.
 
-    Raises if a read fails.
+    "applied" counts rewrites, "retired" answered and mismatched rows retired. Raises if a read fails.
     """
-    report = {"ok": 0, "fix": [], "mismatch": [], "answered": [], "applied": 0}
+    report = {"ok": 0, "fix": [], "mismatch": [], "answered": [], "applied": 0, "retired": 0}
     for row in repair_common.rows(client, "shape_fractions",
                                   "id, question_text, correct_answer, figure"):
         outcome = check(row)
@@ -42,6 +42,9 @@ def repair(client, dry_run=True):
             client.table("questions").update({"question_text": shapes.QUESTION_TEXT}) \
                 .eq("id", row["id"]).execute()
             report["applied"] += 1
+        elif outcome in ("answered", "mismatch") and not dry_run:
+            repair_common.retire(client, row["id"])
+            report["retired"] += 1
     return report
 
 
@@ -55,11 +58,11 @@ def main(argv=None) -> int:
         return 2
     from supabase import create_client
     report = repair(create_client(url, key), dry_run=not args.apply)
-    print(f"ok {report['ok']}, applied {report['applied']}")
+    print(f"ok {report['ok']}, applied {report['applied']}, retired {report['retired']}")
     print(f"text asks something else ({len(report['fix'])}): {report['fix']}")
-    print(f"text asks something else, already answered, left alone ({len(report['answered'])}): "
+    print(f"text asks something else, already answered, to retire ({len(report['answered'])}): "
           f"{report['answered']}")
-    print(f"answer is not the figure's ({len(report['mismatch'])}): {report['mismatch']}")
+    print(f"answer is not the figure's, to retire ({len(report['mismatch'])}): {report['mismatch']}")
     return 0
 
 

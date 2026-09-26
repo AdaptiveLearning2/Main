@@ -2251,7 +2251,9 @@ def get_questions(limit: int = 100, subject: str | None = None, difficulty: str 
     cached, hit = _questions_cache.get(key)
     if hit:
         return cached
-    q = supabase.table("questions").select("*").order("created_at", desc=True).limit(limit)
+    # A retired row keeps a wrong key that past answers were marked against; the bank hides it.
+    q = supabase.table("questions").select("*").is_("retired_at", "null") \
+        .order("created_at", desc=True).limit(limit)
     if subject:    q = q.eq("subject", subject)
     if difficulty: q = q.eq("difficulty", difficulty)
     data = q.execute().data or []
@@ -2263,7 +2265,7 @@ def get_questions(limit: int = 100, subject: str | None = None, difficulty: str 
 def count_questions(subject: str | None = None, difficulty: str | None = None):
     """How many questions exist, via `count="exact"`, without transferring them."""
     try:
-        q = supabase.table("questions").select("id", count="exact").limit(1)
+        q = supabase.table("questions").select("id", count="exact").is_("retired_at", "null").limit(1)
         if subject:    q = q.eq("subject", subject)
         if difficulty: q = q.eq("difficulty", difficulty)
         res = q.execute()

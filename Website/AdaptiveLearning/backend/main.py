@@ -376,14 +376,23 @@ app.add_middleware(
 
 # ─── helpers ──────────────────────────────────────────────────────────────
 
+# Seconds for the GoTrue check behind every authenticated request; unbounded, a stall holds a worker.
+AUTH_CHECK_TIMEOUT = _env_number("AUTH_CHECK_TIMEOUT", 5.0, float, minimum=0.5)
+
+
 def get_user(request: Request):
     token = request.headers.get("authorization", "").replace("Bearer ", "").strip()
     if not token:
         raise HTTPException(401, "Missing token")
-    resp = requests.get(f"{SUPABASE_URL}/auth/v1/user", headers={
-        "Authorization": f"Bearer {token}",
-        "apikey": SERVICE_ROLE_KEY
-    })
+    try:
+        resp = requests.get(f"{SUPABASE_URL}/auth/v1/user", headers={
+            "Authorization": f"Bearer {token}",
+            "apikey": SERVICE_ROLE_KEY
+        }, timeout=AUTH_CHECK_TIMEOUT)
+    except requests.RequestException as e:
+        # 503, not 401: the token was never judged, and a 401 reads as an expired session.
+        print(f"[auth] could not reach the auth server: {type(e).__name__}")
+        raise HTTPException(503, "Sign-in could not be checked right now")
     if resp.status_code != 200:
         raise HTTPException(401, "Invalid token")
     return resp.json()
@@ -800,20 +809,55 @@ def _school_day(ts, tz: tzinfo) -> str:
     return "" if resolved is None else resolved.isoformat()
 
 
-def _credit_session_to_user_stats(user_id: str, total_q: int, correct: int) -> None:
-    """Add one closed session's answers to the student's lifetime totals. Never raises."""
+def _streak_update(stats: dict, started_at, tz: tzinfo) -> dict:
+    """The streak fields after crediting a session that began at `started_at`.
+
+    A streak counts consecutive school days with an answered session, keyed on the day the
+    work began (the sweep closes sessions hours later). An older session changes nothing.
+    """
+    day, last = _school_date(started_at, tz), _school_date(stats.get("last_session_at"), tz)
+    current, best = stats.get("current_streak") or 0, stats.get("best_streak") or 0
+    if day is None or (last is not None and day < last):
+        return {}
+    if last is not None and day == last:
+        current = max(current, 1)
+    elif last is not None and day == last + timedelta(days=1):
+        current += 1
+    else:
+        current = 1
+    return {"current_streak": current, "best_streak": max(best, current),
+            "last_session_at": _parse_ts(started_at).isoformat()}
+
+
+def _live_streak(stats: dict, tz: tzinfo) -> dict:
+    """`stats` with `current_streak` 0 once a whole school day has passed without a session."""
+    last = _school_date(stats.get("last_session_at"), tz)
+    today = _utc_now().astimezone(tz).date()
+    if stats.get("current_streak") and (last is None or last < today - timedelta(days=1)):
+        return {**stats, "current_streak": 0}
+    return stats
+
+
+def _credit_session_to_user_stats(user_id: str, total_q: int, correct: int,
+                                  started_at=None) -> None:
+    """Add one closed session's answers to the lifetime totals and the streak. Never raises.
+
+    `last_session_at` is when the latest credited session began; the streak is read from it.
+    """
     if not total_q:
         # No zero row: an absent `user_stats` row already reads as "no data yet".
         return
     try:
         existing = supabase.table("user_stats").select("*").eq("user_id", user_id).execute()
         now = _utc_now().isoformat()
+        streak = _streak_update(existing.data[0] if existing.data else {},
+                                started_at or now, _school_timezone())
         if existing.data:
             s = existing.data[0]
             supabase.table("user_stats").update({
                 "total_questions": (s.get("total_questions") or 0) + total_q,
                 "total_correct":   (s.get("total_correct")   or 0) + correct,
-                "last_session_at": now,
+                **streak,
                 "updated_at":      now,
             }).eq("user_id", user_id).execute()
         else:
@@ -824,6 +868,7 @@ def _credit_session_to_user_stats(user_id: str, total_q: int, correct: int) -> N
                 "current_streak":   0,
                 "best_streak":      0,
                 "last_session_at":  now,
+                **streak,
             }).execute()
     except Exception as e:                                     # noqa: BLE001
         print(f"[stats] could not credit {total_q} answers for {user_id[:8]}: {e}")
@@ -1059,7 +1104,7 @@ def _close_session(user_id: str, session: dict, ended_at: str,
     if _discard_if_nothing_recorded(sid, total_q, answers_counted=counted):
         return {"discarded": True}
 
-    _credit_session_to_user_stats(user_id, total_q, correct)
+    _credit_session_to_user_stats(user_id, total_q, correct, session.get("started_at"))
     _rollup_session_days(user_id, session.get("started_at"), ended_at)
     # After the discard: an empty session is not a fault worth an alert.
     _raise_session_alerts(user_id, session, closed_by, total_q)
@@ -2904,9 +2949,10 @@ def _stats_including_open_session_many(student_ids: list[str]) -> dict[str, dict
     try:
         rows = supabase.table("user_stats").select("*") \
             .in_("user_id", lookup).execute().data or []
+        tz = _school_timezone() if rows else None
         for r in rows:
             if r.get("user_id") in base:
-                base[r["user_id"]] = {**r, "retrieved": True}
+                base[r["user_id"]] = {**_live_streak(r, tz), "retrieved": True}
     except Exception as e:                                     # noqa: BLE001
         print(f"[stats] could not batch-read user_stats for {len(student_ids)}: {e}")
         return {sid: {**v, "retrieved": False} for sid, v in base.items()}
@@ -4040,12 +4086,16 @@ def leaderboard(request: Request, limit: int = 20):
     """
     user = get_user(request)
     res = supabase.table("user_stats") \
-        .select("user_id, total_correct, total_questions, current_streak, best_streak") \
+        .select("user_id, total_correct, total_questions, current_streak, best_streak, "
+                "last_session_at") \
         .order("total_correct", desc=True).limit(max(1, min(limit, _LEADERBOARD_MAX))).execute()
     rows = res.data or []
     profiles = _profiles_many(r.get("user_id") for r in rows)
+    tz = _school_timezone() if rows else None
     enriched = []
     for i, row in enumerate(rows):
+        row = _live_streak(row, tz)
+        row.pop("last_session_at", None)
         uid = row.pop("user_id", None)
         p = profiles.get(uid) or {}
         enriched.append({

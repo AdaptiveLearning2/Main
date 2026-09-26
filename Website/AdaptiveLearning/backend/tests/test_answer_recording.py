@@ -234,7 +234,7 @@ def test_closing_a_session_twice_credits_it_once(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
     monkeypatch.setattr(main.eeg_poller, "stop", lambda *_a, **_k: None)
     monkeypatch.setattr(main, "_credit_session_to_user_stats",
-                        lambda uid, q, c: credited.append((uid, q, c)))
+                        lambda uid, q, c, *_started: credited.append((uid, q, c)))
 
     out = main.end_session(session_id="s-1", request=None)
 
@@ -254,7 +254,7 @@ def test_closing_an_open_session_still_credits_it(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
     monkeypatch.setattr(main.eeg_poller, "stop", lambda *_a, **_k: None)
     monkeypatch.setattr(main, "_credit_session_to_user_stats",
-                        lambda uid, q, c: credited.append((uid, q, c)))
+                        lambda uid, q, c, *_started: credited.append((uid, q, c)))
     monkeypatch.setattr(main, "_discard_if_nothing_recorded", lambda *_a, **_k: False)
     monkeypatch.setattr(main, "_rollup_session_days", lambda *_a: None)
     monkeypatch.setattr(main.chart_archive, "schedule", lambda *_a, **_k: None)
@@ -351,7 +351,7 @@ class _ClaimClient:
 def _close_with(monkeypatch, client, credited):
     monkeypatch.setattr(main, "supabase", client)
     monkeypatch.setattr(main, "_credit_session_to_user_stats",
-                        lambda uid, q, c: credited.append((uid, q, c)))
+                        lambda uid, q, c, *_started: credited.append((uid, q, c)))
     monkeypatch.setattr(main, "_rollup_session_days", lambda *_a: None)
     monkeypatch.setattr(main.chart_archive, "schedule", lambda *_a, **_k: None)
 

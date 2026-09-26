@@ -1188,8 +1188,11 @@ def test_class_summary_averages_accuracy_over_students_who_attempted(monkeypatch
     monkeypatch.setattr(main, "supabase", _ClassSummaryClient(
         classes=[{"id": "c1"}],
         members=[{"class_id": "c1", "student_id": s} for s in ("a", "b", "c")],
-        stats=[{"user_id": "a", "total_questions": 10, "total_correct": 8, "current_streak": 4},
-               {"user_id": "b", "total_questions": 10, "total_correct": 4, "current_streak": 2},
+        # A credited row always carries `last_session_at`; the streak decays without a recent one.
+        stats=[{"user_id": "a", "total_questions": 10, "total_correct": 8, "current_streak": 4,
+                "last_session_at": main._utc_now().isoformat()},
+               {"user_id": "b", "total_questions": 10, "total_correct": 4, "current_streak": 2,
+                "last_session_at": main._utc_now().isoformat()},
                {"user_id": "c", "total_questions": 0, "total_correct": 0, "current_streak": 0}],
     ))
 

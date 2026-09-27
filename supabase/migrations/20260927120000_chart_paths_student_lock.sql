@@ -158,4 +158,33 @@ REVOKE ALL ON FUNCTION "public"."record_chart_paths"("uuid", "jsonb") FROM "anon
 REVOKE ALL ON FUNCTION "public"."record_chart_paths"("uuid", "jsonb") FROM "authenticated";
 GRANT EXECUTE ON FUNCTION "public"."record_chart_paths"("uuid", "jsonb") TO "service_role";
 
+
+-- Nulls only the named charts, in the row, as erase_signals does: writing back a whole copy
+-- would restore a key a concurrent erasure had just nulled. Returns the resulting map.
+CREATE OR REPLACE FUNCTION "public"."drop_chart_paths"(
+    "p_session_id" "uuid",
+    "p_charts" "text"[]
+) RETURNS "jsonb"
+LANGUAGE "plpgsql"
+SECURITY INVOKER
+SET "search_path" TO 'public'
+AS $$
+DECLARE
+    result "jsonb";
+BEGIN
+    UPDATE sessions s
+       SET chart_paths = s.chart_paths || (
+               SELECT COALESCE(jsonb_object_agg(c, NULL), '{}'::jsonb)
+                 FROM unnest(p_charts) c WHERE s.chart_paths ? c)
+     WHERE s.id = p_session_id AND s.chart_paths IS NOT NULL
+    RETURNING s.chart_paths INTO result;
+    RETURN result;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION "public"."drop_chart_paths"("uuid", "text"[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION "public"."drop_chart_paths"("uuid", "text"[]) FROM "anon";
+REVOKE ALL ON FUNCTION "public"."drop_chart_paths"("uuid", "text"[]) FROM "authenticated";
+GRANT EXECUTE ON FUNCTION "public"."drop_chart_paths"("uuid", "text"[]) TO "service_role";
+
 NOTIFY pgrst, 'reload schema';

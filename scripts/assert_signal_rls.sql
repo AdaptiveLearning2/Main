@@ -1236,6 +1236,7 @@ DECLARE
     owner_id uuid;
     lock_key bigint;
     n        int;
+    returned jsonb;
 BEGIN
     SELECT id, user_id INTO sess, owner_id FROM public.sessions ORDER BY id LIMIT 1;
     IF sess IS NULL THEN
@@ -1269,6 +1270,23 @@ BEGIN
        OR has_function_privilege('anon', 'public.record_chart_paths(uuid, jsonb)', 'EXECUTE') THEN
         RAISE EXCEPTION 'record_chart_paths is executable by an application role -- any user '
                         'could point any session''s charts anywhere';
+    END IF;
+
+    -- drop_chart_paths nulls the named keys in the row and nothing else: a whole-map write from
+    -- a stale copy is what it replaces. A key the row never had is not added.
+    PERFORM public.record_chart_paths(sess,
+        '{"cognitive_timeline": "a.svg", "heart_rate": "b.svg"}'::jsonb);
+    -- Two statements: in one, the row read shares a snapshot from before the call's UPDATE.
+    returned := public.drop_chart_paths(sess, ARRAY['cognitive_timeline', 'emotion_pie']);
+    IF returned IS DISTINCT FROM '{"cognitive_timeline": null, "heart_rate": "b.svg"}'::jsonb
+       OR (SELECT chart_paths FROM public.sessions WHERE id = sess)
+           IS DISTINCT FROM '{"cognitive_timeline": null, "heart_rate": "b.svg"}'::jsonb THEN
+        RAISE EXCEPTION 'drop_chart_paths changed more than the charts it was named: returned %',
+            returned;
+    END IF;
+    IF has_function_privilege('authenticated', 'public.drop_chart_paths(uuid, text[])', 'EXECUTE')
+       OR has_function_privilege('anon', 'public.drop_chart_paths(uuid, text[])', 'EXECUTE') THEN
+        RAISE EXCEPTION 'drop_chart_paths is executable by an application role';
     END IF;
 END $$;
 

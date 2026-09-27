@@ -104,16 +104,27 @@ class _Client:
         self._erasure_read_fails = erasure_read_fails
         self.updates = []
         self.rpc_calls = []
+        self.stored = None
+        self.after_record = None
         self.reads = []
         self._storage = _Storage(fail=fail_storage)
         self._storage.removed = []
         self._on_execute = on_execute
 
     def rpc(self, name, params):
-        """`record_chart_paths`, the archive's locked write: recorded, and kept in `updates`."""
+        """The two chart_paths RPCs, applied to `stored` as the SQL does; each write is also in
+        `updates`. `after_record(stored)` runs between them, as a concurrent erasure would."""
         self.rpc_calls.append((name, params))
-        assert name == "record_chart_paths"
-        return _Update(self.updates, {"chart_paths": params["p_paths"]})
+        if name == "record_chart_paths":
+            self.stored = dict(params["p_paths"])
+            if self.after_record:
+                self.after_record(self.stored)
+        else:
+            assert name == "drop_chart_paths"
+            self.stored.update({c: None for c in params["p_charts"] if c in self.stored})
+        self.updates.append({"chart_paths": dict(self.stored)})
+        result = dict(self.stored)
+        return type("Q", (), {"execute": lambda _s: type("R", (), {"data": result})()})()
 
     def table(self, name):
         if name == "sessions":
@@ -257,6 +268,21 @@ def test_an_erasure_during_the_archive_takes_its_charts_back_out():
         chart_archive.object_path(USER, SESSION, n)
         for n in ("emotion_pie", "heart_rate", "stress_pie"))
     assert list(client.bucket.uploaded) == [paths["cognitive_timeline"]]
+
+
+def test_dropping_charts_does_not_restore_one_a_second_erasure_just_nulled():
+    """A whole-map write puts back the heart path this erasure removed; nulling by key does not."""
+    client = _Client(cognitive=COG, face=FACE, heart=HEART,
+                     erasures=[{"channel": "eeg", "erased_at": _now_iso()}])
+    client.after_record = lambda stored: stored.update(heart_rate=None, stress_pie=None)
+
+    paths = chart_archive.archive_session(client, SESSION, USER)
+
+    assert client.stored["heart_rate"] is None and client.stored["stress_pie"] is None
+    assert client.stored["cognitive_timeline"] is None
+    assert client.rpc_calls[-1] == ("drop_chart_paths",
+                                    {"p_session_id": SESSION, "p_charts": ["cognitive_timeline"]})
+    assert paths == client.stored
 
 
 def test_an_erasure_stamped_by_a_database_clock_running_behind_still_counts():

@@ -234,11 +234,12 @@ def _drop_erased(client, session_id: str, user_id: str, paths: dict,
     doomed = [n for n in chart_render.CHART_NAMES if n in hit and paths.get(n)]
     if not doomed:
         return paths
-    paths = {**paths, **{n: None for n in doomed}}
-    client.table("sessions").update({"chart_paths": paths}).eq("id", session_id).execute()
+    # Named keys only, in the row: a whole-map write would restore one a second erasure nulled.
+    stored = client.rpc("drop_chart_paths",
+                        {"p_session_id": session_id, "p_charts": doomed}).execute().data
     remove_objects(client, [object_path(user_id, session_id, n) for n in doomed])
     print(f"[charts] {session_id[:8]}: dropped {doomed}, erased during the archive")
-    return paths
+    return stored if isinstance(stored, dict) else {**paths, **{n: None for n in doomed}}
 
 
 def _withdraw(client, session_id: str, user_id: str, drawn: list) -> None:

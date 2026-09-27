@@ -5339,7 +5339,7 @@ def _shape_consent(row: dict, student_id: str, erasures: dict | None = None) -> 
         "channels": channels,
         "retrieved": row.get("retrieved", True),
         "updated_at": row.get("updated_at"),
-        # Raised only by a parent turning a channel back ON.
+        # Raised only by a parent turning a channel ON, a first opt-in included.
         "needs_student_ack": bool(
             enabled_at and (ack_at is None or ack_at < enabled_at)
         ),
@@ -5419,9 +5419,9 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
             withdrawn.append(c)
         # State this decision was made against, asserted on the write below.
         guards[f"{c}_enabled"] = was
-        # "Back on" only: a first opt-in on a default-off channel resumes nothing, and the
-        # student's notice says something they turned off is measured again.
-        if requested and actor == "parent" and current.get(f"{c}_revoked_at"):
+        # Any parent turn-on, a first opt-in included: the student is told either way, and
+        # the banner's wording claims no earlier withdrawal (a re-enable nulls `revoked_at`).
+        if requested and actor == "parent":
             re_enabled = True
 
     if not fields:

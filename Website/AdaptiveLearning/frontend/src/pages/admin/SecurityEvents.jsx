@@ -34,7 +34,7 @@ const KINDS = {
     describe: (e, subject) => {
       const parts = []
       if (e.detail?.withdrew) parts.push(`turned off ${e.detail.withdrew}`)
-      if (e.detail?.re_enabled) parts.push('turned a channel back on')
+      if (e.detail?.re_enabled) parts.push('turned a channel on')
       const what = parts.join(' and ') || 'changed consent'
       return e.subject ? `${what} for ${subject}` : what
     },

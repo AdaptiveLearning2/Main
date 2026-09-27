@@ -1,5 +1,5 @@
 /**
- * Tells a student that a parent switched a sensor back on (clears
+ * Tells a student that a parent switched a sensor on (clears
  * `needs_student_ack`). Dashboard only, never mid-question.
  */
 
@@ -31,11 +31,11 @@ export default function ParentRestoredBanner({ studentId }) {
   return (
     <NoticeBanner
       tone="indigo" icon={ShieldCheck} onAcknowledge={acknowledge}
-      title="A parent turned a sensor back on"
+      title="A parent turned a sensor on"
     >
       <p className="text-xs mt-1">
-        Something you turned off is being measured again while you practise.
-        You can see which, and turn it off again, in your profile settings.
+        A sensor is now measured while you practise. It may be one you turned off
+        before. You can see which, and turn it off, in your profile settings.
       </p>
     </NoticeBanner>
   )

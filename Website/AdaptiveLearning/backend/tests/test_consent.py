@@ -249,12 +249,12 @@ def test_parent_re_enabling_raises_a_notice_for_the_student(monkeypatch):
     assert out["needs_student_ack"] is True
 
 
-def test_a_first_opt_in_raises_no_back_on_notice(monkeypatch):
-    """Off from the start, never turned off: the banner's "something you turned off" is false."""
+def test_a_first_opt_in_still_tells_the_student(monkeypatch):
+    """Off from the start, never withdrawn: a sensor a parent switched on is still news."""
     fake = _fake(monkeypatch, PARENT, consent_row=_row(camera_enabled=False))
     out = main.update_consent("student-1", main.ConsentUpdate(camera_enabled=True), None)
-    assert out["needs_student_ack"] is False
-    assert fake.store["signal_consent"][0].get("parent_enabled_at") is None
+    assert out["needs_student_ack"] is True
+    assert fake.store["signal_consent"][0].get("parent_enabled_at") is not None
 
 
 def test_parent_disabling_raises_no_notice(monkeypatch):

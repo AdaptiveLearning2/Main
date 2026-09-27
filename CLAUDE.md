@@ -1085,9 +1085,10 @@ and answer 409 if it moved. Read-then-write is not atomic, and the pair that rac
 withdrawal against a parent's re-enable on the same channel — losing that silently means recording
 against a refusal.
 
-A parent turning a channel **back on** sets `parent_enabled_at` and raises `needs_student_ack`, cleared
-by `POST /api/consent/ack`. A parent turning one *off* raises nothing. Discovering a resumed sensor by
-noticing data reappear is not consent.
+A parent turning a channel **on** — a first opt-in as much as a re-enable — sets `parent_enabled_at` and
+raises `needs_student_ack`, cleared by `POST /api/consent/ack`. A parent turning one *off* raises nothing.
+Discovering a sensor by noticing data appear is not consent. The banner's copy claims no earlier
+withdrawal, because a re-enable nulls `revoked_at` and nothing stored can tell the two apart.
 
 **That rule has to hold on both ingestion paths, and for a while it did not.** `/api/signals/*` has
 called `_consent()` per request since it existed; the poller writes `cognitive_signals` directly with

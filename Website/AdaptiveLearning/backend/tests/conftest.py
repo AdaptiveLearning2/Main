@@ -60,6 +60,8 @@ def _consent_allows_polling():
 
     The refused and unwired cases live in test_consent_gates_polling.py.
     """
+    # `main` wires the real check at import; imported first, it cannot overwrite this one.
+    import main  # noqa: F401
     eeg_poller.set_consent_check(lambda _student_id: True)
     yield
     eeg_poller.set_consent_check(None)

@@ -63,6 +63,28 @@ def test_restarting_same_session_is_a_noop():
     assert out == {"running": True, "already": True, "recording": True}
 
 
+def test_the_same_session_on_another_device_moves_rather_than_answering_already():
+    """A failed stop left station-a's poller live; reconnecting on station-b must not keep reading it."""
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    old = eeg_poller._active["session-1"]
+    out = eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-b")
+    assert out["running"] and not out["already"]
+    assert eeg_poller._active["session-1"].device_id == "station-b"
+    old.join(timeout=2)
+    assert not old.is_alive()
+    # station-a is free again for someone else.
+    eeg_poller.start(_FakeSupabase(), "user-b", "session-2", "station-a")
+
+
+def test_moving_to_a_device_another_user_holds_keeps_the_current_poller():
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    eeg_poller.start(_FakeSupabase(), "user-b", "session-2", "station-b")
+    with pytest.raises(eeg_poller.DeviceClaimedError):
+        eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-b")
+    assert eeg_poller._active["session-1"].device_id == "station-a"
+    assert eeg_poller._active["session-1"].is_alive()
+
+
 # ── recording is armed by the first question, not by pairing ────────────────
 # Pairing under pull starts the poller; samples belong to first question through Finish.
 
@@ -183,6 +205,25 @@ def test_the_wait_grows_with_misses_and_is_capped():
     assert eeg_poller._poll_wait(2) == pytest.approx(min(eeg_poller.POLL_BACKOFF_MAX_S, base * 2))
     assert eeg_poller._poll_wait(3) == pytest.approx(min(eeg_poller.POLL_BACKOFF_MAX_S, base * 4))
     assert eeg_poller._poll_wait(50) == eeg_poller.POLL_BACKOFF_MAX_S
+
+
+def test_the_wait_survives_an_outage_of_any_length():
+    """1025 misses is ~85 min at the cap; `2.0 ** 1024` overflowed and killed the thread."""
+    for misses in (1025, 10_000, 10 ** 9):
+        assert eeg_poller._poll_wait(misses) == eeg_poller.POLL_BACKOFF_MAX_S
+
+
+@pytest.mark.parametrize("raw, interval", [("4hz", 1.0), ("", 1.0), ("inf", 1.0),
+                                           ("nan", 1.0), ("0.1", 2.0), ("4", 0.25)])
+def test_a_bad_poll_rate_falls_back_rather_than_stopping_the_backend(raw, interval):
+    # A subprocess: the value is read at import, and a reload here would leave stale references.
+    import os, subprocess, sys
+    env = {**os.environ, "EEG_POLL_HZ": raw}
+    out = subprocess.run([sys.executable, "-c", "import eeg_poller; print(eeg_poller.POLL_INTERVAL)"],
+                         cwd=os.path.dirname(eeg_poller.__file__), env=env,
+                         capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert float(out.stdout.strip().splitlines()[-1]) == pytest.approx(interval)
 
 
 def test_a_run_of_empty_reads_is_counted_and_one_payload_resets_it(monkeypatch):

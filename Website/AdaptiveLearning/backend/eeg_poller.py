@@ -9,8 +9,10 @@ from typing import Dict
 
 import eeg_client
 import signal_mapping
+from env_config import env_number
 
-POLL_INTERVAL = 1.0 / max(0.5, float(os.getenv("EEG_POLL_HZ", "1")))
+# Tolerant: read at import, and `main` imports this, so a bad value must not stop the backend.
+POLL_INTERVAL = 1.0 / env_number("EEG_POLL_HZ", 1.0, float, minimum=0.5)
 
 # Backoff cap (s) on empty reads; small because the consent re-check shares this loop.
 POLL_BACKOFF_MAX_S = 5.0
@@ -20,7 +22,9 @@ def _poll_wait(consecutive_misses: int) -> float:
     """Seconds to wait before the next read after this many empty reads in a row."""
     if consecutive_misses <= 1:
         return POLL_INTERVAL
-    return min(POLL_BACKOFF_MAX_S, POLL_INTERVAL * (2 ** (consecutive_misses - 1)))
+    # Exponent capped before the multiply: 2.0 ** 1024 overflows a float an hour into an outage.
+    doublings = min(consecutive_misses - 1, 32)
+    return min(POLL_BACKOFF_MAX_S, POLL_INTERVAL * (2 ** doublings))
 
 # `pull` = this poller reads the sidecar; `push` = sidecar POSTs to /api/signals/*.
 # Binds the poller only (start() refuses under push); ingest endpoints stay open.
@@ -491,8 +495,11 @@ def start(supabase, user_id: str, session_id: str, device_id: str,
 def _start_locked(supabase, user_id: str, session_id: str, device_id: str,
                   record: bool) -> dict:
     with _lock:
-        if session_id in _active and _active[session_id].is_alive():
-            p = _active[session_id]
+        # Same device only: on another one the old poller would keep reading the wrong
+        # station; falling through checks the new device's claims, then stops it.
+        current = _active.get(session_id)
+        if current is not None and current.is_alive() and current.device_id == device_id:
+            p = current
             flipped = p.recording != record
             if flipped:
                 print(f"=== already running for this session; recording -> {record}", flush=True)

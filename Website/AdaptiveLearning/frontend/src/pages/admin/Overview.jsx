@@ -135,7 +135,8 @@ function StudentSearch() {
           {results.map(s => (
             <li key={s.id}>
               <Link
-                to={`/teacher/students/${s.id}/report`}
+                // The admin's own route: the teacher one's RoleGuard bounces an admin to /admin.
+                to={`/admin/students/${s.id}/report`}
                 tabIndex={searching ? -1 : undefined}
                 aria-disabled={searching || undefined}
                 className="flex items-center justify-between gap-3 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl px-4 py-2.5 hover:border-slate-400 transition"

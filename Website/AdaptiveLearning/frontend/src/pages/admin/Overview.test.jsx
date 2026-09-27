@@ -170,8 +170,9 @@ describe('the student search', () => {
     const user = setup()
     await user.type(box(), 'ada')
     await settle()
+    // Not the teacher route: its RoleGuard sends an admin straight back to /admin.
     expect(screen.getByRole('link', { name: /Ada Lovelace/ }))
-      .toHaveAttribute('href', '/teacher/students/u-1/report')
+      .toHaveAttribute('href', '/admin/students/u-1/report')
   })
 })
 

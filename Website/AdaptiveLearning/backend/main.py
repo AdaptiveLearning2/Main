@@ -5414,7 +5414,9 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
             withdrawn.append(c)
         # State this decision was made against, asserted on the write below.
         guards[f"{c}_enabled"] = was
-        if requested and actor == "parent":
+        # "Back on" only: a first opt-in on a default-off channel resumes nothing, and the
+        # student's notice says something they turned off is measured again.
+        if requested and actor == "parent" and current.get(f"{c}_revoked_at"):
             re_enabled = True
 
     if not fields:

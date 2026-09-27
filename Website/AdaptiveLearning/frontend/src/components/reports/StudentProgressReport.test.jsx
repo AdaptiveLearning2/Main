@@ -52,6 +52,41 @@ function renderReport(props = {}) {
   )
 }
 
+function statCard(label) {
+  return screen.getByText(label, { selector: 'p' }).nextElementSibling
+}
+
+it('shows an unread stats block as unread, not as a student with no activity', async () => {
+  // The backend answers a failed user_stats read with zeros and `retrieved: false`.
+  apiFetch.mockImplementation(url => (String(url).includes('/stats/')
+    ? Promise.resolve({ total_questions: 0, total_correct: 0, current_streak: 0, retrieved: false })
+    : defaultFetch(url)))
+  renderReport()
+
+  expect(await screen.findByText('These practice totals could not be loaded.')).toBeInTheDocument()
+  for (const label of ['Questions', 'Correct', 'Accuracy', 'Streak']) {
+    expect(statCard(label)).toHaveTextContent('—')
+  }
+})
+
+it('shows real totals as numbers', async () => {
+  renderReport()
+  await screen.findByText('Recent Sessions')
+  expect(statCard('Questions')).toHaveTextContent('4')
+  expect(statCard('Accuracy')).toHaveTextContent('50%')
+  expect(screen.queryByText('These practice totals could not be loaded.')).not.toBeInTheDocument()
+})
+
+it('does not call no questions 0% accuracy', async () => {
+  apiFetch.mockImplementation(url => (String(url).includes('/stats/')
+    ? Promise.resolve({ total_questions: 0, total_correct: 0, current_streak: 0, retrieved: true })
+    : defaultFetch(url)))
+  renderReport()
+  await screen.findByText('Recent Sessions')
+  expect(statCard('Accuracy')).toHaveTextContent('—')
+  expect(statCard('Questions')).toHaveTextContent('0')
+})
+
 it('requests the weekly report once per render, not twice', async () => {
   renderReport()
   await screen.findByText('Recent Sessions')

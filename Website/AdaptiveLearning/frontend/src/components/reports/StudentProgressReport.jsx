@@ -173,7 +173,10 @@ export default function StudentProgressReport({
     }
   }
 
-  const acc = stats?.total_questions > 0 ? Math.round((stats.total_correct / stats.total_questions) * 100) : 0
+  // `retrieved: false` carries placeholder zeros: shown as a dash, never as a real record.
+  const statsRead = stats?.retrieved !== false
+  const acc = stats?.total_questions > 0 ? Math.round((stats.total_correct / stats.total_questions) * 100) : null
+  const stat = (value, format = v => v) => (statsRead ? format(value ?? 0) : '—')
 
   return (
     <div className="p-6 lg:p-8 pb-12">
@@ -197,10 +200,11 @@ export default function StudentProgressReport({
           {/* stat cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { icon: BookOpen,   label: 'Questions',  value: stats?.total_questions ?? 0,  color: 'bg-gradient-to-br from-indigo-500 to-indigo-600' },
-              { icon: Target,     label: 'Correct',    value: stats?.total_correct ?? 0,    color: 'bg-gradient-to-br from-green-500 to-emerald-600' },
-              { icon: TrendingUp, label: 'Accuracy',   value: `${acc}%`,                    color: 'bg-gradient-to-br from-violet-500 to-purple-600' },
-              { icon: Flame,      label: 'Streak',     value: `${stats?.current_streak ?? 0}d`, color: 'bg-gradient-to-br from-orange-500 to-amber-500' },
+              { icon: BookOpen,   label: 'Questions',  value: stat(stats?.total_questions), color: 'bg-gradient-to-br from-indigo-500 to-indigo-600' },
+              { icon: Target,     label: 'Correct',    value: stat(stats?.total_correct),   color: 'bg-gradient-to-br from-green-500 to-emerald-600' },
+              // No questions is no accuracy, not 0%.
+              { icon: TrendingUp, label: 'Accuracy',   value: statsRead && acc !== null ? `${acc}%` : '—', color: 'bg-gradient-to-br from-violet-500 to-purple-600' },
+              { icon: Flame,      label: 'Streak',     value: stat(stats?.current_streak, v => `${v}d`), color: 'bg-gradient-to-br from-orange-500 to-amber-500' },
             ].map((c, i) => (
               <motion.div key={c.label} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}
                 whileHover={{ y: -3 }}
@@ -215,6 +219,11 @@ export default function StudentProgressReport({
               </motion.div>
             ))}
           </div>
+          {!statsRead && (
+            <p className="text-xs text-gray-600 dark:text-gray-400 -mt-3">
+              These practice totals could not be loaded.
+            </p>
+          )}
 
           {/* Only once loaded; a grid of "N/A" would read as no activity. */}
           {showSignals && signalError && (

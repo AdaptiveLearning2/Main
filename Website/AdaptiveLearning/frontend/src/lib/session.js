@@ -29,7 +29,7 @@ export async function recordAnswer({ sessionId, questionId, selectedIndex, corre
 /**
  * Push only: tell the backend a headband is streaming for this session (its alerts need it).
  * Never throws, and silent: the student can do nothing about a failure, and recording goes on.
- * @returns {Promise<boolean>} whether the backend recorded it
+ * @returns {Promise<boolean>} whether nothing is left to send: recorded, or the session is closed
  */
 export async function markEegStarted(sessionId) {
   if (!sessionId) return false
@@ -37,6 +37,8 @@ export async function markEegStarted(sessionId) {
     await apiFetch(`/api/sessions/${sessionId}/eeg-started`, { method: 'POST' })
     return true
   } catch (e) {
+    // 409: the session closed, and its alerts are already decided; a retry can never land.
+    if (e?.status === 409) return true
     console.error('[session] could not report the EEG start', e)
     return false
   }

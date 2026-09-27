@@ -25,6 +25,14 @@ it('reports a push EEG start for the session it names', async () => {
   expect(apiFetch).toHaveBeenCalledWith('/api/sessions/s1/eeg-started', { method: 'POST' })
 })
 
+it('treats a closed session as nothing left to report, so the page does not retry it', async () => {
+  // The 409 can never become a 200; retrying it spent the page's three attempts on nothing.
+  mockApi({ 'POST /api/sessions/s1/eeg-started': () => { throw apiError(409, 'This session has ended') } })
+
+  await expect(markEegStarted('s1')).resolves.toBe(true)
+  expect(toast.error).not.toHaveBeenCalled()
+})
+
 it('answers false for a failed EEG-start report, without a toast', async () => {
   mockApi({ 'POST /api/sessions/s1/eeg-started': () => { throw apiError(503) } })
 

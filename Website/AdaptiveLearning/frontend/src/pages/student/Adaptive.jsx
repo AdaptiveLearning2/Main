@@ -754,6 +754,8 @@ export default function Adaptive() {
     if (eegStartReported.current === sessionId) return
     eegStartReported.current = sessionId
     if (eegStartFailures.current.sessionId !== sessionId) eegStartFailures.current = { sessionId, count: 0 }
+    // A re-run (a flapping link) sends now; a retry still pending would send a second time.
+    clearTimeout(eegStartTimer.current)
     markEegStarted(sessionId).then(ok => {
       if (ok || eegStartReported.current !== sessionId) return
       // One brief outage must not leave the lesson unstamped: back off, then wait for a change.

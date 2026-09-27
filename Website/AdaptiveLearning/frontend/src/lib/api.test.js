@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('./supabase', async () => await import('../test/mocks/supabase'))
 
-import { apiFetch } from './api'
+import { apiFetch, apiFetchOnUnload } from './api'
 import { authFns, buildAuthSession, resetSupabaseMock, setSession } from '../test/mocks/supabase'
 
 const BASE = 'http://localhost:8000'
@@ -270,5 +270,30 @@ describe('Retry-After', () => {
 
     await expect(apiFetch('/api/generate-question')).rejects.toMatchObject({ status: 500 })
     expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the POST that outlives the page', () => {
+  it('goes out at once, keepalive, with the last token a request carried', async () => {
+    // Awaiting getSession() on the way out is what stopped the pull-mode stop being sent.
+    await apiFetch('/api/sessions')
+    globalThis.fetch.mockClear()
+
+    apiFetchOnUnload('/api/eeg/stop', { session_id: 's1' })
+
+    const [url, opts] = lastCall()
+    expect(url).toBe(`${BASE}/api/eeg/stop`)
+    expect(opts).toMatchObject({ method: 'POST', keepalive: true })
+    expect(opts.headers.Authorization).toBe('Bearer t')
+    expect(JSON.parse(opts.body)).toEqual({ session_id: 's1' })
+  })
+
+  it('sends nothing once the last request had no token', async () => {
+    setSession(null)
+    await apiFetch('/api/sessions')
+    globalThis.fetch.mockClear()
+
+    apiFetchOnUnload('/api/eeg/stop', { session_id: 's1' })
+    expect(globalThis.fetch).not.toHaveBeenCalled()
   })
 })

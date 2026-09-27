@@ -36,12 +36,19 @@ vi.mock('../../lib/sidecar', () => ({
   releasePushIfIdle: vi.fn(async () => ({ stopped: true, devices: [] })),
   sidecarDebug: vi.fn(async () => ({})),
 }))
+// The real helper with a spy for the reload jsdom cannot perform.
+const reloadPage = vi.fn()
+vi.mock('../../lib/pageRestore', async (importOriginal) => {
+  const real = await importOriginal()
+  return { reloadIfRestored: (e) => real.reloadIfRestored(e, reloadPage) }
+})
 vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u1', email: 'a@b.c' }, role: 'student', loading: false }),
 }))
 
 import { toast } from 'sonner'
-import { museRefresh, museConnect, museDisconnect, museState, deviceStart, startPush } from '../../lib/sidecar'
+import { museRefresh, museConnect, museDisconnect, museState, deviceStart, startPush,
+         stopPushOnUnload } from '../../lib/sidecar'
 import { markEegStarted } from '../../lib/session'
 import { mockApi, overrideApi, resetApi } from '../../test/mocks/apiFetch'
 import Adaptive from './Adaptive'
@@ -406,4 +413,18 @@ it('reports nothing for a session with no headband streaming', async () => {
   await sleep(500)
 
   expect(markEegStarted).not.toHaveBeenCalled()
+}, TEST_TIMEOUT)
+
+it('reloads a push page that Back restores after the sidecar was told to stop', async () => {
+  // bfcache keeps the page, so it would still show pushes running that `pagehide` stopped.
+  const page = (type, persisted) => Object.assign(new Event(type), { persisted })
+  withQuestions()
+  render(<Adaptive />)
+  fireEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await waitFor(() => expect(startPush).toHaveBeenCalledWith('sess-push'))
+
+  window.dispatchEvent(page('pagehide', true))
+  expect(stopPushOnUnload).toHaveBeenCalled()
+  window.dispatchEvent(page('pageshow', true))
+  expect(reloadPage).toHaveBeenCalledTimes(1)
 }, TEST_TIMEOUT)

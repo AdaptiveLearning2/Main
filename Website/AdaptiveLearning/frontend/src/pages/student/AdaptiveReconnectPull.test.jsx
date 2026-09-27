@@ -173,7 +173,7 @@ it('starts the duration clock at the first question, not at Connect', async () =
 }, 90_000)
 
 it('stops the finished session\'s recorder before starting the next one\'s', async () => {
-  // Each recorder's `beforeunload` listener is removed only by its `stop()`.
+  // Each recorder's `pagehide` listener is removed only by its `stop()`.
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })
   await waitFor(() => expect(button).not.toBeDisabled())
@@ -252,6 +252,21 @@ it('does not read the pairing itself as a drop, which under pull starts with con
   expect(apiFetch.mock.calls.filter(c => c[0] === '/api/eeg/muse/connect')).toHaveLength(1)
   expect(screen.getByText(/STREAMING/)).toBeInTheDocument()
 }, 60_000)
+
+it('stops the poller it started when the pairing fails', async () => {
+  // Headband off: `begin` brought the poller up, and it never stops on its own.
+  bridge.ingestion = { ...CONNECTED, muse_connected: false, muse_devices: [] }
+  render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('No headband found.', expect.anything()),
+                { timeout: 15000 })
+  expect(bridge.recorders[0].start).toHaveBeenCalledWith({ record: false })
+  await waitFor(() => expect(bridge.recorders[0].stop).toHaveBeenCalled())
+  expect(bridge.pollerRunning).toBe(false)
+}, 30_000)
 
 it('does not scan on a status read that never landed, which would drop a live link', async () => {
   // An unlanded read must not reach `pairOnce` (which disconnects first); observed via the scan count.

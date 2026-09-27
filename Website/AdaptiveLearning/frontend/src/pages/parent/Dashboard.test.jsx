@@ -145,6 +145,46 @@ it('still takes over the page when the very first load fails', async () => {
   expect(screen.queryByText(/couldn't refresh this page just now/i)).not.toBeInTheDocument()
 })
 
+const statTile = (label) => screen.getByText(label, { selector: 'p' }).previousElementSibling
+
+it('shows an unread stats block as unread, not as a child with no work', async () => {
+  // A failed user_stats read arrives as zeros with `retrieved: false`.
+  apiFetch.mockImplementation(() => Promise.resolve([{
+    ...withFace[0],
+    stats: { total_questions: 0, total_correct: 0, current_streak: 0, retrieved: false },
+  }]))
+  renderDashboard()
+
+  expect(await screen.findByText('These practice totals could not be loaded.')).toBeInTheDocument()
+  for (const label of ['Questions', 'Accuracy', 'Streak', 'Correct']) {
+    expect(statTile(label)).toHaveTextContent('—')
+  }
+})
+
+it('shows real totals when the stats read succeeded', async () => {
+  renderDashboard()
+  await screen.findByText('Ada')
+  expect(statTile('Accuracy')).toHaveTextContent('60%')
+  expect(statTile('Questions')).toHaveTextContent('10')
+  expect(screen.queryByText('These practice totals could not be loaded.')).not.toBeInTheDocument()
+})
+
+it('says why a weekly focus figure is missing, not a raw N/A', async () => {
+  // EEG withdrawn last week; sessions still happened this week, so the tiles render.
+  apiFetch.mockImplementation(() => Promise.resolve([{
+    ...withFace[0],
+    signal_summary: { ...withFace[0].signal_summary, focus: null, stress: null,
+                      cognitive_samples: 0, eeg_enabled: false,
+                      eeg_revoked_at: '2026-09-03T09:00:00Z', consent_retrieved: true },
+  }]))
+  renderDashboard()
+
+  expect(await screen.findByText('Weekly Focus')).toBeInTheDocument()
+  expect(statTile('Weekly Focus')).toHaveTextContent(/^Off since/)
+  expect(statTile('Weekly Stress')).toHaveTextContent(/^Off since/)
+  expect(screen.queryByText('N/A')).not.toBeInTheDocument()
+})
+
 it('asks for the children without a viewer-side flag', async () => {
   // Consent on Settings controls recording, not a switch on this query.
   renderDashboard()

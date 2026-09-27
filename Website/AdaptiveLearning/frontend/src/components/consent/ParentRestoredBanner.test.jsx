@@ -19,13 +19,15 @@ describe('ParentRestoredBanner', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('tells the student when a parent turned a sensor back on', async () => {
-    // A parent can restore recording without the student acting, so the student is told.
+  it('tells the student when a parent turned a sensor on', async () => {
+    // The flag is raised for a first opt-in too, so the copy claims no earlier withdrawal.
     apiFetch.mockResolvedValue({ needs_student_ack: true })
 
     render(<ParentRestoredBanner studentId="stu-1" />)
 
-    expect(await screen.findByText(/turned a sensor back on/i)).toBeInTheDocument()
+    expect(await screen.findByText(/turned a sensor on/i)).toBeInTheDocument()
+    expect(screen.queryByText(/back on|measured again|something you turned off/i))
+      .not.toBeInTheDocument()
   })
 
   it('does not claim anything happened when the read fails', async () => {
@@ -46,7 +48,7 @@ describe('ParentRestoredBanner', () => {
     await userEvent.click(await screen.findByRole('button', { name: /Got it/ }))
 
     expect(apiFetch).toHaveBeenLastCalledWith('/api/consent/ack', { method: 'POST' })
-    await waitFor(() => expect(screen.queryByText(/turned a sensor back on/i)).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByText(/turned a sensor on/i)).not.toBeInTheDocument())
   })
 
   it('stays up if the acknowledgement does not land', async () => {
@@ -58,6 +60,6 @@ describe('ParentRestoredBanner', () => {
     await userEvent.click(await screen.findByRole('button', { name: /Got it/ }))
 
     await waitFor(() => expect(screen.getByRole('button', { name: /Got it/ })).toBeEnabled())
-    expect(screen.getByText(/turned a sensor back on/i)).toBeInTheDocument()
+    expect(screen.getByText(/turned a sensor on/i)).toBeInTheDocument()
   })
 })

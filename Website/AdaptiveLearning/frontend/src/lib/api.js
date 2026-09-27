@@ -2,12 +2,33 @@ import { supabase } from './supabase'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
+// The last token a request carried, for a page that is going away and cannot await one.
+let lastToken = null
+
 async function getAccessToken() {
   try {
     const { data } = await supabase.auth.getSession()
-    return data?.session?.access_token || null
+    lastToken = data?.session?.access_token || null
+    return lastToken
   } catch {
     return null
+  }
+}
+
+/**
+ * A POST that outlives the document: `keepalive`, sent synchronously with the last token seen.
+ * For `pagehide`, where `apiFetch`'s awaited `getSession()` never finishes. Never throws;
+ * sends nothing with no token, since the backend would only answer 401.
+ */
+export function apiFetchOnUnload(path, body) {
+  if (!lastToken) return
+  try {
+    fetch(`${API_URL}${path}`, {
+      method: 'POST', keepalive: true, body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${lastToken}` },
+    }).catch(() => {})
+  } catch {
+    // Nothing to do on the way out.
   }
 }
 

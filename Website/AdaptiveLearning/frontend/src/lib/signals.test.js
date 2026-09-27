@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 vi.mock('./api', async () => await import('../test/mocks/apiFetch'))
-import { apiFetch, mockApi, overrideApi, resetApi } from '../test/mocks/apiFetch'
+import { apiFetch, apiFetchOnUnload, mockApi, overrideApi, resetApi } from '../test/mocks/apiFetch'
 import { createSignalRecorder, eegHealth } from './signals'
 
 const startBodies = () => apiFetch.mock.calls
@@ -14,6 +14,44 @@ beforeEach(() => {
   mockApi({
     'POST /api/eeg/start': () => ({ ok: true, running: true }),
     'POST /api/eeg/stop': () => ({ ok: true }),
+  })
+})
+
+describe('createSignalRecorder on a closing page', () => {
+  it('sends the stop on pagehide through the keepalive POST', async () => {
+    // An awaited apiFetch never finishes as the page goes; the poller ran on with no student.
+    const rec = createSignalRecorder({ sessionId: 's1', deviceId: 'default' })
+    await rec.start({ record: false })
+    window.dispatchEvent(new Event('pagehide'))
+    expect(apiFetchOnUnload).toHaveBeenCalledWith('/api/eeg/stop', { session_id: 's1' })
+    await rec.stop()
+  })
+
+  it('sends nothing for a stream that never started, or after stop()', async () => {
+    const idle = createSignalRecorder({ sessionId: 's1', deviceId: 'default' })
+    window.dispatchEvent(new Event('pagehide'))
+    await idle.stop()
+    const rec = createSignalRecorder({ sessionId: 's2', deviceId: 'default' })
+    await rec.start({ record: false })
+    await rec.stop()
+    window.dispatchEvent(new Event('pagehide'))
+    expect(apiFetchOnUnload).not.toHaveBeenCalled()
+  })
+
+  it('reloads a page restored from the back-forward cache after its stream was stopped', async () => {
+    const page = (type, persisted) => Object.assign(new Event(type), { persisted })
+    const onRestore = vi.fn()
+    const rec = createSignalRecorder({ sessionId: 's1', deviceId: 'default', onRestore })
+    await rec.start({ record: true })
+    window.dispatchEvent(page('pageshow', true))       // no hide yet: nothing to restore
+    expect(onRestore).not.toHaveBeenCalled()
+    window.dispatchEvent(page('pagehide', true))
+    expect(apiFetchOnUnload).toHaveBeenCalledWith('/api/eeg/stop', { session_id: 's1' })
+    expect(rec.isActive()).toBe(false)
+    window.dispatchEvent(page('pageshow', true))
+    window.dispatchEvent(page('pageshow', true))
+    expect(onRestore).toHaveBeenCalledTimes(1)
+    await rec.stop()
   })
 })
 

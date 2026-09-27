@@ -1741,7 +1741,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                           consent_retrieved: bool = True,
                           emotion_revoked_at: str | None = None,
                           heart_revoked_at: str | None = None,
-                          eeg_enabled: bool = True):
+                          eeg_enabled: bool = True,
+                          eeg_revoked_at: str | None = None):
     """Averages, highlights and per-day buckets of a student's recent signals.
 
     Callers must already have authorised the viewer. A false flag skips that
@@ -2080,6 +2081,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         "consent_retrieved": consent_retrieved,
         "emotion_revoked_at": emotion_revoked_at,
         "heart_revoked_at": heart_revoked_at,
+        # EEG is always read, so no `eeg_included`; the tiles need these to say "Off since".
+        "eeg_enabled": eeg_enabled,
+        "eeg_revoked_at": eeg_revoked_at,
         "emotion_distribution": (dict(sorted(emotion_counts.items(),
                                              key=lambda kv: (-kv[1], kv[0])))
                                  if include_emotion else None),
@@ -3263,7 +3267,8 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
                                 consent_retrieved=channels.consent_retrieved,
                                 emotion_revoked_at=channels.emotion_revoked_at,
                                 heart_revoked_at=channels.heart_revoked_at,
-                                eeg_enabled=channels.eeg),
+                                eeg_enabled=channels.eeg,
+                                eeg_revoked_at=channels.eeg_revoked_at),
     }
 
 
@@ -5334,7 +5339,7 @@ def _shape_consent(row: dict, student_id: str, erasures: dict | None = None) -> 
         "channels": channels,
         "retrieved": row.get("retrieved", True),
         "updated_at": row.get("updated_at"),
-        # Raised only by a parent turning a channel back ON.
+        # Raised only by a parent turning a channel ON, a first opt-in included.
         "needs_student_ack": bool(
             enabled_at and (ack_at is None or ack_at < enabled_at)
         ),
@@ -5414,6 +5419,8 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
             withdrawn.append(c)
         # State this decision was made against, asserted on the write below.
         guards[f"{c}_enabled"] = was
+        # Any parent turn-on, a first opt-in included: the student is told either way, and
+        # the banner's wording claims no earlier withdrawal (a re-enable nulls `revoked_at`).
         if requested and actor == "parent":
             re_enabled = True
 

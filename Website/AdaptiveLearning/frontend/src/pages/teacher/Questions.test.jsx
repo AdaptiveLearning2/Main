@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -14,7 +14,8 @@ const QUESTION = {
   id: 'q-1',
   question_text: 'What is 7 x 8?',
   options: ['54', '56', '58'],
-  correct_index: 1,
+  // What `/api/questions` returns: text, not an index (there is no `correct_index` column).
+  correct_answer: '56',
   subject: 'algebra',
   difficulty: 'easy',
 }
@@ -57,6 +58,24 @@ it("names a row's topic with every underscore a space", async () => {
 })
 
 describe('the question modal', () => {
+  it('marks the option the stored answer names, and only that one', async () => {
+    // It compared each index with `correct_index`, a field no endpoint sends, so none was marked.
+    const dialog = await openModal()
+    const marked = [...dialog.querySelectorAll('.border-green-400')].map(el => el.textContent)
+    expect(marked).toHaveLength(1)
+    expect(marked[0]).toMatch(/^B56/)
+    expect(within(dialog).getByText('correct answer')).toBeInTheDocument()
+  })
+
+  it('says so when the stored answer matches no option', async () => {
+    mockApi({
+      '/api/questions?limit=1000': () => [{ ...QUESTION, correct_answer: '57' }],
+      '/api/classes': () => [],
+    })
+    const dialog = await openModal()
+    expect(within(dialog).getByText('The stored answer matches none of these options.')).toBeInTheDocument()
+  })
+
   it('is a dialog, and names itself', async () => {
     // role="dialog" is what tells a screen reader the page behind is no longer in front.
     const dialog = await openModal()
@@ -100,6 +119,45 @@ describe('the question modal', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     // The restore is `useDialog`'s effect cleanup, landing with the unmount. Not covered: an opener that left the DOM.
     await waitFor(() => expect(document.activeElement).toBe(opener))
+  })
+})
+
+describe('the size of the bank', () => {
+  // The list is capped at 1000 rows by PostgREST; only the count endpoint knows the total.
+  const COUNTS = { '': 1400, easy: 600, medium: 500, hard: 300 }
+  const withCounts = (bank = [QUESTION, SECOND_QUESTION]) => mockApi([
+    { match: '/api/questions?limit=1000', handler: () => bank },
+    { match: '/api/classes', handler: () => [] },
+    { match: p => p.startsWith('/api/questions/count'), handler: (p) => ({
+      total: COUNTS[new URLSearchParams(p.split('?')[1] || '').get('difficulty') || ''],
+      retrieved: true }) },
+  ])
+
+  it('gives the bank its real size and says the list shows the newest rows', async () => {
+    withCounts()
+    render(<Questions />, { wrapper: MemoryRouter })
+    expect(await screen.findByText('1400 questions total · showing the newest 2')).toBeInTheDocument()
+  })
+
+  it('counts the analytics cards from the count endpoint, not the capped list', async () => {
+    withCounts()
+    render(<Analytics />, { wrapper: MemoryRouter })
+    const card = (label) => screen.getByText(label).nextElementSibling
+    await waitFor(() => expect(card('Total Questions')).toHaveTextContent('1400'))
+    expect(card('Easy')).toHaveTextContent('600')
+    expect(card('Hard')).toHaveTextContent('300')
+    expect(screen.getByText('The charts below cover the newest 2 of 1400 questions.')).toBeInTheDocument()
+  })
+
+  it('does not claim a total it could not count', async () => {
+    mockApi({
+      '/api/questions?limit=1000': () => [QUESTION, SECOND_QUESTION],
+      '/api/classes': () => [],
+      '/api/questions/count': () => ({ total: null, retrieved: false }),
+    })
+    render(<Questions />, { wrapper: MemoryRouter })
+    expect(await screen.findByText('2 questions loaded')).toBeInTheDocument()
+    expect(screen.queryByText(/questions total/)).not.toBeInTheDocument()
   })
 })
 

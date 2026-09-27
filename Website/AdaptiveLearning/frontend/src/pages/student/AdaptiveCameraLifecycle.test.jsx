@@ -57,6 +57,12 @@ vi.mock('../../lib/sidecar', () => ({
   sidecarState: vi.fn(async () => null),
   debugFaceFrame: vi.fn(async () => null),
 }))
+// The real helper with a spy for the reload jsdom cannot perform.
+const reloadPage = vi.fn()
+vi.mock('../../lib/pageRestore', async (importOriginal) => {
+  const real = await importOriginal()
+  return { reloadIfRestored: (e) => real.reloadIfRestored(e, reloadPage) }
+})
 vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u1', email: 'a@b.c' }, role: 'student', loading: false }),
 }))
@@ -105,6 +111,15 @@ it('stops the camera on pagehide with the keepalive stop, since cleanup never ru
   expect(deviceStop).not.toHaveBeenCalled()
 })
 
+it('reloads a page that Back restores after its camera was stopped', async () => {
+  const page = (type, persisted) => Object.assign(new Event(type), { persisted })
+  await renderWithCameraOn()
+  window.dispatchEvent(page('pagehide', true))
+  expect(deviceStopOnUnload).toHaveBeenCalledWith('camera')
+  window.dispatchEvent(page('pageshow', true))
+  expect(reloadPage).toHaveBeenCalledTimes(1)
+})
+
 // Real timers: the retry is on a 5 s cadence and this component hangs under a fake clock.
 it('keeps asking for the device list until the sidecar answers, so the camera card appears without a reload', async () => {
   registry.failures = 1
@@ -146,4 +161,14 @@ it('sends nothing for a camera that is already off', async () => {
   await new Promise(r => setTimeout(r, 50))
   expect(deviceStop).not.toHaveBeenCalled()
   expect(deviceStopOnUnload).not.toHaveBeenCalled()
+})
+
+it('does not reload on Back when nothing was stopped', async () => {
+  const page = (type, persisted) => Object.assign(new Event(type), { persisted })
+  registry.cameraRunning = false
+  render(<Adaptive />)
+  await screen.findByRole('button', { name: /turn on camera/i })
+  window.dispatchEvent(page('pagehide', true))
+  window.dispatchEvent(page('pageshow', true))
+  expect(reloadPage).not.toHaveBeenCalled()
 })

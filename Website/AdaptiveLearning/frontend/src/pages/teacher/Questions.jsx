@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { HelpCircle, Search, Filter, X, ChevronDown } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { fetchQuestionsCached } from '../../lib/questionsCache'
+import { fetchQuestionCount, fetchQuestionsCached } from '../../lib/questionsCache'
 import { apiFetch } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
@@ -10,6 +10,7 @@ import useDialog from '../../hooks/useDialog'
 import { useLatestRequest } from '../../hooks/useLatestRequest'
 import QuestionFigure from '../../components/questions/QuestionFigure'
 import CCSSBadge from '../../components/questions/CCSSBadge'
+import { correctIndex, optionList } from '../../lib/answerKey'
 import { TOPICS as ALL_TOPICS, topicLabel } from '../../lib/topics'
 
 const TOPICS = ['all', ...ALL_TOPICS]
@@ -25,6 +26,9 @@ function QuestionModal({ question, onClose }) {
   // Escape to close, Tab trapped inside, focus returned to the row that opened it.
   const panel = useRef(null)
   useDialog(panel, onClose)
+  // `correct_answer` is text; no table has an index to compare against.
+  const options = optionList(question)
+  const correct = correctIndex(question, options)
 
   return (
     <motion.div
@@ -59,17 +63,22 @@ function QuestionModal({ question, onClose }) {
         <QuestionFigure figure={question.figure} />
         <CCSSBadge standard={question.ccss_standard} />
         <div className="space-y-2 mb-5">
-          {question.options?.map((opt, i) => (
+          {options.map((opt, i) => (
             <div key={i}
-              className={`flex items-center gap-3 p-3 rounded-xl text-sm border ${i === question.correct_index ? 'border-green-400 bg-green-50 dark:bg-green-900/30 text-green-800 dark:text-green-200' : 'border-gray-100 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}>
+              className={`flex items-center gap-3 p-3 rounded-xl text-sm border ${i === correct ? 'border-green-400 bg-green-50 dark:bg-green-900/30 text-green-800 dark:text-green-200' : 'border-gray-100 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}>
               <span className="w-6 h-6 flex-shrink-0 rounded-lg bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 flex items-center justify-center text-xs font-bold text-gray-600 dark:text-gray-300">
                 {String.fromCharCode(65 + i)}
               </span>
               <span>{opt}</span>
-              {i === question.correct_index && <span className="ml-auto text-green-500 text-base">✓</span>}
+              {i === correct && <span className="ml-auto text-green-600 text-base">✓ <span className="sr-only">correct answer</span></span>}
             </div>
           ))}
         </div>
+        {correct === -1 && options.length > 0 && (
+          <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">
+            The stored answer matches none of these options.
+          </p>
+        )}
         <p className="text-xs text-gray-600 dark:text-gray-400">ID: {question.id}</p>
       </motion.div>
     </motion.div>
@@ -94,6 +103,8 @@ export default function Questions() {
   const [studentId, setStudentId] = useState('')
   // Set only for one student; `expired` tells an empty history from an aged-out one.
   const [studentMeta, setStudentMeta] = useState(null)
+  // The exact count, or null if it could not be read.
+  const [bankTotal, setBankTotal] = useState(null)
   const PER_PAGE = 15
 
   // One counter across BOTH loaders: a cached bank read can land under an
@@ -102,7 +113,9 @@ export default function Questions() {
 
   const load = () => {
     const isCurrent = beginQuestionRead()
-    // Whole bank: this page paginates client-side.
+    // The list is capped at 1000 rows, so its length is not the bank's size.
+    fetchQuestionCount().then(setBankTotal)
+    // The newest 1000: this page paginates client-side.
     fetchQuestionsCached(1000)
       .then(q => {
         if (!isCurrent()) return
@@ -185,7 +198,10 @@ export default function Questions() {
               ? `${questions.length} question${questions.length === 1 ? '' : 's'} asked`
                 + (studentMeta.expired ? ` · ${studentMeta.expired} no longer in the bank` : '')
                 + (studentMeta.truncated ? ' · showing the most recent 200 answers' : '')
-              : `${questions.length} questions total`}
+              : bankTotal === null
+                ? `${questions.length} questions loaded`
+                : `${bankTotal} questions total`
+                  + (bankTotal > questions.length ? ` · showing the newest ${questions.length}` : '')}
         </p>
       </motion.div>
 

@@ -33,6 +33,7 @@ export default function AdminLiveFlow() {
         <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-slate-400" /> quiet ({'>'}90s)</span>
         <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-amber-500" /> stale ({'>'}10m)</span>
         <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border-2 border-gray-300 dark:border-gray-600" /> never reported</span>
+        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border-2 border-dashed border-amber-500" /> could not be read</span>
       </div>
 
       {failed && <p className="text-sm text-rose-600">Could not read the open sessions.</p>}

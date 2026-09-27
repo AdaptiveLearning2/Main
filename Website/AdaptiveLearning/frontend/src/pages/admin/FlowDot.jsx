@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 
 /**
  * A channel's liveness as a light: flowing (green, pulses per new sample),
- * stale (amber), seen (slate: reported, not recently), never (hollow).
+ * stale (amber), seen (slate: reported, not recently), never (hollow), unreadable (dashed).
  * Pulses only when the timestamp changes, so a stopped sensor goes still.
  */
 export default function FlowDot({ channel, label }) {
@@ -27,7 +27,11 @@ export default function FlowDot({ channel, label }) {
 
   let tone = 'border-2 border-gray-300 dark:border-gray-600 bg-transparent'
   let title = `${label}: no data has ever arrived for this session`
-  if (seen && flowing) {
+  if (seen === null) {
+    // `null` is the backend's failed read, not "never reported" (false).
+    tone = 'border-2 border-dashed border-amber-500 bg-transparent'
+    title = `${label}: could not be read`
+  } else if (seen && flowing) {
     tone = 'bg-emerald-500'
     title = `${label}: receiving data`
   } else if (seen && stale) {

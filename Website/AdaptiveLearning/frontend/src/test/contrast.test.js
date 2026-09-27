@@ -174,3 +174,35 @@ describe('a grey with no dark companion', () => {
     expect(offenders).toEqual([])
   })
 })
+
+describe('the heatmap steps', () => {
+  // Tailwind 3.4 stock hexes for the colours the scale uses; an unlisted one fails the test.
+  const HEX = {
+    white: 'ffffff',
+    'emerald-50': 'ecfdf5', 'emerald-300': '6ee7b7', 'emerald-500': '10b981',
+    'emerald-700': '047857', 'emerald-950': '022c22',
+    'amber-50': 'fffbeb', 'amber-200': 'fde68a', 'amber-700': 'b45309', 'amber-950': '451a03',
+    'orange-50': 'fff7ed', 'orange-300': 'fdba74', 'orange-800': '9a3412', 'orange-950': '431407',
+    'rose-400': 'fb7185', 'rose-800': '9f1239', 'rose-950': '4c0519',
+  }
+  const pick = (cls, kind, dark) => {
+    const light = cls.match(new RegExp(`(?<![:\\w-])${kind}-([a-z]+(?:-\\d+)?)\\b`))?.[1]
+    const darkOne = cls.match(new RegExp(`dark:${kind}-([a-z]+(?:-\\d+)?)\\b`))?.[1]
+    return dark ? (darkOne ?? light) : light
+  }
+
+  it('puts every cell\'s text at AA against its own shade, in both modes', async () => {
+    const { SCALE } = await import('../components/charts/heatmapScale')
+    const failures = []
+    for (const step of SCALE) {
+      for (const dark of [false, true]) {
+        const bg = pick(step.cell, 'bg', dark), fg = pick(step.text, 'text', dark)
+        expect(HEX[bg], `no hex for ${bg}`).toBeDefined()
+        expect(HEX[fg], `no hex for ${fg}`).toBeDefined()
+        const ratio = contrast(HEX[bg], HEX[fg])
+        if (ratio < AA) failures.push(`${step.at} ${dark ? 'dark' : 'light'}: ${fg} on ${bg} ${ratio.toFixed(2)}`)
+      }
+    }
+    expect(failures).toEqual([])
+  })
+})

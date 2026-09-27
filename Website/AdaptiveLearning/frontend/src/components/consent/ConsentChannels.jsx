@@ -53,6 +53,11 @@ export const CHANNELS = [
 
 const NOTHING_CHANGED = 'Could not load these settings. Nothing has been changed.'
 
+// A failed read after an erasure that succeeded: "nothing has changed" would be false.
+const ERASED_UNREADABLE =
+  'The readings were erased. These settings could not be reloaded just now, so the '
+  + 'erasure may not show here until you refresh.'
+
 // A failed read after a 409: "nothing has changed" would be false.
 const CONFLICT_UNREADABLE =
   'Someone else changed these settings, so your change was not applied. '
@@ -96,11 +101,13 @@ export default function ConsentChannels({ studentId, role, studentName = null })
   const [erasing, setErasing] = useState(null)
   const [erasureNote, setErasureNote] = useState(null)
 
-  // `conflict`: the message to keep after a 409-triggered reload.
-  const load = useCallback((conflict = null) => {
+  // `conflict`: the message to keep after a 409-triggered reload. `afterErasure`: something did
+  // change, so a failed reload keeps the switches and says so. Resolves whether it loaded.
+  const load = useCallback((conflict = null, { afterErasure = false } = {}) => {
     const failed = () => {
-      setChannels(null)
-      setError(conflict ? CONFLICT_UNREADABLE : NOTHING_CHANGED)
+      if (!afterErasure) setChannels(null)
+      setError(afterErasure ? ERASED_UNREADABLE : conflict ? CONFLICT_UNREADABLE : NOTHING_CHANGED)
+      return false
     }
     return apiFetch(`/api/consent/${studentId}`)
       .then(c => {
@@ -108,8 +115,10 @@ export default function ConsentChannels({ studentId, role, studentName = null })
         if (c.retrieved === false) return failed()
         setChannels(c.channels)
         setError(conflict)
+        return true
       })
-      .catch(e => (conflict ? failed() : setError(String(e.message || e))))
+      .catch(e => ((conflict || afterErasure) ? failed()
+        : (setError(String(e.message || e)), false)))
   }, [studentId])
 
   useEffect(() => { load() }, [load])
@@ -157,16 +166,16 @@ export default function ConsentChannels({ studentId, role, studentName = null })
         // The channel name (`camera`), not the flag key, which 422s.
         body: { channel: key.replace('_enabled', ''), confirm: true },
       })
-      // Reload so `erased_at` comes from the server.
-      await load()
-      setErasureNote(out.charts_failed
-        ? {
-            failed: true,
-            text: 'The readings were erased. Some archived charts could not be '
-              + 'removed and are no longer reachable from the app; please tell '
-              + 'us so they can be cleared.',
-          }
-        : { failed: false, text: 'Erased.' })
+      // Reload so `erased_at` comes from the server; a failed reload says the erasure happened.
+      const reloaded = await load(null, { afterErasure: true })
+      // The chart warning stands either way; a failed reload has already said the rows went.
+      if (out.charts_failed) setErasureNote({
+        failed: true,
+        text: (reloaded ? 'The readings were erased. ' : '') + 'Some archived charts could not be '
+          + 'removed and are no longer reachable from the app; please tell '
+          + 'us so they can be cleared.',
+      })
+      else if (reloaded) setErasureNote({ failed: false, text: 'Erased.' })
       closeErasure()
     } catch (e) {
       setError(String(e.message || e))

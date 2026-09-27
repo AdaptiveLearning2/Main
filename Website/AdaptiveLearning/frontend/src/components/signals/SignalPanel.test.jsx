@@ -66,11 +66,59 @@ describe('WeeklySignalReport', () => {
     expect(metric('Sessions').getByText('5')).toBeInTheDocument()
   })
 
-  it('shows N/A in the affected tile when a metric is missing', () => {
+  it('says why a tile has no figure, in the affected tile only, never a raw N/A', () => {
+    // Rows arrived (120) and none gave a focus: calibrating, not missing.
     const partial = { ...report, averages: { ...report.averages, focus: null } }
     render(<WeeklySignalReport report={partial} />)
-    expect(metric('Avg Focus').getByText('N/A')).toBeInTheDocument()
+    expect(metric('Avg Focus').getByText('Calibrating')).toBeInTheDocument()
     expect(metric('Avg Stress').getByText('31%')).toBeInTheDocument()
+    expect(screen.queryByText('N/A', VISIBLE)).not.toBeInTheDocument()
+  })
+
+  it('says Off since <date> on all four EEG tiles when EEG was withdrawn', () => {
+    const withdrawn = {
+      ...report,
+      eeg_enabled: false, eeg_revoked_at: '2026-09-03T09:00:00Z',
+      averages: { ...report.averages, focus: null, stress: null },
+      highlights: { ...report.highlights, highest_stress: null, lowest_focus: null },
+      sample_counts: { ...report.sample_counts, cognitive: 0 },
+    }
+    render(<WeeklySignalReport report={withdrawn} />)
+    for (const label of ['Avg Focus', 'Avg Stress', 'Highest Stress', 'Lowest Focus']) {
+      expect(metric(label).getByText(/^Off since/)).toBeInTheDocument()
+    }
+  })
+
+  it('calls a failed EEG read unavailable, not No sensor', () => {
+    // The failed read's counts are zero, which alone reads as a headband never worn.
+    const failed = {
+      ...report,
+      retrieved: { cognitive: false, face: true, sessions: true },
+      averages: { ...report.averages, focus: null, stress: null },
+      highlights: { ...report.highlights, highest_stress: null, lowest_focus: null },
+      sample_counts: { ...report.sample_counts, cognitive: 0 },
+    }
+    render(<WeeklySignalReport report={failed} />)
+    expect(metric('Avg Focus').getByText('Unavailable')).toBeInTheDocument()
+    expect(metric('Lowest Focus').getByText('Unavailable')).toBeInTheDocument()
+    expect(screen.queryByText('No sensor', VISIBLE)).not.toBeInTheDocument()
+  })
+
+  it('still says Off since when the EEG read failed and the channel was withdrawn', () => {
+    // The revocation comes from the consent read, which succeeded.
+    const failed = {
+      ...report,
+      eeg_enabled: false,
+      eeg_revoked_at: '2026-09-03T10:00:00Z',
+      retrieved: { cognitive: false, face: true, sessions: true },
+      averages: { ...report.averages, focus: null, stress: null },
+      highlights: { ...report.highlights, highest_stress: null, lowest_focus: null },
+      sample_counts: { ...report.sample_counts, cognitive: 0 },
+    }
+    render(<WeeklySignalReport report={failed} />)
+    expect(metric('Avg Focus').getByText(/^Off since/)).toBeInTheDocument()
+    expect(metric('Lowest Focus').getByText(/^Off since/)).toBeInTheDocument()
+    expect(screen.queryByText('Unavailable', VISIBLE)).not.toBeInTheDocument()
   })
 
   it('explains that gaps are unretrieved data, not absence of activity', () => {

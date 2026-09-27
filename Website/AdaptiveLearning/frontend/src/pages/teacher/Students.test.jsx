@@ -141,11 +141,12 @@ describe('signal averages', () => {
     expect(summaryCalls()[0]).toContain('/api/students/stu-1/signal-summary')
   })
 
-  it('reports no data rather than a confident zero when the aggregate has none', async () => {
+  it('reports no sensor rather than a confident zero when the aggregate has none', async () => {
+    // The same reason every signal tile gives (`offLabel`): consented, nothing arrived.
     setData({ summary: { ...SUMMARY, focus: null, cognitive_samples: 0 } })
     render(<Students />)
     await expandAda()
-    await waitFor(() => expect(tile('Focus Score').getByText('—')).toBeInTheDocument())
+    await waitFor(() => expect(tile('Focus Score').getByText('No sensor')).toBeInTheDocument())
   })
 
   it('does not render a missing field as NaN%', async () => {
@@ -153,8 +154,16 @@ describe('signal averages', () => {
     setData({ summary: {} })
     render(<Students />)
     await expandAda()
-    await waitFor(() => expect(tile('Focus Score').getByText('—')).toBeInTheDocument())
+    await waitFor(() => expect(tile('Focus Score').getByText('No sensor')).toBeInTheDocument())
     expect(screen.queryByText(/NaN/)).not.toBeInTheDocument()
+  })
+
+  it('says a withdrawn EEG channel has been off since the day it was withdrawn', async () => {
+    setData({ summary: { ...SUMMARY, focus: null, stress: null, cognitive_samples: 0,
+                         eeg_enabled: false, eeg_revoked_at: '2026-09-03T09:00:00Z' } })
+    render(<Students />)
+    await expandAda()
+    await waitFor(() => expect(tile('Focus Score').getByText(/^Off since/)).toBeInTheDocument())
   })
 })
 
@@ -222,12 +231,43 @@ describe('facial recognition switch', () => {
     setData({ summary: SUMMARY_FACE_OFF })
     render(<Students />)
     await expandAda()
-    expect(tile('Dominant Emotion').getByText('Off')).toBeInTheDocument()
+    // `offLabel`'s wording for a channel off with no revocation date on the payload.
+    expect(tile('Dominant Emotion').getByText('Not recorded')).toBeInTheDocument()
   })
 
+  it('never calls a sensor off when the summary read failed', async () => {
+    // A null summary read as heart "Off / not recorded": a claim about consent from a failed request.
+    setData({ summary: new Error('down') })
+    render(<Students />)
+    await expandAda()
+    for (const label of ['Avg Heart Rate', 'Avg HRV', 'Dominant Emotion']) {
+      await waitFor(() => expect(tile(label).getByText('—')).toBeInTheDocument())
+      expect(tile(label).getByText('signal data unavailable')).toBeInTheDocument()
+    }
+    expect(screen.queryByText('Off')).not.toBeInTheDocument()
+  })
 
+  it('does not call a sensor off when only the consent read failed', async () => {
+    // Consent fails closed to heart off; a teacher must not read that as the family's decision.
+    setData({ summary: { ...SUMMARY, heart_included: false, heart_samples: 0,
+                         consent_retrieved: false } })
+    render(<Students />)
+    await expandAda()
+    await waitFor(() => expect(tile('Avg Heart Rate').getByText('Unavailable')).toBeInTheDocument())
+    expect(tile('Avg Heart Rate').getByText("consent couldn't be read")).toBeInTheDocument()
+  })
 
-
+  it('still says a withdrawn sensor is off when only the aggregate read failed', async () => {
+    // Consent was read; only the figures failed, so the revocation is still known.
+    setData({ summary: { ...SUMMARY, retrieved: false, consent_retrieved: true,
+                         heart_included: false, heart_revoked_at: '2026-09-03T10:00:00Z',
+                         heart_samples: 0, cognitive_samples: 0 } })
+    render(<Students />)
+    await expandAda()
+    await waitFor(() => expect(tile('Avg Heart Rate').getByText(/^Off since/)).toBeInTheDocument())
+    expect(tile('Avg Heart Rate').queryByText('signal data unavailable')).not.toBeInTheDocument()
+    expect(tile('Focus Score').getByText('—')).toBeInTheDocument()
+  })
 })
 
 describe('the "nothing recorded" note', () => {
@@ -383,4 +423,24 @@ it('falls back to the email prefix for a student with no name set', async () => 
   render(<Students />)
 
   expect(await screen.findByText('ada')).toBeInTheDocument()
+})
+
+it('says the roster could not be read, not that nobody has joined, and retries', async () => {
+  // A teacher with thirty enrolled students was told "No students yet".
+  results.class_memberships = { data: null, error: { message: 'PostgREST down' } }
+  render(<Students />)
+
+  expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't load your students")
+  expect(screen.queryByText('No students yet')).not.toBeInTheDocument()
+
+  results.class_memberships = MEMBERSHIPS
+  await userEvent.click(screen.getByRole('button', { name: /try again/i }))
+  expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+})
+
+it('still says No students yet for a roster that read as empty', async () => {
+  results.class_memberships = { data: [], error: null }
+  render(<Students />)
+  expect(await screen.findByText('No students yet')).toBeInTheDocument()
 })

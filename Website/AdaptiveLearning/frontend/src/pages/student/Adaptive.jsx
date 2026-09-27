@@ -7,6 +7,7 @@ import { endSession, recordAnswer } from '../../lib/session'
 import useEegStartReport from '../../hooks/useEegStartReport'
 import { onSignOut } from '../../lib/signOutTasks'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
+import { reloadIfRestored } from '../../lib/pageRestore'
 import { startPush, stopPush, stopPushOnUnload, pushStatus,
          deviceStart, deviceStop, deviceStopOnUnload, museRefresh, museConnect,
          museDisconnect, museState, devices as sidecarDevices,
@@ -229,7 +230,10 @@ export default function Adaptive() {
       const c = cameraRef.current
       return c.running && c.id && c.pushMode ? c.id : null
     }
-    const onPageHide = () => { const id = stoppable(); if (id) deviceStopOnUnload(id) }
+    const onPageHide = (e) => {
+      const id = stoppable()
+      if (id) { deviceStopOnUnload(id); reloadIfRestored(e) }
+    }
     window.addEventListener('pagehide', onPageHide)
     return () => {
       window.removeEventListener('pagehide', onPageHide)
@@ -723,7 +727,7 @@ export default function Adaptive() {
     })
 
     // Cleanup doesn't run on a tab close; `pagehide` (bfcache- and mobile-safe) does.
-    const onPageHide = () => { stopPushOnUnload() }
+    const onPageHide = (e) => { stopPushOnUnload(); reloadIfRestored(e) }
     window.addEventListener('pagehide', onPageHide)
 
     return () => {
@@ -1005,6 +1009,11 @@ export default function Adaptive() {
       const outcome = await pairOnce(hw, activeSessionId)
       if (outcome.ok) return
 
+      // `begin` started a stream (pull: the backend poller, which never stops on its own).
+      // Dropped, not reused: a stopped recorder has removed its `pagehide` listener.
+      Promise.resolve().then(() => hw.end())
+        .catch(e => console.error('[headband] could not stop after a failed pairing', e))
+      setRecorder(null)
       setHeadband(s => ({ ...s, phase: 'idle', deviceName: null }))
       // Long dwell: these are instructions. An unlanded read blames the check,
       // never the headband.
@@ -1049,7 +1058,7 @@ export default function Adaptive() {
     if (headband.pushMode || !headband.connected || !stationId) return
     let rec = recorder
     if (!rec || rec.sessionId !== activeSessionId) {
-      // `stop()` also removes the old recorder's `beforeunload` listener.
+      // `stop()` also removes the old recorder's `pagehide` listener.
       if (rec) await rec.stop()
       rec = createSignalRecorder({ sessionId: activeSessionId, deviceId: stationId })
       setRecorder(rec)

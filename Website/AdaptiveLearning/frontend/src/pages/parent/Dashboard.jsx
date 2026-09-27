@@ -5,7 +5,7 @@ import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Activity,
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import ChildWithdrewBanner from '../../components/consent/ChildWithdrewBanner'
-import { pct, emotionOn as faceIncluded } from '../../components/signals/SignalPanel'
+import { pct, valueOrReason, emotionOn as faceIncluded } from '../../components/signals/SignalPanel'
 
 // Only the fields the tiles below render; keep in step with them.
 function hasSignalSummary(summary) {
@@ -70,10 +70,17 @@ export default function ParentDashboard() {
       ) : (
         <div className="space-y-6">
           {children.map((child, i) => {
-            const acc = child.stats?.total_questions > 0
+            // `retrieved: false` carries placeholder zeros; no questions is no accuracy, not 0%.
+            const statsRead = child.stats?.retrieved !== false
+            const acc = statsRead && child.stats?.total_questions > 0
               ? Math.round((child.stats.total_correct / child.stats.total_questions) * 100)
-              : 0
+              : null
+            const stat = (value, format = v => v) => (statsRead ? format(value ?? 0) : '—')
             const signals = child.signal_summary || {}
+            // The EEG channel's reason for a missing figure, from the fields the summary carries.
+            const eeg = { on: signals.eeg_enabled !== false, revokedAt: signals.eeg_revoked_at,
+                          consentRetrieved: signals.consent_retrieved,
+                          samples: signals.cognitive_samples }
             const retrieved = signalsRetrieved(signals)
             const showSignals = retrieved && hasSignalSummary(signals)
             const initial = (child.name || child.email || '?')[0].toUpperCase()
@@ -102,10 +109,11 @@ export default function ParentDashboard() {
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-0 divide-x divide-gray-50 dark:divide-gray-800">
                   {[
-                    { icon: BookOpen,   label: 'Questions', value: child.stats?.total_questions ?? 0,  color: 'text-indigo-600' },
-                    { icon: TrendingUp, label: 'Accuracy',  value: `${acc}%`, color: acc >= 70 ? 'text-green-600' : acc >= 40 ? 'text-amber-600' : 'text-rose-600' },
-                    { icon: Flame,      label: 'Streak',    value: `${child.stats?.current_streak ?? 0}d`, color: 'text-orange-500' },
-                    { icon: TrendingUp, label: 'Correct',   value: child.stats?.total_correct ?? 0, color: 'text-violet-600' },
+                    { icon: BookOpen,   label: 'Questions', value: stat(child.stats?.total_questions), color: 'text-indigo-600' },
+                    { icon: TrendingUp, label: 'Accuracy',  value: acc === null ? '—' : `${acc}%`,
+                      color: acc === null ? 'text-gray-600 dark:text-gray-400' : acc >= 70 ? 'text-green-600' : acc >= 40 ? 'text-amber-600' : 'text-rose-600' },
+                    { icon: Flame,      label: 'Streak',    value: stat(child.stats?.current_streak, v => `${v}d`), color: 'text-orange-500' },
+                    { icon: TrendingUp, label: 'Correct',   value: stat(child.stats?.total_correct), color: 'text-violet-600' },
                   ].map(s => (
                     <div key={s.label} className="p-4 text-center">
                       <s.icon size={18} className={`mx-auto mb-1 ${s.color}`} />
@@ -114,12 +122,17 @@ export default function ParentDashboard() {
                     </div>
                   ))}
                 </div>
+                {!statsRead && (
+                  <p className="px-5 pb-3 text-xs text-gray-600 dark:text-gray-400">
+                    These practice totals could not be loaded.
+                  </p>
+                )}
 
                 {showSignals ? (
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 p-4 border-t border-gray-50 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/20">
                     {[
-                      { icon: Brain,    label: 'Weekly Focus',   value: pct(signals.focus),          color: 'text-emerald-600' },
-                      { icon: Zap,      label: 'Weekly Stress',  value: pct(signals.stress),         color: 'text-rose-600' },
+                      { icon: Brain,    label: 'Weekly Focus',   value: valueOrReason(pct(signals.focus), eeg),  color: 'text-emerald-600' },
+                      { icon: Zap,      label: 'Weekly Stress',  value: valueOrReason(pct(signals.stress), eeg), color: 'text-rose-600' },
                       { icon: Activity, label: 'AI Sessions',    value: signals.sessions ?? 0,           color: 'text-amber-600' },
                     ].map(item => (
                       <div key={item.label} className="rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-4">

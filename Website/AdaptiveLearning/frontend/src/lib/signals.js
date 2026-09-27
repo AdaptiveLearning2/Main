@@ -1,11 +1,13 @@
-import { apiFetch } from './api'
+import { apiFetch, apiFetchOnUnload } from './api'
+import { reloadIfRestored } from './pageRestore'
 
 /**
  * Toggles the backend's pull-mode poller for a session.
  * `start({record: false})` at Connect (stream only), `start({record: true})`
  * on the first question, which arms the running poller in place.
  */
-export function createSignalRecorder({ sessionId, deviceId }) {
+export function createSignalRecorder({ sessionId, deviceId,
+                                      onRestore = () => window.location.reload() }) {
   let active = false
   let recording = false
 
@@ -35,13 +37,21 @@ export function createSignalRecorder({ sessionId, deviceId }) {
     recording = false
   }
 
-  const onUnload = () => { stop() }
-  window.addEventListener('beforeunload', onUnload)
+  // `pagehide` and keepalive: an awaited `apiFetch` does not outlive the document, and a
+  // poller nobody stops runs on with no student.
+  const onUnload = (e) => {
+    if (!active || !sessionId) return
+    apiFetchOnUnload('/api/eeg/stop', { session_id: sessionId })
+    active = false
+    recording = false
+    reloadIfRestored(e, onRestore)
+  }
+  window.addEventListener('pagehide', onUnload)
 
   return {
     sessionId,
     start,
-    stop: () => { window.removeEventListener('beforeunload', onUnload); return stop() },
+    stop: () => { window.removeEventListener('pagehide', onUnload); return stop() },
     isActive: () => active,
     isRecording: () => recording,
   }

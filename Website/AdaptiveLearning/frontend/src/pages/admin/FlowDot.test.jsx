@@ -111,4 +111,16 @@ describe('the four states', () => {
     render(<FlowDot channel={undefined} label="EEG" />)
     expect(titleOf()).toMatch(/no data has ever arrived/)
   })
+
+  it('shows a failed read as unreadable, not as never reported', () => {
+    // live-signals answers `seen: null` when the newest-row read threw.
+    render(<FlowDot channel={{ flowing: false, stale: false, seen: null, last_ts: null }} label="EEG" />)
+    expect(titleOf()).toBe('EEG: could not be read')
+    expect(titleOf()).not.toMatch(/no data has ever arrived/)
+  })
+
+  it('still calls a channel that never reported never reported', () => {
+    render(<FlowDot channel={{ flowing: false, stale: false, seen: false, last_ts: null }} label="EEG" />)
+    expect(titleOf()).toMatch(/no data has ever arrived/)
+  })
 })

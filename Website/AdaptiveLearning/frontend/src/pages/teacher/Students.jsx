@@ -5,12 +5,14 @@ import { Users, Search, ChevronDown, Flame, Smile, Target, TrendingUp, Zap, Hear
 import HideSensorDataToggle from '../../components/common/HideSensorDataToggle'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 import { apiFetch } from '../../lib/api'
+import { offLabel } from '../../components/signals/SignalPanel'
 
 // Matches the weekly report's window.
 const SIGNAL_WINDOW_DAYS = 7
 // Per tile, since accuracy and streak are lifetime figures, not this window.
 const WINDOW_NOTE = `last ${SIGNAL_WINDOW_DAYS}d`
 const SIGNALS_UNAVAILABLE = 'signal data unavailable'
+const CONSENT_UNREAD = "consent couldn't be read"
 const eegSub = (n, failed) => {
   if (failed) return SIGNALS_UNAVAILABLE
   return n ? `${n} EEG readings · ${WINDOW_NOTE}` : `no EEG data · ${WINDOW_NOTE}`
@@ -53,6 +55,9 @@ async function getStudentStats(studentId)
   const totalAccuracy = statsRetrieved && userStats && userStats.total_questions > 0
     ? Math.round((userStats.total_correct / userStats.total_questions) * 100)
     : null
+  const signalsFailed = summary === null || signals.retrieved === false
+  // A failed read hides a figure, never a revocation the consent read did return.
+  const failedWhileOn = (on) => signalsFailed && !(signals.consent_retrieved === true && !on)
 
   return {
     statsRetrieved,
@@ -72,11 +77,25 @@ async function getStudentStats(studentId)
     // Server-decided from consent: "sensor off" is not "nothing recorded".
     heartIncluded: signals.heart_included === true,
     // Request failed or the aggregate failed; the zero counts above mean nothing then.
-    signalsFailed: summary === null || signals.retrieved === false,
+    signalsFailed,
+    eegFailed: failedWhileOn(signals.eeg_enabled !== false),
+    faceFailed: failedWhileOn(signals.emotion_included !== false && signals.face_included !== false),
+    heartFailed: failedWhileOn(signals.heart_included === true),
     // Server-decided from consent, like heartIncluded.
     faceIncluded: signals.emotion_included !== undefined
       ? signals.emotion_included !== false
       : signals.face_included !== false,
+    // False when the consent read failed: then no tile may say a sensor is off.
+    consentRetrieved: signals.consent_retrieved !== false,
+    // What each tile says with no figure, as every signal tile does (`offLabel`).
+    eegOff: offLabel({ on: signals.eeg_enabled !== false, revokedAt: signals.eeg_revoked_at,
+                       consentRetrieved: signals.consent_retrieved,
+                       samples: signals.cognitive_samples }),
+    faceOff: offLabel({ on: signals.emotion_included !== false && signals.face_included !== false,
+                        revokedAt: signals.emotion_revoked_at,
+                        consentRetrieved: signals.consent_retrieved, samples: signals.face_samples }),
+    heartOff: offLabel({ on: signals.heart_included === true, revokedAt: signals.heart_revoked_at,
+                         consentRetrieved: signals.consent_retrieved, samples: signals.heart_samples }),
     topics: (topicRes.data || []).map(row => {
       const attempted = row.attempted_questions || 0
       const correct = row.correct_questions || 0
@@ -95,6 +114,9 @@ async function getStudentStats(studentId)
 export default function Students() {
   const [students, setStudents] = useState([])
   const [loading, setLoading]   = useState(true)
+  // A failed roster read is not an empty class: "No students yet" would tell the teacher nobody joined.
+  const [rosterFailed, setRosterFailed] = useState(false)
+  const [rosterAttempt, setRosterAttempt] = useState(0)
   const [search, setSearch]     = useState('')
   const [expandedId, setExpandedId] = useState(null)
   const [statsCache, setStatsCache] = useState({})
@@ -112,8 +134,8 @@ export default function Students() {
       const {data: { user }, error: userError } = await supabase.auth.getUser()
       if (userError || !user )
       {
-        if(!cancelled) setLoading(false)
-        return 
+        if(!cancelled) { setRosterFailed(true); setLoading(false) }
+        return
       }
       // Students enrolled in any class this teacher teaches.
       const {data, error} = await supabase
@@ -126,9 +148,10 @@ export default function Students() {
       if(cancelled)
         return
 
-      if (error) 
+      if (error)
       {
         console.error('Failed to load students:', error )
+        setRosterFailed(true)
         setLoading(false)
         return
       }
@@ -140,12 +163,15 @@ export default function Students() {
     }
 
     setStudents(Array.from(seen.values()))
+    setRosterFailed(false)
     setLoading(false)
   }
 
   loadStudents()
   return () => { cancelled = true}
-  }, [])
+  }, [rosterAttempt])
+
+  const retryRoster = () => { setRosterFailed(false); setLoading(true); setRosterAttempt(n => n + 1) }
 
   // Search name and email both.
   const filtered = students.filter(s =>
@@ -212,6 +238,17 @@ export default function Students() {
 
       {loading ? (
         <div className="space-y-3">{[1,2,3,4,5].map(i => <div key={i} className="h-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}</div>
+      ) : rosterFailed ? (
+        <div role="alert" className="text-center py-16">
+          <h3 className="text-xl font-black text-gray-900 dark:text-white mb-2">Couldn&apos;t load your students</h3>
+          <p className="text-gray-600 dark:text-gray-400 text-sm mb-4">
+            Your classes are unchanged; the list could not be read just now.
+          </p>
+          <button onClick={retryRoster}
+            className="px-4 py-2 rounded-xl bg-violet-600 text-white text-sm font-bold hover:bg-violet-700 transition">
+            Try again
+          </button>
+        </div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-16">
           <div className="text-6xl mb-4">🎓</div>
@@ -299,15 +336,15 @@ export default function Students() {
                                   <MiniStat
                                     icon={<Flame size={16} />}
                                     label="Stress Level"
-                                    value={stats.stressLevel ?? '—'}
-                                    sub={eegSub(stats.signalCount, stats.signalsFailed)}
+                                    value={stats.eegFailed ? '—' : (stats.stressLevel ?? stats.eegOff)}
+                                    sub={eegSub(stats.signalCount, stats.eegFailed)}
                                     color="rose"
                                   />
                                   <MiniStat
                                     icon={<Target size={16} />}
                                     label="Focus Score"
-                                    value={stats.focusScore ?? '—'}
-                                    sub={eegSub(stats.signalCount, stats.signalsFailed)}
+                                    value={stats.eegFailed ? '—' : (stats.focusScore ?? stats.eegOff)}
+                                    sub={eegSub(stats.signalCount, stats.eegFailed)}
                                     color="emerald"
                                   />
                                 </>
@@ -326,14 +363,15 @@ export default function Students() {
                             {!hideSensors && (
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
                               {/* No Engagement tile: it is the focus index under another name. */}
-                              {/* "Off" means facial reporting is off, not that there was no reading. */}
+                              {/* "Off" only for a channel consent says is off, never for a failed read. */}
                               <MiniStat
                                 icon={<Smile size={16} />}
                                 label="Dominant Emotion"
-                                value={stats.faceIncluded ? (stats.dominantEmotion ?? '—') : 'Off'}
-                                sub={stats.faceIncluded
-                                  ? faceSub(stats.faceSignalCount, 'most frequent', stats.signalsFailed)
-                                  : 'reporting off'}
+                                value={stats.faceFailed ? '—'
+                                  : stats.faceIncluded ? (stats.dominantEmotion ?? stats.faceOff) : stats.faceOff}
+                                sub={stats.faceFailed ? SIGNALS_UNAVAILABLE
+                                  : stats.faceIncluded ? faceSub(stats.faceSignalCount, 'most frequent', false)
+                                  : stats.consentRetrieved ? 'reporting off' : CONSENT_UNREAD}
                                 color="violet"
                               />
                             </div>
@@ -345,19 +383,21 @@ export default function Students() {
                               <MiniStat
                                 icon={<Heart size={16} />}
                                 label="Avg Heart Rate"
-                                value={stats.heartIncluded ? (stats.heartRate !== null ? `${stats.heartRate} bpm` : '—') : 'Off'}
-                                sub={stats.heartIncluded
-                                  ? `${stats.heartSamples} readings`
-                                  : 'not recorded'}
+                                value={stats.heartFailed ? '—' : stats.heartIncluded && stats.heartRate !== null
+                                  ? `${stats.heartRate} bpm` : stats.heartOff}
+                                sub={stats.heartFailed ? SIGNALS_UNAVAILABLE
+                                  : stats.heartIncluded ? `${stats.heartSamples} readings`
+                                  : stats.consentRetrieved ? 'not recorded' : CONSENT_UNREAD}
                                 color="rose"
                               />
                               <MiniStat
                                 icon={<Activity size={16} />}
                                 label="Avg HRV"
-                                value={stats.heartIncluded ? (stats.rmssd !== null ? `${stats.rmssd} ms` : '—') : 'Off'}
-                                sub={stats.heartIncluded
-                                  ? 'RMSSD, when measurable'
-                                  : 'not recorded'}
+                                value={stats.heartFailed ? '—' : stats.heartIncluded && stats.rmssd !== null
+                                  ? `${stats.rmssd} ms` : stats.heartOff}
+                                sub={stats.heartFailed ? SIGNALS_UNAVAILABLE
+                                  : stats.heartIncluded ? 'RMSSD, when measurable'
+                                  : stats.consentRetrieved ? 'not recorded' : CONSENT_UNREAD}
                                 color="amber"
                               />
                             </div>

@@ -3,10 +3,27 @@ import { it, expect, beforeEach, vi } from 'vitest'
 vi.mock('./api', async () => await import('../test/mocks/apiFetch'))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
-import { apiFetch, mockApi, resetApi } from '../test/mocks/apiFetch'
-import { fetchSessionList } from './session'
+import { toast } from 'sonner'
+import { apiError, apiFetch, mockApi, resetApi } from '../test/mocks/apiFetch'
+import { fetchSessionList, recordAnswer } from './session'
 
-beforeEach(() => { resetApi() })
+beforeEach(() => { resetApi(); vi.mocked(toast.error).mockClear() })
+
+const ANSWER = { sessionId: 's1', questionId: 'q1', selectedIndex: 2, correct: true }
+
+it('reports a session closed under the page as ended, without a toast', async () => {
+  mockApi({ 'POST /api/sessions/s1/answer': () => { throw apiError(409, 'This session has ended') } })
+
+  await expect(recordAnswer(ANSWER)).resolves.toEqual({ ended: true })
+  expect(toast.error).not.toHaveBeenCalled()
+})
+
+it('still toasts and returns null for any other failure', async () => {
+  mockApi({ 'POST /api/sessions/s1/answer': () => { throw apiError(500) } })
+
+  await expect(recordAnswer(ANSWER)).resolves.toBeNull()
+  expect(toast.error).toHaveBeenCalledWith('That answer could not be saved.')
+})
 
 it('reads the capped list with its count', async () => {
   mockApi({ '/api/sessions': () => ({ sessions: [{ id: 's1' }], total: 431, truncated: true }) })

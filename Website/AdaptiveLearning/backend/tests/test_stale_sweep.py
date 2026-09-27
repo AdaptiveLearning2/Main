@@ -269,3 +269,41 @@ def test_nothing_to_look_up_is_not_a_failed_read(monkeypatch):
     out = main.student_sessions("u1", request=None)
     assert out[0]["activity_known"] is True
     assert out[0]["idle"] is False
+
+
+# ── the live monitor closes only a session whose sensor went quiet ──────────
+
+def _live(monkeypatch, latest):
+    """`class_live` for one student whose open session started 15 minutes ago."""
+    from datetime import datetime, timedelta
+    started = (datetime.utcnow() - timedelta(seconds=900)).isoformat()
+    session = {"id": "sess-1", "user_id": "stu-1", "started_at": started}
+    closed = []
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
+    monkeypatch.setattr(main, "_verify_class_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_profiles_many", lambda ids: {})
+    monkeypatch.setattr(main, "_open_sessions_many", lambda ids: {"stu-1": [session]})
+    monkeypatch.setattr(main, "_latest_signals_many", lambda ids: {"sess-1": latest(started)})
+    monkeypatch.setattr(main, "_close_session", lambda *a, **k: closed.append(a[1]["id"]))
+    monkeypatch.setattr(main.eeg_poller, "stop", lambda *a, **k: None)
+
+    class _Members:
+        def table(self, name):
+            q = type("Q", (), {})()
+            q.select = q.eq = lambda *a, **k: q
+            q.execute = lambda: type("R", (), {"data": [{"student_id": "stu-1"}]})()
+            return q
+    monkeypatch.setattr(main, "supabase", _Members())
+    return main.class_live("class-1", None), closed
+
+
+def test_a_sensorless_student_on_one_question_is_not_closed(monkeypatch):
+    """No headband, no camera: fifteen minutes on a question sends the server nothing."""
+    out, closed = _live(monkeypatch, lambda started: {})
+    assert closed == []
+    assert out[0]["active_session"] is None       # not live, but left open for the sweep
+
+
+def test_a_sensor_that_went_quiet_still_closes(monkeypatch):
+    out, closed = _live(monkeypatch, lambda started: {"cognitive": {"ts": started, "focus": 0.5}})
+    assert closed == ["sess-1"]

@@ -106,6 +106,17 @@ it('leaves a student with no grade to the backend default, naming no grade itsel
   expect(apiFetch.mock.calls.some(([p]) => /[?&]grade=/.test(p))).toBe(false)
 })
 
+it('calls an account with no profile row "not set", not unknown', async () => {
+  // A 404 answers the question: there is no saved grade.
+  overrideApi('/api/profile/me', () => { throw apiError(404, 'No profile exists for this account') }, 'GET')
+  overrideApi('/api/topics', () => TOPICS_ROWS, 'GET')
+  render(<Adaptive />)
+
+  await settled('/api/profile/me')
+  expect(await screen.findByDisplayValue('Grade not set')).toBeInTheDocument()
+  expect(screen.queryByText(/grade unknown/)).not.toBeInTheDocument()
+})
+
 it('says the grade is unknown, and lists no grade\'s topics, when the profile could not be read', async () => {
   // The backend reads the profile itself and may serve 7th grade; "not set" would be a guess.
   overrideApi('/api/profile/me', () => { throw apiError(500, 'down') }, 'GET')

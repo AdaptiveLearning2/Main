@@ -52,6 +52,7 @@ vi.mock('../../context/AuthContext', () => ({
 }))
 
 import { toast } from 'sonner'
+import { recordAnswer } from '../../lib/session'
 import { apiFetch, mockApi, resetApi } from '../../test/mocks/apiFetch'
 import Adaptive from './Adaptive'
 
@@ -110,6 +111,26 @@ it('brings the stream up at Connect and records only from the first question', a
   // Same session as the pairing, so the same recorder is armed in place.
   expect(bridge.recorders).toHaveLength(1)
   await waitFor(() => expect(bridge.recorders[0].start).toHaveBeenCalledWith({ record: true }))
+}, 30_000)
+
+it('arms recording for the fresh session when the backend closed the one being answered', async () => {
+  // The poller was writing a closed session; without this nothing records until the next question.
+  recordAnswer.mockResolvedValueOnce({ ended: true }).mockResolvedValueOnce({ topic: 'expressions' })
+  render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+  fireEvent.click(screen.getByRole('button', { name: /generate question/i }))
+  await screen.findByText(/What is 2 \+ 2\?/)
+
+  fireEvent.click(screen.getByRole('button', { name: /^B\s*4$/ }))
+  fireEvent.click(screen.getByRole('button', { name: /submit answer/i }))
+
+  await waitFor(() => expect(recordAnswer).toHaveBeenCalledTimes(2))
+  const fresh = bridge.recorders.find(r => r.sessionId === 'sess-2')
+  expect(fresh).toBeDefined()
+  await waitFor(() => expect(fresh.start).toHaveBeenCalledWith({ record: true }))
 }, 30_000)
 
 /**

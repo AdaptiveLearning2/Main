@@ -38,7 +38,10 @@ export default function PracticeSetup({ onStart }) {
     setLoading(true)
     setFailed(null)
     try {
+      // 404 is an account with no profile row: no grade, not a failure. Anything else is
+      // unknown, and a retry beats silently offering another grade's topics.
       const profile = await apiFetch('/api/profile/me')
+        .catch(e => { if (e?.status === 404) return null; throw e })
       // '' is no grade: the topic list and the session both take the backend's default.
       setGrade(profile?.grade_level || '')
       // Best-effort: a failed history read shouldn't block starting a session.

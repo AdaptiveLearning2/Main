@@ -44,6 +44,8 @@ ALLOWLIST = {
 
     ("main.py", "_summary_rpc", "rpc", "name"):
         "The RPC name, passed by internal callers as a literal.",
+    ("main.py", "get_my_profile", "select", "_PROFILE_SELF_COLUMNS"):
+        "A module-level literal naming the caller's own profile columns.",
     ("main.py", "_session_or_403", "select", "columns"):
         "Column list chosen by the calling endpoint, defaulting to 'user_id'.",
     ("main.py", "_practice_session_or_403", "select", "columns"):

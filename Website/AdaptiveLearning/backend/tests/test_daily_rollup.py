@@ -69,7 +69,17 @@ def test_an_implausible_span_does_not_loop(rpc):
     """A corrupt `started_at` must not turn a close into thousands of RPCs."""
     main._rollup_session_days(USER, "1970-01-01T00:00:00Z", "2026-06-12T03:00:00Z")
 
-    assert rpc.days == ["2026-06-11"], "fell back to the closing day only"
+    assert len(rpc.days) == main._ROLLUP_MAX_SPAN_DAYS + 2
+    assert rpc.days[-1] == "2026-06-11"
+
+
+def test_an_abandoned_session_rolls_up_the_days_its_rows_are_on(rpc):
+    """Closed by the sweep two months on: the rows are on its first days, not the closing one."""
+    main._rollup_session_days(USER, "2026-06-01T17:00:00Z", "2026-08-01T17:00:00Z")
+
+    assert rpc.days[:2] == ["2026-06-01", "2026-06-02"]
+    assert rpc.days[-1] == "2026-08-01"
+    assert len(rpc.days) == main._ROLLUP_MAX_SPAN_DAYS + 2
 
 
 def test_an_inverted_span_still_rolls_up_the_closing_day(rpc):

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 
-import { apiFetch, mockApi, resetApi } from '../../test/mocks/apiFetch'
+import { apiError, apiFetch, mockApi, resetApi } from '../../test/mocks/apiFetch'
 import AdminSchoolYear from './SchoolYear'
 import { isValidTimezone } from '../../lib/timezone'
 
@@ -120,6 +120,47 @@ describe('the timezone field', () => {
     await screen.findByLabelText(/timezone/i)
     expect(screen.getByRole('button', { name: /save/i })).toBeEnabled()
     expect(screen.queryByText(/stop recording for every student/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('dates that let the nightly delete reach further', () => {
+  const REFUSAL = 'Today is outside these dates, so saving them lets the nightly job delete ' +
+    'per-sample signal rows up to 2027-08-31; that cannot be undone.'
+
+  it('shows the refusal and saves only on a second, explicit press', async () => {
+    const bodies = []
+    mockApi({
+      '/api/admin/retention-window': () => WINDOW,
+      'PUT /api/admin/retention-window': (_p, opts) => {
+        bodies.push(opts.body)
+        if (!opts.body.confirm_expiry) throw apiError(409, REFUSAL)
+        return WINDOW
+      },
+    })
+    render(<AdminSchoolYear />)
+    await screen.findByLabelText(/timezone/i)
+
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('cannot be undone')
+    expect(screen.queryByText(/^Saved\.$/)).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /save anyway/i }))
+    expect(await screen.findByText(/^Saved\.$/)).toBeInTheDocument()
+    expect(bodies.map(b => b.confirm_expiry)).toEqual([false, true])
+  })
+
+  it('withdraws the offer when a field changes, so a confirmation cannot carry over', async () => {
+    mockApi({
+      '/api/admin/retention-window': () => WINDOW,
+      'PUT /api/admin/retention-window': () => { throw apiError(409, REFUSAL) },
+    })
+    render(<AdminSchoolYear />)
+    await screen.findByLabelText(/timezone/i)
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    await screen.findByRole('alert')
+
+    await userEvent.clear(screen.getByLabelText(/starts on/i))
+    await waitFor(() => expect(screen.queryByRole('button', { name: /save anyway/i })).not.toBeInTheDocument())
   })
 })
 

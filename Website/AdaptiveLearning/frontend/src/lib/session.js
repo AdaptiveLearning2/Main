@@ -3,7 +3,8 @@ import { toast } from 'sonner'
 
 /**
  * Record one answer against a session. Never throws (safe from a timer callback).
- * @returns {Promise<object|null>} the response (`topic` included), or null if not recorded
+ * @returns {Promise<object|null>} the response (`topic` included); `{ ended: true }`, untoasted,
+ *   when the session was closed server-side; or null if not recorded
  */
 export async function recordAnswer({ sessionId, questionId, selectedIndex, correct }) {
   if (!sessionId || !questionId) {
@@ -17,6 +18,8 @@ export async function recordAnswer({ sessionId, questionId, selectedIndex, corre
       body: { question_id: questionId, selected_index: selectedIndex, correct },
     })
   } catch (e) {
+    // 409: closed under the page (the sweep, the live monitor, another tab); the caller retries.
+    if (e?.status === 409) return { ended: true }
     console.error('[answer] not recorded', e)
     toast.error('That answer could not be saved.')
     return null

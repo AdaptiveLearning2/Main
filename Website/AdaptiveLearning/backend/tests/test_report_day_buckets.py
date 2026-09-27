@@ -310,3 +310,98 @@ def test_a_gaze_only_row_does_not_count_as_an_emotion_sample(monkeypatch,
     assert day["face_samples"] == 2, (
         f"counted {day['face_samples']}: gaze-only rows inflated the emotion "
         "sample count")
+
+
+# ── a declined channel's rollup, a lost rollup, the cut day, the no-EEG sentence ──
+
+def _rollup_query(fake):
+    return next(q for name, q in zip(fake.table_calls, fake.queries)
+                if name == "signal_daily_rollup")
+
+
+@pytest.mark.parametrize("heart,emotion,channels", [
+    (False, False, ["cognitive"]),
+    (True, False, ["cognitive", "heart"]),
+    (True, True, ["cognitive", "heart", "emotion"]),
+])
+def test_a_declined_channels_rollup_is_never_read(monkeypatch, at_three_am_utc,
+                                                  heart, emotion, channels):
+    """The raw read is skipped for a declined channel; its summary must be too."""
+    _school(monkeypatch, LA)
+    fake = _FakeSupabase(_with_rollup())
+    monkeypatch.setattr(main, "supabase", fake)
+    main._weekly_signal_report(STUDENT, include_heart=heart, include_emotion=emotion)
+    assert ("channel", ("in", channels)) in _rollup_query(fake).filters
+
+
+def _before_the_year(monkeypatch):
+    """A window starting after this week: every day of it is past the expiry cutoff."""
+    monkeypatch.setattr(main, "_retention_window", lambda: {
+        "state": main.WINDOW_BEFORE, "starts_on": "2026-09-01",
+        "ends_on": "2027-06-30", "timezone": LA})
+
+
+def test_a_lost_rollup_after_expiry_is_unknown_not_a_quiet_week(monkeypatch, at_three_am_utc):
+    """With the raw rows expired, a failed rollup read left every day reading 'recorded nothing'."""
+    _before_the_year(monkeypatch)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _with_rollup(), table_raises={"signal_daily_rollup"}))
+    report = main._weekly_signal_report(STUDENT)
+    assert all(d["cognitive_retrieved"] is False for d in report["daily"])
+    assert "No EEG" not in report["summary"]
+    assert "could not be loaded" in report["summary"]
+
+
+def test_a_lost_rollup_before_expiry_is_still_a_quiet_week(monkeypatch, at_three_am_utc):
+    """Control: while the raw rows exist they are the record, and empty means empty."""
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _with_rollup(), table_raises={"signal_daily_rollup"}))
+    report = main._weekly_signal_report(STUDENT)
+    assert all(d["cognitive_retrieved"] is True for d in report["daily"])
+    assert "No EEG" in report["summary"]
+
+
+def test_the_day_the_cap_cuts_into_is_counted_once(monkeypatch, at_three_am_utc):
+    """Tuesday's rollup is used for the cut day; its partial raw row must not be added again."""
+    _school(monkeypatch, LA)
+    wednesday = [{"user_id": STUDENT, "ts": "2026-06-10T20:00:00+00:00", "focus": 1.0},
+                 {"user_id": STUDENT, "ts": "2026-06-10T20:01:00+00:00", "focus": 1.0}]
+    tuesday = [{"user_id": STUDENT, "ts": f"2026-06-09T20:0{i}:00+00:00", "focus": 0.0}
+               for i in range(3)]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
+        cog=wednesday + tuesday,
+        rollup=[_rollup("2026-06-09", "cognitive", avg_focus=0.0,
+                        sample_count=3, trusted_sample_count=3)]),
+        max_rows={"cognitive_signals": 3}))
+    report = main._weekly_signal_report(STUDENT)
+    assert report["truncated"] is True
+    assert _day(report, "2026-06-09")["cognitive_from_rollup"] is True
+    # Two raw Wednesday readings at 1.0 and Tuesday's three (rolled) at 0.0: 2/5.
+    assert report["averages"]["focus"] == 0.4
+
+
+def _face_and_heart():
+    return {"face_signals": [{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "emotion": "happy"}],
+            "heart_signals": [{"user_id": STUDENT, "ts": NOW_UTC.isoformat(),
+                               "heart_rate_bpm": 80.0, "trusted": True, "source": "rppg"}]}
+
+
+def test_a_week_without_eeg_does_not_say_its_other_channels_recorded_nothing(
+        monkeypatch, at_three_am_utc):
+    """EEG declined, camera allowed: the summary said no facial or heart samples were recorded."""
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({**_with_rollup(), **_face_and_heart()}))
+    summary = main._weekly_signal_report(STUDENT, eeg_enabled=False)["summary"]
+    assert summary == "Facial recognition and heart rate readings were recorded this week."
+
+
+def test_eeg_rows_with_no_usable_score_are_not_called_absent(monkeypatch, at_three_am_utc):
+    """Poor contact nulls focus; the rows arrived, so 'no EEG samples' would be false."""
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
+        cog=[{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "focus": None, "stress": None}])))
+    summary = main._weekly_signal_report(STUDENT, include_heart=False,
+                                         include_emotion=False)["summary"]
+    assert summary.startswith("EEG readings were recorded this week, but none gave a usable")
+    assert "No EEG" not in summary

@@ -352,6 +352,49 @@ def test_start_allows_known_device_id(monkeypatch):
     assert out == {"ok": True, "running": True, "already": False}
 
 
+def test_a_start_stamps_the_session_and_a_refused_one_does_not(monkeypatch):
+    """`signals_missing` needs to know a headband was started; a refusal started nothing."""
+    stamped = []
+    monkeypatch.setattr(main, "_mark_eeg_started", stamped.append)
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    monkeypatch.setattr(main, "_consent",
+                        lambda _s: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(main, "supabase", _SessionsTable("user-a"))
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "list_devices", lambda: [{"device_id": "station-a"}])
+    monkeypatch.setattr(eeg_poller, "start", lambda *a, **k: {"running": True, "already": False})
+    main.eeg_start(main.EegSessionRequest(session_id="session-1", device_id="station-a"), request=None)
+    assert stamped == ["session-1"]
+
+    with pytest.raises(main.HTTPException):
+        main.eeg_start(main.EegSessionRequest(session_id="session-1", device_id="typo"), request=None)
+    assert stamped == ["session-1"]
+
+
+def test_the_stamp_is_written_once_and_never_raises(monkeypatch):
+    calls = []
+
+    class _Sessions:
+        def table(self, name):
+            calls.append(name)
+            q = type("Q", (), {})()
+            q.update = lambda patch: (calls.append(patch), q)[1]
+            q.eq = lambda *a: (calls.append(("eq",) + a), q)[1]
+            q.is_ = lambda *a: (calls.append(("is",) + a), q)[1]
+            q.execute = lambda: type("R", (), {"data": []})()
+            return q
+    monkeypatch.setattr(main, "supabase", _Sessions())
+    main._mark_eeg_started("session-1")
+    assert calls[0] == "sessions" and "eeg_started_at" in calls[1]
+    assert ("eq", "id", "session-1") in calls and ("is", "eeg_started_at", "null") in calls
+
+    class _Down:
+        def table(self, name):
+            raise RuntimeError("down")
+    monkeypatch.setattr(main, "supabase", _Down())
+    main._mark_eeg_started("session-1")
+
+
 def test_start_falls_back_to_permissive_when_list_devices_unreachable(monkeypatch):
     """An empty known_ids (a transient list_devices() error) must not block a start."""
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})

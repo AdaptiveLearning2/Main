@@ -104,6 +104,30 @@ def test_an_empty_line_chart_says_so():
     assert "No readings" in svg
 
 
+def _axis_labels(svg: str) -> list[str]:
+    """The y-axis ends, top first: the only right-anchored text a line chart draws."""
+    root = _parses(svg)
+    return [t.text for t in root.iter() if t.tag.endswith("text")
+            and t.get("text-anchor") == "end"]
+
+
+def test_a_ratio_chart_is_labelled_0_to_100_percent_like_session_review():
+    """Auto-scaled with `.0f`, focus at 0.40-0.45 was labelled '0' at both ends."""
+    svg = cr.line_svg({"focus": [(0, 0.40), (1, 0.45)], "stress": [(0, 0.2), (1, 0.3)]},
+                      "Cognitive", ratio=True)
+    assert _axis_labels(svg) == ["100%", "0%"]
+
+
+@pytest.mark.parametrize("points, expected", [
+    ([(0, 0.40), (1, 0.45)], ["0.45", "0.40"]),       # a narrow range keeps its decimals
+    ([(0, 0.5), (1, 0.5)], ["1.5", "-0.5"]),          # a flat series, padded by one each way
+    ([(0, -0.001), (1, 0.3)], ["0.30", "0.00"]),      # never a "-0"
+    ([(0, 62.0), (1, 91.0)], ["91", "62"]),
+])
+def test_the_two_ends_of_an_auto_scaled_axis_can_be_told_apart(points, expected):
+    assert _axis_labels(cr.line_svg({"v": points}, "C")) == expected
+
+
 # ── the drift check ─────────────────────────────────────────────────────────
 
 def _jsx_map(name: str, path: Path) -> dict:

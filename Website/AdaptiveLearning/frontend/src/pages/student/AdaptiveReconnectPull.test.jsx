@@ -173,7 +173,7 @@ it('starts the duration clock at the first question, not at Connect', async () =
 }, 90_000)
 
 it('stops the finished session\'s recorder before starting the next one\'s', async () => {
-  // Each recorder's `beforeunload` listener is removed only by its `stop()`.
+  // Each recorder's `pagehide` listener is removed only by its `stop()`.
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })
   await waitFor(() => expect(button).not.toBeDisabled())

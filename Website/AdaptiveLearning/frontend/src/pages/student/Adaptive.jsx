@@ -1049,7 +1049,7 @@ export default function Adaptive() {
     if (headband.pushMode || !headband.connected || !stationId) return
     let rec = recorder
     if (!rec || rec.sessionId !== activeSessionId) {
-      // `stop()` also removes the old recorder's `beforeunload` listener.
+      // `stop()` also removes the old recorder's `pagehide` listener.
       if (rec) await rec.stop()
       rec = createSignalRecorder({ sessionId: activeSessionId, deviceId: stationId })
       setRecorder(rec)

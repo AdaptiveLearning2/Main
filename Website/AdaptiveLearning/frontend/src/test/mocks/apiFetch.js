@@ -70,10 +70,14 @@ export function overrideApi(match, handler, method = undefined) {
   routes.unshift({ match, handler, method })
 }
 
+/** The unload POST, as the real module exports it; recorded, never routed. */
+export const apiFetchOnUnload = vi.fn()
+
 /** Drop the routes and the recorded calls, keeping the implementation. */
 export function resetApi() {
   routes.length = 0
   apiFetch.mockClear()
+  apiFetchOnUnload.mockClear()
 }
 
 /** An error shaped like the real `apiFetch`'s, carrying `.status`. */

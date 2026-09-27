@@ -242,6 +242,17 @@ def test_an_erasure_during_the_archive_takes_its_charts_back_out():
     assert list(client.bucket.uploaded) == [paths["cognitive_timeline"]]
 
 
+def test_an_erasure_stamped_by_a_database_clock_running_behind_still_counts():
+    """`erased_at` is the database's `now()`, not this process's clock."""
+    from datetime import timedelta
+    behind = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+    client = _Client(cognitive=COG, erasures=[{"channel": "eeg", "erased_at": behind}])
+
+    paths = chart_archive.archive_session(client, SESSION, USER)
+
+    assert paths["cognitive_timeline"] is None
+
+
 def test_an_erasure_long_before_the_archive_drops_nothing():
     """Its rows were already gone when the archive read, so what was drawn is clean."""
     client = _Client(cognitive=COG, face=FACE, heart=HEART,

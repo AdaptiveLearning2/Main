@@ -5,7 +5,8 @@ import { apiFetch, apiFetchOnUnload } from './api'
  * `start({record: false})` at Connect (stream only), `start({record: true})`
  * on the first question, which arms the running poller in place.
  */
-export function createSignalRecorder({ sessionId, deviceId }) {
+export function createSignalRecorder({ sessionId, deviceId,
+                                      onRestore = () => window.location.reload() }) {
   let active = false
   let recording = false
 
@@ -37,15 +38,28 @@ export function createSignalRecorder({ sessionId, deviceId }) {
 
   // `pagehide` and keepalive: an awaited `apiFetch` does not outlive the document, and a
   // poller nobody stops runs on with no student.
-  const onUnload = () => {
-    if (active && sessionId) apiFetchOnUnload('/api/eeg/stop', { session_id: sessionId })
+  const onUnload = (e) => {
+    if (!active || !sessionId) return
+    apiFetchOnUnload('/api/eeg/stop', { session_id: sessionId })
+    active = false
+    recording = false
+    // Kept for Back (bfcache): the stream is stopped, so a restored page would show a dead one.
+    if (e?.persisted) window.addEventListener('pageshow', onShow)
+  }
+  const onShow = (e) => {
+    window.removeEventListener('pageshow', onShow)
+    if (e?.persisted) onRestore()
   }
   window.addEventListener('pagehide', onUnload)
 
   return {
     sessionId,
     start,
-    stop: () => { window.removeEventListener('pagehide', onUnload); return stop() },
+    stop: () => {
+      window.removeEventListener('pagehide', onUnload)
+      window.removeEventListener('pageshow', onShow)
+      return stop()
+    },
     isActive: () => active,
     isRecording: () => recording,
   }

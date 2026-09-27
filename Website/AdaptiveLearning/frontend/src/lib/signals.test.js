@@ -37,6 +37,22 @@ describe('createSignalRecorder on a closing page', () => {
     window.dispatchEvent(new Event('pagehide'))
     expect(apiFetchOnUnload).not.toHaveBeenCalled()
   })
+
+  it('reloads a page restored from the back-forward cache after its stream was stopped', async () => {
+    const page = (type, persisted) => Object.assign(new Event(type), { persisted })
+    const onRestore = vi.fn()
+    const rec = createSignalRecorder({ sessionId: 's1', deviceId: 'default', onRestore })
+    await rec.start({ record: true })
+    window.dispatchEvent(page('pageshow', true))       // no hide yet: nothing to restore
+    expect(onRestore).not.toHaveBeenCalled()
+    window.dispatchEvent(page('pagehide', true))
+    expect(apiFetchOnUnload).toHaveBeenCalledWith('/api/eeg/stop', { session_id: 's1' })
+    expect(rec.isActive()).toBe(false)
+    window.dispatchEvent(page('pageshow', true))
+    window.dispatchEvent(page('pageshow', true))
+    expect(onRestore).toHaveBeenCalledTimes(1)
+    await rec.stop()
+  })
 })
 
 describe('createSignalRecorder', () => {

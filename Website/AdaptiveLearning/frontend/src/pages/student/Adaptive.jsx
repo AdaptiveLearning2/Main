@@ -1005,6 +1005,10 @@ export default function Adaptive() {
       const outcome = await pairOnce(hw, activeSessionId)
       if (outcome.ok) return
 
+      // `begin` started a stream (pull: the backend poller, which never stops on its own).
+      // Dropped, not reused: a stopped recorder has removed its `pagehide` listener.
+      hw.end().catch(e => console.error('[headband] could not stop after a failed pairing', e))
+      setRecorder(null)
       setHeadband(s => ({ ...s, phase: 'idle', deviceName: null }))
       // Long dwell: these are instructions. An unlanded read blames the check,
       // never the headband.

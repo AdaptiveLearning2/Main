@@ -55,6 +55,9 @@ async function getStudentStats(studentId)
   const totalAccuracy = statsRetrieved && userStats && userStats.total_questions > 0
     ? Math.round((userStats.total_correct / userStats.total_questions) * 100)
     : null
+  const signalsFailed = summary === null || signals.retrieved === false
+  // A failed read hides a figure, never a revocation the consent read did return.
+  const failedWhileOn = (on) => signalsFailed && !(signals.consent_retrieved === true && !on)
 
   return {
     statsRetrieved,
@@ -74,7 +77,10 @@ async function getStudentStats(studentId)
     // Server-decided from consent: "sensor off" is not "nothing recorded".
     heartIncluded: signals.heart_included === true,
     // Request failed or the aggregate failed; the zero counts above mean nothing then.
-    signalsFailed: summary === null || signals.retrieved === false,
+    signalsFailed,
+    eegFailed: failedWhileOn(signals.eeg_enabled !== false),
+    faceFailed: failedWhileOn(signals.emotion_included !== false && signals.face_included !== false),
+    heartFailed: failedWhileOn(signals.heart_included === true),
     // Server-decided from consent, like heartIncluded.
     faceIncluded: signals.emotion_included !== undefined
       ? signals.emotion_included !== false
@@ -330,15 +336,15 @@ export default function Students() {
                                   <MiniStat
                                     icon={<Flame size={16} />}
                                     label="Stress Level"
-                                    value={stats.signalsFailed ? '—' : (stats.stressLevel ?? stats.eegOff)}
-                                    sub={eegSub(stats.signalCount, stats.signalsFailed)}
+                                    value={stats.eegFailed ? '—' : (stats.stressLevel ?? stats.eegOff)}
+                                    sub={eegSub(stats.signalCount, stats.eegFailed)}
                                     color="rose"
                                   />
                                   <MiniStat
                                     icon={<Target size={16} />}
                                     label="Focus Score"
-                                    value={stats.signalsFailed ? '—' : (stats.focusScore ?? stats.eegOff)}
-                                    sub={eegSub(stats.signalCount, stats.signalsFailed)}
+                                    value={stats.eegFailed ? '—' : (stats.focusScore ?? stats.eegOff)}
+                                    sub={eegSub(stats.signalCount, stats.eegFailed)}
                                     color="emerald"
                                   />
                                 </>
@@ -361,9 +367,9 @@ export default function Students() {
                               <MiniStat
                                 icon={<Smile size={16} />}
                                 label="Dominant Emotion"
-                                value={stats.signalsFailed ? '—'
+                                value={stats.faceFailed ? '—'
                                   : stats.faceIncluded ? (stats.dominantEmotion ?? stats.faceOff) : stats.faceOff}
-                                sub={stats.signalsFailed ? SIGNALS_UNAVAILABLE
+                                sub={stats.faceFailed ? SIGNALS_UNAVAILABLE
                                   : stats.faceIncluded ? faceSub(stats.faceSignalCount, 'most frequent', false)
                                   : stats.consentRetrieved ? 'reporting off' : CONSENT_UNREAD}
                                 color="violet"
@@ -377,9 +383,9 @@ export default function Students() {
                               <MiniStat
                                 icon={<Heart size={16} />}
                                 label="Avg Heart Rate"
-                                value={stats.signalsFailed ? '—' : stats.heartIncluded && stats.heartRate !== null
+                                value={stats.heartFailed ? '—' : stats.heartIncluded && stats.heartRate !== null
                                   ? `${stats.heartRate} bpm` : stats.heartOff}
-                                sub={stats.signalsFailed ? SIGNALS_UNAVAILABLE
+                                sub={stats.heartFailed ? SIGNALS_UNAVAILABLE
                                   : stats.heartIncluded ? `${stats.heartSamples} readings`
                                   : stats.consentRetrieved ? 'not recorded' : CONSENT_UNREAD}
                                 color="rose"
@@ -387,9 +393,9 @@ export default function Students() {
                               <MiniStat
                                 icon={<Activity size={16} />}
                                 label="Avg HRV"
-                                value={stats.signalsFailed ? '—' : stats.heartIncluded && stats.rmssd !== null
+                                value={stats.heartFailed ? '—' : stats.heartIncluded && stats.rmssd !== null
                                   ? `${stats.rmssd} ms` : stats.heartOff}
-                                sub={stats.signalsFailed ? SIGNALS_UNAVAILABLE
+                                sub={stats.heartFailed ? SIGNALS_UNAVAILABLE
                                   : stats.heartIncluded ? 'RMSSD, when measurable'
                                   : stats.consentRetrieved ? 'not recorded' : CONSENT_UNREAD}
                                 color="amber"

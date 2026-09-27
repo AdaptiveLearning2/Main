@@ -257,9 +257,17 @@ describe('facial recognition switch', () => {
     expect(tile('Avg Heart Rate').getByText("consent couldn't be read")).toBeInTheDocument()
   })
 
-
-
-
+  it('still says a withdrawn sensor is off when only the aggregate read failed', async () => {
+    // Consent was read; only the figures failed, so the revocation is still known.
+    setData({ summary: { ...SUMMARY, retrieved: false, consent_retrieved: true,
+                         heart_included: false, heart_revoked_at: '2026-09-03T10:00:00Z',
+                         heart_samples: 0, cognitive_samples: 0 } })
+    render(<Students />)
+    await expandAda()
+    await waitFor(() => expect(tile('Avg Heart Rate').getByText(/^Off since/)).toBeInTheDocument())
+    expect(tile('Avg Heart Rate').queryByText('signal data unavailable')).not.toBeInTheDocument()
+    expect(tile('Focus Score').getByText('—')).toBeInTheDocument()
+  })
 })
 
 describe('the "nothing recorded" note', () => {

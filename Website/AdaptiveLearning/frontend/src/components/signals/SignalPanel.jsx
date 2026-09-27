@@ -107,10 +107,13 @@ function faceReason(report, faceOn) {
  * cognitive read (the weekly report's `retrieved`) is unknown, not "No sensor".
  */
 function eegReason(report) {
+  const on = report?.eeg_enabled !== false
   return {
-    on: report?.eeg_enabled !== false,
+    on,
     revokedAt: report?.eeg_revoked_at ?? null,
-    consentRetrieved: report?.consent_retrieved === false || report?.retrieved?.cognitive === false
+    // A known revocation comes from the consent read, so a failed EEG read doesn't hide it.
+    consentRetrieved: report?.consent_retrieved === false
+      || (on && report?.retrieved?.cognitive === false)
       ? false : report?.consent_retrieved,
     samples: report?.sample_counts?.cognitive,
   }

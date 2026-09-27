@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
 import { endSession, recordAnswer } from '../../lib/session'
+import useEegStartReport from '../../hooks/useEegStartReport'
 import { onSignOut } from '../../lib/signOutTasks'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { startPush, stopPush, stopPushOnUnload, pushStatus,
@@ -738,6 +739,9 @@ export default function Adaptive() {
       setPush(null)
     }
   }, [sessionId, headband.pushMode])
+
+  // Push only, once the sidecar holds this session and a headband streams; never camera-only.
+  useEegStartReport(!!(headband.pushMode && headband.connected && push?.running), sessionId)
 
   // Delivery counts for the panel and recording chip; a slower poll.
   useEffect(() => {

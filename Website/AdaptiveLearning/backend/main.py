@@ -1081,7 +1081,7 @@ def _eeg_was_started(session_id: str) -> bool | None:
     """Whether /api/eeg/start ran for this session. None if unreadable.
 
     Without it, a session answered with no headband paired read as a broken recording.
-    Under push nothing stamps it, so the alert is withheld there.
+    Stamped by `/api/eeg/start` (pull) or `/api/sessions/{id}/eeg-started` (push).
     """
     try:
         rows = supabase.table("sessions").select("eeg_started_at") \
@@ -6257,6 +6257,21 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         )
     _mark_eeg_started(payload.session_id)
     return {"ok": True, **out}
+
+
+@app.post("/api/sessions/{session_id}/eeg-started")
+def session_eeg_started(session_id: str = Path(...), request: Request = None):
+    """Under push, the page reports that the sidecar is streaming a headband for this session.
+
+    Push's counterpart to the stamp `/api/eeg/start` writes, which `signals_missing` needs:
+    the backend never sees a push start. Owner only, idempotent; a closed session is refused.
+    """
+    user = get_user(request)
+    session = _session_or_403(session_id, user["id"], "user_id, ended_at")
+    if session.get("ended_at"):
+        raise HTTPException(409, "This session has ended")
+    _mark_eeg_started(session_id)
+    return {"ok": True}
 
 @app.post("/api/eeg/stop")
 def eeg_stop(payload: EegSessionRequest, request: Request):

@@ -9,6 +9,7 @@ vi.mock('sonner', () => ({
 }))
 vi.mock('../../lib/session', () => ({
   endSession: vi.fn(async () => true),
+  markEegStarted: vi.fn(async () => true),
   // Recorded, so the session count moves and a goal can be reached.
   recordAnswer: vi.fn(async () => ({ topic: 'expressions' })),
 }))

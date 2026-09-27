@@ -14,9 +14,8 @@ export default function useEegStartReport(active, sessionId) {
   // Failures for the current session, and the pending retry; the timer outlives effect re-runs.
   const failures = useRef({ sessionId: null, count: 0 })
   const timer = useRef(null)
+  // No clear on unmount: a late timer only sets state React drops, so nothing is sent.
   const [retry, setRetry] = useState(0)
-
-  useEffect(() => () => clearTimeout(timer.current), [])
 
   useEffect(() => {
     if (!active || !sessionId || reported.current === sessionId) return

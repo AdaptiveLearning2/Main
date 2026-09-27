@@ -91,6 +91,10 @@ def test_archive_session_keeps_the_existing_entry_for_a_chart_outside_only(monke
             self.payload = payload
             return self
 
+        def rpc(self, _name, params):
+            self.payload = {"chart_paths": params["p_paths"]}
+            return self
+
         def eq(self, *_a):
             return self
 

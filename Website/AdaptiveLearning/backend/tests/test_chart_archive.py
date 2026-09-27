@@ -103,10 +103,17 @@ class _Client:
         self._rows["signal_erasure"] = list(erasures)
         self._erasure_read_fails = erasure_read_fails
         self.updates = []
+        self.rpc_calls = []
         self.reads = []
         self._storage = _Storage(fail=fail_storage)
         self._storage.removed = []
         self._on_execute = on_execute
+
+    def rpc(self, name, params):
+        """`record_chart_paths`, the archive's locked write: recorded, and kept in `updates`."""
+        self.rpc_calls.append((name, params))
+        assert name == "record_chart_paths"
+        return _Update(self.updates, {"chart_paths": params["p_paths"]})
 
     def table(self, name):
         if name == "sessions":
@@ -202,6 +209,16 @@ def test_the_paths_are_written_to_the_session_row():
     paths = chart_archive.archive_session(client, SESSION, USER)
 
     assert client.updates == [{"chart_paths": paths}]
+
+
+def test_the_paths_are_written_through_the_locked_rpc_not_a_plain_update():
+    """A plain update skips the per-student lock that keeps an erasure from being missed."""
+    client = _Client(cognitive=COG)
+
+    paths = chart_archive.archive_session(client, SESSION, USER)
+
+    assert client.rpc_calls == [("record_chart_paths",
+                                 {"p_session_id": SESSION, "p_paths": paths})]
 
 
 def test_a_replayed_close_overwrites_rather_than_colliding():
@@ -302,31 +319,51 @@ def test_a_failed_erasure_check_on_a_rerender_raises_and_keeps_its_paths():
     assert caught.value.since < datetime.now(timezone.utc)
 
 
-def _latest_erase_signals() -> str:
-    """The newest migration's `erase_signals`, with `--` comments stripped (a mention is not a use)."""
+def _latest_function(name: str) -> str:
+    """The newest migration's definition of `name`, up to its closing `$$;`, with `--` comments
+    stripped (a mention is not a use)."""
     import re
     from pathlib import Path
     migrations = sorted((Path(__file__).resolve().parents[4] / "supabase" / "migrations")
                         .glob("*.sql"))
-    defining = [m for m in migrations
-                if re.search(r'FUNCTION\s+"?public"?\."?erase_signals"?', m.read_text("utf-8"))]
-    sql = defining[-1].read_text("utf-8")
-    return re.sub(r"--[^\n]*", "", sql)
+    header = re.compile(r'CREATE\s+OR\s+REPLACE\s+FUNCTION\s+"?public"?\."?' + name + r'"?\s*\(')
+    defining = [m for m in migrations if header.search(m.read_text("utf-8"))]
+    sql = re.sub(r"--[^\n]*", "", defining[-1].read_text("utf-8"))
+    start = header.search(sql).start()
+    return sql[start:sql.index("$$;", sql.index("$$", start) + 2)]
 
 
-def test_erase_signals_locks_the_sessions_before_it_deletes_anything():
-    """Source check, stated: the race needs two live transactions, which the fake cannot give.
-    Unlocked, an archive can write and re-check between its UPDATE of sessions and its commit."""
+def _latest_erase_signals() -> str:
+    return _latest_function("erase_signals")
+
+
+# Both functions must lock this one key, or they exclude nothing.
+_LOCK_KEY = r"hashtextextended\(\s*'chart_paths:'\s*\|\|\s*{who}::text,\s*0\s*\)"
+
+
+def test_an_erasure_and_the_archive_write_take_one_student_lock_in_opposite_modes():
+    """Source check, stated: the race needs two live transactions, which the fake cannot give
+    (assert_signal_rls.sql checks the held locks for real). Unlocked, an archive can write and
+    re-check between the erasure's UPDATE of sessions and its commit."""
     import re
-    body = _latest_erase_signals()
-    lock = re.search(r"FROM\s+sessions\s+WHERE\s+user_id\s*=\s*p_user_id[^;]*FOR\s+(NO\s+KEY\s+)?UPDATE",
-                     body)
-    first_delete = re.search(r"\bDELETE\s+FROM\b", body)
+    erase = _latest_erase_signals()
+    lock = re.search(r"pg_advisory_xact_lock\(\s*" + _LOCK_KEY.format(who="p_user_id"), erase)
+    first_delete = re.search(r"\bDELETE\s+FROM\b", erase)
     assert lock and first_delete and lock.start() < first_delete.start()
-    # Plain FOR UPDATE also blocks the KEY SHARE locks that inserting answers and signals takes.
-    assert lock.group(1), "FOR UPDATE holds up the student's answers for the whole erasure"
-    # now() is the transaction's start; a slow erasure would stamp before the re-check window.
-    assert re.search(r"VALUES\s*\(\s*p_user_id,\s*p_channel,\s*clock_timestamp\(\)", body)
+
+    write = _latest_function("record_chart_paths")
+    shared = re.search(r"pg_advisory_xact_lock_shared\(\s*" + _LOCK_KEY.format(who="owner"), write)
+    update = re.search(r"UPDATE\s+sessions\s+SET\s+chart_paths", write)
+    assert shared and update and shared.start() < update.start()
+    # A row lock would hold up every answer and /end on the student's sessions.
+    assert not re.search(r"\bFOR\s+(NO\s+KEY\s+)?UPDATE\b", erase)
+
+
+def test_the_erasure_stamps_its_tombstone_when_it_finishes():
+    """now() is the transaction's start; a slow erasure would stamp before the re-check window."""
+    import re
+    assert re.search(r"VALUES\s*\(\s*p_user_id,\s*p_channel,\s*clock_timestamp\(\)",
+                     _latest_erase_signals())
 
 
 def test_the_charts_an_erasure_takes_match_erase_signals():

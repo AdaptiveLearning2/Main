@@ -1,7 +1,7 @@
--- erase_signals, now locking the student's sessions before it deletes anything, and stamping
--- the tombstone with clock_timestamp(). The chart archive writes chart_paths and then re-reads
--- signal_erasure; without the lock an archive could do both between this function's UPDATE of
--- sessions and its commit, and keep charts drawn from erased rows. Otherwise unchanged.
+-- One per-student advisory lock between an erasure and the archive's chart_paths write: the
+-- archive writes, then re-reads signal_erasure, so unlocked it could do both between the
+-- erasure's UPDATE of sessions and its commit. Advisory, not a row lock, so answers, /end and
+-- ingestion never wait on an erasure. erase_signals also stamps with clock_timestamp().
 CREATE OR REPLACE FUNCTION "public"."erase_signals"(
     "p_user_id" "uuid",
     "p_channel" "text",
@@ -25,9 +25,9 @@ BEGIN
         RAISE EXCEPTION 'unknown channel %', p_channel;
     END IF;
 
-    -- An archive writing chart_paths waits for this commit, then its re-read sees the tombstone;
-    -- NO KEY, so answer and signal inserts (KEY SHARE via their foreign keys) are not held up.
-    PERFORM 1 FROM sessions WHERE user_id = p_user_id ORDER BY id FOR NO KEY UPDATE;
+    -- Exclusive: a record_chart_paths now waits for this commit, then its caller's re-read
+    -- sees the tombstone; one already written is seen by the UPDATE below. Same key there.
+    PERFORM pg_advisory_xact_lock(hashtextextended('chart_paths:' || p_user_id::text, 0));
 
     -- Not batched: one transaction, so a half-finished erasure cannot report success.
 
@@ -128,5 +128,34 @@ REVOKE ALL ON FUNCTION "public"."erase_signals"("uuid", "text", "uuid", "text") 
 REVOKE ALL ON FUNCTION "public"."erase_signals"("uuid", "text", "uuid", "text") FROM "anon";
 REVOKE ALL ON FUNCTION "public"."erase_signals"("uuid", "text", "uuid", "text") FROM "authenticated";
 GRANT EXECUTE ON FUNCTION "public"."erase_signals"("uuid", "text", "uuid", "text") TO "service_role";
+
+
+-- The archive's write of a session's chart_paths, under the shared form of erase_signals' lock.
+-- The student comes from the row, never the caller, so the key cannot be the wrong one.
+CREATE OR REPLACE FUNCTION "public"."record_chart_paths"(
+    "p_session_id" "uuid",
+    "p_paths" "jsonb"
+) RETURNS "void"
+LANGUAGE "plpgsql"
+SECURITY INVOKER
+SET "search_path" TO 'public'
+AS $$
+DECLARE
+    owner "uuid";
+BEGIN
+    SELECT user_id INTO owner FROM sessions WHERE id = p_session_id;
+    IF owner IS NULL THEN
+        RETURN;
+    END IF;
+    PERFORM pg_advisory_xact_lock_shared(hashtextextended('chart_paths:' || owner::text, 0));
+    UPDATE sessions SET chart_paths = p_paths WHERE id = p_session_id;
+END;
+$$;
+
+-- Writes any session's chart_paths, so service_role only.
+REVOKE ALL ON FUNCTION "public"."record_chart_paths"("uuid", "jsonb") FROM PUBLIC;
+REVOKE ALL ON FUNCTION "public"."record_chart_paths"("uuid", "jsonb") FROM "anon";
+REVOKE ALL ON FUNCTION "public"."record_chart_paths"("uuid", "jsonb") FROM "authenticated";
+GRANT EXECUTE ON FUNCTION "public"."record_chart_paths"("uuid", "jsonb") TO "service_role";
 
 NOTIFY pgrst, 'reload schema';

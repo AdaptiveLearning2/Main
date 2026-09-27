@@ -2108,8 +2108,10 @@ absent key for a chart never attempted, and column-NULL for a session the archiv
 claim every pre-archive session was archived and found nothing, and `scripts/assert_signal_rls.sql` fails if a
 default appears. **Column-NULL is retried; a session begun on or before the expiry cutoff never is** —
 `archive_missing`, the stale sweep's second step, since part of a session read back would be archived as all of it.
-**An archive and an erasure each have to see the other**: `erase_signals` locks the student's sessions first, and
-the archive re-reads `signal_erasure` after its write. Drop either and an overlapping pair keeps erased charts.
+**An archive and an erasure each have to see the other**: `erase_signals` takes a per-student advisory lock
+first, the archive writes `chart_paths` only through `record_chart_paths` (the shared form of that lock), then
+re-reads `signal_erasure`. Drop any of the three and an overlapping pair keeps erased charts. Advisory, never a row
+lock on `sessions`: answer saves and `/end` update that row and would stall for the whole erasure.
 
 **Nothing has a policy on `storage.objects`, deliberately.** RLS is on and no policy grants any role anything, so
 only `service_role` reads or writes — not even the student the chart is *about*: an object is fetched by URL, not

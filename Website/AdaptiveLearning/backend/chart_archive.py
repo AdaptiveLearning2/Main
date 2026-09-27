@@ -181,8 +181,8 @@ def archive_session(client, session_id: str, user_id: str, *,
         )
         paths[name] = path
 
-    client.table("sessions").update({"chart_paths": paths}) \
-        .eq("id", session_id).execute()
+    # Through the RPC: it takes the shared form of erase_signals' per-student lock.
+    client.rpc("record_chart_paths", {"p_session_id": session_id, "p_paths": paths}).execute()
     drawn = [n for n in chart_render.CHART_NAMES
              if (only is None or n in only) and paths.get(n)]
     # After the write: an erasure committed before it saw NULL and removed nothing, and

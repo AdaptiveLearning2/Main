@@ -1,4 +1,5 @@
 import { apiFetch, apiFetchOnUnload } from './api'
+import { reloadIfRestored } from './pageRestore'
 
 /**
  * Toggles the backend's pull-mode poller for a session.
@@ -43,23 +44,14 @@ export function createSignalRecorder({ sessionId, deviceId,
     apiFetchOnUnload('/api/eeg/stop', { session_id: sessionId })
     active = false
     recording = false
-    // Kept for Back (bfcache): the stream is stopped, so a restored page would show a dead one.
-    if (e?.persisted) window.addEventListener('pageshow', onShow)
-  }
-  const onShow = (e) => {
-    window.removeEventListener('pageshow', onShow)
-    if (e?.persisted) onRestore()
+    reloadIfRestored(e, onRestore)
   }
   window.addEventListener('pagehide', onUnload)
 
   return {
     sessionId,
     start,
-    stop: () => {
-      window.removeEventListener('pagehide', onUnload)
-      window.removeEventListener('pageshow', onShow)
-      return stop()
-    },
+    stop: () => { window.removeEventListener('pagehide', onUnload); return stop() },
     isActive: () => active,
     isRecording: () => recording,
   }

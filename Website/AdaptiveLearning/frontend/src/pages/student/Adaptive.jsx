@@ -7,6 +7,7 @@ import { endSession, recordAnswer } from '../../lib/session'
 import useEegStartReport from '../../hooks/useEegStartReport'
 import { onSignOut } from '../../lib/signOutTasks'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
+import { reloadIfRestored } from '../../lib/pageRestore'
 import { startPush, stopPush, stopPushOnUnload, pushStatus,
          deviceStart, deviceStop, deviceStopOnUnload, museRefresh, museConnect,
          museDisconnect, museState, devices as sidecarDevices,
@@ -229,7 +230,10 @@ export default function Adaptive() {
       const c = cameraRef.current
       return c.running && c.id && c.pushMode ? c.id : null
     }
-    const onPageHide = () => { const id = stoppable(); if (id) deviceStopOnUnload(id) }
+    const onPageHide = (e) => {
+      const id = stoppable()
+      if (id) { deviceStopOnUnload(id); reloadIfRestored(e) }
+    }
     window.addEventListener('pagehide', onPageHide)
     return () => {
       window.removeEventListener('pagehide', onPageHide)
@@ -723,7 +727,7 @@ export default function Adaptive() {
     })
 
     // Cleanup doesn't run on a tab close; `pagehide` (bfcache- and mobile-safe) does.
-    const onPageHide = () => { stopPushOnUnload() }
+    const onPageHide = (e) => { stopPushOnUnload(); reloadIfRestored(e) }
     window.addEventListener('pagehide', onPageHide)
 
     return () => {

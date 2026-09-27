@@ -5,7 +5,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, PieChart, Pie, Cell, Legend
 import ChartTooltip from '../../components/charts/ChartTooltip'
 import AccessibleChart from '../../components/charts/AccessibleChart'
 import { sliceSpec } from '../../components/charts/describeSeries'
-import { fetchQuestionsCached } from '../../lib/questionsCache'
+import { fetchQuestionCounts, fetchQuestionsCached } from '../../lib/questionsCache'
 import LoadError from '../../components/ui/LoadError'
 import { TOPICS as ALL_TOPICS, topicLabel } from '../../lib/topics'
 
@@ -27,8 +27,11 @@ export default function TeacherAnalytics() {
   const [questions, setQuestions] = useState([])
   const [loading, setLoading]     = useState(true)
   const [failed, setFailed]       = useState(false)
+  // Exact sizes for the cards; the list is capped, so it only draws the charts.
+  const [counts, setCounts]       = useState(null)
 
   const load = () => {
+    fetchQuestionCounts().then(setCounts)
     fetchQuestionsCached(1000)
       .then(q => { setQuestions(q || []); setFailed(false); setLoading(false) })
       // Track failure, or the charts render as all-zero.
@@ -50,12 +53,15 @@ export default function TeacherAnalytics() {
     value: questions.filter(q => q.difficulty === d).length,
   })).filter(d => d.value > 0)
 
+  // A null count is a failed count: a dash, never the capped list's length.
   const summaryCards = [
-    { label: 'Total Questions', value: questions.length,                                     emoji: '❓', color: 'from-violet-500 to-purple-600' },
-    { label: 'Easy',            value: questions.filter(q => q.difficulty === 'easy').length,   emoji: '🟢', color: 'from-green-500 to-emerald-600' },
-    { label: 'Medium',          value: questions.filter(q => q.difficulty === 'medium').length, emoji: '🟡', color: 'from-amber-500 to-orange-500' },
-    { label: 'Hard',            value: questions.filter(q => q.difficulty === 'hard').length,   emoji: '🔴', color: 'from-rose-500 to-red-600' },
+    { label: 'Total Questions', value: counts?.total,  emoji: '❓', color: 'from-violet-500 to-purple-600' },
+    { label: 'Easy',            value: counts?.easy,   emoji: '🟢', color: 'from-green-500 to-emerald-600' },
+    { label: 'Medium',          value: counts?.medium, emoji: '🟡', color: 'from-amber-500 to-orange-500' },
+    { label: 'Hard',            value: counts?.hard,   emoji: '🔴', color: 'from-rose-500 to-red-600' },
   ]
+  // The charts draw the newest rows only; said so when the bank is bigger than that.
+  const partial = counts?.total != null && counts.total > questions.length
 
   return (
     <div className="p-6 lg:p-8 pb-12 space-y-8">
@@ -80,13 +86,19 @@ export default function TeacherAnalytics() {
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-xs font-bold uppercase tracking-widest text-gray-600 mb-1 dark:text-gray-400">{c.label}</p>
-                <p className="text-3xl font-black text-gray-900 dark:text-white">{loading || failed ? '—' : c.value}</p>
+                <p className="text-3xl font-black text-gray-900 dark:text-white">{c.value ?? '—'}</p>
               </div>
               <div className={`w-10 h-10 bg-gradient-to-br ${c.color} rounded-xl flex items-center justify-center text-lg shadow`}>{c.emoji}</div>
             </div>
           </motion.div>
         ))}
       </div>
+
+      {partial && !failed && (
+        <p className="text-xs text-gray-600 dark:text-gray-400 -mt-4">
+          The charts below cover the newest {questions.length} of {counts.total} questions.
+        </p>
+      )}
 
       <div className="grid lg:grid-cols-3 gap-6">
         {/* bar chart */}

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { HelpCircle, Search, Filter, X, ChevronDown } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { fetchQuestionsCached } from '../../lib/questionsCache'
+import { fetchQuestionCount, fetchQuestionsCached } from '../../lib/questionsCache'
 import { apiFetch } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
@@ -103,6 +103,8 @@ export default function Questions() {
   const [studentId, setStudentId] = useState('')
   // Set only for one student; `expired` tells an empty history from an aged-out one.
   const [studentMeta, setStudentMeta] = useState(null)
+  // The exact count, or null if it could not be read.
+  const [bankTotal, setBankTotal] = useState(null)
   const PER_PAGE = 15
 
   // One counter across BOTH loaders: a cached bank read can land under an
@@ -111,7 +113,9 @@ export default function Questions() {
 
   const load = () => {
     const isCurrent = beginQuestionRead()
-    // Whole bank: this page paginates client-side.
+    // The list is capped at 1000 rows, so its length is not the bank's size.
+    fetchQuestionCount().then(setBankTotal)
+    // The newest 1000: this page paginates client-side.
     fetchQuestionsCached(1000)
       .then(q => {
         if (!isCurrent()) return
@@ -194,7 +198,10 @@ export default function Questions() {
               ? `${questions.length} question${questions.length === 1 ? '' : 's'} asked`
                 + (studentMeta.expired ? ` · ${studentMeta.expired} no longer in the bank` : '')
                 + (studentMeta.truncated ? ' · showing the most recent 200 answers' : '')
-              : `${questions.length} questions total`}
+              : bankTotal === null
+                ? `${questions.length} questions loaded`
+                : `${bankTotal} questions total`
+                  + (bankTotal > questions.length ? ` · showing the newest ${questions.length}` : '')}
         </p>
       </motion.div>
 

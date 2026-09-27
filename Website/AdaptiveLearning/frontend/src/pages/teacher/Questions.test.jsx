@@ -122,6 +122,45 @@ describe('the question modal', () => {
   })
 })
 
+describe('the size of the bank', () => {
+  // The list is capped at 1000 rows by PostgREST; only the count endpoint knows the total.
+  const COUNTS = { '': 1400, easy: 600, medium: 500, hard: 300 }
+  const withCounts = (bank = [QUESTION, SECOND_QUESTION]) => mockApi([
+    { match: '/api/questions?limit=1000', handler: () => bank },
+    { match: '/api/classes', handler: () => [] },
+    { match: p => p.startsWith('/api/questions/count'), handler: (p) => ({
+      total: COUNTS[new URLSearchParams(p.split('?')[1] || '').get('difficulty') || ''],
+      retrieved: true }) },
+  ])
+
+  it('gives the bank its real size and says the list shows the newest rows', async () => {
+    withCounts()
+    render(<Questions />, { wrapper: MemoryRouter })
+    expect(await screen.findByText('1400 questions total · showing the newest 2')).toBeInTheDocument()
+  })
+
+  it('counts the analytics cards from the count endpoint, not the capped list', async () => {
+    withCounts()
+    render(<Analytics />, { wrapper: MemoryRouter })
+    const card = (label) => screen.getByText(label).nextElementSibling
+    await waitFor(() => expect(card('Total Questions')).toHaveTextContent('1400'))
+    expect(card('Easy')).toHaveTextContent('600')
+    expect(card('Hard')).toHaveTextContent('300')
+    expect(screen.getByText('The charts below cover the newest 2 of 1400 questions.')).toBeInTheDocument()
+  })
+
+  it('does not claim a total it could not count', async () => {
+    mockApi({
+      '/api/questions?limit=1000': () => [QUESTION, SECOND_QUESTION],
+      '/api/classes': () => [],
+      '/api/questions/count': () => ({ total: null, retrieved: false }),
+    })
+    render(<Questions />, { wrapper: MemoryRouter })
+    expect(await screen.findByText('2 questions loaded')).toBeInTheDocument()
+    expect(screen.queryByText(/questions total/)).not.toBeInTheDocument()
+  })
+})
+
 describe('the question-bank cache shared with Analytics', () => {
   it('serves both pages from a single fetch of the bank', async () => {
     render(<Questions />, { wrapper: MemoryRouter })

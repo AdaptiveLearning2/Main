@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -14,7 +14,8 @@ const QUESTION = {
   id: 'q-1',
   question_text: 'What is 7 x 8?',
   options: ['54', '56', '58'],
-  correct_index: 1,
+  // What `/api/questions` returns: text, not an index (there is no `correct_index` column).
+  correct_answer: '56',
   subject: 'algebra',
   difficulty: 'easy',
 }
@@ -57,6 +58,24 @@ it("names a row's topic with every underscore a space", async () => {
 })
 
 describe('the question modal', () => {
+  it('marks the option the stored answer names, and only that one', async () => {
+    // It compared each index with `correct_index`, a field no endpoint sends, so none was marked.
+    const dialog = await openModal()
+    const marked = [...dialog.querySelectorAll('.border-green-400')].map(el => el.textContent)
+    expect(marked).toHaveLength(1)
+    expect(marked[0]).toMatch(/^B56/)
+    expect(within(dialog).getByText('correct answer')).toBeInTheDocument()
+  })
+
+  it('says so when the stored answer matches no option', async () => {
+    mockApi({
+      '/api/questions?limit=1000': () => [{ ...QUESTION, correct_answer: '57' }],
+      '/api/classes': () => [],
+    })
+    const dialog = await openModal()
+    expect(within(dialog).getByText('The stored answer matches none of these options.')).toBeInTheDocument()
+  })
+
   it('is a dialog, and names itself', async () => {
     // role="dialog" is what tells a screen reader the page behind is no longer in front.
     const dialog = await openModal()

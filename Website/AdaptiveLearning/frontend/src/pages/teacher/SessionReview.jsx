@@ -15,6 +15,7 @@ import { apiFetch } from '../../lib/api'
 import { EMOTION_COLOURS, UNKNOWN_EMOTION_COLOUR, emotionEmoji } from '../../lib/emotions'
 import QuestionFigure from '../../components/questions/QuestionFigure'
 import CCSSBadge from '../../components/questions/CCSSBadge'
+import { correctIndex, optionList } from '../../lib/answerKey'
 
 // calibrating/unknown are shown, not dropped, so categorisation isn't overstated.
 const STRESS_COLOURS = {
@@ -38,37 +39,11 @@ function topicLabel(q) {
   return q?.subject || 'Unknown topic'
 }
 
-/** `options` (unschema'd jsonb) as strings: an array or object, else `[]`. */
-function optionList(q) {
-  const raw = q?.options
-  if (Array.isArray(raw)) return raw.map(String)
-  if (raw && typeof raw === 'object') return Object.values(raw).map(String)
-  return []
-}
-
 /** What the student picked, by text; falls back to the index. */
 function answerLabel(opts, index) {
   if (index === null || index === undefined) return '—'
   const opt = opts[index]
   return opt === undefined ? `Option ${index}` : opt
-}
-
-/** Index of the correct option, or -1.
- * `correct_answer` is text, matched by value (trimmed, case-insensitive), once
- * per question so a duplicate distractor isn't also marked. A bounds-checked
- * numeric fallback covers a row that stores an index.
- */
-function correctIndex(q, opts) {
-  const want = q?.correct_answer
-  if (want === null || want === undefined) return -1
-  const a = String(want).trim().toLowerCase()
-  const byValue = opts.findIndex(o => String(o).trim().toLowerCase() === a)
-  if (byValue !== -1) return byValue
-  if (/^\d+$/.test(a)) {
-    const n = Number(a)
-    if (n >= 0 && n < opts.length) return n
-  }
-  return -1
 }
 
 // Per-section archived SVG. The emotion ribbon has no archived equivalent.

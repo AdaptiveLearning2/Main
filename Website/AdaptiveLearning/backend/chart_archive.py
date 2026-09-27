@@ -189,12 +189,27 @@ def archive_session(client, session_id: str, user_id: str, *,
     # one committed after it finds these paths and removes them itself.
     try:
         erased = _erased_since(client, user_id, read_started)
-    except Exception:
-        # A re-render keeps its paths: nulled, nothing would redraw the last copy of an expired day.
+    except Exception as exc:
         if only is None:
             _withdraw(client, session_id, user_id, drawn)
-        raise
+            raise
+        # A re-render keeps its paths: nulled, nothing would redraw the last copy of an expired day.
+        raise ErasureRecheckFailed(session_id, user_id, drawn,
+                                   read_started - _ERASURE_SLACK, exc) from exc
     return _drop_erased(client, session_id, user_id, paths, erased)
+
+
+class ErasureRecheckFailed(RuntimeError):
+    """A re-render kept `charts` without learning whether an erasure after `since` covers them.
+
+    A re-run cannot settle it: its own window starts later, and an erased channel may have
+    no rows left to redraw from. Someone has to read `signal_erasure` for the student.
+    """
+
+    def __init__(self, session_id, user_id, charts, since, cause):
+        super().__init__(f"erasure re-check failed: {cause}")
+        self.session_id, self.user_id = session_id, user_id
+        self.charts, self.since = list(charts), since
 
 
 # Charts each erased channel takes; must match the CASE in `erase_signals`.
@@ -581,7 +596,7 @@ def rearchive_sessions(client, sessions: list[dict], *, dry_run: bool = True,
     report = {"dry_run": dry_run, "considered": 0, "rerendered": 0,
               "skipped_expired": 0, "skipped_unarchived": 0, "failed": 0,
               "read_failures": 0, "refused": None, "hit_cap": False,
-              "last_ended_at": None, "would_rerender": []}
+              "last_ended_at": None, "would_rerender": [], "unverified": []}
     if expiry is None:
         try:
             expiry = expiry_cutoff(client)
@@ -633,6 +648,11 @@ def rearchive_sessions(client, sessions: list[dict], *, dry_run: bool = True,
             archive_session(client, session_id, user_id, only=wanted, existing_paths=recorded)
             report["rerendered"] += 1
             report["last_ended_at"] = row.get("ended_at")
+        except ErasureRecheckFailed as exc:
+            print(f"[rearchive] {session_id}: {exc}")
+            report["failed"] += 1
+            report["unverified"].append({"session_id": exc.session_id, "user_id": exc.user_id,
+                                         "charts": exc.charts, "since": exc.since.isoformat()})
         except Exception as exc:  # noqa: BLE001 -- one failure must not stop the run
             print(f"[rearchive] {session_id}: {exc}")
             report["failed"] += 1

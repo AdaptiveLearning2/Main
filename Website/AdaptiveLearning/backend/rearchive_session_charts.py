@@ -66,6 +66,12 @@ def main(argv=None) -> int:
         print("\nDry run. Re-run with --apply to re-render.")
         return 0
     print(f"re-rendered:         {report['rerendered']}")
+    for u in report["unverified"]:
+        # Not fixed by re-running: its window starts later, and erased rows cannot be redrawn.
+        print(f"UNVERIFIED session {u['session_id']} (student {u['user_id']}): the erasure "
+              f"re-check failed. If signal_erasure has a row for this student with erased_at "
+              f"after {u['since']}, null {', '.join(u['charts'])} on the session and remove "
+              "those objects.", file=sys.stderr)
     if report["failed"]:
         print(f"failed:              {report['failed']}", file=sys.stderr)
         return 1

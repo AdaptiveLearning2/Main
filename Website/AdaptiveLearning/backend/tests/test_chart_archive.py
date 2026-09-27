@@ -290,12 +290,16 @@ def test_a_failed_erasure_check_on_a_rerender_raises_and_keeps_its_paths():
     existing = {n: chart_archive.object_path(USER, SESSION, n) for n in chart_render.CHART_NAMES}
     client = _Client(cognitive=COG, face=FACE, heart=HEART, erasure_read_fails=True)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(chart_archive.ErasureRecheckFailed) as caught:
         chart_archive.archive_session(client, SESSION, USER, only={"cognitive_timeline"},
                                       existing_paths=existing)
 
     assert client.updates == [{"chart_paths": existing}]
     assert client.bucket.removed == []
+    # What someone needs to settle it by hand.
+    assert (caught.value.session_id, caught.value.user_id) == (SESSION, USER)
+    assert caught.value.charts == ["cognitive_timeline"]
+    assert caught.value.since < datetime.now(timezone.utc)
 
 
 def _latest_erase_signals() -> str:
@@ -315,9 +319,12 @@ def test_erase_signals_locks_the_sessions_before_it_deletes_anything():
     Unlocked, an archive can write and re-check between its UPDATE of sessions and its commit."""
     import re
     body = _latest_erase_signals()
-    lock = re.search(r"FROM\s+sessions\s+WHERE\s+user_id\s*=\s*p_user_id[^;]*FOR\s+UPDATE", body)
+    lock = re.search(r"FROM\s+sessions\s+WHERE\s+user_id\s*=\s*p_user_id[^;]*FOR\s+(NO\s+KEY\s+)?UPDATE",
+                     body)
     first_delete = re.search(r"\bDELETE\s+FROM\b", body)
     assert lock and first_delete and lock.start() < first_delete.start()
+    # Plain FOR UPDATE also blocks the KEY SHARE locks that inserting answers and signals takes.
+    assert lock.group(1), "FOR UPDATE holds up the student's answers for the whole erasure"
     # now() is the transaction's start; a slow erasure would stamp before the re-check window.
     assert re.search(r"VALUES\s*\(\s*p_user_id,\s*p_channel,\s*clock_timestamp\(\)", body)
 

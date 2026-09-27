@@ -288,3 +288,53 @@ def test_a_misspelt_timezone_is_a_failed_read_not_an_empty_cutoff(monkeypatch):
     monkeypatch.undo()
     with pytest.raises(Exception):
         chart_archive.expiry_cutoff(_CutoffClient("2026-06-15", "Australia/Sidney"))
+
+
+# ── a re-render whose erasure re-check failed is named, not just counted ────
+
+def _unverified(sid):
+    from datetime import datetime, timezone
+    return chart_archive.ErasureRecheckFailed(sid, "u1", ["cognitive_timeline"],
+                                              datetime(2026, 9, 27, 11, 55, tzinfo=timezone.utc),
+                                              RuntimeError("signal_erasure unavailable"))
+
+
+def test_a_rerender_whose_erasure_check_failed_is_reported_with_what_to_check(monkeypatch):
+    monkeypatch.setattr(chart_archive, "_fetch", lambda _c, _s: (COG, [], HEART))
+
+    def archive(_c, sid, _u, **_k):
+        raise _unverified(sid)
+
+    monkeypatch.setattr(chart_archive, "archive_session", archive)
+    report = chart_archive.rearchive_sessions(object(), [_session("s1")], dry_run=False)
+    assert report["failed"] == 1
+    assert report["unverified"] == [{"session_id": "s1", "user_id": "u1",
+                                     "charts": ["cognitive_timeline"],
+                                     "since": "2026-09-27T11:55:00+00:00"}]
+
+
+def test_the_tool_prints_an_unverified_rerender_with_the_check_to_run(monkeypatch, capsys):
+    import supabase
+    import rearchive_session_charts as tool
+
+    class _Anything:
+        def __getattr__(self, _name):
+            return self
+
+        def __call__(self, *_a, **_k):
+            return self
+
+        data = []
+
+    monkeypatch.setattr(supabase, "create_client", lambda *_a: _Anything())
+    monkeypatch.setattr(chart_archive, "rearchive_sessions", lambda *_a, **_k: {
+        "dry_run": False, "considered": 1, "rerendered": 0, "skipped_expired": 0,
+        "skipped_unarchived": 0, "failed": 1, "read_failures": 0, "refused": None,
+        "hit_cap": False, "last_ended_at": None, "would_rerender": [],
+        "unverified": [{"session_id": "s1", "user_id": "u1", "charts": ["cognitive_timeline"],
+                        "since": "2026-09-27T11:55:00+00:00"}]})
+
+    assert tool.main(["--apply"]) == 1
+    err = capsys.readouterr().err
+    assert "UNVERIFIED session s1 (student u1)" in err
+    assert "after 2026-09-27T11:55:00+00:00" in err and "null cognitive_timeline" in err

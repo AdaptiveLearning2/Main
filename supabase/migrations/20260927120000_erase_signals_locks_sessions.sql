@@ -25,9 +25,9 @@ BEGIN
         RAISE EXCEPTION 'unknown channel %', p_channel;
     END IF;
 
-    -- An archive writing chart_paths now waits for this commit, then its re-read of
-    -- signal_erasure sees the tombstone; one that wrote first is seen by the UPDATE below.
-    PERFORM 1 FROM sessions WHERE user_id = p_user_id ORDER BY id FOR UPDATE;
+    -- An archive writing chart_paths waits for this commit, then its re-read sees the tombstone;
+    -- NO KEY, so answer and signal inserts (KEY SHARE via their foreign keys) are not held up.
+    PERFORM 1 FROM sessions WHERE user_id = p_user_id ORDER BY id FOR NO KEY UPDATE;
 
     -- Not batched: one transaction, so a half-finished erasure cannot report success.
 

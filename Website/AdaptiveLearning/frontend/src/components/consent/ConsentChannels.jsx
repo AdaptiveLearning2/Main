@@ -168,14 +168,14 @@ export default function ConsentChannels({ studentId, role, studentName = null })
       })
       // Reload so `erased_at` comes from the server; a failed reload says the erasure happened.
       const reloaded = await load(null, { afterErasure: true })
-      if (reloaded) setErasureNote(out.charts_failed
-        ? {
-            failed: true,
-            text: 'The readings were erased. Some archived charts could not be '
-              + 'removed and are no longer reachable from the app; please tell '
-              + 'us so they can be cleared.',
-          }
-        : { failed: false, text: 'Erased.' })
+      // The chart warning stands either way; a failed reload has already said the rows went.
+      if (out.charts_failed) setErasureNote({
+        failed: true,
+        text: (reloaded ? 'The readings were erased. ' : '') + 'Some archived charts could not be '
+          + 'removed and are no longer reachable from the app; please tell '
+          + 'us so they can be cleared.',
+      })
+      else if (reloaded) setErasureNote({ failed: false, text: 'Erased.' })
       closeErasure()
     } catch (e) {
       setError(String(e.message || e))

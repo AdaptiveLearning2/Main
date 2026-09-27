@@ -313,6 +313,25 @@ describe('erasing stored readings', () => {
     expect(screen.getAllByRole('switch')).toHaveLength(3)
   })
 
+  it('keeps the chart warning when the reload after an erasure fails', async () => {
+    const user = userEvent.setup()
+    let reads = 0
+    apiFetch.mockImplementation((url) => {
+      if (url.endsWith('/erase')) return Promise.resolve({ channel: 'camera', charts_failed: 2 })
+      reads += 1
+      return Promise.resolve(reads === 1 ? ALL_ON : { retrieved: false, channels: {} })
+    })
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await waitFor(() => expect(screen.getByText('Camera')).toBeInTheDocument())
+    await user.click(screen.getAllByText(/erase what this recorded/i)[2])
+    await user.click(screen.getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: /erase them/i }))
+
+    expect(await screen.findByText(/these settings could not be reloaded/i)).toBeInTheDocument()
+    expect(screen.getByText(/some archived charts could not be removed/i)).toBeInTheDocument()
+  })
+
   it('says so when an archived chart could not be removed', async () => {
     // Storage removal runs after the rows are gone, so it alone can stay incomplete.
     const user = userEvent.setup()

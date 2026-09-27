@@ -15,20 +15,20 @@ import threading
 import time
 
 import llm_client
+from env_config import env_number
 
 # Seconds for the arithmetic alone (~10ms normally), timed from worker readiness;
 # stops a runaway. `SOLVE_STARTUP_BUDGET` is the one that absorbs a slow machine.
-_CONFIGURED_TIMEOUT_S = llm_client._env_number("SOLVE_TIMEOUT", 3.0, float,
-                                               minimum=1.0)
+_CONFIGURED_TIMEOUT_S = env_number("SOLVE_TIMEOUT", 3.0, float, minimum=1.0)
 
 # Worker processes at once; callers queue past it. Separate from
 # `GENERATION_MAX_CONCURRENCY`, which bounds model calls only.
-SOLVE_MAX_CONCURRENCY = llm_client._env_number(
+SOLVE_MAX_CONCURRENCY = env_number(
     "SOLVE_MAX_CONCURRENCY", 8, int, minimum=1)
 
 # Seconds to wait for a slot; not deducted from the solve budget, which bounds a
 # CPU spin that has not started yet.
-SOLVE_QUEUE_TIMEOUT_S = llm_client._env_number(
+SOLVE_QUEUE_TIMEOUT_S = env_number(
     "SOLVE_QUEUE_TIMEOUT", 20.0, float, minimum=0.1)
 
 _solve_slots = threading.BoundedSemaphore(SOLVE_MAX_CONCURRENCY)
@@ -52,7 +52,7 @@ def _solve_slot(label):
 
 # Seconds to launch Python and import sympy (~99% of a solve). Generous on
 # purpose; `_probe_startup` raises it if this machine is slower.
-_CONFIGURED_STARTUP_BUDGET_S = llm_client._env_number(
+_CONFIGURED_STARTUP_BUDGET_S = env_number(
     "SOLVE_STARTUP_BUDGET", 15.0, float, minimum=1.0)
 SOLVE_STARTUP_BUDGET_S = _CONFIGURED_STARTUP_BUDGET_S
 

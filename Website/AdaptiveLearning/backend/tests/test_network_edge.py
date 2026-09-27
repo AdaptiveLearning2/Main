@@ -323,7 +323,7 @@ def test_a_shortened_production_name_is_not_a_near_miss(raw):
 
 @pytest.mark.parametrize("raw", ["staging", "produciton", "Production!", "1", "yes"])
 def test_a_name_this_app_does_not_know_hides_the_docs_and_says_so(raw, capsys):
-    """Unlike `_env_number`, the safe fallback here is publishing less, with a log line."""
+    """Unlike `env_number`, the safe fallback here is publishing less, with a log line."""
     assert main._is_production(raw)[1] is True
     assert "not a name this app knows" in capsys.readouterr().out
 

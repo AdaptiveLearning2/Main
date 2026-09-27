@@ -16,9 +16,6 @@ load_dotenv()
 console_encoding.make_console_safe()
 
 
-_env_number = env_number
-
-
 # Defaults to ollama so a fresh checkout never bills an Anthropic account.
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
 
@@ -26,23 +23,23 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
 
 # Anthropic accepts 0.0-1.0 (call sites pass Ollama's 1.1, which would 400), so clamped.
-CLAUDE_TEMPERATURE = min(1.0, _env_number("CLAUDE_TEMPERATURE", 1.0, float, minimum=0.0))
+CLAUDE_TEMPERATURE = min(1.0, env_number("CLAUDE_TEMPERATURE", 1.0, float, minimum=0.0))
 
 # Seconds per model call, including queueing; the SDK's own 10-minute default would stall prefetch.
-GENERATION_LLM_TIMEOUT = _env_number("GENERATION_LLM_TIMEOUT", 30.0, float, minimum=1.0)
+GENERATION_LLM_TIMEOUT = env_number("GENERATION_LLM_TIMEOUT", 30.0, float, minimum=1.0)
 
 # Process-wide in-flight model calls, both providers; `main._ensure_queue` bounds only per session.
-GENERATION_MAX_CONCURRENCY = _env_number("GENERATION_MAX_CONCURRENCY", 8, int, minimum=1)
+GENERATION_MAX_CONCURRENCY = env_number("GENERATION_MAX_CONCURRENCY", 8, int, minimum=1)
 _generation_slots = threading.BoundedSemaphore(GENERATION_MAX_CONCURRENCY)
 
 # Billable Claude calls per rolling 24h (a question is 2 calls; a class of 30 x 30 questions ~ 1800).
 # Counts calls, not tokens; in-memory and per worker, so a restart resets it.
-GENERATION_DAILY_CALL_LIMIT = _env_number("GENERATION_DAILY_CALL_LIMIT", 2500, int, minimum=1)
+GENERATION_DAILY_CALL_LIMIT = env_number("GENERATION_DAILY_CALL_LIMIT", 2500, int, minimum=1)
 _call_times: list[float] = []
 _call_lock = threading.Lock()
 
 # 0: call sites already retry 3x and can also reject bad JSON; SDK retries would multiply billing.
-CLAUDE_MAX_RETRIES = _env_number("CLAUDE_MAX_RETRIES", 0, int, minimum=0)
+CLAUDE_MAX_RETRIES = env_number("CLAUDE_MAX_RETRIES", 0, int, minimum=0)
 
 
 # Temperature the Messages API applies when none is sent.

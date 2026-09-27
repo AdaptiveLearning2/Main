@@ -214,6 +214,20 @@ def test_the_weekly_endpoint_reads_a_declined_headband_neither_way(monkeypatch):
     assert out["heart_included"] is True
 
 
+def test_the_weekly_endpoint_says_when_eeg_was_withdrawn(monkeypatch):
+    """SignalPanel's EEG tiles read these; without them a withdrawn channel read as on."""
+    row = {**_consent_row(eeg=False), "eeg_revoked_at": "2026-09-03T09:00:00+00:00"}
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(row)))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    monkeypatch.setattr(main, "_profile", lambda _s: {"display_name": "Kid"})
+
+    out = main.student_weekly_report(STUDENT, None)
+
+    assert out["eeg_enabled"] is False
+    assert out["eeg_revoked_at"] == "2026-09-03T09:00:00+00:00"
+
+
 def test_a_failed_consent_read_is_not_reported_as_a_refusal(monkeypatch):
     """Both suppress every optional channel; only one is a fault."""
     fake = _FakeSupabase(_tables(_consent_row()), table_raises={"signal_consent"})

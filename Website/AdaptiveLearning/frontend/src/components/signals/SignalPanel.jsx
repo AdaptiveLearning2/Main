@@ -103,13 +103,15 @@ function faceReason(report, faceOn) {
 
 /**
  * The offLabel reason for the EEG channel.
- * `eeg_enabled`, not `eeg_included`: cognitive is always read. Absent reads as on.
+ * `eeg_enabled`, not `eeg_included`: cognitive is always read. Absent reads as on. A failed
+ * cognitive read (the weekly report's `retrieved`) is unknown, not "No sensor".
  */
 function eegReason(report) {
   return {
     on: report?.eeg_enabled !== false,
     revokedAt: report?.eeg_revoked_at ?? null,
-    consentRetrieved: report?.consent_retrieved,
+    consentRetrieved: report?.consent_retrieved === false || report?.retrieved?.cognitive === false
+      ? false : report?.consent_retrieved,
     samples: report?.sample_counts?.cognitive,
   }
 }
@@ -341,8 +343,8 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
-        <MiniMetric label="Avg Focus" value={pct(avg.focus)} icon={Brain} tone="emerald" />
-        <MiniMetric label="Avg Stress" value={pct(avg.stress)} icon={Zap} tone="rose" />
+        <MiniMetric label="Avg Focus" value={valueOrReason(pct(avg.focus), eegReason(report))} icon={Brain} tone="emerald" />
+        <MiniMetric label="Avg Stress" value={valueOrReason(pct(avg.stress), eegReason(report))} icon={Zap} tone="rose" />
         {/* sessions_recorded: sample_counts.sessions is capped. Dash on a failed read, never 0. */}
         <MiniMetric
           label="Sessions"
@@ -400,11 +402,11 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       <div className="mt-4 grid md:grid-cols-3 gap-3 text-sm">
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Highest Stress</p>
-          <p className="font-bold text-gray-900 dark:text-white">{pct(highlights.highest_stress)}</p>
+          <p className="font-bold text-gray-900 dark:text-white">{valueOrReason(pct(highlights.highest_stress), eegReason(report))}</p>
         </div>
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Lowest Focus</p>
-          <p className="font-bold text-gray-900 dark:text-white">{pct(highlights.lowest_focus)}</p>
+          <p className="font-bold text-gray-900 dark:text-white">{valueOrReason(pct(highlights.lowest_focus), eegReason(report))}</p>
         </div>
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Dominant Emotion</p>

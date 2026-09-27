@@ -1741,7 +1741,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                           consent_retrieved: bool = True,
                           emotion_revoked_at: str | None = None,
                           heart_revoked_at: str | None = None,
-                          eeg_enabled: bool = True):
+                          eeg_enabled: bool = True,
+                          eeg_revoked_at: str | None = None):
     """Averages, highlights and per-day buckets of a student's recent signals.
 
     Callers must already have authorised the viewer. A false flag skips that
@@ -2080,6 +2081,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         "consent_retrieved": consent_retrieved,
         "emotion_revoked_at": emotion_revoked_at,
         "heart_revoked_at": heart_revoked_at,
+        # EEG is always read, so no `eeg_included`; the tiles need these to say "Off since".
+        "eeg_enabled": eeg_enabled,
+        "eeg_revoked_at": eeg_revoked_at,
         "emotion_distribution": (dict(sorted(emotion_counts.items(),
                                              key=lambda kv: (-kv[1], kv[0])))
                                  if include_emotion else None),
@@ -3263,7 +3267,8 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
                                 consent_retrieved=channels.consent_retrieved,
                                 emotion_revoked_at=channels.emotion_revoked_at,
                                 heart_revoked_at=channels.heart_revoked_at,
-                                eeg_enabled=channels.eeg),
+                                eeg_enabled=channels.eeg,
+                                eeg_revoked_at=channels.eeg_revoked_at),
     }
 
 

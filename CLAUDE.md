@@ -516,8 +516,9 @@ leak** to have teeth: with the switching test last in the file, removing the gua
 
 ## Configuration
 
-**Read numeric settings through `_env_number(name, default, cast, minimum=...)`, never
-`int(os.getenv(…))`.** These are read at import, so a typo would otherwise take every endpoint down
+**Read numeric settings through `env_config.env_number(name, default, cast, minimum=...)`, never
+`int(os.getenv(…))`**, in every backend module — one copy, in its own module so `main`'s imports can
+use it without a cycle. These are read at import, so a typo would otherwise take every endpoint down
 over a tuning knob for one optional feature. It falls back on unparseable and non-finite values
 (`inf` passes a `minimum` check, `nan` fails every comparison, and both break call sites in ways
 that look like the feature being off) and clamps below the floor. **Give every one a floor:** a
@@ -527,7 +528,7 @@ treatment in `config.py` — a validator warns and falls back rather than refusi
 **Backend.** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `AUTH_CHECK_TIMEOUT`, `BACKEND_PORT`, `EEG_API_URL`,
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MODE`, `INGEST_MAX_BATCH` /
 `INGEST_RATE_LIMIT` / `INGEST_RATE_WINDOW`, `SESSION_ABANDONED_AFTER_HOURS` /
-`STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep), `QUESTIONS_CACHE_TTL`,
+`STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep and its chart catch-up), `QUESTIONS_CACHE_TTL`,
 `QUESTION_QUEUE_SIZE`, the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
 `PUBLIC_*_RATE_*` / `TRUSTED_PROXY_HOPS` group under *The network edge*, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels*,
 and the `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` / `SOLVE_*` groups in `docs/question-generation.md`.
@@ -789,11 +790,11 @@ granted per header.
 **`ENV` names both sides, and an unrecognised value hides the docs.** `== "production"` is silent in the one direction
 that matters — `ENV=prod` leaves `/docs`, `/redoc` and `/openapi.json` published with nothing in the boot log saying
 so. `_is_production` recognises spellings on both sides and falls to production with a `[config]` line otherwise,
-which is the **opposite** fallback direction from `_env_number`: there the safe side is the feature's own default,
+which is the **opposite** fallback direction from `env_number`: there the safe side is the feature's own default,
 here it is publishing less. Unset stays development, silently, since that is the ordinary local state and a warning on
 every boot is one nobody reads.
 
-**Read a blank env list as unset, not as a list of one empty string.** `_env_list` is `_env_number`'s shape for text.
+**Read a blank env list as unset, not as a list of one empty string.** `_env_list` is `env_number`'s shape for text.
 An empty allowed origin matches nothing, so the symptom is the whole frontend refused by a setting that looks
 configured.
 
@@ -2105,9 +2106,10 @@ to surface: the window in which an archive can still be rebuilt closes on `ends_
 **`chart_paths` has four states and no column default.** A path, `null` for a channel that produced nothing, an
 absent key for a chart never attempted, and column-NULL for a session the archive never ran on. `'{}'::jsonb` would
 claim every pre-archive session was archived and found nothing, and `scripts/assert_signal_rls.sql` fails if a
-default appears. Column-NULL is also what a cancelled or failed archive leaves; `archive_missing`, the stale
-sweep's second step, retries those (last 30 days, never a session begun on or before the expiry cutoff).
-**The archive re-reads `signal_erasure` after writing**: an erasure mid-archive saw NULL and removed nothing.
+default appears. **Column-NULL is retried; a session begun on or before the expiry cutoff never is** —
+`archive_missing`, the stale sweep's second step, since part of a session read back would be archived as all of it.
+**An archive and an erasure each have to see the other**: `erase_signals` locks the student's sessions first, and
+the archive re-reads `signal_erasure` after its write. Drop either and an overlapping pair keeps erased charts.
 
 **Nothing has a policy on `storage.objects`, deliberately.** RLS is on and no policy grants any role anything, so
 only `service_role` reads or writes — not even the student the chart is *about*: an object is fetched by URL, not

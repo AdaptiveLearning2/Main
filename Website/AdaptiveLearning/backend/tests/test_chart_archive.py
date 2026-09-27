@@ -39,6 +39,10 @@ class _Query:
         self._gt.append((col, val))
         return self
 
+    def gte(self, col, val):
+        self._gt.append((col, val, "gte"))
+        return self
+
     def order(self, col, **_k):
         self._order.append(col)
         return self
@@ -51,7 +55,9 @@ class _Query:
         if self._rows is None:              # an update, which returns nothing here
             return type("R", (), {"data": None})()
         rows = [r for r in self._rows
-                if all(r.get(c) is not None and r[c] > v for c, v in self._gt)]
+                if all(r.get(f[0]) is not None
+                       and (r[f[0]] >= f[1] if len(f) == 3 else r[f[0]] > f[1])
+                       for f in self._gt)]
         for col in reversed(self._order):
             rows = sorted(rows, key=lambda r, c=col: r.get(c))
         rows = rows[:min(n for n in (self._limit, self._max_rows) if n is not None)]
@@ -80,22 +86,34 @@ class _Storage:
         self.calls.append(path)
         self.uploaded[path] = (file, file_options or {})
 
+    def remove(self, paths):
+        for path in paths:
+            self.uploaded.pop(path, None)
+            self.removed.append(path)
+
 
 class _Client:
-    def __init__(self, cognitive=(), face=(), heart=(), fail_storage=False, on_execute=None):
+    def __init__(self, cognitive=(), face=(), heart=(), fail_storage=False, on_execute=None,
+                 erasures=(), erasure_read_fails=False):
         # Every stored row has an id, as the tables' own do.
         self._rows = {name: [r if "id" in r else {"id": i + 1, **r} for i, r in enumerate(rows)]
                       for name, rows in (("cognitive_signals", cognitive),
                                          ("face_signals", face), ("heart_signals", heart))}
+        # `signal_erasure` rows: {"channel", "erased_at"}.
+        self._rows["signal_erasure"] = list(erasures)
+        self._erasure_read_fails = erasure_read_fails
         self.updates = []
         self.reads = []
         self._storage = _Storage(fail=fail_storage)
+        self._storage.removed = []
         self._on_execute = on_execute
 
     def table(self, name):
         if name == "sessions":
             return type("T", (), {
                 "update": lambda _s, values: _Update(self.updates, values)})()
+        if name == "signal_erasure" and self._erasure_read_fails:
+            raise RuntimeError("signal_erasure unavailable")
         query = _Query(self._rows[name], on_execute=self._on_execute)
         query.table = name
         self.reads.append(query)
@@ -200,6 +218,95 @@ def test_a_replayed_close_overwrites_rather_than_colliding():
 
 
 # ── what the charts are made of ─────────────────────────────────────────────
+
+# ── an erasure that lands while the archive runs ────────────────────────────
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def test_an_erasure_during_the_archive_takes_its_charts_back_out():
+    """It saw `chart_paths` NULL, so it removed nothing and nulled nothing; the archive must."""
+    client = _Client(cognitive=COG, face=FACE, heart=HEART,
+                     erasures=[{"channel": "camera", "erased_at": _now_iso()}])
+
+    paths = chart_archive.archive_session(client, SESSION, USER)
+
+    assert paths["cognitive_timeline"]
+    assert paths["emotion_pie"] is None and paths["heart_rate"] is None
+    assert paths["stress_pie"] is None
+    assert client.updates[-1] == {"chart_paths": paths}
+    assert sorted(client.bucket.removed) == sorted(
+        chart_archive.object_path(USER, SESSION, n)
+        for n in ("emotion_pie", "heart_rate", "stress_pie"))
+    assert list(client.bucket.uploaded) == [paths["cognitive_timeline"]]
+
+
+def test_an_erasure_long_before_the_archive_drops_nothing():
+    """Its rows were already gone when the archive read, so what was drawn is clean."""
+    client = _Client(cognitive=COG, face=FACE, heart=HEART,
+                     erasures=[{"channel": "camera", "erased_at": "2020-01-01T00:00:00+00:00"}])
+
+    paths = chart_archive.archive_session(client, SESSION, USER)
+
+    assert all(paths[n] for n in chart_render.CHART_NAMES)
+    assert client.bucket.removed == []
+
+
+def test_an_unrecognised_erased_channel_takes_every_chart():
+    client = _Client(cognitive=COG, face=FACE, heart=HEART,
+                     erasures=[{"channel": "somethingnew", "erased_at": _now_iso()}])
+
+    paths = chart_archive.archive_session(client, SESSION, USER)
+
+    assert paths == {n: None for n in chart_render.CHART_NAMES}
+
+
+def test_a_failed_erasure_check_withdraws_the_archive_so_the_catch_up_retries_it():
+    """"Could not ask" is treated as erased; NULL, not four nulls, so the archive runs again."""
+    client = _Client(cognitive=COG, face=FACE, heart=HEART, erasure_read_fails=True)
+
+    with pytest.raises(RuntimeError):
+        chart_archive.archive_session(client, SESSION, USER)
+
+    assert client.updates[-1] == {"chart_paths": None}
+    assert client.bucket.uploaded == {}
+    assert len(client.bucket.removed) == len(chart_render.CHART_NAMES)
+
+
+def test_a_failed_erasure_check_on_a_rerender_withdraws_only_what_it_redrew():
+    existing = {n: chart_archive.object_path(USER, SESSION, n) for n in chart_render.CHART_NAMES}
+    client = _Client(cognitive=COG, face=FACE, heart=HEART, erasure_read_fails=True)
+
+    with pytest.raises(RuntimeError):
+        chart_archive.archive_session(client, SESSION, USER, only={"cognitive_timeline"},
+                                      existing_paths=existing)
+
+    assert client.updates[-1] == {"chart_paths": {**existing, "cognitive_timeline": None}}
+    assert client.bucket.removed == [existing["cognitive_timeline"]]
+
+
+def test_the_charts_an_erasure_takes_match_erase_signals():
+    """Two copies of one mapping: the SQL deletes by it, this re-check drops by it."""
+    import re
+    from pathlib import Path
+    migrations = sorted((Path(__file__).resolve().parents[4] / "supabase" / "migrations")
+                        .glob("*.sql"))
+    defining = [m for m in migrations
+                if re.search(r'FUNCTION\s+"?public"?\."?erase_signals"?', m.read_text("utf-8"))]
+    sql = defining[-1].read_text("utf-8")
+    case = re.search(r"charts\s*:=\s*CASE\s+p_channel(.*?)END;", sql, re.S).group(1)
+    arrays = dict(re.findall(r"WHEN\s+'(\w+)'\s+THEN\s+ARRAY\[([^\]]*)\]", case))
+    other = re.search(r"ELSE\s+ARRAY\[([^\]]*)\]", case).group(1)
+
+    def names(text):
+        return set(re.findall(r"'(\w+)'", text))
+
+    assert {ch: names(a) for ch, a in arrays.items()} == {
+        ch: set(c) for ch, c in chart_archive.ERASURE_CHARTS.items() if ch in arrays}
+    others = set(chart_archive.ERASURE_CHARTS) - set(arrays)
+    assert others and all(set(chart_archive.ERASURE_CHARTS[ch]) == names(other) for ch in others)
+
 
 def test_a_rejected_facial_window_is_not_counted_as_an_emotion():
     """`emotion: None` is a window the quality gate refused."""
@@ -803,10 +910,110 @@ def test_the_archived_cognitive_chart_does_not_draw_engagement_beside_focus(monk
     seen = {}
     real = chart_render.line_svg
 
-    def spy(points, title):
+    def spy(points, title, *args, **kwargs):
         seen[title] = set(points)
-        return real(points, title)
+        return real(points, title, *args, **kwargs)
 
     monkeypatch.setattr(chart_render, "line_svg", spy)
     chart_archive.build_session_charts(COG, FACE, HEART)
     assert seen["Cognitive signals"] == {"focus", "stress"}
+
+
+def test_the_archived_cognitive_chart_is_on_the_0_to_100_percent_axis():
+    """Its rows are 0..1 ratios; session review plots them on a fixed [0, 1] domain."""
+    from xml.etree import ElementTree
+    svg = chart_archive.build_session_charts(COG, [], [])["cognitive_timeline"]
+    labels = [t.text for t in ElementTree.fromstring(svg).iter()
+              if t.tag.endswith("text") and t.get("text-anchor") == "end"]
+    assert labels == ["100%", "0%"]
+
+
+# ── the catch-up for archives that never ran ────────────────────────────────
+
+class _SessionsQuery:
+    """The catch-up's `sessions` read; records every filter, serves the given rows."""
+
+    def __init__(self, rows, fail=False):
+        self.rows, self.fail, self.calls = rows, fail, []
+
+    def __getattr__(self, name):
+        if name == "not_":
+            self.calls.append(("not_",))
+            return self
+
+        def record(*args, **kwargs):
+            self.calls.append((name, *args, *sorted(kwargs.items())))
+            return self
+        return record
+
+    def execute(self):
+        if self.fail:
+            raise RuntimeError("sessions unavailable")
+        return type("R", (), {"data": self.rows})()
+
+
+class _CatchUpClient:
+    def __init__(self, rows, fail=False):
+        self.sessions = _SessionsQuery(rows, fail)
+
+    def table(self, name):
+        assert name == "sessions"
+        return self.sessions
+
+
+NOW = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
+
+
+def _queued(monkeypatch, expiry=(None, None)):
+    queued = []
+    monkeypatch.setattr(chart_archive, "schedule", lambda _c, sid, uid: queued.append((sid, uid)))
+    monkeypatch.setattr(chart_archive, "expiry_cutoff", lambda _c: expiry)
+    return queued
+
+
+def test_the_catch_up_queues_closed_sessions_the_archive_never_reached(monkeypatch):
+    queued = _queued(monkeypatch)
+    client = _CatchUpClient([{"id": "s1", "user_id": "u1", "started_at": "2026-09-20T10:00:00Z"},
+                             {"id": "s2", "user_id": "u2", "started_at": "2026-09-21T10:00:00Z"}])
+
+    out = chart_archive.archive_missing(client, now=NOW)
+
+    assert queued == [("s1", "u1"), ("s2", "u2")]
+    assert out == {"found": 2, "queued": 2, "skipped_expired": 0, "retrieved": True}
+
+
+def test_the_catch_up_asks_only_for_null_paths_on_closed_sessions_past_the_grace(monkeypatch):
+    """Rule 4: assert on the request. A close's own archive gets the grace first."""
+    _queued(monkeypatch)
+    client = _CatchUpClient([])
+
+    chart_archive.archive_missing(client, now=NOW)
+
+    calls = client.sessions.calls
+    assert ("is_", "chart_paths", "null") in calls
+    assert ("not_",) in calls and ("is_", "ended_at", "null") in calls
+    assert ("lt", "ended_at", (NOW - chart_archive.CATCH_UP_GRACE).isoformat()) in calls
+    assert ("gt", "ended_at", (NOW - chart_archive.CATCH_UP_LOOKBACK).isoformat()) in calls
+    assert ("order", "ended_at", ("desc", True)) in calls
+
+
+def test_the_catch_up_leaves_a_session_begun_on_an_expired_day(monkeypatch):
+    """Part of a session read back would be archived as all of it."""
+    from datetime import date
+    from zoneinfo import ZoneInfo
+    queued = _queued(monkeypatch, expiry=(date(2026, 9, 20), ZoneInfo("UTC")))
+    client = _CatchUpClient([{"id": "old", "user_id": "u1", "started_at": "2026-09-20T10:00:00Z"},
+                             {"id": "new", "user_id": "u1", "started_at": "2026-09-21T10:00:00Z"}])
+
+    out = chart_archive.archive_missing(client, now=NOW)
+
+    assert queued == [("new", "u1")]
+    assert out["skipped_expired"] == 1
+
+
+def test_a_catch_up_that_cannot_list_says_so_and_queues_nothing(monkeypatch):
+    queued = _queued(monkeypatch)
+
+    out = chart_archive.archive_missing(_CatchUpClient([], fail=True), now=NOW)
+
+    assert queued == [] and out["retrieved"] is False

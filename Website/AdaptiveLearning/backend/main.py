@@ -1236,6 +1236,11 @@ def _stale_sweep_loop() -> None:
             _sweep_abandoned_sessions()
         except Exception as e:                                 # noqa: BLE001
             print(f"[stale_sweep] pass failed: {e}")
+        # Its own guard: an archive cancelled at shutdown or failed is retried from here.
+        try:
+            chart_archive.archive_missing(supabase)
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[stale_sweep] chart catch-up failed: {e}")
         # Also checked here, so a stop during the first pass is not an interval away.
         if _stale_sweep_stop.is_set():
             return

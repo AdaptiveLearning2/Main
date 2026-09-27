@@ -11,7 +11,8 @@ from __future__ import annotations
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import chart_render
 
@@ -71,7 +72,7 @@ def build_session_charts(cognitive, face, heart) -> dict:
     # No `engagement`: it is the focus index under another name.
     cog_points = _line_points(cognitive, ("focus", "stress"))
     charts["cognitive_timeline"] = (
-        chart_render.line_svg(cog_points, "Cognitive signals") if cognitive else None
+        chart_render.line_svg(cog_points, "Cognitive signals", ratio=True) if cognitive else None
     )
 
     heart_points = _line_points(heart, ("heart_rate_bpm", "rmssd_ms"))
@@ -150,12 +151,13 @@ def _fetch(client, session_id: str):
 def archive_session(client, session_id: str, user_id: str, *,
                     only: set[str] | None = None,
                     existing_paths: dict | None = None) -> dict:
-    """Render, upload, and record the paths on the session row.
+    """Render, upload, record the paths, then drop the charts of any channel erased meanwhile.
 
-    Returns the `chart_paths` map it wrote; raises (`_run` logs it).
-    `only` restricts the re-render; other charts keep their `existing_paths`
-    entry, so an erasure's null is never re-rendered from surviving rows.
+    Returns the `chart_paths` map it left; raises (`_run` logs it). `only` restricts the
+    re-render; other charts keep their `existing_paths` entry, so an erasure's null is never
+    re-rendered from surviving rows.
     """
+    read_started = datetime.now(timezone.utc)
     cognitive, face, heart = _fetch(client, session_id)
     charts = build_session_charts(cognitive, face, heart)
 
@@ -180,7 +182,57 @@ def archive_session(client, session_id: str, user_id: str, *,
 
     client.table("sessions").update({"chart_paths": paths}) \
         .eq("id", session_id).execute()
+    drawn = [n for n in chart_render.CHART_NAMES
+             if (only is None or n in only) and paths.get(n)]
+    # After the write: an erasure committed before it saw NULL and removed nothing, and
+    # one committed after it finds these paths and removes them itself.
+    try:
+        erased = _erased_since(client, user_id, read_started)
+    except Exception:
+        _withdraw(client, session_id, user_id, paths, drawn, whole=only is None)
+        raise
+    return _drop_erased(client, session_id, user_id, paths, erased)
+
+
+# Charts each erased channel takes; must match the CASE in `erase_signals`.
+ERASURE_CHARTS = {"eeg": ("cognitive_timeline",),
+                  "headband_optical": ("heart_rate", "stress_pie"),
+                  "camera": ("emotion_pie", "heart_rate", "stress_pie")}
+
+# `erased_at` is the database's clock; the slack errs toward dropping a chart.
+_ERASURE_SLACK = timedelta(minutes=5)
+
+
+def _erased_since(client, user_id: str, since: datetime) -> set[str]:
+    rows = (client.table("signal_erasure").select("channel").eq("user_id", user_id)
+            .gte("erased_at", (since - _ERASURE_SLACK).isoformat()).execute().data or [])
+    return {r.get("channel") for r in rows}
+
+
+def _drop_erased(client, session_id: str, user_id: str, paths: dict,
+                 channels: set[str]) -> dict:
+    """Null, then remove, the charts `channels` take. An unknown channel takes all of them."""
+    hit = {c for ch in channels for c in ERASURE_CHARTS.get(ch, chart_render.CHART_NAMES)}
+    doomed = [n for n in chart_render.CHART_NAMES if n in hit and paths.get(n)]
+    if not doomed:
+        return paths
+    paths = {**paths, **{n: None for n in doomed}}
+    client.table("sessions").update({"chart_paths": paths}).eq("id", session_id).execute()
+    remove_objects(client, [object_path(user_id, session_id, n) for n in doomed])
+    print(f"[charts] {session_id[:8]}: dropped {doomed}, erased during the archive")
     return paths
+
+
+def _withdraw(client, session_id: str, user_id: str, paths: dict, drawn: list,
+              whole: bool) -> None:
+    """The erasure re-check failed, so what was drawn is treated as erased. A whole archive
+    goes back to NULL ("never ran"), which the catch-up retries."""
+    try:
+        undone = None if whole else {**paths, **{n: None for n in drawn}}
+        client.table("sessions").update({"chart_paths": undone}).eq("id", session_id).execute()
+    finally:
+        remove_objects(client, [object_path(user_id, session_id, n) for n in drawn])
+    print(f"[charts] {session_id[:8]}: erasure re-check failed; withdrew {drawn}")
 
 
 # ── reading them back ───────────────────────────────────────────────────────
@@ -403,20 +455,102 @@ def schedule(client, session_id: str, user_id: str) -> None:
         print(f"[charts] {session_id[:8]}: could not queue archive: {e}")
 
 
+# ── which sessions may still be read whole ──────────────────────────────────
+
+def expiry_cutoff(client) -> tuple[date | None, ZoneInfo | None]:
+    """`expire_signal_rows`' cutoff and the school's timezone; `(None, None)` if nothing expires.
+
+    Raises on a failed read or an unknown timezone: "could not ask" is not "nothing expired".
+    """
+    cutoff = client.rpc("expired_signal_cutoff", {}).execute().data
+    if not cutoff:
+        return None, None
+    rows = client.table("retention_window").select("timezone").limit(1).execute().data or []
+    tz = rows[0].get("timezone") if rows else None
+    # With no timezone `expire_signal_rows` deletes nothing.
+    return (date.fromisoformat(str(cutoff)[:10]), ZoneInfo(tz)) if tz else (None, None)
+
+
+def touches_expired_day(started_at, expiry) -> bool:
+    """Whether the session began on a school day whose rows may be deleted, wholly or in part.
+
+    Part of a session read back would be archived as all of it. An unreadable start counts.
+    """
+    cutoff, tz = expiry
+    if cutoff is None:
+        return False
+    try:
+        start = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    return start.astimezone(tz).date() <= cutoff
+
+
+# ── archives that never ran ─────────────────────────────────────────────────
+
+# A close's own archive gets this long before the catch-up queues a second one.
+CATCH_UP_GRACE = timedelta(minutes=15)
+# Older NULLs predate the archive or are past repair; this bounds each pass.
+CATCH_UP_LOOKBACK = timedelta(days=30)
+CATCH_UP_BATCH = 20
+
+
+def archive_missing(client, *, now: datetime | None = None,
+                    limit: int = CATCH_UP_BATCH) -> dict:
+    """Queue archives for closed sessions still at `chart_paths` NULL; returns counts.
+
+    Only `_close_session` schedules one, so an archive cancelled at shutdown or failed in
+    `_run` is otherwise never retried. Newest first, so skipped old ones cannot starve it.
+    """
+    now = now or datetime.now(timezone.utc)
+    try:
+        expiry = expiry_cutoff(client)
+        rows = (client.table("sessions").select("id, user_id, started_at")
+                .is_("chart_paths", "null").not_.is_("ended_at", "null")
+                .lt("ended_at", (now - CATCH_UP_GRACE).isoformat())
+                .gt("ended_at", (now - CATCH_UP_LOOKBACK).isoformat())
+                .order("ended_at", desc=True).limit(limit).execute().data or [])
+    except Exception as e:
+        print(f"[charts] catch-up could not list unarchived sessions: {e}")
+        return {"found": 0, "queued": 0, "skipped_expired": 0, "retrieved": False}
+    queued = skipped = 0
+    for row in rows:
+        if not row.get("id") or not row.get("user_id"):
+            continue
+        if touches_expired_day(row.get("started_at"), expiry):
+            skipped += 1
+            continue
+        schedule(client, row["id"], row["user_id"])
+        queued += 1
+    if rows:
+        print(f"[charts] catch-up: {queued} queued, {skipped} skipped as expired")
+    return {"found": len(rows), "queued": queued, "skipped_expired": skipped,
+            "retrieved": True}
+
+
 # ── regenerating archives already written ───────────────────────────────────
 
 def rearchive_sessions(client, sessions: list[dict], *, dry_run: bool = True,
-                       max_rerenders: int = 200, max_read_failures: int = 5) -> dict:
+                       max_rerenders: int = 200, max_read_failures: int = 5,
+                       expiry=None) -> dict:
     """Re-render and re-upload the charts of sessions already archived.
 
-    Dry run by default. Skips a session whose chart rows have expired (the archive
-    is the last copy); re-renders only charts with a recorded path (an erasure's
+    Dry run by default. Skips a session that began on or before the expiry cutoff (the
+    archive is the last copy); re-renders only charts with a recorded path (an erasure's
     null stays null); refuses after `max_read_failures` failed reads.
     """
     report = {"dry_run": dry_run, "considered": 0, "rerendered": 0,
               "skipped_expired": 0, "skipped_unarchived": 0, "failed": 0,
               "read_failures": 0, "refused": None, "hit_cap": False,
               "last_ended_at": None, "would_rerender": []}
+    if expiry is None:
+        try:
+            expiry = expiry_cutoff(client)
+        except Exception as exc:  # noqa: BLE001 -- an unknown cutoff protects nothing
+            report["refused"] = f"could not read the expiry cutoff: {exc}"
+            return report
     for row in sessions:
         if len(report["would_rerender"]) + report["rerendered"] >= max_rerenders:
             report["hit_cap"] = True
@@ -428,6 +562,11 @@ def rearchive_sessions(client, sessions: list[dict], *, dry_run: bool = True,
         if not wanted or not session_id or not user_id:
             report["skipped_unarchived"] += 1
             # Handled: nothing to read, so the cursor may pass it.
+            report["last_ended_at"] = row.get("ended_at")
+            continue
+        # Before reading: rows present is no proof a day was not partly expired.
+        if touches_expired_day(row.get("started_at"), expiry):
+            report["skipped_expired"] += 1
             report["last_ended_at"] = row.get("ended_at")
             continue
         try:

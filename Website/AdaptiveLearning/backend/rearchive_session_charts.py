@@ -40,7 +40,7 @@ def main(argv=None) -> int:
 
     from supabase import create_client
     client = create_client(url, key)
-    query = (client.table("sessions").select("id, user_id, chart_paths, ended_at")
+    query = (client.table("sessions").select("id, user_id, chart_paths, started_at, ended_at")
              .not_.is_("chart_paths", "null").not_.is_("ended_at", "null"))
     if args.before:
         query = query.lt("ended_at", args.before)

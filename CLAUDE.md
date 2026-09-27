@@ -2105,7 +2105,9 @@ to surface: the window in which an archive can still be rebuilt closes on `ends_
 **`chart_paths` has four states and no column default.** A path, `null` for a channel that produced nothing, an
 absent key for a chart never attempted, and column-NULL for a session the archive never ran on. `'{}'::jsonb` would
 claim every pre-archive session was archived and found nothing, and `scripts/assert_signal_rls.sql` fails if a
-default appears.
+default appears. Column-NULL is also what a cancelled or failed archive leaves; `archive_missing`, the stale
+sweep's second step, retries those (last 30 days, never a session begun on or before the expiry cutoff).
+**The archive re-reads `signal_erasure` after writing**: an erasure mid-archive saw NULL and removed nothing.
 
 **Nothing has a policy on `storage.objects`, deliberately.** RLS is on and no policy grants any role anything, so
 only `service_role` reads or writes — not even the student the chart is *about*: an object is fetched by URL, not

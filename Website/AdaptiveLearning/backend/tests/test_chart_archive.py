@@ -285,7 +285,8 @@ def test_a_failed_erasure_check_withdraws_the_archive_so_the_catch_up_retries_it
     assert len(client.bucket.removed) == len(chart_render.CHART_NAMES)
 
 
-def test_a_failed_erasure_check_on_a_rerender_withdraws_only_what_it_redrew():
+def test_a_failed_erasure_check_on_a_rerender_raises_and_keeps_its_paths():
+    """Nulled, the re-render tool skips it and the catch-up never sees it: the last copy is gone."""
     existing = {n: chart_archive.object_path(USER, SESSION, n) for n in chart_render.CHART_NAMES}
     client = _Client(cognitive=COG, face=FACE, heart=HEART, erasure_read_fails=True)
 
@@ -293,12 +294,12 @@ def test_a_failed_erasure_check_on_a_rerender_withdraws_only_what_it_redrew():
         chart_archive.archive_session(client, SESSION, USER, only={"cognitive_timeline"},
                                       existing_paths=existing)
 
-    assert client.updates[-1] == {"chart_paths": {**existing, "cognitive_timeline": None}}
-    assert client.bucket.removed == [existing["cognitive_timeline"]]
+    assert client.updates == [{"chart_paths": existing}]
+    assert client.bucket.removed == []
 
 
-def test_the_charts_an_erasure_takes_match_erase_signals():
-    """Two copies of one mapping: the SQL deletes by it, this re-check drops by it."""
+def _latest_erase_signals() -> str:
+    """The newest migration's `erase_signals`, with `--` comments stripped (a mention is not a use)."""
     import re
     from pathlib import Path
     migrations = sorted((Path(__file__).resolve().parents[4] / "supabase" / "migrations")
@@ -306,6 +307,25 @@ def test_the_charts_an_erasure_takes_match_erase_signals():
     defining = [m for m in migrations
                 if re.search(r'FUNCTION\s+"?public"?\."?erase_signals"?', m.read_text("utf-8"))]
     sql = defining[-1].read_text("utf-8")
+    return re.sub(r"--[^\n]*", "", sql)
+
+
+def test_erase_signals_locks_the_sessions_before_it_deletes_anything():
+    """Source check, stated: the race needs two live transactions, which the fake cannot give.
+    Unlocked, an archive can write and re-check between its UPDATE of sessions and its commit."""
+    import re
+    body = _latest_erase_signals()
+    lock = re.search(r"FROM\s+sessions\s+WHERE\s+user_id\s*=\s*p_user_id[^;]*FOR\s+UPDATE", body)
+    first_delete = re.search(r"\bDELETE\s+FROM\b", body)
+    assert lock and first_delete and lock.start() < first_delete.start()
+    # now() is the transaction's start; a slow erasure would stamp before the re-check window.
+    assert re.search(r"VALUES\s*\(\s*p_user_id,\s*p_channel,\s*clock_timestamp\(\)", body)
+
+
+def test_the_charts_an_erasure_takes_match_erase_signals():
+    """Two copies of one mapping: the SQL deletes by it, this re-check drops by it."""
+    import re
+    sql = _latest_erase_signals()
     case = re.search(r"charts\s*:=\s*CASE\s+p_channel(.*?)END;", sql, re.S).group(1)
     arrays = dict(re.findall(r"WHEN\s+'(\w+)'\s+THEN\s+ARRAY\[([^\]]*)\]", case))
     other = re.search(r"ELSE\s+ARRAY\[([^\]]*)\]", case).group(1)
@@ -976,6 +996,7 @@ NOW = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
 
 
 def _queued(monkeypatch, expiry=(None, None)):
+    monkeypatch.setattr(chart_archive, "_failed_at", {})
     queued = []
     monkeypatch.setattr(chart_archive, "schedule", lambda _c, sid, uid: queued.append((sid, uid)))
     monkeypatch.setattr(chart_archive, "expiry_cutoff", lambda _c: expiry)
@@ -1020,6 +1041,54 @@ def test_the_catch_up_leaves_a_session_begun_on_an_expired_day(monkeypatch):
 
     assert queued == [("new", "u1")]
     assert out["skipped_expired"] == 1
+
+
+def _fail_archive(monkeypatch, fail=True):
+    def archive(*_a, **_k):
+        if fail:
+            raise RuntimeError("storage down")
+        return {}
+    monkeypatch.setattr(chart_archive, "archive_session", archive)
+
+
+def test_an_archive_that_failed_here_is_left_out_of_the_next_passes(monkeypatch):
+    """Else 20 that always fail fill every batch, newest first, and nothing older is reached."""
+    _queued(monkeypatch)
+    _fail_archive(monkeypatch)
+    chart_archive._run(object(), "s-broken", "u1")
+    client = _CatchUpClient([])
+
+    chart_archive.archive_missing(client, now=NOW)
+
+    assert ("in_", "id", ["s-broken"]) in client.sessions.calls
+
+
+def test_a_failed_archive_is_tried_again_after_the_wait_and_forgotten_on_success(monkeypatch):
+    _queued(monkeypatch)
+    _fail_archive(monkeypatch)
+    chart_archive._run(object(), "s-broken", "u1")
+    real = chart_archive.time.monotonic
+    monkeypatch.setattr(chart_archive.time, "monotonic",
+                        lambda: real() + chart_archive.CATCH_UP_RETRY_AFTER_S)
+    later = _CatchUpClient([])
+    chart_archive.archive_missing(later, now=NOW)
+    assert not any(c[0] == "in_" for c in later.sessions.calls)
+
+    monkeypatch.setattr(chart_archive.time, "monotonic", real)
+    chart_archive._run(object(), "s-broken", "u1")
+    _fail_archive(monkeypatch, fail=False)
+    chart_archive._run(object(), "s-broken", "u1")
+    assert chart_archive._recent_failures() == []
+
+
+def test_the_remembered_failures_are_bounded(monkeypatch):
+    _queued(monkeypatch)
+    _fail_archive(monkeypatch)
+    for i in range(chart_archive._FAILED_MAX + 5):
+        chart_archive._run(object(), f"s{i}", "u1")
+    failed = chart_archive._recent_failures()
+    assert len(failed) == chart_archive._FAILED_MAX
+    assert "s0" not in failed and f"s{chart_archive._FAILED_MAX + 4}" in failed
 
 
 def test_a_catch_up_that_cannot_list_says_so_and_queues_nothing(monkeypatch):

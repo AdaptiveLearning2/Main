@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -189,7 +190,9 @@ def archive_session(client, session_id: str, user_id: str, *,
     try:
         erased = _erased_since(client, user_id, read_started)
     except Exception:
-        _withdraw(client, session_id, user_id, paths, drawn, whole=only is None)
+        # A re-render keeps its paths: nulled, nothing would redraw the last copy of an expired day.
+        if only is None:
+            _withdraw(client, session_id, user_id, drawn)
         raise
     return _drop_erased(client, session_id, user_id, paths, erased)
 
@@ -223,13 +226,11 @@ def _drop_erased(client, session_id: str, user_id: str, paths: dict,
     return paths
 
 
-def _withdraw(client, session_id: str, user_id: str, paths: dict, drawn: list,
-              whole: bool) -> None:
-    """The erasure re-check failed, so what was drawn is treated as erased. A whole archive
-    goes back to NULL ("never ran"), which the catch-up retries."""
+def _withdraw(client, session_id: str, user_id: str, drawn: list) -> None:
+    """The erasure re-check failed, so what was drawn is treated as erased. The archive goes
+    back to NULL ("never ran"), which the catch-up retries."""
     try:
-        undone = None if whole else {**paths, **{n: None for n in drawn}}
-        client.table("sessions").update({"chart_paths": undone}).eq("id", session_id).execute()
+        client.table("sessions").update({"chart_paths": None}).eq("id", session_id).execute()
     finally:
         remove_objects(client, [object_path(user_id, session_id, n) for n in drawn])
     print(f"[charts] {session_id[:8]}: erasure re-check failed; withdrew {drawn}")
@@ -442,9 +443,41 @@ def _run(client, session_id: str, user_id: str) -> None:
         paths = archive_session(client, session_id, user_id)
         drawn = sum(1 for v in paths.values() if v)
         print(f"[charts] {session_id[:8]}: archived {drawn}/{len(paths)}")
+        _forget_failure(session_id)
     except Exception as e:
         # The log is the only place this surfaces; the fix window closes on `ends_on`.
         print(f"[charts] {session_id[:8]}: archive failed: {e}")
+        _note_failure(session_id)
+
+
+# Archives that failed in this process, left out of the catch-up for a while so a few that
+# always fail cannot hold back every older one. Per process: a second worker retries its own.
+CATCH_UP_RETRY_AFTER_S = 6 * 3600
+# Most remembered; the list travels in the catch-up's request URL.
+_FAILED_MAX = 100
+_failed_at: dict[str, float] = {}
+_failed_lock = threading.Lock()
+
+
+def _note_failure(session_id: str) -> None:
+    with _failed_lock:
+        _failed_at.pop(session_id, None)
+        _failed_at[session_id] = time.monotonic()
+        while len(_failed_at) > _FAILED_MAX:
+            _failed_at.pop(next(iter(_failed_at)))
+
+
+def _forget_failure(session_id: str) -> None:
+    with _failed_lock:
+        _failed_at.pop(session_id, None)
+
+
+def _recent_failures() -> list[str]:
+    now = time.monotonic()
+    with _failed_lock:
+        for sid in [s for s, at in _failed_at.items() if now - at >= CATCH_UP_RETRY_AFTER_S]:
+            del _failed_at[sid]
+        return list(_failed_at)
 
 
 def schedule(client, session_id: str, user_id: str) -> None:
@@ -502,16 +535,20 @@ def archive_missing(client, *, now: datetime | None = None,
     """Queue archives for closed sessions still at `chart_paths` NULL; returns counts.
 
     Only `_close_session` schedules one, so an archive cancelled at shutdown or failed in
-    `_run` is otherwise never retried. Newest first, so skipped old ones cannot starve it.
+    `_run` is otherwise never retried. Newest first, and this process's recent failures left
+    out, so neither expired nor always-failing sessions fill every batch.
     """
     now = now or datetime.now(timezone.utc)
     try:
         expiry = expiry_cutoff(client)
-        rows = (client.table("sessions").select("id, user_id, started_at")
-                .is_("chart_paths", "null").not_.is_("ended_at", "null")
-                .lt("ended_at", (now - CATCH_UP_GRACE).isoformat())
-                .gt("ended_at", (now - CATCH_UP_LOOKBACK).isoformat())
-                .order("ended_at", desc=True).limit(limit).execute().data or [])
+        query = (client.table("sessions").select("id, user_id, started_at")
+                 .is_("chart_paths", "null").not_.is_("ended_at", "null")
+                 .lt("ended_at", (now - CATCH_UP_GRACE).isoformat())
+                 .gt("ended_at", (now - CATCH_UP_LOOKBACK).isoformat()))
+        failed = _recent_failures()
+        if failed:
+            query = query.not_.in_("id", failed)
+        rows = query.order("ended_at", desc=True).limit(limit).execute().data or []
     except Exception as e:
         print(f"[charts] catch-up could not list unarchived sessions: {e}")
         return {"found": 0, "queued": 0, "skipped_expired": 0, "retrieved": False}

@@ -1,7 +1,6 @@
 # One dispatch point for every model call the backend makes: the 10
 # `LLM_*_generation.py` files, `LLM_topic_decider.py` and `main.py:_llm_strategies`.
 
-import math
 import os
 import threading
 import time
@@ -9,6 +8,7 @@ import time
 from dotenv import load_dotenv
 
 import console_encoding
+from env_config import env_number
 
 load_dotenv()
 
@@ -16,26 +16,7 @@ load_dotenv()
 console_encoding.make_console_safe()
 
 
-def _env_number(name, default, cast, minimum=None):
-    """Read a numeric setting, falling back on a bad value.
-
-    A copy of `main.py:_env_number`: `main` imports this module, so importing back would cycle.
-    """
-    raw = os.getenv(name)
-    if raw is None or raw.strip() == "":
-        return default
-    try:
-        value = cast(raw)
-    except (TypeError, ValueError):
-        print(f"[config] {name}={raw!r} is not a number; using {default}")
-        return default
-    if not math.isfinite(value):
-        print(f"[config] {name}={raw!r} is not a finite number; using {default}")
-        return default
-    if minimum is not None and value < minimum:
-        print(f"[config] {name}={raw!r} is below the usable minimum; using {minimum}")
-        return minimum
-    return value
+_env_number = env_number
 
 
 # Defaults to ollama so a fresh checkout never bills an Anthropic account.

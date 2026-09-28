@@ -267,6 +267,13 @@ class _SlidingWindowLimiter:
             hits.append(now)
             return None
 
+    def release(self, key: str) -> None:
+        """Give back the caller's newest hit, for work admitted but never done."""
+        with self._lock:
+            hits = self.hits.get(key)
+            if hits:
+                hits.pop()
+
     def reset(self) -> None:
         """Forget every caller and re-arm the sweep. For tests."""
         with self._lock:
@@ -1161,6 +1168,8 @@ def _close_session(user_id: str, session: dict, ended_at: str,
 
     # Questions prepared for it can never be served now.
     _drop_prefetched(user_id, sid)
+    # Their lesson is over, so a headband they paired is free for the next student at the station.
+    _forget_pairings_of(user_id)
     total_q, correct, counted = _answer_counts(sid, session)
 
     if _discard_if_nothing_recorded(sid, total_q, answers_counted=counted):
@@ -2213,40 +2222,63 @@ def _generation_waiter():
             _generation_waiters.release()
 
 
-def _claim_daily_question(user_id: str) -> int | None:
-    """Count one served question against the student's school day; None to admit, else seconds to wait.
+def _no_refund() -> None:
+    return None
 
-    A failed or unexpected answer falls back to the per-process limiter rather than refusing everyone.
+
+def _fallback_daily_claim(user_id: str):
+    """`_claim_daily_question`'s answer from the per-process limiter."""
+    wait = _GENERATION_DAILY_LIMITER.check(user_id)
+    if wait is not None:
+        return wait, _no_refund
+    return None, lambda: _GENERATION_DAILY_LIMITER.release(user_id)
+
+
+def _claim_daily_question(user_id: str):
+    """Count one served question against the student's school day: (None, refund) to admit, else (seconds, no-op).
+
+    Call the refund if no question reaches the student. A failed or unexpected answer falls back
+    to the per-process limiter rather than refusing everyone.
     """
     tz = _school_timezone()
     now = datetime.now(tz)
+    day = now.date().isoformat()
     try:
         admitted = supabase.rpc("claim_daily_question", {
-            "p_user_id": user_id, "p_day": now.date().isoformat(),
+            "p_user_id": user_id, "p_day": day,
             "p_limit": _GENERATION_DAILY_LIMIT}).execute().data
     except Exception as e:
         print(f"[generate] daily budget unreadable for {user_id[:8]}: {type(e).__name__}")
         admitted = None
     if admitted is True:
-        return None
+        def refund():
+            # The claim's own day, not the refund's: a failure just past midnight gives back yesterday's.
+            try:
+                supabase.rpc("release_daily_question", {"p_user_id": user_id, "p_day": day}).execute()
+            except Exception as e:
+                print(f"[generate] could not refund a question for {user_id[:8]}: {type(e).__name__}")
+        return None, refund
     if admitted is not False:
-        return _GENERATION_DAILY_LIMITER.check(user_id)
+        return _fallback_daily_claim(user_id)
     midnight = datetime.combine(now.date() + timedelta(days=1), datetime.min.time(), tzinfo=tz)
     # Through UTC: aware datetimes sharing a tzinfo subtract as wall clocks, wrong across a DST change.
     return max(1, int((midnight.astimezone(timezone.utc)
-                       - now.astimezone(timezone.utc)).total_seconds()) + 1)
+                       - now.astimezone(timezone.utc)).total_seconds()) + 1), _no_refund
 
 
 def _generation_refusal(user_id: str, generating: bool = True):
-    """Count one served question against the rate (if generating now), then the day; None, else (limiter, wait)."""
+    """Count one served question against the rate (if generating now), then the day.
+
+    (None, refund) to admit, else (limiter, seconds to wait).
+    """
     if generating:
         wait = _GENERATION_LIMITER.check(user_id)
         if wait is not None:
             return _GENERATION_LIMITER, wait
-    wait = _claim_daily_question(user_id)
+    wait, refund = _claim_daily_question(user_id)
     if wait is not None:
         return _GENERATION_DAILY_LIMITER, wait
-    return None
+    return None, refund
 
 
 def _claim_generation_slot(user_id: str) -> bool:
@@ -2255,12 +2287,15 @@ def _claim_generation_slot(user_id: str) -> bool:
                for limiter in (_GENERATION_LIMITER, _PREFETCH_DAILY_LIMITER))
 
 
-def _admit_generation(user_id: str, generating: bool = True) -> None:
-    """Count one served question, or record the refusal and raise 429. `generating=False` for a queue hit."""
-    refused = _generation_refusal(user_id, generating)
-    if refused is None:
-        return
-    limiter, wait = refused
+def _admit_generation(user_id: str, generating: bool = True):
+    """Count one served question and return its refund, or record the refusal and raise 429.
+
+    `generating=False` for a queue hit. Call the refund if no question reaches the student.
+    """
+    limiter, outcome = _generation_refusal(user_id, generating)
+    if limiter is None:
+        return outcome
+    wait = outcome
     # `get_user` resolved this id, so the refusal has a real actor.
     if limiter is _GENERATION_DAILY_LIMITER:
         _record_security_event("rate_limited", user_id, limiter=_GENERATION_DAILY_LIMITER.name)
@@ -2635,23 +2670,28 @@ def generate_question(
 
     if not question:
         print(f"[generate] generating inline for {user_id[:8]}")
-        _admit_generation(user_id)
-        with _generation_waiter() as admitted:
-            if not admitted:
-                raise HTTPException(
-                    503, "Too many questions are being generated right now. Try again shortly.",
-                    headers={"Retry-After": "5"},
-                )
-            try:
-                question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(
-                    user_id, effective_grade, session_id, manual_bias
-                )
-            except llm_client.GenerationUnavailable as e:
-                # 503: a configured ceiling was reached; never silently serve another source.
-                print(f"[generate] refused for {user_id[:8]}: {e}")
-                raise HTTPException(503, "Question generation is temporarily unavailable.")
-        if not question:
-            raise HTTPException(500, "Failed to generate question")
+        refund = _admit_generation(user_id)
+        try:
+            with _generation_waiter() as admitted:
+                if not admitted:
+                    raise HTTPException(
+                        503, "Too many questions are being generated right now. Try again shortly.",
+                        headers={"Retry-After": "5"},
+                    )
+                try:
+                    question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(
+                        user_id, effective_grade, session_id, manual_bias
+                    )
+                except llm_client.GenerationUnavailable as e:
+                    # 503: a configured ceiling was reached; never silently serve another source.
+                    print(f"[generate] refused for {user_id[:8]}: {e}")
+                    raise HTTPException(503, "Question generation is temporarily unavailable.")
+            if not question:
+                raise HTTPException(500, "Failed to generate question")
+        except Exception:
+            # No question reached the student, so it does not count against their day.
+            refund()
+            raise
     else:
         try:
             # A queued question costs the student's day when served, not when it was made.
@@ -2917,21 +2957,26 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
     topic = _pick_practice_topic(practice_session_id, session["topics"])
 
     # Same rate limit, daily budget, waiter cap and refusals as /api/generate-question.
-    _admit_generation(user["id"])
-    with _generation_waiter() as admitted:
-        if not admitted:
-            raise HTTPException(
-                503, "Too many questions are being generated right now. Try again shortly.",
-                headers={"Retry-After": "5"},
-            )
-        try:
-            question = LLM_topic_decider.question_generation(
-                topic, session["difficulty"], user["id"], session.get("grade_level"))
-        except llm_client.GenerationUnavailable as e:
-            print(f"[practice] generation refused for {user['id'][:8]}: {e}")
-            raise HTTPException(503, "Question generation is temporarily unavailable.")
-    if not question:
-        raise HTTPException(500, "Failed to generate question")
+    refund = _admit_generation(user["id"])
+    try:
+        with _generation_waiter() as admitted:
+            if not admitted:
+                raise HTTPException(
+                    503, "Too many questions are being generated right now. Try again shortly.",
+                    headers={"Retry-After": "5"},
+                )
+            try:
+                question = LLM_topic_decider.question_generation(
+                    topic, session["difficulty"], user["id"], session.get("grade_level"))
+            except llm_client.GenerationUnavailable as e:
+                print(f"[practice] generation refused for {user['id'][:8]}: {e}")
+                raise HTTPException(503, "Question generation is temporarily unavailable.")
+        if not question:
+            raise HTTPException(500, "Failed to generate question")
+    except Exception:
+        # As /api/generate-question: a question that never arrived is not charged.
+        refund()
+        raise
 
     # Same deduplicating storage as the live path, so identical questions share one row.
     LLM_topic_decider._attach_stored_id(question, session["difficulty"])
@@ -6201,22 +6246,62 @@ def _refuse_under_push(what: str) -> None:
         )
 
 
-def _station_pairer(device_id: str) -> str | None:
-    """Who paired this station's headband. In the database, so a restart or a second worker agrees; raises on a failed read."""
-    rows = supabase.table("station_pairings").select("user_id") \
+# A pairing its pairer's page has not polled for this long is released: the tab was closed.
+_PAIRING_IDLE_SEC = env_number("PAIRING_IDLE_SECONDS", 120.0, float, minimum=15.0)
+# The pairer's polls refresh `seen_at` at most this often, not on every 5 s poll.
+_PAIRING_REFRESH_SEC = 30.0
+# Owner rows only: a stale one refuses (the safe direction); a stale "free" would admit a takeover.
+_PAIRING_CACHE_SEC = 10.0
+_pairing_cache: dict[str, tuple[float, str, datetime | None]] = {}
+_pairing_cache_lock = threading.Lock()
+
+
+def _uncache_pairing(device_id: str | None = None, user_id: str | None = None) -> None:
+    with _pairing_cache_lock:
+        for dev in [d for d, (_t, u, _s) in _pairing_cache.items()
+                    if d == device_id or (user_id is not None and u == user_id)]:
+            del _pairing_cache[dev]
+
+
+def _station_pairer(device_id: str):
+    """(user_id, seen_at) of this station's pairing, or None. In the database, so a restart agrees; raises on a failed read."""
+    now = time.monotonic()
+    with _pairing_cache_lock:
+        hit = _pairing_cache.get(device_id)
+    if hit and now - hit[0] < _PAIRING_CACHE_SEC:
+        return hit[1], hit[2]
+    rows = supabase.table("station_pairings").select("user_id, seen_at") \
         .eq("device_id", device_id).limit(1).execute().data or []
-    return rows[0]["user_id"] if rows else None
+    if not rows:
+        _uncache_pairing(device_id)
+        return None
+    pairing = (rows[0]["user_id"], _parse_ts(rows[0].get("seen_at")))
+    with _pairing_cache_lock:
+        _pairing_cache[device_id] = (now, *pairing)
+    return pairing
 
 
 def _record_pairing(user_id: str, device_id: str) -> None:
     """Raises on failure: an unrecorded pairing would leave the headband open to anyone."""
+    _uncache_pairing(device_id)
     supabase.table("station_pairings").upsert(
-        {"device_id": device_id, "user_id": user_id, "paired_at": _utc_now().isoformat()},
+        {"device_id": device_id, "user_id": user_id, "seen_at": _utc_now().isoformat()},
         on_conflict="device_id").execute()
+
+
+def _touch_pairing(user_id: str, device_id: str) -> None:
+    """The pairer's page is still open. Never raises: a missed refresh costs one idle interval at most."""
+    _uncache_pairing(device_id)
+    try:
+        supabase.table("station_pairings").update({"seen_at": _utc_now().isoformat()}) \
+            .eq("device_id", device_id).eq("user_id", user_id).execute()
+    except Exception as e:
+        print(f"[eeg] could not refresh the pairing on {device_id}: {type(e).__name__}")
 
 
 def _forget_pairing(device_id: str, user_id: str | None = None) -> None:
     """Clear the station's pairer; with user_id, only if it is still that user. Never raises."""
+    _uncache_pairing(device_id)
     try:
         q = supabase.table("station_pairings").delete().eq("device_id", device_id)
         if user_id is not None:
@@ -6226,23 +6311,44 @@ def _forget_pairing(device_id: str, user_id: str | None = None) -> None:
         print(f"[eeg] could not clear the pairing on {device_id}: {type(e).__name__}")
 
 
+def _forget_pairings_of(user_id: str) -> None:
+    """The user has finished with any headband they paired: their session closed or their poller stopped. Never raises."""
+    _uncache_pairing(user_id=user_id)
+    try:
+        supabase.table("station_pairings").delete().eq("user_id", user_id).execute()
+    except Exception as e:
+        print(f"[eeg] could not clear {user_id[:8]}'s pairings: {type(e).__name__}")
+
+
 _PAIRER_UNKNOWN = object()
 
 
 def _station_access(user_id: str, device_id: str) -> tuple[bool, dict | None]:
     """(open, the muse status if one was read, for the caller to reuse rather than fetch again).
 
-    A headband another user paired stays theirs while the bridge reports it connected; a failed
-    pairing read counts as another user's. Fails closed when the bridge cannot say.
+    A headband another user paired stays theirs while their page polls and the bridge reports it
+    connected; a failed pairing read counts as another user's. Fails closed when the bridge cannot say.
     """
     if not eeg_poller.can_use_device(user_id, device_id):
         return False, None
+    if eeg_poller.live_poller_user(device_id) == user_id:
+        # Their own poller holds the station, so the pairing cannot matter; no read.
+        return True, None
     try:
-        owner = _station_pairer(device_id)
+        owner, seen = _station_pairer(device_id) or (None, None)
     except Exception as e:
         print(f"[eeg] pairing unreadable on {device_id}: {type(e).__name__}")
-        owner = _PAIRER_UNKNOWN
-    if owner is None or owner == user_id:
+        owner, seen = _PAIRER_UNKNOWN, None
+    idle = None if seen is None else (_utc_now() - seen).total_seconds()
+    if owner is None:
+        return True, None
+    if owner == user_id:
+        if idle is None or idle >= _PAIRING_REFRESH_SEC:
+            _touch_pairing(user_id, device_id)
+        return True, None
+    if owner is not _PAIRER_UNKNOWN and idle is not None and idle >= _PAIRING_IDLE_SEC:
+        # Nothing has polled for it: the pairer's page is gone, whatever the headband says.
+        _forget_pairing(device_id, owner)
         return True, None
     try:
         status = eeg_client.get_muse_status(device_id)
@@ -6461,6 +6567,7 @@ def eeg_stop(payload: EegSessionRequest, request: Request):
     _session_or_403(payload.session_id, user["id"])
     # Also releases the caller's reservation, poller or not.
     out = eeg_poller.stop(payload.session_id, user["id"])
+    _forget_pairings_of(user["id"])
     return {"ok": True, **out}
 
 @app.get("/api/eeg/status")

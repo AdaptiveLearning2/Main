@@ -539,6 +539,12 @@ def _start_locked(supabase, user_id: str, session_id: str, device_id: str,
         return {"running": True, "already": False, "recording": record, "_arm": record}
 
 
+def live_poller_user(device_id: str) -> str | None:
+    """The user whose running poller holds device_id, or None."""
+    with _lock:
+        return _live_poller_owner(device_id)
+
+
 def can_use_device(user_id: str, device_id: str) -> bool:
     """Whether user_id may read/control device_id's (station's) live stream.
 

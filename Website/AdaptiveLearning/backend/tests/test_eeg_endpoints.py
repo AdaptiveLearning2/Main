@@ -614,10 +614,13 @@ def test_debug_is_not_served_in_production(monkeypatch):
 # ── the pairing lives in the database, so a restart keeps it ─────────────
 
 class _PairingsDb:
-    """Only `station_pairings`; `fail` names the operations that raise."""
+    """Only `station_pairings`, rows as the table holds them; `fail` names the operations that raise."""
 
     def __init__(self, fail=()):
-        self.rows, self.fail = {}, set(fail)
+        self.rows, self.fail, self.ops = {}, set(fail), []
+
+    def owners(self):
+        return {d: r["user_id"] for d, r in self.rows.items()}
 
     def table(self, name):
         assert name == "station_pairings", name
@@ -636,6 +639,10 @@ class _PairingsDb:
                 self.op, self.row = "upsert", row
                 return self
 
+            def update(self, fields):
+                self.op, self.row = "update", fields
+                return self
+
             def delete(self):
                 self.op = "delete"
                 return self
@@ -648,16 +655,19 @@ class _PairingsDb:
                 return self
 
             def execute(self):
+                db.ops.append(self.op)
                 if self.op in db.fail:
                     raise RuntimeError(f"{self.op} failed")
                 if self.op == "upsert":
-                    db.rows[self.row["device_id"]] = self.row["user_id"]
+                    db.rows[self.row["device_id"]] = {k: v for k, v in self.row.items() if k != "device_id"}
                     return type("R", (), {"data": [self.row]})()
-                hit = [{"device_id": d, "user_id": u} for d, u in db.rows.items()
-                       if all({"device_id": d, "user_id": u}[c] == v for c, v in self.filters.items())]
-                if self.op == "delete":
-                    for r in hit:
+                hit = [{"device_id": d, **r} for d, r in db.rows.items()
+                       if all({"device_id": d, **r}.get(c) == v for c, v in self.filters.items())]
+                for r in hit:
+                    if self.op == "delete":
                         db.rows.pop(r["device_id"])
+                    elif self.op == "update":
+                        db.rows[r["device_id"]].update(self.row)
                 return type("R", (), {"data": hit})()
         return _Q()
 
@@ -678,7 +688,7 @@ def test_a_restart_does_not_free_a_paired_headband(monkeypatch, pairings_db):
     """Nothing in memory survives a restart; the row does, so user-b is still refused."""
     db = pairings_db()
     _paired_by_a(monkeypatch, connected=True)
-    assert db.rows == {"station-p": "user-a"}
+    assert db.owners() == {"station-p": "user-a"}
     assert main._station_open_to("user-b", "station-p") is False
     assert main._station_open_to("user-a", "station-p") is True
 
@@ -733,3 +743,85 @@ def test_the_status_poll_reads_the_sidecar_once_when_the_gate_had_to_ask(monkeyp
                         lambda device_id=None: reads.append(device_id) or {"ingestion": {"muse_connected": False}})
     main.eeg_status(request=None, device_id="station-p")
     assert reads == ["station-p"]
+
+
+# ── a pairing ends with its pairer's lesson, or when nothing polls for it ─
+
+def _pairing_seen(db, device, user, seconds_ago):
+    from datetime import timedelta
+    db.rows[device] = {"user_id": user,
+                       "seen_at": (main._utc_now() - timedelta(seconds=seconds_ago)).isoformat()}
+
+
+def test_stopping_the_poller_frees_the_station(monkeypatch):
+    _paired_by_a(monkeypatch, connected=True)
+    monkeypatch.setattr(main, "_session_or_403", lambda *_a, **_k: {"user_id": "user-a"})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    payload = type("P", (), {"session_id": "s-a", "device_id": "station-p"})()
+    main.eeg_stop(payload, request=None)
+    assert "station-p" not in pairings
+    assert main._station_open_to("user-b", "station-p") is True
+
+
+def test_closing_the_pairers_session_frees_the_station(monkeypatch):
+    """Every close site goes through `_close_session`, the stale sweep included."""
+    _paired_by_a(monkeypatch, connected=True)
+    monkeypatch.setattr(main, "_claim_session_close", lambda *_a: True)
+    monkeypatch.setattr(main, "_answer_counts", lambda *_a: (0, 0, 0))
+    monkeypatch.setattr(main, "_discard_if_nothing_recorded", lambda *_a, **_k: True)
+    main._close_session("user-a", {"id": "s-a"}, "2026-09-28T10:00:00+00:00")
+    assert "station-p" not in pairings
+
+
+def test_a_pairing_nothing_has_polled_for_is_released(monkeypatch, pairings_db):
+    """The pairer closed the tab: the next student is not told to wait for the headband to go off."""
+    db = pairings_db()
+    _pairing_seen(db, "station-p", "user-a", main._PAIRING_IDLE_SEC + 5)
+    asked = []
+    monkeypatch.setattr(eeg_client, "get_muse_status",
+                        lambda device_id=None: asked.append(1) or {"ingestion": {"muse_connected": True}})
+    assert main._station_open_to("user-b", "station-p") is True
+    assert db.rows == {} and asked == []
+
+
+def test_the_pairers_polls_keep_it_theirs(monkeypatch, pairings_db):
+    db = pairings_db()
+    _pairing_seen(db, "station-p", "user-a", main._PAIRING_IDLE_SEC - 10)
+    assert main._station_open_to("user-a", "station-p") is True
+    # Refreshed, so the idle clock restarts.
+    assert main._parse_ts(db.rows["station-p"]["seen_at"]) > main._utc_now() - __import__("datetime").timedelta(seconds=5)
+    monkeypatch.setattr(eeg_client, "get_muse_status",
+                        lambda device_id=None: {"ingestion": {"muse_connected": True}})
+    assert main._station_open_to("user-b", "station-p") is False
+
+
+def test_a_recent_pairing_is_not_rewritten_on_every_poll(pairings_db):
+    db = pairings_db()
+    _pairing_seen(db, "station-p", "user-a", 5)
+    main._station_open_to("user-a", "station-p")
+    assert "update" not in db.ops
+
+
+# ── the status poll does not read the table every 5 s ────────────────────
+
+def test_a_student_whose_poller_holds_the_station_reads_no_pairing(monkeypatch, pairings_db):
+    db = pairings_db()
+    monkeypatch.setattr(eeg_poller, "live_poller_user", lambda _d: "user-a")
+    monkeypatch.setattr(eeg_poller, "can_use_device", lambda u, _d: u == "user-a")
+    assert main._station_open_to("user-a", "station-p") is True
+    assert db.ops == []
+
+
+def test_an_owner_is_cached_and_free_is_not(monkeypatch, pairings_db):
+    """A stale owner refuses, the safe direction; a stale "free" would admit a takeover."""
+    db = pairings_db()
+    monkeypatch.setattr(eeg_client, "get_muse_status",
+                        lambda device_id=None: {"ingestion": {"muse_connected": True}})
+    main._station_open_to("user-b", "station-free")
+    main._station_open_to("user-b", "station-free")
+    assert db.ops.count("select") == 2
+    _pairing_seen(db, "station-p", "user-a", 1)
+    db.ops.clear()
+    main._station_open_to("user-b", "station-p")
+    main._station_open_to("user-b", "station-p")
+    assert db.ops.count("select") == 1

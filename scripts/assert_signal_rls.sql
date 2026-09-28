@@ -1432,6 +1432,17 @@ BEGIN
     IF public.claim_daily_question(usr, d + 2, 0) THEN
         RAISE EXCEPTION 'a limit of 0 admitted a question';
     END IF;
+    -- A refund gives one back, on its own day only, and never below zero.
+    PERFORM public.release_daily_question(usr, d);
+    IF NOT public.claim_daily_question(usr, d, 2) THEN
+        RAISE EXCEPTION 'a refunded question could not be claimed again';
+    END IF;
+    PERFORM public.release_daily_question(usr, d + 1);
+    PERFORM public.release_daily_question(usr, d + 1);
+    IF (SELECT served FROM public.daily_question_usage WHERE user_id = usr AND day = d + 1) <> 0
+       OR (SELECT served FROM public.daily_question_usage WHERE user_id = usr AND day = d) <> 2 THEN
+        RAISE EXCEPTION 'a refund went below zero or reached another day';
+    END IF;
     IF has_function_privilege('authenticated', 'public.claim_daily_question(uuid, date, integer)', 'EXECUTE')
        OR has_table_privilege('authenticated', 'public.daily_question_usage', 'SELECT') THEN
         RAISE EXCEPTION 'a client role can reach the daily question budget';

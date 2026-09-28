@@ -144,12 +144,13 @@ def _daily_budget_is_in_memory():
     import main
     original = main._claim_daily_question
     _REAL.setdefault("claim_daily_question", original)
-    main._claim_daily_question = lambda user_id: main._GENERATION_DAILY_LIMITER.check(user_id)
+    main._claim_daily_question = lambda user_id: main._fallback_daily_claim(user_id)
     yield
     main._claim_daily_question = original
 
 
-_PAIRING_FUNCS = ("_station_pairer", "_record_pairing", "_forget_pairing")
+_PAIRING_FUNCS = ("_station_pairer", "_record_pairing", "_touch_pairing", "_forget_pairing",
+                  "_forget_pairings_of")
 # device_id -> user_id, standing in for `station_pairings` in every test but the ones of it.
 pairings: dict[str, str] = {}
 
@@ -167,13 +168,18 @@ def _pairings_in_memory():
     for name, fn in originals.items():
         _REAL.setdefault(name, fn)
     pairings.clear()
+    main._pairing_cache.clear()
 
     def forget(device_id, user_id=None):
         if user_id is None or pairings.get(device_id) == user_id:
             pairings.pop(device_id, None)
-    main._station_pairer = pairings.get
+    main._station_pairer = lambda device_id: (
+        (pairings[device_id], main._utc_now()) if device_id in pairings else None)
     main._record_pairing = lambda user_id, device_id: pairings.__setitem__(device_id, user_id)
+    main._touch_pairing = lambda user_id, device_id: None
     main._forget_pairing = forget
+    main._forget_pairings_of = lambda user_id: [
+        pairings.pop(d) for d, u in list(pairings.items()) if u == user_id]
     yield
     for name, fn in originals.items():
         setattr(main, name, fn)

@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS "public"."station_pairings" (
     -- The sidecar's device id, e.g. "default" or "station1".
     "device_id" "text" NOT NULL,
     "user_id" "uuid" NOT NULL,
-    "paired_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    -- Refreshed by the pairer's status polls; a pairing nobody has polled for a while is released.
+    "seen_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     CONSTRAINT "station_pairings_pkey" PRIMARY KEY ("device_id")
 );
 

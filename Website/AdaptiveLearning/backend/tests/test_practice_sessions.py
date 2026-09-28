@@ -581,3 +581,20 @@ def test_learning_strategies_rejects_a_practice_session_owned_by_someone_else(_c
     with pytest.raises(main.HTTPException) as exc:
         main.student_learning_strategies(USER, None, payload)
     assert exc.value.status_code == 403
+
+
+def test_a_practice_question_that_never_arrived_is_not_charged(_client, monkeypatch):
+    """During an outage, clicking Next must not spend the day with nothing to show for it."""
+    from conftest import tighten
+    tighten(monkeypatch, main._GENERATION_DAILY_LIMITER, limit=1)
+    _as(monkeypatch, USER)
+    _client(sessions=[_OWNED_SESSION])
+
+    def _down(*_a, **_k):
+        raise llm_client.GenerationUnavailable("model down")
+    monkeypatch.setattr(main.LLM_topic_decider, "question_generation", _down)
+    with pytest.raises(main.HTTPException) as exc:
+        main.practice_question(SESSION, None)
+    assert exc.value.status_code == 503
+
+    assert main._GENERATION_DAILY_LIMITER.check(USER) is None, "the failed question was charged"

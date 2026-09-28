@@ -46,6 +46,23 @@ REVOKE ALL ON FUNCTION "public"."claim_daily_question"("uuid", "date", integer) 
 REVOKE ALL ON FUNCTION "public"."claim_daily_question"("uuid", "date", integer) FROM "authenticated";
 GRANT EXECUTE ON FUNCTION "public"."claim_daily_question"("uuid", "date", integer) TO "service_role";
 
+-- Gives back a claim whose question never reached the student (the model was down, the server busy).
+CREATE OR REPLACE FUNCTION "public"."release_daily_question"("p_user_id" "uuid", "p_day" "date")
+RETURNS void
+LANGUAGE "sql"
+SECURITY INVOKER
+AS $$
+    UPDATE "public"."daily_question_usage" SET "served" = "served" - 1
+    WHERE "user_id" = "p_user_id" AND "day" = "p_day" AND "served" > 0;
+$$;
+
+ALTER FUNCTION "public"."release_daily_question"("uuid", "date") OWNER TO "postgres";
+
+REVOKE ALL ON FUNCTION "public"."release_daily_question"("uuid", "date") FROM PUBLIC;
+REVOKE ALL ON FUNCTION "public"."release_daily_question"("uuid", "date") FROM "anon";
+REVOKE ALL ON FUNCTION "public"."release_daily_question"("uuid", "date") FROM "authenticated";
+GRANT EXECUTE ON FUNCTION "public"."release_daily_question"("uuid", "date") TO "service_role";
+
 -- A count per day is only ever read for today; keep a week for anyone checking a complaint.
 SELECT "cron"."schedule"(
     'expire-daily-question-usage', '40 3 * * *',

@@ -1352,11 +1352,23 @@ BEGIN
         RAISE EXCEPTION '% heart day(s) that drew on the camera, or might have, outlived its erasure', n;
     END IF;
 
+    -- The headband's second source name: a raw row and an expired day under muse_ppg.
+    INSERT INTO public.heart_signals (session_id, user_id, source, ts, heart_rate_bpm, trusted)
+    SELECT sess_id, uid, 'muse_ppg', '2025-03-20T10:00:00Z', 72, true FROM _ids;
+    INSERT INTO public.signal_daily_rollup
+        (user_id, day, channel, avg_heart_rate_bpm, sample_count, trusted_sample_count,
+         heart_sources)
+    VALUES (uid, DATE '2025-03-14', 'heart', 72, 5, 5, ARRAY['muse_ppg']);
+
     PERFORM public.erase_signals(uid, 'headband_optical', NULL, 'UTC');
     SELECT count(*) INTO n FROM public.signal_daily_rollup
      WHERE user_id = uid AND channel = 'heart';
     IF n <> 0 THEN
-        RAISE EXCEPTION 'the headband-only day outlived erasing the headband';
+        RAISE EXCEPTION '% headband heart day(s) outlived erasing the headband', n;
+    END IF;
+    SELECT count(*) INTO n FROM public.heart_signals WHERE user_id = uid AND source = 'muse_ppg';
+    IF n <> 0 THEN
+        RAISE EXCEPTION 'erasing the headband left % muse_ppg heart row(s)', n;
     END IF;
 END $$;
 
@@ -1378,6 +1390,14 @@ BEGIN
     SELECT last_active INTO seen FROM public.last_active_for_users(ARRAY[usr]);
     IF seen IS DISTINCT FROM '2026-06-01T09:10:00Z'::timestamptz THEN
         RAISE EXCEPTION 'last active reads %, expected the last answer (09:10 on 1 June)', seen;
+    END IF;
+
+    -- Work with no answer still counts: a sample in the newest session is activity.
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus)
+    VALUES (s1, usr, '2026-06-01T09:25:00Z', 0.5);
+    SELECT last_active INTO seen FROM public.last_active_for_users(ARRAY[usr]);
+    IF seen IS DISTINCT FROM '2026-06-01T09:25:00Z'::timestamptz THEN
+        RAISE EXCEPTION 'last active reads %, expected the newest signal (09:25 on 1 June)', seen;
     END IF;
 END $$;
 

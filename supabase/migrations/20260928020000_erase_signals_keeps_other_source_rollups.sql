@@ -1,7 +1,7 @@
--- erase_signals: erasing one heart source keeps the other source's rollup days. A day with
--- raw heart rows left is rebuilt from them; one without (expired: the rollup is the last copy)
--- goes only if its heart_sources name the erased source, or are NULL, since unknown errs
--- toward erasure.
+-- erase_signals: erasing one heart sensor keeps the other's rollup days, and the headband's
+-- erasure takes both its source names (muse_optics, muse_ppg). A day with raw heart rows left
+-- is rebuilt; one without (expired: the rollup is the last copy) goes only if heart_sources
+-- name an erased source, or are NULL, since unknown errs toward erasure.
 CREATE OR REPLACE FUNCTION "public"."erase_signals"(
     "p_user_id" "uuid",
     "p_channel" "text",
@@ -20,6 +20,7 @@ DECLARE
     d           date;
     charts      "text"[];
     objects     "text"[] := ARRAY[]::"text"[];
+    erased_sources "text"[] := ARRAY[]::"text"[];
 BEGIN
     IF p_channel NOT IN ('eeg', 'headband_optical', 'camera') THEN
         RAISE EXCEPTION 'unknown channel %', p_channel;
@@ -41,12 +42,14 @@ BEGIN
         GET DIAGNOSTICS n_face = ROW_COUNT;
     END IF;
 
-    -- Keyed on `source`: erasing the camera leaves headband heart rows.
+    -- Keyed on `source`: erasing the camera leaves headband heart rows. The headband has two
+    -- source names (the CHECK allows both, and _may_record treats both as it).
     IF p_channel IN ('camera', 'headband_optical') THEN
+        erased_sources := CASE p_channel WHEN 'camera' THEN ARRAY['rppg']
+                                         ELSE ARRAY['muse_optics', 'muse_ppg'] END;
         DELETE FROM heart_signals
          WHERE user_id = p_user_id
-           AND source = CASE p_channel WHEN 'camera' THEN 'rppg'
-                                       ELSE 'muse_optics' END;
+           AND source = ANY (erased_sources);
         GET DIAGNOSTICS n_heart = ROW_COUNT;
     END IF;
 
@@ -62,8 +65,7 @@ BEGIN
             -- (expired) is the only copy, so it goes only if it drew on the erased source.
             OR (r.channel = 'heart' AND p_channel IN ('camera', 'headband_optical')
                 AND (r.heart_sources IS NULL
-                     OR (CASE p_channel WHEN 'camera' THEN 'rppg' ELSE 'muse_optics' END)
-                        = ANY (r.heart_sources)
+                     OR r.heart_sources && erased_sources
                      OR EXISTS (SELECT 1 FROM heart_signals h
                                  WHERE h.user_id = p_user_id
                                    AND (h.ts AT TIME ZONE p_timezone)::date = r.day))));

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import threading
 import time
 
 import pytest
@@ -173,16 +174,32 @@ def test_a_line_past_the_cap_stops_the_reader(token_file):
     """Whatever sends an unterminated megabyte is not the bridge."""
     listener, port = _listener()
     adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=port, timeout_seconds=1, token_file=token_file)
+    stop = threading.Event()
+
+    def trickle(conn):
+        # Never idle long enough for the 1 s read timeout, so only the cap can stop the reader.
+        conn.settimeout(0.5)
+        try:
+            while not stop.is_set():
+                conn.sendall(b"x" * 8192)
+                time.sleep(0.05)
+        except OSError:
+            pass
+
     try:
         assert adapter._try_connect() is True
         conn, _ = listener.accept()
-        conn.sendall(b"x" * (TcpMuseBridgeAdapter.MAX_LINE_CHARS + 10))
+        sender = threading.Thread(target=trickle, args=(conn,), daemon=True)
+        sender.start()
         deadline = time.monotonic() + 3.0
         while adapter._reader_thread.is_alive() and time.monotonic() < deadline:
             time.sleep(0.02)
         assert not adapter._reader_thread.is_alive()
+        stop.set()
+        sender.join(2.0)
         conn.close()
     finally:
+        stop.set()
         adapter.disconnect()
         listener.close()
 

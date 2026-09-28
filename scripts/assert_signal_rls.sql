@@ -1399,6 +1399,19 @@ BEGIN
     IF seen IS DISTINCT FROM '2026-06-01T09:25:00Z'::timestamptz THEN
         RAISE EXCEPTION 'last active reads %, expected the newest signal (09:25 on 1 June)', seen;
     END IF;
+
+    -- A headband left on the desk writes rows that measured nothing; they are not activity.
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus)
+    VALUES (s1, usr, '2026-06-01T13:00:00Z', NULL);
+    INSERT INTO public.heart_signals (session_id, user_id, source, ts, heart_rate_bpm, trusted)
+    VALUES (s1, usr, 'muse_optics', '2026-06-01T13:05:00Z', NULL, false);
+    INSERT INTO public.face_signals (session_id, user_id, ts, emotion)
+    VALUES (s1, usr, '2026-06-01T13:10:00Z', NULL);
+    SELECT last_active INTO seen FROM public.last_active_for_users(ARRAY[usr]);
+    IF seen IS DISTINCT FROM '2026-06-01T09:25:00Z'::timestamptz THEN
+        RAISE EXCEPTION 'last active reads %: a sample that measured nothing counted as activity',
+            seen;
+    END IF;
 END $$;
 
 -- Nothing here should persist; the assertions are the product.

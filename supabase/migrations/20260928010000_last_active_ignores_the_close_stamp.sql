@@ -20,14 +20,17 @@ AS $$
            (SELECT max("a"."answered_at")
               FROM "public"."session_answers" "a"
              WHERE "a"."user_id" = "u"."id"),
-           -- Work with no answer (a headband or camera session) is still activity.
+           -- Work with no answer (a headband or camera session) is still activity; a sample that
+           -- measured nothing (a headband on the desk) is not. main._ACTIVITY_SOURCES, mirrored.
            (SELECT GREATEST(
                      (SELECT max("c"."ts") FROM "public"."cognitive_signals" "c"
-                       WHERE "c"."session_id" = "ls"."id"),
+                       WHERE "c"."session_id" = "ls"."id" AND "c"."focus" IS NOT NULL),
                      (SELECT max("f"."ts") FROM "public"."face_signals" "f"
-                       WHERE "f"."session_id" = "ls"."id"),
+                       WHERE "f"."session_id" = "ls"."id"
+                         AND ("f"."emotion" IS NOT NULL OR "f"."gaze_x" IS NOT NULL
+                              OR "f"."head_yaw" IS NOT NULL)),
                      (SELECT max("h"."ts") FROM "public"."heart_signals" "h"
-                       WHERE "h"."session_id" = "ls"."id"))
+                       WHERE "h"."session_id" = "ls"."id" AND "h"."heart_rate_bpm" IS NOT NULL))
               FROM (SELECT "s"."id" FROM "public"."sessions" "s"
                      WHERE "s"."user_id" = "u"."id"
                      ORDER BY "s"."started_at" DESC LIMIT 1) "ls")

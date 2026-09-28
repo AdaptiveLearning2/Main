@@ -118,15 +118,19 @@ def budget_db(monkeypatch):
     return install
 
 
-def test_the_claim_is_the_students_school_day_and_limit(budget_db):
+def test_the_claim_is_the_students_school_day_and_limit(budget_db, monkeypatch):
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    # A zone whose date differs from UTC's right now, or a UTC day would pass unseen.
+    zone = ZoneInfo("Etc/GMT-14" if datetime.now(timezone.utc).hour >= 10 else "Etc/GMT+12")
+    monkeypatch.setattr(main, "_school_timezone", lambda: zone)
+    school_day = datetime.now(zone).date().isoformat()
+    assert school_day != datetime.now(timezone.utc).date().isoformat()
     db = budget_db(True)
     assert main._claim_daily_question("kid") is None
     (name, params), = db.calls
     assert name == "claim_daily_question"
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    assert params == {"p_user_id": "kid", "p_limit": main._GENERATION_DAILY_LIMIT,
-                      "p_day": datetime.now(ZoneInfo("America/Los_Angeles")).date().isoformat()}
+    assert params == {"p_user_id": "kid", "p_limit": main._GENERATION_DAILY_LIMIT, "p_day": school_day}
     # The fallback was not consulted, so a restart cannot reset what the database counted.
     assert main._GENERATION_DAILY_LIMITER.hits == {}
 

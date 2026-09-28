@@ -75,6 +75,10 @@ def parse_bridge_message(message: dict) -> EegSample:
     )
 
 
+# The worst reading of each contact array (hsi 4 = no fit, is_good 0 = invalid).
+_UNKNOWN_CONTACT = {"hsi": 4.0, "is_good": 0.0}
+
+
 def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, Any]) -> None:
     for key in (
         "bridge_mode",
@@ -176,6 +180,9 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
                 continue
             if not isinstance(v, list):
                 continue
+            if key in _UNKNOWN_CONTACT:
+                # A non-finite electrode is unknown: unseated, never the last array's trust.
+                v = [_UNKNOWN_CONTACT[key] if x is None else x for x in v]
             try:
                 target[key] = [float(x) for x in v]
             except (TypeError, ValueError):

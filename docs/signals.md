@@ -121,10 +121,12 @@ well as the flat already-mapped one, and maps the first itself. Don't add a divi
 - **Delivery is counted from the backend's `inserted`, not from what was sent.** The endpoint drops
   samples for a sensor the student declined; counting sent would report a healthy session that
   recorded nothing.
-- **A batch refused whole (400, 413, 422) is dropped and counted `rejected`, never restored.** Resent
-  unchanged it is refused again, so restored it heads its queue for the rest of the lesson and its
-  backoff throttles every channel. That is the rare case: all three endpoints validate *per sample*
-  (`main._validate_each`), so one bad sample is counted `malformed` and the rest of its batch lands.
+- **A batch refused whole is never resent unchanged**: that heads its queue for the rest of the
+  lesson and its backoff throttles every channel. All three endpoints validate *per sample*
+  (`main._validate_each`), so a whole-batch refusal is nearly always a size cap below ours
+  (`INGEST_MAX_BATCH` under 50, a smaller body cap). So a **413 or 422 halves that channel's batch
+  size and restores the samples**, without backoff; only a batch of one refused, or any 400, is
+  dropped and counted `rejected`. The lesson page shows `rejected` + `malformed` as *readings not saved*.
 
 The **browser** side has the matching rule: effect cleanup does not run on a tab close or hard
 refresh, so `Adaptive.jsx` also stops the sidecar from a `pagehide` listener via `stopPushOnUnload`,
@@ -476,7 +478,8 @@ diagnostic added to `SignalProcessor.update`'s return dict has to be declared on
 **Every double the bridge writes goes through `append_json_number`**, which writes a non-finite one as `null`: `<<`
 writes `nan`, `-nan(ind)` or `inf`, which the sidecar's JSON parser refuses, losing the whole line with its status
 fields. libMuse fills dropped EEG samples with NaN. A `null` channel costs that one sample; a `null` band keeps the
-previous value.
+previous value. A `null` inside `hsi`/`is_good` reads as that electrode's worst value (4, 0), never as the previous
+array: keeping it would go on trusting a failing electrode.
 
 **The bridge accepts one TCP client** (`listen(…, 1)`), so nothing can tap the raw 256 Hz stream while the sidecar
 holds it. Every frame does reach the sidecar — the queue is drained in full each tick, then only `samples[-1]` is

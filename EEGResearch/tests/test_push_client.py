@@ -309,9 +309,10 @@ async def test_one_channels_failure_does_not_cost_the_others(client, monkeypatch
     assert status["queued"]["heart"] == 0 and status["queued"]["face"] == 0
 
 
-@pytest.mark.parametrize("status", [400, 413, 422])
+# A 400 is final at any size; a size refusal only once there is nothing left to halve.
+@pytest.mark.parametrize("status, n", [(400, 2), (413, 1), (422, 1)])
 @pytest.mark.anyio
-async def test_a_batch_refused_whole_is_dropped_and_counted_not_retried(client, monkeypatch, status):
+async def test_a_batch_refused_whole_is_dropped_and_counted_not_retried(client, monkeypatch, status, n):
     """Restored, it would head its queue and fail every flush for the rest of the lesson, and
     its backoff (to 120 s) would throttle the channels that were delivering."""
     def responder(url, json, headers):
@@ -322,15 +323,15 @@ async def test_a_batch_refused_whole_is_dropped_and_counted_not_retried(client, 
     monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
                         lambda **_k: fake)
     await _started(client)
-    client.enqueue("face", {"ts": 0})
-    client.enqueue("face", {"ts": 1})
+    for ts in range(n):
+        client.enqueue("face", {"ts": ts})
     client.enqueue("cognitive", {"ts": 0})
 
     await client._flush_once()        # does not raise: a refused batch is not a failed flush
 
     status_now = client.status()
     assert status_now["queued"]["face"] == 0
-    assert status_now["rejected"]["face"] == 2
+    assert status_now["rejected"]["face"] == n
     assert status_now["recorded"]["cognitive"] == 1
     assert status_now["backoff_seconds"] == 0.0 and client._retry_at == 0.0
 
@@ -338,6 +339,35 @@ async def test_a_batch_refused_whole_is_dropped_and_counted_not_retried(client, 
     before = len(fake.calls)
     await client._flush_once()
     assert len(fake.calls) == before
+
+
+@pytest.mark.parametrize("status", [413, 422])
+@pytest.mark.anyio
+async def test_a_size_refusal_halves_the_batch_until_the_backend_takes_it(client, monkeypatch, status):
+    """A backend capping batches below ours would otherwise refuse every batch of the session."""
+    cap = 12
+    def responder(url, json, headers):
+        n = len(json["samples"])
+        return _Response(status_code=status) if n > cap else _Response(
+            body={"ok": True, "inserted": n})
+
+    fake = _FakeClient(responder=responder)
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
+                        lambda **_k: fake)
+    await _started(client)
+    for ts in range(MAX_BATCH):
+        client.enqueue("face", {"ts": ts})
+
+    for _ in range(8):
+        await client._flush_once()
+
+    status_now = client.status()
+    assert status_now["recorded"]["face"] == MAX_BATCH
+    assert status_now["rejected"]["face"] == 0 and status_now["queued"]["face"] == 0
+    assert status_now["batch_limit"]["face"] == MAX_BATCH // 4   # 50 -> 25 -> 12
+    assert [c["json"]["samples"][0]["ts"] for c in fake.calls][:3] == [0, 0, 0], \
+        "a halved batch is resent from its first sample"
+    assert status_now["backoff_seconds"] == 0.0
 
 
 @pytest.mark.anyio

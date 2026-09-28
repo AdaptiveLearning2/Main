@@ -45,9 +45,16 @@ _CHANNELS = ("cognitive", "heart", "face")
 # holds the head of its queue for ever and widens every channel's backoff.
 _REFUSED_WHOLE = frozenset({400, 413, 422})
 
+# Refusals a smaller batch can pass (a body or batch cap below ours): halved and resent, not lost.
+_SIZE_REFUSALS = frozenset({413, 422})
+
 
 class _BatchRefused(Exception):
     """The backend refused this batch, not the request; see `_REFUSED_WHOLE`."""
+
+    def __init__(self, message: str, status: int) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class PushClient:
@@ -73,8 +80,10 @@ class PushClient:
         self._duplicates: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         # Samples the backend refused one by one as unreadable.
         self._malformed: dict[str, int] = {channel: 0 for channel in _CHANNELS}
-        # Samples in batches the backend refused whole (400/413/422): lost, and never retried.
+        # Refused by a 400, or by a 413/422 even as a batch of one: lost, and never retried.
         self._rejected: dict[str, int] = {channel: 0 for channel in _CHANNELS}
+        # Per channel; only shrinks, on a size refusal, and resets with the session.
+        self._batch_limit: dict[str, int] = {channel: MAX_BATCH for channel in _CHANNELS}
         self._task: asyncio.Task | None = None
         # Serialises start/stop: interleaved starts could leave a running loop with no token.
         self._lifecycle = asyncio.Lock()
@@ -169,6 +178,7 @@ class PushClient:
         self._duplicates = {channel: 0 for channel in _CHANNELS}
         self._malformed = {channel: 0 for channel in _CHANNELS}
         self._rejected = {channel: 0 for channel in _CHANNELS}
+        self._batch_limit = {channel: MAX_BATCH for channel in _CHANNELS}
 
     # ── producing ────────────────────────────────────────────────────────────
 
@@ -328,7 +338,13 @@ class PushClient:
                                    "unaccounted", channel, len(samples))
                     raise
                 except _BatchRefused as exc:
-                    # Dropped, counted, and no backoff: the other channels are not at fault.
+                    # No backoff either way: the other channels are not at fault.
+                    if exc.status in _SIZE_REFUSALS and len(samples) > 1:
+                        self._batch_limit[channel] = len(samples) // 2
+                        self._restore(channel, samples)
+                        logger.warning("push: %s; resending in batches of %d",
+                                       exc, self._batch_limit[channel])
+                        continue
                     self._rejected[channel] += len(samples)
                     self._last_error = str(exc)
                     logger.warning("push: %s; %d sample(s) lost, not retried",
@@ -348,7 +364,7 @@ class PushClient:
 
     def _take(self, channel: str) -> list[dict[str, Any]]:
         queue = self._queues[channel]
-        return [queue.popleft() for _ in range(min(MAX_BATCH, len(queue)))]
+        return [queue.popleft() for _ in range(min(self._batch_limit[channel], len(queue)))]
 
     def _restore(self, channel: str, samples: list[dict[str, Any]]) -> None:
         """Return a failed batch to the front of its queue, counting the loss.
@@ -373,7 +389,8 @@ class PushClient:
             # A failure, so samples are restored and backoff widens.
             raise RuntimeError("rate limited by backend (429)")
         if response.status_code in _REFUSED_WHOLE:
-            raise _BatchRefused(f"backend refused the {channel} batch ({response.status_code})")
+            raise _BatchRefused(f"backend refused the {channel} batch ({response.status_code})",
+                                response.status_code)
         response.raise_for_status()
         # Past here the rows are committed, so nothing below may raise and trigger a re-post.
         try:
@@ -422,8 +439,9 @@ class PushClient:
             "duplicates": dict(self._duplicates),
             # Refused by the backend as unreadable; lost.
             "malformed": dict(self._malformed),
-            # In batches the backend refused whole; lost, not retried.
+            # Refused even alone, or by a 400; lost, not retried.
             "rejected": dict(self._rejected),
+            "batch_limit": dict(self._batch_limit),
             "backoff_seconds": self._backoff,
             "last_error": self._last_error,
         }

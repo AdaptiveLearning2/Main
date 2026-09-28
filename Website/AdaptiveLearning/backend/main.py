@@ -1168,8 +1168,8 @@ def _close_session(user_id: str, session: dict, ended_at: str,
 
     # Questions prepared for it can never be served now.
     _drop_prefetched(user_id, sid)
-    # Their lesson is over, so a headband they paired is free for the next student at the station.
-    _forget_pairings_of(user_id)
+    # This lesson is over, so a headband paired in it is free for the next student at the station.
+    _forget_session_pairings(user_id, sid)
     total_q, correct, counted = _answer_counts(sid, session)
 
     if _discard_if_nothing_recorded(sid, total_q, answers_counted=counted):
@@ -6281,22 +6281,51 @@ def _station_pairer(device_id: str):
     return pairing
 
 
-def _record_pairing(user_id: str, device_id: str) -> None:
+def _record_pairing(user_id: str, device_id: str, session_id: str | None = None) -> None:
     """Raises on failure: an unrecorded pairing would leave the headband open to anyone."""
     _uncache_pairing(device_id)
     supabase.table("station_pairings").upsert(
-        {"device_id": device_id, "user_id": user_id, "seen_at": _utc_now().isoformat()},
+        {"device_id": device_id, "user_id": user_id, "session_id": session_id,
+         "seen_at": _utc_now().isoformat()},
         on_conflict="device_id").execute()
+
+
+# (user, device) -> monotonic time of this process's last refresh, so a recording student's
+# polls refresh without reading the row first.
+_pairing_touched: dict[tuple[str, str], float] = {}
 
 
 def _touch_pairing(user_id: str, device_id: str) -> None:
     """The pairer's page is still open. Never raises: a missed refresh costs one idle interval at most."""
     _uncache_pairing(device_id)
+    with _pairing_cache_lock:
+        _pairing_touched[(user_id, device_id)] = time.monotonic()
     try:
         supabase.table("station_pairings").update({"seen_at": _utc_now().isoformat()}) \
             .eq("device_id", device_id).eq("user_id", user_id).execute()
     except Exception as e:
         print(f"[eeg] could not refresh the pairing on {device_id}: {type(e).__name__}")
+
+
+def _touched_recently(user_id: str, device_id: str) -> bool:
+    with _pairing_cache_lock:
+        at = _pairing_touched.get((user_id, device_id))
+    return at is not None and time.monotonic() - at < _PAIRING_REFRESH_SEC
+
+
+def _release_idle_pairing(device_id: str, owner: str) -> bool:
+    """Delete the pairing only if the database still has it idle; whether a row went. Never raises.
+
+    The caller's `seen_at` may be a cached one, so another worker may have refreshed it since.
+    """
+    _uncache_pairing(device_id)
+    cutoff = (_utc_now() - timedelta(seconds=_PAIRING_IDLE_SEC)).isoformat()
+    try:
+        return bool(supabase.table("station_pairings").delete().eq("device_id", device_id)
+                    .eq("user_id", owner).lt("seen_at", cutoff).execute().data)
+    except Exception as e:
+        print(f"[eeg] could not release the idle pairing on {device_id}: {type(e).__name__}")
+        return False
 
 
 def _forget_pairing(device_id: str, user_id: str | None = None) -> None:
@@ -6311,13 +6340,17 @@ def _forget_pairing(device_id: str, user_id: str | None = None) -> None:
         print(f"[eeg] could not clear the pairing on {device_id}: {type(e).__name__}")
 
 
-def _forget_pairings_of(user_id: str) -> None:
-    """The user has finished with any headband they paired: their session closed or their poller stopped. Never raises."""
+def _forget_session_pairings(user_id: str, session_id: str) -> None:
+    """That lesson is over: its session closed or its poller stopped. Never raises.
+
+    Only that session's: the sweep closing an old abandoned one must not free the lesson running now.
+    """
     _uncache_pairing(user_id=user_id)
     try:
-        supabase.table("station_pairings").delete().eq("user_id", user_id).execute()
+        supabase.table("station_pairings").delete().eq("user_id", user_id) \
+            .eq("session_id", session_id).execute()
     except Exception as e:
-        print(f"[eeg] could not clear {user_id[:8]}'s pairings: {type(e).__name__}")
+        print(f"[eeg] could not clear {user_id[:8]}'s pairing for a session: {type(e).__name__}")
 
 
 _PAIRER_UNKNOWN = object()
@@ -6332,7 +6365,10 @@ def _station_access(user_id: str, device_id: str) -> tuple[bool, dict | None]:
     if not eeg_poller.can_use_device(user_id, device_id):
         return False, None
     if eeg_poller.live_poller_user(device_id) == user_id:
-        # Their own poller holds the station, so the pairing cannot matter; no read.
+        # Their own poller holds the station: no read. Still refreshed, or a poller stopping
+        # mid-lesson (consent withdrawn) leaves a pairing that already looks idle.
+        if not _touched_recently(user_id, device_id):
+            _touch_pairing(user_id, device_id)
         return True, None
     try:
         owner, seen = _station_pairer(device_id) or (None, None)
@@ -6346,9 +6382,9 @@ def _station_access(user_id: str, device_id: str) -> tuple[bool, dict | None]:
         if idle is None or idle >= _PAIRING_REFRESH_SEC:
             _touch_pairing(user_id, device_id)
         return True, None
-    if owner is not _PAIRER_UNKNOWN and idle is not None and idle >= _PAIRING_IDLE_SEC:
+    if (owner is not _PAIRER_UNKNOWN and idle is not None and idle >= _PAIRING_IDLE_SEC
+            and _release_idle_pairing(device_id, owner)):
         # Nothing has polled for it: the pairer's page is gone, whatever the headband says.
-        _forget_pairing(device_id, owner)
         return True, None
     try:
         status = eeg_client.get_muse_status(device_id)
@@ -6416,7 +6452,8 @@ def eeg_muse_connect(request: Request, body: dict = Body(...)):
     out = _reserve_and_call(user["id"], device_id, eeg_client.muse_connect, name, device_id,
                             session_id=body.get("session_id"))
     try:
-        _record_pairing(user["id"], device_id)
+        sid = body.get("session_id")
+        _record_pairing(user["id"], device_id, sid if isinstance(sid, str) else None)
     except Exception as e:
         # Unrecorded, the headband would be anyone's: undo the pairing rather than leave it open.
         print(f"[eeg] could not record the pairing on {device_id}: {type(e).__name__}")
@@ -6567,7 +6604,7 @@ def eeg_stop(payload: EegSessionRequest, request: Request):
     _session_or_403(payload.session_id, user["id"])
     # Also releases the caller's reservation, poller or not.
     out = eeg_poller.stop(payload.session_id, user["id"])
-    _forget_pairings_of(user["id"])
+    _forget_session_pairings(user["id"], payload.session_id)
     return {"ok": True, **out}
 
 @app.get("/api/eeg/status")

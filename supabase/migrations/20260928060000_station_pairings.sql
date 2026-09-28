@@ -5,6 +5,9 @@ CREATE TABLE IF NOT EXISTS "public"."station_pairings" (
     -- The sidecar's device id, e.g. "default" or "station1".
     "device_id" "text" NOT NULL,
     "user_id" "uuid" NOT NULL,
+    -- The lesson it was paired in: closing that session releases it, closing another does not.
+    -- Text and no foreign key: the client sends it, and a bad value must not fail the pairing.
+    "session_id" "text",
     -- Refreshed by the pairer's status polls; a pairing nobody has polled for a while is released.
     "seen_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     CONSTRAINT "station_pairings_pkey" PRIMARY KEY ("device_id")

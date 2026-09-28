@@ -150,9 +150,11 @@ def _daily_budget_is_in_memory():
 
 
 _PAIRING_FUNCS = ("_station_pairer", "_record_pairing", "_touch_pairing", "_forget_pairing",
-                  "_forget_pairings_of")
+                  "_release_idle_pairing", "_forget_session_pairings")
 # device_id -> user_id, standing in for `station_pairings` in every test but the ones of it.
 pairings: dict[str, str] = {}
+# device_id -> the session it was paired in.
+pairing_sessions: dict[str, str | None] = {}
 
 
 def real_pairing_funcs():
@@ -168,22 +170,35 @@ def _pairings_in_memory():
     for name, fn in originals.items():
         _REAL.setdefault(name, fn)
     pairings.clear()
+    pairing_sessions.clear()
     main._pairing_cache.clear()
+    main._pairing_touched.clear()
+
+    def record(user_id, device_id, session_id=None):
+        pairings[device_id] = user_id
+        pairing_sessions[device_id] = session_id
 
     def forget(device_id, user_id=None):
         if user_id is None or pairings.get(device_id) == user_id:
             pairings.pop(device_id, None)
+
+    def forget_session(user_id, session_id):
+        for d, u in list(pairings.items()):
+            if u == user_id and pairing_sessions.get(d) == session_id:
+                pairings.pop(d)
     main._station_pairer = lambda device_id: (
         (pairings[device_id], main._utc_now()) if device_id in pairings else None)
-    main._record_pairing = lambda user_id, device_id: pairings.__setitem__(device_id, user_id)
+    main._record_pairing = record
     main._touch_pairing = lambda user_id, device_id: None
     main._forget_pairing = forget
-    main._forget_pairings_of = lambda user_id: [
-        pairings.pop(d) for d, u in list(pairings.items()) if u == user_id]
+    # Never idle here: the stand-in's `seen_at` is always now.
+    main._release_idle_pairing = lambda device_id, owner: False
+    main._forget_session_pairings = forget_session
     yield
     for name, fn in originals.items():
         setattr(main, name, fn)
     pairings.clear()
+    pairing_sessions.clear()
 
 
 @pytest.fixture

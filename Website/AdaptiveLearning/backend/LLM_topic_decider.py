@@ -307,7 +307,7 @@ def get_session_signal_state(session_id, user_id=None):
                                     revoked=not consent["eeg"],
                                     calm_source=calm_source)
 
-    heart_rows = _latest("heart_signals", "stress_category, trusted, source",
+    heart_rows = _latest("heart_signals", "stress_category, trusted, source, heart_rate_bpm",
                          session_id, sources=consent["heart"]) if consent["heart"] else []
     newest_heart = heart_rows[0] if heart_rows else {}
     heart = signal_fusion.heart_channel(
@@ -315,6 +315,7 @@ def get_session_signal_state(session_id, user_id=None):
         newest_heart.get("trusted"),
         newest_heart.get("source"),
         revoked=not consent["heart"],
+        bpm=newest_heart.get("heart_rate_bpm"),
     )
 
     # Named columns, so the confidence this gate reads is unambiguous.

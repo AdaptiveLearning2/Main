@@ -268,10 +268,12 @@ fresh checkout aborted the launcher before anything started. Guard the *match* t
 `.Matches[0].Groups[1]` on an absent key indexes a null array and fails the same way one step later.
 `start.sh` carries the same guard.
 
-**Never redirect a native command's stderr.** PowerShell 5.1 wraps each stderr line from an exe in
-an ErrorRecord, which `$ErrorActionPreference = "Stop"` makes terminating — so
-`python -c "import cv2" 2>$null` killed the script at the failing import, before the block that
-exists to explain it, as a bare `NativeCommandError` naming neither module nor fix. Silence it
+**Redirect a native command's stderr only through `Invoke-Quiet`.** PowerShell 5.1 wraps each
+stderr line from an exe in an ErrorRecord, which `$ErrorActionPreference = "Stop"` makes
+terminating — so `python -c "import cv2" 2>$null` killed the script at the failing import, before
+the block that exists to explain it, as a bare `NativeCommandError` naming neither module nor fix.
+`Invoke-Quiet { ... }` runs the command under a function-local `Continue`, so the caller keeps
+`Stop`; a bare `2>$null` anywhere else is the bug. Where the stderr *is* the diagnosis, silence it
 inside Python instead (`import sys, os; sys.stderr = open(os.devnull, 'w'); import cv2`) and probe
 **one module per call**, so the error can say which import failed.
 

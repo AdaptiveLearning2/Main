@@ -1136,6 +1136,10 @@ export default function Adaptive() {
   const headbandSamples = headband.pushMode
     ? ((push?.recorded?.cognitive || 0) + (push?.recorded?.heart || 0))
     : headband.samples
+  // Readings the backend refused (whole batch, or one by one): lost, and nowhere else on screen.
+  const pushLost = ['rejected', 'malformed']
+    .flatMap(k => Object.values(push?.[k] || {}))
+    .reduce((a, b) => a + (Number(b) || 0), 0)
 
   const activeClass = classes.find(c => c.id === classId)
   // The grade the backend serves: '' is none set anywhere, so its default; undefined is not
@@ -1190,6 +1194,11 @@ export default function Adaptive() {
             )}
             {headband.pushMode && push?.reachable && push?.running && (
               <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
+            )}
+            {headband.pushMode && pushLost > 0 && (
+              <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">
+                {pushLost} {pushLost === 1 ? 'reading' : 'readings'} not saved
+              </span>
             )}
           </p>
           <p className="text-[11px] text-gray-600 mt-0.5 dark:text-gray-400">

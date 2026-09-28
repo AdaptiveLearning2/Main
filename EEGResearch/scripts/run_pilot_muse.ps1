@@ -1,7 +1,8 @@
 param(
     [string]$HostName = "127.0.0.1",
     [ValidateRange(1, 65535)]
-    [int]$ApiPort = 8000,
+    # The sidecar's port; 8000 is the website backend's, which -StopExistingApiOnPort would kill.
+    [int]$ApiPort = 8001,
     [ValidateRange(1, 65535)]
     [int]$BridgePort = 8765,
     [string]$LearnerToken = $env:API_TOKEN,
@@ -31,6 +32,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# Before anything starts: force-stopping 8000 takes the website backend down mid-lesson.
+if ($StopExistingApiOnPort -and $ApiPort -eq 8000) {
+    throw "Refusing -StopExistingApiOnPort on port 8000: that is the website backend's port (start.ps1), not the sidecar's. Use -ApiPort 8001."
+}
 
 if ([string]::IsNullOrWhiteSpace($LearnerToken)) {
     throw "LearnerToken not set. Pass -LearnerToken or set `$env:API_TOKEN before running this script."

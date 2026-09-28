@@ -34,6 +34,16 @@ void append_json_quoted_string(std::ostringstream& o, const std::string& s) {
     o << '"';
 }
 
+// JSON has no nan/inf, and `<<` writes them as `nan`, `-nan(ind)` or `inf`: the sidecar's parser
+// then drops the whole line, status fields and all. libMuse fills dropped EEG samples with NaN.
+void append_json_number(std::ostream& o, double v) {
+    if (std::isfinite(v)) {
+        o << v;
+    } else {
+        o << "null";
+    }
+}
+
 void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService& svc,
                                  const BridgeTcpServer* server = nullptr) {
     if (server) {
@@ -79,7 +89,7 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
     o << ",\"battery_percent\":";
     const double battery = svc.battery_percent();
     if (battery >= 0.0) {
-        o << battery;
+        append_json_number(o, battery);
     } else {
         o << "null";
     }
@@ -106,7 +116,7 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
             if (i > 0) {
                 o << ',';
             }
-            o << optical.last_optics[static_cast<size_t>(i)];
+            append_json_number(o, optical.last_optics[static_cast<size_t>(i)]);
         }
         o << ']';
     } else {
@@ -119,7 +129,7 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
             if (i > 0) {
                 o << ',';
             }
-            o << optical.last_ppg[static_cast<size_t>(i)];
+            append_json_number(o, optical.last_ppg[static_cast<size_t>(i)]);
         }
         o << ']';
     } else {
@@ -139,18 +149,29 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
         o << "null";
     }
     const BandPowers bands = svc.band_powers();
-    o << ",\"delta\":" << bands.delta
-      << ",\"theta\":" << bands.theta
-      << ",\"alpha\":" << bands.alpha
-      << ",\"beta\":" << bands.beta
-      << ",\"gamma\":" << bands.gamma;
+    o << ",\"delta\":";
+    append_json_number(o, bands.delta);
+    o << ",\"theta\":";
+    append_json_number(o, bands.theta);
+    o << ",\"alpha\":";
+    append_json_number(o, bands.alpha);
+    o << ",\"beta\":";
+    append_json_number(o, bands.beta);
+    o << ",\"gamma\":";
+    append_json_number(o, bands.gamma);
 
     // Per-electrode contact quality; null until the packet arrives.
     const ContactQuality contact = svc.contact_quality();
     o << ",\"hsi\":";
     if (contact.has_hsi) {
-        o << '[' << contact.hsi[0] << ',' << contact.hsi[1] << ','
-          << contact.hsi[2] << ',' << contact.hsi[3] << ']';
+        o << '[';
+        for (size_t i = 0; i < contact.hsi.size(); ++i) {
+            if (i > 0) {
+                o << ',';
+            }
+            append_json_number(o, contact.hsi[i]);
+        }
+        o << ']';
     } else {
         o << "null";
     }
@@ -158,8 +179,14 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
       << ",\"notch_filtered\":" << (svc.notch_available() ? "true" : "false");
     o << ",\"is_good\":";
     if (contact.has_is_good) {
-        o << '[' << contact.is_good[0] << ',' << contact.is_good[1] << ','
-          << contact.is_good[2] << ',' << contact.is_good[3] << ']';
+        o << '[';
+        for (size_t i = 0; i < contact.is_good.size(); ++i) {
+            if (i > 0) {
+                o << ',';
+            }
+            append_json_number(o, contact.is_good[i]);
+        }
+        o << ']';
     } else {
         o << "null";
     }
@@ -352,13 +379,7 @@ int main() {
                 if (i > 0) {
                     payload << ',';
                 }
-                const double v = optics.ch[static_cast<size_t>(i)];
-                // nan/inf aren't valid JSON and would break the whole line.
-                if (std::isfinite(v)) {
-                    payload << v;
-                } else {
-                    payload << "null";
-                }
+                append_json_number(payload, optics.ch[static_cast<size_t>(i)]);
             }
             payload << "]}";
             // No device fields at 64Hz; the 5Hz status line carries them.
@@ -367,11 +388,15 @@ int main() {
 
         if (muse_service.poll_frame(frame)) {
             std::ostringstream payload;
-            payload << "{\"kind\":\"eeg\",\"mono_ts_ms\":" << frame.mono_ts_ms
-                    << ",\"tp9\":" << frame.tp9
-                    << ",\"af7\":" << frame.af7
-                    << ",\"af8\":" << frame.af8
-                    << ",\"tp10\":" << frame.tp10;
+            payload << "{\"kind\":\"eeg\",\"mono_ts_ms\":" << frame.mono_ts_ms << ",\"tp9\":";
+            // A null channel costs the sidecar this one sample, not the line.
+            append_json_number(payload, frame.tp9);
+            payload << ",\"af7\":";
+            append_json_number(payload, frame.af7);
+            payload << ",\"af8\":";
+            append_json_number(payload, frame.af8);
+            payload << ",\"tp10\":";
+            append_json_number(payload, frame.tp10);
             append_bridge_device_fields(payload, muse_service);
             payload << "}";
             server.send_json_line(payload.str());

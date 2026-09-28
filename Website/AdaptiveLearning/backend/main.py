@@ -5619,7 +5619,8 @@ class FaceSample(BaseModel):
 
 class FaceBatch(BaseModel):
     session_id: str
-    samples:    list[FaceSample] = Field(max_length=_INGEST_MAX_BATCH)
+    # `Any`, validated per sample in the endpoint, as `CognitiveBatch` is.
+    samples:    list[Any] = Field(max_length=_INGEST_MAX_BATCH)
 
 
 class HeartSample(BaseModel):
@@ -5653,7 +5654,20 @@ class HeartSample(BaseModel):
 
 class HeartBatch(BaseModel):
     session_id: str
-    samples:    list[HeartSample] = Field(max_length=_INGEST_MAX_BATCH)
+    # `Any`, validated per sample in the endpoint, as `CognitiveBatch` is.
+    samples:    list[Any] = Field(max_length=_INGEST_MAX_BATCH)
+
+
+def _validate_each(model, raw_samples) -> tuple[list, int]:
+    """Each sample on its own: `(valid, malformed count)`. One bad sample would otherwise 422 the
+    batch, and the push client retries a refused batch, so it would never be delivered."""
+    valid, malformed = [], 0
+    for raw in raw_samples:
+        try:
+            valid.append(model.model_validate(raw))
+        except Exception:  # noqa: BLE001 -- pydantic's ValidationError, plus a non-dict entry
+            malformed += 1
+    return valid, malformed
 
 def _rate_limit_ingest(user_id: str):
     """Raise 429 once a caller has spent its allowance for the window."""
@@ -5782,14 +5796,7 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
         }
 
     # Mapper `None` = zeroed scores from a disconnected headband: dropped and counted.
-    # Each sample validated on its own, so a malformed one never fails the batch.
-    samples: list[CognitiveSample] = []
-    malformed = 0
-    for raw_sample in payload.samples:
-        try:
-            samples.append(CognitiveSample.model_validate(raw_sample))
-        except Exception:  # noqa: BLE001 -- pydantic's ValidationError, plus a non-dict entry
-            malformed += 1
+    samples, malformed = _validate_each(CognitiveSample, payload.samples)
     inside = _ingest_ts_filter(session)
     placed = [s for s in samples if inside(s.ts)]
     out_of_window = len(samples) - len(placed)
@@ -5821,8 +5828,9 @@ def ingest_face(payload: FaceBatch, request: Request):
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
                 "reason": _not_recording_reason(consent, "camera not consented")}
 
+    samples, malformed = _validate_each(FaceSample, payload.samples)
     inside = _ingest_ts_filter(session)
-    placed = [s for s in payload.samples if inside(s.ts)]
+    placed = [s for s in samples if inside(s.ts)]
     # Through the shared mapper, so the field list can't drift.
     rows = [r for r in (
         signal_mapping.map_face_to_face_signal(
@@ -5848,7 +5856,8 @@ def ingest_face(payload: FaceBatch, request: Request):
     # Separate counts: push_client tells a quiet camera from a replay by them.
     return {"ok": True, "inserted": inserted,
             "dropped": len(placed) - len(rows),
-            "out_of_window": len(payload.samples) - len(placed),
+            "malformed": malformed,
+            "out_of_window": len(samples) - len(placed),
             "duplicates": len(rows) - inserted}
 
 
@@ -5865,8 +5874,9 @@ def ingest_heart(payload: HeartBatch, request: Request):
 
     consent = _may_record(user["id"])
     allowed = _permitted_heart_sources(consent)
-    kept = [s for s in payload.samples if s.source in allowed]
-    dropped = len(payload.samples) - len(kept)
+    samples, malformed = _validate_each(HeartSample, payload.samples)
+    kept = [s for s in samples if s.source in allowed]
+    dropped = len(samples) - len(kept)
     inside = _ingest_ts_filter(session)
     placed = [s for s in kept if inside(s.ts)]
     out_of_window = len(kept) - len(placed)
@@ -5903,6 +5913,7 @@ def ingest_heart(payload: HeartBatch, request: Request):
         # What the database wrote; needs return=representation (the default).
         written = len(resp.data or [])
     return {"ok": True, "inserted": written, "dropped": dropped,
+            "malformed": malformed,
             "out_of_window": out_of_window,
             "duplicates": len(rows) - written, "reason": reason}
 

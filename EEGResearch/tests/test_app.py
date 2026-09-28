@@ -229,6 +229,13 @@ def test_apply_bridge_ingestion_fields_ignores_malformed_numeric_values():
     assert target["connection_state"] == 1
 
 
+def test_a_null_electrode_reads_as_unseated_not_as_the_last_good_array():
+    target = {"hsi": [1.0, 1.0, 1.0, 1.0], "is_good": [1.0, 1.0, 1.0, 1.0]}
+    _apply_bridge_ingestion_fields(target, {"hsi": [1, None, 2, 1], "is_good": [1, None, 1, 1]})
+    assert target["hsi"] == [1.0, 4.0, 2.0, 1.0]
+    assert target["is_good"] == [1.0, 0.0, 1.0, 1.0]
+
+
 def test_apply_bridge_ingestion_fields_passes_optical_fields_through():
     """A field the whitelist omits is dropped silently, like a bridge that never sent it."""
     target: dict = {}

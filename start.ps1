@@ -127,6 +127,15 @@ function Set-EnvKey {
     }
 }
 
+# A native command's stdout, stderr dropped. `2>$null` under Stop aborts on PS 5.1: each stderr
+# line becomes an ErrorRecord that Stop makes terminating -- in exactly the state being probed.
+# Continue is local to this function, so the caller keeps Stop.
+function Invoke-Quiet {
+    param([scriptblock]$Command)
+    $ErrorActionPreference = "Continue"
+    & $Command 2>$null
+}
+
 function Check-Venv {
     param([string]$dir)
     $activate = Join-Path $dir ".venv\Scripts\Activate.ps1"
@@ -139,7 +148,7 @@ function Check-Venv {
     } else {
         # Check the venv was built with the same Python version currently on PATH
         $systemVer = python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
-        $venvVer   = & $pyExe -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+        $venvVer   = Invoke-Quiet { & $pyExe -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" }
         if ($venvVer -ne $systemVer) {
             Write-Host "  Venv Python ($venvVer) does not match system Python ($systemVer) -- rebuilding..." -ForegroundColor Yellow
             Remove-Item -Recurse -Force (Join-Path $dir ".venv")
@@ -195,14 +204,14 @@ if ($llmProvider -eq "claude") {
 } elseif (!(Get-Command ollama -ErrorAction SilentlyContinue)) {
     Write-Host "  Ollama not found. Install from https://ollama.com then re-run." -ForegroundColor Yellow
 } else {
-    $running = ollama list 2>$null
+    $running = Invoke-Quiet { ollama list }
     if (!$running) {
         Start-Window "Ollama" $root "ollama serve"
         Start-Sleep -Seconds 3
     } else {
         Write-Host "  Ollama already running -- skipping." -ForegroundColor Gray
     }
-    $models = ollama list 2>$null
+    $models = Invoke-Quiet { ollama list }
     if ($models -notmatch [regex]::Escape($model)) {
         Write-Host "  Pulling $model (this may take a while)..." -ForegroundColor Yellow
         ollama pull $model

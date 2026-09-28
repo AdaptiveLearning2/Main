@@ -298,6 +298,8 @@ describe('facial reporting switched off', () => {
   it('still reports face data when the flag is absent', () => {
     const { face_included, ...legacy } = faceOff
     render(<WeeklySignalReport report={legacy} />)
+    expect(metric('Dominant Emotion').getByText('neutral')).toBeInTheDocument()
+    expect(metric('Dominant Emotion').queryByText('Not recorded')).not.toBeInTheDocument()
   })
 
   it('does not count the opt-out as data it failed to retrieve', () => {
@@ -528,6 +530,8 @@ describe('per-channel off states', () => {
 
   it('says when a channel was switched off', () => {
     render(<WeeklySignalReport report={{ ...base, emotion_revoked_at: '2026-08-03T09:00:00Z' }} />)
+    expect(metric('Dominant Emotion').getByText((t) => /^Off since /.test(t) && t.includes('Aug')))
+      .toBeInTheDocument()
   })
 
   it('does not claim a withdrawal when the consent read failed', () => {
@@ -542,17 +546,19 @@ describe('per-channel off states', () => {
   })
 
   it('distinguishes a channel that read nothing from one that read nothing usable', () => {
-    // The average must be null too, or there is nothing for the reason to replace.
+    // The tile's own value must be null, or there is nothing for the reason to replace.
     const on = { ...report, emotion_included: true, face_included: true,
                  consent_retrieved: true,
-                 averages: { ...report.averages, face_attention: null } }
+                 highlights: { ...report.highlights, dominant_emotion: null } }
 
     // Readings arrived, none usable: calibrating, not absent.
     render(<WeeklySignalReport report={{ ...on, sample_counts: { face: 12 } }} />)
+    expect(metric('Dominant Emotion').getByText('Calibrating')).toBeInTheDocument()
     cleanup()
 
     // Nothing arrived at all.
     render(<WeeklySignalReport report={{ ...on, sample_counts: { face: 0 } }} />)
+    expect(metric('Dominant Emotion').getByText('No sensor')).toBeInTheDocument()
   })
 
   it('keeps the heart row when the channel is off, with the reason in it', () => {

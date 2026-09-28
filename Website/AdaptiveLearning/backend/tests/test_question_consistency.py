@@ -97,6 +97,19 @@ def test_only_the_two_complementary_scenarios_are_judged(scenario):
     assert qc.negation_mismatch("a die showing greater than 4", scenario) is None
 
 
+@pytest.mark.parametrize("text,scenario,state", [
+    ("What is the probability of drawing a red marble?", "probability_of", qc.ENGAGED_AGREED),
+    ("What is the probability of not drawing a red marble?", "probability_of", qc.ENGAGED_MISMATCH),
+    ("a die showing greater than 4", "dice", qc.INERT_NOT_PROBABILITY),
+    ("", "probability_of", qc.INERT_NO_INPUT),
+])
+def test_the_negation_check_says_whether_it_compared_anything(text, scenario, state):
+    """None from `negation_mismatch` is both "agreed" and "never compared"; the measurement
+    script counted the second as the first, and reported a check that never ran as passing."""
+    assert qc.negation_check(text, scenario)[0] == state
+    assert (qc.negation_check(text, scenario)[1] is not None) == (state == qc.ENGAGED_MISMATCH)
+
+
 def test_a_category_containing_no_is_not_read_as_negation():
     """The negation pattern is word-bounded."""
     text = "A shelf has 4 novels and 6 notebooks. What is the probability of drawing a notebook?"

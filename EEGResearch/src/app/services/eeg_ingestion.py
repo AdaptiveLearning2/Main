@@ -75,6 +75,10 @@ def parse_bridge_message(message: dict) -> EegSample:
     )
 
 
+# The worst reading of each contact array (hsi 4 = no fit, is_good 0 = invalid).
+_UNKNOWN_CONTACT = {"hsi": 4.0, "is_good": 0.0}
+
+
 def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, Any]) -> None:
     for key in (
         "bridge_mode",
@@ -176,6 +180,9 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
                 continue
             if not isinstance(v, list):
                 continue
+            if key in _UNKNOWN_CONTACT:
+                # A non-finite electrode is unknown: unseated, never the last array's trust.
+                v = [_UNKNOWN_CONTACT[key] if x is None else x for x in v]
             try:
                 target[key] = [float(x) for x in v]
             except (TypeError, ValueError):
@@ -589,6 +596,10 @@ class TcpMuseBridgeAdapter:
     # ~64 s at ~64 Hz, well over the 25 s heart window; drop-oldest.
     OPTICS_BUFFER_MAXLEN = 4096
 
+    # Seconds with no optics line (at ~64 Hz) before the buffer is history, not a window: the
+    # window is placed on the bridge's stamps, so it cannot tell on its own that packets stopped.
+    OPTICS_STALE_S = 3.0
+
     # Connect backoff while the bridge is down: doubles to the cap, resets on success.
     # Short cap so a returning local bridge is noticed within seconds.
     CONNECT_BACKOFF_MIN_S = 0.5
@@ -604,7 +615,24 @@ class TcpMuseBridgeAdapter:
         # monotonic() before which no attempt is made; 0.0 = the first is never delayed.
         self._next_connect_at = 0.0
         self.connect_failures = 0
-        self._ingestion_meta: dict[str, Any] = {
+        self._ingestion_meta: dict[str, Any] = self._initial_ingestion_meta()
+        self._ingestion_lock = threading.Lock()
+        self._write_lock = threading.Lock()
+        self._eeg_queue: queue.Queue[EegSample] = queue.Queue(maxsize=self.EEG_QUEUE_MAXSIZE)
+        # (seq, mono_ts_ms, values). Own lock, so copying a window doesn't block the reader.
+        self._optics: deque[tuple[int, float, tuple[float, ...]]] = deque(
+            maxlen=self.OPTICS_BUFFER_MAXLEN
+        )
+        self._optics_lock = threading.Lock()
+        # time.monotonic() of the newest optics line; this process's clock, not the bridge's.
+        self._optics_arrived: float | None = None
+        self._reader_stop = threading.Event()
+        self._reader_thread: threading.Thread | None = None
+
+    @staticmethod
+    def _initial_ingestion_meta() -> dict[str, Any]:
+        """What the adapter reports before any bridge line, and again once the link is gone."""
+        return {
             "bridge_mode": "unknown",
             "muse_connected": False,
             "muse_discovered": False,
@@ -626,16 +654,6 @@ class TcpMuseBridgeAdapter:
             "band_channels_used": 0,
             "notch_filtered": False,
         }
-        self._ingestion_lock = threading.Lock()
-        self._write_lock = threading.Lock()
-        self._eeg_queue: queue.Queue[EegSample] = queue.Queue(maxsize=self.EEG_QUEUE_MAXSIZE)
-        # (seq, mono_ts_ms, values). Own lock, so copying a window doesn't block the reader.
-        self._optics: deque[tuple[int, float, tuple[float, ...]]] = deque(
-            maxlen=self.OPTICS_BUFFER_MAXLEN
-        )
-        self._optics_lock = threading.Lock()
-        self._reader_stop = threading.Event()
-        self._reader_thread: threading.Thread | None = None
 
     def _enqueue_sample(self, sample: EegSample) -> None:
         """Push onto the bounded queue, dropping the oldest rather than blocking."""
@@ -705,6 +723,7 @@ class TcpMuseBridgeAdapter:
                 # seq going backwards means a new bridge process: don't splice two recordings.
                 self._optics.clear()
             self._optics.append((seq, ts_ms, values))
+            self._optics_arrived = time.monotonic()
 
     def optics_window(self, seconds: float) -> OpticsWindow:
         """The most recent `seconds` of optical samples, on a uniform grid.
@@ -718,6 +737,12 @@ class TcpMuseBridgeAdapter:
                 return OpticsWindow(np.empty((0, 0)), None, None, None, 0.0, None, 0)
             newest_ts = self._optics[-1][1]
             width = len(self._optics[-1][2])
+            if (self._optics_arrived is not None
+                    and time.monotonic() - self._optics_arrived > self.OPTICS_STALE_S):
+                # Optics stopped while EEG may go on: re-reading the frozen buffer would publish
+                # the same 25 s as a fresh heart rate every step.
+                return OpticsWindow(np.empty((0, width)), None, None, None, 0.0, None, width,
+                                    "optics_stale")
             cutoff = -float("inf") if seconds == float("inf") else newest_ts - seconds * 1000.0
             rows: list[tuple[int, float, tuple[float, ...]]] = []
             for row in reversed(self._optics):
@@ -838,6 +863,10 @@ class TcpMuseBridgeAdapter:
         with self._optics_lock:
             # Whatever spans a disconnect is two recordings.
             self._optics.clear()
+            self._optics_arrived = None
+        with self._ingestion_lock:
+            # A status line from a link that is gone is no answer: muse_connected would stay true.
+            self._ingestion_meta = self._initial_ingestion_meta()
         self._reader_stop.clear()
 
     def clear_optics(self) -> None:
@@ -847,6 +876,7 @@ class TcpMuseBridgeAdapter:
         """
         with self._optics_lock:
             self._optics.clear()
+            self._optics_arrived = None
 
     def drain_samples(self, max_batch: int) -> list[EegSample]:
         """Return every queued sample, up to max_batch. Blocks only when the

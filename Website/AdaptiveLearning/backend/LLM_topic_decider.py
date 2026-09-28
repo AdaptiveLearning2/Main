@@ -112,8 +112,8 @@ SESSION_PERFORMANCE_WINDOW = 10
 EEG_BIAS_WINDOW = 5
 # A reading older than this (s) no longer steers difficulty; equals main._LIVE_WINDOW_SEC, pinned.
 SIGNAL_MAX_AGE_SEC = 90
-# Heart writes one reading per 10 s and none without a rate, so a headband that lost contact
-# stops steering after three missed readings rather than after SIGNAL_MAX_AGE_SEC.
+# s behind the session's newest reading on any channel: heart writes one per 10 s and none
+# without a rate, so a headband that lost contact stops steering after three missed readings.
 HEART_MAX_AGE_SEC = 30
 # Rows read to find each heart sensor's newest: the headband writes 1 per 10 s, the camera up to 4/s.
 HEART_READ_ROWS = 200
@@ -241,13 +241,22 @@ def _consent_flags(user_id):
         return {"eeg": False, "heart": [], "face": False}
 
 
-def _latest(table, columns, session_id, limit=1, sources=None, max_age=SIGNAL_MAX_AGE_SEC):
+def _stamp(row):
+    """A row's `ts` as an aware datetime, or None when it has none that can be compared."""
+    try:
+        at = _dt.datetime.fromisoformat(str(row.get("ts")))
+    except ValueError:
+        return None
+    return at if at.tzinfo is not None else None
+
+
+def _latest(table, columns, session_id, limit=1, sources=None):
     """This session's most recent row(s) from a signals table, newest first.
 
-    Only rows from the last `max_age` seconds, so a sensor that stopped reporting stops
+    Only rows from the last SIGNAL_MAX_AGE_SEC, so a sensor that stopped reporting stops
     steering. `sources` filters in the query, so a declined sensor's rows are never fetched.
     """
-    cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=max_age)
+    cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=SIGNAL_MAX_AGE_SEC)
     try:
         q = (
             supabase.table(table)
@@ -274,7 +283,7 @@ def get_session_signal_state(session_id, user_id=None):
 
     consent = _consent_flags(user_id)
 
-    eeg_rows = _latest("cognitive_signals", "focus, stress, raw",
+    eeg_rows = _latest("cognitive_signals", "ts, focus, stress, raw",
                        session_id, EEG_BIAS_WINDOW) if consent["eeg"] else []
     focus_vals  = [r["focus"]  for r in eeg_rows if r.get("focus")  is not None]
     stress_vals = [r["stress"] for r in eeg_rows if r.get("stress") is not None]
@@ -312,9 +321,26 @@ def get_session_signal_state(session_id, user_id=None):
                                     revoked=not consent["eeg"],
                                     calm_source=calm_source)
 
-    heart_rows = _latest("heart_signals", "stress_category, trusted, source, heart_rate_bpm",
-                         session_id, HEART_READ_ROWS, sources=consent["heart"],
-                         max_age=HEART_MAX_AGE_SEC) if consent["heart"] else []
+    heart_rows = _latest("heart_signals", "ts, stress_category, trusted, source, heart_rate_bpm",
+                         session_id, HEART_READ_ROWS,
+                         sources=consent["heart"]) if consent["heart"] else []
+
+    # Named columns, so the confidence this gate reads is unambiguous.
+    face_rows = _latest("face_signals", "ts, emotion, emotion_confidence, emotion_trusted",
+                        session_id) if consent["face"] else []
+    newest_face = face_rows[0] if face_rows else {}
+    face = signal_fusion.face_channel(
+        newest_face.get("emotion"),
+        newest_face.get("emotion_confidence"),
+        newest_face.get("emotion_trusted"),
+        revoked=not consent["face"],
+    )
+
+    # Aged against the session's newest reading on any channel, never the server clock: every
+    # row carries the student's laptop clock, which need not agree with this one.
+    latest = max(filter(None, map(_stamp, (*eeg_rows, *heart_rows, *face_rows))), default=None)
+    heart_rows = [r for r in heart_rows if (t := _stamp(r)) is not None
+                  and (latest - t).total_seconds() <= HEART_MAX_AGE_SEC]
     # Each sensor's newest, then one with a category: camera rows carry none, so the newest
     # overall could hide the headband's, and a sensor's own newer row still replaces its older.
     per_sensor = {}
@@ -329,17 +355,6 @@ def get_session_signal_state(session_id, user_id=None):
         newest_heart.get("source"),
         revoked=not consent["heart"],
         bpm=newest_heart.get("heart_rate_bpm"),
-    )
-
-    # Named columns, so the confidence this gate reads is unambiguous.
-    face_rows = _latest("face_signals", "emotion, emotion_confidence, emotion_trusted",
-                        session_id) if consent["face"] else []
-    newest_face = face_rows[0] if face_rows else {}
-    face = signal_fusion.face_channel(
-        newest_face.get("emotion"),
-        newest_face.get("emotion_confidence"),
-        newest_face.get("emotion_trusted"),
-        revoked=not consent["face"],
     )
 
     return signal_fusion.fuse(

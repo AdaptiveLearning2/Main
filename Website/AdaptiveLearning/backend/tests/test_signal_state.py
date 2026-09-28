@@ -385,6 +385,39 @@ def test_a_heart_reading_eases_only_while_it_is_recent(monkeypatch, age, label):
     assert decider.get_session_signal_state(SESSION, USER).label == label
 
 
+def _skewed(monkeypatch, *, eeg_age, heart_age, face_age=None):
+    """Rows `…_age` seconds behind the server's clock, as a slow laptop stamps them."""
+    fake = _FakeSupabase({
+        "signal_consent": [CONSENT_ALL],
+        "cognitive_signals": _fresh(EEG_FOCUSED, eeg_age) if eeg_age is not None else [],
+        "heart_signals": _fresh(HEART_HIGH, heart_age),
+        "face_signals": (_fresh([{"session_id": SESSION, "emotion": "neutral",
+                                  "emotion_confidence": 0.9, "emotion_trusted": True}], face_age)
+                         if face_age is not None else []),
+    })
+    monkeypatch.setattr(decider, "supabase", fake)
+    return decider.get_session_signal_state(SESSION, USER)
+
+
+def test_a_slow_laptop_clock_does_not_silence_heart(monkeypatch):
+    """Every row is 35 s behind the server; heart is judged against the laptop's own newest."""
+    assert _skewed(monkeypatch, eeg_age=35, heart_age=35).label == "stressed"
+
+
+def test_heart_goes_stale_behind_the_camera_as_well_as_behind_eeg(monkeypatch):
+    fresh = _skewed(monkeypatch, eeg_age=None, heart_age=decider.HEART_MAX_AGE_SEC - 5, face_age=0)
+    stale = _skewed(monkeypatch, eeg_age=None, heart_age=decider.HEART_MAX_AGE_SEC + 5, face_age=0)
+    assert fresh.channels["heart"] == "heart elevated (muse_optics)"
+    assert stale.channels["heart"] == "no heart samples"
+
+
+def test_with_nothing_newer_to_compare_heart_falls_back_to_the_query_bound(monkeypatch):
+    """No other channel reading: its own row is the newest, so only the 90 s bound applies."""
+    assert _skewed(monkeypatch, eeg_age=None, heart_age=60).label == "stressed"
+    assert _skewed(monkeypatch, eeg_age=None,
+                   heart_age=decider.SIGNAL_MAX_AGE_SEC + 5).label != "stressed"
+
+
 @pytest.mark.parametrize("age,withheld", [(RECENT, True), (STALE, False)])
 def test_a_face_reading_withholds_only_while_it_is_recent(monkeypatch, age, withheld):
     _install(monkeypatch, CONSENT_ALL, eeg=EEG_FOCUSED, face=_fresh(FACE_SAD, age))
@@ -397,13 +430,11 @@ def test_every_signal_read_is_bounded_by_age_in_the_query(monkeypatch):
     before = datetime.now(timezone.utc)
     decider.get_session_signal_state(SESSION, USER)
     after = datetime.now(timezone.utc)
-    windows = {"cognitive_signals": decider.SIGNAL_MAX_AGE_SEC,
-               "heart_signals": decider.HEART_MAX_AGE_SEC,
-               "face_signals": decider.SIGNAL_MAX_AGE_SEC}
-    reads = [(name, q) for name, q in zip(fake.table_calls, fake.queries) if name in windows]
-    assert sorted(name for name, _ in reads) == sorted(windows)
+    window = timedelta(seconds=decider.SIGNAL_MAX_AGE_SEC)
+    signal_tables = {"cognitive_signals", "heart_signals", "face_signals"}
+    reads = [(name, q) for name, q in zip(fake.table_calls, fake.queries) if name in signal_tables]
+    assert sorted(name for name, _ in reads) == sorted(signal_tables)
     for name, q in reads:
-        window = timedelta(seconds=windows[name])
         cutoff, = [datetime.fromisoformat(v[1]) for col, v in q.filters
                    if col == "ts" and isinstance(v, tuple) and v[0] == "gte"]
         assert before - window <= cutoff <= after - window, name

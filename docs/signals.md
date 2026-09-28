@@ -541,9 +541,12 @@ calibration). Only a trusted rate counts; anything else gets nulls, which fusion
   would read as `high`, which costs an easy question, never a harder one. Camera rPPG gets no score; its rows stay
   `no_classifier`. The decider reads every consented sensor in one query, takes **each sensor's newest row**, and
   prefers one with a category: a newer camera row cannot hide the headband's `high`, and a sensor's own newer row
-  still replaces its older one. **Heart steers for `HEART_MAX_AGE_SEC` (30 s), not the 90 s the other channels get**:
-  no writer records a heart row without a rate, so a headband that lost contact writes nothing, and its last `high`
-  would otherwise go on easing questions for a minute and a half.
+  still replaces its older one. **Heart steers only within `HEART_MAX_AGE_SEC` (30 s) of the session's newest reading
+  on any channel**: no writer records a heart row without a rate, so a headband that lost contact writes nothing, and
+  its last `high` would otherwise go on easing questions for the whole 90 s bound. Measured against the session's own
+  rows, never the server clock, because every `ts` is the student's laptop's — against the server a laptop 35 s slow
+  silenced heart for good. With no other channel reading there is nothing newer to compare, so heart alone keeps the
+  90 s bound, which is the one place a lost headband still eases for that long.
 - **`HeartSample` carries the table's CHECKs** (categories and every range): past the model, one violating value fails
   the whole batch's upsert with a 500, and the push client retries that batch for ever. Refused by the model it is one
   `malformed` sample. `test_signal_ingest.py` and `test_heart_stress.py` read the newest migration defining each

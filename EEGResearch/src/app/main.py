@@ -40,7 +40,8 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 app.add_middleware(
-    TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "*.local", "testserver"]
+    # Loopback names only: "*.local" let a page on the LAN rebind its own mDNS name to 127.0.0.1.
+    TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "testserver"]
 )
 
 

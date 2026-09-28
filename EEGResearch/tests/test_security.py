@@ -110,3 +110,19 @@ def test_the_learner_only_routes_did_not_become_admin_routes(monkeypatch, _fresh
     r = client.get("/api/v1/state", headers={"Authorization": _auth(s.api_token)})
 
     assert r.status_code != 401
+
+
+@pytest.mark.parametrize("host,allowed", [
+    ("127.0.0.1:8001", True),
+    ("localhost:8001", True),
+    # A LAN page rebinding its own mDNS name to 127.0.0.1 would be same-origin with the sidecar.
+    ("evil.local", False),
+    ("classroom-pc.local:8001", False),
+])
+def test_only_loopback_host_names_reach_the_sidecar(host, allowed):
+    client = TestClient(app)
+    s = get_settings()
+
+    r = client.get("/api/v1/state", headers={"Host": host, "Authorization": _auth(s.api_token)})
+
+    assert (r.status_code != 400) is allowed, (host, r.status_code)

@@ -1085,12 +1085,12 @@ in supabase, flask and dotenv at import, so the pure arithmetic lives apart from
 Anything a bounded worker must run needs the same separation — which is why `invalid_reason` moved alongside the angle
 solvers rather than staying beside its caller.
 
-**Most topics need only the parse bounded, not the whole solve.** `safe_sympify_values` covers five of the eleven:
-they parse the model's numbers and then do ordinary arithmetic, which cannot hang. Only `geometry` and
-`angle_relationships` needed their solvers moved, because both keep sympy *expressions* past the parse. Three parses
-stay in-process deliberately, and all three read the **worker's own output** rather than the model's: `sympify(solved)`
-in `expressions` and `rationals`, and `format_number`'s fallback in `median`, all bounded by `MAX_RESULT_CHARS`. **A
-parse whose operand came from the model belongs in the worker, full stop.**
+**Most topics need only the parse bounded.** `safe_sympify_values` covers five of the eleven; `geometry` and
+`angle_relationships` moved whole, since both keep sympy *expressions* past the parse. Three parses stay in-process and
+read the **worker's own output**: `sympify(solved)` in `expressions` and `rationals`, and `median`'s fallback. **A parse
+whose operand came from the model belongs in the worker — and the worker is not a sandbox**: sympify *evals*, as the
+backend's user, with its files and network. So `_run` refuses any request text or non-`values` result that is not plain
+arithmetic (`_SAFE_TEXT`: no quotes, brackets, commas, backslashes or `__`), before a worker starts or a caller parses.
 
 **Every worker branch checks its result is usable, and the `evaluate`/`simplify` one did not.** `1/0` came back as the
 string `zoo` and `0/0` as `nan`; `rationals` served them — `correct_answer='zoo'` among the options — and

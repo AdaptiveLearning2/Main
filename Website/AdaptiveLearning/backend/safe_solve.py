@@ -9,6 +9,7 @@ import contextlib
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -76,6 +77,23 @@ _WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 # Longer results are discarded: the parent re-parses outside the subprocess bound.
 MAX_RESULT_CHARS = 200
+
+# sympify/parse_expr eval their text, so model text that reaches one is limited to arithmetic: no
+# quotes, brackets, commas, backslashes or `__`, which Python attribute and string tricks need.
+_SAFE_TEXT = re.compile(r"[0-9A-Za-z+\-*/^(). =]{1,200}")
+
+
+def _safe_text(value) -> bool:
+    text = str(value)
+    return bool(_SAFE_TEXT.fullmatch(text)) and "__" not in text
+
+
+def _unsafe_request_text(request: dict) -> str | None:
+    """The first model-supplied string in a request that a sympy parse must not see, or None."""
+    variables = request.get("variables") or []
+    texts = [request.get("expr"), *(request.get("values") or []),
+             *(variables.values() if isinstance(variables, dict) else variables)]
+    return next((str(t) for t in texts if t is not None and not _safe_text(t)), None)
 
 
 def _probe_startup():
@@ -285,6 +303,11 @@ def _run(request: dict, timeout, label: str, startup_timeout=None):
 
     Raises `SolverUnavailable` when the worker could not be run at all.
     """
+    unsafe = _unsafe_request_text(request)
+    if unsafe is not None:
+        # A rejected reply, like any other: the caller retries or drops the question.
+        print(f"[safe_solve] refused text a sympy parse would eval ({label}): {unsafe[:40]!r}")
+        return None
     budget = SOLVE_TIMEOUT_S if timeout is None else timeout
     # Only `_probe_startup` passes this, so a tight budget cannot time out its own probe.
     startup = SOLVE_STARTUP_BUDGET_S if startup_timeout is None \
@@ -350,6 +373,10 @@ def _run(request: dict, timeout, label: str, startup_timeout=None):
     if len(result) > MAX_RESULT_CHARS:
         print(f"[safe_solve] result of {len(result)} chars is not a usable "
               f"answer; discarding")
+        return None
+    # Callers sympify this in-process, with the full environment; `values` is JSON, read by json.loads.
+    if request.get("scenario") != "values" and not _safe_text(result):
+        print(f"[safe_solve] result is not plain arithmetic; discarding: {result[:40]!r}")
         return None
     return result
 

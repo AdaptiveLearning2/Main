@@ -121,7 +121,8 @@ def test_an_unlisted_geometry_scenario_comes_back_none():
 
 @pytest.mark.parametrize("scenario,variables,expected", [
     ("triangle_sum", ["75", "105"], "no such figure"),
-    ("triangle_sum", ["!!", "105"], "could not solve"),
+    ("triangle_sum", ["2*", "105"], "could not solve"),
+    ("triangle_sum", ["!!", "105"], "refused text a sympy parse would eval"),
     ("nope", ["1"], "no such scenario"),
     ("triangle_sum", ["50"], "needs 2 variable"),
 ])
@@ -134,7 +135,8 @@ def test_an_angle_refusal_carries_its_reason(scenario, variables, expected, caps
 @pytest.mark.parametrize("scenario,variables,expected", [
     ("pythagorean", {"a": "3"}, "missing variables"),
     ("cube_volume", {"side": "1e200"}, "non-finite"),
-    ("cube_volume", {"side": "!!"}, "could not solve"),
+    ("cube_volume", {"side": "2*"}, "could not solve"),
+    ("cube_volume", {"side": "!!"}, "refused text a sympy parse would eval"),
     ("nope", {"side": "3"}, "no such scenario"),
 ])
 def test_a_geometry_refusal_carries_its_reason(scenario, variables, expected, capsys):

@@ -434,6 +434,7 @@ NOT_AN_ACCESS_DENIAL = {
     "eeg_muse_disconnect": "the same device contention",
     "eeg_start":           "consent or the school year, which is a configuration state; "
                            "filing it as an incident is what `signals_missing` must not do either",
+    "eeg_muse_connect":    "the same consent / school-year state as eeg_start",
 }
 
 

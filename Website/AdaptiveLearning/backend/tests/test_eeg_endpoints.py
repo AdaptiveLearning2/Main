@@ -19,10 +19,14 @@ def _clean_poller_state(monkeypatch):
     monkeypatch.setattr(eeg_client, "stop_session", lambda device_id=eeg_client.DEFAULT_DEVICE_ID: {"ok": True})
     monkeypatch.setattr(eeg_client, "get_state", lambda device_id=eeg_client.DEFAULT_DEVICE_ID, timeout=2.0: None)
     monkeypatch.setattr(eeg_poller, "POLL_INTERVAL", 0.01)
+    # EEG consented unless a test says otherwise (/muse/connect checks it); the real _may_record composes it.
+    monkeypatch.setattr(main, "_consent", lambda _uid: {**main._CONSENT_ENABLED_ALL, "retrieved": True, "exists": True})
     eeg_poller._active.clear()
+    eeg_poller._connected_by.clear()
     yield
     for sid in list(eeg_poller._active):
         eeg_poller.stop(sid)
+    eeg_poller._connected_by.clear()
 
 
 class _FakeSupabase:
@@ -524,3 +528,85 @@ def test_muse_disconnect_releases_the_callers_own_reservation(monkeypatch):
 
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
     assert main.eeg_muse_refresh(request=None, body={"device_id": "station-x"}) == {"ok": True}
+
+
+# ── a paired headband is its pairer's, past the reservation TTL ──────────
+
+def _paired_by_a(monkeypatch, connected):
+    """user-a pairs station-p, then the reservation lapses; the bridge reports `connected`."""
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_connect", lambda name, device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    main.eeg_muse_connect(request=None, body={"name": "MuseS-1", "device_id": "station-p"})
+    eeg_poller.release_reservation("user-a", "station-p")   # what the 30 s TTL does
+    status = {"available": True, "ingestion": {"muse_connected": connected}, "brain_signals": {"tp9": 1.0}}
+    monkeypatch.setattr(eeg_client, "get_muse_status", lambda device_id=None: status)
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+
+
+def test_another_user_cannot_read_or_take_a_headband_still_paired(monkeypatch):
+    _paired_by_a(monkeypatch, connected=True)
+
+    assert main.eeg_status(request=None, device_id="station-p")["muse"] == {
+        "available": False, "reason": "in_use_by_other"}
+    assert main.eeg_debug(request=None, device_id="station-p") == {
+        "available": False, "reason": "in_use_by_other"}
+    for call in (lambda: main.eeg_muse_connect(request=None, body={"name": "MuseS-1", "device_id": "station-p"}),
+                 lambda: main.eeg_muse_disconnect(request=None, body={"device_id": "station-p"})):
+        with pytest.raises(main.HTTPException) as e:
+            call()
+        assert e.value.status_code == 403
+    # The pairer still reads their own station.
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    assert main.eeg_status(request=None, device_id="station-p")["muse"]["available"] is True
+
+
+def test_a_headband_the_bridge_reports_gone_frees_the_station(monkeypatch):
+    _paired_by_a(monkeypatch, connected=False)
+
+    assert main.eeg_status(request=None, device_id="station-p")["muse"]["available"] is True
+    assert eeg_poller.connector_of("station-p") is None
+
+
+def test_a_bridge_that_cannot_say_keeps_the_station_closed(monkeypatch):
+    _paired_by_a(monkeypatch, connected=True)
+
+    def _down(*_a, **_k):
+        raise RuntimeError("sidecar unreachable")
+    monkeypatch.setattr(eeg_client, "get_muse_status", _down)
+    assert main._station_open_to("user-b", "station-p") is False
+
+
+def test_start_refuses_another_users_paired_headband(monkeypatch):
+    _paired_by_a(monkeypatch, connected=True)
+    monkeypatch.setattr(main, "_session_or_403", lambda *_a, **_k: {"user_id": "user-b", "ended_at": None})
+    monkeypatch.setattr(eeg_client, "list_devices", lambda: [{"device_id": "station-p"}])
+    payload = type("P", (), {"session_id": "s-b", "device_id": "station-p", "record": True})()
+
+    with pytest.raises(main.HTTPException) as e:
+        main.eeg_start(payload, request=None)
+    assert e.value.status_code == 409
+    assert "s-b" not in eeg_poller._active
+
+
+def test_connect_is_refused_without_eeg_consent(monkeypatch):
+    """As /start: otherwise a paired headband with no poller sits on the station."""
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    called = []
+    monkeypatch.setattr(eeg_client, "muse_connect", lambda name, device_id: called.append(name))
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-c"})
+    monkeypatch.setattr(main, "_consent", lambda _uid: {
+        **main._CONSENT_ENABLED_ALL, "eeg_enabled": False, "retrieved": True, "exists": True})
+
+    with pytest.raises(main.HTTPException) as e:
+        main.eeg_muse_connect(request=None, body={"name": "MuseS-1", "device_id": "station-c"})
+    assert e.value.status_code == 403
+    assert called == [] and eeg_poller.connector_of("station-c") is None
+
+
+def test_debug_is_not_served_in_production(monkeypatch):
+    monkeypatch.setattr(main, "IS_PRODUCTION", True)
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "u"})
+    with pytest.raises(main.HTTPException) as e:
+        main.eeg_debug(request=None)
+    assert e.value.status_code == 404

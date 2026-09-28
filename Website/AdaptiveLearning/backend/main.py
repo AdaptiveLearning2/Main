@@ -6127,6 +6127,26 @@ def _refuse_under_push(what: str) -> None:
         )
 
 
+def _station_open_to(user_id: str, device_id: str) -> bool:
+    """`can_use_device`, plus: a headband another user paired stays theirs while the bridge reports it connected.
+
+    Fails closed when the bridge cannot say; a headband it reports gone releases the station.
+    """
+    if not eeg_poller.can_use_device(user_id, device_id):
+        return False
+    owner = eeg_poller.connector_of(device_id)
+    if owner in (None, user_id):
+        return True
+    try:
+        connected = (eeg_client.get_muse_status(device_id).get("ingestion") or {}).get("muse_connected")
+    except Exception:
+        return False
+    if connected is False:
+        eeg_poller.forget_connect(device_id, owner)
+        return True
+    return False
+
+
 def _reserve_and_call(user_id: str, device_id: str, fn, *args,
                       session_id: str | None = None):
     """Claim device_id's pre-claim reservation, then run the bridge call.
@@ -6134,7 +6154,7 @@ def _reserve_and_call(user_id: str, device_id: str, fn, *args,
     `session_id`, if sent, scopes the reservation to that pairing attempt.
     Every failure path releases this device's reservation only.
     """
-    if not eeg_poller.reserve_device(user_id, device_id, session_id):
+    if not _station_open_to(user_id, device_id) or not eeg_poller.reserve_device(user_id, device_id, session_id):
         raise HTTPException(403, "Station in use by another user")
     if not eeg_client.is_alive():
         eeg_poller.release_reservation(user_id, device_id)
@@ -6166,8 +6186,17 @@ def eeg_muse_connect(request: Request, body: dict = Body(...)):
         raise HTTPException(400, "Device name required")
     # Before _reserve_and_call -- see eeg_muse_refresh.
     _refuse_under_push("connect to a headband")
-    return _reserve_and_call(user["id"], device_id, eeg_client.muse_connect, name, device_id,
-                             session_id=body.get("session_id"))
+    # As /start refuses: a paired headband with no poller would sit readable on an open station.
+    consent = _may_record(user["id"])
+    if not consent["record_eeg"]:
+        raise HTTPException(403, _as_sentence(_not_recording_reason(
+            consent,
+            "EEG recording is switched off for this student.",
+            "Could not check whether EEG recording is allowed, so the headband was not connected.")))
+    out = _reserve_and_call(user["id"], device_id, eeg_client.muse_connect, name, device_id,
+                            session_id=body.get("session_id"))
+    eeg_poller.record_connect(user["id"], device_id)
+    return out
 
 @app.post("/api/eeg/muse/disconnect")
 def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
@@ -6175,7 +6204,7 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     user = get_user(request)
     device_id = (body or {}).get("device_id") or eeg_client.DEFAULT_DEVICE_ID
     # Checks, never claims: a claiming teardown could lock a free station forever.
-    if not eeg_poller.can_use_device(user["id"], device_id):
+    if not _station_open_to(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
     # Disconnecting ends the caller's hold on the station, as /stop does.
     eeg_poller.release_reservation(user["id"], device_id)
@@ -6183,9 +6212,11 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
-        return eeg_client.muse_disconnect(device_id)
+        out = eeg_client.muse_disconnect(device_id)
     except Exception as e:
         raise HTTPException(502, f"Bridge error: {e}")
+    eeg_poller.forget_connect(device_id)
+    return out
 
 @app.get("/api/eeg/devices")
 def eeg_devices(request: Request):
@@ -6203,14 +6234,16 @@ def eeg_devices(request: Request):
 
 @app.get("/api/eeg/debug")
 def eeg_debug(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
-    """Raw EEG snapshot for local development -- returns the full state from EEGResearch."""
+    """Raw EEG snapshot for local development -- returns the full state from EEGResearch. 404 in production."""
     user = get_user(request)
+    if IS_PRODUCTION:
+        raise HTTPException(404, "Not Found")
     if eeg_poller.INGEST_MODE == "push":
         return {"available": None, "ingest_mode": "push"}
     if not eeg_client.is_alive():
         return {"available": False, "ingest_mode": "pull"}
     # Security: another user's live station holds their biometric data.
-    if not eeg_poller.can_use_device(user["id"], device_id):
+    if not _station_open_to(user["id"], device_id):
         return {"available": False, "reason": "in_use_by_other"}
     # A token misconfiguration raises by design; report it, not a 500.
     try:
@@ -6261,6 +6294,14 @@ def eeg_start(payload: EegSessionRequest, request: Request):
     known_ids = {d.get("device_id") for d in eeg_client.list_devices()}
     if known_ids and device_id not in known_ids:
         raise HTTPException(404, f"Unknown device_id: {device_id!r}")
+    in_use = HTTPException(
+        409,
+        "This headband is already in use by another user. Ask them to "
+        "disconnect, or wait a few seconds and try again.",
+    )
+    # Another student's paired headband is theirs, not a free station, past the reservation TTL.
+    if not _station_open_to(user["id"], device_id):
+        raise in_use
     try:
         out = eeg_poller.start(supabase, user["id"], payload.session_id, device_id,
                                record=payload.record)
@@ -6269,11 +6310,7 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         raise HTTPException(403, str(e))
     except eeg_poller.DeviceClaimedError:
         # A live poller or a reservation; both resolve by waiting.
-        raise HTTPException(
-            409,
-            "This headband is already in use by another user. Ask them to "
-            "disconnect, or wait a few seconds and try again.",
-        )
+        raise in_use
     _mark_eeg_started(payload.session_id)
     return {"ok": True, **out}
 
@@ -6309,7 +6346,7 @@ def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     if push:
         # None: "not probed in this deployment", not "absent".
         muse = {"available": None, "reason": "push_ingestion"}
-    elif eeg_poller.can_use_device(user["id"], device_id):
+    elif _station_open_to(user["id"], device_id):
         muse = eeg_client.get_muse_status(device_id)
     else:
         muse = {"available": False, "reason": "in_use_by_other"}

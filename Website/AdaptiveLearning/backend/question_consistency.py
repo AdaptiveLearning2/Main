@@ -47,6 +47,8 @@ INERT_SCORED_NOT_COMPARABLE = "inert_scored_not_comparable"
 INERT_MIXED_NUMBER = "inert_mixed_number"
 INERT_NO_LIST_IN_TEXT = "inert_no_list_in_text"
 INERT_SHOWN_NOT_COMPARABLE = "inert_shown_not_comparable"
+# The negation check reads only the two probability scenarios; any other it never compares.
+INERT_NOT_PROBABILITY = "inert_not_probability"
 
 
 def dataset_check(question_text, values):
@@ -297,19 +299,26 @@ def dice_mismatch(question_text, sides, faces):
     return None
 
 
-def negation_mismatch(question_text, scenario):
-    """Reason a probability question's wording disagrees with its scenario, or None.
+def negation_check(question_text, scenario):
+    """(state, reason) for the negation comparison; `reason` is non-None only for ENGAGED_MISMATCH.
 
     `not_probability_of` scores 1 - p, so text and scenario must agree on negation both ways.
     """
-    if not question_text or scenario not in ("probability_of", "not_probability_of"):
-        return None
+    if not question_text:
+        return INERT_NO_INPUT, None
+    if scenario not in ("probability_of", "not_probability_of"):
+        return INERT_NOT_PROBABILITY, None
     negated_text = bool(_NEGATION.search(question_text))
     negated_scenario = scenario == "not_probability_of"
     if negated_text == negated_scenario:
-        return None
+        return ENGAGED_AGREED, None
     if negated_scenario:
-        return ("the question asks for a plain probability but the scenario is "
-                "'not_probability_of', so the complement would be scored")
-    return ("the question asks for the complement but the scenario is "
-            "'probability_of', so the wrong side would be scored")
+        return ENGAGED_MISMATCH, ("the question asks for a plain probability but the scenario "
+                                  "is 'not_probability_of', so the complement would be scored")
+    return ENGAGED_MISMATCH, ("the question asks for the complement but the scenario is "
+                              "'probability_of', so the wrong side would be scored")
+
+
+def negation_mismatch(question_text, scenario):
+    """Reason a probability question's wording disagrees with its scenario, or None."""
+    return negation_check(question_text, scenario)[1]

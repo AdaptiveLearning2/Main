@@ -36,7 +36,6 @@ ALL_TOPICS = ("algebra", "ordering", "rationals", "mean", "median", "mode",
 _SEEN = collections.defaultdict(list)
 
 _orig_dataset_mismatch = qc.dataset_mismatch
-_orig_negation_mismatch = qc.negation_mismatch
 _orig_refuse = grade_appropriateness.refuse
 
 
@@ -47,8 +46,9 @@ def _spy_dataset(text, values):
 
 
 def _spy_negation(text, scenario):
-    reason = _orig_negation_mismatch(text, scenario)
-    _SEEN["negation"].append(qc.ENGAGED_MISMATCH if reason else qc.ENGAGED_AGREED)
+    # The state, not the reason: None is also "never compared" (a dice scenario, say).
+    state, reason = qc.negation_check(text, scenario)
+    _SEEN["negation"].append(state)
     return reason
 
 

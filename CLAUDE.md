@@ -1188,7 +1188,9 @@ school's timezone is *past* `ends_on`, everything up to and including it expires
 which is still a recorded school day. So the job is idempotent and self-healing: a missed run completes on the
 next one, and a repeat deletes nothing new. That is what makes a delete with no grace period acceptable. No
 window configured, or `enforced = false`, means no cutoff and nothing deleted, whatever dates linger in the row.
-`main._expiry_cutoff` is the Python copy the school-year form and the weekly report use; change both together.
+**So an unenforced year keeps per-sample data about children indefinitely** — a retention decision, stated on the
+admin School Year page where the switch is; no rolling bound exists, and choosing one is a policy call, not a
+default to invent. `main._expiry_cutoff` is the Python copy the form and the weekly report use; change both together.
 
 Scheduled daily at 03:30 UTC via `pg_cron` rather than on one date, because scheduling a single day would
 turn a missed run into a year of silence. `cron.schedule` upserts on the job name, so re-running the
@@ -1860,8 +1862,10 @@ blank the other.
 **`last_active_for_users` exists because "newest row per student" has no PostgREST form.** One `in_` query ordered
 by time returns the newest rows *overall*, which is one busy student's — the same limitation `my_children`
 documents. That is why the column was absent rather than wrong. It is the greatest of two clocks
-(`started_at` and `max(answered_at)`), **never `ended_at`**: the sweep stamps that when it runs, weeks after the
-student left, and nothing records which closes were the sweep's. **Three states on the roster** — a
+(`started_at` and `max(answered_at)`) plus the newest session's newest sample, **never `ended_at`**: the sweep
+stamps that when it runs, weeks after the student left, and nothing records which closes were the sweep's. The
+sample is the newest session's only, so each read is one `(session_id, ts)` index lookup rather than a year of
+rows per student. **Three states on the roster** — a
 timestamp, `null` for never active, and `last_active_retrieved: false`. Collapsing the last two tells a teacher
 the class has stopped working, which is both wrong and something they would act on.
 

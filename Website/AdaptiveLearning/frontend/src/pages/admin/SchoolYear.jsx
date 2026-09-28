@@ -6,7 +6,7 @@ import { isValidTimezone, knownTimezones } from '../../lib/timezone'
 // open and not_enforced both record, for different reasons.
 const STATE_COPY = {
   open:          ['Recording', 'Today is inside the configured school year.'],
-  not_enforced:  ['Recording', 'The year is not being enforced. Consent still applies.'],
+  not_enforced:  ['Recording', 'The year is not being enforced, so no signal data expires. Consent still applies.'],
   before_year:   ['Not recording', 'The school year has not started yet.'],
   after_year:    ['Not recording', 'The school year has ended.'],
   unconfigured:  ['Not recording', 'No school year has been configured.'],
@@ -115,7 +115,9 @@ export default function AdminSchoolYear() {
             <span className="block text-sm font-bold text-gray-900 dark:text-white">Enforce term dates</span>
             <span className="block text-xs text-gray-500 dark:text-gray-400">
               Off means recording is not gated on a term at all — for prototyping, or a deployment
-              that does not run on one. Consent is unaffected either way.
+              that does not run on one. Consent is unaffected either way. Off also means nothing
+              expires: per-sample signal data is kept until term dates are enforced again, or a
+              parent erases it.
             </span>
           </span>
         </label>

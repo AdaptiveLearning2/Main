@@ -187,7 +187,8 @@ class FaceCaptureAdapter:
         """
         if self._thread is not None:
             return
-        self._source = self._make_source()
+        # The camera opens last: a classifier or locator that raises must not leave it held,
+        # or the next Connect fails to reopen it and names the camera, not the model.
         self._locator = self._make_locator()
         if self.emotion_enabled and self._emotion is None:
             self._emotion = self._make_emotion()
@@ -201,6 +202,7 @@ class FaceCaptureAdapter:
                                  "be built, so this session records no gaze")
                 with self._lock:
                     self._counters.last_error = f"{type(exc).__name__}: {exc}"
+        self._source = self._make_source()
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._capture_loop, name="face-capture", daemon=True
@@ -342,7 +344,8 @@ class FaceCaptureAdapter:
             if not sample.ok:
                 self._counters.consecutive_missing += 1
                 self._counters.missing_reason = "quality"
-                return
+                # The camera produced a frame: a dim one is not a dead camera to back off from.
+                return True
             self._counters.consecutive_missing = 0
             self._counters.missing_reason = None
             self._buffer.append((now, *sample.rgb, sample.usable_fraction))

@@ -105,6 +105,34 @@ def test_disconnect_joins_the_thread_and_releases_the_camera():
     assert "face-capture" not in names
 
 
+def test_a_classifier_that_cannot_load_never_opens_the_camera():
+    """Opened first, the webcam stayed held with no capture thread, and the next Connect
+    failed to reopen it, naming the camera rather than the model."""
+    opened = []
+
+    def source():
+        opened.append(True)
+        return FakeSource()
+
+    def broken_model():
+        raise ValueError("FER+ model failed verification")
+
+    adapter = FaceCaptureAdapter(source, lambda: FakeLocator(), fps=500.0, buffer_seconds=2.0,
+                                 queue_max=QUEUE_MAX, error_backoff=0.0, warmup_seconds=0.0,
+                                 emotion_enabled=True, emotion_classifier_factory=broken_model)
+    with pytest.raises(ValueError, match="verification"):
+        adapter.connect()
+    assert opened == []
+
+
+def test_a_dim_frame_is_a_live_camera_not_one_to_back_off_from():
+    """A quality reject returned None, which the loop read as no frame and backed off after."""
+    adapter, source, locator = _adapter(source=FakeSource(frame=_flat_frame((0, 0, 0))))
+    adapter._source, adapter._locator = source, locator   # what connect() sets, without the thread
+    assert adapter._capture_once() is True
+    assert adapter._counters.missing_reason == "quality"
+
+
 def test_connect_is_idempotent():
     adapter, _, _ = _adapter()
     adapter.connect()

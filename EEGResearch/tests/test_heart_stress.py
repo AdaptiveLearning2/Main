@@ -3,21 +3,26 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from src.app.services.heart_stress import (
     BASELINE_READINGS,
-    CALIBRATION_MAX_GAP,
+    CALIBRATION_MAX_GAP_S,
     CATEGORIES,
     HeartStressScorer,
 )
 
+# Each reading is stamped `after` seconds past the previous one, as the 10 s emit does.
+_clock = [datetime(2026, 9, 28, 10, 0, tzinfo=timezone.utc)]
 
-def _reading(bpm=70.0, *, rmssd=None, trusted=True):
+
+def _reading(bpm=70.0, *, rmssd=None, trusted=True, after=10.0):
+    _clock[0] += timedelta(seconds=after)
     return {"source": "muse_optics", "bpm": bpm, "trusted": trusted,
-            "rejected_by": None, "rmssd_ms": rmssd}
+            "rejected_by": None, "rmssd_ms": rmssd, "ts": _clock[0].isoformat()}
 
 
 def _calibrated(bpm=70.0, rmssd=None):
@@ -75,19 +80,42 @@ def test_an_unsettled_start_keeps_calibrating_until_a_settled_run():
     assert scorer.baseline_bpm == 70.0
 
 
-@pytest.mark.parametrize("gap, restarted", [(CALIBRATION_MAX_GAP, False),
-                                             (CALIBRATION_MAX_GAP + 1, True)])
-def test_a_long_gap_in_calibration_restarts_it(gap, restarted):
-    """Readings minutes apart are not one settled run."""
+@pytest.mark.parametrize("gap_s, restarted", [(CALIBRATION_MAX_GAP_S, False),
+                                               (CALIBRATION_MAX_GAP_S + 1, True),
+                                               (600.0, True)])
+def test_a_long_gap_restarts_calibration_with_no_windows_built_in_it(gap_s, restarted):
+    """A disconnected headband builds no windows, so only the stamps can show the gap."""
     scorer = HeartStressScorer()
     for _ in range(BASELINE_READINGS - 1):
         scorer.score(_reading(70.0))
-    for _ in range(gap):
-        scorer.score(_reading(None, trusted=False))
 
-    after = _scored(scorer, 70.0)
+    after = _reading(70.0, after=gap_s)
+    scorer.score(after)
     assert after["stress_category"] == ("calibrating" if restarted else "low")
     assert (scorer.baseline_bpm is None) == restarted
+
+
+@pytest.mark.parametrize("missed, restarted", [(3, False), (4, True)])
+def test_missed_windows_count_by_the_time_they_span(missed, restarted):
+    scorer = HeartStressScorer()
+    for _ in range(BASELINE_READINGS - 1):
+        scorer.score(_reading(70.0))
+    for _ in range(missed):
+        scorer.score(_reading(None, trusted=False))
+
+    assert (_scored(scorer, 70.0)["stress_category"] == "calibrating") == restarted
+
+
+@pytest.mark.parametrize("ts", [None, "not a time", "2026-09-28T10:00:00"])
+def test_a_reading_with_no_usable_stamp_restarts_calibration(ts):
+    """It cannot be placed in a run; a naive stamp cannot be compared with an aware one."""
+    scorer = HeartStressScorer()
+    for _ in range(BASELINE_READINGS - 1):
+        scorer.score(_reading(70.0))
+    unplaced = {**_reading(70.0), "ts": ts}
+    scorer.score(unplaced)
+    assert unplaced["stress_category"] == "calibrating"
+    assert scorer.baseline_bpm is None
 
 
 def test_only_a_gap_in_a_row_counts():
@@ -102,9 +130,9 @@ def test_only_a_gap_in_a_row_counts():
 
 def test_a_gap_after_the_baseline_formed_keeps_it():
     scorer = _calibrated(70.0)
-    for _ in range(10 * CALIBRATION_MAX_GAP):
-        scorer.score(_reading(None, trusted=False))
-    assert _scored(scorer, 80.0)["stress_category"] == "high"
+    late = _reading(80.0, after=10 * CALIBRATION_MAX_GAP_S)
+    scorer.score(late)
+    assert late["stress_category"] == "high"
 
 
 def test_the_baseline_is_the_median_so_one_outlier_does_not_move_it():

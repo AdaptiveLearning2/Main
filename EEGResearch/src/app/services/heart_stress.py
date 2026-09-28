@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from datetime import datetime
 from statistics import median
 from typing import Any
 
@@ -17,8 +18,9 @@ BASELINE_READINGS = 6
 # bpm; the baseline forms only once that many consecutive readings sit within this span.
 BASELINE_MAX_SPREAD_BPM = 12.0
 
-# Windows in a row with no trusted rate that calibration may bridge; one more and it restarts.
-CALIBRATION_MAX_GAP = 3
+# Seconds between trusted readings that calibration may bridge (three missed 10 s windows).
+# Timed on each reading's `ts`, since a disconnected headband builds no windows to count.
+CALIBRATION_MAX_GAP_S = 40.0
 
 # bpm above the baseline that reaches 100; the baseline itself scores 50.
 HR_SPAN_BPM = 20.0
@@ -42,7 +44,7 @@ class HeartStressScorer:
 
     def __init__(self) -> None:
         self._calibration: deque[tuple[float, float | None]] = deque(maxlen=BASELINE_READINGS)
-        self._gap = 0
+        self._last_trusted_at: datetime | None = None
         self.baseline_bpm: float | None = None
         self.baseline_rmssd_ms: float | None = None
 
@@ -56,16 +58,16 @@ class HeartStressScorer:
         record["stress_baseline_bpm"] = None
         bpm = record.get("bpm")
         if bpm is None or record.get("trusted") is not True:
-            self._gap += 1
-            if self.baseline_bpm is None and self._gap > CALIBRATION_MAX_GAP:
-                # Readings either side of a long gap are not one settled run.
-                self._calibration.clear()
             return
-        self._gap = 0
         rmssd = record.get("rmssd_ms")
         rmssd = float(rmssd) if rmssd is not None and rmssd > 0 else None
 
         if self.baseline_bpm is None:
+            at = _stamp(record.get("ts"))
+            last, self._last_trusted_at = self._last_trusted_at, at
+            if at is None or last is None or (at - last).total_seconds() > CALIBRATION_MAX_GAP_S:
+                # Readings either side of a long gap, or an unplaceable one, are not one settled run.
+                self._calibration.clear()
             self._calibration.append((float(bpm), rmssd))
             if not self._try_baseline():
                 record["stress_category"] = "calibrating"
@@ -93,3 +95,13 @@ class HeartStressScorer:
         rmssds = [r for _, r in self._calibration if r is not None]
         self.baseline_rmssd_ms = median(rmssds) if len(rmssds) >= RMSSD_BASELINE_MIN else None
         return True
+
+
+def _stamp(ts: Any) -> datetime | None:
+    """A reading's ISO stamp, or None when it has none a gap could be measured from."""
+    try:
+        at = datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return None
+    # Naive and aware stamps cannot be subtracted; the block's own is always aware.
+    return at if at.tzinfo is not None else None

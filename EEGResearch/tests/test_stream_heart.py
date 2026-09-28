@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 import numpy as np
 import pytest
@@ -145,7 +146,8 @@ def test_a_recomputed_block_replaces_the_held_one(monkeypatch):
 def _trusted_rate(monkeypatch, bpm=70.0):
     monkeypatch.setattr("src.app.services.stream_manager.build_heart_record",
                         lambda *_a: {"source": "muse_optics", "bpm": bpm, "trusted": True,
-                                     "rejected_by": None, "rmssd_ms": None})
+                                     "rejected_by": None, "rmssd_ms": None,
+                                     "ts": datetime.now(timezone.utc).isoformat()})
 
 
 def test_a_held_block_reaches_the_stress_baseline_once(monkeypatch):

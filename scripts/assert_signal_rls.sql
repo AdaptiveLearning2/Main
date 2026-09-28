@@ -1290,5 +1290,96 @@ BEGIN
     END IF;
 END $$;
 
+-- expired_signal_cutoff: ends_on is still a recorded day, so it expires only once passed; an
+-- unenforced year has no cutoff whatever dates linger in the row.
+DO $$
+DECLARE
+    today date := (now() AT TIME ZONE 'UTC')::date;
+BEGIN
+    DELETE FROM public.retention_window;
+    INSERT INTO public.retention_window (starts_on, ends_on, timezone)
+    VALUES (today - 200, today, 'UTC');
+    IF public.expired_signal_cutoff() IS DISTINCT FROM today - 201 THEN
+        RAISE EXCEPTION 'on its last day the year already expired: cutoff %',
+            public.expired_signal_cutoff();
+    END IF;
+
+    DELETE FROM public.retention_window;
+    INSERT INTO public.retention_window (starts_on, ends_on, timezone)
+    VALUES (today - 200, today - 1, 'UTC');
+    IF public.expired_signal_cutoff() IS DISTINCT FROM today - 1 THEN
+        RAISE EXCEPTION 'the day after ends_on did not expire the year: cutoff %',
+            public.expired_signal_cutoff();
+    END IF;
+
+    DELETE FROM public.retention_window;
+    INSERT INTO public.retention_window (enforced, starts_on, ends_on, timezone)
+    VALUES (false, today - 400, today - 100, 'UTC');
+    IF public.expired_signal_cutoff() IS NOT NULL THEN
+        RAISE EXCEPTION 'an unenforced year still has a cutoff of %, so it goes on deleting',
+            public.expired_signal_cutoff();
+    END IF;
+END $$;
+
+-- Erasing one heart source keeps the other's expired rollup days: with no raw rows left the
+-- rollup is the last copy, and one that never drew on the erased source holds none of it.
+DO $$
+DECLARE
+    uid uuid;
+    n   int;
+BEGIN
+    SELECT owner_id INTO uid FROM _ids;
+    DELETE FROM public.heart_signals WHERE user_id = uid;
+    DELETE FROM public.signal_daily_rollup WHERE user_id = uid;
+    INSERT INTO public.signal_daily_rollup
+        (user_id, day, channel, avg_heart_rate_bpm, sample_count, trusted_sample_count,
+         heart_sources)
+    VALUES (uid, DATE '2025-03-10', 'heart', 70, 5, 5, ARRAY['muse_optics']),
+           (uid, DATE '2025-03-11', 'heart', 95, 10, 10, ARRAY['muse_optics', 'rppg']),
+           (uid, DATE '2025-03-12', 'heart', 80, 5, 5, NULL),
+           (uid, DATE '2025-03-13', 'heart', 120, 5, 5, ARRAY['rppg']);
+
+    PERFORM public.erase_signals(uid, 'camera', NULL, 'UTC');
+
+    IF NOT EXISTS (SELECT 1 FROM public.signal_daily_rollup
+                    WHERE user_id = uid AND channel = 'heart' AND day = DATE '2025-03-10') THEN
+        RAISE EXCEPTION 'erasing the camera took an expired headband-only heart day with it';
+    END IF;
+    SELECT count(*) INTO n FROM public.signal_daily_rollup
+     WHERE user_id = uid AND channel = 'heart'
+       AND day IN (DATE '2025-03-11', DATE '2025-03-12', DATE '2025-03-13');
+    IF n <> 0 THEN
+        RAISE EXCEPTION '% heart day(s) that drew on the camera, or might have, outlived its erasure', n;
+    END IF;
+
+    PERFORM public.erase_signals(uid, 'headband_optical', NULL, 'UTC');
+    SELECT count(*) INTO n FROM public.signal_daily_rollup
+     WHERE user_id = uid AND channel = 'heart';
+    IF n <> 0 THEN
+        RAISE EXCEPTION 'the headband-only day outlived erasing the headband';
+    END IF;
+END $$;
+
+-- last_active_for_users: a sweep's ended_at is when the sweep ran, not when the student was there.
+DO $$
+DECLARE
+    usr  uuid := gen_random_uuid();
+    s1   uuid := gen_random_uuid();
+    s2   uuid := gen_random_uuid();
+    seen timestamptz;
+BEGIN
+    INSERT INTO auth.users (id, email) VALUES (usr, 'last-active@test.invalid');
+    INSERT INTO public.sessions (id, user_id, started_at, ended_at) VALUES
+        (s1, usr, '2026-06-01T09:00:00Z', '2026-07-15T03:00:00Z'),    -- closed weeks later by the sweep
+        (s2, usr, '2026-05-20T09:00:00Z', '2026-05-20T09:20:00Z');
+    INSERT INTO public.session_answers (session_id, user_id, correct, answered_at)
+    VALUES (s1, usr, true, '2026-06-01T09:10:00Z');
+
+    SELECT last_active INTO seen FROM public.last_active_for_users(ARRAY[usr]);
+    IF seen IS DISTINCT FROM '2026-06-01T09:10:00Z'::timestamptz THEN
+        RAISE EXCEPTION 'last active reads %, expected the last answer (09:10 on 1 June)', seen;
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

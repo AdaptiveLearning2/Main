@@ -1184,10 +1184,11 @@ before `p_max_batches` appear in neither `deleted` nor `skipped_days_without_rol
 alone does not mean everything eligible was handled.
 
 **The cutoff is derived, never "today's date".** Days before `starts_on` always expire; once today in the
-school's timezone reaches `ends_on`, everything up to and including it expires too. So the job is
-idempotent and self-healing: a missed run completes on the next one, and a repeat deletes nothing new.
-That is what makes a same-day delete with no grace period acceptable. No window configured means no
-cutoff and nothing deleted.
+school's timezone is *past* `ends_on`, everything up to and including it expires too — never on `ends_on` itself,
+which is still a recorded school day. So the job is idempotent and self-healing: a missed run completes on the
+next one, and a repeat deletes nothing new. That is what makes a delete with no grace period acceptable. No
+window configured, or `enforced = false`, means no cutoff and nothing deleted, whatever dates linger in the row.
+`main._expiry_cutoff` is the Python copy the school-year form and the weekly report use; change both together.
 
 Scheduled daily at 03:30 UTC via `pg_cron` rather than on one date, because scheduling a single day would
 turn a missed run into a year of silence. `cron.schedule` upserts on the job name, so re-running the
@@ -1222,7 +1223,9 @@ the webcam would destroy headband data they said nothing about.
 `HAVING count(*) > 0` on every channel, so with the raw rows gone it inserts nothing and *leaves the
 existing row standing* — averages of erased data outliving the erasure. Deleting first is what makes the
 rebuild a recomputation. The rebuild is not optional either: `expire_signal_rows` refuses a day with no
-rollup row, so a day left without one keeps its raw rows past `ends_on`.
+rollup row, so a day left without one keeps its raw rows past `ends_on`. **Heart is one row for two sensors**, so
+erasing one source deletes only heart days it can rebuild (raw rows left) or that `heart_sources` says drew on it
+(or cannot say). An expired day from the other sensor alone is the last copy and holds nothing erased.
 
 **Archived charts go if they draw on the channel at all**, so `camera` takes `heart_rate` and
 `stress_pie` with it — those mix both sensors into one picture and no pixel says which is which.
@@ -1857,8 +1860,8 @@ blank the other.
 **`last_active_for_users` exists because "newest row per student" has no PostgREST form.** One `in_` query ordered
 by time returns the newest rows *overall*, which is one busy student's — the same limitation `my_children`
 documents. That is why the column was absent rather than wrong. It is the greatest of two clocks
-(`coalesce(ended_at, started_at)` and `max(answered_at)`): a student mid-lesson answered more recently than their
-session began, and an open session must not drop out on a null `ended_at`. **Three states on the roster** — a
+(`started_at` and `max(answered_at)`), **never `ended_at`**: the sweep stamps that when it runs, weeks after the
+student left, and nothing records which closes were the sweep's. **Three states on the roster** — a
 timestamp, `null` for never active, and `last_active_retrieved: false`. Collapsing the last two tells a teacher
 the class has stopped working, which is both wrong and something they would act on.
 

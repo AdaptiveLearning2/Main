@@ -92,6 +92,13 @@ afterEach(() => cleanup())
 async function renderWithCameraOn() {
   const view = render(<Adaptive />)
   await screen.findByText(/on, not recording/i)
+  // The stop reads a ref an effect syncs after that render, so the text can land first (it
+  // did on CI). Wait for the handler itself; a non-bfcache pagehide registers nothing to undo.
+  await waitFor(() => {
+    window.dispatchEvent(new Event('pagehide'))
+    expect(deviceStopOnUnload).toHaveBeenCalledWith('camera')
+  })
+  vi.clearAllMocks()
   return view
 }
 

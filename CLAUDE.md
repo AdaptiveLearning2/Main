@@ -1051,6 +1051,8 @@ if a row came back. It goes back (by insert) only if the write was never tried: 
 child's role is re-read (not via `_role`, which answers `student` on a failed read). Unknown, expired and spent are one
 404 and write `authz_denied`; a failed read is 503. Still "notify, not block", and **a student cannot remove a
 link** — a safeguarding decision, not an omission. Tests: `test_parent_link_codes.py`.
+**A child can hold a second parent account**, so every other linked parent's notice feed reports a new link, a parent
+turn-on (`consent_enablements`) and an erasure, naming no account, all or nothing (`test_parent_links.py`).
 
 ## Consent — `signal_consent` decides what may be recorded
 

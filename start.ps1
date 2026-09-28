@@ -129,11 +129,11 @@ function Set-EnvKey {
 
 # A native command's stdout, stderr dropped. `2>$null` under Stop aborts on PS 5.1: each stderr
 # line becomes an ErrorRecord that Stop makes terminating -- in exactly the state being probed.
+# Continue is local to this function, so the caller keeps Stop.
 function Invoke-Quiet {
     param([scriptblock]$Command)
-    $previous = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    try { & $Command 2>$null } finally { $ErrorActionPreference = $previous }
+    & $Command 2>$null
 }
 
 function Check-Venv {

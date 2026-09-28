@@ -604,8 +604,8 @@ Sequences need the same treatment. `scripts/check_table_grants.py` enforces it i
 **What to grant back is per-table judgement, and the lint deliberately does not check it — so a
 judgement call can go stale as the write path moves, and nothing catches that.** `math_topics` and
 `questions` have `USING (true)` public-read policies, so `anon` keeps `SELECT` on those two and
-nothing else anywhere. Every other backend-written table gets `SELECT` for `authenticated` and
-nothing more.
+nothing else anywhere. Every other backend-written table gets `SELECT` for `authenticated` and nothing more,
+except the three per-sample signal tables, which no client reads: RLS cannot apply consent per channel.
 
 `sessions` was one that had been missed: it kept `authenticated=arwd` next to a `FOR ALL` own
 policy, so a student could rewrite any column of their own sessions through PostgREST —
@@ -993,12 +993,11 @@ It fails closed to `student`, since `_profile` degrades to a student-shaped dict
 
 **Switching to `profiles.role` is only half of it, and it is the half that looks like the whole fix.** `profiles`
 carries a `FOR ALL` own-row policy and `authenticated` held UPDATE, so that column was equally client-writable. **RLS
-narrows *which rows*, never *which columns*, and a CHECK cannot express "not by you".** Only the grant can, and grants
-are per-column for UPDATE and INSERT — INSERT matters as much as UPDATE, since with it alone a student could delete
-their profile and re-insert it as a teacher. Self-service teacher sign-up is unaffected: `handle_new_user` is
-`SECURITY DEFINER` owned by `postgres`, so it bypasses column grants. What changed is that the value cannot be edited
-afterwards by the account it describes. `backend/tests/test_role_gates.py` asserts both halves — the code reads the
-right column, and a migration takes the write away.
+narrows *which rows*, never *which columns*, and a CHECK cannot express "not by you".** Only the grant can — and **a
+column `REVOKE` does nothing while a table-level grant stands**, so the protection is that clients hold no UPDATE or
+INSERT on `profiles` at all; a future edit grant must be a column list without `role`. Sign-up is unaffected:
+`handle_new_user` is `SECURITY DEFINER` owned by `postgres`. `test_role_gates.py` checks the code reads the column;
+`scripts/assert_signal_rls.sql` checks, with `has_column_privilege`, that no client role can write it.
 
 ### The frontend reads the same column, through `GET /api/profile/me`
 
@@ -1803,7 +1802,7 @@ defined per channel (cognitive has no trust flag, so it counts rows that produce
 nulled ones a poor-contact headband writes).
 
 Its access rules differ from `retention_window`'s: the rollup carries a **read-your-own `SELECT` policy** and
-`authenticated` keeps `SELECT`, matching the per-sample tables it summarises. There is no insert/update/delete
+`authenticated` keeps `SELECT`, unlike the per-sample tables, which no client reads. There is no insert/update/delete
 policy for anyone, so with RLS on, PostgREST cannot write it whatever JWT it carries — the only correct writer
 is `rollup_signal_day`.
 

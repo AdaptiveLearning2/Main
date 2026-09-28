@@ -32,15 +32,33 @@ class _Select:
         self._filters[col] = None
         return self
 
+    def in_(self, col, vals):
+        self._filters[f"{col} in"] = tuple(vals)
+        return self
+
+    def neq(self, col, val):
+        self._filters[f"{col} !="] = val
+        return self
+
     def order(self, *_a, **_k):
         return self
 
     def limit(self, *_a, **_k):
         return self
 
+    def _keep(self, r):
+        for k, v in self._filters.items():
+            col, _, op = k.partition(" ")
+            if op == "in" and r.get(col) not in v:
+                return False
+            if op == "!=" and r.get(col) in (v, None):
+                return False
+            if not op and r.get(col) != v:
+                return False
+        return True
+
     def execute(self):
-        matched = [r for r in self._rows
-                   if all(r.get(k) == v for k, v in self._filters.items())]
+        matched = [r for r in self._rows if self._keep(r)]
         self._log.append(("select", dict(self._filters), len(matched)))
         return _Result(matched)
 
@@ -227,22 +245,34 @@ def test_acknowledging_nothing_is_a_404(student):
 
 
 class _WithdrawalClient(_Client):
-    """`parent_child_links` plus the append-only withdrawal log."""
+    """`parent_child_links` plus the append-only logs a parent's notices read."""
 
-    def __init__(self, links, withdrawals):
+    def __init__(self, links, withdrawals, enablements=None, erasures=None):
         super().__init__(links)
         self.withdrawals = withdrawals
+        self.enablements = enablements if enablements is not None else []
+        self.erasures = erasures if erasures is not None else []
 
     def table(self, name):
-        if name == "consent_withdrawals":
-            rows, log = self.withdrawals, self.reads
+        logs = {"consent_withdrawals": ("withdrawals", self.withdrawals),
+                "consent_enablements": ("enablements", self.enablements),
+                "signal_erasure": ("erasures", self.erasures)}
+        if name in logs:
+            label, rows = logs[name]
+            log = self.reads
 
             class _W:
                 def select(_self, *_cols, **_kw):
                     class _Q:
+                        # Each filter narrows: a second must not start again from every row.
                         def in_(_s, col, vals):
-                            # Narrows: a second filter must not start again from every row.
                             _s.rows = [r for r in getattr(_s, "rows", rows) if r.get(col) in vals]
+                            return _s
+
+                        def neq(_s, col, val):
+                            # SQL: NULL <> x is not true, so a null row is dropped too.
+                            _s.rows = [r for r in getattr(_s, "rows", rows)
+                                       if r.get(col) is not None and r.get(col) != val]
                             return _s
 
                         def order(_s, col, desc=False):
@@ -255,7 +285,7 @@ class _WithdrawalClient(_Client):
                             return _s
 
                         def execute(_s):
-                            log.append(("withdrawals", {}, len(_s.rows)))
+                            log.append((label, {}, len(_s.rows)))
                             return _Result(_s.rows)
                     return _Q()
             return _W()
@@ -431,3 +461,95 @@ def test_acknowledging_is_scoped_to_the_caller(notices):
 def test_acknowledging_a_child_that_is_not_yours_changes_nothing(notices):
     _ack({"someone-elses-child": "2026-08-12T09:00:00Z"})
     assert notices.links[0]["parent_ack_at"] == "2026-08-10T09:00:00Z"
+
+
+# ── another parent account's changes reach every other linked parent ────────
+# A child can register a second "parent" account and redeem their own code; these are the
+# notices that make that visible to the real parent.
+
+OTHER = "parent-2"
+
+
+def _changes(out, cid=CHILD):
+    notice = next(n for n in out["notices"] if n["child_id"] == cid)
+    return [(c["kind"], c.get("channel")) for c in notice["parent_changes"]]
+
+
+def test_another_parent_account_linking_is_reported(notices):
+    notices.links.append({"id": "l-9", "parent_id": OTHER, "child_id": CHILD,
+                          "created_at": "2026-08-12T09:00:00Z"})
+    out = main.parent_consent_notices(None)
+    assert _changes(out) == [("parent_linked", None)]
+    # Never who: the account is the child's to name.
+    assert OTHER not in repr(out)
+
+
+def test_a_link_already_seen_is_not_reported_again(notices):
+    notices.links.append({"id": "l-9", "parent_id": OTHER, "child_id": CHILD,
+                          "created_at": "2026-08-09T09:00:00Z"})
+    assert main.parent_consent_notices(None)["notices"] == []
+
+
+def test_the_callers_own_link_is_never_a_change(notices):
+    notices.links[0]["parent_ack_at"] = None
+    assert main.parent_consent_notices(None)["notices"] == []
+
+
+def test_another_parent_turning_a_channel_on_is_reported(notices):
+    notices.enablements += [
+        {"user_id": CHILD, "channel": "camera", "enabled_at": "2026-08-12T09:00:00Z",
+         "enabled_by": OTHER},
+        {"user_id": CHILD, "channel": "eeg", "enabled_at": "2026-08-12T10:00:00Z",
+         "enabled_by": PARENT},
+    ]
+    out = main.parent_consent_notices(None)
+    assert _changes(out) == [("channel_enabled", "camera")]
+
+
+def test_the_callers_own_turn_ons_do_not_use_up_the_cap(notices, monkeypatch):
+    """Filtered in the query, not after it, or their own rows could push the other's out."""
+    monkeypatch.setattr(main, "_MAX_WITHDRAWAL_NOTICES", 1)
+    notices.enablements += [
+        {"user_id": CHILD, "channel": "eeg", "enabled_at": "2026-08-12T10:00:00Z",
+         "enabled_by": PARENT},
+        {"user_id": CHILD, "channel": "camera", "enabled_at": "2026-08-12T09:00:00Z",
+         "enabled_by": OTHER},
+    ]
+    assert _changes(main.parent_consent_notices(None)) == [("channel_enabled", "camera")]
+
+
+def test_an_erasure_by_another_or_a_deleted_account_is_reported(notices):
+    notices.erasures += [
+        {"user_id": CHILD, "channel": "camera", "erased_at": "2026-08-12T09:00:00Z",
+         "erased_by": OTHER},
+        {"user_id": CHILD, "channel": "eeg", "erased_at": "2026-08-12T08:00:00Z",
+         "erased_by": None},
+        {"user_id": CHILD, "channel": "headband_optical", "erased_at": "2026-08-12T10:00:00Z",
+         "erased_by": PARENT},
+    ]
+    out = main.parent_consent_notices(None)
+    assert _changes(out) == [("channel_erased", "camera"), ("channel_erased", "eeg")]
+
+
+def test_the_watermark_covers_withdrawals_and_changes_alike(notices):
+    """One watermark per link, so acking must not pass a change the banner never showed."""
+    notices.withdrawals.append(_w(CHILD, "camera", "2026-08-12T09:00:00Z"))
+    notices.enablements.append({"user_id": CHILD, "channel": "eeg",
+                                "enabled_at": "2026-08-13T09:00:00Z", "enabled_by": OTHER})
+    out = main.parent_consent_notices(None)
+    assert out["notices"][0]["through"] == "2026-08-13T09:00:00Z"
+    _ack({CHILD: out["notices"][0]["through"]})
+    assert main.parent_consent_notices(None)["notices"] == []
+
+
+def test_a_failed_read_of_any_log_hides_the_whole_feed(monkeypatch, notices):
+    """Shown in part, an ack would mark the unread part seen for good."""
+    notices.withdrawals.append(_w(CHILD, "camera", "2026-08-12T09:00:00Z"))
+    real = notices.table
+
+    def table(name):
+        if name == "consent_enablements":
+            raise RuntimeError("postgrest is down")
+        return real(name)
+    monkeypatch.setattr(notices, "table", table)
+    assert main.parent_consent_notices(None) == {"notices": [], "retrieved": False}

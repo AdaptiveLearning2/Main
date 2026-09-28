@@ -5395,6 +5395,7 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
     guards: dict = {}
     re_enabled = False
     withdrawn: list[str] = []
+    enabled: list[str] = []
     for c in CONSENT_CHANNELS:
         requested = getattr(payload, f"{c}_enabled")
         if requested is None:
@@ -5425,6 +5426,7 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
         # the banner's wording claims no earlier withdrawal (a re-enable nulls `revoked_at`).
         if requested and actor == "parent":
             re_enabled = True
+            enabled.append(c)
 
     if not fields:
         # No-op: don't restamp, or an unchanged re-save raises a notice.
@@ -5448,6 +5450,7 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
                         409, "Consent changed while you were editing it; reload and try again"
                     )
                 raise
+            _record_enablements(student_id, enabled, user["id"], now)
             return _shape_consent(_consent(student_id), student_id, _erasures(student_id))
 
         # Conditional on every flag decided against; if it moved, no match -> 409.
@@ -5466,6 +5469,7 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
         raise HTTPException(409, "Consent changed while you were editing it; reload and try again")
 
     _record_withdrawals(student_id, withdrawn, user["id"], now)
+    _record_enablements(student_id, enabled, user["id"], now)
 
     # After the confirmed update. Channel names and direction only, never the
     # resulting flags: `signal_consent` is the authority.
@@ -5495,6 +5499,21 @@ def _record_withdrawals(student_id: str, channels: list[str],
         ]).execute()
     except Exception as e:
         print(f"[consent:withdrawal-log] {student_id} {channels}: {e}")
+
+
+def _record_enablements(student_id: str, channels: list[str],
+                        by: str, at: str) -> None:
+    """Append one row per channel a parent switched on, for the other parents' notices. Never raises."""
+    if not channels:
+        return
+    try:
+        supabase.table("consent_enablements").insert([
+            {"user_id": student_id, "channel": c,
+             "enabled_at": at, "enabled_by": by}
+            for c in channels
+        ]).execute()
+    except Exception as e:
+        print(f"[consent:enable-log] {student_id} {channels}: {e}")
 
 
 @app.post("/api/consent/{student_id}/erase")
@@ -6603,9 +6622,9 @@ CONSENT_CHANNEL_LABELS = {
 
 @app.get("/api/parent/consent-notices")
 def parent_consent_notices(request: Request):
-    """Channels a linked child has switched off since this parent last looked.
+    """What a linked child, or another parent account, changed since this parent last looked.
 
-    From `consent_withdrawals`, not `*_revoked_at` (nulled on re-enable), and acked
+    From append-only logs, not `*_revoked_at` (nulled on re-enable), and acked
     per (parent, child) link. Fails open to [] with `retrieved: false`.
     """
     user = get_user(request)
@@ -6622,6 +6641,13 @@ def parent_consent_notices(request: Request):
         # The child's own withdrawals only: one a parent made is not "<child> turned off".
         # A student can withdraw only their own consent, so both filters on `ids` are exact.
         rows = supabase.table("consent_withdrawals")             .select("user_id, channel, withdrawn_at, withdrawn_by")             .in_("user_id", ids).in_("withdrawn_by", ids)             .order("withdrawn_at", desc=True)             .limit(_MAX_WITHDRAWAL_NOTICES).execute().data or []
+        # Another parent account's link, turn-on or erasure: a second "parent" account is
+        # otherwise how the one-way rules are undone with only the child ever told.
+        # All or nothing: acking a partial feed would mark the unread part seen.
+        other_links = supabase.table("parent_child_links")             .select("child_id, parent_id, created_at")             .in_("child_id", ids).neq("parent_id", user["id"]).execute().data or []
+        enables = supabase.table("consent_enablements")             .select("user_id, channel, enabled_at, enabled_by")             .in_("user_id", ids).neq("enabled_by", user["id"])             .order("enabled_at", desc=True)             .limit(_MAX_WITHDRAWAL_NOTICES).execute().data or []
+        # One row per (student, channel); `erased_by` goes null with its account, so filtered here.
+        erasures = supabase.table("signal_erasure")             .select("user_id, channel, erased_at, erased_by")             .in_("user_id", ids).execute().data or []
     except Exception as e:
         print(f"[consent-notices] {user['id']}: {e}")
         return {"notices": [], "retrieved": False}
@@ -6629,13 +6655,16 @@ def parent_consent_notices(request: Request):
     names = _profiles_many(ids)
     since_by_child = {l["child_id"]: l.get("parent_ack_at") for l in links}
 
+    def unseen(cid, stamp):
+        since = since_by_child.get(cid)
+        # Lexical compare is fine: both are PostgREST UTC, and this is advisory.
+        return bool(stamp) and not (since and stamp <= since)
+
     by_child: dict[str, list[dict]] = {}
     for r in rows:
         cid = r["user_id"]
         stamp = r["withdrawn_at"]
-        since = since_by_child.get(cid)
-        # Lexical compare is fine: both are PostgREST UTC, and this is advisory.
-        if since and stamp <= since:
+        if not unseen(cid, stamp):
             continue
         # One line per channel, newest first.
         seen = by_child.setdefault(cid, [])
@@ -6645,14 +6674,37 @@ def parent_consent_notices(request: Request):
                      "label": CONSENT_CHANNEL_LABELS.get(r["channel"], r["channel"]),
                      "at": stamp})
 
+    # Never who: the account is the child's to name, so a name would be the attacker's word.
+    changes: dict[str, list[dict]] = {}
+    for r in other_links:
+        if unseen(r["child_id"], r.get("created_at")):
+            changes.setdefault(r["child_id"], []).append(
+                {"kind": "parent_linked", "at": r["created_at"]})
+    for kind, found, stamp_col, by_col in (("channel_enabled", enables, "enabled_at", "enabled_by"),
+                                           ("channel_erased", erasures, "erased_at", "erased_by")):
+        for r in found:
+            cid, stamp = r["user_id"], r.get(stamp_col)
+            if r.get(by_col) == user["id"] or not unseen(cid, stamp):
+                continue
+            listed = changes.setdefault(cid, [])
+            # One line per channel and kind, newest first.
+            if any(c["kind"] == kind and c["channel"] == r["channel"] for c in listed):
+                continue
+            listed.append({"kind": kind, "channel": r["channel"],
+                           "label": CONSENT_CHANNEL_LABELS.get(r["channel"], r["channel"]),
+                           "at": stamp})
+
     notices = []
-    for cid, channels in by_child.items():
+    for cid in [*by_child, *(c for c in changes if c not in by_child)]:
+        channels = by_child.get(cid, [])
+        parent_changes = sorted(changes.get(cid, []), key=lambda c: c["at"], reverse=True)
         notices.append({
-            "child_id":   cid,
-            "child_name": (names.get(cid) or {}).get("display_name") or "Your child",
-            "channels":   channels,
+            "child_id":       cid,
+            "child_name":     (names.get(cid) or {}).get("display_name") or "Your child",
+            "channels":       channels,
+            "parent_changes": parent_changes,
             # Watermark the client hands back on acknowledgement.
-            "through":    max(c["at"] for c in channels),
+            "through":        max(c["at"] for c in [*channels, *parent_changes]),
         })
     return {"notices": notices, "retrieved": True}
 

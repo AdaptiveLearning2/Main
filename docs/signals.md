@@ -124,9 +124,12 @@ well as the flat already-mapped one, and maps the first itself. Don't add a divi
 - **A batch refused whole is never resent unchanged**: that heads its queue for the rest of the
   lesson and its backoff throttles every channel. All three endpoints validate *per sample*
   (`main._validate_each`), so a whole-batch refusal is nearly always a size cap below ours
-  (`INGEST_MAX_BATCH` under 50, a smaller body cap). So a **413 or 422 halves that channel's batch
-  size and restores the samples**, without backoff; only a batch of one refused, or any 400, is
-  dropped and counted `rejected`. The lesson page shows `rejected` + `malformed` as *readings not saved*.
+  (`INGEST_MAX_BATCH` under 50, a smaller body cap). So a **size refusal halves that channel's batch
+  size and restores the samples**, without backoff — but only a 413, or a 422 whose every error is
+  `samples` being `too_long` (`_is_size_refusal`), and never below `MIN_BATCH` (5). Any other refusal,
+  a field the two versions disagree on, is not cured by a smaller batch: shrunk to one, each reading
+  would be its own refused request and trip the rate limit. Those, and a size refusal at the floor,
+  are dropped and counted `rejected`. The lesson page shows `rejected` + `malformed` as *readings not saved*.
 
 The **browser** side has the matching rule: effect cleanup does not run on a tab close or hard
 refresh, so `Adaptive.jsx` also stops the sidecar from a `pagehide` listener via `stopPushOnUnload`,

@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from src.app.services.push_client import MAX_BATCH, MAX_QUEUE, PushClient
+from src.app.services.push_client import MAX_BATCH, MAX_QUEUE, MIN_BATCH, PushClient
 
 
 @pytest.fixture
@@ -309,8 +309,9 @@ async def test_one_channels_failure_does_not_cost_the_others(client, monkeypatch
     assert status["queued"]["heart"] == 0 and status["queued"]["face"] == 0
 
 
-# A 400 is final at any size; a size refusal only once there is nothing left to halve.
-@pytest.mark.parametrize("status, n", [(400, 2), (413, 1), (422, 1)])
+# A 400, or a 422 not about length, is final at any size; a 413 once halving would pass MIN_BATCH.
+@pytest.mark.parametrize("status, n", [(400, 2 * MIN_BATCH), (422, 2 * MIN_BATCH),
+                                       (413, 2 * MIN_BATCH - 1)])
 @pytest.mark.anyio
 async def test_a_batch_refused_whole_is_dropped_and_counted_not_retried(client, monkeypatch, status, n):
     """Restored, it would head its queue and fail every flush for the rest of the lesson, and
@@ -341,14 +342,19 @@ async def test_a_batch_refused_whole_is_dropped_and_counted_not_retried(client, 
     assert len(fake.calls) == before
 
 
-@pytest.mark.parametrize("status", [413, 422])
+# FastAPI's answer to a list over `max_length`, as the backend's ingest models give it.
+_TOO_LONG = {"detail": [{"type": "too_long", "loc": ["body", "samples"],
+                         "msg": "List should have at most 12 items after validation"}]}
+
+
+@pytest.mark.parametrize("status, body", [(413, None), (422, _TOO_LONG)])
 @pytest.mark.anyio
-async def test_a_size_refusal_halves_the_batch_until_the_backend_takes_it(client, monkeypatch, status):
+async def test_a_size_refusal_halves_the_batch_until_the_backend_takes_it(client, monkeypatch, status, body):
     """A backend capping batches below ours would otherwise refuse every batch of the session."""
     cap = 12
     def responder(url, json, headers):
         n = len(json["samples"])
-        return _Response(status_code=status) if n > cap else _Response(
+        return _Response(status_code=status, body=body) if n > cap else _Response(
             body={"ok": True, "inserted": n})
 
     fake = _FakeClient(responder=responder)
@@ -376,13 +382,54 @@ async def test_a_new_session_starts_at_the_full_batch_size(client, monkeypatch):
     monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
                         lambda **_k: fake)
     await _started(client)
-    for ts in range(4):
+    for ts in range(MAX_BATCH):
         client.enqueue("face", {"ts": ts})
     await client._flush_once()
-    assert client.status()["batch_limit"]["face"] == 2
+    assert client.status()["batch_limit"]["face"] == MAX_BATCH // 2
 
     await _started(client, session_id="s2")
     assert client.status()["batch_limit"]["face"] == MAX_BATCH
+
+
+# A field the versions disagree on, and a list too long beside another error: neither is size.
+@pytest.mark.parametrize("body", [
+    {"detail": [{"type": "missing", "loc": ["body", "samples", 0, "ts"]}]},
+    {"detail": [_TOO_LONG["detail"][0], {"type": "uuid_parsing", "loc": ["body", "session_id"]}]},
+    {"detail": "Unprocessable"},
+])
+@pytest.mark.anyio
+async def test_a_refusal_not_about_size_never_shrinks_the_batch(client, monkeypatch, body):
+    """Shrunk to one, each reading would be its own refused request and trip the rate limit."""
+    fake = _FakeClient(responder=lambda url, json, headers: _Response(status_code=422, body=body))
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
+                        lambda **_k: fake)
+    await _started(client)
+    for ts in range(2 * MAX_BATCH):
+        client.enqueue("face", {"ts": ts})
+    for _ in range(2):
+        await client._flush_once()
+
+    assert client.status()["batch_limit"]["face"] == MAX_BATCH
+    assert [len(c["json"]["samples"]) for c in fake.calls] == [MAX_BATCH, MAX_BATCH]
+    assert client.status()["rejected"]["face"] == 2 * MAX_BATCH
+
+
+@pytest.mark.anyio
+async def test_a_size_refusal_at_every_size_stops_halving_at_the_floor(client, monkeypatch):
+    fake = _FakeClient(responder=lambda url, json, headers: _Response(status_code=413))
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
+                        lambda **_k: fake)
+    await _started(client)
+    for ts in range(MAX_BATCH):
+        client.enqueue("face", {"ts": ts})
+    for _ in range(20):
+        await client._flush_once()
+
+    # 50 -> 25 -> 12 -> 6; 6 would halve below the floor, so each batch of 6 is dropped.
+    assert client.status()["batch_limit"]["face"] == 6
+    assert len(fake.calls) == 3 + -(-MAX_BATCH // 6)
+    assert client.status()["queued"]["face"] == 0
+    assert client.status()["rejected"]["face"] == MAX_BATCH
 
 
 @pytest.mark.anyio

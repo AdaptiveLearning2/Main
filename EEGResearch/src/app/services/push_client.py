@@ -45,16 +45,33 @@ _CHANNELS = ("cognitive", "heart", "face")
 # holds the head of its queue for ever and widens every channel's backoff.
 _REFUSED_WHOLE = frozenset({400, 413, 422})
 
-# Refusals a smaller batch can pass (a body or batch cap below ours): halved and resent, not lost.
-_SIZE_REFUSALS = frozenset({413, 422})
+# Halving stops here: below it a size refusal is final, so no cap turns each reading into a request.
+MIN_BATCH = 5
 
 
 class _BatchRefused(Exception):
     """The backend refused this batch, not the request; see `_REFUSED_WHOLE`."""
 
-    def __init__(self, message: str, status: int) -> None:
+    def __init__(self, message: str, sized: bool) -> None:
         super().__init__(message)
-        self.status = status
+        self.sized = sized
+
+
+def _is_size_refusal(response: Any) -> bool:
+    """A 413, or a 422 whose every error is the samples list being too long.
+
+    Anything else (a field the two versions disagree on) is not cured by a smaller batch."""
+    if response.status_code == 413:
+        return True
+    if response.status_code != 422:
+        return False
+    try:
+        detail = response.json().get("detail")
+    except Exception:  # noqa: BLE001 - an unreadable body is not evidence of size
+        return False
+    return isinstance(detail, list) and bool(detail) and all(
+        isinstance(d, dict) and d.get("type") == "too_long"
+        and list(d.get("loc") or [])[-1:] == ["samples"] for d in detail)
 
 
 class PushClient:
@@ -80,7 +97,7 @@ class PushClient:
         self._duplicates: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         # Samples the backend refused one by one as unreadable.
         self._malformed: dict[str, int] = {channel: 0 for channel in _CHANNELS}
-        # Refused by a 400, or by a 413/422 even as a batch of one: lost, and never retried.
+        # Refused for other than size, or for size at MIN_BATCH: lost, and never retried.
         self._rejected: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         # Per channel; only shrinks, on a size refusal, and resets with the session.
         self._batch_limit: dict[str, int] = {channel: MAX_BATCH for channel in _CHANNELS}
@@ -339,7 +356,7 @@ class PushClient:
                     raise
                 except _BatchRefused as exc:
                     # No backoff either way: the other channels are not at fault.
-                    if exc.status in _SIZE_REFUSALS and len(samples) > 1:
+                    if exc.sized and len(samples) // 2 >= MIN_BATCH:
                         self._batch_limit[channel] = len(samples) // 2
                         self._restore(channel, samples)
                         logger.warning("push: %s; resending in batches of %d",
@@ -390,7 +407,7 @@ class PushClient:
             raise RuntimeError("rate limited by backend (429)")
         if response.status_code in _REFUSED_WHOLE:
             raise _BatchRefused(f"backend refused the {channel} batch ({response.status_code})",
-                                response.status_code)
+                                _is_size_refusal(response))
         response.raise_for_status()
         # Past here the rows are committed, so nothing below may raise and trigger a re-post.
         try:
@@ -439,7 +456,7 @@ class PushClient:
             "duplicates": dict(self._duplicates),
             # Refused by the backend as unreadable; lost.
             "malformed": dict(self._malformed),
-            # Refused even alone, or by a 400; lost, not retried.
+            # Refused, and no smaller batch would pass; lost, not retried.
             "rejected": dict(self._rejected),
             "batch_limit": dict(self._batch_limit),
             "backoff_seconds": self._backoff,

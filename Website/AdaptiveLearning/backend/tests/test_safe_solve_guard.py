@@ -55,6 +55,25 @@ def test_ordinary_arithmetic_still_solves(call, expected):
     assert call() == expected
 
 
+# Spellings a model writes that sympy solved before the guard; measured, not guessed.
+@pytest.mark.parametrize("call,expected", [
+    (lambda: safe_solve.safe_solve("12 ÷ 3 × 2", "evaluate"), "8"),
+    (lambda: safe_solve.safe_solve("3·4 + 2⋅1", "evaluate"), "14"),
+    (lambda: safe_solve.safe_solve("x − 4 = 6", "equation"), "10"),
+    (lambda: safe_solve.safe_solve("3\t+ 4\n", "evaluate"), "7"),
+    (lambda: safe_solve.safe_solve("5!", "evaluate"), "120"),
+    (lambda: safe_solve.safe_sympify_values(["−3", "1,200", "7\n", "–2"]), [-3.0, 1200.0, 7.0, -2.0]),
+])
+def test_a_models_spelling_of_arithmetic_still_solves(call, expected):
+    assert call() == expected
+
+
+def test_a_comma_that_is_not_thousands_is_still_refused(monkeypatch):
+    monkeypatch.setattr(safe_solve, "_spawn", lambda _r: pytest.fail("a worker was started"))
+    for text in ("1,2", "1,2000", "f(1,200)"[:-1] + ",1)"):
+        assert safe_solve.safe_sympify_values([text]) is None, text
+
+
 class _Proc:
     returncode = 0
 

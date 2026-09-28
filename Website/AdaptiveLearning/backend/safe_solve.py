@@ -80,12 +80,40 @@ MAX_RESULT_CHARS = 200
 
 # sympify/parse_expr eval their text, so model text that reaches one is limited to arithmetic: no
 # quotes, brackets, commas, backslashes or `__`, which Python attribute and string tricks need.
-_SAFE_TEXT = re.compile(r"[0-9A-Za-z+\-*/^(). =]{1,200}")
+_SAFE_TEXT = re.compile(r"[0-9A-Za-z+\-*/^(). =!]{1,200}")
+
+# Spellings a model uses for arithmetic the list above refuses, rewritten before the check.
+_ARITHMETIC_SPELLINGS = str.maketrans({"×": "*", "·": "*", "⋅": "*", "÷": "/",
+                                       "−": "-", "–": "-", " ": " ", "\t": " ",
+                                       "\n": " ", "\r": " "})
+_THOUSANDS_COMMA = re.compile(r"(?<=\d),(?=\d{3}(?!\d))")
+
+
+def _normalised(value):
+    """A model string in the spelling the guard and sympy both read; anything else unchanged."""
+    if not isinstance(value, str):
+        return value
+    return _THOUSANDS_COMMA.sub("", value.translate(_ARITHMETIC_SPELLINGS)).strip()
 
 
 def _safe_text(value) -> bool:
     text = str(value)
     return bool(_SAFE_TEXT.fullmatch(text)) and "__" not in text
+
+
+def _normalise_request(request: dict) -> dict:
+    """The request with every model-supplied string normalised, so the worker parses what was checked."""
+    out = dict(request)
+    if "expr" in out:
+        out["expr"] = _normalised(out["expr"])
+    if isinstance(out.get("values"), list):
+        out["values"] = [_normalised(v) for v in out["values"]]
+    variables = out.get("variables")
+    if isinstance(variables, dict):
+        out["variables"] = {k: _normalised(v) for k, v in variables.items()}
+    elif isinstance(variables, list):
+        out["variables"] = [_normalised(v) for v in variables]
+    return out
 
 
 def _unsafe_request_text(request: dict) -> str | None:
@@ -303,6 +331,7 @@ def _run(request: dict, timeout, label: str, startup_timeout=None):
 
     Raises `SolverUnavailable` when the worker could not be run at all.
     """
+    request = _normalise_request(request)
     unsafe = _unsafe_request_text(request)
     if unsafe is not None:
         # A rejected reply, like any other: the caller retries or drops the question.

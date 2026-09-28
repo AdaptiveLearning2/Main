@@ -64,6 +64,81 @@ def test_a_revoked_heart_channel_cannot_change_the_difficulty(monkeypatch):
     assert decider.get_session_signal_state(SESSION, USER).label == "focused"
 
 
+def test_a_newer_camera_row_without_a_category_does_not_hide_the_headbands(monkeypatch):
+    now = datetime.now(timezone.utc)
+    fake = _FakeSupabase({
+        "signal_consent": [CONSENT_ALL],
+        "cognitive_signals": _fresh(EEG_CALM),
+        "heart_signals": [
+            {**HEART_HIGH[0], "ts": (now - timedelta(seconds=8)).isoformat()},
+            {"session_id": SESSION, "source": "rppg", "heart_rate_bpm": 74.0,
+             "stress_category": None, "trusted": True, "ts": now.isoformat()},
+        ],
+        "face_signals": [],
+    })
+    monkeypatch.setattr(decider, "supabase", fake)
+    state = decider.get_session_signal_state(SESSION, USER)
+
+    assert state.label == "stressed"
+    assert "muse_optics" in state.reason
+
+
+def _heart_reads(fake):
+    return [q for name, q in zip(fake.table_calls, fake.queries) if name == "heart_signals"]
+
+
+@pytest.mark.parametrize("heart", [HEART_HIGH, []])
+def test_one_heart_query_across_every_consented_sensor(monkeypatch, heart):
+    fake = _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM, heart=heart)
+    decider.get_session_signal_state(SESSION, USER)
+
+    read, = _heart_reads(fake)
+    sources, = [v[1] for col, v in read.filters if col == "source"]
+    assert sorted(sources) == ["muse_optics", "muse_ppg", "rppg"]
+    # Wide enough that a camera writing every tick cannot push the headband's newest out.
+    assert read._limit == decider.HEART_READ_ROWS >= 10 * 4 * 2
+
+
+def test_a_sensors_own_newer_row_replaces_its_older_high(monkeypatch):
+    """A row with a rate and no category (a sidecar predating the classifier) is that sensor's word."""
+    now = datetime.now(timezone.utc)
+    fake = _FakeSupabase({
+        "signal_consent": [CONSENT_ALL],
+        "cognitive_signals": _fresh(EEG_CALM),
+        "heart_signals": [
+            {**HEART_HIGH[0], "ts": (now - timedelta(seconds=10)).isoformat()},
+            {"session_id": SESSION, "source": "muse_optics", "heart_rate_bpm": 71.0,
+             "stress_category": None, "trusted": True, "ts": now.isoformat()},
+        ],
+        "face_signals": [],
+    })
+    monkeypatch.setattr(decider, "supabase", fake)
+    state = decider.get_session_signal_state(SESSION, USER)
+
+    assert state.label == "focused"
+    assert "no stress classifier (muse_optics)" in state.channels["heart"]
+
+
+def test_with_no_category_anywhere_the_newest_row_names_the_absence(monkeypatch):
+    now = datetime.now(timezone.utc)
+    fake = _FakeSupabase({
+        "signal_consent": [CONSENT_ALL],
+        "cognitive_signals": [],
+        "heart_signals": [
+            {"session_id": SESSION, "source": "muse_optics", "heart_rate_bpm": None,
+             "stress_category": None, "trusted": False,
+             "ts": (now - timedelta(seconds=8)).isoformat()},
+            {"session_id": SESSION, "source": "rppg", "heart_rate_bpm": 74.0,
+             "stress_category": None, "trusted": True, "ts": now.isoformat()},
+        ],
+        "face_signals": [],
+    })
+    monkeypatch.setattr(decider, "supabase", fake)
+    state = decider.get_session_signal_state(SESSION, USER)
+
+    assert "no stress classifier (rppg)" in state.channels["heart"]
+
+
 def test_a_consented_heart_channel_does_change_it(monkeypatch):
     """Same rows with consent reach the opposite label, so the test above is about consent."""
     _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM, heart=HEART_HIGH)
@@ -302,10 +377,47 @@ def test_an_eeg_reading_steers_only_while_it_is_recent(monkeypatch, age, label):
     assert decider.get_session_signal_state(SESSION, USER).label == label
 
 
-@pytest.mark.parametrize("age,label", [(RECENT, "stressed"), (STALE, "focused")])
+@pytest.mark.parametrize("age,label", [(decider.HEART_MAX_AGE_SEC - 5, "stressed"),
+                                       (decider.HEART_MAX_AGE_SEC + 5, "focused")])
 def test_a_heart_reading_eases_only_while_it_is_recent(monkeypatch, age, label):
+    """No row is written without a rate, so a headband that lost contact leaves only its last high."""
     _install(monkeypatch, CONSENT_ALL, eeg=EEG_FOCUSED, heart=_fresh(HEART_HIGH, age))
     assert decider.get_session_signal_state(SESSION, USER).label == label
+
+
+def _skewed(monkeypatch, *, eeg_age, heart_age, face_age=None):
+    """Rows `…_age` seconds behind the server's clock, as a slow laptop stamps them."""
+    fake = _FakeSupabase({
+        "signal_consent": [CONSENT_ALL],
+        "cognitive_signals": _fresh(EEG_FOCUSED, eeg_age) if eeg_age is not None else [],
+        "heart_signals": _fresh(HEART_HIGH, heart_age),
+        "face_signals": (_fresh([{"session_id": SESSION, "emotion": "neutral",
+                                  "emotion_confidence": 0.9, "emotion_trusted": True}], face_age)
+                         if face_age is not None else []),
+    })
+    monkeypatch.setattr(decider, "supabase", fake)
+    return decider.get_session_signal_state(SESSION, USER)
+
+
+def test_a_slow_laptop_clock_does_not_silence_heart(monkeypatch):
+    """Every row is 35 s behind the server; heart is judged against the laptop's own newest."""
+    assert _skewed(monkeypatch, eeg_age=35, heart_age=35).label == "stressed"
+
+
+def test_heart_goes_stale_behind_the_camera_as_well_as_behind_eeg(monkeypatch):
+    fresh = _skewed(monkeypatch, eeg_age=None, heart_age=decider.HEART_MAX_AGE_SEC - 5, face_age=0)
+    stale = _skewed(monkeypatch, eeg_age=None, heart_age=decider.HEART_MAX_AGE_SEC + 5, face_age=0)
+    assert fresh.channels["heart"] == "heart elevated (muse_optics)"
+    assert stale.channels["heart"] == "no heart samples"
+
+
+@pytest.mark.parametrize("eeg_age", [None, 60], ids=["heart_only", "whole_headband_dropped"])
+def test_with_nothing_newer_to_compare_heart_falls_back_to_the_query_bound(monkeypatch, eeg_age):
+    """A documented limit: with no channel still arriving, only the 90 s bound applies."""
+    assert _skewed(monkeypatch, eeg_age=eeg_age, heart_age=60).channels["heart"] == \
+        "heart elevated (muse_optics)"
+    assert _skewed(monkeypatch, eeg_age=None,
+                   heart_age=decider.SIGNAL_MAX_AGE_SEC + 5).label != "stressed"
 
 
 @pytest.mark.parametrize("age,withheld", [(RECENT, True), (STALE, False)])
@@ -322,12 +434,12 @@ def test_every_signal_read_is_bounded_by_age_in_the_query(monkeypatch):
     after = datetime.now(timezone.utc)
     window = timedelta(seconds=decider.SIGNAL_MAX_AGE_SEC)
     signal_tables = {"cognitive_signals", "heart_signals", "face_signals"}
-    reads = [q for name, q in zip(fake.table_calls, fake.queries) if name in signal_tables]
-    assert len(reads) == 3
-    for q in reads:
+    reads = [(name, q) for name, q in zip(fake.table_calls, fake.queries) if name in signal_tables]
+    assert sorted(name for name, _ in reads) == sorted(signal_tables)
+    for name, q in reads:
         cutoff, = [datetime.fromisoformat(v[1]) for col, v in q.filters
                    if col == "ts" and isinstance(v, tuple) and v[0] == "gte"]
-        assert before - window <= cutoff <= after - window
+        assert before - window <= cutoff <= after - window, name
 
 
 def test_the_age_bound_is_the_window_the_live_pages_call_flowing():

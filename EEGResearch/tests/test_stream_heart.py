@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 import numpy as np
 import pytest
@@ -140,6 +141,42 @@ def test_a_recomputed_block_replaces_the_held_one(monkeypatch):
 
     assert second is not first
     assert session.adapter.reads == 2
+
+
+def _trusted_rate(monkeypatch, bpm=70.0):
+    monkeypatch.setattr("src.app.services.stream_manager.build_heart_record",
+                        lambda *_a: {"source": "muse_optics", "bpm": bpm, "trusted": True,
+                                     "rejected_by": None, "rmssd_ms": None,
+                                     "ts": datetime.now(timezone.utc).isoformat()})
+
+
+def test_a_held_block_reaches_the_stress_baseline_once(monkeypatch):
+    """Scored per tick, one window would fill the whole calibration on its own."""
+    _trusted_rate(monkeypatch)
+    session = _session(_flat_window())
+    blocks = [session._optical_heart_block() for _ in range(20)]
+
+    assert session._heart_stress._calibration.maxlen > 1
+    assert len(session._heart_stress._calibration) == 1
+    assert blocks[-1]["stress_category"] == "calibrating"
+
+
+def test_the_stress_baseline_survives_a_dropped_block_and_not_a_stop(monkeypatch):
+    from src.app.services.heart_stress import BASELINE_READINGS
+
+    _trusted_rate(monkeypatch)
+    monkeypatch.setattr("src.app.services.stream_manager.EMIT_EVERY_SECONDS", 0.0)
+    session = _session(_flat_window())
+    for _ in range(BASELINE_READINGS):
+        session._optical_heart_block()
+    assert session._heart_stress.baseline_bpm == 70.0
+
+    session._drop_held_heart_block()
+    assert session._optical_heart_block()["stress_category"] == "low"
+
+    # The next student calibrates from scratch.
+    session._reset_heart()
+    assert session._optical_heart_block()["stress_category"] == "calibrating"
 
 
 def test_the_tracker_survives_between_windows(monkeypatch):

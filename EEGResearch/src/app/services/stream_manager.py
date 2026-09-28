@@ -16,6 +16,7 @@ from src.app.services.optics_processing import (
     RATE_WINDOW_SECONDS,
     build_heart_record,
 )
+from src.app.services.heart_stress import HeartStressScorer
 from src.app.services.ppg_processing import HeartRateTracker
 from src.app.services.eeg_spectrum import SpectrumEstimator, poisons_buffer
 from src.app.services.signal_processing import SignalProcessor
@@ -65,6 +66,8 @@ class DeviceSession:
         self.adaptation = AdaptationEngine()
         # Per device: continuity compares each window with this device's last.
         self._heart_tracker: HeartRateTracker | None = None
+        # The session's heart-rate baseline; outlives a dropped lock, not the session.
+        self._heart_stress: HeartStressScorer | None = None
         self._heart_block: dict[str, Any] | None = None
         # Last recompute (emit cadence) vs last accepted rate (anchor staleness).
         self._heart_emitted_at: float | None = None
@@ -122,6 +125,10 @@ class DeviceSession:
         self._heart_block = build_heart_record(
             window_fn(RATE_WINDOW_SECONDS), self._heart_tracker, since
         )
+        if self._heart_stress is None:
+            self._heart_stress = HeartStressScorer()
+        # Here, not per tick: each window must reach the baseline exactly once.
+        self._heart_stress.score(self._heart_block)
         if self._heart_block.get("bpm") is not None:
             self._heart_accepted_at = now
         return self._heart_block
@@ -137,6 +144,7 @@ class DeviceSession:
     def _reset_heart(self) -> None:
         """Forget everything about the heart channel. For `stop()` only."""
         self._heart_tracker = None
+        self._heart_stress = None
         self._heart_block = None
         self._heart_emitted_at = None
         self._heart_accepted_at = None

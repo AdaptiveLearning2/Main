@@ -515,10 +515,45 @@ a double-detected notch or an octave-low rate is indistinguishable from clean, s
 healthy. Genuine 4-channel windows reach 1.054, so the bound sits at 1.15 — above real data and well below the
 1.20–1.26 single-channel runs produce.
 
-`sqi` and `stress_score` are **not derived** on either path; those columns stay null, so `heart_signals.stress_score`
-has no producer — don't read an empty tile as a broken query. Nor does `stress_category`, the one heart field fusion
-reads, so heart holds no opinion in difficulty decisions: `heart_channel` reports a row with a rate as
-`no_classifier`, never as "no heart samples".
+`sqi` is **not derived** on either path, so that column stays null — don't read an empty tile as a broken query.
+
+### Arousal is heart rate against the session's own baseline, and every number in it is a guess
+
+`heart_stress.HeartStressScorer` writes `stress_score`, `stress_category` and `stress_baseline_bpm` on the headband's
+block, once per window (`stream_manager._optical_heart_block`, never per tick, or one held block would fill the whole
+calibration). Only a trusted rate counts; anything else gets nulls, which fusion reads as absent.
+
+- **The baseline is the median of the first 6 trusted readings within 12 bpm of each other**, about a minute after the
+  first rate; until then `calibrating`. An unsettled start slides until a settled run of 6 arrives, and more than 40 s
+  between trusted readings restarts calibration, since readings either side of a long gap are not one run. **Timed on
+  each reading's `ts`, not by counting refused windows**: a disconnected headband builds none, so a count never sees a
+  10-minute drop. A reading with no aware stamp restarts it too. It is **fixed for
+  the session** (a rolling reference would decay a sustained rise back to "low"), survives a dropped lock, and is
+  forgotten by `_reset_heart`, so the next student calibrates afresh. Known limit: a student already aroused when
+  calibration runs gets a high baseline, and the score under-reports for the whole session.
+- **The category is heart rate alone**: +5 bpm over baseline is `moderate`, +10 is `high`; both clear the 2.1 bpm
+  seated error, and neither is validated on a child. The score is 50 at baseline and 100 at +20 bpm, clamped.
+- **RMSSD nudges the score and never the category**: ±10 points per halving or doubling against an RMSSD baseline
+  (from at least 3 calibration readings, else never used), bounded at ±10. About one window in five has no RMSSD, so a
+  category depending on it would flip at a threshold whenever the gate did, and fusion reads the category. So score
+  and category can disagree by at most those 10 points.
+- **`high` now eases difficulty on its own**, as any trusted channel may. The gait failure (confident step cadence)
+  would read as `high`, which costs an easy question, never a harder one. Camera rPPG gets no score; its rows stay
+  `no_classifier`. The decider reads every consented sensor in one query, takes **each sensor's newest row**, and
+  prefers one with a category: a newer camera row cannot hide the headband's `high`, and a sensor's own newer row
+  still replaces its older one. **Heart steers only within `HEART_MAX_AGE_SEC` (30 s) of the session's newest reading
+  on any channel**: no writer records a heart row without a rate, so a headband that lost contact writes nothing, and
+  its last `high` would otherwise go on easing questions for the whole 90 s bound. Measured against the session's own
+  rows, never the server clock, because every `ts` is the student's laptop's — against the server a laptop 35 s slow
+  silenced heart for good. **So the 30 s only applies while another channel is still arriving.** When nothing newer
+  exists — heart is the only channel, *or the whole headband dropped out of Bluetooth range*, since EEG and heart stop
+  together — its last `high` keeps easing for up to the 90 s query bound. Accepted: heart can only ease, a student who
+  walked away asks for no questions, and the case that costs anything (a headband dying mid-lesson) costs about 90 s
+  of easier questions. Closing it needs a server-stamped arrival column on `heart_signals`, which does not exist.
+- **`HeartSample` carries the table's CHECKs** (categories and every range): past the model, one violating value fails
+  the whole batch's upsert with a 500, and the push client retries that batch for ever. Refused by the model it is one
+  `malformed` sample. `test_signal_ingest.py` and `test_heart_stress.py` read the newest migration defining each
+  constraint to hold all three equal. The poller writes one row at a time, so there a violation costs that row alone.
 
 ### The poller's heart write is consent-gated, and that gate is the only one there is
 

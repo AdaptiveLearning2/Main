@@ -273,12 +273,15 @@ def test_an_unknown_session_is_404_not_403(_client, monkeypatch):
 # ─── GET /api/practice-sessions/{id}/question ───────────────────────────
 
 def test_question_refuses_over_the_rate_limit(_client, monkeypatch):
+    from conftest import tighten
     _as(monkeypatch, USER)
     _client(sessions=[_OWNED_SESSION])
-    monkeypatch.setattr(main, "_claim_generation_slot", lambda _uid: False)
+    tighten(monkeypatch, main._GENERATION_LIMITER, limit=1)
+    main._GENERATION_LIMITER.check(USER)                # this minute's one generation, spent
+    monkeypatch.setattr(main, "_record_security_event", lambda *a, **k: None)
     with pytest.raises(main.HTTPException) as exc:
         main.practice_question(SESSION, None)
-    assert exc.value.status_code == 429
+    assert exc.value.status_code == 429 and "today" not in exc.value.detail
 
 
 def test_question_surfaces_a_reached_ceiling_as_503_not_500(_client, monkeypatch):
@@ -293,6 +296,25 @@ def test_question_surfaces_a_reached_ceiling_as_503_not_500(_client, monkeypatch
     with pytest.raises(main.HTTPException) as exc:
         main.practice_question(SESSION, None)
     assert exc.value.status_code == 503
+
+
+def test_a_student_past_their_daily_budget_gets_a_429_and_no_model_call(_client, monkeypatch):
+    """Practice spends the same per-student day as /api/generate-question."""
+    from conftest import tighten
+    tighten(monkeypatch, main._GENERATION_DAILY_LIMITER, limit=1)
+    main._GENERATION_DAILY_LIMITER.check(USER)          # today's one generation, spent elsewhere
+    _as(monkeypatch, USER)
+    _client(sessions=[_OWNED_SESSION])
+    monkeypatch.setattr(main, "_record_security_event", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(main.LLM_topic_decider, "question_generation",
+                        lambda *a, **_k: calls.append(a))
+
+    with pytest.raises(main.HTTPException) as exc:
+        main.practice_question(SESSION, None)
+
+    assert exc.value.status_code == 429 and "today" in exc.value.detail
+    assert calls == []
 
 
 def test_question_that_genuinely_failed_is_a_500(_client, monkeypatch):

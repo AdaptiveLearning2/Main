@@ -2176,11 +2176,17 @@ def _shutdown_prefetch_pool():
 
 
 # Per-student generations per window (a rate, unlike `_prefetch_active`'s concurrency).
-# 60/min is far above what answering can consume.
-_GENERATION_RATE_LIMIT  = env_number("GENERATION_RATE_LIMIT", 60, int, minimum=1)
+# 20/min is still above what answering can consume, prefetch refills included.
+_GENERATION_RATE_LIMIT  = env_number("GENERATION_RATE_LIMIT", 20, int, minimum=1)
 _GENERATION_RATE_WINDOW = env_number("GENERATION_RATE_WINDOW", 60.0, float, minimum=1.0)
 _GENERATION_LIMITER = _SlidingWindowLimiter(
     "generation", _GENERATION_RATE_LIMIT, _GENERATION_RATE_WINDOW)
+
+# Per-student generations per rolling day. GENERATION_DAILY_CALL_LIMIT is one process-wide ceiling,
+# so without this one account could spend it for every student; a generation is two or more calls.
+_GENERATION_DAILY_LIMIT = env_number("GENERATION_DAILY_LIMIT_PER_STUDENT", 150, int, minimum=1)
+_GENERATION_DAILY_LIMITER = _SlidingWindowLimiter(
+    "generation_daily", _GENERATION_DAILY_LIMIT, 86400.0)
 
 # Requests in flight on generation, process-wide; past it, refuse rather than queue.
 # Waiters block anyio's ~40-slot threadpool, so 30 leaves headroom for ingest.
@@ -2203,9 +2209,34 @@ def _generation_waiter():
             _generation_waiters.release()
 
 
+def _generation_refusal(user_id: str):
+    """Count one generation against this student's rate, then their day; None to admit, else (limiter, wait)."""
+    for limiter in (_GENERATION_LIMITER, _GENERATION_DAILY_LIMITER):
+        wait = limiter.check(user_id)
+        if wait is not None:
+            return limiter, wait
+    return None
+
+
 def _claim_generation_slot(user_id: str) -> bool:
-    """Count one generation against this student's window; False to refuse."""
-    return _GENERATION_LIMITER.check(user_id) is None
+    """`_generation_refusal` as a bool, for a caller with nobody to tell (the prefetch worker)."""
+    return _generation_refusal(user_id) is None
+
+
+def _admit_generation(user_id: str) -> None:
+    """Claim one generation for a request, or record the refusal and raise 429."""
+    refused = _generation_refusal(user_id)
+    if refused is None:
+        return
+    limiter, wait = refused
+    # `get_user` resolved this id, so the refusal has a real actor.
+    if limiter is _GENERATION_DAILY_LIMITER:
+        _record_security_event("rate_limited", user_id, limiter=_GENERATION_DAILY_LIMITER.name)
+        raise HTTPException(429, "You've reached today's question limit. Try again tomorrow.",
+                            headers={"Retry-After": str(max(1, int(wait)))})
+    _record_security_event("rate_limited", user_id, limiter=_GENERATION_LIMITER.name)
+    raise HTTPException(429, "Too many questions requested. Try again shortly.",
+                        headers={"Retry-After": str(max(1, int(_GENERATION_RATE_WINDOW)))})
 
 
 def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None):
@@ -2572,14 +2603,7 @@ def generate_question(
 
     if not question:
         print(f"[generate] generating inline for {user_id[:8]}")
-        if not _claim_generation_slot(user_id):
-            # `get_user` resolved this id, so the refusal has a real actor.
-            _record_security_event("rate_limited", user_id,
-                                   limiter=_GENERATION_LIMITER.name)
-            raise HTTPException(
-                429, "Too many questions requested. Try again shortly.",
-                headers={"Retry-After": str(max(1, int(_GENERATION_RATE_WINDOW)))},
-            )
+        _admit_generation(user_id)
         with _generation_waiter() as admitted:
             if not admitted:
                 raise HTTPException(
@@ -2853,16 +2877,8 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
 
     topic = _pick_practice_topic(practice_session_id, session["topics"])
 
-    # Same rate limit, waiter cap and refusals as /api/generate-question.
-    if not _claim_generation_slot(user["id"]):
-        # Real actor, so it records; `GENERATION_SILENT_SITES` in
-        # `test_security_events.py` pins which sites do not.
-        _record_security_event("rate_limited", user["id"],
-                               limiter=_GENERATION_LIMITER.name)
-        raise HTTPException(
-            429, "Too many questions requested. Try again shortly.",
-            headers={"Retry-After": str(max(1, int(_GENERATION_RATE_WINDOW)))},
-        )
+    # Same rate limit, daily budget, waiter cap and refusals as /api/generate-question.
+    _admit_generation(user["id"])
     with _generation_waiter() as admitted:
         if not admitted:
             raise HTTPException(

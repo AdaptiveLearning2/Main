@@ -483,7 +483,7 @@ GENERATION_SILENT_SITES = {
 
 # Named floor, not a count, so a rename fails too.
 EXPECTED_LIMITERS = {
-    "strategies", "chart_summary", "ingest", "generation",
+    "strategies", "chart_summary", "ingest", "generation", "generation_daily",
     "public_generate", "public_read", "public_probe",
     "parent_link_code",
 }
@@ -594,9 +594,9 @@ def test_every_generation_slot_site_records_or_says_why_not():
     for fn in ast.walk(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        if fn.name == "_claim_generation_slot":
-            continue          # the helper itself, not one of its callers
-        if calls(fn, "_claim_generation_slot"):
+        if fn.name in ("_claim_generation_slot", "_generation_refusal"):
+            continue          # the helpers themselves, not their callers
+        if calls(fn, "_claim_generation_slot") or calls(fn, "_generation_refusal"):
             sites[fn.name] = records_a_generation_refusal(fn)
 
     assert sites, "no _claim_generation_slot call sites found -- has it moved?"

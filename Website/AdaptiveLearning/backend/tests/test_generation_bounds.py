@@ -52,6 +52,46 @@ def test_the_limit_bounds_volume_where_the_queue_bounds_concurrency(monkeypatch)
     assert [main._claim_generation_slot("kid") for _ in range(3)][-1] is False
 
 
+# ─── the per-student daily budget ────────────────────────────────────────
+# GENERATION_DAILY_CALL_LIMIT is one ceiling for the whole deployment; this keeps one account from spending it.
+
+def test_a_student_runs_out_of_their_day_while_their_rate_is_fresh(monkeypatch):
+    tighten(monkeypatch, main._GENERATION_DAILY_LIMITER, limit=2)
+    assert [main._claim_generation_slot("kid") for _ in range(3)] == [True, True, False]
+    assert main._claim_generation_slot("another-kid") is True
+
+
+def test_a_request_past_the_daily_budget_is_a_429_that_says_tomorrow(monkeypatch):
+    tighten(monkeypatch, main._GENERATION_DAILY_LIMITER, limit=1)
+    recorded = []
+    monkeypatch.setattr(main, "_record_security_event", lambda kind, actor, **d: recorded.append((kind, d)))
+    main._admit_generation("kid")
+
+    with pytest.raises(HTTPException) as e:
+        main._admit_generation("kid")
+
+    assert e.value.status_code == 429 and "today" in e.value.detail
+    assert int(e.value.headers["Retry-After"]) > 60, "a day's budget is not back in a minute"
+    assert recorded == [("rate_limited", {"limiter": main._GENERATION_DAILY_LIMITER.name})]
+
+
+def test_generate_question_takes_the_daily_budget(monkeypatch):
+    """Refused before the decider runs: a refused generation spends no model call."""
+    tighten(monkeypatch, main._GENERATION_DAILY_LIMITER, limit=1)
+    monkeypatch.setattr(main, "_record_security_event", lambda *a, **k: None)
+    from test_access_control import _FakeSupabase
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({}))
+    calls = []
+    decider = lambda *a, **_k: calls.append(a) or {"question_text": "2+2"}  # noqa: E731
+    _generate(monkeypatch, decider=decider)
+
+    with pytest.raises(HTTPException) as e:
+        _generate(monkeypatch, decider=decider)
+
+    assert e.value.status_code == 429 and "today" in e.value.detail
+    assert len(calls) == 1
+
+
 # ─── what a refusal looks like from outside ──────────────────────────────
 
 def _generate(monkeypatch, *, decider, session_id=None):

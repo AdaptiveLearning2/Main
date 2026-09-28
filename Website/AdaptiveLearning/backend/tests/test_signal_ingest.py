@@ -1,7 +1,9 @@
 """Ingestion trust boundary: may this be recorded (consent), and how much of it (bounds)."""
 
 import os
+import re
 import time
+from pathlib import Path
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
@@ -474,6 +476,44 @@ def test_a_non_finite_heart_value_is_malformed_and_the_rest_of_the_batch_lands(s
         out = _post_heart([_heart(**{field: float("nan")}),
                            _heart(ts="2026-08-09T10:00:05Z")])
         assert (out["malformed"], out["inserted"]) == (1, 1), field
+
+
+@pytest.mark.parametrize("field, value", [
+    ("heart_rate_bpm", 19.0), ("heart_rate_bpm", 251.0), ("rmssd_ms", -1.0),
+    ("rmssd_ms", 1001.0), ("sqi", 1.5), ("stress_score", 100.5), ("stress_score", -0.1),
+    ("stress_category", "elevated"),
+])
+def test_a_value_the_table_would_refuse_is_malformed_and_the_rest_of_the_batch_lands(
+        store, field, value):
+    """Past the model, one CHECK violation fails the whole upsert and the client retries it for ever."""
+    _consent(store, headband_optical_enabled=True)
+    out = _post_heart([_heart(**{field: value}), _heart(ts="2026-08-09T10:00:05Z")])
+    assert (out["malformed"], out["inserted"]) == (1, 1)
+
+
+def _latest_check(name):
+    """A constraint's CHECK text as the newest migration defining it leaves it."""
+    migrations = sorted((Path(__file__).resolve().parents[4] / "supabase/migrations").glob("*.sql"))
+    found = None
+    for path in migrations:
+        text = path.read_text(encoding="utf-8")
+        for m in re.finditer(rf'(ADD|DROP) CONSTRAINT (IF EXISTS )?"{name}"([^;]*);', text):
+            found = m.group(3) if m.group(1) == "ADD" else None
+    assert found is not None, f"{name} is not defined by any migration"
+    return found
+
+
+def test_the_heart_sample_bounds_are_the_tables_checks():
+    """A bound looser than the CHECK is the failed-batch path again; a tighter one refuses good data."""
+    category_check = _latest_check("heart_signals_stress_category_check")
+    assert set(re.findall(r"'(\w+)'::\"text\"", category_check)) == main._HEART_STRESS_CATEGORIES
+    for col in ("heart_rate_bpm", "rmssd_ms", "sqi", "stress_score"):
+        lo, hi = re.search(rf'"{col}" >= ([\d.]+) AND "{col}" <= ([\d.]+)',
+                           _latest_check(f"heart_signals_{col}_range")).groups()
+        meta = main.HeartSample.model_fields[col].metadata
+        ge = [m.ge for m in meta if hasattr(m, "ge")]
+        le = [m.le for m in meta if hasattr(m, "le")]
+        assert (ge, le) == ([float(lo)], [float(hi)]), col
 
 
 def test_a_malformed_face_sample_is_counted_and_the_rest_of_the_batch_lands(store):

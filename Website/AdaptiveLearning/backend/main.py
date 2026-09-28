@@ -5623,19 +5623,24 @@ class FaceBatch(BaseModel):
     samples:    list[Any] = Field(max_length=_INGEST_MAX_BATCH)
 
 
+# Must equal `heart_signals_stress_category_check`: one value outside it fails the whole upsert.
+_HEART_STRESS_CATEGORIES = frozenset({"calibrating", "low", "moderate", "high", "unknown"})
+
+
 class HeartSample(BaseModel):
     """One derived heart reading, from whichever sensor produced it.
 
     `source` (muse_optics | muse_ppg | rppg) is required: consent is per sensor.
+    Bounds are the table's CHECKs, so a bad value is one malformed sample, not a failed batch.
     """
     ts:                 str | None = None
     source:             str
-    heart_rate_bpm:     float | None = None
-    rmssd_ms:           float | None = None
+    heart_rate_bpm:     float | None = Field(None, ge=20, le=250)
+    rmssd_ms:           float | None = Field(None, ge=0, le=1000)
     beat_coverage:      float | None = None
     rmssd_rejected_by:  str   | None = None
-    sqi:                float | None = None
-    stress_score:       float | None = None
+    sqi:                float | None = Field(None, ge=0, le=1)
+    stress_score:       float | None = Field(None, ge=0, le=100)
     stress_category:    str   | None = None
     # What `stress_score` is relative to; the mapper puts it in `raw`.
     stress_baseline_bpm: float | None = None
@@ -5651,6 +5656,13 @@ class HeartSample(BaseModel):
         """Same check as `CognitiveSample._finite`."""
         if v is not None and not math.isfinite(v):
             raise ValueError("must be a finite number")
+        return v
+
+    @field_validator("stress_category")
+    @classmethod
+    def _known_category(cls, v: str | None) -> str | None:
+        if v is not None and v not in _HEART_STRESS_CATEGORIES:
+            raise ValueError("unknown stress category")
         return v
 
 

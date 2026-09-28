@@ -237,8 +237,11 @@ if ($Muse) {
         (Get-Content $eegEnv) -replace '^EEG_SOURCE=.*', 'EEG_SOURCE=muse' | Set-Content $eegEnv
     }
 
-    if (!(Test-Path $bridgeExe)) {
-        Write-Host "  Bridge exe not found -- building now..." -ForegroundColor Yellow
+    # Stale counts as missing: an exe older than its source speaks a protocol the sidecar no longer does.
+    $bridgeStale = (Test-Path $bridgeExe) -and [bool](Get-ChildItem (Join-Path $eegDir "native_bridge\src") -File |
+        Where-Object { $_.LastWriteTime -gt (Get-Item $bridgeExe).LastWriteTime })
+    if (!(Test-Path $bridgeExe) -or $bridgeStale) {
+        Write-Host "  Bridge exe missing or older than its source -- building now..." -ForegroundColor Yellow
         if (!(Test-Path $sdkDir)) {
             Write-Host "  ERROR: libMuse SDK not found at $sdkDir" -ForegroundColor Red
             exit 1

@@ -860,7 +860,8 @@ class TcpMuseBridgeAdapter:
         except (OSError, TypeError, UnicodeDecodeError):
             token = ""
         if not token:
-            raise _NoBridgeToken(f"no bridge token at {self.token_file!r}; is muse_native_bridge running?")
+            raise _NoBridgeToken(f"no bridge token at {self.token_file!r}; is muse_native_bridge running, "
+                                 "and built from this checkout (an older build writes none)?")
         return token
 
     def connect(self) -> None:

@@ -198,6 +198,8 @@ def map_heart_to_heart_signal(payload: dict, session_id: str, user_id: str) -> d
                     # RMSSD's own gate, separate from `rejected_by`.
                     beat_coverage=heart.get("beat_coverage"),
                     rmssd_rejected_by=heart.get("rmssd_rejected_by"),
+                    # What `stress_score` is relative to.
+                    stress_baseline_bpm=heart.get("stress_baseline_bpm"),
                     ingestion=payload.get("ingestion")),
     }
 

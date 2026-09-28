@@ -286,6 +286,8 @@ class PushClient:
                 "sqi": heart.get("sqi"),
                 "stress_score": heart.get("stress_score"),
                 "stress_category": heart.get("stress_category"),
+                # What `stress_score` is relative to; lands in `raw`.
+                "stress_baseline_bpm": heart.get("stress_baseline_bpm"),
                 "trusted": heart.get("trusted"),
                 # Top-level, not in `raw`, where the endpoint strips client-posted keys.
                 "synthetic": heart.get("synthetic"),

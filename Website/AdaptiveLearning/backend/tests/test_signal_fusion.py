@@ -130,6 +130,20 @@ def test_the_backend_names_exactly_the_labels_the_sidecar_emits():
     assert signal_fusion.NEGATIVE_EMOTIONS <= set(emitted)
 
 
+def test_the_backend_reads_heart_categories_the_sidecar_writes():
+    """A renamed "high" would leave heart unable to ease difficulty, with nothing failing."""
+    import ast
+    from pathlib import Path
+    import signal_fusion
+    src = Path(__file__).resolve().parents[4] / "EEGResearch/src/app/services/heart_stress.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    written, = [ast.literal_eval(node.value) for node in tree.body
+                if isinstance(node, ast.Assign)
+                and any(getattr(t, "id", None) == "CATEGORIES" for t in node.targets)]
+    assert signal_fusion.ELEVATED_STRESS <= set(written)
+    assert "calibrating" in written
+
+
 # Every FER+ label, and whether it withholds; a label added on either side fails until listed.
 WITHHOLDS = {"neutral": False, "happy": False, "surprise": False, "sad": True,
              "angry": True, "disgust": True, "fear": True, "contempt": True}

@@ -108,7 +108,7 @@ def heart_channel(
         return ChannelState(None, "heart revoked", source, cause="revoked")
     if stress_category is None:
         if bpm is not None:
-            # No sensor produces a stress category yet, so heart holds no opinion.
+            # Camera rPPG, or a sidecar predating the headband's classifier: no opinion.
             return ChannelState(None, f"heart rate read, no stress classifier ({source})",
                                 source, cause="no_classifier")
         return ChannelState(None, "no heart samples", source, cause="no_samples")

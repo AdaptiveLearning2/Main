@@ -122,6 +122,18 @@ def test_heart_values_are_carried_in_absolute_units():
     assert row["trusted"] is True
 
 
+def test_a_stress_score_keeps_the_baseline_it_was_scored_against():
+    row = signal_mapping.map_heart_to_heart_signal({
+        "timestamp": "2026-08-09T10:00:00Z",
+        "heart": {"source": "muse_optics", "bpm": 81.0, "trusted": True,
+                  "stress_score": 77.5, "stress_category": "high",
+                  "stress_baseline_bpm": 70.0},
+    }, "s", "u")
+
+    assert (row["stress_score"], row["stress_category"]) == (77.5, "high")
+    assert row["raw"]["stress_baseline_bpm"] == 70.0
+
+
 def test_a_row_can_carry_a_heart_rate_and_no_rmssd():
     """RMSSD is an enrichment; its refusal reason is carried under its own name."""
     row = signal_mapping.map_heart_to_heart_signal({

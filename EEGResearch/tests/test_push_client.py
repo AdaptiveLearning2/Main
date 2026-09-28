@@ -808,6 +808,22 @@ async def test_rmssd_gating_fields_are_carried_into_the_enqueued_sample(client):
 
 
 @pytest.mark.anyio
+async def test_the_stress_fields_and_their_baseline_are_carried(client):
+    await _started(client)
+    client.submit_payload({
+        "timestamp": "2026-08-10T10:00:00Z", "device_id": "station1",
+        "features": {},
+        "heart": {"source": "muse_optics", "bpm": 81.0, "trusted": True,
+                  "stress_score": 77.5, "stress_category": "high",
+                  "stress_baseline_bpm": 70.0, "ts": "2026-08-10T10:00:00+00:00"},
+    })
+
+    sample = client._queues["heart"][0]
+    assert (sample["stress_score"], sample["stress_category"],
+            sample["stress_baseline_bpm"]) == (77.5, "high", 70.0)
+
+
+@pytest.mark.anyio
 async def test_a_new_heart_reading_is_enqueued_again(client):
     await _started(client)
     for stamp in ("2026-08-10T10:00:00+00:00", "2026-08-10T10:00:10+00:00"):

@@ -112,6 +112,11 @@ SESSION_PERFORMANCE_WINDOW = 10
 EEG_BIAS_WINDOW = 5
 # A reading older than this (s) no longer steers difficulty; equals main._LIVE_WINDOW_SEC, pinned.
 SIGNAL_MAX_AGE_SEC = 90
+# Heart writes one reading per 10 s and none without a rate, so a headband that lost contact
+# stops steering after three missed readings rather than after SIGNAL_MAX_AGE_SEC.
+HEART_MAX_AGE_SEC = 30
+# Rows read to find each heart sensor's newest: the headband writes 1 per 10 s, the camera up to 4/s.
+HEART_READ_ROWS = 200
 # Focus/calm/confidence thresholds live only in `signal_fusion`.
 
 DIFFS = ["easy", "medium", "hard"]
@@ -236,14 +241,13 @@ def _consent_flags(user_id):
         return {"eeg": False, "heart": [], "face": False}
 
 
-def _latest(table, columns, session_id, limit=1, sources=None, present=None):
+def _latest(table, columns, session_id, limit=1, sources=None, max_age=SIGNAL_MAX_AGE_SEC):
     """This session's most recent row(s) from a signals table, newest first.
 
-    Only rows from the last SIGNAL_MAX_AGE_SEC, so a sensor that stopped reporting stops
+    Only rows from the last `max_age` seconds, so a sensor that stopped reporting stops
     steering. `sources` filters in the query, so a declined sensor's rows are never fetched.
-    `present` names a column the row must have non-null.
     """
-    cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=SIGNAL_MAX_AGE_SEC)
+    cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=max_age)
     try:
         q = (
             supabase.table(table)
@@ -253,8 +257,6 @@ def _latest(table, columns, session_id, limit=1, sources=None, present=None):
         )
         if sources is not None:
             q = q.in_("source", sources)
-        if present is not None:
-            q = q.filter(present, "not.is", "null")
         return (q.order("ts", desc=True).limit(limit).execute()).data or []
     except Exception as e:
         print(f"[{table}] {e}")
@@ -310,14 +312,17 @@ def get_session_signal_state(session_id, user_id=None):
                                     revoked=not consent["eeg"],
                                     calm_source=calm_source)
 
-    # A categorised row first: camera rows carry none, so the newest overall could hide the headband's.
-    # The second read runs only when no sensor has one, to name why heart is silent.
-    heart_cols = "stress_category, trusted, source, heart_rate_bpm"
-    heart_rows = (_latest("heart_signals", heart_cols, session_id, sources=consent["heart"],
-                          present="stress_category")
-                  or _latest("heart_signals", heart_cols, session_id, sources=consent["heart"])
-                  ) if consent["heart"] else []
-    newest_heart = heart_rows[0] if heart_rows else {}
+    heart_rows = _latest("heart_signals", "stress_category, trusted, source, heart_rate_bpm",
+                         session_id, HEART_READ_ROWS, sources=consent["heart"],
+                         max_age=HEART_MAX_AGE_SEC) if consent["heart"] else []
+    # Each sensor's newest, then one with a category: camera rows carry none, so the newest
+    # overall could hide the headband's, and a sensor's own newer row still replaces its older.
+    per_sensor = {}
+    for row in heart_rows:
+        per_sensor.setdefault(row.get("source"), row)
+    newest = list(per_sensor.values())
+    newest_heart = next((r for r in newest if r.get("stress_category") is not None),
+                        newest[0] if newest else {})
     heart = signal_fusion.heart_channel(
         newest_heart.get("stress_category"),
         newest_heart.get("trusted"),

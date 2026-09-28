@@ -55,8 +55,6 @@ ALLOWLIST = {
         "a fixed set.",
     ("LLM_topic_decider.py", "_latest", "select", "columns"):
         "Column list passed by internal callers as a literal.",
-    ("LLM_topic_decider.py", "_latest", "filter", "present"):
-        "A column name passed by the one caller as the literal 'stress_category'.",
     ("chart_archive.py", "rows", "select", "SIGNAL_COLUMNS[table]"):
         "A module-level literal keyed by the three table names it iterates itself.",
     ("repair_common.py", "rows", "select", "columns"):

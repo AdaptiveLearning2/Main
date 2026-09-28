@@ -515,10 +515,29 @@ a double-detected notch or an octave-low rate is indistinguishable from clean, s
 healthy. Genuine 4-channel windows reach 1.054, so the bound sits at 1.15 — above real data and well below the
 1.20–1.26 single-channel runs produce.
 
-`sqi` and `stress_score` are **not derived** on either path; those columns stay null, so `heart_signals.stress_score`
-has no producer — don't read an empty tile as a broken query. Nor does `stress_category`, the one heart field fusion
-reads, so heart holds no opinion in difficulty decisions: `heart_channel` reports a row with a rate as
-`no_classifier`, never as "no heart samples".
+`sqi` is **not derived** on either path, so that column stays null — don't read an empty tile as a broken query.
+
+### Arousal is heart rate against the session's own baseline, and every number in it is a guess
+
+`heart_stress.HeartStressScorer` writes `stress_score`, `stress_category` and `stress_baseline_bpm` on the headband's
+block, once per window (`stream_manager._optical_heart_block`, never per tick, or one held block would fill the whole
+calibration). Only a trusted rate counts; anything else gets nulls, which fusion reads as absent.
+
+- **The baseline is the median of the first 6 trusted readings within 12 bpm of each other**, about a minute after the
+  first rate; until then `calibrating`. An unsettled start slides until a settled run of 6 arrives. It is **fixed for
+  the session** (a rolling reference would decay a sustained rise back to "low"), survives a dropped lock, and is
+  forgotten by `_reset_heart`, so the next student calibrates afresh. Known limit: a student already aroused when
+  calibration runs gets a high baseline, and the score under-reports for the whole session.
+- **The category is heart rate alone**: +5 bpm over baseline is `moderate`, +10 is `high`; both clear the 2.1 bpm
+  seated error, and neither is validated on a child. The score is 50 at baseline and 100 at +20 bpm, clamped.
+- **RMSSD nudges the score and never the category**: ±10 points per halving or doubling against an RMSSD baseline
+  (from at least 3 calibration readings, else never used), bounded at ±10. About one window in five has no RMSSD, so a
+  category depending on it would flip at a threshold whenever the gate did, and fusion reads the category. So score
+  and category can disagree by at most those 10 points.
+- **`high` now eases difficulty on its own**, as any trusted channel may. The gait failure (confident step cadence)
+  would read as `high`, which costs an easy question, never a harder one. Camera rPPG gets no score; its rows stay
+  `no_classifier`. `stress_category` values must stay inside `heart_signals_stress_category_check`, since one outside
+  it fails the whole batch's upsert; `test_heart_stress.py` reads the migration to hold them equal.
 
 ### The poller's heart write is consent-gated, and that gate is the only one there is
 

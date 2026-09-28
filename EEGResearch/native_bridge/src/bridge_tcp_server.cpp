@@ -1,9 +1,59 @@
 #include "bridge_tcp_server.h"
 
+#include <windows.h>
+#include <bcrypt.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <string>
 
 #pragma comment(lib, "Ws2_32.lib")
+#pragma comment(lib, "bcrypt.lib")
+
+namespace {
+
+// 32 bytes from the OS CSPRNG, as hex; empty on failure.
+std::string random_token() {
+    unsigned char bytes[32];
+    if (BCryptGenRandom(nullptr, bytes, sizeof(bytes), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+        return {};
+    }
+    std::string hex;
+    char two[3];
+    for (unsigned char b : bytes) {
+        std::snprintf(two, sizeof(two), "%02x", b);
+        hex += two;
+    }
+    return hex;
+}
+
+bool equal_constant_time(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) {
+        return false;
+    }
+    unsigned char diff = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        diff |= static_cast<unsigned char>(a[i] ^ b[i]);
+    }
+    return diff == 0;
+}
+
+} // namespace
+
+std::string BridgeTcpServer::token_path_from_env(unsigned short port) {
+    if (const char* explicit_path = std::getenv("MUSE_BRIDGE_TOKEN_FILE"); explicit_path && *explicit_path) {
+        return explicit_path;
+    }
+    const char* base = std::getenv("LOCALAPPDATA");
+    if (!base || !*base) {
+        return {};
+    }
+    const std::string dir = std::string(base) + "\\AdaptiveLearning";
+    CreateDirectoryA(dir.c_str(), nullptr);
+    return dir + "\\muse_bridge_" + std::to_string(port) + ".token";
+}
 
 BridgeTcpServer::BridgeTcpServer()
     : listen_socket_(INVALID_SOCKET), client_socket_(INVALID_SOCKET), started_(false) {}
@@ -12,9 +62,24 @@ BridgeTcpServer::~BridgeTcpServer() {
     stop();
 }
 
-bool BridgeTcpServer::start(unsigned short port) {
+bool BridgeTcpServer::start(unsigned short port, const std::string& token_path) {
     if (started_) {
         return true;
+    }
+
+    // Written before listening, so a client that can connect can already read it.
+    token_ = random_token();
+    if (token_.empty() || token_path.empty()) {
+        std::cerr << "No bridge token: set MUSE_BRIDGE_TOKEN_FILE or LOCALAPPDATA\n";
+        return false;
+    }
+    {
+        std::ofstream out(token_path, std::ios::trunc);
+        out << token_;
+        if (!out) {
+            std::cerr << "Could not write the bridge token to " << token_path << "\n";
+            return false;
+        }
     }
 
     WSADATA wsa_data{};
@@ -80,6 +145,8 @@ void BridgeTcpServer::try_accept_client() {
     }
     u_long nonblocking = 1;
     ioctlsocket(client_socket_, FIONBIO, &nonblocking);
+    authenticated_ = false;
+    accepted_at_ms_ = GetTickCount64();
 }
 
 void BridgeTcpServer::close_client() {
@@ -88,6 +155,7 @@ void BridgeTcpServer::close_client() {
         client_socket_ = INVALID_SOCKET;
     }
     recv_buffer_.clear();
+    authenticated_ = false;
 }
 
 void BridgeTcpServer::send_json_line(const std::string& payload) {
@@ -97,7 +165,8 @@ void BridgeTcpServer::send_json_line(const std::string& payload) {
     if (client_socket_ == INVALID_SOCKET) {
         try_accept_client();
     }
-    if (client_socket_ == INVALID_SOCKET) {
+    // Nothing streams to a client that has not proved it read the token file.
+    if (client_socket_ == INVALID_SOCKET || !authenticated_) {
         return;
     }
 
@@ -125,6 +194,39 @@ void BridgeTcpServer::send_json_line(const std::string& payload) {
     }
 }
 
+// The next complete line for the caller. The first line must be "AUTH <token>"; anything else,
+// an HTTP request included, closes the client, as does a line or unterminated buffer past kMaxLine.
+bool BridgeTcpServer::take_line(std::string& line_out) {
+    for (;;) {
+        const auto pos = recv_buffer_.find('\n');
+        if (pos == std::string::npos) {
+            if (recv_buffer_.size() > kMaxLine) {
+                close_client();
+            }
+            return false;
+        }
+        if (pos > kMaxLine) {
+            close_client();
+            return false;
+        }
+        std::string line(recv_buffer_, 0, pos);
+        recv_buffer_.erase(0, pos + 1);
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        if (!authenticated_) {
+            if (!equal_constant_time(line, "AUTH " + token_)) {
+                close_client();
+                return false;
+            }
+            authenticated_ = true;
+            continue;
+        }
+        line_out = std::move(line);
+        return true;
+    }
+}
+
 bool BridgeTcpServer::poll_command(std::string& line_out) {
     if (!started_) {
         return false;
@@ -135,6 +237,11 @@ bool BridgeTcpServer::poll_command(std::string& line_out) {
     if (client_socket_ == INVALID_SOCKET) {
         return false;
     }
+    // A client holding the only slot without authenticating would lock the sidecar out.
+    if (!authenticated_ && GetTickCount64() - accepted_at_ms_ > kAuthDeadlineMs) {
+        close_client();
+        return false;
+    }
 
     char buf[2048];
     const int n = recv(client_socket_, buf, static_cast<int>(sizeof(buf)), 0);
@@ -142,13 +249,7 @@ bool BridgeTcpServer::poll_command(std::string& line_out) {
         const int err = WSAGetLastError();
         if (err == WSAEWOULDBLOCK) {
             // No new data; still return a buffered line if one is waiting.
-            const auto pos = recv_buffer_.find('\n');
-            if (pos == std::string::npos) {
-                return false;
-            }
-            line_out.assign(recv_buffer_, 0, pos);
-            recv_buffer_.erase(0, pos + 1);
-            return true;
+            return take_line(line_out);
         }
         close_client();
         return false;
@@ -158,12 +259,5 @@ bool BridgeTcpServer::poll_command(std::string& line_out) {
         return false;
     }
     recv_buffer_.append(buf, static_cast<size_t>(n));
-
-    const auto pos = recv_buffer_.find('\n');
-    if (pos == std::string::npos) {
-        return false;
-    }
-    line_out.assign(recv_buffer_, 0, pos);
-    recv_buffer_.erase(0, pos + 1);
-    return true;
+    return take_line(line_out);
 }

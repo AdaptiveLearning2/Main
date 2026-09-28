@@ -83,6 +83,8 @@ class Settings(BaseSettings):
     muse_bridge_host: str = Field(default="127.0.0.1", alias="MUSE_BRIDGE_HOST")
     muse_bridge_port: int = Field(default=8765, alias="MUSE_BRIDGE_PORT")
     muse_bridge_timeout_seconds: int = Field(default=5, alias="MUSE_BRIDGE_TIMEOUT_SECONDS")
+    # The bridge writes its token here on start; empty = the per-port default both sides compute.
+    muse_bridge_token_file: str = Field(default="", alias="MUSE_BRIDGE_TOKEN_FILE")
     # "device_id:kind[@[host:]port],..." e.g. "station1:muse@8765"; empty = single device.
     eeg_devices: str = Field(default="", alias="EEG_DEVICES")
 

@@ -404,3 +404,34 @@ experience the reading exists to end. It matters here more than it would elsewhe
 an alpha residual at the temporal pair, so a dead or lifted temporal electrode is both the
 likeliest way to ruin a capture and the way to silence the check on it. The line names the starved
 channel and its sample count. Only a window still filling is silent.
+
+## Observed device failures — an index across the capture docs
+
+Every real failure seen in a recording, in one place, with the file and the moment. **None was
+annotated at recording time**: each was found in the analysis the last column cites. The raw EEG
+captures live in `C:\eeg_captures\` on one machine, outside the repo and with no backup; the optics,
+webcam and ECG fixtures are committed beside this file. Times are seconds from the first EEG frame's
+`mono_ts_ms`; a segment is the frame's `segment` field.
+
+| failure | recording | where | what | source |
+| --- | --- | --- | --- | --- |
+| degraded contact | `2026-09-13_a/b.jsonl` (sidecar, 8 Hz) | every segment; worst in blinking (run a), jaw_clench, arithmetic aloud | 0.2–2.7 good electrodes by segment, prepared or not | *Contact*, above |
+| contact grade blind to mains | `2026-09-19_raw_b.jsonl` | whole capture | 60 Hz ~1000× the floor on TP9/TP10; `hsi` 1 on 90–99% of frames | *Second wearer*, finding 1 |
+| residual mains | `2026-09-20_raw_c.jsonl` | whole capture | 60 Hz +0.30 (tp9), +1.80 (tp10) above floor | *What these runs cannot establish* |
+| noisy channel | `2026-09-14_raw.jsonl` | AF7, peak +1797 µV at 154.0 s (`between`) | range −83…+1797 against ±250 on the others | *Raw-stream capture* |
+| EEG delivery gaps | the three raw captures | largest: 106 ms at 18.6 s (`between`); 383 ms at 277.4 s (`between`); 365 ms at 181.0 s (`eyes_open_rest`) | 256.43 / 256.44 / 256.38 frames/s overall. EEG frames carry no counter, and libMuse's NaN fill for a dropped sample was written as `nan`, which the capture script skips as unparseable — so in these captures a loss is indistinguishable from a delivery gap. The bridge now writes it as `null` | measured 2026-09-28, here |
+| optics timestamp jitter | `optics_rest_64hz.jsonl.gz` | whole capture | 9% of frames share a stamp; 40.7 ms rms, 103.6 ms max against a uniform clock | `README.md`, *The timestamps are not a sample clock* |
+| optics sample loss | all six `optics_*.jsonl.gz` | — | none: `seq` contiguous in every file, exercise included | measured 2026-09-28, here |
+| cadence lock | `optics_through_exercise.jsonl.gz` | exercise phase, ~60–120 s | 162–167 bpm at confidence 1.00; watch read 104 on sitting down | `README.md`, first section |
+| motion refusals | seated/fidget pair, 2026-08-09 | — | 12 of 16 fidget windows refused; **the recordings are not committed**, only the results | `README.md`, *The seated/fidget pair* |
+| webcam rPPG | `face_rgb_ecg_20260808.jsonl.gz`, `session2_rgb.jsonl.gz` | whole captures | median 48.7 bpm against ECG 85–88; nothing tracks the rate in the second | `FACE_RPPG_ECG.md` |
+| BLE dropout, 16 CH optics | **not recorded** | — | link drops within ~20 s, contact to `[4,4,4,4]` | `docs/signals.md` verdict only; no date or attempt count survives |
+| battery | the three raw captures | — | none: levels 38–41%, 99–100%, 93–94% | measured 2026-09-28, here |
+
+**Contact is on every raw frame, repeated rather than sampled.** The bridge copies its latest
+`hsi`/`is_good` onto each 256 Hz EEG frame; the `hsi` tuple changed 86, 15 and 8 times across the
+three raw captures (one change per 6.5, 22 and 33 s). That counts changes of value, not how often the
+headband reports contact, which no capture measures. Link state, reconnect attempts and battery ride
+on the same frames, and on the 5 Hz status lines while EEG is stopped — but `capture_eeg_reference.py
+--source bridge` keeps only `eeg` and `status` lines, so a dropout recorded with it would lose the
+optics frames.

@@ -88,6 +88,13 @@ class _Query:
         self._filters.append((col, ("is", val)))
         return self
 
+    def filter(self, col, op, val):
+        # Only the IS NOT NULL form the code uses; anything else raises rather than being ignored.
+        if (op, val) != ("not.is", "null"):
+            raise AssertionError(f"unsupported filter({col!r}, {op!r}, {val!r})")
+        self._filters.append((col, ("is", "not.null")))
+        return self
+
     def or_(self, expr):
         # Recorded, not evaluated, so `execute` refuses it against a non-empty
         # table rather than silently ignoring the filter.

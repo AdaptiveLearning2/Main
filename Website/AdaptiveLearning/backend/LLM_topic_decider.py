@@ -236,11 +236,12 @@ def _consent_flags(user_id):
         return {"eeg": False, "heart": [], "face": False}
 
 
-def _latest(table, columns, session_id, limit=1, sources=None):
+def _latest(table, columns, session_id, limit=1, sources=None, present=None):
     """This session's most recent row(s) from a signals table, newest first.
 
     Only rows from the last SIGNAL_MAX_AGE_SEC, so a sensor that stopped reporting stops
     steering. `sources` filters in the query, so a declined sensor's rows are never fetched.
+    `present` names a column the row must have non-null.
     """
     cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=SIGNAL_MAX_AGE_SEC)
     try:
@@ -252,6 +253,8 @@ def _latest(table, columns, session_id, limit=1, sources=None):
         )
         if sources is not None:
             q = q.in_("source", sources)
+        if present is not None:
+            q = q.filter(present, "not.is", "null")
         return (q.order("ts", desc=True).limit(limit).execute()).data or []
     except Exception as e:
         print(f"[{table}] {e}")
@@ -307,13 +310,14 @@ def get_session_signal_state(session_id, user_id=None):
                                     revoked=not consent["eeg"],
                                     calm_source=calm_source)
 
-    # Newest per sensor: camera rows carry no category, so the newest overall could hide the headband's.
-    heart_rows = [row for source in consent["heart"]
-                  for row in _latest("heart_signals",
-                                     "ts, stress_category, trusted, source, heart_rate_bpm",
-                                     session_id, sources=[source])]
-    categorised = [r for r in heart_rows if r.get("stress_category") is not None]
-    newest_heart = max(categorised or heart_rows, key=lambda r: str(r.get("ts") or ""), default={})
+    # A categorised row first: camera rows carry none, so the newest overall could hide the headband's.
+    # The second read runs only when no sensor has one, to name why heart is silent.
+    heart_cols = "stress_category, trusted, source, heart_rate_bpm"
+    heart_rows = (_latest("heart_signals", heart_cols, session_id, sources=consent["heart"],
+                          present="stress_category")
+                  or _latest("heart_signals", heart_cols, session_id, sources=consent["heart"])
+                  ) if consent["heart"] else []
+    newest_heart = heart_rows[0] if heart_rows else {}
     heart = signal_fusion.heart_channel(
         newest_heart.get("stress_category"),
         newest_heart.get("trusted"),

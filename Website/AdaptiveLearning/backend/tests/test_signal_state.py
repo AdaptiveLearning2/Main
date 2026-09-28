@@ -83,6 +83,20 @@ def test_a_newer_camera_row_without_a_category_does_not_hide_the_headbands(monke
     assert "muse_optics" in state.reason
 
 
+def _heart_reads(fake):
+    return [q for name, q in zip(fake.table_calls, fake.queries) if name == "heart_signals"]
+
+
+def test_one_heart_query_across_every_consented_sensor_when_a_category_is_there(monkeypatch):
+    fake = _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM, heart=HEART_HIGH)
+    decider.get_session_signal_state(SESSION, USER)
+
+    read, = _heart_reads(fake)
+    assert ("stress_category", ("is", "not.null")) in read.filters
+    sources, = [v[1] for col, v in read.filters if col == "source"]
+    assert sorted(sources) == ["muse_optics", "muse_ppg", "rppg"]
+
+
 def test_with_no_category_anywhere_the_newest_row_names_the_absence(monkeypatch):
     now = datetime.now(timezone.utc)
     fake = _FakeSupabase({
@@ -362,12 +376,8 @@ def test_every_signal_read_is_bounded_by_age_in_the_query(monkeypatch):
     window = timedelta(seconds=decider.SIGNAL_MAX_AGE_SEC)
     signal_tables = {"cognitive_signals", "heart_signals", "face_signals"}
     reads = [q for name, q in zip(fake.table_calls, fake.queries) if name in signal_tables]
-    # One heart read per consented sensor.
-    heart_sources = sorted(v[1][0] for name, q in zip(fake.table_calls, fake.queries)
-                           if name == "heart_signals"
-                           for col, v in q.filters if col == "source")
-    assert heart_sources == ["muse_optics", "muse_ppg", "rppg"]
-    assert len(reads) == 2 + len(heart_sources)
+    # No heart row at all here, so both heart reads run: categorised first, then any.
+    assert len(reads) == 4
     for q in reads:
         cutoff, = [datetime.fromisoformat(v[1]) for col, v in q.filters
                    if col == "ts" and isinstance(v, tuple) and v[0] == "gte"]

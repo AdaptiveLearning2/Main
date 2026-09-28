@@ -371,6 +371,21 @@ async def test_a_size_refusal_halves_the_batch_until_the_backend_takes_it(client
 
 
 @pytest.mark.anyio
+async def test_a_new_session_starts_at_the_full_batch_size(client, monkeypatch):
+    fake = _FakeClient(responder=lambda url, json, headers: _Response(status_code=413))
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
+                        lambda **_k: fake)
+    await _started(client)
+    for ts in range(4):
+        client.enqueue("face", {"ts": ts})
+    await client._flush_once()
+    assert client.status()["batch_limit"]["face"] == 2
+
+    await _started(client, session_id="s2")
+    assert client.status()["batch_limit"]["face"] == MAX_BATCH
+
+
+@pytest.mark.anyio
 async def test_a_server_error_is_still_restored_and_retried(client, monkeypatch):
     """Only a refusal of the batch itself drops it; a 5xx says nothing about the samples."""
     fake = _FakeClient(responder=lambda *_a, **_k: _Response(status_code=503))

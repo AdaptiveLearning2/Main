@@ -593,7 +593,7 @@ class _NoBridgeToken(Exception):
 
 
 def bridge_token_path(port: int) -> str | None:
-    """Where muse_native_bridge writes this port's token: MUSE_BRIDGE_TOKEN_FILE is the override."""
+    """Where muse_native_bridge writes this port's token; no override, so both sides always agree."""
     base = os.environ.get("LOCALAPPDATA")
     return os.path.join(base, "AdaptiveLearning", f"muse_bridge_{port}.token") if base else None
 
@@ -974,7 +974,6 @@ def build_ingestion_adapter(
             host=host or settings.muse_bridge_host,
             port=port or settings.muse_bridge_port,
             timeout_seconds=settings.muse_bridge_timeout_seconds,
-            token_file=settings.muse_bridge_token_file or None,
         )
     if source == "sim":
         return SimulatedMuseIngestionAdapter(sim_optics=settings.eeg_sim_optics)

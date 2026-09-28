@@ -43,9 +43,7 @@ bool equal_constant_time(const std::string& a, const std::string& b) {
 } // namespace
 
 std::string BridgeTcpServer::token_path_from_env(unsigned short port) {
-    if (const char* explicit_path = std::getenv("MUSE_BRIDGE_TOKEN_FILE"); explicit_path && *explicit_path) {
-        return explicit_path;
-    }
+    // No override: the sidecar derives the same path, and one setting can't name a file per port.
     const char* base = std::getenv("LOCALAPPDATA");
     if (!base || !*base) {
         return {};
@@ -67,19 +65,10 @@ bool BridgeTcpServer::start(unsigned short port, const std::string& token_path) 
         return true;
     }
 
-    // Written before listening, so a client that can connect can already read it.
     token_ = random_token();
     if (token_.empty() || token_path.empty()) {
-        std::cerr << "No bridge token: set MUSE_BRIDGE_TOKEN_FILE or LOCALAPPDATA\n";
+        std::cerr << "No bridge token: LOCALAPPDATA is not set\n";
         return false;
-    }
-    {
-        std::ofstream out(token_path, std::ios::trunc);
-        out << token_;
-        if (!out) {
-            std::cerr << "Could not write the bridge token to " << token_path << "\n";
-            return false;
-        }
     }
 
     WSADATA wsa_data{};
@@ -98,6 +87,11 @@ bool BridgeTcpServer::start(unsigned short port, const std::string& token_path) 
     service.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     service.sin_port = htons(port);
 
+    // Otherwise a process binding with SO_REUSEADDR could take the port and read the sidecar's AUTH line.
+    BOOL exclusive = TRUE;
+    setsockopt(listen_socket_, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+               reinterpret_cast<const char*>(&exclusive), sizeof(exclusive));
+
     if (bind(listen_socket_, reinterpret_cast<SOCKADDR*>(&service), sizeof(service)) == SOCKET_ERROR) {
         const int err = WSAGetLastError();
         std::cerr << "bind() failed on 127.0.0.1:" << port << " (WSA error " << err << ")\n";
@@ -114,6 +108,19 @@ bool BridgeTcpServer::start(unsigned short port, const std::string& token_path) 
         listen_socket_ = INVALID_SOCKET;
         WSACleanup();
         return false;
+    }
+
+    // Only once the port is ours: a second bridge that fails to bind must not replace the running one's token.
+    {
+        std::ofstream out(token_path, std::ios::trunc);
+        out << token_;
+        if (!out) {
+            std::cerr << "Could not write the bridge token to " << token_path << "\n";
+            closesocket(listen_socket_);
+            listen_socket_ = INVALID_SOCKET;
+            WSACleanup();
+            return false;
+        }
     }
 
     u_long nonblocking = 1;

@@ -21,7 +21,7 @@ public:
     /** Whole lines dropped on a full send buffer (a partial write closes the client instead). */
     long long dropped_lines() const noexcept { return dropped_lines_; }
 
-    /** MUSE_BRIDGE_TOKEN_FILE, else %LOCALAPPDATA%\AdaptiveLearning\muse_bridge_<port>.token (one per bridge). */
+    /** %LOCALAPPDATA%\AdaptiveLearning\muse_bridge_<port>.token (one per bridge); the sidecar derives the same. */
     static std::string token_path_from_env(unsigned short port);
 
 private:

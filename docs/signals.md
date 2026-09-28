@@ -489,9 +489,11 @@ holds it. Every frame does reach the sidecar — the queue is drained in full ea
 scored — so a consumer of the raw stream belongs inside the drain, not on a second socket.
 
 **A client must authenticate before the bridge streams to it.** On start the bridge writes a random token to
-`MUSE_BRIDGE_TOKEN_FILE`, else `%LOCALAPPDATA%\AdaptiveLearning\muse_bridge_<port>.token` — per port, so stations
-do not overwrite each other — and closes any client whose first line is not `AUTH <token>` within 2 s, or whose line
-passes 4 KiB. Without it, whichever local process connected first while the sidecar was away (a web page's POST
+`%LOCALAPPDATA%\AdaptiveLearning\muse_bridge_<port>.token` — per port, so stations do not overwrite each other, and
+**only after it holds the port** (`SO_EXCLUSIVEADDRUSE`), so a second bridge that fails to bind cannot replace the
+running one's token — and closes any client whose first line is not `AUTH <token>` within 2 s, or whose line passes
+4 KiB. **There is no path override**: the bridge reads `getenv` and the sidecar reads `.env`, so a setting would be
+honoured on one side only, and one path cannot name a file per station. Without it, whichever local process connected first while the sidecar was away (a web page's POST
 included) held the headband. The sidecar reads the file before each connect, so a restarted bridge's new token is
 picked up; no file means no bridge on that port, and it does not dial.
 

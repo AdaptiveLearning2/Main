@@ -411,9 +411,11 @@ def test_heart_goes_stale_behind_the_camera_as_well_as_behind_eeg(monkeypatch):
     assert stale.channels["heart"] == "no heart samples"
 
 
-def test_with_nothing_newer_to_compare_heart_falls_back_to_the_query_bound(monkeypatch):
-    """No other channel reading: its own row is the newest, so only the 90 s bound applies."""
-    assert _skewed(monkeypatch, eeg_age=None, heart_age=60).label == "stressed"
+@pytest.mark.parametrize("eeg_age", [None, 60], ids=["heart_only", "whole_headband_dropped"])
+def test_with_nothing_newer_to_compare_heart_falls_back_to_the_query_bound(monkeypatch, eeg_age):
+    """A documented limit: with no channel still arriving, only the 90 s bound applies."""
+    assert _skewed(monkeypatch, eeg_age=eeg_age, heart_age=60).channels["heart"] == \
+        "heart elevated (muse_optics)"
     assert _skewed(monkeypatch, eeg_age=None,
                    heart_age=decider.SIGNAL_MAX_AGE_SEC + 5).label != "stressed"
 

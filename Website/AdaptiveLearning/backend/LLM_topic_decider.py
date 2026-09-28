@@ -112,8 +112,8 @@ SESSION_PERFORMANCE_WINDOW = 10
 EEG_BIAS_WINDOW = 5
 # A reading older than this (s) no longer steers difficulty; equals main._LIVE_WINDOW_SEC, pinned.
 SIGNAL_MAX_AGE_SEC = 90
-# s behind the session's newest reading on any channel: heart writes one per 10 s and none
-# without a rate, so a headband that lost contact stops steering after three missed readings.
+# s behind the session's newest reading on any channel, so it applies only while another channel
+# arrives; a whole-headband drop keeps SIGNAL_MAX_AGE_SEC. See docs/signals.md.
 HEART_MAX_AGE_SEC = 30
 # Rows read to find each heart sensor's newest: the headband writes 1 per 10 s, the camera up to 4/s.
 HEART_READ_ROWS = 200

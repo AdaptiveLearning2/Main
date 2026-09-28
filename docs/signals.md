@@ -545,8 +545,11 @@ calibration). Only a trusted rate counts; anything else gets nulls, which fusion
   on any channel**: no writer records a heart row without a rate, so a headband that lost contact writes nothing, and
   its last `high` would otherwise go on easing questions for the whole 90 s bound. Measured against the session's own
   rows, never the server clock, because every `ts` is the student's laptop's — against the server a laptop 35 s slow
-  silenced heart for good. With no other channel reading there is nothing newer to compare, so heart alone keeps the
-  90 s bound, which is the one place a lost headband still eases for that long.
+  silenced heart for good. **So the 30 s only applies while another channel is still arriving.** When nothing newer
+  exists — heart is the only channel, *or the whole headband dropped out of Bluetooth range*, since EEG and heart stop
+  together — its last `high` keeps easing for up to the 90 s query bound. Accepted: heart can only ease, a student who
+  walked away asks for no questions, and the case that costs anything (a headband dying mid-lesson) costs about 90 s
+  of easier questions. Closing it needs a server-stamped arrival column on `heart_signals`, which does not exist.
 - **`HeartSample` carries the table's CHECKs** (categories and every range): past the model, one violating value fails
   the whole batch's upsert with a 500, and the push client retries that batch for ever. Refused by the model it is one
   `malformed` sample. `test_signal_ingest.py` and `test_heart_stress.py` read the newest migration defining each

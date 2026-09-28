@@ -307,9 +307,13 @@ def get_session_signal_state(session_id, user_id=None):
                                     revoked=not consent["eeg"],
                                     calm_source=calm_source)
 
-    heart_rows = _latest("heart_signals", "stress_category, trusted, source, heart_rate_bpm",
-                         session_id, sources=consent["heart"]) if consent["heart"] else []
-    newest_heart = heart_rows[0] if heart_rows else {}
+    # Newest per sensor: camera rows carry no category, so the newest overall could hide the headband's.
+    heart_rows = [row for source in consent["heart"]
+                  for row in _latest("heart_signals",
+                                     "ts, stress_category, trusted, source, heart_rate_bpm",
+                                     session_id, sources=[source])]
+    categorised = [r for r in heart_rows if r.get("stress_category") is not None]
+    newest_heart = max(categorised or heart_rows, key=lambda r: str(r.get("ts") or ""), default={})
     heart = signal_fusion.heart_channel(
         newest_heart.get("stress_category"),
         newest_heart.get("trusted"),

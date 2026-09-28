@@ -64,6 +64,45 @@ def test_a_revoked_heart_channel_cannot_change_the_difficulty(monkeypatch):
     assert decider.get_session_signal_state(SESSION, USER).label == "focused"
 
 
+def test_a_newer_camera_row_without_a_category_does_not_hide_the_headbands(monkeypatch):
+    now = datetime.now(timezone.utc)
+    fake = _FakeSupabase({
+        "signal_consent": [CONSENT_ALL],
+        "cognitive_signals": _fresh(EEG_CALM),
+        "heart_signals": [
+            {**HEART_HIGH[0], "ts": (now - timedelta(seconds=8)).isoformat()},
+            {"session_id": SESSION, "source": "rppg", "heart_rate_bpm": 74.0,
+             "stress_category": None, "trusted": True, "ts": now.isoformat()},
+        ],
+        "face_signals": [],
+    })
+    monkeypatch.setattr(decider, "supabase", fake)
+    state = decider.get_session_signal_state(SESSION, USER)
+
+    assert state.label == "stressed"
+    assert "muse_optics" in state.reason
+
+
+def test_with_no_category_anywhere_the_newest_row_names_the_absence(monkeypatch):
+    now = datetime.now(timezone.utc)
+    fake = _FakeSupabase({
+        "signal_consent": [CONSENT_ALL],
+        "cognitive_signals": [],
+        "heart_signals": [
+            {"session_id": SESSION, "source": "muse_optics", "heart_rate_bpm": None,
+             "stress_category": None, "trusted": False,
+             "ts": (now - timedelta(seconds=8)).isoformat()},
+            {"session_id": SESSION, "source": "rppg", "heart_rate_bpm": 74.0,
+             "stress_category": None, "trusted": True, "ts": now.isoformat()},
+        ],
+        "face_signals": [],
+    })
+    monkeypatch.setattr(decider, "supabase", fake)
+    state = decider.get_session_signal_state(SESSION, USER)
+
+    assert "no stress classifier (rppg)" in state.channels["heart"]
+
+
 def test_a_consented_heart_channel_does_change_it(monkeypatch):
     """Same rows with consent reach the opposite label, so the test above is about consent."""
     _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM, heart=HEART_HIGH)
@@ -323,7 +362,12 @@ def test_every_signal_read_is_bounded_by_age_in_the_query(monkeypatch):
     window = timedelta(seconds=decider.SIGNAL_MAX_AGE_SEC)
     signal_tables = {"cognitive_signals", "heart_signals", "face_signals"}
     reads = [q for name, q in zip(fake.table_calls, fake.queries) if name in signal_tables]
-    assert len(reads) == 3
+    # One heart read per consented sensor.
+    heart_sources = sorted(v[1][0] for name, q in zip(fake.table_calls, fake.queries)
+                           if name == "heart_signals"
+                           for col, v in q.filters if col == "source")
+    assert heart_sources == ["muse_optics", "muse_ppg", "rppg"]
+    assert len(reads) == 2 + len(heart_sources)
     for q in reads:
         cutoff, = [datetime.fromisoformat(v[1]) for col, v in q.filters
                    if col == "ts" and isinstance(v, tuple) and v[0] == "gte"]

@@ -55,10 +55,107 @@ def test_the_limit_bounds_volume_where_the_queue_bounds_concurrency(monkeypatch)
 # ─── the per-student daily budget ────────────────────────────────────────
 # GENERATION_DAILY_CALL_LIMIT is one ceiling for the whole deployment; this keeps one account from spending it.
 
-def test_a_student_runs_out_of_their_day_while_their_rate_is_fresh(monkeypatch):
-    tighten(monkeypatch, main._GENERATION_DAILY_LIMITER, limit=2)
+def test_prefetch_runs_out_of_its_own_day_and_never_spends_the_students(monkeypatch):
+    """A prefetched question may never be shown, so it must not cost the student one."""
+    tighten(monkeypatch, main._PREFETCH_DAILY_LIMITER, limit=2)
+    claimed = []
+    monkeypatch.setattr(main, "_claim_daily_question", lambda uid: claimed.append(uid))
     assert [main._claim_generation_slot("kid") for _ in range(3)] == [True, True, False]
     assert main._claim_generation_slot("another-kid") is True
+    assert claimed == []
+
+
+def test_a_queued_question_costs_the_student_when_served(monkeypatch):
+    ask = _queued_then_inline(monkeypatch, "7th Grade", [("7th Grade", 0)])
+    claimed = []
+    monkeypatch.setattr(main, "_claim_daily_question", lambda uid: claimed.append(uid))
+    assert ask() == "made for 7th Grade 0"
+    assert claimed == ["kid"]
+
+
+def test_a_queued_question_refused_by_the_day_stays_queued(monkeypatch):
+    """Spent on a refusal, it would be gone the next morning for a question nobody saw."""
+    ask = _queued_then_inline(monkeypatch, "7th Grade", [("7th Grade", 0)])
+    monkeypatch.setattr(main, "_record_security_event", lambda *a, **k: None)
+    monkeypatch.setattr(main, "_claim_daily_question", lambda _uid: 3600)
+    with pytest.raises(HTTPException) as e:
+        ask()
+    assert e.value.status_code == 429
+    assert main._prefetch_cache["kid"][main._prefetch_key("7th Grade", 0, None)] == [
+        {"question_text": "made for 7th Grade 0"}]
+
+
+# ─── the served budget lives in the database ─────────────────────────────
+
+class _BudgetDb:
+    """Only `rpc("claim_daily_question")`; `answer` is its `.data`, or an exception to raise."""
+
+    def __init__(self, answer):
+        self.answer, self.calls = answer, []
+
+    def rpc(self, name, params):
+        self.calls.append((name, params))
+        db = self
+
+        class _R:
+            def execute(_self):
+                if isinstance(db.answer, Exception):
+                    raise db.answer
+                return type("Res", (), {"data": db.answer})()
+        return _R()
+
+
+@pytest.fixture
+def budget_db(monkeypatch):
+    from conftest import real_claim_daily_question
+    monkeypatch.setattr(main, "_claim_daily_question", real_claim_daily_question())
+    monkeypatch.setattr(main, "_school_timezone", lambda: __import__("zoneinfo").ZoneInfo("America/Los_Angeles"))
+
+    def install(answer):
+        db = _BudgetDb(answer)
+        monkeypatch.setattr(main, "supabase", db)
+        return db
+    return install
+
+
+def test_the_claim_is_the_students_school_day_and_limit(budget_db):
+    db = budget_db(True)
+    assert main._claim_daily_question("kid") is None
+    (name, params), = db.calls
+    assert name == "claim_daily_question"
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    assert params == {"p_user_id": "kid", "p_limit": main._GENERATION_DAILY_LIMIT,
+                      "p_day": datetime.now(ZoneInfo("America/Los_Angeles")).date().isoformat()}
+    # The fallback was not consulted, so a restart cannot reset what the database counted.
+    assert main._GENERATION_DAILY_LIMITER.hits == {}
+
+
+def test_a_spent_day_waits_until_the_schools_midnight(budget_db):
+    budget_db(False)
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo("America/Los_Angeles"))
+    to_midnight = (24 * 3600 - (now - now.replace(hour=0, minute=0, second=0, microsecond=0))
+                   .total_seconds())
+    wait = main._claim_daily_question("kid")
+    # Within a DST hour of the naive figure, and never zero.
+    assert wait >= 1 and abs(wait - to_midnight) <= 3600 + 5
+
+
+def test_an_unreadable_budget_falls_back_to_the_process_limiter(budget_db, monkeypatch):
+    budget_db(RuntimeError("postgrest is down"))
+    tighten(monkeypatch, main._GENERATION_DAILY_LIMITER, limit=1)
+    assert main._claim_daily_question("kid") is None
+    assert main._claim_daily_question("kid") is not None
+
+
+def test_an_unexpected_answer_falls_back_rather_than_admitting(budget_db, monkeypatch):
+    """PGRST202 before the migration, or a list: neither is a yes."""
+    budget_db([])
+    tighten(monkeypatch, main._GENERATION_DAILY_LIMITER, limit=1)
+    assert main._claim_daily_question("kid") is None
+    assert main._claim_daily_question("kid") is not None
 
 
 def test_a_request_past_the_daily_budget_is_a_429_that_says_tomorrow(monkeypatch):

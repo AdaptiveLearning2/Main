@@ -554,28 +554,6 @@ def can_use_device(user_id: str, device_id: str) -> bool:
         return True
 
 
-# Who paired each station's headband. Outlives the reservation TTL; the caller clears it once the
-# bridge reports the headband gone (main._station_open_to), since only the bridge knows.
-_connected_by: dict[str, str] = {}
-
-
-def record_connect(user_id: str, device_id: str) -> None:
-    with _lock:
-        _connected_by[device_id] = user_id
-
-
-def connector_of(device_id: str) -> str | None:
-    with _lock:
-        return _connected_by.get(device_id)
-
-
-def forget_connect(device_id: str, user_id: str | None = None) -> None:
-    """Clear the station's pairer; with user_id, only if it is still that user."""
-    with _lock:
-        if user_id is None or _connected_by.get(device_id) == user_id:
-            _connected_by.pop(device_id, None)
-
-
 def stop(session_id: str, user_id: str | None = None) -> dict:
     """Stop this session's poller if any, and release its user's reservation either way.
 

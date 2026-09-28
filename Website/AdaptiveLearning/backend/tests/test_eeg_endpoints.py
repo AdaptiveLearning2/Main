@@ -10,6 +10,7 @@ import pytest  # noqa: E402
 import eeg_client  # noqa: E402
 import eeg_poller  # noqa: E402
 import main  # noqa: E402
+from conftest import pairings, real_pairing_funcs  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -22,11 +23,9 @@ def _clean_poller_state(monkeypatch):
     # EEG consented unless a test says otherwise (/muse/connect checks it); the real _may_record composes it.
     monkeypatch.setattr(main, "_consent", lambda _uid: {**main._CONSENT_ENABLED_ALL, "retrieved": True, "exists": True})
     eeg_poller._active.clear()
-    eeg_poller._connected_by.clear()
     yield
     for sid in list(eeg_poller._active):
         eeg_poller.stop(sid)
-    eeg_poller._connected_by.clear()
 
 
 class _FakeSupabase:
@@ -565,7 +564,7 @@ def test_a_headband_the_bridge_reports_gone_frees_the_station(monkeypatch):
     _paired_by_a(monkeypatch, connected=False)
 
     assert main.eeg_status(request=None, device_id="station-p")["muse"]["available"] is True
-    assert eeg_poller.connector_of("station-p") is None
+    assert "station-p" not in pairings
 
 
 def test_a_bridge_that_cannot_say_keeps_the_station_closed(monkeypatch):
@@ -601,7 +600,7 @@ def test_connect_is_refused_without_eeg_consent(monkeypatch):
     with pytest.raises(main.HTTPException) as e:
         main.eeg_muse_connect(request=None, body={"name": "MuseS-1", "device_id": "station-c"})
     assert e.value.status_code == 403
-    assert called == [] and eeg_poller.connector_of("station-c") is None
+    assert called == [] and "station-c" not in pairings
 
 
 def test_debug_is_not_served_in_production(monkeypatch):
@@ -610,3 +609,127 @@ def test_debug_is_not_served_in_production(monkeypatch):
     with pytest.raises(main.HTTPException) as e:
         main.eeg_debug(request=None)
     assert e.value.status_code == 404
+
+
+# ── the pairing lives in the database, so a restart keeps it ─────────────
+
+class _PairingsDb:
+    """Only `station_pairings`; `fail` names the operations that raise."""
+
+    def __init__(self, fail=()):
+        self.rows, self.fail = {}, set(fail)
+
+    def table(self, name):
+        assert name == "station_pairings", name
+        db = self
+
+        class _Q:
+            def __init__(self):
+                self.op, self.filters, self.row = None, {}, None
+
+            def select(self, *_a):
+                self.op = "select"
+                return self
+
+            def upsert(self, row, on_conflict=None):
+                assert on_conflict == "device_id"
+                self.op, self.row = "upsert", row
+                return self
+
+            def delete(self):
+                self.op = "delete"
+                return self
+
+            def eq(self, col, val):
+                self.filters[col] = val
+                return self
+
+            def limit(self, _n):
+                return self
+
+            def execute(self):
+                if self.op in db.fail:
+                    raise RuntimeError(f"{self.op} failed")
+                if self.op == "upsert":
+                    db.rows[self.row["device_id"]] = self.row["user_id"]
+                    return type("R", (), {"data": [self.row]})()
+                hit = [{"device_id": d, "user_id": u} for d, u in db.rows.items()
+                       if all({"device_id": d, "user_id": u}[c] == v for c, v in self.filters.items())]
+                if self.op == "delete":
+                    for r in hit:
+                        db.rows.pop(r["device_id"])
+                return type("R", (), {"data": hit})()
+        return _Q()
+
+
+@pytest.fixture
+def pairings_db(monkeypatch):
+    for name, fn in real_pairing_funcs().items():
+        monkeypatch.setattr(main, name, fn)
+
+    def install(**kw):
+        db = _PairingsDb(**kw)
+        monkeypatch.setattr(main, "supabase", db)
+        return db
+    return install
+
+
+def test_a_restart_does_not_free_a_paired_headband(monkeypatch, pairings_db):
+    """Nothing in memory survives a restart; the row does, so user-b is still refused."""
+    db = pairings_db()
+    _paired_by_a(monkeypatch, connected=True)
+    assert db.rows == {"station-p": "user-a"}
+    assert main._station_open_to("user-b", "station-p") is False
+    assert main._station_open_to("user-a", "station-p") is True
+
+
+def test_the_row_goes_when_the_bridge_reports_the_headband_gone(monkeypatch, pairings_db):
+    db = pairings_db()
+    _paired_by_a(monkeypatch, connected=False)
+    assert main._station_open_to("user-b", "station-p") is True
+    assert db.rows == {}
+
+
+def test_disconnecting_clears_the_row(monkeypatch, pairings_db):
+    db = pairings_db()
+    _paired_by_a(monkeypatch, connected=True)
+    monkeypatch.setattr(eeg_client, "muse_disconnect", lambda device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    main.eeg_muse_disconnect(request=None, body={"device_id": "station-p"})
+    assert db.rows == {}
+
+
+def test_an_unreadable_pairing_is_someone_elses_until_the_bridge_says_gone(monkeypatch, pairings_db):
+    pairings_db(fail={"select"})
+    monkeypatch.setattr(eeg_client, "get_muse_status",
+                        lambda device_id=None: {"ingestion": {"muse_connected": True}})
+    assert main._station_open_to("user-b", "station-p") is False
+    monkeypatch.setattr(eeg_client, "get_muse_status",
+                        lambda device_id=None: {"ingestion": {"muse_connected": False}})
+    assert main._station_open_to("user-b", "station-p") is True
+
+
+def test_a_pairing_that_cannot_be_recorded_is_undone(monkeypatch, pairings_db):
+    """Left connected and unrecorded, the headband would be open to anyone."""
+    pairings_db(fail={"upsert"})
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_connect", lambda name, device_id: {"ok": True})
+    dropped = []
+    monkeypatch.setattr(eeg_client, "muse_disconnect", lambda device_id: dropped.append(device_id))
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    with pytest.raises(main.HTTPException) as e:
+        main.eeg_muse_connect(request=None, body={"name": "MuseS-1", "device_id": "station-p"})
+    assert e.value.status_code == 503
+    assert dropped == ["station-p"]
+    # Its reservation goes too, so the station is not held by a failed connect.
+    assert eeg_poller.can_use_device("user-b", "station-p") is True
+
+
+def test_the_status_poll_reads_the_sidecar_once_when_the_gate_had_to_ask(monkeypatch):
+    """A released station is read by the gate; the poll reuses that rather than asking again."""
+    _paired_by_a(monkeypatch, connected=False)
+    reads = []
+    monkeypatch.setattr(eeg_client, "get_muse_status",
+                        lambda device_id=None: reads.append(device_id) or {"ingestion": {"muse_connected": False}})
+    main.eeg_status(request=None, device_id="station-p")
+    assert reads == ["station-p"]

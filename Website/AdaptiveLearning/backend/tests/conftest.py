@@ -127,6 +127,59 @@ def _feature_flags_are_default():
     main._feature_flags_cache_clear()
 
 
+_REAL = {}
+
+
+def real_claim_daily_question():
+    """The database-backed claim that `_daily_budget_is_in_memory` swaps out, for the tests of it."""
+    return _REAL["claim_daily_question"]
+
+
+@pytest.fixture(autouse=True)
+def _daily_budget_is_in_memory():
+    """The served-question budget on its per-process fallback, so no test reaches a real database.
+
+    No `monkeypatch`, for the ordering reason in `_feature_flags_are_default`.
+    """
+    import main
+    original = main._claim_daily_question
+    _REAL.setdefault("claim_daily_question", original)
+    main._claim_daily_question = lambda user_id: main._GENERATION_DAILY_LIMITER.check(user_id)
+    yield
+    main._claim_daily_question = original
+
+
+_PAIRING_FUNCS = ("_station_pairer", "_record_pairing", "_forget_pairing")
+# device_id -> user_id, standing in for `station_pairings` in every test but the ones of it.
+pairings: dict[str, str] = {}
+
+
+def real_pairing_funcs():
+    """The database-backed pairing functions `_pairings_in_memory` swaps out."""
+    return {name: _REAL[name] for name in _PAIRING_FUNCS}
+
+
+@pytest.fixture(autouse=True)
+def _pairings_in_memory():
+    """`station_pairings` as a dict, so a test's own fake client need not model it. No `monkeypatch`, as above."""
+    import main
+    originals = {name: getattr(main, name) for name in _PAIRING_FUNCS}
+    for name, fn in originals.items():
+        _REAL.setdefault(name, fn)
+    pairings.clear()
+
+    def forget(device_id, user_id=None):
+        if user_id is None or pairings.get(device_id) == user_id:
+            pairings.pop(device_id, None)
+    main._station_pairer = pairings.get
+    main._record_pairing = lambda user_id, device_id: pairings.__setitem__(device_id, user_id)
+    main._forget_pairing = forget
+    yield
+    for name, fn in originals.items():
+        setattr(main, name, fn)
+    pairings.clear()
+
+
 @pytest.fixture
 def set_flag(monkeypatch):
     """Override one feature flag, leaving the rest at their declared defaults."""

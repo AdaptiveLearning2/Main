@@ -1407,5 +1407,36 @@ BEGIN
     END LOOP;
 END $$;
 
+-- ── claim_daily_question admits up to the limit, per student per day ────────
+-- The only place the claim runs; the backend suite can check only the call's arguments.
+
+DO $$
+DECLARE
+    usr  uuid;
+    got  boolean[] := '{}';
+    d    date := DATE '2026-09-28';
+BEGIN
+    SELECT owner_id INTO usr FROM _ids;
+    FOR i IN 1..3 LOOP
+        got := got || public.claim_daily_question(usr, d, 2);
+    END LOOP;
+    IF got IS DISTINCT FROM ARRAY[true, true, false] THEN
+        RAISE EXCEPTION 'a limit of 2 answered % over three claims', got;
+    END IF;
+    IF NOT public.claim_daily_question(usr, d + 1, 2) THEN
+        RAISE EXCEPTION 'the next day started already spent';
+    END IF;
+    IF (SELECT served FROM public.daily_question_usage WHERE user_id = usr AND day = d) <> 2 THEN
+        RAISE EXCEPTION 'a refused claim was counted';
+    END IF;
+    IF public.claim_daily_question(usr, d + 2, 0) THEN
+        RAISE EXCEPTION 'a limit of 0 admitted a question';
+    END IF;
+    IF has_function_privilege('authenticated', 'public.claim_daily_question(uuid, date, integer)', 'EXECUTE')
+       OR has_table_privilege('authenticated', 'public.daily_question_usage', 'SELECT') THEN
+        RAISE EXCEPTION 'a client role can reach the daily question budget';
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

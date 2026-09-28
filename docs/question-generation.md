@@ -124,7 +124,7 @@ Verification stops at the network boundary without credits, and that boundary is
 | --- | --- | --- |
 | Per-call deadline | `GENERATION_LLM_TIMEOUT` (30 s) | The SDK's default is **ten minutes**; a prefetch worker blocked that long never refills the queue |
 | Concurrency | `GENERATION_MAX_CONCURRENCY` (8) | `_ensure_queue` bounds *per session*, so the peak was however many children pressed start at once |
-| Per-student volume | `GENERATION_RATE_LIMIT` / `_WINDOW` (20/min), `GENERATION_DAILY_LIMIT_PER_STUDENT` (150/day) | The queue bounds calls *in flight*, not *over time*; the daily ceiling below is shared, so one account could spend it |
+| Per-student volume | `GENERATION_RATE_LIMIT` / `_WINDOW` (20/min), `GENERATION_DAILY_LIMIT_PER_STUDENT` (150 *served* per school day, in `daily_question_usage`; prefetch has its own 150) | The queue bounds calls *in flight*, not *over time*; the daily ceiling below is shared, so one account could spend it. Counted in the database so a restart or a second worker cannot reset it, and on serving so an unshown prefetch costs the student nothing |
 | Waiting callers | `GENERATION_MAX_WAITERS` (30) | The fourth bound, and it was missing |
 | Spend | `GENERATION_DAILY_CALL_LIMIT` (2500/24 h, Claude only) | Nothing bounded it; free against a local model |
 
@@ -1090,7 +1090,8 @@ solvers rather than staying beside its caller.
 read the **worker's own output**: `sympify(solved)` in `expressions` and `rationals`, and `median`'s fallback. **A parse
 whose operand came from the model belongs in the worker — and the worker is not a sandbox**: sympify *evals*, as the
 backend's user, with its files and network. So `_run` refuses any request text or non-`values` result that is not plain
-arithmetic (`_SAFE_TEXT`: no quotes, brackets, commas, backslashes or `__`), before a worker starts or a caller parses.
+arithmetic (`_SAFE_TEXT`: no quotes, brackets, commas, backslashes or `__`), before a worker starts or a caller parses;
+a model's `×`, `÷`, `·`, U+2212, thousands comma and stray whitespace are rewritten first, in the request the worker gets.
 
 **Every worker branch checks its result is usable, and the `evaluate`/`simplify` one did not.** `1/0` came back as the
 string `zoo` and `0/0` as `nan`; `rationals` served them — `correct_answer='zoo'` among the options — and

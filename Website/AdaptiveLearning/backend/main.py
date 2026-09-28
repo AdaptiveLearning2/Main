@@ -2182,11 +2182,15 @@ _GENERATION_RATE_WINDOW = env_number("GENERATION_RATE_WINDOW", 60.0, float, mini
 _GENERATION_LIMITER = _SlidingWindowLimiter(
     "generation", _GENERATION_RATE_LIMIT, _GENERATION_RATE_WINDOW)
 
-# Per-student generations per rolling day. GENERATION_DAILY_CALL_LIMIT is one process-wide ceiling,
-# so without this one account could spend it for every student; a generation is two or more calls.
+# Questions served per student per school day. GENERATION_DAILY_CALL_LIMIT is one process-wide ceiling,
+# so without this one account could spend it for every student. Counted by `claim_daily_question`;
+# the limiter below is only its fallback when that call fails.
 _GENERATION_DAILY_LIMIT = env_number("GENERATION_DAILY_LIMIT_PER_STUDENT", 150, int, minimum=1)
 _GENERATION_DAILY_LIMITER = _SlidingWindowLimiter(
     "generation_daily", _GENERATION_DAILY_LIMIT, 86400.0)
+# Prefetch makes questions nobody may see, so it spends its own budget, never the student's.
+_PREFETCH_DAILY_LIMITER = _SlidingWindowLimiter(
+    "prefetch_daily", _GENERATION_DAILY_LIMIT, 86400.0)
 
 # Requests in flight on generation, process-wide; past it, refuse rather than queue.
 # Waiters block anyio's ~40-slot threadpool, so 30 leaves headroom for ingest.
@@ -2209,23 +2213,51 @@ def _generation_waiter():
             _generation_waiters.release()
 
 
-def _generation_refusal(user_id: str):
-    """Count one generation against this student's rate, then their day; None to admit, else (limiter, wait)."""
-    for limiter in (_GENERATION_LIMITER, _GENERATION_DAILY_LIMITER):
-        wait = limiter.check(user_id)
+def _claim_daily_question(user_id: str) -> int | None:
+    """Count one served question against the student's school day; None to admit, else seconds to wait.
+
+    A failed or unexpected answer falls back to the per-process limiter rather than refusing everyone.
+    """
+    tz = _school_timezone()
+    now = datetime.now(tz)
+    try:
+        admitted = supabase.rpc("claim_daily_question", {
+            "p_user_id": user_id, "p_day": now.date().isoformat(),
+            "p_limit": _GENERATION_DAILY_LIMIT}).execute().data
+    except Exception as e:
+        print(f"[generate] daily budget unreadable for {user_id[:8]}: {type(e).__name__}")
+        admitted = None
+    if admitted is True:
+        return None
+    if admitted is not False:
+        return _GENERATION_DAILY_LIMITER.check(user_id)
+    midnight = datetime.combine(now.date() + timedelta(days=1), datetime.min.time(), tzinfo=tz)
+    # Through UTC: aware datetimes sharing a tzinfo subtract as wall clocks, wrong across a DST change.
+    return max(1, int((midnight.astimezone(timezone.utc)
+                       - now.astimezone(timezone.utc)).total_seconds()) + 1)
+
+
+def _generation_refusal(user_id: str, generating: bool = True):
+    """Count one served question against the rate (if generating now), then the day; None, else (limiter, wait)."""
+    if generating:
+        wait = _GENERATION_LIMITER.check(user_id)
         if wait is not None:
-            return limiter, wait
+            return _GENERATION_LIMITER, wait
+    wait = _claim_daily_question(user_id)
+    if wait is not None:
+        return _GENERATION_DAILY_LIMITER, wait
     return None
 
 
 def _claim_generation_slot(user_id: str) -> bool:
-    """`_generation_refusal` as a bool, for a caller with nobody to tell (the prefetch worker)."""
-    return _generation_refusal(user_id) is None
+    """For the prefetch worker: the rate, then prefetch's own day budget. Nobody to tell on a refusal."""
+    return all(limiter.check(user_id) is None
+               for limiter in (_GENERATION_LIMITER, _PREFETCH_DAILY_LIMITER))
 
 
-def _admit_generation(user_id: str) -> None:
-    """Claim one generation for a request, or record the refusal and raise 429."""
-    refused = _generation_refusal(user_id)
+def _admit_generation(user_id: str, generating: bool = True) -> None:
+    """Count one served question, or record the refusal and raise 429. `generating=False` for a queue hit."""
+    refused = _generation_refusal(user_id, generating)
     if refused is None:
         return
     limiter, wait = refused
@@ -2621,6 +2653,13 @@ def generate_question(
         if not question:
             raise HTTPException(500, "Failed to generate question")
     else:
+        try:
+            # A queued question costs the student's day when served, not when it was made.
+            _admit_generation(user_id, generating=False)
+        except HTTPException:
+            with _prefetch_lock:
+                _prefetch_cache.setdefault(user_id, {}).setdefault(key, []).insert(0, question)
+            raise
         print(f"[generate] cache hit for {user_id[:8]} -- instant serve")
 
     question["effective_grade"] = effective_grade
@@ -6162,24 +6201,64 @@ def _refuse_under_push(what: str) -> None:
         )
 
 
-def _station_open_to(user_id: str, device_id: str) -> bool:
-    """`can_use_device`, plus: a headband another user paired stays theirs while the bridge reports it connected.
+def _station_pairer(device_id: str) -> str | None:
+    """Who paired this station's headband. In the database, so a restart or a second worker agrees; raises on a failed read."""
+    rows = supabase.table("station_pairings").select("user_id") \
+        .eq("device_id", device_id).limit(1).execute().data or []
+    return rows[0]["user_id"] if rows else None
 
-    Fails closed when the bridge cannot say; a headband it reports gone releases the station.
+
+def _record_pairing(user_id: str, device_id: str) -> None:
+    """Raises on failure: an unrecorded pairing would leave the headband open to anyone."""
+    supabase.table("station_pairings").upsert(
+        {"device_id": device_id, "user_id": user_id, "paired_at": _utc_now().isoformat()},
+        on_conflict="device_id").execute()
+
+
+def _forget_pairing(device_id: str, user_id: str | None = None) -> None:
+    """Clear the station's pairer; with user_id, only if it is still that user. Never raises."""
+    try:
+        q = supabase.table("station_pairings").delete().eq("device_id", device_id)
+        if user_id is not None:
+            q = q.eq("user_id", user_id)
+        q.execute()
+    except Exception as e:
+        print(f"[eeg] could not clear the pairing on {device_id}: {type(e).__name__}")
+
+
+_PAIRER_UNKNOWN = object()
+
+
+def _station_access(user_id: str, device_id: str) -> tuple[bool, dict | None]:
+    """(open, the muse status if one was read, for the caller to reuse rather than fetch again).
+
+    A headband another user paired stays theirs while the bridge reports it connected; a failed
+    pairing read counts as another user's. Fails closed when the bridge cannot say.
     """
     if not eeg_poller.can_use_device(user_id, device_id):
-        return False
-    owner = eeg_poller.connector_of(device_id)
-    if owner in (None, user_id):
-        return True
+        return False, None
     try:
-        connected = (eeg_client.get_muse_status(device_id).get("ingestion") or {}).get("muse_connected")
+        owner = _station_pairer(device_id)
+    except Exception as e:
+        print(f"[eeg] pairing unreadable on {device_id}: {type(e).__name__}")
+        owner = _PAIRER_UNKNOWN
+    if owner is None or owner == user_id:
+        return True, None
+    try:
+        status = eeg_client.get_muse_status(device_id)
+        connected = (status.get("ingestion") or {}).get("muse_connected")
     except Exception:
-        return False
+        return False, None
     if connected is False:
-        eeg_poller.forget_connect(device_id, owner)
-        return True
-    return False
+        if owner is not _PAIRER_UNKNOWN:
+            _forget_pairing(device_id, owner)
+        return True, status
+    return False, None
+
+
+def _station_open_to(user_id: str, device_id: str) -> bool:
+    """`_station_access` for a caller with no use for the status."""
+    return _station_access(user_id, device_id)[0]
 
 
 def _reserve_and_call(user_id: str, device_id: str, fn, *args,
@@ -6230,7 +6309,18 @@ def eeg_muse_connect(request: Request, body: dict = Body(...)):
             "Could not check whether EEG recording is allowed, so the headband was not connected.")))
     out = _reserve_and_call(user["id"], device_id, eeg_client.muse_connect, name, device_id,
                             session_id=body.get("session_id"))
-    eeg_poller.record_connect(user["id"], device_id)
+    try:
+        _record_pairing(user["id"], device_id)
+    except Exception as e:
+        # Unrecorded, the headband would be anyone's: undo the pairing rather than leave it open.
+        print(f"[eeg] could not record the pairing on {device_id}: {type(e).__name__}")
+        try:
+            eeg_client.muse_disconnect(device_id)
+        except Exception:
+            pass
+        eeg_poller.release_reservation(user["id"], device_id)
+        raise HTTPException(503, "Could not record who connected this headband, so it was "
+                                 "disconnected. Try again.")
     return out
 
 @app.post("/api/eeg/muse/disconnect")
@@ -6250,7 +6340,7 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
         out = eeg_client.muse_disconnect(device_id)
     except Exception as e:
         raise HTTPException(502, f"Bridge error: {e}")
-    eeg_poller.forget_connect(device_id)
+    _forget_pairing(device_id)
     return out
 
 @app.get("/api/eeg/devices")
@@ -6278,12 +6368,13 @@ def eeg_debug(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     if not eeg_client.is_alive():
         return {"available": False, "ingest_mode": "pull"}
     # Security: another user's live station holds their biometric data.
-    if not _station_open_to(user["id"], device_id):
+    open_, muse = _station_access(user["id"], device_id)
+    if not open_:
         return {"available": False, "reason": "in_use_by_other"}
     # A token misconfiguration raises by design; report it, not a 500.
     try:
         snapshot = eeg_client.get_state(device_id, timeout=1.5)
-        muse     = eeg_client.get_muse_status(device_id)
+        muse     = muse or eeg_client.get_muse_status(device_id)
     except RuntimeError as e:
         return {"available": False, "error": str(e)}
     return {"available": True, "snapshot": snapshot, "muse": muse}
@@ -6381,10 +6472,13 @@ def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     if push:
         # None: "not probed in this deployment", not "absent".
         muse = {"available": None, "reason": "push_ingestion"}
-    elif _station_open_to(user["id"], device_id):
-        muse = eeg_client.get_muse_status(device_id)
     else:
-        muse = {"available": False, "reason": "in_use_by_other"}
+        open_, read = _station_access(user["id"], device_id)
+        if not open_:
+            muse = {"available": False, "reason": "in_use_by_other"}
+        else:
+            # At most one sidecar read per poll: the gate's own, when it had to ask.
+            muse = read or eeg_client.get_muse_status(device_id)
     return {
         "service": None if push else eeg_client.is_alive(),
         "ingest_mode": eeg_poller.INGEST_MODE,

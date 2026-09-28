@@ -1352,7 +1352,9 @@ Tests: `backend/tests/test_admin.py`. `conftest`'s `_feature_flags_are_default` 
 other test file, and **deliberately does not take `monkeypatch`** — requesting it from an autouse fixture
 pytest orders early hoists `monkeypatch`'s setup ahead of `_join_poller_threads` and inverts their
 teardown, which failed three unrelated tests in teardown for a reason nothing in their bodies could
-explain. `pytest --setup-plan` shows the ordering directly.
+explain. `pytest --setup-plan` shows the ordering directly. Two more autouse fixtures swap database-backed state
+the same way: the daily question budget and the station pairer run in memory for every test but their own, which
+take the real functions from `real_claim_daily_question()` / `real_pairing_funcs()`.
 
 ### The security log records that something happened, never what was in it
 

@@ -391,10 +391,11 @@ async def test_a_new_session_starts_at_the_full_batch_size(client, monkeypatch):
     assert client.status()["batch_limit"]["face"] == MAX_BATCH
 
 
-# A field the versions disagree on, and a list too long beside another error: neither is size.
+# A field the versions disagree on; the list too long beside another error, or inside a sample.
 @pytest.mark.parametrize("body", [
     {"detail": [{"type": "missing", "loc": ["body", "samples", 0, "ts"]}]},
     {"detail": [_TOO_LONG["detail"][0], {"type": "uuid_parsing", "loc": ["body", "session_id"]}]},
+    {"detail": [{"type": "too_long", "loc": ["body", "samples", 0, "last_optics"]}]},
     {"detail": "Unprocessable"},
 ])
 @pytest.mark.anyio

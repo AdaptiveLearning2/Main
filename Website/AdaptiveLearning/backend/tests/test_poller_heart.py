@@ -60,6 +60,31 @@ def _allow(*sources):
     eeg_poller.set_heart_consent_check(lambda user_id, source: source in sources)
 
 
+def _values(row):
+    """Every reading in the row, and the full ids (the log may carry an 8-character prefix)."""
+    readings = [v for v in row.values() if isinstance(v, float) or (isinstance(v, int) and not isinstance(v, bool))]
+    return [str(v) for v in readings if len(str(v)) > 2] + [row["user_id"], row["session_id"]]
+
+
+def test_the_log_carries_no_reading_written_or_failed(poller, capsys):
+    """Logs sit outside consent, erasure and expiry, so a reading must never reach one."""
+    p, db = poller
+    _allow("muse_optics")
+    p._record_heart(_payload(bpm=68.25), loops=1)
+    written = db.writes[0][1]
+
+    class _Failing(_Table):
+        def execute(self):
+            raise RuntimeError(f"Failing row contains ({', '.join(_values(self.sink[-1][1]))})")
+    p.supabase.table = lambda name: _Failing(db.writes, name)
+    p._record_heart(_payload(bpm=71.5, ts="2026-08-10T10:00:10+00:00"), loops=1)
+
+    out = capsys.readouterr().out
+    assert "HEART #1" in out and "HEART INSERT FAILED #1" in out
+    for value in _values(written) + _values(db.writes[-1][1]):
+        assert value not in out, value
+
+
 def test_a_consented_reading_is_written(poller):
     p, db = poller
     _allow("muse_optics")

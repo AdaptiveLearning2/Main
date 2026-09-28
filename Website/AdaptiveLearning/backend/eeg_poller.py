@@ -52,6 +52,12 @@ class DeviceClaimedError(Exception):
         super().__init__(f"Device {device_id!r} is already in use by another user")
 
 
+def _error_label(e: Exception) -> str:
+    """Type and code only: a Postgres message quotes the failing row, readings included."""
+    code = getattr(e, "code", None)
+    return f"{type(e).__name__}" + (f" code={code}" if code else "")
+
+
 class _Poller(threading.Thread):
     def __init__(self, supabase, user_id: str, session_id: str, device_id: str):
         super().__init__(daemon=True)
@@ -136,12 +142,11 @@ class _Poller(threading.Thread):
             self.heart_samples += 1
             if self.heart_samples <= 3 or self.heart_samples % 10 == 0:
                 print(f"+++ [eeg-poller] HEART #{self.heart_samples} session={self.session_id[:8]} "
-                      f"source={source} bpm={row.get('heart_rate_bpm')}", flush=True)
+                      f"source={source}", flush=True)
         except Exception as e:
             self.heart_errors += 1
             if self.heart_errors <= 3 or self.heart_errors % 10 == 0:
-                print(f"!!! [eeg-poller] HEART INSERT FAILED #{self.heart_errors}: "
-                      f"{type(e).__name__}: {e}", flush=True)
+                print(f"!!! [eeg-poller] HEART INSERT FAILED #{self.heart_errors}: {_error_label(e)}", flush=True)
 
     def run(self):
         # start() just read consent, so the first re-check is a full interval away.
@@ -214,11 +219,11 @@ class _Poller(threading.Thread):
                         # Count rows written; a deduped repeat writes none.
                         self.samples += len(res.data or [])
                         if self.samples <= 3 or self.samples % 10 == 0:
-                            print(f"+++ [eeg-poller] INSERTED #{self.samples} session={self.session_id[:8]} focus={row.get('focus')}", flush=True)
+                            print(f"+++ [eeg-poller] INSERTED #{self.samples} session={self.session_id[:8]}", flush=True)
                     except Exception as e:
                         self.errors += 1
-                        print(f"!!! [eeg-poller] INSERT FAILED #{self.errors}: {type(e).__name__}: {e}", flush=True)
-                        print(f"!!! [eeg-poller] row was: {row}", flush=True)
+                        print(f"!!! [eeg-poller] INSERT FAILED #{self.errors}: {_error_label(e)} "
+                              f"fields={sorted(row)}", flush=True)
             # wait(), not sleep(), so stop() takes effect immediately.
             self._stop_event.wait(_poll_wait(self.consecutive_misses))
 

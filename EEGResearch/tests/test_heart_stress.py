@@ -9,6 +9,7 @@ import pytest
 
 from src.app.services.heart_stress import (
     BASELINE_READINGS,
+    CALIBRATION_MAX_GAP,
     CATEGORIES,
     HeartStressScorer,
 )
@@ -72,6 +73,28 @@ def test_an_unsettled_start_keeps_calibrating_until_a_settled_run():
     # One more settled reading slides the 95 out.
     assert _scored(scorer, 70.0)["stress_category"] == "low"
     assert scorer.baseline_bpm == 70.0
+
+
+@pytest.mark.parametrize("gap, restarted", [(CALIBRATION_MAX_GAP, False),
+                                             (CALIBRATION_MAX_GAP + 1, True)])
+def test_a_long_gap_in_calibration_restarts_it(gap, restarted):
+    """Readings minutes apart are not one settled run."""
+    scorer = HeartStressScorer()
+    for _ in range(BASELINE_READINGS - 1):
+        scorer.score(_reading(70.0))
+    for _ in range(gap):
+        scorer.score(_reading(None, trusted=False))
+
+    after = _scored(scorer, 70.0)
+    assert after["stress_category"] == ("calibrating" if restarted else "low")
+    assert (scorer.baseline_bpm is None) == restarted
+
+
+def test_a_gap_after_the_baseline_formed_keeps_it():
+    scorer = _calibrated(70.0)
+    for _ in range(10 * CALIBRATION_MAX_GAP):
+        scorer.score(_reading(None, trusted=False))
+    assert _scored(scorer, 80.0)["stress_category"] == "high"
 
 
 def test_the_baseline_is_the_median_so_one_outlier_does_not_move_it():
@@ -144,10 +167,15 @@ def test_the_rate_fields_are_never_touched():
 
 
 def test_every_category_is_one_the_database_accepts():
-    """A category outside the CHECK fails the whole batch's upsert, not one row."""
-    migration = (Path(__file__).resolve().parents[2]
-                 / "supabase/migrations/20260805000000_heart_signals.sql").read_text(encoding="utf-8")
-    check = migration[migration.index("heart_signals_stress_category_check"):]
-    allowed = set(re.findall(r"'(\w+)'::\"text\"", check[:check.index(";")]))
+    """A category outside the CHECK is refused as malformed, so it is never recorded.
+
+    Read from the newest migration defining the constraint, so a later change is seen."""
+    check = None
+    for path in sorted((Path(__file__).resolve().parents[2] / "supabase/migrations").glob("*.sql")):
+        for m in re.finditer(r'(ADD|DROP) CONSTRAINT (IF EXISTS )?"heart_signals_stress_category_check"'
+                             r'([^;]*);', path.read_text(encoding="utf-8")):
+            check = m.group(3) if m.group(1) == "ADD" else None
+    assert check is not None
+    allowed = set(re.findall(r"'(\w+)'::\"text\"", check))
     assert set(CATEGORIES) <= allowed
     assert "calibrating" in CATEGORIES and "high" in CATEGORIES

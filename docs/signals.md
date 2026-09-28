@@ -524,7 +524,9 @@ block, once per window (`stream_manager._optical_heart_block`, never per tick, o
 calibration). Only a trusted rate counts; anything else gets nulls, which fusion reads as absent.
 
 - **The baseline is the median of the first 6 trusted readings within 12 bpm of each other**, about a minute after the
-  first rate; until then `calibrating`. An unsettled start slides until a settled run of 6 arrives. It is **fixed for
+  first rate; until then `calibrating`. An unsettled start slides until a settled run of 6 arrives, and more than 3
+  windows in a row with no trusted rate (30 s) restart calibration, since readings either side of a long gap are not
+  one run. It is **fixed for
   the session** (a rolling reference would decay a sustained rise back to "low"), survives a dropped lock, and is
   forgotten by `_reset_heart`, so the next student calibrates afresh. Known limit: a student already aroused when
   calibration runs gets a high baseline, and the score under-reports for the whole session.
@@ -536,8 +538,12 @@ calibration). Only a trusted rate counts; anything else gets nulls, which fusion
   and category can disagree by at most those 10 points.
 - **`high` now eases difficulty on its own**, as any trusted channel may. The gait failure (confident step cadence)
   would read as `high`, which costs an easy question, never a harder one. Camera rPPG gets no score; its rows stay
-  `no_classifier`. `stress_category` values must stay inside `heart_signals_stress_category_check`, since one outside
-  it fails the whole batch's upsert; `test_heart_stress.py` reads the migration to hold them equal.
+  `no_classifier`, and the decider reads the newest row **per sensor**, preferring one with a category, so a newer
+  camera row cannot hide the headband's `high`.
+- **`HeartSample` carries the table's CHECKs** (categories and every range): past the model, one violating value fails
+  the whole batch's upsert with a 500, and the push client retries that batch for ever. Refused by the model it is one
+  `malformed` sample. `test_signal_ingest.py` and `test_heart_stress.py` read the newest migration defining each
+  constraint to hold all three equal. The poller writes one row at a time, so there a violation costs that row alone.
 
 ### The poller's heart write is consent-gated, and that gate is the only one there is
 

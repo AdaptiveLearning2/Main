@@ -23,7 +23,7 @@ EMOTION_MIN_CONFIDENCE = 0.50
 FER_LABELS = ("neutral", "happy", "surprise", "sad", "angry", "disgust", "fear", "contempt")
 NEGATIVE_EMOTIONS = frozenset({"sad", "fear", "angry", "disgust", "contempt"})
 
-# `trusted` is checked separately: an untrusted sample still carries a category.
+# `trusted` is still checked: the headband categorises trusted rows only, but a row can come from elsewhere.
 ELEVATED_STRESS = frozenset({"high"})
 
 

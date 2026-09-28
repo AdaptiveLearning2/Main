@@ -17,10 +17,13 @@ BASELINE_READINGS = 6
 # bpm; the baseline forms only once that many consecutive readings sit within this span.
 BASELINE_MAX_SPREAD_BPM = 12.0
 
+# Windows in a row with no trusted rate that calibration may bridge; one more and it restarts.
+CALIBRATION_MAX_GAP = 3
+
 # bpm above the baseline that reaches 100; the baseline itself scores 50.
 HR_SPAN_BPM = 20.0
 
-# bpm above the baseline for each category; both clear the 2.1 bpm seated error.
+# bpm above the baseline for each category; docs/signals.md says what error they must clear.
 MODERATE_DELTA_BPM = 5.0
 HIGH_DELTA_BPM = 10.0
 
@@ -39,6 +42,7 @@ class HeartStressScorer:
 
     def __init__(self) -> None:
         self._calibration: deque[tuple[float, float | None]] = deque(maxlen=BASELINE_READINGS)
+        self._gap = 0
         self.baseline_bpm: float | None = None
         self.baseline_rmssd_ms: float | None = None
 
@@ -52,7 +56,12 @@ class HeartStressScorer:
         record["stress_baseline_bpm"] = None
         bpm = record.get("bpm")
         if bpm is None or record.get("trusted") is not True:
+            self._gap += 1
+            if self.baseline_bpm is None and self._gap > CALIBRATION_MAX_GAP:
+                # Readings either side of a long gap are not one settled run.
+                self._calibration.clear()
             return
+        self._gap = 0
         rmssd = record.get("rmssd_ms")
         rmssd = float(rmssd) if rmssd is not None and rmssd > 0 else None
 

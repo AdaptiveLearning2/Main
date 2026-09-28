@@ -115,6 +115,40 @@ def test_a_disconnect_clears_the_buffer():
     assert len(a.optics_window(float("inf")).channels) == 0
 
 
+def test_a_buffer_nothing_has_reached_lately_is_stale_not_a_window(monkeypatch):
+    """Optics stopping while EEG goes on leaves the buffer frozen; re-read, it would republish
+    the same 25 s as a fresh heart rate every step. The cutoff runs off the bridge's stamps."""
+    import src.app.services.eeg_ingestion as ingestion
+    now = [1000.0]
+    monkeypatch.setattr(ingestion.time, "monotonic", lambda: now[0])
+    a = _adapter()
+    _feed(a, [(1.0,)] * 640)
+    assert len(a.optics_window(5.0).channels) > 0
+
+    now[0] += TcpMuseBridgeAdapter.OPTICS_STALE_S + 0.5
+    stale = a.optics_window(5.0)
+    assert len(stale.channels) == 0 and stale.unusable_reason == "optics_stale"
+
+    # Packets resuming is a live window again.
+    _feed(a, [(1.0,)] * 640, start_seq=640, start_ms=640 * 1000 / 64)
+    assert len(a.optics_window(5.0).channels) > 0
+
+
+def test_a_disconnect_forgets_the_link_it_reported(monkeypatch):
+    """A bridge that exited left `muse_connected: true` and its last `eeg_age_ms` standing."""
+    import src.app.services.eeg_ingestion as ingestion
+    a = _adapter()
+    ingestion._apply_bridge_ingestion_fields(a._ingestion_meta, {
+        "muse_connected": True, "eeg_age_ms": 12, "active_muse_name": "Muse-1"})
+    assert a.get_ingestion_meta()["muse_connected"] is True
+
+    a.disconnect()
+
+    meta = a.get_ingestion_meta()
+    assert meta["muse_connected"] is False and meta["active_muse_name"] == ""
+    assert "eeg_age_ms" not in meta
+
+
 def test_the_buffer_holds_more_than_a_window_and_no_more():
     a = _adapter()
     _feed(a, [(1.0,)] * (TcpMuseBridgeAdapter.OPTICS_BUFFER_MAXLEN + 500))

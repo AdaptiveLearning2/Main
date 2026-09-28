@@ -567,6 +567,8 @@ def test_the_sweeper_can_be_switched_off(monkeypatch):
 def test_the_sweeper_starts_and_is_joinable(monkeypatch):
     """A printing thread must be joined, or shutdown can hit a fatal stdout-lock abort."""
     monkeypatch.setattr(main, "_STALE_SWEEP_INTERVAL_SEC", 30)
+    # The loop's chart catch-up would otherwise query whatever SUPABASE_URL points at.
+    monkeypatch.setattr(main.chart_archive, "archive_missing", lambda *a, **k: {})
     assert main.start_stale_sweeper() is True
     # Starting twice must not leave a second thread running.
     assert main.start_stale_sweeper() is False

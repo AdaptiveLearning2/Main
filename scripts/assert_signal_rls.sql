@@ -1228,5 +1228,67 @@ BEGIN
     END IF;
 END $$;
 
+-- erase_signals and record_chart_paths must take one per-student advisory lock, exclusive and
+-- shared, or an archive can miss an erasure. Read from the locks this transaction holds.
+DO $$
+DECLARE
+    sess     uuid;
+    owner_id uuid;
+    lock_key bigint;
+    n        int;
+    returned jsonb;
+BEGIN
+    SELECT id, user_id INTO sess, owner_id FROM public.sessions ORDER BY id LIMIT 1;
+    IF sess IS NULL THEN
+        RAISE EXCEPTION 'fixture is wrong: no session to record chart paths on';
+    END IF;
+    lock_key := hashtextextended('chart_paths:' || owner_id::text, 0);
+
+    PERFORM public.record_chart_paths(sess, '{"cognitive_timeline": null}'::jsonb);
+    IF (SELECT chart_paths FROM public.sessions WHERE id = sess)
+           IS DISTINCT FROM '{"cognitive_timeline": null}'::jsonb THEN
+        RAISE EXCEPTION 'record_chart_paths did not write the paths it was given';
+    END IF;
+
+    -- A bigint advisory key is split across classid (high 32 bits) and objid, objsubid 1.
+    SELECT count(*) INTO n FROM pg_locks
+     WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND objsubid = 1
+       AND mode = 'ShareLock' AND ((classid::bigint << 32) | objid::bigint) = lock_key;
+    IF n <> 1 THEN
+        RAISE EXCEPTION 'record_chart_paths took no shared lock on its student''s key';
+    END IF;
+
+    PERFORM public.erase_signals(owner_id, 'eeg', NULL, 'UTC');
+    SELECT count(*) INTO n FROM pg_locks
+     WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND objsubid = 1
+       AND mode = 'ExclusiveLock' AND ((classid::bigint << 32) | objid::bigint) = lock_key;
+    IF n <> 1 THEN
+        RAISE EXCEPTION 'erase_signals took no exclusive lock on the key record_chart_paths shares';
+    END IF;
+
+    IF has_function_privilege('authenticated', 'public.record_chart_paths(uuid, jsonb)', 'EXECUTE')
+       OR has_function_privilege('anon', 'public.record_chart_paths(uuid, jsonb)', 'EXECUTE') THEN
+        RAISE EXCEPTION 'record_chart_paths is executable by an application role -- any user '
+                        'could point any session''s charts anywhere';
+    END IF;
+
+    -- drop_chart_paths nulls the named keys in the row and nothing else: a whole-map write from
+    -- a stale copy is what it replaces. A key the row never had is not added.
+    PERFORM public.record_chart_paths(sess,
+        '{"cognitive_timeline": "a.svg", "heart_rate": "b.svg"}'::jsonb);
+    -- Two statements: in one, the row read shares a snapshot from before the call's UPDATE.
+    returned := public.drop_chart_paths(sess, ARRAY['cognitive_timeline', 'emotion_pie']);
+    IF returned IS DISTINCT FROM '{"cognitive_timeline": null, "heart_rate": "b.svg"}'::jsonb
+       OR (SELECT chart_paths FROM public.sessions WHERE id = sess)
+           IS DISTINCT FROM '{"cognitive_timeline": null, "heart_rate": "b.svg"}'::jsonb THEN
+        RAISE EXCEPTION 'drop_chart_paths changed more than the charts it was named: returned %',
+            returned;
+    END IF;
+    IF has_function_privilege('authenticated', 'public.drop_chart_paths(uuid, text[])', 'EXECUTE')
+       OR has_function_privilege('anon', 'public.drop_chart_paths(uuid, text[])', 'EXECUTE') THEN
+        RAISE EXCEPTION 'drop_chart_paths is executable by an application role';
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

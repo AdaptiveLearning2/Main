@@ -130,11 +130,19 @@ def pie_svg(counts: dict, title: str, colours: dict) -> str:
     return _svg("".join(out), title)
 
 
-def line_svg(points: dict, title: str, unit: str = "") -> str:
+def _axis_label(value: float, span: float) -> str:
+    """Enough decimals to tell the two ends apart, and never a "-0"."""
+    decimals = 0 if span >= 10 else 1 if span >= 1 else 2
+    text = f"{value:.{decimals}f}"
+    return text.lstrip("-") if float(text) == 0 else text
+
+
+def line_svg(points: dict, title: str, unit: str = "", *, ratio: bool = False) -> str:
     """One or more series over time.
 
     `points` maps a series name to [(x, y)]: x numeric (epoch ms), y a value or None.
     A None breaks the line rather than bridging a gap nothing was recorded in.
+    `ratio`: y is 0..1, drawn on a fixed 0-100% axis as session review draws it.
     """
     series = {}
     for name, raw in (points or {}).items():
@@ -149,9 +157,16 @@ def line_svg(points: dict, title: str, unit: str = "") -> str:
     ys = [y for pts in series.values() for _, y in pts if y is not None]
     x_lo, x_hi = min(xs), max(xs)
     y_lo, y_hi = min(ys), max(ys)
+    if ratio:
+        y_lo, y_hi = min(0.0, y_lo), max(1.0, y_hi)
     # Pad a flat series (zero range) so it sits mid-plot.
-    if y_hi - y_lo < 1e-9:
+    elif y_hi - y_lo < 1e-9:
         y_lo, y_hi = y_lo - 1, y_hi + 1
+
+    def label(v):
+        if ratio:
+            return f"{v * 100:.0f}%"
+        return _axis_label(v, y_hi - y_lo) + html.escape(unit)
     x_span = (x_hi - x_lo) or 1
 
     plot_w = _WIDTH - _PAD - 110
@@ -169,10 +184,10 @@ def line_svg(points: dict, title: str, unit: str = "") -> str:
         f'<line x1="{_PAD}" y1="52" x2="{_PAD}" y2="{52 + plot_h}" '
         f'stroke="#e2e8f0" stroke-width="1"/>',
         f'<text x="{_PAD - 6}" y="56" text-anchor="end" font-family="sans-serif" '
-        f'font-size="9" fill="#94a3b8">{y_hi:.0f}{html.escape(unit)}</text>',
+        f'font-size="9" fill="#94a3b8">{label(y_hi)}</text>',
         f'<text x="{_PAD - 6}" y="{52 + plot_h}" text-anchor="end" '
         f'font-family="sans-serif" font-size="9" fill="#94a3b8">'
-        f'{y_lo:.0f}{html.escape(unit)}</text>',
+        f'{label(y_lo)}</text>',
     ]
 
     for i, (name, pts) in enumerate(sorted(series.items())):

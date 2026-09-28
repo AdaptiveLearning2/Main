@@ -13,6 +13,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
 import pytest  # noqa: E402
 
+import env_config  # noqa: E402
 import llm_client  # noqa: E402
 import main  # noqa: E402
 from conftest import tighten  # noqa: E402
@@ -2049,9 +2050,9 @@ def test_the_waiter_cap_is_released_so_it_does_not_leak_a_slot():
 def test_the_waiter_cap_has_a_floor_like_the_other_settings(monkeypatch):
     """Zero would admit nobody, silently disabling the model pass."""
     monkeypatch.setenv("STRATEGY_LLM_MAX_WAITERS", "0")
-    assert main._env_number("STRATEGY_LLM_MAX_WAITERS", 4, int, minimum=1) == 1
+    assert env_config.env_number("STRATEGY_LLM_MAX_WAITERS", 4, int, minimum=1) == 1
     monkeypatch.setenv("STRATEGY_LLM_MAX_WAITERS", "-3")
-    assert main._env_number("STRATEGY_LLM_MAX_WAITERS", 4, int, minimum=1) == 1
+    assert env_config.env_number("STRATEGY_LLM_MAX_WAITERS", 4, int, minimum=1) == 1
 
 
 def test_pool_refusing_the_work_falls_back_rather_than_raising():
@@ -2118,41 +2119,41 @@ def test_the_app_runs_the_shutdown_on_the_way_out():
 def test_bad_numeric_env_falls_back_instead_of_killing_the_process(monkeypatch):
     """Read at import, so a typo would take down every endpoint."""
     monkeypatch.setenv("STRATEGY_RATE_LIMIT", "ten")
-    assert main._env_number("STRATEGY_RATE_LIMIT", 10, int) == 10
+    assert env_config.env_number("STRATEGY_RATE_LIMIT", 10, int) == 10
 
 
 def test_unset_and_empty_numeric_env_use_the_default(monkeypatch):
     monkeypatch.delenv("STRATEGY_RATE_WINDOW", raising=False)
-    assert main._env_number("STRATEGY_RATE_WINDOW", 60.0, float) == 60.0
+    assert env_config.env_number("STRATEGY_RATE_WINDOW", 60.0, float) == 60.0
     # Exported-but-empty: float("") raises like float("abc").
     monkeypatch.setenv("STRATEGY_RATE_WINDOW", "   ")
-    assert main._env_number("STRATEGY_RATE_WINDOW", 60.0, float) == 60.0
+    assert env_config.env_number("STRATEGY_RATE_WINDOW", 60.0, float) == 60.0
 
 
 def test_valid_numeric_env_is_still_honoured(monkeypatch):
     monkeypatch.setenv("STRATEGY_LLM_TIMEOUT", "2.5")
-    assert main._env_number("STRATEGY_LLM_TIMEOUT", 20.0, float) == 2.5
+    assert env_config.env_number("STRATEGY_LLM_TIMEOUT", 20.0, float) == 2.5
 
 
 @pytest.mark.parametrize("raw", ["0", "-1"])
 def test_out_of_range_numeric_env_is_clamped_not_honoured(raw, monkeypatch):
     """A number is not automatically a usable setting: these parse, and each disables its feature."""
     monkeypatch.setenv("STRATEGY_RATE_LIMIT", raw)
-    assert main._env_number("STRATEGY_RATE_LIMIT", 10, int, minimum=1) == 1
+    assert env_config.env_number("STRATEGY_RATE_LIMIT", 10, int, minimum=1) == 1
 
 
 def test_clamping_is_to_the_minimum_not_back_to_the_default(monkeypatch):
     """A small number asked for a small number; the nearest usable value honours that."""
     monkeypatch.setenv("STRATEGY_RATE_WINDOW", "0.25")
-    assert main._env_number("STRATEGY_RATE_WINDOW", 60.0, float, minimum=1.0) == 1.0
+    assert env_config.env_number("STRATEGY_RATE_WINDOW", 60.0, float, minimum=1.0) == 1.0
 
 
 def test_in_range_values_are_untouched_by_the_floor(monkeypatch):
     monkeypatch.setenv("STRATEGY_LLM_TIMEOUT", "2.5")
-    assert main._env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0) == 2.5
+    assert env_config.env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0) == 2.5
     # No minimum given: no floor.
     monkeypatch.setenv("STRATEGY_RATE_LIMIT", "0")
-    assert main._env_number("STRATEGY_RATE_LIMIT", 10, int) == 0
+    assert env_config.env_number("STRATEGY_RATE_LIMIT", 10, int) == 0
 
 
 def test_the_shipped_settings_carry_a_floor():
@@ -2164,7 +2165,7 @@ def test_the_shipped_settings_carry_a_floor():
 def test_non_finite_numeric_env_falls_back_to_the_default(raw, monkeypatch):
     """float() accepts these and the floor misses inf/nan; -inf falls back too, not clamped."""
     monkeypatch.setenv("STRATEGY_LLM_TIMEOUT", raw)
-    assert main._env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0) == 20.0
+    assert env_config.env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0) == 20.0
 
 
 def test_non_finite_rate_window_would_otherwise_turn_a_429_into_a_500():
@@ -2183,7 +2184,7 @@ def test_non_finite_timeout_would_otherwise_disable_the_model_pass(monkeypatch):
 def test_a_finite_value_below_the_floor_still_clamps(monkeypatch):
     """The non-finite check runs before the floor, so it must not shadow it."""
     monkeypatch.setenv("STRATEGY_LLM_TIMEOUT", "0")
-    assert main._env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0) == 1.0
+    assert env_config.env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0) == 1.0
     assert main.STRATEGY_LLM_TIMEOUT >= 1.0
 
 

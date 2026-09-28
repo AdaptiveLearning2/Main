@@ -6,6 +6,7 @@ import threading
 import httpx2 as httpx
 import pytest
 
+import env_config
 import llm_client
 
 
@@ -291,11 +292,11 @@ def test_a_caller_that_cannot_get_a_slot_is_refused_within_its_budget(monkeypatc
 def test_a_bad_numeric_setting_falls_back_rather_than_crashing_the_app(monkeypatch):
     """Read at import, so a typo would take every endpoint down."""
     monkeypatch.setenv("SOME_KNOB", "not-a-number")
-    assert llm_client._env_number("SOME_KNOB", 30.0, float, minimum=1.0) == 30.0
+    assert env_config.env_number("SOME_KNOB", 30.0, float, minimum=1.0) == 30.0
     monkeypatch.setenv("SOME_KNOB", "inf")
-    assert llm_client._env_number("SOME_KNOB", 30.0, float, minimum=1.0) == 30.0
+    assert env_config.env_number("SOME_KNOB", 30.0, float, minimum=1.0) == 30.0
     monkeypatch.setenv("SOME_KNOB", "0")
-    assert llm_client._env_number("SOME_KNOB", 30.0, float, minimum=1.0) == 1.0
+    assert env_config.env_number("SOME_KNOB", 30.0, float, minimum=1.0) == 1.0
 
 
 def test_the_configured_temperature_reaches_generation(monkeypatch):

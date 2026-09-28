@@ -20,35 +20,13 @@ import signal_mapping
 import eeg_poller
 import llm_client
 import grade_levels
+from env_config import env_number
 
 load_dotenv()
 
-def _env_number(name: str, default, cast, minimum=None):
-    """Read a numeric setting at import, falling back to `default` on a bad value.
-
-    Below `minimum` clamps to the minimum; non-finite values ("inf", "nan")
-    fall back to the default, since inf passes any floor and nan fails every one.
-    """
-    raw = os.getenv(name)
-    if raw is None or raw.strip() == "":
-        return default
-    try:
-        value = cast(raw)
-    except (TypeError, ValueError):
-        print(f"[config] {name}={raw!r} is not a number; using {default}")
-        return default
-    if not math.isfinite(value):
-        print(f"[config] {name}={raw!r} is not a finite number; using {default}")
-        return default
-    if minimum is not None and value < minimum:
-        print(f"[config] {name}={raw!r} is below the usable minimum; using {minimum}")
-        return minimum
-    return value
-
-
 SUPABASE_URL     = os.getenv("SUPABASE_URL")
 SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-BACKEND_PORT     = _env_number("BACKEND_PORT", 8000, int, minimum=1)
+BACKEND_PORT     = env_number("BACKEND_PORT", 8000, int, minimum=1)
 
 if not SUPABASE_URL or not SERVICE_ROLE_KEY:
     raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
@@ -130,11 +108,11 @@ app = FastAPI(
 
 
 # Body cap for ordinary endpoints (bytes); nothing here accepts an upload.
-_MAX_BODY_BYTES = int(_env_number("MAX_BODY_BYTES", 256 * 1024, int, minimum=4096))
+_MAX_BODY_BYTES = int(env_number("MAX_BODY_BYTES", 256 * 1024, int, minimum=4096))
 
 # Ingest cap is derived: INGEST_MAX_BATCH x this per-sample allowance (~3x a measured sample).
 _INGEST_MAX_SAMPLE_BYTES = int(
-    _env_number("INGEST_MAX_SAMPLE_BYTES", 4096, int, minimum=512))
+    env_number("INGEST_MAX_SAMPLE_BYTES", 4096, int, minimum=512))
 _INGEST_PATH_PREFIX = "/api/signals/"
 
 
@@ -236,20 +214,20 @@ _AUTHENTICATED_ADDRESS_LIMITER = {
 # health is 720/min at rest. These refuse runaway clients, not a class.
 _PUBLIC_RATE_LIMITS = {
     "public_generate": (
-        _env_number("PUBLIC_GENERATE_RATE_LIMIT", 600, int, minimum=1),
-        _env_number("PUBLIC_GENERATE_RATE_WINDOW", 60.0, float, minimum=1.0)),
+        env_number("PUBLIC_GENERATE_RATE_LIMIT", 600, int, minimum=1),
+        env_number("PUBLIC_GENERATE_RATE_WINDOW", 60.0, float, minimum=1.0)),
     "public_read": (
-        _env_number("PUBLIC_READ_RATE_LIMIT", 1800, int, minimum=1),
-        _env_number("PUBLIC_READ_RATE_WINDOW", 60.0, float, minimum=1.0)),
+        env_number("PUBLIC_READ_RATE_LIMIT", 1800, int, minimum=1),
+        env_number("PUBLIC_READ_RATE_WINDOW", 60.0, float, minimum=1.0)),
     # 12/min per open lesson, so ~150 lessons behind one address.
     "public_probe": (
-        _env_number("PUBLIC_PROBE_RATE_LIMIT", 1800, int, minimum=1),
-        _env_number("PUBLIC_PROBE_RATE_WINDOW", 60.0, float, minimum=1.0)),
+        env_number("PUBLIC_PROBE_RATE_LIMIT", 1800, int, minimum=1),
+        env_number("PUBLIC_PROBE_RATE_WINDOW", 60.0, float, minimum=1.0)),
 }
 
 # Proxies in front of this process; X-Forwarded-For is read only this far from the
 # right. 0 (default) ignores the header, so a caller cannot mint identities.
-_TRUSTED_PROXY_HOPS = int(_env_number("TRUSTED_PROXY_HOPS", 0, int, minimum=0))
+_TRUSTED_PROXY_HOPS = int(env_number("TRUSTED_PROXY_HOPS", 0, int, minimum=0))
 
 class _SlidingWindowLimiter:
     """`limit` calls per `window` seconds per key, on a monotonic clock.
@@ -377,7 +355,7 @@ app.add_middleware(
 # ─── helpers ──────────────────────────────────────────────────────────────
 
 # Seconds for the GoTrue check behind every authenticated request; unbounded, a stall holds a worker.
-AUTH_CHECK_TIMEOUT = _env_number("AUTH_CHECK_TIMEOUT", 5.0, float, minimum=0.5)
+AUTH_CHECK_TIMEOUT = env_number("AUTH_CHECK_TIMEOUT", 5.0, float, minimum=0.5)
 
 
 def get_user(request: Request):
@@ -422,7 +400,7 @@ def _unique_ids(values) -> list:
 # ─── the security log ────────────────────────────────────────────────────
 
 # Seconds before the same cooled event is worth another row (a limiter fires per request).
-_SECURITY_EVENT_COOLDOWN_SEC = _env_number(
+_SECURITY_EVENT_COOLDOWN_SEC = env_number(
     "SECURITY_EVENT_COOLDOWN_SECONDS", 300, float, minimum=0)
 # Cooled kind -> `detail` fields in the cooldown key, so one limiter cannot mask another.
 _COOLED_KINDS = {"rate_limited": ("limiter",)}
@@ -1049,11 +1027,11 @@ CLOSED_BY_SWEEP = "stale_sweep"
 
 # Session age (not idleness) past which it is abandoned; errs long, since closing
 # a live session discards the question in progress.
-_SESSION_ABANDONED_AFTER_SEC = _env_number(
+_SESSION_ABANDONED_AFTER_SEC = env_number(
     "SESSION_ABANDONED_AFTER_HOURS", 6.0, float, minimum=1.0) * 3600
 
 # Background sweep interval (s); 0 disables it.
-_STALE_SWEEP_INTERVAL_SEC = _env_number(
+_STALE_SWEEP_INTERVAL_SEC = env_number(
     "STALE_SWEEP_INTERVAL_SECONDS", 900.0, float, minimum=0.0)
 
 # Sessions closed per pass; each close renders charts and writes storage.
@@ -1255,6 +1233,11 @@ def _stale_sweep_loop() -> None:
             _sweep_abandoned_sessions()
         except Exception as e:                                 # noqa: BLE001
             print(f"[stale_sweep] pass failed: {e}")
+        # Its own guard: an archive cancelled at shutdown or failed is retried from here.
+        try:
+            chart_archive.archive_missing(supabase)
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[stale_sweep] chart catch-up failed: {e}")
         # Also checked here, so a stop during the first pass is not an interval away.
         if _stale_sweep_stop.is_set():
             return
@@ -2130,7 +2113,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
 # Up to QUEUE_SIZE pre-generated questions per user. 0 (default) disables it: with a
 # billed model, questions an abandoned session never answers are wasted spend.
 QUESTION_QUEUE_SIZE_DEFAULT = 0
-QUEUE_SIZE = _env_number("QUESTION_QUEUE_SIZE", QUESTION_QUEUE_SIZE_DEFAULT, int, minimum=0)
+QUEUE_SIZE = env_number("QUESTION_QUEUE_SIZE", QUESTION_QUEUE_SIZE_DEFAULT, int, minimum=0)
 _prefetch_cache: dict[str, dict[tuple, list]] = {}   # user_id → {`_prefetch_key`: questions}
 _prefetch_lock = threading.Lock()
 _prefetch_active: dict[str, dict[tuple, int]] = {}   # user_id → {`_prefetch_key`: in-flight workers}
@@ -2191,14 +2174,14 @@ def _shutdown_prefetch_pool():
 
 # Per-student generations per window (a rate, unlike `_prefetch_active`'s concurrency).
 # 60/min is far above what answering can consume.
-_GENERATION_RATE_LIMIT  = _env_number("GENERATION_RATE_LIMIT", 60, int, minimum=1)
-_GENERATION_RATE_WINDOW = _env_number("GENERATION_RATE_WINDOW", 60.0, float, minimum=1.0)
+_GENERATION_RATE_LIMIT  = env_number("GENERATION_RATE_LIMIT", 60, int, minimum=1)
+_GENERATION_RATE_WINDOW = env_number("GENERATION_RATE_WINDOW", 60.0, float, minimum=1.0)
 _GENERATION_LIMITER = _SlidingWindowLimiter(
     "generation", _GENERATION_RATE_LIMIT, _GENERATION_RATE_WINDOW)
 
 # Requests in flight on generation, process-wide; past it, refuse rather than queue.
 # Waiters block anyio's ~40-slot threadpool, so 30 leaves headroom for ingest.
-_GENERATION_MAX_WAITERS = _env_number("GENERATION_MAX_WAITERS", 30, int, minimum=1)
+_GENERATION_MAX_WAITERS = env_number("GENERATION_MAX_WAITERS", 30, int, minimum=1)
 _generation_waiters = threading.BoundedSemaphore(_GENERATION_MAX_WAITERS)
 
 
@@ -2432,7 +2415,7 @@ class _TTLCache:
 
 
 # Teacher question-bank reads only; the live adaptive path stays uncached.
-QUESTIONS_CACHE_TTL = _env_number("QUESTIONS_CACHE_TTL", 30.0, float, minimum=1.0)
+QUESTIONS_CACHE_TTL = env_number("QUESTIONS_CACHE_TTL", 30.0, float, minimum=1.0)
 # Entries up to `_QUESTIONS_MAX` rows each, keyed on caller strings; real traffic uses two keys.
 _questions_cache = _TTLCache(QUESTIONS_CACHE_TTL, max_size=32)
 
@@ -3302,7 +3285,7 @@ def student_topic_breakdown(student_id: str, request: Request):
 # rule-based answer is always the fallback.
 STRATEGY_LLM_MODEL   = os.getenv("STRATEGY_LLM_MODEL", "llama3.1:8b")
 # Wall-clock budget (s) for the whole model call.
-STRATEGY_LLM_TIMEOUT = _env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0)
+STRATEGY_LLM_TIMEOUT = env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0)
 
 # Own pool, so the wall-clock timeout is enforced (httpx's is per operation).
 # Built on first use; tests substitute the global.
@@ -3334,18 +3317,18 @@ def _shutdown_strategy_pool():
 
 # Callers blocked waiting on the model, process-wide (they hold anyio threadpool
 # slots). Past it, the model pass is skipped for the rule-based list.
-_STRATEGY_LLM_MAX_WAITERS = _env_number("STRATEGY_LLM_MAX_WAITERS", 4, int, minimum=1)
+_STRATEGY_LLM_MAX_WAITERS = env_number("STRATEGY_LLM_MAX_WAITERS", 4, int, minimum=1)
 _strategy_llm_waiters = threading.BoundedSemaphore(_STRATEGY_LLM_MAX_WAITERS)
 
 
 # Per-caller strategy requests per window, per worker process.
-_STRATEGY_RATE_LIMIT  = _env_number("STRATEGY_RATE_LIMIT", 10, int, minimum=1)
+_STRATEGY_RATE_LIMIT  = env_number("STRATEGY_RATE_LIMIT", 10, int, minimum=1)
 
 # Ingest volume bounds: the sidecar posts with the student's token, a trust
 # boundary. ~1000x headroom over a 1 Hz sensor, to allow a backlog flush.
-_INGEST_MAX_BATCH   = _env_number("INGEST_MAX_BATCH", 500, int, minimum=1)
-_INGEST_RATE_LIMIT  = _env_number("INGEST_RATE_LIMIT", 120, int, minimum=1)
-_INGEST_RATE_WINDOW = _env_number("INGEST_RATE_WINDOW", 60.0, float, minimum=1.0)
+_INGEST_MAX_BATCH   = env_number("INGEST_MAX_BATCH", 500, int, minimum=1)
+_INGEST_RATE_LIMIT  = env_number("INGEST_RATE_LIMIT", 120, int, minimum=1)
+_INGEST_RATE_WINDOW = env_number("INGEST_RATE_WINDOW", 60.0, float, minimum=1.0)
 
 _INGEST_LIMITER = _SlidingWindowLimiter(
     "ingest", _INGEST_RATE_LIMIT, _INGEST_RATE_WINDOW)
@@ -3356,7 +3339,7 @@ _HEART_SOURCES_BY_RECORD_FLAG = {
     "record_camera":           ("rppg",),
 }
 
-_STRATEGY_RATE_WINDOW = _env_number("STRATEGY_RATE_WINDOW", 60.0, float, minimum=1.0)
+_STRATEGY_RATE_WINDOW = env_number("STRATEGY_RATE_WINDOW", 60.0, float, minimum=1.0)
 _STRATEGY_LIMITER = _SlidingWindowLimiter(
     "strategies", _STRATEGY_RATE_LIMIT, _STRATEGY_RATE_WINDOW)
 
@@ -3737,7 +3720,7 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
 
 CHART_SUMMARY_LLM_MODEL = os.getenv("CHART_SUMMARY_LLM_MODEL", "llama3.1:8b")
 # Floored like STRATEGY_LLM_TIMEOUT: at zero the pass is silently off.
-CHART_SUMMARY_LLM_TIMEOUT = _env_number("CHART_SUMMARY_LLM_TIMEOUT", 20.0, float, minimum=1.0)
+CHART_SUMMARY_LLM_TIMEOUT = env_number("CHART_SUMMARY_LLM_TIMEOUT", 20.0, float, minimum=1.0)
 
 _CHART_SUMMARY_LLM_POOL: ThreadPoolExecutor | None = None
 _chart_summary_pool_lock = threading.Lock()
@@ -3766,11 +3749,11 @@ def _shutdown_chart_summary_pool():
 
 
 # Callers waiting on the model at once (anyio slots). Floor 1, or nobody is admitted.
-_CHART_SUMMARY_MAX_WAITERS = _env_number("CHART_SUMMARY_MAX_WAITERS", 4, int, minimum=1)
+_CHART_SUMMARY_MAX_WAITERS = env_number("CHART_SUMMARY_MAX_WAITERS", 4, int, minimum=1)
 _chart_summary_waiters = threading.BoundedSemaphore(_CHART_SUMMARY_MAX_WAITERS)
 
-_CHART_SUMMARY_RATE_LIMIT  = _env_number("CHART_SUMMARY_RATE_LIMIT", 10, int, minimum=1)
-_CHART_SUMMARY_RATE_WINDOW = _env_number("CHART_SUMMARY_RATE_WINDOW", 60.0, float, minimum=1.0)
+_CHART_SUMMARY_RATE_LIMIT  = env_number("CHART_SUMMARY_RATE_LIMIT", 10, int, minimum=1)
+_CHART_SUMMARY_RATE_WINDOW = env_number("CHART_SUMMARY_RATE_WINDOW", 60.0, float, minimum=1.0)
 _CHART_SUMMARY_LIMITER = _SlidingWindowLimiter(
     "chart_summary", _CHART_SUMMARY_RATE_LIMIT, _CHART_SUMMARY_RATE_WINDOW)
 

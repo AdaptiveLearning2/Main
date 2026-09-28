@@ -7,6 +7,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
 import pytest  # noqa: E402
 
+import env_config  # noqa: E402
 import llm_client  # noqa: E402
 import safe_solve  # noqa: E402
 
@@ -62,10 +63,8 @@ def test_a_syntactically_invalid_expression_is_none_not_a_raise():
 ])
 def test_the_timeout_is_read_through_env_number_with_a_floor(value, expected,
                                                              monkeypatch):
-    import llm_client
     monkeypatch.setenv("SOLVE_TIMEOUT", value)
-    assert llm_client._env_number("SOLVE_TIMEOUT", 10.0, float,
-                                  minimum=1.0) == expected
+    assert env_config.env_number("SOLVE_TIMEOUT", 10.0, float, minimum=1.0) == expected
 
 
 # ─── the equation op, which algebra runs entirely in the worker ──────────

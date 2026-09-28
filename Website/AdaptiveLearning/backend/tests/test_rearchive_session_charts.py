@@ -17,8 +17,14 @@ ALL_PATHS = {"cognitive_timeline": "u/s/c.svg", "heart_rate": "u/s/h.svg",
              "stress_pie": "u/s/p.svg", "emotion_pie": None}
 
 
-def _session(sid, paths=ALL_PATHS):
-    return {"id": sid, "user_id": "u1", "chart_paths": paths}
+@pytest.fixture(autouse=True)
+def _nothing_has_expired(monkeypatch):
+    """No cutoff yet; the tests about the cutoff pass `expiry` themselves."""
+    monkeypatch.setattr(chart_archive, "expiry_cutoff", lambda _client: (None, None))
+
+
+def _session(sid, paths=ALL_PATHS, started_at="2026-06-10T14:00:00+00:00"):
+    return {"id": sid, "user_id": "u1", "chart_paths": paths, "started_at": started_at}
 
 
 def _fetch_for(table):
@@ -85,11 +91,22 @@ def test_archive_session_keeps_the_existing_entry_for_a_chart_outside_only(monke
             self.payload = payload
             return self
 
+        def rpc(self, _name, params):
+            self.payload = {"chart_paths": params["p_paths"]}
+            return self
+
         def eq(self, *_a):
             return self
 
+        # The erasure re-check: no erasures.
+        def select(self, *_a):
+            return self
+
+        def gte(self, *_a):
+            return self
+
         def execute(self):
-            return None
+            return type("R", (), {"data": []})()
 
     monkeypatch.setattr(chart_archive, "_fetch", lambda _c, _s: (COG, [], HEART))
     client = _Client()
@@ -201,3 +218,127 @@ def test_the_cursor_does_not_pass_a_session_whose_render_failed(monkeypatch):
     report = chart_archive.rearchive_sessions(object(), rows, dry_run=False)
     assert report["failed"] == 1 and report["rerendered"] == 1
     assert report["last_ended_at"] == "2026-09-01T10:00:00+00:00"
+
+
+# ── the expiry cutoff, not "any rows left", decides what may be re-read ─────
+
+def _sydney(cutoff="2026-06-15"):
+    from datetime import date
+    from zoneinfo import ZoneInfo
+    return date.fromisoformat(cutoff), ZoneInfo("Australia/Sydney")
+
+
+def test_a_session_begun_on_an_expired_day_is_not_rerendered_even_with_rows_left(monkeypatch):
+    """Expiry deletes per student-day in capped batches, so surviving rows prove nothing."""
+    monkeypatch.setattr(chart_archive, "_fetch", _fetch_for({
+        "s-expired-day": (COG, [], HEART), "s-after": (COG, [], HEART)}))
+    calls = _spy_archive(monkeypatch)
+    report = chart_archive.rearchive_sessions(object(), [
+        # 20:00 UTC on the 14th is the morning of the 15th in Sydney: on the cutoff.
+        _session("s-expired-day", started_at="2026-06-14T20:00:00+00:00"),
+        # 15:00 UTC on the 15th is the 16th there: after it, though UTC says the 15th.
+        _session("s-after", started_at="2026-06-15T15:00:00+00:00"),
+    ], dry_run=False, expiry=_sydney())
+    assert [c[0] for c in calls] == ["s-after"]
+    assert report["skipped_expired"] == 1
+
+
+def test_a_run_that_cannot_read_the_cutoff_refuses_rather_than_assuming_none(monkeypatch):
+    def unreadable(_client):
+        raise RuntimeError("rpc unavailable")
+
+    monkeypatch.setattr(chart_archive, "expiry_cutoff", unreadable)
+    calls = _spy_archive(monkeypatch)
+    report = chart_archive.rearchive_sessions(object(), [_session("s")], dry_run=False)
+    assert calls == []
+    assert "cutoff" in report["refused"]
+
+
+def test_an_unreadable_start_counts_as_expired():
+    assert chart_archive.touches_expired_day("not a time", _sydney())
+    assert chart_archive.touches_expired_day(None, _sydney())
+    assert not chart_archive.touches_expired_day("not a time", (None, None))
+
+
+class _CutoffClient:
+    def __init__(self, cutoff, timezone):
+        self._cutoff, self._timezone = cutoff, timezone
+
+    def rpc(self, name, _params):
+        assert name == "expired_signal_cutoff"
+        return type("Q", (), {"execute": lambda _s: type("R", (), {"data": self._cutoff})()})()
+
+    def table(self, name):
+        assert name == "retention_window"
+        rows = [{"timezone": self._timezone}]
+        q = type("Q", (), {})()
+        q.select = q.limit = lambda *_a, **_k: q
+        q.execute = lambda: type("R", (), {"data": rows})()
+        return q
+
+
+@pytest.mark.parametrize("cutoff, tz, expected", [
+    ("2026-06-15", "Australia/Sydney", "2026-06-15 Australia/Sydney"),
+    (None, "Australia/Sydney", "none"),        # nothing has expired yet
+    ("2026-06-15", None, "none"),               # expire_signal_rows deletes nothing then
+])
+def test_the_cutoff_is_read_with_the_schools_timezone(cutoff, tz, expected, monkeypatch):
+    monkeypatch.undo()          # the real reader, not the autouse stand-in
+    got = chart_archive.expiry_cutoff(_CutoffClient(cutoff, tz))
+    assert (f"{got[0]} {got[1]}" if got[0] else "none") == expected
+
+
+def test_a_misspelt_timezone_is_a_failed_read_not_an_empty_cutoff(monkeypatch):
+    monkeypatch.undo()
+    with pytest.raises(Exception):
+        chart_archive.expiry_cutoff(_CutoffClient("2026-06-15", "Australia/Sidney"))
+
+
+# ── a re-render whose erasure re-check failed is named, not just counted ────
+
+def _unverified(sid):
+    from datetime import datetime, timezone
+    return chart_archive.ErasureRecheckFailed(sid, "u1", ["cognitive_timeline"],
+                                              datetime(2026, 9, 27, 11, 55, tzinfo=timezone.utc),
+                                              RuntimeError("signal_erasure unavailable"))
+
+
+def test_a_rerender_whose_erasure_check_failed_is_reported_with_what_to_check(monkeypatch):
+    monkeypatch.setattr(chart_archive, "_fetch", lambda _c, _s: (COG, [], HEART))
+
+    def archive(_c, sid, _u, **_k):
+        raise _unverified(sid)
+
+    monkeypatch.setattr(chart_archive, "archive_session", archive)
+    report = chart_archive.rearchive_sessions(object(), [_session("s1")], dry_run=False)
+    assert report["failed"] == 1
+    assert report["unverified"] == [{"session_id": "s1", "user_id": "u1",
+                                     "charts": ["cognitive_timeline"],
+                                     "since": "2026-09-27T11:55:00+00:00"}]
+
+
+def test_the_tool_prints_an_unverified_rerender_with_the_check_to_run(monkeypatch, capsys):
+    import supabase
+    import rearchive_session_charts as tool
+
+    class _Anything:
+        def __getattr__(self, _name):
+            return self
+
+        def __call__(self, *_a, **_k):
+            return self
+
+        data = []
+
+    monkeypatch.setattr(supabase, "create_client", lambda *_a: _Anything())
+    monkeypatch.setattr(chart_archive, "rearchive_sessions", lambda *_a, **_k: {
+        "dry_run": False, "considered": 1, "rerendered": 0, "skipped_expired": 0,
+        "skipped_unarchived": 0, "failed": 1, "read_failures": 0, "refused": None,
+        "hit_cap": False, "last_ended_at": None, "would_rerender": [],
+        "unverified": [{"session_id": "s1", "user_id": "u1", "charts": ["cognitive_timeline"],
+                        "since": "2026-09-27T11:55:00+00:00"}]})
+
+    assert tool.main(["--apply"]) == 1
+    err = capsys.readouterr().err
+    assert "UNVERIFIED session s1 (student u1)" in err
+    assert "after 2026-09-27T11:55:00+00:00" in err and "null cognitive_timeline" in err

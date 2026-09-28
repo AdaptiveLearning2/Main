@@ -6,6 +6,16 @@ os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
 import main  # noqa: E402
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def catch_ups(monkeypatch):
+    """Records the loop's chart catch-up rather than letting it query a real project."""
+    calls = []
+    monkeypatch.setattr(main.chart_archive, "archive_missing",
+                        lambda client, **k: calls.append(client) or {})
+    return calls
 
 
 class _FakeDB:
@@ -90,6 +100,21 @@ def test_a_stop_during_the_first_sweep_is_not_made_to_wait(monkeypatch):
     finally:
         main._stale_sweep_stop.clear()
     assert time.monotonic() - started < 30, "it waited on the interval anyway"
+
+
+def test_the_chart_catch_up_runs_every_pass_even_when_the_sweep_fails(monkeypatch, catch_ups):
+    """Only a close schedules an archive; this pass is what retries a cancelled or failed one."""
+    def boom(*a, **k):
+        raise RuntimeError("sessions unavailable")
+
+    monkeypatch.setattr(main, "_sweep_abandoned_sessions", boom)
+    monkeypatch.setattr(main, "_STALE_SWEEP_INTERVAL_SEC", 3600.0)
+    main._stale_sweep_stop.set()
+    try:
+        main._stale_sweep_loop()
+    finally:
+        main._stale_sweep_stop.clear()
+    assert catch_ups == [main.supabase]
 
 
 def _session(sid, *, ended=None, started_min_ago=1):

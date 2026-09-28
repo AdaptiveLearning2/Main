@@ -49,6 +49,16 @@ def test_a_calibrating_heart_channel_is_not_a_calm_one():
     assert "calibrating" in ch.reason
 
 
+def test_a_heart_rate_with_no_stress_category_is_a_missing_classifier_not_no_samples():
+    """No sensor produces `stress_category` yet: rows with a rate arrive, and the channel called
+    them "no heart samples". It still holds no opinion, so fusion is unchanged."""
+    ch = heart_channel(None, True, "muse_optics", bpm=72.0)
+    assert ch.label is None and ch.cause == "no_classifier"
+    assert "no stress classifier" in ch.reason
+    assert heart_channel(None, None, None).cause == "no_samples"
+    assert fuse(NEUTRAL_EEG, ch).label == fuse(NEUTRAL_EEG, heart_channel(None, None, None)).label
+
+
 def test_an_untrusted_heart_sample_is_present_but_not_acted_on():
     ch = heart_channel("high", False, "muse_optics")
     assert ch.label is None

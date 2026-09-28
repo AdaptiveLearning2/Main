@@ -97,14 +97,20 @@ def heart_channel(
     source: str | None,
     *,
     revoked: bool = False,
+    bpm: float | None = None,
 ) -> ChannelState:
     """The heart channel's label, source-agnostic (optics, PPG or camera rPPG).
 
     `calibrating` is a temporary absence (a failover building its baseline), not "no reading".
+    `bpm` only names the absence: a rate with no category is a missing classifier, not no data.
     """
     if revoked:
         return ChannelState(None, "heart revoked", source, cause="revoked")
     if stress_category is None:
+        if bpm is not None:
+            # No sensor produces a stress category yet, so heart holds no opinion.
+            return ChannelState(None, f"heart rate read, no stress classifier ({source})",
+                                source, cause="no_classifier")
         return ChannelState(None, "no heart samples", source, cause="no_samples")
     if stress_category == "calibrating":
         return ChannelState(None, f"heart calibrating ({source})", source,

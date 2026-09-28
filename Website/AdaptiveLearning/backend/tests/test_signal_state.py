@@ -333,3 +333,14 @@ def test_every_signal_read_is_bounded_by_age_in_the_query(monkeypatch):
 def test_the_age_bound_is_the_window_the_live_pages_call_flowing():
     import main
     assert decider.SIGNAL_MAX_AGE_SEC == main._LIVE_WINDOW_SEC
+
+
+def test_a_heart_rate_row_with_no_category_is_named_as_a_missing_classifier(monkeypatch):
+    """The decider reads the rate so the diagnostic can say why heart is silent; nothing
+    produces `stress_category`, and "no heart samples" was false with rows arriving."""
+    rows = [{"session_id": SESSION, "stress_category": None, "trusted": True,
+             "source": "muse_optics", "heart_rate_bpm": 74.0}]
+    _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM, heart=rows)
+    state = decider.get_session_signal_state(SESSION, USER)
+    # The fake returns only the named columns, so this fails if the select drops the rate.
+    assert "no stress classifier" in state.channels["heart"]

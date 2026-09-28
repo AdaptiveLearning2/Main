@@ -481,3 +481,27 @@ def test_a_viewer_with_no_relationship_is_refused(monkeypatch):
     with pytest.raises(main.HTTPException) as exc:
         main.student_focus_accuracy(ALICE, None)
     assert exc.value.status_code == 403
+
+
+def test_last_active_counts_only_the_samples_main_counts_as_activity():
+    """Source check, stated: `last_active_for_users` copies `_ACTIVITY_SOURCES` into SQL, and
+    a filter dropped from one copy puts a headband left on the desk back on the roster."""
+    import re
+    from pathlib import Path
+    migrations = sorted((Path(__file__).resolve().parents[4] / "supabase" / "migrations").glob("*.sql"))
+    header = re.compile(r'CREATE\s+OR\s+REPLACE\s+FUNCTION\s+"public"\."last_active_for_users"')
+    sql = re.sub(r"--[^\n]*", "", [m for m in migrations if header.search(m.read_text("utf-8"))][-1]
+                 .read_text("utf-8"))
+    body = sql[header.search(sql).start():]
+    body = body[:body.index("$$;", body.index("$$") + 2)]
+    for table, column, measured in main._ACTIVITY_SOURCES:
+        if not measured:
+            continue
+        # The subquery reading this table, up to the next one.
+        found = re.search(r'max\("(\w)"\."' + column + r'"\)\s+FROM\s+"public"\."' + table
+                          + r'"(.*?)(?=\(SELECT\s+max|\Z)', body, re.S)
+        assert found, f"last_active_for_users does not read {table}"
+        alias, where = found.group(1), found.group(2)
+        for col in measured:
+            assert re.search(rf'"{alias}"\."{col}"\s+IS\s+NOT\s+NULL', where), \
+                f"{table}.{col} counts as activity in main but not in last_active_for_users"

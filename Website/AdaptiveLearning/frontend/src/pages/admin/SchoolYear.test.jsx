@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 
-import { apiError, apiFetch, mockApi, resetApi } from '../../test/mocks/apiFetch'
+import { apiError, apiFetch, mockApi, overrideApi, resetApi } from '../../test/mocks/apiFetch'
 import AdminSchoolYear from './SchoolYear'
 import { isValidTimezone } from '../../lib/timezone'
 
@@ -185,5 +185,16 @@ describe('the Saved message', () => {
 
     await userEvent.clear(screen.getByLabelText(/starts on/i))
     await waitFor(() => expect(screen.queryByText(/^Saved\.$/)).not.toBeInTheDocument())
+  })
+})
+
+describe('an unenforced year', () => {
+  it('says nothing expires, where the switch is and in the status it leads to', async () => {
+    // Unenforced keeps children's signal data indefinitely: a retention decision, so it is stated.
+    overrideApi('/api/admin/retention-window', () => ({ ...WINDOW, state: 'not_enforced', enforced: false }))
+    render(<AdminSchoolYear />)
+
+    expect(await screen.findByText(/not being enforced, so no signal data expires/i)).toBeInTheDocument()
+    expect(screen.getByText(/off also means nothing expires/i)).toBeInTheDocument()
   })
 })

@@ -638,16 +638,18 @@ def _retention_window() -> dict:
     return _resolve_window(rows[0])
 
 
-def _expiry_cutoff(starts_on, ends_on, today: date) -> date | None:
+def _expiry_cutoff(starts_on, ends_on, today: date, enforced=True) -> date | None:
     """`expired_signal_cutoff`'s rule in Python, its only copy here: None without usable dates.
 
-    Enforced is ignored, as in the SQL.
+    None for an unenforced year, as in the SQL; `ends_on` expires only once it has passed.
     """
+    if enforced is False:
+        return None
     try:
         starts, ends = date.fromisoformat(str(starts_on)), date.fromisoformat(str(ends_on))
     except ValueError:
         return None                 # no dates: the SQL cutoff is NULL and deletes nothing
-    return ends if today >= ends else starts - timedelta(days=1)
+    return ends if today > ends else starts - timedelta(days=1)
 
 
 def _expired_through(today: date) -> date | None:
@@ -658,7 +660,8 @@ def _expired_through(today: date) -> date | None:
     window = _retention_window()
     if window.get("state") == WINDOW_UNREADABLE:
         return date.max
-    return _expiry_cutoff(window.get("starts_on"), window.get("ends_on"), today)
+    return _expiry_cutoff(window.get("starts_on"), window.get("ends_on"), today,
+                          enforced=window.get("state") != WINDOW_NOT_ENFORCED)
 
 
 def _resolve_window(row: dict) -> dict:
@@ -6879,16 +6882,17 @@ def admin_get_retention_window(request: Request):
             "timezone": row.get("timezone") or "UTC"}
 
 
-def _confirm_expiry_move(starts, ends, tz_name: str, confirmed: bool) -> None:
+def _confirm_expiry_move(starts, ends, tz_name: str, confirmed: bool,
+                         enforced: bool = True) -> None:
     """409 unless confirmed, when these dates move the delete cutoff later with today outside them.
 
-    `expired_signal_cutoff` reads the dates whether or not the year is enforced, and the
-    nightly delete it drives cannot be undone: a mistyped year would clear this year's rows.
+    The nightly delete that cutoff drives cannot be undone: a mistyped year would clear this
+    year's rows. An unenforced year has no cutoff, so saving one never asks.
     """
     today = _utc_now().astimezone(ZoneInfo(tz_name)).date()
-    new_cutoff = _expiry_cutoff(starts, ends, today)
+    new_cutoff = _expiry_cutoff(starts, ends, today, enforced=enforced)
     if new_cutoff is None:
-        return                      # no usable dates: nothing is deleted
+        return                      # unenforced or no usable dates: nothing is deleted
     current = _expired_through(today)
     moves_later = current in (None, date.max) or new_cutoff > current
     inside = date.fromisoformat(str(starts)) <= today <= date.fromisoformat(str(ends))
@@ -6922,7 +6926,8 @@ def admin_set_retention_window(request: Request, payload: RetentionWindowUpdate)
             raise HTTPException(422, "starts_on and ends_on must be YYYY-MM-DD")
         if ends_d <= starts_d:
             raise HTTPException(422, "ends_on must be after starts_on")
-    _confirm_expiry_move(starts, ends, payload.timezone, payload.confirm_expiry)
+    _confirm_expiry_move(starts, ends, payload.timezone, payload.confirm_expiry,
+                         enforced=payload.enforced)
 
     row = {"id": True, "enforced": payload.enforced,
            "starts_on": starts or None, "ends_on": ends or None,

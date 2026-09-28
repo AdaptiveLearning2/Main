@@ -90,6 +90,16 @@ def test_a_long_gap_in_calibration_restarts_it(gap, restarted):
     assert (scorer.baseline_bpm is None) == restarted
 
 
+def test_only_a_gap_in_a_row_counts():
+    """Short gaps split by trusted readings are ordinary seated refusals, not one long gap."""
+    scorer = HeartStressScorer()
+    for _ in range(BASELINE_READINGS - 1):
+        scorer.score(_reading(None, trusted=False))
+        scorer.score(_reading(None, trusted=False))
+        scorer.score(_reading(70.0))
+    assert _scored(scorer, 70.0)["stress_category"] == "low"
+
+
 def test_a_gap_after_the_baseline_formed_keeps_it():
     scorer = _calibrated(70.0)
     for _ in range(10 * CALIBRATION_MAX_GAP):

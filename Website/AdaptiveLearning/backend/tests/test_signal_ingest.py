@@ -455,15 +455,23 @@ def test_rmssd_gating_fields_reach_the_stored_row(store):
     assert row["raw"]["rmssd_rejected_by"] == "coverage"
 
 
-def test_a_non_finite_heart_value_is_refused_by_the_model(store):
-    """NaN/Infinity pass `float | None`, then fail the insert and take the batch down."""
-    from pydantic import ValidationError
-
+def test_a_non_finite_heart_value_is_malformed_and_the_rest_of_the_batch_lands(store):
+    """NaN/Infinity pass `float | None`, then fail the insert. Refused per sample: refused as a
+    batch, the push client retried it for ever and it never landed."""
+    _consent(store, headband_optical_enabled=True)
     for field in ("heart_rate_bpm", "rmssd_ms", "beat_coverage",
                   "sqi", "stress_score"):
-        with pytest.raises(ValidationError):
-            main.HeartBatch(session_id=SESSION,
-                            samples=[_heart(**{field: float("nan")})])
+        store["heart_signals"].clear()
+        out = _post_heart([_heart(**{field: float("nan")}),
+                           _heart(ts="2026-08-09T10:00:05Z")])
+        assert (out["malformed"], out["inserted"]) == (1, 1), field
+
+
+def test_a_malformed_face_sample_is_counted_and_the_rest_of_the_batch_lands(store):
+    _consent(store, camera_enabled=True)
+    out = main.ingest_face(main.FaceBatch(session_id=SESSION, samples=[
+        "not a sample", {"emotion": "happy", "ts": "2026-08-09T10:00:05Z"}]), request=None)
+    assert (out["malformed"], out["inserted"]) == (1, 1)
 
 
 def test_derived_fields_win_over_a_client_supplied_key(store):

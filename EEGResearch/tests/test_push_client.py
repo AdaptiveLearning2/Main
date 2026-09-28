@@ -309,6 +309,51 @@ async def test_one_channels_failure_does_not_cost_the_others(client, monkeypatch
     assert status["queued"]["heart"] == 0 and status["queued"]["face"] == 0
 
 
+@pytest.mark.parametrize("status", [400, 413, 422])
+@pytest.mark.anyio
+async def test_a_batch_refused_whole_is_dropped_and_counted_not_retried(client, monkeypatch, status):
+    """Restored, it would head its queue and fail every flush for the rest of the lesson, and
+    its backoff (to 120 s) would throttle the channels that were delivering."""
+    def responder(url, json, headers):
+        return _Response(status_code=status) if url.endswith("/face") else _Response(
+            body={"ok": True, "inserted": len(json["samples"])})
+
+    fake = _FakeClient(responder=responder)
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
+                        lambda **_k: fake)
+    await _started(client)
+    client.enqueue("face", {"ts": 0})
+    client.enqueue("face", {"ts": 1})
+    client.enqueue("cognitive", {"ts": 0})
+
+    await client._flush_once()        # does not raise: a refused batch is not a failed flush
+
+    status_now = client.status()
+    assert status_now["queued"]["face"] == 0
+    assert status_now["rejected"]["face"] == 2
+    assert status_now["recorded"]["cognitive"] == 1
+    assert status_now["backoff_seconds"] == 0.0 and client._retry_at == 0.0
+
+    # The next flush does not resend it.
+    before = len(fake.calls)
+    await client._flush_once()
+    assert len(fake.calls) == before
+
+
+@pytest.mark.anyio
+async def test_a_server_error_is_still_restored_and_retried(client, monkeypatch):
+    """Only a refusal of the batch itself drops it; a 5xx says nothing about the samples."""
+    fake = _FakeClient(responder=lambda *_a, **_k: _Response(status_code=503))
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
+                        lambda **_k: fake)
+    await _started(client)
+    client.enqueue("face", {"ts": 0})
+    with pytest.raises(Exception):
+        await client._flush_once()
+    assert client.status()["queued"]["face"] == 1
+    assert client.status()["rejected"]["face"] == 0
+
+
 @pytest.mark.anyio
 async def test_restoring_into_a_full_queue_counts_what_it_evicts(client, monkeypatch):
     """`extendleft` on a maxlen deque evicts the newest samples; still counted."""

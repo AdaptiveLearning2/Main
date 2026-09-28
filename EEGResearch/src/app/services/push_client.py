@@ -41,6 +41,14 @@ SHUTDOWN_BUDGET = 10.0
 
 _CHANNELS = ("cognitive", "heart", "face")
 
+# Statuses that refuse the batch itself: resent unchanged it is refused again, so retrying it
+# holds the head of its queue for ever and widens every channel's backoff.
+_REFUSED_WHOLE = frozenset({400, 413, 422})
+
+
+class _BatchRefused(Exception):
+    """The backend refused this batch, not the request; see `_REFUSED_WHOLE`."""
+
 
 class PushClient:
     """Buffers samples per channel and flushes them to the backend.
@@ -65,6 +73,8 @@ class PushClient:
         self._duplicates: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         # Samples the backend refused one by one as unreadable.
         self._malformed: dict[str, int] = {channel: 0 for channel in _CHANNELS}
+        # Samples in batches the backend refused whole (400/413/422): lost, and never retried.
+        self._rejected: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         self._task: asyncio.Task | None = None
         # Serialises start/stop: interleaved starts could leave a running loop with no token.
         self._lifecycle = asyncio.Lock()
@@ -158,6 +168,7 @@ class PushClient:
         self._unaccounted = {channel: 0 for channel in _CHANNELS}
         self._duplicates = {channel: 0 for channel in _CHANNELS}
         self._malformed = {channel: 0 for channel in _CHANNELS}
+        self._rejected = {channel: 0 for channel in _CHANNELS}
 
     # ── producing ────────────────────────────────────────────────────────────
 
@@ -316,6 +327,12 @@ class PushClient:
                     logger.warning("push: %s batch cancelled in flight; %d sample(s) "
                                    "unaccounted", channel, len(samples))
                     raise
+                except _BatchRefused as exc:
+                    # Dropped, counted, and no backoff: the other channels are not at fault.
+                    self._rejected[channel] += len(samples)
+                    self._last_error = str(exc)
+                    logger.warning("push: %s; %d sample(s) lost, not retried",
+                                   exc, len(samples))
                 except Exception as exc:  # noqa: BLE001 - re-raised below
                     self._restore(channel, samples)
                     if first_error is None:
@@ -355,6 +372,8 @@ class PushClient:
         if response.status_code == 429:
             # A failure, so samples are restored and backoff widens.
             raise RuntimeError("rate limited by backend (429)")
+        if response.status_code in _REFUSED_WHOLE:
+            raise _BatchRefused(f"backend refused the {channel} batch ({response.status_code})")
         response.raise_for_status()
         # Past here the rows are committed, so nothing below may raise and trigger a re-post.
         try:
@@ -403,6 +422,8 @@ class PushClient:
             "duplicates": dict(self._duplicates),
             # Refused by the backend as unreadable; lost.
             "malformed": dict(self._malformed),
+            # In batches the backend refused whole; lost, not retried.
+            "rejected": dict(self._rejected),
             "backoff_seconds": self._backoff,
             "last_error": self._last_error,
         }

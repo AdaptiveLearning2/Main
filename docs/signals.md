@@ -121,6 +121,10 @@ well as the flat already-mapped one, and maps the first itself. Don't add a divi
 - **Delivery is counted from the backend's `inserted`, not from what was sent.** The endpoint drops
   samples for a sensor the student declined; counting sent would report a healthy session that
   recorded nothing.
+- **A batch refused whole (400, 413, 422) is dropped and counted `rejected`, never restored.** Resent
+  unchanged it is refused again, so restored it heads its queue for the rest of the lesson and its
+  backoff throttles every channel. That is the rare case: all three endpoints validate *per sample*
+  (`main._validate_each`), so one bad sample is counted `malformed` and the rest of its batch lands.
 
 The **browser** side has the matching rule: effect cleanup does not run on a tab close or hard
 refresh, so `Adaptive.jsx` also stops the sidecar from a `pagehide` listener via `stopPushOnUnload`,
@@ -452,6 +456,11 @@ The headband is the primary heart source (the camera is emotion-only), reaching 
 - **The block carries its own `ts`, and both writers key on it.** Held, one measurement arrives on ~40 consecutive
   ticks. `map_heart_to_heart_signal` prefers `heart["ts"]`, the push client dedupes per `(device, source)`, and the
   poller upserts on `heart_session_source_ts_key`. The camera's block has no `ts` and takes the tick's.
+- **A buffer nothing has reached for `OPTICS_STALE_S` (3 s) is `optics_stale`, not a window.** The window is
+  placed on the bridge's own stamps, so it cannot tell by itself that optical packets stopped while EEG went on; the
+  frozen 25 s would be re-estimated every step and published as a fresh reading. Arrival is stamped on this
+  process's clock. A disconnect also resets the ingestion metadata, or a bridge that exited still reads
+  `muse_connected: true`.
 
 **A payload key needs a field on `InterpretedEegData` or `/api/v1/state` deletes it.** `Envelope.data` is a declared
 model and **pydantic drops undeclared keys silently** — the same trap as `main.FaceSample`, one layer further out.
@@ -463,6 +472,11 @@ model. `tests/test_state_envelope.py` derives the check from `stream_manager`'s 
 **`features` is its own nested model, and the same trap one level down.** That check sees top-level keys only; a
 diagnostic added to `SignalProcessor.update`'s return dict has to be declared on `schemas.FeatureData`, which
 `test_every_feature_key_the_processor_returns_is_declared_on_the_model` derives by calling the processor.
+
+**Every double the bridge writes goes through `append_json_number`**, which writes a non-finite one as `null`: `<<`
+writes `nan`, `-nan(ind)` or `inf`, which the sidecar's JSON parser refuses, losing the whole line with its status
+fields. libMuse fills dropped EEG samples with NaN. A `null` channel costs that one sample; a `null` band keeps the
+previous value.
 
 **The bridge accepts one TCP client** (`listen(…, 1)`), so nothing can tap the raw 256 Hz stream while the sidecar
 holds it. Every frame does reach the sidecar — the queue is drained in full each tick, then only `samples[-1]` is
@@ -496,7 +510,9 @@ healthy. Genuine 4-channel windows reach 1.054, so the bound sits at 1.15 — ab
 1.20–1.26 single-channel runs produce.
 
 `sqi` and `stress_score` are **not derived** on either path; those columns stay null, so `heart_signals.stress_score`
-has no producer — don't read an empty tile as a broken query.
+has no producer — don't read an empty tile as a broken query. Nor does `stress_category`, the one heart field fusion
+reads, so heart holds no opinion in difficulty decisions: `heart_channel` reports a row with a rate as
+`no_classifier`, never as "no heart samples".
 
 ### The poller's heart write is consent-gated, and that gate is the only one there is
 

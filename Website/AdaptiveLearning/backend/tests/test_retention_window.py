@@ -400,7 +400,8 @@ def test_turning_enforcement_off_does_not_bypass_consent(monkeypatch):
 
 @pytest.mark.parametrize("today,expected", [
     ("2026-10-01", "2026-08-31"),       # inside the year: everything before its start
-    ("2027-06-30", "2027-06-30"),       # the last day: the year itself, from tonight
+    ("2027-06-30", "2026-08-31"),       # the last day is still recorded, so it is not expired
+    ("2027-07-01", "2027-06-30"),       # the day after: the year itself
     ("2027-08-01", "2027-06-30"),       # after the year
     ("2026-07-01", "2026-08-31"),       # before it starts: the day before the start
 ])
@@ -415,3 +416,18 @@ def test_no_usable_dates_have_no_cutoff():
     from datetime import date
     assert main._expiry_cutoff(None, None, date(2026, 9, 26)) is None
     assert main._expiry_cutoff("2026-09-01", "not a date", date(2026, 9, 26)) is None
+
+
+def test_an_unenforced_year_has_no_cutoff_whatever_dates_linger():
+    """Unticking "enforced" keeps the dates in the form; they must not go on deleting."""
+    from datetime import date
+    assert main._expiry_cutoff("2025-09-01", "2026-06-30", date(2026, 9, 26),
+                               enforced=False) is None
+
+
+def test_the_expired_day_the_report_uses_is_none_for_an_unenforced_year(monkeypatch):
+    from datetime import date
+    monkeypatch.setattr(main, "_retention_window", lambda: {
+        "state": main.WINDOW_NOT_ENFORCED, "starts_on": "2025-09-01",
+        "ends_on": "2026-06-30", "timezone": "UTC"})
+    assert main._expired_through(date(2026, 9, 26)) is None

@@ -586,14 +586,13 @@ def test_an_inverted_year_is_refused(monkeypatch):
     ("2027-09-01", "2028-06-30"),       # the start year mistyped: today is before it
     ("2025-09-01", "2026-06-30"),       # an end already past
 ], ids=["future start", "past end"])
-@pytest.mark.parametrize("enforced", [True, False])
-def test_dates_that_move_the_delete_cutoff_need_confirming(monkeypatch, starts, ends, enforced):
-    """`expired_signal_cutoff` reads the dates enforced or not, and its delete is irreversible."""
+def test_dates_that_move_the_delete_cutoff_need_confirming(monkeypatch, starts, ends):
+    """The delete `expired_signal_cutoff` drives is irreversible."""
     from datetime import datetime, timezone
     monkeypatch.setattr(main, "_utc_now", lambda: datetime(2026, 9, 25, 12, tzinfo=timezone.utc))
     monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
     monkeypatch.setattr(main, "supabase", c := _Fake(admins=["admin-1"]))
-    update = dict(enforced=enforced, starts_on=starts, ends_on=ends, timezone="UTC")
+    update = dict(enforced=True, starts_on=starts, ends_on=ends, timezone="UTC")
 
     with pytest.raises(main.HTTPException) as e:
         main.admin_set_retention_window(None, main.RetentionWindowUpdate(**update))
@@ -601,6 +600,17 @@ def test_dates_that_move_the_delete_cutoff_need_confirming(monkeypatch, starts, 
     assert not [row for table, row in c.upserts if table == "retention_window"]
 
     main.admin_set_retention_window(None, main.RetentionWindowUpdate(**update, confirm_expiry=True))
+    assert [row for table, row in c.upserts if table == "retention_window"]
+
+
+def test_an_unenforced_year_saves_without_confirming_whatever_its_dates(monkeypatch):
+    """Unenforced has no cutoff, so nothing is deleted by these dates and there is nothing to confirm."""
+    from datetime import datetime, timezone
+    monkeypatch.setattr(main, "_utc_now", lambda: datetime(2026, 9, 25, 12, tzinfo=timezone.utc))
+    monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
+    monkeypatch.setattr(main, "supabase", c := _Fake(admins=["admin-1"]))
+    main.admin_set_retention_window(None, main.RetentionWindowUpdate(
+        enforced=False, starts_on="2025-09-01", ends_on="2026-06-30", timezone="UTC"))
     assert [row for table, row in c.upserts if table == "retention_window"]
 
 

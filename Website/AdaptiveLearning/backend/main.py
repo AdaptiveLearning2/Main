@@ -313,6 +313,11 @@ def _client_address(request: Request) -> str:
         if len(chain) >= _TRUSTED_PROXY_HOPS:
             return chain[-_TRUSTED_PROXY_HOPS]
         # Too few entries: fall back to the peer (a shared bucket, never a bypass).
+        if not _proxy_hops_warned:
+            _proxy_hops_warned = True
+            print(f"[config] a request's X-Forwarded-For had {len(chain)} of the "
+                  f"{_TRUSTED_PROXY_HOPS} entries TRUSTED_PROXY_HOPS expects: set too high, or a "
+                  "request skipped the proxy; either way it shares one address budget")
     elif not _proxy_hops_warned and request.headers.get("x-forwarded-for"):
         # Once, and not at boot: a proxy is only visible in the requests it forwards.
         _proxy_hops_warned = True

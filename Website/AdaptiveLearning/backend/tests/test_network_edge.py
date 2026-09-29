@@ -452,6 +452,17 @@ def test_a_configured_proxy_is_not_reported(monkeypatch, capsys):
     assert "TRUSTED_PROXY_HOPS" not in capsys.readouterr().out
 
 
+def test_a_chain_shorter_than_the_hop_count_is_reported_once(monkeypatch, capsys):
+    """Hops set above the real chain also collapse every school into the peer's bucket."""
+    monkeypatch.setattr(main, "_TRUSTED_PROXY_HOPS", 2)
+    monkeypatch.setattr(main, "_proxy_hops_warned", False)
+    for _ in range(3):
+        assert main._client_address(_request("203.0.113.9")) == "10.0.0.1"
+    out = capsys.readouterr().out
+    assert out.count("TRUSTED_PROXY_HOPS") == 1
+    assert "had 1 of the 2 entries" in out
+
+
 def _tighten(monkeypatch, limiter="public_read", limit=2, window=60.0):
     """Shrink one budget by patching the limiter object; `_PUBLIC_RATE_LIMITS` is read at import."""
     budget = main._PUBLIC_BUDGETS[limiter]

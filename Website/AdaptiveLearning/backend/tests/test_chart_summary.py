@@ -584,6 +584,17 @@ def test_one_scale_throughout_still_has_a_direction():
     assert main._trend_direction(weeks, "focus")["direction"] == "up"
 
 
+def test_a_stress_trend_across_two_calm_sources_has_no_direction_and_focus_keeps_one():
+    """The calm source moves stress's unit and not focus's."""
+    weeks = [{"focus": 0.3, "stress": 0.3,
+              "score_scale": {"min": 2, "max": 2, "calm_sources": ["sdk"]}},
+             {"focus": 0.7, "stress": 0.7,
+              "score_scale": {"min": 2, "max": 2, "calm_sources": ["local"]}}]
+    stress = main._trend_direction(weeks, "stress")
+    assert stress["direction"] is None and stress["mixed_scale"] is True
+    assert main._trend_direction(weeks, "focus")["direction"] == "up"
+
+
 def test_a_withdrawn_eeg_channel_with_readings_states_them():
     """EEG is read regardless of withdrawal; its figures were dropped as 'not recorded'."""
     basis = _basis(channels={

@@ -343,8 +343,8 @@ def test_the_score_scale_comes_from_the_rollup_rows_never_a_date():
     rows = [{"channel": "cognitive", "score_scale_min": 1, "score_scale_max": 1},
             {"channel": "cognitive", "score_scale_min": 2, "score_scale_max": 2},
             {"channel": "heart", "score_scale_min": None, "score_scale_max": None}]
-    assert backend_main._scale_range(rows) == {"min": 1, "max": 2}
-    assert backend_main._scale_range(rows[:1]) == {"min": 1, "max": 1}
+    assert backend_main._scale_range(rows) == {"min": 1, "max": 2, "calm_sources": []}
+    assert backend_main._scale_range(rows[:1]) == {"min": 1, "max": 1, "calm_sources": []}
     assert backend_main._scale_range([{"channel": "cognitive"}]) is None, "unrecorded is not scale 1"
     # Carried by every rollup-backed surface.
     assert '"score_scale": _scale_range(b["scale_rows"])' in inspect.getsource(backend_main._signal_trend)
@@ -353,7 +353,8 @@ def test_the_score_scale_comes_from_the_rollup_rows_never_a_date():
         "the roster rows are labelled beside the chart, outlier flag included"
     assert 'summary["score_scale"] = _scale_ranges_many' in inspect.getsource(backend_main._signal_summary)
     assert 'out[str(sid)]["score_scale"] = scales.get(str(sid))' in inspect.getsource(backend_main._signal_summaries)
-    assert backend_main._combine_ranges([{"min": 1, "max": 1}, None, {"min": 2, "max": 2}]) == {"min": 1, "max": 2}
+    assert backend_main._combine_ranges([{"min": 1, "max": 1}, None, {"min": 2, "max": 2}]) == \
+        {"min": 1, "max": 2, "calm_sources": []}
     assert backend_main._combine_ranges([None]) is None
     assert '"score_scale": _scale_range(rollup_by.values())' in inspect.getsource(backend_main._weekly_signal_report)
     # Never on a heart or emotion row, which no re-anchoring touched.

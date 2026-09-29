@@ -1583,19 +1583,24 @@ def _stress_weight(rollup_row: dict) -> int:
 
 
 def _scale_range(rollup_rows) -> dict | None:
-    """`{"min", "max"}` of the score scale over cognitive rollup rows, or None
-    when no row recorded one.
+    """`{"min", "max", "calm_sources"}` over cognitive rollup rows, or None if no row has a scale.
 
-    Read from rows, never a date: the scale changes per sidecar restart. Ends
-    that differ straddle a change, so readers must not average across them.
+    Read from rows, never a date: both change per sidecar restart. Ends that differ, or
+    two calm sources (stress only), mean values either side must not be averaged together.
     """
-    lows = [r.get("score_scale_min") for r in rollup_rows
-            if r.get("channel") == "cognitive" and r.get("score_scale_min") is not None]
-    highs = [r.get("score_scale_max") for r in rollup_rows
-             if r.get("channel") == "cognitive" and r.get("score_scale_max") is not None]
+    cognitive = [r for r in rollup_rows if r.get("channel") == "cognitive"]
+    lows = [r["score_scale_min"] for r in cognitive if r.get("score_scale_min") is not None]
+    highs = [r["score_scale_max"] for r in cognitive if r.get("score_scale_max") is not None]
     if not lows or not highs:
         return None
-    return {"min": int(min(lows)), "max": int(max(highs))}
+    return {"min": int(min(lows)), "max": int(max(highs)),
+            "calm_sources": _calm_sources_union(r.get("calm_sources") for r in cognitive)}
+
+
+def _calm_sources_union(lists) -> list[str]:
+    """Sorted union of calm-source lists; a null list (no scored stress) adds nothing."""
+    return sorted({s for sources in lists if isinstance(sources, list)
+                   for s in sources if isinstance(s, str)})
 
 
 def _week_start(day: date) -> date:
@@ -3893,13 +3898,14 @@ def _trend_direction(weeks: list[dict], key: str) -> dict:
     """Which way one series moved across the weeks that have a reading.
 
     Always a dict: `direction` is None below two weeks or across a score-scale change
-    (`mixed_scale`), and `weeks_with_data` tells zero weeks from one. Anchored on the
-    first and last weeks *with* a reading, so trailing null weeks don't hide a trend.
+    (`mixed_scale`; for stress, two calm sources too), and `weeks_with_data` tells zero weeks
+    from one. Anchored on the first and last weeks *with* a reading, so null weeks don't hide a trend.
     """
     readings = [w for w in (weeks or []) if isinstance(w.get(key), (int, float))]
     points = [w[key] for w in readings]
     scales = _combine_ranges(w.get("score_scale") for w in readings)
-    mixed = bool(scales) and scales["min"] != scales["max"]
+    mixed = bool(scales) and (scales["min"] != scales["max"]
+                              or (key == "stress" and len(scales["calm_sources"]) > 1))
     if len(points) < 2 or mixed:
         return {"direction": None, "first": None, "last": None,
                 "weeks_with_data": len(points), "mixed_scale": mixed}
@@ -5036,11 +5042,12 @@ def _merge_cohort_trend(parts: list[list]) -> list:
 
 
 def _combine_ranges(ranges) -> dict | None:
-    """The widest of several `{"min", "max"}` ranges, or None if none."""
+    """The widest of several `_scale_range` results, calm sources unioned, or None if none."""
     present = [r for r in ranges if r]
     if not present:
         return None
-    return {"min": min(r["min"] for r in present), "max": max(r["max"] for r in present)}
+    return {"min": min(r["min"] for r in present), "max": max(r["max"] for r in present),
+            "calm_sources": _calm_sources_union(r.get("calm_sources") for r in present)}
 
 
 def _scale_ranges_many(user_ids: list[str], days: int) -> dict[str, dict | None]:
@@ -5055,7 +5062,7 @@ def _scale_ranges_many(user_ids: list[str], days: int) -> dict[str, dict | None]
         today = date.fromisoformat(_school_day(_utc_now(), _school_timezone()))
         since = today - timedelta(days=days - 1)
         rows = (supabase.table("signal_daily_rollup")
-                .select("user_id, channel, score_scale_min, score_scale_max")
+                .select("user_id, channel, score_scale_min, score_scale_max, calm_sources")
                 .in_("user_id", list(user_ids)).eq("channel", "cognitive")
                 .gte("day", since.isoformat()).execute().data or [])
     except Exception as e:                                     # noqa: BLE001

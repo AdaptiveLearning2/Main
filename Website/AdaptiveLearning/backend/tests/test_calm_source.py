@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 
 import pytest
 
@@ -46,7 +47,8 @@ def _row(**features):
 
 def test_the_row_records_the_calm_source_its_scale_and_whether_calm_was_measured():
     local = _row(calm_source="local", calm_measured=True, calm_held_seconds=2.0)
-    assert local["raw"]["calm_source"] == "local" and local["raw"]["score_scale"] == 3
+    assert local["raw"]["calm_source"] == "local"
+    assert local["raw"]["score_scale"] == 2, "the source is its own key, not a scale"
     assert local["stress"] == pytest.approx(0.5)
     assert _row(calm_source="sdk")["raw"]["score_scale"] == 2
     assert _row()["raw"]["score_scale"] == 2, "no source is sdk"
@@ -58,3 +60,47 @@ def test_the_row_records_the_calm_source_its_scale_and_whether_calm_was_measured
     fresh = _row(calm_source="local", calm_measured=True,
                  calm_held_seconds=signal_mapping.CALM_HOLD_MAX_SECONDS)
     assert fresh["stress"] == pytest.approx(0.5), "at the cap is still held, not stale"
+
+
+def test_the_score_scale_is_the_version_alone_so_a_bump_cannot_read_as_a_source(monkeypatch):
+    """Packed into one number, the next version bump would have read as the local calm."""
+    monkeypatch.setattr(signal_mapping, "SCORE_SCALE_VERSION", 3)
+    for features in ({"calm_source": "sdk"}, {"calm_source": "local"}, {}):
+        assert _row(**features)["raw"]["score_scale"] == 3
+    assert "calm_source" not in _row()["raw"], "absent stays absent, and reads as sdk"
+
+
+def test_an_unknown_calm_source_withholds_stress_and_says_why():
+    """A source outside sdk/local puts calm on no known scale; focus is unaffected."""
+    for bad in ("martian", {"a": 1}, ["local"], 3):
+        row = _row(calm_source=bad)
+        assert row["stress"] is None and row["focus"] == pytest.approx(0.6)
+        assert "calm_source" not in row["raw"] and row["raw"]["calm_invalid"] == ["calm_source"]
+
+
+def test_a_row_on_no_known_calm_source_adds_nothing_to_the_windows_calm(monkeypatch):
+    """Its stress is on no known scale, so averaging it in moves calm by a meaningless amount."""
+    base = {"session_id": SESSION, "focus": 0.4, "engagement": 0.4}
+    rows = [{**base, "stress": 0.2, "raw": {"confidence": 0.9}},
+            {**base, "stress": 0.9, "raw": {"confidence": 0.9, "calm_source": "martian"}}]
+    _install(monkeypatch, CONSENT_ALL, eeg=rows)
+    assert decider.get_session_signal_state(SESSION, USER).calm == pytest.approx(0.8)
+
+
+def test_the_calm_sources_ride_beside_the_scale_and_combine_as_a_union(monkeypatch):
+    """A day on two calm sources is two units of stress, whatever the version says."""
+    import main
+    from tests.test_access_control import _FakeSupabase
+    monkeypatch.setattr(main, "_utc_now", lambda: datetime(2026, 9, 29, 12, tzinfo=timezone.utc))
+    monkeypatch.setattr(main, "_school_timezone", lambda: timezone.utc)
+    rows = [{"user_id": "a", "day": "2026-09-28", "channel": "cognitive", "score_scale_min": 2,
+             "score_scale_max": 2, "calm_sources": ["sdk"]},
+            {"user_id": "a", "day": "2026-09-29", "channel": "cognitive", "score_scale_min": 2,
+             "score_scale_max": 2, "calm_sources": ["local"]},
+            {"user_id": "b", "day": "2026-09-29", "channel": "cognitive", "score_scale_min": 2,
+             "score_scale_max": 2, "calm_sources": None}]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({"signal_daily_rollup": rows}))
+    scales = main._scale_ranges_many(["a", "b"], 7)
+    assert scales["a"] == {"min": 2, "max": 2, "calm_sources": ["local", "sdk"]}
+    assert scales["b"] == {"min": 2, "max": 2, "calm_sources": []}, "no stress, no source"
+    assert main._combine_ranges(scales.values())["calm_sources"] == ["local", "sdk"]

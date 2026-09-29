@@ -937,24 +937,27 @@ down 0.49 Bels; only calm's is held.
 are unchanged. Left at 0.7/0.35 the widening made `focused` 61% harder on a capture where it was reached on zero
 ticks. Both remain unmeasured against a task.
 
-That re-anchors every stored value, so **`signal_mapping` writes `raw.score_scale` on every cognitive row** (2 on the
-sdk calm source, 3 on the local one, per `SCORE_SCALE_BY_CALM_SOURCE`); rows without the key predate it. **The rollup
-records the range seen each day** (`score_scale_min`/`score_scale_max`) and every rollup-backed payload carries
-`score_scale: {min, max}` for its window. **Never a date**: the rollout is per sidecar process, as each student's
-machine restarts, and `_scale_range` keeps "no row recorded one" apart from scale 1.
+That re-anchors every stored value, so **`signal_mapping` writes `raw.score_scale` on every cognitive row** — the
+population-bounds version, `SCORE_SCALE_VERSION`, and nothing else; rows without the key predate it. **The calm source
+is its own key, `raw.calm_source`, never folded into that number**: packed in as scale 3, the next version bump would
+have read as the local calm. A posted source outside `sdk`/`local` withholds stress and is named in `raw.calm_invalid`,
+and the decider averages no stress from such a row. **The rollup records both per day** — the scale range
+(`score_scale_min`/`score_scale_max`, over rows with a focus) and `calm_sources` (over rows with a *scored stress*, the
+only rows that say what unit the day's stress is in; no key is `sdk`) — and every rollup-backed payload carries
+`score_scale: {min, max, calm_sources}` for its window. **Never a date**: the rollout is per sidecar process, as each
+student's machine restarts, and `_scale_range` keeps "no row recorded one" apart from scale 1.
 
 `ScaleNote` renders the caption — term trend, class trend (only beside a drawn line), class roster (class range, or
 any one student's, since the outlier flag is computed on those numbers) and weekly summary tiles — **when the range
 straddles the change**: a series on two scales is not one series and the chart cannot show where the step is. Each
 wiring has a test with a mixed fixture, since the null branch passes with the element deleted.
 
-**Scale 3 is a different unit, not a later version**: it moves stress and not focus, and runs on one student's
-headband beside a classmate's on scale 2 at the same time — so `describeScaleChange` names which figures a range moves
-and whether the split is a step in time (1→2) or two sources side by side (any range reaching 3). **A scale-3 row
-whose stress is NULL is left out of the day's range while any row with a scored stress is present**, and only a day
-with no scored stress at all falls back to reading such rows as scale 2 (they contributed only a focus). Mapping them
-to 2 unconditionally made every local session read 2..3 on its own; not mapping them at all drew the two-source
-caption beside an sdk day. A row with a NULL `raw` is scale 1 like a row with no key, so the null test comes first.
+**A version step and a calm-source split are different facts**: a step moves focus and stress and is a step in time;
+two sources move stress only and run side by side, one student's headband beside a classmate's. `describeScaleChange`
+names which, and the chart summary withholds a stress direction, not a focus one, across two sources. A held local
+calm (stress nulled) names no source, so an ordinary local session reads one source, not two. Rows stored as scale 3
+before the split were migrated (`20260929000000`) to scale 2 with `calm_source: local`, and rolled days rewritten to
+match. A row with a NULL `raw` is scale 1 and `sdk`, like a row with no key, so the null test comes first.
 
 **The rollup reads `raw.score_scale` through `score_scale_of(jsonb)`, never a hard cast**: `raw` is client-supplied on
 the push path, and a cast raised out of the cognitive INSERT, the first of three, so one posted sample aborted a
@@ -1087,8 +1090,8 @@ session.
 
 The decider reads `raw.calm_source` off the rows and **a window holding both sources has no calm opinion.**
 `calm_source`, `calm_measured` and `calm_held_seconds` are client-supplied on the push path and validated by type in
-the mapper (string; bool; finite non-negative number), the decider type-checks the source again before it is a set
-element, and **a value present in the wrong type *withholds* stress rather than recording it**: `"false"` is not
+the mapper (`sdk` or `local`; bool; finite non-negative number), the decider checks the source again and counts no
+stress from a row on an unknown one, and **a value present in the wrong type *withholds* stress rather than recording it**: `"false"` is not
 `False` and `"150"` fails an isinstance check, and both read as a measured, fresh calm — the number the hold rule
 exists to withhold. A posted list as the source 500'd the ingest and then every question until it aged out. A rejected
 `calm_measured`/`calm_held_seconds` is named in `raw.calm_invalid`, or the nulled stress reads as an older sidecar that

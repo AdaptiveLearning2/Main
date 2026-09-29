@@ -673,8 +673,8 @@ describe('the score-scale caption on the class panels', () => {
     expect(screen.queryByRole('note')).not.toBeInTheDocument()
   })
 
-  it('captions a roster where one student is on the local calm scale beside sdk classmates', () => {
-    // Beside a 2..2 classmate, 3..3 puts stress on two scales; the caption names stress only.
+  it('captions a roster where one student is on the local calm beside sdk classmates', () => {
+    // One version, two calm sources: stress is in two units; the caption names stress only.
     const student = (id, score_scale) => ({
       student_id: id, display_name: id,
       summary: { focus: 0.6, stress: 0.3, cognitive_samples: 10, days_recorded: 2,
@@ -683,8 +683,9 @@ describe('the score-scale caption on the class panels', () => {
     })
     render(<ClassSignalRoster data={{
       retrieved: true, summaries_retrieved: true, class_size: 5, min_students: 5,
-      score_scale: { min: 2, max: 2 },
-      per_student: [student('a', { min: 2, max: 2 }), student('b', { min: 3, max: 3 })],
+      score_scale: { min: 2, max: 2, calm_sources: ['sdk'] },
+      per_student: [student('a', { min: 2, max: 2, calm_sources: ['sdk'] }),
+                    student('b', { min: 2, max: 2, calm_sources: ['local'] })],
     }} />)
     expect(screen.getByRole('note')).toHaveTextContent(/two different ways/)
     expect(screen.getByRole('note')).not.toHaveTextContent(/focus/)

@@ -285,8 +285,20 @@ def get_session_signal_state(session_id, user_id=None):
 
     eeg_rows = _latest("cognitive_signals", "ts, focus, stress, raw",
                        session_id, EEG_BIAS_WINDOW) if consent["eeg"] else []
+    # Calm source (the stressed line differs by source); a missing key means "sdk".
+    # Type-checked before use as a set element: a posted dict or list is unhashable.
+    def _calm_source_of(r: dict) -> str | None:
+        raw = r.get("raw")
+        s = raw.get("calm_source") if isinstance(raw, dict) else None
+        if s is None:
+            return "sdk"
+        return s if isinstance(s, str) else None
+    # A row on no known source is on no known scale, so its stress is not a calm reading.
+    stress_rows = [r for r in eeg_rows if r.get("stress") is not None
+                   and _calm_source_of(r) in signal_fusion.EEG_STRESSED_CALM_MAX_BY_SOURCE]
+
     focus_vals  = [r["focus"]  for r in eeg_rows if r.get("focus")  is not None]
-    stress_vals = [r["stress"] for r in eeg_rows if r.get("stress") is not None]
+    stress_vals = [r["stress"] for r in stress_rows]
     # Signal quality is `raw.confidence` (no column). `raw` is unvalidated client JSON,
     # so only a real number in 0..1 counts (bool is an int to isinstance).
     confidence_vals = [
@@ -302,16 +314,7 @@ def get_session_signal_state(session_id, user_id=None):
     calm       = (1.0 - fmean(stress_vals)) if stress_vals else None
     confidence = fmean(confidence_vals) if confidence_vals else None
 
-    # Calm source (the stressed line differs by source); a missing key means "sdk".
-    # Type-checked before use as a set element: a posted dict or list is unhashable.
-    def _calm_source_of(r: dict) -> str | None:
-        raw = r.get("raw")
-        s = raw.get("calm_source") if isinstance(raw, dict) else None
-        if s is None:
-            return "sdk"
-        return s if isinstance(s, str) else None
-    sources = {_calm_source_of(r) for r in eeg_rows if r.get("stress") is not None}
-    sources = {s for s in sources if s in signal_fusion.EEG_STRESSED_CALM_MAX_BY_SOURCE}
+    sources = {_calm_source_of(r) for r in stress_rows}
     if len(sources) > 1:
         # Mixed sources put calm on two scales: withdraw calm only, not focus/confidence.
         calm = None

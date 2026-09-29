@@ -63,6 +63,10 @@ class _Query:
         self._limit = n
         return self
 
+    def range(self, start, end):
+        self._range = (start, end)
+        return self
+
     def eq(self, col, val):
         self._filters.append((col, val))
         return self
@@ -134,6 +138,8 @@ class _Query:
         if self._order:
             rows = sorted(rows, key=lambda r: str(r.get(self._order, "")), reverse=self._desc)
         total = len(rows)
+        if getattr(self, "_range", None):
+            rows = rows[self._range[0]:self._range[1] + 1]
         # _max_rows mirrors db-max-rows, a server cap .limit() cannot raise.
         ceilings = [n for n in (self._limit, self._max_rows) if n is not None]
         if ceilings:
@@ -2322,6 +2328,35 @@ def test_a_teacher_sees_their_own_classes(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
     monkeypatch.setattr(main, "_role", lambda _uid: "teacher")
     assert [r["display_name"] for r in main.leaderboard(None)] == ["Name 0", "Name 1", "Name 2"]
+
+
+def test_a_teacher_of_a_whole_school_is_ranked_over_every_student(monkeypatch):
+    """Past db-max-rows memberships are paged, and the ids go out in URL-sized chunks."""
+    n = 1200
+    tables = _leaderboard_tables(0)
+    ids = [f"student-{i:04d}" for i in range(n)] + ["student-z"]
+    tables["class_memberships"] = [{"class_id": "c1", "student_id": s} for s in ids]
+    tables["user_stats"] = [{"user_id": s, "total_correct": 100 + i % 500, "total_questions": 999,
+                             "current_streak": 1, "best_streak": 2} for i, s in enumerate(ids[:-1])]
+    # Last in every order the reads use, and first on the board.
+    tables["user_stats"].append({"user_id": "student-z", "total_correct": 999, "total_questions": 999,
+                                 "current_streak": 1, "best_streak": 2})
+    tables["profiles"].append({"id": "student-z", "display_name": "Top"})
+    fake = _FakeSupabase(tables, max_rows={"class_memberships": 500})
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
+    monkeypatch.setattr(main, "_role", lambda _uid: "teacher")
+
+    rows = main.leaderboard(None)
+
+    assert rows[0]["display_name"] == "Top"
+    scores = [r["total_correct"] for r in rows]
+    assert scores == sorted(scores, reverse=True) and len(rows) == 20
+    asked = [vals[0] for q in fake.queries for col, (op, *vals) in q.filters
+             if col == "user_id" and op == "in"]
+    # A fixed budget, not the constant: 8 KiB is a common URL limit, and a uuid is 37 bytes of it.
+    assert all(len(a) * 37 <= 8192 for a in asked)
+    assert sorted(s for a in asked for s in a) == sorted(ids)
 
 
 def test_a_student_in_no_class_sees_only_themselves(monkeypatch):

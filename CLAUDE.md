@@ -346,7 +346,8 @@ It audits **three Python sets, because they are three different installs** — t
 two are audited *as installed*, not as files: `requirements.txt` pins direct dependencies only, so
 auditing the file alone would miss the transitive tree, which is where `starlette`, `idna` and
 `urllib3` live. The locks are audited `--no-deps`, since the point of a lock is that it already
-names every version.
+names every version, and `--disable-pip`: they are hashed and Windows-resolved, so letting
+pip-audit install one on the ubuntu runner fails on Linux-only extras (see *Three venvs*).
 
 `npm audit` runs at `--audit-level=high`: npm reports transitive dev-only findings in build tooling
 that never reaches a browser, and a job red for those is one nobody reads by the time a real one

@@ -517,8 +517,20 @@ describe('a withdrawn channel', () => {
                   emotion_revoked_at: '2026-08-20T09:00:00Z' },
     })
     renderAt()
-    expect(await screen.findByText(/The camera was turned off on .*kept, but not shown/)).toBeInTheDocument()
+    expect(await screen.findByText(/The camera was turned off on .*so nothing it recorded is shown/)).toBeInTheDocument()
     expect(screen.queryByText('No face samples for this session.')).not.toBeInTheDocument()
+  })
+
+  it('never says a sensor that was never on was turned off, or that it recorded anything', async () => {
+    apiFetch.mockResolvedValue({
+      cognitive: COG, face: [], heart: [], answers: [],
+      channels: { face_included: true, heart_included: false, consent_retrieved: true,
+                  heart_revoked_at: null },
+    })
+    renderAt()
+    expect(await screen.findByText('Heart-rate recording is off for this student, so nothing from it is shown.'))
+      .toBeInTheDocument()
+    expect(screen.queryByText(/turned off|recorded is/)).not.toBeInTheDocument()
   })
 
   it('says heart-rate recording was turned off under the timeline', async () => {
@@ -545,7 +557,7 @@ describe('a withdrawn channel', () => {
     mockPair({ archived: true, charts: { cognitive_timeline: null }, unavailable: [],
                withdrawn: ['emotion_pie', 'heart_rate', 'stress_pie'] })
     renderAt()
-    expect(await screen.findByText('Not shown: this sensor was turned off for this student.')).toBeInTheDocument()
+    expect(await screen.findByText('Not shown: this sensor is off for this student.')).toBeInTheDocument()
     expect(screen.queryByText('Nothing was recorded on the camera channel.')).not.toBeInTheDocument()
   })
 })

@@ -638,6 +638,36 @@ def test_the_ceiling_is_per_session_and_per_channel(store, monkeypatch):
     assert other["inserted"] == 3
 
 
+def test_a_replayed_batch_costs_nothing_against_the_ceiling(store, monkeypatch):
+    """The push client resends a batch whose answer it lost; only new rows stay charged.
+
+    Admission still needs room for the batch, since duplicates are known only after the write.
+    """
+    tighten(monkeypatch, main._INGEST_ROW_LIMITER, limit=6)
+    _consent(store, headband_optical_enabled=True)
+    assert _post_heart(_hearts(3))["inserted"] == 3
+    assert _post_heart(_hearts(3))["duplicates"] == 3
+    assert _post_heart(_hearts(3, start=3))["inserted"] == 3
+
+
+def test_a_failed_write_gives_its_rows_back(store, monkeypatch):
+    tighten(monkeypatch, main._INGEST_ROW_LIMITER, limit=5)
+    _consent(store, headband_optical_enabled=True)
+    real = main.supabase
+
+    class _Down:
+        def table(self, name):
+            if name == "heart_signals":
+                raise RuntimeError("write failed")
+            return real.table(name)
+
+    monkeypatch.setattr(main, "supabase", _Down())
+    with pytest.raises(RuntimeError):
+        _post_heart(_hearts(5))
+    monkeypatch.setattr(main, "supabase", real)
+    assert _post_heart(_hearts(5))["inserted"] == 5
+
+
 def test_the_default_ceiling_is_above_what_the_push_client_can_send():
     """50 rows every 5 s per channel is 600 a minute; a ceiling at or below it refuses a real session."""
     assert main._INGEST_ROWS_PER_MINUTE > 600

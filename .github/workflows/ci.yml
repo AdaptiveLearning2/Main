@@ -248,7 +248,8 @@ jobs:
           pip-audit --skip-editable \
             --path "$("$venv/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
 
-      # `--no-deps`: a lock already names every version.
+      # `--no-deps`: a lock already names every version. `--disable-pip`: the locks are
+      # Windows-resolved and hashed, so installing one on this runner fails on Linux-only extras.
       - name: Audit the committed lock files
         id: audit-locks
         continue-on-error: true
@@ -258,7 +259,7 @@ jobs:
           for lock in requirements.lock requirements-dev.lock \
                       requirements-face.lock requirements-gaze.lock; do
             echo "::group::$lock"
-            pip-audit -r "$lock" --no-deps || status=1
+            pip-audit -r "$lock" --no-deps --disable-pip || status=1
             echo "::endgroup::"
           done
           exit $status

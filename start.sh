@@ -245,13 +245,18 @@ if [ -f "$EEG_ENV" ]; then
     for _pair in "API_TOKEN:EEG_API_TOKEN" "ADMIN_TOKEN:EEG_ADMIN_TOKEN"; do
         _key="${_pair%%:*}"; _backend_key="${_pair##*:}"
         _current="$(sed -n "s/^${_key}=//p" "$EEG_ENV" | tail -1)"
-        case "$_current" in
-            ""|replace-me*)
-                _token="$("$PYTHON" -c 'import secrets; print(secrets.token_urlsafe(32))')"
-                set_env_key "$EEG_ENV" "$_key" "$_token"
-                set_env_key "$BACKEND_ENV" "$_backend_key" "$_token"
-                echo -e "  ${GRAY}Generated ${_key} (and the backend's ${_backend_key})${NC}" ;;
-        esac
+        _remake=false
+        case "$_current" in ""|replace-me*) _remake=true ;; esac
+        # It refuses equal tokens too (the learner one ships in the page), so a copied admin token is remade.
+        if [ "$_key" = ADMIN_TOKEN ] && [ "$_current" = "$(sed -n 's/^API_TOKEN=//p' "$EEG_ENV" | tail -1)" ]; then
+            _remake=true
+        fi
+        if [ "$_remake" = true ]; then
+            _token="$("$PYTHON" -c 'import secrets; print(secrets.token_urlsafe(32))')"
+            set_env_key "$EEG_ENV" "$_key" "$_token"
+            set_env_key "$BACKEND_ENV" "$_backend_key" "$_token"
+            echo -e "  ${GRAY}Generated ${_key} (and the backend's ${_backend_key})${NC}"
+        fi
     done
 fi
 

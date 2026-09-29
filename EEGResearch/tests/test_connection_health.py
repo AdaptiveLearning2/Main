@@ -125,7 +125,8 @@ def _listener():
 
 
 class _FakeBridge:
-    """Answers the adapter's CHALLENGE as `answer` says ("right", "wrong" or "silent") and keeps what follows."""
+    """Answers the adapter's CHALLENGE as `answer` says ("right", "wrong", "silent" or "hangup",
+    as a bridge built before the challenge does) and keeps what follows."""
 
     def __init__(self, answer="right", token="a1b2c3d4"):
         self.listener, self.port = _listener()
@@ -145,6 +146,10 @@ class _FakeBridge:
             first = stream.readline()
             self.heard = first
             nonce = first.decode().strip().removeprefix("CHALLENGE ")
+            if self.answer == "hangup":
+                self.conn.close()
+                self.conn = None
+                return
             if self.answer == "silent":
                 time.sleep(1.5)
                 self.heard += stream.read1(4096) if hasattr(stream, "read1") else b""
@@ -192,7 +197,19 @@ def test_the_token_follows_the_bridges_proof(token_file):
         bridge.close()
 
 
-@pytest.mark.parametrize("answer", ["wrong", "silent"])
+@pytest.mark.parametrize("answer, says", [("hangup", "rebuild it"), ("wrong", "answered the challenge wrongly")])
+def test_an_old_bridge_is_told_apart_from_an_impostor(token_file, answer, says, capsys):
+    bridge = _FakeBridge(answer)
+    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=bridge.port, timeout_seconds=1, token_file=token_file)
+    try:
+        assert adapter._try_connect() is False
+        assert says in capsys.readouterr().out
+    finally:
+        adapter.disconnect()
+        bridge.close()
+
+
+@pytest.mark.parametrize("answer", ["wrong", "silent", "hangup"])
 def test_whatever_cannot_prove_itself_the_bridge_never_gets_the_token(token_file, answer):
     """A process that took the port first would otherwise read the token and feed fabricated EEG."""
     bridge = _FakeBridge(answer)

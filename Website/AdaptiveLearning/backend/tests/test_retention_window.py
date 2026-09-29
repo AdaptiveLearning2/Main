@@ -205,10 +205,11 @@ _GATING_CALLBACKS = ("_poller_may_record_eeg", "_poller_may_record_eeg_reason",
 def _writes_signal_rows(source: str) -> bool:
     """Whether a function writes a signal table; over-matches on purpose.
 
-    `upsert` covers `ingest_heart`, which dedupes on `heart_session_source_ts_key`.
+    `upsert` covers `ingest_heart`, which dedupes on `heart_session_source_ts_key`;
+    `_write_ingest_rows(` is the ingest endpoints' upsert, which names no table itself.
     """
     return (any(t in source for t in _SIGNAL_TABLES)
-            and (".insert(" in source or ".upsert(" in source))
+            and any(w in source for w in (".insert(", ".upsert(", "_write_ingest_rows(")))
 
 
 def _recording_sites():

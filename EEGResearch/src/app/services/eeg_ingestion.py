@@ -841,8 +841,11 @@ class TcpMuseBridgeAdapter:
             expected = "PROOF " + hmac.new(token.encode("ascii"), nonce.encode("ascii"),
                                            hashlib.sha256).hexdigest()
             if not hmac.compare_digest(proof, expected):
-                print(f"[bridge] {self.host}:{self.port} did not prove it holds the bridge's token; "
-                      f"not sending it", flush=True)
+                # A hang-up is what a bridge built before the challenge does with one.
+                why = ("hung up at the challenge: likely a bridge built before it, so rebuild it "
+                       "(start.ps1 -Muse does)") if not proof else \
+                      "answered the challenge wrongly, so it is not the bridge that wrote the token file"
+                print(f"[bridge] {self.host}:{self.port} {why}; not sending the token", flush=True)
                 stream.close()
                 sock.close()
                 return self._connect_failed()

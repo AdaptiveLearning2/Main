@@ -140,8 +140,11 @@ function SessionReviewBody({ sessionId }) {
   const withheld = (included, revokedAt, sensor) => {
     if (included !== false) return null
     if (channels.consent_retrieved === false) return `Consent for ${sensor} could not be checked, so its data is not shown.`
+    const Sensor = `${sensor[0].toUpperCase()}${sensor.slice(1)}`
+    // No revocation date: never consented, so nothing was turned off and nothing was recorded.
     const since = revokedAt && fmtDate(revokedAt)
-    return `${sensor[0].toUpperCase()}${sensor.slice(1)} was turned off${since ? ` on ${since}` : ''}. What it recorded is kept, but not shown.`
+    if (!since) return `${Sensor} is off for this student, so nothing from it is shown.`
+    return `${Sensor} was turned off on ${since}, so nothing it recorded is shown.`
   }
   const faceWithheld  = withheld(channels.face_included, channels.emotion_revoked_at, 'the camera')
   const heartWithheld = withheld(channels.heart_included, channels.heart_revoked_at, 'heart-rate recording')
@@ -304,7 +307,7 @@ function SessionReviewBody({ sessionId }) {
     empty: 'Nothing was recorded on this channel.',
     unavailable: 'The archived chart for this session could not be loaded.',
     unarchived: 'No signal samples for this session.',
-    withdrawn: 'Not shown: this sensor was turned off for this student.',
+    withdrawn: 'Not shown: this sensor is off for this student.',
     failed: 'The archived charts could not be loaded — try again.',
     pending: 'Loading the archived charts…',
   }

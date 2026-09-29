@@ -249,7 +249,9 @@ if (-not (Update-DeviceRegistry $eegEnv $headband $cameraEntry -DryRun)) { exit 
 # and the backend gets the same one: under pull it calls the sidecar with it.
 foreach ($pair in @(@("API_TOKEN", "EEG_API_TOKEN"), @("ADMIN_TOKEN", "EEG_ADMIN_TOKEN"))) {
     $current = Get-EnvValue $eegEnv $pair[0]
-    if ((Test-Path $eegEnv) -and (-not $current -or $current -like "replace-me*")) {
+    # It refuses equal tokens too (the learner one ships in the page), so a copied admin token is remade.
+    $sameAsApi = ($pair[0] -eq "ADMIN_TOKEN") -and $current -and ($current -eq (Get-EnvValue $eegEnv "API_TOKEN"))
+    if ((Test-Path $eegEnv) -and (-not $current -or $current -like "replace-me*" -or $sameAsApi)) {
         $token = New-SidecarToken
         Set-EnvKey $eegEnv $pair[0] $token
         Set-EnvKey $backendEnv $pair[1] $token

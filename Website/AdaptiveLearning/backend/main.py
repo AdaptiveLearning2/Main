@@ -268,12 +268,12 @@ class _SlidingWindowLimiter:
             hits.extend([now] * cost)
             return None
 
-    def release(self, key: str) -> None:
-        """Give back the caller's newest hit, for work admitted but never done."""
+    def release(self, key: str, count: int = 1) -> None:
+        """Give back the caller's `count` newest hits, for work admitted but never done."""
         with self._lock:
             hits = self.hits.get(key)
-            if hits:
-                hits.pop()
+            if hits and count > 0:
+                del hits[-count:]
 
     def reset(self) -> None:
         """Forget every caller and re-arm the sweep. For tests."""
@@ -4389,6 +4389,29 @@ def student_chart_summary(student_id: str, request: Request, payload: ChartSumma
 # ─── leaderboard ─────────────────────────────────────────────────────────
 
 _LEADERBOARD_MAX = 100
+# Ids per `in_` read: each is ~37 bytes of URL, and a school's roster would pass URL limits.
+_LEADERBOARD_ID_CHUNK = 200
+
+
+def _chunks(ids: list[str], size: int = _LEADERBOARD_ID_CHUNK):
+    for i in range(0, len(ids), size):
+        yield ids[i:i + size]
+
+
+def _class_members(class_ids: list[str]) -> set[str]:
+    """Every student in these classes, paged until a read comes back empty (db-max-rows cuts silently)."""
+    members: set[str] = set()
+    for chunk in _chunks(class_ids):
+        start = 0
+        while True:
+            page = supabase.table("class_memberships").select("class_id, student_id") \
+                .in_("class_id", chunk).order("class_id").order("student_id") \
+                .range(start, start + 999).execute().data or []
+            if not page:
+                break
+            members |= {m["student_id"] for m in page}
+            start += len(page)
+    return members
 
 
 def _leaderboard_peers(user_id: str) -> set[str]:
@@ -4406,11 +4429,7 @@ def _leaderboard_peers(user_id: str) -> set[str]:
             .eq("student_id", user_id).execute()
         class_ids = [m["class_id"] for m in mine.data or []]
         peers = {user_id}
-    if class_ids:
-        members = supabase.table("class_memberships").select("student_id") \
-            .in_("class_id", class_ids).execute()
-        peers |= {m["student_id"] for m in members.data or []}
-    return peers
+    return peers | _class_members(class_ids)
 
 
 @app.get("/api/leaderboard")
@@ -4428,12 +4447,16 @@ def leaderboard(request: Request, limit: int = 20):
         raise HTTPException(503, "The leaderboard could not be loaded right now")
     if not peers:
         return []
-    res = supabase.table("user_stats") \
-        .select("user_id, total_correct, total_questions, current_streak, best_streak, "
-                "last_session_at") \
-        .in_("user_id", sorted(peers)) \
-        .order("total_correct", desc=True).limit(max(1, min(limit, _LEADERBOARD_MAX))).execute()
-    rows = res.data or []
+    top = max(1, min(limit, _LEADERBOARD_MAX))
+    rows = []
+    # Each chunk's own top N, merged: the board's top N is among them.
+    for chunk in _chunks(sorted(peers)):
+        rows += supabase.table("user_stats") \
+            .select("user_id, total_correct, total_questions, current_streak, best_streak, "
+                    "last_session_at") \
+            .in_("user_id", chunk) \
+            .order("total_correct", desc=True).limit(top).execute().data or []
+    rows = sorted(rows, key=lambda r: r.get("total_correct") or 0, reverse=True)[:top]
     profiles = _profiles_many(r.get("user_id") for r in rows)
     tz = _school_timezone() if rows else None
     enriched = []
@@ -5888,6 +5911,22 @@ def _admit_ingest_rows(user_id: str, session_id: str, channel: str, n: int) -> N
                             headers={"Retry-After": str(refused_after)})
 
 
+def _write_ingest_rows(table: str, rows: list[dict], on_conflict: str,
+                       session_id: str, channel: str) -> int:
+    """Upsert admitted rows and return how many were new; a replayed or failed row is given back."""
+    key = f"{session_id}:{channel}"
+    try:
+        resp = supabase.table(table).upsert(rows, on_conflict=on_conflict,
+                                            ignore_duplicates=True).execute()
+    except Exception:
+        _INGEST_ROW_LIMITER.release(key, len(rows))
+        raise
+    # What the database wrote (needs return=representation); push_client counts from it.
+    written = len(resp.data or [])
+    _INGEST_ROW_LIMITER.release(key, len(rows) - written)
+    return written
+
+
 def _permitted_heart_sources(gate: dict) -> set[str]:
     """The sources this student may currently be recorded from.
 
@@ -6013,11 +6052,8 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     inserted = 0
     if rows:
         _admit_ingest_rows(user["id"], payload.session_id, "cognitive", len(rows))
-        resp = supabase.table("cognitive_signals").upsert(
-            rows, on_conflict="session_id,ts", ignore_duplicates=True
-        ).execute()
-        # What the database wrote (needs return=representation); push_client counts from it.
-        inserted = len(resp.data or [])
+        inserted = _write_ingest_rows("cognitive_signals", rows, "session_id,ts",
+                                      payload.session_id, "cognitive")
     return {"ok": True, "inserted": inserted,
             "dropped": len(samples) - len(rows),
             "malformed": malformed,
@@ -6057,11 +6093,8 @@ def ingest_face(payload: FaceBatch, request: Request):
     inserted = 0
     if rows:
         _admit_ingest_rows(user["id"], payload.session_id, "face", len(rows))
-        resp = supabase.table("face_signals").upsert(
-            rows, on_conflict="session_id,ts", ignore_duplicates=True
-        ).execute()
-        # What the database wrote -- see the cognitive endpoint.
-        inserted = len(resp.data or [])
+        inserted = _write_ingest_rows("face_signals", rows, "session_id,ts",
+                                      payload.session_id, "face")
     # Separate counts: push_client tells a quiet camera from a replay by them.
     return {"ok": True, "inserted": inserted,
             "dropped": len(placed) - len(rows),
@@ -6118,11 +6151,8 @@ def ingest_heart(payload: HeartBatch, request: Request):
     if rows:
         _admit_ingest_rows(user["id"], payload.session_id, "heart", len(rows))
         # Idempotent on (session_id, source, ts).
-        resp = supabase.table("heart_signals").upsert(
-            rows, on_conflict="session_id,source,ts", ignore_duplicates=True
-        ).execute()
-        # What the database wrote; needs return=representation (the default).
-        written = len(resp.data or [])
+        written = _write_ingest_rows("heart_signals", rows, "session_id,source,ts",
+                                     payload.session_id, "heart")
     return {"ok": True, "inserted": written, "dropped": dropped,
             "malformed": malformed,
             "out_of_window": out_of_window,

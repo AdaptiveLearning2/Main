@@ -301,14 +301,23 @@ _PUBLIC_BUDGETS = {
 }
 
 
+_proxy_hops_warned = False
+
+
 def _client_address(request: Request) -> str:
     """The caller, for a route where there is no account to name them by."""
+    global _proxy_hops_warned
     if _TRUSTED_PROXY_HOPS:
         chain = [p.strip() for p in
                  request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
         if len(chain) >= _TRUSTED_PROXY_HOPS:
             return chain[-_TRUSTED_PROXY_HOPS]
         # Too few entries: fall back to the peer (a shared bucket, never a bypass).
+    elif not _proxy_hops_warned and request.headers.get("x-forwarded-for"):
+        # Once, and not at boot: a proxy is only visible in the requests it forwards.
+        _proxy_hops_warned = True
+        print("[config] a request carried X-Forwarded-For but TRUSTED_PROXY_HOPS is 0: behind a "
+              "proxy, every school shares one address budget, class joins included")
     client = request.client
     # No peer shares one bucket rather than being unlimited.
     return client.host if client and client.host else "unknown"

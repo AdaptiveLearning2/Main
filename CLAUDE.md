@@ -850,7 +850,10 @@ also keeps an address budget, in `_AUTHENTICATED_ADDRESS_LIMITER` (apart, so `_P
 caller"): sign-up is self-service, so a per-student limit alone is a new allowance per account.
 **`/api/classes/join` keeps its address budget in the handler instead** (`_JOIN_MISS_LIMITER`), because it counts
 only *wrong* codes from signed-in students: charged before login, a school's first morning of correct codes, or one
-student's script, would lock the whole network out of joining. Old 6-character codes are the weak case, and
+student's script, would lock the whole network out of joining. Like every address budget it needs
+`TRUSTED_PROXY_HOPS` set behind a proxy — at 0 every school is one bucket, and once it is spent even right codes
+are refused, since a limit checked after the lookup would tell an attacker which guesses were codes. The first
+request carrying `X-Forwarded-For` at 0 logs a `[config]` line. Old 6-character codes are the weak case, and
 `POST /api/classes/{id}/join-code` lets the owning teacher replace one; members stay enrolled.
 
 **An address is a school, not a student**, and that sets the numbers. A class leaves through one NAT and

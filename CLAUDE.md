@@ -530,7 +530,7 @@ treatment in `config.py` — a validator warns and falls back rather than refusi
 
 **Backend.** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `AUTH_CHECK_TIMEOUT`, `BACKEND_PORT`, `EEG_API_URL`,
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MODE`, `INGEST_MAX_BATCH` /
-`INGEST_RATE_LIMIT` / `INGEST_RATE_WINDOW`, `SESSION_ABANDONED_AFTER_HOURS` /
+`INGEST_RATE_LIMIT` / `INGEST_RATE_WINDOW` / `INGEST_MAX_ROWS_PER_MINUTE` (per session and channel), `SESSION_ABANDONED_AFTER_HOURS` /
 `STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep and its chart catch-up), `QUESTIONS_CACHE_TTL`,
 `QUESTION_QUEUE_SIZE`, `PAIRING_IDLE_SECONDS` (120; a headband pairing its pairer's page stopped polling is released), the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
 `PUBLIC_*_RATE_*` / `TRUSTED_PROXY_HOPS` group under *The network edge*, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels*,

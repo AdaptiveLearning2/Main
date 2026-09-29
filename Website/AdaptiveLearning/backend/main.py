@@ -248,8 +248,8 @@ class _SlidingWindowLimiter:
         self.sweep_at = time.monotonic()
         self._lock = threading.Lock()
 
-    def check(self, key: str) -> int | None:
-        """Seconds to wait, or `None` while the caller is inside its allowance."""
+    def check(self, key: str, cost: int = 1) -> int | None:
+        """Seconds to wait, or `None` while the caller is inside its allowance; `cost` hits at once, all or none."""
         now = time.monotonic()
         with self._lock:
             if (len(self.hits) > self._sweep_above
@@ -261,10 +261,11 @@ class _SlidingWindowLimiter:
 
             hits = [t for t in self.hits.get(key, ()) if now - t < self.window]
             self.hits[key] = hits
-            if len(hits) >= self.limit:
-                # The oldest counted hit is the one whose expiry frees a slot.
-                return max(1, int(self.window - (now - min(hits))) + 1)
-            hits.append(now)
+            if len(hits) + cost > self.limit:
+                # Hits are in time order; the one whose expiry frees `cost` slots decides the wait.
+                freeing = hits[min(len(hits), len(hits) + cost - self.limit) - 1] if hits else now
+                return max(1, int(self.window - (now - freeing)) + 1)
+            hits.extend([now] * cost)
             return None
 
     def release(self, key: str) -> None:
@@ -3443,6 +3444,12 @@ _INGEST_RATE_WINDOW = env_number("INGEST_RATE_WINDOW", 60.0, float, minimum=1.0)
 _INGEST_LIMITER = _SlidingWindowLimiter(
     "ingest", _INGEST_RATE_LIMIT, _INGEST_RATE_WINDOW)
 
+# Rows per session per channel per minute. The batch rate alone allowed 60k rows a minute, ~86M
+# a day per account. The push client sends at most 600 (50 every 5 s), so this is twice that.
+_INGEST_ROWS_PER_MINUTE = env_number("INGEST_MAX_ROWS_PER_MINUTE", 1200, int,
+                                     minimum=_INGEST_MAX_BATCH)
+_INGEST_ROW_LIMITER = _SlidingWindowLimiter("ingest_rows", _INGEST_ROWS_PER_MINUTE, 60.0)
+
 # Heart sources each sensor permits, keyed on `_may_record`'s composed flags, never raw consent.
 _HEART_SOURCES_BY_RECORD_FLAG = {
     "record_headband_optical": ("muse_optics", "muse_ppg"),
@@ -5870,6 +5877,17 @@ def _rate_limit_ingest(user_id: str):
                             headers={"Retry-After": str(refused_after)})
 
 
+def _admit_ingest_rows(user_id: str, session_id: str, channel: str, n: int) -> None:
+    """Raise 429 if `n` more rows would pass the session's per-channel ceiling; the batch is kept and retried."""
+    if n <= 0:
+        return
+    refused_after = _INGEST_ROW_LIMITER.check(f"{session_id}:{channel}", cost=n)
+    if refused_after is not None:
+        _record_security_event("rate_limited", user_id, limiter=_INGEST_ROW_LIMITER.name)
+        raise HTTPException(429, "Too many samples for this session. Slow down.",
+                            headers={"Retry-After": str(refused_after)})
+
+
 def _permitted_heart_sources(gate: dict) -> set[str]:
     """The sources this student may currently be recorded from.
 
@@ -5994,6 +6012,7 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     # Upsert on `cog_session_ts_key`: a replayed batch is a no-op.
     inserted = 0
     if rows:
+        _admit_ingest_rows(user["id"], payload.session_id, "cognitive", len(rows))
         resp = supabase.table("cognitive_signals").upsert(
             rows, on_conflict="session_id,ts", ignore_duplicates=True
         ).execute()
@@ -6037,6 +6056,7 @@ def ingest_face(payload: FaceBatch, request: Request):
     # Upsert on `face_session_ts_key`: a replayed batch is a no-op.
     inserted = 0
     if rows:
+        _admit_ingest_rows(user["id"], payload.session_id, "face", len(rows))
         resp = supabase.table("face_signals").upsert(
             rows, on_conflict="session_id,ts", ignore_duplicates=True
         ).execute()
@@ -6096,6 +6116,7 @@ def ingest_heart(payload: HeartBatch, request: Request):
 
     written = 0
     if rows:
+        _admit_ingest_rows(user["id"], payload.session_id, "heart", len(rows))
         # Idempotent on (session_id, source, ts).
         resp = supabase.table("heart_signals").upsert(
             rows, on_conflict="session_id,source,ts", ignore_duplicates=True

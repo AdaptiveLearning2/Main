@@ -489,7 +489,7 @@ GENERATION_SILENT_SITES = {
 
 # Named floor, not a count, so a rename fails too.
 EXPECTED_LIMITERS = {
-    "strategies", "chart_summary", "ingest", "generation", "generation_daily", "prefetch_daily",
+    "strategies", "chart_summary", "ingest", "ingest_rows", "generation", "generation_daily", "prefetch_daily",
     "public_generate", "public_read", "public_probe",
     "parent_link_code", "class_join",
 }

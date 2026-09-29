@@ -601,3 +601,51 @@ def test_the_synthetic_mark_is_derived_from_the_sample_never_from_the_posted_raw
     assert out["inserted"] == 3
     marks = [row["raw"].get("synthetic") for row in store["heart_signals"]]
     assert marks == [True, None, None]
+
+
+# ── rows per session per channel: the batch rate alone allowed ~86M a day ───
+
+def _hearts(n, start=0):
+    return [_heart(ts=f"2026-08-09T10:{(start + i) // 60:02d}:{(start + i) % 60:02d}Z") for i in range(n)]
+
+
+def test_rows_past_the_sessions_ceiling_are_refused_whole_and_nothing_is_written(store, monkeypatch):
+    """A 429 keeps the batch in the push client's queue; a partial write would lose the rest."""
+    from conftest import tighten
+    tighten(monkeypatch, main._INGEST_ROW_LIMITER, limit=5)
+    _consent(store, headband_optical_enabled=True)
+    recorded = []
+    monkeypatch.setattr(main, "_record_security_event", lambda kind, actor, **d: recorded.append((kind, d)))
+    assert _post_heart(_hearts(3))["inserted"] == 3
+    with pytest.raises(main.HTTPException) as e:
+        _post_heart(_hearts(3, start=3))
+    assert e.value.status_code == 429 and int(e.value.headers["Retry-After"]) >= 1
+    assert len(store["heart_signals"]) == 3
+    assert recorded == [("rate_limited", {"limiter": main._INGEST_ROW_LIMITER.name})]
+
+
+def test_the_ceiling_is_per_session_and_per_channel(store, monkeypatch):
+    from conftest import tighten
+    tighten(monkeypatch, main._INGEST_ROW_LIMITER, limit=3)
+    _consent(store, headband_optical_enabled=True, camera_enabled=True)
+    assert _post_heart(_hearts(3))["inserted"] == 3
+    # Another channel of the same session has its own budget.
+    out = main.ingest_face(main.FaceBatch(session_id=SESSION, samples=[
+        {"ts": f"2026-08-09T10:00:0{i}Z", "emotion": "happy"} for i in range(3)]), request=None)
+    assert out["inserted"] == 3
+    # And another session.
+    other = main.ingest_heart(main.HeartBatch(session_id="session-2", samples=_hearts(3)), request=None)
+    assert other["inserted"] == 3
+
+
+def test_the_default_ceiling_is_above_what_the_push_client_can_send():
+    """50 rows every 5 s per channel is 600 a minute; a ceiling at or below it refuses a real session."""
+    assert main._INGEST_ROWS_PER_MINUTE > 600
+    assert main._INGEST_ROWS_PER_MINUTE >= main._INGEST_MAX_BATCH
+
+
+def test_a_cost_is_taken_whole_or_not_at_all():
+    limiter = main._SlidingWindowLimiter("t", 5, 60.0)
+    assert limiter.check("k", cost=4) is None
+    assert limiter.check("k", cost=2) is not None
+    assert limiter.check("k", cost=1) is None, "the refused cost of 2 was partly taken"

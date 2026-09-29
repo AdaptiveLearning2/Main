@@ -8,6 +8,7 @@ from statistics import fmean, median, pstdev
 from typing import Any, Callable
 
 from src.app.models import EegSample
+from src.app.services.contact import seated_channels
 
 
 class SignalProcessor:
@@ -107,10 +108,14 @@ class SignalProcessor:
         self._samples_no_delta = 0
         self._samples_no_spread = 0
         self._held_ratios: tuple[float, float] | None = None
-        # Smoothed raw log ratios; None until the first admitted tick seeds them.
+        # Whether the held calm was a measurement, not the midpoint placeholder.
+        self._held_calm_measured = False
+        # Smoothed raw log ratios, each on its own clock (local calm can be absent);
+        # None until the first admitted tick with a value seeds them.
         self._ema_focus: float | None = None
         self._ema_calm: float | None = None
         self._ema_ts: datetime | None = None
+        self._ema_calm_ts: datetime | None = None
         # Bounded: a stalled sample clock covers nothing, so the list would otherwise grow.
         self._baseline_focus: deque[float] = deque(maxlen=self.BASELINE_MAX_SAMPLES)
         self._baseline_calm: deque[float] = deque(maxlen=self.BASELINE_MAX_SAMPLES)
@@ -132,9 +137,7 @@ class SignalProcessor:
         self._calm_latched: datetime | None = None
         self._calm_ramp_elapsed = 0.0
         self._calm_ramp_last_ts: datetime | None = None
-        # Whether a calm was scored since the last gap (a midpoint placeholder is not
-        # one), and when the last fresh local estimate arrived.
-        self._calm_ever = False
+        # When the last fresh local estimate was scored (an artifact tick's is discarded).
         self._calm_fresh_ts: datetime | None = None
         # The centre each score used when the current baseline latched; the ramp starts there.
         self._baseline_collecting = True
@@ -201,11 +204,12 @@ class SignalProcessor:
         # Artifact medians kept: reset() runs on every no-sample tick, and cleared they never fill.
         self._held_ratios = None
         # After a gap no calm has been measured; the placeholder must say so.
-        self._calm_ever = False
+        self._held_calm_measured = False
         self._calm_fresh_ts = None
         self._ema_focus = None
         self._ema_calm = None
         self._ema_ts = None
+        self._ema_calm_ts = None
         # Baseline NOT cleared: it belongs to the session; only restart_baseline() replaces it.
 
     @staticmethod
@@ -435,21 +439,28 @@ class SignalProcessor:
                 self._calm_ramp_elapsed += self._covered(ts, self._calm_ramp_last_ts)
             self._calm_ramp_last_ts = ts
 
-    def _smooth_ratios(self, focus_raw: float, calm_raw: float, ts: datetime) -> tuple[float, float]:
-        """Advance the smoothed log ratios to this admitted tick and return them; seeded by the first tick."""
-        if self._ema_focus is None or self._ema_ts is None:
-            self._ema_focus, self._ema_calm, self._ema_ts = focus_raw, calm_raw, ts
-            return focus_raw, calm_raw
-        dt = (ts - self._ema_ts).total_seconds()
+    def _ema_weight(self, ts: datetime, last: datetime) -> float:
+        """Weight of a new value arriving `ts - last` after the previous one; a stalled clock is one nominal tick."""
+        dt = (ts - last).total_seconds()
         if dt <= 0.0:
             dt = self.NOMINAL_TICK_SECONDS
-        weight = 1.0 - exp(-dt / self.RATIO_SMOOTHING_SECONDS)
-        self._ema_focus += weight * (focus_raw - self._ema_focus)
-        # Local calm can be absent for a tick; the smoothed value holds.
-        if calm_raw is not None:
-            self._ema_calm = (calm_raw if self._ema_calm is None
-                              else self._ema_calm + weight * (calm_raw - self._ema_calm))
+        return 1.0 - exp(-dt / self.RATIO_SMOOTHING_SECONDS)
+
+    def _smooth_ratios(self, focus_raw: float, calm_raw: float | None,
+                       ts: datetime) -> tuple[float, float | None]:
+        """Advance the smoothed log ratios to this admitted tick and return them; each seeded by its first value."""
+        if self._ema_focus is None or self._ema_ts is None:
+            self._ema_focus = focus_raw
+        else:
+            self._ema_focus += self._ema_weight(ts, self._ema_ts) * (focus_raw - self._ema_focus)
         self._ema_ts = ts
+        # An absent local calm holds; its age since the last value is weighed when one arrives.
+        if calm_raw is not None:
+            if self._ema_calm is None or self._ema_calm_ts is None:
+                self._ema_calm = calm_raw
+            else:
+                self._ema_calm += self._ema_weight(ts, self._ema_calm_ts) * (calm_raw - self._ema_calm)
+            self._ema_calm_ts = ts
         return self._ema_focus, self._ema_calm
 
     def _artifact_reason(self, bands: dict[str, Any], frame_spread: float | None,
@@ -500,22 +511,10 @@ class SignalProcessor:
         contact data is absent or would exclude everything.
         """
         values = [sample.channel_tp9, sample.channel_af7, sample.channel_af8, sample.channel_tp10]
-        meta = meta or {}
-        is_good = meta.get("is_good")
-        hsi = meta.get("hsi")
-        has_is_good = isinstance(is_good, list) and len(is_good) == len(values)
-        has_hsi = isinstance(hsi, list) and len(hsi) == len(values)
-        if not has_is_good and not has_hsi:
+        seated = seated_channels(meta)
+        if seated is None:
             return values
-        kept: list[float] = []
-        try:
-            for i, value in enumerate(values):
-                valid = (not has_is_good) or float(is_good[i]) >= 1.0
-                seated = (not has_hsi) or float(hsi[i]) <= 2.0
-                if valid and seated:
-                    kept.append(value)
-        except (TypeError, ValueError):
-            return values
+        kept = [value for value, ok in zip(values, seated) if ok]
         return kept or values
 
     @staticmethod
@@ -545,8 +544,6 @@ class SignalProcessor:
         if self.calm_source == "local":
             # Until the buffer fills, calm is held, never taken from the SDK ratio (different scale).
             band_calm_raw = alpha_residual
-            if spectrum_ready:
-                self._calm_fresh_ts = sample.timestamp
         # A missing local calm does not send the tick down the amplitude fallback.
         using_band_features = band_focus_raw is not None and (
             band_calm_raw is not None or self.calm_source == "local")
@@ -622,33 +619,39 @@ class SignalProcessor:
                     band_focus_raw, band_calm_raw, sample.timestamp)
                 self._advance_ramp(sample.timestamp)
                 focus_ratio = self._score_against_baseline(focus_smooth, "focus", sample.timestamp)
-                if calm_smooth is not None:
+                # Whether calm_ratio is a measurement: a midpoint placeholder looks like a real 0.5.
+                calm_measured = calm_smooth is not None
+                if calm_measured:
                     calm_ratio = self._score_against_baseline(calm_smooth, "calm", sample.timestamp)
-                    self._calm_ever = True
                 else:
                     # Local source, opening buffer fill: the midpoint.
                     calm_ratio = 0.5
+                fresh_calm = band_calm_raw is not None
                 self._held_ratios = (focus_ratio, calm_ratio)
+                self._held_calm_measured = calm_measured
             elif self._held_ratios is not None:
                 # Hold the last admitted scores: a blink is not a change in focus.
                 focus_ratio, calm_ratio = self._held_ratios
+                calm_measured = self._held_calm_measured
+                fresh_calm = False
             else:
                 # Nothing admitted yet: score the raw tick so the session has a number.
                 focus_ratio = self._score_against_baseline(band_focus_raw, "focus", sample.timestamp)
+                calm_measured = fresh_calm = band_calm_raw is not None
                 calm_ratio = (self._score_against_baseline(band_calm_raw, "calm", sample.timestamp)
-                              if band_calm_raw is not None else 0.5)
+                              if calm_measured else 0.5)
+            if fresh_calm:
+                self._calm_fresh_ts = sample.timestamp
         elif malformed:
             # Hold, as for any artifact; with nothing held yet, the midpoint.
             focus_ratio, calm_ratio = self._held_ratios or (0.5, 0.5)
+            calm_measured = self._held_ratios is not None and self._held_calm_measured
         else:
             focus_ratio = focus_amp_ratio
             # Neutral rather than 1.0: no spread data is absence of evidence.
-            calm_ratio = 0.5 if calm_amp_ratio is None else calm_amp_ratio
+            calm_measured = calm_amp_ratio is not None
+            calm_ratio = calm_amp_ratio if calm_measured else 0.5
 
-        # Whether calm_ratio is a measurement: a midpoint placeholder looks like a real 0.5.
-        calm_measured = (self._calm_ever
-                         or (using_band_features and band_calm_raw is not None)
-                         or (not using_band_features and not malformed))
         # Seconds a local calm has been carried; None on the SDK source.
         calm_held_seconds = None
         if self.calm_source == "local" and self._calm_fresh_ts is not None:
@@ -722,5 +725,9 @@ class SignalProcessor:
             "calm_centred": self._calm_ready,
             # None with no bands: the last value would read as a steady measurement.
             "focus_log_ratio_smoothed": self._ema_focus if using_band_features else None,
-            "calm_log_ratio_smoothed": self._ema_calm if using_band_features else None,
+            # Each in its raw key's unit, so only the scored source's is set.
+            "calm_log_ratio_smoothed": (self._ema_calm if using_band_features
+                                        and self.calm_source == "sdk" else None),
+            "calm_alpha_residual_smoothed": (self._ema_calm if using_band_features
+                                             and self.calm_source == "local" else None),
         }

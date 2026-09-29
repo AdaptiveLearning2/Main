@@ -21,9 +21,11 @@ class Settings(BaseSettings):
     admin_token: str = Field(alias="ADMIN_TOKEN")
     # Must include the frontend origin: under push the browser calls this sidecar directly.
     allowed_origins: str = Field(
-        default="http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000",
+        default="http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000",
         alias="ALLOWED_ORIGINS",
     )
+    # Off unless asked for: APP_ENV defaults to development, so it cannot tell a student's laptop apart.
+    sidecar_docs: bool = Field(default=False, alias="SIDECAR_DOCS")
     eeg_sample_hz: int = Field(default=4, alias="EEG_SAMPLE_HZ")
     eeg_source: str = Field(default="sim", alias="EEG_SOURCE")
     # "sdk" (bridge band powers) or "local" (services/eeg_spectrum.py). Changes the unit of

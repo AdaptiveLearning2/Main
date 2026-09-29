@@ -126,3 +126,16 @@ def test_only_loopback_host_names_reach_the_sidecar(host, allowed):
     r = client.get("/api/v1/state", headers={"Host": host, "Authorization": _auth(s.api_token)})
 
     assert (r.status_code != 400) is allowed, (host, r.status_code)
+
+
+def test_the_api_docs_are_off_by_default():
+    """They describe every route to anything on the machine; a developer opts in with SIDECAR_DOCS."""
+    assert get_settings().sidecar_docs is False
+    client = TestClient(app)
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert client.get(path, headers={"host": "127.0.0.1"}).status_code == 404, path
+
+
+@pytest.mark.parametrize("origin", ["http://localhost:3000"])
+def test_an_unrelated_local_dev_server_is_not_an_allowed_origin(origin):
+    assert origin not in [o.strip() for o in get_settings().allowed_origins.split(",")]

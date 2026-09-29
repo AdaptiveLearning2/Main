@@ -66,14 +66,17 @@ def calm_source_of(value: Any) -> str | None:
     return value if isinstance(value, str) and value in CALM_SOURCES else None
 
 
-def withhold_unknown_calm_source(row: dict) -> dict:
-    """A flat row whose client `raw` names an unknown calm source: stress withheld, as the mapper does."""
-    raw = row.get("raw")
-    if not isinstance(raw, dict) or calm_source_of(raw.get("calm_source")) is not None:
-        return row
-    raw = {k: v for k, v in raw.items() if k != "calm_source"}
-    raw["calm_invalid"] = ["calm_source"]
-    return {**row, "raw": raw, "stress": None}
+def sanitise_flat_row(row: dict) -> dict:
+    """A flat row's client `raw` made to say what the mapper's would: the current score scale,
+    and no stress on an unknown calm source."""
+    raw = dict(row.get("raw") or {})
+    raw["score_scale"] = SCORE_SCALE_VERSION
+    row = {**row, "raw": raw}
+    if calm_source_of(raw.get("calm_source")) is None:
+        raw.pop("calm_source")
+        raw["calm_invalid"] = ["calm_source"]
+        row["stress"] = None
+    return row
 
 
 def eeg_quality(eeg: dict) -> str:

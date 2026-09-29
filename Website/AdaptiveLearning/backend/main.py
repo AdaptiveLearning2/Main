@@ -5925,7 +5925,7 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
                  **envelope,
                  "raw": raw},
                 payload.session_id, user["id"])
-        return signal_mapping.withhold_unknown_calm_source({
+        return signal_mapping.sanitise_flat_row({
             "session_id": payload.session_id,
             "user_id":    user["id"],
             "ts":         s.ts or _utc_now().isoformat(),

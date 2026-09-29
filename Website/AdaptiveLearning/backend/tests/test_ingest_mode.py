@@ -553,6 +553,23 @@ def test_a_flat_sample_on_an_unknown_calm_source_withholds_stress_like_the_mappe
     assert written[1]["stress"] == pytest.approx(0.40) and written[1]["raw"]["calm_source"] == "local"
 
 
+def test_a_flat_sample_records_the_current_score_scale_whatever_the_client_sent(monkeypatch):
+    """A posted 999 put a scale-change caption on the student's report and hid their trend directions."""
+    import signal_mapping
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+
+    main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"ts": "2026-08-10T10:00:00Z", "focus": 0.72, "stress": 0.40, "raw": {"score_scale": 999}},
+        {"ts": "2026-08-10T10:00:01Z", "focus": 0.72, "stress": 0.40},
+    ]), None)
+
+    assert [w["raw"]["score_scale"] for w in written] == [signal_mapping.SCORE_SCALE_VERSION] * 2
+
+
 def test_the_cognitive_batch_is_length_bounded_like_the_others():
     """The writer is a process on a student's machine; this endpoint is the trust boundary."""
     with pytest.raises(Exception):

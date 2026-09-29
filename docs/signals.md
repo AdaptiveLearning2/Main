@@ -938,7 +938,8 @@ are unchanged. Left at 0.7/0.35 the widening made `focused` 61% harder on a capt
 ticks. Both remain unmeasured against a task.
 
 That re-anchors every stored value, so **`signal_mapping` writes `raw.score_scale` on every cognitive row** — the
-population-bounds version, `SCORE_SCALE_VERSION`, and nothing else; rows without the key predate it. **The calm source
+population-bounds version, `SCORE_SCALE_VERSION`, and nothing else, over any posted value on the flat ingest shape too
+(`sanitise_flat_row`); rows without the key predate it. **The calm source
 is its own key, `raw.calm_source`, never folded into that number**: packed in as scale 3, the next version bump would
 have read as the local calm. A posted source outside `sdk`/`local` withholds stress and is named in `raw.calm_invalid`,
 on the flat ingest shape as on the mapped one, and the decider averages no stress from such a row — all three through

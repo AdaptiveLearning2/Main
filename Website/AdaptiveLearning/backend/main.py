@@ -6137,10 +6137,14 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
         supabase.table("sessions").select("user_id").eq("id", session_id), "Session")
     _verify_can_view_student(user, sess["user_id"])
 
+    # As the reports do: a withdrawn channel is not read, and the payload says why it is empty.
+    channels = _reportable_channels(sess["user_id"])
+    skip = frozenset(t for t, on in (("face_signals", channels.emotion),
+                                     ("heart_signals", channels.heart)) if not on)
     # Paged, through the archive's reader. Heart rows carry `source`: a mid-session
     # sensor failover must read as a sensor change, not a physiological event.
     cog_data, fac_data, hrt_data = chart_archive.read_session_signals(
-        supabase, session_id, since)
+        supabase, session_id, since, skip=skip)
     # Question embedded (one query, named columns). Left-joined: a deleted
     # question arrives as `questions: null` and the answer still shows.
     answers = (supabase.table("session_answers")
@@ -6148,7 +6152,20 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
                        "subject, difficulty, figure, ccss_standard)")
                .eq("session_id", session_id).order("answered_at")
                .execute().data or [])
-    return {"cognitive": cog_data, "face": fac_data, "heart": hrt_data, "answers": answers}
+    return {"cognitive": cog_data, "face": fac_data, "heart": hrt_data, "answers": answers,
+            "channels": _channel_flags(channels)}
+
+
+def _channel_flags(channels: ReportChannels) -> dict:
+    """Why a skipped channel is empty, in the reports' vocabulary: off, since when, or consent unreadable."""
+    return {"face_included": channels.emotion, "heart_included": channels.heart,
+            "consent_retrieved": channels.consent_retrieved,
+            "emotion_revoked_at": channels.emotion_revoked_at,
+            "heart_revoked_at": channels.heart_revoked_at}
+
+
+# Archived charts drawing a channel, withheld as its rows are once that channel is withdrawn.
+_CHARTS_BY_CHANNEL = {"emotion": ("emotion_pie",), "heart": ("heart_rate", "stress_pie")}
 
 
 @app.get("/api/signals/session/{session_id}/charts")
@@ -6157,24 +6174,31 @@ def session_charts(session_id: str, request: Request):
 
     The bucket has no policies: `_verify_can_view_student` is the whole check.
     States: `archived: false` (never ran), `charts[name]: null` (nothing drawn),
-    `name in unavailable` (object unreadable). Raises rather than `retrieved`.
+    `name in unavailable` (object unreadable), `name in withdrawn` (its channel is off; not signed).
     """
     user = get_user(request)
     sess = _row_or_404(
         supabase.table("sessions").select("user_id, chart_paths").eq("id", session_id),
         "Session")
     _verify_can_view_student(user, sess["user_id"])
+    channels = _reportable_channels(sess["user_id"])
+    withdrawn = sorted(name for channel, on in (("emotion", channels.emotion), ("heart", channels.heart))
+                       if not on for name in _CHARTS_BY_CHANNEL[channel])
 
     paths = sess.get("chart_paths")
     if paths is None:
         # Column-NULL: the archive never ran. Distinct from `{}` and four nulls.
-        return {"archived": False, "charts": {}, "unavailable": [],
+        return {"archived": False, "charts": {}, "unavailable": [], "withdrawn": withdrawn,
+                "channels": _channel_flags(channels),
                 "expires_in": chart_archive.SIGNED_URL_TTL_SECONDS}
 
     # Security: paths derive from owner and id; `chart_paths` decides presence only.
+    # A withdrawn chart is dropped before signing, so no URL to it is ever issued.
+    kept = {name: path for name, path in paths.items() if name not in withdrawn}
     urls, unavailable = chart_archive.signed_chart_urls(
-        supabase, paths, sess["user_id"], session_id)
-    return {"archived": True, "charts": urls, "unavailable": unavailable,
+        supabase, kept, sess["user_id"], session_id)
+    return {"archived": True, "charts": urls, "unavailable": unavailable, "withdrawn": withdrawn,
+            "channels": _channel_flags(channels),
             "expires_in": chart_archive.SIGNED_URL_TTL_SECONDS}
 
 

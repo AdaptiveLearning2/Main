@@ -1067,8 +1067,10 @@ backfill and an unconfigured student records nothing. `_consent()` fails **close
 carries `retrieved` so callers can tell "nobody consented" from "we couldn't find out".
 
 **Withdrawal stops future recording and keeps what is already stored.** A revoked channel records
-nothing further until consent is given again, and no past row is deleted or hidden. Withdrawal is not
-erasure.
+nothing further until consent is given again, and no past row is deleted. Withdrawal is not
+erasure. **But every surface stops reading a withdrawn face or heart channel** — reports, session review
+and its archived charts alike — and says it is off, with the date; re-enabling shows the history again.
+EEG is the exception and is always read (see *A tile never says "no data"*).
 
 **Writes only through the backend.** The table has no insert/update/delete policy for anyone, so with
 RLS on, PostgREST cannot write it whatever JWT it carries — including the anon key in the frontend

@@ -739,6 +739,9 @@ def test_the_endpoint_returns_a_url_per_recorded_chart(monkeypatch):
     import main
 
     monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    # Every channel consented: a withdrawn one's charts are withheld (tested below).
+    monkeypatch.setattr(main, "_consent", lambda _uid: {**main._CONSENT_ENABLED_ALL,
+                                                        "retrieved": True, "exists": True})
     # Real archived objects, not a hand-written path map that could drift.
     archiver = _SigningClient(cognitive=COG)
     paths = chart_archive.archive_session(archiver, SESSION, USER)
@@ -1167,3 +1170,70 @@ def test_a_catch_up_that_cannot_list_says_so_and_queues_nothing(monkeypatch):
     out = chart_archive.archive_missing(_CatchUpClient([], fail=True), now=NOW)
 
     assert queued == [] and out["retrieved"] is False
+
+
+# ── a withdrawn channel is not read for review, as the reports do not read it ─
+
+def _consent_with(**flags):
+    import main
+    base = {**main._CONSENT_ENABLED_ALL, "retrieved": True, "exists": True}
+    base.update(flags)
+    return lambda _uid: base
+
+
+def test_a_skipped_table_is_never_queried():
+    """Rule 4: an empty list cannot tell "asked and got nothing" from "never asked"."""
+    client = _Client(cognitive=COG, face=FACE, heart=HEART)
+    cog, face, heart = chart_archive.read_session_signals(
+        client, SESSION, skip=frozenset({"face_signals", "heart_signals"}))
+    assert cog and face == [] and heart == []
+    assert {q.table for q in client.reads} == {"cognitive_signals"}
+
+
+def test_review_skips_withdrawn_channels_and_says_since_when(monkeypatch):
+    import main
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
+    monkeypatch.setattr(main, "_row_or_404", lambda *_a: {"user_id": USER})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", _consent_with(
+        camera_enabled=False, camera_revoked_at="2026-08-20T09:00:00+00:00",
+        headband_optical_enabled=False, headband_optical_revoked_at="2026-08-19T09:00:00+00:00"))
+    asked = []
+    monkeypatch.setattr(chart_archive, "read_session_signals",
+                        lambda _c, _s, _since, skip=frozenset(): asked.append(skip) or ([{"ts": 1}], [], []))
+
+    class _Answers:
+        def table(self, _name):
+            q = type("Q", (), {})()
+            for m in ("select", "eq", "order"):
+                setattr(q, m, lambda *a, **k: q)
+            q.execute = lambda: type("R", (), {"data": []})()
+            return q
+    monkeypatch.setattr(main, "supabase", _Answers())
+
+    out = main.session_signals(SESSION, None)
+    assert asked == [frozenset({"face_signals", "heart_signals"})]
+    assert out["channels"]["face_included"] is False and out["channels"]["heart_included"] is False
+    assert out["channels"]["emotion_revoked_at"] == "2026-08-20T09:00:00+00:00"
+    assert out["channels"]["heart_revoked_at"] == "2026-08-20T09:00:00+00:00"
+
+
+def test_a_withdrawn_channels_archived_charts_are_never_signed(monkeypatch):
+    """A signed URL cannot be revoked, so withholding has to happen before signing."""
+    import main
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", _consent_with(camera_enabled=False,
+                                                        headband_optical_enabled=False))
+    archiver = _SigningClient(cognitive=COG, heart=HEART, face=FACE)
+    paths = chart_archive.archive_session(archiver, SESSION, USER)
+    client = _SessionsClient({"user_id": USER, "chart_paths": paths})
+    client._storage = archiver._storage
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
+    monkeypatch.setattr(main, "supabase", client)
+
+    payload = main.session_charts(SESSION, None)
+    assert payload["withdrawn"] == ["emotion_pie", "heart_rate", "stress_pie"]
+    assert set(payload["charts"]) == {"cognitive_timeline"}
+    signed = [path for path, _ttl in getattr(client.bucket, "signed", [])]
+    assert signed and all(chart_archive.object_path(USER, SESSION, name) not in signed
+                          for name in payload["withdrawn"])

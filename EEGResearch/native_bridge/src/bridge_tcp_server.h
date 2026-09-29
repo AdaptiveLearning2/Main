@@ -28,6 +28,7 @@ private:
     void try_accept_client();
     void close_client();
     bool take_line(std::string& line_out);
+    bool send_raw(const std::string& line);
 
     // A line past this, or a client silent past the auth deadline, is closed: no command is near it.
     static constexpr size_t kMaxLine = 4096;
@@ -40,5 +41,7 @@ private:
     long long dropped_lines_{0};
     std::string token_;
     bool authenticated_{false};
+    // One CHALLENGE per connection, so a client cannot use the bridge as an HMAC oracle at leisure.
+    bool challenged_{false};
     std::uint64_t accepted_at_ms_{0};
 };

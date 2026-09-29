@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import socket
 import threading
 import time
@@ -112,25 +114,7 @@ def test_the_backoff_doubles_to_a_cap_and_never_past_it(token_file):
     assert adapter.connect_failures == 6
 
 
-def test_a_successful_connection_resets_the_backoff(token_file):
-    listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    listener.listen(1)
-    port = listener.getsockname()[1]
-    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=port, timeout_seconds=1,
-                                   token_file=token_file)
-    try:
-        adapter._connect_backoff_s = TcpMuseBridgeAdapter.CONNECT_BACKOFF_MAX_S
-        adapter._next_connect_at = 0.0
-        assert adapter._try_connect() is True
-        assert adapter._connect_backoff_s == TcpMuseBridgeAdapter.CONNECT_BACKOFF_MIN_S
-        assert adapter.connect_wait_remaining() == 0.0
-    finally:
-        adapter.disconnect()
-        listener.close()
-
-
-# ── the bridge's token: sent first, required, and a bounded read ─────────────
+# ── the bridge's token: proved, then sent, and a bounded read ───────────────
 
 def _listener():
     listener = socket.socket()
@@ -140,18 +124,82 @@ def _listener():
     return listener, listener.getsockname()[1]
 
 
-def test_the_first_line_sent_is_the_bridges_token(token_file):
-    listener, port = _listener()
-    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=port, timeout_seconds=1, token_file=token_file)
+class _FakeBridge:
+    """Answers the adapter's CHALLENGE as `answer` says ("right", "wrong" or "silent") and keeps what follows."""
+
+    def __init__(self, answer="right", token="a1b2c3d4"):
+        self.listener, self.port = _listener()
+        self.answer, self.token = answer, token
+        self.after_proof = b""
+        self.conn = None
+        self.proved = threading.Event()
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self):
+        try:
+            self.conn, _ = self.listener.accept()
+            self.conn.settimeout(2.0)
+            stream = self.conn.makefile("rb")
+            nonce = stream.readline().decode().strip().removeprefix("CHALLENGE ")
+            if self.answer == "silent":
+                time.sleep(1.5)
+                return
+            key = self.token if self.answer == "right" else "someone-else"
+            proof = hmac.new(key.encode(), nonce.encode(), hashlib.sha256).hexdigest()
+            self.conn.sendall(f"PROOF {proof}\n".encode())
+            self.proved.set()
+            self.after_proof = stream.readline()
+        except OSError:
+            pass
+
+    def close(self):
+        self.thread.join(3.0)
+        if self.conn:
+            self.conn.close()
+        self.listener.close()
+
+
+def test_a_successful_connection_resets_the_backoff(token_file):
+    bridge = _FakeBridge()
+    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=bridge.port, timeout_seconds=1,
+                                   token_file=token_file)
     try:
+        adapter._connect_backoff_s = TcpMuseBridgeAdapter.CONNECT_BACKOFF_MAX_S
+        adapter._next_connect_at = 0.0
         assert adapter._try_connect() is True
-        conn, _ = listener.accept()
-        conn.settimeout(2.0)
-        assert conn.recv(64) == b"AUTH a1b2c3d4\n"
-        conn.close()
+        assert adapter._connect_backoff_s == TcpMuseBridgeAdapter.CONNECT_BACKOFF_MIN_S
+        assert adapter.connect_wait_remaining() == 0.0
     finally:
         adapter.disconnect()
-        listener.close()
+        bridge.close()
+
+
+def test_the_token_follows_the_bridges_proof(token_file):
+    bridge = _FakeBridge("right")
+    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=bridge.port, timeout_seconds=1, token_file=token_file)
+    try:
+        assert adapter._try_connect() is True
+        bridge.thread.join(3.0)
+        assert bridge.after_proof == b"AUTH a1b2c3d4\n"
+    finally:
+        adapter.disconnect()
+        bridge.close()
+
+
+@pytest.mark.parametrize("answer", ["wrong", "silent"])
+def test_whatever_cannot_prove_itself_the_bridge_never_gets_the_token(token_file, answer):
+    """A process that took the port first would otherwise read the token and feed fabricated EEG."""
+    bridge = _FakeBridge(answer)
+    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=bridge.port, timeout_seconds=1, token_file=token_file)
+    try:
+        assert adapter._try_connect() is False
+        assert adapter.connect_failures == 1
+        bridge.close()
+        assert b"a1b2c3d4" not in bridge.after_proof
+    finally:
+        adapter.disconnect()
+        bridge.close()
 
 
 def test_no_token_file_means_no_connection_attempt(tmp_path):
@@ -172,8 +220,8 @@ def test_no_token_file_means_no_connection_attempt(tmp_path):
 
 def test_a_line_past_the_cap_stops_the_reader(token_file):
     """Whatever sends an unterminated megabyte is not the bridge."""
-    listener, port = _listener()
-    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=port, timeout_seconds=1, token_file=token_file)
+    bridge = _FakeBridge("right")
+    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=bridge.port, timeout_seconds=1, token_file=token_file)
     stop = threading.Event()
 
     def trickle(conn):
@@ -188,8 +236,8 @@ def test_a_line_past_the_cap_stops_the_reader(token_file):
 
     try:
         assert adapter._try_connect() is True
-        conn, _ = listener.accept()
-        sender = threading.Thread(target=trickle, args=(conn,), daemon=True)
+        bridge.thread.join(3.0)                     # proof sent and the AUTH line read
+        sender = threading.Thread(target=trickle, args=(bridge.conn,), daemon=True)
         sender.start()
         deadline = time.monotonic() + 3.0
         while adapter._reader_thread.is_alive() and time.monotonic() < deadline:
@@ -197,11 +245,10 @@ def test_a_line_past_the_cap_stops_the_reader(token_file):
         assert not adapter._reader_thread.is_alive()
         stop.set()
         sender.join(2.0)
-        conn.close()
     finally:
         stop.set()
         adapter.disconnect()
-        listener.close()
+        bridge.close()
 
 
 # ── DeviceSession health ────────────────────────────────────────────────────

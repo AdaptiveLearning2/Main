@@ -495,7 +495,10 @@ running one's token — and closes any client whose first line is not `AUTH <tok
 4 KiB. **There is no path override**: the bridge reads `getenv` and the sidecar reads `.env`, so a setting would be
 honoured on one side only, and one path cannot name a file per station. Without it, whichever local process connected first while the sidecar was away (a web page's POST
 included) held the headband. The sidecar reads the file before each connect, so a restarted bridge's new token is
-picked up; no file means no bridge on that port, and it does not dial.
+picked up; no file means no bridge on that port, and it does not dial. **The bridge proves itself first**: the
+sidecar sends `CHALLENGE <nonce>` and sends its token only after `PROOF <HMAC-SHA256(token, nonce)>`, one challenge
+per connection. A process that took the port before the bridge, with a crashed run's token file still on disk, would
+otherwise be handed the token and could feed fabricated EEG. One running as the same user can read the file anyway.
 
 ### RMSSD is an enrichment, and a null one is normal
 

@@ -54,28 +54,28 @@ def test_a_channel_unseated_anywhere_in_the_buffer_is_left_out_until_those_sampl
 
 
 def test_a_malformed_is_good_does_not_erase_the_hsi_verdict():
-    seated = seated_channels({"hsi": [1.0, 1.0, 1.0, 4.0], "is_good": ["x", None, 1.0, "y"]})
+    seated = seated_channels({"hsi": [1.0, 1.0, 1.0, 4.0], "is_good": ["x", [], 1.0, "y"]})
     assert seated == [True, True, True, False]
     assert seated_channels({}) is None
 
 
-def test_a_nan_contact_entry_unseats_the_electrode_as_every_other_reader_does():
-    """A NaN is_good already reads as bad in _sample_is_usable and _contact_ratio; so must this."""
-    nan = float("nan")
-    assert seated_channels({"is_good": [nan, 1.0, 1.0, 1.0]}) == [False, True, True, True]
-    assert seated_channels({"hsi": [nan, 1.0, 1.0, 1.0]}) == [False, True, True, True]
+def test_a_nan_or_null_contact_entry_unseats_the_electrode():
+    """The bridge writes a non-finite contact value as null, and its own band mask rejects it."""
     railing = EegSample(timestamp=T0, channel_tp9=1682.0, channel_af7=800.0, channel_af8=801.0,
                         channel_tp10=802.0)
-    kept = SignalProcessor._good_channel_values(railing, {"hsi": [1.0] * 4,
-                                                          "is_good": [nan, 1.0, 1.0, 1.0]})
-    assert kept == [800.0, 801.0, 802.0]
+    for bad in (float("nan"), None):
+        assert seated_channels({"is_good": [bad, 1.0, 1.0, 1.0]}) == [False, True, True, True]
+        assert seated_channels({"hsi": [bad, 1.0, 1.0, 1.0]}) == [False, True, True, True]
+        kept = SignalProcessor._good_channel_values(railing, {"hsi": [1.0] * 4,
+                                                              "is_good": [bad, 1.0, 1.0, 1.0]})
+        assert kept == [800.0, 801.0, 802.0], bad
 
 
 def test_the_processor_and_the_spectrum_read_contact_through_one_check():
     """A malformed is_good must not readmit the electrode hsi says is railing, in either reader."""
     sample = EegSample(timestamp=T0, channel_tp9=1.0, channel_af7=2.0, channel_af8=3.0,
                        channel_tp10=4.0)
-    meta = {"hsi": [1.0, 1.0, 1.0, 4.0], "is_good": ["x", None, 1.0, "y"]}
+    meta = {"hsi": [1.0, 1.0, 1.0, 4.0], "is_good": ["x", [], 1.0, "y"]}
     kept = SignalProcessor._good_channel_values(sample, meta)
     assert kept == [1.0, 2.0, 3.0]
     everyone_off = {"hsi": [4.0] * 4, "is_good": [0.0] * 4}

@@ -2285,17 +2285,60 @@ def test_learning_strategies_clamps_the_day_range(monkeypatch, set_flag):
 def _leaderboard_tables(n=5):
     # Scores stay three digits: _Query.order sorts by str().
     # `profiles` is real data: names come from one batched read, not `_profile`.
+    # Everyone shares class c1 with the caller; "other-*" are another school's, ranked above.
     return {
         "user_stats": [
             {"user_id": f"student-{i}", "total_correct": 900 - i, "total_questions": 900,
              "current_streak": 1, "best_streak": 2}
             for i in range(n)
-        ],
+        ] + [{"user_id": "other-0", "total_correct": 999, "total_questions": 999,
+              "current_streak": 1, "best_streak": 2}],
         "profiles": [
             {"id": f"student-{i}", "display_name": f"Name {i}", "email": f"s{i}@x.com"}
             for i in range(n)
-        ],
+        ] + [{"id": "other-0", "display_name": "Elsewhere", "email": "o@y.com"},
+             {"id": "teacher-1", "display_name": "Teacher", "role": "teacher"}],
+        "classes": [{"id": "c1", "teacher_id": "teacher-1"}, {"id": "c9", "teacher_id": "teacher-9"}],
+        "class_memberships": [{"class_id": "c1", "student_id": f"student-{i}"} for i in range(n)]
+        + [{"class_id": "c9", "student_id": "other-0"}],
     }
+
+
+def test_leaderboard_names_nobody_outside_the_callers_classes(monkeypatch):
+    """Another school's child, ranked first overall, is neither named nor counted."""
+    fake = _FakeSupabase(_leaderboard_tables(3))
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+    rows = main.leaderboard(None)
+    assert [r["display_name"] for r in rows] == ["Name 0", "Name 1", "Name 2"]
+    # Filtered in the read, so another school's rows are never fetched, not just never shown.
+    (asked,) = [vals for q in fake.queries for col, (op, *vals) in q.filters
+                if col == "user_id" and op == "in"]
+    assert sorted(asked[0]) == ["student-0", "student-1", "student-2"]
+
+
+def test_a_teacher_sees_their_own_classes(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(3)))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
+    monkeypatch.setattr(main, "_role", lambda _uid: "teacher")
+    assert [r["display_name"] for r in main.leaderboard(None)] == ["Name 0", "Name 1", "Name 2"]
+
+
+def test_a_student_in_no_class_sees_only_themselves(monkeypatch):
+    tables = _leaderboard_tables(3)
+    tables["class_memberships"] = []
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(tables))
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+    assert [r["is_me"] for r in main.leaderboard(None)] == [True]
+
+
+def test_an_unreadable_class_list_is_an_error_not_a_smaller_board(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(3),
+                                                        table_raises={"class_memberships"}))
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+    with pytest.raises(main.HTTPException) as e:
+        main.leaderboard(None)
+    assert e.value.status_code == 503
 
 
 def test_leaderboard_clamps_an_oversized_limit(monkeypatch):
@@ -2328,6 +2371,8 @@ def test_leaderboard_names_the_board_in_one_read(monkeypatch):
     fake = _FakeSupabase(_leaderboard_tables(30))
     monkeypatch.setattr(main, "supabase", fake)
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+    # The caller's own role is one `profiles` read of its own; this counts the board's.
+    monkeypatch.setattr(main, "_role", lambda _uid: "student")
 
     rows = main.leaderboard(None, limit=30)
 

@@ -4384,17 +4384,47 @@ def student_chart_summary(student_id: str, request: Request, payload: ChartSumma
 _LEADERBOARD_MAX = 100
 
 
+def _leaderboard_peers(user_id: str) -> set[str]:
+    """The students the caller is ranked among: every student in a class they're in or teach.
+
+    A student is always among them. Names never leave the caller's own classes, so no school
+    sees another's children. Raises on a failed read: a partial class is not a smaller one.
+    """
+    if _role(user_id) == "teacher":
+        classes = supabase.table("classes").select("id").eq("teacher_id", user_id).execute()
+        class_ids = [c["id"] for c in classes.data or []]
+        peers: set[str] = set()
+    else:
+        mine = supabase.table("class_memberships").select("class_id") \
+            .eq("student_id", user_id).execute()
+        class_ids = [m["class_id"] for m in mine.data or []]
+        peers = {user_id}
+    if class_ids:
+        members = supabase.table("class_memberships").select("student_id") \
+            .in_("class_id", class_ids).execute()
+        peers |= {m["student_id"] for m in members.data or []}
+    return peers
+
+
 @app.get("/api/leaderboard")
 def leaderboard(request: Request, limit: int = 20):
-    """Top students by correct answers.
+    """Top students by correct answers, among the caller's classes only.
 
     Service-role read, so `limit` must stay clamped to _LEADERBOARD_MAX.
     user_id is never returned; only `is_me`.
     """
     user = get_user(request)
+    try:
+        peers = _leaderboard_peers(user["id"])
+    except Exception as e:
+        print(f"[leaderboard] classes unreadable for {user['id'][:8]}: {type(e).__name__}")
+        raise HTTPException(503, "The leaderboard could not be loaded right now")
+    if not peers:
+        return []
     res = supabase.table("user_stats") \
         .select("user_id, total_correct, total_questions, current_streak, best_streak, "
                 "last_session_at") \
+        .in_("user_id", sorted(peers)) \
         .order("total_correct", desc=True).limit(max(1, min(limit, _LEADERBOARD_MAX))).execute()
     rows = res.data or []
     profiles = _profiles_many(r.get("user_id") for r in rows)

@@ -6459,6 +6459,9 @@ def _station_open_to(user_id: str, device_id: str) -> bool:
     return _station_access(user_id, device_id)[0]
 
 
+_BRIDGE_ERROR = "The headband service did not respond. Try again, or restart the headband."
+
+
 def _reserve_and_call(user_id: str, device_id: str, fn, *args,
                       session_id: str | None = None):
     """Claim device_id's pre-claim reservation, then run the bridge call.
@@ -6475,7 +6478,9 @@ def _reserve_and_call(user_id: str, device_id: str, fn, *args,
         return fn(*args)
     except Exception as e:
         eeg_poller.release_reservation(user_id, device_id)
-        raise HTTPException(502, f"Bridge error: {e}")
+        # Logged, not sent: a requests error names the sidecar's internal URL.
+        print(f"[eeg] bridge call on {device_id} failed: {e}")
+        raise HTTPException(502, _BRIDGE_ERROR)
 
 
 @app.post("/api/eeg/muse/refresh")
@@ -6538,7 +6543,8 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     try:
         out = eeg_client.muse_disconnect(device_id)
     except Exception as e:
-        raise HTTPException(502, f"Bridge error: {e}")
+        print(f"[eeg] disconnect on {device_id} failed: {e}")
+        raise HTTPException(502, _BRIDGE_ERROR)
     _forget_pairing(device_id)
     return out
 
@@ -6581,20 +6587,24 @@ def eeg_debug(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
 
 @app.get("/api/eeg/health")
 def eeg_health():
-    """Tells the frontend whether the EEGResearch sidecar service is reachable."""
+    """Tells the frontend whether the EEGResearch sidecar service is reachable.
+
+    No login, so a yes or no and nothing else: not the sidecar's URL, not its error text,
+    and not the default headband's status, which carries live readings.
+    """
     if eeg_poller.INGEST_MODE == "push":
         # None: "not probed in this deployment", not "down".
-        return {"available": None, "ingest_mode": "push", "url": None}
-    alive = eeg_client.is_alive()
-    if not alive:
-        return {"available": False, "ingest_mode": "pull",
-                "url": eeg_client.EEG_API_URL}
+        return {"available": None, "ingest_mode": "push"}
+    if not eeg_client.is_alive():
+        return {"available": False, "ingest_mode": "pull"}
     # /healthz is unauthenticated; this call surfaces a token misconfiguration.
     try:
-        muse = eeg_client.get_muse_status()
+        eeg_client.get_muse_status()
     except RuntimeError as e:
-        return {"available": False, "url": eeg_client.EEG_API_URL, "error": str(e)}
-    return {"available": True, "url": eeg_client.EEG_API_URL, "muse": muse}
+        print(f"[eeg] health probe: {e}")
+        return {"available": False, "ingest_mode": "pull",
+                "error": "The headband service is not set up correctly on this computer."}
+    return {"available": True, "ingest_mode": "pull"}
 
 @app.post("/api/eeg/start")
 def eeg_start(payload: EegSessionRequest, request: Request):

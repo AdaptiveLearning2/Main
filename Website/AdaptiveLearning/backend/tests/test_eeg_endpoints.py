@@ -84,15 +84,33 @@ def test_health_reports_error_instead_of_500_on_missing_token(monkeypatch):
     monkeypatch.setattr(eeg_client, "get_muse_status", _raise)
     out = main.eeg_health()  # must not raise
     assert out["available"] is False
-    assert "EEG_API_TOKEN" in out["error"]
+    # No login on this route: a fixed sentence, never the configuration's own error text.
+    assert out["error"] and "EEG_API_TOKEN" not in out["error"]
 
 
-def test_health_healthy_path_returns_muse(monkeypatch):
+def test_health_answers_yes_or_no_and_nothing_else(monkeypatch):
+    """Unauthenticated: the sidecar's URL and the default headband's live status are not its to share."""
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
-    monkeypatch.setattr(eeg_client, "get_muse_status", lambda: {"available": True})
-    out = main.eeg_health()
-    assert out["available"] is True
-    assert out["muse"] == {"available": True}
+    monkeypatch.setattr(eeg_client, "get_muse_status",
+                        lambda: {"available": True, "brain_signals": {"tp9": 812.0}})
+    assert main.eeg_health() == {"available": True, "ingest_mode": "pull"}
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: False)
+    assert main.eeg_health() == {"available": False, "ingest_mode": "pull"}
+
+
+def test_a_failed_bridge_call_names_no_internal_address(monkeypatch):
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+
+    def _refused(*_a, **_k):
+        raise RuntimeError("HTTPConnectionPool(host='10.0.0.7', port=8001): Max retries exceeded")
+    monkeypatch.setattr(eeg_client, "muse_refresh", _refused)
+    monkeypatch.setattr(eeg_client, "muse_disconnect", _refused)
+    for call in (lambda: main.eeg_muse_refresh(request=None, body={"device_id": "station-x"}),
+                 lambda: main.eeg_muse_disconnect(request=None, body={"device_id": "station-x"})):
+        with pytest.raises(main.HTTPException) as e:
+            call()
+        assert e.value.status_code == 502 and "10.0.0.7" not in e.value.detail
 
 
 # ── /api/eeg/debug ───────────────────────────────────────────────────────

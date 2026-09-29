@@ -80,8 +80,13 @@ def db(monkeypatch):
     return fake
 
 
-def _join(code="ABCD2345"):
-    return main.join_class(main.JoinClassRequest(join_code=code), None)
+def _from(host):
+    """A request from `host`, for the per-address budget; the caller comes from `get_user`."""
+    return type("Req", (), {"headers": {}, "client": type("Peer", (), {"host": host})()})()
+
+
+def _join(code="ABCD2345", host="10.0.0.1"):
+    return main.join_class(main.JoinClassRequest(join_code=code), _from(host))
 
 
 def test_a_student_joins_and_learns_nothing_of_the_teachers(db):
@@ -120,6 +125,36 @@ def test_guesses_past_the_limit_are_refused_before_any_lookup(db, monkeypatch):
     assert e.value.status_code == 429 and int(e.value.headers["Retry-After"]) >= 1
     assert len(db.selects) == lookups, "a refused guess still reached the classes table"
     assert recorded == [("rate_limited", {"limiter": main._JOIN_CODE_LIMITER.name})]
+
+
+def test_wrong_codes_from_one_network_are_bounded_across_accounts(db, monkeypatch):
+    """Accounts are self-service, so the per-account limit alone is ten guesses per new account."""
+    from conftest import tighten
+    tighten(monkeypatch, main._JOIN_MISS_LIMITER, limit=2)
+    recorded = []
+    monkeypatch.setattr(main, "_record_security_event", lambda kind, actor, **d: recorded.append((kind, d)))
+    for i, guess in enumerate(("AAAA2222", "BBBB3333")):
+        monkeypatch.setattr(main, "get_user", lambda _r, i=i: {"id": f"student-{i + 10}"})
+        with pytest.raises(main.HTTPException):
+            _join(guess)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "student-99"})
+    with pytest.raises(main.HTTPException) as e:
+        _join()
+    assert e.value.status_code == 429 and int(e.value.headers["Retry-After"]) >= 1
+    assert recorded == [("rate_limited", {"limiter": main._JOIN_MISS_LIMITER.name})]
+    assert _join(host="10.0.0.2")["id"] == "class-1", "another network is unaffected"
+
+
+def test_right_codes_never_use_up_the_networks_budget(db, monkeypatch):
+    """A school's first morning is hundreds of correct joins from one address."""
+    from conftest import tighten
+    tighten(monkeypatch, main._JOIN_MISS_LIMITER, limit=1)
+    for i in range(5):
+        monkeypatch.setattr(main, "get_user", lambda _r, i=i: {"id": f"student-{i + 20}"})
+        assert _join()["id"] == "class-1"
+    with pytest.raises(main.HTTPException) as e:
+        _join("AAAA2222")
+    assert e.value.status_code == 404, "the one allowed miss was taken by right codes"
 
 
 def test_a_students_class_list_sends_what_joining_did_and_nothing_of_the_teachers(db):

@@ -534,7 +534,8 @@ do not: a `replace-me` token, two equal tokens, or push over plain `http://` to 
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MODE`, `INGEST_MAX_BATCH` /
 `INGEST_RATE_LIMIT` / `INGEST_RATE_WINDOW` / `INGEST_MAX_ROWS_PER_MINUTE` (per session and channel), `SESSION_ABANDONED_AFTER_HOURS` /
 `STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep and its chart catch-up), `QUESTIONS_CACHE_TTL`,
-`QUESTION_QUEUE_SIZE`, `PAIRING_IDLE_SECONDS` (120; a headband pairing its pairer's page stopped polling is released), the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
+`QUESTION_QUEUE_SIZE`, `PAIRING_IDLE_SECONDS` (120; a headband pairing its pairer's page stopped polling is released),
+`CLASS_JOIN_MISSES_PER_ADDRESS` (1000 wrong class codes an hour), the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
 `PUBLIC_*_RATE_*` / `TRUSTED_PROXY_HOPS` group under *The network edge*, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels*,
 and the `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` / `SOLVE_*` groups in `docs/question-generation.md`.
 
@@ -847,6 +848,10 @@ unauthenticated caller cannot choose; `test_network_edge.py` derives the set, so
 **A route that names a student resolves its caller**, never a `user_id` query parameter. `/api/generate-question`
 also keeps an address budget, in `_AUTHENTICATED_ADDRESS_LIMITER` (apart, so `_PUBLIC_LIMITER` means exactly "no
 caller"): sign-up is self-service, so a per-student limit alone is a new allowance per account.
+**`/api/classes/join` keeps its address budget in the handler instead** (`_JOIN_MISS_LIMITER`), because it counts
+only *wrong* codes from signed-in students: charged before login, a school's first morning of correct codes, or one
+student's script, would lock the whole network out of joining. Old 6-character codes are the weak case, and
+`POST /api/classes/{id}/join-code` lets the owning teacher replace one; members stay enrolled.
 
 **An address is a school, not a student**, and that sets the numbers. A class leaves through one NAT and
 `Adaptive.jsx` polls the health route every 5 s per open page, so sixty students behind one address is

@@ -208,8 +208,6 @@ _PUBLIC_LIMITER = {
 # Separate so `_PUBLIC_LIMITER` means exactly "no caller" (tested both ways).
 _AUTHENTICATED_ADDRESS_LIMITER = {
     "/api/generate-question": "public_generate",
-    # A class code is guessed by volume, and each new account brings its own per-account budget.
-    "/api/classes/join":      "public_join",
 }
 
 # An address is a school behind one NAT, not a student: 60 students polling
@@ -218,10 +216,6 @@ _PUBLIC_RATE_LIMITS = {
     "public_generate": (
         env_number("PUBLIC_GENERATE_RATE_LIMIT", 600, int, minimum=1),
         env_number("PUBLIC_GENERATE_RATE_WINDOW", 60.0, float, minimum=1.0)),
-    # A whole school joining at the start of term, typos included, with room to spare.
-    "public_join": (
-        env_number("PUBLIC_JOIN_RATE_LIMIT", 300, int, minimum=1),
-        env_number("PUBLIC_JOIN_RATE_WINDOW", 3600.0, float, minimum=1.0)),
     "public_read": (
         env_number("PUBLIC_READ_RATE_LIMIT", 1800, int, minimum=1),
         env_number("PUBLIC_READ_RATE_WINDOW", 60.0, float, minimum=1.0)),
@@ -416,8 +410,12 @@ def _new_link_code() -> str:
 # A class join code is guessable by volume, so the same alphabet and length. Older 6-character
 # codes still join until their teacher replaces them. The limits are the real control.
 _JOIN_CODE_LEN = 8
-# Attempts per account per hour, successful or not, beside the per-address `public_join` budget.
+# Attempts per account per hour, successful or not.
 _JOIN_CODE_LIMITER = _SlidingWindowLimiter("class_join", 10, 3600.0)
+# Wrong codes per address per hour, from signed-in students only: accounts are self-service, and a
+# school's first morning of correct codes must not lock it out. 1000 misses an hour against 32^8 codes.
+_JOIN_MISS_LIMITER = _SlidingWindowLimiter(
+    "class_join_address", env_number("CLASS_JOIN_MISSES_PER_ADDRESS", 1000, int, minimum=1), 3600.0)
 
 
 def _new_join_code() -> str:
@@ -509,7 +507,18 @@ def _role(uid: str) -> str:
 
     Fails closed to 'student' on a failed read.
     """
-    return (_profile(uid) or {}).get("role") or "student"
+    return _role_of(_profile(uid))
+
+
+def _role_of(profile: dict | None) -> str:
+    """The one rule for a role: the stored column, else 'student'."""
+    return (profile or {}).get("role") or "student"
+
+
+def _role_or_raise(uid: str) -> str:
+    """`_role`, but a failed read raises, for a caller that must not treat an outage as a student."""
+    rows = supabase.table("profiles").select("role").eq("id", uid).execute().data
+    return _role_of(rows[0] if rows else None)
 
 
 def _placeholder_profile(uid: str) -> dict:
@@ -4441,8 +4450,7 @@ def _leaderboard_peers(user_id: str) -> set[str]:
     sees another's children. Raises on a failed read: a partial class is not a smaller one.
     """
     # Not `_role`, which answers "student" on a failed read and so shows a teacher an empty board.
-    me = supabase.table("profiles").select("role").eq("id", user_id).execute().data
-    if ((me[0].get("role") if me else None) or "student") == "teacher":
+    if _role_or_raise(user_id) == "teacher":
         classes = supabase.table("classes").select("id").eq("teacher_id", user_id).execute()
         class_ids = [c["id"] for c in classes.data or []]
         peers: set[str] = set()
@@ -4637,11 +4645,20 @@ def join_class(payload: JoinClassRequest, request: Request):
                                  "try again later.", headers={"Retry-After": str(wait)})
     if _role(user["id"]) != "student":
         raise HTTPException(403, "Only students can join a class")
+    address = _client_address(request)
+    wait = _JOIN_MISS_LIMITER.check(address)
+    if wait is not None:
+        # The limiter's name, never the address: an address is personal data.
+        _record_security_event("rate_limited", user["id"], limiter=_JOIN_MISS_LIMITER.name)
+        raise HTTPException(429, "Too many wrong class codes from this network. Try again later.",
+                            headers={"Retry-After": str(wait)})
     # Named columns, as `my_classes` sends a student: `teacher_id` and `join_code` are the teacher's.
     cls  = supabase.table("classes").select("id, name, grade_level") \
         .eq("join_code", payload.join_code.strip().upper()).execute()
     if not cls.data:
         raise HTTPException(404, "Class not found -- check the code")
+    # A right code is not a guess, so only misses stay charged to the address.
+    _JOIN_MISS_LIMITER.release(address)
     class_id = cls.data[0]["id"]
     already = supabase.table("class_memberships").select("id") \
         .eq("class_id", class_id).eq("student_id", user["id"]).execute()

@@ -1449,5 +1449,89 @@ BEGIN
     END IF;
 END $$;
 
+-- ── a teacher reads no consent row: it names the parent who changed it ─────
+-- The student's own read stays, so this cannot pass by revoking the table from everyone.
+
+DO $$
+DECLARE
+    usr     uuid;
+    teacher uuid := gen_random_uuid();
+    cls     uuid := gen_random_uuid();
+    n       int;
+BEGIN
+    SELECT owner_id INTO usr FROM _ids;
+    INSERT INTO auth.users (id, email) VALUES (teacher, 'teacher@test.invalid');
+    INSERT INTO public.profiles (id, email, role) VALUES (teacher, 'teacher@test.invalid', 'teacher')
+        ON CONFLICT (id) DO UPDATE SET role = 'teacher';
+    INSERT INTO public.classes (id, teacher_id, name, join_code) VALUES (cls, teacher, 'c', 'ZZZZ9999');
+    INSERT INTO public.class_memberships (class_id, student_id) VALUES (cls, usr);
+    INSERT INTO public.signal_consent (user_id, camera_enabled) VALUES (usr, true)
+        ON CONFLICT (user_id) DO NOTHING;
+
+    SET LOCAL ROLE authenticated;
+    PERFORM set_config('request.jwt.claims',
+                       json_build_object('sub', teacher, 'role', 'authenticated')::text, true);
+    SELECT count(*) INTO n FROM public.signal_consent WHERE user_id = usr;
+    IF n <> 0 THEN
+        RAISE EXCEPTION 'a teacher read % consent rows naming who changed them', n;
+    END IF;
+    PERFORM set_config('request.jwt.claims',
+                       json_build_object('sub', usr, 'role', 'authenticated')::text, true);
+    SELECT count(*) INTO n FROM public.signal_consent WHERE user_id = usr;
+    IF n <> 1 THEN
+        RAISE EXCEPTION 'the student could not read their own consent row';
+    END IF;
+    RESET ROLE;
+END $$;
+
+-- ── no client role holds a sequence, now or for one created later ───────────
+
+DO $$
+DECLARE
+    s record;
+    who text;
+BEGIN
+    CREATE SEQUENCE public.assert_rls_new_seq;
+    FOR s IN SELECT c.oid::regclass AS seq FROM pg_class c
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE c.relkind = 'S' AND n.nspname = 'public' LOOP
+        FOREACH who IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+            IF has_sequence_privilege(who, s.seq, 'USAGE')
+               OR has_sequence_privilege(who, s.seq, 'SELECT')
+               OR has_sequence_privilege(who, s.seq, 'UPDATE') THEN
+                RAISE EXCEPTION '% holds a privilege on sequence %', who, s.seq;
+            END IF;
+        END LOOP;
+    END LOOP;
+END $$;
+
+-- ── the definer helpers resolve only qualified tables ────────────────────────
+-- A temp table shadowing class_memberships must not make a student a member of a class.
+
+DO $$
+DECLARE
+    usr    uuid;
+    ghost  uuid := gen_random_uuid();
+    cls    uuid;
+BEGIN
+    SELECT owner_id INTO usr FROM _ids;
+    SELECT class_id INTO cls FROM public.class_memberships WHERE student_id = usr LIMIT 1;
+    PERFORM set_config('request.jwt.claims',
+                       json_build_object('sub', usr, 'role', 'authenticated')::text, true);
+    CREATE TEMP TABLE class_memberships (class_id uuid, student_id uuid);
+    INSERT INTO pg_temp.class_memberships VALUES (ghost, usr);
+    IF public.is_member_of_class(ghost) THEN
+        RAISE EXCEPTION 'is_member_of_class read a temp table shadowing class_memberships';
+    END IF;
+    IF NOT public.is_member_of_class(cls) THEN
+        RAISE EXCEPTION 'is_member_of_class no longer finds a real membership';
+    END IF;
+    DROP TABLE pg_temp.class_memberships;
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname IN ('is_member_of_class', 'is_teacher_of_class')
+               AND NOT ('search_path=""' = ANY (coalesce(proconfig, '{}')))) THEN
+        RAISE EXCEPTION 'a definer helper does not pin an empty search_path';
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

@@ -53,6 +53,18 @@ def test_an_artifact_on_the_first_full_buffer_holds_a_placeholder_that_says_so()
     assert f["calm_measured"] is True and f["calm_held_seconds"] == pytest.approx(t.dt)
 
 
+def test_a_local_estimate_on_a_tick_never_admitted_is_discarded_like_a_held_one():
+    """Before anything is admitted the tick is raw-scored for a number, but its local calm is not fresh."""
+    emg = {**BANDS, "gamma": 0.9}
+    t = _local()
+    f = t.processor.update(t.sample(), emg, spectrum=_spectrum(0.4))
+    assert f["artifact_reason"] == "emg_gamma" and f["calm_score"] == pytest.approx(50.0)
+    assert f["calm_measured"] is False and f["calm_held_seconds"] is None
+    sdk = Ticker()
+    assert sdk.processor.update(sdk.sample(), emg)["calm_measured"] is True, \
+        "the SDK ratio is the tick's own reading"
+
+
 def test_the_smoothed_calm_diagnostic_keeps_its_unit_on_each_source():
     """calm_log_ratio_smoothed is in calm_log_ratio's unit; the residual has its own key."""
     t = _local()

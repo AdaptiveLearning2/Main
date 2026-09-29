@@ -1057,7 +1057,9 @@ the SDK band dict, not the raw samples), the rate check compares the span betwee
 *positions* between them (push admits an unstamped sample, so counting stamps refused a real buffer), and a poison
 while still filling reports `artifact`, not `filling`. **Contact is judged over the buffer the same way**: a tick's
 contact vouches only for its own samples, so an electrode any buffered tick marked unseated stays out until that
-tick's samples have left. The processor and the estimator read contact through one check, `services/contact.py`.
+tick's samples have left. Whether an electrode is seated is one check, `services/contact.py`, for the processor's
+channel mask and the estimator alike; `_sample_is_usable` (any electrode valid) and `_contact_ratio` (a smoothed
+fraction) read the same lists for other questions. A NaN `is_good` entry is bad in all three.
 
 **The stressed line is per calm source** — `STRESSED_CALM_MAX` in `adaptation.py` and
 `EEG_STRESSED_CALM_MAX_BY_SOURCE` in `signal_fusion.py`, pinned equal by a test on each side. 0.377 was 0.311 Bels
@@ -1081,8 +1083,9 @@ focus has latched: latched with focus, one calm sample was the session's calm ce
 on a placeholder — the opening fill, after every gap, and the amplitude fallback with one electrode seated, all
 writing the 50 a genuine residual of zero produces — and the engine labels neither stressed nor focused on one. A held
 calm carries the measuredness of what it holds, so an artifact on the first full buffer holds a placeholder that
-still says so; `calm_held_seconds` ages from the last *admitted* estimate, never a discarded one. `calm_held_seconds` says how long a local calm has been
-carried, and past `CALM_HOLD_MAX_SECONDS` the mapper nulls `stress` **and the engine labels neutral** — the constant
+still says so, and a local estimate on any tick not admitted is discarded. `calm_held_seconds` says how long a local
+calm has been carried, counted from the last *admitted* estimate, and past `CALM_HOLD_MAX_SECONDS` the mapper nulls
+`stress` **and the engine labels neutral** — the constant
 lives in both `adaptation.py` and `signal_mapping.py`, pinned equal by a test on each side, or the sidecar asserts a
 learner state from a calm the backend has just declined to record.
 

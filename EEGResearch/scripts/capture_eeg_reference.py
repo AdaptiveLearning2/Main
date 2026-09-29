@@ -51,7 +51,7 @@ FREE = "free"
 # Summary columns in print order, raw ratios first.
 SUMMARY_FIELDS = (
     "focus_log_ratio", "calm_log_ratio",
-    "focus_log_ratio_smoothed", "calm_log_ratio_smoothed",
+    "focus_log_ratio_smoothed", "calm_log_ratio_smoothed", "calm_alpha_residual_smoothed",
     "focus_score", "calm_score", "confidence", "contact_ratio",
     "alpha", "beta", "theta", "gamma", "delta",
 )

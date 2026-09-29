@@ -635,11 +635,13 @@ class SignalProcessor:
                 calm_measured = self._held_calm_measured
                 fresh_calm = False
             else:
-                # Nothing admitted yet: score the raw tick so the session has a number.
+                # Nothing admitted yet: score the raw tick so the session has a number. A local
+                # estimate on a tick not admitted is discarded, as on a held one.
                 focus_ratio = self._score_against_baseline(band_focus_raw, "focus", sample.timestamp)
-                calm_measured = fresh_calm = band_calm_raw is not None
+                calm_measured = band_calm_raw is not None and self.calm_source == "sdk"
                 calm_ratio = (self._score_against_baseline(band_calm_raw, "calm", sample.timestamp)
                               if calm_measured else 0.5)
+                fresh_calm = False
             if fresh_calm:
                 self._calm_fresh_ts = sample.timestamp
         elif malformed:

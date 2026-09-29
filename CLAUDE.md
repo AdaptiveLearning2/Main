@@ -531,7 +531,7 @@ treatment in `config.py` — a validator warns and falls back rather than refusi
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MODE`, `INGEST_MAX_BATCH` /
 `INGEST_RATE_LIMIT` / `INGEST_RATE_WINDOW`, `SESSION_ABANDONED_AFTER_HOURS` /
 `STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep and its chart catch-up), `QUESTIONS_CACHE_TTL`,
-`QUESTION_QUEUE_SIZE`, the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
+`QUESTION_QUEUE_SIZE`, `PAIRING_IDLE_SECONDS` (120; a headband pairing its pairer's page stopped polling is released), the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
 `PUBLIC_*_RATE_*` / `TRUSTED_PROXY_HOPS` group under *The network edge*, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels*,
 and the `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` / `SOLVE_*` groups in `docs/question-generation.md`.
 
@@ -604,8 +604,8 @@ Sequences need the same treatment. `scripts/check_table_grants.py` enforces it i
 **What to grant back is per-table judgement, and the lint deliberately does not check it — so a
 judgement call can go stale as the write path moves, and nothing catches that.** `math_topics` and
 `questions` have `USING (true)` public-read policies, so `anon` keeps `SELECT` on those two and
-nothing else anywhere. Every other backend-written table gets `SELECT` for `authenticated` and
-nothing more.
+nothing else anywhere. Every other backend-written table gets `SELECT` for `authenticated` and nothing more,
+except the three per-sample signal tables, which no client reads: RLS cannot apply consent per channel.
 
 `sessions` was one that had been missed: it kept `authenticated=arwd` next to a `FOR ALL` own
 policy, so a student could rewrite any column of their own sessions through PostgREST —
@@ -993,12 +993,11 @@ It fails closed to `student`, since `_profile` degrades to a student-shaped dict
 
 **Switching to `profiles.role` is only half of it, and it is the half that looks like the whole fix.** `profiles`
 carries a `FOR ALL` own-row policy and `authenticated` held UPDATE, so that column was equally client-writable. **RLS
-narrows *which rows*, never *which columns*, and a CHECK cannot express "not by you".** Only the grant can, and grants
-are per-column for UPDATE and INSERT — INSERT matters as much as UPDATE, since with it alone a student could delete
-their profile and re-insert it as a teacher. Self-service teacher sign-up is unaffected: `handle_new_user` is
-`SECURITY DEFINER` owned by `postgres`, so it bypasses column grants. What changed is that the value cannot be edited
-afterwards by the account it describes. `backend/tests/test_role_gates.py` asserts both halves — the code reads the
-right column, and a migration takes the write away.
+narrows *which rows*, never *which columns*, and a CHECK cannot express "not by you".** Only the grant can — and **a
+column `REVOKE` does nothing while a table-level grant stands**, so the protection is that clients hold no UPDATE or
+INSERT on `profiles` at all; a future edit grant must be a column list without `role`. Sign-up is unaffected:
+`handle_new_user` is `SECURITY DEFINER` owned by `postgres`. `test_role_gates.py` checks the code reads the column;
+`scripts/assert_signal_rls.sql` checks, with `has_column_privilege`, that no client role can write it.
 
 ### The frontend reads the same column, through `GET /api/profile/me`
 
@@ -1052,6 +1051,8 @@ if a row came back. It goes back (by insert) only if the write was never tried: 
 child's role is re-read (not via `_role`, which answers `student` on a failed read). Unknown, expired and spent are one
 404 and write `authz_denied`; a failed read is 503. Still "notify, not block", and **a student cannot remove a
 link** — a safeguarding decision, not an omission. Tests: `test_parent_link_codes.py`.
+**A child can hold a second parent account**, so every other linked parent's notice feed reports a new link, a parent
+turn-on (`consent_enablements`) and an erasure, naming no account, all or nothing (`test_parent_links.py`).
 
 ## Consent — `signal_consent` decides what may be recorded
 
@@ -1351,7 +1352,9 @@ Tests: `backend/tests/test_admin.py`. `conftest`'s `_feature_flags_are_default` 
 other test file, and **deliberately does not take `monkeypatch`** — requesting it from an autouse fixture
 pytest orders early hoists `monkeypatch`'s setup ahead of `_join_poller_threads` and inverts their
 teardown, which failed three unrelated tests in teardown for a reason nothing in their bodies could
-explain. `pytest --setup-plan` shows the ordering directly.
+explain. `pytest --setup-plan` shows the ordering directly. Two more autouse fixtures swap database-backed state
+the same way: the daily question budget and the station pairer run in memory for every test but their own, which
+take the real functions from `real_claim_daily_question()` / `real_pairing_funcs()`.
 
 ### The security log records that something happened, never what was in it
 
@@ -1803,7 +1806,7 @@ defined per channel (cognitive has no trust flag, so it counts rows that produce
 nulled ones a poor-contact headband writes).
 
 Its access rules differ from `retention_window`'s: the rollup carries a **read-your-own `SELECT` policy** and
-`authenticated` keeps `SELECT`, matching the per-sample tables it summarises. There is no insert/update/delete
+`authenticated` keeps `SELECT`, unlike the per-sample tables, which no client reads. There is no insert/update/delete
 policy for anyone, so with RLS on, PostgREST cannot write it whatever JWT it carries — the only correct writer
 is `rollup_signal_day`.
 

@@ -434,6 +434,7 @@ NOT_AN_ACCESS_DENIAL = {
     "eeg_muse_disconnect": "the same device contention",
     "eeg_start":           "consent or the school year, which is a configuration state; "
                            "filing it as an incident is what `signals_missing` must not do either",
+    "eeg_muse_connect":    "the same consent / school-year state as eeg_start",
 }
 
 
@@ -469,7 +470,11 @@ def test_a_function_classified_as_not_a_denial_records_none(name):
 # A new limiter either records or appears below with a reason.
 
 # Limiter name -> why a refusal from it writes no row.
-SILENT_LIMITERS = {}
+SILENT_LIMITERS = {
+    "prefetch_daily":
+        "Only `_prefetch_worker` consults it, and a skipped refill refuses nobody "
+        "(see GENERATION_SILENT_SITES).",
+}
 
 # `_claim_generation_slot` call site -> why it records nothing (per site, not per limiter).
 GENERATION_SILENT_SITES = {
@@ -482,7 +487,7 @@ GENERATION_SILENT_SITES = {
 
 # Named floor, not a count, so a rename fails too.
 EXPECTED_LIMITERS = {
-    "strategies", "chart_summary", "ingest", "generation",
+    "strategies", "chart_summary", "ingest", "generation", "generation_daily", "prefetch_daily",
     "public_generate", "public_read", "public_probe",
     "parent_link_code",
 }
@@ -593,9 +598,9 @@ def test_every_generation_slot_site_records_or_says_why_not():
     for fn in ast.walk(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        if fn.name == "_claim_generation_slot":
-            continue          # the helper itself, not one of its callers
-        if calls(fn, "_claim_generation_slot"):
+        if fn.name in ("_claim_generation_slot", "_generation_refusal"):
+            continue          # the helpers themselves, not their callers
+        if calls(fn, "_claim_generation_slot") or calls(fn, "_generation_refusal"):
             sites[fn.name] = records_a_generation_refusal(fn)
 
     assert sites, "no _claim_generation_slot call sites found -- has it moved?"

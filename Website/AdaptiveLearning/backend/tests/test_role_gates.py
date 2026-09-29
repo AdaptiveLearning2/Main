@@ -142,18 +142,9 @@ def _migration_sql() -> str:
         io.open(p, encoding="utf-8").read() for p in sorted(_MIGRATIONS.glob("*.sql")))
 
 
-@pytest.mark.parametrize("command", ["UPDATE", "INSERT"])
-@pytest.mark.parametrize("grantee", ["anon", "authenticated"])
-def test_the_role_column_write_is_revoked_from_the_client_roles(command, grantee):
-    sql = _migration_sql()
-    pattern = re.compile(
-        rf'REVOKE\s+{command}\s*\(\s*"?role"?\s*\)\s+ON\s+(?:TABLE\s+)?'
-        rf'(?:"?public"?\s*\.\s*)?"?profiles"?\s+FROM\s+"?{grantee}"?',
-        re.IGNORECASE)
-    assert pattern.search(sql), (
-        f"no REVOKE {command} (role) ON profiles FROM {grantee} in any migration "
-        "-- the endpoints gate on this column, so a client that can write it can "
-        "still self-elevate")
+# That no client role can write `profiles.role` is asserted against a real database, with
+# has_column_privilege, in scripts/assert_signal_rls.sql: a column REVOKE in the migration text
+# says nothing while a table-level grant stands.
 
 
 def test_signup_cannot_choose_the_admin_role():

@@ -267,6 +267,13 @@ class _SlidingWindowLimiter:
             hits.append(now)
             return None
 
+    def release(self, key: str) -> None:
+        """Give back the caller's newest hit, for work admitted but never done."""
+        with self._lock:
+            hits = self.hits.get(key)
+            if hits:
+                hits.pop()
+
     def reset(self) -> None:
         """Forget every caller and re-arm the sweep. For tests."""
         with self._lock:
@@ -1161,6 +1168,8 @@ def _close_session(user_id: str, session: dict, ended_at: str,
 
     # Questions prepared for it can never be served now.
     _drop_prefetched(user_id, sid)
+    # This lesson is over, so a headband paired in it is free for the next student at the station.
+    _forget_session_pairings(user_id, sid)
     total_q, correct, counted = _answer_counts(sid, session)
 
     if _discard_if_nothing_recorded(sid, total_q, answers_counted=counted):
@@ -2176,11 +2185,21 @@ def _shutdown_prefetch_pool():
 
 
 # Per-student generations per window (a rate, unlike `_prefetch_active`'s concurrency).
-# 60/min is far above what answering can consume.
-_GENERATION_RATE_LIMIT  = env_number("GENERATION_RATE_LIMIT", 60, int, minimum=1)
+# 20/min is still above what answering can consume, prefetch refills included.
+_GENERATION_RATE_LIMIT  = env_number("GENERATION_RATE_LIMIT", 20, int, minimum=1)
 _GENERATION_RATE_WINDOW = env_number("GENERATION_RATE_WINDOW", 60.0, float, minimum=1.0)
 _GENERATION_LIMITER = _SlidingWindowLimiter(
     "generation", _GENERATION_RATE_LIMIT, _GENERATION_RATE_WINDOW)
+
+# Questions served per student per school day. GENERATION_DAILY_CALL_LIMIT is one process-wide ceiling,
+# so without this one account could spend it for every student. Counted by `claim_daily_question`;
+# the limiter below is only its fallback when that call fails.
+_GENERATION_DAILY_LIMIT = env_number("GENERATION_DAILY_LIMIT_PER_STUDENT", 150, int, minimum=1)
+_GENERATION_DAILY_LIMITER = _SlidingWindowLimiter(
+    "generation_daily", _GENERATION_DAILY_LIMIT, 86400.0)
+# Prefetch makes questions nobody may see, so it spends its own budget, never the student's.
+_PREFETCH_DAILY_LIMITER = _SlidingWindowLimiter(
+    "prefetch_daily", _GENERATION_DAILY_LIMIT, 86400.0)
 
 # Requests in flight on generation, process-wide; past it, refuse rather than queue.
 # Waiters block anyio's ~40-slot threadpool, so 30 leaves headroom for ingest.
@@ -2203,9 +2222,88 @@ def _generation_waiter():
             _generation_waiters.release()
 
 
+def _no_refund() -> None:
+    return None
+
+
+def _fallback_daily_claim(user_id: str):
+    """`_claim_daily_question`'s answer from the per-process limiter."""
+    wait = _GENERATION_DAILY_LIMITER.check(user_id)
+    if wait is not None:
+        return wait, _no_refund
+    return None, lambda: _GENERATION_DAILY_LIMITER.release(user_id)
+
+
+def _claim_daily_question(user_id: str):
+    """Count one served question against the student's school day: (None, refund) to admit, else (seconds, no-op).
+
+    Call the refund if no question reaches the student. A failed or unexpected answer falls back
+    to the per-process limiter rather than refusing everyone.
+    """
+    tz = _school_timezone()
+    now = datetime.now(tz)
+    day = now.date().isoformat()
+    try:
+        admitted = supabase.rpc("claim_daily_question", {
+            "p_user_id": user_id, "p_day": day,
+            "p_limit": _GENERATION_DAILY_LIMIT}).execute().data
+    except Exception as e:
+        print(f"[generate] daily budget unreadable for {user_id[:8]}: {type(e).__name__}")
+        admitted = None
+    if admitted is True:
+        def refund():
+            # The claim's own day, not the refund's: a failure just past midnight gives back yesterday's.
+            try:
+                supabase.rpc("release_daily_question", {"p_user_id": user_id, "p_day": day}).execute()
+            except Exception as e:
+                print(f"[generate] could not refund a question for {user_id[:8]}: {type(e).__name__}")
+        return None, refund
+    if admitted is not False:
+        return _fallback_daily_claim(user_id)
+    midnight = datetime.combine(now.date() + timedelta(days=1), datetime.min.time(), tzinfo=tz)
+    # Through UTC: aware datetimes sharing a tzinfo subtract as wall clocks, wrong across a DST change.
+    return max(1, int((midnight.astimezone(timezone.utc)
+                       - now.astimezone(timezone.utc)).total_seconds()) + 1), _no_refund
+
+
+def _generation_refusal(user_id: str, generating: bool = True):
+    """Count one served question against the rate (if generating now), then the day.
+
+    (None, refund) to admit, else (limiter, seconds to wait).
+    """
+    if generating:
+        wait = _GENERATION_LIMITER.check(user_id)
+        if wait is not None:
+            return _GENERATION_LIMITER, wait
+    wait, refund = _claim_daily_question(user_id)
+    if wait is not None:
+        return _GENERATION_DAILY_LIMITER, wait
+    return None, refund
+
+
 def _claim_generation_slot(user_id: str) -> bool:
-    """Count one generation against this student's window; False to refuse."""
-    return _GENERATION_LIMITER.check(user_id) is None
+    """For the prefetch worker: the rate, then prefetch's own day budget. Nobody to tell on a refusal."""
+    return all(limiter.check(user_id) is None
+               for limiter in (_GENERATION_LIMITER, _PREFETCH_DAILY_LIMITER))
+
+
+def _admit_generation(user_id: str, generating: bool = True):
+    """Count one served question and return its refund, or record the refusal and raise 429.
+
+    `generating=False` for a queue hit. Call the refund if no question reaches the student.
+    """
+    limiter, outcome = _generation_refusal(user_id, generating)
+    if limiter is None:
+        return outcome
+    wait = outcome
+    # `get_user` resolved this id, so the refusal has a real actor.
+    if limiter is _GENERATION_DAILY_LIMITER:
+        _record_security_event("rate_limited", user_id, limiter=_GENERATION_DAILY_LIMITER.name)
+        raise HTTPException(429, "You've reached today's question limit. Try again tomorrow.",
+                            headers={"Retry-After": str(max(1, int(wait)))})
+    _record_security_event("rate_limited", user_id, limiter=_GENERATION_LIMITER.name)
+    raise HTTPException(429, "Too many questions requested. Try again shortly.",
+                        headers={"Retry-After": str(max(1, int(_GENERATION_RATE_WINDOW)))})
 
 
 def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None):
@@ -2572,31 +2670,36 @@ def generate_question(
 
     if not question:
         print(f"[generate] generating inline for {user_id[:8]}")
-        if not _claim_generation_slot(user_id):
-            # `get_user` resolved this id, so the refusal has a real actor.
-            _record_security_event("rate_limited", user_id,
-                                   limiter=_GENERATION_LIMITER.name)
-            raise HTTPException(
-                429, "Too many questions requested. Try again shortly.",
-                headers={"Retry-After": str(max(1, int(_GENERATION_RATE_WINDOW)))},
-            )
-        with _generation_waiter() as admitted:
-            if not admitted:
-                raise HTTPException(
-                    503, "Too many questions are being generated right now. Try again shortly.",
-                    headers={"Retry-After": "5"},
-                )
-            try:
-                question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(
-                    user_id, effective_grade, session_id, manual_bias
-                )
-            except llm_client.GenerationUnavailable as e:
-                # 503: a configured ceiling was reached; never silently serve another source.
-                print(f"[generate] refused for {user_id[:8]}: {e}")
-                raise HTTPException(503, "Question generation is temporarily unavailable.")
-        if not question:
-            raise HTTPException(500, "Failed to generate question")
+        refund = _admit_generation(user_id)
+        try:
+            with _generation_waiter() as admitted:
+                if not admitted:
+                    raise HTTPException(
+                        503, "Too many questions are being generated right now. Try again shortly.",
+                        headers={"Retry-After": "5"},
+                    )
+                try:
+                    question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(
+                        user_id, effective_grade, session_id, manual_bias
+                    )
+                except llm_client.GenerationUnavailable as e:
+                    # 503: a configured ceiling was reached; never silently serve another source.
+                    print(f"[generate] refused for {user_id[:8]}: {e}")
+                    raise HTTPException(503, "Question generation is temporarily unavailable.")
+            if not question:
+                raise HTTPException(500, "Failed to generate question")
+        except Exception:
+            # No question reached the student, so it does not count against their day.
+            refund()
+            raise
     else:
+        try:
+            # A queued question costs the student's day when served, not when it was made.
+            _admit_generation(user_id, generating=False)
+        except HTTPException:
+            with _prefetch_lock:
+                _prefetch_cache.setdefault(user_id, {}).setdefault(key, []).insert(0, question)
+            raise
         print(f"[generate] cache hit for {user_id[:8]} -- instant serve")
 
     question["effective_grade"] = effective_grade
@@ -2853,30 +2956,27 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
 
     topic = _pick_practice_topic(practice_session_id, session["topics"])
 
-    # Same rate limit, waiter cap and refusals as /api/generate-question.
-    if not _claim_generation_slot(user["id"]):
-        # Real actor, so it records; `GENERATION_SILENT_SITES` in
-        # `test_security_events.py` pins which sites do not.
-        _record_security_event("rate_limited", user["id"],
-                               limiter=_GENERATION_LIMITER.name)
-        raise HTTPException(
-            429, "Too many questions requested. Try again shortly.",
-            headers={"Retry-After": str(max(1, int(_GENERATION_RATE_WINDOW)))},
-        )
-    with _generation_waiter() as admitted:
-        if not admitted:
-            raise HTTPException(
-                503, "Too many questions are being generated right now. Try again shortly.",
-                headers={"Retry-After": "5"},
-            )
-        try:
-            question = LLM_topic_decider.question_generation(
-                topic, session["difficulty"], user["id"], session.get("grade_level"))
-        except llm_client.GenerationUnavailable as e:
-            print(f"[practice] generation refused for {user['id'][:8]}: {e}")
-            raise HTTPException(503, "Question generation is temporarily unavailable.")
-    if not question:
-        raise HTTPException(500, "Failed to generate question")
+    # Same rate limit, daily budget, waiter cap and refusals as /api/generate-question.
+    refund = _admit_generation(user["id"])
+    try:
+        with _generation_waiter() as admitted:
+            if not admitted:
+                raise HTTPException(
+                    503, "Too many questions are being generated right now. Try again shortly.",
+                    headers={"Retry-After": "5"},
+                )
+            try:
+                question = LLM_topic_decider.question_generation(
+                    topic, session["difficulty"], user["id"], session.get("grade_level"))
+            except llm_client.GenerationUnavailable as e:
+                print(f"[practice] generation refused for {user['id'][:8]}: {e}")
+                raise HTTPException(503, "Question generation is temporarily unavailable.")
+        if not question:
+            raise HTTPException(500, "Failed to generate question")
+    except Exception:
+        # As /api/generate-question: a question that never arrived is not charged.
+        refund()
+        raise
 
     # Same deduplicating storage as the live path, so identical questions share one row.
     LLM_topic_decider._attach_stored_id(question, session["difficulty"])
@@ -5379,6 +5479,7 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
     guards: dict = {}
     re_enabled = False
     withdrawn: list[str] = []
+    enabled: list[str] = []
     for c in CONSENT_CHANNELS:
         requested = getattr(payload, f"{c}_enabled")
         if requested is None:
@@ -5409,6 +5510,7 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
         # the banner's wording claims no earlier withdrawal (a re-enable nulls `revoked_at`).
         if requested and actor == "parent":
             re_enabled = True
+            enabled.append(c)
 
     if not fields:
         # No-op: don't restamp, or an unchanged re-save raises a notice.
@@ -5432,6 +5534,7 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
                         409, "Consent changed while you were editing it; reload and try again"
                     )
                 raise
+            _record_enablements(student_id, enabled, user["id"], now)
             return _shape_consent(_consent(student_id), student_id, _erasures(student_id))
 
         # Conditional on every flag decided against; if it moved, no match -> 409.
@@ -5450,6 +5553,7 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
         raise HTTPException(409, "Consent changed while you were editing it; reload and try again")
 
     _record_withdrawals(student_id, withdrawn, user["id"], now)
+    _record_enablements(student_id, enabled, user["id"], now)
 
     # After the confirmed update. Channel names and direction only, never the
     # resulting flags: `signal_consent` is the authority.
@@ -5479,6 +5583,21 @@ def _record_withdrawals(student_id: str, channels: list[str],
         ]).execute()
     except Exception as e:
         print(f"[consent:withdrawal-log] {student_id} {channels}: {e}")
+
+
+def _record_enablements(student_id: str, channels: list[str],
+                        by: str, at: str) -> None:
+    """Append one row per channel a parent switched on, for the other parents' notices. Never raises."""
+    if not channels:
+        return
+    try:
+        supabase.table("consent_enablements").insert([
+            {"user_id": student_id, "channel": c,
+             "enabled_at": at, "enabled_by": by}
+            for c in channels
+        ]).execute()
+    except Exception as e:
+        print(f"[consent:enable-log] {student_id} {channels}: {e}")
 
 
 @app.post("/api/consent/{student_id}/erase")
@@ -6127,6 +6246,163 @@ def _refuse_under_push(what: str) -> None:
         )
 
 
+# A pairing its pairer's page has not polled for this long is released: the tab was closed.
+_PAIRING_IDLE_SEC = env_number("PAIRING_IDLE_SECONDS", 120.0, float, minimum=15.0)
+# The pairer's polls refresh `seen_at` at most this often, not on every 5 s poll.
+_PAIRING_REFRESH_SEC = 30.0
+# Owner rows only: a stale one refuses (the safe direction); a stale "free" would admit a takeover.
+_PAIRING_CACHE_SEC = 10.0
+_pairing_cache: dict[str, tuple[float, str, datetime | None]] = {}
+_pairing_cache_lock = threading.Lock()
+
+
+def _uncache_pairing(device_id: str | None = None, user_id: str | None = None) -> None:
+    with _pairing_cache_lock:
+        for dev in [d for d, (_t, u, _s) in _pairing_cache.items()
+                    if d == device_id or (user_id is not None and u == user_id)]:
+            del _pairing_cache[dev]
+
+
+def _station_pairer(device_id: str):
+    """(user_id, seen_at) of this station's pairing, or None. In the database, so a restart agrees; raises on a failed read."""
+    now = time.monotonic()
+    with _pairing_cache_lock:
+        hit = _pairing_cache.get(device_id)
+    if hit and now - hit[0] < _PAIRING_CACHE_SEC:
+        return hit[1], hit[2]
+    rows = supabase.table("station_pairings").select("user_id, seen_at") \
+        .eq("device_id", device_id).limit(1).execute().data or []
+    if not rows:
+        _uncache_pairing(device_id)
+        return None
+    pairing = (rows[0]["user_id"], _parse_ts(rows[0].get("seen_at")))
+    with _pairing_cache_lock:
+        _pairing_cache[device_id] = (now, *pairing)
+    return pairing
+
+
+def _record_pairing(user_id: str, device_id: str, session_id: str | None = None) -> None:
+    """Raises on failure: an unrecorded pairing would leave the headband open to anyone."""
+    _uncache_pairing(device_id)
+    supabase.table("station_pairings").upsert(
+        {"device_id": device_id, "user_id": user_id, "session_id": session_id,
+         "seen_at": _utc_now().isoformat()},
+        on_conflict="device_id").execute()
+
+
+# (user, device) -> monotonic time of this process's last refresh, so a recording student's
+# polls refresh without reading the row first.
+_pairing_touched: dict[tuple[str, str], float] = {}
+
+
+def _touch_pairing(user_id: str, device_id: str) -> None:
+    """The pairer's page is still open. Never raises: a missed refresh costs one idle interval at most."""
+    _uncache_pairing(device_id)
+    with _pairing_cache_lock:
+        _pairing_touched[(user_id, device_id)] = time.monotonic()
+    try:
+        supabase.table("station_pairings").update({"seen_at": _utc_now().isoformat()}) \
+            .eq("device_id", device_id).eq("user_id", user_id).execute()
+    except Exception as e:
+        print(f"[eeg] could not refresh the pairing on {device_id}: {type(e).__name__}")
+
+
+def _touched_recently(user_id: str, device_id: str) -> bool:
+    with _pairing_cache_lock:
+        at = _pairing_touched.get((user_id, device_id))
+    return at is not None and time.monotonic() - at < _PAIRING_REFRESH_SEC
+
+
+def _release_idle_pairing(device_id: str, owner: str) -> bool:
+    """Delete the pairing only if the database still has it idle; whether a row went. Never raises.
+
+    The caller's `seen_at` may be a cached one, so another worker may have refreshed it since.
+    """
+    _uncache_pairing(device_id)
+    cutoff = (_utc_now() - timedelta(seconds=_PAIRING_IDLE_SEC)).isoformat()
+    try:
+        return bool(supabase.table("station_pairings").delete().eq("device_id", device_id)
+                    .eq("user_id", owner).lt("seen_at", cutoff).execute().data)
+    except Exception as e:
+        print(f"[eeg] could not release the idle pairing on {device_id}: {type(e).__name__}")
+        return False
+
+
+def _forget_pairing(device_id: str, user_id: str | None = None) -> None:
+    """Clear the station's pairer; with user_id, only if it is still that user. Never raises."""
+    _uncache_pairing(device_id)
+    try:
+        q = supabase.table("station_pairings").delete().eq("device_id", device_id)
+        if user_id is not None:
+            q = q.eq("user_id", user_id)
+        q.execute()
+    except Exception as e:
+        print(f"[eeg] could not clear the pairing on {device_id}: {type(e).__name__}")
+
+
+def _forget_session_pairings(user_id: str, session_id: str) -> None:
+    """That lesson is over: its session closed or its poller stopped. Never raises.
+
+    Only that session's: the sweep closing an old abandoned one must not free the lesson running now.
+    """
+    _uncache_pairing(user_id=user_id)
+    try:
+        supabase.table("station_pairings").delete().eq("user_id", user_id) \
+            .eq("session_id", session_id).execute()
+    except Exception as e:
+        print(f"[eeg] could not clear {user_id[:8]}'s pairing for a session: {type(e).__name__}")
+
+
+_PAIRER_UNKNOWN = object()
+
+
+def _station_access(user_id: str, device_id: str) -> tuple[bool, dict | None]:
+    """(open, the muse status if one was read, for the caller to reuse rather than fetch again).
+
+    A headband another user paired stays theirs while their page polls and the bridge reports it
+    connected; a failed pairing read counts as another user's. Fails closed when the bridge cannot say.
+    """
+    if not eeg_poller.can_use_device(user_id, device_id):
+        return False, None
+    if eeg_poller.live_poller_user(device_id) == user_id:
+        # Their own poller holds the station: no read. Still refreshed, or a poller stopping
+        # mid-lesson (consent withdrawn) leaves a pairing that already looks idle.
+        if not _touched_recently(user_id, device_id):
+            _touch_pairing(user_id, device_id)
+        return True, None
+    try:
+        owner, seen = _station_pairer(device_id) or (None, None)
+    except Exception as e:
+        print(f"[eeg] pairing unreadable on {device_id}: {type(e).__name__}")
+        owner, seen = _PAIRER_UNKNOWN, None
+    idle = None if seen is None else (_utc_now() - seen).total_seconds()
+    if owner is None:
+        return True, None
+    if owner == user_id:
+        if idle is None or idle >= _PAIRING_REFRESH_SEC:
+            _touch_pairing(user_id, device_id)
+        return True, None
+    if (owner is not _PAIRER_UNKNOWN and idle is not None and idle >= _PAIRING_IDLE_SEC
+            and _release_idle_pairing(device_id, owner)):
+        # Nothing has polled for it: the pairer's page is gone, whatever the headband says.
+        return True, None
+    try:
+        status = eeg_client.get_muse_status(device_id)
+        connected = (status.get("ingestion") or {}).get("muse_connected")
+    except Exception:
+        return False, None
+    if connected is False:
+        if owner is not _PAIRER_UNKNOWN:
+            _forget_pairing(device_id, owner)
+        return True, status
+    return False, None
+
+
+def _station_open_to(user_id: str, device_id: str) -> bool:
+    """`_station_access` for a caller with no use for the status."""
+    return _station_access(user_id, device_id)[0]
+
+
 def _reserve_and_call(user_id: str, device_id: str, fn, *args,
                       session_id: str | None = None):
     """Claim device_id's pre-claim reservation, then run the bridge call.
@@ -6134,7 +6410,7 @@ def _reserve_and_call(user_id: str, device_id: str, fn, *args,
     `session_id`, if sent, scopes the reservation to that pairing attempt.
     Every failure path releases this device's reservation only.
     """
-    if not eeg_poller.reserve_device(user_id, device_id, session_id):
+    if not _station_open_to(user_id, device_id) or not eeg_poller.reserve_device(user_id, device_id, session_id):
         raise HTTPException(403, "Station in use by another user")
     if not eeg_client.is_alive():
         eeg_poller.release_reservation(user_id, device_id)
@@ -6166,8 +6442,29 @@ def eeg_muse_connect(request: Request, body: dict = Body(...)):
         raise HTTPException(400, "Device name required")
     # Before _reserve_and_call -- see eeg_muse_refresh.
     _refuse_under_push("connect to a headband")
-    return _reserve_and_call(user["id"], device_id, eeg_client.muse_connect, name, device_id,
-                             session_id=body.get("session_id"))
+    # As /start refuses: a paired headband with no poller would sit readable on an open station.
+    consent = _may_record(user["id"])
+    if not consent["record_eeg"]:
+        raise HTTPException(403, _as_sentence(_not_recording_reason(
+            consent,
+            "EEG recording is switched off for this student.",
+            "Could not check whether EEG recording is allowed, so the headband was not connected.")))
+    out = _reserve_and_call(user["id"], device_id, eeg_client.muse_connect, name, device_id,
+                            session_id=body.get("session_id"))
+    try:
+        sid = body.get("session_id")
+        _record_pairing(user["id"], device_id, sid if isinstance(sid, str) else None)
+    except Exception as e:
+        # Unrecorded, the headband would be anyone's: undo the pairing rather than leave it open.
+        print(f"[eeg] could not record the pairing on {device_id}: {type(e).__name__}")
+        try:
+            eeg_client.muse_disconnect(device_id)
+        except Exception:
+            pass
+        eeg_poller.release_reservation(user["id"], device_id)
+        raise HTTPException(503, "Could not record who connected this headband, so it was "
+                                 "disconnected. Try again.")
+    return out
 
 @app.post("/api/eeg/muse/disconnect")
 def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
@@ -6175,7 +6472,7 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     user = get_user(request)
     device_id = (body or {}).get("device_id") or eeg_client.DEFAULT_DEVICE_ID
     # Checks, never claims: a claiming teardown could lock a free station forever.
-    if not eeg_poller.can_use_device(user["id"], device_id):
+    if not _station_open_to(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
     # Disconnecting ends the caller's hold on the station, as /stop does.
     eeg_poller.release_reservation(user["id"], device_id)
@@ -6183,9 +6480,11 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
-        return eeg_client.muse_disconnect(device_id)
+        out = eeg_client.muse_disconnect(device_id)
     except Exception as e:
         raise HTTPException(502, f"Bridge error: {e}")
+    _forget_pairing(device_id)
+    return out
 
 @app.get("/api/eeg/devices")
 def eeg_devices(request: Request):
@@ -6203,19 +6502,22 @@ def eeg_devices(request: Request):
 
 @app.get("/api/eeg/debug")
 def eeg_debug(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
-    """Raw EEG snapshot for local development -- returns the full state from EEGResearch."""
+    """Raw EEG snapshot for local development -- returns the full state from EEGResearch. 404 in production."""
     user = get_user(request)
+    if IS_PRODUCTION:
+        raise HTTPException(404, "Not Found")
     if eeg_poller.INGEST_MODE == "push":
         return {"available": None, "ingest_mode": "push"}
     if not eeg_client.is_alive():
         return {"available": False, "ingest_mode": "pull"}
     # Security: another user's live station holds their biometric data.
-    if not eeg_poller.can_use_device(user["id"], device_id):
+    open_, muse = _station_access(user["id"], device_id)
+    if not open_:
         return {"available": False, "reason": "in_use_by_other"}
     # A token misconfiguration raises by design; report it, not a 500.
     try:
         snapshot = eeg_client.get_state(device_id, timeout=1.5)
-        muse     = eeg_client.get_muse_status(device_id)
+        muse     = muse or eeg_client.get_muse_status(device_id)
     except RuntimeError as e:
         return {"available": False, "error": str(e)}
     return {"available": True, "snapshot": snapshot, "muse": muse}
@@ -6261,6 +6563,14 @@ def eeg_start(payload: EegSessionRequest, request: Request):
     known_ids = {d.get("device_id") for d in eeg_client.list_devices()}
     if known_ids and device_id not in known_ids:
         raise HTTPException(404, f"Unknown device_id: {device_id!r}")
+    in_use = HTTPException(
+        409,
+        "This headband is already in use by another user. Ask them to "
+        "disconnect, or wait a few seconds and try again.",
+    )
+    # Another student's paired headband is theirs, not a free station, past the reservation TTL.
+    if not _station_open_to(user["id"], device_id):
+        raise in_use
     try:
         out = eeg_poller.start(supabase, user["id"], payload.session_id, device_id,
                                record=payload.record)
@@ -6269,11 +6579,14 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         raise HTTPException(403, str(e))
     except eeg_poller.DeviceClaimedError:
         # A live poller or a reservation; both resolve by waiting.
-        raise HTTPException(
-            409,
-            "This headband is already in use by another user. Ask them to "
-            "disconnect, or wait a few seconds and try again.",
-        )
+        raise in_use
+    # A tab reuses a live headband across sessions without reconnecting, so the pairing follows
+    # the session now recording; left on the old one, that session's close would release it.
+    # Safe to overwrite: the gate above admitted the caller. The poller holds the station anyway.
+    try:
+        _record_pairing(user["id"], device_id, payload.session_id)
+    except Exception as e:
+        print(f"[eeg] could not move the pairing on {device_id} to this session: {type(e).__name__}")
     _mark_eeg_started(payload.session_id)
     return {"ok": True, **out}
 
@@ -6298,6 +6611,7 @@ def eeg_stop(payload: EegSessionRequest, request: Request):
     _session_or_403(payload.session_id, user["id"])
     # Also releases the caller's reservation, poller or not.
     out = eeg_poller.stop(payload.session_id, user["id"])
+    _forget_session_pairings(user["id"], payload.session_id)
     return {"ok": True, **out}
 
 @app.get("/api/eeg/status")
@@ -6309,10 +6623,13 @@ def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     if push:
         # None: "not probed in this deployment", not "absent".
         muse = {"available": None, "reason": "push_ingestion"}
-    elif eeg_poller.can_use_device(user["id"], device_id):
-        muse = eeg_client.get_muse_status(device_id)
     else:
-        muse = {"available": False, "reason": "in_use_by_other"}
+        open_, read = _station_access(user["id"], device_id)
+        if not open_:
+            muse = {"available": False, "reason": "in_use_by_other"}
+        else:
+            # At most one sidecar read per poll: the gate's own, when it had to ask.
+            muse = read or eeg_client.get_muse_status(device_id)
     return {
         "service": None if push else eeg_client.is_alive(),
         "ingest_mode": eeg_poller.INGEST_MODE,
@@ -6550,9 +6867,9 @@ CONSENT_CHANNEL_LABELS = {
 
 @app.get("/api/parent/consent-notices")
 def parent_consent_notices(request: Request):
-    """Channels a linked child has switched off since this parent last looked.
+    """What a linked child, or another parent account, changed since this parent last looked.
 
-    From `consent_withdrawals`, not `*_revoked_at` (nulled on re-enable), and acked
+    From append-only logs, not `*_revoked_at` (nulled on re-enable), and acked
     per (parent, child) link. Fails open to [] with `retrieved: false`.
     """
     user = get_user(request)
@@ -6569,6 +6886,13 @@ def parent_consent_notices(request: Request):
         # The child's own withdrawals only: one a parent made is not "<child> turned off".
         # A student can withdraw only their own consent, so both filters on `ids` are exact.
         rows = supabase.table("consent_withdrawals")             .select("user_id, channel, withdrawn_at, withdrawn_by")             .in_("user_id", ids).in_("withdrawn_by", ids)             .order("withdrawn_at", desc=True)             .limit(_MAX_WITHDRAWAL_NOTICES).execute().data or []
+        # Another parent account's link, turn-on or erasure: a second "parent" account is
+        # otherwise how the one-way rules are undone with only the child ever told.
+        # All or nothing: acking a partial feed would mark the unread part seen.
+        other_links = supabase.table("parent_child_links")             .select("child_id, parent_id, created_at")             .in_("child_id", ids).neq("parent_id", user["id"]).execute().data or []
+        enables = supabase.table("consent_enablements")             .select("user_id, channel, enabled_at, enabled_by")             .in_("user_id", ids).neq("enabled_by", user["id"])             .order("enabled_at", desc=True)             .limit(_MAX_WITHDRAWAL_NOTICES).execute().data or []
+        # One row per (student, channel); `erased_by` goes null with its account, so filtered here.
+        erasures = supabase.table("signal_erasure")             .select("user_id, channel, erased_at, erased_by")             .in_("user_id", ids).execute().data or []
     except Exception as e:
         print(f"[consent-notices] {user['id']}: {e}")
         return {"notices": [], "retrieved": False}
@@ -6576,13 +6900,16 @@ def parent_consent_notices(request: Request):
     names = _profiles_many(ids)
     since_by_child = {l["child_id"]: l.get("parent_ack_at") for l in links}
 
+    def unseen(cid, stamp):
+        since = since_by_child.get(cid)
+        # Lexical compare is fine: both are PostgREST UTC, and this is advisory.
+        return bool(stamp) and not (since and stamp <= since)
+
     by_child: dict[str, list[dict]] = {}
     for r in rows:
         cid = r["user_id"]
         stamp = r["withdrawn_at"]
-        since = since_by_child.get(cid)
-        # Lexical compare is fine: both are PostgREST UTC, and this is advisory.
-        if since and stamp <= since:
+        if not unseen(cid, stamp):
             continue
         # One line per channel, newest first.
         seen = by_child.setdefault(cid, [])
@@ -6592,14 +6919,37 @@ def parent_consent_notices(request: Request):
                      "label": CONSENT_CHANNEL_LABELS.get(r["channel"], r["channel"]),
                      "at": stamp})
 
+    # Never who: the account is the child's to name, so a name would be the attacker's word.
+    changes: dict[str, list[dict]] = {}
+    for r in other_links:
+        if unseen(r["child_id"], r.get("created_at")):
+            changes.setdefault(r["child_id"], []).append(
+                {"kind": "parent_linked", "at": r["created_at"]})
+    for kind, found, stamp_col, by_col in (("channel_enabled", enables, "enabled_at", "enabled_by"),
+                                           ("channel_erased", erasures, "erased_at", "erased_by")):
+        for r in found:
+            cid, stamp = r["user_id"], r.get(stamp_col)
+            if r.get(by_col) == user["id"] or not unseen(cid, stamp):
+                continue
+            listed = changes.setdefault(cid, [])
+            # One line per channel and kind, newest first.
+            if any(c["kind"] == kind and c["channel"] == r["channel"] for c in listed):
+                continue
+            listed.append({"kind": kind, "channel": r["channel"],
+                           "label": CONSENT_CHANNEL_LABELS.get(r["channel"], r["channel"]),
+                           "at": stamp})
+
     notices = []
-    for cid, channels in by_child.items():
+    for cid in [*by_child, *(c for c in changes if c not in by_child)]:
+        channels = by_child.get(cid, [])
+        parent_changes = sorted(changes.get(cid, []), key=lambda c: c["at"], reverse=True)
         notices.append({
-            "child_id":   cid,
-            "child_name": (names.get(cid) or {}).get("display_name") or "Your child",
-            "channels":   channels,
+            "child_id":       cid,
+            "child_name":     (names.get(cid) or {}).get("display_name") or "Your child",
+            "channels":       channels,
+            "parent_changes": parent_changes,
             # Watermark the client hands back on acknowledgement.
-            "through":    max(c["at"] for c in channels),
+            "through":        max(c["at"] for c in [*channels, *parent_changes]),
         })
     return {"notices": notices, "retrieved": True}
 

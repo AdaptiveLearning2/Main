@@ -45,6 +45,10 @@ class _Query:
         self._mode, self._pending = "update", row
         return self
 
+    def insert(self, rows, **_k):
+        self._mode, self._pending = "insert", rows if isinstance(rows, list) else [rows]
+        return self
+
     def _matches(self, row):
         return all(row.get(c) == v for c, v in self._filters.items())
 
@@ -67,6 +71,9 @@ class _Query:
             for r in hit:
                 r.update(self._pending)
             return _Result(hit)
+        if self._mode == "insert":
+            rows.extend(dict(r) for r in self._pending)
+            return _Result(list(self._pending))
         raise AssertionError("unreachable")
 
 
@@ -262,6 +269,28 @@ def test_parent_disabling_raises_no_notice(monkeypatch):
     _fake(monkeypatch, PARENT, consent_row=_row())
     out = main.update_consent("student-1", main.ConsentUpdate(camera_enabled=False), None)
     assert out["needs_student_ack"] is False
+
+
+def test_a_parent_turn_on_is_logged_for_the_other_parents(monkeypatch):
+    """`consent_enablements` is what tells a real parent a second account switched a sensor on."""
+    fake = _fake(monkeypatch, PARENT, consent_row=_row(camera_enabled=False))
+    main.update_consent("student-1", main.ConsentUpdate(camera_enabled=True), None)
+    logged = fake.store.get("consent_enablements", [])
+    assert [(r["user_id"], r["channel"], r["enabled_by"]) for r in logged] == [
+        ("student-1", "camera", "parent-1")]
+
+
+def test_a_first_opt_in_on_a_new_row_is_logged_too(monkeypatch):
+    """The insert path returns early, so it needs the log call of its own."""
+    fake = _fake(monkeypatch, PARENT, consent_row=None)
+    main.update_consent("student-1", main.ConsentUpdate(eeg_enabled=True), None)
+    assert [r["channel"] for r in fake.store.get("consent_enablements", [])] == ["eeg"]
+
+
+def test_a_turn_off_logs_no_turn_on(monkeypatch):
+    fake = _fake(monkeypatch, PARENT, consent_row=_row())
+    main.update_consent("student-1", main.ConsentUpdate(camera_enabled=False), None)
+    assert fake.store.get("consent_enablements", []) == []
 
 
 def test_acknowledging_clears_the_notice(monkeypatch):

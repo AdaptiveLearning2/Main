@@ -10,6 +10,7 @@ import pytest  # noqa: E402
 import eeg_client  # noqa: E402
 import eeg_poller  # noqa: E402
 import main  # noqa: E402
+from conftest import pairing_sessions, pairings, real_pairing_funcs  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +20,8 @@ def _clean_poller_state(monkeypatch):
     monkeypatch.setattr(eeg_client, "stop_session", lambda device_id=eeg_client.DEFAULT_DEVICE_ID: {"ok": True})
     monkeypatch.setattr(eeg_client, "get_state", lambda device_id=eeg_client.DEFAULT_DEVICE_ID, timeout=2.0: None)
     monkeypatch.setattr(eeg_poller, "POLL_INTERVAL", 0.01)
+    # EEG consented unless a test says otherwise (/muse/connect checks it); the real _may_record composes it.
+    monkeypatch.setattr(main, "_consent", lambda _uid: {**main._CONSENT_ENABLED_ALL, "retrieved": True, "exists": True})
     eeg_poller._active.clear()
     yield
     for sid in list(eeg_poller._active):
@@ -524,3 +527,400 @@ def test_muse_disconnect_releases_the_callers_own_reservation(monkeypatch):
 
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
     assert main.eeg_muse_refresh(request=None, body={"device_id": "station-x"}) == {"ok": True}
+
+
+# ── a paired headband is its pairer's, past the reservation TTL ──────────
+
+def _paired_by_a(monkeypatch, connected):
+    """user-a pairs station-p, then the reservation lapses; the bridge reports `connected`."""
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_connect", lambda name, device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    main.eeg_muse_connect(request=None, body={"name": "MuseS-1", "device_id": "station-p", "session_id": "s-a"})
+    eeg_poller.release_reservation("user-a", "station-p")   # what the 30 s TTL does
+    status = {"available": True, "ingestion": {"muse_connected": connected}, "brain_signals": {"tp9": 1.0}}
+    monkeypatch.setattr(eeg_client, "get_muse_status", lambda device_id=None: status)
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+
+
+def test_another_user_cannot_read_or_take_a_headband_still_paired(monkeypatch):
+    _paired_by_a(monkeypatch, connected=True)
+
+    assert main.eeg_status(request=None, device_id="station-p")["muse"] == {
+        "available": False, "reason": "in_use_by_other"}
+    assert main.eeg_debug(request=None, device_id="station-p") == {
+        "available": False, "reason": "in_use_by_other"}
+    for call in (lambda: main.eeg_muse_connect(request=None, body={"name": "MuseS-1", "device_id": "station-p"}),
+                 lambda: main.eeg_muse_disconnect(request=None, body={"device_id": "station-p"})):
+        with pytest.raises(main.HTTPException) as e:
+            call()
+        assert e.value.status_code == 403
+    # The pairer still reads their own station.
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    assert main.eeg_status(request=None, device_id="station-p")["muse"]["available"] is True
+
+
+def test_a_headband_the_bridge_reports_gone_frees_the_station(monkeypatch):
+    _paired_by_a(monkeypatch, connected=False)
+
+    assert main.eeg_status(request=None, device_id="station-p")["muse"]["available"] is True
+    assert "station-p" not in pairings
+
+
+def test_a_bridge_that_cannot_say_keeps_the_station_closed(monkeypatch):
+    _paired_by_a(monkeypatch, connected=True)
+
+    def _down(*_a, **_k):
+        raise RuntimeError("sidecar unreachable")
+    monkeypatch.setattr(eeg_client, "get_muse_status", _down)
+    assert main._station_open_to("user-b", "station-p") is False
+
+
+def test_start_refuses_another_users_paired_headband(monkeypatch):
+    _paired_by_a(monkeypatch, connected=True)
+    monkeypatch.setattr(main, "_session_or_403", lambda *_a, **_k: {"user_id": "user-b", "ended_at": None})
+    monkeypatch.setattr(eeg_client, "list_devices", lambda: [{"device_id": "station-p"}])
+    payload = type("P", (), {"session_id": "s-b", "device_id": "station-p", "record": True})()
+
+    with pytest.raises(main.HTTPException) as e:
+        main.eeg_start(payload, request=None)
+    assert e.value.status_code == 409
+    assert "s-b" not in eeg_poller._active
+
+
+def test_connect_is_refused_without_eeg_consent(monkeypatch):
+    """As /start: otherwise a paired headband with no poller sits on the station."""
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    called = []
+    monkeypatch.setattr(eeg_client, "muse_connect", lambda name, device_id: called.append(name))
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-c"})
+    monkeypatch.setattr(main, "_consent", lambda _uid: {
+        **main._CONSENT_ENABLED_ALL, "eeg_enabled": False, "retrieved": True, "exists": True})
+
+    with pytest.raises(main.HTTPException) as e:
+        main.eeg_muse_connect(request=None, body={"name": "MuseS-1", "device_id": "station-c"})
+    assert e.value.status_code == 403
+    assert called == [] and "station-c" not in pairings
+
+
+def test_debug_is_not_served_in_production(monkeypatch):
+    monkeypatch.setattr(main, "IS_PRODUCTION", True)
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "u"})
+    with pytest.raises(main.HTTPException) as e:
+        main.eeg_debug(request=None)
+    assert e.value.status_code == 404
+
+
+# ── the pairing lives in the database, so a restart keeps it ─────────────
+
+class _PairingsDb:
+    """Only `station_pairings`, rows as the table holds them; `fail` names the operations that raise."""
+
+    def __init__(self, fail=()):
+        self.rows, self.fail, self.ops = {}, set(fail), []
+
+    def owners(self):
+        return {d: r["user_id"] for d, r in self.rows.items()}
+
+    def table(self, name):
+        assert name == "station_pairings", name
+        db = self
+
+        class _Q:
+            def __init__(self):
+                self.op, self.filters, self.row = None, {}, None
+
+            def select(self, *_a):
+                self.op = "select"
+                return self
+
+            def upsert(self, row, on_conflict=None):
+                assert on_conflict == "device_id"
+                self.op, self.row = "upsert", row
+                return self
+
+            def update(self, fields):
+                self.op, self.row = "update", fields
+                return self
+
+            def delete(self):
+                self.op = "delete"
+                return self
+
+            def eq(self, col, val):
+                self.filters[col] = val
+                return self
+
+            def lt(self, col, val):
+                # Timestamps only; compared as instants, not as strings.
+                self.below = (col, main._parse_ts(val))
+                return self
+
+            def limit(self, _n):
+                return self
+
+            def _keep(self, row):
+                if not all(row.get(c) == v for c, v in self.filters.items()):
+                    return False
+                col, bound = getattr(self, "below", (None, None))
+                return col is None or main._parse_ts(row.get(col)) < bound
+
+            def execute(self):
+                db.ops.append(self.op)
+                if self.op in db.fail:
+                    raise RuntimeError(f"{self.op} failed")
+                if self.op == "upsert":
+                    db.rows[self.row["device_id"]] = {k: v for k, v in self.row.items() if k != "device_id"}
+                    return type("R", (), {"data": [self.row]})()
+                hit = [{"device_id": d, **r} for d, r in db.rows.items() if self._keep({"device_id": d, **r})]
+                for r in hit:
+                    if self.op == "delete":
+                        db.rows.pop(r["device_id"])
+                    elif self.op == "update":
+                        db.rows[r["device_id"]].update(self.row)
+                return type("R", (), {"data": hit})()
+        return _Q()
+
+
+@pytest.fixture
+def pairings_db(monkeypatch):
+    for name, fn in real_pairing_funcs().items():
+        monkeypatch.setattr(main, name, fn)
+
+    def install(**kw):
+        db = _PairingsDb(**kw)
+        monkeypatch.setattr(main, "supabase", db)
+        return db
+    return install
+
+
+def test_a_restart_does_not_free_a_paired_headband(monkeypatch, pairings_db):
+    """Nothing in memory survives a restart; the row does, so user-b is still refused."""
+    db = pairings_db()
+    _paired_by_a(monkeypatch, connected=True)
+    assert db.owners() == {"station-p": "user-a"}
+    assert main._station_open_to("user-b", "station-p") is False
+    assert main._station_open_to("user-a", "station-p") is True
+
+
+def test_the_row_goes_when_the_bridge_reports_the_headband_gone(monkeypatch, pairings_db):
+    db = pairings_db()
+    _paired_by_a(monkeypatch, connected=False)
+    assert main._station_open_to("user-b", "station-p") is True
+    assert db.rows == {}
+
+
+def test_disconnecting_clears_the_row(monkeypatch, pairings_db):
+    db = pairings_db()
+    _paired_by_a(monkeypatch, connected=True)
+    monkeypatch.setattr(eeg_client, "muse_disconnect", lambda device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    main.eeg_muse_disconnect(request=None, body={"device_id": "station-p"})
+    assert db.rows == {}
+
+
+def test_an_unreadable_pairing_is_someone_elses_until_the_bridge_says_gone(monkeypatch, pairings_db):
+    pairings_db(fail={"select"})
+    monkeypatch.setattr(eeg_client, "get_muse_status",
+                        lambda device_id=None: {"ingestion": {"muse_connected": True}})
+    assert main._station_open_to("user-b", "station-p") is False
+    monkeypatch.setattr(eeg_client, "get_muse_status",
+                        lambda device_id=None: {"ingestion": {"muse_connected": False}})
+    assert main._station_open_to("user-b", "station-p") is True
+
+
+def test_a_pairing_that_cannot_be_recorded_is_undone(monkeypatch, pairings_db):
+    """Left connected and unrecorded, the headband would be open to anyone."""
+    pairings_db(fail={"upsert"})
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_connect", lambda name, device_id: {"ok": True})
+    dropped = []
+    monkeypatch.setattr(eeg_client, "muse_disconnect", lambda device_id: dropped.append(device_id))
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    with pytest.raises(main.HTTPException) as e:
+        main.eeg_muse_connect(request=None, body={"name": "MuseS-1", "device_id": "station-p"})
+    assert e.value.status_code == 503
+    assert dropped == ["station-p"]
+    # Its reservation goes too, so the station is not held by a failed connect.
+    assert eeg_poller.can_use_device("user-b", "station-p") is True
+
+
+def test_the_status_poll_reads_the_sidecar_once_when_the_gate_had_to_ask(monkeypatch):
+    """A released station is read by the gate; the poll reuses that rather than asking again."""
+    _paired_by_a(monkeypatch, connected=False)
+    reads = []
+    monkeypatch.setattr(eeg_client, "get_muse_status",
+                        lambda device_id=None: reads.append(device_id) or {"ingestion": {"muse_connected": False}})
+    main.eeg_status(request=None, device_id="station-p")
+    assert reads == ["station-p"]
+
+
+# ── a pairing ends with its pairer's lesson, or when nothing polls for it ─
+
+def _pairing_seen(db, device, user, seconds_ago):
+    from datetime import timedelta
+    db.rows[device] = {"user_id": user,
+                       "seen_at": (main._utc_now() - timedelta(seconds=seconds_ago)).isoformat()}
+
+
+def test_stopping_the_poller_frees_the_station(monkeypatch):
+    _paired_by_a(monkeypatch, connected=True)
+    monkeypatch.setattr(main, "_session_or_403", lambda *_a, **_k: {"user_id": "user-a"})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    payload = type("P", (), {"session_id": "s-a", "device_id": "station-p"})()
+    main.eeg_stop(payload, request=None)
+    assert "station-p" not in pairings
+    assert main._station_open_to("user-b", "station-p") is True
+
+
+def test_closing_the_pairers_session_frees_the_station(monkeypatch):
+    """Every close site goes through `_close_session`, the stale sweep included."""
+    _paired_by_a(monkeypatch, connected=True)
+    monkeypatch.setattr(main, "_claim_session_close", lambda *_a: True)
+    monkeypatch.setattr(main, "_answer_counts", lambda *_a: (0, 0, 0))
+    monkeypatch.setattr(main, "_discard_if_nothing_recorded", lambda *_a, **_k: True)
+    main._close_session("user-a", {"id": "s-a"}, "2026-09-28T10:00:00+00:00")
+    assert "station-p" not in pairings
+
+
+def test_a_pairing_nothing_has_polled_for_is_released(monkeypatch, pairings_db):
+    """The pairer closed the tab: the next student is not told to wait for the headband to go off."""
+    db = pairings_db()
+    _pairing_seen(db, "station-p", "user-a", main._PAIRING_IDLE_SEC + 5)
+    asked = []
+    monkeypatch.setattr(eeg_client, "get_muse_status",
+                        lambda device_id=None: asked.append(1) or {"ingestion": {"muse_connected": True}})
+    assert main._station_open_to("user-b", "station-p") is True
+    assert db.rows == {} and asked == []
+
+
+def test_the_pairers_polls_keep_it_theirs(monkeypatch, pairings_db):
+    db = pairings_db()
+    _pairing_seen(db, "station-p", "user-a", main._PAIRING_IDLE_SEC - 10)
+    assert main._station_open_to("user-a", "station-p") is True
+    # Refreshed, so the idle clock restarts.
+    assert main._parse_ts(db.rows["station-p"]["seen_at"]) > main._utc_now() - __import__("datetime").timedelta(seconds=5)
+    monkeypatch.setattr(eeg_client, "get_muse_status",
+                        lambda device_id=None: {"ingestion": {"muse_connected": True}})
+    assert main._station_open_to("user-b", "station-p") is False
+
+
+def test_a_recent_pairing_is_not_rewritten_on_every_poll(pairings_db):
+    db = pairings_db()
+    _pairing_seen(db, "station-p", "user-a", 5)
+    main._station_open_to("user-a", "station-p")
+    assert "update" not in db.ops
+
+
+# ── the status poll does not read the table every 5 s ────────────────────
+
+def test_a_student_whose_poller_holds_the_station_reads_no_pairing(monkeypatch, pairings_db):
+    """It refreshes without reading, and no more often than the refresh interval."""
+    db = pairings_db()
+    monkeypatch.setattr(eeg_poller, "live_poller_user", lambda _d: "user-a")
+    monkeypatch.setattr(eeg_poller, "can_use_device", lambda u, _d: u == "user-a")
+    assert main._station_open_to("user-a", "station-p") is True
+    assert main._station_open_to("user-a", "station-p") is True
+    assert db.ops == ["update"]
+
+
+def test_a_poller_stopping_mid_lesson_does_not_leave_the_pairing_looking_idle(monkeypatch, pairings_db):
+    """Consent withdrawn stops the poller with the page still open; the headband stays the pairer's."""
+    db = pairings_db()
+    _pairing_seen(db, "station-p", "user-a", main._PAIRING_IDLE_SEC + 60)   # connected long ago
+    monkeypatch.setattr(eeg_poller, "live_poller_user", lambda _d: "user-a")
+    monkeypatch.setattr(eeg_poller, "can_use_device", lambda u, _d: u == "user-a")
+    main._station_open_to("user-a", "station-p")                            # a poll while recording
+    monkeypatch.setattr(eeg_poller, "live_poller_user", lambda _d: None)    # the poller stops
+    monkeypatch.setattr(eeg_poller, "can_use_device", lambda _u, _d: True)
+    monkeypatch.setattr(eeg_client, "get_muse_status",
+                        lambda device_id=None: {"ingestion": {"muse_connected": True}})
+    assert main._station_open_to("user-b", "station-p") is False
+    assert db.owners() == {"station-p": "user-a"}
+
+
+def test_an_idle_look_from_the_cache_does_not_release_a_pairing_just_refreshed(monkeypatch, pairings_db):
+    """Another worker refreshed it after this one cached `seen_at`: the delete must find nothing."""
+    from datetime import timedelta
+    db = pairings_db()
+    _pairing_seen(db, "station-p", "user-a", 1)
+    stale = main._utc_now() - timedelta(seconds=main._PAIRING_IDLE_SEC + 60)
+    main._pairing_cache["station-p"] = (__import__("time").monotonic(), "user-a", stale)
+    monkeypatch.setattr(eeg_client, "get_muse_status",
+                        lambda device_id=None: {"ingestion": {"muse_connected": True}})
+    assert main._station_open_to("user-b", "station-p") is False
+    assert db.owners() == {"station-p": "user-a"}
+
+
+def test_closing_another_session_leaves_the_pairing(monkeypatch):
+    """The sweep closing a 6-hour-old abandoned session must not free the lesson running now."""
+    _paired_by_a(monkeypatch, connected=True)                                # paired in s-a
+    monkeypatch.setattr(main, "_claim_session_close", lambda *_a: True)
+    monkeypatch.setattr(main, "_answer_counts", lambda *_a: (0, 0, 0))
+    monkeypatch.setattr(main, "_discard_if_nothing_recorded", lambda *_a, **_k: True)
+    main._close_session("user-a", {"id": "s-old"}, "2026-09-28T10:00:00+00:00")
+    assert pairings == {"station-p": "user-a"}
+
+
+def test_the_pairing_records_its_session(monkeypatch, pairings_db):
+    db = pairings_db()
+    _paired_by_a(monkeypatch, connected=True)
+    assert db.rows["station-p"]["session_id"] == "s-a"
+
+
+def test_an_owner_is_cached_and_free_is_not(monkeypatch, pairings_db):
+    """A stale owner refuses, the safe direction; a stale "free" would admit a takeover."""
+    db = pairings_db()
+    monkeypatch.setattr(eeg_client, "get_muse_status",
+                        lambda device_id=None: {"ingestion": {"muse_connected": True}})
+    main._station_open_to("user-b", "station-free")
+    main._station_open_to("user-b", "station-free")
+    assert db.ops.count("select") == 2
+    _pairing_seen(db, "station-p", "user-a", 1)
+    db.ops.clear()
+    main._station_open_to("user-b", "station-p")
+    main._station_open_to("user-b", "station-p")
+    assert db.ops.count("select") == 1
+
+
+def test_the_database_release_is_scoped_to_the_session(monkeypatch, pairings_db):
+    db = pairings_db()
+    _paired_by_a(monkeypatch, connected=True)                                # paired in s-a
+    main._forget_session_pairings("user-a", "s-old")
+    assert db.owners() == {"station-p": "user-a"}
+    main._forget_session_pairings("user-a", "s-a")
+    assert db.owners() == {}
+
+
+# ── a tab reusing a live headband across sessions ───────────────────────
+
+def _start_as_a(monkeypatch, session_id):
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    monkeypatch.setattr(main, "_session_or_403", lambda *_a, **_k: {"user_id": "user-a", "ended_at": None})
+    monkeypatch.setattr(main, "_mark_eeg_started", lambda _sid: None)
+    monkeypatch.setattr(eeg_client, "list_devices", lambda: [{"device_id": "station-p"}])
+    payload = type("P", (), {"session_id": session_id, "device_id": "station-p", "record": True})()
+    return main.eeg_start(payload, request=None)
+
+
+def test_recording_in_a_new_session_moves_the_pairing_to_it(monkeypatch):
+    """Else the old session's close releases a headband the new one is still wearing."""
+    _paired_by_a(monkeypatch, connected=True)                                # paired in s-a
+    assert _start_as_a(monkeypatch, "s-b")["ok"] is True
+    assert pairing_sessions["station-p"] == "s-b"
+    eeg_poller.stop("s-b", "user-a")                                         # recording stops mid-lesson
+    monkeypatch.setattr(main, "_claim_session_close", lambda *_a: True)
+    monkeypatch.setattr(main, "_answer_counts", lambda *_a: (0, 0, 0))
+    monkeypatch.setattr(main, "_discard_if_nothing_recorded", lambda *_a, **_k: True)
+    main._close_session("user-a", {"id": "s-a"}, "2026-09-28T10:00:00+00:00")
+    assert main._station_open_to("user-b", "station-p") is False
+
+
+def test_a_pairing_that_cannot_be_moved_still_starts_recording(monkeypatch):
+    """The running poller holds the station, so a failed write is logged, not a refusal."""
+    _paired_by_a(monkeypatch, connected=True)
+
+    def _down(*_a, **_k):
+        raise RuntimeError("postgrest is down")
+    monkeypatch.setattr(main, "_record_pairing", _down)
+    assert _start_as_a(monkeypatch, "s-b")["ok"] is True

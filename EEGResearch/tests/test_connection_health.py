@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import threading
 import time
 
 import pytest
@@ -60,6 +61,14 @@ def test_malformed_reconnect_fields_keep_the_prior_value():
 
 # ── TCP reconnect backoff ───────────────────────────────────────────────────
 
+@pytest.fixture
+def token_file(tmp_path):
+    """What muse_native_bridge writes on start; the adapter must send it before anything else."""
+    path = tmp_path / "muse_bridge.token"
+    path.write_text("a1b2c3d4", encoding="ascii")
+    return str(path)
+
+
 def _closed_port() -> int:
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -68,8 +77,9 @@ def _closed_port() -> int:
     return port
 
 
-def test_a_refused_connection_is_not_retried_until_the_backoff_elapses():
-    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=_closed_port(), timeout_seconds=1)
+def test_a_refused_connection_is_not_retried_until_the_backoff_elapses(token_file):
+    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=_closed_port(), timeout_seconds=1,
+                                   token_file=token_file)
     assert adapter.connect_wait_remaining() == 0.0
 
     assert adapter._try_connect() is False
@@ -86,8 +96,9 @@ def test_a_refused_connection_is_not_retried_until_the_backoff_elapses():
         adapter.drain_samples(1)
 
 
-def test_the_backoff_doubles_to_a_cap_and_never_past_it():
-    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=_closed_port(), timeout_seconds=1)
+def test_the_backoff_doubles_to_a_cap_and_never_past_it(token_file):
+    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=_closed_port(), timeout_seconds=1,
+                                   token_file=token_file)
     waits = []
     for _ in range(6):
         adapter._next_connect_at = 0.0  # let the next attempt through
@@ -101,12 +112,13 @@ def test_the_backoff_doubles_to_a_cap_and_never_past_it():
     assert adapter.connect_failures == 6
 
 
-def test_a_successful_connection_resets_the_backoff():
+def test_a_successful_connection_resets_the_backoff(token_file):
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
     port = listener.getsockname()[1]
-    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=port, timeout_seconds=1)
+    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=port, timeout_seconds=1,
+                                   token_file=token_file)
     try:
         adapter._connect_backoff_s = TcpMuseBridgeAdapter.CONNECT_BACKOFF_MAX_S
         adapter._next_connect_at = 0.0
@@ -114,6 +126,80 @@ def test_a_successful_connection_resets_the_backoff():
         assert adapter._connect_backoff_s == TcpMuseBridgeAdapter.CONNECT_BACKOFF_MIN_S
         assert adapter.connect_wait_remaining() == 0.0
     finally:
+        adapter.disconnect()
+        listener.close()
+
+
+# ── the bridge's token: sent first, required, and a bounded read ─────────────
+
+def _listener():
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener.settimeout(2.0)
+    return listener, listener.getsockname()[1]
+
+
+def test_the_first_line_sent_is_the_bridges_token(token_file):
+    listener, port = _listener()
+    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=port, timeout_seconds=1, token_file=token_file)
+    try:
+        assert adapter._try_connect() is True
+        conn, _ = listener.accept()
+        conn.settimeout(2.0)
+        assert conn.recv(64) == b"AUTH a1b2c3d4\n"
+        conn.close()
+    finally:
+        adapter.disconnect()
+        listener.close()
+
+
+def test_no_token_file_means_no_connection_attempt(tmp_path):
+    """No bridge has started on this port, so there is nothing to authenticate to."""
+    listener, port = _listener()
+    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=port, timeout_seconds=1,
+                                   token_file=str(tmp_path / "absent.token"))
+    try:
+        assert adapter._try_connect() is False
+        assert adapter.connect_failures == 1
+        listener.settimeout(0.3)
+        with pytest.raises(socket.timeout):
+            listener.accept()
+    finally:
+        adapter.disconnect()
+        listener.close()
+
+
+def test_a_line_past_the_cap_stops_the_reader(token_file):
+    """Whatever sends an unterminated megabyte is not the bridge."""
+    listener, port = _listener()
+    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=port, timeout_seconds=1, token_file=token_file)
+    stop = threading.Event()
+
+    def trickle(conn):
+        # Never idle long enough for the 1 s read timeout, so only the cap can stop the reader.
+        conn.settimeout(0.5)
+        try:
+            while not stop.is_set():
+                conn.sendall(b"x" * 8192)
+                time.sleep(0.05)
+        except OSError:
+            pass
+
+    try:
+        assert adapter._try_connect() is True
+        conn, _ = listener.accept()
+        sender = threading.Thread(target=trickle, args=(conn,), daemon=True)
+        sender.start()
+        deadline = time.monotonic() + 3.0
+        while adapter._reader_thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert not adapter._reader_thread.is_alive()
+        stop.set()
+        sender.join(2.0)
+        conn.close()
+    finally:
+        stop.set()
         adapter.disconnect()
         listener.close()
 

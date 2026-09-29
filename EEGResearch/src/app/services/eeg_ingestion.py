@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import queue
 import random
 import socket
@@ -587,6 +588,16 @@ class OpticsWindow:
     synthetic: bool = False
 
 
+class _NoBridgeToken(Exception):
+    """The bridge's token file is missing or empty: no bridge on this port has started."""
+
+
+def bridge_token_path(port: int) -> str | None:
+    """Where muse_native_bridge writes this port's token; no override, so both sides always agree."""
+    base = os.environ.get("LOCALAPPDATA")
+    return os.path.join(base, "AdaptiveLearning", f"muse_bridge_{port}.token") if base else None
+
+
 class TcpMuseBridgeAdapter:
     """Reads normalized samples from a native bridge over localhost TCP."""
 
@@ -605,10 +616,16 @@ class TcpMuseBridgeAdapter:
     CONNECT_BACKOFF_MIN_S = 0.5
     CONNECT_BACKOFF_MAX_S = 5.0
 
-    def __init__(self, host: str, port: int, timeout_seconds: int) -> None:
+    # Bridge lines are a few hundred bytes; one past this is not the bridge, so the reader stops.
+    MAX_LINE_CHARS = 65536
+
+    def __init__(self, host: str, port: int, timeout_seconds: int,
+                 token_file: str | None = None) -> None:
         self.host = host
         self.port = port
         self.timeout_seconds = timeout_seconds
+        self.token_file = token_file or bridge_token_path(port)
+        self._token_missing_reported = False
         self._socket: socket.socket | None = None
         self._stream: TextIO | None = None
         self._connect_backoff_s = self.CONNECT_BACKOFF_MIN_S
@@ -671,10 +688,10 @@ class TcpMuseBridgeAdapter:
         assert self._stream is not None
         while not self._reader_stop.is_set():
             try:
-                line = self._stream.readline()
+                line = self._stream.readline(self.MAX_LINE_CHARS)
             except OSError:
                 break
-            if not line:
+            if not line or (len(line) >= self.MAX_LINE_CHARS and not line.endswith("\n")):
                 break
             try:
                 payload = json.loads(line)
@@ -800,12 +817,23 @@ class TcpMuseBridgeAdapter:
         if self.connect_wait_remaining() > 0.0:
             return False
         try:
+            token = self._read_token()
+        except _NoBridgeToken as e:
+            if not self._token_missing_reported:
+                print(f"[bridge] {e}", flush=True)
+                self._token_missing_reported = True
+            return self._connect_failed()
+        self._token_missing_reported = False
+        try:
             sock = socket.create_connection((self.host, self.port), timeout=self.timeout_seconds)
         except OSError:
-            self.connect_failures += 1
-            self._next_connect_at = time.monotonic() + self._connect_backoff_s
-            self._connect_backoff_s = min(self.CONNECT_BACKOFF_MAX_S, self._connect_backoff_s * 2)
-            return False
+            return self._connect_failed()
+        try:
+            # The bridge closes a client whose first line is not this, and streams nothing to it.
+            sock.sendall(f"AUTH {token}\n".encode("ascii"))
+        except OSError:
+            sock.close()
+            return self._connect_failed()
         self._connect_backoff_s = self.CONNECT_BACKOFF_MIN_S
         self._next_connect_at = 0.0
         self._reader_stop.clear()
@@ -817,6 +845,24 @@ class TcpMuseBridgeAdapter:
         self._reader_thread.start()
         print(f"[bridge] Connected to {self.host}:{self.port}", flush=True)
         return True
+
+    def _connect_failed(self) -> bool:
+        self.connect_failures += 1
+        self._next_connect_at = time.monotonic() + self._connect_backoff_s
+        self._connect_backoff_s = min(self.CONNECT_BACKOFF_MAX_S, self._connect_backoff_s * 2)
+        return False
+
+    def _read_token(self) -> str:
+        """The token this port's bridge wrote on start; raises `_NoBridgeToken` if there is none."""
+        try:
+            with open(self.token_file, encoding="ascii") as f:
+                token = f.read().strip()
+        except (OSError, TypeError, UnicodeDecodeError):
+            token = ""
+        if not token:
+            raise _NoBridgeToken(f"no bridge token at {self.token_file!r}; is muse_native_bridge running, "
+                                 "and built from this checkout (an older build writes none)?")
+        return token
 
     def connect(self) -> None:
         """Connect to the native bridge. If it isn't up yet, returns without

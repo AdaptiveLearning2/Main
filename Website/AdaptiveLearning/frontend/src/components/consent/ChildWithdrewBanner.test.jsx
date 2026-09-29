@@ -136,3 +136,51 @@ it('sends a watermark for every child it displayed', async () => {
     { method: 'POST', body: { through: {
       'kid-1': '2026-08-12T09:00:00Z', 'kid-2': '2026-08-10T09:00:00Z' } } })
 })
+
+describe('another parent account', () => {
+  const CHANGES = {
+    retrieved: true,
+    notices: [{
+      child_id: 'kid-1', child_name: 'Ada', channels: [],
+      parent_changes: [
+        { kind: 'channel_enabled', channel: 'camera', label: 'the camera', at: '2026-08-13T09:00:00Z' },
+        { kind: 'channel_erased', channel: 'eeg', label: 'the headband', at: '2026-08-12T10:00:00Z' },
+        { kind: 'parent_linked', at: '2026-08-12T09:00:00Z' },
+      ],
+      through: '2026-08-13T09:00:00Z',
+    }],
+  }
+
+  it('reports a link, a turn-on and an erasure, naming no account', async () => {
+    apiFetch.mockResolvedValue(CHANGES)
+    draw()
+
+    expect(await screen.findByText(/Another parent account made changes/i)).toBeInTheDocument()
+    expect(screen.getByText(/was linked to Ada/i)).toBeInTheDocument()
+    expect(screen.getByText(/turned on the camera for Ada/i)).toBeInTheDocument()
+    expect(screen.getByText(/erased what the headband recorded for Ada/i)).toBeInTheDocument()
+    expect(screen.getByText(/contact your child's school/i)).toBeInTheDocument()
+    // No withdrawal here, so no claim about one.
+    expect(screen.queryByText(/what was recorded before is unchanged/i)).not.toBeInTheDocument()
+  })
+
+  it('shows a kind it does not know rather than dropping it', async () => {
+    apiFetch.mockResolvedValue({ retrieved: true, notices: [{
+      child_id: 'kid-1', child_name: 'Ada', channels: [],
+      parent_changes: [{ kind: 'something_new', at: '2026-08-12T09:00:00Z' }],
+      through: '2026-08-12T09:00:00Z' }] })
+    draw()
+
+    expect(await screen.findByText(/changed Ada's settings/i)).toBeInTheDocument()
+  })
+
+  it('acknowledges with the watermark that covers the changes', async () => {
+    apiFetch.mockResolvedValueOnce(CHANGES).mockResolvedValueOnce({ ok: true })
+    draw()
+
+    await userEvent.click(await screen.findByRole('button', { name: /Got it/ }))
+
+    expect(apiFetch).toHaveBeenLastCalledWith('/api/parent/consent-notices/ack',
+      { method: 'POST', body: { through: { 'kid-1': '2026-08-13T09:00:00Z' } } })
+  })
+})

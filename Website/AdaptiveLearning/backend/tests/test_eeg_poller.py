@@ -157,6 +157,41 @@ def test_the_default_still_records_from_the_first_tick(monkeypatch):
     assert db.rows
 
 
+@pytest.mark.parametrize("fail", [False, True])
+def test_the_log_carries_no_reading_or_full_id(monkeypatch, capsys, fail):
+    """Logs sit outside consent, erasure and expiry; a failed write's error quotes the row, like Postgres."""
+    _streaming(monkeypatch)
+    seen = []
+
+    class _DB:
+        def table(self, name):
+            class _T:
+                def upsert(self, row, **_k):
+                    seen.append(row)
+                    class _R:
+                        data = [row]
+                        def execute(self_inner):
+                            if fail:
+                                raise RuntimeError(f"Failing row contains ({', '.join(map(str, row.values()))})")
+                            return self_inner
+                    return _R()
+            return _T()
+
+    user, session = "user-with-a-long-full-id", "session-with-a-long-full-id"
+    eeg_poller.start(_DB(), user, session, "station-a")
+    deadline = time.monotonic() + 2.0
+    while len(seen) < 3 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    eeg_poller.stop_all()
+
+    out = capsys.readouterr().out
+    assert seen and ("INSERT FAILED" if fail else "INSERTED #1") in out
+    readings = {str(v) for row in seen for v in row.values()
+                if isinstance(v, float) or (isinstance(v, int) and not isinstance(v, bool))}
+    for value in readings | {user, session}:
+        assert len(value) < 3 or value not in out, value
+
+
 def test_released_device_can_be_reclaimed_by_another_user():
     eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
     eeg_poller.stop("session-1")  # the path /api/eeg/stop and the stale sweep use

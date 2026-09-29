@@ -20,7 +20,7 @@ it('creates the client with the auth settings written out', async () => {
   expect(options?.auth).toEqual({
     autoRefreshToken: true,
     persistSession: true,
-    detectSessionInUrl: true,
+    detectSessionInUrl: false,
     flowType: 'implicit',
   })
 })

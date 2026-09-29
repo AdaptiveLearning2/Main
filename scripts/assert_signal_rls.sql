@@ -197,16 +197,11 @@ BEGIN
     VALUES (sess, usr, 'muse_ppg', when_ts);
 END $$;
 
--- ── the SELECT grant exists, asserted separately ────────────────────────────
--- So the zero-rows assertion below can only be about RLS, not a missing grant.
+-- ── the consent SELECT grant exists, asserted separately ────────────────────
+-- The signal tables have none: see the face_signals/cognitive_signals block below.
 
 DO $$
 BEGIN
-    IF NOT has_table_privilege('authenticated', 'public.heart_signals', 'SELECT') THEN
-        RAISE EXCEPTION
-            'authenticated lacks SELECT on heart_signals -- the RLS assertion '
-            'below would pass for the wrong reason';
-    END IF;
     IF NOT has_table_privilege('authenticated', 'public.signal_consent', 'SELECT') THEN
         RAISE EXCEPTION 'authenticated lacks SELECT on signal_consent';
     END IF;
@@ -229,28 +224,16 @@ BEGIN
     INSERT INTO public.heart_signals (session_id, user_id, source, ts, heart_rate_bpm)
     VALUES (sess, owner_id, 'muse_optics', now() + interval '1 minute', 72);
 
-    -- Impersonate an unrelated logged-in user.
+    -- No client reads it, owner included: the backend reads it and applies consent per channel.
     SET LOCAL ROLE authenticated;
-    PERFORM set_config('request.jwt.claims',
-                       json_build_object('sub', other_id, 'role', 'authenticated')::text,
-                       true);
-
-    SELECT count(*) INTO visible FROM public.heart_signals;
-    IF visible <> 0 THEN
-        RAISE EXCEPTION 'an unrelated authenticated user saw % heart rows', visible;
-    END IF;
-
-    -- The owner *can* see it; with no policy at all the stranger check would pass too.
     PERFORM set_config('request.jwt.claims',
                        json_build_object('sub', owner_id, 'role', 'authenticated')::text,
                        true);
-    SELECT count(*) INTO visible FROM public.heart_signals;
-    IF visible = 0 THEN
-        RAISE EXCEPTION
-            'the owner cannot see their own heart rows -- the RLS policy is '
-            'missing or too strict, and the stranger check above is therefore '
-            'passing for the wrong reason';
-    END IF;
+    BEGIN
+        SELECT count(*) INTO visible FROM public.heart_signals;
+        RAISE EXCEPTION 'an authenticated user read % heart rows', visible;
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
 
     -- And cannot write one: no INSERT policy.
     BEGIN
@@ -286,20 +269,23 @@ BEGIN
 END $$;
 
 -- ── the same, for face_signals and cognitive_signals ────────────────────────
--- SELECT-only grant and policy, as heart_signals: an own-row policy is not consent.
+-- No client grant on any of the three, and no teacher-read policy to reopen them if one returns:
+-- RLS let any class teacher read every row whatever the student had declined.
 
 DO $$
+DECLARE
+    t text;
 BEGIN
-    IF NOT has_table_privilege('authenticated', 'public.face_signals', 'SELECT') THEN
-        RAISE EXCEPTION
-            'authenticated lacks SELECT on face_signals -- the RLS assertion '
-            'below would pass for the wrong reason';
-    END IF;
-    IF NOT has_table_privilege('authenticated', 'public.cognitive_signals', 'SELECT') THEN
-        RAISE EXCEPTION
-            'authenticated lacks SELECT on cognitive_signals -- the RLS '
-            'assertion below would pass for the wrong reason';
-    END IF;
+    FOREACH t IN ARRAY ARRAY['cognitive_signals', 'face_signals', 'heart_signals'] LOOP
+        IF has_table_privilege('authenticated', 'public.' || t, 'SELECT')
+           OR has_table_privilege('anon', 'public.' || t, 'SELECT') THEN
+            RAISE EXCEPTION 'a client role can SELECT % -- only the backend reads it', t;
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_policies
+                   WHERE schemaname = 'public' AND tablename = t AND policyname ILIKE '%teacher%') THEN
+            RAISE EXCEPTION 'a teacher policy on % would reopen raw reads if SELECT is granted back', t;
+        END IF;
+    END LOOP;
     -- No sequence USAGE without the INSERT it existed for.
     IF has_sequence_privilege('authenticated', 'public.face_signals_id_seq', 'USAGE') THEN
         RAISE EXCEPTION
@@ -328,39 +314,21 @@ BEGIN
     INSERT INTO public.cognitive_signals (session_id, user_id)
     VALUES (sess, owner_id);
 
-    -- Impersonate an unrelated logged-in user.
+    -- No client reads them, owner included, as in the heart_signals block.
     SET LOCAL ROLE authenticated;
-    PERFORM set_config('request.jwt.claims',
-                       json_build_object('sub', other_id, 'role', 'authenticated')::text,
-                       true);
-
-    SELECT count(*) INTO visible FROM public.face_signals;
-    IF visible <> 0 THEN
-        RAISE EXCEPTION 'an unrelated authenticated user saw % face rows', visible;
-    END IF;
-    SELECT count(*) INTO visible FROM public.cognitive_signals;
-    IF visible <> 0 THEN
-        RAISE EXCEPTION 'an unrelated authenticated user saw % cognitive rows', visible;
-    END IF;
-
-    -- The owner *can* see their own rows, as in the heart_signals block.
     PERFORM set_config('request.jwt.claims',
                        json_build_object('sub', owner_id, 'role', 'authenticated')::text,
                        true);
-    SELECT count(*) INTO visible FROM public.face_signals;
-    IF visible = 0 THEN
-        RAISE EXCEPTION
-            'the owner cannot see their own face rows -- the RLS policy is '
-            'missing or too strict, and the stranger check above is therefore '
-            'passing for the wrong reason';
-    END IF;
-    SELECT count(*) INTO visible FROM public.cognitive_signals;
-    IF visible = 0 THEN
-        RAISE EXCEPTION
-            'the owner cannot see their own cognitive rows -- the RLS policy '
-            'is missing or too strict, and the stranger check above is '
-            'therefore passing for the wrong reason';
-    END IF;
+    BEGIN
+        SELECT count(*) INTO visible FROM public.face_signals;
+        RAISE EXCEPTION 'an authenticated user read % face rows', visible;
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
+    BEGIN
+        SELECT count(*) INTO visible FROM public.cognitive_signals;
+        RAISE EXCEPTION 'an authenticated user read % cognitive rows', visible;
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
 
     -- And cannot write one, which would bypass consent.
     BEGIN
@@ -1411,6 +1379,73 @@ BEGIN
     IF seen IS DISTINCT FROM '2026-06-01T09:25:00Z'::timestamptz THEN
         RAISE EXCEPTION 'last active reads %: a sample that measured nothing counted as activity',
             seen;
+    END IF;
+END $$;
+
+-- ── columns a client must never write, checked as Postgres answers it ───────
+-- A column REVOKE leaves a table-level grant standing, so has_column_privilege, not the migration
+-- text, is the check: a later GRANT UPDATE ON profiles would otherwise make any caller an admin.
+
+DO $$
+DECLARE
+    c record;
+    who text;
+    cmd text;
+BEGIN
+    FOR c IN SELECT * FROM (VALUES ('profiles', 'role'),
+                                   ('parent_child_links', 'student_ack_at'),
+                                   ('parent_child_links', 'parent_ack_at'),
+                                   ('classes', 'teacher_id'),
+                                   ('classes', 'join_code')) AS t(tbl, col) LOOP
+        FOREACH who IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+            FOREACH cmd IN ARRAY ARRAY['UPDATE', 'INSERT'] LOOP
+                IF has_column_privilege(who, 'public.' || c.tbl, c.col, cmd) THEN
+                    RAISE EXCEPTION '% can % %.% -- grant a column list without it', who, cmd, c.tbl, c.col;
+                END IF;
+            END LOOP;
+        END LOOP;
+    END LOOP;
+END $$;
+
+-- ── claim_daily_question admits up to the limit, per student per day ────────
+-- The only place the claim runs; the backend suite can check only the call's arguments.
+
+DO $$
+DECLARE
+    usr  uuid;
+    got  boolean[] := '{}';
+    d    date := DATE '2026-09-28';
+BEGIN
+    SELECT owner_id INTO usr FROM _ids;
+    FOR i IN 1..3 LOOP
+        got := got || public.claim_daily_question(usr, d, 2);
+    END LOOP;
+    IF got IS DISTINCT FROM ARRAY[true, true, false] THEN
+        RAISE EXCEPTION 'a limit of 2 answered % over three claims', got;
+    END IF;
+    IF NOT public.claim_daily_question(usr, d + 1, 2) THEN
+        RAISE EXCEPTION 'the next day started already spent';
+    END IF;
+    IF (SELECT served FROM public.daily_question_usage WHERE user_id = usr AND day = d) <> 2 THEN
+        RAISE EXCEPTION 'a refused claim was counted';
+    END IF;
+    IF public.claim_daily_question(usr, d + 2, 0) THEN
+        RAISE EXCEPTION 'a limit of 0 admitted a question';
+    END IF;
+    -- A refund gives one back, on its own day only, and never below zero.
+    PERFORM public.release_daily_question(usr, d);
+    IF NOT public.claim_daily_question(usr, d, 2) THEN
+        RAISE EXCEPTION 'a refunded question could not be claimed again';
+    END IF;
+    PERFORM public.release_daily_question(usr, d + 1);
+    PERFORM public.release_daily_question(usr, d + 1);
+    IF (SELECT served FROM public.daily_question_usage WHERE user_id = usr AND day = d + 1) <> 0
+       OR (SELECT served FROM public.daily_question_usage WHERE user_id = usr AND day = d) <> 2 THEN
+        RAISE EXCEPTION 'a refund went below zero or reached another day';
+    END IF;
+    IF has_function_privilege('authenticated', 'public.claim_daily_question(uuid, date, integer)', 'EXECUTE')
+       OR has_table_privilege('authenticated', 'public.daily_question_usage', 'SELECT') THEN
+        RAISE EXCEPTION 'a client role can reach the daily question budget';
     END IF;
 END $$;
 

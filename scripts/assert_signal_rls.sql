@@ -1011,6 +1011,7 @@ DECLARE
     hi       smallint;
     n        int;
     srcs     text[];
+    r        record;
 BEGIN
     SELECT i.owner_id, i.sess_id INTO owner_id, sess FROM _ids i;
     DELETE FROM cognitive_signals WHERE user_id = owner_id;
@@ -1097,6 +1098,42 @@ BEGIN
        OR public.calm_source_of('{"calm_source": ["local"]}'::jsonb) IS NOT NULL
        OR public.calm_source_of('{"calm_source": "martian"}'::jsonb) IS NOT NULL THEN
         RAISE EXCEPTION 'calm_source_of does not read a posted source safely';
+    END IF;
+
+    -- 3 is retired: a row an older backend wrote for local calm reads as scale 2, source local.
+    DELETE FROM cognitive_signals WHERE user_id = owner_id;
+    INSERT INTO cognitive_signals (session_id, user_id, ts, focus, stress, raw) VALUES
+        (sess, owner_id, '2026-03-12T18:00:01Z', 0.5, 0.4,
+         '{"score_scale": 3, "calm_source": "local"}'::jsonb);
+    PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-12', 'UTC');
+    SELECT calm_sources, score_scale_min, score_scale_max INTO srcs, lo, hi
+      FROM signal_daily_rollup WHERE user_id = owner_id AND channel = 'cognitive';
+    IF srcs IS DISTINCT FROM ARRAY['local']::text[] OR lo IS DISTINCT FROM 2 OR hi IS DISTINCT FROM 2 THEN
+        RAISE EXCEPTION 'a retired scale-3 row reads % on %..%, expected {local} on 2..2', srcs, lo, hi;
+    END IF;
+
+    -- The one-time backfill, on rolled days as the old rollup wrote them.
+    DELETE FROM signal_daily_rollup WHERE user_id = owner_id;
+    INSERT INTO signal_daily_rollup (user_id, day, channel, avg_stress, sample_count,
+                                     trusted_sample_count, score_scale_min, score_scale_max) VALUES
+        (owner_id, DATE '2026-02-01', 'cognitive', 0.4,  5, 5, 3, 3),
+        (owner_id, DATE '2026-02-02', 'cognitive', 0.4,  5, 5, 2, 3),
+        (owner_id, DATE '2026-02-03', 'cognitive', 0.4,  5, 5, 2, 2),
+        (owner_id, DATE '2026-02-04', 'cognitive', NULL, 5, 5, NULL, NULL),
+        (owner_id, DATE '2026-02-05', 'cognitive', NULL, 5, 5, 1, 2);
+    PERFORM public.backfill_rollup_calm_sources();
+    FOR r IN SELECT day, calm_sources AS s, score_scale_min AS a, score_scale_max AS b
+               FROM signal_daily_rollup WHERE user_id = owner_id ORDER BY day LOOP
+        IF (r.day = '2026-02-01' AND (r.s IS DISTINCT FROM ARRAY['local']::text[] OR r.a IS DISTINCT FROM 2 OR r.b IS DISTINCT FROM 2))
+        OR (r.day = '2026-02-02' AND (r.s IS DISTINCT FROM ARRAY['local', 'sdk']::text[] OR r.a IS DISTINCT FROM 2 OR r.b IS DISTINCT FROM 2))
+        OR (r.day = '2026-02-03' AND (r.s IS DISTINCT FROM ARRAY['sdk']::text[] OR r.a IS DISTINCT FROM 2 OR r.b IS DISTINCT FROM 2))
+        OR (r.day = '2026-02-04' AND (r.s IS NOT NULL OR r.a IS NOT NULL OR r.b IS NOT NULL))
+        OR (r.day = '2026-02-05' AND (r.s IS NOT NULL OR r.a IS DISTINCT FROM 1 OR r.b IS DISTINCT FROM 2)) THEN
+            RAISE EXCEPTION 'the calm-source backfill read % as % on %..%', r.day, r.s, r.a, r.b;
+        END IF;
+    END LOOP;
+    IF public.backfill_rollup_calm_sources() <> 0 THEN
+        RAISE EXCEPTION 'the calm-source backfill is not idempotent';
     END IF;
 
     IF public.score_scale_of('{"score_scale": "oops"}'::jsonb) IS NOT NULL

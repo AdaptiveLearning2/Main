@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -64,10 +66,27 @@ def test_the_row_records_the_calm_source_its_scale_and_whether_calm_was_measured
 
 def test_the_score_scale_is_the_version_alone_so_a_bump_cannot_read_as_a_source(monkeypatch):
     """Packed into one number, the next version bump would have read as the local calm."""
-    monkeypatch.setattr(signal_mapping, "SCORE_SCALE_VERSION", 3)
+    monkeypatch.setattr(signal_mapping, "SCORE_SCALE_VERSION", 4)
     for features in ({"calm_source": "sdk"}, {"calm_source": "local"}, {}):
-        assert _row(**features)["raw"]["score_scale"] == 3
+        assert _row(**features)["raw"]["score_scale"] == 4
     assert "calm_source" not in _row()["raw"], "absent stays absent, and reads as sdk"
+
+
+def test_the_version_never_takes_the_retired_value_3():
+    """Rows stored before the split say 3 for local calm on scale 2, and the rollup reads 3 as 2."""
+    assert signal_mapping.SCORE_SCALE_VERSION != 3
+
+
+def test_the_sql_reads_the_same_calm_sources_as_the_backend():
+    """SQL cannot import the Python list, so the latest calm_source_of is pinned to it.
+
+    A text read of the migration: there is no SQL parser here."""
+    migrations = sorted(Path(__file__).resolve().parents[4].joinpath("supabase", "migrations").glob("*.sql"))
+    defining = [p for p in migrations
+                if 'FUNCTION "public"."calm_source_of"' in p.read_text(encoding="utf-8")]
+    assert defining, "no migration defines calm_source_of"
+    m = re.search(r"IN \(([^)]*)\) THEN \"raw\"->>'calm_source'", defining[-1].read_text(encoding="utf-8"))
+    assert m and set(re.findall(r"'(\w+)'", m.group(1))) == set(signal_mapping.CALM_SOURCES)
 
 
 def test_an_unknown_calm_source_withholds_stress_and_says_why():

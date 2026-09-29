@@ -45,10 +45,11 @@ def _raw(payload: dict, **derived: Any) -> dict:
     return merged
 
 
-# Bump when the sidecar's population bounds change; written into `raw.score_scale`.
-# The calm source is `raw.calm_source`, never folded into this number.
+# Bump when the sidecar's population bounds change; written into `raw.score_scale`. Never 3:
+# rows stored before the calm source had its own key say 3 for local calm, which the rollup reads as 2.
 SCORE_SCALE_VERSION = 2
 # The calm sources with a stressed line; a posted value outside them withholds stress.
+# The SQL copy is `calm_source_of(jsonb)`, pinned to this by a test.
 CALM_SOURCES = tuple(signal_fusion.EEG_STRESSED_CALM_MAX_BY_SOURCE)
 # Seconds a local calm may be held before it is stale and `stress` is nulled.
 CALM_HOLD_MAX_SECONDS = 10.0
@@ -56,6 +57,23 @@ CALM_HOLD_MAX_SECONDS = 10.0
 # Nulled together: same electrodes, same window.
 _MEASUREMENT_COLUMNS = ("focus", "stress", "engagement",
                         "alpha", "beta", "theta", "delta", "gamma")
+
+
+def calm_source_of(value: Any) -> str | None:
+    """A posted `calm_source` as a known source: absent is "sdk" (an older sidecar), anything else None."""
+    if value is None:
+        return "sdk"
+    return value if isinstance(value, str) and value in CALM_SOURCES else None
+
+
+def withhold_unknown_calm_source(row: dict) -> dict:
+    """A flat row whose client `raw` names an unknown calm source: stress withheld, as the mapper does."""
+    raw = row.get("raw")
+    if not isinstance(raw, dict) or calm_source_of(raw.get("calm_source")) is not None:
+        return row
+    raw = {k: v for k, v in raw.items() if k != "calm_source"}
+    raw["calm_invalid"] = ["calm_source"]
+    return {**row, "raw": raw, "stress": None}
 
 
 def eeg_quality(eeg: dict) -> str:
@@ -87,10 +105,9 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
     focus = _ratio(f.get("focus_score"))
     calm = _ratio(f.get("calm_score"))
     confidence = _ratio(f.get("confidence"))
-    # Client-supplied on push; absent means an older sidecar, i.e. sdk.
+    # Client-supplied on push.
     calm_source = f.get("calm_source")
-    calm_source_ok = calm_source is None or (isinstance(calm_source, str)
-                                             and calm_source in CALM_SOURCES)
+    calm_source_ok = calm_source_of(calm_source) is not None
     # Gate the stress column: a present but mistyped value withholds it ("false" is not False);
     # absent means an older sidecar, i.e. measured.
     calm_measured = f.get("calm_measured")

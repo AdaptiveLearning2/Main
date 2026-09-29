@@ -941,8 +941,10 @@ That re-anchors every stored value, so **`signal_mapping` writes `raw.score_scal
 population-bounds version, `SCORE_SCALE_VERSION`, and nothing else; rows without the key predate it. **The calm source
 is its own key, `raw.calm_source`, never folded into that number**: packed in as scale 3, the next version bump would
 have read as the local calm. A posted source outside `sdk`/`local` withholds stress and is named in `raw.calm_invalid`,
-and the decider averages no stress from such a row. **The rollup records both per day** — the scale range
-(`score_scale_min`/`score_scale_max`, over rows with a focus) and `calm_sources` (over rows with a *scored stress*, the
+on the flat ingest shape as on the mapped one, and the decider averages no stress from such a row — all three through
+`signal_mapping.calm_source_of`, with the SQL `calm_source_of` pinned to it by a test. **The rollup records both per
+day** — the scale range (`score_scale_min`/`score_scale_max`, over rows with a focus) and `calm_sources` (over rows
+with a *scored stress*, the
 only rows that say what unit the day's stress is in; no key is `sdk`) — and every rollup-backed payload carries
 `score_scale: {min, max, calm_sources}` for its window. **Never a date**: the rollout is per sidecar process, as each
 student's machine restarts, and `_scale_range` keeps "no row recorded one" apart from scale 1.
@@ -955,9 +957,11 @@ wiring has a test with a mixed fixture, since the null branch passes with the el
 **A version step and a calm-source split are different facts**: a step moves focus and stress and is a step in time;
 two sources move stress only and run side by side, one student's headband beside a classmate's. `describeScaleChange`
 names which, and the chart summary withholds a stress direction, not a focus one, across two sources. A held local
-calm (stress nulled) names no source, so an ordinary local session reads one source, not two. Rows stored as scale 3
-before the split were migrated (`20260929000000`) to scale 2 with `calm_source: local`, and rolled days rewritten to
-match. A row with a NULL `raw` is scale 1 and `sdk`, like a row with no key, so the null test comes first.
+calm (stress nulled) names no source, so an ordinary local session reads one source, not two. **3 is retired**: rows an
+older backend stored for local calm say scale 3 beside `calm_source: local`, and the rollup reads 3 as 2 whenever it
+rolls them, so `SCORE_SCALE_VERSION` never takes 3 (pinned by a test) and migration-before-deploy order does not
+matter. Days rolled before the split were rewritten once by `backfill_rollup_calm_sources()` (`20260929030000`), which
+`assert_signal_rls.sql` runs on legacy rows. A row with a NULL `raw` is scale 1 and `sdk`, like a row with no key.
 
 **The rollup reads `raw.score_scale` through `score_scale_of(jsonb)`, never a hard cast**: `raw` is client-supplied on
 the push path, and a cast raised out of the cognitive INSERT, the first of three, so one posted sample aborted a

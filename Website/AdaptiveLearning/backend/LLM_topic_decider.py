@@ -9,6 +9,7 @@ import json
 import random
 from statistics import fmean
 import signal_fusion
+import signal_mapping
 import grade_levels
 import unicodedata
 import datetime as _dt
@@ -285,17 +286,13 @@ def get_session_signal_state(session_id, user_id=None):
 
     eeg_rows = _latest("cognitive_signals", "ts, focus, stress, raw",
                        session_id, EEG_BIAS_WINDOW) if consent["eeg"] else []
-    # Calm source (the stressed line differs by source); a missing key means "sdk".
-    # Type-checked before use as a set element: a posted dict or list is unhashable.
+    # Calm source (the stressed line differs by source), read as the mapper reads it.
     def _calm_source_of(r: dict) -> str | None:
         raw = r.get("raw")
-        s = raw.get("calm_source") if isinstance(raw, dict) else None
-        if s is None:
-            return "sdk"
-        return s if isinstance(s, str) else None
+        return signal_mapping.calm_source_of(raw.get("calm_source") if isinstance(raw, dict) else None)
     # A row on no known source is on no known scale, so its stress is not a calm reading.
-    stress_rows = [r for r in eeg_rows if r.get("stress") is not None
-                   and _calm_source_of(r) in signal_fusion.EEG_STRESSED_CALM_MAX_BY_SOURCE]
+    stress_rows = [r for r in eeg_rows
+                   if r.get("stress") is not None and _calm_source_of(r) is not None]
 
     focus_vals  = [r["focus"]  for r in eeg_rows if r.get("focus")  is not None]
     stress_vals = [r["stress"] for r in stress_rows]

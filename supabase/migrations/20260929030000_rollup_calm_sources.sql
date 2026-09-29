@@ -1,6 +1,6 @@
 -- The calm source gets its own rollup column instead of riding in the score
--- scale as "3", so score_scale is the population-bounds version alone and the
--- next version bump cannot read as the local calm. See docs/signals.md.
+-- scale as "3", so score_scale is the population-bounds version alone. 3 is
+-- retired, read as 2 whenever and whoever wrote it. See docs/signals.md.
 
 ALTER TABLE "public"."signal_daily_rollup"
     ADD COLUMN IF NOT EXISTS "calm_sources" text[];
@@ -30,22 +30,36 @@ REVOKE ALL ON FUNCTION "public"."calm_source_of"(jsonb) FROM "anon";
 REVOKE ALL ON FUNCTION "public"."calm_source_of"(jsonb) FROM "authenticated";
 GRANT EXECUTE ON FUNCTION "public"."calm_source_of"(jsonb) TO "service_role";
 
--- Stored rows: scale 3 was the local calm measured on scale 2.
-UPDATE "public"."cognitive_signals"
-   SET "raw" = "raw" || '{"score_scale": 2, "calm_source": "local"}'::jsonb
- WHERE "raw" @> '{"score_scale": 3}'::jsonb;
+-- Rolled days written before this, whose raw rows may have expired: 3 at both
+-- ends was local only, 3 above a lower end local beside sdk, other stress sdk.
+-- One-time and idempotent; a function so assert_signal_rls.sql can test it.
+CREATE OR REPLACE FUNCTION "public"."backfill_rollup_calm_sources"()
+RETURNS integer
+LANGUAGE sql
+SECURITY INVOKER
+SET "search_path" TO 'public'
+AS $$
+    WITH changed AS (
+        UPDATE signal_daily_rollup
+           SET calm_sources = CASE
+                   WHEN score_scale_max = 3 AND score_scale_min = 3 THEN ARRAY['local']
+                   WHEN score_scale_max = 3 THEN ARRAY['local', 'sdk']
+                   ELSE ARRAY['sdk']
+               END,
+               score_scale_min = CASE WHEN score_scale_min = 3 THEN 2 ELSE score_scale_min END,
+               score_scale_max = CASE WHEN score_scale_max = 3 THEN 2 ELSE score_scale_max END
+         WHERE channel = 'cognitive' AND calm_sources IS NULL
+           AND (score_scale_max = 3 OR avg_stress IS NOT NULL)
+        RETURNING 1)
+    SELECT count(*)::integer FROM changed;
+$$;
 
--- Rolled days, whose raw rows may have expired: 3 at both ends was local only;
--- 3 above a lower end was local beside sdk; any other stress was sdk.
-UPDATE "public"."signal_daily_rollup"
-   SET "calm_sources" = CASE
-           WHEN "score_scale_max" = 3 AND "score_scale_min" = 3 THEN ARRAY['local']
-           WHEN "score_scale_max" = 3 THEN ARRAY['local', 'sdk']
-           WHEN "avg_stress" IS NOT NULL THEN ARRAY['sdk']
-       END,
-       "score_scale_min" = CASE WHEN "score_scale_min" = 3 THEN 2 ELSE "score_scale_min" END,
-       "score_scale_max" = CASE WHEN "score_scale_max" = 3 THEN 2 ELSE "score_scale_max" END
- WHERE "channel" = 'cognitive' AND "calm_sources" IS NULL;
+REVOKE ALL ON FUNCTION "public"."backfill_rollup_calm_sources"() FROM PUBLIC;
+REVOKE ALL ON FUNCTION "public"."backfill_rollup_calm_sources"() FROM "anon";
+REVOKE ALL ON FUNCTION "public"."backfill_rollup_calm_sources"() FROM "authenticated";
+GRANT EXECUTE ON FUNCTION "public"."backfill_rollup_calm_sources"() TO "service_role";
+
+SELECT "public"."backfill_rollup_calm_sources"();
 
 -- rollup_signal_day: the cognitive INSERT reads the scale and the calm source
 -- separately; heart and emotion unchanged from 20260918000000.
@@ -79,9 +93,10 @@ BEGIN
            array_agg(DISTINCT src ORDER BY src) FILTER (WHERE stress IS NOT NULL AND src IS NOT NULL),
            now()
     FROM (SELECT focus, stress, engagement,
-                 -- No key or NULL raw is scale 1; the null test comes first, as
-                 -- `?` is NULL on a NULL raw.
+                 -- No key or NULL raw is scale 1 (the null test first: `?` is NULL
+                 -- on a NULL raw). 3 is retired: it meant local calm on scale 2.
                  CASE WHEN raw IS NULL OR NOT (raw ? 'score_scale') THEN 1
+                      WHEN public.score_scale_of(raw) = 3 THEN 2
                       ELSE public.score_scale_of(raw) END AS sc,
                  public.calm_source_of(raw) AS src
             FROM cognitive_signals

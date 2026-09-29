@@ -5925,7 +5925,7 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
                  **envelope,
                  "raw": raw},
                 payload.session_id, user["id"])
-        return {
+        return signal_mapping.withhold_unknown_calm_source({
             "session_id": payload.session_id,
             "user_id":    user["id"],
             "ts":         s.ts or _utc_now().isoformat(),
@@ -5933,7 +5933,7 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
             "focus":      s.focus, "stress": s.stress, "engagement": s.focus,
             "alpha":      s.alpha, "beta":   s.beta,   "theta":      s.theta,
             "delta":      s.delta, "gamma":  s.gamma,  "raw":        s.raw,
-        }
+        })
 
     # Mapper `None` = zeroed scores from a disconnected headband: dropped and counted.
     samples, malformed = _validate_each(CognitiveSample, payload.samples)

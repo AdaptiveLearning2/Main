@@ -7681,4 +7681,5 @@ def admin_student_search(request: Request, q: str = "", limit: int = 10):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=BACKEND_PORT, reload=True)
+    # Loopback: with ENV unset /docs is on, and 0.0.0.0 served it and the API to the whole LAN.
+    uvicorn.run("main:app", host="127.0.0.1", port=BACKEND_PORT, reload=True)

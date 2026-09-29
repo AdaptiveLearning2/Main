@@ -1081,7 +1081,7 @@ catches exceptions rather than non-termination. **If a topic touches model text 
 belongs in the worker.**
 
 `geometry_solvers.py` and `angle_solvers.py` exist for that: the worker cannot import a generator module, which pulls
-in supabase, flask and dotenv at import, so the pure arithmetic lives apart from the prompt and the retry loop.
+in supabase and dotenv at import, so the pure arithmetic lives apart from the prompt and the retry loop.
 Anything a bounded worker must run needs the same separation — which is why `invalid_reason` moved alongside the angle
 solvers rather than staying beside its caller.
 

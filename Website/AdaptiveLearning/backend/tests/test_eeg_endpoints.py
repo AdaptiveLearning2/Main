@@ -881,3 +881,12 @@ def test_an_owner_is_cached_and_free_is_not(monkeypatch, pairings_db):
     main._station_open_to("user-b", "station-p")
     main._station_open_to("user-b", "station-p")
     assert db.ops.count("select") == 1
+
+
+def test_the_database_release_is_scoped_to_the_session(monkeypatch, pairings_db):
+    db = pairings_db()
+    _paired_by_a(monkeypatch, connected=True)                                # paired in s-a
+    main._forget_session_pairings("user-a", "s-old")
+    assert db.owners() == {"station-p": "user-a"}
+    main._forget_session_pairings("user-a", "s-a")
+    assert db.owners() == {}

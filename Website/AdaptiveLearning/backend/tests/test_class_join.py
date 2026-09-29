@@ -1,0 +1,109 @@
+"""Joining a class: students only, a bounded number of guesses, and nothing of the teacher's returned."""
+import os
+
+os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
+os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
+
+import pytest  # noqa: E402
+
+import main  # noqa: E402
+
+CLASS = {"id": "class-1", "name": "Algebra", "grade_level": "7", "teacher_id": "teacher-1",
+         "join_code": "ABCD2345"}
+
+
+class _Db:
+    """`classes` and `class_memberships`, recording each select's columns and every insert."""
+
+    def __init__(self):
+        self.tables = {"classes": [dict(CLASS)], "class_memberships": []}
+        self.selects, self.inserts = [], []
+
+    def table(self, name):
+        db = self
+
+        class _Q:
+            def __init__(self):
+                self.filters, self.row = {}, None
+
+            def select(self, cols):
+                db.selects.append((name, cols))
+                self.cols = [c.strip() for c in cols.split(",")]
+                return self
+
+            def eq(self, col, val):
+                self.filters[col] = val
+                return self
+
+            def insert(self, row):
+                self.row = row
+                return self
+
+            def execute(self):
+                if self.row is not None:
+                    db.inserts.append((name, self.row))
+                    db.tables[name].append(self.row)
+                    return type("R", (), {"data": [self.row]})()
+                hit = [{c: r.get(c) for c in self.cols} for r in db.tables[name]
+                       if all(r.get(k) == v for k, v in self.filters.items())]
+                return type("R", (), {"data": hit})()
+        return _Q()
+
+
+@pytest.fixture
+def db(monkeypatch):
+    fake = _Db()
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "student-1"})
+    monkeypatch.setattr(main, "_role", lambda uid: "student" if uid.startswith("student") else "parent")
+    monkeypatch.setattr(main, "_record_security_event", lambda *a, **k: None)
+    return fake
+
+
+def _join(code="ABCD2345"):
+    return main.join_class(main.JoinClassRequest(join_code=code), None)
+
+
+def test_a_student_joins_and_learns_nothing_of_the_teachers(db):
+    out = _join("abcd2345 ")
+    assert out == {"id": "class-1", "name": "Algebra", "grade_level": "7"}
+    # Asked for by name, so a column added later is not sent either.
+    assert ("classes", "id, name, grade_level") in db.selects
+    assert db.inserts == [("class_memberships", {"class_id": "class-1", "student_id": "student-1"})]
+
+
+def test_a_code_issued_before_the_longer_codes_still_joins(db):
+    db.tables["classes"][0]["join_code"] = "ABC123"
+    assert _join("ABC123")["id"] == "class-1"
+
+
+def test_a_parent_or_teacher_cannot_join_as_a_student(db, monkeypatch):
+    """They would appear on the teacher's roster as a student."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "parent-1"})
+    with pytest.raises(main.HTTPException) as e:
+        _join()
+    assert e.value.status_code == 403
+    assert db.inserts == []
+
+
+def test_guesses_past_the_limit_are_refused_before_any_lookup(db, monkeypatch):
+    from conftest import tighten
+    tighten(monkeypatch, main._JOIN_CODE_LIMITER, limit=2)
+    recorded = []
+    monkeypatch.setattr(main, "_record_security_event", lambda kind, actor, **d: recorded.append((kind, d)))
+    for guess in ("AAAA2222", "BBBB3333"):
+        with pytest.raises(main.HTTPException):
+            _join(guess)                                   # 404s, but they count
+    lookups = len(db.selects)
+    with pytest.raises(main.HTTPException) as e:
+        _join()
+    assert e.value.status_code == 429 and int(e.value.headers["Retry-After"]) >= 1
+    assert len(db.selects) == lookups, "a refused guess still reached the classes table"
+    assert recorded == [("rate_limited", {"limiter": main._JOIN_CODE_LIMITER.name})]
+
+
+def test_a_new_class_gets_a_long_code_from_the_unambiguous_alphabet(db, monkeypatch):
+    monkeypatch.setattr(main, "_role", lambda _uid: "teacher")
+    codes = {main._new_join_code() for _ in range(200)}
+    assert all(len(c) == 8 and set(c) <= set(main._LINK_CODE_ALPHABET) for c in codes)
+    assert len(codes) == 200

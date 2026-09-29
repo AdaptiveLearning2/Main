@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-import os, math, re, requests, random, secrets, string, threading, time, collections, contextlib
+import os, math, re, requests, random, secrets, threading, time, collections, contextlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta, timezone, tzinfo
@@ -382,10 +382,6 @@ def get_user(request: Request):
         raise HTTPException(401, "Invalid token")
     return resp.json()
 
-def rand_code(n=6):
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=n))
-
-
 # ─── the code a child gives a parent ─────────────────────────────────────
 # A credential, so `secrets` (CSPRNG), never `rand_code`'s `random`. No O/0/I/1:
 # a child reads it aloud. The TTL, single use and limiter are the real controls.
@@ -397,6 +393,17 @@ _LINK_CODE_TTL_SEC = 30 * 60
 def _new_link_code() -> str:
     return "".join(secrets.choice(_LINK_CODE_ALPHABET)
                    for _ in range(_LINK_CODE_LEN))
+
+
+# A class join code is guessable by volume, so the same alphabet and length; 6-character codes
+# issued before this still join. The join limiter is the real control.
+_JOIN_CODE_LEN = 8
+# Attempts per account per hour, successful or not; each refusal is audited.
+_JOIN_CODE_LIMITER = _SlidingWindowLimiter("class_join", 10, 3600.0)
+
+
+def _new_join_code() -> str:
+    return "".join(secrets.choice(_LINK_CODE_ALPHABET) for _ in range(_JOIN_CODE_LEN))
 
 
 def _unique_ids(values) -> list:
@@ -4414,12 +4421,12 @@ def create_class(payload: CreateClassRequest, request: Request):
     user = get_user(request)
     if _role(user["id"]) != "teacher":
         raise HTTPException(403, "Only teachers can create classes")
-    code = rand_code()
+    code = _new_join_code()
     for _ in range(5):
         existing = supabase.table("classes").select("id").eq("join_code", code).execute()
         if not existing.data:
             break
-        code = rand_code()
+        code = _new_join_code()
     res = supabase.table("classes").insert({
         "teacher_id":  user["id"],
         "name":        payload.name,
@@ -4523,7 +4530,17 @@ def my_classes(request: Request):
 @app.post("/api/classes/join")
 def join_class(payload: JoinClassRequest, request: Request):
     user = get_user(request)
-    cls  = supabase.table("classes").select("*").eq("join_code", payload.join_code.upper()).execute()
+    # Before the lookup: a refused guess must not learn whether the code exists.
+    wait = _JOIN_CODE_LIMITER.check(user["id"])
+    if wait is not None:
+        _record_security_event("rate_limited", user["id"], limiter=_JOIN_CODE_LIMITER.name)
+        raise HTTPException(429, "Too many attempts. Check the code with your teacher and "
+                                 "try again later.", headers={"Retry-After": str(wait)})
+    if _role(user["id"]) != "student":
+        raise HTTPException(403, "Only students can join a class")
+    # Named columns: `teacher_id` and `join_code` are not the joining student's to read.
+    cls  = supabase.table("classes").select("id, name, grade_level") \
+        .eq("join_code", payload.join_code.strip().upper()).execute()
     if not cls.data:
         raise HTTPException(404, "Class not found -- check the code")
     class_id = cls.data[0]["id"]

@@ -6,6 +6,9 @@ import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
 import { toast } from 'sonner'
 
+// New classes get 8 characters; codes issued before that are 6 and still join.
+const CODE_LENGTHS = [6, 8]
+
 export default function JoinClass() {
   const [code, setCode]         = useState('')
   const [loading, setLoading]   = useState(false)
@@ -44,7 +47,7 @@ export default function JoinClass() {
         <h1 className="text-3xl font-black text-gray-900 dark:text-white flex items-center gap-3">
           <Users className="text-indigo-600" size={28} /> Join a Class
         </h1>
-        <p className="text-gray-500 dark:text-gray-400 mt-1">Enter the 6-character code your teacher gave you.</p>
+        <p className="text-gray-500 dark:text-gray-400 mt-1">Enter the code your teacher gave you.</p>
       </motion.div>
 
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
@@ -52,11 +55,12 @@ export default function JoinClass() {
         <form onSubmit={handleJoin} className="flex gap-3">
           <div className="relative flex-1">
             <Hash size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-600 dark:text-gray-400" />
-            <input value={code} onChange={e => setCode(e.target.value.toUpperCase().slice(0, 6))}
+            <input value={code} onChange={e => setCode(e.target.value.toUpperCase().slice(0, 8))}
+              aria-label="Class code"
               className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:text-white outline-none transition tracking-widest font-mono uppercase"
-              placeholder="ABC123" maxLength={6} />
+              placeholder="ABCD2345" maxLength={8} />
           </div>
-          <motion.button type="submit" disabled={loading || code.length !== 6}
+          <motion.button type="submit" disabled={loading || !CODE_LENGTHS.includes(code.length)}
             whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
             className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-xl font-bold shadow disabled:opacity-50 disabled:cursor-not-allowed transition whitespace-nowrap">
             {loading ? '...' : 'Join Class'}

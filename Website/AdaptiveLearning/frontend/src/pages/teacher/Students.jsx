@@ -140,7 +140,8 @@ export default function Students() {
       // Students enrolled in any class this teacher teaches.
       const {data, error} = await supabase
       .from('class_memberships')
-      .select('student_id, profiles!inner(*), classes!inner(teacher_id)')
+      // Named, not `*`: RLS is the only check on this read, and a column added later would ride along.
+      .select('student_id, profiles!inner(id, email, display_name, created_at), classes!inner(teacher_id)')
       .eq('classes.teacher_id', user.id)
 
       if (error) console.error('Failed to load students:', error)

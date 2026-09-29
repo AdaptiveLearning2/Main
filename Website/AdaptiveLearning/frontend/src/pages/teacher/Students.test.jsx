@@ -23,6 +23,7 @@ vi.mock('../../lib/api', () => {
 
 vi.mock('../../lib/supabase', () => {
   const fromCalls = []
+  const selectCalls = []
   const results = {}
   // Chainable builder; also a thenable, since the topic query is awaited straight off .eq().
   const query = (table) => {
@@ -32,7 +33,7 @@ vi.mock('../../lib/supabase', () => {
       return r instanceof Error ? Promise.reject(r) : Promise.resolve(r)
     }
     const q = {
-      select: () => q,
+      select: (cols) => { selectCalls.push([table, cols]); return q },
       eq: () => q,
       order: () => q,
       limit: () => settle(),
@@ -47,11 +48,13 @@ vi.mock('../../lib/supabase', () => {
       from: (table) => { fromCalls.push(table); return query(table) },
     },
     __fromCalls: fromCalls,
+    __selectCalls: selectCalls,
     __results: results,
   }
 })
 
-const { __fromCalls: fromCalls, __results: results } = await import('../../lib/supabase')
+const { __fromCalls: fromCalls, __selectCalls: selectCalls, __results: results } =
+  await import('../../lib/supabase')
 const { __apiCalls: apiCalls, __apiState: apiState } = await import('../../lib/api')
 
 // Real `profiles` columns only: there is no `username`.
@@ -110,8 +113,18 @@ const summaryCalls = () => apiCalls.filter(p => p.includes('/signal-summary'))
 beforeEach(() => {
   localStorage.clear()
   fromCalls.length = 0
+  selectCalls.length = 0
   apiCalls.length = 0
   setData()
+})
+
+it('reads the roster by named profile columns, never `*`', async () => {
+  // RLS is the only check on this read; `*` would send whatever `profiles` gains next.
+  render(<Students />)
+  await waitFor(() => expect(selectCalls.some(([t]) => t === 'class_memberships')).toBe(true))
+  const [, cols] = selectCalls.find(([t]) => t === 'class_memberships')
+  expect(cols).toContain('profiles!inner(id, email, display_name, created_at)')
+  expect(cols).not.toMatch(/\*/)
 })
 
 describe('signal averages', () => {

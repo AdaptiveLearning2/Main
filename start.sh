@@ -239,6 +239,22 @@ _camera_entry=""
 [ "$CAMERA" = true ] && _camera_entry="camera:face@$CAMERA_INDEX"
 update_device_registry "$EEG_ENV" "default:sim" "$_camera_entry" check || exit 1
 
+# The sidecar refuses .env.example's public `replace-me` tokens, so a real pair is made once here,
+# and the backend gets the same one: under pull it calls the sidecar with it.
+if [ -f "$EEG_ENV" ]; then
+    for _pair in "API_TOKEN:EEG_API_TOKEN" "ADMIN_TOKEN:EEG_ADMIN_TOKEN"; do
+        _key="${_pair%%:*}"; _backend_key="${_pair##*:}"
+        _current="$(sed -n "s/^${_key}=//p" "$EEG_ENV" | tail -1)"
+        case "$_current" in
+            ""|replace-me*)
+                _token="$("$PYTHON" -c 'import secrets; print(secrets.token_urlsafe(32))')"
+                set_env_key "$EEG_ENV" "$_key" "$_token"
+                set_env_key "$BACKEND_ENV" "$_backend_key" "$_token"
+                echo -e "  ${GRAY}Generated ${_key} (and the backend's ${_backend_key})${NC}" ;;
+        esac
+    done
+fi
+
 if [ -f "$EEG_ENV" ]; then
     if grep -q "^EEG_SOURCE=muse" "$EEG_ENV" 2>/dev/null; then
         sed -i '' 's/^EEG_SOURCE=muse/EEG_SOURCE=sim/' "$EEG_ENV"
@@ -341,8 +357,8 @@ ensure_model('$LANDMARK_MODEL')
     if [ -n "$API_TOKEN_VALUE" ]; then
         set_env_key "$FRONTEND_ENV" "VITE_EEG_LOCAL_TOKEN" "$API_TOKEN_VALUE"
     else
-        echo -e "  ${YELLOW}No API_TOKEN in $EEG_ENV yet -- VITE_EEG_LOCAL_TOKEN not set.${NC}"
-        echo -e "  ${YELLOW}The browser will 401 against the sidecar. Re-run this script once it has started.${NC}"
+        echo -e "  ${YELLOW}No $EEG_ENV -- VITE_EEG_LOCAL_TOKEN not set.${NC}"
+        echo -e "  ${YELLOW}Copy EEGResearch/.env.example to .env and re-run this script.${NC}"
     fi
     # Read back, since the registry is composed onto existing stations.
     echo -e "  ${GRAY}$(grep '^EEG_DEVICES=' "$EEG_ENV" | tail -1)${NC}"

@@ -553,6 +553,21 @@ def test_a_flat_sample_on_an_unknown_calm_source_withholds_stress_like_the_mappe
     assert written[1]["stress"] == pytest.approx(0.40) and written[1]["raw"]["calm_source"] == "local"
 
 
+def test_a_flat_sample_with_a_null_calm_source_stores_no_key(monkeypatch):
+    """Python reads null as sdk; the SQL calm_source_of reads a JSON null as unknown. No key agrees."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+
+    main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"ts": "2026-08-10T10:00:00Z", "focus": 0.72, "stress": 0.40, "raw": {"calm_source": None}},
+    ]), None)
+
+    assert "calm_source" not in written[0]["raw"] and written[0]["stress"] == pytest.approx(0.40)
+
+
 def test_a_flat_sample_records_the_current_score_scale_whatever_the_client_sent(monkeypatch):
     """A posted 999 put a scale-change caption on the student's report and hid their trend directions."""
     import signal_mapping

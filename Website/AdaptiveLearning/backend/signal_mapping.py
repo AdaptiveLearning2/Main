@@ -71,6 +71,9 @@ def sanitise_flat_row(row: dict) -> dict:
     and no stress on an unknown calm source."""
     raw = dict(row.get("raw") or {})
     raw["score_scale"] = SCORE_SCALE_VERSION
+    # A null source is sdk here but unknown to the SQL calm_source_of; no key reads sdk in both.
+    if "calm_source" in raw and raw["calm_source"] is None:
+        del raw["calm_source"]
     row = {**row, "raw": raw}
     if calm_source_of(raw.get("calm_source")) is None:
         raw.pop("calm_source")

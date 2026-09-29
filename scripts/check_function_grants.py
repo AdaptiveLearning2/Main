@@ -121,7 +121,8 @@ def scan(sql: str) -> list[tuple]:
 
 def analyse(sources: list[tuple[str, str]]) -> tuple[list[str], dict[str, str]]:
     """sources is [(label, sql)] in application order."""
-    created: dict[str, tuple[str, set[str], bool]] = {}
+    # name -> (first migration, {signature: unpinned definer})
+    created: dict[str, tuple[str, dict[str, bool]]] = {}
     revoked: dict[str, set[str]] = {}
     client = {g.lower() for g in REQUIRED_GRANTEES}
 
@@ -129,9 +130,10 @@ def analyse(sources: list[tuple[str, str]]) -> tuple[list[str], dict[str, str]]:
         for event in scan(sql):
             if event[0] == "create":
                 _, name, signature, unpinned = event
-                origin, signatures, _ = created.get(name, (label, set(), False))
-                # The latest definition decides: a later CREATE OR REPLACE may pin what an earlier one did not.
-                created[name] = (origin, signatures | {signature}, unpinned)
+                origin, signatures = created.setdefault(name, (label, {}))
+                # Per signature, the latest definition decides: a later CREATE OR REPLACE may pin
+                # what an earlier one did not, but a new overload replaces nothing.
+                signatures[signature] = unpinned
             elif event[0] == "revoke":
                 revoked.setdefault(event[1], set()).update(event[2])
             else:
@@ -139,14 +141,14 @@ def analyse(sources: list[tuple[str, str]]) -> tuple[list[str], dict[str, str]]:
                 revoked.setdefault(event[1], set()).difference_update(event[2] & client)
 
     failures = []
-    for name, (origin, signatures, unpinned) in sorted(created.items()):
+    for name, (origin, signatures) in sorted(created.items()):
         problems = []
-        if not signatures <= ALLOWLIST.keys():
+        if not signatures.keys() <= ALLOWLIST.keys():
             missing = [g for g in REQUIRED_GRANTEES if g.lower() not in revoked.get(name, set())]
             if missing:
                 problems.append(f"missing REVOKE from: {', '.join(missing)}")
-        if unpinned:
-            problems.append("SECURITY DEFINER without SET search_path")
+        problems += [f"SECURITY DEFINER without SET search_path: {sig}"
+                     for sig, unpinned in sorted(signatures.items()) if unpinned]
         if problems:
             failures.append(f"  {name}  (created in {origin})\n"
                             + "\n".join(f"      {p}" for p in problems))
@@ -343,6 +345,15 @@ CASES: list[tuple[str, str, bool]] = [
         'CREATE OR REPLACE FUNCTION "public"."f"() RETURNS int LANGUAGE sql SECURITY DEFINER '
         "SET search_path TO '' AS $$ SELECT 1 $$;",
         True,
+    ),
+    (
+        "a pinned new overload does not hide an unpinned older one",
+        'CREATE FUNCTION "public"."f"() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$;'
+        'REVOKE ALL ON FUNCTION "public"."f"() FROM PUBLIC, "anon", "authenticated";'
+        "\x00"
+        'CREATE FUNCTION "public"."f"("n" integer) RETURNS int LANGUAGE sql SECURITY DEFINER '
+        "SET search_path TO '' AS $$ SELECT 1 $$;",
+        False,
     ),
     (
         "a REVOKE does not bind across a statement boundary",

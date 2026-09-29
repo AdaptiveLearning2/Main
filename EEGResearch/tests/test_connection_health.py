@@ -125,8 +125,8 @@ def _listener():
 
 
 class _FakeBridge:
-    """Answers the adapter's CHALLENGE as `answer` says ("right", "wrong", "silent" or "hangup",
-    as a bridge built before the challenge does) and keeps what follows."""
+    """Answers the adapter's CHALLENGE as `answer` says ("right", "wrong", "nonascii", "silent" or
+    "hangup", as a bridge built before the challenge does) and keeps what follows."""
 
     def __init__(self, answer="right", token="a1b2c3d4"):
         self.listener, self.port = _listener()
@@ -156,6 +156,8 @@ class _FakeBridge:
                 return
             key = self.token if self.answer == "right" else "someone-else"
             proof = hmac.new(key.encode(), nonce.encode(), hashlib.sha256).hexdigest()
+            if self.answer == "nonascii":
+                proof = "é" * 64
             self.conn.sendall(f"PROOF {proof}\n".encode())
             self.proved.set()
             self.after_proof = stream.readline()
@@ -209,7 +211,7 @@ def test_an_old_bridge_is_told_apart_from_an_impostor(token_file, answer, says, 
         bridge.close()
 
 
-@pytest.mark.parametrize("answer", ["wrong", "silent", "hangup"])
+@pytest.mark.parametrize("answer", ["wrong", "silent", "hangup", "nonascii"])
 def test_whatever_cannot_prove_itself_the_bridge_never_gets_the_token(token_file, answer):
     """A process that took the port first would otherwise read the token and feed fabricated EEG."""
     bridge = _FakeBridge(answer)

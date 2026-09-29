@@ -24,7 +24,7 @@ class _Db:
 
         class _Q:
             def __init__(self):
-                self.filters, self.row = {}, None
+                self.filters, self.row, self.changes, self.one = {}, None, None, False
 
             def select(self, cols):
                 db.selects.append((name, cols))
@@ -35,18 +35,38 @@ class _Db:
                 self.filters[col] = val
                 return self
 
+            def in_(self, col, vals):
+                self.filters[col] = ("in", list(vals))
+                return self
+
+            def single(self):
+                self.one = True
+                return self
+
             def insert(self, row):
                 self.row = row
                 return self
+
+            def update(self, changes):
+                self.changes = changes
+                return self
+
+            def _match(self, r):
+                return all(r.get(k) in v[1] if isinstance(v, tuple) else r.get(k) == v
+                           for k, v in self.filters.items())
 
             def execute(self):
                 if self.row is not None:
                     db.inserts.append((name, self.row))
                     db.tables[name].append(self.row)
                     return type("R", (), {"data": [self.row]})()
-                hit = [{c: r.get(c) for c in self.cols} for r in db.tables[name]
-                       if all(r.get(k) == v for k, v in self.filters.items())]
-                return type("R", (), {"data": hit})()
+                if self.changes is not None:
+                    for r in db.tables[name]:
+                        if self._match(r):
+                            r.update(self.changes)
+                    return type("R", (), {"data": []})()
+                hit = [{c: r.get(c) for c in self.cols} for r in db.tables[name] if self._match(r)]
+                return type("R", (), {"data": (hit[0] if hit else None) if self.one else hit})()
         return _Q()
 
 
@@ -100,6 +120,33 @@ def test_guesses_past_the_limit_are_refused_before_any_lookup(db, monkeypatch):
     assert e.value.status_code == 429 and int(e.value.headers["Retry-After"]) >= 1
     assert len(db.selects) == lookups, "a refused guess still reached the classes table"
     assert recorded == [("rate_limited", {"limiter": main._JOIN_CODE_LIMITER.name})]
+
+
+def test_a_students_class_list_sends_what_joining_did_and_nothing_of_the_teachers(db):
+    db.tables["class_memberships"].append({"class_id": "class-1", "student_id": "student-1"})
+    assert main.my_classes(None) == [{"id": "class-1", "name": "Algebra", "grade_level": "7"}]
+    assert ("classes", "id, name, grade_level") in db.selects
+
+
+def test_the_teacher_replaces_an_old_code_and_the_class_keeps_its_members(db, monkeypatch):
+    db.tables["classes"][0]["join_code"] = "ABC123"
+    db.tables["class_memberships"].append({"class_id": "class-1", "student_id": "student-9"})
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
+    out = main.replace_join_code("class-1", None)
+    assert len(out["join_code"]) == 8 and db.tables["classes"][0]["join_code"] == out["join_code"]
+    assert db.tables["class_memberships"] == [{"class_id": "class-1", "student_id": "student-9"}]
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "student-1"})
+    with pytest.raises(main.HTTPException) as e:
+        _join("ABC123")
+    assert e.value.status_code == 404, "the old code still joins"
+
+
+def test_only_the_owning_teacher_replaces_a_code(db, monkeypatch):
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-2"})
+    with pytest.raises(main.HTTPException) as e:
+        main.replace_join_code("class-1", None)
+    assert e.value.status_code == 403
+    assert db.tables["classes"][0]["join_code"] == "ABCD2345"
 
 
 def test_a_new_class_gets_a_long_code_from_the_unambiguous_alphabet(db, monkeypatch):

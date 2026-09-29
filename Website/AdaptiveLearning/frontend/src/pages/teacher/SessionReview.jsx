@@ -147,6 +147,8 @@ function SessionReviewBody({ sessionId }) {
     return `${Sensor} was turned off on ${since}, so nothing it recorded is shown.`
   }
   const faceWithheld  = withheld(channels.face_included, channels.emotion_revoked_at, 'the camera')
+  const faceCount = channels.face_included !== false ? face.length
+    : channels.consent_retrieved === false ? 'Unavailable' : 'Off'
   const heartWithheld = withheld(channels.heart_included, channels.heart_revoked_at, 'heart-rate recording')
 
   // Numeric ms x-axis, more stable than category strings.
@@ -296,6 +298,7 @@ function SessionReviewBody({ sessionId }) {
     if (archiveErr) return 'failed'
     if (!archive) return 'pending'
     if ((archive.withdrawn || []).includes(name)) return 'withdrawn'
+    if ((archive.unchecked || []).includes(name)) return 'unchecked'
     if (!archive.archived) return 'unarchived'
     if ((archive.unavailable || []).includes(name)) return 'unavailable'
     const url = (archive.charts || {})[name]
@@ -308,6 +311,7 @@ function SessionReviewBody({ sessionId }) {
     unavailable: 'The archived chart for this session could not be loaded.',
     unarchived: 'No signal samples for this session.',
     withdrawn: 'Not shown: this sensor is off for this student.',
+    unchecked: 'Not shown: consent for this sensor could not be checked.',
     failed: 'The archived charts could not be loaded — try again.',
     pending: 'Loading the archived charts…',
   }
@@ -336,7 +340,8 @@ function SessionReviewBody({ sessionId }) {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
           { label: 'Cognitive samples', value: cognitive.length, icon: <Brain size={16} className="text-indigo-500" /> },
-          { label: 'Face samples',      value: face.length,      icon: <Camera size={16} className="text-pink-500" /> },
+          // A skipped channel was never read, so its count is a reason, never 0.
+          { label: 'Face samples',      value: faceCount,        icon: <Camera size={16} className="text-pink-500" /> },
           { label: 'Answers',           value: totalAnswers,     icon: <Activity size={16} className="text-emerald-500" /> },
           { label: 'Accuracy',          value: totalAnswers ? `${acc}%` : '—', icon: <CheckCircle2 size={16} className="text-violet-500" /> },
         ].map(t => (
@@ -479,7 +484,7 @@ function SessionReviewBody({ sessionId }) {
             <p className="text-sm text-gray-600 dark:text-gray-400">
               {faceWithheld || (isUrl(archivedChart('emotion_pie'))
                 ? 'The per-sample rows have expired, so the moment-by-moment timeline is gone. The emotion mix is below.'
-                : archivedChart('emotion_pie') === 'unavailable' || archivedChart('emotion_pie') === 'withdrawn'
+                : ['unavailable', 'withdrawn', 'unchecked'].includes(archivedChart('emotion_pie'))
                   ? NO_CHART_COPY[archivedChart('emotion_pie')]
                   : archivedChart('emotion_pie') === 'empty'
                     ? 'Nothing was recorded on the camera channel.'

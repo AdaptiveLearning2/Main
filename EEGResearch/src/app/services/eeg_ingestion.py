@@ -840,7 +840,8 @@ class TcpMuseBridgeAdapter:
             proof = stream.readline(self.MAX_LINE_CHARS).rstrip("\r\n")
             expected = "PROOF " + hmac.new(token.encode("ascii"), nonce.encode("ascii"),
                                            hashlib.sha256).hexdigest()
-            if not hmac.compare_digest(proof, expected):
+            # As bytes: compare_digest raises on a non-ASCII str, which a squatter can send.
+            if not hmac.compare_digest(proof.encode("utf-8"), expected.encode("ascii")):
                 # A hang-up is what a bridge built before the challenge does with one.
                 why = ("hung up at the challenge: likely a bridge built before it, so rebuild it "
                        "(start.ps1 -Muse does)") if not proof else \

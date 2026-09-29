@@ -428,6 +428,17 @@ def test_question_generation_keeps_an_address_budget(monkeypatch):
     assert seen[2].status_code == 429
 
 
+def test_class_joins_keep_an_address_budget(monkeypatch):
+    """Per account alone, a class code could be guessed ten tries per throwaway account."""
+    _tighten(monkeypatch, "public_join", limit=2)
+    unguarded = TestClient(main.app, raise_server_exceptions=False)
+
+    seen = [unguarded.post("/api/classes/join", json={"join_code": "ABCD2345"}) for _ in range(3)]
+
+    assert [r.status_code for r in seen[:2]] == [401, 401]
+    assert seen[2].status_code == 429
+
+
 def _tighten(monkeypatch, limiter="public_read", limit=2, window=60.0):
     """Shrink one budget by patching the limiter object; `_PUBLIC_RATE_LIMITS` is read at import."""
     budget = main._PUBLIC_BUDGETS[limiter]

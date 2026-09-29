@@ -10,6 +10,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _log = logging.getLogger(__name__)
 
+# The website backend's default INGEST_MAX_ROWS_PER_MINUTE: rows per session channel it accepts.
+BACKEND_ROWS_PER_MINUTE = 1200
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
@@ -129,6 +132,16 @@ class Settings(BaseSettings):
             if url.scheme != "https" and url.hostname not in ("127.0.0.1", "localhost", "::1"):
                 raise ValueError(f"BACKEND_URL {self.backend_url!r} would carry the student's token "
                                  "in cleartext; use https for any host but this machine")
+        return self
+
+    @model_validator(mode="after")
+    def _push_rate_fits_the_backend(self):
+        """Warns, since only the backend knows its own ceiling: one pushed row per tick per channel."""
+        # Half the ceiling: a retried batch is charged again until the backend finds it duplicated.
+        if self.push_enabled and 2 * 60 * self.eeg_sample_hz > BACKEND_ROWS_PER_MINUTE:
+            _log.warning("EEG_SAMPLE_HZ=%d pushes %d rows a minute per channel, over half the backend's "
+                         "default INGEST_MAX_ROWS_PER_MINUTE (%d); raise that there, or samples are "
+                         "refused", self.eeg_sample_hz, 60 * self.eeg_sample_hz, BACKEND_ROWS_PER_MINUTE)
         return self
 
 

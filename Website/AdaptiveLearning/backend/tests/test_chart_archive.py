@@ -1233,7 +1233,27 @@ def test_a_withdrawn_channels_archived_charts_are_never_signed(monkeypatch):
 
     payload = main.session_charts(SESSION, None)
     assert payload["withdrawn"] == ["emotion_pie", "heart_rate", "stress_pie"]
+    assert payload["unchecked"] == []
     assert set(payload["charts"]) == {"cognitive_timeline"}
     signed = [path for path, _ttl in getattr(client.bucket, "signed", [])]
     assert signed and all(chart_archive.object_path(USER, SESSION, name) not in signed
                           for name in payload["withdrawn"])
+
+
+def test_charts_withheld_for_unreadable_consent_are_not_called_withdrawn(monkeypatch):
+    """Fail closed, but a failed read is not a decision anyone made."""
+    import main
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", _consent_with(retrieved=False, camera_enabled=False,
+                                                        headband_optical_enabled=False))
+    archiver = _SigningClient(cognitive=COG, heart=HEART, face=FACE)
+    paths = chart_archive.archive_session(archiver, SESSION, USER)
+    client = _SessionsClient({"user_id": USER, "chart_paths": paths})
+    client._storage = archiver._storage
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
+    monkeypatch.setattr(main, "supabase", client)
+
+    payload = main.session_charts(SESSION, None)
+    assert payload["withdrawn"] == []
+    assert payload["unchecked"] == ["emotion_pie", "heart_rate", "stress_pie"]
+    assert set(payload["charts"]) == {"cognitive_timeline"}

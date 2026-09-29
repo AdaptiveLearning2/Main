@@ -87,6 +87,10 @@ class _Query:
         self._filters.append((col, ("lt", val)))
         return self
 
+    def gt(self, col, val):
+        self._filters.append((col, ("gt", val)))
+        return self
+
     def is_(self, col, val):
         # Matches the string the real client sends ("null"), not Python's None.
         self._filters.append((col, ("is", val)))
@@ -112,6 +116,9 @@ class _Query:
                     return False
             elif isinstance(want, tuple) and want[0] == "lt":
                 if have is None or str(have) >= str(want[1]):
+                    return False
+            elif isinstance(want, tuple) and want[0] == "gt":
+                if have is None or str(have) <= str(want[1]):
                     return False
             elif isinstance(want, tuple) and want[0] == "is":
                 # Anything but "null"/"not.null" raises rather than being ignored.
@@ -2325,13 +2332,33 @@ def test_leaderboard_names_nobody_outside_the_callers_classes(monkeypatch):
 
 def test_a_teacher_sees_their_own_classes(monkeypatch):
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(3)))
+    # teacher-1's role comes from its `profiles` row.
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
-    monkeypatch.setattr(main, "_role", lambda _uid: "teacher")
     assert [r["display_name"] for r in main.leaderboard(None)] == ["Name 0", "Name 1", "Name 2"]
 
 
-def test_a_teacher_of_a_whole_school_is_ranked_over_every_student(monkeypatch):
-    """Past db-max-rows memberships are paged, and the ids go out in URL-sized chunks."""
+class _DeletesAfterFirstPage(_FakeSupabase):
+    """A membership row that was already read is deleted before the next page is asked for."""
+
+    def table(self, name):
+        query = super().table(name)
+        if name == "class_memberships":
+            run = query.execute
+
+            def execute():
+                out = run()
+                if not getattr(self, "_deleted", False) and out.data:
+                    self._deleted = True
+                    del self._tables["class_memberships"][0]
+                return out
+            query.execute = execute
+        return query
+
+
+@pytest.mark.parametrize("fake_cls", [_FakeSupabase, _DeletesAfterFirstPage],
+                         ids=["steady", "deleted_mid_read"])
+def test_a_teacher_of_a_whole_school_is_ranked_over_every_student(monkeypatch, fake_cls):
+    """Past db-max-rows memberships are paged by key, and the ids go out in URL-sized chunks."""
     n = 1200
     tables = _leaderboard_tables(0)
     ids = [f"student-{i:04d}" for i in range(n)] + ["student-z"]
@@ -2342,10 +2369,9 @@ def test_a_teacher_of_a_whole_school_is_ranked_over_every_student(monkeypatch):
     tables["user_stats"].append({"user_id": "student-z", "total_correct": 999, "total_questions": 999,
                                  "current_streak": 1, "best_streak": 2})
     tables["profiles"].append({"id": "student-z", "display_name": "Top"})
-    fake = _FakeSupabase(tables, max_rows={"class_memberships": 500})
+    fake = fake_cls(tables, max_rows={"class_memberships": 500})
     monkeypatch.setattr(main, "supabase", fake)
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
-    monkeypatch.setattr(main, "_role", lambda _uid: "teacher")
 
     rows = main.leaderboard(None)
 
@@ -2367,10 +2393,15 @@ def test_a_student_in_no_class_sees_only_themselves(monkeypatch):
     assert [r["is_me"] for r in main.leaderboard(None)] == [True]
 
 
-def test_an_unreadable_class_list_is_an_error_not_a_smaller_board(monkeypatch):
+@pytest.mark.parametrize("table, caller", [
+    (table, caller) for caller in ("student-1", "teacher-1")
+    for table in ("profiles", "class_memberships", "user_stats")
+] + [("classes", "teacher-1")])
+def test_any_unreadable_read_is_an_error_not_a_smaller_board(monkeypatch, table, caller):
+    """A failed role read would otherwise show a teacher the empty board of a student in no class."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(3),
-                                                        table_raises={"class_memberships"}))
-    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+                                                        table_raises={table}))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": caller})
     with pytest.raises(main.HTTPException) as e:
         main.leaderboard(None)
     assert e.value.status_code == 503
@@ -2406,13 +2437,12 @@ def test_leaderboard_names_the_board_in_one_read(monkeypatch):
     fake = _FakeSupabase(_leaderboard_tables(30))
     monkeypatch.setattr(main, "supabase", fake)
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
-    # The caller's own role is one `profiles` read of its own; this counts the board's.
-    monkeypatch.setattr(main, "_role", lambda _uid: "student")
 
     rows = main.leaderboard(None, limit=30)
 
-    assert fake.table_calls.count("profiles") == 1, (
-        f"one read for the board, got {fake.table_calls.count('profiles')}")
+    # One for the caller's own role, one for the board's names; a per-row lookup would be 32.
+    assert fake.table_calls.count("profiles") == 2, (
+        f"one read for the board, got {fake.table_calls.count('profiles') - 1}")
     # Names still land, so the above can't pass by not reading profiles.
     assert rows[0]["display_name"] == "Name 0"
 

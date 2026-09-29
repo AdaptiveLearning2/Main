@@ -6,7 +6,7 @@ import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
 import { toast } from 'sonner'
 
-// New classes get 8 characters; codes issued before that are 6 and still join.
+// New classes get 8 characters; older 6-character codes join until their teacher replaces them.
 const CODE_LENGTHS = [6, 8]
 
 export default function JoinClass() {
@@ -90,14 +90,12 @@ export default function JoinClass() {
                 </div>
                 <div>
                   <p className="font-bold text-gray-900 dark:text-white">{c.name}</p>
-                  <p className="text-xs text-gray-600 flex items-center gap-2 dark:text-gray-400">
-                    Code: <span className="font-mono font-bold">{c.join_code}</span>
-                    {c.grade_level && (
-                      <span className="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-400 font-bold">
-                        · <GraduationCap size={11} /> {c.grade_level}
-                      </span>
-                    )}
-                  </p>
+                  {/* No class code: it is the teacher's to hand out, so the API does not send it. */}
+                  {c.grade_level && (
+                    <p className="text-xs inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-400 font-bold">
+                      <GraduationCap size={11} /> {c.grade_level}
+                    </p>
+                  )}
                 </div>
               </div>
               <span className="text-xs font-bold text-green-600 bg-green-100 dark:bg-green-900/30 dark:text-green-400 px-3 py-1 rounded-full">Enrolled ✓</span>

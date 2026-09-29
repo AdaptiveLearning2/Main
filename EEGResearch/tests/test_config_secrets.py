@@ -44,6 +44,15 @@ def test_a_remote_http_url_is_fine_while_push_is_off():
     assert _settings(PUSH_ENABLED=False, BACKEND_URL="http://192.168.1.20:8000")
 
 
+@pytest.mark.parametrize("hz, push, warns", [(4, True, False), (10, True, False),
+                                              (11, True, True), (30, False, False)])
+def test_a_push_rate_the_backend_would_refuse_warns(hz, push, warns, caplog):
+    """The backend cannot see EEG_SAMPLE_HZ, so its ceiling is checked here."""
+    with caplog.at_level("WARNING"):
+        _settings(EEG_SAMPLE_HZ=hz, PUSH_ENABLED=push)
+    assert ("INGEST_MAX_ROWS_PER_MINUTE" in caplog.text) is warns
+
+
 def test_a_short_token_warns_but_boots(caplog):
     with caplog.at_level("WARNING"):
         _settings(API_TOKEN="short", ADMIN_TOKEN="other")

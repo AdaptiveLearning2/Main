@@ -208,6 +208,8 @@ _PUBLIC_LIMITER = {
 # Separate so `_PUBLIC_LIMITER` means exactly "no caller" (tested both ways).
 _AUTHENTICATED_ADDRESS_LIMITER = {
     "/api/generate-question": "public_generate",
+    # A class code is guessed by volume, and each new account brings its own per-account budget.
+    "/api/classes/join":      "public_join",
 }
 
 # An address is a school behind one NAT, not a student: 60 students polling
@@ -216,6 +218,10 @@ _PUBLIC_RATE_LIMITS = {
     "public_generate": (
         env_number("PUBLIC_GENERATE_RATE_LIMIT", 600, int, minimum=1),
         env_number("PUBLIC_GENERATE_RATE_WINDOW", 60.0, float, minimum=1.0)),
+    # A whole school joining at the start of term, typos included, with room to spare.
+    "public_join": (
+        env_number("PUBLIC_JOIN_RATE_LIMIT", 300, int, minimum=1),
+        env_number("PUBLIC_JOIN_RATE_WINDOW", 3600.0, float, minimum=1.0)),
     "public_read": (
         env_number("PUBLIC_READ_RATE_LIMIT", 1800, int, minimum=1),
         env_number("PUBLIC_READ_RATE_WINDOW", 60.0, float, minimum=1.0)),
@@ -230,11 +236,11 @@ _PUBLIC_RATE_LIMITS = {
 _TRUSTED_PROXY_HOPS = int(env_number("TRUSTED_PROXY_HOPS", 0, int, minimum=0))
 
 class _SlidingWindowLimiter:
-    """`limit` calls per `window` seconds per key, on a monotonic clock.
+    """`limit` hits per `window` seconds per key, on a monotonic clock.
 
-    Answers rather than raising, so middleware can use it. The sweep is gated
-    on size *and* time; `sweep_at` is seeded from `monotonic()`, not 0.0,
-    whose reference point is undefined.
+    Answers rather than raising, so middleware can use it. `hits[key]` is a deque of
+    `[time, count]`, one per admitted call, oldest first. `sweep_at` is seeded from
+    `monotonic()`, not 0.0, whose reference point is undefined.
     """
 
     def __init__(self, name: str, limit: int, window: float,
@@ -244,36 +250,47 @@ class _SlidingWindowLimiter:
         self.window = window
         self._sweep_above = sweep_above
         self._sweep_every = sweep_every
-        self.hits: dict[str, list[float]] = {}
+        self.hits: dict[str, collections.deque[list]] = {}
         self.sweep_at = time.monotonic()
         self._lock = threading.Lock()
 
     def check(self, key: str, cost: int = 1) -> int | None:
         """Seconds to wait, or `None` while the caller is inside its allowance; `cost` hits at once, all or none."""
-        now = time.monotonic()
         with self._lock:
+            # Read under the lock, so entries are appended in time order.
+            now = time.monotonic()
             if (len(self.hits) > self._sweep_above
                     and now - self.sweep_at >= self._sweep_every):
                 self.sweep_at = now
-                for stale in [k for k, ts in self.hits.items()
-                              if all(now - t >= self.window for t in ts)]:
+                for stale in [k for k, q in self.hits.items()
+                              if not q or now - q[-1][0] >= self.window]:
                     del self.hits[stale]
 
-            hits = [t for t in self.hits.get(key, ()) if now - t < self.window]
-            self.hits[key] = hits
-            if len(hits) + cost > self.limit:
-                # Hits are in time order; the one whose expiry frees `cost` slots decides the wait.
-                freeing = hits[min(len(hits), len(hits) + cost - self.limit) - 1] if hits else now
+            q = self.hits.setdefault(key, collections.deque())
+            while q and now - q[0][0] >= self.window:
+                q.popleft()
+            used = sum(n for _t, n in q)
+            if used + cost > self.limit:
+                # The entry whose expiry frees enough room decides the wait.
+                need, freeing = used + cost - self.limit, now
+                for t, n in q:
+                    need, freeing = need - n, t
+                    if need <= 0:
+                        break
                 return max(1, int(self.window - (now - freeing)) + 1)
-            hits.extend([now] * cost)
+            q.append([now, cost])
             return None
 
     def release(self, key: str, count: int = 1) -> None:
         """Give back the caller's `count` newest hits, for work admitted but never done."""
         with self._lock:
-            hits = self.hits.get(key)
-            if hits and count > 0:
-                del hits[-count:]
+            q = self.hits.get(key)
+            while q and count > 0:
+                take = min(count, q[-1][1])
+                q[-1][1] -= take
+                count -= take
+                if q[-1][1] == 0:
+                    q.pop()
 
     def reset(self) -> None:
         """Forget every caller and re-arm the sweep. For tests."""
@@ -384,7 +401,7 @@ def get_user(request: Request):
     return resp.json()
 
 # ─── the code a child gives a parent ─────────────────────────────────────
-# A credential, so `secrets` (CSPRNG), never `rand_code`'s `random`. No O/0/I/1:
+# A credential, so `secrets` (CSPRNG), never `random`. No O/0/I/1:
 # a child reads it aloud. The TTL, single use and limiter are the real controls.
 _LINK_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _LINK_CODE_LEN = 8
@@ -396,10 +413,10 @@ def _new_link_code() -> str:
                    for _ in range(_LINK_CODE_LEN))
 
 
-# A class join code is guessable by volume, so the same alphabet and length; 6-character codes
-# issued before this still join. The join limiter is the real control.
+# A class join code is guessable by volume, so the same alphabet and length. Older 6-character
+# codes still join until their teacher replaces them. The limits are the real control.
 _JOIN_CODE_LEN = 8
-# Attempts per account per hour, successful or not; each refusal is audited.
+# Attempts per account per hour, successful or not, beside the per-address `public_join` budget.
 _JOIN_CODE_LIMITER = _SlidingWindowLimiter("class_join", 10, 3600.0)
 
 
@@ -3444,8 +3461,9 @@ _INGEST_RATE_WINDOW = env_number("INGEST_RATE_WINDOW", 60.0, float, minimum=1.0)
 _INGEST_LIMITER = _SlidingWindowLimiter(
     "ingest", _INGEST_RATE_LIMIT, _INGEST_RATE_WINDOW)
 
-# Rows per session per channel per minute. The batch rate alone allowed 60k rows a minute, ~86M
-# a day per account. The push client sends at most 600 (50 every 5 s), so this is twice that.
+# Rows per session per channel per minute; the batch rate alone allowed 60k. The sidecar pushes one
+# row per tick, 240 a minute at its default EEG_SAMPLE_HZ=4; this is twice a 10 Hz sidecar's. It cannot
+# see the sidecar's setting, so the sidecar warns at boot when it would push past this default.
 _INGEST_ROWS_PER_MINUTE = env_number("INGEST_MAX_ROWS_PER_MINUTE", 1200, int,
                                      minimum=_INGEST_MAX_BATCH)
 _INGEST_ROW_LIMITER = _SlidingWindowLimiter("ingest_rows", _INGEST_ROWS_PER_MINUTE, 60.0)
@@ -4402,15 +4420,17 @@ def _class_members(class_ids: list[str]) -> set[str]:
     """Every student in these classes, paged until a read comes back empty (db-max-rows cuts silently)."""
     members: set[str] = set()
     for chunk in _chunks(class_ids):
-        start = 0
+        last = None
         while True:
-            page = supabase.table("class_memberships").select("class_id, student_id") \
-                .in_("class_id", chunk).order("class_id").order("student_id") \
-                .range(start, start + 999).execute().data or []
+            query = supabase.table("class_memberships").select("student_id").in_("class_id", chunk)
+            if last is not None:
+                # By key, not offset: a row deleted mid-read cannot shift a student past the page.
+                query = query.gt("student_id", last)
+            page = query.order("student_id").limit(1000).execute().data or []
             if not page:
                 break
             members |= {m["student_id"] for m in page}
-            start += len(page)
+            last = page[-1]["student_id"]
     return members
 
 
@@ -4420,7 +4440,9 @@ def _leaderboard_peers(user_id: str) -> set[str]:
     A student is always among them. Names never leave the caller's own classes, so no school
     sees another's children. Raises on a failed read: a partial class is not a smaller one.
     """
-    if _role(user_id) == "teacher":
+    # Not `_role`, which answers "student" on a failed read and so shows a teacher an empty board.
+    me = supabase.table("profiles").select("role").eq("id", user_id).execute().data
+    if ((me[0].get("role") if me else None) or "student") == "teacher":
         classes = supabase.table("classes").select("id").eq("teacher_id", user_id).execute()
         class_ids = [c["id"] for c in classes.data or []]
         peers: set[str] = set()
@@ -4432,22 +4454,8 @@ def _leaderboard_peers(user_id: str) -> set[str]:
     return peers | _class_members(class_ids)
 
 
-@app.get("/api/leaderboard")
-def leaderboard(request: Request, limit: int = 20):
-    """Top students by correct answers, among the caller's classes only.
-
-    Service-role read, so `limit` must stay clamped to _LEADERBOARD_MAX.
-    user_id is never returned; only `is_me`.
-    """
-    user = get_user(request)
-    try:
-        peers = _leaderboard_peers(user["id"])
-    except Exception as e:
-        print(f"[leaderboard] classes unreadable for {user['id'][:8]}: {type(e).__name__}")
-        raise HTTPException(503, "The leaderboard could not be loaded right now")
-    if not peers:
-        return []
-    top = max(1, min(limit, _LEADERBOARD_MAX))
+def _leaderboard_rows(peers: set[str], top: int) -> list[dict]:
+    """The top `top` stats rows among `peers`; raises on a failed read."""
     rows = []
     # Each chunk's own top N, merged: the board's top N is among them.
     for chunk in _chunks(sorted(peers)):
@@ -4456,7 +4464,23 @@ def leaderboard(request: Request, limit: int = 20):
                     "last_session_at") \
             .in_("user_id", chunk) \
             .order("total_correct", desc=True).limit(top).execute().data or []
-    rows = sorted(rows, key=lambda r: r.get("total_correct") or 0, reverse=True)[:top]
+    return sorted(rows, key=lambda r: r.get("total_correct") or 0, reverse=True)[:top]
+
+
+@app.get("/api/leaderboard")
+def leaderboard(request: Request, limit: int = 20):
+    """Top students by correct answers, among the caller's classes only.
+
+    Service-role read, so `limit` must stay clamped to _LEADERBOARD_MAX.
+    user_id is never returned; only `is_me`. Any failed read is a 503, never a smaller board.
+    """
+    user = get_user(request)
+    try:
+        peers = _leaderboard_peers(user["id"])
+        rows = _leaderboard_rows(peers, max(1, min(limit, _LEADERBOARD_MAX))) if peers else []
+    except Exception as e:
+        print(f"[leaderboard] unreadable for {user['id'][:8]}: {type(e).__name__}")
+        raise HTTPException(503, "The leaderboard could not be loaded right now")
     profiles = _profiles_many(r.get("user_id") for r in rows)
     tz = _school_timezone() if rows else None
     enriched = []
@@ -4481,19 +4505,33 @@ def create_class(payload: CreateClassRequest, request: Request):
     user = get_user(request)
     if _role(user["id"]) != "teacher":
         raise HTTPException(403, "Only teachers can create classes")
-    code = _new_join_code()
-    for _ in range(5):
-        existing = supabase.table("classes").select("id").eq("join_code", code).execute()
-        if not existing.data:
-            break
-        code = _new_join_code()
     res = supabase.table("classes").insert({
         "teacher_id":  user["id"],
         "name":        payload.name,
         "grade_level": payload.grade_level,
-        "join_code":   code,
+        "join_code":   _unused_join_code(),
     }).execute()
     return res.data[0]
+
+
+def _unused_join_code() -> str:
+    """A new code no class holds, retried a few times; a collision in 32^8 is vanishingly rare."""
+    code = _new_join_code()
+    for _ in range(5):
+        if not supabase.table("classes").select("id").eq("join_code", code).execute().data:
+            break
+        code = _new_join_code()
+    return code
+
+
+@app.post("/api/classes/{class_id}/join-code")
+def replace_join_code(class_id: str, request: Request):
+    """A new 8-character code for the owning teacher; the old one stops joining, and members stay."""
+    user = get_user(request)
+    _verify_class_owner(class_id, user["id"])
+    code = _unused_join_code()
+    supabase.table("classes").update({"join_code": code}).eq("id", class_id).execute()
+    return {"id": class_id, "join_code": code}
 
 # Registered before `/api/classes/{class_id}`, or that route binds "summary".
 @app.get("/api/classes/summary")
@@ -4584,7 +4622,8 @@ def my_classes(request: Request):
         ids = [m["class_id"] for m in (memberships.data or [])]
         if not ids:
             return []
-        res = supabase.table("classes").select("*").in_("id", ids).execute()
+        # What `join_class` returns: the teacher's id and the class code are the teacher's.
+        res = supabase.table("classes").select("id, name, grade_level").in_("id", ids).execute()
     return res.data or []
 
 @app.post("/api/classes/join")
@@ -4598,7 +4637,7 @@ def join_class(payload: JoinClassRequest, request: Request):
                                  "try again later.", headers={"Retry-After": str(wait)})
     if _role(user["id"]) != "student":
         raise HTTPException(403, "Only students can join a class")
-    # Named columns: `teacher_id` and `join_code` are not the joining student's to read.
+    # Named columns, as `my_classes` sends a student: `teacher_id` and `join_code` are the teacher's.
     cls  = supabase.table("classes").select("id, name, grade_level") \
         .eq("join_code", payload.join_code.strip().upper()).execute()
     if not cls.data:
@@ -6202,9 +6241,9 @@ _CHARTS_BY_CHANNEL = {"emotion": ("emotion_pie",), "heart": ("heart_rate", "stre
 def session_charts(session_id: str, request: Request):
     """Short-lived signed URLs for a closed session's archived charts.
 
-    The bucket has no policies: `_verify_can_view_student` is the whole check.
-    States: `archived: false` (never ran), `charts[name]: null` (nothing drawn),
-    `name in unavailable` (object unreadable), `name in withdrawn` (its channel is off; not signed).
+    The bucket has no policies: `_verify_can_view_student` is the whole check. States: `archived:
+    false` (never ran), `charts[name]: null` (nothing drawn), `unavailable` (object unreadable),
+    `withdrawn` (channel off) and `unchecked` (consent unreadable); the last two are never signed.
     """
     user = get_user(request)
     sess = _row_or_404(
@@ -6212,24 +6251,24 @@ def session_charts(session_id: str, request: Request):
         "Session")
     _verify_can_view_student(user, sess["user_id"])
     channels = _reportable_channels(sess["user_id"])
-    withdrawn = sorted(name for channel, on in (("emotion", channels.emotion), ("heart", channels.heart))
-                       if not on for name in _CHARTS_BY_CHANNEL[channel])
+    held = sorted(name for channel, on in (("emotion", channels.emotion), ("heart", channels.heart))
+                  if not on for name in _CHARTS_BY_CHANNEL[channel])
+    # An unreadable consent row withholds too (fail closed), but is not a withdrawal.
+    withdrawn, unchecked = (held, []) if channels.consent_retrieved else ([], held)
+    common = {"withdrawn": withdrawn, "unchecked": unchecked, "channels": _channel_flags(channels),
+              "expires_in": chart_archive.SIGNED_URL_TTL_SECONDS}
 
     paths = sess.get("chart_paths")
     if paths is None:
         # Column-NULL: the archive never ran. Distinct from `{}` and four nulls.
-        return {"archived": False, "charts": {}, "unavailable": [], "withdrawn": withdrawn,
-                "channels": _channel_flags(channels),
-                "expires_in": chart_archive.SIGNED_URL_TTL_SECONDS}
+        return {"archived": False, "charts": {}, "unavailable": [], **common}
 
     # Security: paths derive from owner and id; `chart_paths` decides presence only.
-    # A withdrawn chart is dropped before signing, so no URL to it is ever issued.
-    kept = {name: path for name, path in paths.items() if name not in withdrawn}
+    # A withheld chart is dropped before signing, so no URL to it is ever issued.
+    kept = {name: path for name, path in paths.items() if name not in held}
     urls, unavailable = chart_archive.signed_chart_urls(
         supabase, kept, sess["user_id"], session_id)
-    return {"archived": True, "charts": urls, "unavailable": unavailable, "withdrawn": withdrawn,
-            "channels": _channel_flags(channels),
-            "expires_in": chart_archive.SIGNED_URL_TTL_SECONDS}
+    return {"archived": True, "charts": urls, "unavailable": unavailable, **common}
 
 
 # ─── live monitoring (only show truly active sessions) ───────────────────

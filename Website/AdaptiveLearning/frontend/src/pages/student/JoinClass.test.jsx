@@ -26,6 +26,16 @@ describe('JoinClass', () => {
     expect(screen.getByRole('button', { name: 'Join Class' })).toBeEnabled()
   })
 
+  it('lists a joined class by name and grade, with no class code', async () => {
+    // An older backend still sent the code; the page must not show it either way.
+    mockApi({ '/api/classes': [{ id: 'c1', name: 'Algebra', grade_level: '7th Grade', join_code: 'ABCD2345' }] })
+    render(<JoinClass />)
+    expect(await screen.findByText('Algebra')).toBeInTheDocument()
+    expect(screen.getByText('7th Grade')).toBeInTheDocument()
+    expect(screen.queryByText('ABCD2345')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Code:/)).not.toBeInTheDocument()
+  })
+
   it('offers no join for a length no code has', async () => {
     render(<JoinClass />)
     await userEvent.type(screen.getByLabelText('Class code'), 'abcd234')

@@ -3,6 +3,7 @@
 import os
 import re
 import time
+from collections import deque
 from pathlib import Path
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -408,7 +409,7 @@ def test_stale_callers_are_evicted_rather_than_accumulating(store, monkeypatch):
 
     # Callers who posted a full window ago and never came back.
     stale = time.monotonic() - (main._INGEST_LIMITER.window + 1)
-    main._INGEST_LIMITER.hits.update({f"gone-{i}": [stale] for i in range(10)})
+    main._INGEST_LIMITER.hits.update({f"gone-{i}": deque([[stale, 1]]) for i in range(10)})
     main._INGEST_LIMITER.sweep_at = 0.0
 
     _post_heart([_heart()])
@@ -425,7 +426,7 @@ def test_an_active_caller_is_never_swept(store, monkeypatch):
     monkeypatch.setattr(main._INGEST_LIMITER, "_sweep_above", 0)
     monkeypatch.setattr(main._INGEST_LIMITER, "_sweep_every", 0.0)
 
-    main._INGEST_LIMITER.hits["busy"] = [time.monotonic()]   # a hit just now
+    main._INGEST_LIMITER.hits["busy"] = deque([[time.monotonic(), 1]])   # a hit just now
     main._INGEST_LIMITER.sweep_at = 0.0
 
     _post_heart([_heart()])
@@ -668,9 +669,16 @@ def test_a_failed_write_gives_its_rows_back(store, monkeypatch):
     assert _post_heart(_hearts(5))["inserted"] == 5
 
 
-def test_the_default_ceiling_is_above_what_the_push_client_can_send():
-    """50 rows every 5 s per channel is 600 a minute; a ceiling at or below it refuses a real session."""
-    assert main._INGEST_ROWS_PER_MINUTE > 600
+def test_the_default_ceiling_is_the_one_the_sidecar_warns_against():
+    """One pushed row per tick; the sidecar compares its EEG_SAMPLE_HZ to this default.
+
+    Read from source, since a local backend .env may set the variable.
+    """
+    default = int(re.search(r'env_number\("INGEST_MAX_ROWS_PER_MINUTE", (\d+)',
+                            Path(main.__file__).read_text(encoding="utf-8")).group(1))
+    config = Path(__file__).resolve().parents[4] / "EEGResearch" / "src" / "app" / "config.py"
+    assert f"BACKEND_ROWS_PER_MINUTE = {default}\n" in config.read_text(encoding="utf-8")
+    assert default >= 2 * 60 * 4, "twice the sidecar's default 4 Hz"
     assert main._INGEST_ROWS_PER_MINUTE >= main._INGEST_MAX_BATCH
 
 
@@ -679,3 +687,22 @@ def test_a_cost_is_taken_whole_or_not_at_all():
     assert limiter.check("k", cost=4) is None
     assert limiter.check("k", cost=2) is not None
     assert limiter.check("k", cost=1) is None, "the refused cost of 2 was partly taken"
+
+
+def test_a_batch_is_one_entry_and_can_be_given_back_in_part():
+    """Stored per call, not per row: a 500-row batch must not be 500 entries rescanned under the lock."""
+    limiter = main._SlidingWindowLimiter("t", 1200, 60.0)
+    assert limiter.check("k", cost=500) is None and limiter.check("k", cost=300) is None
+    assert len(limiter.hits["k"]) == 2
+    limiter.release("k", 350)          # all of the newest call and 50 of the one before
+    assert [n for _t, n in limiter.hits["k"]] == [450]
+    assert limiter.check("k", cost=750) is None and limiter.check("k", cost=1) is not None
+
+
+def test_the_clock_is_read_under_the_lock(monkeypatch):
+    """Read before it, two callers can append out of time order, and pruning assumes order."""
+    limiter = main._SlidingWindowLimiter("t", 5, 60.0)
+    real, held = time.monotonic, []
+    monkeypatch.setattr(main.time, "monotonic", lambda: (held.append(limiter._lock.locked()), real())[1])
+    limiter.check("k")
+    assert held and all(held)

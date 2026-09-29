@@ -526,8 +526,9 @@ use it without a cycle. These are read at import, so a typo would otherwise take
 over a tuning knob for one optional feature. It falls back on unparseable and non-finite values
 (`inf` passes a `minimum` check, `nan` fails every comparison, and both break call sites in ways
 that look like the feature being off) and clamps below the floor. **Give every one a floor:** a
-number is not automatically a usable setting. The sidecar's boot settings take the same tolerant
-treatment in `config.py` — a validator warns and falls back rather than refusing the boot.
+number is not automatically a usable setting. The sidecar's tuning settings take the same tolerant
+treatment in `config.py` — a validator warns and falls back rather than refusing the boot. Its secrets
+do not: a `replace-me` token, two equal tokens, or push over plain `http://` to another host refuse it.
 
 **Backend.** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `AUTH_CHECK_TIMEOUT`, `BACKEND_PORT`, `EEG_API_URL`,
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MODE`, `INGEST_MAX_BATCH` /
@@ -550,7 +551,9 @@ that endpoint is a trust boundary, and neither the session check nor the consent
 registry, `PUSH_ENABLED` / `BACKEND_URL` drive the push client, `ALLOWED_ORIGINS` must name the
 **frontend** origin (getting it wrong fails every local call on CORS while the sidecar looks
 healthy), `EEG_SIM_OPTICS`, `EEG_SPECTRUM_SOURCE`, `EEG_SPECTRUM_POISON_SECONDS`,
-`EEG_CALM_CENTRE_ON_ARM`, `FACE_*`.
+`EEG_CALM_CENTRE_ON_ARM`, `FACE_*`, `SIDECAR_DOCS` (off: no `/docs` or `/openapi.json`, since
+`APP_ENV` cannot tell a student's laptop apart), and `EEG_SAMPLE_HZ`, which warns under push when
+it would pass half the backend's `INGEST_MAX_ROWS_PER_MINUTE` default.
 
 **The native bridge reads its own env directly, not through `config.py`**: `MUSE_BRIDGE_PORT`
 (8765), `MUSE_ENABLE_OPTICS` (off), `MUSE_OPTICS_PRESET` (`1035`), `MUSE_AUTO_RECONNECT`,
@@ -670,7 +673,8 @@ and it makes any *later* schema mismatch degrade to a quietly wrong answer inste
 `SECURITY DEFINER` **and deliberately granted to `anon` and `authenticated`**. RLS policies evaluate
 them as the calling user, so revoking the grants breaks the policies they exist to serve. They are
 safe by construction — both are `auth.uid()`-scoped booleans with no parameter to pivot on (they
-answer "am *I* in this class", not "is user X"), and both pin `SET search_path TO 'public'`.
+answer "am *I* in this class", not "is user X"), and both pin `SET search_path TO ''` with every
+table schema-qualified, so a caller's temp table cannot stand in for `class_memberships`.
 
 Audited against `pg_proc.proacl` on production and a local stack: five functions in `public`, and
 these two are the only ones granted to an application role. Re-audit with:

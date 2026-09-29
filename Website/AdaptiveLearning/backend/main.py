@@ -6580,6 +6580,13 @@ def eeg_start(payload: EegSessionRequest, request: Request):
     except eeg_poller.DeviceClaimedError:
         # A live poller or a reservation; both resolve by waiting.
         raise in_use
+    # A tab reuses a live headband across sessions without reconnecting, so the pairing follows
+    # the session now recording; left on the old one, that session's close would release it.
+    # Safe to overwrite: the gate above admitted the caller. The poller holds the station anyway.
+    try:
+        _record_pairing(user["id"], device_id, payload.session_id)
+    except Exception as e:
+        print(f"[eeg] could not move the pairing on {device_id} to this session: {type(e).__name__}")
     _mark_eeg_started(payload.session_id)
     return {"ok": True, **out}
 

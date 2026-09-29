@@ -10,7 +10,7 @@ import pytest  # noqa: E402
 import eeg_client  # noqa: E402
 import eeg_poller  # noqa: E402
 import main  # noqa: E402
-from conftest import pairings, real_pairing_funcs  # noqa: E402
+from conftest import pairing_sessions, pairings, real_pairing_funcs  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -890,3 +890,37 @@ def test_the_database_release_is_scoped_to_the_session(monkeypatch, pairings_db)
     assert db.owners() == {"station-p": "user-a"}
     main._forget_session_pairings("user-a", "s-a")
     assert db.owners() == {}
+
+
+# ── a tab reusing a live headband across sessions ───────────────────────
+
+def _start_as_a(monkeypatch, session_id):
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    monkeypatch.setattr(main, "_session_or_403", lambda *_a, **_k: {"user_id": "user-a", "ended_at": None})
+    monkeypatch.setattr(main, "_mark_eeg_started", lambda _sid: None)
+    monkeypatch.setattr(eeg_client, "list_devices", lambda: [{"device_id": "station-p"}])
+    payload = type("P", (), {"session_id": session_id, "device_id": "station-p", "record": True})()
+    return main.eeg_start(payload, request=None)
+
+
+def test_recording_in_a_new_session_moves_the_pairing_to_it(monkeypatch):
+    """Else the old session's close releases a headband the new one is still wearing."""
+    _paired_by_a(monkeypatch, connected=True)                                # paired in s-a
+    assert _start_as_a(monkeypatch, "s-b")["ok"] is True
+    assert pairing_sessions["station-p"] == "s-b"
+    eeg_poller.stop("s-b", "user-a")                                         # recording stops mid-lesson
+    monkeypatch.setattr(main, "_claim_session_close", lambda *_a: True)
+    monkeypatch.setattr(main, "_answer_counts", lambda *_a: (0, 0, 0))
+    monkeypatch.setattr(main, "_discard_if_nothing_recorded", lambda *_a, **_k: True)
+    main._close_session("user-a", {"id": "s-a"}, "2026-09-28T10:00:00+00:00")
+    assert main._station_open_to("user-b", "station-p") is False
+
+
+def test_a_pairing_that_cannot_be_moved_still_starts_recording(monkeypatch):
+    """The running poller holds the station, so a failed write is logged, not a refusal."""
+    _paired_by_a(monkeypatch, connected=True)
+
+    def _down(*_a, **_k):
+        raise RuntimeError("postgrest is down")
+    monkeypatch.setattr(main, "_record_pairing", _down)
+    assert _start_as_a(monkeypatch, "s-b")["ok"] is True

@@ -5736,6 +5736,15 @@ class FaceSample(BaseModel):
     emotion_trusted:     bool  | None = None
     raw:                 dict  | None = None
 
+    @field_validator("attention", "gaze_x", "gaze_y", "head_yaw", "head_pitch", "head_roll",
+                     "emotion_confidence")
+    @classmethod
+    def _finite(cls, v: float | None) -> float | None:
+        """As `CognitiveSample._finite`: a NaN would fail the whole batch's upsert, not drop one sample."""
+        if v is not None and not math.isfinite(v):
+            raise ValueError("must be a finite number")
+        return v
+
 class FaceBatch(BaseModel):
     session_id: str
     # `Any`, validated per sample in the endpoint, as `CognitiveBatch` is.

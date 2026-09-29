@@ -478,6 +478,19 @@ def test_a_non_finite_heart_value_is_malformed_and_the_rest_of_the_batch_lands(s
         assert (out["malformed"], out["inserted"]) == (1, 1), field
 
 
+@pytest.mark.parametrize("field", ["attention", "gaze_x", "gaze_y", "head_yaw", "head_pitch",
+                                   "head_roll", "emotion_confidence"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_a_non_finite_face_value_is_malformed_and_the_rest_of_the_batch_lands(store, field, value):
+    _consent(store, camera_enabled=True)
+    out = main.ingest_face(
+        main.FaceBatch(session_id=SESSION, samples=[
+            {"ts": "2026-08-09T10:00:00Z", "emotion": "happy", field: value},
+            {"ts": "2026-08-09T10:00:05Z", "emotion": "happy", "emotion_confidence": 0.9}]),
+        request=None)
+    assert (out["malformed"], out["inserted"]) == (1, 1), field
+
+
 @pytest.mark.parametrize("field, value", [
     ("heart_rate_bpm", 19.0), ("heart_rate_bpm", 251.0), ("rmssd_ms", -1.0),
     ("rmssd_ms", 1001.0), ("sqi", 1.5), ("stress_score", 100.5), ("stress_score", -0.1),

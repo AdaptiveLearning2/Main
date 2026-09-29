@@ -131,6 +131,7 @@ class _FakeBridge:
         self.listener, self.port = _listener()
         self.answer, self.token = answer, token
         self.after_proof = b""
+        self.heard = b""      # every byte the adapter sent, first line included
         self.conn = None
         self.proved = threading.Event()
         self.thread = threading.Thread(target=self._serve, daemon=True)
@@ -141,15 +142,19 @@ class _FakeBridge:
             self.conn, _ = self.listener.accept()
             self.conn.settimeout(2.0)
             stream = self.conn.makefile("rb")
-            nonce = stream.readline().decode().strip().removeprefix("CHALLENGE ")
+            first = stream.readline()
+            self.heard = first
+            nonce = first.decode().strip().removeprefix("CHALLENGE ")
             if self.answer == "silent":
                 time.sleep(1.5)
+                self.heard += stream.read1(4096) if hasattr(stream, "read1") else b""
                 return
             key = self.token if self.answer == "right" else "someone-else"
             proof = hmac.new(key.encode(), nonce.encode(), hashlib.sha256).hexdigest()
             self.conn.sendall(f"PROOF {proof}\n".encode())
             self.proved.set()
             self.after_proof = stream.readline()
+            self.heard += self.after_proof
         except OSError:
             pass
 
@@ -196,7 +201,8 @@ def test_whatever_cannot_prove_itself_the_bridge_never_gets_the_token(token_file
         assert adapter._try_connect() is False
         assert adapter.connect_failures == 1
         bridge.close()
-        assert b"a1b2c3d4" not in bridge.after_proof
+        assert bridge.heard.startswith(b"CHALLENGE ")
+        assert b"a1b2c3d4" not in bridge.heard
     finally:
         adapter.disconnect()
         bridge.close()

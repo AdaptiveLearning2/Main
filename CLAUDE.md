@@ -314,8 +314,9 @@ obvious fix for the nested workflow below never running is to move it to the rep
 that would run exactly this lock on ubuntu. **Regenerate them on the platform that will install
 them** — that is the whole of the available fix. A single lock covering both platforms is not one:
 `pip-compile` has no `--universal`, in 7.6.1 or any version, so that route is a toolchain change
-rather than a flag.
-One pre-existing gap: none has ever carried `setuptools`, so `import rppg`
+rather than a flag. **They carry hashes**: regenerate with `--generate-hashes`, and the dev lock with
+`--allow-unsafe` too, or its unpinned `pip`/`setuptools` make a hashed install refuse.
+One pre-existing gap: only the dev lock carries `setuptools`, and at a version without `pkg_resources`, so `import rppg`
 / `import heartpy` fail on a missing `pkg_resources` against a persistent venv. (`keras`/`jax` load fine once
 `KERAS_BACKEND` is set the way `rppg/models.py` already sets it at import.) The `open-rppg`
 measurements were always done in a throwaway `pip install --target ... "setuptools<81"` env.

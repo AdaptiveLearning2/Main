@@ -75,17 +75,18 @@ def _first_line(text: str, pattern: str) -> int:
     raise AssertionError(pattern)
 
 
-def _body_after_functions(text: str, last_fn: str) -> str:
-    body = text[text.index(last_fn):]
-    return body[body.index("\n}\n") + 3:]
+def _script_body(text: str) -> str:
+    """What runs at the top level: every function definition removed, wherever it sits."""
+    return re.sub(r"^(?:function [\w-]+ \{|\w+\(\) \{)\n.*?^\}\n", "", text, flags=re.S | re.M)
 
 
 def test_the_registry_is_validated_before_any_write_and_applied_after_provisioning():
     """The check precedes every .env write; the apply follows camera model provisioning."""
-    ps1 = _body_after_functions((ROOT / "start.ps1").read_text(encoding="utf-8"), "function Set-EnvKey {")
+    ps1 = _script_body((ROOT / "start.ps1").read_text(encoding="utf-8"))
     check = _first_line(ps1, r"Update-DeviceRegistry \$eegEnv .*-DryRun")
     writes = [_first_line(ps1, p) for p in (
-        r"Set-EnvKey \$eegEnv", r"Set-Content \$eegEnv", r"Set-EnvKey \$backendEnv")]
+        r"Set-EnvKey \$eegEnv", r"Set-Content \$eegEnv", r"Set-EnvKey \$backendEnv",
+        r"Update-SidecarTokens \$eegEnv")]
     assert check < min(writes), (check, writes)
     lines = ps1.splitlines()
     applies = [i for i, l in enumerate(lines, 1)
@@ -98,10 +99,11 @@ def test_the_registry_is_validated_before_any_write_and_applied_after_provisioni
     assert exits_between, "the provisioning exits lie between the check and the apply"
     assert all(i < camera_apply for i in exits_between)
 
-    sh = _body_after_functions((ROOT / "start.sh").read_text(encoding="utf-8"), "set_env_key() {")
+    sh = _script_body((ROOT / "start.sh").read_text(encoding="utf-8"))
     check = _first_line(sh, r'update_device_registry "\$EEG_ENV" .* check')
     writes = [_first_line(sh, p) for p in (
-        r'set_env_key "\$EEG_ENV"', r"sed -i .*EEG_ENV", r'set_env_key "\$BACKEND_ENV"')]
+        r'set_env_key "\$EEG_ENV"', r"sed -i .*EEG_ENV", r'set_env_key "\$BACKEND_ENV"',
+        r'ensure_sidecar_tokens "\$EEG_ENV"')]
     assert check < min(writes), (check, writes)
     lines = sh.splitlines()
     applies = [i for i, l in enumerate(lines, 1)

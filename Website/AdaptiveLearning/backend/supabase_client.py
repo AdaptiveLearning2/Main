@@ -11,18 +11,29 @@ import supabase
 # Above the threads that can hold a request at once (anyio's 40, the worker pools, one poller per
 # pull-mode session), and all kept alive, so a burst reuses connections instead of re-handshaking.
 _LIMITS = httpx.Limits(max_connections=128, max_keepalive_connections=128)
-# Postgrest's own read budget; a starved pool fails in 10 s rather than queueing for 120.
-_TIMEOUT = httpx.Timeout(120.0, connect=10.0, pool=10.0)
-# Storage's own default: `/charts` signs up to four URLs in turn while a request waits.
-_STORAGE_TIMEOUT = httpx.Timeout(20.0, connect=10.0, pool=10.0)
+# Each service keeps the budget its own client had. The database API: Postgrest's 120 s, and a
+# starved pool fails in 10 s rather than queueing for the whole read budget.
+_REST_TIMEOUT = httpx.Timeout(120.0, connect=10.0, pool=10.0)
+# Auth: httpx's 5 s default, which GoTrue used.
+_AUTH_TIMEOUT = httpx.Timeout(5.0)
+# Everything else, Storage included (its own 20 s: `/charts` signs up to four URLs in turn).
+_OTHER_TIMEOUT = httpx.Timeout(20.0, connect=10.0, pool=10.0)
 
 _clients: dict = {}
 _clients_lock = threading.Lock()
 
 
-def _storage_timeout(request: httpx.Request) -> None:
-    if request.url.path.startswith("/storage/v1/"):
-        request.extensions["timeout"] = _STORAGE_TIMEOUT.as_dict()
+def _timeout_by_service(url: str):
+    """A request hook choosing each call's budget by service, under the project URL's own path."""
+    base = httpx.URL(url).path.rstrip("/")
+    rest, auth = f"{base}/rest/v1/", f"{base}/auth/v1/"
+
+    def hook(request: httpx.Request) -> None:
+        path = request.url.path
+        if not path.startswith(rest):
+            request.extensions["timeout"] = (
+                _AUTH_TIMEOUT if path.startswith(auth) else _OTHER_TIMEOUT).as_dict()
+    return hook
 
 
 def make_client(url: str, key: str) -> "supabase.Client":
@@ -30,9 +41,11 @@ def make_client(url: str, key: str) -> "supabase.Client":
 
     Resolves `supabase.create_client` at call time, so a test patching it there still applies.
     """
-    http = httpx.Client(http2=False, follow_redirects=True, timeout=_TIMEOUT, limits=_LIMITS,
-                        event_hooks={"request": [_storage_timeout]})
-    return supabase.create_client(url, key, options=supabase.ClientOptions(httpx_client=http))
+    http = httpx.Client(http2=False, follow_redirects=True, timeout=_REST_TIMEOUT, limits=_LIMITS)
+    client = supabase.create_client(url, key, options=supabase.ClientOptions(httpx_client=http))
+    # After the call, so a missing URL still fails with supabase's own error.
+    http.event_hooks = {"request": [_timeout_by_service(url)]}
+    return client
 
 
 def get_client(url: str, key: str) -> "supabase.Client":

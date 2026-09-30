@@ -5,6 +5,7 @@ import pathlib
 import sys
 
 import httpx
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -13,6 +14,7 @@ from supabase_client import get_client, make_client  # noqa: E402
 
 _BACKEND = pathlib.Path(__file__).resolve().parents[1]
 _URL, _KEY = "http://localhost:54321", "test-key"
+_UID = "00000000-0000-0000-0000-000000000001"  # GoTrue refuses a non-UUID before sending
 # One-shot CLIs build a fresh client: cached, a test's patched fake would outlive the test.
 _SCRIPTS = {"rearchive_session_charts.py", "repair_graph_comparisons.py",
             "repair_shape_fraction_texts.py", "sweep_orphan_charts.py"}
@@ -39,35 +41,43 @@ def test_one_client_per_credentials_per_process(monkeypatch):
     assert get_client(_URL, "another-key") is not first
 
 
-def _send_one_query_and_one_storage_call():
+def _send_one_call_per_service(url):
+    """One REST query, one Storage call, one Auth admin call; returns the requests sent."""
     seen = []
 
     def handler(request):
         seen.append(request)
         return httpx.Response(200, json=[])
 
-    client = make_client(_URL, _KEY)
+    client = make_client(url, _KEY)
     client.options.httpx_client._transport = httpx.MockTransport(handler)
     client.table("sessions").select("id").eq("id", "s1").execute()
     client.storage.list_buckets()
+    try:
+        client.auth.admin.update_user_by_id(_UID, {"user_metadata": {}})
+    except Exception:  # noqa: BLE001 -- only the request matters; `[]` is not a user
+        pass
     return seen
 
 
-def test_a_query_and_a_storage_call_go_out_with_their_url_and_key():
-    seen = _send_one_query_and_one_storage_call()
+def test_each_service_goes_out_with_its_url_and_key():
+    seen = _send_one_call_per_service(_URL)
     assert [str(r.url).split("?")[0] for r in seen] == [
-        f"{_URL}/rest/v1/sessions", f"{_URL}/storage/v1/bucket"]
+        f"{_URL}/rest/v1/sessions", f"{_URL}/storage/v1/bucket",
+        f"{_URL}/auth/v1/admin/users/{_UID}"]
     for r in seen:
         assert r.headers["apikey"] == _KEY
         assert r.headers["authorization"] == f"Bearer {_KEY}"
 
 
-def test_storage_keeps_its_short_timeout_on_the_shared_pool():
-    rest, storage = (r.extensions["timeout"] for r in _send_one_query_and_one_storage_call())
-    assert rest["read"] == 120.0
-    assert storage["read"] == 20.0
-    # A starved pool fails fast for both, rather than queueing for the read budget.
-    assert rest["pool"] == storage["pool"] == 10.0
+@pytest.mark.parametrize("url", [_URL, f"{_URL}/supabase"], ids=["bare", "with-a-path"])
+def test_each_service_keeps_its_own_timeout_on_the_shared_pool(url):
+    rest, storage, auth = _send_one_call_per_service(url)
+    assert rest.url.path.startswith(httpx.URL(url).path.rstrip("/") + "/rest/v1/")
+    budgets = [r.extensions["timeout"] for r in (rest, storage, auth)]
+    assert [b["read"] for b in budgets] == [120.0, 20.0, 5.0]
+    # A starved pool fails fast rather than queueing for the whole read budget.
+    assert budgets[0]["pool"] == budgets[1]["pool"] == 10.0
 
 
 def _calls(tree, name):

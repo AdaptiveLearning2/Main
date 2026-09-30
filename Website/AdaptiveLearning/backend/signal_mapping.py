@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import math
 
+import signal_fusion
+
 from typing import Any
 
 
@@ -43,16 +45,41 @@ def _raw(payload: dict, **derived: Any) -> dict:
     return merged
 
 
-# Bump when the sidecar's population bounds change; written into `raw.score_scale`.
+# Bump when the sidecar's population bounds change; written into `raw.score_scale`. Never 3:
+# rows stored before the calm source had its own key say 3 for local calm, which the rollup reads as 2.
 SCORE_SCALE_VERSION = 2
-# Local calm is on a different span, so it is its own scale; unknown sources take the SDK's.
-SCORE_SCALE_BY_CALM_SOURCE = {"sdk": SCORE_SCALE_VERSION, "local": 3}
+# The calm sources with a stressed line; a posted value outside them withholds stress.
+# The SQL copy is `calm_source_of(jsonb)`, pinned to this by a test.
+CALM_SOURCES = tuple(signal_fusion.EEG_STRESSED_CALM_MAX_BY_SOURCE)
 # Seconds a local calm may be held before it is stale and `stress` is nulled.
 CALM_HOLD_MAX_SECONDS = 10.0
 
 # Nulled together: same electrodes, same window.
 _MEASUREMENT_COLUMNS = ("focus", "stress", "engagement",
                         "alpha", "beta", "theta", "delta", "gamma")
+
+
+def calm_source_of(value: Any) -> str | None:
+    """A posted `calm_source` as a known source: absent is "sdk" (an older sidecar), anything else None."""
+    if value is None:
+        return "sdk"
+    return value if isinstance(value, str) and value in CALM_SOURCES else None
+
+
+def sanitise_flat_row(row: dict) -> dict:
+    """A flat row's client `raw` made to say what the mapper's would: the current score scale,
+    and no stress on an unknown calm source."""
+    raw = dict(row.get("raw") or {})
+    raw["score_scale"] = SCORE_SCALE_VERSION
+    # A null source is sdk here but unknown to the SQL calm_source_of; no key reads sdk in both.
+    if "calm_source" in raw and raw["calm_source"] is None:
+        del raw["calm_source"]
+    row = {**row, "raw": raw}
+    if calm_source_of(raw.get("calm_source")) is None:
+        raw.pop("calm_source")
+        raw["calm_invalid"] = ["calm_source"]
+        row["stress"] = None
+    return row
 
 
 def eeg_quality(eeg: dict) -> str:
@@ -84,8 +111,9 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
     focus = _ratio(f.get("focus_score"))
     calm = _ratio(f.get("calm_score"))
     confidence = _ratio(f.get("confidence"))
-    # Client-supplied on push; only a string may be used as a dict key.
-    calm_source = f.get("calm_source") if isinstance(f.get("calm_source"), str) else None
+    # Client-supplied on push.
+    calm_source = f.get("calm_source")
+    calm_source_ok = calm_source_of(calm_source) is not None
     # Gate the stress column: a present but mistyped value withholds it ("false" is not False);
     # absent means an older sidecar, i.e. measured.
     calm_measured = f.get("calm_measured")
@@ -118,8 +146,8 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
             quality_basis=f.get("quality_basis"),
             # Why this tick was held (a held score is the previous tick's).
             artifact_reason=f.get("artifact_reason"),
-            # Picks the stressed line and the score scale.
-            calm_source=calm_source,
+            # Picks the stressed line; the rollup reads it into `calm_sources`.
+            calm_source=calm_source if calm_source_ok else None,
             # Centred on the session baseline vs. the population midpoint; a bool or nothing.
             focus_centred=(f.get("focus_centred")
                            if isinstance(f.get("focus_centred"), bool) else None),
@@ -128,18 +156,18 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
             calm_measured=calm_measured if calm_measured_ok else None,
             calm_held_seconds=held if held_ok else None,
             # Which key was rejected, so a nulled stress doesn't read as an older sidecar.
-            calm_invalid=([k for k, ok in (("calm_measured", calm_measured_ok),
+            calm_invalid=([k for k, ok in (("calm_source", calm_source_ok),
+                                           ("calm_measured", calm_measured_ok),
                                            ("calm_held_seconds", held_ok)) if not ok]
                           or None),
             ingestion=eeg.get("ingestion"),
             # EEG signal quality, 0..1; no column carries it. signal_fusion.eeg_channel gates on it.
             confidence=confidence,
             # Population scale the scores were measured on; read by the rollup via score_scale_of(raw).
-            score_scale=SCORE_SCALE_BY_CALM_SOURCE.get(calm_source or "sdk",
-                                                       SCORE_SCALE_VERSION),
+            score_scale=SCORE_SCALE_VERSION,
         ),
     }
-    if (calm_measured is False or not calm_measured_ok or not held_ok
+    if (calm_measured is False or not calm_source_ok or not calm_measured_ok or not held_ok
             or (held is not None and held > CALM_HOLD_MAX_SECONDS)):
         # A placeholder or stale calm is not a stress reading; focus stays, `raw` says why.
         row["stress"] = None

@@ -1,13 +1,15 @@
-// The EEG score scale a rollup-backed payload was measured on (`score_scale: {min, max}`).
-// A range whose ends differ straddles a change: values either side are not comparable.
+// The EEG score scale a rollup-backed payload was measured on (`score_scale: {min, max, calm_sources}`).
+// Ends that differ straddle a version change; two calm sources put stress in two units.
+
+const sourcesOf = scale => (Array.isArray(scale?.calm_sources) ? scale.calm_sources : [])
 
 export function isMixedScale(scale) {
-  return !!scale && typeof scale.min === 'number' && typeof scale.max === 'number'
-    && scale.min !== scale.max
+  if (!scale || typeof scale.min !== 'number' || typeof scale.max !== 'number') return false
+  return scale.min !== scale.max || sourcesOf(scale).length > 1
 }
 
-// The widest range across several labelled rows (weeks or days), or null when
-// none carries a label -- unlabelled is unknown, not scale 1.
+// The widest range across several labelled rows (weeks or days), calm sources unioned,
+// or null when none carries a label -- unlabelled is unknown, not scale 1.
 export function combineScales(rows) {
   // Both ends must be numbers, or a half-populated row yields NaN.
   const ranges = (rows || []).map(r => r?.score_scale)
@@ -16,17 +18,15 @@ export function combineScales(rows) {
   return {
     min: Math.min(...ranges.map(s => s.min)),
     max: Math.max(...ranges.map(s => s.max)),
+    calm_sources: [...new Set(ranges.flatMap(sourcesOf))].sort(),
   }
 }
 
-// Scale 3 is a different calm source (`calm_source: local`, stress only), not a
-// later version; it can run beside scale 2 at the same time.
-export const LOCAL_CALM_SCALE = 3
-
+// A version step moves focus and stress; a calm-source split moves stress only.
 export function describeScaleChange(scale) {
   if (!isMixedScale(scale)) return null
-  const versionStep = scale.min < 2 && scale.max >= 2
-  const sourceSplit = scale.max >= LOCAL_CALM_SCALE
+  const versionStep = scale.min !== scale.max
+  const sourceSplit = sourcesOf(scale).length > 1
   const affected = versionStep ? 'focus and stress' : 'stress'
   return { affected, versionStep, sourceSplit }
 }

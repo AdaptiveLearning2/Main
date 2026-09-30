@@ -31,8 +31,9 @@ def test_an_unhashable_calm_source_is_not_a_source_and_does_not_raise(monkeypatc
     _install(monkeypatch, CONSENT_ALL,
              eeg=_rows({"confidence": 0.9, "calm_source": {"a": 1}},
                        {"confidence": 0.9, "calm_source": ["local"]}))
-    assert decider.get_session_signal_state(SESSION, USER).label == "stressed", \
-        "garbage names no source; the remaining rows are sdk"
+    state = decider.get_session_signal_state(SESSION, USER)
+    assert state.calm is None and state.label != "stressed", \
+        "garbage names no scale, so its stress is no calm reading"
     row = _row(calm_source={"a": 1})
     assert "calm_source" not in row["raw"] and row["raw"]["score_scale"] == 2
 

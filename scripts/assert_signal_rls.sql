@@ -1000,7 +1000,7 @@ BEGIN
     END IF;
 END $$;
 
--- ── the rollup records the score scale, and a posted value cannot abort it ──
+-- ── the rollup records the score scale and calm source; a posted value cannot abort it ──
 -- `raw` is client-supplied, so a bad score_scale must be skipped, not abort the day's rollup
 -- (which would exempt its rows from expiry).
 DO $$
@@ -1010,13 +1010,15 @@ DECLARE
     lo       smallint;
     hi       smallint;
     n        int;
+    srcs     text[];
+    r        record;
 BEGIN
     SELECT i.owner_id, i.sess_id INTO owner_id, sess FROM _ids i;
     DELETE FROM cognitive_signals WHERE user_id = owner_id;
     DELETE FROM signal_daily_rollup WHERE user_id = owner_id;
 
     -- Four rows on one day: no key (predates the label: scale 1), scale 2, a
-    -- string, and a null measurement carrying scale 3 that must not count.
+    -- string, and a null measurement carrying a higher scale that must not count.
     INSERT INTO cognitive_signals (session_id, user_id, ts, focus, raw) VALUES
         (sess, owner_id, '2026-03-12T18:00:01Z', 0.5, '{}'::jsonb),
         (sess, owner_id, '2026-03-12T18:00:02Z', 0.5, '{"score_scale": 2}'::jsonb),
@@ -1047,56 +1049,91 @@ BEGIN
         RAISE EXCEPTION 'stress_sample_count is %, expected 2 of the 3 rows with a focus', n;
     END IF;
 
-    -- A scale-3 row with no stress contributed only a scale-2 focus; with a stress it is scale 3.
-    INSERT INTO cognitive_signals (session_id, user_id, ts, focus, raw) VALUES
-        (sess, owner_id, '2026-03-12T18:00:05Z', 0.5, '{"score_scale": 3}'::jsonb);
+    -- The calm source is its own column, not a scale: only a row with a stress names one,
+    -- no key is sdk, and an unknown value names none.
+    DELETE FROM cognitive_signals WHERE user_id = owner_id;
+    INSERT INTO cognitive_signals (session_id, user_id, ts, focus, stress, raw) VALUES
+        (sess, owner_id, '2026-03-12T18:00:01Z', 0.5, 0.4,  '{"score_scale": 2}'::jsonb),
+        (sess, owner_id, '2026-03-12T18:00:02Z', 0.5, NULL,
+         '{"score_scale": 2, "calm_source": "local"}'::jsonb),
+        (sess, owner_id, '2026-03-12T18:00:03Z', 0.5, 0.4,
+         '{"score_scale": 2, "calm_source": "martian"}'::jsonb);
     PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-12', 'UTC');
-    SELECT score_scale_max INTO hi FROM signal_daily_rollup
-     WHERE user_id = owner_id AND channel = 'cognitive';
-    IF hi IS DISTINCT FROM 2 THEN
-        RAISE EXCEPTION 'a scale-3 row with no stress reported scale %', hi;
+    SELECT calm_sources, score_scale_min, score_scale_max INTO srcs, lo, hi
+      FROM signal_daily_rollup WHERE user_id = owner_id AND channel = 'cognitive';
+    IF srcs IS DISTINCT FROM ARRAY['sdk']::text[] OR lo IS DISTINCT FROM 2 OR hi IS DISTINCT FROM 2 THEN
+        RAISE EXCEPTION 'calm sources % on scale %..%, expected {sdk} on 2..2: a held local '
+                        'calm and an unknown source name no source', srcs, lo, hi;
     END IF;
     UPDATE cognitive_signals SET stress = 0.4
-     WHERE user_id = owner_id AND ts = '2026-03-12T18:00:05Z';
+     WHERE user_id = owner_id AND ts = '2026-03-12T18:00:02Z';
     PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-12', 'UTC');
-    SELECT score_scale_max INTO hi FROM signal_daily_rollup
-     WHERE user_id = owner_id AND channel = 'cognitive';
-    IF hi IS DISTINCT FROM 3 THEN
-        RAISE EXCEPTION 'a scale-3 row with a stress reported scale %', hi;
+    SELECT calm_sources, score_scale_max INTO srcs, hi
+      FROM signal_daily_rollup WHERE user_id = owner_id AND channel = 'cognitive';
+    IF srcs IS DISTINCT FROM ARRAY['local', 'sdk']::text[] OR hi IS DISTINCT FROM 2 THEN
+        RAISE EXCEPTION 'a scored local calm beside sdk reads % on max scale %, '
+                        'expected {local,sdk} on 2', srcs, hi;
     END IF;
 
-    -- An ordinary local session (held then scored calm) is one source: 3..3.
-    -- A row with a NULL raw predates the label and anchors at 1.
-    DELETE FROM cognitive_signals WHERE user_id = owner_id;
-    INSERT INTO cognitive_signals (session_id, user_id, ts, focus, stress, raw) VALUES
-        (sess, owner_id, '2026-03-12T18:00:01Z', 0.5, NULL, '{"score_scale": 3}'::jsonb),
-        (sess, owner_id, '2026-03-12T18:00:02Z', 0.5, 0.4,  '{"score_scale": 3}'::jsonb);
+    -- No stress at all names no source; a NULL raw is sdk and predates the label (scale 1).
+    UPDATE cognitive_signals SET stress = NULL WHERE user_id = owner_id;
     PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-12', 'UTC');
-    SELECT score_scale_min, score_scale_max INTO lo, hi FROM signal_daily_rollup
-     WHERE user_id = owner_id AND channel = 'cognitive';
-    IF lo IS DISTINCT FROM 3 OR hi IS DISTINCT FROM 3 THEN
-        RAISE EXCEPTION 'a local session with a held then a scored calm reads %..%, '
-                        'expected 3..3', lo, hi;
+    SELECT calm_sources INTO srcs
+      FROM signal_daily_rollup WHERE user_id = owner_id AND channel = 'cognitive';
+    IF srcs IS NOT NULL THEN
+        RAISE EXCEPTION 'a day with no stress named calm sources %', srcs;
     END IF;
-    UPDATE cognitive_signals SET raw = NULL
+    UPDATE cognitive_signals SET stress = 0.4, raw = NULL
      WHERE user_id = owner_id AND ts = '2026-03-12T18:00:01Z';
     PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-12', 'UTC');
-    SELECT score_scale_min INTO lo FROM signal_daily_rollup
-     WHERE user_id = owner_id AND channel = 'cognitive';
-    IF lo IS DISTINCT FROM 1 THEN
-        RAISE EXCEPTION 'a row with a NULL raw reads scale % (expected 1: it predates the label)', lo;
+    SELECT calm_sources, score_scale_min INTO srcs, lo
+      FROM signal_daily_rollup WHERE user_id = owner_id AND channel = 'cognitive';
+    IF srcs IS DISTINCT FROM ARRAY['sdk']::text[] OR lo IS DISTINCT FROM 1 THEN
+        RAISE EXCEPTION 'a row with a NULL raw reads % on scale %, expected {sdk} on 1', srcs, lo;
     END IF;
 
-    -- Pre-label rows beside held local rows mix scales 1 and 2: range 1..2.
+    IF public.calm_source_of(NULL) <> 'sdk' OR public.calm_source_of('{}'::jsonb) <> 'sdk'
+       OR public.calm_source_of('"local"'::jsonb) <> 'sdk'
+       OR public.calm_source_of('{"calm_source": "local"}'::jsonb) <> 'local'
+       OR public.calm_source_of('{"calm_source": ["local"]}'::jsonb) IS NOT NULL
+       OR public.calm_source_of('{"calm_source": "martian"}'::jsonb) IS NOT NULL THEN
+        RAISE EXCEPTION 'calm_source_of does not read a posted source safely';
+    END IF;
+
+    -- 3 is retired: a row an older backend wrote for local calm reads as scale 2, source local.
     DELETE FROM cognitive_signals WHERE user_id = owner_id;
     INSERT INTO cognitive_signals (session_id, user_id, ts, focus, stress, raw) VALUES
-        (sess, owner_id, '2026-03-12T18:00:01Z', 0.5, 0.4,  NULL),
-        (sess, owner_id, '2026-03-12T18:00:02Z', 0.5, NULL, '{"score_scale": 3}'::jsonb);
+        (sess, owner_id, '2026-03-12T18:00:01Z', 0.5, 0.4,
+         '{"score_scale": 3, "calm_source": "local"}'::jsonb);
     PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-12', 'UTC');
-    SELECT score_scale_min, score_scale_max INTO lo, hi FROM signal_daily_rollup
-     WHERE user_id = owner_id AND channel = 'cognitive';
-    IF lo IS DISTINCT FROM 1 OR hi IS DISTINCT FROM 2 THEN
-        RAISE EXCEPTION 'pre-label rows beside held local rows read %..%, expected 1..2', lo, hi;
+    SELECT calm_sources, score_scale_min, score_scale_max INTO srcs, lo, hi
+      FROM signal_daily_rollup WHERE user_id = owner_id AND channel = 'cognitive';
+    IF srcs IS DISTINCT FROM ARRAY['local']::text[] OR lo IS DISTINCT FROM 2 OR hi IS DISTINCT FROM 2 THEN
+        RAISE EXCEPTION 'a retired scale-3 row reads % on %..%, expected {local} on 2..2', srcs, lo, hi;
+    END IF;
+
+    -- The one-time backfill, on rolled days as the old rollup wrote them.
+    DELETE FROM signal_daily_rollup WHERE user_id = owner_id;
+    INSERT INTO signal_daily_rollup (user_id, day, channel, avg_stress, sample_count,
+                                     trusted_sample_count, score_scale_min, score_scale_max) VALUES
+        (owner_id, DATE '2026-02-01', 'cognitive', 0.4,  5, 5, 3, 3),
+        (owner_id, DATE '2026-02-02', 'cognitive', 0.4,  5, 5, 2, 3),
+        (owner_id, DATE '2026-02-03', 'cognitive', 0.4,  5, 5, 2, 2),
+        (owner_id, DATE '2026-02-04', 'cognitive', NULL, 5, 5, NULL, NULL),
+        (owner_id, DATE '2026-02-05', 'cognitive', NULL, 5, 5, 1, 2);
+    PERFORM public.backfill_rollup_calm_sources();
+    FOR r IN SELECT day, calm_sources AS s, score_scale_min AS a, score_scale_max AS b
+               FROM signal_daily_rollup WHERE user_id = owner_id ORDER BY day LOOP
+        IF (r.day = '2026-02-01' AND (r.s IS DISTINCT FROM ARRAY['local']::text[] OR r.a IS DISTINCT FROM 2 OR r.b IS DISTINCT FROM 2))
+        OR (r.day = '2026-02-02' AND (r.s IS DISTINCT FROM ARRAY['local', 'sdk']::text[] OR r.a IS DISTINCT FROM 2 OR r.b IS DISTINCT FROM 2))
+        OR (r.day = '2026-02-03' AND (r.s IS DISTINCT FROM ARRAY['sdk']::text[] OR r.a IS DISTINCT FROM 2 OR r.b IS DISTINCT FROM 2))
+        OR (r.day = '2026-02-04' AND (r.s IS NOT NULL OR r.a IS NOT NULL OR r.b IS NOT NULL))
+        OR (r.day = '2026-02-05' AND (r.s IS NOT NULL OR r.a IS DISTINCT FROM 1 OR r.b IS DISTINCT FROM 2)) THEN
+            RAISE EXCEPTION 'the calm-source backfill read % as % on %..%', r.day, r.s, r.a, r.b;
+        END IF;
+    END LOOP;
+    IF public.backfill_rollup_calm_sources() <> 0 THEN
+        RAISE EXCEPTION 'the calm-source backfill is not idempotent';
     END IF;
 
     IF public.score_scale_of('{"score_scale": "oops"}'::jsonb) IS NOT NULL

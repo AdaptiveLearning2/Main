@@ -10,6 +10,8 @@ import main  # noqa: E402
 
 CLASS = {"id": "class-1", "name": "Algebra", "grade_level": "7", "teacher_id": "teacher-1",
          "join_code": "ABCD2345"}
+# Before the fixture replaces it, for the tests that drive the real read.
+REAL_ROLE_OR_RAISE = main._role_or_raise
 
 
 class _Db:
@@ -123,6 +125,19 @@ def test_an_unreadable_role_refuses_rather_than_admitting_a_student(db, monkeypa
     assert e.value.status_code == 503
     assert db.inserts == []
     assert not any(t == "classes" for t, _cols in db.selects), "no code looked up either"
+
+
+def test_an_account_with_no_profile_row_cannot_join(db, monkeypatch):
+    """No row read is no role read; only a stored "student" is admitted."""
+    monkeypatch.setattr(main, "_role_or_raise", REAL_ROLE_OR_RAISE)
+    db.tables["profiles"] = []
+    with pytest.raises(main.HTTPException) as e:
+        _join()
+    assert e.value.status_code == 403
+    assert db.inserts == []
+    # The same read admits a stored student, so the refusal above is about the missing row.
+    db.tables["profiles"] = [{"id": "student-1", "role": "student"}]
+    assert _join()["id"] == "class-1"
 
 
 def test_guesses_past_the_limit_are_refused_before_any_lookup(db, monkeypatch):

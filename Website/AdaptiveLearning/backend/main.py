@@ -531,10 +531,13 @@ def _role_of(profile: dict | None) -> str:
     return (profile or {}).get("role") or "student"
 
 
-def _role_or_raise(uid: str) -> str:
-    """`_role`, but a failed read raises, for a caller that must not treat an outage as a student."""
+def _role_or_raise(uid: str) -> str | None:
+    """The stored role, `None` with no profile row; a failed read raises.
+
+    For a gate that must admit only a role it actually read: `_role` answers "student" to both.
+    """
     rows = supabase.table("profiles").select("role").eq("id", uid).execute().data
-    return _role_of(rows[0] if rows else None)
+    return _role_of(rows[0]) if rows else None
 
 
 def _placeholder_profile(uid: str) -> dict:
@@ -4659,7 +4662,7 @@ def join_class(payload: JoinClassRequest, request: Request):
         _record_security_event("rate_limited", user["id"], limiter=_JOIN_CODE_LIMITER.name)
         raise HTTPException(429, "Too many attempts. Check the code with your teacher and "
                                  "try again later.", headers={"Retry-After": str(wait)})
-    # Not `_role`: it answers "student" on a failed read, which would admit anyone to this gate.
+    # Not `_role`: it answers "student" on a failed read or a missing row, admitting anyone here.
     try:
         role = _role_or_raise(user["id"])
     except Exception as e:
@@ -7026,7 +7029,13 @@ def create_parent_link_code(request: Request):
     Students only. One code at a time: upserted on `student_id` in one statement.
     """
     user = get_user(request)
-    if _role(user["id"]) != "student":
+    # Not `_role`, which answers "student" on a failed read or a missing row.
+    try:
+        role = _role_or_raise(user["id"])
+    except Exception as e:
+        print(f"[link_code] role unreadable for {user['id'][:8]}: {type(e).__name__}")
+        raise HTTPException(503, "A code cannot be made right now. Try again soon.")
+    if role != "student":
         raise HTTPException(403, "Only a student can create a code for their own account")
     code = _new_link_code()
     expires = _utc_now() + timedelta(seconds=_LINK_CODE_TTL_SEC)

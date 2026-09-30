@@ -242,6 +242,8 @@ TOKEN_CASES = [
     ("", REAL + "a", {"API_TOKEN"}),
     (REAL, REAL, {"ADMIN_TOKEN"}),
     (REAL, REAL + "a", set()),
+    # Tokens are case-sensitive: these differ, so the sidecar accepts them and neither is remade.
+    (REAL.upper(), REAL, set()),
 ]
 
 

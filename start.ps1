@@ -153,7 +153,8 @@ function Update-SidecarTokens {
         # Trimmed and in any case (-like ignores case), as the sidecar reads it.
         $norm = if ($current) { $current.Trim() } else { "" }
         # It refuses equal tokens too (the learner one ships in the page), so a copied admin token is remade.
-        $sameAsApi = ($pair[0] -eq "ADMIN_TOKEN") -and $current -and ($current -eq (Get-EnvValue $eegEnv "API_TOKEN"))
+        # -ceq: tokens are case-sensitive, and the sidecar compares them exactly.
+        $sameAsApi = ($pair[0] -eq "ADMIN_TOKEN") -and $current -and ($current -ceq (Get-EnvValue $eegEnv "API_TOKEN"))
         if (-not $norm -or $norm -like "replace-me*" -or $sameAsApi) {
             $token = New-SidecarToken
             Set-EnvKey $eegEnv $pair[0] $token

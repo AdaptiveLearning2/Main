@@ -552,7 +552,7 @@ def test_only_one_place_reads_user_stats():
     import re
 
     source = inspect.getsource(main)
-    # `[\s\\]*`, not `\s*`: `leaderboard` splits its call with a backslash continuation.
+    # `[\s\\]*`, not `\s*`: `_leaderboard_rows` splits its call with a backslash continuation.
     readers = [m.start() for m in
                re.finditer(r'table\("user_stats"\)[\s\\]*\.?[\s\\]*select', source)]
     assert len(readers) >= 3, (
@@ -562,7 +562,7 @@ def test_only_one_place_reads_user_stats():
 
     ALLOWED = {"_stats_including_open_session", "_stats_including_open_session_many",
                "_credit_session_to_user_stats"}
-    ALLOWLIST = {"leaderboard": "ranks all users; one query, staleness is uniform"}
+    ALLOWLIST = {"_leaderboard_rows": "ranks a caller's classmates; staleness is uniform across them"}
 
     for pos in readers:
         head = source[:pos]

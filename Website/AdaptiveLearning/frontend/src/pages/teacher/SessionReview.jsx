@@ -16,6 +16,7 @@ import { EMOTION_COLOURS, UNKNOWN_EMOTION_COLOUR, emotionEmoji } from '../../lib
 import QuestionFigure from '../../components/questions/QuestionFigure'
 import CCSSBadge from '../../components/questions/CCSSBadge'
 import { correctIndex, optionList } from '../../lib/answerKey'
+import { fmtDate } from '../../lib/dates'
 
 // calibrating/unknown are shown, not dropped, so categorisation isn't overstated.
 const STRESS_COLOURS = {
@@ -132,6 +133,23 @@ function SessionReviewBody({ sessionId }) {
   const face      = Array.isArray(data?.face)      ? data.face      : []
   const heart     = Array.isArray(data?.heart)     ? data.heart     : []
   const answers   = Array.isArray(data?.answers)   ? data.answers   : []
+
+  // A withdrawn channel is not read, so its emptiness needs its own sentence, never "no samples".
+  // Absent (an older payload) reads as included: there is nothing true to say about it.
+  const channels = data?.channels || {}
+  const withheld = (included, revokedAt, sensor) => {
+    if (included !== false) return null
+    if (channels.consent_retrieved === false) return `Consent for ${sensor} could not be checked, so its data is not shown.`
+    const Sensor = `${sensor[0].toUpperCase()}${sensor.slice(1)}`
+    // No revocation date: never consented, so nothing was turned off and nothing was recorded.
+    const since = revokedAt && fmtDate(revokedAt)
+    if (!since) return `${Sensor} is off for this student, so nothing from it is shown.`
+    return `${Sensor} was turned off on ${since}, so nothing it recorded is shown.`
+  }
+  const faceWithheld  = withheld(channels.face_included, channels.emotion_revoked_at, 'the camera')
+  const faceCount = channels.face_included !== false ? face.length
+    : channels.consent_retrieved === false ? 'Unavailable' : 'Off'
+  const heartWithheld = withheld(channels.heart_included, channels.heart_revoked_at, 'heart-rate recording')
 
   // Numeric ms x-axis, more stable than category strings.
   const cognitiveByT = new Map(
@@ -279,6 +297,8 @@ function SessionReviewBody({ sessionId }) {
   const archivedChart = (name) => {
     if (archiveErr) return 'failed'
     if (!archive) return 'pending'
+    if ((archive.withdrawn || []).includes(name)) return 'withdrawn'
+    if ((archive.unchecked || []).includes(name)) return 'unchecked'
     if (!archive.archived) return 'unarchived'
     if ((archive.unavailable || []).includes(name)) return 'unavailable'
     const url = (archive.charts || {})[name]
@@ -290,6 +310,8 @@ function SessionReviewBody({ sessionId }) {
     empty: 'Nothing was recorded on this channel.',
     unavailable: 'The archived chart for this session could not be loaded.',
     unarchived: 'No signal samples for this session.',
+    withdrawn: 'Not shown: this sensor is off for this student.',
+    unchecked: 'Not shown: consent for this sensor could not be checked.',
     failed: 'The archived charts could not be loaded — try again.',
     pending: 'Loading the archived charts…',
   }
@@ -318,7 +340,8 @@ function SessionReviewBody({ sessionId }) {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
           { label: 'Cognitive samples', value: cognitive.length, icon: <Brain size={16} className="text-indigo-500" /> },
-          { label: 'Face samples',      value: face.length,      icon: <Camera size={16} className="text-pink-500" /> },
+          // A skipped channel was never read, so its count is a reason, never 0.
+          { label: 'Face samples',      value: faceCount,        icon: <Camera size={16} className="text-pink-500" /> },
           { label: 'Answers',           value: totalAnswers,     icon: <Activity size={16} className="text-emerald-500" /> },
           { label: 'Accuracy',          value: totalAnswers ? `${acc}%` : '—', icon: <CheckCircle2 size={16} className="text-violet-500" /> },
         ].map(t => (
@@ -333,6 +356,7 @@ function SessionReviewBody({ sessionId }) {
         <h2 className="font-black text-gray-900 dark:text-white mb-4 flex items-center gap-2">
           <Brain size={18} className="text-indigo-600" /> Cognitive timeline
         </h2>
+        {heartWithheld && <p className="text-xs text-gray-600 dark:text-gray-400 -mt-2 mb-3">{heartWithheld}</p>}
         {!hasChart ? (
           <div className="text-center py-12">
             {/* Archived SVGs once per-sample rows expire; the archive keeps cognitive and heart apart. */}
@@ -458,13 +482,13 @@ function SessionReviewBody({ sessionId }) {
             <div className="text-4xl mb-2">📷</div>
             {/* No archived ribbon: the archive kept only the pie. Compare states, not strings. */}
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              {isUrl(archivedChart('emotion_pie'))
+              {faceWithheld || (isUrl(archivedChart('emotion_pie'))
                 ? 'The per-sample rows have expired, so the moment-by-moment timeline is gone. The emotion mix is below.'
-                : archivedChart('emotion_pie') === 'unavailable'
-                  ? NO_CHART_COPY.unavailable
+                : ['unavailable', 'withdrawn', 'unchecked'].includes(archivedChart('emotion_pie'))
+                  ? NO_CHART_COPY[archivedChart('emotion_pie')]
                   : archivedChart('emotion_pie') === 'empty'
                     ? 'Nothing was recorded on the camera channel.'
-                    : 'No face samples for this session.'}
+                    : 'No face samples for this session.')}
             </p>
           </div>
         ) : (

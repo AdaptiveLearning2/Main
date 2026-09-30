@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import math
 import os
 import queue
 import random
+import secrets
 import socket
 import threading
 import time
@@ -626,6 +629,8 @@ class TcpMuseBridgeAdapter:
         self.timeout_seconds = timeout_seconds
         self.token_file = token_file or bridge_token_path(port)
         self._token_missing_reported = False
+        # The last challenge failure printed, so a retry every few seconds does not repeat it.
+        self._challenge_failure_reported: str | None = None
         self._socket: socket.socket | None = None
         self._stream: TextIO | None = None
         self._connect_backoff_s = self.CONNECT_BACKOFF_MIN_S
@@ -828,17 +833,39 @@ class TcpMuseBridgeAdapter:
             sock = socket.create_connection((self.host, self.port), timeout=self.timeout_seconds)
         except OSError:
             return self._connect_failed()
+        stream = sock.makefile("r", encoding="utf-8")
         try:
-            # The bridge closes a client whose first line is not this, and streams nothing to it.
+            # Proof first: whatever took the port before the bridge would otherwise be handed the
+            # token, and could feed us fabricated EEG. Only the token file's reader can answer.
+            nonce = secrets.token_hex(32)
+            sock.sendall(f"CHALLENGE {nonce}\n".encode("ascii"))
+            proof = stream.readline(self.MAX_LINE_CHARS).rstrip("\r\n")
+            expected = "PROOF " + hmac.new(token.encode("ascii"), nonce.encode("ascii"),
+                                           hashlib.sha256).hexdigest()
+            # As bytes: compare_digest raises on a non-ASCII str, which a squatter can send.
+            if not hmac.compare_digest(proof.encode("utf-8"), expected.encode("ascii")):
+                # A hang-up is what a bridge built before the challenge does with one.
+                why = ("hung up at the challenge: likely a bridge built before it, so rebuild it "
+                       "(start.ps1 -Muse does)") if not proof else \
+                      "answered the challenge wrongly, so it is not the bridge that wrote the token file"
+                if why != self._challenge_failure_reported:
+                    print(f"[bridge] {self.host}:{self.port} {why}; not sending the token", flush=True)
+                    self._challenge_failure_reported = why
+                stream.close()
+                sock.close()
+                return self._connect_failed()
+            # The bridge closes a client whose first line after the challenge is not this.
             sock.sendall(f"AUTH {token}\n".encode("ascii"))
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            stream.close()
             sock.close()
             return self._connect_failed()
         self._connect_backoff_s = self.CONNECT_BACKOFF_MIN_S
         self._next_connect_at = 0.0
+        self._challenge_failure_reported = None
         self._reader_stop.clear()
         self._socket = sock
-        self._stream = sock.makefile("r", encoding="utf-8")
+        self._stream = stream
         self._reader_thread = threading.Thread(
             target=self._reader_loop, name="muse-bridge-reader", daemon=True
         )

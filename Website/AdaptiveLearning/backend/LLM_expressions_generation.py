@@ -6,8 +6,6 @@ from dotenv import load_dotenv
 import llm_client
 from llm_json import extract_json
 import json
-from flask import Flask, jsonify
-from flask_cors import CORS
 import sympy as sp
 from sympy import symbols, Eq, solve, sympify, Integer
 from sympy.parsing.sympy_parser import (

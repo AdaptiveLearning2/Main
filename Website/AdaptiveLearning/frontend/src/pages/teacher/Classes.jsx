@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Users, Plus, X, Copy, Check, GraduationCap, Pencil, Save, ChevronRight } from 'lucide-react'
+import { Users, Plus, X, Copy, Check, GraduationCap, Pencil, Save, ChevronRight, RefreshCw } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { toast } from 'sonner'
 import SkeletonList from '../../components/ui/Skeleton'
@@ -70,6 +70,18 @@ export default function Classes() {
       toast.success('Grade updated')
     } catch (err) {
       toast.error(err.message || 'Failed to update')
+    }
+  }
+
+  async function replaceCode(cls, e) {
+    e.stopPropagation()
+    if (!window.confirm(`Give "${cls.name || 'this class'}" a new code? The old code stops working; students already in the class stay in it.`)) return
+    try {
+      const { join_code } = await apiFetch(`/api/classes/${cls.id}/join-code`, { method: 'POST' })
+      setClasses(prev => prev.map(c => c.id === cls.id ? { ...c, join_code } : c))
+      toast.success(`New code: ${join_code}`)
+    } catch (err) {
+      toast.error(err.message || 'Failed to replace the code')
     }
   }
 
@@ -154,6 +166,10 @@ export default function Classes() {
                       <button onClick={(e) => copyCode(cls.join_code, cls.id, e)}
                         className="p-1 rounded-md hover:bg-violet-50 dark:hover:bg-violet-900/30 transition">
                         {copiedId === cls.id ? <Check size={13} className="text-green-500" /> : <Copy size={13} className="text-gray-600 dark:text-gray-400" />}
+                      </button>
+                      <button onClick={(e) => replaceCode(cls, e)} aria-label="Replace the class code" title="Replace the class code"
+                        className="p-1 rounded-md hover:bg-violet-50 dark:hover:bg-violet-900/30 transition">
+                        <RefreshCw size={13} className="text-gray-600 dark:text-gray-400" />
                       </button>
 
                       {editingId === cls.id ? (

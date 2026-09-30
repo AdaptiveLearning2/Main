@@ -63,6 +63,10 @@ class _Query:
         self._limit = n
         return self
 
+    def range(self, start, end):
+        self._range = (start, end)
+        return self
+
     def eq(self, col, val):
         self._filters.append((col, val))
         return self
@@ -81,6 +85,10 @@ class _Query:
 
     def lt(self, col, val):
         self._filters.append((col, ("lt", val)))
+        return self
+
+    def gt(self, col, val):
+        self._filters.append((col, ("gt", val)))
         return self
 
     def is_(self, col, val):
@@ -109,6 +117,9 @@ class _Query:
             elif isinstance(want, tuple) and want[0] == "lt":
                 if have is None or str(have) >= str(want[1]):
                     return False
+            elif isinstance(want, tuple) and want[0] == "gt":
+                if have is None or str(have) <= str(want[1]):
+                    return False
             elif isinstance(want, tuple) and want[0] == "is":
                 # Anything but "null"/"not.null" raises rather than being ignored.
                 if want[1] == "null":
@@ -134,6 +145,8 @@ class _Query:
         if self._order:
             rows = sorted(rows, key=lambda r: str(r.get(self._order, "")), reverse=self._desc)
         total = len(rows)
+        if getattr(self, "_range", None):
+            rows = rows[self._range[0]:self._range[1] + 1]
         # _max_rows mirrors db-max-rows, a server cap .limit() cannot raise.
         ceilings = [n for n in (self._limit, self._max_rows) if n is not None]
         if ceilings:
@@ -2285,17 +2298,113 @@ def test_learning_strategies_clamps_the_day_range(monkeypatch, set_flag):
 def _leaderboard_tables(n=5):
     # Scores stay three digits: _Query.order sorts by str().
     # `profiles` is real data: names come from one batched read, not `_profile`.
+    # Everyone shares class c1 with the caller; "other-*" are another school's, ranked above.
     return {
         "user_stats": [
             {"user_id": f"student-{i}", "total_correct": 900 - i, "total_questions": 900,
              "current_streak": 1, "best_streak": 2}
             for i in range(n)
-        ],
+        ] + [{"user_id": "other-0", "total_correct": 999, "total_questions": 999,
+              "current_streak": 1, "best_streak": 2}],
         "profiles": [
             {"id": f"student-{i}", "display_name": f"Name {i}", "email": f"s{i}@x.com"}
             for i in range(n)
-        ],
+        ] + [{"id": "other-0", "display_name": "Elsewhere", "email": "o@y.com"},
+             {"id": "teacher-1", "display_name": "Teacher", "role": "teacher"}],
+        "classes": [{"id": "c1", "teacher_id": "teacher-1"}, {"id": "c9", "teacher_id": "teacher-9"}],
+        "class_memberships": [{"class_id": "c1", "student_id": f"student-{i}"} for i in range(n)]
+        + [{"class_id": "c9", "student_id": "other-0"}],
     }
+
+
+def test_leaderboard_names_nobody_outside_the_callers_classes(monkeypatch):
+    """Another school's child, ranked first overall, is neither named nor counted."""
+    fake = _FakeSupabase(_leaderboard_tables(3))
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+    rows = main.leaderboard(None)
+    assert [r["display_name"] for r in rows] == ["Name 0", "Name 1", "Name 2"]
+    # Filtered in the read, so another school's rows are never fetched, not just never shown.
+    (asked,) = [vals for q in fake.queries for col, (op, *vals) in q.filters
+                if col == "user_id" and op == "in"]
+    assert sorted(asked[0]) == ["student-0", "student-1", "student-2"]
+
+
+def test_a_teacher_sees_their_own_classes(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(3)))
+    # teacher-1's role comes from its `profiles` row.
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
+    assert [r["display_name"] for r in main.leaderboard(None)] == ["Name 0", "Name 1", "Name 2"]
+
+
+class _DeletesAfterFirstPage(_FakeSupabase):
+    """A membership row that was already read is deleted before the next page is asked for."""
+
+    def table(self, name):
+        query = super().table(name)
+        if name == "class_memberships":
+            run = query.execute
+
+            def execute():
+                out = run()
+                if not getattr(self, "_deleted", False) and out.data:
+                    self._deleted = True
+                    del self._tables["class_memberships"][0]
+                return out
+            query.execute = execute
+        return query
+
+
+@pytest.mark.parametrize("fake_cls", [_FakeSupabase, _DeletesAfterFirstPage],
+                         ids=["steady", "deleted_mid_read"])
+def test_a_teacher_of_a_whole_school_is_ranked_over_every_student(monkeypatch, fake_cls):
+    """Past db-max-rows memberships are paged by key, and the ids go out in URL-sized chunks."""
+    n = 1200
+    tables = _leaderboard_tables(0)
+    ids = [f"student-{i:04d}" for i in range(n)] + ["student-z"]
+    tables["class_memberships"] = [{"class_id": "c1", "student_id": s} for s in ids]
+    tables["user_stats"] = [{"user_id": s, "total_correct": 100 + i % 500, "total_questions": 999,
+                             "current_streak": 1, "best_streak": 2} for i, s in enumerate(ids[:-1])]
+    # Last in every order the reads use, and first on the board.
+    tables["user_stats"].append({"user_id": "student-z", "total_correct": 999, "total_questions": 999,
+                                 "current_streak": 1, "best_streak": 2})
+    tables["profiles"].append({"id": "student-z", "display_name": "Top"})
+    fake = fake_cls(tables, max_rows={"class_memberships": 500})
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
+
+    rows = main.leaderboard(None)
+
+    assert rows[0]["display_name"] == "Top"
+    scores = [r["total_correct"] for r in rows]
+    assert scores == sorted(scores, reverse=True) and len(rows) == 20
+    asked = [vals[0] for q in fake.queries for col, (op, *vals) in q.filters
+             if col == "user_id" and op == "in"]
+    # A fixed budget, not the constant: 8 KiB is a common URL limit, and a uuid is 37 bytes of it.
+    assert all(len(a) * 37 <= 8192 for a in asked)
+    assert sorted(s for a in asked for s in a) == sorted(ids)
+
+
+def test_a_student_in_no_class_sees_only_themselves(monkeypatch):
+    tables = _leaderboard_tables(3)
+    tables["class_memberships"] = []
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(tables))
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+    assert [r["is_me"] for r in main.leaderboard(None)] == [True]
+
+
+@pytest.mark.parametrize("table, caller", [
+    (table, caller) for caller in ("student-1", "teacher-1")
+    for table in ("profiles", "class_memberships", "user_stats")
+] + [("classes", "teacher-1")])
+def test_any_unreadable_read_is_an_error_not_a_smaller_board(monkeypatch, table, caller):
+    """A failed role read would otherwise show a teacher the empty board of a student in no class."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(3),
+                                                        table_raises={table}))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": caller})
+    with pytest.raises(main.HTTPException) as e:
+        main.leaderboard(None)
+    assert e.value.status_code == 503
 
 
 def test_leaderboard_clamps_an_oversized_limit(monkeypatch):
@@ -2331,8 +2440,9 @@ def test_leaderboard_names_the_board_in_one_read(monkeypatch):
 
     rows = main.leaderboard(None, limit=30)
 
-    assert fake.table_calls.count("profiles") == 1, (
-        f"one read for the board, got {fake.table_calls.count('profiles')}")
+    # One for the caller's own role, one for the board's names; a per-row lookup would be 32.
+    assert fake.table_calls.count("profiles") == 2, (
+        f"one read for the board, got {fake.table_calls.count('profiles') - 1}")
     # Names still land, so the above can't pass by not reading profiles.
     assert rows[0]["display_name"] == "Name 0"
 

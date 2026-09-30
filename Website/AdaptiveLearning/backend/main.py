@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-import os, math, re, requests, random, secrets, string, threading, time, collections, contextlib
+import os, math, re, requests, random, secrets, threading, time, collections, contextlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta, timezone, tzinfo
@@ -230,11 +230,11 @@ _PUBLIC_RATE_LIMITS = {
 _TRUSTED_PROXY_HOPS = int(env_number("TRUSTED_PROXY_HOPS", 0, int, minimum=0))
 
 class _SlidingWindowLimiter:
-    """`limit` calls per `window` seconds per key, on a monotonic clock.
+    """`limit` hits per `window` seconds per key, on a monotonic clock.
 
-    Answers rather than raising, so middleware can use it. The sweep is gated
-    on size *and* time; `sweep_at` is seeded from `monotonic()`, not 0.0,
-    whose reference point is undefined.
+    Answers rather than raising, so middleware can use it. `hits[key]` is a deque of
+    `[time, count]`, one per admitted call, oldest first. `sweep_at` is seeded from
+    `monotonic()`, not 0.0, whose reference point is undefined.
     """
 
     def __init__(self, name: str, limit: int, window: float,
@@ -244,35 +244,47 @@ class _SlidingWindowLimiter:
         self.window = window
         self._sweep_above = sweep_above
         self._sweep_every = sweep_every
-        self.hits: dict[str, list[float]] = {}
+        self.hits: dict[str, collections.deque[list]] = {}
         self.sweep_at = time.monotonic()
         self._lock = threading.Lock()
 
-    def check(self, key: str) -> int | None:
-        """Seconds to wait, or `None` while the caller is inside its allowance."""
-        now = time.monotonic()
+    def check(self, key: str, cost: int = 1) -> int | None:
+        """Seconds to wait, or `None` while the caller is inside its allowance; `cost` hits at once, all or none."""
         with self._lock:
+            # Read under the lock, so entries are appended in time order.
+            now = time.monotonic()
             if (len(self.hits) > self._sweep_above
                     and now - self.sweep_at >= self._sweep_every):
                 self.sweep_at = now
-                for stale in [k for k, ts in self.hits.items()
-                              if all(now - t >= self.window for t in ts)]:
+                for stale in [k for k, q in self.hits.items()
+                              if not q or now - q[-1][0] >= self.window]:
                     del self.hits[stale]
 
-            hits = [t for t in self.hits.get(key, ()) if now - t < self.window]
-            self.hits[key] = hits
-            if len(hits) >= self.limit:
-                # The oldest counted hit is the one whose expiry frees a slot.
-                return max(1, int(self.window - (now - min(hits))) + 1)
-            hits.append(now)
+            q = self.hits.setdefault(key, collections.deque())
+            while q and now - q[0][0] >= self.window:
+                q.popleft()
+            used = sum(n for _t, n in q)
+            if used + cost > self.limit:
+                # The entry whose expiry frees enough room decides the wait.
+                need, freeing = used + cost - self.limit, now
+                for t, n in q:
+                    need, freeing = need - n, t
+                    if need <= 0:
+                        break
+                return max(1, int(self.window - (now - freeing)) + 1)
+            q.append([now, cost])
             return None
 
-    def release(self, key: str) -> None:
-        """Give back the caller's newest hit, for work admitted but never done."""
+    def release(self, key: str, count: int = 1) -> None:
+        """Give back the caller's `count` newest hits, for work admitted but never done."""
         with self._lock:
-            hits = self.hits.get(key)
-            if hits:
-                hits.pop()
+            q = self.hits.get(key)
+            while q and count > 0:
+                take = min(count, q[-1][1])
+                q[-1][1] -= take
+                count -= take
+                if q[-1][1] == 0:
+                    q.pop()
 
     def reset(self) -> None:
         """Forget every caller and re-arm the sweep. For tests."""
@@ -289,14 +301,30 @@ _PUBLIC_BUDGETS = {
 }
 
 
+_proxy_hops_warned = False
+_proxy_chain_short_warned = False
+
+
 def _client_address(request: Request) -> str:
     """The caller, for a route where there is no account to name them by."""
+    global _proxy_hops_warned, _proxy_chain_short_warned
     if _TRUSTED_PROXY_HOPS:
         chain = [p.strip() for p in
                  request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
         if len(chain) >= _TRUSTED_PROXY_HOPS:
             return chain[-_TRUSTED_PROXY_HOPS]
         # Too few entries: fall back to the peer (a shared bucket, never a bypass).
+        # No header at all is a direct hit (a health check), not evidence about the setting.
+        if chain and not _proxy_chain_short_warned:
+            _proxy_chain_short_warned = True
+            print(f"[config] a request's X-Forwarded-For had {len(chain)} of the "
+                  f"{_TRUSTED_PROXY_HOPS} entries TRUSTED_PROXY_HOPS expects: set too high, or a "
+                  "request reached this server around a proxy; either way it shares one address budget")
+    elif not _proxy_hops_warned and request.headers.get("x-forwarded-for"):
+        # Once, and not at boot: a proxy is only visible in the requests it forwards.
+        _proxy_hops_warned = True
+        print("[config] a request carried X-Forwarded-For but TRUSTED_PROXY_HOPS is 0: behind a "
+              "proxy, every school shares one address budget, class joins included")
     client = request.client
     # No peer shares one bucket rather than being unlimited.
     return client.host if client and client.host else "unknown"
@@ -382,12 +410,8 @@ def get_user(request: Request):
         raise HTTPException(401, "Invalid token")
     return resp.json()
 
-def rand_code(n=6):
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=n))
-
-
 # ─── the code a child gives a parent ─────────────────────────────────────
-# A credential, so `secrets` (CSPRNG), never `rand_code`'s `random`. No O/0/I/1:
+# A credential, so `secrets` (CSPRNG), never `random`. No O/0/I/1:
 # a child reads it aloud. The TTL, single use and limiter are the real controls.
 _LINK_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _LINK_CODE_LEN = 8
@@ -397,6 +421,21 @@ _LINK_CODE_TTL_SEC = 30 * 60
 def _new_link_code() -> str:
     return "".join(secrets.choice(_LINK_CODE_ALPHABET)
                    for _ in range(_LINK_CODE_LEN))
+
+
+# A class join code is guessable by volume, so the same alphabet and length. Older 6-character
+# codes still join until their teacher replaces them. The limits are the real control.
+_JOIN_CODE_LEN = 8
+# Attempts per account per hour, successful or not.
+_JOIN_CODE_LIMITER = _SlidingWindowLimiter("class_join", 10, 3600.0)
+# Wrong codes per address per hour, from signed-in students only: accounts are self-service, and a
+# school's first morning of correct codes must not lock it out. 1000 misses an hour against 32^8 codes.
+_JOIN_MISS_LIMITER = _SlidingWindowLimiter(
+    "class_join_address", env_number("CLASS_JOIN_MISSES_PER_ADDRESS", 1000, int, minimum=1), 3600.0)
+
+
+def _new_join_code() -> str:
+    return "".join(secrets.choice(_LINK_CODE_ALPHABET) for _ in range(_JOIN_CODE_LEN))
 
 
 def _unique_ids(values) -> list:
@@ -484,7 +523,21 @@ def _role(uid: str) -> str:
 
     Fails closed to 'student' on a failed read.
     """
-    return (_profile(uid) or {}).get("role") or "student"
+    return _role_of(_profile(uid))
+
+
+def _role_of(profile: dict | None) -> str:
+    """The one rule for a role: the stored column, else 'student'."""
+    return (profile or {}).get("role") or "student"
+
+
+def _role_or_raise(uid: str) -> str | None:
+    """The stored role, `None` with no profile row; a failed read raises.
+
+    For a gate that must admit only a role it actually read: `_role` answers "student" to both.
+    """
+    rows = supabase.table("profiles").select("role").eq("id", uid).execute().data
+    return _role_of(rows[0]) if rows else None
 
 
 def _placeholder_profile(uid: str) -> dict:
@@ -3436,6 +3489,13 @@ _INGEST_RATE_WINDOW = env_number("INGEST_RATE_WINDOW", 60.0, float, minimum=1.0)
 _INGEST_LIMITER = _SlidingWindowLimiter(
     "ingest", _INGEST_RATE_LIMIT, _INGEST_RATE_WINDOW)
 
+# Rows per student (not session: a closed session's window still ingests) per channel per minute. The
+# sidecar pushes one per tick, 240/min at EEG_SAMPLE_HZ=4; this is twice a 10 Hz sidecar's, and the
+# sidecar warns at boot when it would pass this default, which it cannot see.
+_INGEST_ROWS_PER_MINUTE = env_number("INGEST_MAX_ROWS_PER_MINUTE", 1200, int,
+                                     minimum=_INGEST_MAX_BATCH)
+_INGEST_ROW_LIMITER = _SlidingWindowLimiter("ingest_rows", _INGEST_ROWS_PER_MINUTE, 60.0)
+
 # Heart sources each sensor permits, keyed on `_may_record`'s composed flags, never raw consent.
 _HEART_SOURCES_BY_RECORD_FLAG = {
     "record_headband_optical": ("muse_optics", "muse_ppg"),
@@ -4375,21 +4435,79 @@ def student_chart_summary(student_id: str, request: Request, payload: ChartSumma
 # ─── leaderboard ─────────────────────────────────────────────────────────
 
 _LEADERBOARD_MAX = 100
+# Ids per `in_` read: each is ~37 bytes of URL, and a school's roster would pass URL limits.
+_LEADERBOARD_ID_CHUNK = 200
+
+
+def _chunks(ids: list[str], size: int = _LEADERBOARD_ID_CHUNK):
+    for i in range(0, len(ids), size):
+        yield ids[i:i + size]
+
+
+def _class_members(class_ids: list[str]) -> set[str]:
+    """Every student in these classes, paged until a read comes back empty (db-max-rows cuts silently)."""
+    members: set[str] = set()
+    for chunk in _chunks(class_ids):
+        last = None
+        while True:
+            query = supabase.table("class_memberships").select("student_id").in_("class_id", chunk)
+            if last is not None:
+                # By key, not offset: a row deleted mid-read cannot shift a student past the page.
+                query = query.gt("student_id", last)
+            page = query.order("student_id").limit(1000).execute().data or []
+            if not page:
+                break
+            members |= {m["student_id"] for m in page}
+            last = page[-1]["student_id"]
+    return members
+
+
+def _leaderboard_peers(user_id: str) -> set[str]:
+    """The students the caller is ranked among: every student in a class they're in or teach.
+
+    A student is always among them. Names never leave the caller's own classes, so no school
+    sees another's children. Raises on a failed read: a partial class is not a smaller one.
+    """
+    # Not `_role`, which answers "student" on a failed read and so shows a teacher an empty board.
+    if _role_or_raise(user_id) == "teacher":
+        classes = supabase.table("classes").select("id").eq("teacher_id", user_id).execute()
+        class_ids = [c["id"] for c in classes.data or []]
+        peers: set[str] = set()
+    else:
+        mine = supabase.table("class_memberships").select("class_id") \
+            .eq("student_id", user_id).execute()
+        class_ids = [m["class_id"] for m in mine.data or []]
+        peers = {user_id}
+    return peers | _class_members(class_ids)
+
+
+def _leaderboard_rows(peers: set[str], top: int) -> list[dict]:
+    """The top `top` stats rows among `peers`; raises on a failed read."""
+    rows = []
+    # Each chunk's own top N, merged: the board's top N is among them.
+    for chunk in _chunks(sorted(peers)):
+        rows += supabase.table("user_stats") \
+            .select("user_id, total_correct, total_questions, current_streak, best_streak, "
+                    "last_session_at") \
+            .in_("user_id", chunk) \
+            .order("total_correct", desc=True).limit(top).execute().data or []
+    return sorted(rows, key=lambda r: r.get("total_correct") or 0, reverse=True)[:top]
 
 
 @app.get("/api/leaderboard")
 def leaderboard(request: Request, limit: int = 20):
-    """Top students by correct answers.
+    """Top students by correct answers, among the caller's classes only.
 
     Service-role read, so `limit` must stay clamped to _LEADERBOARD_MAX.
-    user_id is never returned; only `is_me`.
+    user_id is never returned; only `is_me`. Any failed read is a 503, never a smaller board.
     """
     user = get_user(request)
-    res = supabase.table("user_stats") \
-        .select("user_id, total_correct, total_questions, current_streak, best_streak, "
-                "last_session_at") \
-        .order("total_correct", desc=True).limit(max(1, min(limit, _LEADERBOARD_MAX))).execute()
-    rows = res.data or []
+    try:
+        peers = _leaderboard_peers(user["id"])
+        rows = _leaderboard_rows(peers, max(1, min(limit, _LEADERBOARD_MAX))) if peers else []
+    except Exception as e:
+        print(f"[leaderboard] unreadable for {user['id'][:8]}: {type(e).__name__}")
+        raise HTTPException(503, "The leaderboard could not be loaded right now")
     profiles = _profiles_many(r.get("user_id") for r in rows)
     tz = _school_timezone() if rows else None
     enriched = []
@@ -4414,19 +4532,33 @@ def create_class(payload: CreateClassRequest, request: Request):
     user = get_user(request)
     if _role(user["id"]) != "teacher":
         raise HTTPException(403, "Only teachers can create classes")
-    code = rand_code()
-    for _ in range(5):
-        existing = supabase.table("classes").select("id").eq("join_code", code).execute()
-        if not existing.data:
-            break
-        code = rand_code()
     res = supabase.table("classes").insert({
         "teacher_id":  user["id"],
         "name":        payload.name,
         "grade_level": payload.grade_level,
-        "join_code":   code,
+        "join_code":   _unused_join_code(),
     }).execute()
     return res.data[0]
+
+
+def _unused_join_code() -> str:
+    """A new code no class holds, retried a few times; a collision in 32^8 is vanishingly rare."""
+    code = _new_join_code()
+    for _ in range(5):
+        if not supabase.table("classes").select("id").eq("join_code", code).execute().data:
+            break
+        code = _new_join_code()
+    return code
+
+
+@app.post("/api/classes/{class_id}/join-code")
+def replace_join_code(class_id: str, request: Request):
+    """A new 8-character code for the owning teacher; the old one stops joining, and members stay."""
+    user = get_user(request)
+    _verify_class_owner(class_id, user["id"])
+    code = _unused_join_code()
+    supabase.table("classes").update({"join_code": code}).eq("id", class_id).execute()
+    return {"id": class_id, "join_code": code}
 
 # Registered before `/api/classes/{class_id}`, or that route binds "summary".
 @app.get("/api/classes/summary")
@@ -4509,7 +4641,12 @@ def update_class(class_id: str, payload: UpdateClassRequest, request: Request):
 @app.get("/api/classes")
 def my_classes(request: Request):
     user = get_user(request)
-    role = _role(user["id"])
+    # Not `_role`: a failed read would send a teacher down the student branch and show no classes.
+    try:
+        role = _role_or_raise(user["id"])
+    except Exception as e:
+        print(f"[my_classes] role unreadable for {user['id'][:8]}: {type(e).__name__}")
+        raise HTTPException(503, "Your classes could not be loaded right now.")
     if role == "teacher":
         res = supabase.table("classes").select("*, class_memberships(count)").eq("teacher_id", user["id"]).execute()
     else:
@@ -4517,15 +4654,41 @@ def my_classes(request: Request):
         ids = [m["class_id"] for m in (memberships.data or [])]
         if not ids:
             return []
-        res = supabase.table("classes").select("*").in_("id", ids).execute()
+        # What `join_class` returns: the teacher's id and the class code are the teacher's.
+        res = supabase.table("classes").select("id, name, grade_level").in_("id", ids).execute()
     return res.data or []
 
 @app.post("/api/classes/join")
 def join_class(payload: JoinClassRequest, request: Request):
     user = get_user(request)
-    cls  = supabase.table("classes").select("*").eq("join_code", payload.join_code.upper()).execute()
+    # Before the lookup: a refused guess must not learn whether the code exists.
+    wait = _JOIN_CODE_LIMITER.check(user["id"])
+    if wait is not None:
+        _record_security_event("rate_limited", user["id"], limiter=_JOIN_CODE_LIMITER.name)
+        raise HTTPException(429, "Too many attempts. Check the code with your teacher and "
+                                 "try again later.", headers={"Retry-After": str(wait)})
+    # Not `_role`: it answers "student" on a failed read or a missing row, admitting anyone here.
+    try:
+        role = _role_or_raise(user["id"])
+    except Exception as e:
+        print(f"[join_class] role unreadable for {user['id'][:8]}: {type(e).__name__}")
+        raise HTTPException(503, "Joining a class is not available right now. Try again soon.")
+    if role != "student":
+        raise HTTPException(403, "Only students can join a class")
+    address = _client_address(request)
+    wait = _JOIN_MISS_LIMITER.check(address)
+    if wait is not None:
+        # The limiter's name, never the address: an address is personal data.
+        _record_security_event("rate_limited", user["id"], limiter=_JOIN_MISS_LIMITER.name)
+        raise HTTPException(429, "Too many wrong class codes from this network. Try again later.",
+                            headers={"Retry-After": str(wait)})
+    # Named columns, as `my_classes` sends a student: `teacher_id` and `join_code` are the teacher's.
+    cls  = supabase.table("classes").select("id, name, grade_level") \
+        .eq("join_code", payload.join_code.strip().upper()).execute()
     if not cls.data:
         raise HTTPException(404, "Class not found -- check the code")
+    # A right code is not a guess, so only misses stay charged to the address.
+    _JOIN_MISS_LIMITER.release(address)
     class_id = cls.data[0]["id"]
     already = supabase.table("class_memberships").select("id") \
         .eq("class_id", class_id).eq("student_id", user["id"]).execute()
@@ -5736,6 +5899,15 @@ class FaceSample(BaseModel):
     emotion_trusted:     bool  | None = None
     raw:                 dict  | None = None
 
+    @field_validator("attention", "gaze_x", "gaze_y", "head_yaw", "head_pitch", "head_roll",
+                     "emotion_confidence")
+    @classmethod
+    def _finite(cls, v: float | None) -> float | None:
+        """As `CognitiveSample._finite`: a NaN would fail the whole batch's upsert, not drop one sample."""
+        if v is not None and not math.isfinite(v):
+            raise ValueError("must be a finite number")
+        return v
+
 class FaceBatch(BaseModel):
     session_id: str
     # `Any`, validated per sample in the endpoint, as `CognitiveBatch` is.
@@ -5812,6 +5984,33 @@ def _rate_limit_ingest(user_id: str):
                                limiter=_INGEST_LIMITER.name)
         raise HTTPException(429, "Too many ingest batches. Slow down.",
                             headers={"Retry-After": str(refused_after)})
+
+
+def _admit_ingest_rows(user_id: str, channel: str, n: int) -> None:
+    """Raise 429 if `n` more rows would pass the student's per-channel ceiling; the batch is kept and retried."""
+    if n <= 0:
+        return
+    refused_after = _INGEST_ROW_LIMITER.check(f"{user_id}:{channel}", cost=n)
+    if refused_after is not None:
+        _record_security_event("rate_limited", user_id, limiter=_INGEST_ROW_LIMITER.name)
+        raise HTTPException(429, "Too many samples. Slow down.",
+                            headers={"Retry-After": str(refused_after)})
+
+
+def _write_ingest_rows(table: str, rows: list[dict], on_conflict: str,
+                       user_id: str, channel: str) -> int:
+    """Upsert admitted rows and return how many were new; a replayed or failed row is given back."""
+    key = f"{user_id}:{channel}"
+    try:
+        resp = supabase.table(table).upsert(rows, on_conflict=on_conflict,
+                                            ignore_duplicates=True).execute()
+    except Exception:
+        _INGEST_ROW_LIMITER.release(key, len(rows))
+        raise
+    # What the database wrote (needs return=representation); push_client counts from it.
+    written = len(resp.data or [])
+    _INGEST_ROW_LIMITER.release(key, len(rows) - written)
+    return written
 
 
 def _permitted_heart_sources(gate: dict) -> set[str]:
@@ -5938,11 +6137,9 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     # Upsert on `cog_session_ts_key`: a replayed batch is a no-op.
     inserted = 0
     if rows:
-        resp = supabase.table("cognitive_signals").upsert(
-            rows, on_conflict="session_id,ts", ignore_duplicates=True
-        ).execute()
-        # What the database wrote (needs return=representation); push_client counts from it.
-        inserted = len(resp.data or [])
+        _admit_ingest_rows(user["id"], "cognitive", len(rows))
+        inserted = _write_ingest_rows("cognitive_signals", rows, "session_id,ts",
+                                      user["id"], "cognitive")
     return {"ok": True, "inserted": inserted,
             "dropped": len(samples) - len(rows),
             "malformed": malformed,
@@ -5981,11 +6178,9 @@ def ingest_face(payload: FaceBatch, request: Request):
     # Upsert on `face_session_ts_key`: a replayed batch is a no-op.
     inserted = 0
     if rows:
-        resp = supabase.table("face_signals").upsert(
-            rows, on_conflict="session_id,ts", ignore_duplicates=True
-        ).execute()
-        # What the database wrote -- see the cognitive endpoint.
-        inserted = len(resp.data or [])
+        _admit_ingest_rows(user["id"], "face", len(rows))
+        inserted = _write_ingest_rows("face_signals", rows, "session_id,ts",
+                                      user["id"], "face")
     # Separate counts: push_client tells a quiet camera from a replay by them.
     return {"ok": True, "inserted": inserted,
             "dropped": len(placed) - len(rows),
@@ -6040,12 +6235,10 @@ def ingest_heart(payload: HeartBatch, request: Request):
 
     written = 0
     if rows:
+        _admit_ingest_rows(user["id"], "heart", len(rows))
         # Idempotent on (session_id, source, ts).
-        resp = supabase.table("heart_signals").upsert(
-            rows, on_conflict="session_id,source,ts", ignore_duplicates=True
-        ).execute()
-        # What the database wrote; needs return=representation (the default).
-        written = len(resp.data or [])
+        written = _write_ingest_rows("heart_signals", rows, "session_id,source,ts",
+                                     user["id"], "heart")
     return {"ok": True, "inserted": written, "dropped": dropped,
             "malformed": malformed,
             "out_of_window": out_of_window,
@@ -6060,10 +6253,14 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
         supabase.table("sessions").select("user_id").eq("id", session_id), "Session")
     _verify_can_view_student(user, sess["user_id"])
 
+    # As the reports do: a withdrawn channel is not read, and the payload says why it is empty.
+    channels = _reportable_channels(sess["user_id"])
+    skip = frozenset(t for t, on in (("face_signals", channels.emotion),
+                                     ("heart_signals", channels.heart)) if not on)
     # Paged, through the archive's reader. Heart rows carry `source`: a mid-session
     # sensor failover must read as a sensor change, not a physiological event.
     cog_data, fac_data, hrt_data = chart_archive.read_session_signals(
-        supabase, session_id, since)
+        supabase, session_id, since, skip=skip)
     # Question embedded (one query, named columns). Left-joined: a deleted
     # question arrives as `questions: null` and the answer still shows.
     answers = (supabase.table("session_answers")
@@ -6071,34 +6268,54 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
                        "subject, difficulty, figure, ccss_standard)")
                .eq("session_id", session_id).order("answered_at")
                .execute().data or [])
-    return {"cognitive": cog_data, "face": fac_data, "heart": hrt_data, "answers": answers}
+    return {"cognitive": cog_data, "face": fac_data, "heart": hrt_data, "answers": answers,
+            "channels": _channel_flags(channels)}
+
+
+def _channel_flags(channels: ReportChannels) -> dict:
+    """Why a skipped channel is empty, in the reports' vocabulary: off, since when, or consent unreadable."""
+    return {"face_included": channels.emotion, "heart_included": channels.heart,
+            "consent_retrieved": channels.consent_retrieved,
+            "emotion_revoked_at": channels.emotion_revoked_at,
+            "heart_revoked_at": channels.heart_revoked_at}
+
+
+# Archived charts drawing a channel, withheld as its rows are once that channel is withdrawn.
+_CHARTS_BY_CHANNEL = {"emotion": ("emotion_pie",), "heart": ("heart_rate", "stress_pie")}
 
 
 @app.get("/api/signals/session/{session_id}/charts")
 def session_charts(session_id: str, request: Request):
     """Short-lived signed URLs for a closed session's archived charts.
 
-    The bucket has no policies: `_verify_can_view_student` is the whole check.
-    States: `archived: false` (never ran), `charts[name]: null` (nothing drawn),
-    `name in unavailable` (object unreadable). Raises rather than `retrieved`.
+    The bucket has no policies: `_verify_can_view_student` is the whole check. States: `archived:
+    false` (never ran), `charts[name]: null` (nothing drawn), `unavailable` (object unreadable),
+    `withdrawn` (channel off) and `unchecked` (consent unreadable); the last two are never signed.
     """
     user = get_user(request)
     sess = _row_or_404(
         supabase.table("sessions").select("user_id, chart_paths").eq("id", session_id),
         "Session")
     _verify_can_view_student(user, sess["user_id"])
+    channels = _reportable_channels(sess["user_id"])
+    held = sorted(name for channel, on in (("emotion", channels.emotion), ("heart", channels.heart))
+                  if not on for name in _CHARTS_BY_CHANNEL[channel])
+    # An unreadable consent row withholds too (fail closed), but is not a withdrawal.
+    withdrawn, unchecked = (held, []) if channels.consent_retrieved else ([], held)
+    common = {"withdrawn": withdrawn, "unchecked": unchecked, "channels": _channel_flags(channels),
+              "expires_in": chart_archive.SIGNED_URL_TTL_SECONDS}
 
     paths = sess.get("chart_paths")
     if paths is None:
         # Column-NULL: the archive never ran. Distinct from `{}` and four nulls.
-        return {"archived": False, "charts": {}, "unavailable": [],
-                "expires_in": chart_archive.SIGNED_URL_TTL_SECONDS}
+        return {"archived": False, "charts": {}, "unavailable": [], **common}
 
     # Security: paths derive from owner and id; `chart_paths` decides presence only.
+    # A withheld chart is dropped before signing, so no URL to it is ever issued.
+    kept = {name: path for name, path in paths.items() if name not in held}
     urls, unavailable = chart_archive.signed_chart_urls(
-        supabase, paths, sess["user_id"], session_id)
-    return {"archived": True, "charts": urls, "unavailable": unavailable,
-            "expires_in": chart_archive.SIGNED_URL_TTL_SECONDS}
+        supabase, kept, sess["user_id"], session_id)
+    return {"archived": True, "charts": urls, "unavailable": unavailable, **common}
 
 
 # ─── live monitoring (only show truly active sessions) ───────────────────
@@ -6403,6 +6620,9 @@ def _station_open_to(user_id: str, device_id: str) -> bool:
     return _station_access(user_id, device_id)[0]
 
 
+_BRIDGE_ERROR = "The headband service did not respond. Try again, or restart the headband."
+
+
 def _reserve_and_call(user_id: str, device_id: str, fn, *args,
                       session_id: str | None = None):
     """Claim device_id's pre-claim reservation, then run the bridge call.
@@ -6419,7 +6639,9 @@ def _reserve_and_call(user_id: str, device_id: str, fn, *args,
         return fn(*args)
     except Exception as e:
         eeg_poller.release_reservation(user_id, device_id)
-        raise HTTPException(502, f"Bridge error: {e}")
+        # Logged, not sent: a requests error names the sidecar's internal URL.
+        print(f"[eeg] bridge call on {device_id} failed: {e}")
+        raise HTTPException(502, _BRIDGE_ERROR)
 
 
 @app.post("/api/eeg/muse/refresh")
@@ -6482,7 +6704,8 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     try:
         out = eeg_client.muse_disconnect(device_id)
     except Exception as e:
-        raise HTTPException(502, f"Bridge error: {e}")
+        print(f"[eeg] disconnect on {device_id} failed: {e}")
+        raise HTTPException(502, _BRIDGE_ERROR)
     _forget_pairing(device_id)
     return out
 
@@ -6525,20 +6748,24 @@ def eeg_debug(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
 
 @app.get("/api/eeg/health")
 def eeg_health():
-    """Tells the frontend whether the EEGResearch sidecar service is reachable."""
+    """Tells the frontend whether the EEGResearch sidecar service is reachable.
+
+    No login, so a yes or no and nothing else: not the sidecar's URL, not its error text,
+    and not the default headband's status, which carries live readings.
+    """
     if eeg_poller.INGEST_MODE == "push":
         # None: "not probed in this deployment", not "down".
-        return {"available": None, "ingest_mode": "push", "url": None}
-    alive = eeg_client.is_alive()
-    if not alive:
-        return {"available": False, "ingest_mode": "pull",
-                "url": eeg_client.EEG_API_URL}
+        return {"available": None, "ingest_mode": "push"}
+    if not eeg_client.is_alive():
+        return {"available": False, "ingest_mode": "pull"}
     # /healthz is unauthenticated; this call surfaces a token misconfiguration.
     try:
-        muse = eeg_client.get_muse_status()
+        eeg_client.get_muse_status()
     except RuntimeError as e:
-        return {"available": False, "url": eeg_client.EEG_API_URL, "error": str(e)}
-    return {"available": True, "url": eeg_client.EEG_API_URL, "muse": muse}
+        print(f"[eeg] health probe: {e}")
+        return {"available": False, "ingest_mode": "pull",
+                "error": "The headband service is not set up correctly on this computer."}
+    return {"available": True, "ingest_mode": "pull"}
 
 @app.post("/api/eeg/start")
 def eeg_start(payload: EegSessionRequest, request: Request):
@@ -6807,7 +7034,13 @@ def create_parent_link_code(request: Request):
     Students only. One code at a time: upserted on `student_id` in one statement.
     """
     user = get_user(request)
-    if _role(user["id"]) != "student":
+    # Not `_role`, which answers "student" on a failed read or a missing row.
+    try:
+        role = _role_or_raise(user["id"])
+    except Exception as e:
+        print(f"[link_code] role unreadable for {user['id'][:8]}: {type(e).__name__}")
+        raise HTTPException(503, "A code cannot be made right now. Try again soon.")
+    if role != "student":
         raise HTTPException(403, "Only a student can create a code for their own account")
     code = _new_link_code()
     expires = _utc_now() + timedelta(seconds=_LINK_CODE_TTL_SEC)
@@ -7625,4 +7858,5 @@ def admin_student_search(request: Request, q: str = "", limit: int = 10):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=BACKEND_PORT, reload=True)
+    # Loopback: with ENV unset /docs is on, and 0.0.0.0 served it and the API to the whole LAN.
+    uvicorn.run("main:app", host="127.0.0.1", port=BACKEND_PORT, reload=True)

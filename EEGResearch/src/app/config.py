@@ -3,10 +3,15 @@ from functools import lru_cache
 import logging
 from math import isfinite
 
-from pydantic import Field, field_validator
+from urllib.parse import urlsplit
+
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _log = logging.getLogger(__name__)
+
+# The website backend's default INGEST_MAX_ROWS_PER_MINUTE: rows per student per channel it accepts.
+BACKEND_ROWS_PER_MINUTE = 1200
 
 
 class Settings(BaseSettings):
@@ -21,9 +26,11 @@ class Settings(BaseSettings):
     admin_token: str = Field(alias="ADMIN_TOKEN")
     # Must include the frontend origin: under push the browser calls this sidecar directly.
     allowed_origins: str = Field(
-        default="http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000",
+        default="http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000",
         alias="ALLOWED_ORIGINS",
     )
+    # Off unless asked for: APP_ENV defaults to development, so it cannot tell a student's laptop apart.
+    sidecar_docs: bool = Field(default=False, alias="SIDECAR_DOCS")
     eeg_sample_hz: int = Field(default=4, alias="EEG_SAMPLE_HZ")
     eeg_source: str = Field(default="sim", alias="EEG_SOURCE")
     # "sdk" (bridge band powers) or "local" (services/eeg_spectrum.py). Changes the unit of
@@ -107,6 +114,35 @@ class Settings(BaseSettings):
     # Off: the backend's eeg_poller pulls instead. See services/push_client.py.
     push_enabled: bool = Field(default=False, alias="PUSH_ENABLED")
     backend_url: str = Field(default="http://127.0.0.1:8000", alias="BACKEND_URL")
+
+    @model_validator(mode="after")
+    def _secrets_are_real_and_travel_safely(self):
+        """Refuses the boot, unlike the tuning settings above: these guard every call and the student's JWT."""
+        for name, value in (("API_TOKEN", self.api_token), ("ADMIN_TOKEN", self.admin_token)):
+            if value.strip().lower().startswith("replace-me"):
+                raise ValueError(f"{name} is .env.example's public placeholder; start.ps1 / start.sh "
+                                 f"generate a real one, or set your own")
+            if len(value) < 32:
+                _log.warning("%s is %d characters; use at least 32 (start.ps1 generates 43)", name, len(value))
+        if self.api_token == self.admin_token:
+            # The learner token ships in the page, so it would be the admin token too.
+            raise ValueError("API_TOKEN and ADMIN_TOKEN are the same; the learner token is public")
+        if self.push_enabled:
+            url = urlsplit(self.backend_url)
+            if url.scheme != "https" and url.hostname not in ("127.0.0.1", "localhost", "::1"):
+                raise ValueError(f"BACKEND_URL {self.backend_url!r} would carry the student's token "
+                                 "in cleartext; use https for any host but this machine")
+        return self
+
+    @model_validator(mode="after")
+    def _push_rate_fits_the_backend(self):
+        """Warns, since only the backend knows its own ceiling: one pushed row per tick per channel."""
+        # Half the ceiling: a retried batch is charged again until the backend finds it duplicated.
+        if self.push_enabled and 2 * 60 * self.eeg_sample_hz > BACKEND_ROWS_PER_MINUTE:
+            _log.warning("EEG_SAMPLE_HZ=%d pushes %d rows a minute per channel, over half the backend's "
+                         "default INGEST_MAX_ROWS_PER_MINUTE (%d); raise that there, or samples are "
+                         "refused", self.eeg_sample_hz, 60 * self.eeg_sample_hz, BACKEND_ROWS_PER_MINUTE)
+        return self
 
 
 @lru_cache

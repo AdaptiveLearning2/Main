@@ -127,6 +127,43 @@ function Set-EnvKey {
     }
 }
 
+function Get-EnvValue {
+    # The last assignment, as dotenv reads it; $null for a missing file or key.
+    param([string]$path, [string]$key)
+    if (!(Test-Path $path)) { return $null }
+    $line = Select-String -Path $path -Pattern "^$key=(.*)$" | Select-Object -Last 1
+    if ($line) { return $line.Matches[0].Groups[1].Value }
+    return $null
+}
+
+function New-SidecarToken {
+    # 32 random bytes, URL-safe base64: what secrets.token_urlsafe(32) gives.
+    $bytes = New-Object byte[] 32
+    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    return ([Convert]::ToBase64String($bytes)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+
+function Update-SidecarTokens {
+    # The sidecar refuses .env.example's `replace-me` tokens, so a real pair is made once here, and
+    # the backend gets the same one: under pull it calls the sidecar with it.
+    param([string]$eegEnv, [string]$backendEnv)
+    if (!(Test-Path $eegEnv)) { return }
+    foreach ($pair in @(@("API_TOKEN", "EEG_API_TOKEN"), @("ADMIN_TOKEN", "EEG_ADMIN_TOKEN"))) {
+        $current = Get-EnvValue $eegEnv $pair[0]
+        # Trimmed and in any case (-like ignores case), as the sidecar reads it.
+        $norm = if ($current) { $current.Trim() } else { "" }
+        # It refuses equal tokens too (the learner one ships in the page), so a copied admin token is remade.
+        # -ceq: tokens are case-sensitive, and the sidecar compares them exactly.
+        $sameAsApi = ($pair[0] -eq "ADMIN_TOKEN") -and $current -and ($current -ceq (Get-EnvValue $eegEnv "API_TOKEN"))
+        if (-not $norm -or $norm -like "replace-me*" -or $sameAsApi) {
+            $token = New-SidecarToken
+            Set-EnvKey $eegEnv $pair[0] $token
+            Set-EnvKey $backendEnv $pair[1] $token
+            Write-Host "  Generated $($pair[0]) (and the backend's $($pair[1]))" -ForegroundColor Gray
+        }
+    }
+}
+
 # A native command's stdout, stderr dropped. `2>$null` under Stop aborts on PS 5.1: each stderr
 # line becomes an ErrorRecord that Stop makes terminating -- in exactly the state being probed.
 # Continue is local to this function, so the caller keeps Stop.
@@ -228,6 +265,8 @@ $frontendEnv = Join-Path $frontendDir ".env"
 $headband = if ($Muse) { "default:muse@8765" } else { "default:sim" }
 $cameraEntry = if ($Camera) { "camera:face@$CameraIndex" } else { "" }
 if (-not (Update-DeviceRegistry $eegEnv $headband $cameraEntry -DryRun)) { exit 1 }
+
+Update-SidecarTokens $eegEnv $backendEnv
 
 if ($Muse) {
     Write-Host "[2/5] Native Muse Bridge" -ForegroundColor Cyan
@@ -371,17 +410,13 @@ if ($Camera) {
     Set-EnvKey $backendEnv "INGEST_MODE" "push"
     # The page calls the sidecar with its API_TOKEN; unset, every browser call 401s.
     # Guard the file and the match: a fresh checkout has neither. -Last 1 as dotenv reads.
-    $apiToken = $null
-    if (Test-Path $eegEnv) {
-        $tokenLine = Select-String -Path $eegEnv -Pattern '^API_TOKEN=(.*)$' | Select-Object -Last 1
-        if ($tokenLine) { $apiToken = $tokenLine.Matches[0].Groups[1].Value }
-    }
+    $apiToken = Get-EnvValue $eegEnv "API_TOKEN"
     if ($apiToken) {
         Set-EnvKey $frontendEnv "VITE_EEG_LOCAL_TOKEN" $apiToken
     } else {
-        # The sidecar writes API_TOKEN on first start, so the next run picks it up.
-        Write-Host "  No API_TOKEN in $eegEnv yet -- VITE_EEG_LOCAL_TOKEN not set." -ForegroundColor Yellow
-        Write-Host "  The browser will 401 against the sidecar. Re-run this script once it has started." -ForegroundColor Yellow
+        # Only with no EEGResearch/.env at all: the tokens above are generated into an existing one.
+        Write-Host "  No $eegEnv -- VITE_EEG_LOCAL_TOKEN not set." -ForegroundColor Yellow
+        Write-Host "  Copy EEGResearch/.env.example to .env and re-run this script." -ForegroundColor Yellow
     }
     Write-Host "  INGEST_MODE = push (the camera's only writer is the push endpoint)" -ForegroundColor Gray
 } else {

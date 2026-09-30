@@ -6,6 +6,11 @@ package.json
 .venv/
 venv/
 
+# Secrets, in every directory; only the committed templates are tracked.
+.env
+.env.*
+!.env.example
+
 # Coverage output from `npm run test:coverage`.
 coverage/
 

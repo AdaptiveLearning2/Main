@@ -1,7 +1,7 @@
 """The angle-relationship solve path, with nothing heavy imported.
 
-Separate from the generator so `_solve_worker` can import it without supabase
-or flask. Runs only in the worker: `parse_expr` on model strings is unbounded.
+Separate from the generator so `_solve_worker` can import it without supabase.
+Runs only in the worker: `parse_expr` on model strings is unbounded.
 """
 
 import math

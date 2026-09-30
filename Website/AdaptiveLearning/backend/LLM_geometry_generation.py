@@ -10,8 +10,6 @@ from llm_json import extract_json
 import question_schemas
 import question_figures
 import json
-from flask import Flask, jsonify
-from flask_cors import CORS
 import sympy as sp
 from sympy import sqrt, symbols, Eq, solve, sympify, Integer, Rational, pi
 import incorrect_solution_generation as inc_gen

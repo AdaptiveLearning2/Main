@@ -16,6 +16,9 @@ from tests.test_local_calm_review import BANDS, _local, _tick
 from tests.test_poison_behaviour import CLENCH, GOOD as GOOD_BANDS
 from tests.test_signal_processing import Ticker, _spectrum
 
+# Full-length, so the short-token warning cannot be the record a "nothing logged" assertion sees.
+_TOKEN, _ADMIN = "t" * 43, "a" * 43
+
 
 def _n():
     return int(EPOCH_SECONDS * SAMPLE_RATE_HZ)
@@ -72,12 +75,12 @@ def test_focus_keeps_its_centre_on_arm_under_either_mode():
 def test_the_settings_reach_the_objects_the_stream_manager_builds(monkeypatch):
     monkeypatch.setenv("EEG_SPECTRUM_POISON_SECONDS", "2")
     monkeypatch.setenv("EEG_CALM_CENTRE_ON_ARM", "midpoint")
-    s = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a")
+    s = Settings(_env_file=None, API_TOKEN=_TOKEN, ADMIN_TOKEN=_ADMIN)
     session = DeviceSession("station1", s, DeviceConfig(device_id="station1", kind="sim",
                                                           host="127.0.0.1", port=8765))
     assert session.spectrum.poison_seconds == 2.0
     assert session.processor.calm_centre_on_arm == "midpoint"
-    d = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a",
+    d = Settings(_env_file=None, API_TOKEN=_TOKEN, ADMIN_TOKEN=_ADMIN,
                  EEG_SPECTRUM_POISON_SECONDS="4", EEG_CALM_CENTRE_ON_ARM="keep")
     assert d.eeg_spectrum_poison_seconds == 4.0 and d.eeg_calm_centre_on_arm == "keep"
 
@@ -131,7 +134,7 @@ def test_an_unusable_poison_length_falls_back_to_the_buffer_with_a_warning(bad, 
 def test_the_settings_survive_an_unusable_poison_length_end_to_end():
     """Through Settings and DeviceSession, the path that runs at import."""
     for value in ("nan", "inf", "0", "abc", ""):
-        s = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a", EEG_SPECTRUM_POISON_SECONDS=value)
+        s = Settings(_env_file=None, API_TOKEN=_TOKEN, ADMIN_TOKEN=_ADMIN, EEG_SPECTRUM_POISON_SECONDS=value)
         session = DeviceSession("station1", s, DeviceConfig(device_id="station1", kind="sim",
                                                               host="127.0.0.1", port=8765))
         assert session.spectrum.poison_seconds == EPOCH_SECONDS
@@ -154,7 +157,7 @@ def test_a_misspelt_centre_setting_boots_the_sidecar_on_keep_with_a_warning(capl
     """Case and whitespace are forgiven; a misspelling warns and means keep."""
     import logging
     with caplog.at_level(logging.WARNING, logger="src.app.config"):
-        s = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a", EEG_CALM_CENTRE_ON_ARM="midpont")
+        s = Settings(_env_file=None, API_TOKEN=_TOKEN, ADMIN_TOKEN=_ADMIN, EEG_CALM_CENTRE_ON_ARM="midpont")
     assert s.eeg_calm_centre_on_arm == "keep"
     assert any("EEG_CALM_CENTRE_ON_ARM" in r.message for r in caplog.records)
     session = DeviceSession("station1", s, DeviceConfig(device_id="station1", kind="sim",
@@ -163,7 +166,7 @@ def test_a_misspelt_centre_setting_boots_the_sidecar_on_keep_with_a_warning(capl
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="src.app.config"):
         for raw, want in ((" MIDPOINT ", "midpoint"), ("", "keep"), ("Keep", "keep")):
-            assert Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a",
+            assert Settings(_env_file=None, API_TOKEN=_TOKEN, ADMIN_TOKEN=_ADMIN,
                             EEG_CALM_CENTRE_ON_ARM=raw).eeg_calm_centre_on_arm == want
     assert not caplog.records
     with pytest.raises(ValueError):
@@ -173,12 +176,12 @@ def test_a_misspelt_centre_setting_boots_the_sidecar_on_keep_with_a_warning(capl
 def test_a_non_numeric_poison_length_warns_at_settings_not_at_import(caplog):
     import logging
     with caplog.at_level(logging.WARNING, logger="src.app.config"):
-        s = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a", EEG_SPECTRUM_POISON_SECONDS="abc")
+        s = Settings(_env_file=None, API_TOKEN=_TOKEN, ADMIN_TOKEN=_ADMIN, EEG_SPECTRUM_POISON_SECONDS="abc")
     assert s.eeg_spectrum_poison_seconds == 4.0
     assert any("EEG_SPECTRUM_POISON_SECONDS" in r.message for r in caplog.records)
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="src.app.config"):
-        assert Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a",
+        assert Settings(_env_file=None, API_TOKEN=_TOKEN, ADMIN_TOKEN=_ADMIN,
                         EEG_SPECTRUM_POISON_SECONDS="2").eeg_spectrum_poison_seconds == 2.0
     assert not caplog.records
 
@@ -187,16 +190,16 @@ def test_a_misspelt_spectrum_source_warns_rather_than_silently_meaning_sdk(caplo
     """This setting decides the unit of every stored calm value."""
     import logging
     with caplog.at_level(logging.WARNING, logger="src.app.config"):
-        s = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a", EEG_SPECTRUM_SOURCE="locl")
+        s = Settings(_env_file=None, API_TOKEN=_TOKEN, ADMIN_TOKEN=_ADMIN, EEG_SPECTRUM_SOURCE="locl")
     assert s.eeg_spectrum_source == "sdk"
     assert any("EEG_SPECTRUM_SOURCE" in r.message for r in caplog.records)
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="src.app.config"):
         for raw, want in ((" LOCAL ", "local"), ("", "sdk"), ("Sdk", "sdk")):
-            assert Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a",
+            assert Settings(_env_file=None, API_TOKEN=_TOKEN, ADMIN_TOKEN=_ADMIN,
                             EEG_SPECTRUM_SOURCE=raw).eeg_spectrum_source == want
     assert not caplog.records
-    s = Settings(_env_file=None, API_TOKEN="t", ADMIN_TOKEN="a", EEG_SPECTRUM_SOURCE=" LOCAL ")
+    s = Settings(_env_file=None, API_TOKEN=_TOKEN, ADMIN_TOKEN=_ADMIN, EEG_SPECTRUM_SOURCE=" LOCAL ")
     session = DeviceSession("station1", s, DeviceConfig(device_id="station1", kind="sim",
                                                           host="127.0.0.1", port=8765))
     assert session.processor.calm_source == "local"

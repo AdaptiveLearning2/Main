@@ -1,7 +1,7 @@
 """The geometry solve path, with nothing heavy imported.
 
-Separate from the generator so `_solve_worker` can import it without supabase
-or flask. Runs only in the worker: `sympify` on model values is unbounded.
+Separate from the generator so `_solve_worker` can import it without supabase.
+Runs only in the worker: `sympify` on model values is unbounded.
 """
 
 import math

@@ -24,7 +24,7 @@ export default function Leaderboard() {
         <h1 className="text-3xl font-black text-gray-900 dark:text-white flex items-center gap-3">
           <Trophy className="text-yellow-500" size={28} /> Leaderboard
         </h1>
-        <p className="text-gray-500 dark:text-gray-400 mt-1">Top students by correct answers — real data 🔥</p>
+        <p className="text-gray-500 dark:text-gray-400 mt-1">Top students in your classes by correct answers 🔥</p>
       </motion.div>
 
       {/* podium — top 3 */}
@@ -65,7 +65,7 @@ export default function Leaderboard() {
       ) : rows.length === 0 ? (
         <div className="text-center py-12">
           <p className="text-4xl mb-3">🏁</p>
-          <p className="text-gray-500 dark:text-gray-400">No students have answered questions yet. Be the first!</p>
+          <p className="text-gray-500 dark:text-gray-400">No one in your classes has answered questions yet. Be the first!</p>
         </div>
       ) : (
         <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">

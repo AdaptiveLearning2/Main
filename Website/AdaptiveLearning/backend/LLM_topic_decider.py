@@ -1,6 +1,4 @@
 import os
-from flask import Flask, jsonify, request
-from flask_cors import CORS
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import llm_client
@@ -22,7 +20,6 @@ import LLM_shape_fractions_generation
 import LLM_quadratics_generation, LLM_functions_generation
 import LLM_spread_generation
 import LLM_kindergarten_generation
-# python -m flask --app LLM_topic_decider run
 
 load_dotenv()
 SUPABASE_URL     = os.getenv("SUPABASE_URL")
@@ -857,16 +854,3 @@ def _difficulty_from_accuracy(accuracy_response, topic):
     if accuracy < 0.7:
         return "medium"
     return "hard"
-
-
-app= Flask(__name__)
-CORS(app)
-@app.route("/")
-def display_question():
-    user_id = request.args.get("user_id")
-
-    if not user_id:
-        return jsonify({"error": "Missing user_id"}), 400
-
-    response = LLM_topic_decider(user_id)
-    return jsonify(response)

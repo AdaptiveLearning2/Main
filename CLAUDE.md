@@ -314,8 +314,9 @@ obvious fix for the nested workflow below never running is to move it to the rep
 that would run exactly this lock on ubuntu. **Regenerate them on the platform that will install
 them** — that is the whole of the available fix. A single lock covering both platforms is not one:
 `pip-compile` has no `--universal`, in 7.6.1 or any version, so that route is a toolchain change
-rather than a flag.
-One pre-existing gap: none has ever carried `setuptools`, so `import rppg`
+rather than a flag. **They carry hashes**: regenerate with `--generate-hashes`, and the dev lock with
+`--allow-unsafe` too, or its unpinned `pip`/`setuptools` make a hashed install refuse.
+One pre-existing gap: only the dev lock carries `setuptools`, and at a version without `pkg_resources`, so `import rppg`
 / `import heartpy` fail on a missing `pkg_resources` against a persistent venv. (`keras`/`jax` load fine once
 `KERAS_BACKEND` is set the way `rppg/models.py` already sets it at import.) The `open-rppg`
 measurements were always done in a throwaway `pip install --target ... "setuptools<81"` env.
@@ -345,7 +346,8 @@ It audits **three Python sets, because they are three different installs** — t
 two are audited *as installed*, not as files: `requirements.txt` pins direct dependencies only, so
 auditing the file alone would miss the transitive tree, which is where `starlette`, `idna` and
 `urllib3` live. The locks are audited `--no-deps`, since the point of a lock is that it already
-names every version.
+names every version, and `--disable-pip`: they are hashed and Windows-resolved, so letting
+pip-audit install one on the ubuntu runner fails on Linux-only extras (see *Three venvs*).
 
 `npm audit` runs at `--audit-level=high`: npm reports transitive dev-only findings in build tooling
 that never reaches a browser, and a job red for those is one nobody reads by the time a real one
@@ -524,14 +526,16 @@ use it without a cycle. These are read at import, so a typo would otherwise take
 over a tuning knob for one optional feature. It falls back on unparseable and non-finite values
 (`inf` passes a `minimum` check, `nan` fails every comparison, and both break call sites in ways
 that look like the feature being off) and clamps below the floor. **Give every one a floor:** a
-number is not automatically a usable setting. The sidecar's boot settings take the same tolerant
-treatment in `config.py` — a validator warns and falls back rather than refusing the boot.
+number is not automatically a usable setting. The sidecar's tuning settings take the same tolerant
+treatment in `config.py` — a validator warns and falls back rather than refusing the boot. Its secrets
+do not: a `replace-me` token, two equal tokens, or push over plain `http://` to another host refuse it.
 
 **Backend.** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `AUTH_CHECK_TIMEOUT`, `BACKEND_PORT`, `EEG_API_URL`,
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MODE`, `INGEST_MAX_BATCH` /
-`INGEST_RATE_LIMIT` / `INGEST_RATE_WINDOW`, `SESSION_ABANDONED_AFTER_HOURS` /
+`INGEST_RATE_LIMIT` / `INGEST_RATE_WINDOW` / `INGEST_MAX_ROWS_PER_MINUTE` (per student and channel), `SESSION_ABANDONED_AFTER_HOURS` /
 `STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep and its chart catch-up), `QUESTIONS_CACHE_TTL`,
-`QUESTION_QUEUE_SIZE`, `PAIRING_IDLE_SECONDS` (120; a headband pairing its pairer's page stopped polling is released), the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
+`QUESTION_QUEUE_SIZE`, `PAIRING_IDLE_SECONDS` (120; a headband pairing its pairer's page stopped polling is released),
+`CLASS_JOIN_MISSES_PER_ADDRESS` (1000 wrong class codes an hour), the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
 `PUBLIC_*_RATE_*` / `TRUSTED_PROXY_HOPS` group under *The network edge*, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels*,
 and the `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` / `SOLVE_*` groups in `docs/question-generation.md`.
 
@@ -548,7 +552,9 @@ that endpoint is a trust boundary, and neither the session check nor the consent
 registry, `PUSH_ENABLED` / `BACKEND_URL` drive the push client, `ALLOWED_ORIGINS` must name the
 **frontend** origin (getting it wrong fails every local call on CORS while the sidecar looks
 healthy), `EEG_SIM_OPTICS`, `EEG_SPECTRUM_SOURCE`, `EEG_SPECTRUM_POISON_SECONDS`,
-`EEG_CALM_CENTRE_ON_ARM`, `FACE_*`.
+`EEG_CALM_CENTRE_ON_ARM`, `FACE_*`, `SIDECAR_DOCS` (off: no `/docs` or `/openapi.json`, since
+`APP_ENV` cannot tell a student's laptop apart), and `EEG_SAMPLE_HZ`, which warns under push when
+it would pass half the backend's `INGEST_MAX_ROWS_PER_MINUTE` default.
 
 **The native bridge reads its own env directly, not through `config.py`**: `MUSE_BRIDGE_PORT`
 (8765), `MUSE_ENABLE_OPTICS` (off), `MUSE_OPTICS_PRESET` (`1035`), `MUSE_AUTO_RECONNECT`,
@@ -668,7 +674,8 @@ and it makes any *later* schema mismatch degrade to a quietly wrong answer inste
 `SECURITY DEFINER` **and deliberately granted to `anon` and `authenticated`**. RLS policies evaluate
 them as the calling user, so revoking the grants breaks the policies they exist to serve. They are
 safe by construction — both are `auth.uid()`-scoped booleans with no parameter to pivot on (they
-answer "am *I* in this class", not "is user X"), and both pin `SET search_path TO 'public'`.
+answer "am *I* in this class", not "is user X"), and both pin `SET search_path TO ''` with every
+table schema-qualified, so a caller's temp table cannot stand in for `class_memberships`.
 
 Audited against `pg_proc.proacl` on production and a local stack: five functions in `public`, and
 these two are the only ones granted to an application role. Re-audit with:
@@ -841,6 +848,13 @@ unauthenticated caller cannot choose; `test_network_edge.py` derives the set, so
 **A route that names a student resolves its caller**, never a `user_id` query parameter. `/api/generate-question`
 also keeps an address budget, in `_AUTHENTICATED_ADDRESS_LIMITER` (apart, so `_PUBLIC_LIMITER` means exactly "no
 caller"): sign-up is self-service, so a per-student limit alone is a new allowance per account.
+**`/api/classes/join` keeps its address budget in the handler instead** (`_JOIN_MISS_LIMITER`), because it counts
+only *wrong* codes from signed-in students: charged before login, a school's first morning of correct codes, or one
+student's script, would lock the whole network out of joining. Like every address budget it needs
+`TRUSTED_PROXY_HOPS` set behind a proxy — at 0 every school is one bucket, and once it is spent even right codes
+are refused, since a limit checked after the lookup would tell an attacker which guesses were codes. The first
+request carrying `X-Forwarded-For` at 0 logs a `[config]` line. Old 6-character codes are the weak case, and
+`POST /api/classes/{id}/join-code` lets the owning teacher replace one; members stay enrolled.
 
 **An address is a school, not a student**, and that sets the numbers. A class leaves through one NAT and
 `Adaptive.jsx` polls the health route every 5 s per open page, so sixty students behind one address is
@@ -1066,8 +1080,10 @@ backfill and an unconfigured student records nothing. `_consent()` fails **close
 carries `retrieved` so callers can tell "nobody consented" from "we couldn't find out".
 
 **Withdrawal stops future recording and keeps what is already stored.** A revoked channel records
-nothing further until consent is given again, and no past row is deleted or hidden. Withdrawal is not
-erasure.
+nothing further until consent is given again, and no past row is deleted. Withdrawal is not
+erasure. **But every surface stops reading a withdrawn face or heart channel** — reports, session review
+and its archived charts alike — and says it is off, with the date; re-enabling shows the history again.
+EEG is the exception and is always read (see *A tile never says "no data"*).
 
 **Writes only through the backend.** The table has no insert/update/delete policy for anyone, so with
 RLS on, PostgREST cannot write it whatever JWT it carries — including the anon key in the frontend
@@ -1385,12 +1401,12 @@ instead of raising: the 429 wording, the audit write and the `limiter` label liv
 outside the lock — and the label is `<instance>.name`, never a second copy of the string, or the row
 can name a limiter other than the one that fired.
 
-**Which limiters record is a partition, not a habit.** All five do, and
-`test_every_limiter_either_records_or_is_classified_as_silent` requires a new one to record or to be
+**Which limiters record is a partition, not a habit.**
+`test_every_limiter_either_records_or_is_classified_as_silent` requires every limiter to record or to be
 listed as deliberately silent with a reason — generation was silent for a while and nothing said
 whether that was a decision. **It finds the limiters at runtime and carries a named floor**, because a
 partition over a scan is only as good as the scan: an AST match on one assignment shape misses an
-annotated one, and collecting the five into a registry — which `_PUBLIC_BUDGETS` already is — would
+annotated one, and collecting them into a registry — which `_PUBLIC_BUDGETS` already is — would
 have left it reporting nothing unclassified while examining nothing. Same countermeasure as the
 chart-render palette scraper's refusal of an empty result. The generation limiter's call sites differ,
 so it is pinned per site too: `practice_question` and `generate_question` record, because `get_user`

@@ -426,6 +426,8 @@ RECORDS_THE_DENIAL = {
 # Refuses something that is not access to anyone's data; a row here would mean nothing.
 NOT_AN_ACCESS_DENIAL = {
     "create_class":        "a role gate on the caller's own action",
+    "join_class":          "a role gate on the caller's own action; guessing codes is "
+                           "what the join limiter records",
     "create_parent_link_code":
                            "a role gate on the caller's own account -- a "
                            "teacher asking for a code meant for a student is "
@@ -487,9 +489,9 @@ GENERATION_SILENT_SITES = {
 
 # Named floor, not a count, so a rename fails too.
 EXPECTED_LIMITERS = {
-    "strategies", "chart_summary", "ingest", "generation", "generation_daily", "prefetch_daily",
+    "strategies", "chart_summary", "ingest", "ingest_rows", "generation", "generation_daily", "prefetch_daily",
     "public_generate", "public_read", "public_probe",
-    "parent_link_code",
+    "parent_link_code", "class_join", "class_join_address",
 }
 
 

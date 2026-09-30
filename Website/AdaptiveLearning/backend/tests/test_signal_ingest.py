@@ -3,6 +3,7 @@
 import os
 import re
 import time
+from collections import deque
 from pathlib import Path
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -408,7 +409,7 @@ def test_stale_callers_are_evicted_rather_than_accumulating(store, monkeypatch):
 
     # Callers who posted a full window ago and never came back.
     stale = time.monotonic() - (main._INGEST_LIMITER.window + 1)
-    main._INGEST_LIMITER.hits.update({f"gone-{i}": [stale] for i in range(10)})
+    main._INGEST_LIMITER.hits.update({f"gone-{i}": deque([[stale, 1]]) for i in range(10)})
     main._INGEST_LIMITER.sweep_at = 0.0
 
     _post_heart([_heart()])
@@ -425,7 +426,7 @@ def test_an_active_caller_is_never_swept(store, monkeypatch):
     monkeypatch.setattr(main._INGEST_LIMITER, "_sweep_above", 0)
     monkeypatch.setattr(main._INGEST_LIMITER, "_sweep_every", 0.0)
 
-    main._INGEST_LIMITER.hits["busy"] = [time.monotonic()]   # a hit just now
+    main._INGEST_LIMITER.hits["busy"] = deque([[time.monotonic(), 1]])   # a hit just now
     main._INGEST_LIMITER.sweep_at = 0.0
 
     _post_heart([_heart()])
@@ -476,6 +477,19 @@ def test_a_non_finite_heart_value_is_malformed_and_the_rest_of_the_batch_lands(s
         out = _post_heart([_heart(**{field: float("nan")}),
                            _heart(ts="2026-08-09T10:00:05Z")])
         assert (out["malformed"], out["inserted"]) == (1, 1), field
+
+
+@pytest.mark.parametrize("field", ["attention", "gaze_x", "gaze_y", "head_yaw", "head_pitch",
+                                   "head_roll", "emotion_confidence"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_a_non_finite_face_value_is_malformed_and_the_rest_of_the_batch_lands(store, field, value):
+    _consent(store, camera_enabled=True)
+    out = main.ingest_face(
+        main.FaceBatch(session_id=SESSION, samples=[
+            {"ts": "2026-08-09T10:00:00Z", "emotion": "happy", field: value},
+            {"ts": "2026-08-09T10:00:05Z", "emotion": "happy", "emotion_confidence": 0.9}]),
+        request=None)
+    assert (out["malformed"], out["inserted"]) == (1, 1), field
 
 
 @pytest.mark.parametrize("field, value", [
@@ -588,3 +602,109 @@ def test_the_synthetic_mark_is_derived_from_the_sample_never_from_the_posted_raw
     assert out["inserted"] == 3
     marks = [row["raw"].get("synthetic") for row in store["heart_signals"]]
     assert marks == [True, None, None]
+
+
+# ── rows per student per channel: the batch rate alone allowed ~86M a day ───
+
+def _hearts(n, start=0):
+    return [_heart(ts=f"2026-08-09T10:{(start + i) // 60:02d}:{(start + i) % 60:02d}Z") for i in range(n)]
+
+
+def test_rows_past_the_sessions_ceiling_are_refused_whole_and_nothing_is_written(store, monkeypatch):
+    """A 429 keeps the batch in the push client's queue; a partial write would lose the rest."""
+    from conftest import tighten
+    tighten(monkeypatch, main._INGEST_ROW_LIMITER, limit=5)
+    _consent(store, headband_optical_enabled=True)
+    recorded = []
+    monkeypatch.setattr(main, "_record_security_event", lambda kind, actor, **d: recorded.append((kind, d)))
+    assert _post_heart(_hearts(3))["inserted"] == 3
+    with pytest.raises(main.HTTPException) as e:
+        _post_heart(_hearts(3, start=3))
+    assert e.value.status_code == 429 and int(e.value.headers["Retry-After"]) >= 1
+    assert len(store["heart_signals"]) == 3
+    assert recorded == [("rate_limited", {"limiter": main._INGEST_ROW_LIMITER.name})]
+
+
+def test_the_ceiling_is_per_channel_and_shared_by_a_students_sessions(store, monkeypatch):
+    """Per student, not per session: a closed session's window still ingests, so each one would add a budget."""
+    from conftest import tighten
+    tighten(monkeypatch, main._INGEST_ROW_LIMITER, limit=3)
+    _consent(store, headband_optical_enabled=True, camera_enabled=True)
+    assert _post_heart(_hearts(3))["inserted"] == 3
+    # Another channel has its own budget.
+    out = main.ingest_face(main.FaceBatch(session_id=SESSION, samples=[
+        {"ts": f"2026-08-09T10:00:0{i}Z", "emotion": "happy"} for i in range(3)]), request=None)
+    assert out["inserted"] == 3
+    # Another session of the same student does not.
+    with pytest.raises(main.HTTPException) as e:
+        main.ingest_heart(main.HeartBatch(session_id="session-2", samples=_hearts(3)), request=None)
+    assert e.value.status_code == 429
+
+
+def test_a_replayed_batch_costs_nothing_against_the_ceiling(store, monkeypatch):
+    """The push client resends a batch whose answer it lost; only new rows stay charged.
+
+    Admission still needs room for the batch, since duplicates are known only after the write.
+    """
+    tighten(monkeypatch, main._INGEST_ROW_LIMITER, limit=6)
+    _consent(store, headband_optical_enabled=True)
+    assert _post_heart(_hearts(3))["inserted"] == 3
+    assert _post_heart(_hearts(3))["duplicates"] == 3
+    assert _post_heart(_hearts(3, start=3))["inserted"] == 3
+
+
+def test_a_failed_write_gives_its_rows_back(store, monkeypatch):
+    tighten(monkeypatch, main._INGEST_ROW_LIMITER, limit=5)
+    _consent(store, headband_optical_enabled=True)
+    real = main.supabase
+
+    class _Down:
+        def table(self, name):
+            if name == "heart_signals":
+                raise RuntimeError("write failed")
+            return real.table(name)
+
+    monkeypatch.setattr(main, "supabase", _Down())
+    with pytest.raises(RuntimeError):
+        _post_heart(_hearts(5))
+    monkeypatch.setattr(main, "supabase", real)
+    assert _post_heart(_hearts(5))["inserted"] == 5
+
+
+def test_the_default_ceiling_is_the_one_the_sidecar_warns_against():
+    """One pushed row per tick; the sidecar compares its EEG_SAMPLE_HZ to this default.
+
+    Read from source, since a local backend .env may set the variable.
+    """
+    default = int(re.search(r'env_number\("INGEST_MAX_ROWS_PER_MINUTE", (\d+)',
+                            Path(main.__file__).read_text(encoding="utf-8")).group(1))
+    config = Path(__file__).resolve().parents[4] / "EEGResearch" / "src" / "app" / "config.py"
+    assert f"BACKEND_ROWS_PER_MINUTE = {default}\n" in config.read_text(encoding="utf-8")
+    assert default >= 2 * 60 * 4, "twice the sidecar's default 4 Hz"
+    assert main._INGEST_ROWS_PER_MINUTE >= main._INGEST_MAX_BATCH
+
+
+def test_a_cost_is_taken_whole_or_not_at_all():
+    limiter = main._SlidingWindowLimiter("t", 5, 60.0)
+    assert limiter.check("k", cost=4) is None
+    assert limiter.check("k", cost=2) is not None
+    assert limiter.check("k", cost=1) is None, "the refused cost of 2 was partly taken"
+
+
+def test_a_batch_is_one_entry_and_can_be_given_back_in_part():
+    """Stored per call, not per row: a 500-row batch must not be 500 entries rescanned under the lock."""
+    limiter = main._SlidingWindowLimiter("t", 1200, 60.0)
+    assert limiter.check("k", cost=500) is None and limiter.check("k", cost=300) is None
+    assert len(limiter.hits["k"]) == 2
+    limiter.release("k", 350)          # all of the newest call and 50 of the one before
+    assert [n for _t, n in limiter.hits["k"]] == [450]
+    assert limiter.check("k", cost=750) is None and limiter.check("k", cost=1) is not None
+
+
+def test_the_clock_is_read_under_the_lock(monkeypatch):
+    """Read before it, two callers can append out of time order, and pruning assumes order."""
+    limiter = main._SlidingWindowLimiter("t", 5, 60.0)
+    real, held = time.monotonic, []
+    monkeypatch.setattr(main.time, "monotonic", lambda: (held.append(limiter._lock.locked()), real())[1])
+    limiter.check("k")
+    assert held and all(held)

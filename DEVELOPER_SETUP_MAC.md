@@ -82,9 +82,10 @@ cd ~/AdaptiveLearning/EEGResearch
 cp .env.example .env
 ```
 
-Simulator mode needs no other changes, but `API_TOKEN` and `ADMIN_TOKEN` are required — the app
-fails to start without them, rather than falling back to a guessable default. Set real values for
-both before continuing.
+Simulator mode needs no other changes. `API_TOKEN` and `ADMIN_TOKEN` are required, and the sidecar
+refuses to start on the `replace-me` placeholders the file ships with, or on two identical tokens.
+`./start.sh` replaces placeholders with generated tokens on its first run and gives the backend the
+same pair; if you start the sidecar by hand, set your own (32+ characters) first.
 
 ---
 

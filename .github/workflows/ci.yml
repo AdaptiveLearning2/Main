@@ -5,16 +5,20 @@ on:
   push:
     branches: [main]
 
+# Nothing here writes to the repository; a job that needs more asks for it itself.
+permissions:
+  contents: read
+
 jobs:
   eegresearch-tests:
     name: EEGResearch tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # 3.14, matching the local venvs. The minor, not the patch: setup-python
       # fails outright on an exact version the runner image lacks.
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.14"
 
@@ -36,7 +40,7 @@ jobs:
     # ENABLE_LIBMUSE=OFF (the SDK cannot ship to CI): code inside those guards is not compiled.
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Configure
         working-directory: EEGResearch/native_bridge
@@ -50,9 +54,9 @@ jobs:
     name: Website backend tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.14"
 
@@ -87,8 +91,8 @@ jobs:
     # explicit REVOKE narrows them. A lint, because ALTER DEFAULT PRIVILEGES does not work.
     # Own job: stdlib text analysis, no Docker, under a second.
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.14'
       # The parser first: a regex over SQL fails quietly in both directions.
@@ -109,8 +113,8 @@ jobs:
     runs-on: ubuntu-latest
     # A written limit on comment size had already failed once; this makes it a gate.
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.14'
       - name: Self-test the parser
@@ -124,10 +128,10 @@ jobs:
     # The only CI step that applies migrations ("Supabase Preview" is always skipped).
     # A local Supabase stack, not bare postgres: migrations need auth.uid() and the Supabase roles.
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # Matches the repo-local CLI in package.json; bump both together.
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb  # v1.7.3
         with:
           version: 2.108.0
 
@@ -153,9 +157,9 @@ jobs:
     name: Frontend tests, build & lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "24"
           cache: "npm"
@@ -202,14 +206,14 @@ jobs:
     name: Dependency scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.14"
 
       - name: Install pip-audit
-        run: pip install pip-audit
+        run: pip install pip-audit==2.10.1
 
       # Each audit is `continue-on-error` with an `id`, and the last step fails the job,
       # so one finding does not hide the rest.
@@ -244,7 +248,8 @@ jobs:
           pip-audit --skip-editable \
             --path "$("$venv/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
 
-      # `--no-deps`: a lock already names every version.
+      # `--no-deps`: a lock already names every version. `--disable-pip`: the locks are
+      # Windows-resolved and hashed, so installing one on this runner fails on Linux-only extras.
       - name: Audit the committed lock files
         id: audit-locks
         continue-on-error: true
@@ -254,12 +259,12 @@ jobs:
           for lock in requirements.lock requirements-dev.lock \
                       requirements-face.lock requirements-gaze.lock; do
             echo "::group::$lock"
-            pip-audit -r "$lock" --no-deps || status=1
+            pip-audit -r "$lock" --no-deps --disable-pip || status=1
             echo "::endgroup::"
           done
           exit $status
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "24"
           cache: "npm"
@@ -308,7 +313,7 @@ jobs:
     name: Secret scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # Whole history: a removed key is still served by its commit.
           fetch-depth: 0

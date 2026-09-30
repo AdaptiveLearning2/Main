@@ -19,10 +19,11 @@ class _Fake:
 
     def __init__(self, codes=(), links=(), role="student", code_read_raises=None,
                  profile_raises=None, link_insert_raises=None, link_on_failure=False,
-                 link_read_raises_after_insert=False, link_read_raises=False):
+                 link_read_raises_after_insert=False, link_read_raises=False, no_profile=False):
         self.codes = [dict(c) for c in codes]
         self.links = [dict(l) for l in links]
         self.role = role       # the *child's* profile: the one link_child reads
+        self.no_profile = no_profile
         self.code_read_raises = code_read_raises
         self.profile_raises = profile_raises
         self.link_insert_raises = link_insert_raises
@@ -129,8 +130,8 @@ class _Fake:
                 elif table == "profiles":
                     if client.profile_raises:
                         raise client.profile_raises
-                    rows = [{"id": self._filters.get("id"),
-                             "display_name": "Ada", "role": client.role}]
+                    rows = [] if client.no_profile else [{"id": self._filters.get("id"),
+                                                          "display_name": "Ada", "role": client.role}]
                 else:
                     rows = []
                 return type("R", (), {"data": rows})()
@@ -177,12 +178,27 @@ def test_a_code_is_stored_against_the_caller_and_replaces_the_last(monkeypatch, 
 def test_only_a_student_can_create_a_code(monkeypatch):
     """A teacher's code would link a parent to a teacher, which `_verify_can_view_student` honours."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
-    monkeypatch.setattr(main, "_role", lambda _uid: "teacher")
-    monkeypatch.setattr(main, "supabase", _Fake())
+    fake = _Fake(role="teacher")
+    monkeypatch.setattr(main, "supabase", fake)
 
     with pytest.raises(main.HTTPException) as e:
         main.create_parent_link_code(None)
     assert e.value.status_code == 403
+    assert fake.upserts == []
+
+
+@pytest.mark.parametrize("fake, status", [
+    (_Fake(profile_raises=RuntimeError("profiles down")), 503),
+    (_Fake(no_profile=True), 403),
+], ids=["role unreadable", "no profile row"])
+def test_a_role_that_was_not_read_as_student_makes_no_code(monkeypatch, fake, status):
+    """`_role` answers "student" to both, the permissive direction for a students-only gate."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": CHILD})
+    monkeypatch.setattr(main, "supabase", fake)
+    with pytest.raises(main.HTTPException) as e:
+        main.create_parent_link_code(None)
+    assert e.value.status_code == status
+    assert fake.upserts == []
 
 
 def test_a_code_is_drawn_from_an_unambiguous_alphabet_and_does_not_repeat():

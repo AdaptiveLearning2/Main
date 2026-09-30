@@ -29,6 +29,33 @@ std::string random_token() {
     return hex;
 }
 
+// HMAC-SHA256(key, message) as hex; empty on failure. The sidecar computes the same to check a PROOF.
+std::string hmac_sha256_hex(const std::string& key, const std::string& message) {
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    unsigned char digest[32];
+    bool ok = BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr,
+                                          BCRYPT_ALG_HANDLE_HMAC_FLAG) == 0;
+    ok = ok && BCryptCreateHash(alg, &hash, nullptr, 0,
+                                reinterpret_cast<PUCHAR>(const_cast<char*>(key.data())),
+                                static_cast<ULONG>(key.size()), 0) == 0;
+    ok = ok && BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char*>(message.data())),
+                              static_cast<ULONG>(message.size()), 0) == 0;
+    ok = ok && BCryptFinishHash(hash, digest, sizeof(digest), 0) == 0;
+    if (hash) BCryptDestroyHash(hash);
+    if (alg) BCryptCloseAlgorithmProvider(alg, 0);
+    if (!ok) {
+        return {};
+    }
+    std::string hex;
+    char two[3];
+    for (unsigned char b : digest) {
+        std::snprintf(two, sizeof(two), "%02x", b);
+        hex += two;
+    }
+    return hex;
+}
+
 bool equal_constant_time(const std::string& a, const std::string& b) {
     if (a.size() != b.size()) {
         return false;
@@ -153,7 +180,14 @@ void BridgeTcpServer::try_accept_client() {
     u_long nonblocking = 1;
     ioctlsocket(client_socket_, FIONBIO, &nonblocking);
     authenticated_ = false;
+    challenged_ = false;
     accepted_at_ms_ = GetTickCount64();
+}
+
+// One short line to a client not yet authenticated; false if it could not all be written.
+bool BridgeTcpServer::send_raw(const std::string& line) {
+    const int sent = send(client_socket_, line.c_str(), static_cast<int>(line.size()), 0);
+    return sent == static_cast<int>(line.size());
 }
 
 void BridgeTcpServer::close_client() {
@@ -163,6 +197,7 @@ void BridgeTcpServer::close_client() {
     }
     recv_buffer_.clear();
     authenticated_ = false;
+    challenged_ = false;
 }
 
 void BridgeTcpServer::send_json_line(const std::string& payload) {
@@ -201,8 +236,9 @@ void BridgeTcpServer::send_json_line(const std::string& payload) {
     }
 }
 
-// The next complete line for the caller. The first line must be "AUTH <token>"; anything else,
-// an HTTP request included, closes the client, as does a line or unterminated buffer past kMaxLine.
+// The next complete line for the caller. Before "AUTH <token>" a client may send one "CHALLENGE <nonce>",
+// answered with the token's HMAC so the sidecar knows this is the bridge before revealing the token.
+// Anything else, an HTTP request included, closes the client, as does a line past kMaxLine.
 bool BridgeTcpServer::take_line(std::string& line_out) {
     for (;;) {
         const auto pos = recv_buffer_.find('\n');
@@ -222,6 +258,16 @@ bool BridgeTcpServer::take_line(std::string& line_out) {
             line.pop_back();
         }
         if (!authenticated_) {
+            static const std::string kChallenge = "CHALLENGE ";
+            if (!challenged_ && line.compare(0, kChallenge.size(), kChallenge) == 0) {
+                challenged_ = true;
+                const std::string proof = hmac_sha256_hex(token_, line.substr(kChallenge.size()));
+                if (proof.empty() || !send_raw("PROOF " + proof + "\n")) {
+                    close_client();
+                    return false;
+                }
+                continue;
+            }
             if (!equal_constant_time(line, "AUTH " + token_)) {
                 close_client();
                 return false;

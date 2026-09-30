@@ -73,6 +73,30 @@ describe('creating a class', () => {
   })
 })
 
+describe('replacing a class code', () => {
+  it('asks first, then shows the new code in place of the old one', async () => {
+    overrideApi('/api/classes/c-1/join-code', () => ({ id: 'c-1', join_code: 'NEWCODE8' }), 'POST')
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    draw()
+    await userEvent.click(await screen.findByRole('button', { name: 'Replace the class code' }))
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/old code stops working/))
+    expect(await screen.findByText('NEWCODE8')).toBeInTheDocument()
+    expect(screen.queryByText('AB12CD')).not.toBeInTheDocument()
+    confirm.mockRestore()
+  })
+
+  it('changes nothing when the teacher says no', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    draw()
+    await userEvent.click(await screen.findByRole('button', { name: 'Replace the class code' }))
+
+    expect(apiFetch.mock.calls.some(([p]) => p.endsWith('/join-code'))).toBe(false)
+    expect(screen.getByText('AB12CD')).toBeInTheDocument()
+    confirm.mockRestore()
+  })
+})
+
 describe('editing a grade', () => {
   it('opens a class with no grade on "Grade not set", and saving that untouched writes nothing', async () => {
     overrideApi('/api/classes', () => ([{ ...CLASS, grade_level: null }]))

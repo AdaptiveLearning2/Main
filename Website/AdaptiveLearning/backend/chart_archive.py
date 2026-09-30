@@ -114,15 +114,18 @@ SIGNAL_COLUMNS = {
 }
 
 
-def read_session_signals(client, session_id: str, since: str | None = None):
-    """A session's cognitive, face and heart rows in `ts` order, up to `_ROW_CAP` each.
+def read_session_signals(client, session_id: str, since: str | None = None,
+                         skip: frozenset = frozenset()):
+    """A session's cognitive, face and heart rows in `ts` order, up to `_ROW_CAP` each; `[]` for a table in `skip`.
 
     The one reader for session review and the archive, so both stop at the same row.
-    Paged by id, not position, so a row written or deleted mid-read is neither repeated
-    nor skipped; only an empty page ends a table, as a short one may be a lower server cap.
+    Paged by id, so a row written or deleted mid-read is neither repeated nor skipped.
+    A skipped table is never queried: review skips a withdrawn channel's (CLAUDE.md, *Consent*).
     """
     def rows(table):
         out: list = []
+        if table in skip:
+            return out
         last_id = None
         while len(out) < _ROW_CAP:
             query = client.table(table).select(SIGNAL_COLUMNS[table]) \

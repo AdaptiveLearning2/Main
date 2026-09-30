@@ -3486,9 +3486,9 @@ _INGEST_RATE_WINDOW = env_number("INGEST_RATE_WINDOW", 60.0, float, minimum=1.0)
 _INGEST_LIMITER = _SlidingWindowLimiter(
     "ingest", _INGEST_RATE_LIMIT, _INGEST_RATE_WINDOW)
 
-# Rows per session per channel per minute; the batch rate alone allowed 60k. The sidecar pushes one
-# row per tick, 240 a minute at its default EEG_SAMPLE_HZ=4; this is twice a 10 Hz sidecar's. It cannot
-# see the sidecar's setting, so the sidecar warns at boot when it would push past this default.
+# Rows per student (not session: a closed session's window still ingests) per channel per minute. The
+# sidecar pushes one per tick, 240/min at EEG_SAMPLE_HZ=4; this is twice a 10 Hz sidecar's, and the
+# sidecar warns at boot when it would pass this default, which it cannot see.
 _INGEST_ROWS_PER_MINUTE = env_number("INGEST_MAX_ROWS_PER_MINUTE", 1200, int,
                                      minimum=_INGEST_MAX_BATCH)
 _INGEST_ROW_LIMITER = _SlidingWindowLimiter("ingest_rows", _INGEST_ROWS_PER_MINUTE, 60.0)
@@ -4659,7 +4659,13 @@ def join_class(payload: JoinClassRequest, request: Request):
         _record_security_event("rate_limited", user["id"], limiter=_JOIN_CODE_LIMITER.name)
         raise HTTPException(429, "Too many attempts. Check the code with your teacher and "
                                  "try again later.", headers={"Retry-After": str(wait)})
-    if _role(user["id"]) != "student":
+    # Not `_role`: it answers "student" on a failed read, which would admit anyone to this gate.
+    try:
+        role = _role_or_raise(user["id"])
+    except Exception as e:
+        print(f"[join_class] role unreadable for {user['id'][:8]}: {type(e).__name__}")
+        raise HTTPException(503, "Joining a class is not available right now. Try again soon.")
+    if role != "student":
         raise HTTPException(403, "Only students can join a class")
     address = _client_address(request)
     wait = _JOIN_MISS_LIMITER.check(address)
@@ -5972,21 +5978,21 @@ def _rate_limit_ingest(user_id: str):
                             headers={"Retry-After": str(refused_after)})
 
 
-def _admit_ingest_rows(user_id: str, session_id: str, channel: str, n: int) -> None:
-    """Raise 429 if `n` more rows would pass the session's per-channel ceiling; the batch is kept and retried."""
+def _admit_ingest_rows(user_id: str, channel: str, n: int) -> None:
+    """Raise 429 if `n` more rows would pass the student's per-channel ceiling; the batch is kept and retried."""
     if n <= 0:
         return
-    refused_after = _INGEST_ROW_LIMITER.check(f"{session_id}:{channel}", cost=n)
+    refused_after = _INGEST_ROW_LIMITER.check(f"{user_id}:{channel}", cost=n)
     if refused_after is not None:
         _record_security_event("rate_limited", user_id, limiter=_INGEST_ROW_LIMITER.name)
-        raise HTTPException(429, "Too many samples for this session. Slow down.",
+        raise HTTPException(429, "Too many samples. Slow down.",
                             headers={"Retry-After": str(refused_after)})
 
 
 def _write_ingest_rows(table: str, rows: list[dict], on_conflict: str,
-                       session_id: str, channel: str) -> int:
+                       user_id: str, channel: str) -> int:
     """Upsert admitted rows and return how many were new; a replayed or failed row is given back."""
-    key = f"{session_id}:{channel}"
+    key = f"{user_id}:{channel}"
     try:
         resp = supabase.table(table).upsert(rows, on_conflict=on_conflict,
                                             ignore_duplicates=True).execute()
@@ -6123,9 +6129,9 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     # Upsert on `cog_session_ts_key`: a replayed batch is a no-op.
     inserted = 0
     if rows:
-        _admit_ingest_rows(user["id"], payload.session_id, "cognitive", len(rows))
+        _admit_ingest_rows(user["id"], "cognitive", len(rows))
         inserted = _write_ingest_rows("cognitive_signals", rows, "session_id,ts",
-                                      payload.session_id, "cognitive")
+                                      user["id"], "cognitive")
     return {"ok": True, "inserted": inserted,
             "dropped": len(samples) - len(rows),
             "malformed": malformed,
@@ -6164,9 +6170,9 @@ def ingest_face(payload: FaceBatch, request: Request):
     # Upsert on `face_session_ts_key`: a replayed batch is a no-op.
     inserted = 0
     if rows:
-        _admit_ingest_rows(user["id"], payload.session_id, "face", len(rows))
+        _admit_ingest_rows(user["id"], "face", len(rows))
         inserted = _write_ingest_rows("face_signals", rows, "session_id,ts",
-                                      payload.session_id, "face")
+                                      user["id"], "face")
     # Separate counts: push_client tells a quiet camera from a replay by them.
     return {"ok": True, "inserted": inserted,
             "dropped": len(placed) - len(rows),
@@ -6221,10 +6227,10 @@ def ingest_heart(payload: HeartBatch, request: Request):
 
     written = 0
     if rows:
-        _admit_ingest_rows(user["id"], payload.session_id, "heart", len(rows))
+        _admit_ingest_rows(user["id"], "heart", len(rows))
         # Idempotent on (session_id, source, ts).
         written = _write_ingest_rows("heart_signals", rows, "session_id,source,ts",
-                                     payload.session_id, "heart")
+                                     user["id"], "heart")
     return {"ok": True, "inserted": written, "dropped": dropped,
             "malformed": malformed,
             "out_of_window": out_of_window,

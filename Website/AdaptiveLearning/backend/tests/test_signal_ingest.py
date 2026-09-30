@@ -604,7 +604,7 @@ def test_the_synthetic_mark_is_derived_from_the_sample_never_from_the_posted_raw
     assert marks == [True, None, None]
 
 
-# ── rows per session per channel: the batch rate alone allowed ~86M a day ───
+# ── rows per student per channel: the batch rate alone allowed ~86M a day ───
 
 def _hearts(n, start=0):
     return [_heart(ts=f"2026-08-09T10:{(start + i) // 60:02d}:{(start + i) % 60:02d}Z") for i in range(n)]
@@ -625,18 +625,20 @@ def test_rows_past_the_sessions_ceiling_are_refused_whole_and_nothing_is_written
     assert recorded == [("rate_limited", {"limiter": main._INGEST_ROW_LIMITER.name})]
 
 
-def test_the_ceiling_is_per_session_and_per_channel(store, monkeypatch):
+def test_the_ceiling_is_per_channel_and_shared_by_a_students_sessions(store, monkeypatch):
+    """Per student, not per session: a closed session's window still ingests, so each one would add a budget."""
     from conftest import tighten
     tighten(monkeypatch, main._INGEST_ROW_LIMITER, limit=3)
     _consent(store, headband_optical_enabled=True, camera_enabled=True)
     assert _post_heart(_hearts(3))["inserted"] == 3
-    # Another channel of the same session has its own budget.
+    # Another channel has its own budget.
     out = main.ingest_face(main.FaceBatch(session_id=SESSION, samples=[
         {"ts": f"2026-08-09T10:00:0{i}Z", "emotion": "happy"} for i in range(3)]), request=None)
     assert out["inserted"] == 3
-    # And another session.
-    other = main.ingest_heart(main.HeartBatch(session_id="session-2", samples=_hearts(3)), request=None)
-    assert other["inserted"] == 3
+    # Another session of the same student does not.
+    with pytest.raises(main.HTTPException) as e:
+        main.ingest_heart(main.HeartBatch(session_id="session-2", samples=_hearts(3)), request=None)
+    assert e.value.status_code == 429
 
 
 def test_a_replayed_batch_costs_nothing_against_the_ceiling(store, monkeypatch):

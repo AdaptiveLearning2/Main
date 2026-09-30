@@ -75,7 +75,9 @@ def db(monkeypatch):
     fake = _Db()
     monkeypatch.setattr(main, "supabase", fake)
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "student-1"})
-    monkeypatch.setattr(main, "_role", lambda uid: "student" if uid.startswith("student") else "parent")
+    role = lambda uid: "student" if uid.startswith("student") else "parent"  # noqa: E731
+    monkeypatch.setattr(main, "_role", role)
+    monkeypatch.setattr(main, "_role_or_raise", role)
     monkeypatch.setattr(main, "_record_security_event", lambda *a, **k: None)
     return fake
 
@@ -109,6 +111,18 @@ def test_a_parent_or_teacher_cannot_join_as_a_student(db, monkeypatch):
         _join()
     assert e.value.status_code == 403
     assert db.inserts == []
+
+
+def test_an_unreadable_role_refuses_rather_than_admitting_a_student(db, monkeypatch):
+    """`_role` would answer "student" here, the permissive direction for a students-only gate."""
+    def unreadable(_uid):
+        raise RuntimeError("profiles read failed")
+    monkeypatch.setattr(main, "_role_or_raise", unreadable)
+    with pytest.raises(main.HTTPException) as e:
+        _join()
+    assert e.value.status_code == 503
+    assert db.inserts == []
+    assert not any(t == "classes" for t, _cols in db.selects), "no code looked up either"
 
 
 def test_guesses_past_the_limit_are_refused_before_any_lookup(db, monkeypatch):

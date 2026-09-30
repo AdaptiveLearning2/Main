@@ -532,7 +532,7 @@ do not: a `replace-me` token, two equal tokens, or push over plain `http://` to 
 
 **Backend.** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `AUTH_CHECK_TIMEOUT`, `BACKEND_PORT`, `EEG_API_URL`,
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MODE`, `INGEST_MAX_BATCH` /
-`INGEST_RATE_LIMIT` / `INGEST_RATE_WINDOW` / `INGEST_MAX_ROWS_PER_MINUTE` (per session and channel), `SESSION_ABANDONED_AFTER_HOURS` /
+`INGEST_RATE_LIMIT` / `INGEST_RATE_WINDOW` / `INGEST_MAX_ROWS_PER_MINUTE` (per student and channel), `SESSION_ABANDONED_AFTER_HOURS` /
 `STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep and its chart catch-up), `QUESTIONS_CACHE_TTL`,
 `QUESTION_QUEUE_SIZE`, `PAIRING_IDLE_SECONDS` (120; a headband pairing its pairer's page stopped polling is released),
 `CLASS_JOIN_MISSES_PER_ADDRESS` (1000 wrong class codes an hour), the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
@@ -1401,12 +1401,12 @@ instead of raising: the 429 wording, the audit write and the `limiter` label liv
 outside the lock — and the label is `<instance>.name`, never a second copy of the string, or the row
 can name a limiter other than the one that fired.
 
-**Which limiters record is a partition, not a habit.** All five do, and
-`test_every_limiter_either_records_or_is_classified_as_silent` requires a new one to record or to be
+**Which limiters record is a partition, not a habit.**
+`test_every_limiter_either_records_or_is_classified_as_silent` requires every limiter to record or to be
 listed as deliberately silent with a reason — generation was silent for a while and nothing said
 whether that was a decision. **It finds the limiters at runtime and carries a named floor**, because a
 partition over a scan is only as good as the scan: an AST match on one assignment shape misses an
-annotated one, and collecting the five into a registry — which `_PUBLIC_BUDGETS` already is — would
+annotated one, and collecting them into a registry — which `_PUBLIC_BUDGETS` already is — would
 have left it reporting nothing unclassified while examining nothing. Same countermeasure as the
 chart-render palette scraper's refusal of an empty result. The generation limiter's call sites differ,
 so it is pinned per site too: `practice_question` and `generate_question` record, because `get_user`

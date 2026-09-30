@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _log = logging.getLogger(__name__)
 
-# The website backend's default INGEST_MAX_ROWS_PER_MINUTE: rows per session channel it accepts.
+# The website backend's default INGEST_MAX_ROWS_PER_MINUTE: rows per student per channel it accepts.
 BACKEND_ROWS_PER_MINUTE = 1200
 
 

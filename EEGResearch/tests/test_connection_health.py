@@ -211,6 +211,32 @@ def test_an_old_bridge_is_told_apart_from_an_impostor(token_file, answer, says, 
         bridge.close()
 
 
+def test_a_repeated_challenge_failure_is_reported_once_until_a_connect_succeeds(token_file, capsys):
+    """An old bridge exe fails every retry, a few seconds apart; the log says so once, not forever."""
+    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=0, timeout_seconds=1, token_file=token_file)
+
+    def attempt(answer):
+        bridge = _FakeBridge(answer)
+        adapter.port, adapter._next_connect_at = bridge.port, 0.0
+        try:
+            return adapter._try_connect()
+        finally:
+            adapter.disconnect()
+            bridge.close()
+
+    try:
+        assert attempt("hangup") is False and attempt("hangup") is False
+        assert capsys.readouterr().out.count("rebuild it") == 1
+        assert attempt("wrong") is False
+        assert capsys.readouterr().out.count("answered the challenge wrongly") == 1, "a new reason is new"
+        assert attempt("right") is True
+        capsys.readouterr()
+        assert attempt("wrong") is False
+        assert capsys.readouterr().out.count("answered the challenge wrongly") == 1, "reset by a success"
+    finally:
+        adapter.disconnect()
+
+
 @pytest.mark.parametrize("answer", ["wrong", "silent", "hangup", "nonascii"])
 def test_whatever_cannot_prove_itself_the_bridge_never_gets_the_token(token_file, answer):
     """A process that took the port first would otherwise read the token and feed fabricated EEG."""

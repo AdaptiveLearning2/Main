@@ -302,22 +302,24 @@ _PUBLIC_BUDGETS = {
 
 
 _proxy_hops_warned = False
+_proxy_chain_short_warned = False
 
 
 def _client_address(request: Request) -> str:
     """The caller, for a route where there is no account to name them by."""
-    global _proxy_hops_warned
+    global _proxy_hops_warned, _proxy_chain_short_warned
     if _TRUSTED_PROXY_HOPS:
         chain = [p.strip() for p in
                  request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
         if len(chain) >= _TRUSTED_PROXY_HOPS:
             return chain[-_TRUSTED_PROXY_HOPS]
         # Too few entries: fall back to the peer (a shared bucket, never a bypass).
-        if not _proxy_hops_warned:
-            _proxy_hops_warned = True
+        # No header at all is a direct hit (a health check), not evidence about the setting.
+        if chain and not _proxy_chain_short_warned:
+            _proxy_chain_short_warned = True
             print(f"[config] a request's X-Forwarded-For had {len(chain)} of the "
                   f"{_TRUSTED_PROXY_HOPS} entries TRUSTED_PROXY_HOPS expects: set too high, or a "
-                  "request skipped the proxy; either way it shares one address budget")
+                  "request reached this server around a proxy; either way it shares one address budget")
     elif not _proxy_hops_warned and request.headers.get("x-forwarded-for"):
         # Once, and not at boot: a proxy is only visible in the requests it forwards.
         _proxy_hops_warned = True

@@ -448,6 +448,7 @@ def test_a_forwarded_request_at_zero_hops_is_reported_once(monkeypatch, capsys):
 def test_a_configured_proxy_is_not_reported(monkeypatch, capsys):
     monkeypatch.setattr(main, "_TRUSTED_PROXY_HOPS", 1)
     monkeypatch.setattr(main, "_proxy_hops_warned", False)
+    monkeypatch.setattr(main, "_proxy_chain_short_warned", False)
     assert main._client_address(_request("203.0.113.9")) == "203.0.113.9"
     assert "TRUSTED_PROXY_HOPS" not in capsys.readouterr().out
 
@@ -455,7 +456,10 @@ def test_a_configured_proxy_is_not_reported(monkeypatch, capsys):
 def test_a_chain_shorter_than_the_hop_count_is_reported_once(monkeypatch, capsys):
     """Hops set above the real chain also collapse every school into the peer's bucket."""
     monkeypatch.setattr(main, "_TRUSTED_PROXY_HOPS", 2)
-    monkeypatch.setattr(main, "_proxy_hops_warned", False)
+    monkeypatch.setattr(main, "_proxy_chain_short_warned", False)
+    # A direct hit first: it says nothing about the setting and must not use up the warning.
+    assert main._client_address(_request()) == "10.0.0.1"
+    assert "TRUSTED_PROXY_HOPS" not in capsys.readouterr().out
     for _ in range(3):
         assert main._client_address(_request("203.0.113.9")) == "10.0.0.1"
     out = capsys.readouterr().out

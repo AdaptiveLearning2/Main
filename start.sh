@@ -239,26 +239,31 @@ _camera_entry=""
 [ "$CAMERA" = true ] && _camera_entry="camera:face@$CAMERA_INDEX"
 update_device_registry "$EEG_ENV" "default:sim" "$_camera_entry" check || exit 1
 
-# The sidecar refuses .env.example's public `replace-me` tokens, so a real pair is made once here,
-# and the backend gets the same one: under pull it calls the sidecar with it.
-if [ -f "$EEG_ENV" ]; then
-    for _pair in "API_TOKEN:EEG_API_TOKEN" "ADMIN_TOKEN:EEG_ADMIN_TOKEN"; do
-        _key="${_pair%%:*}"; _backend_key="${_pair##*:}"
-        _current="$(sed -n "s/^${_key}=//p" "$EEG_ENV" | tail -1)"
-        _remake=false
-        case "$_current" in ""|replace-me*) _remake=true ;; esac
+# The sidecar refuses .env.example's `replace-me` tokens, so a real pair is made once here, and
+# the backend gets the same one: under pull it calls the sidecar with it.
+ensure_sidecar_tokens() {
+    local eeg_env="$1" backend_env="$2" pair key backend_key current norm remake token
+    [ -f "$eeg_env" ] || return 0
+    for pair in "API_TOKEN:EEG_API_TOKEN" "ADMIN_TOKEN:EEG_ADMIN_TOKEN"; do
+        key="${pair%%:*}"; backend_key="${pair##*:}"
+        current="$(sed -n "s/^${key}=//p" "$eeg_env" | tail -1)"
+        # Trimmed and in any case, as the sidecar reads it.
+        norm="$(printf '%s' "$current" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
+        remake=false
+        case "$norm" in ""|replace-me*) remake=true ;; esac
         # It refuses equal tokens too (the learner one ships in the page), so a copied admin token is remade.
-        if [ "$_key" = ADMIN_TOKEN ] && [ "$_current" = "$(sed -n 's/^API_TOKEN=//p' "$EEG_ENV" | tail -1)" ]; then
-            _remake=true
+        if [ "$key" = ADMIN_TOKEN ] && [ "$current" = "$(sed -n 's/^API_TOKEN=//p' "$eeg_env" | tail -1)" ]; then
+            remake=true
         fi
-        if [ "$_remake" = true ]; then
-            _token="$("$PYTHON" -c 'import secrets; print(secrets.token_urlsafe(32))')"
-            set_env_key "$EEG_ENV" "$_key" "$_token"
-            set_env_key "$BACKEND_ENV" "$_backend_key" "$_token"
-            echo -e "  ${GRAY}Generated ${_key} (and the backend's ${_backend_key})${NC}"
+        if [ "$remake" = true ]; then
+            token="$("$PYTHON" -c 'import secrets; print(secrets.token_urlsafe(32))')"
+            set_env_key "$eeg_env" "$key" "$token"
+            set_env_key "$backend_env" "$backend_key" "$token"
+            echo -e "  ${GRAY}Generated ${key} (and the backend's ${backend_key})${NC}"
         fi
     done
-fi
+}
+ensure_sidecar_tokens "$EEG_ENV" "$BACKEND_ENV"
 
 if [ -f "$EEG_ENV" ]; then
     if grep -q "^EEG_SOURCE=muse" "$EEG_ENV" 2>/dev/null; then

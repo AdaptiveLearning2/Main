@@ -143,6 +143,26 @@ function New-SidecarToken {
     return ([Convert]::ToBase64String($bytes)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 }
 
+function Update-SidecarTokens {
+    # The sidecar refuses .env.example's `replace-me` tokens, so a real pair is made once here, and
+    # the backend gets the same one: under pull it calls the sidecar with it.
+    param([string]$eegEnv, [string]$backendEnv)
+    if (!(Test-Path $eegEnv)) { return }
+    foreach ($pair in @(@("API_TOKEN", "EEG_API_TOKEN"), @("ADMIN_TOKEN", "EEG_ADMIN_TOKEN"))) {
+        $current = Get-EnvValue $eegEnv $pair[0]
+        # Trimmed and in any case (-like ignores case), as the sidecar reads it.
+        $norm = if ($current) { $current.Trim() } else { "" }
+        # It refuses equal tokens too (the learner one ships in the page), so a copied admin token is remade.
+        $sameAsApi = ($pair[0] -eq "ADMIN_TOKEN") -and $current -and ($current -eq (Get-EnvValue $eegEnv "API_TOKEN"))
+        if (-not $norm -or $norm -like "replace-me*" -or $sameAsApi) {
+            $token = New-SidecarToken
+            Set-EnvKey $eegEnv $pair[0] $token
+            Set-EnvKey $backendEnv $pair[1] $token
+            Write-Host "  Generated $($pair[0]) (and the backend's $($pair[1]))" -ForegroundColor Gray
+        }
+    }
+}
+
 # A native command's stdout, stderr dropped. `2>$null` under Stop aborts on PS 5.1: each stderr
 # line becomes an ErrorRecord that Stop makes terminating -- in exactly the state being probed.
 # Continue is local to this function, so the caller keeps Stop.
@@ -245,19 +265,7 @@ $headband = if ($Muse) { "default:muse@8765" } else { "default:sim" }
 $cameraEntry = if ($Camera) { "camera:face@$CameraIndex" } else { "" }
 if (-not (Update-DeviceRegistry $eegEnv $headband $cameraEntry -DryRun)) { exit 1 }
 
-# The sidecar refuses .env.example's public `replace-me` tokens, so a real pair is made once here,
-# and the backend gets the same one: under pull it calls the sidecar with it.
-foreach ($pair in @(@("API_TOKEN", "EEG_API_TOKEN"), @("ADMIN_TOKEN", "EEG_ADMIN_TOKEN"))) {
-    $current = Get-EnvValue $eegEnv $pair[0]
-    # It refuses equal tokens too (the learner one ships in the page), so a copied admin token is remade.
-    $sameAsApi = ($pair[0] -eq "ADMIN_TOKEN") -and $current -and ($current -eq (Get-EnvValue $eegEnv "API_TOKEN"))
-    if ((Test-Path $eegEnv) -and (-not $current -or $current -like "replace-me*" -or $sameAsApi)) {
-        $token = New-SidecarToken
-        Set-EnvKey $eegEnv $pair[0] $token
-        Set-EnvKey $backendEnv $pair[1] $token
-        Write-Host "  Generated $($pair[0]) (and the backend's $($pair[1]))" -ForegroundColor Gray
-    }
-}
+Update-SidecarTokens $eegEnv $backendEnv
 
 if ($Muse) {
     Write-Host "[2/5] Native Muse Bridge" -ForegroundColor Cyan

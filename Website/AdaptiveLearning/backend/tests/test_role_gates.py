@@ -91,10 +91,23 @@ def test_my_classes_reads_the_profile_not_the_claim(monkeypatch):
     monkeypatch.setattr(main, "supabase", _Profiles(role="student"))
     monkeypatch.setattr(main, "get_user", lambda _r: _claiming("teacher"))
     seen = []
-    monkeypatch.setattr(main, "_role", lambda uid: seen.append(uid) or "student")
+    monkeypatch.setattr(main, "_role_or_raise", lambda uid: seen.append(uid) or "student")
 
     main.my_classes(None)
     assert seen == [UID]
+
+
+def test_my_classes_refuses_rather_than_showing_a_teacher_no_classes(monkeypatch):
+    """`_role` answers "student" on a failed read, and a teacher has no memberships: an empty list."""
+    monkeypatch.setattr(main, "supabase", _Profiles(role="teacher"))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": UID})
+
+    def unreadable(_uid):
+        raise RuntimeError("profiles down")
+    monkeypatch.setattr(main, "_role_or_raise", unreadable)
+    with pytest.raises(main.HTTPException) as e:
+        main.my_classes(None)
+    assert e.value.status_code == 503
 
 
 # ── the gate still admits the people it should ──────────────────────────────

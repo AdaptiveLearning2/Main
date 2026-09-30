@@ -4641,7 +4641,12 @@ def update_class(class_id: str, payload: UpdateClassRequest, request: Request):
 @app.get("/api/classes")
 def my_classes(request: Request):
     user = get_user(request)
-    role = _role(user["id"])
+    # Not `_role`: a failed read would send a teacher down the student branch and show no classes.
+    try:
+        role = _role_or_raise(user["id"])
+    except Exception as e:
+        print(f"[my_classes] role unreadable for {user['id'][:8]}: {type(e).__name__}")
+        raise HTTPException(503, "Your classes could not be loaded right now.")
     if role == "teacher":
         res = supabase.table("classes").select("*, class_memberships(count)").eq("teacher_id", user["id"]).execute()
     else:

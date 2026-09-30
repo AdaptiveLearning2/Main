@@ -1,4 +1,4 @@
-"""Both launchers' registry functions, extracted and driven against a temp .env; see CLAUDE.md "The device registry"."""
+"""Both launchers' registry and token functions, extracted and driven against a temp .env; see CLAUDE.md "The device registry"."""
 
 from __future__ import annotations
 
@@ -226,3 +226,70 @@ def test_start_sh_camera_branch_composes_onto_the_registry(tmp_path, line, headb
     env = _env(tmp_path, line)
     before = env.read_text(encoding="utf-8")
     _check(env, before, _run_sh(tmp_path, env, headband, camera), expected)
+
+
+# ── the sidecar tokens: remade exactly when the sidecar would refuse them ───────
+
+REAL = "k" * 43
+TOKEN_CASES = [
+    # (API_TOKEN value, ADMIN_TOKEN value, which keys must be remade)
+    ("replace-me", "replace-me-admin", {"API_TOKEN", "ADMIN_TOKEN"}),
+    # The sidecar lowercases and trims before it refuses, so the launcher must too.
+    ("Replace-Me", REAL + "a", {"API_TOKEN"}),
+    ("  replace-me  ", REAL + "a", {"API_TOKEN"}),
+    ("", REAL + "a", {"API_TOKEN"}),
+    (REAL, REAL, {"ADMIN_TOKEN"}),
+    (REAL, REAL + "a", set()),
+]
+
+
+def _token_envs(tmp_path: Path, api: str, admin: str) -> tuple[Path, Path]:
+    eeg, backend = tmp_path / "eeg.env", tmp_path / "backend.env"
+    eeg.write_text(f"API_TOKEN={api}\nADMIN_TOKEN={admin}\nEEG_SOURCE=sim\n", encoding="utf-8")
+    backend.write_text("SUPABASE_URL=http://localhost:54321\n", encoding="utf-8")
+    return eeg, backend
+
+
+def _values(path: Path) -> dict[str, str]:
+    return dict(l.split("=", 1) for l in path.read_text(encoding="utf-8").splitlines() if "=" in l)
+
+
+def _check_tokens(eeg: Path, backend: Path, api: str, admin: str, remade: set[str]) -> None:
+    after, mirrored = _values(eeg), _values(backend)
+    for key, before, backend_key in (("API_TOKEN", api, "EEG_API_TOKEN"), ("ADMIN_TOKEN", admin, "EEG_ADMIN_TOKEN")):
+        if key in remade:
+            assert after[key] != before and len(after[key]) == 43, key
+            assert mirrored[backend_key] == after[key], f"{backend_key} must match the new {key}"
+        else:
+            assert after[key] == before, f"{key} was a usable token and must be kept"
+            assert backend_key not in mirrored
+    assert after["API_TOKEN"] != after["ADMIN_TOKEN"]
+
+
+@pytest.mark.skipif(BASH is None, reason="needs bash")
+@pytest.mark.parametrize("api,admin,remade", TOKEN_CASES)
+def test_start_sh_remakes_exactly_the_tokens_the_sidecar_refuses(tmp_path, api, admin, remade):
+    eeg, backend = _token_envs(tmp_path, api, admin)
+    fn = _extract((ROOT / "start.sh").read_text(encoding="utf-8"), "ensure_sidecar_tokens() {")
+    script = tmp_path / "t.sh"
+    python = Path(sys.executable).as_posix()
+    script.write_text(_sh_functions() + fn + f"\nPYTHON='{python}'\n"
+                      f"ensure_sidecar_tokens '{eeg.as_posix()}' '{backend.as_posix()}'\n", encoding="utf-8")
+    r = subprocess.run([BASH, str(script)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    _check_tokens(eeg, backend, api, admin, remade)
+
+
+@pytest.mark.skipif(sys.platform != "win32" or POWERSHELL is None, reason="start.ps1 is Windows")
+@pytest.mark.parametrize("api,admin,remade", TOKEN_CASES)
+def test_start_ps1_remakes_exactly_the_tokens_the_sidecar_refuses(tmp_path, api, admin, remade):
+    eeg, backend = _token_envs(tmp_path, api, admin)
+    src = (ROOT / "start.ps1").read_text(encoding="utf-8")
+    fns = "\n".join(_extract(src, f"function {name} {{") for name in
+                    ("Set-EnvKey", "Get-EnvValue", "New-SidecarToken", "Update-SidecarTokens"))
+    script = tmp_path / "t.ps1"
+    script.write_text(fns + f"\nUpdate-SidecarTokens '{eeg}' '{backend}'\n", encoding="utf-8")
+    r = subprocess.run([POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    _check_tokens(eeg, backend, api, admin, remade)

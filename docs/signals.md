@@ -901,7 +901,9 @@ resting ticks. No bound separates artifact from rest by better than ~3:1; 3.0× 
 39% of artifact ticks, and a false hold costs one 250 ms tick.
 
 **The ratios are smoothed over 4 s** on the sample clock before scaling; held and rejected ticks leave the smoothed
-value alone.
+value alone. Each series has its own clock, so a local calm missing for seconds is weighed by that age when it
+returns rather than as one tick. `calm_log_ratio_smoothed` stays in `calm_log_ratio`'s unit (null on local); the
+smoothed residual is `calm_alpha_residual_smoothed`.
 
 **The baseline is 45 s of at-least-degraded contact, fixed for the session, on one scale with a 10 s ramp at the
 latch — and it is taken from the first question, not from Connect.** Gating on contact was not enough: the
@@ -1016,7 +1018,8 @@ fitting settings to the only person they worked on.
 the local figure rides on every payload as
 `calm_alpha_residual` either way, so a session on `sdk` still records what `local` would have read. On `local`, a tick
 before the buffer fills **holds** calm rather than borrowing the SDK ratio: the two are different numbers on different
-scales and one baseline cannot hold both. A signal-loss reset empties the buffer, since whatever spans a gap is two
+scales and one baseline cannot hold both. A tick with no band powers holds it too, rather than taking the amplitude
+fallback's spread-based calm. A signal-loss reset empties the buffer, since whatever spans a gap is two
 recordings. The estimator is fed from the drain in `DeviceSession._loop` — every sample, since only `samples[-1]` is
 scored. **The SDK alpha band did move on this run** (+0.24 Bels closed) because contact held at 3 of 4: it is not blind
 to alpha, it is unreliable at the contact the product gets.
@@ -1056,7 +1059,12 @@ its samples have left: the gate holds one tick, the window kept the blink for fo
 moved the residual further than the whole closed-to-open effect. `malformed_bands` does **not** poison it (a fault in
 the SDK band dict, not the raw samples), the rate check compares the span between two stamps against the sample
 *positions* between them (push admits an unstamped sample, so counting stamps refused a real buffer), and a poison
-while still filling reports `artifact`, not `filling`.
+while still filling reports `artifact`, not `filling`. **Contact is judged over the buffer the same way**: a tick's
+contact vouches only for its own samples, so an electrode any buffered tick marked unseated stays out until that
+tick's samples have left. Whether an electrode is seated is one check, `services/contact.py`, for the processor's
+channel mask and the estimator alike; `_sample_is_usable` (any electrode valid) and `_contact_ratio` (a smoothed
+fraction) read the same lists for other questions. The seated check unseats a NaN or a null entry (the bridge writes
+a non-finite value as null); the other two read a NaN `is_good` as bad too.
 
 **The stressed line is per calm source** — `STRESSED_CALM_MAX` in `adaptation.py` and
 `EEG_STRESSED_CALM_MAX_BY_SOURCE` in `signal_fusion.py`, pinned equal by a test on each side. 0.377 was 0.311 Bels
@@ -1077,9 +1085,12 @@ and held past the 10 s cap on 40% of resting ones.
 
 **Calm latches on its own coverage** over the ticks that had a value, with its own ramp, and keeps collecting after
 focus has latched: latched with focus, one calm sample was the session's calm centre for good. `calm_measured` is false
-on a placeholder — the opening fill, and after every gap, both write the same 50 a genuine residual of zero produces —
-and the engine labels neither stressed nor focused on one. `calm_held_seconds` says how long a local calm has been
-carried, and past `CALM_HOLD_MAX_SECONDS` the mapper nulls `stress` **and the engine labels neutral** — the constant
+on a placeholder — the opening fill, after every gap, and the amplitude fallback with one electrode seated, all
+writing the 50 a genuine residual of zero produces — and the engine labels neither stressed nor focused on one. A held
+calm carries the measuredness of what it holds, so an artifact on the first full buffer holds a placeholder that
+still says so, and a local estimate on any tick not admitted is discarded. `calm_held_seconds` says how long a local
+calm has been carried, counted from the last *admitted* estimate, and past `CALM_HOLD_MAX_SECONDS` the mapper nulls
+`stress` **and the engine labels neutral** — the constant
 lives in both `adaptation.py` and `signal_mapping.py`, pinned equal by a test on each side, or the sidecar asserts a
 learner state from a calm the backend has just declined to record.
 

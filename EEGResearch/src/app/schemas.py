@@ -36,7 +36,9 @@ class FeatureData(BaseModel):
     # Plain str, not a Literal: an unlisted reason would 500 every /api/v1/state call.
     artifact_reason: str | None = None
     focus_log_ratio_smoothed: float | None = None
+    # Smoothed calm in its raw key's unit: the SDK ratio on sdk, the residual on local.
     calm_log_ratio_smoothed: float | None = None
+    calm_alpha_residual_smoothed: float | None = None
     # calm_source is "sdk" | "local"; the residual is carried on both for comparison.
     calm_source: str | None = None
     calm_alpha_residual: float | None = None

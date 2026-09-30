@@ -9,11 +9,14 @@ the 1/f slope is carried for comparison, not scored. Welch, 2 s Hann, 50% overla
 from __future__ import annotations
 
 import logging
+from collections import deque
 from datetime import datetime
 from math import isfinite
 from typing import Any
 
 import numpy as np
+
+from src.app.services.contact import CHANNELS, seated_channels
 
 SAMPLE_RATE_HZ = 256.0
 EPOCH_SECONDS = 4.0
@@ -25,8 +28,6 @@ FIT_EXCLUDE_HZ = (7.0, 13.0)
 ALPHA_HZ = (8.0, 12.0)
 # TP9 and TP10 carry the rhythm; AF7/AF8 carry the blink and the muscle.
 TEMPORAL = ("tp9", "tp10")
-# The bridge's channel order, for indexing hsi/is_good.
-CHANNELS = ("tp9", "af7", "af8", "tp10")
 # Allowed fractional mismatch between a full buffer's timestamp span and 256 Hz.
 RATE_TOLERANCE = 0.25
 
@@ -87,8 +88,8 @@ def poisons_buffer(artifact_reason: str | None) -> bool:
 class SpectrumEstimator:
     """Rolling 4 s buffer per temporal channel; `latest()` is the estimate.
 
-    `push()` takes every sample the tick drained. A channel the tick's contact data
-    marks unseated is left out rather than averaged in.
+    `push()` takes every sample the tick drained. A channel any buffered tick's contact
+    data marked unseated is left out, not averaged in, until that tick's samples have left.
     `latest()["reason"]`: `filling`, `sample_rate`, `artifact`, or `no_channel`.
     """
 
@@ -110,11 +111,13 @@ class SpectrumEstimator:
             samples = int(round(requested * sample_rate_hz))
         self.poison_seconds = requested
         self.poison_samples = samples
-        self._buf: dict[str, list[float]] = {c: [] for c in TEMPORAL}
-        self._ts: list[datetime] = []
+        self._buf: dict[str, deque[float]] = {c: deque(maxlen=self.capacity) for c in TEMPORAL}
+        self._ts: deque[datetime | None] = deque(maxlen=self.capacity)
         # Samples pushed, and the count at which the last artifact's samples have left.
         self._pushed = 0
         self._clean_after = 0
+        # Per channel, the count at which the last unseated tick's samples have left.
+        self._unseated_until = {c: 0 for c in TEMPORAL}
         self._latest: dict[str, Any] = self._empty("filling")
 
     @staticmethod
@@ -129,6 +132,7 @@ class SpectrumEstimator:
         self._ts.clear()
         self._pushed = 0
         self._clean_after = 0
+        self._unseated_until = {c: 0 for c in TEMPORAL}
         self._latest = self._empty("filling")
 
     def poison(self) -> None:
@@ -150,12 +154,12 @@ class SpectrumEstimator:
                 self._buf[c].append(v)
             self._ts.append(getattr(s, "timestamp", None))
         self._pushed += len(samples)
-        for c in TEMPORAL:
-            if len(self._buf[c]) > self.capacity:
-                del self._buf[c][:len(self._buf[c]) - self.capacity]
-        if len(self._ts) > self.capacity:
-            del self._ts[:len(self._ts) - self.capacity]
-        self._latest = self._estimate(meta or {})
+        seated = seated_channels(meta)
+        if samples and seated is not None:
+            for c in TEMPORAL:
+                if not seated[CHANNELS.index(c)]:
+                    self._unseated_until[c] = self._pushed + self.capacity
+        self._latest = self._estimate()
         return self._latest
 
     def latest(self) -> dict[str, Any]:
@@ -175,31 +179,7 @@ class SpectrumEstimator:
         bar = RATE_TOLERANCE * len(self._ts) / self.sample_rate_hz
         return abs(span - expected) <= bar
 
-    def _seated(self, meta: dict[str, Any]) -> dict[str, bool]:
-        """Per channel, whether the tick's contact data vouches for it.
-
-        No contact data: every channel counts. hsi and is_good are read independently."""
-        hsi = meta.get("hsi")
-        is_good = meta.get("is_good")
-        out = {}
-        for i, c in enumerate(CHANNELS):
-            ok = True
-            if isinstance(hsi, list) and len(hsi) == len(CHANNELS):
-                try:
-                    if float(hsi[i]) > 2.0:
-                        ok = False
-                except (TypeError, ValueError):
-                    pass
-            if isinstance(is_good, list) and len(is_good) == len(CHANNELS):
-                try:
-                    if float(is_good[i]) < 1.0:
-                        ok = False
-                except (TypeError, ValueError):
-                    pass
-            out[c] = ok
-        return out
-
-    def _estimate(self, meta: dict[str, Any]) -> dict[str, Any]:
+    def _estimate(self) -> dict[str, Any]:
         # Artifact is reported before filling.
         if self._pushed < self._clean_after:
             return self._empty("artifact")
@@ -207,12 +187,11 @@ class SpectrumEstimator:
             return self._empty("filling")
         if not self._rate_plausible():
             return self._empty("sample_rate")
-        seated = self._seated(meta)
         residuals, slopes = [], []
         for c in TEMPORAL:
-            if not seated[c]:
+            if self._pushed < self._unseated_until[c]:
                 continue
-            x = np.asarray(self._buf[c])
+            x = np.fromiter(self._buf[c], dtype=float, count=self.capacity)
             if not np.all(np.isfinite(x)):
                 # One non-finite sample makes the FFT NaN everywhere.
                 continue

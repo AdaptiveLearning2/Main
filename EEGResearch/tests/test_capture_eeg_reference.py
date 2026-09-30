@@ -164,6 +164,13 @@ def test_the_flattened_row_carries_every_feature_field_the_sidecar_declares():
     assert missing == [], f"flatten_state does not carry {missing}"
 
 
+def test_the_summary_prints_every_smoothed_ratio_the_sidecar_declares():
+    """On a local-calm run the smoothed calm is calm_alpha_residual_smoothed; unlisted, it printed empty."""
+    from src.app.schemas import FeatureData
+    smoothed = {f for f in FeatureData.model_fields if f.endswith("_smoothed")}
+    assert smoothed and smoothed <= set(capture.SUMMARY_FIELDS)
+
+
 def test_the_arithmetic_prompt_asks_for_silence():
     """Aloud, speech EMG corrupts the temporal alpha residual the local calm reads."""
     prompt = next(p for s, _, p in capture.DEFAULT_PROTOCOL if s == "arithmetic")

@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import timedelta
 
 from src.app.models import EegSample
+from src.app.services.contact import seated_channels
 from src.app.services.eeg_spectrum import CHANNELS, EPOCH_SECONDS, SAMPLE_RATE_HZ, SpectrumEstimator
+from src.app.services.signal_processing import SignalProcessor
 from tests.test_eeg_spectrum import GOOD, T0, pink, samples_from
 
 
@@ -36,10 +38,48 @@ def test_an_artifact_poisons_the_buffer_until_its_samples_have_left():
     assert est.push(samples[n + n // 2:], GOOD)["ready"] is True
 
 
+def test_a_channel_unseated_anywhere_in_the_buffer_is_left_out_until_those_samples_leave():
+    """Contact is per tick, the buffer is 4 s: a reseat does not vouch for what railed before it."""
+    est = SpectrumEstimator()
+    n = int(EPOCH_SECONDS * SAMPLE_RATE_HZ)
+    samples = samples_from({c: pink(3 * n, i) for i, c in enumerate(CHANNELS)})
+    railed = n - 64
+    tp10_off = {"hsi": [1.0, 1.0, 1.0, 4.0], "is_good": [1.0, 1.0, 1.0, 0.0]}
+    est.push(samples[:railed], tp10_off)
+    assert est.push(samples[railed:n], GOOD)["channels_used"] == 1
+    assert est.push(samples[n:railed + n - 1], GOOD)["channels_used"] == 1
+    assert est.push(samples[railed + n - 1:railed + n], GOOD)["channels_used"] == 2
+    est.reset()
+    assert est.push(samples[:n], GOOD)["channels_used"] == 2
+
+
 def test_a_malformed_is_good_does_not_erase_the_hsi_verdict():
-    seated = SpectrumEstimator()._seated({"hsi": [1.0, 1.0, 1.0, 4.0],
-                                          "is_good": ["x", None, 1.0, "y"]})
-    assert seated["tp10"] is False and seated["tp9"] is True
+    seated = seated_channels({"hsi": [1.0, 1.0, 1.0, 4.0], "is_good": ["x", [], 1.0, "y"]})
+    assert seated == [True, True, True, False]
+    assert seated_channels({}) is None
+
+
+def test_a_nan_or_null_contact_entry_unseats_the_electrode():
+    """The bridge writes a non-finite contact value as null, and its own band mask rejects it."""
+    railing = EegSample(timestamp=T0, channel_tp9=1682.0, channel_af7=800.0, channel_af8=801.0,
+                        channel_tp10=802.0)
+    for bad in (float("nan"), None):
+        assert seated_channels({"is_good": [bad, 1.0, 1.0, 1.0]}) == [False, True, True, True]
+        assert seated_channels({"hsi": [bad, 1.0, 1.0, 1.0]}) == [False, True, True, True]
+        kept = SignalProcessor._good_channel_values(railing, {"hsi": [1.0] * 4,
+                                                              "is_good": [bad, 1.0, 1.0, 1.0]})
+        assert kept == [800.0, 801.0, 802.0], bad
+
+
+def test_the_processor_and_the_spectrum_read_contact_through_one_check():
+    """A malformed is_good must not readmit the electrode hsi says is railing, in either reader."""
+    sample = EegSample(timestamp=T0, channel_tp9=1.0, channel_af7=2.0, channel_af8=3.0,
+                       channel_tp10=4.0)
+    meta = {"hsi": [1.0, 1.0, 1.0, 4.0], "is_good": ["x", [], 1.0, "y"]}
+    kept = SignalProcessor._good_channel_values(sample, meta)
+    assert kept == [1.0, 2.0, 3.0]
+    everyone_off = {"hsi": [4.0] * 4, "is_good": [0.0] * 4}
+    assert len(SignalProcessor._good_channel_values(sample, everyone_off)) == 4, "never empty"
 
 
 def test_only_the_temporal_channels_are_buffered():

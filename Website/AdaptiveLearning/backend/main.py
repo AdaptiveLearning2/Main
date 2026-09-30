@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
-from supabase_client import make_client
+from supabase_client import get_client
 from postgrest.types import ReturnMethod  # supabase pins this sibling
 from typing import Any, NamedTuple
 
@@ -31,7 +31,7 @@ BACKEND_PORT     = env_number("BACKEND_PORT", 8000, int, minimum=1)
 if not SUPABASE_URL or not SERVICE_ROLE_KEY:
     raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
 
-supabase = make_client(SUPABASE_URL, SERVICE_ROLE_KEY)
+supabase = get_client(SUPABASE_URL, SERVICE_ROLE_KEY)
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):

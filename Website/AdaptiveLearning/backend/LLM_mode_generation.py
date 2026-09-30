@@ -5,7 +5,6 @@ import os
 import re
 import itertools
 import random
-from supabase import create_client, Client
 from dotenv import load_dotenv
 import llm_client
 from llm_json import extract_json

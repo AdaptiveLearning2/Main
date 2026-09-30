@@ -5,7 +5,7 @@ import time
 from supabase import Client
 from dotenv import load_dotenv
 
-from supabase_client import make_client
+from supabase_client import get_client
 
 load_dotenv()
 
@@ -40,7 +40,7 @@ def _get_client():
             key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
             if not url or not key:
                 return None
-            _client = make_client(url, key)
+            _client = get_client(url, key)
     return _client
 
 

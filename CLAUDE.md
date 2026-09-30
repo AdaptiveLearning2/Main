@@ -770,13 +770,13 @@ same failure one step later. Nothing references `math_topics.id`: `record_topic_
 failing on something the repo does not contain. It is a guard for whoever regenerates the file, not
 a gate.
 
-## Build every Supabase client with `supabase_client.make_client`
+## Get the Supabase client from `supabase_client.get_client`
 
 supabase-py's sync clients default to HTTP/2, and one HTTP/2 connection shared by threads fails
-with `[Errno 11] Resource temporarily unavailable` — every endpoint, the sweep and the archive pool
-share one client. `make_client` hands all sub-clients one HTTP/1.1 `httpx.Client`. **Local runs
-never show the bug**: HTTP/2 is negotiated only over TLS, and the local stack is plain `http://`.
-`tests/test_supabase_client.py` fails on any other `create_client` call in the backend.
+with `[Errno 11] Resource temporarily unavailable`. `get_client` returns one cached client per
+process, every sub-client on one HTTP/1.1 pool; one-shot scripts build theirs with `make_client`.
+**Local runs never show the bug**: HTTP/2 is negotiated only over TLS, and the local stack is plain
+`http://`. `tests/test_supabase_client.py` fails on any other way of building a client.
 ---
 
 # Privacy

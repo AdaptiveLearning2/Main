@@ -1015,7 +1015,8 @@ fitting settings to the only person they worked on.
 the local figure rides on every payload as
 `calm_alpha_residual` either way, so a session on `sdk` still records what `local` would have read. On `local`, a tick
 before the buffer fills **holds** calm rather than borrowing the SDK ratio: the two are different numbers on different
-scales and one baseline cannot hold both. A signal-loss reset empties the buffer, since whatever spans a gap is two
+scales and one baseline cannot hold both. A tick with no band powers holds it too, rather than taking the amplitude
+fallback's spread-based calm. A signal-loss reset empties the buffer, since whatever spans a gap is two
 recordings. The estimator is fed from the drain in `DeviceSession._loop` — every sample, since only `samples[-1]` is
 scored. **The SDK alpha band did move on this run** (+0.24 Bels closed) because contact held at 3 of 4: it is not blind
 to alpha, it is unreliable at the contact the product gets.

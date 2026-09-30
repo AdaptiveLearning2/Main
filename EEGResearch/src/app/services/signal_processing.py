@@ -650,9 +650,14 @@ class SignalProcessor:
             calm_measured = self._held_ratios is not None and self._held_calm_measured
         else:
             focus_ratio = focus_amp_ratio
-            # Neutral rather than 1.0: no spread data is absence of evidence.
-            calm_measured = calm_amp_ratio is not None
-            calm_ratio = calm_amp_ratio if calm_measured else 0.5
+            if self.calm_source == "local":
+                # The spread is not the local calm (another scale): hold the last one, which ages.
+                calm_ratio = self._held_ratios[1] if self._held_ratios is not None else 0.5
+                calm_measured = self._held_ratios is not None and self._held_calm_measured
+            else:
+                # Neutral rather than 1.0: no spread data is absence of evidence.
+                calm_measured = calm_amp_ratio is not None
+                calm_ratio = calm_amp_ratio if calm_measured else 0.5
 
         # Seconds a local calm has been carried; None on the SDK source.
         calm_held_seconds = None

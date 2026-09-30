@@ -8,7 +8,7 @@ import pytest
 
 from src.app.services.signal_processing import SignalProcessor
 from tests.test_local_calm_review import BANDS, _local, _tick
-from tests.test_signal_processing import Ticker, _spectrum
+from tests.test_signal_processing import CONTACT_GOOD, Ticker, _spectrum
 
 
 def test_the_amplitude_fallback_placeholder_is_not_a_measured_calm():
@@ -63,6 +63,23 @@ def test_a_local_estimate_on_a_tick_never_admitted_is_discarded_like_a_held_one(
     sdk = Ticker()
     assert sdk.processor.update(sdk.sample(), emg)["calm_measured"] is True, \
         "the SDK ratio is the tick's own reading"
+
+
+def test_a_tick_without_band_powers_holds_the_local_calm_rather_than_scoring_the_spread():
+    """The amplitude spread is a different measure; on local it read 96.9 as a fresh local calm."""
+    t = _local()
+    for _ in range(8):
+        before = _tick(t, _spectrum(0.3))
+    assert before["calm_score"] == pytest.approx(75.0), "not 50, so a placeholder cannot pass as held"
+    no_bands = dict(CONTACT_GOOD)
+    f = t.processor.update(t.sample(), no_bands, spectrum=_spectrum(0.3))
+    t.now += t.dt
+    assert f["calm_score"] == pytest.approx(before["calm_score"])
+    assert f["calm_measured"] is True and f["calm_held_seconds"] == pytest.approx(t.dt)
+    fresh = _local()
+    f = fresh.processor.update(fresh.sample(), no_bands, spectrum=_spectrum(0.0))
+    assert f["calm_score"] == pytest.approx(50.0) and f["calm_measured"] is False
+    assert Ticker().run(no_bands, 5)["calm_score"] > 90.0, "sdk keeps the amplitude fallback"
 
 
 def test_the_smoothed_calm_diagnostic_keeps_its_unit_on_each_source():

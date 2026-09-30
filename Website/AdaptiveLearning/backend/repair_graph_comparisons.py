@@ -69,8 +69,8 @@ def main(argv=None) -> int:
     if not url or not key:
         print("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set", file=sys.stderr)
         return 2
-    from supabase import create_client
-    report = repair(create_client(url, key), dry_run=not args.apply)
+    from supabase_client import make_client
+    report = repair(make_client(url, key), dry_run=not args.apply)
     print(f"ok {report['ok']}, skipped {report['skip']}, applied {report['applied']}, "
           f"retired {report['retired']}")
     print(f"wrong answer stored ({len(report['fix'])}): {report['fix']}")

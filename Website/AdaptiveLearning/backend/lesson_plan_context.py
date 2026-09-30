@@ -2,8 +2,10 @@ import os
 import threading
 import time
 
-from supabase import create_client, Client
+from supabase import Client
 from dotenv import load_dotenv
+
+from supabase_client import make_client
 
 load_dotenv()
 
@@ -38,7 +40,7 @@ def _get_client():
             key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
             if not url or not key:
                 return None
-            _client = create_client(url, key)
+            _client = make_client(url, key)
     return _client
 
 

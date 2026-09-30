@@ -38,8 +38,8 @@ def main(argv=None) -> int:
         return 2
     print(f"target: {urlparse(url).netloc}  ({'APPLY' if args.apply else 'dry run'})")
 
-    from supabase import create_client
-    client = create_client(url, key)
+    from supabase_client import make_client
+    client = make_client(url, key)
     query = (client.table("sessions").select("id, user_id, chart_paths, started_at, ended_at")
              .not_.is_("chart_paths", "null").not_.is_("ended_at", "null"))
     if args.before:

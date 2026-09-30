@@ -25,6 +25,9 @@ supabase==2.31.0
 # this exact version, so a split fails to install; the `supabase` group in
 # .github/dependabot.yml bumps the two in one pull request.
 postgrest==2.31.0
+# Imported directly: supabase_client.py builds the HTTP/1.1 client every
+# Supabase sub-client shares. The supabase packages require >=0.26,<0.29.
+httpx==0.28.1
 requests==2.34.2
 openai==3.19.0
 ollama==0.6.2

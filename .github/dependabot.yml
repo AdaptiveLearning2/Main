@@ -11,9 +11,9 @@ updates:
     open-pull-requests-limit: 5
     groups:
       # First, since a dependency joins the first matching group. supabase pins postgrest
-      # exactly and main.py imports postgrest, so both move together, majors included.
+      # exactly and bounds httpx; all three are imported directly, so they move together.
       supabase:
-        patterns: ["supabase", "postgrest"]
+        patterns: ["supabase", "postgrest", "httpx"]
       backend-python:
         patterns: ["*"]
         update-types: ["minor", "patch"]

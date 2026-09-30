@@ -1,5 +1,5 @@
 import os
-from supabase import create_client, Client
+from supabase_client import make_client
 from dotenv import load_dotenv
 import llm_client
 from llm_json import extract_json
@@ -25,7 +25,7 @@ import LLM_kindergarten_generation
 load_dotenv()
 SUPABASE_URL     = os.getenv("SUPABASE_URL")
 SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-supabase = create_client(SUPABASE_URL, SERVICE_ROLE_KEY)
+supabase = make_client(SUPABASE_URL, SERVICE_ROLE_KEY)
 
 ALL_TOPICS = [
     "geometry", "algebra", "expressions", "ordering", "rationals",

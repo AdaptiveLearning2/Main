@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import ast
+import re
+import sys
 import tomllib
+from importlib.metadata import packages_distributions
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +16,78 @@ CAMERA_PACKAGES = ("opencv-python", "opencv", "onnxruntime", "mediapipe")
 def _pyproject() -> dict:
     with (ROOT / "pyproject.toml").open("rb") as fh:
         return tomllib.load(fh)
+
+
+def _normalise(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _is_optional_guard(stmt: ast.stmt) -> bool:
+    """`if TYPE_CHECKING:` never runs; `try: import x / except ImportError` is optional by design."""
+    if isinstance(stmt, ast.If):
+        test = stmt.test
+        return getattr(test, "id", getattr(test, "attr", None)) == "TYPE_CHECKING"
+    if isinstance(stmt, ast.Try):
+        caught = [n for h in stmt.handlers if h.type for n in ast.walk(h.type)]
+        return any(getattr(n, "id", None) in ("ImportError", "ModuleNotFoundError") for n in caught)
+    return False
+
+
+def _import_time_modules(stmts: list[ast.stmt]) -> set[str]:
+    """Top-level names imported when the module loads; function bodies are lazy and skipped."""
+    found: set[str] = set()
+    for stmt in stmts:
+        if isinstance(stmt, ast.Import):
+            found.update(alias.name.split(".")[0] for alias in stmt.names)
+        elif isinstance(stmt, ast.ImportFrom):
+            if stmt.level == 0 and stmt.module:
+                found.add(stmt.module.split(".")[0])
+        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        else:
+            blocks = [getattr(stmt, f, []) for f in ("body", "orelse", "finalbody")]
+            blocks += [h.body for h in getattr(stmt, "handlers", [])]
+            if _is_optional_guard(stmt):
+                blocks = blocks[1:]
+            for block in blocks:
+                found |= _import_time_modules(block)
+    return found
+
+
+def _third_party_import_time_modules() -> set[str]:
+    found: set[str] = set()
+    for path in (ROOT / "src" / "app").rglob("*.py"):
+        found |= _import_time_modules(ast.parse(path.read_text(encoding="utf-8")).body)
+    return {m for m in found if m not in sys.stdlib_module_names and m not in ("src", "__future__")}
+
+
+def test_the_scan_skips_lazy_and_guarded_imports():
+    source = (
+        "import httpx\n"
+        "from fastapi import FastAPI\n"
+        "if TYPE_CHECKING:\n    import typed_only\n"
+        "try:\n    import cv2\nexcept ImportError:\n    cv2 = None\n"
+        "try:\n    import required\nexcept ValueError:\n    pass\n"
+        "def lazy():\n    import onnxruntime\n"
+        "class Holder:\n    def method(self):\n        import mediapipe\n"
+    )
+    assert _import_time_modules(ast.parse(source).body) == {"httpx", "fastapi", "required"}
+
+
+def test_every_import_time_dependency_is_pinned_in_the_base_lock():
+    """A module-level import missing from requirements.lock fails `import src.app.main` on install."""
+    modules = _third_party_import_time_modules()
+    assert {"fastapi", "numpy", "pydantic"} <= modules, f"the scan found too little: {modules}"
+
+    lock = (ROOT / "requirements.lock").read_text(encoding="utf-8")
+    pinned = {_normalise(m.group(1)) for m in re.finditer(r"^([A-Za-z0-9._-]+)==", lock, re.M)}
+    owners = packages_distributions()
+    missing = {}
+    for module in sorted(modules):
+        dists = {_normalise(d) for d in owners.get(module, [])}
+        if not dists & pinned:
+            missing[module] = sorted(dists) or "no installed distribution"
+    assert not missing, f"imported at module level but not pinned in requirements.lock: {missing}"
 
 
 def test_no_camera_dependency_is_in_the_base_install():

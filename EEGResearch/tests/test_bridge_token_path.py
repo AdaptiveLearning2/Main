@@ -49,7 +49,7 @@ def _stop(proc: subprocess.Popen) -> None:
     proc.wait(timeout=10)
 
 
-@pytest.mark.parametrize("folder", ["la-Łódź", "Zoë"])
+@pytest.mark.parametrize("folder", ["la-Łódź", "Zoë"], ids=["outside-cp1252", "inside-cp1252"])
 def test_the_bridge_starts_and_writes_its_token_under_a_non_ansi_localappdata(folder, tmp_path, monkeypatch):
     base = tmp_path / folder
     base.mkdir()

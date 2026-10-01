@@ -353,6 +353,18 @@ def test_start_sh_check_venv_installs_what_a_pulled_pyproject_added(tmp_path, be
 
 
 @pytest.mark.skipif(BASH is None, reason="needs bash")
+def test_start_sh_check_venv_builds_a_missing_venv_and_installs_into_it(tmp_path):
+    project = tmp_path / "EEGResearch"
+    project.mkdir()
+    _stub(tmp_path / "python3", 'echo "VENV $(basename "$(pwd)") $*"')
+    r = _sh(tmp_path, ('install_venv_deps() { echo "INSTALL $2"; }\n'
+                       f"PYTHON='{(tmp_path / 'python3').as_posix()}'\n"
+                       f"check_venv '{project.as_posix()}' editable\n"), "check_venv")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines()[-2:] == ["VENV EEGResearch -m venv .venv", "INSTALL editable"], r.stdout
+
+
+@pytest.mark.skipif(BASH is None, reason="needs bash")
 def test_start_sh_missing_deps_reports_every_requirement_the_probe_prints(tmp_path):
     project = _sh_venv(tmp_path, f"exec '{Path(sys.executable).as_posix()}' \"$@\"")
     (project / "scripts").mkdir()

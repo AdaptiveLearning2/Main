@@ -414,7 +414,7 @@ reason — linted, the number depended on whether coverage had ever been run on 
 Dependencies are pinned: `backend/requirements.txt` (runtime, direct deps only, cross-platform by
 design — no `pip freeze`), `requirements-dev.txt` adds pytest. EEGResearch uses `pyproject.toml`
 plus `requirements*.lock`; a module-level import in `src/app` must be a runtime dependency, not a
-`dev` one, since CI installs `.[dev]` and cannot see the gap (`test_packaging.py` checks the base lock).
+`dev` one, since CI installs `.[dev]` and cannot see the gap (`test_packaging.py` checks pyproject and the base lock).
 
 **There must be exactly one vite, and `npm ls vite` is the check.** A second, older vite under
 `node_modules/vitest/` leaves `@vitejs/plugin-react` off the test transform, so every JSX file

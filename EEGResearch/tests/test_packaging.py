@@ -22,14 +22,22 @@ def _normalise(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
+def _pinned_in(lock_name: str) -> set[str]:
+    """Normalised names pinned with `==`, `name[extra]==` included."""
+    lock = (ROOT / lock_name).read_text(encoding="utf-8")
+    return {_normalise(m.group(1)) for m in re.finditer(r"^([A-Za-z0-9._-]+)(?:\[[^\]]*\])?==", lock, re.M)}
+
+
 def _is_optional_guard(stmt: ast.stmt) -> bool:
-    """`if TYPE_CHECKING:` never runs; `try: import x / except ImportError` is optional by design."""
+    """`if TYPE_CHECKING:` never runs; `try: import x / except ImportError` is optional unless it raises."""
     if isinstance(stmt, ast.If):
         test = stmt.test
         return getattr(test, "id", getattr(test, "attr", None)) == "TYPE_CHECKING"
     if isinstance(stmt, ast.Try):
-        caught = [n for h in stmt.handlers if h.type for n in ast.walk(h.type)]
-        return any(getattr(n, "id", None) in ("ImportError", "ModuleNotFoundError") for n in caught)
+        handlers = [h for h in stmt.handlers if h.type and any(
+            getattr(n, "id", None) in ("ImportError", "ModuleNotFoundError") for n in ast.walk(h.type))]
+        return bool(handlers) and not any(
+            isinstance(n, ast.Raise) for h in handlers for s in h.body for n in ast.walk(s))
     return False
 
 
@@ -68,26 +76,39 @@ def test_the_scan_skips_lazy_and_guarded_imports():
         "if TYPE_CHECKING:\n    import typed_only\n"
         "try:\n    import cv2\nexcept ImportError:\n    cv2 = None\n"
         "try:\n    import required\nexcept ValueError:\n    pass\n"
+        "try:\n    import hard\nexcept ImportError:\n    raise RuntimeError('install it')\n"
+        "if sys.platform == 'win32':\n    import platform_only\n"
         "def lazy():\n    import onnxruntime\n"
         "class Holder:\n    def method(self):\n        import mediapipe\n"
     )
-    assert _import_time_modules(ast.parse(source).body) == {"httpx", "fastapi", "required"}
+    assert _import_time_modules(ast.parse(source).body) == {
+        "httpx", "fastapi", "required", "hard", "platform_only"}
 
 
-def test_every_import_time_dependency_is_pinned_in_the_base_lock():
-    """A module-level import missing from requirements.lock fails `import src.app.main` on install."""
+def test_every_import_time_dependency_is_a_runtime_dependency_and_pinned_in_the_base_lock():
+    """A module-level import outside [project].dependencies or requirements.lock fails `import src.app.main`."""
     modules = _third_party_import_time_modules()
     assert {"fastapi", "numpy", "pydantic"} <= modules, f"the scan found too little: {modules}"
 
-    lock = (ROOT / "requirements.lock").read_text(encoding="utf-8")
-    pinned = {_normalise(m.group(1)) for m in re.finditer(r"^([A-Za-z0-9._-]+)==", lock, re.M)}
+    declared = {_normalise(re.match(r"[A-Za-z0-9._-]+", d).group())
+                for d in _pyproject()["project"]["dependencies"]}
+    pinned = _pinned_in("requirements.lock")
     owners = packages_distributions()
-    missing = {}
+    undeclared, unpinned = {}, {}
     for module in sorted(modules):
         dists = {_normalise(d) for d in owners.get(module, [])}
+        if not dists & declared:
+            undeclared[module] = sorted(dists) or "no installed distribution"
         if not dists & pinned:
-            missing[module] = sorted(dists) or "no installed distribution"
-    assert not missing, f"imported at module level but not pinned in requirements.lock: {missing}"
+            unpinned[module] = sorted(dists) or "no installed distribution"
+    assert not undeclared, f"imported at module level but not in [project].dependencies: {undeclared}"
+    assert not unpinned, f"imported at module level but not pinned in requirements.lock: {unpinned}"
+
+
+def test_a_pin_with_extras_counts_as_pinned():
+    lock = (ROOT / "requirements.lock").read_text(encoding="utf-8")
+    assert re.search(r"^uvicorn\[standard\]==", lock, re.M), "uvicorn is no longer pinned with extras"
+    assert "uvicorn" in _pinned_in("requirements.lock")
 
 
 def test_no_camera_dependency_is_in_the_base_install():

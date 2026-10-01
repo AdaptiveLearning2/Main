@@ -377,7 +377,8 @@ def test_start_sh_missing_deps_reports_every_requirement_the_probe_prints(tmp_pa
 
 @pytest.mark.skipif(BASH is None, reason="needs bash")
 @pytest.mark.parametrize("mode,args", [("editable", "install -e . -q"),
-                                       ("requirements", "install -r requirements.txt -q")])
+                                       ("requirements", "install -r requirements.txt -q")],
+                         ids=["editable", "requirements"])
 def test_start_sh_installs_from_the_project_folder(tmp_path, mode, args):
     project = _sh_venv(tmp_path, "exit 1")
     (project / "here").write_text("project", encoding="utf-8")

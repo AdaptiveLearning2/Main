@@ -327,8 +327,8 @@ measurements were always done in a throwaway `pip install --target ... "setuptoo
 CI (`.github/workflows/ci.yml`) runs **nine** jobs on PRs and pushes to `main`: `EEGResearch tests`,
 `Native bridge build`, `Website backend tests`, `Database grants`, `Comment length`, `Database migrations`,
 `Frontend tests, build & lint`, `Dependency scan`, `Secret scan`. Counted by name, so a tenth on the
-PR page is new or undocumented rather than a stale number. (The `Supabase Preview` check is the
-integration's, not CI's, and is always skipped.)
+PR page is new or undocumented rather than a stale number. (Two more come from integrations, not CI:
+`Supabase Preview`, always skipped, and `Cloudflare Pages`, a preview deploy of the frontend.)
 
 **`EEGResearch/.github/workflows/ci.yml` exists and has never run.** GitHub reads workflows only
 from the repository root's `.github/workflows/`, so a nested one is an ordinary file. It is the only

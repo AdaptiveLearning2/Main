@@ -187,15 +187,16 @@ function Test-HostedArgs {
         $errors += "-Hosted needs -Muse: the simulator would push made-up EEG to the hosted backend."
     }
     # No path: the push client appends /api/signals/..., so /api would post to /api/api/...
+    # No user name: GetLeftPart keeps one, and no browser sends it in an Origin.
     $u = $null
-    if (-not $backendUrl -or -not [Uri]::TryCreate($backendUrl, 'Absolute', [ref]$u) -or
+    if (-not $backendUrl -or -not [Uri]::TryCreate($backendUrl, 'Absolute', [ref]$u) -or $u.UserInfo -or
             $u.Scheme -ne 'https' -or $u.AbsolutePath -ne '/' -or $u.Query -or $u.Fragment) {
-        $errors += "-BackendUrl must be the hosted backend's https address with no path, e.g. https://name.onrender.com."
+        $errors += "-BackendUrl must be the hosted backend's https address with no path or user name, e.g. https://name.onrender.com."
     }
     $o = $null
-    if (-not $frontendOrigin -or -not [Uri]::TryCreate($frontendOrigin, 'Absolute', [ref]$o) -or
+    if (-not $frontendOrigin -or -not [Uri]::TryCreate($frontendOrigin, 'Absolute', [ref]$o) -or $o.UserInfo -or
             $o.Scheme -ne 'https' -or $o.AbsolutePath -ne '/' -or $o.Query -or $o.Fragment) {
-        $errors += "-FrontendOrigin must be the site's https origin with no path, e.g. https://name.pages.dev."
+        $errors += "-FrontendOrigin must be the site's https origin with no path or user name, e.g. https://name.pages.dev."
     }
     # token_urlsafe's alphabet, which survives a .env round trip; the placeholder is refused by the sidecar.
     if ($learnerToken -cnotmatch '^[A-Za-z0-9_-]+$' -or $learnerToken -like 'replace-me*') {
@@ -280,6 +281,24 @@ function Check-Venv {
         }
         Pop-Location
     }
+}
+
+function Get-SidecarCommand {
+    # Hosted, the window first drops each session variable the sidecar reads: one left in this
+    # session (EEG_SOURCE=sim from a test run, say) beats the .env just written.
+    param([bool]$hosted, [string]$python, [string]$eegDir)
+    $run = ".\.venv\Scripts\Activate.ps1; uvicorn src.app.main:app --host 127.0.0.1 --port 8001"
+    # No --reload for students: nothing on their machine edits the sidecar's code.
+    if (-not $hosted) { return "$run --reload" }
+    # The names come from the sidecar's own Settings, so a key added there is covered too.
+    Push-Location $eegDir
+    try {
+        $names = @((Invoke-Quiet { & $python -c "from src.app.config import Settings; print(' '.join(f.alias for f in Settings.model_fields.values() if f.alias))" }) -split '\s+')
+    } finally { Pop-Location }
+    $set = @($names | Where-Object { $_ -match '^[A-Za-z_][A-Za-z0-9_]*$' -and (Test-Path "Env:$_") } | Sort-Object -Unique)
+    if ($set.Count -eq 0) { return $run }
+    Write-Host "  Hosted: clearing $($set -join ', ') in the sidecar's window, so it reads its .env" -ForegroundColor Yellow
+    return (($set | ForEach-Object { "Remove-Item Env:$_; " }) -join '') + $run
 }
 
 function Start-Window {
@@ -539,9 +558,7 @@ if ($Hosted) {
 # 3. EEGResearch backend
 Write-Host "[3/5] EEGResearch backend (port 8001)" -ForegroundColor Cyan
 Check-Venv $eegDir
-# No --reload for students: nothing on their machine edits the sidecar's code.
-$reload = if ($Hosted) { "" } else { " --reload" }
-$eegCmd = ".\.venv\Scripts\Activate.ps1; uvicorn src.app.main:app --host 127.0.0.1 --port 8001$reload"
+$eegCmd = Get-SidecarCommand $Hosted (Join-Path $eegDir ".venv\Scripts\python.exe") $eegDir
 Start-Window "EEG Backend :8001" $eegDir $eegCmd
 Start-Sleep -Seconds 2
 

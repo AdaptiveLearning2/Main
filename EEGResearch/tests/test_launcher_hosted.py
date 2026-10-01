@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -32,8 +33,10 @@ ARG_CASES = [
     ({"backend": "http://main-u0ki.onrender.com"}, ["-BackendUrl"]),
     ({"backend": BACKEND + "/api"}, ["-BackendUrl"]),
     ({"backend": ""}, ["-BackendUrl"]),
+    ({"backend": "https://user:pw@main-u0ki.onrender.com"}, ["-BackendUrl"]),
     ({"origin": ORIGIN + "/login"}, ["-FrontendOrigin"]),
     ({"origin": "http://adaptive.pages.dev"}, ["-FrontendOrigin"]),
+    ({"origin": "https://user@adaptive.pages.dev"}, ["-FrontendOrigin"]),
     ({"token": ""}, ["-LearnerToken"]),
     ({"token": "replace-me-learner-token"}, ["-LearnerToken"]),
     ({"token": "has a space"}, ["-LearnerToken"]),
@@ -52,13 +55,13 @@ def _extract(text: str, start: str) -> str:
     return m.group(0)
 
 
-def _ps(tmp_path: Path, body: str, *functions: str) -> subprocess.CompletedProcess:
+def _ps(tmp_path: Path, body: str, *functions: str, env: dict | None = None) -> subprocess.CompletedProcess:
     src = (ROOT / "start.ps1").read_text(encoding="utf-8")
     script = tmp_path / "t.ps1"
     script.write_text("\n".join(_extract(src, f"function {f} {{") for f in functions) + "\n" + body,
                       encoding="utf-8")
     return subprocess.run([POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, env=env)
 
 
 def _launch(tmp_path: Path, sidecar_env: str, backend: str, origin: str, token: str):
@@ -176,6 +179,35 @@ def test_a_local_run_adds_the_local_origins_and_keeps_every_other(tmp_path, curr
     assert dotenv_values(env)["ALLOWED_ORIGINS"] == expected
 
 
+SESSION = {"EEG_SOURCE": "sim", "API_TOKEN": "t", "EEG_DEVICES": "default:sim"}
+
+
+@WINDOWS
+def test_the_hosted_sidecar_window_reads_its_env_file_not_this_session(tmp_path):
+    # The real window command, run in a child as Start-Window runs it; uvicorn is a probe of the settings.
+    eeg, bin_ = tmp_path / "EEGResearch", tmp_path / "bin"
+    (eeg / ".venv" / "Scripts").mkdir(parents=True)
+    bin_.mkdir()
+    probe = tmp_path / "probe.py"
+    probe.write_text("from src.app.config import Settings\ns = Settings()\n"
+                     "print(f'SETTINGS={s.eeg_source}|{s.api_token}|{s.eeg_devices}')\n", encoding="utf-8")
+    (bin_ / "uvicorn.cmd").write_text(f'@"{sys.executable}" "{probe}"\r\n', encoding="utf-8")
+    (eeg / ".venv" / "Scripts" / "Activate.ps1").write_text(f"$env:PATH = '{bin_};' + $env:PATH\n", encoding="utf-8")
+    (eeg / ".env").write_text(f"EEG_SOURCE=muse\nAPI_TOKEN={TOKEN}\nADMIN_TOKEN=machine-own-{'a' * 30}\n",
+                              encoding="utf-8")
+    aliases = {f.alias.upper() for f in Settings.model_fields.values() if f.alias}
+    env = {k: v for k, v in os.environ.items() if k.upper() not in aliases}
+    env.update(SESSION, PYTHONPATH=str(ROOT / "EEGResearch"))
+    r = _ps(tmp_path, (
+        f"$cmd = Get-SidecarCommand $true '{sys.executable}' '{eeg}'\n"
+        f"powershell -NoProfile -Command \"cd '{eeg}'; $cmd\"\n"
+        "\"PARENT=$env:EEG_SOURCE\"\n"), "Get-SidecarCommand", "Invoke-Quiet", env=env)
+    assert r.returncode == 0, r.stderr
+    assert f"SETTINGS=muse|{TOKEN}|" in r.stdout.splitlines(), (r.stdout, r.stderr)
+    assert f"clearing {', '.join(sorted(SESSION))} in the sidecar's window" in r.stdout
+    assert "PARENT=sim" in r.stdout, "the window that ran start.ps1 keeps its own variables"
+
+
 def _script_body(text: str) -> str:
     """What runs at the top level: every function definition removed."""
     return re.sub(r"^function [\w-]+ \{\n.*?^\}\n", "", text, flags=re.S | re.M)
@@ -191,6 +223,13 @@ def test_the_hosted_keys_win_over_both_camera_branches():
     assert local and hosted > max(local), (hosted, local)
     assert re.search(r'^\$localOrigins = "([^"]+)"', ps1, re.M).group(1) == LOCAL
     assert any(re.search(r"^\s*Add-LocalOrigins \$eegEnv \$localOrigins", l) for l in lines)
+
+
+def test_the_sidecar_window_runs_the_command_that_clears_the_session():
+    # Structural only because a bare launch stops at the libMuse check, before any window opens.
+    lines = _script_body((ROOT / "start.ps1").read_text(encoding="utf-8")).splitlines()
+    made = next(i for i, l in enumerate(lines) if re.match(r"\$eegCmd = Get-SidecarCommand \$Hosted ", l))
+    assert re.match(r'Start-Window "EEG Backend :8001" \$eegDir \$eegCmd$', lines[made + 1])
 
 
 @pytest.mark.skipif(BASH is None, reason="needs bash")

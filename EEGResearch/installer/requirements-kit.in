@@ -1,0 +1,5 @@
+# The kit's build tools, resolved against the sidecar with both camera extras, which the build installs too.
+-c ../requirements-gaze.lock
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.8
+pefile==2024.8.26

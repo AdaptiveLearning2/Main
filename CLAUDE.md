@@ -206,7 +206,7 @@ npm run dev
 | `-NoEmotion` | FER+ off, and skips the 35 MB model fetch entirely. |
 | `-Optics` (`-OpticsPreset 103N`) | Headband optical channels. Refused without `-Muse`. |
 | `-LocalCalm` | `EEG_SPECTRUM_SOURCE=local`. Refused without `-Muse`, and refused outright by `start.sh`. |
-| `-Hosted` (`-BackendUrl`, `-FrontendOrigin`, `-LearnerToken`) | Student machine for the hosted site: bridge and sidecar only, pushing to the backend with the site's shared token. Refused without `-Muse` (the simulator streams unpaired, so it would push made-up EEG) and outright by `start.sh`. Tests: `test_launcher_hosted.py`. |
+| `-Hosted` (`-BackendUrl`, `-FrontendOrigin`, `-LearnerToken`) | Student machine for the hosted site: bridge and sidecar only, pushing to the backend with the site's shared token. Refused without `-Muse` (the simulator streams unpaired, so it would push made-up EEG) and outright by `start.sh`. Tests: `test_launcher_hosted.py`. The student kit (`EEGResearch/src/kit`, see `docs/signals.md`) sets the same values from `kit.json`, checked against the same table (`tests/launcher_cases.py`). |
 
 **Every model-backed flag provisions its model at setup, not on the first frame of a lesson** — a
 4 MB download in front of a student reads as a broken feature rather than an incomplete install.
@@ -328,7 +328,8 @@ CI (`.github/workflows/ci.yml`) runs **nine** jobs on PRs and pushes to `main`: 
 `Native bridge build`, `Website backend tests`, `Database grants`, `Comment length`, `Database migrations`,
 `Frontend tests, build & lint`, `Dependency scan`, `Secret scan`. Counted by name, so a tenth on the
 PR page is new or undocumented rather than a stale number. (Two more come from integrations, not CI:
-`Supabase Preview`, always skipped, and `Cloudflare Pages`, a preview deploy of the frontend.)
+`Supabase Preview`, always skipped, and `Cloudflare Pages`, a preview deploy of the frontend.) `Native bridge
+build` also runs the Windows-only launcher, kit and bridge tests, against the bridge it has just built.
 
 **`EEGResearch/.github/workflows/ci.yml` exists and has never run.** GitHub reads workflows only
 from the repository root's `.github/workflows/`, so a nested one is an ordinary file. It is the only
@@ -343,7 +344,7 @@ step names the advisory and the fixed version, so a red run says what to do. Tun
 until it passes is tuning the detector to the disease.
 
 It audits **three Python sets, because they are three different installs** — the backend's pinned
-`requirements-dev.txt`, the sidecar's `pyproject`, and the four committed `.lock` files. The first
+`requirements-dev.txt`, the sidecar's `pyproject`, and the five committed `.lock` files (the kit's is `installer/`). The first
 two are audited *as installed*, not as files: `requirements.txt` pins direct dependencies only, so
 auditing the file alone would miss the transitive tree, which is where `starlette`, `idna` and
 `urllib3` live. The locks are audited `--no-deps`, since the point of a lock is that it already

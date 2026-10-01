@@ -311,6 +311,26 @@ configuration the session was launched with; nothing else has to change, because
 adapter reconnects on its own and the page treats the restarted bridge's "not connected" as a drop.
 `EEGResearch/tests/test_bridge_supervisor.py` drives the loop against a stub `.cmd` (Windows only).
 
+### The student kit runs both with no toolchain
+
+`EEGResearch/src/kit` is the launcher frozen into `AdaptiveLearningSensors.exe`; `EEGResearch/scripts/build_student_kit.ps1`
+builds it into an Inno Setup installer (`EEGResearch/installer`). It is `start.ps1 -Hosted -Muse -Optics -Camera -Gaze`
+read from `kit.json`, which `src/kit/config.py` refuses for exactly the reasons `Test-HostedArgs` refuses its arguments:
+`tests/launcher_cases.py` is the one table both are tested against.
+
+- **The environment, never a `.env`.** It removes every `Settings` name and every `MUSE_*` name before setting its own,
+  so nothing from the session or a profile reaches either process, and the bridge never sees the tokens. `ADMIN_TOKEN`
+  is fresh on every start: under push, every endpoint the page calls takes the learner token.
+- **One copy per machine**, `Global\AdaptiveLearningSensors`, so a second person signed in at once gets no sensors. The
+  bridge is in a kill-on-close job, so it cannot outlive the launcher however that ends. `--stop` sets
+  `Global\AdaptiveLearningSensorsStop` and returns only once the copy has exited; the installer waits on that.
+- **The supervisor** is this section's restart policy in Python, stopping on 0 and on 78. Past the budget it retries
+  every 300 s rather than giving up, since nobody is watching. Each run logs to its own file; the newest ten are kept.
+- **`--self-test`** runs before every installer is built: the models on a real portrait, the sidecar on port 0, and
+  the bridge started, authenticated and required to answer `bridge_mode: libmuse` with its C++ runtime loaded from the
+  kit's own `bridge\`. A blank frame cannot tell a working model from one that never detects, and a machine with Visual
+  C++ installed hides a missing runtime from a plain launch.
+
 It is deliberately **not** a Windows service or a scheduled task: moving the exe out of the launcher
 window is how those variables get lost. The debug panel's *Link* row tells a dead bridge from a
 dropped headband — `consecutive_errors` climbing with `eeg_age_ms` absent is the bridge gone,

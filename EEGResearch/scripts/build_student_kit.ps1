@@ -1,0 +1,130 @@
+<#
+.SYNOPSIS
+Builds the student sensor kit installer: the libMuse bridge, the frozen sidecar, both camera models,
+kit.json, a self-test of the result, and an Inno Setup installer with its SHA-256.
+
+.DESCRIPTION
+Runs on the developer's Windows machine and needs Python 3.14 on PATH, Visual Studio with the C++
+workload, CMake, Inno Setup 6 and the libMuse SDK folder; see DEVELOPER_SETUP_WINDOWS.md, "Building the
+student kit". Intermediate files go to EEGResearch\build\kit and the installer to EEGResearch\dist\kit.
+The arguments are checked as start.ps1 -Hosted checks its own, before anything is built.
+
+.EXAMPLE
+.\EEGResearch\scripts\build_student_kit.ps1 -BackendUrl https://name.onrender.com -FrontendOrigin https://name.pages.dev -LearnerToken <VITE_EEG_LOCAL_TOKEN> -Version 0.1.0
+#>
+param(
+    [Parameter(Mandatory = $true)][string]$BackendUrl,
+    [Parameter(Mandatory = $true)][string]$FrontendOrigin,
+    [Parameter(Mandatory = $true)][string]$LearnerToken,
+    [Parameter(Mandatory = $true)][string]$Version,
+    [ValidateRange(0, 99)][int]$CameraIndex = 0,
+    [string]$OpticsPreset = "",
+    [string]$LibMuseSdkDir = "",
+    # Optional signing: the arguments for `signtool sign` before the file name, e.g. Artifact Signing's /dlib and /dmdf.
+    [string[]]$SignToolArgs = @(),
+    [switch]$SkipInstaller
+)
+
+$ErrorActionPreference = "Stop"
+$eeg = Split-Path $PSScriptRoot -Parent
+$work = Join-Path $eeg "build\kit"
+$out = Join-Path $eeg "dist\kit"
+$installer = Join-Path $eeg "installer"
+
+function Invoke-Step {
+    param([string]$what, [scriptblock]$command)
+    Write-Host "== $what" -ForegroundColor Cyan
+    $global:LASTEXITCODE = 0
+    & $command
+    if ($LASTEXITCODE -ne 0) { throw "$what failed (exit $LASTEXITCODE)" }
+}
+
+function Find-Tool {
+    param([string]$name, [string[]]$candidates)
+    foreach ($path in $candidates) { if ($path -and (Test-Path $path)) { return $path } }
+    throw "$name not found; looked in: $($candidates -join '; ')"
+}
+
+if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "-Version must look like 0.1.0" }
+$kitArgs = @("--backend-url", $BackendUrl, "--frontend-origin", $FrontendOrigin, "--learner-token", $LearnerToken,
+             "--camera-index", "$CameraIndex", "--version", $Version)
+# Only when set: PowerShell 5.1 drops an empty argument to a native command, leaving the flag with no value.
+if ($OpticsPreset) { $kitArgs += @("--optics-preset", $OpticsPreset) }
+
+# The same check the launcher runs on kit.json, before anything slow happens. Standard library only.
+Push-Location $eeg
+try {
+    Invoke-Step "Checking the arguments" { python -m src.kit.config check @kitArgs }
+} finally { Pop-Location }
+$pythonVersion = & python -c "import sys; print('%d.%d' % sys.version_info[:2])"
+if ($pythonVersion -ne "3.14") { throw "Python 3.14 must be first on PATH (found $pythonVersion): the locks are resolved for it" }
+
+if (-not $LibMuseSdkDir) { $LibMuseSdkDir = Join-Path $eeg "libmuse_windows_8.0.5" }
+if (-not (Test-Path $LibMuseSdkDir)) { throw "libMuse SDK not found at $LibMuseSdkDir; pass -LibMuseSdkDir" }
+Invoke-Step "Building the bridge with libMuse" {
+    & (Join-Path $PSScriptRoot "run_native_bridge.ps1") -EnableLibMuse -LibMuseSdkDir $LibMuseSdkDir -BuildOnly
+}
+$bridgeExe = Join-Path $eeg "native_bridge\build\Release\muse_native_bridge.exe"
+
+# A fresh venv from the locks every time: the dev venv drifts from them, and the kit must match what was reviewed.
+$venv = Join-Path $work "venv"
+if (Test-Path $venv) { Remove-Item -Recurse -Force $venv }
+New-Item -ItemType Directory -Force $work | Out-Null
+Invoke-Step "Creating the build venv" { python -m venv $venv }
+$py = Join-Path $venv "Scripts\python.exe"
+Invoke-Step "Installing the locked sidecar and build tools" {
+    & $py -m pip install --quiet --require-hashes -r (Join-Path $eeg "requirements-gaze.lock") `
+        -r (Join-Path $installer "requirements-kit.lock")
+}
+
+$models = Join-Path $work "models"
+Invoke-Step "Fetching and verifying the camera models" { & $py (Join-Path $installer "kit_build.py") models $models }
+Invoke-Step "Freezing the launcher and sidecar" { & $py (Join-Path $installer "kit_build.py") freeze $work (Join-Path $work "dist") }
+Invoke-Step "Staging the kit folder" {
+    & $py (Join-Path $installer "kit_build.py") stage (Join-Path $work "dist") $bridgeExe $models (Join-Path $work "stage")
+}
+$app = Join-Path $work "stage\AdaptiveLearningSensors"
+Push-Location $eeg
+try {
+    Invoke-Step "Writing kit.json" { & $py -m src.kit.config write (Join-Path $app "kit.json") @kitArgs }
+} finally { Pop-Location }
+Invoke-Step "Auditing every bundled binary's DLL imports" { & $py (Join-Path $installer "kit_build.py") audit $app }
+
+$report = Join-Path $work "selftest.json"
+if (Test-Path $report) { Remove-Item $report }
+Write-Host "== Running the kit's self-test" -ForegroundColor Cyan
+# A windowed exe does not set $LASTEXITCODE, so the exit code comes from the process object.
+$run = Start-Process -FilePath (Join-Path $app "AdaptiveLearningSensors.exe") -ArgumentList "--self-test", "`"$report`"" `
+    -Wait -PassThru
+if (-not (Test-Path $report)) { throw "the self-test wrote no report (exit $($run.ExitCode)); see $work\selftest.console.log" }
+$result = Get-Content -Raw -Encoding UTF8 $report | ConvertFrom-Json
+foreach ($check in $result.checks) {
+    $colour = if ($check.ok) { "Green" } else { "Red" }
+    Write-Host ("  {0,-5} {1}" -f $(if ($check.ok) { "PASS" } else { "FAIL" }), $check.name) -ForegroundColor $colour
+    if (-not $check.ok) { Write-Host "        $($check.detail.error)" -ForegroundColor Yellow }
+}
+if ($run.ExitCode -ne 0 -or -not $result.ok) { throw "the self-test failed; the full report is $report" }
+if ($SkipInstaller) { Write-Host "Kit staged and self-tested at $app (no installer: -SkipInstaller)."; return }
+
+$signTool = $null
+if ($SignToolArgs.Count -gt 0) {
+    $signTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+        Sort-Object FullName | Select-Object -Last 1 -ExpandProperty FullName
+    if (-not $signTool) { throw "signtool.exe not found under Windows Kits\10; install the Windows SDK" }
+    foreach ($exe in @((Join-Path $app "AdaptiveLearningSensors.exe"), (Join-Path $app "bridge\muse_native_bridge.exe"))) {
+        Invoke-Step "Signing $(Split-Path $exe -Leaf)" { & $signTool sign @SignToolArgs $exe }
+    }
+}
+
+$iscc = Find-Tool "Inno Setup 6 (ISCC.exe)" @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+    "$env:ProgramFiles\Inno Setup 6\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe")
+New-Item -ItemType Directory -Force $out | Out-Null
+Invoke-Step "Compiling the installer" {
+    & $iscc /Q "/DAppVersion=$Version" "/DSourceDir=$app" "/DOutputDir=$out" (Join-Path $installer "student_kit.iss")
+}
+$setup = Join-Path $out "AdaptiveLearningSensors-Setup-$Version.exe"
+if ($signTool) { Invoke-Step "Signing the installer" { & $signTool sign @SignToolArgs $setup } }
+$hash = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLower()
+Set-Content -Encoding ascii -Path "$setup.sha256" -Value "$hash  $(Split-Path $setup -Leaf)"
+Write-Host "Built $setup" -ForegroundColor Green
+Write-Host "SHA-256 $hash"

@@ -132,7 +132,9 @@ function Set-EnvKey {
         $lines = [IO.File]::ReadAllLines($full, (New-Object Text.UTF8Encoding $false, $true))
     } catch [Text.DecoderFallbackException] {
         # Saved in the ANSI code page: convert it, or a character a person typed is rewritten as U+FFFD.
-        $lines = [IO.File]::ReadAllLines($full, [Text.Encoding]::Default)
+        # Named, not [Text.Encoding]::Default, which is UTF-8 under PowerShell 7.
+        $acp = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage').ACP
+        $lines = [IO.File]::ReadAllLines($full, [Text.Encoding]::GetEncoding([int]$acp))
     }
     if ($lines -match "^$key=") {
         $lines = $lines -replace "^$key=.*", "$key=$value"

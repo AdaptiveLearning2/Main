@@ -184,17 +184,19 @@ check_venv() {
         "$PYTHON" -m venv .venv
         popd > /dev/null
         install_venv_deps "$dir" "$mode"
-    elif [ "$mode" = "editable" ]; then
-        # An editable install keeps the dependency list it was installed with; see Check-Venv in start.ps1.
+    else
+        # A venv keeps the dependency list it was installed with; see Check-Venv in start.ps1.
+        local manifest="$dir/pyproject.toml" fix="-e ."
+        if [ "$mode" != "editable" ]; then manifest="$dir/requirements.txt"; fix="-r requirements.txt"; fi
         local missing
-        missing="$(missing_deps "$dir")"
+        missing="$(missing_deps "$dir" "$manifest")"
         if [ -n "$missing" ]; then
             echo -e "  ${YELLOW}Installing what this venv lacks: ${missing// /, }${NC}"
             install_venv_deps "$dir" "$mode"
-            missing="$(missing_deps "$dir")"
+            missing="$(missing_deps "$dir" "$manifest")"
             if [ -n "$missing" ]; then
                 echo -e "  ${RED}ERROR: $dir/.venv still lacks ${missing// /, }. From that folder run:${NC}"
-                echo -e "  ${YELLOW}  .venv/bin/pip install -e .${NC}"
+                echo -e "  ${YELLOW}  .venv/bin/pip install $fix${NC}"
                 exit 1
             fi
         fi
@@ -202,8 +204,9 @@ check_venv() {
 }
 
 missing_deps() {
-    # Unmet requirements, from the sidecar's own probe; a probe that cannot run reports nothing.
-    "$1/.venv/bin/python" "$1/scripts/missing_runtime_deps.py" 2>/dev/null
+    # What a pyproject or requirements file ($2) asks for that a venv ($1) lacks, from the sidecar's
+    # probe; a probe that cannot run reports nothing.
+    "$1/.venv/bin/python" "$EEG_DIR/scripts/missing_runtime_deps.py" "$2" 2>/dev/null
 }
 
 install_venv_deps() {

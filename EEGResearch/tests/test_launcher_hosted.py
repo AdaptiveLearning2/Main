@@ -266,9 +266,7 @@ def test_a_hosted_run_stops_when_the_sidecars_settings_cannot_be_read(tmp_path, 
 @pytest.fixture(scope="module")
 def built_venv(tmp_path_factory):
     """A project folder with a real, empty venv, so Check-Venv probes instead of rebuilding."""
-    project = tmp_path_factory.mktemp("venv") / "EEGResearch"
-    (project / "scripts").mkdir(parents=True)
-    shutil.copy(ROOT / "EEGResearch" / "scripts" / "missing_runtime_deps.py", project / "scripts")
+    project = tmp_path_factory.mktemp("venv") / "project"
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(project / ".venv")], check=True)
     return project
 
@@ -278,35 +276,59 @@ VENV_CASES = pytest.mark.parametrize("before,after,installs,refused", [
     ("httpx", "", 1, False),
     ("httpx", "httpx", 1, True),
 ], ids=["complete", "healed", "still-missing"])
-PROBE_PYPROJECT = ('[project]\nname = "x"\nversion = "0"\ndependencies = [\n  "pytest>=1",\n'
-                   '  "no-such-distribution-anywhere>=1",\n  "nor-this-one>=2"\n]\n')
+# The sidecar installs editable from its pyproject, the backend from its requirements.txt.
+MANIFESTS = pytest.mark.parametrize("manifest,fix", [("pyproject.toml", "pip install -e ."),
+                                                     ("requirements.txt", "pip install -r requirements.txt")],
+                                    ids=["pyproject", "requirements"])
+PROBE_FILES = pytest.mark.parametrize("manifest,content", [
+    ("pyproject.toml", '[project]\nname = "x"\nversion = "0"\ndependencies = [\n  "pytest>=1",\n'
+                       '  "no-such-distribution-anywhere>=1",\n  "nor-this-one>=2"\n]\n'),
+    ("requirements.txt", "pytest>=1\nno-such-distribution-anywhere>=1\nnor-this-one>=2\n"),
+], ids=["pyproject", "requirements"])
+
+
+def _with_probe(tmp_path: Path) -> Path:
+    """An EEGResearch folder beside the script under test, holding the probe where both launchers look."""
+    scripts = tmp_path / "EEGResearch" / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy(ROOT / "EEGResearch" / "scripts" / "missing_runtime_deps.py", scripts)
+    return scripts.parent
 
 
 @WINDOWS
+@MANIFESTS
 @VENV_CASES
-def test_check_venv_installs_what_a_pulled_pyproject_added(tmp_path, built_venv, before, after, installs, refused):
-    (built_venv / "pyproject.toml").write_text('[project]\nname = "x"\nversion = "0"\n', encoding="utf-8")
+def test_check_venv_installs_what_a_pulled_dependency_list_added(tmp_path, built_venv, manifest, fix,
+                                                                 before, after, installs, refused):
+    for name in ("pyproject.toml", "requirements.txt"):
+        (built_venv / name).unlink(missing_ok=True)
+    (built_venv / manifest).write_text("", encoding="utf-8")
     # `python` on PATH must match the venv's version, or Check-Venv rebuilds instead of probing.
     env = dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"])
     r = _ps(tmp_path, (
         "$script:probes = 0\n"
-        "function Get-MissingDeps { param($python, $dir); $script:probes++\n"
+        "function Get-MissingDeps { param($python, $manifest); $script:probes++\n"
+        "    Write-Host \"PROBE $python $manifest\"\n"
         f"    if ($script:probes -eq 1) {{ @('{before}') | Where-Object {{ $_ }} }}"
         f" else {{ @('{after}') | Where-Object {{ $_ }} }} }}\n"
         "function Install-VenvDeps { param($dir); 'INSTALL' }\n"
         f"Check-Venv '{built_venv}'\n"
         "'RETURNED'\n"), "Check-Venv", "Invoke-Quiet", env=env)
     out = r.stdout.splitlines()
+    probe = f"PROBE {built_venv / '.venv' / 'Scripts' / 'python.exe'} {built_venv / manifest}"
+    assert [line for line in out if line.startswith("PROBE ")] == [probe] * (1 + installs), r.stdout
     assert out.count("INSTALL") == installs, (r.stdout, r.stderr)
     assert (r.returncode, "RETURNED" in out) == ((1, False) if refused else (0, True)), (r.stdout, r.stderr)
     if refused:
-        assert "still lacks httpx" in r.stdout and "pip install -e ." in r.stdout
+        assert "still lacks httpx" in r.stdout and fix in r.stdout
 
 
 @WINDOWS
-def test_get_missing_deps_reports_every_requirement_the_probe_prints(tmp_path, built_venv):
-    (built_venv / "pyproject.toml").write_text(PROBE_PYPROJECT, encoding="utf-8")
-    r = _ps(tmp_path, (f"$m = @(Get-MissingDeps '{sys.executable}' '{built_venv}')\n"
+@PROBE_FILES
+def test_get_missing_deps_reports_every_requirement_the_probe_prints(tmp_path, manifest, content):
+    _with_probe(tmp_path)
+    (tmp_path / manifest).write_text(content, encoding="utf-8")
+    r = _ps(tmp_path, (f"$m = @(Get-MissingDeps '{sys.executable}' '{tmp_path / manifest}')\n"
                        "\"COUNT=$($m.Count)\"; $m\n"), "Get-MissingDeps", "Invoke-Quiet")
     assert r.returncode == 0, r.stderr
     assert r.stdout.splitlines() == ["COUNT=2", "no-such-distribution-anywhere>=1", "nor-this-one>=2"]
@@ -317,9 +339,9 @@ def _stub(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def _sh_venv(tmp_path: Path, python: str) -> Path:
+def _sh_venv(tmp_path: Path, python: str, name: str = "EEGResearch") -> Path:
     """A project whose .venv/bin/python is a shell stub running `python`, laid out as start.sh expects."""
-    project = tmp_path / "EEGResearch"
+    project = tmp_path / name
     (project / ".venv" / "bin").mkdir(parents=True)
     (project / ".venv" / "bin" / "activate").write_text("", encoding="utf-8")
     _stub(project / ".venv" / "bin" / "python", python)
@@ -335,42 +357,50 @@ def _sh(tmp_path: Path, body: str, *functions: str) -> subprocess.CompletedProce
 
 
 @pytest.mark.skipif(BASH is None, reason="needs bash")
+@MANIFESTS
 @VENV_CASES
-def test_start_sh_check_venv_installs_what_a_pulled_pyproject_added(tmp_path, before, after, installs, refused):
+def test_start_sh_check_venv_installs_what_a_pulled_dependency_list_added(tmp_path, manifest, fix,
+                                                                          before, after, installs, refused):
+    mode = "editable" if manifest == "pyproject.toml" else "requirements"
     project = _sh_venv(tmp_path, "echo 3.14")  # PYTHON is this stub too, so check_venv probes, not rebuilds
-    probed = (tmp_path / "probed").as_posix()
+    probed, calls = (tmp_path / "probed").as_posix(), (tmp_path / "calls").as_posix()
     r = _sh(tmp_path, (
-        f"missing_deps() {{ if [ -e '{probed}' ]; then echo '{after}'; else : > '{probed}'; echo '{before}'; fi; }}\n"
-        "install_venv_deps() { echo INSTALL; }\n"
+        f"missing_deps() {{ echo \"$1 $2\" >> '{calls}'\n"
+        f"    if [ -e '{probed}' ]; then echo '{after}'; else : > '{probed}'; echo '{before}'; fi; }}\n"
+        'install_venv_deps() { echo "INSTALL $2"; }\n'
         f"PYTHON='{(project / '.venv' / 'bin' / 'python').as_posix()}'\n"
-        f"check_venv '{project.as_posix()}' editable\n"
+        f"check_venv '{project.as_posix()}' {mode}\n"
         "echo RETURNED\n"), "check_venv")
     out = r.stdout.splitlines()
-    assert out.count("INSTALL") == installs, (r.stdout, r.stderr)
+    assert out.count(f"INSTALL {mode}") == installs, (r.stdout, r.stderr)
     assert (r.returncode, "RETURNED" in out) == ((1, False) if refused else (0, True)), (r.stdout, r.stderr)
+    probe = f"{project.as_posix()} {project.as_posix()}/{manifest}"
+    assert Path(calls).read_text(encoding="utf-8").splitlines() == [probe] * (1 + installs)
     if refused:
-        assert "still lacks httpx" in r.stdout and "pip install -e ." in r.stdout
+        assert "still lacks httpx" in r.stdout and fix in r.stdout
 
 
 @pytest.mark.skipif(BASH is None, reason="needs bash")
-def test_start_sh_check_venv_builds_a_missing_venv_and_installs_into_it(tmp_path):
+@pytest.mark.parametrize("mode", ["editable", "requirements"])
+def test_start_sh_check_venv_builds_a_missing_venv_and_installs_into_it(tmp_path, mode):
     project = tmp_path / "EEGResearch"
     project.mkdir()
     _stub(tmp_path / "python3", 'echo "VENV $(basename "$(pwd)") $*"')
     r = _sh(tmp_path, ('install_venv_deps() { echo "INSTALL $2"; }\n'
                        f"PYTHON='{(tmp_path / 'python3').as_posix()}'\n"
-                       f"check_venv '{project.as_posix()}' editable\n"), "check_venv")
+                       f"check_venv '{project.as_posix()}' {mode}\n"), "check_venv")
     assert r.returncode == 0, r.stderr
-    assert r.stdout.splitlines()[-2:] == ["VENV EEGResearch -m venv .venv", "INSTALL editable"], r.stdout
+    assert r.stdout.splitlines()[-2:] == ["VENV EEGResearch -m venv .venv", f"INSTALL {mode}"], r.stdout
 
 
 @pytest.mark.skipif(BASH is None, reason="needs bash")
-def test_start_sh_missing_deps_reports_every_requirement_the_probe_prints(tmp_path):
-    project = _sh_venv(tmp_path, f"exec '{Path(sys.executable).as_posix()}' \"$@\"")
-    (project / "scripts").mkdir()
-    shutil.copy(ROOT / "EEGResearch" / "scripts" / "missing_runtime_deps.py", project / "scripts")
-    (project / "pyproject.toml").write_text(PROBE_PYPROJECT, encoding="utf-8")
-    r = _sh(tmp_path, f"missing_deps '{project.as_posix()}'\n", "missing_deps")
+@PROBE_FILES
+def test_start_sh_missing_deps_reports_every_requirement_the_probe_prints(tmp_path, manifest, content):
+    project = _sh_venv(tmp_path, f"exec '{Path(sys.executable).as_posix()}' \"$@\"", name="project")
+    eeg = _with_probe(tmp_path)  # apart from the venv's folder, as the backend's is
+    (project / manifest).write_text(content, encoding="utf-8")
+    r = _sh(tmp_path, (f"EEG_DIR='{eeg.as_posix()}'\n"
+                       f"missing_deps '{project.as_posix()}' '{(project / manifest).as_posix()}'\n"), "missing_deps")
     assert r.returncode == 0, r.stderr
     assert r.stdout.split() == ["no-such-distribution-anywhere>=1", "nor-this-one>=2"]
 

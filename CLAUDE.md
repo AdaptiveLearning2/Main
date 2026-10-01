@@ -415,8 +415,9 @@ Dependencies are pinned: `backend/requirements.txt` (runtime, direct deps only, 
 design — no `pip freeze`), `requirements-dev.txt` adds pytest. EEGResearch uses `pyproject.toml`
 plus `requirements*.lock`; a module-level import in `src/app` must be a runtime dependency, not a
 `dev` one, since CI installs `.[dev]` and cannot see the gap (`test_packaging.py` checks pyproject
-and every lock). An editable install keeps the dependency list it was installed with, so both
-launchers' venv checks install what a pulled `pyproject` adds or raises (`scripts/missing_runtime_deps.py`).
+and every lock). A venv keeps the dependency list it was installed with, so both launchers' venv
+checks install what a pulled sidecar `pyproject` or backend `requirements.txt` adds or changes:
+`EEGResearch/scripts/missing_runtime_deps.py` reads either, under each venv's own python.
 
 **There must be exactly one vite, and `npm ls vite` is the check.** A second, older vite under
 `node_modules/vitest/` leaves `@vitejs/plugin-react` off the test transform, so every JSX file

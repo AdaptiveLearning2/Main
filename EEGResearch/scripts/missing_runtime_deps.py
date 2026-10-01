@@ -1,11 +1,12 @@
-"""Print the runtime requirements in pyproject that this interpreter does not meet, space-separated.
+"""Print what a pyproject or requirements file asks for that this interpreter lacks, space-separated.
 
-An editable install keeps the dependency list it was installed with, so both launchers ask this
-before starting the sidecar and install whatever a pulled pyproject added, raised or extended.
+A venv keeps the dependency list it was installed with, so both launchers ask this before starting the
+sidecar or the backend and install whatever a pulled pyproject or requirements.txt added or changed.
 """
 
 from __future__ import annotations
 
+import re
 import sys
 import tomllib
 from importlib.metadata import PackageNotFoundError, requires, version
@@ -38,12 +39,21 @@ def _unmet(req: Requirement, seen: set[tuple[str, str]]) -> list[str]:
     return unmet
 
 
-def missing(pyproject: Path) -> list[str]:
+def _requirements(path: Path) -> list[str]:
+    """A .toml's [project].dependencies, else one requirement per line; an option such as -r fails."""
+    text = path.read_text(encoding="utf-8")
+    if path.suffix == ".toml":
+        return tomllib.loads(text)["project"]["dependencies"]
+    # As pip reads it: `#` opens a comment only at a line's start or after whitespace.
+    lines = (re.sub(r"(^|\s)#.*", "", line).strip() for line in text.splitlines())
+    return [line for line in lines if line]
+
+
+def missing(path: Path) -> list[str]:
     """Unmet requirements; one whose marker excludes this interpreter is skipped."""
-    deps = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["dependencies"]
     seen: set[tuple[str, str]] = set()
     unmet = []
-    for req in map(Requirement, deps):
+    for req in map(Requirement, _requirements(path)):
         if req.marker is None or req.marker.evaluate():
             unmet += _unmet(req, seen)
     return unmet

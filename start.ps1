@@ -284,17 +284,20 @@ function Check-Venv {
         python -m venv .venv
         Pop-Location
         Install-VenvDeps $dir
-    } elseif (Test-Path (Join-Path $dir "pyproject.toml")) {
-        # An editable install keeps the dependency list it was installed with, so what a pulled
-        # pyproject adds or raises is installed here, before a window starts and dies on the import.
-        $missing = @(Get-MissingDeps $pyExe $dir)
+    } else {
+        # A venv keeps the dependency list it was installed with, so what a pulled pyproject or
+        # requirements.txt adds or changes is installed here, before a window starts and dies on the import.
+        $editable = Test-Path (Join-Path $dir "pyproject.toml")
+        $manifest = Join-Path $dir $(if ($editable) { "pyproject.toml" } else { "requirements.txt" })
+        $missing = @(Get-MissingDeps $pyExe $manifest)
         if ($missing.Count -gt 0) {
             Write-Host "  Installing what this venv lacks: $($missing -join ', ')" -ForegroundColor Yellow
             Install-VenvDeps $dir
-            $missing = @(Get-MissingDeps $pyExe $dir)
+            $missing = @(Get-MissingDeps $pyExe $manifest)
             if ($missing.Count -gt 0) {
+                $fix = if ($editable) { "-e ." } else { "-r requirements.txt" }
                 Write-Host "  ERROR: $dir\.venv still lacks $($missing -join ', '). From that folder run:" -ForegroundColor Red
-                Write-Host "    .\.venv\Scripts\pip install -e ." -ForegroundColor Yellow
+                Write-Host "    .\.venv\Scripts\pip install $fix" -ForegroundColor Yellow
                 exit 1
             }
         }
@@ -302,10 +305,11 @@ function Check-Venv {
 }
 
 function Get-MissingDeps {
-    # Unmet requirements, from the sidecar's own probe; a probe that cannot run reports nothing.
-    param([string]$python, [string]$dir)
-    $probe = Join-Path $dir "scripts\missing_runtime_deps.py"
-    $out = Invoke-Quiet { & $python $probe }
+    # What a pyproject or requirements file asks for that $python lacks, from the sidecar's probe;
+    # a probe that cannot run reports nothing.
+    param([string]$python, [string]$manifest)
+    $probe = Join-Path $PSScriptRoot "EEGResearch\scripts\missing_runtime_deps.py"
+    $out = Invoke-Quiet { & $python $probe $manifest }
     return @(($out -join ' ') -split '\s+' | Where-Object { $_ })
 }
 

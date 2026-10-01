@@ -206,6 +206,7 @@ npm run dev
 | `-NoEmotion` | FER+ off, and skips the 35 MB model fetch entirely. |
 | `-Optics` (`-OpticsPreset 103N`) | Headband optical channels. Refused without `-Muse`. |
 | `-LocalCalm` | `EEG_SPECTRUM_SOURCE=local`. Refused without `-Muse`, and refused outright by `start.sh`. |
+| `-Hosted` (`-BackendUrl`, `-FrontendOrigin`, `-LearnerToken`) | Student machine for the hosted site: bridge and sidecar only, pushing to the backend with the site's shared token. Refused without `-Muse` (the simulator streams unpaired, so it would push made-up EEG) and outright by `start.sh`. Tests: `test_launcher_hosted.py`. |
 
 **Every model-backed flag provisions its model at setup, not on the first frame of a lesson** — a
 4 MB download in front of a student reads as a broken feature rather than an incomplete install.
@@ -422,10 +423,11 @@ comes back only if a vitest bump drops vite 8 from that range. vitest and `@vite
 other exactly, so they move as one (the `vitest` Dependabot group). **Resolve with npm 11** (Node
 24): npm 10's arborist crashes on vitest 5's peer set with `reading 'edgesOut'`; `npm ci` is fine.
 
-**A worktree that borrows `node_modules` through a junction must drop the junction first.** `git
-worktree remove` deletes *through* a junction, so it empties the main checkout's `node_modules` from
-the top of the alphabet until a long path stops it. Remove the link with `cmd /c rmdir <link>`
-(which deletes only the link) before removing the worktree; if it already happened, `npm ci` restores it.
+**A worktree borrows from the main checkout in two ways that bite.** `git worktree remove` deletes
+*through* a `node_modules` junction, emptying the main checkout's copy (drop the link with
+`cmd /c rmdir <link>` first; `npm ci` restores it). And `EEGResearch/.venv` is an editable install
+of the main checkout, so sidecar tests run from a worktree import *its* `src` unless prefixed with
+`PYTHONPATH=<worktree>/EEGResearch`; `src.app.config.__file__` shows which.
 
 ### Two test-writing rules that came from real flakes
 

@@ -3,7 +3,7 @@
 # Usage: ./start.sh [--muse [--optics]] [--camera [--index N]] [--gaze [--no-emotion]]
 #   no flags = simulator; --muse = real Muse S (libMuse is Windows-only); --gaze implies --camera;
 #   --no-emotion skips the 35 MB FER+ model; --optics = headband PPG -> heart rate (Windows only).
-#   --local-calm is refused: this launcher always runs the simulator (use start.ps1 -Muse -LocalCalm).
+#   --local-calm and --hosted are refused: this launcher always runs the simulator (use start.ps1 -Muse).
 
 MUSE=false
 CAMERA=false
@@ -13,6 +13,7 @@ NO_EMOTION=false
 OPTICS=false
 OPTICS_PRESET=""
 LOCAL_CALM=false
+HOSTED=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --muse)       MUSE=true; shift ;;
@@ -23,6 +24,7 @@ while [[ $# -gt 0 ]]; do
         --optics)     OPTICS=true; shift ;;
         --preset)     OPTICS_PRESET="$2"; shift 2 ;;
         --local-calm) LOCAL_CALM=true; shift ;;
+        --hosted)     HOSTED=true; shift ;;
         *)            echo "unknown option: $1"; exit 1 ;;
     esac
 done
@@ -57,6 +59,12 @@ fi
 if [ "$LOCAL_CALM" = true ]; then
     echo "--local-calm needs a headband, and libMuse is Windows-only: this launcher always runs the simulator."
     echo "  Use start.ps1 -Muse -LocalCalm on Windows, or drop --local-calm."
+    exit 1
+fi
+# Same, and worse: the simulator streams unpaired, so a hosted run would push made-up EEG to the site.
+if [ "$HOSTED" = true ]; then
+    echo "--hosted needs a headband, and libMuse is Windows-only: this launcher always runs the simulator."
+    echo "  Use start.ps1 -Hosted -Muse on Windows."
     exit 1
 fi
 if [ -n "$OPTICS_PRESET" ] && [ "$OPTICS" != true ]; then

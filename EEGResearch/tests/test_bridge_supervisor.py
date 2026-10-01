@@ -53,6 +53,18 @@ def test_a_clean_exit_is_not_restarted(tmp_path):
     assert "not restarting" in res.stdout
 
 
+NO_RESTART_EXIT = 78  # main.cpp's kExitNoRestart
+
+
+def test_a_failure_the_bridge_says_a_restart_cannot_fix_is_not_restarted(tmp_path):
+    runs = tmp_path / "runs.txt"
+    exe = _stub_exe(tmp_path, NO_RESTART_EXIT, runs)
+    res = _run(exe, MaxRestarts=5, RestartDelaySeconds=0)
+    assert runs.read_text().count("run") == 1
+    assert res.returncode == NO_RESTART_EXIT, res.stdout + res.stderr
+    assert "a restart cannot fix" in res.stdout
+
+
 def test_a_missing_exe_is_refused_rather_than_looped(tmp_path):
     res = _run(tmp_path / "nowhere.exe", RestartDelaySeconds=0)
     assert res.returncode == 2

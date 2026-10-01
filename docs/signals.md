@@ -302,7 +302,10 @@ harness whose bridge starts connected is adopted without a scan, so both reconne
 `start.ps1 -Muse` launches in the bridge's window. It restarts the exe on a non-zero exit, prints
 every exit with its time and code, and gives up once more than five exits land inside ten minutes —
 so a persistent failure (a missing `libmuse.dll`, port 8765 taken) stops with its cause on screen
-rather than looping. A clean exit (Ctrl+C) is not restarted. It inherits `MUSE_ENABLE_OPTICS` and the
+rather than looping. A clean exit (Ctrl+C) is not restarted, and nor is exit code 78 (`kExitNoRestart`),
+the bridge saying a restart cannot help: its token folder is missing and cannot be created, or `LOCALAPPDATA` is
+unset. A token file that cannot be written in an existing folder exits 1 and is retried, since another program
+may hold it for a moment. It inherits `MUSE_ENABLE_OPTICS` and the
 rest from the window `start.ps1` set them in and reads none of them itself, so a restart lands on the
 configuration the session was launched with; nothing else has to change, because the sidecar's TCP
 adapter reconnects on its own and the page treats the restarted bridge's "not connected" as a drop.
@@ -492,13 +495,20 @@ scored — so a consumer of the raw stream belongs inside the drain, not on a se
 `%LOCALAPPDATA%\AdaptiveLearning\muse_bridge_<port>.token` — per port, so stations do not overwrite each other, and
 **only after it holds the port** (`SO_EXCLUSIVEADDRUSE`), so a second bridge that fails to bind cannot replace the
 running one's token — and closes any client whose first line is not `AUTH <token>` within 2 s, or whose line passes
-4 KiB. **There is no path override**: the bridge reads `getenv` and the sidecar reads `.env`, so a setting would be
+4 KiB. **There is no path override**: the bridge reads its process environment and the sidecar reads `.env`, so a setting would be
 honoured on one side only, and one path cannot name a file per station. Without it, whichever local process connected first while the sidecar was away (a web page's POST
 included) held the headband. The sidecar reads the file before each connect, so a restarted bridge's new token is
 picked up; no file means no bridge on that port, and it does not dial. **The bridge proves itself first**: the
 sidecar sends `CHALLENGE <nonce>` and sends its token only after `PROOF <HMAC-SHA256(token, nonce)>`, one challenge
 per connection. A process that took the port before the bridge, with a crashed run's token file still on disk, would
 otherwise be handed the token and could feed fabricated EEG. One running as the same user can read the file anyway.
+
+**In the bridge, an env var that can hold a path, and the path built from it, go through the wide APIs**
+(`GetEnvironmentVariableW`, `std::filesystem::path`, `CreateDirectoryW`); plain `getenv` is for the ASCII `MUSE_*`
+settings only. `getenv` returns the ANSI code page's best fit, so a user folder outside
+it (`Łódź`) comes back as one that does not exist and the token cannot be written. A failed write has its own message,
+never the port-conflict one. `EEGResearch/tests/test_bridge_token_path.py` runs the built exe against such a folder;
+it skips where no exe is built, which includes CI (that job only compiles).
 
 ### RMSSD is an enrichment, and a null one is normal
 

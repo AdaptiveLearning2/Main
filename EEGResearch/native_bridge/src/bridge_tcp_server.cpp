@@ -69,15 +69,37 @@ bool equal_constant_time(const std::string& a, const std::string& b) {
 
 } // namespace
 
-std::string BridgeTcpServer::token_path_from_env(unsigned short port) {
+std::filesystem::path BridgeTcpServer::token_path_from_env(unsigned short port) {
     // No override: the sidecar derives the same path, and one setting can't name a file per port.
-    const char* base = std::getenv("LOCALAPPDATA");
-    if (!base || !*base) {
+    // Wide calls only: getenv's ANSI best-fit turns a folder outside the code page into one that doesn't exist.
+    const DWORD needed = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+    if (needed <= 1) {
         return {};
     }
-    const std::string dir = std::string(base) + "\\AdaptiveLearning";
-    CreateDirectoryA(dir.c_str(), nullptr);
-    return dir + "\\muse_bridge_" + std::to_string(port) + ".token";
+    std::wstring base(needed, L'\0');
+    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", base.data(), needed);
+    if (length == 0 || length >= needed) {
+        return {};
+    }
+    base.resize(length);
+    const std::filesystem::path dir = std::filesystem::path(base) / L"AdaptiveLearning";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    return dir / (L"muse_bridge_" + std::to_wstring(port) + L".token");
+}
+
+std::string BridgeTcpServer::utf8(const std::filesystem::path& path) {
+    const std::wstring& wide = path.native();
+    if (wide.empty()) {
+        return {};
+    }
+    const int bytes = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()),
+                                          nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<size_t>(bytes > 0 ? bytes : 0), '\0');
+    if (bytes > 0) {
+        WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), out.data(), bytes,
+                            nullptr, nullptr);
+    }
+    return out;
 }
 
 BridgeTcpServer::BridgeTcpServer()
@@ -87,26 +109,27 @@ BridgeTcpServer::~BridgeTcpServer() {
     stop();
 }
 
-bool BridgeTcpServer::start(unsigned short port, const std::string& token_path) {
+BridgeTcpServer::StartResult BridgeTcpServer::start(unsigned short port,
+                                                   const std::filesystem::path& token_path) {
     if (started_) {
-        return true;
+        return StartResult::Started;
     }
 
     token_ = random_token();
     if (token_.empty() || token_path.empty()) {
         std::cerr << "No bridge token: LOCALAPPDATA is not set\n";
-        return false;
+        return StartResult::NoToken;
     }
 
     WSADATA wsa_data{};
     if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
-        return false;
+        return StartResult::NetworkFailed;
     }
 
     listen_socket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listen_socket_ == INVALID_SOCKET) {
         WSACleanup();
-        return false;
+        return StartResult::NetworkFailed;
     }
 
     sockaddr_in service{};
@@ -125,7 +148,7 @@ bool BridgeTcpServer::start(unsigned short port, const std::string& token_path) 
         closesocket(listen_socket_);
         listen_socket_ = INVALID_SOCKET;
         WSACleanup();
-        return false;
+        return StartResult::NetworkFailed;
     }
 
     if (listen(listen_socket_, 1) == SOCKET_ERROR) {
@@ -134,7 +157,7 @@ bool BridgeTcpServer::start(unsigned short port, const std::string& token_path) 
         closesocket(listen_socket_);
         listen_socket_ = INVALID_SOCKET;
         WSACleanup();
-        return false;
+        return StartResult::NetworkFailed;
     }
 
     // Only once the port is ours: a second bridge that fails to bind must not replace the running one's token.
@@ -142,18 +165,23 @@ bool BridgeTcpServer::start(unsigned short port, const std::string& token_path) 
         std::ofstream out(token_path, std::ios::trunc);
         out << token_;
         if (!out) {
-            std::cerr << "Could not write the bridge token to " << token_path << "\n";
+            std::error_code ec;
+            const bool have_dir = std::filesystem::is_directory(token_path.parent_path(), ec);
+            std::cerr << "Could not write the bridge token to " << utf8(token_path) << "\n"
+                      << (have_dir ? "The folder exists but the file could not be written (permissions?).\n"
+                                   : "Its folder does not exist and could not be created: check LOCALAPPDATA.\n")
+                      << "Port " << port << " was free; this is not a port conflict.\n";
             closesocket(listen_socket_);
             listen_socket_ = INVALID_SOCKET;
             WSACleanup();
-            return false;
+            return have_dir ? StartResult::TokenWriteFailed : StartResult::TokenFolderMissing;
         }
     }
 
     u_long nonblocking = 1;
     ioctlsocket(listen_socket_, FIONBIO, &nonblocking);
     started_ = true;
-    return true;
+    return StartResult::Started;
 }
 
 void BridgeTcpServer::stop() {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -10,8 +11,11 @@ public:
     BridgeTcpServer();
     ~BridgeTcpServer();
 
-    /** Listens on 127.0.0.1:port after writing a fresh token to token_path (see docs/signals.md). */
-    bool start(unsigned short port, const std::string& token_path);
+    enum class StartResult { Started, NoToken, NetworkFailed, TokenFolderMissing, TokenWriteFailed };
+
+    /** Listens on 127.0.0.1:port after writing a fresh token to token_path (see docs/signals.md).
+     *  The token results are fully explained on stderr; NetworkFailed leaves the advice to the caller. */
+    StartResult start(unsigned short port, const std::filesystem::path& token_path);
     void stop();
     void send_json_line(const std::string& payload);
 
@@ -22,7 +26,10 @@ public:
     long long dropped_lines() const noexcept { return dropped_lines_; }
 
     /** %LOCALAPPDATA%\AdaptiveLearning\muse_bridge_<port>.token (one per bridge); the sidecar derives the same. */
-    static std::string token_path_from_env(unsigned short port);
+    static std::filesystem::path token_path_from_env(unsigned short port);
+
+    /** A path as UTF-8, for logging. */
+    static std::string utf8(const std::filesystem::path& path);
 
 private:
     void try_accept_client();

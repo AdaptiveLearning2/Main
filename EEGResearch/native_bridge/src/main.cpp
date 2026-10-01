@@ -12,6 +12,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <windows.h>
 
 #if defined(ENABLE_LIBMUSE)
 #include <winrt/Windows.Foundation.h>
@@ -19,6 +20,25 @@
 
 namespace {
 std::atomic<bool> g_keep_running{true};
+
+// sysexits' EX_CONFIG: a restart cannot fix this environment, so run_bridge_supervised.ps1 stops on it.
+constexpr int kExitNoRestart = 78;
+
+// UTF-8 output while the bridge runs, then the console's old code page back: run by hand, it is the caller's.
+class Utf8ConsoleOutput {
+public:
+    Utf8ConsoleOutput() : previous_(GetConsoleOutputCP()) { SetConsoleOutputCP(CP_UTF8); }
+    ~Utf8ConsoleOutput() {
+        if (previous_ != 0) {  // 0: there was no console
+            SetConsoleOutputCP(previous_);
+        }
+    }
+    Utf8ConsoleOutput(const Utf8ConsoleOutput&) = delete;
+    Utf8ConsoleOutput& operator=(const Utf8ConsoleOutput&) = delete;
+
+private:
+    UINT previous_;
+};
 
 void append_json_quoted_string(std::ostringstream& o, const std::string& s) {
     o << '"';
@@ -306,6 +326,8 @@ unsigned short read_port_from_env() {
 } // namespace
 
 int main() {
+    // Paths are printed as UTF-8, which a console on an OEM code page garbles.
+    const Utf8ConsoleOutput utf8_console;
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);
 
@@ -326,8 +348,17 @@ int main() {
     }
 
     BridgeTcpServer server;
-    const std::string token_path = BridgeTcpServer::token_path_from_env(kPort);
-    if (!server.start(kPort, token_path)) {
+    const std::filesystem::path token_path = BridgeTcpServer::token_path_from_env(kPort);
+    const BridgeTcpServer::StartResult started = server.start(kPort, token_path);
+    // start() has already said why; only a socket failure gets the port-conflict advice.
+    if (started == BridgeTcpServer::StartResult::NoToken ||
+        started == BridgeTcpServer::StartResult::TokenFolderMissing) {
+        return kExitNoRestart;
+    }
+    if (started == BridgeTcpServer::StartResult::TokenWriteFailed) {
+        return 1;  // the folder is there and another program may hold the file briefly, so a restart can help
+    }
+    if (started == BridgeTcpServer::StartResult::NetworkFailed) {
         std::cerr << "Failed to start TCP server on 127.0.0.1:" << kPort << "\n";
         std::cerr << "Common causes:\n";
         std::cerr << "- Another bridge/process is already listening on this port\n";
@@ -348,7 +379,7 @@ int main() {
     }
 
     std::cout << "muse_native_bridge listening on 127.0.0.1:" << kPort << "\n";
-    std::cout << "Clients must first send \"AUTH <token>\"; token written to " << token_path << "\n";
+    std::cout << "Clients must first send \"AUTH <token>\"; token written to " << BridgeTcpServer::utf8(token_path) << "\n";
     std::cout << "TCP commands (JSON line): {\"cmd\":\"refresh\"} | {\"cmd\":\"connect\",\"name\":\"Muse-XXXX\"} | "
                  "{\"cmd\":\"disconnect\"}\n";
     std::cout << "Press Ctrl+C to stop\n";

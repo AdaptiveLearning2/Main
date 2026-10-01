@@ -500,8 +500,9 @@ sidecar sends `CHALLENGE <nonce>` and sends its token only after `PROOF <HMAC-SH
 per connection. A process that took the port before the bridge, with a crashed run's token file still on disk, would
 otherwise be handed the token and could feed fabricated EEG. One running as the same user can read the file anyway.
 
-**The bridge reads Windows paths and env vars through the wide APIs** (`GetEnvironmentVariableW`,
-`std::filesystem::path`, `CreateDirectoryW`). `getenv` returns the ANSI code page's best fit, so a user folder outside
+**In the bridge, an env var that can hold a path, and the path built from it, go through the wide APIs**
+(`GetEnvironmentVariableW`, `std::filesystem::path`, `CreateDirectoryW`); plain `getenv` is for the ASCII `MUSE_*`
+settings only. `getenv` returns the ANSI code page's best fit, so a user folder outside
 it (`Łódź`) comes back as one that does not exist and the token cannot be written. A failed write has its own message,
 never the port-conflict one. `EEGResearch/tests/test_bridge_token_path.py` runs the built exe against such a folder;
 it skips where no exe is built, which includes CI (that job only compiles).

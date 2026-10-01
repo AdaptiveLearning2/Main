@@ -326,7 +326,8 @@ function Get-BridgeCommand {
         $cmd = "`$env:MUSE_ENABLE_OPTICS='1'; $cmd"
     }
     if ($hosted) {
-        $cmd = (Get-ClearCommand @('MUSE_BRIDGE_PORT', 'MUSE_ENABLE_OPTICS', 'MUSE_OPTICS_PRESET', 'MUSE_LIVENESS_TIMEOUT_MS')) + $cmd
+        $cmd = (Get-ClearCommand @('MUSE_BRIDGE_PORT', 'MUSE_ENABLE_OPTICS', 'MUSE_OPTICS_PRESET',
+            'MUSE_LIVENESS_TIMEOUT_MS', 'MUSE_AUTO_RECONNECT')) + $cmd
     }
     return $cmd
 }

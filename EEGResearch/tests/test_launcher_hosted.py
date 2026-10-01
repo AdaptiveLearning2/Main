@@ -180,9 +180,11 @@ def test_a_local_run_adds_the_local_origins_and_keeps_every_other(tmp_path, curr
 
 
 LEFTOVERS = {"EEG_SOURCE": "sim", "API_TOKEN": "t", "EEG_DEVICES": "default:sim", "MUSE_BRIDGE_PORT": "8766"}
-BRIDGE_VARS = sorted(set(re.findall(r'getenv\("([A-Z_]+)"\)', "".join(
-    p.read_text(encoding="utf-8", errors="ignore")
-    for p in (ROOT / "EEGResearch" / "native_bridge" / "src").rglob("*") if p.is_file()))) - {"LOCALAPPDATA"})
+_BRIDGE_SRC = "".join(p.read_text(encoding="utf-8", errors="ignore")
+                      for p in (ROOT / "EEGResearch" / "native_bridge" / "src").rglob("*") if p.is_file())
+# Direct getenv names plus every "MUSE_*" literal: a name read through a helper (env_flag_off) has no getenv beside it.
+BRIDGE_VARS = sorted((set(re.findall(r'getenv\("([A-Z_]+)"\)', _BRIDGE_SRC))
+                      | set(re.findall(r'"(MUSE_[A-Z_]+)"', _BRIDGE_SRC))) - {"LOCALAPPDATA"})
 
 
 def _clean_env(where: str, leftovers: dict) -> dict:
@@ -237,7 +239,7 @@ def test_the_hosted_sidecar_window_reads_its_env_file_not_this_session(tmp_path,
 ], ids=["no-optics", "optics", "optics-preset"])
 def test_the_hosted_bridge_window_reads_only_what_the_flags_set(tmp_path, where, optics, preset, expected):
     # Every name the bridge's source reads is left over as "9"; the stub supervisor prints what the bridge gets.
-    assert "MUSE_BRIDGE_PORT" in BRIDGE_VARS, BRIDGE_VARS  # an empty scan would pass everything below
+    assert {"MUSE_BRIDGE_PORT", "MUSE_AUTO_RECONNECT"} <= set(BRIDGE_VARS), BRIDGE_VARS  # a scan that misses passes
     stub = tmp_path / "supervisor.ps1"
     stub.write_text("param([string]$Exe)\n" + "".join(f'"{n}=" + $env:{n}\n' for n in BRIDGE_VARS), encoding="utf-8")
     leftovers = {n: "9" for n in BRIDGE_VARS}

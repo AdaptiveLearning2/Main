@@ -304,6 +304,37 @@ def test_a_tampered_model_is_refused_at_load_not_only_at_setup(tmp_path, monkeyp
         _TasksMesh(str(tampered))
 
 
+@pytest.mark.parametrize("extra", [-1, 1])
+def test_a_model_of_the_wrong_size_is_refused_at_load(tmp_path, extra):
+    from src.app.services.face_landmarks import MODEL_BYTES, _TasksMesh
+
+    wrong = tmp_path / "face_landmarker.task"
+    wrong.write_bytes(b"\x01" * (MODEL_BYTES + extra))
+
+    with pytest.raises(ValueError, match="refusing to load unverified"):
+        _TasksMesh(str(wrong))
+
+
+def test_the_real_model_with_a_trailing_byte_is_refused_at_load(tmp_path):
+    from src.app.services.face_landmarks import _TasksMesh, default_model_path, verify
+
+    source = default_model_path()
+    if not verify(source):
+        pytest.skip(f"no verified landmark model at {source}")
+    padded = tmp_path / "face_landmarker.task"
+    padded.write_bytes(source.read_bytes() + b"\x00")
+
+    with pytest.raises(ValueError, match="refusing to load unverified"):
+        _TasksMesh(str(padded))
+
+
+def test_a_missing_model_is_named_at_load(tmp_path):
+    from src.app.services.face_landmarks import _TasksMesh
+
+    with pytest.raises(FileNotFoundError, match="no face landmark model"):
+        _TasksMesh(str(tmp_path / "absent.task"))
+
+
 def test_a_locked_model_file_reports_what_happened(tmp_path, monkeypatch):
     """Windows locks open files; an earlier `-Gaze` sidecar may still hold the model."""
     from src.app.services import face_landmarks as fl

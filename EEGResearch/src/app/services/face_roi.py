@@ -7,7 +7,7 @@ derived image ever leaves this module or is retained between calls.
 from __future__ import annotations
 
 from dataclasses import dataclass
-
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -103,9 +103,17 @@ class FaceLocator:
         else:
             import cv2  # noqa: PLC0415 -- lazy by design
 
-            self._cascade = cv2.CascadeClassifier(
-                cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-            )
+            path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
+            self._cascade = cv2.CascadeClassifier()
+            try:
+                # Read by Python: OpenCV cannot open a non-ASCII path on Windows.
+                xml = path.read_text(encoding="utf-8")
+                storage = cv2.FileStorage()
+                # open(), not the constructor, which reports a parse error as a SystemError.
+                storage.open(xml, cv2.FILE_STORAGE_READ | cv2.FILE_STORAGE_MEMORY)
+                self._cascade.read(storage.getFirstTopLevelNode())
+            except (OSError, UnicodeDecodeError, cv2.error) as exc:  # missing, or damaged
+                raise RuntimeError("OpenCV Haar cascade failed to load") from exc
             if self._cascade.empty():
                 raise RuntimeError("OpenCV Haar cascade failed to load")
         self.redetect_every = redetect_every

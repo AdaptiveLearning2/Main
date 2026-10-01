@@ -135,16 +135,19 @@ def default_model_path() -> Path:
     return Path(__file__).resolve().parents[3] / "models" / "face_landmarker.task"
 
 
+def _verified_bytes(path: Path) -> bytes | None:
+    """The file's bytes if they are the model this code was written against, else None."""
+    with path.open("rb") as handle:
+        data = handle.read(MODEL_BYTES + 1)  # one byte past, so a longer file reads as the wrong size
+    if len(data) != MODEL_BYTES or hashlib.sha256(data).hexdigest() != MODEL_SHA256:
+        return None
+    return data
+
+
 def verify(path: Path) -> bool:
     """Whether the file on disk is the model this code was written against."""
     path = Path(path)
-    if not path.exists() or path.stat().st_size != MODEL_BYTES:
-        return False
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1 << 20):
-            digest.update(chunk)
-    return digest.hexdigest() == MODEL_SHA256
+    return path.is_file() and _verified_bytes(path) is not None
 
 
 def ensure_model(path: Path | None = None, *, allow_download: bool = True) -> Path:
@@ -207,14 +210,18 @@ class _TasksMesh:
     def __init__(self, model_path: str | None = None) -> None:
         # Verified before importing MediaPipe, so the error names the real cause.
         path = Path(model_path or os.environ.get(MODEL_ENV) or default_model_path())
-        if path.is_file() and not verify(path):
-            # Checked at load too, not only at install.
-            raise ValueError(
-                f"refusing to load unverified landmark model at {path}; "
-                f"expected sha256 {MODEL_SHA256[:16]}... -- re-provision it "
-                f"with ./start.ps1 -Gaze"
-            )
-        if not path.is_file():
+        if path.is_file():
+            # The bytes checked are the bytes loaded: MediaPipe gets a buffer, never the
+            # path, which its C API cannot open when non-ASCII on Windows.
+            model = _verified_bytes(path)
+            if model is None:
+                # Checked at load too, not only at install.
+                raise ValueError(
+                    f"refusing to load unverified landmark model at {path}; "
+                    f"expected sha256 {MODEL_SHA256[:16]}... -- re-provision it "
+                    f"with ./start.ps1 -Gaze"
+                )
+        else:
             raise FileNotFoundError(
                 f"no face landmark model at {path}.\n"
                 f"MediaPipe 1.0.0 does not ship one -- the Tasks API loads it "
@@ -231,10 +238,12 @@ class _TasksMesh:
 
         self._np = np
         self._mp = mp
+        # MediaPipe gets a raw pointer into these bytes; they must outlive the landmarker.
+        self._model = model
 
         self._landmarker = vision.FaceLandmarker.create_from_options(
             vision.FaceLandmarkerOptions(
-                base_options=mp_python.BaseOptions(model_asset_path=str(path)),
+                base_options=mp_python.BaseOptions(model_asset_buffer=model),
                 running_mode=vision.RunningMode.VIDEO,
                 num_faces=1,
                 min_face_detection_confidence=0.5,

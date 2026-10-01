@@ -262,12 +262,12 @@ would disable the poller on a later headband-only run.
 
 ### Two `start.ps1` rules that cost whole runs
 
-**Guard every read of a `.env` with `Test-Path`.** `Set-EnvKey` returns silently when the file is
-missing, so nothing before the read notices, and `Select-String -Path` on a missing file is a
-*terminating* error under this file's `$ErrorActionPreference` — a first-ever `-Camera` run on a
-fresh checkout aborted the launcher before anything started. Guard the *match* too:
-`.Matches[0].Groups[1]` on an absent key indexes a null array and fails the same way one step later.
-`start.sh` carries the same guard.
+**Guard every read of a `.env` with `Test-Path`, and write one only through `Set-EnvKey`.**
+`Set-EnvKey` returns silently when the file is missing, so nothing before the read notices, and
+`Select-String -Path` on a missing file is a *terminating* error under this file's
+`$ErrorActionPreference`. Guard the *match* too: `.Matches[0].Groups[1]` on an absent key indexes a
+null array and fails the same way one step later. `start.sh` carries the same guard. 5.1's
+`Set-Content` writes ANSI, which the sidecar cannot decode once an install path is non-ASCII.
 
 **Redirect a native command's stderr only through `Invoke-Quiet`.** PowerShell 5.1 wraps each
 stderr line from an exe in an ErrorRecord, which `$ErrorActionPreference = "Stop"` makes

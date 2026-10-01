@@ -285,15 +285,16 @@ function Check-Venv {
         Pop-Location
         Install-VenvDeps $dir
     } else {
-        # A venv keeps the dependency list it was installed with, so what a pulled pyproject or
-        # requirements.txt adds or changes is installed here, before a window starts and dies on the import.
+        # A venv keeps the dependency list it was installed with, so what a pulled list adds is installed
+        # here, before a window dies on the import. A requirements.txt pin held at another version only
+        # warns: it may be a bump on trial, and reinstalling would revert it or, offline, stop the launch.
         $editable = Test-Path (Join-Path $dir "pyproject.toml")
         $manifest = Join-Path $dir $(if ($editable) { "pyproject.toml" } else { "requirements.txt" })
-        $missing = @(Get-MissingDeps $pyExe $manifest)
+        $missing = @(Get-MissingDeps $pyExe $manifest -Absent:(-not $editable))
         if ($missing.Count -gt 0) {
             Write-Host "  Installing what this venv lacks: $($missing -join ', ')" -ForegroundColor Yellow
             Install-VenvDeps $dir
-            $missing = @(Get-MissingDeps $pyExe $manifest)
+            $missing = @(Get-MissingDeps $pyExe $manifest -Absent:(-not $editable))
             if ($missing.Count -gt 0) {
                 $fix = if ($editable) { "-e ." } else { "-r requirements.txt" }
                 Write-Host "  ERROR: $dir\.venv still lacks $($missing -join ', '). From that folder run:" -ForegroundColor Red
@@ -301,15 +302,23 @@ function Check-Venv {
                 exit 1
             }
         }
+        if (-not $editable) {
+            $other = @(Get-MissingDeps $pyExe $manifest)
+            if ($other.Count -gt 0) {
+                Write-Host "  WARNING: $dir\.venv differs from these requirements.txt pins: $($other -join ', ')" -ForegroundColor Yellow
+                Write-Host "    To match them, from that folder run: .\.venv\Scripts\pip install -r requirements.txt" -ForegroundColor Yellow
+            }
+        }
     }
 }
 
 function Get-MissingDeps {
-    # What a pyproject or requirements file asks for that $python lacks, from the sidecar's probe;
-    # a probe that cannot run reports nothing.
-    param([string]$python, [string]$manifest)
+    # What a pyproject or requirements file asks for that $python lacks, from the sidecar's probe; with
+    # -Absent, only packages not installed at all. A probe that cannot run reports nothing.
+    param([string]$python, [string]$manifest, [switch]$Absent)
     $probe = Join-Path $PSScriptRoot "EEGResearch\scripts\missing_runtime_deps.py"
-    $out = Invoke-Quiet { & $python $probe $manifest }
+    $flags = @(if ($Absent) { "--absent" })
+    $out = Invoke-Quiet { & $python $probe $manifest @flags }
     return @(($out -join ' ') -split '\s+' | Where-Object { $_ })
 }
 

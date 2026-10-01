@@ -271,20 +271,30 @@ def built_venv(tmp_path_factory):
     return project
 
 
-VENV_CASES = pytest.mark.parametrize("before,after,installs,refused", [
-    ("", "", 0, False),
-    ("httpx", "", 1, False),
-    ("httpx", "httpx", 1, True),
-], ids=["complete", "healed", "still-missing"])
-# The sidecar installs editable from its pyproject, the backend from its requirements.txt.
-MANIFESTS = pytest.mark.parametrize("manifest,fix", [("pyproject.toml", "pip install -e ."),
-                                                     ("requirements.txt", "pip install -r requirements.txt")],
-                                    ids=["pyproject", "requirements"])
+# The probe's first answer and its later ones; the probes made, A with --absent; then the outcome.
+# The backend's exact pins install only what is absent, and warn about a pin held at another version.
+VENV_CASES = pytest.mark.parametrize("manifest,before,after,probes,installs,refused,warned", [
+    ("pyproject.toml", "", "", "F", 0, False, False),
+    ("pyproject.toml", "httpx", "", "FF", 1, False, False),
+    ("pyproject.toml", "httpx", "httpx", "FF", 1, True, False),
+    ("requirements.txt", "", "", "AF", 0, False, False),
+    ("requirements.txt", "httpx", "", "AAF", 1, False, False),
+    ("requirements.txt", "httpx", "httpx", "AA", 1, True, False),
+    ("requirements.txt", "", "fastapi==9", "AF", 0, False, True),
+], ids=["pyproject-complete", "pyproject-healed", "pyproject-still-missing", "requirements-complete",
+        "requirements-healed", "requirements-still-missing", "requirements-other-version"])
+FIX = {"pyproject.toml": "pip install -e .", "requirements.txt": "pip install -r requirements.txt"}
+WARNING = "differs from these requirements.txt pins: fastapi==9"
 PROBE_FILES = pytest.mark.parametrize("manifest,content", [
-    ("pyproject.toml", '[project]\nname = "x"\nversion = "0"\ndependencies = [\n  "pytest>=1",\n'
+    ("pyproject.toml", '[project]\nname = "x"\nversion = "0"\ndependencies = [\n  "pytest>=1",\n  "pydantic>=9999",\n'
                        '  "no-such-distribution-anywhere>=1",\n  "nor-this-one>=2"\n]\n'),
-    ("requirements.txt", "pytest>=1\nno-such-distribution-anywhere>=1\nnor-this-one>=2\n"),
+    ("requirements.txt", "pytest>=1\npydantic>=9999\nno-such-distribution-anywhere>=1\nnor-this-one>=2\n"),
 ], ids=["pyproject", "requirements"])
+# pydantic is installed but older than asked, so it is named unless only absent packages are.
+PROBE_ANSWERS = pytest.mark.parametrize("absent,expected", [
+    (False, ["pydantic>=9999", "no-such-distribution-anywhere>=1", "nor-this-one>=2"]),
+    (True, ["no-such-distribution-anywhere>=1", "nor-this-one>=2"]),
+], ids=["all", "absent"])
 
 
 def _with_probe(tmp_path: Path) -> Path:
@@ -296,42 +306,45 @@ def _with_probe(tmp_path: Path) -> Path:
 
 
 @WINDOWS
-@MANIFESTS
 @VENV_CASES
-def test_check_venv_installs_what_a_pulled_dependency_list_added(tmp_path, built_venv, manifest, fix,
-                                                                 before, after, installs, refused):
-    for name in ("pyproject.toml", "requirements.txt"):
+def test_check_venv_installs_what_a_pulled_dependency_list_added(tmp_path, built_venv, manifest, before, after,
+                                                                 probes, installs, refused, warned):
+    for name in FIX:
         (built_venv / name).unlink(missing_ok=True)
     (built_venv / manifest).write_text("", encoding="utf-8")
     # `python` on PATH must match the venv's version, or Check-Venv rebuilds instead of probing.
     env = dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"])
     r = _ps(tmp_path, (
         "$script:probes = 0\n"
-        "function Get-MissingDeps { param($python, $manifest); $script:probes++\n"
-        "    Write-Host \"PROBE $python $manifest\"\n"
+        "function Get-MissingDeps { param($python, $manifest, [switch]$Absent); $script:probes++\n"
+        "    Write-Host \"PROBE $python $manifest $(if ($Absent) { 'A' } else { 'F' })\"\n"
         f"    if ($script:probes -eq 1) {{ @('{before}') | Where-Object {{ $_ }} }}"
         f" else {{ @('{after}') | Where-Object {{ $_ }} }} }}\n"
         "function Install-VenvDeps { param($dir); 'INSTALL' }\n"
         f"Check-Venv '{built_venv}'\n"
         "'RETURNED'\n"), "Check-Venv", "Invoke-Quiet", env=env)
     out = r.stdout.splitlines()
-    probe = f"PROBE {built_venv / '.venv' / 'Scripts' / 'python.exe'} {built_venv / manifest}"
-    assert [line for line in out if line.startswith("PROBE ")] == [probe] * (1 + installs), r.stdout
+    python = built_venv / ".venv" / "Scripts" / "python.exe"
+    assert [line for line in out if line.startswith("PROBE ")] == [
+        f"PROBE {python} {built_venv / manifest} {kind}" for kind in probes], r.stdout
     assert out.count("INSTALL") == installs, (r.stdout, r.stderr)
     assert (r.returncode, "RETURNED" in out) == ((1, False) if refused else (0, True)), (r.stdout, r.stderr)
+    assert (WARNING in r.stdout) == warned, r.stdout
     if refused:
-        assert "still lacks httpx" in r.stdout and fix in r.stdout
+        assert "still lacks httpx" in r.stdout and FIX[manifest] in r.stdout
 
 
 @WINDOWS
 @PROBE_FILES
-def test_get_missing_deps_reports_every_requirement_the_probe_prints(tmp_path, manifest, content):
+@PROBE_ANSWERS
+def test_get_missing_deps_reports_every_requirement_the_probe_prints(tmp_path, manifest, content, absent, expected):
     _with_probe(tmp_path)
     (tmp_path / manifest).write_text(content, encoding="utf-8")
-    r = _ps(tmp_path, (f"$m = @(Get-MissingDeps '{sys.executable}' '{tmp_path / manifest}')\n"
+    switch = " -Absent" if absent else ""
+    r = _ps(tmp_path, (f"$m = @(Get-MissingDeps '{sys.executable}' '{tmp_path / manifest}'{switch})\n"
                        "\"COUNT=$($m.Count)\"; $m\n"), "Get-MissingDeps", "Invoke-Quiet")
     assert r.returncode == 0, r.stderr
-    assert r.stdout.splitlines() == ["COUNT=2", "no-such-distribution-anywhere>=1", "nor-this-one>=2"]
+    assert r.stdout.splitlines() == [f"COUNT={len(expected)}", *expected]
 
 
 def _stub(path: Path, body: str) -> None:
@@ -357,15 +370,14 @@ def _sh(tmp_path: Path, body: str, *functions: str) -> subprocess.CompletedProce
 
 
 @pytest.mark.skipif(BASH is None, reason="needs bash")
-@MANIFESTS
 @VENV_CASES
-def test_start_sh_check_venv_installs_what_a_pulled_dependency_list_added(tmp_path, manifest, fix,
-                                                                          before, after, installs, refused):
+def test_start_sh_check_venv_installs_what_a_pulled_dependency_list_added(tmp_path, manifest, before, after,
+                                                                          probes, installs, refused, warned):
     mode = "editable" if manifest == "pyproject.toml" else "requirements"
     project = _sh_venv(tmp_path, "echo 3.14")  # PYTHON is this stub too, so check_venv probes, not rebuilds
     probed, calls = (tmp_path / "probed").as_posix(), (tmp_path / "calls").as_posix()
     r = _sh(tmp_path, (
-        f"missing_deps() {{ echo \"$1 $2\" >> '{calls}'\n"
+        f"missing_deps() {{ echo \"$*\" >> '{calls}'\n"
         f"    if [ -e '{probed}' ]; then echo '{after}'; else : > '{probed}'; echo '{before}'; fi; }}\n"
         'install_venv_deps() { echo "INSTALL $2"; }\n'
         f"PYTHON='{(project / '.venv' / 'bin' / 'python').as_posix()}'\n"
@@ -375,9 +387,11 @@ def test_start_sh_check_venv_installs_what_a_pulled_dependency_list_added(tmp_pa
     assert out.count(f"INSTALL {mode}") == installs, (r.stdout, r.stderr)
     assert (r.returncode, "RETURNED" in out) == ((1, False) if refused else (0, True)), (r.stdout, r.stderr)
     probe = f"{project.as_posix()} {project.as_posix()}/{manifest}"
-    assert Path(calls).read_text(encoding="utf-8").splitlines() == [probe] * (1 + installs)
+    assert Path(calls).read_text(encoding="utf-8").splitlines() == [
+        probe + (" --absent" if kind == "A" else "") for kind in probes]
+    assert (WARNING in r.stdout) == warned, r.stdout
     if refused:
-        assert "still lacks httpx" in r.stdout and fix in r.stdout
+        assert "still lacks httpx" in r.stdout and FIX[manifest] in r.stdout
 
 
 @pytest.mark.skipif(BASH is None, reason="needs bash")
@@ -395,14 +409,18 @@ def test_start_sh_check_venv_builds_a_missing_venv_and_installs_into_it(tmp_path
 
 @pytest.mark.skipif(BASH is None, reason="needs bash")
 @PROBE_FILES
-def test_start_sh_missing_deps_reports_every_requirement_the_probe_prints(tmp_path, manifest, content):
+@PROBE_ANSWERS
+def test_start_sh_missing_deps_reports_every_requirement_the_probe_prints(tmp_path, manifest, content, absent,
+                                                                          expected):
     project = _sh_venv(tmp_path, f"exec '{Path(sys.executable).as_posix()}' \"$@\"", name="project")
     eeg = _with_probe(tmp_path)  # apart from the venv's folder, as the backend's is
     (project / manifest).write_text(content, encoding="utf-8")
+    flag = " --absent" if absent else ""
     r = _sh(tmp_path, (f"EEG_DIR='{eeg.as_posix()}'\n"
-                       f"missing_deps '{project.as_posix()}' '{(project / manifest).as_posix()}'\n"), "missing_deps")
+                       f"missing_deps '{project.as_posix()}' '{(project / manifest).as_posix()}'{flag}\n"),
+            "missing_deps")
     assert r.returncode == 0, r.stderr
-    assert r.stdout.split() == ["no-such-distribution-anywhere>=1", "nor-this-one>=2"]
+    assert r.stdout.split() == expected
 
 
 @pytest.mark.skipif(BASH is None, reason="needs bash")

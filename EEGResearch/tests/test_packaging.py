@@ -129,10 +129,11 @@ def _manifest_with(tmp_path: Path, deps: list[str], kind: str) -> Path:
     return path
 
 
-def _missing(manifest: Path, blocked: bool = False, site: Path | None = None) -> list[str]:
+def _missing(manifest: Path, blocked: bool = False, site: Path | None = None, absent: bool = False) -> list[str]:
     prefix = ["-c", BLOCK_PACKAGING] if blocked else []
     env = dict(os.environ, PYTHONPATH=str(site)) if site else None
-    run = subprocess.run([sys.executable, *prefix, str(MISSING_DEPS), str(manifest)],
+    flags = ["--absent"] if absent else []
+    run = subprocess.run([sys.executable, *prefix, str(MISSING_DEPS), str(manifest), *flags],
                          capture_output=True, text=True, check=True, env=env)
     return run.stdout.split()
 
@@ -197,6 +198,21 @@ def test_the_dependency_probe_names_what_an_extra_adds_that_this_interpreter_lac
     ]) + "\n", encoding="utf-8")
     manifest = _manifest_with(tmp_path, ["probe-extra-fixture[more]>=1"], kind)
     assert _missing(manifest, site=tmp_path / "site") == ["no-such-distribution-anywhere>=2"]
+
+
+def test_the_dependency_probe_names_only_what_is_not_installed_when_asked(tmp_path):
+    """--absent, as the launchers ask it of the backend's exact pins; an installed extra is still looked into."""
+    info = tmp_path / "site" / "probe_extra_fixture-1.0.dist-info"
+    info.mkdir(parents=True)
+    (info / "METADATA").write_text("\n".join([
+        "Metadata-Version: 2.1", "Name: probe-extra-fixture", "Version: 1.0", "Provides-Extra: more",
+        'Requires-Dist: pytest==1.0; extra == "more"',  # installed, at another version
+        'Requires-Dist: no-such-distribution-anywhere>=2; extra == "more"',
+    ]) + "\n", encoding="utf-8")
+    manifest = _manifest_with(tmp_path, ["pydantic==1.0", "probe-extra-fixture[more]==2.0", "no-such-dist==1"],
+                              "requirements")
+    unmet = _missing(manifest, site=tmp_path / "site", absent=True)
+    assert unmet == ["no-such-distribution-anywhere>=2", "no-such-dist==1"]
 
 
 @KINDS

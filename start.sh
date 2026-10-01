@@ -185,19 +185,29 @@ check_venv() {
         popd > /dev/null
         install_venv_deps "$dir" "$mode"
     else
-        # A venv keeps the dependency list it was installed with; see Check-Venv in start.ps1.
-        local manifest="$dir/pyproject.toml" fix="-e ."
-        if [ "$mode" != "editable" ]; then manifest="$dir/requirements.txt"; fix="-r requirements.txt"; fi
+        # A venv keeps the dependency list it was installed with, and a requirements.txt pin held at
+        # another version only warns; see Check-Venv in start.ps1.
+        local manifest="$dir/pyproject.toml" fix="-e ." absent=""
+        if [ "$mode" != "editable" ]; then
+            manifest="$dir/requirements.txt"; fix="-r requirements.txt"; absent="--absent"
+        fi
         local missing
-        missing="$(missing_deps "$dir" "$manifest")"
+        missing="$(missing_deps "$dir" "$manifest" $absent)"
         if [ -n "$missing" ]; then
             echo -e "  ${YELLOW}Installing what this venv lacks: ${missing// /, }${NC}"
             install_venv_deps "$dir" "$mode"
-            missing="$(missing_deps "$dir" "$manifest")"
+            missing="$(missing_deps "$dir" "$manifest" $absent)"
             if [ -n "$missing" ]; then
                 echo -e "  ${RED}ERROR: $dir/.venv still lacks ${missing// /, }. From that folder run:${NC}"
                 echo -e "  ${YELLOW}  .venv/bin/pip install $fix${NC}"
                 exit 1
+            fi
+        fi
+        if [ -n "$absent" ]; then
+            missing="$(missing_deps "$dir" "$manifest")"
+            if [ -n "$missing" ]; then
+                echo -e "  ${YELLOW}WARNING: $dir/.venv differs from these requirements.txt pins: ${missing// /, }${NC}"
+                echo -e "  ${YELLOW}  To match them, from that folder run: .venv/bin/pip install -r requirements.txt${NC}"
             fi
         fi
     fi
@@ -205,8 +215,8 @@ check_venv() {
 
 missing_deps() {
     # What a pyproject or requirements file ($2) asks for that a venv ($1) lacks, from the sidecar's
-    # probe; a probe that cannot run reports nothing.
-    "$1/.venv/bin/python" "$EEG_DIR/scripts/missing_runtime_deps.py" "$2" 2>/dev/null
+    # probe; with --absent as $3, only packages not installed at all. A probe that cannot run reports nothing.
+    "$1/.venv/bin/python" "$EEG_DIR/scripts/missing_runtime_deps.py" "${@:2}" 2>/dev/null
 }
 
 install_venv_deps() {

@@ -272,15 +272,44 @@ function Check-Venv {
     if ($needRebuild) {
         Push-Location $dir
         python -m venv .venv
+        Pop-Location
+        Install-VenvDeps $dir
+    } elseif (Test-Path (Join-Path $dir "pyproject.toml")) {
+        # An editable install keeps the dependency list it was installed with, so what a pulled
+        # pyproject adds or raises is installed here, before a window starts and dies on the import.
+        $missing = @(Get-MissingDeps $pyExe $dir)
+        if ($missing.Count -gt 0) {
+            Write-Host "  Installing what this venv lacks: $($missing -join ', ')" -ForegroundColor Yellow
+            Install-VenvDeps $dir
+            $missing = @(Get-MissingDeps $pyExe $dir)
+            if ($missing.Count -gt 0) {
+                Write-Host "  ERROR: $dir\.venv still lacks $($missing -join ', '). From that folder run:" -ForegroundColor Red
+                Write-Host "    .\.venv\Scripts\pip install -e ." -ForegroundColor Yellow
+                exit 1
+            }
+        }
+    }
+}
+
+function Get-MissingDeps {
+    # Unmet requirements, from the sidecar's own probe; a probe that cannot run reports nothing.
+    param([string]$python, [string]$dir)
+    $probe = Join-Path $dir "scripts\missing_runtime_deps.py"
+    $out = Invoke-Quiet { & $python $probe }
+    return @(($out -join ' ') -split '\s+' | Where-Object { $_ })
+}
+
+function Install-VenvDeps {
+    param([string]$dir)
+    Push-Location $dir
+    try {
         $pip = Join-Path $dir ".venv\Scripts\pip.exe"
-        $setup = Join-Path $dir "pyproject.toml"
-        if (Test-Path $setup) {
+        if (Test-Path (Join-Path $dir "pyproject.toml")) {
             & $pip install -e . -q
         } else {
             & $pip install -r requirements.txt -q
         }
-        Pop-Location
-    }
+    } finally { Pop-Location }
 }
 
 function Get-ClearCommand {

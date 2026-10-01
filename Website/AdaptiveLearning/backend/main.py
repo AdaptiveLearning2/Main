@@ -4726,10 +4726,15 @@ def _can_view_student(viewer: dict, student_id: str) -> bool | None:
     if uid == student_id:
         return True
 
-    if _is_admin(uid):
-        return True
-
     unread = False
+    try:
+        # Not `_is_admin`, which reads a failed profile read as "not an admin".
+        if _role_or_raise(uid) == ADMIN_ROLE:
+            return True
+    except Exception as e:
+        print(f"[can_view_student:admin] {e}")
+        unread = True
+
     try:
         # One read. Without `!inner` PostgREST keeps every membership and only empties the embed.
         taught = supabase.table("class_memberships").select("id, classes!inner(teacher_id)") \

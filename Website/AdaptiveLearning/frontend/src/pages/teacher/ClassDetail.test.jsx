@@ -96,7 +96,9 @@ it('does not blame the class for a 404 from the roster', async () => {
       : Promise.resolve({ id: CLASS_ID, name: 'Algebra', join_code: 'ABC123' }),
   )
   renderAt()
-  expect(await screen.findByText(/couldn't load this class/i)).toBeInTheDocument()
+  // The class itself loaded, so the sentence names the roster rather than the class.
+  expect(await screen.findByText("Couldn't find this class's students.")).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
   expect(screen.queryByText('Class not found.')).not.toBeInTheDocument()
 })
 

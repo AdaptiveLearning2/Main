@@ -330,7 +330,7 @@ def test_a_denial_read_in_full_is_a_403_and_is_logged(monkeypatch):
     assert (exc.value.status_code, events) == (403, ["authz_denied"])
 
 
-@pytest.mark.parametrize("failing", ["class_memberships", "parent_child_links"])
+@pytest.mark.parametrize("failing", ["profiles", "class_memberships", "parent_child_links"])
 def test_a_failed_relationship_read_is_a_503_and_not_a_logged_denial(monkeypatch, failing):
     monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={failing}))
     events = _logged_events(monkeypatch)
@@ -339,9 +339,16 @@ def test_a_failed_relationship_read_is_a_503_and_not_a_logged_denial(monkeypatch
     assert (exc.value.status_code, events) == (503, [])
 
 
-def test_a_failed_read_does_not_block_what_another_relationship_allows(monkeypatch):
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={"class_memberships"}))
+@pytest.mark.parametrize("failing", ["profiles", "class_memberships"])
+def test_a_failed_read_does_not_block_what_another_relationship_allows(monkeypatch, failing):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={failing}))
     assert main._can_view_student(PARENT, "student-1") is True
+
+
+def test_an_admin_whose_role_was_read_can_view_any_student(monkeypatch):
+    tables = {**TABLES, "profiles": [{"id": "admin-1", "role": "admin"}]}
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(tables))
+    assert main._can_view_student({"id": "admin-1"}, "student-2") is True
 
 
 # ── _verify_class_owner ──────────────────────────────────────────────────

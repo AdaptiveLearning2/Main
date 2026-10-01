@@ -1002,8 +1002,8 @@ a new check inline — re-deriving the rule per endpoint is how the original `cl
 - `_verify_class_owner(class_id, user_id)` — only the owning teacher.
 - `_verify_can_view_student(viewer, student_id)` — the student themselves, a teacher of a class they are enrolled in,
   a linked parent, or an admin (a **fourth relationship** rather than letting each admin path grow its own copy of a
-  report query). A relationship read that fails answers **503 and logs no denial**: an outage in the security log
-  reads as a parent or teacher refused. The teacher check is one `classes!inner` read; without `!inner` PostgREST
+  report query). A relationship or admin-role read that fails answers **503 and logs no denial**: an outage in the
+  security log reads as a parent, teacher or admin refused. So the admin check uses `_role_or_raise`, not `_is_admin`. The teacher check is one `classes!inner` read; without `!inner` PostgREST
   keeps every membership and the filter stops restricting.
 - `_session_or_403(session_id, user_id, columns)` — a session is **one student's**, so this is ownership and nothing
   weaker; no teacher or parent is admitted. It returns the row, which is the point: `record_answer` and `end_session`
@@ -1558,7 +1558,8 @@ there is nothing true to say about a channel the payload does not know about.
 a layer, and naming a layer sends someone to inspect it — so a teacher whose Question Bank filter was refused
 went and checked a server that had answered perfectly well. It now picks the sentence from `error.status`,
 which `apiFetch` attaches: **403** is "you don't have access to X" and gets **no Try again button**, since
-retrying a refusal cannot work and offering the button is part of the false claim; **401** says the session
+retrying a refusal cannot work and offering the button is part of the false claim; **404** is "couldn't find X",
+also with no button, since the backend answered and a stale link will 404 again; **401** says the session
 expired and keeps it; **429** says too many requests and keeps it — a school behind one address hits the address
 budget, not an outage; **anything else, including an error carrying no `status` at all**, keeps the original
 wording, because a dropped connection genuinely is an unreachable backend. Callers pass nothing; a page wires

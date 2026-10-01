@@ -48,6 +48,7 @@ export default function ClassDetail() {
   async function loadData() {
     setLoading(true)
     setError(null)
+    let failed = 'this class'
     try {
       // allSettled: both can 404 for a missing class; decide with both results.
       const [classRes, studentsRes] = await Promise.allSettled([
@@ -61,13 +62,15 @@ export default function ClassDetail() {
         setCls(null)
         return
       }
+      // The class just loaded, so a failure from here is the roster's, never "class not found".
+      failed = "this class's students"
       if (studentsRes.status === 'rejected') throw studentsRes.reason
 
       setCls(classRes.value)
       setStudents(Array.isArray(studentsRes.value) ? studentsRes.value : [])
     } catch (err) {
-      // The error itself, so LoadError can tell a refusal from an outage by its status.
-      setError(err ?? new Error('Could not load class'))
+      // The error itself, whose status picks LoadError's sentence, and the request that failed.
+      setError({ cause: err ?? new Error('Could not load class'), what: failed })
     } finally {
       setLoading(false)
     }
@@ -126,7 +129,7 @@ export default function ClassDetail() {
   if (error) {
     return (
       <div className="p-6 lg:p-8 text-center">
-        <LoadError what="this class" error={error} onRetry={loadData} />
+        <LoadError what={error.what} error={error.cause} onRetry={loadData} />
         <button onClick={() => navigate('/teacher/classes')} className="px-5 py-2.5 bg-slate-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-xl font-bold text-sm">Back to Classes</button>
       </div>
     )

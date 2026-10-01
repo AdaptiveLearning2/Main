@@ -36,6 +36,15 @@ describe('LoadError', () => {
     expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
   })
 
+  it('calls a 404 not found, not a backend that is down, and offers no retry', () => {
+    // The backend answered; a stale link or a deleted record will 404 again.
+    render(<LoadError what="this class" error={err(404)} onRetry={vi.fn()} />)
+    const box = screen.getByRole('status')
+    expect(box).toHaveTextContent("Couldn't find this class.")
+    expect(box).not.toHaveTextContent(/backend/i)
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+  })
+
   it('keeps Try again on a 401, which a restored session can fix', () => {
     render(<LoadError what="your classes" error={err(401)} onRetry={vi.fn()} />)
     expect(screen.getByRole('status')).toHaveTextContent(/session has expired/i)

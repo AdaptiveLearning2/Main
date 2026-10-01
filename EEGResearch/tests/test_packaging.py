@@ -9,8 +9,10 @@ import re
 import subprocess
 import sys
 import tomllib
-from importlib.metadata import packages_distributions
+from importlib.metadata import packages_distributions, version
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 CAMERA_PACKAGES = ("opencv-python", "opencv", "onnxruntime", "mediapipe")
@@ -108,44 +110,83 @@ def test_every_import_time_dependency_is_a_runtime_dependency_and_pinned_in_ever
 
 
 MISSING_DEPS = ROOT / "scripts" / "missing_runtime_deps.py"
+BACKEND_REQUIREMENTS = ROOT.parent / "Website" / "AdaptiveLearning" / "backend" / "requirements.txt"
 # A base install has no packaging distribution; blocking the import stands in for one.
 BLOCK_PACKAGING = ("import runpy, sys; sys.modules['packaging'] = None; sys.argv = sys.argv[1:]; "
                    "runpy.run_path(sys.argv[0], run_name='__main__')")
+# What the launchers probe: the sidecar's pyproject and the backend's requirements.txt.
+KINDS = pytest.mark.parametrize("kind", ["pyproject", "requirements"])
 
 
-def _pyproject_with(tmp_path: Path, deps: list[str]) -> Path:
+def _manifest_with(tmp_path: Path, deps: list[str], kind: str) -> Path:
+    if kind == "requirements":
+        path = tmp_path / "requirements.txt"
+        path.write_text("".join(f"{d}\n" for d in deps), encoding="utf-8")
+        return path
     path = tmp_path / "pyproject.toml"
     listed = ", ".join(json.dumps(d) for d in deps)  # a JSON string is a TOML basic string
     path.write_text(f'[project]\nname = "x"\nversion = "0"\ndependencies = [{listed}]\n', encoding="utf-8")
     return path
 
 
-def _missing(pyproject: Path, blocked: bool = False, site: Path | None = None) -> list[str]:
+def _missing(manifest: Path, blocked: bool = False, site: Path | None = None, absent: bool = False) -> list[str]:
     prefix = ["-c", BLOCK_PACKAGING] if blocked else []
     env = dict(os.environ, PYTHONPATH=str(site)) if site else None
-    run = subprocess.run([sys.executable, *prefix, str(MISSING_DEPS), str(pyproject)],
+    flags = ["--absent"] if absent else []
+    run = subprocess.run([sys.executable, *prefix, str(MISSING_DEPS), str(manifest), *flags],
                          capture_output=True, text=True, check=True, env=env)
     return run.stdout.split()
 
 
-def test_the_dependency_probe_names_what_this_interpreter_lacks(tmp_path):
-    pyproject = _pyproject_with(tmp_path, ["pytest>=1", "uvicorn[standard]>=0.30", "pydantic_settings>=2",
-                                           "no-such-distribution-anywhere>=1"])
-    assert _missing(pyproject) == ["no-such-distribution-anywhere>=1"]
+@KINDS
+def test_the_dependency_probe_names_what_this_interpreter_lacks(tmp_path, kind):
+    manifest = _manifest_with(tmp_path, ["pytest>=1", "uvicorn[standard]>=0.30", "pydantic_settings>=2",
+                                         "no-such-distribution-anywhere>=1", "no-such-dist-with-an-extra[more]==1"],
+                              kind)
+    # Named with its extra, since the backend's launcher installs exactly what is printed.
+    assert _missing(manifest) == ["no-such-distribution-anywhere>=1", "no-such-dist-with-an-extra[more]==1"]
 
 
-def test_the_dependency_probe_skips_a_requirement_whose_marker_excludes_this_interpreter(tmp_path):
-    pyproject = _pyproject_with(tmp_path, ['no-such-backport; python_version < "3.11"',
-                                           'no-such-port; sys_platform == "no-such-os"',
-                                           'no-such-dist-that-applies; python_version >= "3.11"'])
-    assert _missing(pyproject) == ["no-such-dist-that-applies"]
+@KINDS
+def test_the_dependency_probe_skips_a_requirement_whose_marker_excludes_this_interpreter(tmp_path, kind):
+    manifest = _manifest_with(tmp_path, ['no-such-backport; python_version < "3.11"',
+                                         'no-such-port; sys_platform == "no-such-os"',
+                                         'no-such-dist-that-applies; python_version >= "3.11"'], kind)
+    assert _missing(manifest) == ["no-such-dist-that-applies"]
 
 
-def test_the_dependency_probe_names_an_installed_distribution_older_than_asked(tmp_path):
-    assert _missing(_pyproject_with(tmp_path, ["pytest>=1", "pydantic>=9999"])) == ["pydantic>=9999"]
+@KINDS
+def test_the_dependency_probe_names_an_installed_distribution_older_than_asked(tmp_path, kind):
+    assert _missing(_manifest_with(tmp_path, ["pytest>=1", "pydantic>=9999"], kind)) == ["pydantic>=9999"]
 
 
-def test_the_dependency_probe_names_what_an_extra_adds_that_this_interpreter_lacks(tmp_path):
+def test_the_dependency_probe_reads_a_requirements_file_as_pip_does(tmp_path):
+    path = tmp_path / "requirements.txt"
+    path.write_text("\n".join([
+        "# a comment, then blank lines", "", "   ",
+        f"pytest=={version('pytest')}  # met exactly",
+        "pydantic==1.0",  # installed, but newer than pinned
+        'no-such-url-dist @ https://x.invalid/a.zip#frag ; python_version < "3"',  # unspaced: part of the URL
+        "  no-such-distribution-anywhere==1",
+    ]) + "\n", encoding="utf-8")
+    assert _missing(path) == ["pydantic==1.0", "no-such-distribution-anywhere==1"]
+
+
+def test_the_dependency_probe_reads_every_line_of_the_backends_requirements(tmp_path):
+    """Stand-ins at version 0 for the real file's pins, so every line read comes back and a skipped one cannot."""
+    lines = [line.strip() for line in BACKEND_REQUIREMENTS.read_text(encoding="utf-8").splitlines()
+             if line.strip() and not line.lstrip().startswith("#")]
+    pins = [re.fullmatch(r"([A-Za-z0-9._-]+)(\[[^\]]*\])?(==\S+)", line) for line in lines]
+    assert len(lines) >= 10 and all(pins), f"a line the stand-ins cannot model: {lines}"
+    for pin in pins:
+        info = tmp_path / "site" / f"{_normalise(pin[1]).replace('-', '_')}-0.dist-info"
+        info.mkdir(parents=True)
+        (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {pin[1]}\nVersion: 0\n", encoding="utf-8")
+    assert _missing(BACKEND_REQUIREMENTS, site=tmp_path / "site") == lines  # extras kept, so each installs as pinned
+
+
+@KINDS
+def test_the_dependency_probe_names_what_an_extra_adds_that_this_interpreter_lacks(tmp_path, kind):
     """A stand-in distribution, so the extra's contents do not depend on what this interpreter has."""
     info = tmp_path / "site" / "probe_extra_fixture-1.0.dist-info"
     info.mkdir(parents=True)
@@ -157,13 +198,29 @@ def test_the_dependency_probe_names_what_an_extra_adds_that_this_interpreter_lac
         'Requires-Dist: probe-extra-fixture[more]; extra == "more"',  # a cycle has to end
         'Requires-Dist: no-such-base-dependency; python_version >= "3.11"',  # its own, not the extra's
     ]) + "\n", encoding="utf-8")
-    pyproject = _pyproject_with(tmp_path, ["probe-extra-fixture[more]>=1"])
-    assert _missing(pyproject, site=tmp_path / "site") == ["no-such-distribution-anywhere>=2"]
+    manifest = _manifest_with(tmp_path, ["probe-extra-fixture[more]>=1"], kind)
+    assert _missing(manifest, site=tmp_path / "site") == ["no-such-distribution-anywhere>=2"]
 
 
-def test_the_dependency_probe_runs_where_the_packaging_distribution_is_absent(tmp_path):
-    pyproject = _pyproject_with(tmp_path, ['no-such-backport; python_version < "3.11"', "pydantic>=9999"])
-    assert _missing(pyproject, blocked=True) == ["pydantic>=9999"]
+def test_the_dependency_probe_names_only_what_is_not_installed_when_asked(tmp_path):
+    """--absent, as the launchers ask it of the backend's exact pins; an installed extra is still looked into."""
+    info = tmp_path / "site" / "probe_extra_fixture-1.0.dist-info"
+    info.mkdir(parents=True)
+    (info / "METADATA").write_text("\n".join([
+        "Metadata-Version: 2.1", "Name: probe-extra-fixture", "Version: 1.0", "Provides-Extra: more",
+        'Requires-Dist: pytest==1.0; extra == "more"',  # installed, at another version
+        'Requires-Dist: no-such-distribution-anywhere>=2; extra == "more"',
+    ]) + "\n", encoding="utf-8")
+    manifest = _manifest_with(tmp_path, ["pydantic==1.0", "probe-extra-fixture[more]==2.0", "no-such-dist==1"],
+                              "requirements")
+    unmet = _missing(manifest, site=tmp_path / "site", absent=True)
+    assert unmet == ["no-such-distribution-anywhere>=2", "no-such-dist==1"]
+
+
+@KINDS
+def test_the_dependency_probe_runs_where_the_packaging_distribution_is_absent(tmp_path, kind):
+    manifest = _manifest_with(tmp_path, ['no-such-backport; python_version < "3.11"', "pydantic>=9999"], kind)
+    assert _missing(manifest, blocked=True) == ["pydantic>=9999"]
 
 
 def test_the_dependency_probe_finds_every_runtime_dependency_of_this_install():

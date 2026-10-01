@@ -284,37 +284,53 @@ function Check-Venv {
         python -m venv .venv
         Pop-Location
         Install-VenvDeps $dir
-    } elseif (Test-Path (Join-Path $dir "pyproject.toml")) {
-        # An editable install keeps the dependency list it was installed with, so what a pulled
-        # pyproject adds or raises is installed here, before a window starts and dies on the import.
-        $missing = @(Get-MissingDeps $pyExe $dir)
+    } else {
+        # A venv keeps the dependency list it was installed with, so what a pulled list adds is installed
+        # here, before a window dies on the import. A requirements.txt pin held at another version may be a
+        # bump on trial: only absent packages are installed, by name, and it is reported, never reverted.
+        $editable = Test-Path (Join-Path $dir "pyproject.toml")
+        $manifest = Join-Path $dir $(if ($editable) { "pyproject.toml" } else { "requirements.txt" })
+        $missing = @(Get-MissingDeps $pyExe $manifest -Absent:(-not $editable))
         if ($missing.Count -gt 0) {
             Write-Host "  Installing what this venv lacks: $($missing -join ', ')" -ForegroundColor Yellow
-            Install-VenvDeps $dir
-            $missing = @(Get-MissingDeps $pyExe $dir)
+            if ($editable) { Install-VenvDeps $dir } else { Install-VenvDeps $dir $missing }
+            $missing = @(Get-MissingDeps $pyExe $manifest -Absent:(-not $editable))
             if ($missing.Count -gt 0) {
+                $fix = if ($editable) { "-e ." } else { '"' + ($missing -join '" "') + '"' }
                 Write-Host "  ERROR: $dir\.venv still lacks $($missing -join ', '). From that folder run:" -ForegroundColor Red
-                Write-Host "    .\.venv\Scripts\pip install -e ." -ForegroundColor Yellow
+                Write-Host "    .\.venv\Scripts\pip install $fix" -ForegroundColor Yellow
                 exit 1
+            }
+        }
+        if (-not $editable) {
+            $other = @(Get-MissingDeps $pyExe $manifest)
+            if ($other.Count -gt 0) {
+                Write-Host "  WARNING: $dir\.venv differs from these requirements.txt pins: $($other -join ', ')" -ForegroundColor Yellow
+                Write-Host "    To match them, from that folder run: .\.venv\Scripts\pip install -r requirements.txt" -ForegroundColor Yellow
             }
         }
     }
 }
 
 function Get-MissingDeps {
-    # Unmet requirements, from the sidecar's own probe; a probe that cannot run reports nothing.
-    param([string]$python, [string]$dir)
-    $probe = Join-Path $dir "scripts\missing_runtime_deps.py"
-    $out = Invoke-Quiet { & $python $probe }
+    # What a pyproject or requirements file asks for that $python lacks, from the sidecar's probe; with
+    # -Absent, only packages not installed at all. A probe that cannot run reports nothing.
+    param([string]$python, [string]$manifest, [switch]$Absent)
+    $probe = Join-Path $PSScriptRoot "EEGResearch\scripts\missing_runtime_deps.py"
+    $flags = @(if ($Absent) { "--absent" })
+    $out = Invoke-Quiet { & $python $probe $manifest @flags }
     return @(($out -join ' ') -split '\s+' | Where-Object { $_ })
 }
 
 function Install-VenvDeps {
-    param([string]$dir)
+    # $packages by name when given; otherwise the folder's pyproject, editable, or its requirements.txt.
+    param([string]$dir, [string[]]$packages)
     Push-Location $dir
     try {
         $pip = Join-Path $dir ".venv\Scripts\pip.exe"
-        if (Test-Path (Join-Path $dir "pyproject.toml")) {
+        if ($packages) {
+            & $pip install @packages -q
+        } elseif (Test-Path (Join-Path $dir "pyproject.toml")) {
             & $pip install -e . -q
         } else {
             & $pip install -r requirements.txt -q

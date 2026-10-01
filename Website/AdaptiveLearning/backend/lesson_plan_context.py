@@ -2,8 +2,9 @@ import os
 import threading
 import time
 
-from supabase import create_client, Client
 from dotenv import load_dotenv
+
+from supabase_client import get_client
 
 load_dotenv()
 
@@ -20,26 +21,17 @@ BLANK_ROW      = "blank_row"       # seeded but empty: a half-finished edit
 READ_FAILED    = "read_failed"     # an outage; the row may well exist
 NO_CREDENTIALS = "no_credentials"  # misconfigured process, never asked
 
-_client: Client | None = None
-_client_lock = threading.Lock()
-
 _cache = {}  # (topic_name, grade_band) -> (expires_at, str | None, reason)
 _cache_lock = threading.Lock()
 
 
 def _get_client():
     """Lazy, so main.py's own missing-env RuntimeError fires first; None without credentials."""
-    global _client
-    if _client is not None:
-        return _client
-    with _client_lock:
-        if _client is None:
-            url = os.environ.get("SUPABASE_URL")
-            key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-            if not url or not key:
-                return None
-            _client = create_client(url, key)
-    return _client
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    if not url or not key:
+        return None
+    return get_client(url, key)
 
 
 def _lookup(topic_name, grade_band):

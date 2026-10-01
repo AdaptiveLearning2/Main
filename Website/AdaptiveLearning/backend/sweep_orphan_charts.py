@@ -32,9 +32,9 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
 
-    from supabase import create_client
+    from supabase_client import make_client
     report = chart_archive.sweep_orphan_charts(
-        create_client(url, key),
+        make_client(url, key),
         dry_run=not args.apply,
         max_deletes=args.max_deletes,
         max_orphan_fraction=args.max_orphan_fraction,

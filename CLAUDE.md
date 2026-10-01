@@ -769,6 +769,14 @@ same failure one step later. Nothing references `math_topics.id`: `record_topic_
 `backend/tests/test_seed_sql.py` checks all three, and **skips when the file is absent** rather than
 failing on something the repo does not contain. It is a guard for whoever regenerates the file, not
 a gate.
+
+## Get the Supabase client from `supabase_client.get_client`
+
+supabase-py's sync clients default to HTTP/2, and one HTTP/2 connection shared by threads fails
+with `[Errno 11] Resource temporarily unavailable`. `get_client` returns one cached client per
+process, every sub-client on one HTTP/1.1 pool; one-shot scripts build theirs with `make_client`.
+**Local runs never show the bug**: HTTP/2 is negotiated only over TLS, and the local stack is plain
+`http://`. `tests/test_supabase_client.py` fails on any other way of building a client.
 ---
 
 # Privacy

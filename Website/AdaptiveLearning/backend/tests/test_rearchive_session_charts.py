@@ -330,7 +330,7 @@ def test_the_tool_prints_an_unverified_rerender_with_the_check_to_run(monkeypatc
 
         data = []
 
-    monkeypatch.setattr(supabase, "create_client", lambda *_a: _Anything())
+    monkeypatch.setattr(supabase, "create_client", lambda *_a, **_k: _Anything())
     monkeypatch.setattr(chart_archive, "rearchive_sessions", lambda *_a, **_k: {
         "dry_run": False, "considered": 1, "rerendered": 0, "skipped_expired": 0,
         "skipped_unarchived": 0, "failed": 1, "read_failures": 0, "refused": None,

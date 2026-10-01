@@ -11,10 +11,10 @@ public:
     BridgeTcpServer();
     ~BridgeTcpServer();
 
-    enum class StartResult { Started, NoToken, NetworkFailed, TokenWriteFailed };
+    enum class StartResult { Started, NoToken, NetworkFailed, TokenFolderMissing, TokenWriteFailed };
 
     /** Listens on 127.0.0.1:port after writing a fresh token to token_path (see docs/signals.md).
-     *  NoToken and TokenWriteFailed are fully explained on stderr; NetworkFailed leaves the advice to the caller. */
+     *  The token results are fully explained on stderr; NetworkFailed leaves the advice to the caller. */
     StartResult start(unsigned short port, const std::filesystem::path& token_path);
     void stop();
     void send_json_line(const std::string& payload);

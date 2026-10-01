@@ -174,7 +174,7 @@ BridgeTcpServer::StartResult BridgeTcpServer::start(unsigned short port,
             closesocket(listen_socket_);
             listen_socket_ = INVALID_SOCKET;
             WSACleanup();
-            return StartResult::TokenWriteFailed;
+            return have_dir ? StartResult::TokenWriteFailed : StartResult::TokenFolderMissing;
         }
     }
 

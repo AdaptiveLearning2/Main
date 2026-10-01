@@ -14,7 +14,7 @@ cannot loop for ever: more than MaxRestarts exits inside RestartWindowSeconds
 stops the loop and leaves the last exit code on screen. Every exit is printed
 with its time and code, so the crash a restart hides from the student is still
 readable here. Exit code 78 is the bridge saying a restart cannot help (its
-token file cannot be written), so that stops the loop at once.
+token folder is missing, or LOCALAPPDATA is unset), so that stops the loop at once.
 
 Environment is inherited from the window that runs this, which is where
 start.ps1 sets MUSE_ENABLE_OPTICS and friends; nothing here reads or sets

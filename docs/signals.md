@@ -303,7 +303,9 @@ harness whose bridge starts connected is adopted without a scan, so both reconne
 every exit with its time and code, and gives up once more than five exits land inside ten minutes —
 so a persistent failure (a missing `libmuse.dll`, port 8765 taken) stops with its cause on screen
 rather than looping. A clean exit (Ctrl+C) is not restarted, and nor is exit code 78 (`kExitNoRestart`),
-the bridge saying a restart cannot help: its token file cannot be written. It inherits `MUSE_ENABLE_OPTICS` and the
+the bridge saying a restart cannot help: its token folder is missing and cannot be created, or `LOCALAPPDATA` is
+unset. A token file that cannot be written in an existing folder exits 1 and is retried, since another program
+may hold it for a moment. It inherits `MUSE_ENABLE_OPTICS` and the
 rest from the window `start.ps1` set them in and reads none of them itself, so a restart lands on the
 configuration the session was launched with; nothing else has to change, because the sidecar's TCP
 adapter reconnects on its own and the page treats the restarted bridge's "not connected" as a drop.

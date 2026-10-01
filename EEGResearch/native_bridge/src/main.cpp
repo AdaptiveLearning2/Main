@@ -24,6 +24,22 @@ std::atomic<bool> g_keep_running{true};
 // sysexits' EX_CONFIG: a restart cannot fix this environment, so run_bridge_supervised.ps1 stops on it.
 constexpr int kExitNoRestart = 78;
 
+// UTF-8 output while the bridge runs, then the console's old code page back: run by hand, it is the caller's.
+class Utf8ConsoleOutput {
+public:
+    Utf8ConsoleOutput() : previous_(GetConsoleOutputCP()) { SetConsoleOutputCP(CP_UTF8); }
+    ~Utf8ConsoleOutput() {
+        if (previous_ != 0) {  // 0: there was no console
+            SetConsoleOutputCP(previous_);
+        }
+    }
+    Utf8ConsoleOutput(const Utf8ConsoleOutput&) = delete;
+    Utf8ConsoleOutput& operator=(const Utf8ConsoleOutput&) = delete;
+
+private:
+    UINT previous_;
+};
+
 void append_json_quoted_string(std::ostringstream& o, const std::string& s) {
     o << '"';
     for (unsigned char c : s) {
@@ -311,7 +327,7 @@ unsigned short read_port_from_env() {
 
 int main() {
     // Paths are printed as UTF-8, which a console on an OEM code page garbles.
-    SetConsoleOutputCP(CP_UTF8);
+    const Utf8ConsoleOutput utf8_console;
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);
 
@@ -336,8 +352,11 @@ int main() {
     const BridgeTcpServer::StartResult started = server.start(kPort, token_path);
     // start() has already said why; only a socket failure gets the port-conflict advice.
     if (started == BridgeTcpServer::StartResult::NoToken ||
-        started == BridgeTcpServer::StartResult::TokenWriteFailed) {
+        started == BridgeTcpServer::StartResult::TokenFolderMissing) {
         return kExitNoRestart;
+    }
+    if (started == BridgeTcpServer::StartResult::TokenWriteFailed) {
+        return 1;  // the folder is there and another program may hold the file briefly, so a restart can help
     }
     if (started == BridgeTcpServer::StartResult::NetworkFailed) {
         std::cerr << "Failed to start TCP server on 127.0.0.1:" << kPort << "\n";

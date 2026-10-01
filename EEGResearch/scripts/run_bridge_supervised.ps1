@@ -13,7 +13,8 @@ Bounded, so a persistent failure -- a missing libmuse.dll, port 8765 taken --
 cannot loop for ever: more than MaxRestarts exits inside RestartWindowSeconds
 stops the loop and leaves the last exit code on screen. Every exit is printed
 with its time and code, so the crash a restart hides from the student is still
-readable here.
+readable here. Exit code 78 is the bridge saying a restart cannot help (its
+token file cannot be written), so that stops the loop at once.
 
 Environment is inherited from the window that runs this, which is where
 start.ps1 sets MUSE_ENABLE_OPTICS and friends; nothing here reads or sets
@@ -59,6 +60,11 @@ while ($true) {
     if ($code -eq 0) {
         Write-Host "bridge supervisor: clean exit; not restarting" -ForegroundColor Gray
         exit 0
+    }
+    # main.cpp's kExitNoRestart: the bridge cannot run in this environment, so another run fails the same way.
+    if ($code -eq 78) {
+        Write-Host "bridge supervisor: the bridge reported a failure a restart cannot fix; not restarting. Read the lines above." -ForegroundColor Red
+        exit $code
     }
 
     $exits.Add($ended)

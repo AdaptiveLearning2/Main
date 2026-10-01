@@ -12,6 +12,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <windows.h>
 
 #if defined(ENABLE_LIBMUSE)
 #include <winrt/Windows.Foundation.h>
@@ -19,6 +20,9 @@
 
 namespace {
 std::atomic<bool> g_keep_running{true};
+
+// sysexits' EX_CONFIG: a restart cannot fix this environment, so run_bridge_supervised.ps1 stops on it.
+constexpr int kExitNoRestart = 78;
 
 void append_json_quoted_string(std::ostringstream& o, const std::string& s) {
     o << '"';
@@ -306,6 +310,8 @@ unsigned short read_port_from_env() {
 } // namespace
 
 int main() {
+    // Paths are printed as UTF-8, which a console on an OEM code page garbles.
+    SetConsoleOutputCP(CP_UTF8);
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);
 
@@ -331,7 +337,7 @@ int main() {
     // start() has already said why; only a socket failure gets the port-conflict advice.
     if (started == BridgeTcpServer::StartResult::NoToken ||
         started == BridgeTcpServer::StartResult::TokenWriteFailed) {
-        return 1;
+        return kExitNoRestart;
     }
     if (started == BridgeTcpServer::StartResult::NetworkFailed) {
         std::cerr << "Failed to start TCP server on 127.0.0.1:" << kPort << "\n";

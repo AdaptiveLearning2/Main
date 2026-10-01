@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import json
+import os
 import re
 import subprocess
 import sys
@@ -106,20 +108,62 @@ def test_every_import_time_dependency_is_a_runtime_dependency_and_pinned_in_ever
 
 
 MISSING_DEPS = ROOT / "scripts" / "missing_runtime_deps.py"
+# A base install has no packaging distribution; blocking the import stands in for one.
+BLOCK_PACKAGING = ("import runpy, sys; sys.modules['packaging'] = None; sys.argv = sys.argv[1:]; "
+                   "runpy.run_path(sys.argv[0], run_name='__main__')")
 
 
-def _missing(pyproject: Path) -> list[str]:
-    run = subprocess.run([sys.executable, str(MISSING_DEPS), str(pyproject)],
-                         capture_output=True, text=True, check=True)
+def _pyproject_with(tmp_path: Path, deps: list[str]) -> Path:
+    path = tmp_path / "pyproject.toml"
+    listed = ", ".join(json.dumps(d) for d in deps)  # a JSON string is a TOML basic string
+    path.write_text(f'[project]\nname = "x"\nversion = "0"\ndependencies = [{listed}]\n', encoding="utf-8")
+    return path
+
+
+def _missing(pyproject: Path, blocked: bool = False, site: Path | None = None) -> list[str]:
+    prefix = ["-c", BLOCK_PACKAGING] if blocked else []
+    env = dict(os.environ, PYTHONPATH=str(site)) if site else None
+    run = subprocess.run([sys.executable, *prefix, str(MISSING_DEPS), str(pyproject)],
+                         capture_output=True, text=True, check=True, env=env)
     return run.stdout.split()
 
 
 def test_the_dependency_probe_names_what_this_interpreter_lacks(tmp_path):
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text('[project]\nname = "x"\nversion = "0"\ndependencies = [\n'
-                         '  "pytest>=1",\n  "uvicorn[standard]>=0.30",\n  "pydantic_settings>=2",\n'
-                         '  "no-such-distribution-anywhere>=1"\n]\n', encoding="utf-8")
-    assert _missing(pyproject) == ["no-such-distribution-anywhere"]
+    pyproject = _pyproject_with(tmp_path, ["pytest>=1", "uvicorn[standard]>=0.30", "pydantic_settings>=2",
+                                           "no-such-distribution-anywhere>=1"])
+    assert _missing(pyproject) == ["no-such-distribution-anywhere>=1"]
+
+
+def test_the_dependency_probe_skips_a_requirement_whose_marker_excludes_this_interpreter(tmp_path):
+    pyproject = _pyproject_with(tmp_path, ['no-such-backport; python_version < "3.11"',
+                                           'no-such-port; sys_platform == "no-such-os"',
+                                           'no-such-dist-that-applies; python_version >= "3.11"'])
+    assert _missing(pyproject) == ["no-such-dist-that-applies"]
+
+
+def test_the_dependency_probe_names_an_installed_distribution_older_than_asked(tmp_path):
+    assert _missing(_pyproject_with(tmp_path, ["pytest>=1", "pydantic>=9999"])) == ["pydantic>=9999"]
+
+
+def test_the_dependency_probe_names_what_an_extra_adds_that_this_interpreter_lacks(tmp_path):
+    """A stand-in distribution, so the extra's contents do not depend on what this interpreter has."""
+    info = tmp_path / "site" / "probe_extra_fixture-1.0.dist-info"
+    info.mkdir(parents=True)
+    (info / "METADATA").write_text("\n".join([
+        "Metadata-Version: 2.1", "Name: probe-extra-fixture", "Version: 1.0", "Provides-Extra: more",
+        'Requires-Dist: pytest>=1; extra == "more"',
+        'Requires-Dist: no-such-distribution-anywhere>=2; extra == "more"',
+        'Requires-Dist: no-such-backport; python_version < "3.11" and extra == "more"',
+        'Requires-Dist: probe-extra-fixture[more]; extra == "more"',  # a cycle has to end
+        'Requires-Dist: no-such-base-dependency; python_version >= "3.11"',  # its own, not the extra's
+    ]) + "\n", encoding="utf-8")
+    pyproject = _pyproject_with(tmp_path, ["probe-extra-fixture[more]>=1"])
+    assert _missing(pyproject, site=tmp_path / "site") == ["no-such-distribution-anywhere>=2"]
+
+
+def test_the_dependency_probe_runs_where_the_packaging_distribution_is_absent(tmp_path):
+    pyproject = _pyproject_with(tmp_path, ['no-such-backport; python_version < "3.11"', "pydantic>=9999"])
+    assert _missing(pyproject, blocked=True) == ["pydantic>=9999"]
 
 
 def test_the_dependency_probe_finds_every_runtime_dependency_of_this_install():

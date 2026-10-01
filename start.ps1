@@ -275,11 +275,11 @@ function Check-Venv {
         Pop-Location
         Install-VenvDeps $dir
     } elseif (Test-Path (Join-Path $dir "pyproject.toml")) {
-        # An editable install keeps the dependency list it was installed with, so one a pulled
-        # pyproject adds is installed here, before a window starts and dies on the import.
+        # An editable install keeps the dependency list it was installed with, so what a pulled
+        # pyproject adds or raises is installed here, before a window starts and dies on the import.
         $missing = @(Get-MissingDeps $pyExe $dir)
         if ($missing.Count -gt 0) {
-            Write-Host "  Installing dependencies added since this venv was built: $($missing -join ', ')" -ForegroundColor Yellow
+            Write-Host "  Installing what this venv lacks: $($missing -join ', ')" -ForegroundColor Yellow
             Install-VenvDeps $dir
             $missing = @(Get-MissingDeps $pyExe $dir)
             if ($missing.Count -gt 0) {
@@ -292,7 +292,7 @@ function Check-Venv {
 }
 
 function Get-MissingDeps {
-    # Names only, from the sidecar's own probe; a probe that cannot run reports nothing.
+    # Unmet requirements, from the sidecar's own probe; a probe that cannot run reports nothing.
     param([string]$python, [string]$dir)
     $probe = Join-Path $dir "scripts\missing_runtime_deps.py"
     $out = Invoke-Quiet { & $python $probe }

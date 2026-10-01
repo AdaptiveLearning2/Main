@@ -182,13 +182,40 @@ check_venv() {
     if [ "$need_rebuild" = true ]; then
         pushd "$dir" > /dev/null
         "$PYTHON" -m venv .venv
-        if [ "$mode" = "editable" ]; then
-            .venv/bin/pip install -e . -q
-        else
-            .venv/bin/pip install -r requirements.txt -q
-        fi
         popd > /dev/null
+        install_venv_deps "$dir" "$mode"
+    elif [ "$mode" = "editable" ]; then
+        # An editable install keeps the dependency list it was installed with; see Check-Venv in start.ps1.
+        local missing
+        missing="$(missing_deps "$dir")"
+        if [ -n "$missing" ]; then
+            echo -e "  ${YELLOW}Installing what this venv lacks: ${missing// /, }${NC}"
+            install_venv_deps "$dir" "$mode"
+            missing="$(missing_deps "$dir")"
+            if [ -n "$missing" ]; then
+                echo -e "  ${RED}ERROR: $dir/.venv still lacks ${missing// /, }. From that folder run:${NC}"
+                echo -e "  ${YELLOW}  .venv/bin/pip install -e .${NC}"
+                exit 1
+            fi
+        fi
     fi
+}
+
+missing_deps() {
+    # Unmet requirements, from the sidecar's own probe; a probe that cannot run reports nothing.
+    "$1/.venv/bin/python" "$1/scripts/missing_runtime_deps.py" 2>/dev/null
+}
+
+install_venv_deps() {
+    local dir="$1"
+    local mode="$2"
+    pushd "$dir" > /dev/null
+    if [ "$mode" = "editable" ]; then
+        .venv/bin/pip install -e . -q
+    else
+        .venv/bin/pip install -r requirements.txt -q
+    fi
+    popd > /dev/null
 }
 
 # Write a shell script to a temp file and open it in a new Terminal window.

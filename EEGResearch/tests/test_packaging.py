@@ -1,9 +1,10 @@
-"""The camera extras stay optional: CI and headband-only installs have no camera dependency."""
+"""The sidecar's install surface: camera extras stay optional, and every import-time dependency is a runtime one."""
 
 from __future__ import annotations
 
 import ast
 import re
+import subprocess
 import sys
 import tomllib
 from importlib.metadata import packages_distributions
@@ -85,24 +86,45 @@ def test_the_scan_skips_lazy_and_guarded_imports():
         "httpx", "fastapi", "required", "hard", "platform_only"}
 
 
-def test_every_import_time_dependency_is_a_runtime_dependency_and_pinned_in_the_base_lock():
-    """A module-level import outside [project].dependencies or requirements.lock fails `import src.app.main`."""
+def test_every_import_time_dependency_is_a_runtime_dependency_and_pinned_in_every_lock():
+    """A module-level import missing from [project].dependencies or a lock fails `import src.app.main` there."""
     modules = _third_party_import_time_modules()
     assert {"fastapi", "numpy", "pydantic"} <= modules, f"the scan found too little: {modules}"
+    locks = sorted(p.name for p in ROOT.glob("requirements*.lock"))
+    assert len(locks) >= 4, f"found too few locks: {locks}"
 
     declared = {_normalise(re.match(r"[A-Za-z0-9._-]+", d).group())
                 for d in _pyproject()["project"]["dependencies"]}
-    pinned = _pinned_in("requirements.lock")
     owners = packages_distributions()
-    undeclared, unpinned = {}, {}
-    for module in sorted(modules):
-        dists = {_normalise(d) for d in owners.get(module, [])}
-        if not dists & declared:
-            undeclared[module] = sorted(dists) or "no installed distribution"
-        if not dists & pinned:
-            unpinned[module] = sorted(dists) or "no installed distribution"
+    dists = {m: {_normalise(d) for d in owners.get(m, [])} for m in sorted(modules)}
+    undeclared = {m: sorted(d) or "no installed distribution" for m, d in dists.items() if not d & declared}
     assert not undeclared, f"imported at module level but not in [project].dependencies: {undeclared}"
-    assert not unpinned, f"imported at module level but not pinned in requirements.lock: {unpinned}"
+    pinned = {lock: _pinned_in(lock) for lock in locks}
+    unpinned = {f"{lock}: {m}": sorted(d) or "no installed distribution"
+                 for lock in locks for m, d in dists.items() if not d & pinned[lock]}
+    assert not unpinned, f"imported at module level but not pinned: {unpinned}"
+
+
+MISSING_DEPS = ROOT / "scripts" / "missing_runtime_deps.py"
+
+
+def _missing(pyproject: Path) -> list[str]:
+    run = subprocess.run([sys.executable, str(MISSING_DEPS), str(pyproject)],
+                         capture_output=True, text=True, check=True)
+    return run.stdout.split()
+
+
+def test_the_dependency_probe_names_what_this_interpreter_lacks(tmp_path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\nversion = "0"\ndependencies = [\n'
+                         '  "pytest>=1",\n  "uvicorn[standard]>=0.30",\n  "pydantic_settings>=2",\n'
+                         '  "no-such-distribution-anywhere>=1"\n]\n', encoding="utf-8")
+    assert _missing(pyproject) == ["no-such-distribution-anywhere"]
+
+
+def test_the_dependency_probe_finds_every_runtime_dependency_of_this_install():
+    """Tests run on an install carrying every runtime dependency, so any name reported is a lookup bug."""
+    assert _missing(ROOT / "pyproject.toml") == []
 
 
 def test_a_pin_with_extras_counts_as_pinned():

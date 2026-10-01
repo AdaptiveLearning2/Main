@@ -263,6 +263,52 @@ def test_a_hosted_run_stops_when_the_sidecars_settings_cannot_be_read(tmp_path, 
     assert "could not read the sidecar's settings" in r.stdout and "NOT REACHED" not in r.stdout
 
 
+@pytest.fixture(scope="module")
+def built_venv(tmp_path_factory):
+    """A project folder with a real, empty venv, so Check-Venv probes instead of rebuilding."""
+    project = tmp_path_factory.mktemp("venv") / "EEGResearch"
+    (project / "scripts").mkdir(parents=True)
+    shutil.copy(ROOT / "EEGResearch" / "scripts" / "missing_runtime_deps.py", project / "scripts")
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(project / ".venv")], check=True)
+    return project
+
+
+@WINDOWS
+@pytest.mark.parametrize("before,after,installs,refused", [
+    ("", "", 0, False),
+    ("httpx", "", 1, False),
+    ("httpx", "httpx", 1, True),
+], ids=["complete", "healed", "still-missing"])
+def test_check_venv_installs_what_a_pulled_pyproject_added(tmp_path, built_venv, before, after, installs, refused):
+    (built_venv / "pyproject.toml").write_text('[project]\nname = "x"\nversion = "0"\n', encoding="utf-8")
+    # `python` on PATH must match the venv's version, or Check-Venv rebuilds instead of probing.
+    env = dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"])
+    r = _ps(tmp_path, (
+        "$script:probes = 0\n"
+        "function Get-MissingDeps { param($python, $dir); $script:probes++\n"
+        f"    if ($script:probes -eq 1) {{ @('{before}') | Where-Object {{ $_ }} }}"
+        f" else {{ @('{after}') | Where-Object {{ $_ }} }} }}\n"
+        "function Install-VenvDeps { param($dir); 'INSTALL' }\n"
+        f"Check-Venv '{built_venv}'\n"
+        "'RETURNED'\n"), "Check-Venv", "Invoke-Quiet", env=env)
+    out = r.stdout.splitlines()
+    assert out.count("INSTALL") == installs, (r.stdout, r.stderr)
+    assert (r.returncode, "RETURNED" in out) == ((1, False) if refused else (0, True)), (r.stdout, r.stderr)
+    if refused:
+        assert "still lacks httpx" in r.stdout and "pip install -e ." in r.stdout
+
+
+@WINDOWS
+def test_get_missing_deps_reports_every_name_the_probe_prints(tmp_path, built_venv):
+    (built_venv / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nversion = "0"\ndependencies = [\n  "pytest>=1",\n'
+        '  "no-such-distribution-anywhere>=1",\n  "nor-this-one>=2"\n]\n', encoding="utf-8")
+    r = _ps(tmp_path, (f"$m = @(Get-MissingDeps '{sys.executable}' '{built_venv}')\n"
+                       "\"COUNT=$($m.Count)\"; $m\n"), "Get-MissingDeps", "Invoke-Quiet")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == ["COUNT=2", "no-such-distribution-anywhere", "nor-this-one"]
+
+
 def _script_body(text: str) -> str:
     """What runs at the top level: every function definition removed."""
     return re.sub(r"^function [\w-]+ \{\n.*?^\}\n", "", text, flags=re.S | re.M)

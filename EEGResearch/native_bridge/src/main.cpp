@@ -326,8 +326,14 @@ int main() {
     }
 
     BridgeTcpServer server;
-    const std::string token_path = BridgeTcpServer::token_path_from_env(kPort);
-    if (!server.start(kPort, token_path)) {
+    const std::filesystem::path token_path = BridgeTcpServer::token_path_from_env(kPort);
+    const BridgeTcpServer::StartResult started = server.start(kPort, token_path);
+    // start() has already said why; only a socket failure gets the port-conflict advice.
+    if (started == BridgeTcpServer::StartResult::NoToken ||
+        started == BridgeTcpServer::StartResult::TokenWriteFailed) {
+        return 1;
+    }
+    if (started == BridgeTcpServer::StartResult::NetworkFailed) {
         std::cerr << "Failed to start TCP server on 127.0.0.1:" << kPort << "\n";
         std::cerr << "Common causes:\n";
         std::cerr << "- Another bridge/process is already listening on this port\n";
@@ -348,7 +354,7 @@ int main() {
     }
 
     std::cout << "muse_native_bridge listening on 127.0.0.1:" << kPort << "\n";
-    std::cout << "Clients must first send \"AUTH <token>\"; token written to " << token_path << "\n";
+    std::cout << "Clients must first send \"AUTH <token>\"; token written to " << BridgeTcpServer::utf8(token_path) << "\n";
     std::cout << "TCP commands (JSON line): {\"cmd\":\"refresh\"} | {\"cmd\":\"connect\",\"name\":\"Muse-XXXX\"} | "
                  "{\"cmd\":\"disconnect\"}\n";
     std::cout << "Press Ctrl+C to stop\n";

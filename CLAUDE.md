@@ -206,6 +206,13 @@ npm run dev
 | `-NoEmotion` | FER+ off, and skips the 35 MB model fetch entirely. |
 | `-Optics` (`-OpticsPreset 103N`) | Headband optical channels. Refused without `-Muse`. |
 | `-LocalCalm` | `EEG_SPECTRUM_SOURCE=local`. Refused without `-Muse`, and refused outright by `start.sh`. |
+| `-Hosted` (`-BackendUrl`, `-FrontendOrigin`, `-LearnerToken`) | Student machine for the hosted site: bridge and sidecar only, push to the backend, CORS to the site, the site's shared learner token. Refused without `-Muse` and outright by `start.sh`. |
+
+**`-Hosted` is refused without `-Muse` because the simulator streams whether or not anything is
+paired**, so a hosted run would push made-up EEG onto a real student's record. Its arguments are
+checked before any write, and its keys are written after both camera branches so the hosted values
+win. Every other run writes `ALLOWED_ORIGINS` back to the sidecar's local default, so a hosted
+origin cannot break a later local run. Tests: `EEGResearch/tests/test_launcher_hosted.py`.
 
 **Every model-backed flag provisions its model at setup, not on the first frame of a lesson** — a
 4 MB download in front of a student reads as a broken feature rather than an incomplete install.
@@ -426,6 +433,11 @@ other exactly, so they move as one (the `vitest` Dependabot group). **Resolve wi
 worktree remove` deletes *through* a junction, so it empties the main checkout's `node_modules` from
 the top of the alphabet until a long path stops it. Remove the link with `cmd /c rmdir <link>`
 (which deletes only the link) before removing the worktree; if it already happened, `npm ci` restores it.
+
+**A worktree's sidecar tests import the main checkout unless `PYTHONPATH` names the worktree.**
+`EEGResearch/.venv` is an editable install of the main checkout, so `src` resolves there, and a run
+from a worktree tests whatever that checkout holds. Prefix the run with
+`PYTHONPATH=<worktree>/EEGResearch`, and confirm with `python -c "import src.app.config as c; print(c.__file__)"`.
 
 ### Two test-writing rules that came from real flakes
 

@@ -196,6 +196,34 @@ Stop-Process -Name muse_native_bridge -Force -ErrorAction SilentlyContinue
 ```
 Then restart `.\start.ps1 -Muse`.
 
+### A student machine for the hosted site
+
+The website and its backend are hosted; a student machine runs only the bridge and the EEG sidecar,
+which pushes readings to the hosted backend. It needs the headband setup above, plus the sidecar's
+`.env` and camera extras once:
+
+```powershell
+cd C:\AdaptiveLearning\EEGResearch
+copy .env.example .env
+python -m venv .venv; .\.venv\Scripts\pip install -e ".[face,gaze]"
+```
+
+Then, with every feature on (headband EEG and heart rate, camera emotion, gaze):
+
+```powershell
+cd C:\AdaptiveLearning
+.\start.ps1 -Hosted -Muse -Optics -Camera -Gaze `
+    -BackendUrl https://<backend>.onrender.com `
+    -FrontendOrigin https://<site>.pages.dev `
+    -LearnerToken <the site's VITE_EEG_LOCAL_TOKEN>
+```
+
+Open the site in this machine's browser, sign in, and click **Connect Headband**. Drop `-Optics`,
+`-Camera` or `-Gaze` to leave that feature off. `-LearnerToken` must equal the site's
+`VITE_EEG_LOCAL_TOKEN` exactly, or every call from the page to the sidecar is refused. The machine
+keeps its own `ADMIN_TOKEN`. `-Hosted` is refused without `-Muse`, because the simulator would push
+made-up readings to real records.
+
 ---
 
 ## 5. Stack layout

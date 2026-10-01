@@ -12,7 +12,14 @@
     # 1031/1032 16 CH, 1033/1034 8 CH, 1035/1036 4 CH, odd = low power. Empty = bridge default 1035.
     [string]$OpticsPreset = "",
     # EEG_SPECTRUM_SOURCE=local instead of the SDK band ratio; written every run, so only this flag selects it.
-    [switch]$LocalCalm
+    [switch]$LocalCalm,
+    # A student machine for the hosted site: starts only the bridge and sidecar, pushing to -BackendUrl.
+    [switch]$Hosted,
+    [string]$BackendUrl = "",
+    # The site's https origin (e.g. https://name.pages.dev), the sidecar's only allowed caller.
+    [string]$FrontendOrigin = "",
+    # The site's VITE_EEG_LOCAL_TOKEN: every student machine's sidecar must share it.
+    [string]$LearnerToken = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -164,6 +171,52 @@ function Update-SidecarTokens {
     }
 }
 
+function Test-HostedArgs {
+    # Every reason a -Hosted run would misconfigure the sidecar; empty when it is safe. Writes nothing.
+    param([bool]$hosted, [bool]$muse, [string]$backendUrl, [string]$frontendOrigin,
+          [string]$learnerToken, [string]$eegEnv)
+    $errors = @()
+    if (-not $hosted) {
+        if ($backendUrl -or $frontendOrigin -or $learnerToken) {
+            $errors += "-BackendUrl, -FrontendOrigin and -LearnerToken do nothing without -Hosted."
+        }
+        return ,$errors
+    }
+    # The simulator streams whether or not a headband is paired: made-up EEG on a student's record.
+    if (-not $muse) {
+        $errors += "-Hosted needs -Muse: the simulator would push made-up EEG to the hosted backend."
+    }
+    $u = $null
+    if (-not $backendUrl -or -not [Uri]::TryCreate($backendUrl, 'Absolute', [ref]$u) -or
+            $u.Scheme -ne 'https' -or $u.Query -or $u.Fragment) {
+        $errors += "-BackendUrl must be the hosted backend's https URL, e.g. https://name.onrender.com."
+    }
+    $o = $null
+    if (-not $frontendOrigin -or -not [Uri]::TryCreate($frontendOrigin, 'Absolute', [ref]$o) -or
+            $o.Scheme -ne 'https' -or $o.AbsolutePath -ne '/' -or $o.Query -or $o.Fragment) {
+        $errors += "-FrontendOrigin must be the site's https origin with no path, e.g. https://name.pages.dev."
+    }
+    # token_urlsafe's alphabet, which survives a .env round trip; the placeholder is refused by the sidecar.
+    if ($learnerToken -cnotmatch '^[A-Za-z0-9_-]+$' -or $learnerToken -like 'replace-me*') {
+        $errors += "-LearnerToken must be the site's VITE_EEG_LOCAL_TOKEN (letters, digits, - and _)."
+    }
+    # Set-EnvKey skips a missing file silently, which would start a sidecar on the old settings.
+    if (-not (Test-Path $eegEnv)) {
+        $errors += "No $eegEnv -- copy EEGResearch\.env.example to .env first."
+    }
+    return ,$errors
+}
+
+function Set-HostedSidecarEnv {
+    # Push to the hosted backend, accept calls only from the site, and share its learner token.
+    # ADMIN_TOKEN stays this machine's own; Update-SidecarTokens remakes it if it now equals API_TOKEN.
+    param([string]$eegEnv, [string]$backendUrl, [string]$frontendOrigin, [string]$learnerToken)
+    Set-EnvKey $eegEnv "API_TOKEN" $learnerToken
+    Set-EnvKey $eegEnv "PUSH_ENABLED" "true"
+    Set-EnvKey $eegEnv "BACKEND_URL" $backendUrl.TrimEnd('/')
+    Set-EnvKey $eegEnv "ALLOWED_ORIGINS" $frontendOrigin.TrimEnd('/')
+}
+
 # A native command's stdout, stderr dropped. `2>$null` under Stop aborts on PS 5.1: each stderr
 # line becomes an ErrorRecord that Stop makes terminating -- in exactly the state being probed.
 # Continue is local to this function, so the caller keeps Stop.
@@ -215,17 +268,33 @@ function Start-Window {
     Start-Sleep -Seconds 1
 }
 
+# Before any .env is written or any process started, so a refusal changes nothing.
+$hostedErrors = Test-HostedArgs -hosted $Hosted.IsPresent -muse $Muse.IsPresent -backendUrl $BackendUrl `
+    -frontendOrigin $FrontendOrigin -learnerToken $LearnerToken -eegEnv (Join-Path $eegDir ".env")
+if ($hostedErrors.Count -gt 0) {
+    foreach ($e in $hostedErrors) { Write-Host $e -ForegroundColor Red }
+    exit 1
+}
+# Written on every run from the flag, so a hosted origin cannot outlive a hosted run.
+$localOrigins = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000"
+
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  AdaptiveLearning -- Starting Stack"    -ForegroundColor Cyan
+if ($Hosted) {
+    Write-Host "  AdaptiveLearning -- Student machine"  -ForegroundColor Cyan
+} else {
+    Write-Host "  AdaptiveLearning -- Starting Stack"    -ForegroundColor Cyan
+}
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. Ollama, skipped when the backend is configured for Claude.
+# 1. Ollama, skipped when the backend is configured for Claude, and on a hosted student machine.
 # `Test-Path` first: Select-String on a missing file is terminating under Stop.
 $llmProvider = "ollama"
 $backendEnvPath = Join-Path $backendDir ".env"
-if (Test-Path $backendEnvPath) {
+if ($Hosted) {
+    $llmProvider = "hosted"
+} elseif (Test-Path $backendEnvPath) {
     $providerLine = Select-String -Path $backendEnvPath -Pattern '^\s*LLM_PROVIDER\s*=\s*(\S+)' |
         Select-Object -First 1
     # Guard the match too: .Matches[0] on an absent key is a null-array index.
@@ -235,7 +304,9 @@ if (Test-Path $backendEnvPath) {
 }
 
 Write-Host "[1/5] Ollama (LLM)" -ForegroundColor Cyan
-if ($llmProvider -eq "claude") {
+if ($llmProvider -eq "hosted") {
+    Write-Host "  Hosted -- the backend at $BackendUrl generates questions; skipping." -ForegroundColor Gray
+} elseif ($llmProvider -eq "claude") {
     Write-Host "  LLM_PROVIDER=claude in backend/.env -- skipping Ollama." -ForegroundColor Gray
     Write-Host "  Nothing local is needed for question generation." -ForegroundColor Gray
 } elseif (!(Get-Command ollama -ErrorAction SilentlyContinue)) {
@@ -407,63 +478,84 @@ if ($Camera) {
     Set-EnvKey $eegEnv "BACKEND_URL" "http://127.0.0.1:8000"
     # From the flag on both branches, so a hand-edited `local` cannot survive.
     Set-EnvKey $eegEnv "EEG_SPECTRUM_SOURCE" $spectrumSource
-    Set-EnvKey $backendEnv "INGEST_MODE" "push"
-    # The page calls the sidecar with its API_TOKEN; unset, every browser call 401s.
-    # Guard the file and the match: a fresh checkout has neither. -Last 1 as dotenv reads.
-    $apiToken = Get-EnvValue $eegEnv "API_TOKEN"
-    if ($apiToken) {
-        Set-EnvKey $frontendEnv "VITE_EEG_LOCAL_TOKEN" $apiToken
-    } else {
-        # Only with no EEGResearch/.env at all: the tokens above are generated into an existing one.
-        Write-Host "  No $eegEnv -- VITE_EEG_LOCAL_TOKEN not set." -ForegroundColor Yellow
-        Write-Host "  Copy EEGResearch/.env.example to .env and re-run this script." -ForegroundColor Yellow
+    # Hosted: the backend and the page are elsewhere, so only the sidecar is configured.
+    if (-not $Hosted) {
+        Set-EnvKey $backendEnv "INGEST_MODE" "push"
+        # The page calls the sidecar with its API_TOKEN; unset, every browser call 401s.
+        # Guard the file and the match: a fresh checkout has neither. -Last 1 as dotenv reads.
+        $apiToken = Get-EnvValue $eegEnv "API_TOKEN"
+        if ($apiToken) {
+            Set-EnvKey $frontendEnv "VITE_EEG_LOCAL_TOKEN" $apiToken
+        } else {
+            # Only with no EEGResearch/.env at all: the tokens above are generated into an existing one.
+            Write-Host "  No $eegEnv -- VITE_EEG_LOCAL_TOKEN not set." -ForegroundColor Yellow
+            Write-Host "  Copy EEGResearch/.env.example to .env and re-run this script." -ForegroundColor Yellow
+        }
+        Write-Host "  INGEST_MODE = push (the camera's only writer is the push endpoint)" -ForegroundColor Gray
     }
-    Write-Host "  INGEST_MODE = push (the camera's only writer is the push endpoint)" -ForegroundColor Gray
 } else {
     Set-EnvKey $eegEnv "FACE_ENABLED" "false"
     Set-EnvKey $eegEnv "FACE_GAZE_ENABLED" "false"
     Set-EnvKey $eegEnv "FACE_EMOTION_ENABLED" "false"
     # Back to pull: the backend polls the sidecar.
     Set-EnvKey $eegEnv "PUSH_ENABLED" "false"
-    Set-EnvKey $backendEnv "INGEST_MODE" "pull"
+    if (-not $Hosted) { Set-EnvKey $backendEnv "INGEST_MODE" "pull" }
     Set-EnvKey $eegEnv "EEG_SPECTRUM_SOURCE" $spectrumSource
 
     # Drops the camera entry and re-points the headband entry.
     $null = Update-DeviceRegistry $eegEnv $headband
 }
 
+# After both branches, so the hosted push target and origin win over their local values.
+if ($Hosted) {
+    Set-HostedSidecarEnv $eegEnv $BackendUrl $FrontendOrigin $LearnerToken
+    Update-SidecarTokens $eegEnv $backendEnv
+    Write-Host "  Hosted: pushing to $BackendUrl, accepting calls from $FrontendOrigin" -ForegroundColor Gray
+} else {
+    Set-EnvKey $eegEnv "ALLOWED_ORIGINS" $localOrigins
+}
+
 # 3. EEGResearch backend
 Write-Host "[3/5] EEGResearch backend (port 8001)" -ForegroundColor Cyan
 Check-Venv $eegDir
-$eegCmd = ".\.venv\Scripts\Activate.ps1; uvicorn src.app.main:app --host 127.0.0.1 --port 8001 --reload"
+# No --reload for students: nothing on their machine edits the sidecar's code.
+$reload = if ($Hosted) { "" } else { " --reload" }
+$eegCmd = ".\.venv\Scripts\Activate.ps1; uvicorn src.app.main:app --host 127.0.0.1 --port 8001$reload"
 Start-Window "EEG Backend :8001" $eegDir $eegCmd
 Start-Sleep -Seconds 2
 
-# 4. Website backend
-Write-Host "[4/5] Website backend (port 8000)" -ForegroundColor Cyan
-Check-Venv $backendDir
-$apiCmd = ".\.venv\Scripts\Activate.ps1; uvicorn main:app --reload --port 8000"
-Start-Window "Website Backend :8000" $backendDir $apiCmd
-Start-Sleep -Seconds 2
+if (-not $Hosted) {
+    # 4. Website backend
+    Write-Host "[4/5] Website backend (port 8000)" -ForegroundColor Cyan
+    Check-Venv $backendDir
+    $apiCmd = ".\.venv\Scripts\Activate.ps1; uvicorn main:app --reload --port 8000"
+    Start-Window "Website Backend :8000" $backendDir $apiCmd
+    Start-Sleep -Seconds 2
 
-# 5. Frontend
-Write-Host "[5/5] Frontend (Vite)" -ForegroundColor Cyan
-$nmPath = Join-Path $frontendDir "node_modules"
-if (!(Test-Path $nmPath)) {
-    Write-Host "  node_modules not found -- running npm install..." -ForegroundColor Yellow
-    Push-Location $frontendDir
-    npm install
-    Pop-Location
+    # 5. Frontend
+    Write-Host "[5/5] Frontend (Vite)" -ForegroundColor Cyan
+    $nmPath = Join-Path $frontendDir "node_modules"
+    if (!(Test-Path $nmPath)) {
+        Write-Host "  node_modules not found -- running npm install..." -ForegroundColor Yellow
+        Push-Location $frontendDir
+        npm install
+        Pop-Location
+    }
+    Start-Window "Frontend :5173" $frontendDir "npm run dev"
 }
-Start-Window "Frontend :5173" $frontendDir "npm run dev"
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
 Write-Host "  All services started!"                 -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Frontend:    http://localhost:5173"    -ForegroundColor White
-Write-Host "  Website API: http://localhost:8000"    -ForegroundColor White
+if ($Hosted) {
+    Write-Host "  Site:        $FrontendOrigin"      -ForegroundColor White
+    Write-Host "  Backend:     $BackendUrl"          -ForegroundColor White
+} else {
+    Write-Host "  Frontend:    http://localhost:5173"    -ForegroundColor White
+    Write-Host "  Website API: http://localhost:8000"    -ForegroundColor White
+}
 Write-Host "  EEG API:     http://localhost:8001"    -ForegroundColor White
 if ($Muse) {
     Write-Host "  Muse Bridge: port 8765"            -ForegroundColor White
@@ -472,7 +564,9 @@ if ($Camera) {
     Write-Host "  Camera:      index $CameraIndex"   -ForegroundColor White
 }
 Write-Host ""
-if ($Muse) {
+if ($Hosted) {
+    Write-Host "  Open $FrontendOrigin in this machine's browser, sign in, and click Connect Headband." -ForegroundColor Yellow
+} elseif ($Muse) {
     Write-Host "  Turn on your Muse S and click Connect Headband in the app." -ForegroundColor Yellow
 } else {
     Write-Host "  Running in simulator mode. Use .\start.ps1 -Muse to enable the headband." -ForegroundColor Gray

@@ -173,7 +173,7 @@ def _free_port() -> int:
 
 
 def check_bridge(ctx):
-    """The kit's bridge starts, writes its token, answers as a libMuse build, and runs on the kit's own C++ runtime."""
+    """The bridge starts, writes its token, answers as a libMuse build, and loads its C++ runtime from bridge\\."""
     require("cfg" in ctx, "kit.json did not load")
     bridge_dir = ctx["app"] / "bridge"
     home = Path(tempfile.mkdtemp(prefix="kit-bridge-"))
@@ -203,9 +203,10 @@ def check_bridge(ctx):
     finally:
         proc.kill()
         proc.wait(10)
+    # A working launch proves nothing: the bridge inherits the launcher's DLL folder, _internal\, ahead of System32.
     crt = [m for m in modules if CRT.fullmatch(os.path.basename(m))]
     outside = [m for m in crt if not _norm(m).startswith(_norm(bridge_dir) + os.sep)]
-    require(crt and not outside, f"the C++ runtime came from outside the kit: {outside or 'none loaded'}")
+    require(crt and not outside, f"the C++ runtime did not load from bridge\\: {outside or 'none loaded'}")
     return {"bridge_mode": status["bridge_mode"], "crt": crt}
 
 

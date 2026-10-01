@@ -327,9 +327,10 @@ read from `kit.json`, which `src/kit/config.py` refuses for exactly the reasons 
 - **The supervisor** is this section's restart policy in Python, stopping on 0 and on 78. Past the budget it retries
   every 300 s rather than giving up, since nobody is watching. Each run logs to its own file; the newest ten are kept.
 - **`--self-test`** runs before every installer is built: the models on a real portrait, the sidecar on port 0, and
-  the bridge started, authenticated and required to answer `bridge_mode: libmuse` with its C++ runtime loaded from the
-  kit's own `bridge\`. A blank frame cannot tell a working model from one that never detects, and a machine with Visual
-  C++ installed hides a missing runtime from a plain launch.
+  the bridge started, authenticated and required to answer `bridge_mode: libmuse` with its C++ runtime loaded from
+  `bridge\` itself. A blank frame cannot tell a working model from one that never detects, and a launch that works
+  cannot show where the runtime came from: the bridge inherits the frozen launcher's DLL folder, `_internal\`, ahead of
+  System32. The four runtime files are the only names the two share, and `bridge\` is searched first.
 
 It is deliberately **not** a Windows service or a scheduled task: moving the exe out of the launcher
 window is how those variables get lost. The debug panel's *Link* row tells a dead bridge from a

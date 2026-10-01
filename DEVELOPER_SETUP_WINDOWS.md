@@ -248,8 +248,8 @@ and Inno Setup 6 (`winget install --id JRSoftware.InnoSetup -e --scope user`). F
 It refuses the arguments for the reasons `-Hosted` refuses its own, then builds the bridge with
 libMuse, freezes the sidecar from a fresh venv installed from `requirements-gaze.lock` and
 `installer\requirements-kit.lock`, fetches and verifies both camera models, and checks every bundled
-DLL. It then self-tests the result: the models on a real face, and the bridge as a libMuse build on
-the kit's own C++ runtime. The installer and its SHA-256 land in `EEGResearch\dist\kit`.
+DLL. It then self-tests the result: the models on a real face, and the bridge as a libMuse build
+loading its C++ runtime from its own folder. The installer and its SHA-256 land in `EEGResearch\dist\kit`.
 
 - `-SkipInstaller` stops after the self-test.
 - `-SignToolArgs` signs both exes and the installer, for example with Artifact Signing. An unsigned

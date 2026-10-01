@@ -1,6 +1,7 @@
 """Learning preferences: endpoint bounds, the failed-read fallback, and the session prewarm."""
 
 import os
+from datetime import datetime, timedelta
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
@@ -148,3 +149,25 @@ def test_the_falsy_settings_are_sent_rather_than_filtered_out(field, value, monk
     main.update_my_profile(main.UpdateProfileRequest(**{field: value}), None)
 
     assert written == [{field: value}]
+
+
+def test_a_profile_edit_stamps_updated_at_in_utc_with_its_offset(monkeypatch):
+    stamped = []
+
+    class _Recording:
+        def table(self, _name):
+            class _Q:
+                def update(self, obj):
+                    stamped.append(obj.get("updated_at"))
+                    return self
+
+                def eq(self, *_a):  return self
+                def execute(self):  return type("R", (), {"data": []})()
+
+            return _Q()
+
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+    monkeypatch.setattr(main, "supabase", _Recording())
+    monkeypatch.setattr(main, "_profile", lambda _uid: {"id": STUDENT["id"]})
+    main.update_my_profile(main.UpdateProfileRequest(practice_reminders=True), None)
+    assert [datetime.fromisoformat(s).utcoffset() for s in stamped] == [timedelta(0)], stamped

@@ -10,6 +10,7 @@ import ClassAccuracyTrend from '../../components/analytics/ClassAccuracyTrend'
 import ClassTimeOfDay from '../../components/analytics/ClassTimeOfDay'
 import ClassSignalTrend from '../../components/analytics/ClassSignalTrend'
 import ClassSignalRoster from '../../components/analytics/ClassSignalRoster'
+import LoadError from '../../components/ui/LoadError'
 import { readHideSensorData } from '../../lib/viewPrefs'
 
 /** "2h ago", or null so the caller can say "never" or "unknown" itself. */
@@ -65,8 +66,8 @@ export default function ClassDetail() {
       setCls(classRes.value)
       setStudents(Array.isArray(studentsRes.value) ? studentsRes.value : [])
     } catch (err) {
-      setError(err.message || 'Could not load class')
-      toast.error(err.message || 'Could not load class')
+      // The error itself, so LoadError can tell a refusal from an outage by its status.
+      setError(err ?? new Error('Could not load class'))
     } finally {
       setLoading(false)
     }
@@ -125,12 +126,8 @@ export default function ClassDetail() {
   if (error) {
     return (
       <div className="p-6 lg:p-8 text-center">
-        <p className="text-gray-500 dark:text-gray-400 mb-1">Couldn&apos;t load this class.</p>
-        <p className="text-xs text-gray-600 mb-4 dark:text-gray-400">{error}</p>
-        <div className="flex items-center justify-center gap-2">
-          <button onClick={loadData} className="px-5 py-2.5 bg-violet-600 text-white rounded-xl font-bold text-sm">Try again</button>
-          <button onClick={() => navigate('/teacher/classes')} className="px-5 py-2.5 bg-slate-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-xl font-bold text-sm">Back to Classes</button>
-        </div>
+        <LoadError what="this class" error={error} onRetry={loadData} />
+        <button onClick={() => navigate('/teacher/classes')} className="px-5 py-2.5 bg-slate-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-xl font-bold text-sm">Back to Classes</button>
       </div>
     )
   }

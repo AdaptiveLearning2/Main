@@ -697,6 +697,8 @@ class _SessionsClient(_SigningClient):
                     return type("R", (), {"data": row})()
 
             return _T()
+        if name in ("class_memberships", "parent_child_links"):
+            return _Query([])  # read, and empty: a viewer with no relationship, not a failed check
         return super().table(name)
 
 

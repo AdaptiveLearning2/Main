@@ -2,6 +2,7 @@
 import asyncio
 import inspect
 import os
+import re
 import sys
 import threading
 import time
@@ -26,14 +27,20 @@ class _Result:
         self.count = count
 
 
+# The embeds main.py uses: (table, embedded table) -> the foreign key PostgREST joins on.
+_EMBED_KEYS = {("class_memberships", "classes"): "class_id"}
+
+
 class _Query:
     """Minimal stand-in for the supabase-py query builder chain."""
 
-    def __init__(self, rows, max_rows=None, raises=None):
+    def __init__(self, rows, max_rows=None, raises=None, name=None, tables=None):
         self._rows = rows
         self._max_rows = max_rows
         # A read that fails, as opposed to one that returns nothing.
         self._raises = raises
+        self._name, self._tables = name, tables or {}
+        self._embeds = {}
         self._filters = self.filters = []
         self._limit = None
         self._order = None
@@ -43,12 +50,31 @@ class _Query:
 
     def select(self, *cols, **kw):
         self._count = kw.get("count")
-        # Only named columns come back, as in PostgREST. Embeds ("a(b)") aren't
-        # modelled and fall back to whole rows.
+        # Only named columns come back, as in PostgREST. With an embed ("a(b)"), whole rows: one in
+        # _EMBED_KEYS is joined, any other is left to the fixture's rows.
         spec = ",".join(cols)
+        self._embeds = {m[1]: bool(m[2]) for m in re.finditer(r"(\w+)(!inner)?\(", spec)
+                        if (self._name, m[1]) in _EMBED_KEYS}
         if spec and "*" not in spec and "(" not in spec:
             self._cols = [c.strip() for c in spec.split(",") if c.strip()]
         return self
+
+    def _embed(self, row):
+        """Row with each embed attached, as PostgREST was seen to answer; None when `!inner` drops it.
+
+        A filter on an embed's column empties that embed, and drops the row only under `!inner`.
+        """
+        out = dict(row)
+        for name, inner in self._embeds.items():
+            key = _EMBED_KEYS[(self._name, name)]
+            target = next((r for r in self._tables.get(name, []) if r.get("id") == row.get(key)), None)
+            wanted = [(col.split(".", 1)[1], v) for col, v in self._filters if col.startswith(name + ".")]
+            if target is not None and any(target.get(col) != v for col, v in wanted):
+                target = None
+            if target is None and inner:
+                return None
+            out[name] = target
+        return out
 
     def _project(self, row):
         if self._cols is None:
@@ -104,6 +130,8 @@ class _Query:
 
     def _matches(self, row):
         for col, want in self._filters:
+            if col.split(".", 1)[0] in self._embeds:
+                continue  # applied to the embed in `_embed`
             have = row.get(col)
             if isinstance(want, tuple) and want[0] == "in":
                 if have not in want[1]:
@@ -141,7 +169,8 @@ class _Query:
             raise AssertionError(
                 "or_() is recorded but not evaluated by this fake; give the "
                 "table no rows, or model the filter")
-        rows = [r for r in self._rows if self._matches(r)]
+        rows = [self._embed(r) for r in self._rows] if self._embeds else list(self._rows)
+        rows = [r for r in rows if r is not None and self._matches(r)]
         if self._order:
             rows = sorted(rows, key=lambda r: str(r.get(self._order, "")), reverse=self._desc)
         total = len(rows)
@@ -193,7 +222,7 @@ class _FakeSupabase:
         self.table_calls.append(name)
         cap = self._max_rows.get(name) if isinstance(self._max_rows, dict) else self._max_rows
         exc = RuntimeError(f"{name} read failed") if name in self._table_raises else None
-        query = _Query(self._tables.get(name, []), max_rows=cap, raises=exc)
+        query = _Query(self._tables.get(name, []), max_rows=cap, raises=exc, name=name, tables=self._tables)
         query._drop_count = self._count_missing
         self.queries.append(query)
         return query
@@ -280,6 +309,39 @@ def test_verify_raises_403_for_unauthorized_viewer():
     with pytest.raises(main.HTTPException) as exc:
         main._verify_can_view_student(STRANGER, "student-1")
     assert exc.value.status_code == 403
+
+
+def test_the_teacher_check_is_one_read():
+    assert main._can_view_student(TEACHER, "student-1") is True
+    calls = main.supabase.table_calls
+    assert calls.count("class_memberships") == 1 and "classes" not in calls, calls
+
+
+def _logged_events(monkeypatch) -> list:
+    events = []
+    monkeypatch.setattr(main, "_record_security_event", lambda *a, **_k: events.append(a[0]))
+    return events
+
+
+def test_a_denial_read_in_full_is_a_403_and_is_logged(monkeypatch):
+    events = _logged_events(monkeypatch)
+    with pytest.raises(main.HTTPException) as exc:
+        main._verify_can_view_student(STRANGER, "student-1")
+    assert (exc.value.status_code, events) == (403, ["authz_denied"])
+
+
+@pytest.mark.parametrize("failing", ["class_memberships", "parent_child_links"])
+def test_a_failed_relationship_read_is_a_503_and_not_a_logged_denial(monkeypatch, failing):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={failing}))
+    events = _logged_events(monkeypatch)
+    with pytest.raises(main.HTTPException) as exc:
+        main._verify_can_view_student(STRANGER, "student-1")
+    assert (exc.value.status_code, events) == (503, [])
+
+
+def test_a_failed_read_does_not_block_what_another_relationship_allows(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={"class_memberships"}))
+    assert main._can_view_student(PARENT, "student-1") is True
 
 
 # ── _verify_class_owner ──────────────────────────────────────────────────
@@ -1288,8 +1350,8 @@ def test_missing_class_returns_404_not_500():
     assert exc.value.status_code == 404
 
 
-def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_stale(monkeypatch):
-    """A stale session's heart reading is nulled like cognitive and face."""
+def _class_live_on_a_stale_session(monkeypatch):
+    """`class_live` over one session last heard from 700 s ago: (rows, updates written, poller stops)."""
     from datetime import datetime, timedelta
 
     stale_ts = (datetime.utcnow() - timedelta(seconds=700)).isoformat()
@@ -1355,8 +1417,12 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
     monkeypatch.setattr(main.eeg_poller, "stop",
                         lambda sid, uid=None: stop_calls.append((sid, uid))
                         or {"running": False, "samples": 0})
+    return main.class_live("class-1", None), updates, stop_calls
 
-    out = main.class_live("class-1", None)
+
+def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_stale(monkeypatch):
+    """A stale session's heart reading is nulled like cognitive and face."""
+    out, updates, stop_calls = _class_live_on_a_stale_session(monkeypatch)
 
     assert any(t == "sessions" for t, _ in updates), "the stale session was never marked ended"
     assert out[0]["latest_cognitive"] is None
@@ -1369,6 +1435,14 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
         "the stale-session sweep must release the student's reservation, "
         "not the teacher's (or none at all)"
     )
+
+
+def test_class_live_stamps_a_stale_close_in_utc_with_its_offset(monkeypatch):
+    from datetime import datetime, timedelta
+
+    _, updates, _ = _class_live_on_a_stale_session(monkeypatch)
+    stamps = [fields["ended_at"] for table, fields in updates if table == "sessions" and "ended_at" in fields]
+    assert [datetime.fromisoformat(s).utcoffset() for s in stamps] == [timedelta(0)], stamps
 
 
 # ── facial-recognition opt-out ───────────────────────────────────────────

@@ -172,6 +172,19 @@ def test_three_states_are_distinguishable_on_the_payload():
     assert low["calm_score"] < held["calm_score"]
 
 
+def test_a_null_is_good_entry_is_a_bad_electrode_for_the_frame_gate():
+    """The bridge writes a non-finite contact value as null; docs/signals.md reads it as 0."""
+    t = Ticker()
+    _warm(t)
+    nulled = t.tick({**RELAXED, "hsi": [1.0] * 4, "is_good": [None, 0.0, 0.0, 0.0]})
+    assert nulled["samples_rejected"] == 1
+
+
+def test_a_null_is_good_entry_is_a_bad_electrode_for_the_contact_ratio():
+    f = Ticker().run({**RELAXED, "hsi": [1.0] * 4, "is_good": [None, 1.0, 1.0, 1.0]}, 30)
+    assert f["contact_ratio"] == pytest.approx(0.75)
+
+
 # -- 1.5 the ratios are smoothed before they are scaled ------------------------
 
 def test_a_one_tick_excursion_moves_the_score_less_than_the_ratio_moved():

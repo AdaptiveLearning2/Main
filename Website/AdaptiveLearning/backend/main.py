@@ -2524,7 +2524,7 @@ def update_my_profile(payload: UpdateProfileRequest, request: Request):
         ) if value is not None
     }
     if fields:
-        fields["updated_at"] = datetime.utcnow().isoformat()
+        fields["updated_at"] = _utc_now().isoformat()
         supabase.table("profiles").update(fields).eq("id", user["id"]).execute()
     if payload.display_name is not None:
         try:
@@ -2818,7 +2818,7 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
         "question_id":    payload.question_id,
         "selected_index": payload.selected_index,
         "correct":        payload.correct,
-        "answered_at":    datetime.utcnow().isoformat(),
+        "answered_at":    _utc_now().isoformat(),
     }).execute()
     # Atomic increment in the database. Never raises: the answer row is the record
     # and `_answer_counts` recomputes at close.
@@ -4717,8 +4717,8 @@ def _verify_class_owner(class_id: str, user_id: str):
         raise HTTPException(403, "Not your class")
 
 
-def _can_view_student(viewer: dict, student_id: str) -> bool:
-    """Self, a teacher of their class, a linked parent, or an admin.
+def _can_view_student(viewer: dict, student_id: str) -> bool | None:
+    """Self, a teacher of their class, a linked parent, or an admin; None if a check could not be read.
 
     Service-role reads bypass RLS: this check is the enforcement.
     """
@@ -4729,16 +4729,16 @@ def _can_view_student(viewer: dict, student_id: str) -> bool:
     if _is_admin(uid):
         return True
 
+    unread = False
     try:
-        classes = supabase.table("classes").select("id").eq("teacher_id", uid).execute().data or []
-        class_ids = [c["id"] for c in classes]
-        if class_ids:
-            member = supabase.table("class_memberships").select("id") \
-                .in_("class_id", class_ids).eq("student_id", student_id).limit(1).execute().data or []
-            if member:
-                return True
+        # One read. Without `!inner` PostgREST keeps every membership and only empties the embed.
+        taught = supabase.table("class_memberships").select("id, classes!inner(teacher_id)") \
+            .eq("student_id", student_id).eq("classes.teacher_id", uid).limit(1).execute().data or []
+        if taught:
+            return True
     except Exception as e:
         print(f"[can_view_student:teacher] {e}")
+        unread = True
 
     try:
         link = supabase.table("parent_child_links").select("id") \
@@ -4747,12 +4747,17 @@ def _can_view_student(viewer: dict, student_id: str) -> bool:
             return True
     except Exception as e:
         print(f"[can_view_student:parent] {e}")
+        unread = True
 
-    return False
+    return None if unread else False
 
 
 def _verify_can_view_student(viewer: dict, student_id: str):
-    if not _can_view_student(viewer, student_id):
+    allowed = _can_view_student(viewer, student_id)
+    if allowed is None:
+        # Still refused, but a failed read is not a denial, so it stays out of the security log.
+        raise HTTPException(503, "Could not check access to this student; try again")
+    if not allowed:
         # The subject id answers "who tried to read this child's record".
         _record_security_event("authz_denied", viewer.get("id"), student_id,
                                check="can_view_student")
@@ -6363,7 +6368,7 @@ def class_live(class_id: str, request: Request):
 
     LIVE_WINDOW_SEC = _LIVE_WINDOW_SEC
     STALE_AFTER_SEC = _STALE_AFTER_SEC
-    now = datetime.utcnow()
+    now = _utc_now()
     live_cutoff  = (now - timedelta(seconds=LIVE_WINDOW_SEC)).isoformat()
     stale_cutoff = (now - timedelta(seconds=STALE_AFTER_SEC)).isoformat()
 

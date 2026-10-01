@@ -9,6 +9,7 @@ vi.mock('../../lib/api', () => ({ apiFetch: vi.fn() }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 const { apiFetch } = await import('../../lib/api')
+const { toast } = await import('sonner')
 
 const CLASS_ID = 'class-1'
 
@@ -58,8 +59,21 @@ it('distinguishes a failed request from a missing class', async () => {
   apiFetch.mockRejectedValue(new Error('Not your class'))
   renderAt()
   expect(await screen.findByText(/couldn't load this class/i)).toBeInTheDocument()
-  expect(screen.getByText('Not your class')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+  // The backend's detail string is not shown to a teacher.
+  expect(screen.queryByText('Not your class')).not.toBeInTheDocument()
   expect(screen.queryByText('Class not found.')).not.toBeInTheDocument()
+})
+
+it('says a refused class is refused, once, with no retry', async () => {
+  apiFetch.mockReset()
+  toast.error.mockClear()
+  apiFetch.mockRejectedValue(Object.assign(new Error('Not your class'), { status: 403 }))
+  renderAt()
+  expect(await screen.findByText("You don't have access to this class.")).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+  expect(screen.queryByText('Not your class')).not.toBeInTheDocument()
+  expect(toast.error).not.toHaveBeenCalled()
 })
 
 const notFound = (msg) => Object.assign(new Error(msg), { status: 404 })

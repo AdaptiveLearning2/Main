@@ -286,7 +286,8 @@ class SignalProcessor:
         good_channels: float | None = None
         if isinstance(is_good, list) and is_good:
             try:
-                instant = sum(1 for v in is_good if float(v) >= 1.0) / len(is_good)
+                # A null is the bridge's non-finite value: a bad electrode, not unknown (docs/signals.md).
+                instant = sum(1 for v in is_good if v is not None and float(v) >= 1.0) / len(is_good)
             except (TypeError, ValueError):
                 instant = None
             if instant is not None:
@@ -527,7 +528,7 @@ class SignalProcessor:
         if not isinstance(is_good, list) or not is_good:
             return True  # no contact data -- can't judge, so don't discard
         try:
-            return any(float(v) >= 1.0 for v in is_good)
+            return any(v is not None and float(v) >= 1.0 for v in is_good)  # null: a bad electrode
         except (TypeError, ValueError):
             return True
 

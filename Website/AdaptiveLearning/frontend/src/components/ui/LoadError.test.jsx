@@ -83,6 +83,8 @@ describe('every LoadError call site is classified', () => {
       'GET /api/students/{id}/questions -- _verify_can_view_student',
     'pages/teacher/Sessions.jsx':
       'GET /api/classes/{id}/students -- _verify_class_owner',
+    'pages/teacher/ClassDetail.jsx':
+      'GET /api/classes/{id} -- _verify_class_owner',
     // Two sites; the stricter class applies to the file.
     'pages/teacher/Live.jsx':
       'GET /api/teacher/classes/{id}/live -- _verify_class_owner',

@@ -418,8 +418,8 @@ plus `requirements*.lock`; a module-level import in `src/app` must be a runtime 
 and every lock). A venv keeps the dependency list it was installed with, so both launchers' venv
 checks install what a pulled sidecar `pyproject` adds or raises, or a package a pulled backend
 `requirements.txt` adds (`EEGResearch/scripts/missing_runtime_deps.py`, under each venv's own python).
-A backend pin held at another version only warns: it may be a bump on trial, and reinstalling would
-revert it or, offline, stop the launch.
+An existing backend venv gets its missing packages by name, never `-r`, and a pin held at another
+version only warns: it may be a bump on trial, and reinstalling would revert it or, offline, stop the launch.
 
 **There must be exactly one vite, and `npm ls vite` is the check.** A second, older vite under
 `node_modules/vitest/` leaves `@vitejs/plugin-react` off the test transform, so every JSX file

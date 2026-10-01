@@ -185,19 +185,21 @@ check_venv() {
         popd > /dev/null
         install_venv_deps "$dir" "$mode"
     else
-        # A venv keeps the dependency list it was installed with, and a requirements.txt pin held at
-        # another version only warns; see Check-Venv in start.ps1.
-        local manifest="$dir/pyproject.toml" fix="-e ." absent=""
-        if [ "$mode" != "editable" ]; then
-            manifest="$dir/requirements.txt"; fix="-r requirements.txt"; absent="--absent"
-        fi
-        local missing
+        # A venv keeps the dependency list it was installed with; a requirements.txt pin held at another
+        # version is reported, and only absent packages are installed, by name. See Check-Venv in start.ps1.
+        local manifest="$dir/pyproject.toml" absent=""
+        if [ "$mode" != "editable" ]; then manifest="$dir/requirements.txt"; absent="--absent"; fi
+        local missing packages=()
         missing="$(missing_deps "$dir" "$manifest" $absent)"
         if [ -n "$missing" ]; then
             echo -e "  ${YELLOW}Installing what this venv lacks: ${missing// /, }${NC}"
-            install_venv_deps "$dir" "$mode"
+            # An array, so an extra's brackets reach pip rather than being globbed.
+            [ -n "$absent" ] && read -ra packages <<< "$missing"
+            install_venv_deps "$dir" "$mode" "${packages[@]}"
             missing="$(missing_deps "$dir" "$manifest" $absent)"
             if [ -n "$missing" ]; then
+                local fix="-e ."
+                [ -n "$absent" ] && fix="\"${missing// /\" \"}\""
                 echo -e "  ${RED}ERROR: $dir/.venv still lacks ${missing// /, }. From that folder run:${NC}"
                 echo -e "  ${YELLOW}  .venv/bin/pip install $fix${NC}"
                 exit 1
@@ -220,10 +222,13 @@ missing_deps() {
 }
 
 install_venv_deps() {
+    # Packages named after the mode, by name; otherwise the folder's pyproject, editable, or requirements.txt.
     local dir="$1"
     local mode="$2"
     pushd "$dir" > /dev/null
-    if [ "$mode" = "editable" ]; then
+    if [ $# -gt 2 ]; then
+        .venv/bin/pip install "${@:3}" -q
+    elif [ "$mode" = "editable" ]; then
         .venv/bin/pip install -e . -q
     else
         .venv/bin/pip install -r requirements.txt -q

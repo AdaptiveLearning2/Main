@@ -18,6 +18,12 @@ except ImportError:  # not in the base install; pip vendors it, and the install 
     from pip._vendor.packaging.requirements import Requirement
 
 
+def _spec(req: Requirement) -> str:
+    """req as pip installs it, extras kept: the backend's launcher installs what this prints, by name."""
+    extras = f"[{','.join(sorted(req.extras))}]" if req.extras else ""
+    return f"{req.name}{extras}{req.specifier}"
+
+
 def _unmet(req: Requirement, seen: set[tuple[str, str]], absent_only: bool) -> list[str]:
     """req if not installed or, unless absent_only, at a version it excludes; else what its extras add that is.
 
@@ -26,9 +32,9 @@ def _unmet(req: Requirement, seen: set[tuple[str, str]], absent_only: bool) -> l
     try:
         installed = version(req.name)
     except PackageNotFoundError:
-        return [f"{req.name}{req.specifier}"]
+        return [_spec(req)]
     if not absent_only and not req.specifier.contains(installed, prereleases=True):
-        return [f"{req.name}{req.specifier}"]
+        return [_spec(req)]
     unmet = []
     for extra in sorted(req.extras):
         if (req.name.lower(), extra) in seen:

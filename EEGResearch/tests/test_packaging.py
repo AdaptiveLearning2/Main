@@ -141,8 +141,10 @@ def _missing(manifest: Path, blocked: bool = False, site: Path | None = None, ab
 @KINDS
 def test_the_dependency_probe_names_what_this_interpreter_lacks(tmp_path, kind):
     manifest = _manifest_with(tmp_path, ["pytest>=1", "uvicorn[standard]>=0.30", "pydantic_settings>=2",
-                                         "no-such-distribution-anywhere>=1"], kind)
-    assert _missing(manifest) == ["no-such-distribution-anywhere>=1"]
+                                         "no-such-distribution-anywhere>=1", "no-such-dist-with-an-extra[more]==1"],
+                              kind)
+    # Named with its extra, since the backend's launcher installs exactly what is printed.
+    assert _missing(manifest) == ["no-such-distribution-anywhere>=1", "no-such-dist-with-an-extra[more]==1"]
 
 
 @KINDS
@@ -180,7 +182,7 @@ def test_the_dependency_probe_reads_every_line_of_the_backends_requirements(tmp_
         info = tmp_path / "site" / f"{_normalise(pin[1]).replace('-', '_')}-0.dist-info"
         info.mkdir(parents=True)
         (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {pin[1]}\nVersion: 0\n", encoding="utf-8")
-    assert _missing(BACKEND_REQUIREMENTS, site=tmp_path / "site") == [pin[1] + pin[3] for pin in pins]
+    assert _missing(BACKEND_REQUIREMENTS, site=tmp_path / "site") == lines  # extras kept, so each installs as pinned
 
 
 @KINDS

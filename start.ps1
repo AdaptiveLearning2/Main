@@ -127,13 +127,19 @@ function Set-EnvKey {
     # UTF-8 with no BOM both ways: the sidecar decodes .env as UTF-8, and dotenv reads a BOM into the first key.
     param([string]$path, [string]$key, [string]$value)
     if (!(Test-Path $path)) { return }
-    $lines = @(Get-Content -Encoding UTF8 $path)
+    $full = Convert-Path $path
+    try {
+        $lines = [IO.File]::ReadAllLines($full, (New-Object Text.UTF8Encoding $false, $true))
+    } catch [Text.DecoderFallbackException] {
+        # Saved in the ANSI code page: convert it, or a character a person typed is rewritten as U+FFFD.
+        $lines = [IO.File]::ReadAllLines($full, [Text.Encoding]::Default)
+    }
     if ($lines -match "^$key=") {
         $lines = $lines -replace "^$key=.*", "$key=$value"
     } else {
         $lines += "$key=$value"
     }
-    [IO.File]::WriteAllLines((Convert-Path $path), [string[]]$lines, (New-Object Text.UTF8Encoding $false))
+    [IO.File]::WriteAllLines($full, [string[]]$lines, (New-Object Text.UTF8Encoding $false))
 }
 
 function Get-EnvValue {

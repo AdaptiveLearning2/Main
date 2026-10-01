@@ -1,4 +1,4 @@
-"""start.ps1 writes .env as UTF-8 with no BOM; see CLAUDE.md "Three start.ps1 rules"."""
+"""start.ps1 writes .env as UTF-8 with no BOM; see CLAUDE.md "start.ps1 rules that cost whole runs"."""
 
 from __future__ import annotations
 
@@ -26,16 +26,29 @@ def _extract(text: str, start: str) -> str:
     return m.group(0)
 
 
+def _ansi() -> str:
+    """Python's codec for the system ANSI code page, which Set-Content wrote."""
+    import ctypes
+
+    return f"cp{ctypes.windll.kernel32.GetACP()}"
+
+
+@pytest.mark.parametrize("saved_as", ["utf-8", "ansi"])
 @pytest.mark.parametrize("present", [False, True], ids=["append", "rewrite"])
-def test_a_non_ascii_install_path_is_written_so_the_sidecar_can_read_it(tmp_path, monkeypatch, present):
+def test_a_non_ascii_install_path_is_written_so_the_sidecar_can_read_it(tmp_path, monkeypatch, present, saved_as):
     folder = tmp_path / "Zoë kit"
     folder.mkdir()
     env = folder / ".env"
     landmark = str(folder / "models" / "face_landmarker.task")
     emotion = str(folder / "models" / "emotion-ferplus-8.onnx")
-    # EEG_SOURCE first, where a BOM would land in the key; the UTF-8 emotion line must survive the write.
-    env.write_text(f"EEG_SOURCE=sim\nFACE_EMOTION_MODEL_PATH={emotion}\n"
-                   + ("FACE_LANDMARK_MODEL_PATH=models/face_landmarker.task\n" if present else ""), encoding="utf-8")
+    comment = "# Zoë's station"
+    # EEG_SOURCE first, where a BOM would land in the key; the typed lines must survive in either encoding.
+    text = (f"EEG_SOURCE=sim\n{comment}\nFACE_EMOTION_MODEL_PATH={emotion}\n"
+            + ("FACE_LANDMARK_MODEL_PATH=models/face_landmarker.task\n" if present else ""))
+    try:
+        env.write_bytes(text.encode("utf-8" if saved_as == "utf-8" else _ansi()))
+    except (LookupError, UnicodeEncodeError):
+        pytest.skip(f"this machine's ANSI code page cannot hold {folder.name!r}")
     src = (ROOT / "start.ps1").read_text(encoding="utf-8")
     script = tmp_path / "t.ps1"
     # Paths ride in the environment: PowerShell 5.1 reads a BOM-less script as ANSI.
@@ -47,7 +60,9 @@ def test_a_non_ascii_install_path_is_written_so_the_sidecar_can_read_it(tmp_path
                        capture_output=True, text=True, env={**os.environ, "T_ENV": str(env), "T_VALUE": landmark})
     assert r.returncode == 0, r.stderr
     assert "READBACK=True" in r.stdout.splitlines(), (r.stdout, r.stderr)
-    assert not env.read_bytes().startswith(b"\xef\xbb\xbf"), "dotenv reads a BOM into the first key's name"
+    raw = env.read_bytes()
+    assert not raw.startswith(b"\xef\xbb\xbf"), "dotenv reads a BOM into the first key's name"
+    assert comment in raw.decode("utf-8").splitlines(), "a line only a person wrote is kept, character for character"
     assert dotenv_values(env) == {"EEG_SOURCE": "sim", "FACE_EMOTION_MODEL_PATH": emotion,
                                   "FACE_LANDMARK_MODEL_PATH": landmark}
     monkeypatch.chdir(folder)

@@ -260,14 +260,14 @@ on whenever the camera was, and put a third of the camera's configuration in a P
 rather than in the `.env` a reader checks. `INGEST_MODE` likewise: a stale `push` from a camera run
 would disable the poller on a later headband-only run.
 
-### Three `start.ps1` rules that cost whole runs
+### Two `start.ps1` rules that cost whole runs
 
-**Guard every read of a `.env` with `Test-Path`.** `Set-EnvKey` returns silently when the file is
-missing, so nothing before the read notices, and `Select-String -Path` on a missing file is a
-*terminating* error under this file's `$ErrorActionPreference` — a first-ever `-Camera` run on a
-fresh checkout aborted the launcher before anything started. Guard the *match* too:
-`.Matches[0].Groups[1]` on an absent key indexes a null array and fails the same way one step later.
-`start.sh` carries the same guard.
+**Guard every read of a `.env` with `Test-Path`, and write one only through `Set-EnvKey`.**
+`Set-EnvKey` returns silently when the file is missing, so nothing before the read notices, and
+`Select-String -Path` on a missing file is a *terminating* error under this file's
+`$ErrorActionPreference`. Guard the *match* too: `.Matches[0].Groups[1]` on an absent key indexes a
+null array and fails the same way one step later. `start.sh` carries the same guard. 5.1's
+`Set-Content` writes ANSI, which the sidecar cannot decode once an install path is non-ASCII.
 
 **Redirect a native command's stderr only through `Invoke-Quiet`.** PowerShell 5.1 wraps each
 stderr line from an exe in an ErrorRecord, which `$ErrorActionPreference = "Stop"` makes
@@ -277,12 +277,6 @@ the block that exists to explain it, as a bare `NativeCommandError` naming neith
 `Stop`; a bare `2>$null` anywhere else is the bug. Where the stderr *is* the diagnosis, silence it
 inside Python instead (`import sys, os; sys.stderr = open(os.devnull, 'w'); import cv2`) and probe
 **one module per call**, so the error can say which import failed.
-
-**Write a `.env` only through `Set-EnvKey`, which writes UTF-8 with no BOM.** PS 5.1's
-`Set-Content`/`Add-Content` write the ANSI code page, and every `-Camera` run writes an absolute
-install path, so a non-ASCII folder name stops the sidecar booting on a `UnicodeDecodeError`.
-`-Encoding UTF8` is no fix: 5.1 adds a BOM, which dotenv reads into the first key's name. Reads
-take `-Encoding UTF8` (`Get-Content`'s default is ANSI). Tests: `test_launcher_env_encoding.py`.
 
 ### Three venvs, and `start.ps1` uses two
 

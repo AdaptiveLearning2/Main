@@ -1,7 +1,8 @@
 """Model files under a non-ASCII directory load, with the real OpenCV and MediaPipe.
 
-On Windows their C APIs cannot open such a path, so the files are read by Python
-and handed over as bytes. Skipped where the camera extras are not installed (CI).
+On Windows their C APIs cannot open such a path, so the files are read by Python and
+handed over as bytes. Off Windows the path tests pass either way; skipped without the
+camera extras (CI).
 """
 
 from __future__ import annotations
@@ -63,3 +64,39 @@ def test_the_landmark_model_loads_from_a_non_ascii_directory(unicode_dir):
 
     assert landmarker.locate(np.zeros((480, 640, 3), dtype=np.uint8), 640, 480) == {}
     assert landmarker.last_reason == "no_face"
+
+
+def test_the_landmarker_is_given_the_bytes_that_were_verified(tmp_path, monkeypatch):
+    pytest.importorskip("mediapipe")
+    import hashlib
+    from types import SimpleNamespace
+
+    from mediapipe.tasks import python as mp_python
+    from src.app.services import face_landmarks as fl
+
+    source = fl.default_model_path()
+    if not fl.verify(source):
+        pytest.skip(f"no verified landmark model at {source}")
+    model = tmp_path / "face_landmarker.task"
+    shutil.copyfile(source, model)
+
+    def hash_then_swap_the_file(data):
+        digest = hashlib.sha256(data)
+        model.write_bytes(b"\x01" * fl.MODEL_BYTES)    # swapped between check and use
+        return digest
+
+    received = {}
+    real_base_options = mp_python.BaseOptions
+
+    def capture(**kwargs):
+        received.update(kwargs)
+        return real_base_options(**kwargs)
+
+    monkeypatch.setattr(fl, "hashlib", SimpleNamespace(sha256=hash_then_swap_the_file))
+    monkeypatch.setattr(mp_python, "BaseOptions", capture)
+
+    fl._TasksMesh(str(model))
+
+    on_disk = hashlib.sha256(model.read_bytes()).hexdigest()
+    assert on_disk != fl.MODEL_SHA256, "the file was not swapped, so this proves nothing"
+    assert hashlib.sha256(received["model_asset_buffer"]).hexdigest() == fl.MODEL_SHA256

@@ -684,7 +684,8 @@ actually captured**: `open_memmap` zero-fills, and an untrimmed tail reads back 
 than absent data, which a windowing script would feed to the model as a sharp non-physiological edge.
 
 The camera ships **emotion-only**. POS is kept because it is correct and is the front half of any
-future attempt; do not read its passing tests as evidence it measures a heart rate.
+future attempt; do not read its passing tests as evidence it measures a heart rate. The ROI's Haar cascade loads from
+bytes, never a path: see *Model files are read by Python* under the geometry half below.
 
 ## `attention` has no producer; `gaze_x`/`gaze_y` do
 

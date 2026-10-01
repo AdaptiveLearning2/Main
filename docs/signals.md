@@ -775,6 +775,12 @@ override with `FACE_LANDMARK_MODEL_PATH`) and refuses with the fetch command whe
 adapted at *construction* rather than in `locate()`: `locate()` is the half with tests and its injected collaborator's
 shape is the legacy one, so porting the untested half to fit the tested half keeps every existing test on real code.
 
+**Model files are read by Python and handed over as bytes**, the Haar cascade as an in-memory `cv2.FileStorage` and the
+landmark bundle as `model_asset_buffer`: OpenCV's and MediaPipe's C APIs cannot open a non-ASCII path on Windows (a
+venv under `C:\Users\Zoë\…`), even one in the ANSI code page. The landmark digest is taken over the same bytes that are
+loaded, so nothing can change between check and use. onnxruntime opens wide paths and keeps its path.
+`test_face_model_unicode_paths.py` enforces it with the real libraries; it skips where the camera extras are absent.
+
 **Everything left of the camera is measured in image coordinates, and the frame is not mirrored**, so a subject's own
 left is the image *right*. Looking left drives `gaze.x` **positive**; turning the head left drives `yaw` **positive**;
 `pitch > 0` is the face pointing *up*. `CANONICAL_FACE` must therefore put the subject's left at **positive x** — it

@@ -207,14 +207,20 @@ class _TasksMesh:
     def __init__(self, model_path: str | None = None) -> None:
         # Verified before importing MediaPipe, so the error names the real cause.
         path = Path(model_path or os.environ.get(MODEL_ENV) or default_model_path())
-        if path.is_file() and not verify(path):
-            # Checked at load too, not only at install.
-            raise ValueError(
-                f"refusing to load unverified landmark model at {path}; "
-                f"expected sha256 {MODEL_SHA256[:16]}... -- re-provision it "
-                f"with ./start.ps1 -Gaze"
-            )
-        if not path.is_file():
+        if path.is_file():
+            # The bytes checked are the bytes loaded: MediaPipe gets a buffer, never the
+            # path, which its C API cannot open when non-ASCII on Windows.
+            with path.open("rb") as handle:
+                model = handle.read(MODEL_BYTES + 1)
+            if (len(model) != MODEL_BYTES
+                    or hashlib.sha256(model).hexdigest() != MODEL_SHA256):
+                # Checked at load too, not only at install.
+                raise ValueError(
+                    f"refusing to load unverified landmark model at {path}; "
+                    f"expected sha256 {MODEL_SHA256[:16]}... -- re-provision it "
+                    f"with ./start.ps1 -Gaze"
+                )
+        else:
             raise FileNotFoundError(
                 f"no face landmark model at {path}.\n"
                 f"MediaPipe 1.0.0 does not ship one -- the Tasks API loads it "
@@ -231,10 +237,12 @@ class _TasksMesh:
 
         self._np = np
         self._mp = mp
+        # MediaPipe gets a raw pointer into these bytes; they must outlive the landmarker.
+        self._model = model
 
         self._landmarker = vision.FaceLandmarker.create_from_options(
             vision.FaceLandmarkerOptions(
-                base_options=mp_python.BaseOptions(model_asset_path=str(path)),
+                base_options=mp_python.BaseOptions(model_asset_buffer=model),
                 running_mode=vision.RunningMode.VIDEO,
                 num_faces=1,
                 min_face_detection_confidence=0.5,

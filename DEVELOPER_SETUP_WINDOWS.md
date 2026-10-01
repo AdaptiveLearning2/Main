@@ -199,7 +199,8 @@ Then restart `.\start.ps1 -Muse`.
 ### A student machine for the hosted site
 
 The website and its backend are hosted; a student machine runs only the bridge and the EEG sidecar,
-which pushes readings to the hosted backend. It needs the headband setup above, plus the sidecar's
+which pushes readings to the hosted backend. That backend must run `INGEST_MODE=push`, since it
+cannot reach a student's machine. Each machine needs the headband setup above, plus the sidecar's
 `.env` and camera extras once:
 
 ```powershell

@@ -85,7 +85,7 @@ def test_the_registry_is_validated_before_any_write_and_applied_after_provisioni
     ps1 = _script_body((ROOT / "start.ps1").read_text(encoding="utf-8"))
     check = _first_line(ps1, r"Update-DeviceRegistry \$eegEnv .*-DryRun")
     writes = [_first_line(ps1, p) for p in (
-        r"Set-EnvKey \$eegEnv", r"Set-Content \$eegEnv", r"Set-EnvKey \$backendEnv",
+        r"Set-EnvKey \$eegEnv", r"Set-EnvKey \$backendEnv", r"Set-HostedToken \$eegEnv",
         r"Update-SidecarTokens \$eegEnv")]
     assert check < min(writes), (check, writes)
     lines = ps1.splitlines()

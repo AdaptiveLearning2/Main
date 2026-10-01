@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from dotenv import dotenv_values
 
 from src.app.config import Settings
 
@@ -20,6 +21,7 @@ WINDOWS = pytest.mark.skipif(sys.platform != "win32" or POWERSHELL is None, reas
 BACKEND = "https://main-u0ki.onrender.com"
 ORIGIN = "https://adaptive.pages.dev"
 TOKEN = "Ab3_dEf-" * 5 + "xyz"  # 43 characters of token_urlsafe's alphabet, as start.ps1 makes
+LOCAL = Settings.model_fields["allowed_origins"].default
 
 GOOD = {"hosted": True, "muse": True, "backend": BACKEND, "origin": ORIGIN, "token": TOKEN, "env": True}
 ARG_CASES = [
@@ -28,6 +30,7 @@ ARG_CASES = [
     ({"backend": BACKEND + "/", "origin": ORIGIN + "/"}, []),
     ({"muse": False}, ["needs -Muse"]),
     ({"backend": "http://main-u0ki.onrender.com"}, ["-BackendUrl"]),
+    ({"backend": BACKEND + "/api"}, ["-BackendUrl"]),
     ({"backend": ""}, ["-BackendUrl"]),
     ({"origin": ORIGIN + "/login"}, ["-FrontendOrigin"]),
     ({"origin": "http://adaptive.pages.dev"}, ["-FrontendOrigin"]),
@@ -58,9 +61,21 @@ def _ps(tmp_path: Path, body: str, *functions: str) -> subprocess.CompletedProce
                           capture_output=True, text=True)
 
 
-def _values(path: Path) -> dict[str, str]:
-    """Each key's last assignment, as dotenv reads it."""
-    return dict(line.split("=", 1) for line in path.read_text(encoding="utf-8").splitlines() if "=" in line)
+def _launch(tmp_path: Path, sidecar_env: str, backend: str, origin: str, token: str):
+    """start.ps1 -Hosted -Muse, copied into a bare tree. Returns (process, sidecar .env, files before).
+
+    Past the check it writes the .env, then stops at the missing libMuse SDK before any window opens.
+    """
+    shutil.copy(ROOT / "start.ps1", tmp_path / "start.ps1")
+    env = tmp_path / "EEGResearch" / ".env"
+    env.parent.mkdir()
+    env.write_text(sidecar_env, encoding="utf-8")
+    before = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
+    r = subprocess.run([POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                        str(tmp_path / "start.ps1"), "-Hosted", "-Muse", "-BackendUrl", backend,
+                        "-FrontendOrigin", origin, "-LearnerToken", token],
+                       capture_output=True, text=True, timeout=120)
+    return r, env, before
 
 
 @WINDOWS
@@ -83,26 +98,82 @@ def test_hosted_arguments_are_refused_for_exactly_these_reasons(tmp_path, change
         assert any(fragment in e for e in errors), (fragment, errors)
 
 
+SIDECAR_ENV = "EEG_SOURCE=sim\nAPI_TOKEN=replace-me-learner-token\nADMIN_TOKEN=replace-me-admin-token\n"
+
+
+@WINDOWS
+@pytest.mark.parametrize("change,message", [
+    ({"backend": "http://main-u0ki.onrender.com"}, "-BackendUrl"),
+    ({"backend": BACKEND + "/api"}, "-BackendUrl"),
+    ({"origin": ORIGIN + "/login"}, "-FrontendOrigin"),
+    ({"token": "replace-me-learner-token"}, "-LearnerToken"),
+])
+def test_a_refused_hosted_launch_writes_nothing_and_starts_nothing(tmp_path, change, message):
+    a = {**GOOD, **change}
+    r, env, before = _launch(tmp_path, SIDECAR_ENV, a["backend"], a["origin"], a["token"])
+    assert r.returncode == 1, r.stdout
+    assert message in r.stdout
+    assert env.read_text(encoding="utf-8") == SIDECAR_ENV
+    assert sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*")) == before
+
+
+@WINDOWS
+@pytest.mark.parametrize("source_line", ["EEG_SOURCE=sim\n", "EEG_SOURCE = sim\n", ""],
+                         ids=["plain", "spaced", "missing"])
+def test_a_hosted_launch_never_leaves_the_sidecar_on_the_simulator(tmp_path, source_line):
+    sidecar_env = source_line + "API_TOKEN=replace-me-learner-token\nADMIN_TOKEN=replace-me-admin-token\n"
+    r, env, _ = _launch(tmp_path, sidecar_env, BACKEND, ORIGIN, TOKEN)
+    assert "libMuse SDK not found" in r.stdout, (r.stdout, r.stderr)  # where the bare tree stops
+    v = dotenv_values(env)  # read as the sidecar reads it, last assignment winning
+    assert v["EEG_SOURCE"] == "muse"
+    # The learner token lands before the token step, which then generates only ADMIN_TOKEN.
+    assert v["API_TOKEN"] == TOKEN and "Generated API_TOKEN" not in r.stdout
+    assert v["ADMIN_TOKEN"] not in (TOKEN, "replace-me-admin-token")
+
+
 @WINDOWS
 @pytest.mark.parametrize("admin", ["replace-me-admin-token", TOKEN, "machine-own-admin-" + "a" * 30])
-def test_the_hosted_keys_are_written_and_admin_stays_this_machines_own(tmp_path, admin):
-    eeg = tmp_path / "eeg.env"
-    eeg.write_text(
-        "EEG_SOURCE=muse\nAPI_TOKEN=locally-generated-" + "b" * 30 + f"\nADMIN_TOKEN={admin}\n"
-        "PUSH_ENABLED=false\nBACKEND_URL=http://127.0.0.1:8000\n", encoding="utf-8")
+def test_the_hosted_keys_reach_every_copy_and_are_written_as_a_browser_sends_them(tmp_path, admin):
+    eeg, backend, frontend = tmp_path / "eeg.env", tmp_path / "backend.env", tmp_path / "frontend.env"
+    eeg.write_text(f"EEG_SOURCE=muse\nAPI_TOKEN=locally-generated-{'b' * 30}\nADMIN_TOKEN={admin}\n"
+                   "PUSH_ENABLED=false\nBACKEND_URL=http://127.0.0.1:8000\n", encoding="utf-8")
+    backend.write_text("EEG_API_TOKEN=old-local\nEEG_ADMIN_TOKEN=old-admin\n", encoding="utf-8")
+    frontend.write_text("VITE_EEG_LOCAL_TOKEN=old-local\n", encoding="utf-8")
     r = _ps(tmp_path,
-            f"Set-HostedSidecarEnv '{eeg}' '{BACKEND}/' '{ORIGIN}/' '{TOKEN}'\n"
-            f"Update-SidecarTokens '{eeg}' '{tmp_path / 'absent-backend.env'}'\n",
-            "Set-HostedSidecarEnv", "Set-EnvKey", "Get-EnvValue", "New-SidecarToken", "Update-SidecarTokens")
+            f"Set-HostedToken '{eeg}' '{backend}' '{frontend}' '{TOKEN}'\n"
+            f"Update-SidecarTokens '{eeg}' '{backend}'\n"
+            f"Set-HostedSidecarEnv '{eeg}' 'HTTPS://Main-u0ki.onrender.com/' 'HTTPS://Adaptive.Pages.Dev:443/'\n",
+            "Set-HostedToken", "Set-HostedSidecarEnv", "Set-EnvKey", "Get-EnvValue", "New-SidecarToken",
+            "Update-SidecarTokens")
     assert r.returncode == 0, r.stderr
-    v = _values(eeg)
-    assert v["API_TOKEN"] == TOKEN
+    v, b, f = dotenv_values(eeg), dotenv_values(backend), dotenv_values(frontend)
+    # Every copy matches, or a later local run on this machine is refused by its own sidecar.
+    assert v["API_TOKEN"] == b["EEG_API_TOKEN"] == f["VITE_EEG_LOCAL_TOKEN"] == TOKEN
+    # CORS compares origins exactly, as a browser sends them: lower case, no default port.
     assert (v["PUSH_ENABLED"], v["BACKEND_URL"], v["ALLOWED_ORIGINS"]) == ("true", BACKEND, ORIGIN)
     assert v["EEG_SOURCE"] == "muse", "keys the hosted mode does not own are left alone"
-    # The sidecar refuses a placeholder, and an admin token equal to the public learner one.
     assert v["ADMIN_TOKEN"] != TOKEN and not v["ADMIN_TOKEN"].startswith("replace-me")
     if admin.startswith("machine-own-"):
         assert v["ADMIN_TOKEN"] == admin, "a real admin token is kept"
+    else:
+        assert b["EEG_ADMIN_TOKEN"] == v["ADMIN_TOKEN"], "a remade admin token reaches the backend too"
+
+
+@WINDOWS
+@pytest.mark.parametrize("current,expected", [
+    (f"ALLOWED_ORIGINS={ORIGIN}", f"{ORIGIN},{LOCAL}"),
+    ("ALLOWED_ORIGINS=http://localhost:4173", f"http://localhost:4173,{LOCAL}"),
+    (f"ALLOWED_ORIGINS={LOCAL}", LOCAL),
+    (f"ALLOWED_ORIGINS=http://localhost:5173, {ORIGIN}",
+     f"http://localhost:5173,{ORIGIN},http://127.0.0.1:5173,http://localhost:8000"),
+    ("", LOCAL),
+], ids=["hosted-origin-kept", "hand-added-kept", "already-local", "spaces-and-order", "missing"])
+def test_a_local_run_adds_the_local_origins_and_keeps_every_other(tmp_path, current, expected):
+    env = tmp_path / ".env"
+    env.write_text(f"EEG_SOURCE=sim\n{current}\n", encoding="utf-8")
+    r = _ps(tmp_path, f"Add-LocalOrigins '{env}' '{LOCAL}'\n", "Add-LocalOrigins", "Set-EnvKey", "Get-EnvValue")
+    assert r.returncode == 0, r.stderr
+    assert dotenv_values(env)["ALLOWED_ORIGINS"] == expected
 
 
 def _script_body(text: str) -> str:
@@ -110,29 +181,16 @@ def _script_body(text: str) -> str:
     return re.sub(r"^function [\w-]+ \{\n.*?^\}\n", "", text, flags=re.S | re.M)
 
 
-def test_hosted_is_checked_before_any_write_and_its_keys_win_over_both_branches():
-    body = (ROOT / "start.ps1").read_text(encoding="utf-8")
-    lines = _script_body(body).splitlines()
-
-    def first(pattern: str) -> int:
-        return next(i for i, l in enumerate(lines, 1) if re.search(pattern, l))
-
-    check = first(r"Test-HostedArgs ")
-    assert check < min(first(p) for p in (
-        r"Set-EnvKey \$eegEnv", r"Set-Content \$eegEnv", r"Update-SidecarTokens \$eegEnv", r"Start-Window"))
-    hosted = first(r"^\s*Set-HostedSidecarEnv \$eegEnv")
-    local = [i for i, l in enumerate(lines, 1)
-             if re.search(r'Set-EnvKey \$eegEnv "(BACKEND_URL|PUSH_ENABLED|API_TOKEN)"', l)]
-    assert local and hosted > max(local), (hosted, local)
-    # The learner token just changed, so the admin token is re-checked against it afterwards.
-    assert any(i > hosted and re.search(r"Update-SidecarTokens \$eegEnv", l) for i, l in enumerate(lines, 1))
-
-
-def test_a_local_run_restores_the_sidecars_own_default_origins():
+def test_the_hosted_keys_win_over_both_camera_branches():
+    # Structural only because the branches need a venv and a camera; every other property above runs.
     ps1 = (ROOT / "start.ps1").read_text(encoding="utf-8")
-    m = re.search(r'^\$localOrigins = "([^"]+)"', ps1, re.M)
-    assert m and m.group(1) == Settings.model_fields["allowed_origins"].default
-    assert re.search(r'^\s*Set-EnvKey \$eegEnv "ALLOWED_ORIGINS" \$localOrigins', _script_body(ps1), re.M)
+    lines = _script_body(ps1).splitlines()
+    hosted = next(i for i, l in enumerate(lines, 1) if re.search(r"^\s*Set-HostedSidecarEnv \$eegEnv", l))
+    local = [i for i, l in enumerate(lines, 1)
+             if re.search(r'Set-EnvKey \$eegEnv "(BACKEND_URL|PUSH_ENABLED)"', l)]
+    assert local and hosted > max(local), (hosted, local)
+    assert re.search(r'^\$localOrigins = "([^"]+)"', ps1, re.M).group(1) == LOCAL
+    assert any(re.search(r"^\s*Add-LocalOrigins \$eegEnv \$localOrigins", l) for l in lines)
 
 
 @pytest.mark.skipif(BASH is None, reason="needs bash")

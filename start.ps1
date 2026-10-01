@@ -186,10 +186,11 @@ function Test-HostedArgs {
     if (-not $muse) {
         $errors += "-Hosted needs -Muse: the simulator would push made-up EEG to the hosted backend."
     }
+    # No path: the push client appends /api/signals/..., so /api would post to /api/api/...
     $u = $null
     if (-not $backendUrl -or -not [Uri]::TryCreate($backendUrl, 'Absolute', [ref]$u) -or
-            $u.Scheme -ne 'https' -or $u.Query -or $u.Fragment) {
-        $errors += "-BackendUrl must be the hosted backend's https URL, e.g. https://name.onrender.com."
+            $u.Scheme -ne 'https' -or $u.AbsolutePath -ne '/' -or $u.Query -or $u.Fragment) {
+        $errors += "-BackendUrl must be the hosted backend's https address with no path, e.g. https://name.onrender.com."
     }
     $o = $null
     if (-not $frontendOrigin -or -not [Uri]::TryCreate($frontendOrigin, 'Absolute', [ref]$o) -or
@@ -207,14 +208,35 @@ function Test-HostedArgs {
     return ,$errors
 }
 
-function Set-HostedSidecarEnv {
-    # Push to the hosted backend, accept calls only from the site, and share its learner token.
-    # ADMIN_TOKEN stays this machine's own; Update-SidecarTokens remakes it if it now equals API_TOKEN.
-    param([string]$eegEnv, [string]$backendUrl, [string]$frontendOrigin, [string]$learnerToken)
+function Set-HostedToken {
+    # The site's learner token into every copy this machine keeps, before Update-SidecarTokens runs,
+    # so it generates only ADMIN_TOKEN (never one equal to this) and a later local run still matches.
+    param([string]$eegEnv, [string]$backendEnv, [string]$frontendEnv, [string]$learnerToken)
     Set-EnvKey $eegEnv "API_TOKEN" $learnerToken
+    Set-EnvKey $backendEnv "EEG_API_TOKEN" $learnerToken
+    Set-EnvKey $frontendEnv "VITE_EEG_LOCAL_TOKEN" $learnerToken
+}
+
+function Set-HostedSidecarEnv {
+    # Push to the hosted backend and accept calls only from the site, both written as a browser
+    # sends an origin (lower case, no default port): CORS compares the strings exactly.
+    param([string]$eegEnv, [string]$backendUrl, [string]$frontendOrigin)
     Set-EnvKey $eegEnv "PUSH_ENABLED" "true"
-    Set-EnvKey $eegEnv "BACKEND_URL" $backendUrl.TrimEnd('/')
-    Set-EnvKey $eegEnv "ALLOWED_ORIGINS" $frontendOrigin.TrimEnd('/')
+    Set-EnvKey $eegEnv "BACKEND_URL" ([Uri]$backendUrl).GetLeftPart([UriPartial]::Authority)
+    Set-EnvKey $eegEnv "ALLOWED_ORIGINS" ([Uri]$frontendOrigin).GetLeftPart([UriPartial]::Authority)
+}
+
+function Add-LocalOrigins {
+    # Adds whichever local frontend origins the sidecar's allowlist lacks, keeping every other entry.
+    param([string]$eegEnv, [string]$localOrigins)
+    if (!(Test-Path $eegEnv)) { return }
+    $current = Get-EnvValue $eegEnv "ALLOWED_ORIGINS"
+    $list = @()
+    if ($current) { $list = @($current -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+    foreach ($origin in ($localOrigins -split ',')) {
+        if ($list -notcontains $origin) { $list += $origin }
+    }
+    Set-EnvKey $eegEnv "ALLOWED_ORIGINS" ($list -join ',')
 }
 
 # A native command's stdout, stderr dropped. `2>$null` under Stop aborts on PS 5.1: each stderr
@@ -275,7 +297,7 @@ if ($hostedErrors.Count -gt 0) {
     foreach ($e in $hostedErrors) { Write-Host $e -ForegroundColor Red }
     exit 1
 }
-# Written on every run from the flag, so a hosted origin cannot outlive a hosted run.
+# Added back on every local run, so a hosted run's origin cannot lock the local frontend out.
 $localOrigins = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000"
 
 Write-Host ""
@@ -337,15 +359,15 @@ $headband = if ($Muse) { "default:muse@8765" } else { "default:sim" }
 $cameraEntry = if ($Camera) { "camera:face@$CameraIndex" } else { "" }
 if (-not (Update-DeviceRegistry $eegEnv $headband $cameraEntry -DryRun)) { exit 1 }
 
+if ($Hosted) { Set-HostedToken $eegEnv $backendEnv $frontendEnv $LearnerToken }
 Update-SidecarTokens $eegEnv $backendEnv
 
 if ($Muse) {
     Write-Host "[2/5] Native Muse Bridge" -ForegroundColor Cyan
 
-    # Point EEGResearch at the real headband
-    if (Test-Path $eegEnv) {
-        (Get-Content $eegEnv) -replace '^EEG_SOURCE=.*', 'EEG_SOURCE=muse' | Set-Content $eegEnv
-    }
+    # Point EEGResearch at the real headband. Set-EnvKey adds a missing line, and appends after a
+    # misspelt one (dotenv takes the last), so a hosted run can never fall back to the simulator.
+    Set-EnvKey $eegEnv "EEG_SOURCE" "muse"
 
     # Stale counts as missing: an exe older than its source speaks a protocol the sidecar no longer does.
     $bridgeStale = (Test-Path $bridgeExe) -and [bool](Get-ChildItem (Join-Path $eegDir "native_bridge\src") -File |
@@ -390,7 +412,7 @@ if ($Muse) {
 } else {
     Write-Host "[2/5] Simulator mode -- switching EEG_SOURCE to sim" -ForegroundColor Gray
     if (Test-Path $eegEnv) {
-        (Get-Content $eegEnv) -replace '^EEG_SOURCE=.*', 'EEG_SOURCE=sim' | Set-Content $eegEnv
+        Set-EnvKey $eegEnv "EEG_SOURCE" "sim"
         Write-Host "  Set EEG_SOURCE=sim in EEGResearch/.env" -ForegroundColor Gray
     }
 }
@@ -508,11 +530,10 @@ if ($Camera) {
 
 # After both branches, so the hosted push target and origin win over their local values.
 if ($Hosted) {
-    Set-HostedSidecarEnv $eegEnv $BackendUrl $FrontendOrigin $LearnerToken
-    Update-SidecarTokens $eegEnv $backendEnv
+    Set-HostedSidecarEnv $eegEnv $BackendUrl $FrontendOrigin
     Write-Host "  Hosted: pushing to $BackendUrl, accepting calls from $FrontendOrigin" -ForegroundColor Gray
 } else {
-    Set-EnvKey $eegEnv "ALLOWED_ORIGINS" $localOrigins
+    Add-LocalOrigins $eegEnv $localOrigins
 }
 
 # 3. EEGResearch backend

@@ -47,6 +47,27 @@ def test_a_missing_cascade_still_fails_to_load(unicode_dir, monkeypatch):
         FaceLocator()
 
 
+DAMAGED = {
+    "truncated": lambda real: real[: len(real) // 2],
+    "not-xml": lambda real: b"not a cascade",
+    "not-utf8": lambda real: b"\xff\xfe" + real,
+    "not-a-cascade": lambda real: b'<?xml version="1.0"?>\n<opencv_storage><x>1</x></opencv_storage>\n',
+}
+
+
+@pytest.mark.parametrize("damage", list(DAMAGED))
+def test_a_damaged_cascade_fails_to_load_the_same_way(unicode_dir, monkeypatch, damage):
+    cv2 = pytest.importorskip("cv2")
+    from src.app.services.face_roi import FaceLocator
+
+    real = (Path(cv2.data.haarcascades) / CASCADE).read_bytes()
+    (unicode_dir / CASCADE).write_bytes(DAMAGED[damage](real))
+    monkeypatch.setattr(cv2.data, "haarcascades", str(unicode_dir) + os.sep)
+
+    with pytest.raises(RuntimeError, match="Haar cascade failed to load"):
+        FaceLocator()
+
+
 def test_the_landmark_model_loads_from_a_non_ascii_directory(unicode_dir):
     pytest.importorskip("mediapipe")
     from src.app.services.face_landmarks import (

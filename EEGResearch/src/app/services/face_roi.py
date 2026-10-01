@@ -108,10 +108,11 @@ class FaceLocator:
             try:
                 # Read by Python: OpenCV cannot open a non-ASCII path on Windows.
                 xml = path.read_text(encoding="utf-8")
-                storage = cv2.FileStorage(
-                    xml, cv2.FILE_STORAGE_READ | cv2.FILE_STORAGE_MEMORY)
+                storage = cv2.FileStorage()
+                # open(), not the constructor, which reports a parse error as a SystemError.
+                storage.open(xml, cv2.FILE_STORAGE_READ | cv2.FILE_STORAGE_MEMORY)
                 self._cascade.read(storage.getFirstTopLevelNode())
-            except OSError as exc:
+            except (OSError, UnicodeDecodeError, cv2.error) as exc:  # missing, or damaged
                 raise RuntimeError("OpenCV Haar cascade failed to load") from exc
             if self._cascade.empty():
                 raise RuntimeError("OpenCV Haar cascade failed to load")

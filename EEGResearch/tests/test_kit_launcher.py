@@ -1,10 +1,11 @@
-"""The student kit's launcher: kit.json as start.ps1 -Hosted checks it, what each process is given, the supervisor."""
+"""The student kit: kit.json as start.ps1 -Hosted checks it, what each process is given, the supervisor, the build."""
 
 from __future__ import annotations
 
 import logging
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -27,6 +28,9 @@ FIELD = {"backend": "backend_url", "origin": "frontend_origin", "token": "learne
 GOOD = {"backend_url": BACKEND, "frontend_origin": ORIGIN, "learner_token": TOKEN}
 # The base interpreter: a venv's python.exe is a redirector whose own kill-on-close job would hide a missing one.
 PYTHON = getattr(sys, "_base_executable", None) or sys.executable
+BUILD_SCRIPT = ROOT / "EEGResearch" / "scripts" / "build_student_kit.ps1"
+POWERSHELL = shutil.which("powershell")
+NOISY = 'cmd /c "echo out & echo err 1>&2 & exit 0"'  # succeeds while writing to stderr, as PyInstaller does
 
 
 def _cfg(**change) -> KitConfig:
@@ -341,3 +345,32 @@ def test_stop_succeeds_when_nothing_runs_and_fails_on_a_copy_that_will_not_stop(
     finally:
         copy.kill()
         copy.wait(10)
+
+
+def _powershell(script: str) -> subprocess.CompletedProcess:
+    return subprocess.run([POWERSHELL, "-NoProfile", "-Command", script], capture_output=True, text=True, timeout=60)
+
+
+def _build_step(command: str, redirect: str = "") -> subprocess.CompletedProcess:
+    """The build script's Invoke-Step around COMMAND, at top level under Stop as the script calls it."""
+    step = re.search(r"^function Invoke-Step \{.*?^\}", BUILD_SCRIPT.read_text(encoding="utf-8"), re.S | re.M)
+    assert step, "build_student_kit.ps1 has no Invoke-Step"
+    return _powershell(f"$ErrorActionPreference = 'Stop'\n{step.group(0)}\n"
+                       f"$x = Invoke-Step 'step' {{ {command} }} {redirect}\n\"after:$($x -join '|')\"\n"
+                       "$ErrorActionPreference")
+
+
+@pytest.mark.skipif(POWERSHELL is None, reason="Windows PowerShell only")
+def test_a_build_step_survives_captured_stderr_and_fails_on_a_bad_exit_or_an_exe_that_never_started():
+    if "survived" in _powershell(f"$ErrorActionPreference = 'Stop'; $x = {NOISY} *>&1; 'survived'").stdout:
+        pytest.skip("this PowerShell does not abort on captured stderr, so it proves nothing here")
+    noisy = _build_step(NOISY, "*>&1")
+    lines = noisy.stdout.strip().splitlines()
+    assert len(lines) >= 2 and lines[-2].startswith("after:"), noisy.stdout + noisy.stderr
+    assert "out" in lines[-2] and "err" in lines[-2]  # stderr is kept, not discarded
+    assert lines[-1] == "Stop"  # the caller's preference is untouched
+    # No try around these: inside one, PowerShell would stop on the missing exe whatever the step did.
+    for command, reason in (("cmd /c 'exit 3'", "step failed (exit 3)"),
+                            ("& 'C:\\no\\such\\tool.exe'", "step failed: the command did not start")):
+        failed = _build_step(command)
+        assert "after:" not in failed.stdout and reason in failed.stderr, (command, failed.stdout, failed.stderr)

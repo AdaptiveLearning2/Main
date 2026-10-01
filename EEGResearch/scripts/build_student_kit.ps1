@@ -34,8 +34,11 @@ $installer = Join-Path $eeg "installer"
 function Invoke-Step {
     param([string]$what, [scriptblock]$command)
     Write-Host "== $what" -ForegroundColor Cyan
-    $global:LASTEXITCODE = 0
+    # Function-local: under Stop, an exe's stderr line is fatal once output is captured (*>, Tee-Object) on 5.1.
+    $ErrorActionPreference = "Continue"
+    $global:LASTEXITCODE = $null  # stays null if the exe never started, which Continue reports and moves past
     & $command
+    if ($null -eq $LASTEXITCODE) { throw "$what failed: the command did not start" }
     if ($LASTEXITCODE -ne 0) { throw "$what failed (exit $LASTEXITCODE)" }
 }
 

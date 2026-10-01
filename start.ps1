@@ -36,7 +36,7 @@ $heartOn = $false
 $preEnv = Join-Path $PSScriptRoot "EEGResearch\.env"
 if (Test-Path $preEnv) {
     # Same match as start.sh's grep (case-insensitive, spaces allowed); keep them in parity.
-    $heartOn = @(Get-Content $preEnv) -match '^\s*FACE_HEART_ENABLED\s*=\s*true\s*$' | ForEach-Object { $true } | Select-Object -First 1
+    $heartOn = @(Get-Content -Encoding UTF8 $preEnv) -match '^\s*FACE_HEART_ENABLED\s*=\s*true\s*$' | ForEach-Object { $true } | Select-Object -First 1
     if (-not $heartOn) { $heartOn = $false }
 }
 if ($Camera -and $NoEmotion -and -not $Gaze -and -not $heartOn) {
@@ -94,7 +94,7 @@ function Update-DeviceRegistry {
     param([string]$path, [string]$headband, [string]$camera = "", [switch]$DryRun)
     if (!(Test-Path $path)) { return $true }
     # -Last 1: a duplicated key would make an array; dotenv takes the last.
-    $line = @(Get-Content $path) | Where-Object { $_ -match '^EEG_DEVICES=' } | Select-Object -Last 1
+    $line = @(Get-Content -Encoding UTF8 $path) | Where-Object { $_ -match '^EEG_DEVICES=' } | Select-Object -Last 1
     if (!$line) {
         if ($camera -and -not $DryRun) { Set-EnvKey $path "EEG_DEVICES" "$headband,$camera" }
         return $true
@@ -124,21 +124,23 @@ function Update-DeviceRegistry {
 
 function Set-EnvKey {
     # Rewrite a key in a .env, or append it if absent (a -replace alone misses a missing key).
+    # UTF-8 with no BOM both ways: the sidecar decodes .env as UTF-8, and dotenv reads a BOM into the first key.
     param([string]$path, [string]$key, [string]$value)
     if (!(Test-Path $path)) { return }
-    $lines = @(Get-Content $path)
+    $lines = @(Get-Content -Encoding UTF8 $path)
     if ($lines -match "^$key=") {
-        ($lines -replace "^$key=.*", "$key=$value") | Set-Content $path
+        $lines = $lines -replace "^$key=.*", "$key=$value"
     } else {
-        Add-Content $path "$key=$value"
+        $lines += "$key=$value"
     }
+    [IO.File]::WriteAllLines((Convert-Path $path), [string[]]$lines, (New-Object Text.UTF8Encoding $false))
 }
 
 function Get-EnvValue {
     # The last assignment, as dotenv reads it; $null for a missing file or key.
     param([string]$path, [string]$key)
     if (!(Test-Path $path)) { return $null }
-    $line = Select-String -Path $path -Pattern "^$key=(.*)$" | Select-Object -Last 1
+    $line = Select-String -Encoding UTF8 -Path $path -Pattern "^$key=(.*)$" | Select-Object -Last 1
     if ($line) { return $line.Matches[0].Groups[1].Value }
     return $null
 }
@@ -396,7 +398,7 @@ $backendEnvPath = Join-Path $backendDir ".env"
 if ($Hosted) {
     $llmProvider = "hosted"
 } elseif (Test-Path $backendEnvPath) {
-    $providerLine = Select-String -Path $backendEnvPath -Pattern '^\s*LLM_PROVIDER\s*=\s*(\S+)' |
+    $providerLine = Select-String -Encoding UTF8 -Path $backendEnvPath -Pattern '^\s*LLM_PROVIDER\s*=\s*(\S+)' |
         Select-Object -First 1
     # Guard the match too: .Matches[0] on an absent key is a null-array index.
     if ($providerLine -and $providerLine.Matches.Count -gt 0) {
@@ -566,7 +568,7 @@ if ($Camera) {
     Set-EnvKey $eegEnv "FACE_EMOTION_ENABLED" $(if ($NoEmotion) { "false" } else { "true" })
     Set-EnvKey $eegEnv "FACE_LANDMARK_MODEL_PATH" "$landmarkModel"
     # Read back, since the registry is composed onto existing stations.
-    Write-Host "  $(@(Get-Content $eegEnv) | Where-Object { $_ -match '^EEG_DEVICES=' } | Select-Object -Last 1)" -ForegroundColor Gray
+    Write-Host "  $(@(Get-Content -Encoding UTF8 $eegEnv) | Where-Object { $_ -match '^EEG_DEVICES=' } | Select-Object -Last 1)" -ForegroundColor Gray
 
     # The camera records only under push: face_signals' one writer is /api/signals/face.
     # Mode keys are written on both branches, so a stale push cannot disable a later poller.

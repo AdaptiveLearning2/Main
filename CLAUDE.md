@@ -293,7 +293,7 @@ evidence the app can import something: `anthropic` was in the root venv and abse
 imports it lazily, so not at boot. Install a new runtime dependency into `backend/.venv` in the
 same change that pins it.
 
-All three venvs are on Python 3.14.7, **and so is CI** — `ci.yml`'s four `setup-python` pins say
+All three venvs are on Python 3.14.7, **and so is CI** — `ci.yml`'s six `setup-python` pins say
 `3.14`, the minor rather than the patch, because `setup-python` fails outright on an exact version
 the runner image does not have. They sat at 3.12 for a month after development moved, so CI was
 testing an interpreter nobody ran; keep them together. `EEGResearch/requirements*.lock` are

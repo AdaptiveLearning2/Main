@@ -283,9 +283,15 @@ function Check-Venv {
     }
 }
 
+function Get-ClearCommand {
+    # Every name, set here or not: the new window runs the user's profile first, which may set one.
+    param([string[]]$names)
+    return "Remove-Item " + (($names | ForEach-Object { "Env:$_" }) -join ', ') + " -ErrorAction SilentlyContinue; "
+}
+
 function Get-SidecarCommand {
-    # Hosted, the window first drops each session variable the sidecar reads: one left in this
-    # session (EEG_SOURCE=sim from a test run, say) beats the .env just written.
+    # Hosted, the window first drops every variable the sidecar reads: one left in a session
+    # (EEG_SOURCE=sim from a test run, say) beats the .env just written.
     param([bool]$hosted, [string]$python, [string]$eegDir)
     $run = ".\.venv\Scripts\Activate.ps1; uvicorn src.app.main:app --host 127.0.0.1 --port 8001"
     # No --reload for students: nothing on their machine edits the sidecar's code.
@@ -293,12 +299,36 @@ function Get-SidecarCommand {
     # The names come from the sidecar's own Settings, so a key added there is covered too.
     Push-Location $eegDir
     try {
-        $names = @((Invoke-Quiet { & $python -c "from src.app.config import Settings; print(' '.join(f.alias for f in Settings.model_fields.values() if f.alias))" }) -split '\s+')
+        $names = @((Invoke-Quiet { & $python -c "from src.app.config import Settings; print(' '.join(f.alias for f in Settings.model_fields.values() if f.alias))" }) -split '\s+' |
+            Where-Object { $_ -match '^[A-Za-z_][A-Za-z0-9_]*$' })
+    } catch {
+        $names = @()  # a missing interpreter throws past Invoke-Quiet; refused below, by name
     } finally { Pop-Location }
-    $set = @($names | Where-Object { $_ -match '^[A-Za-z_][A-Za-z0-9_]*$' -and (Test-Path "Env:$_") } | Sort-Object -Unique)
-    if ($set.Count -eq 0) { return $run }
-    Write-Host "  Hosted: clearing $($set -join ', ') in the sidecar's window, so it reads its .env" -ForegroundColor Yellow
-    return (($set | ForEach-Object { "Remove-Item Env:$_; " }) -join '') + $run
+    if ($names.Count -eq 0) {
+        Write-Host "  ERROR: could not read the sidecar's settings with $python, so its window could" -ForegroundColor Red
+        Write-Host "  not be cleared. Close the bridge window, then fix the sidecar's venv." -ForegroundColor Red
+        exit 1
+    }
+    $set = @($names | Where-Object { Test-Path "Env:$_" } | Sort-Object -Unique)
+    if ($set.Count -gt 0) {
+        Write-Host "  Hosted: clearing $($set -join ', ') in the sidecar's window, so it reads its .env" -ForegroundColor Yellow
+    }
+    return (Get-ClearCommand $names) + $run
+}
+
+function Get-BridgeCommand {
+    # The bridge reads getenv, not a .env, so the flags' values are set in its window. Hosted, every
+    # variable it reads is dropped first, so the bridge listens where the cleared sidecar looks.
+    param([bool]$hosted, [bool]$optics, [string]$preset, [string]$supervisor, [string]$exe)
+    $cmd = "& '$supervisor' -Exe '$exe'"
+    if ($optics) {
+        if ($preset) { $cmd = "`$env:MUSE_OPTICS_PRESET='$preset'; $cmd" }
+        $cmd = "`$env:MUSE_ENABLE_OPTICS='1'; $cmd"
+    }
+    if ($hosted) {
+        $cmd = (Get-ClearCommand @('MUSE_BRIDGE_PORT', 'MUSE_ENABLE_OPTICS', 'MUSE_OPTICS_PRESET', 'MUSE_LIVENESS_TIMEOUT_MS')) + $cmd
+    }
+    return $cmd
 }
 
 function Start-Window {
@@ -410,15 +440,10 @@ if ($Muse) {
         Copy-Item $dll $dllDst
     }
 
-    # Set in the launching window, not a .env: the bridge reads getenv directly. Backticked
-    # to expand in the child. The supervisor's bounded restarts inherit them.
+    # The supervisor's bounded restarts inherit the window's variables.
     $bridgeSupervisor = Join-Path $eegDir "scripts\run_bridge_supervised.ps1"
-    $bridgeCmd = "& '$bridgeSupervisor' -Exe '$bridgeExe'"
+    $bridgeCmd = Get-BridgeCommand $Hosted.IsPresent $Optics.IsPresent $OpticsPreset $bridgeSupervisor $bridgeExe
     if ($Optics) {
-        if ($OpticsPreset) {
-            $bridgeCmd = "`$env:MUSE_OPTICS_PRESET='$OpticsPreset'; $bridgeCmd"
-        }
-        $bridgeCmd = "`$env:MUSE_ENABLE_OPTICS='1'; $bridgeCmd"
         $rung = if ($OpticsPreset) { "PRESET_$OpticsPreset" } else { "PRESET_1035 (bridge default)" }
         Write-Host "  Optics ON -- $rung. Heart rate needs a 2025 Athena; older" -ForegroundColor Yellow
         Write-Host "  models have no PRESET_10xx range and stay on PRESET_21." -ForegroundColor Gray
@@ -558,7 +583,7 @@ if ($Hosted) {
 # 3. EEGResearch backend
 Write-Host "[3/5] EEGResearch backend (port 8001)" -ForegroundColor Cyan
 Check-Venv $eegDir
-$eegCmd = Get-SidecarCommand $Hosted (Join-Path $eegDir ".venv\Scripts\python.exe") $eegDir
+$eegCmd = Get-SidecarCommand $Hosted.IsPresent (Join-Path $eegDir ".venv\Scripts\python.exe") $eegDir
 Start-Window "EEG Backend :8001" $eegDir $eegCmd
 Start-Sleep -Seconds 2
 

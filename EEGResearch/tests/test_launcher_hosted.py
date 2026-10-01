@@ -179,33 +179,86 @@ def test_a_local_run_adds_the_local_origins_and_keeps_every_other(tmp_path, curr
     assert dotenv_values(env)["ALLOWED_ORIGINS"] == expected
 
 
-SESSION = {"EEG_SOURCE": "sim", "API_TOKEN": "t", "EEG_DEVICES": "default:sim"}
+LEFTOVERS = {"EEG_SOURCE": "sim", "API_TOKEN": "t", "EEG_DEVICES": "default:sim", "MUSE_BRIDGE_PORT": "8766"}
+BRIDGE_VARS = sorted(set(re.findall(r'getenv\("([A-Z_]+)"\)', "".join(
+    p.read_text(encoding="utf-8", errors="ignore")
+    for p in (ROOT / "EEGResearch" / "native_bridge" / "src").rglob("*") if p.is_file()))) - {"LOCALAPPDATA"})
+
+
+def _clean_env(where: str, leftovers: dict) -> dict:
+    """This environment minus every name either window reads; `session` puts the leftovers back."""
+    names = {f.alias.upper() for f in Settings.model_fields.values() if f.alias} | set(BRIDGE_VARS)
+    env = {k: v for k, v in os.environ.items() if k.upper() not in names}
+    env["PYTHONPATH"] = str(ROOT / "EEGResearch")
+    if where == "session":
+        env.update(leftovers)
+    return env
+
+
+def _window(where: str, leftovers: dict, workdir: Path) -> str:
+    """$cmd in a child as Start-Window opens it; `profile` sets the leftovers in it before the command."""
+    pre = "".join(f"`$env:{k}='{v}'; " for k, v in leftovers.items()) if where == "profile" else ""
+    return f"powershell -NoProfile -Command \"{pre}cd '{workdir}'; $cmd\"\n"
 
 
 @WINDOWS
-def test_the_hosted_sidecar_window_reads_its_env_file_not_this_session(tmp_path):
-    # The real window command, run in a child as Start-Window runs it; uvicorn is a probe of the settings.
+@pytest.mark.parametrize("where", ["session", "profile"])
+def test_the_hosted_sidecar_window_reads_its_env_file_not_this_session(tmp_path, where):
+    # The real window command; uvicorn is a probe printing the settings the sidecar would load.
     eeg, bin_ = tmp_path / "EEGResearch", tmp_path / "bin"
     (eeg / ".venv" / "Scripts").mkdir(parents=True)
     bin_.mkdir()
     probe = tmp_path / "probe.py"
-    probe.write_text("from src.app.config import Settings\ns = Settings()\n"
-                     "print(f'SETTINGS={s.eeg_source}|{s.api_token}|{s.eeg_devices}')\n", encoding="utf-8")
+    probe.write_text("from src.app.config import Settings\ns = Settings()\nprint(f'SETTINGS={s.eeg_source}|"
+                     "{s.api_token}|{s.eeg_devices}|{s.muse_bridge_port}')\n", encoding="utf-8")
     (bin_ / "uvicorn.cmd").write_text(f'@"{sys.executable}" "{probe}"\r\n', encoding="utf-8")
     (eeg / ".venv" / "Scripts" / "Activate.ps1").write_text(f"$env:PATH = '{bin_};' + $env:PATH\n", encoding="utf-8")
     (eeg / ".env").write_text(f"EEG_SOURCE=muse\nAPI_TOKEN={TOKEN}\nADMIN_TOKEN=machine-own-{'a' * 30}\n",
                               encoding="utf-8")
-    aliases = {f.alias.upper() for f in Settings.model_fields.values() if f.alias}
-    env = {k: v for k, v in os.environ.items() if k.upper() not in aliases}
-    env.update(SESSION, PYTHONPATH=str(ROOT / "EEGResearch"))
     r = _ps(tmp_path, (
+        "$ErrorActionPreference = 'Stop'\n"
         f"$cmd = Get-SidecarCommand $true '{sys.executable}' '{eeg}'\n"
-        f"powershell -NoProfile -Command \"cd '{eeg}'; $cmd\"\n"
-        "\"PARENT=$env:EEG_SOURCE\"\n"), "Get-SidecarCommand", "Invoke-Quiet", env=env)
+        + _window(where, LEFTOVERS, eeg) + "\"PARENT=$env:EEG_SOURCE\"\n"),
+        "Get-SidecarCommand", "Get-ClearCommand", "Invoke-Quiet", env=_clean_env(where, LEFTOVERS))
     assert r.returncode == 0, r.stderr
-    assert f"SETTINGS=muse|{TOKEN}|" in r.stdout.splitlines(), (r.stdout, r.stderr)
-    assert f"clearing {', '.join(sorted(SESSION))} in the sidecar's window" in r.stdout
-    assert "PARENT=sim" in r.stdout, "the window that ran start.ps1 keeps its own variables"
+    # 8765: the bridge's own default, which its window falls back to once cleared too.
+    assert f"SETTINGS=muse|{TOKEN}||8765" in r.stdout.splitlines(), (r.stdout, r.stderr)
+    named = f"clearing {', '.join(sorted(LEFTOVERS))} in the sidecar's window"
+    assert (named in r.stdout) == (where == "session"), r.stdout
+    assert f"PARENT={'sim' if where == 'session' else ''}" in r.stdout.splitlines(), "the launching window is left alone"
+
+
+@WINDOWS
+@pytest.mark.parametrize("where", ["session", "profile"])
+@pytest.mark.parametrize("optics,preset,expected", [
+    (False, "", {}),
+    (True, "", {"MUSE_ENABLE_OPTICS": "1"}),
+    (True, "1034", {"MUSE_ENABLE_OPTICS": "1", "MUSE_OPTICS_PRESET": "1034"}),
+], ids=["no-optics", "optics", "optics-preset"])
+def test_the_hosted_bridge_window_reads_only_what_the_flags_set(tmp_path, where, optics, preset, expected):
+    # Every name the bridge's source reads is left over as "9"; the stub supervisor prints what the bridge gets.
+    assert "MUSE_BRIDGE_PORT" in BRIDGE_VARS, BRIDGE_VARS  # an empty scan would pass everything below
+    stub = tmp_path / "supervisor.ps1"
+    stub.write_text("param([string]$Exe)\n" + "".join(f'"{n}=" + $env:{n}\n' for n in BRIDGE_VARS), encoding="utf-8")
+    leftovers = {n: "9" for n in BRIDGE_VARS}
+    r = _ps(tmp_path, (
+        "$ErrorActionPreference = 'Stop'\n"
+        f"$cmd = Get-BridgeCommand $true ${optics} '{preset}' '{stub}' 'bridge.exe'\n"
+        + _window(where, leftovers, tmp_path)), "Get-BridgeCommand", "Get-ClearCommand", env=_clean_env(where, leftovers))
+    assert r.returncode == 0, r.stderr
+    seen = dict(l.split("=", 1) for l in r.stdout.splitlines() if l.split("=", 1)[0] in BRIDGE_VARS)
+    assert seen == {n: expected.get(n, "") for n in BRIDGE_VARS}
+
+
+@WINDOWS
+@pytest.mark.parametrize("python", ["missing.exe", "fails.cmd"])
+def test_a_hosted_run_stops_when_the_sidecars_settings_cannot_be_read(tmp_path, python):
+    (tmp_path / "fails.cmd").write_text("@echo No module named src 1>&2\r\n@exit /b 1\r\n", encoding="utf-8")
+    r = _ps(tmp_path, ("$ErrorActionPreference = 'Stop'\n"
+                       f"$cmd = Get-SidecarCommand $true '{tmp_path / python}' '{tmp_path}'\n"
+                       "'NOT REACHED'\n"), "Get-SidecarCommand", "Get-ClearCommand", "Invoke-Quiet")
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert "could not read the sidecar's settings" in r.stdout and "NOT REACHED" not in r.stdout
 
 
 def _script_body(text: str) -> str:
@@ -225,11 +278,16 @@ def test_the_hosted_keys_win_over_both_camera_branches():
     assert any(re.search(r"^\s*Add-LocalOrigins \$eegEnv \$localOrigins", l) for l in lines)
 
 
-def test_the_sidecar_window_runs_the_command_that_clears_the_session():
+@pytest.mark.parametrize("var,call,window", [
+    ("eegCmd", "Get-SidecarCommand", "EEG Backend :8001"),
+    ("bridgeCmd", "Get-BridgeCommand", "Muse Bridge :8765"),
+])
+def test_both_windows_run_the_commands_that_clear_the_session(var, call, window):
     # Structural only because a bare launch stops at the libMuse check, before any window opens.
     lines = _script_body((ROOT / "start.ps1").read_text(encoding="utf-8")).splitlines()
-    made = next(i for i, l in enumerate(lines) if re.match(r"\$eegCmd = Get-SidecarCommand \$Hosted ", l))
-    assert re.match(r'Start-Window "EEG Backend :8001" \$eegDir \$eegCmd$', lines[made + 1])
+    made = next(i for i, l in enumerate(lines) if re.match(rf"\s*\${var} = {call} \$Hosted\.IsPresent ", l))
+    used = next(i for i, l in enumerate(lines) if re.match(rf'\s*Start-Window "{window}" \$eegDir \${var}$', l))
+    assert made < used and not any(re.match(rf"\s*\${var} =", l) for l in lines[made + 1:used])
 
 
 @pytest.mark.skipif(BASH is None, reason="needs bash")

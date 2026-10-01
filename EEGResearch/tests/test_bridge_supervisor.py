@@ -1,5 +1,6 @@
 """run_bridge_supervised.ps1 restarts a crashed exe up to a cap, driven against a stub .cmd."""
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -71,7 +72,7 @@ def test_an_exe_that_exists_but_cannot_start_is_a_failure_with_a_code(tmp_path):
 
 
 def test_start_ps1_launches_the_bridge_through_the_supervisor():
-    """The env-var prefixes wrap `$bridgeCmd`, so the supervisor must be what it runs."""
+    """`Get-BridgeCommand` runs the script it is handed (test_launcher_hosted drives it), so hand it the supervisor."""
     src = (Path(__file__).resolve().parents[2] / "start.ps1").read_text(encoding="utf-8")
-    assert "run_bridge_supervised.ps1" in src
-    assert "$bridgeCmd = \"& '$bridgeSupervisor' -Exe '$bridgeExe'\"" in src
+    assert '$bridgeSupervisor = Join-Path $eegDir "scripts\\run_bridge_supervised.ps1"' in src
+    assert re.search(r"^\s*\$bridgeCmd = Get-BridgeCommand .* \$bridgeSupervisor \$bridgeExe\s*$", src, re.M)

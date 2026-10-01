@@ -18,7 +18,7 @@
 # To upgrade: bump a pin, rebuild the venv, run `python -m pytest tests/`.
 
 fastapi==0.141.1
-uvicorn[standard]==0.53.0
+uvicorn[standard]==0.54.0
 python-dotenv==1.2.3
 supabase==2.31.0
 # Imported directly (`ReturnMethod`), so pinned here too. supabase requires
@@ -29,7 +29,7 @@ postgrest==2.31.0
 # Supabase sub-client shares. The supabase packages require >=0.26,<0.29.
 httpx==0.28.1
 requests==2.34.2
-openai==3.19.0
+openai==3.19.2
 ollama==0.6.2
 # Both model providers are installed, not one: `LLM_PROVIDER` selects
 # between them at runtime and defaults to ollama, so a deployment can be

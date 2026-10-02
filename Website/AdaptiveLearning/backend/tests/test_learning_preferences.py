@@ -135,7 +135,8 @@ class _ProfileTable:
         client = self
 
         class _Q:
-            def update(self, obj, returning=main.ReturnMethod.representation, **_k):
+            def update(self, obj, returning=None, **_k):
+                # Records what was passed, None when omitted; behaves as the client's default would.
                 client.written.append(dict(obj))
                 client.returning.append(returning)
                 self._update, self._minimal = obj, returning == main.ReturnMethod.minimal

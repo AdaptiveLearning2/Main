@@ -7,6 +7,8 @@ import threading
 import time
 from typing import Dict
 
+from postgrest.types import ReturnMethod
+
 import eeg_client
 import signal_mapping
 from env_config import env_number
@@ -214,7 +216,7 @@ class _Poller(threading.Thread):
                         # Upsert on cog_session_ts_key, so pull + push can't double-write.
                         res = self.supabase.table("cognitive_signals").upsert(
                             row, on_conflict="session_id,ts",
-                            ignore_duplicates=True
+                            ignore_duplicates=True, returning=ReturnMethod.representation
                         ).execute()
                         # Count rows written; a deduped repeat writes none.
                         self.samples += len(res.data or [])

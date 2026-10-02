@@ -163,6 +163,10 @@ def test_the_detector_sees_each_shape(snippet, why):
 
 # ── a write whose rows decide something asks for them ──────────────────────
 
+# Every postgrest write that defaults to returning=representation.
+WRITE_METHODS = {"insert", "upsert", "update", "delete"}
+
+
 def _base_name(node):
     """The name a call chain starts from (`q` in `q.eq(...).execute()`), or None."""
     while isinstance(node, (ast.Call, ast.Attribute)):
@@ -171,7 +175,7 @@ def _base_name(node):
 
 
 def _row_reading_writes(tree, module):
-    """`.update()`/`.delete()` on a table whose returned rows are read: (module, function, line, named)."""
+    """A table write whose returned rows are read: (module, function, line, named)."""
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     found = []
     for func in ast.walk(tree):
@@ -179,7 +183,7 @@ def _row_reading_writes(tree, module):
             continue
         for call in ast.walk(func):
             if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-                    and call.func.attr in ("update", "delete")
+                    and call.func.attr in WRITE_METHODS
                     and "table(" in ast.unparse(call.func.value)):
                 continue
             top, reads = call, False
@@ -209,7 +213,7 @@ def test_a_write_whose_rows_decide_something_asks_for_them():
     """Empty rows read as "no match" (a 404, a 409, a lost close); under `return=minimal` every write is empty."""
     sites = _all_row_reading_writes()
     # A scan that finds nothing passes while checking nothing.
-    assert len(sites) >= 8, sites
+    assert len(sites) >= 14, sites
     unnamed = [s for s in sites if not s[3]]
     assert not unnamed, ("Pass returning=ReturnMethod.representation; the client's default is not a contract:\n"
                          + "\n".join(f"  {m}:{ln} {fn}()" for m, fn, ln, _ in unnamed))
@@ -221,7 +225,10 @@ def test_a_write_whose_rows_decide_something_asks_for_them():
     ('    res = supabase.table("t").delete().eq("id", 1).execute()\n    return bool(res.data)', True),
     ('    supabase.table("t").update({}).eq("id", 1).execute()', False),
     ('    q = supabase.table("t").delete().eq("id", 1)\n    q.execute()', False),
-], ids=["chained", "builder-in-a-name", "response-in-a-name", "rows-unread", "builder-rows-unread"])
+    ('    res = supabase.table("t").insert({}).execute()\n    return res.data[0]', True),
+    ('    self.n += len(supabase.table("t").upsert({}, on_conflict="id").execute().data)', True),
+], ids=["chained", "builder-in-a-name", "response-in-a-name", "rows-unread", "builder-rows-unread",
+        "insert", "upsert"])
 def test_the_write_detector_sees_each_shape(body, reads):
     found = _row_reading_writes(ast.parse(f"def handler():\n{body}\n"), "m.py")
     assert bool(found) is reads, (body, found)

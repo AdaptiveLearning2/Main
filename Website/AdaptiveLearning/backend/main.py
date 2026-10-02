@@ -2826,7 +2826,7 @@ def start_session(payload: StartSessionRequest, request: Request):
         "questions_answered": 0,
         "correct_answers":    0,
     }
-    res = supabase.table("sessions").insert(obj).execute()
+    res = supabase.table("sessions").insert(obj, returning=ReturnMethod.representation).execute()
 
     # Pre-warm the queue at the student's own difficulty bias.
     profile = _profile(user["id"])
@@ -3012,7 +3012,7 @@ def start_practice_session(payload: StartPracticeSessionRequest, request: Reques
         "topics":     payload.topics,
         "difficulty": payload.difficulty,
         "grade_level": grade,
-    }).execute()
+    }, returning=ReturnMethod.representation).execute()
     return res.data[0]
 
 
@@ -4576,7 +4576,7 @@ def create_class(payload: CreateClassRequest, request: Request):
         "name":        payload.name,
         "grade_level": payload.grade_level,
         "join_code":   _unused_join_code(),
-    }).execute()
+    }, returning=ReturnMethod.representation).execute()
     return res.data[0]
 
 
@@ -6047,12 +6047,12 @@ def _write_ingest_rows(table: str, rows: list[dict], on_conflict: str,
     """Upsert admitted rows and return how many were new; a replayed or failed row is given back."""
     key = f"{user_id}:{channel}"
     try:
-        resp = supabase.table(table).upsert(rows, on_conflict=on_conflict,
-                                            ignore_duplicates=True).execute()
+        resp = supabase.table(table).upsert(rows, on_conflict=on_conflict, ignore_duplicates=True,
+                                            returning=ReturnMethod.representation).execute()
     except Exception:
         _INGEST_ROW_LIMITER.release(key, len(rows))
         raise
-    # What the database wrote (needs return=representation); push_client counts from it.
+    # What the database wrote; push_client counts from it.
     written = len(resp.data or [])
     _INGEST_ROW_LIMITER.release(key, len(rows) - written)
     return written

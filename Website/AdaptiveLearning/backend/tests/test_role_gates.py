@@ -43,7 +43,7 @@ class _Profiles:
                 self._single = True
                 return self
 
-            def insert(self, row):
+            def insert(self, row, **_kw):
                 client.inserted.append((table, row))
                 self._insert = row
                 return self

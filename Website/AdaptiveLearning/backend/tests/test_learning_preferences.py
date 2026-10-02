@@ -33,7 +33,7 @@ class _Client:
             def update(self, *_a):        return self
             def single(self):             return self
 
-            def insert(self, obj):
+            def insert(self, obj, **_kw):
                 client.inserted.append((table, obj))
                 self._insert = obj
                 return self

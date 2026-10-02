@@ -70,7 +70,7 @@ jobs:
           pytest -rfEs tests/test_kit_launcher.py tests/test_launcher_hosted.py
           tests/test_bridge_supervisor.py tests/test_bridge_token_path.py
           tests/test_launcher_device_registry.py tests/test_launcher_env_encoding.py
-          tests/test_run_pilot_muse.py tests/test_start_ps1_native_stderr.py
+          tests/test_run_pilot_muse.py tests/test_start_ps1_native_stderr.py tests/test_capture_optics.py
 
   website-backend:
     name: Website backend tests

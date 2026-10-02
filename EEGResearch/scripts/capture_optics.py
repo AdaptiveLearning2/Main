@@ -1,28 +1,99 @@
 #!/usr/bin/env python3
 """Capture a raw optical recording from the native bridge to a JSONL fixture.
 
-Reads the bridge's TCP port directly (bridge running and connected); `.gz` output is gzipped
-(two minutes: ~640KB plain, ~97KB gzipped).
-One {"seq", "mono_ts_ms", "n", "ch"} frame per line; warns on a `seq` gap (time base is by index).
+Talks to the bridge on 127.0.0.1 as the sidecar does: its token, after it has proved it holds the same
+one. `--connect NAME` asks for a scan first, since the bridge scans only when asked. `.gz` output is
+gzipped (two minutes: ~640KB plain, ~97KB gzipped). One {"seq", "mono_ts_ms", "n", "ch"} frame per
+line; warns on a `seq` gap (time base is by index).
 """
 
 from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
+import hmac
 import json
+import os
+import secrets
 import socket
 import sys
 import time
+from collections.abc import Iterator
+
+
+def _token(port: int) -> str:
+    """The token this port's bridge wrote; eeg_ingestion.bridge_token_path's rule."""
+    path = os.path.join(os.environ.get("LOCALAPPDATA", ""), "AdaptiveLearning", f"muse_bridge_{port}.token")
+    try:
+        with open(path, encoding="ascii") as f:
+            token = f.read().strip()
+    except (OSError, UnicodeDecodeError):
+        token = ""
+    if not token:
+        raise SystemExit(f"no bridge token at {path}: is muse_native_bridge running on port {port}?")
+    return token
+
+
+def _authenticate(sock: socket.socket, token: str) -> None:
+    """The sidecar's handshake: the token goes only to a bridge that proved it read the same file."""
+    nonce = secrets.token_hex(32)
+    sock.sendall(f"CHALLENGE {nonce}\n".encode("ascii"))
+    proof = b""
+    while not proof.endswith(b"\n") and len(proof) < 256:
+        chunk = sock.recv(1)
+        if not chunk:
+            break
+        proof += chunk
+    expected = "PROOF " + hmac.new(token.encode("ascii"), nonce.encode("ascii"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(proof.rstrip(b"\r\n"), expected.encode("ascii")):
+        raise SystemExit("the process on that port did not prove it is the bridge; not sending the token")
+    sock.sendall(f"AUTH {token}\n".encode("ascii"))
+
+
+def _messages(sock: socket.socket) -> Iterator[dict | None]:
+    """Each JSON line the bridge sends, None on a quiet second; ends when it hangs up."""
+    buf = b""
+    while True:
+        try:
+            chunk = sock.recv(65536)
+        except socket.timeout:
+            yield None
+            continue
+        if not chunk:
+            return
+        buf += chunk
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(msg, dict):
+                yield msg
+
+
+def _pair(sock: socket.socket, messages: Iterator[dict | None], name: str, seconds: float) -> None:
+    """A scan, then connect once NAME is in it: what the page does before every pairing."""
+    sock.sendall(b'{"cmd":"refresh"}\n')
+    deadline = time.monotonic() + seconds
+    for msg in messages:
+        if msg and name in (msg.get("muse_devices") or []):
+            sock.sendall(json.dumps({"cmd": "connect", "name": name}).encode() + b"\n")
+            print(f"connect requested: {name}", file=sys.stderr)
+            return
+        if time.monotonic() > deadline:
+            break
+    raise SystemExit(f"{name} not found in {seconds:.0f} s of scanning: is it on and nearby?")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--seconds", type=float, default=60.0)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--connect", default="", help="headband name to connect first")
+    ap.add_argument("--connect", default="", help="headband name to scan for and connect first")
+    ap.add_argument("--scan-seconds", type=float, default=12.0, help="how long --connect waits for the headband")
     args = ap.parse_args()
 
     opener = gzip.open if args.out.endswith(".gz") else open
@@ -33,36 +104,27 @@ def main() -> int:
     channel_counts: set[int] = set()
     seqs: list[int] = []
 
-    sock = socket.create_connection((args.host, args.port), timeout=5)
+    token = _token(args.port)
+    sock = socket.create_connection(("127.0.0.1", args.port), timeout=5)
     try:
+        _authenticate(sock, token)
         sock.settimeout(1.0)
+        messages = _messages(sock)
         if args.connect:
-            sock.sendall(json.dumps({"cmd": "connect", "name": args.connect}).encode() + b"\n")
-            print(f"connect requested: {args.connect}", file=sys.stderr)
+            _pair(sock, messages, args.connect, args.scan_seconds)
 
         # Written as frames arrive, so a crash keeps what came before.
         with opener(args.out, "wt", encoding="utf-8") as fh:
-            buf = b""
             started = time.time()
             last_report = started
-            while time.time() - started < args.seconds:
-                try:
-                    chunk = sock.recv(65536)
-                except socket.timeout:
-                    continue
-                if not chunk:
+            reported_mode = False
+            for msg in messages:
+                if time.time() - started >= args.seconds:
                     break
-                buf += chunk
-                while b"\n" in buf:
-                    line, buf = buf.split(b"\n", 1)
-                    if not line.strip():
-                        continue
-                    try:
-                        msg = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if msg.get("kind") != "optics":
-                        continue
+                if msg is not None and not reported_mode and "bridge_mode" in msg:
+                    reported_mode = True
+                    print(f"bridge answering: bridge_mode {msg['bridge_mode']}", file=sys.stderr)
+                if msg is not None and msg.get("kind") == "optics":
                     # Skip a malformed line rather than abort.
                     if msg.get("mono_ts_ms") is None or msg.get("ch") is None:
                         continue

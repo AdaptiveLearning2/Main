@@ -65,6 +65,27 @@ it('keeps a student with no row at all as plain off', async () => {
   expect(badge.textContent).not.toMatch(/ago|weak|stale/)
 })
 
+it('adds a reading to the trend only when the poll brings a new one', async () => {
+  // Polls outnumber readings (2 s against the sidecar's ~5 s), so repeats must not count.
+  const ts = new Date().toISOString()
+  let polls = 0
+  mockApi({
+    '/api/classes': () => CLASSES,
+    '/api/teacher/classes/c1/live': () => {
+      polls += 1
+      return [student({ latest_cognitive: { ts, focus: 0.6, engagement: 0.5, stress: 0.3 } })]
+    },
+  })
+  render(<MemoryRouter><Live /></MemoryRouter>)
+  await screen.findByText(/Headband on/)
+  // A visible tab polls at once on visibilitychange, so no waiting on the interval.
+  for (const want of [2, 3]) {
+    document.dispatchEvent(new Event('visibilitychange'))
+    await waitFor(() => expect(polls).toBe(want))
+  }
+  await waitFor(() => expect(screen.getByRole('img', { name: /last 1 readings/ })).toBeInTheDocument())
+})
+
 // ── switching class ──────────────────────────────────────────────────────────
 // Roster state is scoped to the selected class; "Nobody's joined yet" means a loaded empty class.
 

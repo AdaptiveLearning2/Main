@@ -27,6 +27,11 @@ function agoLabel(iso) {
 
 export default function ClassDetail() {
   const { id } = useParams()
+  // Keyed: another class starts from fresh state, so no effect has to reset any.
+  return <ClassDetailBody key={id} id={id} />
+}
+
+function ClassDetailBody({ id }) {
   const navigate = useNavigate()
   const [cls, setCls]           = useState(null)
   const [students, setStudents] = useState([])
@@ -42,43 +47,34 @@ export default function ClassDetail() {
   const hideSensors = readHideSensorData()
   const analyticsRun = useRef(0)
 
-  useEffect(() => { loadData() }, [id])
-  useEffect(() => { loadAnalytics() }, [id])
-
-  async function loadData() {
-    setLoading(true)
-    setError(null)
-    let failed = 'this class'
-    try {
-      // allSettled: both can 404 for a missing class; decide with both results.
-      const [classRes, studentsRes] = await Promise.allSettled([
-        apiFetch(`/api/classes/${id}`),
-        apiFetch(`/api/classes/${id}/students`)
-      ])
-
-      // Only a 404 on the class request itself means "class not found".
+  // The loaders set state only in a callback, as the effects require; the retries raise the skeleton.
+  function loadData() {
+    // allSettled: a missing class fails both requests, and the class's own result names it.
+    return Promise.allSettled([
+      apiFetch(`/api/classes/${id}`),
+      apiFetch(`/api/classes/${id}/students`)
+    ]).then(([classRes, studentsRes]) => {
+      // `cause.status` picks LoadError's sentence; `what` names the request that failed.
       if (classRes.status === 'rejected') {
-        if (classRes.reason?.status !== 404) throw classRes.reason
-        setCls(null)
-        return
+        setError({ cause: classRes.reason, what: 'this class' })
+      } else if (studentsRes.status === 'rejected') {
+        setError({ cause: studentsRes.reason, what: "this class's students" })
+      } else {
+        setError(null)
+        setCls(classRes.value)
+        setStudents(Array.isArray(studentsRes.value) ? studentsRes.value : [])
       }
-      // The class just loaded, so a failure from here is the roster's, never "class not found".
-      failed = "this class's students"
-      if (studentsRes.status === 'rejected') throw studentsRes.reason
-
-      setCls(classRes.value)
-      setStudents(Array.isArray(studentsRes.value) ? studentsRes.value : [])
-    } catch (err) {
-      // The error itself, whose status picks LoadError's sentence, and the request that failed.
-      setError({ cause: err ?? new Error('Could not load class'), what: failed })
-    } finally {
       setLoading(false)
-    }
+    })
   }
 
-  async function loadAnalytics() {
+  function retryData() {
+    setLoading(true)
+    loadData()
+  }
+
+  function loadAnalytics() {
     const run = ++analyticsRun.current
-    setAnalyticsLoading(true)
     // Independent reads; a rejected one becomes `retrieved: false`, as the
     // backend sends for an aggregate failed behind a 200.
     const paths = {
@@ -88,21 +84,27 @@ export default function ClassDetail() {
       timeOfDay: `/api/classes/${id}/time-of-day?days=30`,
       cohortSignals: `/api/classes/${id}/cohort-signals?days=30`,
     }
-    const settled = await Promise.allSettled(
-      Object.values(paths).map(p => apiFetch(p)))
+    return Promise.allSettled(Object.values(paths).map(p => apiFetch(p))).then(settled => {
+      // Generation counter, not a cleanup flag: a retry supersedes a read still in flight.
+      if (run !== analyticsRun.current) return
 
-    // Generation counter, not a cleanup flag: the retry button also calls this,
-    // and a superseded class must not repaint under the new heading.
-    if (run !== analyticsRun.current) return
-
-    const next = {}
-    Object.keys(paths).forEach((key, i) => {
-      const res = settled[i]
-      next[key] = res.status === 'fulfilled' ? res.value : { retrieved: false }
+      const next = {}
+      Object.keys(paths).forEach((key, i) => {
+        const res = settled[i]
+        next[key] = res.status === 'fulfilled' ? res.value : { retrieved: false }
+      })
+      setAnalytics(next)
+      setAnalyticsLoading(false)
     })
-    setAnalytics(next)
-    setAnalyticsLoading(false)
   }
+
+  function retryAnalytics() {
+    setAnalyticsLoading(true)
+    loadAnalytics()
+  }
+
+  useEffect(() => { loadData() }, [id])
+  useEffect(() => { loadAnalytics() }, [id])
 
   function copyCode() {
     if (!cls?.join_code) {
@@ -129,17 +131,8 @@ export default function ClassDetail() {
   if (error) {
     return (
       <div className="p-6 lg:p-8 text-center">
-        <LoadError what={error.what} error={error.cause} onRetry={loadData} />
+        <LoadError what={error.what} error={error.cause} onRetry={retryData} />
         <button onClick={() => navigate('/teacher/classes')} className="px-5 py-2.5 bg-slate-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-xl font-bold text-sm">Back to Classes</button>
-      </div>
-    )
-  }
-
-  if (!cls) {
-    return (
-      <div className="p-6 lg:p-8 text-center">
-        <p className="text-gray-500 dark:text-gray-400 mb-4">Class not found.</p>
-        <button onClick={() => navigate('/teacher/classes')} className="px-5 py-2.5 bg-violet-600 text-white rounded-xl font-bold text-sm">Back to Classes</button>
       </div>
     )
   }
@@ -211,18 +204,18 @@ export default function ClassDetail() {
       <div className="mt-8 grid lg:grid-cols-2 gap-6">
         {/* First: the only panel that asks for an action. */}
         <AlertFeed data={analytics.alerts} loading={analyticsLoading}
-          onRetry={loadAnalytics} />
+          onRetry={retryAnalytics} />
         <ClassAccuracyTrend data={analytics.trend} loading={analyticsLoading}
-          onRetry={loadAnalytics} />
+          onRetry={retryAnalytics} />
         <ClassTopicHeatmap data={analytics.heatmap} loading={analyticsLoading}
-          onRetry={loadAnalytics} />
+          onRetry={retryAnalytics} />
         <ClassTimeOfDay data={analytics.timeOfDay} loading={analyticsLoading}
-          onRetry={loadAnalytics} />
+          onRetry={retryAnalytics} />
         {/* Sensor surfaces, so they honour "Hide sensor data". */}
         <ClassSignalTrend data={analytics.cohortSignals} loading={analyticsLoading}
-          onRetry={loadAnalytics} hideSensors={hideSensors} />
+          onRetry={retryAnalytics} hideSensors={hideSensors} />
         <ClassSignalRoster data={analytics.cohortSignals} loading={analyticsLoading}
-          onRetry={loadAnalytics} hideSensors={hideSensors} />
+          onRetry={retryAnalytics} hideSensors={hideSensors} />
       </div>
     </div>
   )

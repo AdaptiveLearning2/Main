@@ -116,58 +116,66 @@ def test_the_endpoint_refuses_values_the_column_would_refuse(field, value):
         main.UpdateProfileRequest(**{field: value})
 
 
+class _ProfileTable:
+    """`profiles` for `update_my_profile`: records each update; the re-read finds the row or fails."""
+
+    def __init__(self, reread_fails=False):
+        self.written = []
+        self._reread_fails = reread_fails
+
+    def table(self, _name):
+        client = self
+
+        class _Q:
+            def update(self, obj):
+                client.written.append(dict(obj))
+                self._update = True
+                return self
+
+            def select(self, *_a, **_k): return self
+            def eq(self, *_a):           return self
+            def limit(self, *_a):        return self
+
+            def execute(self):
+                if client._reread_fails and not getattr(self, "_update", False):
+                    raise RuntimeError("profiles read failed")
+                return type("R", (), {"data": [{"id": STUDENT["id"], "practice_reminders": False}]})()
+
+        return _Q()
+
+
+def _save(monkeypatch, client, **fields):
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+    monkeypatch.setattr(main, "supabase", client)
+    return main.update_my_profile(main.UpdateProfileRequest(**fields), None)
+
+
 @pytest.mark.parametrize("field,value", [
     ("difficulty_bias", 0),
     ("practice_reminders", False),
 ])
 def test_the_falsy_settings_are_sent_rather_than_filtered_out(field, value, monkeypatch):
     """0 and False are real choices; driven through the handler, not a restated filter."""
-    written = []
-
-    class _Recording:
-        def table(self, _name):
-            outer = self
-
-            class _Q:
-                def update(self, obj):
-                    outer_obj = dict(obj)
-                    outer_obj.pop("updated_at", None)
-                    written.append(outer_obj)
-                    return self
-
-                def eq(self, *_a):  return self
-                def select(self, *_a, **_k): return self
-                def single(self):   return self
-                def execute(self):  return type("R", (), {"data": []})()
-
-            return _Q()
-
-    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
-    monkeypatch.setattr(main, "supabase", _Recording())
-    monkeypatch.setattr(main, "_profile", lambda _uid: {"id": STUDENT["id"]})
-
-    main.update_my_profile(main.UpdateProfileRequest(**{field: value}), None)
-
-    assert written == [{field: value}]
+    client = _ProfileTable()
+    _save(monkeypatch, client, **{field: value})
+    assert [{k: v for k, v in w.items() if k != "updated_at"} for w in client.written] == [{field: value}]
 
 
 def test_a_profile_edit_stamps_updated_at_in_utc_with_its_offset(monkeypatch):
-    stamped = []
+    client = _ProfileTable()
+    _save(monkeypatch, client, practice_reminders=True)
+    stamps = [datetime.fromisoformat(w["updated_at"]).utcoffset() for w in client.written]
+    assert stamps == [timedelta(0)], client.written
 
-    class _Recording:
-        def table(self, _name):
-            class _Q:
-                def update(self, obj):
-                    stamped.append(obj.get("updated_at"))
-                    return self
 
-                def eq(self, *_a):  return self
-                def execute(self):  return type("R", (), {"data": []})()
+def test_a_save_answers_with_the_row_it_read_back(monkeypatch):
+    assert _save(monkeypatch, _ProfileTable(), practice_reminders=False)["practice_reminders"] is False
 
-            return _Q()
 
-    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
-    monkeypatch.setattr(main, "supabase", _Recording())
-    monkeypatch.setattr(main, "_profile", lambda _uid: {"id": STUDENT["id"]})
-    main.update_my_profile(main.UpdateProfileRequest(practice_reminders=True), None)
-    assert [datetime.fromisoformat(s).utcoffset() for s in stamped] == [timedelta(0)], stamped
+def test_a_save_whose_read_back_fails_is_an_error_not_the_placeholder(monkeypatch):
+    """The page adopts what a save returns, so placeholder defaults would be saved on the next tap."""
+    client = _ProfileTable(reread_fails=True)
+    with pytest.raises(main.HTTPException) as exc:
+        _save(monkeypatch, client, practice_reminders=False)
+    assert exc.value.status_code == 503 and "Saved" in exc.value.detail
+    assert len(client.written) == 1

@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { vi } from 'vitest'
 import ClassDetail from './ClassDetail'
 
@@ -56,13 +56,14 @@ it('survives a class with an empty name', async () => {
 
 it('distinguishes a failed request from a missing class', async () => {
   apiFetch.mockReset()
-  apiFetch.mockRejectedValue(new Error('Not your class'))
+  // As apiFetch throws for a non-2xx: the backend's detail as the message, the status attached.
+  apiFetch.mockRejectedValue(Object.assign(new Error('Internal Server Error'), { status: 500 }))
   renderAt()
   expect(await screen.findByText(/couldn't load this class/i)).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
   // The backend's detail string is not shown to a teacher.
-  expect(screen.queryByText('Not your class')).not.toBeInTheDocument()
-  expect(screen.queryByText('Class not found.')).not.toBeInTheDocument()
+  expect(screen.queryByText('Internal Server Error')).not.toBeInTheDocument()
+  expect(screen.queryByText("Couldn't find this class.")).not.toBeInTheDocument()
 })
 
 it('says a refused class is refused, once, with no retry', async () => {
@@ -83,7 +84,9 @@ it('still reports a genuinely missing class as not found', async () => {
   apiFetch.mockReset()
   apiFetch.mockRejectedValue(notFound('Class not found'))
   renderAt()
-  expect(await screen.findByText('Class not found.')).toBeInTheDocument()
+  expect(await screen.findByText("Couldn't find this class.")).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Back to Classes' })).toBeInTheDocument()
   expect(screen.queryByText(/couldn't load this class/i)).not.toBeInTheDocument()
 })
 
@@ -99,7 +102,47 @@ it('does not blame the class for a 404 from the roster', async () => {
   // The class itself loaded, so the sentence names the roster rather than the class.
   expect(await screen.findByText("Couldn't find this class's students.")).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
-  expect(screen.queryByText('Class not found.')).not.toBeInTheDocument()
+  expect(screen.queryByText("Couldn't find this class.")).not.toBeInTheDocument()
+})
+
+it('offers Try again when the roster read failed just now, and recovers on it', async () => {
+  // A failed read behind the owner check is a 503, never a 404 claiming the roster is gone.
+  apiFetch.mockReset()
+  let rosterUp = false
+  apiFetch.mockImplementation((url) =>
+    !String(url).includes('/students')
+      ? Promise.resolve({ id: CLASS_ID, name: 'Algebra', join_code: 'ABC123' })
+      : rosterUp
+        ? Promise.resolve([{ user_id: 's1', name: 'Ada' }])
+        : Promise.reject(Object.assign(new Error('Class could not be loaded; try again'), { status: 503 })),
+  )
+  renderAt()
+  expect(await screen.findByText("Couldn't load this class's students just now. Try again in a moment."))
+    .toBeInTheDocument()
+  rosterUp = true
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  expect(await screen.findByText('Students (1)')).toBeInTheDocument()
+})
+
+it("starts another class from fresh state, not the last class's error", async () => {
+  // Same route, new id: the loaders reset nothing themselves, so the page must remount.
+  apiFetch.mockReset()
+  apiFetch.mockImplementation((url) =>
+    String(url).includes('/class-gone') ? Promise.reject(notFound('Class not found')) : new Promise(() => {}))
+  function GoTo() {
+    const navigate = useNavigate()
+    return <button onClick={() => navigate('/teacher/classes/class-2')}>next class</button>
+  }
+  render(
+    <MemoryRouter initialEntries={['/teacher/classes/class-gone']}>
+      <Routes>
+        <Route path="/teacher/classes/:id" element={<><ClassDetail /><GoTo /></>} />
+      </Routes>
+    </MemoryRouter>,
+  )
+  expect(await screen.findByText("Couldn't find this class.")).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'next class' }))
+  expect(screen.queryByText("Couldn't find this class.")).not.toBeInTheDocument()
 })
 
 // ─── the last-active column ───────────────────────────────────────────────

@@ -185,6 +185,11 @@ def test_a_null_is_good_entry_is_a_bad_electrode_for_the_contact_ratio():
     assert f["contact_ratio"] == pytest.approx(0.75)
 
 
+def test_a_null_hsi_entry_is_the_worst_fit_rather_than_discarding_the_list():
+    f = Ticker().run({**RELAXED, "hsi": [None, 1.0, 1.0, 1.0], "is_good": [1.0] * 4}, 30)
+    assert f["contact_ratio"] == pytest.approx(0.75)
+
+
 # -- 1.5 the ratios are smoothed before they are scaled ------------------------
 
 def test_a_one_tick_excursion_moves_the_score_less_than_the_ratio_moved():

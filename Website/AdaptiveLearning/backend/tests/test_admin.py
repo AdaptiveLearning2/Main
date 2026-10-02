@@ -171,11 +171,17 @@ def test_every_admin_route_is_covered_by_the_refusal_test():
         f"admin endpoints with no refusal test: {sorted(routed - covered)}")
 
 
-def test_an_unreadable_admin_table_denies(monkeypatch):
-    """Fails closed: this guards the switch that turns off consent enforcement."""
+def test_an_unreadable_admin_table_denies_without_logging_a_denial(monkeypatch):
+    """Fails closed, guarding the consent-enforcement switch; a 503, since nobody was refused."""
+    events = []
     monkeypatch.setattr(main, "supabase", _Fake(admins=["admin-1"],
                                                 raises=["profiles"]))
-    assert main._is_admin("admin-1") is False
+    monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
+    monkeypatch.setattr(main, "_record_security_event", lambda kind, *_a, **_k: events.append(kind))
+
+    with pytest.raises(main.HTTPException) as e:
+        main.admin_me(None)
+    assert (e.value.status_code, events) == (503, [])
 
 
 def test_an_admin_may_view_any_student(monkeypatch):

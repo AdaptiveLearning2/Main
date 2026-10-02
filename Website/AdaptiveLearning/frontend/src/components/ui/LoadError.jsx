@@ -1,7 +1,7 @@
 /**
- * "This didn't load": never drawn as an empty list. `error.status` picks the
- * sentence: 403 refused and 404 not found (neither retried), 401 session expired,
- * 429 too many requests, anything else (no status included) could not reach the backend.
+ * "This didn't load": never drawn as an empty list. `error.status` picks the sentence:
+ * 403 refused and 404 not found (neither retried), 401 session expired, 429 too many requests,
+ * 503 a read that failed just now, anything else (no status included) could not reach the backend.
  */
 export default function LoadError({ what = 'this page', onRetry, error }) {
   const status = error?.status
@@ -14,6 +14,8 @@ export default function LoadError({ what = 'this page', onRetry, error }) {
     : status === 404 ? `Couldn't find ${what}.`
     : status === 401 ? `Your session has expired. Sign in again to see ${what}.`
     : status === 429 ? `Too many requests just now, so ${what} didn't load. Wait a moment and try again.`
+    // The backend answered but a read behind it failed; apiFetch first retries one sent with Retry-After.
+    : status === 503 ? `Couldn't load ${what} just now. Try again in a moment.`
     : `Couldn't load ${what}. Make sure the backend is running.`
 
   return (

@@ -296,8 +296,8 @@ class SignalProcessor:
         fit_score: float | None = None
         if isinstance(hsi, list) and hsi:
             try:
-                # HSI 1 -> 1.0, 2 -> 0.5, 4 -> 0.0; 0 means "not reported".
-                rated = [float(v) for v in hsi if float(v) > 0.0]
+                # HSI 1 -> 1.0, 2 -> 0.5, 4 -> 0.0; 0 means "not reported", a null the worst (4).
+                rated = [v for v in (4.0 if x is None else float(x) for x in hsi) if v > 0.0]
             except (TypeError, ValueError):
                 rated = []
             if rated:

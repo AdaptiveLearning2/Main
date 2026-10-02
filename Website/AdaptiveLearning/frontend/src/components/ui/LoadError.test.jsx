@@ -60,6 +60,15 @@ describe('LoadError', () => {
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
   })
 
+  it('calls a 503 a read that failed just now, not a backend that is down, and keeps Try again', () => {
+    // The backend answered; what failed was a read behind it, which may succeed next time.
+    render(<LoadError what="this class" error={err(503)} onRetry={vi.fn()} />)
+    const box = screen.getByRole('status')
+    expect(box).toHaveTextContent("Couldn't load this class just now. Try again in a moment.")
+    expect(box).not.toHaveTextContent(/backend/i)
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+  })
+
   it('keeps Try again for a status it has no special sentence for', () => {
     render(<LoadError what="your classes" error={err(500)} onRetry={vi.fn()} />)
     expect(screen.getByRole('status')).toHaveTextContent(/backend is running/)

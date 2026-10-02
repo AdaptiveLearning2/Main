@@ -1002,9 +1002,7 @@ a new check inline — re-deriving the rule per endpoint is how the original `cl
 - `_verify_class_owner(class_id, user_id)` — only the owning teacher.
 - `_verify_can_view_student(viewer, student_id)` — the student themselves, a teacher of a class they are enrolled in,
   a linked parent, or an admin (a **fourth relationship** rather than letting each admin path grow its own copy of a
-  report query). A relationship or admin-role read that fails answers **503 and logs no denial**: an outage in the
-  security log reads as a parent, teacher or admin refused. So the admin check uses `_role_or_raise`, not `_is_admin`. The teacher check is one `classes!inner` read; without `!inner` PostgREST
-  keeps every membership and the filter stops restricting.
+  report query). In every helper here **a read that fails is a 503**: a logged 403 reads as someone refused.
 - `_session_or_403(session_id, user_id, columns)` — a session is **one student's**, so this is ownership and nothing
   weaker; no teacher or parent is admitted. It returns the row, which is the point: `record_answer` and `end_session`
   need the session anyway, and paying for a second query is why they were written with no check at all.
@@ -1292,8 +1290,8 @@ whether a tile says "erased" or "no sensor", never whether anything may be recor
 
 ## Admin is a role, and three migrations are what make that safe
 
-Admin is `profiles.role = 'admin'`, read through the same `_role` every other role gate uses, and set
-from the dashboard SQL editor.
+Admin is `profiles.role = 'admin'`, read by `_role_or_raise` (a failed read is a 503, never a refusal), and
+set from the dashboard SQL editor.
 
 **It is a role rather than a side table only because the column is server-controlled on both edges**, and
 both are load-bearing: one migration revokes UPDATE/INSERT on it from the client roles, another whitelists
@@ -1554,17 +1552,15 @@ there is nothing true to say about a channel the payload does not know about.
 
 ## A refusal is not an outage
 
-`components/ui/LoadError.jsx` used to say *"make sure the backend is running"* for every failure. That names
-a layer, and naming a layer sends someone to inspect it — so a teacher whose Question Bank filter was refused
-went and checked a server that had answered perfectly well. It now picks the sentence from `error.status`,
-which `apiFetch` attaches: **403** is "you don't have access to X" and gets **no Try again button**, since
-retrying a refusal cannot work and offering the button is part of the false claim; **404** is "couldn't find X",
-also with no button, since the backend answered and a stale link will 404 again; **401** says the session
-expired and keeps it; **429** says too many requests and keeps it — a school behind one address hits the address
-budget, not an outage; **anything else, including an error carrying no `status` at all**, keeps the original
-wording, because a dropped connection genuinely is an unreachable backend. Callers pass nothing; a page wires
-it by holding the error in the state it already had (`setFailed(e)` — every read of that flag was a
-truthiness check).
+`components/ui/LoadError.jsx` picks its sentence from the `error.status` that `apiFetch` attaches, because naming a
+layer sends someone to inspect it: a teacher whose Question Bank filter was refused went and checked a server that
+had answered perfectly well. **403** ("you don't have access to X") and **404** ("couldn't find X") get **no Try
+again button**, since asking again cannot change the answer — so the backend must never answer 404 for a read that
+failed (`_row_or_404` answers 503). **401** (session expired), **429** (too many requests: a school behind one
+address hits the address budget) and **503** (a read behind the backend failed just now) keep the button. **Anything
+else, including no `status` at all**, keeps *"make sure the backend is running"*: a dropped connection genuinely is
+an unreachable backend. Callers pass nothing; a page wires it by holding the error in the state it already had
+(`setFailed(e)` — every read of that flag was a truthiness check).
 
 **Name what was actually refused, not what the page is about.** `questions` is public-read, so a 403 on the
 Question Bank can only ever concern the student filter — *"you don't have access to the question bank"* would

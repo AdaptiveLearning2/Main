@@ -87,6 +87,7 @@ class _CapturingClient:
 
             def select(self, *_a, **_k):  return self
             def eq(self, *_a):            return self
+            def limit(self, *_a):         return self
 
             def single(self):
                 # `_row_or_404` unwraps single() to the row; a list here would fail in the double.
@@ -158,7 +159,6 @@ def test_a_profile_update_writes_only_the_columns_it_names(monkeypatch):
     client = _CapturingClient()
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
     monkeypatch.setattr(main, "supabase", client)
-    monkeypatch.setattr(main, "_profile", lambda _uid: {"id": STUDENT["id"]})
 
     main.update_my_profile(
         _payload_for(main.UpdateProfileRequest,

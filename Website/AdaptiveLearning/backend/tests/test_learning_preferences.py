@@ -1,6 +1,7 @@
 """Learning preferences: endpoint bounds, the failed-read fallback, and the session prewarm."""
 
 import os
+from datetime import datetime, timedelta
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
@@ -115,36 +116,96 @@ def test_the_endpoint_refuses_values_the_column_would_refuse(field, value):
         main.UpdateProfileRequest(**{field: value})
 
 
+_STORED = {"id": STUDENT["id"], "display_name": "S", "role": "student", "difficulty_bias": 0,
+           "practice_reminders": True, "updated_at": None, "avatar_path": "not for the page"}
+
+
+class _ProfileTable:
+    """`profiles` for `update_my_profile`: an update answers with the row as stored, as PostgREST does.
+
+    `row=None` is an account with no profile row; `reads_fail` fails every read that is not an update.
+    """
+
+    def __init__(self, row=_STORED, reads_fail=False):
+        self.row = dict(row) if row is not None else None
+        self.written, self.reads, self.returning = [], 0, []
+        self._reads_fail = reads_fail
+
+    def table(self, _name):
+        client = self
+
+        class _Q:
+            def update(self, obj, returning=None, **_k):
+                # Records what was passed, None when omitted; behaves as the client's default would.
+                client.written.append(dict(obj))
+                client.returning.append(returning)
+                self._update, self._minimal = obj, returning == main.ReturnMethod.minimal
+                return self
+
+            def select(self, *_a, **_k): return self
+            def eq(self, *_a):           return self
+            def limit(self, *_a):        return self
+
+            def execute(self):
+                if getattr(self, "_update", None) is not None:
+                    if client.row is not None:
+                        client.row.update(self._update)
+                    # `return=minimal` answers no rows, which would read as "no profile".
+                    stored = [dict(client.row)] if client.row and not self._minimal else []
+                    return type("R", (), {"data": stored})()
+                client.reads += 1
+                if client._reads_fail:
+                    raise RuntimeError("profiles read failed")
+                return type("R", (), {"data": [dict(client.row)] if client.row else []})()
+
+        return _Q()
+
+
+def _save(monkeypatch, client, **fields):
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+    monkeypatch.setattr(main, "supabase", client)
+    return main.update_my_profile(main.UpdateProfileRequest(**fields), None)
+
+
 @pytest.mark.parametrize("field,value", [
     ("difficulty_bias", 0),
     ("practice_reminders", False),
 ])
 def test_the_falsy_settings_are_sent_rather_than_filtered_out(field, value, monkeypatch):
     """0 and False are real choices; driven through the handler, not a restated filter."""
-    written = []
+    client = _ProfileTable()
+    _save(monkeypatch, client, **{field: value})
+    assert [{k: v for k, v in w.items() if k != "updated_at"} for w in client.written] == [{field: value}]
 
-    class _Recording:
-        def table(self, _name):
-            outer = self
 
-            class _Q:
-                def update(self, obj):
-                    outer_obj = dict(obj)
-                    outer_obj.pop("updated_at", None)
-                    written.append(outer_obj)
-                    return self
+def test_a_profile_edit_stamps_updated_at_in_utc_with_its_offset(monkeypatch):
+    client = _ProfileTable()
+    _save(monkeypatch, client, practice_reminders=True)
+    stamps = [datetime.fromisoformat(w["updated_at"]).utcoffset() for w in client.written]
+    assert stamps == [timedelta(0)], client.written
 
-                def eq(self, *_a):  return self
-                def select(self, *_a, **_k): return self
-                def single(self):   return self
-                def execute(self):  return type("R", (), {"data": []})()
 
-            return _Q()
+def test_a_save_answers_with_the_row_as_stored_in_its_named_columns(monkeypatch):
+    saved = _save(monkeypatch, _ProfileTable(), practice_reminders=False)
+    assert saved["practice_reminders"] is False
+    assert "avatar_path" not in saved and "updated_at" not in saved
 
-    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
-    monkeypatch.setattr(main, "supabase", _Recording())
-    monkeypatch.setattr(main, "_profile", lambda _uid: {"id": STUDENT["id"]})
 
-    main.update_my_profile(main.UpdateProfileRequest(**{field: value}), None)
+def test_a_save_reads_nothing_after_its_update(monkeypatch):
+    """A read failing after a landed save would make the page restore the old value and save it back."""
+    client = _ProfileTable(reads_fail=True)
+    assert _save(monkeypatch, client, practice_reminders=False)["practice_reminders"] is False
+    assert client.reads == 0
 
-    assert written == [{field: value}]
+
+def test_a_save_asks_for_the_row_as_stored(monkeypatch):
+    """By name, not by the client's default: an empty answer is only "no profile" if rows were asked for."""
+    client = _ProfileTable()
+    _save(monkeypatch, client, practice_reminders=False)
+    assert client.returning == [main.ReturnMethod.representation]
+
+
+def test_a_save_for_an_account_with_no_profile_row_is_a_404(monkeypatch):
+    with pytest.raises(main.HTTPException) as exc:
+        _save(monkeypatch, _ProfileTable(row=None), practice_reminders=False)
+    assert exc.value.status_code == 404

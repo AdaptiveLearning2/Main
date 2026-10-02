@@ -2,6 +2,7 @@
 import asyncio
 import inspect
 import os
+import re
 import sys
 import threading
 import time
@@ -12,6 +13,7 @@ os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
 import pytest  # noqa: E402
+from postgrest.exceptions import APIError  # noqa: E402
 
 import env_config  # noqa: E402
 import llm_client  # noqa: E402
@@ -26,14 +28,22 @@ class _Result:
         self.count = count
 
 
+# The embeds main.py uses: (table, embedded table) -> the foreign key PostgREST joins on.
+_EMBED_KEYS = {("class_memberships", "classes"): "class_id"}
+
+
 class _Query:
     """Minimal stand-in for the supabase-py query builder chain."""
 
-    def __init__(self, rows, max_rows=None, raises=None):
+    def __init__(self, rows, max_rows=None, raises=None, name=None, tables=None, failure=None):
         self._rows = rows
         self._max_rows = max_rows
         # A read that fails, as opposed to one that returns nothing.
         self._raises = raises
+        self._name, self._tables = name, tables or {}
+        # Table name -> the exception its read raises, or None; consulted for embedded tables.
+        self._failure = failure or (lambda _name: None)
+        self._embeds = {}
         self._filters = self.filters = []
         self._limit = None
         self._order = None
@@ -43,12 +53,34 @@ class _Query:
 
     def select(self, *cols, **kw):
         self._count = kw.get("count")
-        # Only named columns come back, as in PostgREST. Embeds ("a(b)") aren't
-        # modelled and fall back to whole rows.
+        # Only named columns come back, as in PostgREST. With an embed ("a(b)"), whole rows: one in
+        # _EMBED_KEYS is joined, any other is left to the fixture's rows.
         spec = ",".join(cols)
+        self._embeds = {m[1]: bool(m[2]) for m in re.finditer(r"(\w+)(!inner)?\(", spec)
+                        if (self._name, m[1]) in _EMBED_KEYS}
         if spec and "*" not in spec and "(" not in spec:
             self._cols = [c.strip() for c in spec.split(",") if c.strip()]
         return self
+
+    def _embed(self, row):
+        """Row with each embed attached, as PostgREST was seen to answer; None when `!inner` drops it.
+
+        A filter on an embed's column empties that embed, and drops the row only under `!inner`.
+        """
+        out = dict(row)
+        for name, inner in self._embeds.items():
+            key = _EMBED_KEYS[(self._name, name)]
+            target = next((r for r in self._tables.get(name, []) if r.get("id") == row.get(key)), None)
+            wanted = [(col.split(".", 1)[1], v) for col, v in self._filters if col.startswith(name + ".")]
+            # Only `.eq` is modelled on an embed; any other filter would compare a tuple and drop rows silently.
+            if any(isinstance(v, tuple) for _, v in wanted):
+                raise AssertionError(f"unmodelled filter on embed {name!r}: {wanted}")
+            if target is not None and any(target.get(col) != v for col, v in wanted):
+                target = None
+            if target is None and inner:
+                return None
+            out[name] = target
+        return out
 
     def _project(self, row):
         if self._cols is None:
@@ -104,6 +136,8 @@ class _Query:
 
     def _matches(self, row):
         for col, want in self._filters:
+            if col.split(".", 1)[0] in self._embeds:
+                continue  # applied to the embed in `_embed`
             have = row.get(col)
             if isinstance(want, tuple) and want[0] == "in":
                 if have not in want[1]:
@@ -137,11 +171,16 @@ class _Query:
     def execute(self):
         if self._raises:
             raise self._raises
+        # A failed read of an embedded table fails the whole request, as it does in PostgREST.
+        embedded = next((e for e in map(self._failure, self._embeds) if e), None)
+        if embedded:
+            raise embedded
         if getattr(self, "or_filters", None) and self._rows:
             raise AssertionError(
                 "or_() is recorded but not evaluated by this fake; give the "
                 "table no rows, or model the filter")
-        rows = [r for r in self._rows if self._matches(r)]
+        rows = [self._embed(r) for r in self._rows] if self._embeds else list(self._rows)
+        rows = [r for r in rows if r is not None and self._matches(r)]
         if self._order:
             rows = sorted(rows, key=lambda r: str(r.get(self._order, "")), reverse=self._desc)
         total = len(rows)
@@ -158,8 +197,19 @@ class _Query:
     def single(self):
         rows = self.execute().data
         if not rows:
-            raise RuntimeError("no rows")  # supabase-py raises rather than returning empty
+            raise _no_row()  # supabase-py raises rather than returning empty
         return _Single(rows[0])
+
+
+def _no_row() -> APIError:
+    """What the client raises for `.single()` on zero rows, as PostgREST answers it."""
+    return APIError({"code": "PGRST116", "details": "The result contains 0 rows",
+                     "message": "JSON object requested, multiple (or no) rows returned"})
+
+
+def _not_a_uuid() -> APIError:
+    """What the client raises when an id compared to a uuid column cannot be one."""
+    return APIError({"code": "22P02", "message": 'invalid input syntax for type uuid: "not-a-uuid"'})
 
 
 class _Single:
@@ -176,8 +226,8 @@ class _FakeSupabase:
         self._tables = tables
         # count="exact" requested but none returned: a third state for totals.
         self._count_missing = count_missing
-        # Table names whose reads fail, independently of each other.
-        self._table_raises = set(table_raises or ())
+        # Table names whose reads fail, independently of each other; a dict names each exception.
+        self._table_raises = table_raises if isinstance(table_raises, dict) else set(table_raises or ())
         # int: every table; dict: per-table cap.
         self._max_rows = max_rows
         self._rpc_results = rpc_results or {}
@@ -189,11 +239,18 @@ class _FakeSupabase:
         # Every query built, so tests can assert on its filters.
         self.queries = []
 
+    def _failure(self, name):
+        """The exception a read of `name` raises, or None."""
+        if name not in self._table_raises:
+            return None
+        return (self._table_raises[name] if isinstance(self._table_raises, dict)
+                else RuntimeError(f"{name} read failed"))
+
     def table(self, name):
         self.table_calls.append(name)
         cap = self._max_rows.get(name) if isinstance(self._max_rows, dict) else self._max_rows
-        exc = RuntimeError(f"{name} read failed") if name in self._table_raises else None
-        query = _Query(self._tables.get(name, []), max_rows=cap, raises=exc)
+        query = _Query(self._tables.get(name, []), max_rows=cap, raises=self._failure(name), name=name,
+                       tables=self._tables, failure=self._failure)
         query._drop_count = self._count_missing
         self.queries.append(query)
         return query
@@ -228,8 +285,10 @@ TABLES = {
         {"id": "class-1", "teacher_id": "teacher-1"},
         {"id": "class-2", "teacher_id": "teacher-2"},
     ],
+    # class-2 has a student too, or a teacher check that ignored the student would still deny.
     "class_memberships": [
         {"id": "m1", "class_id": "class-1", "student_id": "student-1"},
+        {"id": "m2", "class_id": "class-2", "student_id": "student-2"},
     ],
     "parent_child_links": [
         {"id": "l1", "parent_id": "parent-1", "child_id": "student-1"},
@@ -256,8 +315,9 @@ def test_teacher_can_view_a_student_in_their_class():
 
 
 def test_teacher_cannot_view_a_student_not_in_their_class():
-    # teacher-2 owns class-2; student-1 isn't enrolled in it.
+    # teacher-2 teaches student-2 in class-2; student-1 isn't enrolled in it.
     assert main._can_view_student(OTHER_TEACHER, "student-1") is False
+    assert main._can_view_student(OTHER_TEACHER, "student-2") is True
 
 
 def test_linked_parent_can_view_their_child():
@@ -276,10 +336,72 @@ def test_stranger_cannot_view_any_student():
     assert main._can_view_student(STRANGER, "student-1") is False
 
 
-def test_verify_raises_403_for_unauthorized_viewer():
+def test_the_teacher_check_is_one_read():
+    """And the only read: the admin check comes last, so a teacher's view costs no profile read."""
+    assert main._can_view_student(TEACHER, "student-1") is True
+    assert main.supabase.table_calls == ["class_memberships"]
+
+
+def test_the_fake_refuses_an_embed_filter_it_does_not_model():
+    """Unrefused, a future `.in_` on the join would drop every row, a wrong answer that looks like a denial."""
+    query = main.supabase.table("class_memberships").select("id, classes!inner(teacher_id)") \
+        .in_("classes.teacher_id", ["teacher-1"])
+    with pytest.raises(AssertionError, match="unmodelled filter"):
+        query.execute()
+
+
+def _logged_events(monkeypatch) -> list:
+    events = []
+    monkeypatch.setattr(main, "_record_security_event", lambda *a, **_k: events.append(a[0]))
+    return events
+
+
+def test_a_denial_read_in_full_is_a_403_and_is_logged(monkeypatch):
+    events = _logged_events(monkeypatch)
     with pytest.raises(main.HTTPException) as exc:
         main._verify_can_view_student(STRANGER, "student-1")
-    assert exc.value.status_code == 403
+    assert (exc.value.status_code, events) == (403, ["authz_denied"])
+
+
+@pytest.mark.parametrize("failing", ["profiles", "class_memberships", "classes", "parent_child_links"])
+def test_a_failed_relationship_read_is_a_503_and_not_a_logged_denial(monkeypatch, failing):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={failing}))
+    events = _logged_events(monkeypatch)
+    with pytest.raises(main.HTTPException) as exc:
+        main._verify_can_view_student(STRANGER, "student-1")
+    assert (exc.value.status_code, events) == (503, [])
+
+
+@pytest.mark.parametrize("failing", ["profiles", "class_memberships"])
+def test_a_failed_read_does_not_block_what_another_relationship_allows(monkeypatch, failing):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={failing}))
+    assert main._can_view_student(PARENT, "student-1") is True
+
+
+def test_a_malformed_student_id_is_a_logged_denial_not_an_outage(monkeypatch):
+    """PostgREST refuses a non-uuid with 22P02: no student has that id, so 403, not "try again"."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={
+        "class_memberships": _not_a_uuid(), "parent_child_links": _not_a_uuid()}))
+    events = _logged_events(monkeypatch)
+    with pytest.raises(main.HTTPException) as exc:
+        main._verify_can_view_student(TEACHER, "not-a-uuid")
+    assert (exc.value.status_code, events) == (403, ["authz_denied"])
+
+
+def test_a_failed_access_read_asks_the_client_to_retry(monkeypatch):
+    """`apiFetch` retries a GET 503 only when it carries `Retry-After`."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={"class_memberships"}))
+    with pytest.raises(main.HTTPException) as exc:
+        main._verify_can_view_student(STRANGER, "student-1")
+    assert exc.value.headers == {"Retry-After": str(main._READ_RETRY_AFTER_SEC)}
+
+
+def test_a_failed_parent_link_read_refuses_a_consent_write_without_logging_a_denial(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={"parent_child_links"}))
+    events = _logged_events(monkeypatch)
+    with pytest.raises(main.HTTPException) as exc:
+        main._consent_actor(PARENT, "student-1")
+    assert (exc.value.status_code, events) == (503, [])
 
 
 # ── _verify_class_owner ──────────────────────────────────────────────────
@@ -298,6 +420,23 @@ def test_student_is_rejected_from_class_roster():
     with pytest.raises(main.HTTPException) as exc:
         main._verify_class_owner("class-1", "student-1")
     assert exc.value.status_code == 403
+
+
+def test_a_failed_class_read_is_a_503_never_a_404(monkeypatch):
+    """A 404 tells the page the class is gone and offers no retry; a failed read proved nothing."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={"classes"}))
+    events = _logged_events(monkeypatch)
+    with pytest.raises(main.HTTPException) as exc:
+        main._verify_class_owner("class-1", "teacher-1")
+    assert (exc.value.status_code, events) == (503, [])
+    assert exc.value.headers == {"Retry-After": str(main._READ_RETRY_AFTER_SEC)}
+
+
+def test_a_class_id_that_cannot_be_a_uuid_is_a_404(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={"classes": _not_a_uuid()}))
+    with pytest.raises(main.HTTPException) as exc:
+        main._verify_class_owner("not-a-uuid", "teacher-1")
+    assert exc.value.status_code == 404
 
 
 # ── GET /api/classes/{id} ────────────────────────────────────────────────
@@ -323,7 +462,7 @@ def test_class_detail_rejects_a_non_owning_teacher(monkeypatch):
 
 
 def test_class_detail_404s_an_unknown_class(monkeypatch):
-    # The frontend shows "Class not found" for this status only.
+    # The frontend shows "Couldn't find this class." for this status, with no retry.
     monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
     with pytest.raises(main.HTTPException) as exc:
         main.get_class("class-does-not-exist", None)
@@ -1090,8 +1229,7 @@ class _RaisingSessions:
             def single(self): return self
 
             def execute(self):
-                raise RuntimeError(
-                    "{'code': 'PGRST116', 'details': 'The result contains 0 rows'}")
+                raise _no_row()
 
         return _Q()
 
@@ -1288,11 +1426,11 @@ def test_missing_class_returns_404_not_500():
     assert exc.value.status_code == 404
 
 
-def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_stale(monkeypatch):
-    """A stale session's heart reading is nulled like cognitive and face."""
-    from datetime import datetime, timedelta
+def _class_live_on_a_stale_session(monkeypatch):
+    """`class_live` over one session last heard from 700 s ago: (rows, updates written, poller stops)."""
+    from datetime import datetime, timedelta, timezone
 
-    stale_ts = (datetime.utcnow() - timedelta(seconds=700)).isoformat()
+    stale_ts = (datetime.now(timezone.utc) - timedelta(seconds=700)).isoformat()
 
     class _Tbl:
         def __init__(self, name, tables, updates):
@@ -1355,8 +1493,12 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
     monkeypatch.setattr(main.eeg_poller, "stop",
                         lambda sid, uid=None: stop_calls.append((sid, uid))
                         or {"running": False, "samples": 0})
+    return main.class_live("class-1", None), updates, stop_calls
 
-    out = main.class_live("class-1", None)
+
+def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_stale(monkeypatch):
+    """A stale session's heart reading is nulled like cognitive and face."""
+    out, updates, stop_calls = _class_live_on_a_stale_session(monkeypatch)
 
     assert any(t == "sessions" for t, _ in updates), "the stale session was never marked ended"
     assert out[0]["latest_cognitive"] is None
@@ -1369,6 +1511,14 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
         "the stale-session sweep must release the student's reservation, "
         "not the teacher's (or none at all)"
     )
+
+
+def test_class_live_stamps_a_stale_close_in_utc_with_its_offset(monkeypatch):
+    from datetime import datetime, timedelta
+
+    _, updates, _ = _class_live_on_a_stale_session(monkeypatch)
+    stamps = [fields["ended_at"] for table, fields in updates if table == "sessions" and "ended_at" in fields]
+    assert [datetime.fromisoformat(s).utcoffset() for s in stamps] == [timedelta(0)], stamps
 
 
 # ── facial-recognition opt-out ───────────────────────────────────────────

@@ -498,8 +498,25 @@ def _group_by_user(rows) -> dict[str, list]:
     return grouped
 
 
+# PostgREST codes meaning "no such row": `.single()` matched none, or the id cannot be a uuid.
+_NO_ROW_CODES = frozenset({"PGRST116", "22P02"})
+
+# What a 503 for a failed read asks the client to wait, in seconds; `apiFetch` then retries a GET itself.
+_READ_RETRY_AFTER_SEC = 2
+
+
+def _names_no_row(exc: Exception) -> bool:
+    """Whether a failed read means the row does not exist, rather than that the read failed."""
+    return getattr(exc, "code", None) in _NO_ROW_CODES
+
+
+def _read_failed(detail: str) -> HTTPException:
+    """503 for a read that failed: a 403 or 404 would claim an answer nobody read."""
+    return HTTPException(503, detail, headers={"Retry-After": str(_READ_RETRY_AFTER_SEC)})
+
+
 def _row_or_404(query, what: str) -> dict:
-    """Run a `.single()` lookup; 404 when the row is absent (it raises PGRST116).
+    """Run a `.single()` lookup: 404 when no row matches, 503 when the read fails.
 
     Not for a lookup where absence is a legitimate answer.
     """
@@ -507,8 +524,11 @@ def _row_or_404(query, what: str) -> dict:
         res = query.single().execute()
     except HTTPException:
         raise
-    except Exception:                                          # noqa: BLE001
-        raise HTTPException(404, f"{what} not found")
+    except Exception as e:                                     # noqa: BLE001
+        if _names_no_row(e):
+            raise HTTPException(404, f"{what} not found")
+        print(f"[row_or_404] {what}: {e}")
+        raise _read_failed(f"{what} could not be loaded; try again")
     if not res.data:
         raise HTTPException(404, f"{what} not found")
     return res.data
@@ -2491,23 +2511,27 @@ _PROFILE_SELF_COLUMNS = ("id, display_name, email, role, grade_level, difficulty
                          "session_duration_minutes, practice_reminders, created_at")
 
 
-@app.get("/api/profile/me")
-def get_my_profile(request: Request):
-    """The caller's own row. A failed or missing read is an error, never `_profile`'s placeholder.
-
-    The placeholder is role "student": a teacher greeted by it was routed into the student app,
-    where an error lets AuthContext fall back to the sign-up claim.
-    """
-    user = get_user(request)
+def _own_profile(uid: str) -> dict:
+    """The caller's own row; a failed or missing read is an error, never `_profile`'s placeholder."""
     try:
         rows = supabase.table("profiles").select(_PROFILE_SELF_COLUMNS) \
-            .eq("id", user["id"]).limit(1).execute().data
+            .eq("id", uid).limit(1).execute().data
     except Exception as e:                                     # noqa: BLE001
-        print(f"[profile] could not read {user['id'][:8]}: {e}")
+        print(f"[profile] could not read {uid[:8]}: {e}")
         raise HTTPException(503, "Your profile could not be loaded")
     if not rows:
         raise HTTPException(404, "No profile exists for this account")
     return rows[0]
+
+
+@app.get("/api/profile/me")
+def get_my_profile(request: Request):
+    """The caller's own row.
+
+    Never the placeholder, which is role "student": a teacher greeted by it was routed into the
+    student app, where an error lets AuthContext fall back to the sign-up claim.
+    """
+    return _own_profile(get_user(request)["id"])
 
 @app.put("/api/profile/me")
 def update_my_profile(payload: UpdateProfileRequest, request: Request):
@@ -2523,9 +2547,12 @@ def update_my_profile(payload: UpdateProfileRequest, request: Request):
             ("practice_reminders", payload.practice_reminders),
         ) if value is not None
     }
+    stored = None
     if fields:
-        fields["updated_at"] = datetime.utcnow().isoformat()
-        supabase.table("profiles").update(fields).eq("id", user["id"]).execute()
+        fields["updated_at"] = _utc_now().isoformat()
+        # The row as stored, asked for by name: empty then means no row, and no second read can fail.
+        stored = supabase.table("profiles").update(fields, returning=ReturnMethod.representation) \
+            .eq("id", user["id"]).execute().data or []
     if payload.display_name is not None:
         try:
             supabase.auth.admin.update_user_by_id(
@@ -2535,7 +2562,13 @@ def update_my_profile(payload: UpdateProfileRequest, request: Request):
             )
         except Exception as e:
             print("metadata sync failed:", e)
-    return _profile(user["id"])
+    if stored is None:
+        return _own_profile(user["id"])
+    if not stored:
+        raise HTTPException(404, "No profile exists for this account")
+    # Not `_profile`'s placeholder: the page adopts what a save returns and sends it on the next tap.
+    columns = [c.strip() for c in _PROFILE_SELF_COLUMNS.split(",")]
+    return {c: stored[0][c] for c in columns if c in stored[0]}
 
 
 # ─── questions ───────────────────────────────────────────────────────────
@@ -2818,7 +2851,7 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
         "question_id":    payload.question_id,
         "selected_index": payload.selected_index,
         "correct":        payload.correct,
-        "answered_at":    datetime.utcnow().isoformat(),
+        "answered_at":    _utc_now().isoformat(),
     }).execute()
     # Atomic increment in the database. Never raises: the answer row is the record
     # and `_answer_counts` recomputes at close.
@@ -4717,8 +4750,8 @@ def _verify_class_owner(class_id: str, user_id: str):
         raise HTTPException(403, "Not your class")
 
 
-def _can_view_student(viewer: dict, student_id: str) -> bool:
-    """Self, a teacher of their class, a linked parent, or an admin.
+def _can_view_student(viewer: dict, student_id: str) -> bool | None:
+    """Self, a teacher of their class, a linked parent, or an admin; None if a check could not be read.
 
     Service-role reads bypass RLS: this check is the enforcement.
     """
@@ -4726,33 +4759,34 @@ def _can_view_student(viewer: dict, student_id: str) -> bool:
     if uid == student_id:
         return True
 
-    if _is_admin(uid):
-        return True
-
-    try:
-        classes = supabase.table("classes").select("id").eq("teacher_id", uid).execute().data or []
-        class_ids = [c["id"] for c in classes]
-        if class_ids:
-            member = supabase.table("class_memberships").select("id") \
-                .in_("class_id", class_ids).eq("student_id", student_id).limit(1).execute().data or []
-            if member:
+    checks = (
+        # One read. Without `!inner` PostgREST keeps every membership and only empties the embed.
+        ("teacher", lambda: supabase.table("class_memberships").select("id, classes!inner(teacher_id)")
+         .eq("student_id", student_id).eq("classes.teacher_id", uid).limit(1).execute().data),
+        ("parent", lambda: supabase.table("parent_child_links").select("id")
+         .eq("parent_id", uid).eq("child_id", student_id).limit(1).execute().data),
+        # Last, as the rarest. Not `_role`, which reads a failed profile read as "student".
+        ("admin", lambda: _role_or_raise(uid) == ADMIN_ROLE),
+    )
+    unread = False
+    for name, check in checks:
+        try:
+            if check():
                 return True
-    except Exception as e:
-        print(f"[can_view_student:teacher] {e}")
-
-    try:
-        link = supabase.table("parent_child_links").select("id") \
-            .eq("parent_id", uid).eq("child_id", student_id).limit(1).execute().data or []
-        if link:
-            return True
-    except Exception as e:
-        print(f"[can_view_student:parent] {e}")
-
-    return False
+        except Exception as e:                                 # noqa: BLE001
+            # An id that cannot be a uuid names no student: a denial, not an outage.
+            if not _names_no_row(e):
+                print(f"[can_view_student:{name}] {e}")
+                unread = True
+    return None if unread else False
 
 
 def _verify_can_view_student(viewer: dict, student_id: str):
-    if not _can_view_student(viewer, student_id):
+    allowed = _can_view_student(viewer, student_id)
+    if allowed is None:
+        # Still refused, but a failed read is not a denial, so it stays out of the security log.
+        raise _read_failed("Could not check access to this student; try again")
+    if not allowed:
         # The subject id answers "who tried to read this child's record".
         _record_security_event("authz_denied", viewer.get("id"), student_id,
                                check="can_view_student")
@@ -5546,13 +5580,16 @@ def _IS_DUPLICATE_KEY(exc: Exception) -> bool:
 
 
 def _is_linked_parent(viewer_id: str, student_id: str) -> bool:
+    """Whether a parent link exists. A failed read raises a 503: it is not a refusal to log."""
     try:
         link = supabase.table("parent_child_links").select("id") \
             .eq("parent_id", viewer_id).eq("child_id", student_id).limit(1).execute().data or []
-        return bool(link)
-    except Exception as e:
+    except Exception as e:                                     # noqa: BLE001
+        if _names_no_row(e):
+            return False
         print(f"[consent:parent_link] {e}")
-        return False
+        raise _read_failed("Could not check the parent link; try again")
+    return bool(link)
 
 
 def _consent_actor(viewer: dict, student_id: str) -> str:
@@ -6048,7 +6085,7 @@ def _session_or_403(session_id: str, user_id: str, columns: str = "user_id") -> 
     """Fetch a session, refusing it unless the caller owns it. Returns the row.
 
     Ownership only: no teacher or parent. `columns` must include `user_id`
-    (absent, it refuses everyone). A failed read is a 404, never a way past.
+    (absent, it refuses everyone). A missing row is a 404 and a failed read a 503, never a way past.
     """
     row = _row_or_404(
         supabase.table("sessions").select(columns).eq("id", session_id),
@@ -6363,7 +6400,7 @@ def class_live(class_id: str, request: Request):
 
     LIVE_WINDOW_SEC = _LIVE_WINDOW_SEC
     STALE_AFTER_SEC = _STALE_AFTER_SEC
-    now = datetime.utcnow()
+    now = _utc_now()
     live_cutoff  = (now - timedelta(seconds=LIVE_WINDOW_SEC)).isoformat()
     stale_cutoff = (now - timedelta(seconds=STALE_AFTER_SEC)).isoformat()
 
@@ -7283,18 +7320,16 @@ def my_children(request: Request, include_face: bool = True):
 # See CLAUDE.md "Admin is a role".
 
 
-def _is_admin(user_id: str) -> bool:
-    """Whether this user is a platform administrator, from `profiles.role`.
-
-    Fails closed through `_role`, which degrades to 'student' on a failed read.
-    """
-    return _role(user_id) == ADMIN_ROLE
-
-
 def _require_admin(request: Request) -> dict:
-    """The caller, if they are an admin. 401 without a token, 403 without a row."""
+    """The caller, if they are an admin. 401 without a token, 403 without the role, 503 if unread."""
     user = get_user(request)
-    if not _is_admin(user["id"]):
+    try:
+        role = _role_or_raise(user["id"])
+    except Exception as e:                                     # noqa: BLE001
+        # Still refused, but not logged: an outage is not someone reaching for the console.
+        print(f"[admin] could not read {user['id'][:8]}'s role: {e}")
+        raise _read_failed("Could not check admin access; try again")
+    if role != ADMIN_ROLE:
         # Own kind, not `authz_denied`. `.url` read defensively: the audit must
         # never break the 403 it records.
         _record_security_event(

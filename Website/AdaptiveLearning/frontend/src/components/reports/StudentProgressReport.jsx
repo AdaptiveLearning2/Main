@@ -233,7 +233,7 @@ export default function StudentProgressReport({
             </div>
           )}
           {showSignals && signalReport && (
-            <div className="grid lg:grid-cols-1 gap-6">
+            <div className="space-y-6">
               <LiveSignalSummary report={signalReport} title="Latest Signal Snapshot" />
               <WeeklySignalReport report={signalReport} title="Weekly EEG & Face Report" />
             </div>

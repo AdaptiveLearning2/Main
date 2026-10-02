@@ -1002,7 +1002,7 @@ a new check inline — re-deriving the rule per endpoint is how the original `cl
 - `_verify_class_owner(class_id, user_id)` — only the owning teacher.
 - `_verify_can_view_student(viewer, student_id)` — the student themselves, a teacher of a class they are enrolled in,
   a linked parent, or an admin (a **fourth relationship** rather than letting each admin path grow its own copy of a
-  report query).
+  report query). In every helper here **a read that fails is a 503**: a logged 403 reads as someone refused.
 - `_session_or_403(session_id, user_id, columns)` — a session is **one student's**, so this is ownership and nothing
   weaker; no teacher or parent is admitted. It returns the row, which is the point: `record_answer` and `end_session`
   need the session anyway, and paying for a second query is why they were written with no check at all.
@@ -1290,8 +1290,8 @@ whether a tile says "erased" or "no sensor", never whether anything may be recor
 
 ## Admin is a role, and three migrations are what make that safe
 
-Admin is `profiles.role = 'admin'`, read through the same `_role` every other role gate uses, and set
-from the dashboard SQL editor.
+Admin is `profiles.role = 'admin'`, read by `_role_or_raise` (a failed read is a 503, never a refusal), and
+set from the dashboard SQL editor.
 
 **It is a role rather than a side table only because the column is server-controlled on both edges**, and
 both are load-bearing: one migration revokes UPDATE/INSERT on it from the client roles, another whitelists
@@ -1552,16 +1552,15 @@ there is nothing true to say about a channel the payload does not know about.
 
 ## A refusal is not an outage
 
-`components/ui/LoadError.jsx` used to say *"make sure the backend is running"* for every failure. That names
-a layer, and naming a layer sends someone to inspect it — so a teacher whose Question Bank filter was refused
-went and checked a server that had answered perfectly well. It now picks the sentence from `error.status`,
-which `apiFetch` attaches: **403** is "you don't have access to X" and gets **no Try again button**, since
-retrying a refusal cannot work and offering the button is part of the false claim; **401** says the session
-expired and keeps it; **429** says too many requests and keeps it — a school behind one address hits the address
-budget, not an outage; **anything else, including an error carrying no `status` at all**, keeps the original
-wording, because a dropped connection genuinely is an unreachable backend. Callers pass nothing; a page wires
-it by holding the error in the state it already had (`setFailed(e)` — every read of that flag was a
-truthiness check).
+`components/ui/LoadError.jsx` picks its sentence from the `error.status` that `apiFetch` attaches, because naming a
+layer sends someone to inspect it: a teacher whose Question Bank filter was refused went and checked a server that
+had answered perfectly well. **403** ("you don't have access to X") and **404** ("couldn't find X") get **no Try
+again button**, since asking again cannot change the answer — so the backend must never answer 404 for a read that
+failed (`_row_or_404` answers 503). **401** (session expired), **429** (too many requests: a school behind one
+address hits the address budget) and **503** (a read behind the backend failed just now) keep the button. **Anything
+else, including no `status` at all**, keeps *"make sure the backend is running"*: a dropped connection genuinely is
+an unreachable backend. Callers pass nothing; a page wires it by holding the error in the state it already had
+(`setFailed(e)` — every read of that flag was a truthiness check).
 
 **Name what was actually refused, not what the page is about.** `questions` is public-read, so a 403 on the
 Question Bank can only ever concern the student filter — *"you don't have access to the question bank"* would
@@ -1680,9 +1679,10 @@ Both shapes have since bitten, and the corrections are the load-bearing half:
 - **Derived `loading` needs a remount, not just a derivation.** `loading = loadedFor !== id` reads *false* when you
   navigate A→B→A: B's request is cancelled on the way out without ever advancing `loadedFor`, so returning to A finds
   it still saying `'A'`. `SessionReview.jsx` therefore keys the body on the id (`<Body key={sessionId} …>`), which
-  resets every piece of session-scoped state at once — including the `err` that otherwise let a failure on A mask a B
-  that loaded fine. `ChildDetail.jsx` does the same, and this is now the pattern for any page whose whole state
-  belongs to one route param.
+  resets all session-scoped state at once, the `err` that let a failure on A mask a B that loaded fine included.
+  `ChildDetail.jsx` and `ClassDetail.jsx` do the same: the pattern for any page whose state belongs to one route param.
+- **The rule cannot see a component holding a `try/finally`**: the compiler behind it skips it (18 files hold one),
+  so removing one surfaces old findings. Loaders set state in a `.then` callback; after an `await` still counts.
 - **The render-time adjustment compares against the previous *render*, and that is not always the question.**
   `useValueChange` (`hooks/useValueChange.js`) is the extracted form and is right for `Flags.jsx`. It was wrong for
   `FlowDot.jsx`, which needs the last value it *acted on*: the pulse timer clears the live state, so a timestamp that

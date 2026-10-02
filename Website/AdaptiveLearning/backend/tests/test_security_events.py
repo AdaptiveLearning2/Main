@@ -88,7 +88,7 @@ def test_a_refused_session_records_the_owner_as_the_subject(recorder, monkeypatc
 def test_reaching_for_the_admin_console_is_its_own_kind(recorder, monkeypatch):
     """Not folded into `authz_denied`, where it would hide among ordinary refusals."""
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
-    monkeypatch.setattr(main, "_is_admin", lambda _uid: False)
+    monkeypatch.setattr(main, "_role_or_raise", lambda _uid: "student")
 
     class _Req:
         url = type("U", (), {"path": "/api/admin/flags/strategy_llm_enabled"})()
@@ -198,7 +198,7 @@ def test_a_failed_write_does_not_turn_a_403_into_a_500(monkeypatch, capsys):
 
 def test_the_endpoint_is_admin_only(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
-    monkeypatch.setattr(main, "_is_admin", lambda _uid: False)
+    monkeypatch.setattr(main, "_role_or_raise", lambda _uid: "student")
 
     class _Req:
         url = type("U", (), {"path": "/api/admin/security-events"})()

@@ -1088,8 +1088,8 @@ while still filling reports `artifact`, not `filling`. **Contact is judged over 
 contact vouches only for its own samples, so an electrode any buffered tick marked unseated stays out until that
 tick's samples have left. Whether an electrode is seated is one check, `services/contact.py`, for the processor's
 channel mask and the estimator alike; `_sample_is_usable` (any electrode valid) and `_contact_ratio` (a smoothed
-fraction) read the same lists for other questions. The seated check unseats a NaN or a null entry (the bridge writes
-a non-finite value as null); the other two read a NaN `is_good` as bad too.
+fraction) read the same lists for other questions. All three read a NaN or null `is_good` as bad (the bridge writes a
+non-finite value as null); the seated check unseats one in `hsi` too, and `_contact_ratio` reads a null `hsi` as 4.
 
 **The stressed line is per calm source** — `STRESSED_CALM_MAX` in `adaptation.py` and
 `EEG_STRESSED_CALM_MAX_BY_SOURCE` in `signal_fusion.py`, pinned equal by a test on each side. 0.377 was 0.311 Bels

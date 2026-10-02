@@ -7,6 +7,7 @@ os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
 import pytest  # noqa: E402
+from postgrest.exceptions import APIError  # noqa: E402
 
 import chart_archive  # noqa: E402
 import chart_render  # noqa: E402
@@ -671,11 +672,15 @@ def test_signed_urls_are_short_lived():
 # ── the endpoint ────────────────────────────────────────────────────────────
 
 class _SessionsClient(_SigningClient):
-    """Adds the `sessions` row the endpoint reads before it signs anything."""
+    """Adds the `sessions` row the endpoint reads before it signs anything.
 
-    def __init__(self, row, **kw):
+    `row` is the session, None for no such session, or an exception for a read that fails.
+    """
+
+    def __init__(self, row, viewer_role=None, **kw):
         super().__init__(**kw)
         self._row = row
+        self._viewer_role = viewer_role
 
     def table(self, name):
         if name == "sessions":
@@ -692,11 +697,18 @@ class _SessionsClient(_SigningClient):
                     return self
 
                 def execute(self):
+                    if isinstance(row, Exception):
+                        raise row
                     if row is None:
-                        raise RuntimeError("no such row")
+                        raise APIError({"code": "PGRST116", "details": "The result contains 0 rows"})
                     return type("R", (), {"data": row})()
 
             return _T()
+        if name == "profiles":
+            # The viewer's own role, for the admin check.
+            return _Query([{"role": self._viewer_role}] if self._viewer_role else [])
+        if name in ("class_memberships", "parent_child_links"):
+            return _Query([])  # read, and empty: a viewer with no relationship, not a failed check
         return super().table(name)
 
 
@@ -709,13 +721,14 @@ def _charts(monkeypatch, row, viewer="viewer", **kw):
     return main.session_charts(SESSION, None), client
 
 
-def test_the_endpoint_checks_the_relationship_not_the_role(monkeypatch):
-    """The bucket has no policies, so this check is the only defence."""
+@pytest.mark.parametrize("role", ["teacher", "parent"])
+def test_the_endpoint_checks_the_relationship_not_the_role(monkeypatch, role):
+    """The bucket has no policies, so this check is the only defence; the role alone admits nobody."""
     import main
 
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "a-stranger"})
     monkeypatch.setattr(main, "supabase",
-                        _SessionsClient({"user_id": USER, "chart_paths": {}}))
+                        _SessionsClient({"user_id": USER, "chart_paths": {}}, viewer_role=role))
 
     with pytest.raises(main.HTTPException) as exc:
         main.session_charts(SESSION, None)
@@ -758,16 +771,18 @@ def test_the_endpoint_returns_a_url_per_recorded_chart(monkeypatch):
     assert payload["expires_in"] == chart_archive.SIGNED_URL_TTL_SECONDS
 
 
-def test_an_unreadable_session_row_is_a_404_not_an_empty_payload(monkeypatch):
+@pytest.mark.parametrize("row,status", [(None, 404), (RuntimeError("connection reset"), 503)],
+                         ids=["missing", "unreadable"])
+def test_a_session_row_not_read_is_an_error_not_an_empty_payload(monkeypatch, row, status):
     """An empty payload would report an absence the read never established."""
     import main
 
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
-    monkeypatch.setattr(main, "supabase", _SessionsClient(None))
+    monkeypatch.setattr(main, "supabase", _SessionsClient(row))
 
     with pytest.raises(main.HTTPException) as exc:
         main.session_charts(SESSION, None)
-    assert exc.value.status_code == 404
+    assert exc.value.status_code == status
 
 
 # ── every close site archives ───────────────────────────────────────────────

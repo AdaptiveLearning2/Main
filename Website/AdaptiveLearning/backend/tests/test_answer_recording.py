@@ -1,6 +1,7 @@
 """An answer reaches the database, attributed to the question's own topic."""
 
 import os
+from datetime import datetime, timedelta
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
@@ -174,6 +175,17 @@ def test_the_answer_endpoint_updates_the_topic_record(monkeypatch):
     )
 
     assert seen == [(USER, QUESTION, True)]
+
+
+def test_an_answer_is_stamped_in_utc_with_its_offset(monkeypatch):
+    client = _Client()
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
+    monkeypatch.setattr(main, "supabase", client)
+    monkeypatch.setattr(main, "_record_topic_attempt", lambda *_a: None)
+    main.record_answer(session_id="s-1", request=None,
+                       payload=main.AnswerPayload(question_id=QUESTION, selected_index=2, correct=True))
+    stamps = [row["answered_at"] for table, row in client.inserts if table == "session_answers"]
+    assert [datetime.fromisoformat(s).utcoffset() for s in stamps] == [timedelta(0)], stamps
 
 
 class _SessionClient:

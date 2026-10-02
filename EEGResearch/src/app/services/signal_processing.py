@@ -286,7 +286,8 @@ class SignalProcessor:
         good_channels: float | None = None
         if isinstance(is_good, list) and is_good:
             try:
-                instant = sum(1 for v in is_good if float(v) >= 1.0) / len(is_good)
+                # A null is the bridge's non-finite value: a bad electrode, not unknown (docs/signals.md).
+                instant = sum(1 for v in is_good if v is not None and float(v) >= 1.0) / len(is_good)
             except (TypeError, ValueError):
                 instant = None
             if instant is not None:
@@ -295,8 +296,8 @@ class SignalProcessor:
         fit_score: float | None = None
         if isinstance(hsi, list) and hsi:
             try:
-                # HSI 1 -> 1.0, 2 -> 0.5, 4 -> 0.0; 0 means "not reported".
-                rated = [float(v) for v in hsi if float(v) > 0.0]
+                # HSI 1 -> 1.0, 2 -> 0.5, 4 -> 0.0; 0 means "not reported", a null the worst (4).
+                rated = [v for v in (4.0 if x is None else float(x) for x in hsi) if v > 0.0]
             except (TypeError, ValueError):
                 rated = []
             if rated:
@@ -527,7 +528,7 @@ class SignalProcessor:
         if not isinstance(is_good, list) or not is_good:
             return True  # no contact data -- can't judge, so don't discard
         try:
-            return any(float(v) >= 1.0 for v in is_good)
+            return any(v is not None and float(v) >= 1.0 for v in is_good)  # null: a bad electrode
         except (TypeError, ValueError):
             return True
 

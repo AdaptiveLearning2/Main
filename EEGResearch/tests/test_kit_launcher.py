@@ -295,7 +295,7 @@ def test_the_bridge_run_log_keeps_its_start_up_lines_when_the_supervisor_stops_i
 
 @REAL_BRIDGE
 def test_the_bridge_scans_only_when_asked_and_stops_once_nobody_asks(tmp_path):
-    port, env = _real_bridge_env(tmp_path, MUSE_SCAN_IDLE_MS="1500")
+    port, env = _real_bridge_env(tmp_path, MUSE_SCAN_IDLE_MS="3000")
     bridge = subprocess.Popen([str(_BRIDGE_EXE)], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                               stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     try:
@@ -309,8 +309,11 @@ def test_the_bridge_scans_only_when_asked_and_stops_once_nobody_asks(tmp_path):
                 pytest.skip("scanning is libMuse's; this is the synthetic build")
             assert first["scanning"] is False  # up, as from sign-in, and quiet
             conn.sendall(b'{"cmd":"refresh"}\n')
-            assert any(s["scanning"] for s in itertools.islice(statuses, 10))
-            assert any(not s["scanning"] for s in itertools.islice(statuses, 25))  # 1.5 s idle, within 5 s
+            # From the first line showing the scan: lines sent before the bridge read the command come first.
+            after = itertools.dropwhile(lambda s: not s["scanning"], itertools.islice(statuses, 40))
+            held = list(itertools.islice(after, 5))
+            assert len(held) == 5 and all(s["scanning"] for s in held)  # held a second: pairing waits up to 12 s
+            assert any(not s["scanning"] for s in after)  # then dropped, 3 s after the refresh
     finally:
         bridge.kill()
         bridge.wait(10)

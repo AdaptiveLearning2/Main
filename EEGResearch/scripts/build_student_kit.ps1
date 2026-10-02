@@ -100,15 +100,26 @@ Invoke-Step "Auditing every bundled binary's DLL imports" { & $py (Join-Path $in
 $report = Join-Path $work "selftest.json"
 if (Test-Path $report) { Remove-Item $report }
 Write-Host "== Running the kit's self-test" -ForegroundColor Cyan
-# A windowed exe does not set $LASTEXITCODE, so the exit code comes from the process object.
-$run = Start-Process -FilePath (Join-Path $app "AdaptiveLearningSensors.exe") -ArgumentList "--self-test", "`"$report`"" `
-    -Wait -PassThru
+$savedPath = $env:Path
+# Windows' own folders only, as on a student machine: a DLL on this machine's PATH would stand in for a missing one.
+$env:Path = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\Wbem"
+try {
+    # A windowed exe does not set $LASTEXITCODE, so the exit code comes from the process object.
+    $run = Start-Process -FilePath (Join-Path $app "AdaptiveLearningSensors.exe") `
+        -ArgumentList "--self-test", "`"$report`"" -PassThru
+} finally { $env:Path = $savedPath }
+$null = $run.Handle  # held now, or 5.1 reports no ExitCode once the process has gone
+if (-not $run.WaitForExit(600000)) {
+    Stop-Process -Id $run.Id -Force
+    throw "the self-test did not finish in 10 minutes; see $work\selftest.console.log"
+}
 if (-not (Test-Path $report)) { throw "the self-test wrote no report (exit $($run.ExitCode)); see $work\selftest.console.log" }
 $result = Get-Content -Raw -Encoding UTF8 $report | ConvertFrom-Json
 foreach ($check in $result.checks) {
     $colour = if ($check.ok) { "Green" } else { "Red" }
     Write-Host ("  {0,-5} {1}" -f $(if ($check.ok) { "PASS" } else { "FAIL" }), $check.name) -ForegroundColor $colour
     if (-not $check.ok) { Write-Host "        $($check.detail.error)" -ForegroundColor Yellow }
+    if ($check.detail.foreign) { Write-Host "        not the kit's, not failed: $($check.detail.foreign -join ', ')" }
 }
 if ($run.ExitCode -ne 0 -or -not $result.ok) { throw "the self-test failed; the full report is $report" }
 if ($SkipInstaller) { Write-Host "Kit staged and self-tested at $app (no installer: -SkipInstaller)."; return }

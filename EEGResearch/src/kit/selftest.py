@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import ntpath
 import os
 import re
 import socket
@@ -18,6 +19,8 @@ import threading
 import time
 import traceback
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from src.kit import config as kit_config
@@ -28,6 +31,7 @@ FACE_IMAGE = Path("selftest") / "face.jpg"
 STATUS_DLL_NOT_FOUND = 0xC0000135
 CRT = re.compile(r"(msvcp140(_\w+)?|vcruntime140(_\w+)?|concrt140)\.dll", re.I)
 PYTHON_RUNTIME = re.compile(r"python3\d*\.dll", re.I)
+SERVER_START_S = 30.0
 
 
 class CheckFailed(Exception):
@@ -134,36 +138,51 @@ class _Records(logging.Handler):
         self.lines.append(self.format(record))
 
 
-def check_server(ctx):
-    require(ctx.get("settings_ok"), "the settings check did not pass, so the sidecar's env is not set")
+@contextmanager
+def _server_warnings() -> Iterator[list[str]]:
+    """Warnings and errors logged while the block runs: on the root logger, which uvicorn's dictConfig leaves alone."""
+    records = _Records()
+    root = logging.getLogger()
+    root.addHandler(records)
+    try:
+        yield records.lines
+    finally:
+        root.removeHandler(records)
+
+
+def _serve_once(app, path: str) -> tuple[int, dict, list[str]]:
+    """uvicorn with app on a free port, one GET of path, then stopped; CheckFailed if it did not start in time."""
     import uvicorn  # noqa: PLC0415
 
-    from src.app.main import app  # noqa: PLC0415
-
-    errors = _Records()
-    logging.getLogger("uvicorn").addHandler(errors)  # a failed start is otherwise only a timeout here
-    try:
+    with _server_warnings() as warnings:  # a failed start is otherwise only a timeout here
         server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, http="h11", ws="none",
                                                loop="asyncio", lifespan="on", log_config=uvicorn_log_config()))
-        thread = threading.Thread(target=server.run, name="selftest-uvicorn")
+        thread = threading.Thread(target=server.run, name="selftest-uvicorn", daemon=True)  # never holds up the exit
         thread.start()
-        deadline = time.monotonic() + 30
-        while not server.started:
-            require(thread.is_alive(), f"uvicorn stopped during startup: {errors.lines[-5:]}")
-            require(time.monotonic() < deadline, f"uvicorn did not start in 30 s: {errors.lines[-5:]}")
-            time.sleep(0.05)
-        port = server.servers[0].sockets[0].getsockname()[1]
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=10) as resp:
+            deadline = time.monotonic() + SERVER_START_S
+            while not server.started:
+                require(thread.is_alive(), f"uvicorn stopped during startup: {warnings[-5:]}")
+                require(time.monotonic() < deadline,
+                        f"uvicorn did not start in {SERVER_START_S:.0f} s: {warnings[-5:]}")
+                time.sleep(0.05)
+            port = server.servers[0].sockets[0].getsockname()[1]
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=10) as resp:
                 status, body = resp.status, json.loads(resp.read())
         finally:
-            server.should_exit = True
+            server.should_exit = True  # on a slow start too, or it serves on once started
             thread.join(30)
-    finally:
-        logging.getLogger("uvicorn").removeHandler(errors)
+        require(not thread.is_alive(), "uvicorn did not exit when asked")
+        return status, body, warnings[-5:]
+
+
+def check_server(ctx):
+    require(ctx.get("settings_ok"), "the settings check did not pass, so the sidecar's env is not set")
+    from src.app.main import app  # noqa: PLC0415
+
+    status, body, warnings = _serve_once(app, "/healthz")
     require(status == 200 and body == {"status": "ok"}, f"healthz {status} {body}")
-    require(not thread.is_alive(), "uvicorn did not exit when asked")
-    return {"healthz": status, "warnings": errors.lines[-5:]}
+    return {"healthz": status, "warnings": warnings}
 
 
 def _free_port() -> int:
@@ -227,21 +246,31 @@ def _bridge_status(port: int, token: str) -> dict:
     raise CheckFailed("no status line from the bridge in 10 s")
 
 
-def check_modules(ctx):
-    """Nothing this process loaded outside the kit except Windows' own DLLs and what Defender injects."""
-    require(getattr(sys, "frozen", False), "run from source, where the interpreter is outside the kit by design")
-    app, windows = _norm(ctx["app"]), _norm(os.environ.get("SystemRoot", r"C:\Windows"))
-    defender = _norm(Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "Microsoft" / "Windows Defender")
-    outside = []
-    for path in winproc.loaded_modules():
-        n, name = _norm(path), os.path.basename(path)
-        if n.startswith(app + os.sep):
+def _outside_kit(loaded, app: str, windows: str, kit_names: set[str]) -> tuple[list[str], list[str]]:
+    """(failing, foreign) among loaded paths, read as Windows paths on any platform. The runtimes from outside the
+    kit fail, and so does a DLL the kit ships found outside Windows; any other DLL outside Windows, such as an
+    antivirus hook, is only reported."""
+    app, windows = ntpath.normcase(app).rstrip("\\") + "\\", ntpath.normcase(windows).rstrip("\\") + "\\"
+    failing, foreign = [], []
+    for path in loaded:
+        n, name = ntpath.normcase(path), ntpath.basename(path).lower()
+        if n.startswith(app):
             continue
-        if CRT.fullmatch(name) or PYTHON_RUNTIME.fullmatch(name) or not (
-                n.startswith(windows + os.sep) or n.startswith(defender + os.sep)):
-            outside.append(path)
-    require(not outside, f"loaded from outside the kit: {outside}")
-    return {"outside": outside}
+        if CRT.fullmatch(name) or PYTHON_RUNTIME.fullmatch(name):
+            failing.append(path)
+        elif not n.startswith(windows):
+            (failing if name in kit_names else foreign).append(path)
+    return failing, foreign
+
+
+def check_modules(ctx):
+    """No runtime or DLL the kit ships came from elsewhere; with PATH cut to Windows', nothing else could stand in."""
+    require(getattr(sys, "frozen", False), "run from source, where the interpreter is outside the kit by design")
+    kit_names = {p.name.lower() for p in ctx["app"].rglob("*") if p.suffix.lower() in (".dll", ".pyd")}
+    failing, foreign = _outside_kit(winproc.loaded_modules(), str(ctx["app"]),
+                                    os.environ.get("SystemRoot", r"C:\Windows"), kit_names)
+    require(not failing, f"loaded from outside the kit: {failing}")
+    return {"outside": failing, "foreign": foreign}
 
 
 def _versions() -> dict:

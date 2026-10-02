@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -19,7 +20,7 @@ from test_bridge_token_path import _EXE as _BRIDGE_EXE
 
 from src.app.config import Settings, parse_eeg_devices
 from src.kit import config as kit_config
-from src.kit import launcher
+from src.kit import launcher, selftest
 from src.kit.config import KitConfig, KitConfigError, check
 from src.kit.supervisor import NO_RESTART_EXIT, BridgeSupervisor, RestartPolicy, describe_exit
 
@@ -395,7 +396,47 @@ def test_a_build_step_survives_captured_stderr_and_fails_on_a_bad_exit_or_an_exe
 def test_the_build_hands_a_token_starting_with_a_dash_and_an_empty_preset_to_the_settings_check(tmp_path):
     dash = "-" + TOKEN[1:]  # token_urlsafe starts one token in 64 with "-"
     kit = tmp_path / "kit.json"
-    out = _powershell(f"{_build_function('Get-KitArgs')}\n$a = Get-KitArgs '{BACKEND}' '{ORIGIN}' '{dash}' 2 '' '0.1.0'\n"
+    out = _powershell(f"{_build_function('Get-KitArgs')}\n"
+                      f"$a = Get-KitArgs '{BACKEND}' '{ORIGIN}' '{dash}' 2 '' '0.1.0'\n"
                       f"& '{PYTHON}' -m src.kit.config write '{kit}' @a; exit $LASTEXITCODE", cwd=ROOT / "EEGResearch")
     assert out.returncode == 0, out.stdout + out.stderr
     assert kit_config.load(kit)[0] == KitConfig(BACKEND, ORIGIN, dash, 2, "", "0.1.0")
+
+
+def _starts_in(seconds: float):
+    """An ASGI app whose lifespan startup takes this long."""
+    async def app(scope, receive, send):
+        if scope["type"] == "lifespan":
+            await receive()
+            await asyncio.sleep(seconds)
+            await send({"type": "lifespan.startup.complete"})
+            await receive()
+            await send({"type": "lifespan.shutdown.complete"})
+    return app
+
+
+def test_the_server_check_keeps_what_uvicorn_logs_after_configuring_its_logging():
+    import uvicorn  # noqa: PLC0415
+
+    with selftest._server_warnings() as lines:
+        uvicorn.Config(_starts_in(0), log_config=launcher.uvicorn_log_config())  # its dictConfig, as the check's
+        logging.getLogger("uvicorn.error").error("[Errno 10048] address already in use")
+    assert any("10048" in line for line in lines)
+
+
+def test_a_slow_server_start_fails_the_check_and_leaves_no_server_running(monkeypatch):
+    monkeypatch.setattr(selftest, "SERVER_START_S", 0.3)
+    with pytest.raises(selftest.CheckFailed, match="did not start"):
+        selftest._serve_once(_starts_in(1.5), "/")
+    assert not [t for t in threading.enumerate() if t.name == "selftest-uvicorn" and t.is_alive()]
+
+
+def test_the_modules_check_fails_a_kit_dll_from_elsewhere_and_only_reports_a_foreign_one():
+    av, system_crt = r"C:\Program Files\SomeAV\hook64.dll", r"C:\Windows\System32\MSVCP140.dll"
+    other_python, other_opencv = r"C:\Python314\python314.dll", r"C:\Tools\opencv_world.dll"
+    loaded = [r"C:\Kit\_internal\python314.dll", r"C:\Windows\System32\kernel32.dll",
+              r"C:\Windows\System32\dbghelp.dll", av, system_crt, other_python, other_opencv]
+    kit_names = {"python314.dll", "dbghelp.dll", "opencv_world.dll", "msvcp140.dll"}
+    failing, foreign = selftest._outside_kit(loaded, r"C:\Kit", r"C:\Windows", kit_names)
+    assert failing == [system_crt, other_python, other_opencv]
+    assert foreign == [av]

@@ -1679,9 +1679,10 @@ Both shapes have since bitten, and the corrections are the load-bearing half:
 - **Derived `loading` needs a remount, not just a derivation.** `loading = loadedFor !== id` reads *false* when you
   navigate A→B→A: B's request is cancelled on the way out without ever advancing `loadedFor`, so returning to A finds
   it still saying `'A'`. `SessionReview.jsx` therefore keys the body on the id (`<Body key={sessionId} …>`), which
-  resets every piece of session-scoped state at once — including the `err` that otherwise let a failure on A mask a B
-  that loaded fine. `ChildDetail.jsx` does the same, and this is now the pattern for any page whose whole state
-  belongs to one route param.
+  resets all session-scoped state at once, the `err` that let a failure on A mask a B that loaded fine included.
+  `ChildDetail.jsx` and `ClassDetail.jsx` do the same: the pattern for any page whose state belongs to one route param.
+- **The rule cannot see a component holding a `try/finally`**: the compiler behind it skips it (18 files hold one),
+  so removing one surfaces old findings. Loaders set state in a `.then` callback; after an `await` still counts.
 - **The render-time adjustment compares against the previous *render*, and that is not always the question.**
   `useValueChange` (`hooks/useValueChange.js`) is the extracted form and is right for `Flags.jsx`. It was wrong for
   `FlowDot.jsx`, which needs the last value it *acted on*: the pulse timer clears the live state, so a timestamp that

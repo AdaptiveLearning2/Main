@@ -59,7 +59,8 @@ it('distinguishes a failed request from a missing class', async () => {
   // As apiFetch throws for a non-2xx: the backend's detail as the message, the status attached.
   apiFetch.mockRejectedValue(Object.assign(new Error('Internal Server Error'), { status: 500 }))
   renderAt()
-  expect(await screen.findByText(/couldn't load this class/i)).toBeInTheDocument()
+  // The whole sentence: "this class's students" also contains "this class".
+  expect(await screen.findByText("Couldn't load this class. Make sure the backend is running.")).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
   // The backend's detail string is not shown to a teacher.
   expect(screen.queryByText('Internal Server Error')).not.toBeInTheDocument()

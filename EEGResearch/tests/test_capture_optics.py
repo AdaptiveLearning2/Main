@@ -22,24 +22,29 @@ HEADBAND = "Muse-TEST"
 
 
 class _FakeBridge(threading.Thread):
-    """Answers the challenge (wrongly unless honest), lists HEADBAND only after a scan, streams after a connect."""
+    """Answers the challenge "right", "wrong" or not at all; lists HEADBAND after a scan, streams after a connect."""
 
-    def __init__(self, honest: bool) -> None:
+    def __init__(self, answer: str) -> None:
         super().__init__(daemon=True)
-        self.honest = honest
+        self.answer = answer
         self.received = b""
         self.server = socket.create_server(("127.0.0.1", 0))
         self.port = self.server.getsockname()[1]
 
     def run(self) -> None:
-        conn, _ = self.server.accept()
+        with self.server:
+            conn, _ = self.server.accept()
         conn.settimeout(0.2)
         with conn:
             while b"\n" not in self.received and self._read(conn):
                 pass
+            if self.answer == "silent":
+                while self._read(conn):
+                    pass
+                return
             nonce = self.received.split(b"\n", 1)[0].split()[1]
-            proof = hmac.new(TOKEN.encode(), nonce, hashlib.sha256).hexdigest() if self.honest else "0" * 64
-            conn.sendall(f"PROOF {proof}\n".encode())
+            right = hmac.new(TOKEN.encode(), nonce, hashlib.sha256).hexdigest()
+            conn.sendall(f"PROOF {right if self.answer == 'right' else '0' * 64}\n".encode())
             seq = 0
             while self._read(conn):
                 if b'"connect"' in self.received:
@@ -71,17 +76,20 @@ def _capture(tmp_path, port: int, *extra: str) -> subprocess.CompletedProcess:
                            *extra], env=env, capture_output=True, text=True, timeout=60)
 
 
-def test_an_impostor_on_the_port_is_never_handed_the_token(tmp_path):
-    fake = _FakeBridge(honest=False)
+@pytest.mark.parametrize("answer", ["wrong", "silent"])
+def test_a_process_on_the_port_that_does_not_prove_itself_is_refused_plainly_and_never_handed_the_token(
+        tmp_path, answer):
+    fake = _FakeBridge(answer)
     fake.start()
     out = _capture(tmp_path, fake.port, "--seconds", "2")
     fake.join(10)
-    assert out.returncode != 0 and "did not prove" in out.stderr
+    assert out.returncode != 0 and "did not prove it is the bridge" in out.stderr
+    assert "Traceback" not in out.stderr  # a refusal, not a crash
     assert fake.received.startswith(b"CHALLENGE ") and TOKEN.encode() not in fake.received
 
 
 def test_connect_scans_first_then_captures_what_the_bridge_streams(tmp_path):
-    fake = _FakeBridge(honest=True)
+    fake = _FakeBridge("right")
     fake.start()
     out = _capture(tmp_path, fake.port, "--connect", HEADBAND, "--seconds", "2", "--scan-seconds", "5")
     fake.join(10)

@@ -11,44 +11,32 @@ from __future__ import annotations
 
 import argparse
 import gzip
-import hashlib
-import hmac
 import json
-import os
-import secrets
 import socket
 import sys
 import time
 from collections.abc import Iterator
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.app.services.bridge_handshake import authenticate, bridge_token_path, read_token  # noqa: E402
+
+CONNECT_TIMEOUT_S = 5.0
 
 
-def _token(port: int) -> str:
-    """The token this port's bridge wrote; eeg_ingestion.bridge_token_path's rule."""
-    path = os.path.join(os.environ.get("LOCALAPPDATA", ""), "AdaptiveLearning", f"muse_bridge_{port}.token")
-    try:
-        with open(path, encoding="ascii") as f:
-            token = f.read().strip()
-    except (OSError, UnicodeDecodeError):
-        token = ""
+def _authenticate(sock: socket.socket, port: int) -> None:
+    """The sidecar's handshake: the token goes only to a bridge that proved it read the same file."""
+    path = bridge_token_path(port)
+    token = read_token(path)
     if not token:
         raise SystemExit(f"no bridge token at {path}: is muse_native_bridge running on port {port}?")
-    return token
-
-
-def _authenticate(sock: socket.socket, token: str) -> None:
-    """The sidecar's handshake: the token goes only to a bridge that proved it read the same file."""
-    nonce = secrets.token_hex(32)
-    sock.sendall(f"CHALLENGE {nonce}\n".encode("ascii"))
-    proof = b""
-    while not proof.endswith(b"\n") and len(proof) < 256:
-        chunk = sock.recv(1)
-        if not chunk:
-            break
-        proof += chunk
-    expected = "PROOF " + hmac.new(token.encode("ascii"), nonce.encode("ascii"), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(proof.rstrip(b"\r\n"), expected.encode("ascii")):
-        raise SystemExit("the process on that port did not prove it is the bridge; not sending the token")
-    sock.sendall(f"AUTH {token}\n".encode("ascii"))
+    try:
+        refused = authenticate(sock, token)
+    except TimeoutError:
+        refused = f"did not answer the challenge in {CONNECT_TIMEOUT_S:.0f} s"
+    if refused:
+        raise SystemExit(f"the process on port {port} {refused}, so did not prove it is the bridge; "
+                         "the token was not sent")
 
 
 def _messages(sock: socket.socket) -> Iterator[dict | None]:
@@ -104,10 +92,9 @@ def main() -> int:
     channel_counts: set[int] = set()
     seqs: list[int] = []
 
-    token = _token(args.port)
-    sock = socket.create_connection(("127.0.0.1", args.port), timeout=5)
+    sock = socket.create_connection(("127.0.0.1", args.port), timeout=CONNECT_TIMEOUT_S)
     try:
-        _authenticate(sock, token)
+        _authenticate(sock, args.port)
         sock.settimeout(1.0)
         messages = _messages(sock)
         if args.connect:

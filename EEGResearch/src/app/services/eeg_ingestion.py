@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import math
-import os
 import queue
 import random
-import secrets
 import socket
 import threading
 import time
@@ -20,6 +16,7 @@ import numpy as np
 
 from src.app.config import Settings
 from src.app.models import EegSample
+from src.app.services.bridge_handshake import HUNG_UP, authenticate, bridge_token_path, read_token
 from src.app.services.signal_processing import SignalProcessor
 
 # interaxon::bridge::ConnectionState (see libMuse bridge_connection_state.h)
@@ -595,12 +592,6 @@ class _NoBridgeToken(Exception):
     """The bridge's token file is missing or empty: no bridge on this port has started."""
 
 
-def bridge_token_path(port: int) -> str | None:
-    """Where muse_native_bridge writes this port's token; no override, so both sides always agree."""
-    base = os.environ.get("LOCALAPPDATA")
-    return os.path.join(base, "AdaptiveLearning", f"muse_bridge_{port}.token") if base else None
-
-
 class TcpMuseBridgeAdapter:
     """Reads normalized samples from a native bridge over localhost TCP."""
 
@@ -833,33 +824,23 @@ class TcpMuseBridgeAdapter:
             sock = socket.create_connection((self.host, self.port), timeout=self.timeout_seconds)
         except OSError:
             return self._connect_failed()
-        stream = sock.makefile("r", encoding="utf-8")
         try:
             # Proof first: whatever took the port before the bridge would otherwise be handed the
             # token, and could feed us fabricated EEG. Only the token file's reader can answer.
-            nonce = secrets.token_hex(32)
-            sock.sendall(f"CHALLENGE {nonce}\n".encode("ascii"))
-            proof = stream.readline(self.MAX_LINE_CHARS).rstrip("\r\n")
-            expected = "PROOF " + hmac.new(token.encode("ascii"), nonce.encode("ascii"),
-                                           hashlib.sha256).hexdigest()
-            # As bytes: compare_digest raises on a non-ASCII str, which a squatter can send.
-            if not hmac.compare_digest(proof.encode("utf-8"), expected.encode("ascii")):
-                # A hang-up is what a bridge built before the challenge does with one.
-                why = ("hung up at the challenge: likely a bridge built before it, so rebuild it "
-                       "(start.ps1 -Muse does)") if not proof else \
-                      "answered the challenge wrongly, so it is not the bridge that wrote the token file"
-                if why != self._challenge_failure_reported:
-                    print(f"[bridge] {self.host}:{self.port} {why}; not sending the token", flush=True)
-                    self._challenge_failure_reported = why
-                stream.close()
-                sock.close()
-                return self._connect_failed()
-            # The bridge closes a client whose first line after the challenge is not this.
-            sock.sendall(f"AUTH {token}\n".encode("ascii"))
-        except (OSError, UnicodeDecodeError):
-            stream.close()
+            refused = authenticate(sock, token)
+        except OSError:
             sock.close()
             return self._connect_failed()
+        if refused:
+            # A hang-up is what a bridge built before the challenge does with one.
+            why = (f"{refused}: likely a bridge built before it, so rebuild it (start.ps1 -Muse does)"
+                   if refused == HUNG_UP else f"{refused}, so it is not the bridge that wrote the token file")
+            if why != self._challenge_failure_reported:
+                print(f"[bridge] {self.host}:{self.port} {why}; not sending the token", flush=True)
+                self._challenge_failure_reported = why
+            sock.close()
+            return self._connect_failed()
+        stream = sock.makefile("r", encoding="utf-8")  # after the proof, which was read unbuffered
         self._connect_backoff_s = self.CONNECT_BACKOFF_MIN_S
         self._next_connect_at = 0.0
         self._challenge_failure_reported = None
@@ -881,11 +862,7 @@ class TcpMuseBridgeAdapter:
 
     def _read_token(self) -> str:
         """The token this port's bridge wrote on start; raises `_NoBridgeToken` if there is none."""
-        try:
-            with open(self.token_file, encoding="ascii") as f:
-                token = f.read().strip()
-        except (OSError, TypeError, UnicodeDecodeError):
-            token = ""
+        token = read_token(self.token_file)
         if not token:
             raise _NoBridgeToken(f"no bridge token at {self.token_file!r}; is muse_native_bridge running, "
                                  "and built from this checkout (an older build writes none)?")

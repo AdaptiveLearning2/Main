@@ -24,6 +24,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from src.app.services.bridge_handshake import authenticate
 from src.kit import config as kit_config
 from src.kit import winproc
 from src.kit.launcher import BRIDGE_EXE, prepare_sidecar_process, sidecar_config
@@ -239,7 +240,8 @@ def check_bridge(ctx):
 
 def _bridge_status(port: int, token: str) -> dict:
     with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
-        conn.sendall(f"AUTH {token}\n".encode())
+        refused = authenticate(conn, token)  # the sidecar's handshake, so the bridge's proof is checked too
+        require(refused is None, f"the bridge {refused}")
         reader = conn.makefile("rb")
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:

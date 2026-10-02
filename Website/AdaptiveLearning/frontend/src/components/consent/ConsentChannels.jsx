@@ -139,10 +139,10 @@ export default function ConsentChannels({ studentId, role, studentName = null })
       } else {
         setError(String(e.message || e))
       }
-    } finally {
-      setSaving(null)
-      setConfirming(null)
     }
+    // `load` never rejects, so nothing above can skip this.
+    setSaving(null)
+    setConfirming(null)
   }
 
   const openErasure = (key) => {
@@ -156,32 +156,30 @@ export default function ConsentChannels({ studentId, role, studentName = null })
     setErasureFor(null)
   }
 
-  const erase = async (key) => {
+  const erase = (key) => {
     setErasing(key)
     setError(null)
     setErasureNote(null)
-    try {
-      const out = await apiFetch(`/api/consent/${studentId}/erase`, {
-        method: 'POST',
-        // The channel name (`camera`), not the flag key, which 422s.
-        body: { channel: key.replace('_enabled', ''), confirm: true },
+    return apiFetch(`/api/consent/${studentId}/erase`, {
+      method: 'POST',
+      // The channel name (`camera`), not the flag key, which 422s.
+      body: { channel: key.replace('_enabled', ''), confirm: true },
+    })
+      .then(async (out) => {
+        // Reload so `erased_at` comes from the server; a failed reload says the erasure happened.
+        const reloaded = await load(null, { afterErasure: true })
+        // The chart warning stands either way; a failed reload has already said the rows went.
+        if (out.charts_failed) setErasureNote({
+          failed: true,
+          text: (reloaded ? 'The readings were erased. ' : '') + 'Some archived charts could not be '
+            + 'removed and are no longer reachable from the app; please tell '
+            + 'us so they can be cleared.',
+        })
+        else if (reloaded) setErasureNote({ failed: false, text: 'Erased.' })
+        closeErasure()
       })
-      // Reload so `erased_at` comes from the server; a failed reload says the erasure happened.
-      const reloaded = await load(null, { afterErasure: true })
-      // The chart warning stands either way; a failed reload has already said the rows went.
-      if (out.charts_failed) setErasureNote({
-        failed: true,
-        text: (reloaded ? 'The readings were erased. ' : '') + 'Some archived charts could not be '
-          + 'removed and are no longer reachable from the app; please tell '
-          + 'us so they can be cleared.',
-      })
-      else if (reloaded) setErasureNote({ failed: false, text: 'Erased.' })
-      closeErasure()
-    } catch (e) {
-      setError(String(e.message || e))
-    } finally {
-      setErasing(null)
-    }
+      .catch(e => setError(String(e.message || e)))
+      .finally(() => setErasing(null))
   }
 
   const request = (key, next) => {

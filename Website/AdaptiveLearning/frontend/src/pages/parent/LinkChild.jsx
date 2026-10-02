@@ -28,9 +28,8 @@ export default function ParentLinkChild() {
       navigate('/parent')
     } catch (err) {
       toast.error(err.message || 'Could not link child')
-    } finally {
-      setLoading(false)
     }
+    setLoading(false)
   }
 
   return (

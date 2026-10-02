@@ -24,9 +24,8 @@ export default function Login() {
       toast.success('Welcome back! 👋')
     } catch (err) {
       toast.error(signInMessage(err))
-    } finally {
-      setLoading(false)
     }
+    setLoading(false)
   }
 
   return (

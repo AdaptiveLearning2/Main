@@ -94,26 +94,23 @@ export default function Profile() {
     } catch (e) {
       setPrefs(previous)
       toast.error(e.message || 'Could not save that setting')
-    } finally {
-      setPrefsBusy(false)
     }
+    setPrefsBusy(false)
   }
 
   const saveProfile = async () => {
     setSaving(true)
-    try {
-      const updated = await apiFetch('/api/profile/me', {
-        method: 'PUT',
-        body: { display_name: editName.trim() || null, grade_level: editGrade || null }
+    return apiFetch('/api/profile/me', {
+      method: 'PUT',
+      body: { display_name: editName.trim() || null, grade_level: editGrade || null }
+    })
+      .then(updated => {
+        setProfile(updated)
+        refreshProfile()
+        toast.success('Profile saved')
       })
-      setProfile(updated)
-      refreshProfile()
-      toast.success('Profile saved')
-    } catch (e) {
-      toast.error(e.message || 'Could not save profile')
-    } finally {
-      setSaving(false)
-    }
+      .catch(e => toast.error(e.message || 'Could not save profile'))
+      .finally(() => setSaving(false))
   }
 
   const copyCode = () => {
@@ -132,9 +129,8 @@ export default function Profile() {
       setCodeRetrieved(true)
     } catch (e) {
       toast.error(e.message || 'Could not create a code')
-    } finally {
-      setCodeBusy(false)
     }
+    setCodeBusy(false)
   }
 
   const acc      = stats?.total_questions > 0 ? Math.round((stats.total_correct / stats.total_questions) * 100) : 0

@@ -34,6 +34,8 @@ export default defineConfig([
       }],
       // `no-unused-vars` cannot see JSX. Only this rule, not the plugin's recommended set.
       'react/jsx-uses-vars': 'error',
+      // A component the compiler cannot build is unseen by every compiler-backed hooks rule.
+      'react-hooks/todo': 'error',
       // Editor feedback; CI gates on `eslint.sinks.config.js`.
       ...sinkRules,
     },

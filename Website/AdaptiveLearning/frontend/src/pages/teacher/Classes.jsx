@@ -23,38 +23,38 @@ export default function Classes() {
   const [editingId, setEditingId] = useState(null)
   const [editGrade, setEditGrade] = useState('')
 
-  useEffect(() => { loadClasses() }, [])
-
-  async function loadClasses() {
-    try {
-      setClasses(await apiFetch('/api/classes'))
-      setFailed(false)
-    } catch (e) {
-      // Set failed, or a failed read shows "No classes yet".
-      console.error('Failed to load classes:', e)
-      setFailed(true)
-    }
-    setLoading(false)
+  function loadClasses() {
+    return apiFetch('/api/classes')
+      .then(rows => {
+        setClasses(rows)
+        setFailed(false)
+      })
+      .catch(e => {
+        // Set failed, or a failed read shows "No classes yet".
+        console.error('Failed to load classes:', e)
+        setFailed(true)
+      })
+      .finally(() => setLoading(false))
   }
 
-  async function createClass(e) {
+  useEffect(() => { loadClasses() }, [])
+
+  function createClass(e) {
     e.preventDefault()
     if (!newName.trim()) return
     setCreating(true)
-    try {
-      const cls = await apiFetch('/api/classes', {
-        method: 'POST',
-        body: { name: newName.trim(), grade_level: newGrade || null }
+    return apiFetch('/api/classes', {
+      method: 'POST',
+      body: { name: newName.trim(), grade_level: newGrade || null }
+    })
+      .then(cls => {
+        setClasses(prev => [cls, ...prev])
+        setNewName('')
+        setShowForm(false)
+        toast.success(`Class "${cls.name}" created! Code: ${cls.join_code}`)
       })
-      setClasses(prev => [cls, ...prev])
-      setNewName('')
-      setShowForm(false)
-      toast.success(`Class "${cls.name}" created! Code: ${cls.join_code}`)
-    } catch (err) {
-      toast.error(err.message || 'Failed to create class')
-    } finally {
-      setCreating(false)
-    }
+      .catch(err => toast.error(err.message || 'Failed to create class'))
+      .finally(() => setCreating(false))
   }
 
   async function saveGrade(classId) {

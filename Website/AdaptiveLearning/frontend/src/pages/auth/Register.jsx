@@ -55,16 +55,14 @@ export default function Register() {
     if (password.length < 6)  return toast.error('Password must be at least 6 characters')
     if (role === 'student' && !grade) return toast.error('Choose your grade')
     setLoading(true)
-    try {
-      await signUp(email, password, role, displayName, role === 'student' ? grade : '')
-      // HomeRedirect picks the destination once the role resolves.
-      navigate('/')
-      toast.success('Account created! Welcome 🎉')
-    } catch (err) {
-      toast.error(signUpMessage(err))
-    } finally {
-      setLoading(false)
-    }
+    return signUp(email, password, role, displayName, role === 'student' ? grade : '')
+      .then(() => {
+        // HomeRedirect picks the destination once the role resolves.
+        navigate('/')
+        toast.success('Account created! Welcome 🎉')
+      })
+      .catch(err => toast.error(signUpMessage(err)))
+      .finally(() => setLoading(false))
   }
 
   return (

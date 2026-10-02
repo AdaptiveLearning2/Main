@@ -1,7 +1,7 @@
 /**
  * The shell the three consent notices share.
  * A failed acknowledgement leaves the banner standing: the person has not been told yet.
- * `onAcknowledge` clears what made the banner render; this owns `busy` (cleared in `finally`).
+ * `onAcknowledge` clears what made the banner render; this owns `busy` (cleared on both paths).
  */
 
 import { useState } from 'react'
@@ -44,9 +44,8 @@ export default function NoticeBanner({
       await onAcknowledge()
     } catch {
       // Swallowed; the banner stays up.
-    } finally {
-      setBusy(false)
     }
+    setBusy(false)
   }
 
   return (

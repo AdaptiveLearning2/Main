@@ -9,6 +9,8 @@ import { useLatestRequest } from '../../hooks/useLatestRequest'
 import { TOPIC_ICONS as ICONS, topicLabel } from '../../lib/topics'
 
 const TOPIC_ICONS = ICONS
+// A default parameter must be a name: the compiler cannot build a component with an inline arrow there.
+const asIs = v => v
 
 /**
  * A single student's full learning report, shared by parent ChildDetail and teacher StudentReport.
@@ -117,66 +119,66 @@ export default function StudentProgressReport({
 
 
 
-  async function generateStrategies() {
+  function generateStrategies() {
     const isCurrent = beginStrategyRequest()
     setStrategyLoading(true)
     setStrategyError(null)
-    try {
-      // FastAPI 422s a bodyless POST even when every field defaults.
-      const res = await apiFetch(`/api/students/${studentId}/learning-strategies`, {
-        method: 'POST',
-        body: {},
+    // FastAPI 422s a bodyless POST even when every field defaults.
+    return apiFetch(`/api/students/${studentId}/learning-strategies`, {
+      method: 'POST',
+      body: {},
+    })
+      .then(res => {
+        if (!isCurrent()) return
+        setStrategies(res.strategies || [])
+        setStrategySource(res.source || null)
+        setStrategySignals(res.basis?.signals_retrieved ?? null)
       })
-      if (!isCurrent()) return
-      setStrategies(res.strategies || [])
-      setStrategySource(res.source || null)
-      setStrategySignals(res.basis?.signals_retrieved ?? null)
-    } catch (err) {
-      if (!isCurrent()) return
-      setStrategies(null)
-      setStrategySource(null)
-      setStrategySignals(null)
-      setStrategyError(err.message || 'Could not generate strategies right now.')
-    } finally {
+      .catch(err => {
+        if (!isCurrent()) return
+        setStrategies(null)
+        setStrategySource(null)
+        setStrategySignals(null)
+        setStrategyError(err.message || 'Could not generate strategies right now.')
+      })
       // Only the newest request owns the spinner.
-      if (isCurrent()) setStrategyLoading(false)
-    }
+      .finally(() => { if (isCurrent()) setStrategyLoading(false) })
   }
 
-  async function generateChartSummary() {
+  function generateChartSummary() {
     const isCurrent = beginChartSummaryRequest()
     setChartSummaryLoading(true)
     setChartSummaryError(null)
-    try {
-      const res = await apiFetch(`/api/students/${studentId}/chart-summary`, {
-        method: 'POST',
-        body: {},
+    return apiFetch(`/api/students/${studentId}/chart-summary`, {
+      method: 'POST',
+      body: {},
+    })
+      .then(res => {
+        if (!isCurrent()) return
+        setChartSummary(res.summary || [])
+        setChartSummarySource(res.source || null)
+        // Undefined where absent; the panel checks `=== false`.
+        setChartSummaryRetrieved({
+          signals: res.basis?.signals_retrieved,
+          trend: res.basis?.trend_retrieved,
+          stats: res.basis?.stats_retrieved,
+          topics: res.basis?.topics_retrieved,
+        })
       })
-      if (!isCurrent()) return
-      setChartSummary(res.summary || [])
-      setChartSummarySource(res.source || null)
-      // Undefined where absent; the panel checks `=== false`.
-      setChartSummaryRetrieved({
-        signals: res.basis?.signals_retrieved,
-        trend: res.basis?.trend_retrieved,
-        stats: res.basis?.stats_retrieved,
-        topics: res.basis?.topics_retrieved,
+      .catch(err => {
+        if (!isCurrent()) return
+        setChartSummary(null)
+        setChartSummarySource(null)
+        setChartSummaryRetrieved(null)
+        setChartSummaryError(err.message || 'Could not generate a summary right now.')
       })
-    } catch (err) {
-      if (!isCurrent()) return
-      setChartSummary(null)
-      setChartSummarySource(null)
-      setChartSummaryRetrieved(null)
-      setChartSummaryError(err.message || 'Could not generate a summary right now.')
-    } finally {
-      if (isCurrent()) setChartSummaryLoading(false)
-    }
+      .finally(() => { if (isCurrent()) setChartSummaryLoading(false) })
   }
 
   // `retrieved: false` carries placeholder zeros: shown as a dash, never as a real record.
   const statsRead = stats?.retrieved !== false
   const acc = stats?.total_questions > 0 ? Math.round((stats.total_correct / stats.total_questions) * 100) : null
-  const stat = (value, format = v => v) => (statsRead ? format(value ?? 0) : '—')
+  const stat = (value, format = asIs) => (statsRead ? format(value ?? 0) : '—')
 
   return (
     <div className="p-6 lg:p-8 pb-12">

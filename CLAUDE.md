@@ -1682,8 +1682,9 @@ Both shapes have since bitten, and the corrections are the load-bearing half:
   it still saying `'A'`. `SessionReview.jsx` therefore keys the body on the id (`<Body key={sessionId} …>`), which
   resets all session-scoped state at once, the `err` that let a failure on A mask a B that loaded fine included.
   `ChildDetail.jsx` and `ClassDetail.jsx` do the same: the pattern for any page whose state belongs to one route param.
-- **The rule cannot see a component holding a `try/finally`**: the compiler behind it skips it (18 files hold one),
-  so removing one surfaces old findings. Loaders set state in a `.then` callback; after an `await` still counts.
+- **The compiler behind these rules skips a component it cannot build**, and `react-hooks/todo` (on) reports it: a
+  `finally`; a `throw`, `?.`, `||` or ternary inside a `try`; `??=`; an inline arrow as a default parameter. Use a promise
+  chain, which an effect's loader needs anyway (state set after an `await` still counts), or plain statements in a `try`.
 - **The render-time adjustment compares against the previous *render*, and that is not always the question.**
   `useValueChange` (`hooks/useValueChange.js`) is the extracted form and is right for `Flags.jsx`. It was wrong for
   `FlowDot.jsx`, which needs the last value it *acted on*: the pulse timer clears the live state, so a timestamp that
@@ -1801,11 +1802,10 @@ What mattered was the combination, and the tiny badges that were also sub-AA are
 ## A tone is a whole class name
 
 The three consent notices (`ChildWithdrewBanner`, `ParentRestoredBanner`, `ParentLinkedBanner`) share
-`NoticeBanner`. What each restated was the part worth having in one place: **a failed acknowledgement leaves
-the banner standing**, because the person has not been told yet and a notice that dismisses itself on a failed
-write is one nobody sees again. `onAcknowledge` clears whatever made the banner render; the shell owns the
-pending flag and swallows the rejection. `busy` is cleared in a `finally`, not only on the failure path — a
-caller that acknowledges without unmounting would otherwise be left with a permanently dead button.
+`NoticeBanner`, which owns what each restated: **a failed acknowledgement leaves the banner standing**, since a
+notice that dismisses itself on a failed write is one nobody sees again. `onAcknowledge` clears whatever made the
+banner render; the shell owns the pending flag, swallows the rejection, and clears `busy` on both paths, or an
+acknowledgement that does not unmount the banner leaves its button dead.
 
 **Tone classes are full strings in a map, never interpolated.** Tailwind decides what CSS to ship by scanning
 source text for complete class names, so `bg-${tone}-50` renders markup pointing at a rule that was never
@@ -2031,9 +2031,9 @@ its poller, so a tick could insert a signal row after the discard check had look
 conditional, so two closes racing — a delayed `/end` against the sweep — both ran the whole sequence and both
 credited the session's *cumulative* counts, landing every answer twice in the lifetime totals. `/end`'s read of
 `ended_at` is not the guard; that read and the write are two statements. `_claim_session_close` is:
-`is_("ended_at","null")` matches at most one row. **An empty update result is ambiguous** — it is also what a
-client not asking PostgREST for the updated row returns — so it is confirmed by reading the row back, and only a
-*different* `ended_at` counts as a loss. Guessing "lost" would skip the credit, rollup and archive for every close.
+`is_("ended_at","null")` matches at most one row, and the rows the update returns decide: none means another close
+won. **That holds only while the update returns its row** (`return=representation`, postgrest's default, pinned by
+`test_postgrest_update_returns_the_updated_row`); under `minimal` every close would skip its credit, rollup and archive.
 
 Stopping the poller stays at the call sites — it takes different ids at each — and **before the call** is the whole
 of the ordering rule, pinned by `test_every_close_site_stops_the_poller_first`.

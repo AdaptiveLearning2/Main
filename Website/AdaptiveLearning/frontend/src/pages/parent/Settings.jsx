@@ -69,24 +69,23 @@ export default function ParentSettings() {
     } catch (e) {
       console.error('[parent settings] display name not saved', e)
       toast.error('That could not be saved.')
-    } finally {
-      setSavingName(false)
     }
+    setSavingName(false)
   }
 
-  const unlink = async (child) => {
+  const unlink = (child) => {
     setUnlinking(child.user_id)
-    try {
-      await apiFetch(`/api/parent/children/${child.user_id}`, { method: 'DELETE' })
-      setChildren(list => (list || []).filter(c => c.user_id !== child.user_id))
-      setConfirmingUnlink(null)
-      toast.success(`Unlinked from ${child.name || 'your child'}.`)
-    } catch (e) {
-      console.error('[parent settings] unlink failed', e)
-      toast.error('That could not be unlinked.')
-    } finally {
-      setUnlinking(null)
-    }
+    return apiFetch(`/api/parent/children/${child.user_id}`, { method: 'DELETE' })
+      .then(() => {
+        setChildren(list => (list || []).filter(c => c.user_id !== child.user_id))
+        setConfirmingUnlink(null)
+        toast.success(`Unlinked from ${child.name || 'your child'}.`)
+      })
+      .catch(e => {
+        console.error('[parent settings] unlink failed', e)
+        toast.error('That could not be unlinked.')
+      })
+      .finally(() => setUnlinking(null))
   }
 
   const joined = fmtDate(joinedAt)

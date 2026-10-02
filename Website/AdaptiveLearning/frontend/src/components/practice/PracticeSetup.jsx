@@ -34,27 +34,32 @@ export default function PracticeSetup({ onStart }) {
   const [failed, setFailed] = useState(null)
   const [starting, setStarting] = useState(false)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setFailed(null)
-    try {
-      // 404 is an account with no profile row: no grade, not a failure. Anything else is
-      // unknown, and a retry beats silently offering another grade's topics.
-      const profile = await apiFetch('/api/profile/me')
-        .catch(e => { if (e?.status === 404) return null; throw e })
-      // '' is no grade: the topic list and the session both take the backend's default.
-      setGrade(profile?.grade_level || '')
-      // Best-effort: a failed history read shouldn't block starting a session.
-      apiFetch('/api/practice-sessions').then(setHistory).catch(() => {})
-    } catch (e) {
-      console.error('Failed to load the practice setup screen:', e)
-      setFailed(e || new Error('practice setup'))
-    } finally {
-      setLoading(false)
-    }
+  // Sets state only in callbacks, as the effect requires; `retry` raises the skeleton.
+  const load = useCallback(() => {
+    // 404 is an account with no profile row: no grade, not a failure. Anything else is
+    // unknown, and a retry beats silently offering another grade's topics.
+    return apiFetch('/api/profile/me')
+      .catch(e => { if (e?.status === 404) return null; throw e })
+      .then(profile => {
+        // '' is no grade: the topic list and the session both take the backend's default.
+        setGrade(profile?.grade_level || '')
+        // Best-effort: a failed history read shouldn't block starting a session.
+        apiFetch('/api/practice-sessions').then(setHistory).catch(() => {})
+      })
+      .catch(e => {
+        console.error('Failed to load the practice setup screen:', e)
+        setFailed(e || new Error('practice setup'))
+      })
+      .finally(() => setLoading(false))
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  function retry() {
+    setLoading(true)
+    setFailed(null)
+    load()
+  }
 
   // What is sent: a pick the grade no longer allows drops out, derived rather than pruned.
   const chosen = selectedTopics.filter(name => (topics || []).some(t => t.name === name && t.allowed))
@@ -64,21 +69,19 @@ export default function PracticeSetup({ onStart }) {
     setSelectedTopics(sel => sel.includes(name) ? sel.filter(t => t !== name) : [...sel, name])
   }
 
-  async function handleStart() {
+  function handleStart() {
     if (!chosen.length || starting) return
     setStarting(true)
-    try {
-      const session = await apiFetch('/api/practice-sessions/start', {
-        method: 'POST',
-        body: { mode, topics: chosen, difficulty, grade: grade || null },
+    return apiFetch('/api/practice-sessions/start', {
+      method: 'POST',
+      body: { mode, topics: chosen, difficulty, grade: grade || null },
+    })
+      .then(session => onStart(session, questionCount))
+      .catch(e => {
+        console.error('Failed to start a practice session:', e)
+        toast.error('Could not start that practice session.')
       })
-      onStart(session, questionCount)
-    } catch (e) {
-      console.error('Failed to start a practice session:', e)
-      toast.error('Could not start that practice session.')
-    } finally {
-      setStarting(false)
-    }
+      .finally(() => setStarting(false))
   }
 
   if (loading) return (
@@ -90,7 +93,7 @@ export default function PracticeSetup({ onStart }) {
 
   if (failed) return (
     <div className="max-w-lg mx-auto px-4 py-8">
-      <LoadError what="practice setup" error={failed} onRetry={load} />
+      <LoadError what="practice setup" error={failed} onRetry={retry} />
     </div>
   )
 

@@ -38,7 +38,8 @@ export default function JoinClass() {
       setClasses(await apiFetch('/api/classes'))
     } catch (err) {
       toast.error(err.message || 'Could not join class')
-    } finally { setLoading(false) }
+    }
+    setLoading(false)
   }
 
   return (

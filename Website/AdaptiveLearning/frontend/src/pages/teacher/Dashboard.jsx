@@ -35,31 +35,28 @@ export default function TeacherDashboard() {
   useEffect(() => {
     let killed = false
 
-    const loadQuestions = async () => {
-      try {
-        const [recent, count] = await Promise.all([
-          apiFetch('/api/questions?limit=5'),
-          apiFetch('/api/questions/count'),
-        ])
+    const loadQuestions = () => Promise.all([
+      apiFetch('/api/questions?limit=5'),
+      apiFetch('/api/questions/count'),
+    ])
+      .then(([recent, count]) => {
         if (killed) return
         setQuestions(recent || [])
         setQuestionCount(count?.retrieved === false ? null : (count?.total ?? null))
         setQuestionsFailed(false)
         return true
-      } catch (e) {
+      })
+      .catch(e => {
         if (killed) return
         console.error('Failed to load questions:', e)
         // Leave old data on screen on a failed refresh.
         setQuestionsFailed(true)
         return false
-      } finally {
-        if (!killed) setLoading(false)
-      }
-    }
+      })
+      .finally(() => { if (!killed) setLoading(false) })
 
-    const loadClasses = async () => {
-      try {
-        const rows = await apiFetch('/api/classes')
+    const loadClasses = () => apiFetch('/api/classes')
+      .then(async (rows) => {
         if (killed) return
         setClasses(rows || [])
         // One request for all classes' averages; its own catch blanks only the averages.
@@ -68,15 +65,14 @@ export default function TeacherDashboard() {
         setClassAverages(averages)
         setClassesFailed(false)
         return true
-      } catch (e) {
+      })
+      .catch(e => {
         if (killed) return
         console.error('Failed to load classes:', e)
         setClassesFailed(true)
         return false
-      } finally {
-        if (!killed) setClassesLoading(false)
-      }
-    }
+      })
+      .finally(() => { if (!killed) setClassesLoading(false) })
 
     const refresh = async () => {
       const [q, c] = await Promise.all([loadQuestions(), loadClasses()])

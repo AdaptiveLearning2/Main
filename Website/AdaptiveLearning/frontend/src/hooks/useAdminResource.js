@@ -27,15 +27,15 @@ export default function useAdminResource({ load, pollMs = 0 }) {
   const mutate = useCallback(async (write) => {
     setBusy(true)
     setError(null)
+    let ok = true
     try {
       setData(await write())
-      return true
     } catch (e) {
       setError(e.message)
-      return false
-    } finally {
-      setBusy(false)
+      ok = false
     }
+    setBusy(false)
+    return ok
   }, [])
 
   return { data, setData, busy, error, refresh, mutate }

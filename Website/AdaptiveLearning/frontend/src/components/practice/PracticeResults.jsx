@@ -31,9 +31,8 @@ export default function PracticeResults({ session, result, onRestart }) {
     } catch (e) {
       console.error('Failed to load study tips:', e)
       setTipsFailed(true)
-    } finally {
-      setTipsLoading(false)
     }
+    setTipsLoading(false)
   }
 
   const finalAcc = isTest && session.questions_answered

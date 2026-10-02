@@ -244,6 +244,37 @@ it('does not re-read the role when a token refresh replaces the session', async 
   expect(apiFetch.mock.calls.length).toBe(before)
 })
 
+it("never shows a new account the previous account's role while its own is read", async () => {
+  // A shared machine: another account's session replaces this one.
+  getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
+  apiFetch.mockResolvedValue({ role: 'teacher' })
+  render(<AuthProvider><RoleProbe /></AuthProvider>)
+  await screen.findByText('role:teacher')
+
+  apiFetch.mockReturnValue(new Promise(() => {}))
+  act(() => authCallback('SIGNED_IN', { user: { id: 'u2', user_metadata: {} } }))
+
+  expect(screen.queryByText('role:teacher')).not.toBeInTheDocument()
+  expect(screen.getByText('loading')).toBeInTheDocument()
+})
+
+it('reads the role again when the same account signs back in', async () => {
+  getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
+  apiFetch.mockResolvedValue({ role: 'teacher' })
+  render(<AuthProvider><RoleProbe /></AuthProvider>)
+  await screen.findByText('role:teacher')
+
+  act(() => authCallback('SIGNED_OUT', null))
+  let resolve
+  apiFetch.mockReturnValue(new Promise(r => { resolve = r }))
+  act(() => authCallback('SIGNED_IN', SESSION('teacher')))
+
+  // Not the role read for the session that ended: it may have changed since.
+  expect(screen.getByText('loading')).toBeInTheDocument()
+  resolve({ role: 'admin' })
+  expect(await screen.findByText('role:admin')).toBeInTheDocument()
+})
+
 
 /** `displayName`: stored name, then claim, then email prefix. */
 it('names a user from their stored profile, not from their email', async () => {

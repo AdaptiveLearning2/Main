@@ -17,6 +17,9 @@ function signalsRetrieved(summary) {
   return summary?.retrieved !== false
 }
 
+// A default parameter must be a name: the compiler cannot build a component with an inline arrow there.
+const asIs = v => v
+
 export default function ParentDashboard() {
   const { displayName } = useAuth()
   const [children, setChildren]   = useState([])
@@ -75,7 +78,7 @@ export default function ParentDashboard() {
             const acc = statsRead && child.stats?.total_questions > 0
               ? Math.round((child.stats.total_correct / child.stats.total_questions) * 100)
               : null
-            const stat = (value, format = v => v) => (statsRead ? format(value ?? 0) : '—')
+            const stat = (value, format = asIs) => (statsRead ? format(value ?? 0) : '—')
             const signals = child.signal_summary || {}
             // The EEG channel's reason for a missing figure, from the fields the summary carries.
             const eeg = { on: signals.eeg_enabled !== false, revokedAt: signals.eeg_revoked_at,

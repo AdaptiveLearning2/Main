@@ -50,9 +50,8 @@ export default function TeacherSettings() {
     } catch (e) {
       console.error('[settings] display name not saved', e)
       toast.error('That could not be saved.')
-    } finally {
-      setSavingName(false)
     }
+    setSavingName(false)
   }
 
   const changePassword = async () => {
@@ -60,28 +59,24 @@ export default function TeacherSettings() {
     if (pw.next.length < 6)      return toast.error('Use at least 6 characters.')
 
     setSavingPw(true)
-    try {
-      // updateUser doesn't verify the current password, so re-auth here first.
-      const { error: reauth } = await supabase.auth.signInWithPassword({
-        email: user?.email,
-        password: pw.current,
+    // updateUser doesn't verify the current password, so re-auth here first.
+    return supabase.auth.signInWithPassword({ email: user?.email, password: pw.current })
+      .then(async ({ error: reauth }) => {
+        if (reauth) {
+          toast.error('That current password is not right.')
+          return
+        }
+        const { error } = await supabase.auth.updateUser({ password: pw.next })
+        if (error) throw error
+
+        setPw({ current: '', next: '', confirm: '' })
+        toast.success('Password updated.')
       })
-      if (reauth) {
-        toast.error('That current password is not right.')
-        return
-      }
-
-      const { error } = await supabase.auth.updateUser({ password: pw.next })
-      if (error) throw error
-
-      setPw({ current: '', next: '', confirm: '' })
-      toast.success('Password updated.')
-    } catch (e) {
-      console.error('[settings] password not changed', e)
-      toast.error(e?.message || 'The password could not be changed.')
-    } finally {
-      setSavingPw(false)
-    }
+      .catch(e => {
+        console.error('[settings] password not changed', e)
+        toast.error(e?.message || 'The password could not be changed.')
+      })
+      .finally(() => setSavingPw(false))
   }
 
   return (

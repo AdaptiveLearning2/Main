@@ -9,12 +9,13 @@ const AuthContext = createContext()
 /** Role read timeout: it gates `loading` for every route, and a `.catch` is not a bound. */
 const ROLE_TIMEOUT_MS = 10000
 
+const NO_PROFILE = { id: null, role: null, name: null }
+
 export function AuthProvider({ children }) {
   const [user, setUser]       = useState(null)
   const [session, setSession] = useState(null)
-  const [role, setRole]       = useState(null)
-  // `profiles.display_name`, from the same read as the role.
-  const [profileName, setProfileName] = useState(null)
+  // `profiles.role` and `display_name` from one read, with the user id they were read for.
+  const [profile, setProfile] = useState(NO_PROFILE)
   const [authLoading, setAuthLoading] = useState(true)
 
   // Client-writable, not authoritative: fallback only when the backend is unreachable.
@@ -26,7 +27,7 @@ export function AuthProvider({ children }) {
 
   // Lets the id-keyed role effect read the current user without re-running.
   const userRef = useRef(null)
-  userRef.current = user
+  useEffect(() => { userRef.current = user }, [user])
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -37,6 +38,8 @@ export function AuthProvider({ children }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       // Also sign-outs not via signOut(): expired refresh token, another tab.
       if (event === 'SIGNED_OUT') clearViewPrefs()
+      // Signing back in as the same account reads its role again rather than reusing this one.
+      if (!session?.user) setProfile(NO_PROFILE)
       setSession(session)
       setUser(session?.user ?? null)
       setAuthLoading(false)
@@ -52,34 +55,31 @@ export function AuthProvider({ children }) {
     return apiFetch('/api/profile/me', { timeoutMs: ROLE_TIMEOUT_MS })
   }, [userId])
 
+  // Derived, never reset: a new account is never routed or greeted as the previous one.
+  const role = profile.id === userId ? profile.role : null
+  const profileName = profile.id === userId ? profile.name : null
+
   useEffect(() => {
-    if (!userId) {
-      setRole(null)
-      setProfileName(null)
-      return
-    }
+    if (!userId) return
     let cancelled = false
-    // Cleared first so a new account is never routed or greeted as the previous one.
-    setRole(null)
-    setProfileName(null)
     loadProfile()
       .then(p => {
         if (cancelled) return
-        setRole(p?.role || claimedRole(userRef.current))
-        setProfileName(p?.display_name?.trim() || null)
+        setProfile({ id: userId, role: p?.role || claimedRole(userRef.current),
+                     name: p?.display_name?.trim() || null })
       })
       // A blip is not a demotion: fall back to the claim, not 'student'.
-      .catch(() => { if (!cancelled) setRole(claimedRole(userRef.current)) })
+      .catch(() => {
+        if (!cancelled) setProfile({ id: userId, role: claimedRole(userRef.current), name: null })
+      })
     return () => { cancelled = true }
   }, [userId, loadProfile])
 
   // Re-read after a profile save. Swallows failure: the save already succeeded.
-  const refreshProfile = useCallback(async () => {
-    try {
-      const p = await loadProfile()
-      setProfileName(p?.display_name?.trim() || null)
-    } catch { /* keep the name we have */ }
-  }, [loadProfile])
+  const refreshProfile = useCallback(() => loadProfile()
+    .then(p => setProfile(prev => (prev.id === userId
+      ? { ...prev, name: p?.display_name?.trim() || null } : prev)))
+    .catch(() => { /* keep the name we have */ }), [loadProfile, userId])
 
   const displayName = profileName || claimedName(user)
 
@@ -103,16 +103,14 @@ export function AuthProvider({ children }) {
   // One sign-out at a time: a repeat click joins the one in progress.
   const signingOut = useRef(null)
   const signOut = () => {
-    signingOut.current ??= (async () => {
-      // Before the token is cleared; see `lib/signOutTasks.js`.
-      await runSignOutTasks()
-      try {
-        await supabase.auth.signOut()
-      } finally {
+    if (!signingOut.current) {
+      signingOut.current = (async () => {
+        // Before the token is cleared; see `lib/signOutTasks.js`.
+        await runSignOutTasks()
         // Even on a failed sign-out, for shared machines.
-        clearViewPrefs()
-      }
-    })().finally(() => { signingOut.current = null })
+        await Promise.resolve().then(() => supabase.auth.signOut()).finally(clearViewPrefs)
+      })().finally(() => { signingOut.current = null })
+    }
     return signingOut.current
   }
 

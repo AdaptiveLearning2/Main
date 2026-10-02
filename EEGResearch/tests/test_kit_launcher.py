@@ -9,11 +9,14 @@ import logging
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 
 import pytest
@@ -24,7 +27,7 @@ from src.app.config import Settings, parse_eeg_devices
 from src.kit import config as kit_config
 from src.kit import launcher, selftest
 from src.kit.config import KitConfig, KitConfigError, check
-from src.kit.supervisor import NO_RESTART_EXIT, BridgeSupervisor, RestartPolicy, describe_exit
+from src.kit.supervisor import NO_RESTART_EXIT, Supervisor, RestartPolicy, describe_exit
 
 WINDOWS = pytest.mark.skipif(sys.platform != "win32", reason="Windows process plumbing")
 FIELD = {"backend": "backend_url", "origin": "frontend_origin", "token": "learner_token"}
@@ -176,7 +179,7 @@ class _Sleeps:
 def test_a_crashing_bridge_is_restarted_then_retried_slowly_and_never_given_up(tmp_path):
     sleeps = _Sleeps(limit=6)
     policy = RestartPolicy(max_restarts=2, delay_s=0.5, slow_retry_s=300)
-    supervisor = BridgeSupervisor(_exits(3), dict(os.environ), tmp_path, policy, sleep=sleeps)
+    supervisor = Supervisor(_exits(3), dict(os.environ), tmp_path, policy, sleep=sleeps)
     assert supervisor.run(threading.Event()) == "stopped"
     # A third exit is one more than two restarts: a slow wait, then a fresh budget.
     assert (sleeps.waits, supervisor.runs) == ([0.5, 0.5, 300, 0.5, 0.5, 300], 6)
@@ -185,7 +188,7 @@ def test_a_crashing_bridge_is_restarted_then_retried_slowly_and_never_given_up(t
 @pytest.mark.parametrize("code,ended", [(0, "clean"), (NO_RESTART_EXIT, "no-restart")])
 def test_a_clean_exit_or_one_a_restart_cannot_fix_ends_supervision(tmp_path, code, ended):
     sleeps = _Sleeps(limit=99)
-    supervisor = BridgeSupervisor(_exits(code), dict(os.environ), tmp_path, sleep=sleeps)
+    supervisor = Supervisor(_exits(code), dict(os.environ), tmp_path, sleep=sleeps)
     assert supervisor.run(threading.Event()) == ended
     assert (supervisor.runs, sleeps.waits) == (1, [])
 
@@ -200,13 +203,13 @@ def test_only_exits_inside_the_window_count_toward_the_slow_retry(tmp_path, step
 
     sleeps = _Sleeps(limit=3)
     policy = RestartPolicy(max_restarts=1, window_s=600, delay_s=0.5, slow_retry_s=300)
-    BridgeSupervisor(_exits(3), dict(os.environ), tmp_path, policy, clock=clock, sleep=sleeps).run(threading.Event())
+    Supervisor(_exits(3), dict(os.environ), tmp_path, policy, clock=clock, sleep=sleeps).run(threading.Event())
     assert sleeps.waits == waits
 
 
 def test_a_bridge_that_cannot_start_is_logged_and_retried_like_a_crash(tmp_path, caplog):
     sleeps = _Sleeps(limit=2)
-    supervisor = BridgeSupervisor([str(tmp_path / "missing.exe")], dict(os.environ), tmp_path,
+    supervisor = Supervisor([str(tmp_path / "missing.exe")], dict(os.environ), tmp_path,
                                   RestartPolicy(delay_s=0.5), sleep=sleeps)
     with caplog.at_level(logging.ERROR, logger="src.kit.supervisor"):
         assert supervisor.run(threading.Event()) == "stopped"
@@ -215,7 +218,7 @@ def test_a_bridge_that_cannot_start_is_logged_and_retried_like_a_crash(tmp_path,
 
 def test_stop_ends_a_running_bridge_promptly(tmp_path):
     stop = threading.Event()
-    supervisor = BridgeSupervisor([sys.executable, "-c", "import time; time.sleep(60)"], dict(os.environ), tmp_path)
+    supervisor = Supervisor([sys.executable, "-c", "import time; time.sleep(60)"], dict(os.environ), tmp_path)
     ended: list[str] = []
     thread = threading.Thread(target=lambda: ended.append(supervisor.run(stop)))
     thread.start()
@@ -230,7 +233,7 @@ def test_stop_ends_a_running_bridge_promptly(tmp_path):
 
 def test_each_run_logs_to_its_own_file_and_only_the_newest_ten_are_kept(tmp_path):
     sleeps = _Sleeps(limit=12)
-    supervisor = BridgeSupervisor(_exits(3), dict(os.environ), tmp_path, RestartPolicy(max_restarts=99, delay_s=0),
+    supervisor = Supervisor(_exits(3), dict(os.environ), tmp_path, RestartPolicy(max_restarts=99, delay_s=0),
                                   sleep=sleeps)
     supervisor.run(threading.Event())
     logs = sorted(tmp_path.glob("bridge-*.log"))
@@ -250,7 +253,7 @@ def test_the_kit_does_not_restart_the_real_bridge_when_its_token_folder_is_missi
     env = kit_config.bridge_env(_cfg(), dict(os.environ))
     env.update(LOCALAPPDATA=str(blocker / "sub"), MUSE_BRIDGE_PORT=str(port))
     sleeps = _Sleeps(limit=3)
-    supervisor = BridgeSupervisor([str(_BRIDGE_EXE)], env, tmp_path / "logs", sleep=sleeps)
+    supervisor = Supervisor([str(_BRIDGE_EXE)], env, tmp_path / "logs", sleep=sleeps)
     assert supervisor.run(threading.Event()) == "no-restart"
     assert (supervisor.runs, sleeps.waits) == (1, [])
 
@@ -280,7 +283,7 @@ def _bridge_token(home, port: int) -> str:
 @REAL_BRIDGE
 def test_the_bridge_run_log_keeps_its_start_up_lines_when_the_supervisor_stops_it(tmp_path):
     port, env = _real_bridge_env(tmp_path)
-    supervisor = BridgeSupervisor([str(_BRIDGE_EXE)], env, tmp_path / "logs")
+    supervisor = Supervisor([str(_BRIDGE_EXE)], env, tmp_path / "logs")
     stop = threading.Event()
     runner = threading.Thread(target=supervisor.run, args=(stop,))
     runner.start()
@@ -506,3 +509,159 @@ def test_the_modules_check_fails_a_kit_dll_from_elsewhere_and_only_reports_a_for
     failing, foreign = selftest._outside_kit(loaded, r"C:\Kit", r"C:\Windows", kit_names)
     assert failing == [system_crt, other_python, other_opencv]
     assert foreign == [av]
+
+
+def test_the_sidecar_process_reads_no_env_file_where_it_runs(tmp_path, monkeypatch, environ):
+    from src.app.config import Settings  # noqa: PLC0415
+
+    monkeypatch.setitem(Settings.model_config, "env_file", Settings.model_config["env_file"])
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("SIDECAR_DOCS=true\nEEG_SAMPLE_HZ=7\n", encoding="utf-8")
+    launcher.prepare_environment(environ, _cfg(), tmp_path)
+    launcher.prepare_sidecar_process(tmp_path / "data")
+    settings = Settings()
+    assert (settings.sidecar_docs, settings.eeg_sample_hz) == (False, 4)
+
+
+def test_matplotlib_builds_its_font_list_once_in_the_kit_data_folder(tmp_path):
+    pytest.importorskip("matplotlib")
+    code = ("import sys\nfrom pathlib import Path\nfrom src.kit import launcher\n"
+            "launcher.prepare_sidecar_process(Path(sys.argv[1]))\nimport matplotlib.font_manager\n")
+    env = dict(os.environ, PYTHONPATH=str(ROOT / "EEGResearch"))
+    env.pop("MPLCONFIGDIR", None)
+    built = []
+    for _ in range(2):
+        subprocess.run([sys.executable, "-c", code, str(tmp_path)], env=env, check=True, timeout=120)
+        (font_list,) = (tmp_path / "matplotlib").glob("fontlist-*.json")
+        built.append(font_list.stat().st_mtime_ns)
+    assert built[0] == built[1]  # built by the first process, read by the second
+
+
+def _until(predicate, seconds: float):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if value := predicate():
+            return value
+        time.sleep(0.25)
+    return None
+
+
+def test_on_stop_a_child_gets_its_grace_period_before_it_is_ended(tmp_path):
+    child = [PYTHON, "-c", "import time; time.sleep(1); print('finished by itself', flush=True)"]
+    supervisor = Supervisor(child, dict(os.environ), tmp_path, name="sidecar", graceful_s=10)
+    stop = threading.Event()
+    runner = threading.Thread(target=supervisor.run, args=(stop,))
+    runner.start()
+    assert _until(lambda: supervisor.process is not None, 10)
+    stop.set()
+    runner.join(20)
+    assert supervisor.process.returncode == 0
+    (log,) = tmp_path.glob("sidecar-*.log")
+    assert "finished by itself" in log.read_text(encoding="utf-8")
+
+
+@WINDOWS
+def test_the_sidecar_drops_a_connection_from_another_windows_session_unread(monkeypatch):
+    import uvicorn  # noqa: PLC0415
+
+    from src.kit import winproc  # noqa: PLC0415
+
+    seen = []
+
+    async def app(scope, receive, send):
+        if scope["type"] == "lifespan":
+            await receive()
+            await send({"type": "lifespan.startup.complete"})
+            await receive()
+            await send({"type": "lifespan.shutdown.complete"})
+        else:
+            seen.append(scope["path"])
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+    config = launcher.sidecar_config(app, 0)
+    reads, real_read = [], config.http.data_received
+    monkeypatch.setattr(config.http, "data_received", lambda self, data: (reads.append(data), real_read(self, data)))
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        assert _until(lambda: server.started, 20)
+        url = f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
+        with urllib.request.urlopen(url + "/ours", timeout=10) as resp:
+            assert resp.status == 200
+        assert seen == ["/ours"] and reads
+        reads.clear()
+        monkeypatch.setattr(winproc, "own_session", lambda: -1)  # this process now reads as another user's
+        with pytest.raises(OSError):
+            urllib.request.urlopen(url + "/theirs", timeout=10)
+        assert seen == ["/ours"] and reads == []  # dropped before a byte of the request was read
+    finally:
+        server.should_exit = True
+        thread.join(20)
+
+
+_SERVE = ("import sys\nfrom src.kit import config, launcher\n"
+          "launcher.INSTANCE_MUTEX, launcher.STOP_EVENT = sys.argv[1], sys.argv[2]\n"
+          "config.SIDECAR_PORT = int(sys.argv[3])\nsys.exit(launcher.main([]))\n")
+_STOP = ("import sys\nfrom src.kit import launcher\n"
+         "launcher.INSTANCE_MUTEX, launcher.STOP_EVENT = sys.argv[1], sys.argv[2]\n"
+         "sys.exit(launcher.main(['--stop']))\n")
+
+
+def _get(url: str) -> int | None:
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+    except OSError:
+        return None
+
+
+def _sidecar_pid(port: int) -> int | None:
+    """The process serving port: the owner of its end of a connection made to ask."""
+    from src.kit import winproc  # noqa: PLC0415
+
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as probe:
+            return winproc.tcp_owner_pid(("127.0.0.1", port), probe.getsockname()[1])
+    except OSError:
+        return None
+
+
+@WINDOWS
+def test_the_sidecar_is_restarted_after_it_dies_and_both_processes_stop_on_request(tmp_path):
+    app, local = tmp_path / "app", tmp_path / "local"
+    app.mkdir()
+    kit_config.write(app / kit_config.KIT_FILE, _cfg())
+    data = local / "AdaptiveLearning" / "Sensors"
+    data.mkdir(parents=True)
+    (data / ".env").write_text("SIDECAR_DOCS=true\n", encoding="utf-8")  # kit.json alone decides the settings
+    mutex, event = _names()
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    env = dict(os.environ, KIT_APP_DIR=str(app), LOCALAPPDATA=str(local), PYTHONPATH=str(ROOT / "EEGResearch"))
+    kit = subprocess.Popen([sys.executable, "-c", _SERVE, mutex, event, str(port)], env=env,
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    url = f"http://127.0.0.1:{port}"
+    try:
+        assert _until(lambda: _get(url + "/healthz") == 200, 60), "the sidecar never answered"
+        assert _get(url + "/docs") == 404
+        first = _sidecar_pid(port)
+        assert first not in (None, kit.pid)
+        os.kill(first, signal.SIGTERM)  # as a crash in camera code would end it
+        assert _until(lambda: _get(url + "/healthz") == 200 and _sidecar_pid(port) not in (None, first), 60)
+        stop = subprocess.run([sys.executable, "-c", _STOP, mutex, event], env=env, timeout=60,
+                              capture_output=True, text=True)
+        assert stop.returncode == 0, stop.stdout + stop.stderr
+        assert kit.wait(30) == 0
+        assert _sidecar_pid(port) is None
+    finally:
+        if kit.poll() is None:
+            kit.kill()
+        if (left := _sidecar_pid(port)) is not None:
+            os.kill(left, signal.SIGTERM)
+    log = (data / "logs" / "sidecar.log").read_text(encoding="utf-8")
+    assert "Application shutdown complete" in log  # it stopped itself, flushing its push client, rather than ended

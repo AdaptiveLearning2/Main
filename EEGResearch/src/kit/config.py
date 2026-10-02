@@ -150,6 +150,13 @@ def bridge_env(cfg: KitConfig, base: MutableMapping[str, str]) -> dict[str, str]
     return env
 
 
+def settings_from_environment_only() -> None:
+    """The sidecar's Settings read no .env from here on, so the environment the kit set is all they see."""
+    from src.app.config import Settings  # noqa: PLC0415 -- pydantic only once the kit is launching
+
+    Settings.model_config["env_file"] = None
+
+
 def clear_sidecar_settings(environ: MutableMapping[str, str]) -> list[str]:
     """Removes every name the sidecar's Settings reads from environ, and returns those that were set."""
     from src.app.config import Settings  # noqa: PLC0415 -- pydantic only once the kit is launching

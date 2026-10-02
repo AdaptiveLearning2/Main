@@ -25,7 +25,7 @@ from pathlib import Path
 
 from src.kit import config as kit_config
 from src.kit import winproc
-from src.kit.launcher import BRIDGE_EXE, uvicorn_log_config
+from src.kit.launcher import BRIDGE_EXE, prepare_sidecar_process, sidecar_config
 
 FACE_IMAGE = Path("selftest") / "face.jpg"
 STATUS_DLL_NOT_FOUND = 0xC0000135
@@ -74,6 +74,8 @@ def check_settings(ctx):
     kit_config.clear_sidecar_settings(os.environ)
     env = kit_config.sidecar_env(ctx["cfg"], ctx["app"])
     os.environ.update(env)
+    prepare_sidecar_process(work)  # as the sidecar process does, before anything imports matplotlib
+    ctx["matplotlib"] = work / "matplotlib"
     from src.app.config import Settings, get_settings, parse_eeg_devices  # noqa: PLC0415
 
     get_settings.cache_clear()
@@ -126,7 +128,11 @@ def check_landmarks(ctx):
     rgb = bgr[:, :, ::-1].copy()
     found = fl.FaceMeshLandmarker(model_path=str(model)).locate(rgb, rgb.shape[1], rgb.shape[0])
     require(bool(found), "the landmarker found no face in the portrait")
-    return {"landmarks": sorted(found)}
+    import matplotlib  # noqa: PLC0415 -- mediapipe imported it; frozen, its cache must not be a new temp folder
+
+    cache = matplotlib.get_cachedir()
+    require("matplotlib" not in ctx or _norm(cache) == _norm(ctx["matplotlib"]), f"matplotlib caches in {cache}")
+    return {"landmarks": sorted(found), "matplotlib_cache": cache}
 
 
 class _Records(logging.Handler):
@@ -155,8 +161,7 @@ def _serve_once(app, path: str) -> tuple[int, dict, list[str]]:
     import uvicorn  # noqa: PLC0415
 
     with _server_warnings() as warnings:  # a failed start is otherwise only a timeout here
-        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, http="h11", ws="none",
-                                               loop="asyncio", lifespan="on", log_config=uvicorn_log_config()))
+        server = uvicorn.Server(sidecar_config(app, 0))  # the sidecar's own, so the session check is checked too
         thread = threading.Thread(target=server.run, name="selftest-uvicorn", daemon=True)  # never holds up the exit
         thread.start()
         try:

@@ -6,12 +6,17 @@ Importable anywhere (CI imports the kit on Linux); calling these off Windows rai
 from __future__ import annotations
 
 import ctypes
+import os
+import socket
 import sys
 from ctypes import wintypes
 
 ERROR_FILE_NOT_FOUND = 2
 ERROR_ACCESS_DENIED = 5
+ERROR_INSUFFICIENT_BUFFER = 122
 ERROR_ALREADY_EXISTS = 183
+AF_INET = 2
+TCP_TABLE_OWNER_PID_CONNECTIONS = 4
 SYNCHRONIZE = 0x00100000
 EVENT_MODIFY_STATE = 0x0002
 WAIT_OBJECT_0, WAIT_ABANDONED, WAIT_TIMEOUT = 0x0, 0x80, 0x102
@@ -48,8 +53,13 @@ if sys.platform == "win32":
                                             ctypes.POINTER(wintypes.DWORD), wintypes.DWORD]
     _psapi.GetModuleFileNameExW.argtypes = [wintypes.HANDLE, wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
     _psapi.GetModuleFileNameExW.restype = wintypes.DWORD
+    _k32.ProcessIdToSessionId.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    _iphlpapi = ctypes.WinDLL("iphlpapi")
+    _iphlpapi.GetExtendedTcpTable.argtypes = [wintypes.LPVOID, ctypes.POINTER(wintypes.DWORD), wintypes.BOOL,
+                                              wintypes.ULONG, ctypes.c_int, wintypes.ULONG]
+    _iphlpapi.GetExtendedTcpTable.restype = wintypes.DWORD
 else:
-    _k32 = _psapi = None
+    _k32 = _psapi = _iphlpapi = None
 
 
 def _api():
@@ -89,14 +99,15 @@ class SingleInstance:
 
 
 class StopSignal:
-    """The named event `--stop` sets; created unset, since only the copy holding the mutex creates it."""
+    """The named event `--stop` sets: the copy holding the mutex resets it, and its sidecar opens it as it is."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, reset: bool = True) -> None:
         k32 = _api()
         self.handle = k32.CreateEventW(None, True, False, name)
         if not self.handle:
             raise ctypes.WinError(ctypes.get_last_error())
-        k32.ResetEvent(self.handle)
+        if reset:
+            k32.ResetEvent(self.handle)
 
     def wait(self, seconds: float) -> bool:
         return _api().WaitForSingleObject(self.handle, int(seconds * 1000)) == WAIT_OBJECT_0
@@ -154,6 +165,51 @@ def kill_children_with_me() -> None:
         k32.CloseHandle(job)
         raise ctypes.WinError(error)
     _job = job
+
+
+class _TcpRow(ctypes.Structure):
+    """MIB_TCPROW_OWNER_PID: addresses and ports in network byte order, each port in the low 16 bits."""
+    _fields_ = [(n, wintypes.DWORD) for n in ("state", "local_addr", "local_port", "remote_addr", "remote_port", "pid")]
+
+
+def tcp_owner_pid(local: tuple[str, int], remote_port: int) -> int | None:
+    """The PID owning the IPv4 endpoint local of a TCP connection to remote_port, or None if there is none."""
+    _api()
+    size = wintypes.DWORD(0)
+    for _ in range(4):  # the table can grow between sizing it and reading it
+        table = ctypes.create_string_buffer(max(size.value, ctypes.sizeof(wintypes.DWORD)))
+        result = _iphlpapi.GetExtendedTcpTable(table, ctypes.byref(size), False, AF_INET,
+                                               TCP_TABLE_OWNER_PID_CONNECTIONS, 0)
+        if result == 0:
+            break
+        if result != ERROR_INSUFFICIENT_BUFFER:
+            return None
+    else:
+        return None
+    count = wintypes.DWORD.from_buffer(table).value
+    addr = int.from_bytes(socket.inet_aton(local[0]), "little")
+    for row in (_TcpRow * count).from_buffer(table, ctypes.sizeof(wintypes.DWORD)):
+        if (row.local_addr == addr and socket.ntohs(row.local_port & 0xFFFF) == local[1]
+                and socket.ntohs(row.remote_port & 0xFFFF) == remote_port):
+            return row.pid
+    return None
+
+
+def session_id(pid: int) -> int | None:
+    """The Windows session pid runs in, or None if Windows will not say (another user's process, say)."""
+    session = wintypes.DWORD()
+    return session.value if _api().ProcessIdToSessionId(pid, ctypes.byref(session)) else None
+
+
+def own_session() -> int | None:
+    return session_id(os.getpid())
+
+
+def peer_in_this_session(peer: tuple[str, int], local_port: int) -> bool:
+    """Whether the process at the other end of a loopback connection to local_port runs in this session."""
+    pid = tcp_owner_pid(peer, local_port)
+    mine = own_session()
+    return pid is not None and mine is not None and session_id(pid) == mine
 
 
 def loaded_modules(pid: int | None = None) -> list[str]:

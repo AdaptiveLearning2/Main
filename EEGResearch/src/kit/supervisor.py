@@ -1,4 +1,4 @@
-"""Keeps the bridge running: run_bridge_supervised.ps1's restart policy, then slow retries, since nobody is watching."""
+"""Keeps the kit's processes running with run_bridge_supervised.ps1's restart policy, then slow retries."""
 
 from __future__ import annotations
 
@@ -31,18 +31,25 @@ def describe_exit(code: int) -> str:
     return f"0x{code & 0xFFFFFFFF:08X}" if code < 0 or code > 255 else str(code)
 
 
-class BridgeSupervisor:
-    """Runs command until stop is set, it exits cleanly, or it exits with NO_RESTART_EXIT."""
+class Supervisor:
+    """Runs command until stop is set, it exits cleanly, or it exits with NO_RESTART_EXIT.
+
+    On stop it gets graceful_s to exit by itself (the sidecar sees the stop event too) before it is terminated.
+    """
 
     def __init__(self, command: list[str], env: dict[str, str], log_dir: Path,
                  policy: RestartPolicy = RestartPolicy(), clock: Callable[[], float] = time.monotonic,
-                 sleep: Callable[[threading.Event, float], bool] | None = None) -> None:
+                 sleep: Callable[[threading.Event, float], bool] | None = None, name: str = "bridge",
+                 graceful_s: float = 0.0, cwd: Path | None = None) -> None:
         self._command = command
         self._env = env
         self._log_dir = Path(log_dir)
         self._policy = policy
         self._clock = clock
         self._sleep = sleep or (lambda stop, seconds: stop.wait(seconds))
+        self.name = name
+        self._graceful_s = graceful_s
+        self._cwd = cwd
         self.runs = 0
         self.process: subprocess.Popen | None = None  # the current or last run
 
@@ -55,18 +62,18 @@ class BridgeSupervisor:
             if code is None:
                 return "stopped"
             if code == 0:
-                logger.info("bridge exited cleanly; not restarting")
+                logger.info("%s exited cleanly; not restarting", self.name)
                 return "clean"
             if code == NO_RESTART_EXIT:
-                logger.error("bridge reported a failure a restart cannot fix; not restarting. Its log says why: %s",
-                             self._log_dir)
+                logger.error("%s reported a failure a restart cannot fix; not restarting. Its log says why: %s",
+                             self.name, self._log_dir)
                 return "no-restart"
             now = self._clock()
             exits.append(now)
             while exits and exits[0] < now - self._policy.window_s:
                 exits.popleft()
             if len(exits) > self._policy.max_restarts:
-                logger.error("bridge exited %d times in %.0f s; retrying every %.0f s", len(exits),
+                logger.error("%s exited %d times in %.0f s; retrying every %.0f s", self.name, len(exits),
                              self._policy.window_s, self._policy.slow_retry_s)
                 exits.clear()
                 if self._sleep(stop, self._policy.slow_retry_s):
@@ -78,15 +85,16 @@ class BridgeSupervisor:
     def _run_once(self, stop: threading.Event) -> int | None:
         """The run's exit code, or None if stop ended it; a command that cannot start counts as a failed run."""
         self._log_dir.mkdir(parents=True, exist_ok=True)
-        log_path = self._log_dir / f"bridge-{time.strftime('%Y%m%d-%H%M%S')}-{self.runs:05d}.log"
+        log_path = self._log_dir / f"{self.name}-{time.strftime('%Y%m%d-%H%M%S')}-{self.runs:05d}.log"
         self._prune_logs()
-        logger.info("bridge run %d starting; output in %s", self.runs, log_path.name)
+        logger.info("%s run %d starting; output in %s", self.name, self.runs, log_path.name)
         try:
             with open(log_path, "wb") as out:
-                proc = self.process = subprocess.Popen(self._command, env=self._env, stdin=subprocess.DEVNULL,
-                                                       stdout=out, stderr=subprocess.STDOUT, creationflags=_NO_WINDOW)
+                proc = self.process = subprocess.Popen(self._command, env=self._env, cwd=self._cwd,
+                                                       stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                                                       creationflags=_NO_WINDOW)
         except OSError as exc:
-            logger.error("bridge did not start: %s", exc)
+            logger.error("%s did not start: %s", self.name, exc)
             return -1
         while True:
             try:
@@ -94,16 +102,22 @@ class BridgeSupervisor:
                 break
             except subprocess.TimeoutExpired:
                 if stop.is_set():
-                    proc.terminate()
-                    proc.wait(timeout=10)
-                    logger.info("bridge stopped")
+                    self._end(proc)
+                    logger.info("%s stopped", self.name)
                     return None
-        logger.warning("bridge run %d exited with code %s", self.runs, describe_exit(code))
+        logger.warning("%s run %d exited with code %s", self.name, self.runs, describe_exit(code))
         return code
+
+    def _end(self, proc: subprocess.Popen) -> None:
+        try:
+            proc.wait(timeout=self._graceful_s)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            proc.wait(timeout=10)
 
     def _prune_logs(self) -> None:
         """Keeps the newest KEEP_RUN_LOGS - 1, so the run about to start makes KEEP_RUN_LOGS."""
-        logs = sorted(self._log_dir.glob("bridge-*.log"))
+        logs = sorted(self._log_dir.glob(f"{self.name}-*.log"))
         for old in logs[:max(0, len(logs) - (KEEP_RUN_LOGS - 1))]:
             try:
                 old.unlink()

@@ -524,6 +524,128 @@ BEGIN
     END IF;
 END $$;
 
+-- The cutoff day ends at local midnight, on a 25-hour DST day too: the delete bounds on an
+-- instant, so a fixed UTC offset would keep its last hour or take the next day's first.
+DO $$
+DECLARE
+    uid uuid; sess uuid; last_second int; next_day int;
+    saved public.retention_window; had_row boolean;
+BEGIN
+    SELECT owner_id, sess_id INTO uid, sess FROM _ids;
+    SELECT * INTO saved FROM public.retention_window LIMIT 1;
+    had_row := FOUND;
+    DELETE FROM public.retention_window;
+    -- Los Angeles leaves DST on 2025-11-02, so that local day runs 07:00Z to 08:00Z next day.
+    INSERT INTO public.retention_window (starts_on, ends_on, timezone)
+    VALUES ('2025-01-01', '2025-11-02', 'America/Los_Angeles');
+
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus) VALUES
+        (sess, uid, '2025-11-03T07:59:59Z', 0.5),
+        (sess, uid, '2025-11-03T08:00:00Z', 0.5);
+    INSERT INTO public.signal_daily_rollup
+        (user_id, day, channel, sample_count, trusted_sample_count)
+    VALUES (uid, DATE '2025-11-02', 'cognitive', 1, 1),
+           (uid, DATE '2025-11-03', 'cognitive', 1, 1);
+
+    PERFORM public.expire_signal_rows();
+
+    SELECT count(*) INTO last_second FROM public.cognitive_signals
+     WHERE user_id = uid AND ts = '2025-11-03T07:59:59Z';
+    SELECT count(*) INTO next_day FROM public.cognitive_signals
+     WHERE user_id = uid AND ts = '2025-11-03T08:00:00Z';
+    IF last_second <> 0 THEN
+        RAISE EXCEPTION
+            'the last second of the cutoff day (23:59:59 local) survived: the delete '
+            'bound is short of local midnight on a DST day';
+    END IF;
+    IF next_day <> 1 THEN
+        RAISE EXCEPTION
+            'the first second after the cutoff day (00:00 local) was deleted: the '
+            'delete bound runs past local midnight';
+    END IF;
+    -- Leave the shared fixtures as found: later sections read them.
+    DELETE FROM public.cognitive_signals
+     WHERE user_id = uid AND ts IN ('2025-11-03T07:59:59Z', '2025-11-03T08:00:00Z');
+    DELETE FROM public.signal_daily_rollup
+     WHERE user_id = uid AND day IN (DATE '2025-11-02', DATE '2025-11-03');
+    DELETE FROM public.retention_window;
+    IF had_row THEN
+        INSERT INTO public.retention_window SELECT saved.*;
+    END IF;
+END $$;
+
+-- ── latest_signals_for_sessions: the newest row per channel, named fields only ──
+DO $$
+DECLARE
+    uid uuid; sess uuid := gen_random_uuid(); empty_sess uuid := gen_random_uuid();
+    n int; body jsonb; keys text[];
+BEGIN
+    -- Sessions of its own, so the shared fixture's rows neither help nor hinder.
+    SELECT owner_id INTO uid FROM _ids;
+    INSERT INTO public.sessions (id, user_id) VALUES (sess, uid), (empty_sess, uid);
+
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus, stress, engagement, raw)
+    VALUES (sess, uid, '2026-09-01T10:00:00Z', 0.1, 0.9, 0.1,
+            '{"signal_quality": "good", "quality_basis": "contact", "bands": [1, 2]}'),
+           (sess, uid, '2026-09-01T10:00:05Z', 0.2, 0.8, 0.2,
+            '{"signal_quality": "poor", "quality_basis": "contact", "bands": [3, 4]}');
+    INSERT INTO public.face_signals (session_id, user_id, ts, emotion)
+    VALUES (sess, uid, '2026-09-01T10:00:01Z', 'neutral'),
+           (sess, uid, '2026-09-01T10:00:06Z', 'happy');
+    INSERT INTO public.heart_signals
+        (session_id, user_id, source, ts, heart_rate_bpm, rmssd_ms, trusted)
+    VALUES (sess, uid, 'muse_optics', '2026-09-01T10:00:02Z', 70, 40, true),
+           (sess, uid, 'muse_optics', '2026-09-01T10:00:07Z', 72, 41, false);
+    INSERT INTO public.session_answers (session_id, user_id, correct, answered_at)
+    VALUES (sess, uid, true, '2026-09-01T10:00:03Z'),
+           (sess, uid, false, '2026-09-01T10:00:08Z');
+
+    -- The same id twice and a session with no rows: one row per channel, once.
+    SELECT count(*) INTO n
+      FROM public.latest_signals_for_sessions(ARRAY[sess, sess, empty_sess]);
+    IF n <> 4 THEN
+        RAISE EXCEPTION 'expected one row per channel for the one session with data, got %', n;
+    END IF;
+
+    SELECT payload INTO body FROM public.latest_signals_for_sessions(ARRAY[sess])
+     WHERE channel = 'cognitive';
+    SELECT array_agg(k ORDER BY k) INTO keys FROM jsonb_object_keys(body) k;
+    IF (body->>'focus')::float8 <> 0.2 OR body->'raw'->>'signal_quality' <> 'poor'
+       OR keys <> ARRAY['engagement', 'focus', 'raw', 'stress', 'ts'] THEN
+        RAISE EXCEPTION 'cognitive is not the newest row, or not the named fields: %', body;
+    END IF;
+    SELECT array_agg(k ORDER BY k) INTO keys FROM jsonb_object_keys(body->'raw') k;
+    IF keys <> ARRAY['quality_basis', 'signal_quality'] THEN
+        RAISE EXCEPTION 'raw carries more than the live view reads: %', body->'raw';
+    END IF;
+
+    SELECT payload INTO body FROM public.latest_signals_for_sessions(ARRAY[sess])
+     WHERE channel = 'face';
+    SELECT array_agg(k ORDER BY k) INTO keys FROM jsonb_object_keys(body) k;
+    IF body->>'emotion' <> 'happy' OR keys <> ARRAY['emotion', 'ts'] THEN
+        RAISE EXCEPTION 'face is not the newest row, or not the named fields: %', body;
+    END IF;
+
+    -- Newest, trusted or not: the card reads `trusted` itself.
+    SELECT payload INTO body FROM public.latest_signals_for_sessions(ARRAY[sess])
+     WHERE channel = 'heart';
+    SELECT array_agg(k ORDER BY k) INTO keys FROM jsonb_object_keys(body) k;
+    IF (body->>'heart_rate_bpm')::float8 <> 72 OR (body->>'trusted')::boolean
+       OR keys <> ARRAY['heart_rate_bpm', 'rmssd_ms', 'source', 'trusted', 'ts'] THEN
+        RAISE EXCEPTION 'heart is not the newest row, or not the named fields: %', body;
+    END IF;
+
+    SELECT payload INTO body FROM public.latest_signals_for_sessions(ARRAY[sess])
+     WHERE channel = 'answer';
+    IF (body->>'answered_at')::timestamptz <> '2026-09-01T10:00:08Z'
+       OR (SELECT count(*) FROM jsonb_object_keys(body)) <> 1 THEN
+        RAISE EXCEPTION 'answer is not the newest answered_at alone: %', body;
+    END IF;
+
+    -- Cascades the four tables' rows, so later sections see the fixtures as before.
+    DELETE FROM public.sessions WHERE id IN (sess, empty_sess);
+END $$;
+
 -- ── the archived charts (Phase 8) ───────────────────────────────────────────
 -- They outlive the rows they draw on, and both guards are database state a fake client cannot see.
 

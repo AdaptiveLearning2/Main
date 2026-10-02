@@ -2550,8 +2550,9 @@ def update_my_profile(payload: UpdateProfileRequest, request: Request):
     stored = None
     if fields:
         fields["updated_at"] = _utc_now().isoformat()
-        # The update returns the row as stored: no second read to fail after the save has landed.
-        stored = supabase.table("profiles").update(fields).eq("id", user["id"]).execute().data or []
+        # The row as stored, asked for by name: empty then means no row, and no second read can fail.
+        stored = supabase.table("profiles").update(fields, returning=ReturnMethod.representation) \
+            .eq("id", user["id"]).execute().data or []
     if payload.display_name is not None:
         try:
             supabase.auth.admin.update_user_by_id(

@@ -35,12 +35,14 @@ _EMBED_KEYS = {("class_memberships", "classes"): "class_id"}
 class _Query:
     """Minimal stand-in for the supabase-py query builder chain."""
 
-    def __init__(self, rows, max_rows=None, raises=None, name=None, tables=None):
+    def __init__(self, rows, max_rows=None, raises=None, name=None, tables=None, failure=None):
         self._rows = rows
         self._max_rows = max_rows
         # A read that fails, as opposed to one that returns nothing.
         self._raises = raises
         self._name, self._tables = name, tables or {}
+        # Table name -> the exception its read raises, or None; consulted for embedded tables.
+        self._failure = failure or (lambda _name: None)
         self._embeds = {}
         self._filters = self.filters = []
         self._limit = None
@@ -169,6 +171,10 @@ class _Query:
     def execute(self):
         if self._raises:
             raise self._raises
+        # A failed read of an embedded table fails the whole request, as it does in PostgREST.
+        embedded = next((e for e in map(self._failure, self._embeds) if e), None)
+        if embedded:
+            raise embedded
         if getattr(self, "or_filters", None) and self._rows:
             raise AssertionError(
                 "or_() is recorded but not evaluated by this fake; give the "
@@ -233,14 +239,18 @@ class _FakeSupabase:
         # Every query built, so tests can assert on its filters.
         self.queries = []
 
+    def _failure(self, name):
+        """The exception a read of `name` raises, or None."""
+        if name not in self._table_raises:
+            return None
+        return (self._table_raises[name] if isinstance(self._table_raises, dict)
+                else RuntimeError(f"{name} read failed"))
+
     def table(self, name):
         self.table_calls.append(name)
         cap = self._max_rows.get(name) if isinstance(self._max_rows, dict) else self._max_rows
-        exc = None
-        if name in self._table_raises:
-            exc = (self._table_raises[name] if isinstance(self._table_raises, dict)
-                   else RuntimeError(f"{name} read failed"))
-        query = _Query(self._tables.get(name, []), max_rows=cap, raises=exc, name=name, tables=self._tables)
+        query = _Query(self._tables.get(name, []), max_rows=cap, raises=self._failure(name), name=name,
+                       tables=self._tables, failure=self._failure)
         query._drop_count = self._count_missing
         self.queries.append(query)
         return query
@@ -353,7 +363,7 @@ def test_a_denial_read_in_full_is_a_403_and_is_logged(monkeypatch):
     assert (exc.value.status_code, events) == (403, ["authz_denied"])
 
 
-@pytest.mark.parametrize("failing", ["profiles", "class_memberships", "parent_child_links"])
+@pytest.mark.parametrize("failing", ["profiles", "class_memberships", "classes", "parent_child_links"])
 def test_a_failed_relationship_read_is_a_503_and_not_a_logged_denial(monkeypatch, failing):
     monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={failing}))
     events = _logged_events(monkeypatch)

@@ -128,16 +128,17 @@ class _ProfileTable:
 
     def __init__(self, row=_STORED, reads_fail=False):
         self.row = dict(row) if row is not None else None
-        self.written, self.reads = [], 0
+        self.written, self.reads, self.returning = [], 0, []
         self._reads_fail = reads_fail
 
     def table(self, _name):
         client = self
 
         class _Q:
-            def update(self, obj):
+            def update(self, obj, returning=main.ReturnMethod.representation, **_k):
                 client.written.append(dict(obj))
-                self._update = obj
+                client.returning.append(returning)
+                self._update, self._minimal = obj, returning == main.ReturnMethod.minimal
                 return self
 
             def select(self, *_a, **_k): return self
@@ -148,7 +149,9 @@ class _ProfileTable:
                 if getattr(self, "_update", None) is not None:
                     if client.row is not None:
                         client.row.update(self._update)
-                    return type("R", (), {"data": [dict(client.row)] if client.row else []})()
+                    # `return=minimal` answers no rows, which would read as "no profile".
+                    stored = [dict(client.row)] if client.row and not self._minimal else []
+                    return type("R", (), {"data": stored})()
                 client.reads += 1
                 if client._reads_fail:
                     raise RuntimeError("profiles read failed")
@@ -192,6 +195,13 @@ def test_a_save_reads_nothing_after_its_update(monkeypatch):
     client = _ProfileTable(reads_fail=True)
     assert _save(monkeypatch, client, practice_reminders=False)["practice_reminders"] is False
     assert client.reads == 0
+
+
+def test_a_save_asks_for_the_row_as_stored(monkeypatch):
+    """By name, not by the client's default: an empty answer is only "no profile" if rows were asked for."""
+    client = _ProfileTable()
+    _save(monkeypatch, client, practice_reminders=False)
+    assert client.returning == [main.ReturnMethod.representation]
 
 
 def test_a_save_for_an_account_with_no_profile_row_is_a_404(monkeypatch):

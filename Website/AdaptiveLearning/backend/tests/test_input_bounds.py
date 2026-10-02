@@ -94,7 +94,7 @@ class _CapturingClient:
                 self._single = True
                 return self
 
-            def update(self, obj):
+            def update(self, obj, **_k):
                 client.updates.append((table, obj))
                 return self
 

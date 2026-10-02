@@ -11,6 +11,7 @@ import logging
 import ntpath
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -69,7 +70,8 @@ def check_kit(ctx):
 
 def check_settings(ctx):
     require("cfg" in ctx, "kit.json did not load")
-    work = Path(tempfile.mkdtemp(prefix="kit-cwd-"))
+    work = ctx["tmp"] / "cwd"
+    work.mkdir()
     os.chdir(work)  # as the launcher does: a folder with no .env
     kit_config.clear_sidecar_settings(os.environ)
     env = kit_config.sidecar_env(ctx["cfg"], ctx["app"])
@@ -200,7 +202,8 @@ def check_bridge(ctx):
     """The bridge starts, writes its token, answers as a libMuse build, and loads its C++ runtime from bridge\\."""
     require("cfg" in ctx, "kit.json did not load")
     bridge_dir = ctx["app"] / "bridge"
-    home = Path(tempfile.mkdtemp(prefix="kit-bridge-"))
+    home = ctx["tmp"] / "bridge"
+    home.mkdir()
     port = _free_port()
     env = kit_config.bridge_env(ctx["cfg"], dict(os.environ))
     env.update(LOCALAPPDATA=str(home), MUSE_BRIDGE_PORT=str(port))
@@ -302,17 +305,22 @@ def run(report_path: Path, app: Path) -> int:
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     logging.getLogger().handlers[:] = [handler]
     logging.getLogger().setLevel(logging.INFO)
-    ctx = {"app": app}
+    ctx = {"app": app, "tmp": Path(tempfile.mkdtemp(prefix="kit-selftest-"))}
     results = []
     started = time.monotonic()
-    for name, check in CHECKS:
-        t = time.monotonic()
-        try:
-            detail, ok = check(ctx), True
-        except BaseException as exc:  # a failure is recorded, never mistaken for a pass
-            ok, detail = False, {"error": f"{type(exc).__name__}: {exc}", "trace": traceback.format_exc()[-1500:]}
-        results.append({"name": name, "ok": ok, "detail": detail, "seconds": round(time.monotonic() - t, 3)})
-        print(f"{'PASS' if ok else 'FAIL'} {name}", flush=True)
+    home = os.getcwd()
+    try:
+        for name, check in CHECKS:
+            t = time.monotonic()
+            try:
+                detail, ok = check(ctx), True
+            except BaseException as exc:  # a failure is recorded, never mistaken for a pass
+                ok, detail = False, {"error": f"{type(exc).__name__}: {exc}", "trace": traceback.format_exc()[-1500:]}
+            results.append({"name": name, "ok": ok, "detail": detail, "seconds": round(time.monotonic() - t, 3)})
+            print(f"{'PASS' if ok else 'FAIL'} {name}", flush=True)
+    finally:
+        os.chdir(home)  # the settings check works inside ctx["tmp"], and Windows keeps a working folder
+        shutil.rmtree(ctx["tmp"], ignore_errors=True)
     report = {"ok": all(r["ok"] for r in results), "checks": results,
               "total_seconds": round(time.monotonic() - started, 3), "frozen": bool(getattr(sys, "frozen", False)),
               "executable": sys.executable, "app": str(app), "versions": _versions()}

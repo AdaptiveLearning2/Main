@@ -117,8 +117,14 @@ class Supervisor:
 
     def _prune_logs(self) -> None:
         """Keeps the newest KEEP_RUN_LOGS - 1, so the run about to start makes KEEP_RUN_LOGS."""
-        logs = sorted(self._log_dir.glob(f"{self.name}-*.log"))
-        for old in logs[:max(0, len(logs) - (KEEP_RUN_LOGS - 1))]:
+        logs = []
+        for path in self._log_dir.glob(f"{self.name}-*.log"):
+            try:
+                logs.append((path.stat().st_mtime_ns, path.name, path))
+            except OSError:
+                pass  # removed meanwhile
+        # By when written, not by name: a name carries local time, which goes back an hour each autumn.
+        for _, _, old in sorted(logs)[:max(0, len(logs) - (KEEP_RUN_LOGS - 1))]:
             try:
                 old.unlink()
             except OSError:

@@ -13,6 +13,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -27,7 +28,7 @@ from src.app.config import Settings, parse_eeg_devices
 from src.kit import config as kit_config
 from src.kit import launcher, selftest
 from src.kit.config import KitConfig, KitConfigError, check
-from src.kit.supervisor import NO_RESTART_EXIT, Supervisor, RestartPolicy, describe_exit
+from src.kit.supervisor import KEEP_RUN_LOGS, NO_RESTART_EXIT, RestartPolicy, Supervisor, describe_exit
 
 WINDOWS = pytest.mark.skipif(sys.platform != "win32", reason="Windows process plumbing")
 FIELD = {"backend": "backend_url", "origin": "frontend_origin", "token": "learner_token"}
@@ -240,6 +241,19 @@ def test_each_run_logs_to_its_own_file_and_only_the_newest_ten_are_kept(tmp_path
     assert (len(logs), supervisor.runs) == (10, 12)
     assert logs[-1].name.endswith("-00012.log")
     assert all(log.read_text().strip() == "bridge ran" for log in logs)
+
+
+def test_pruning_keeps_the_newest_runs_when_the_local_clock_has_gone_back(tmp_path):
+    # Written in the hour before an autumn clock change: later times in their names, earlier ones on disk.
+    for i in range(KEEP_RUN_LOGS - 1):
+        early = tmp_path / f"bridge-29991231-2359{i:02d}-{i + 1:05d}.log"
+        early.write_text("before the change")
+        os.utime(early, ns=(10**18 + i, 10**18 + i))
+    supervisor = Supervisor(_exits(3), dict(os.environ), tmp_path, RestartPolicy(max_restarts=99, delay_s=0),
+                            sleep=_Sleeps(limit=3))
+    supervisor.run(threading.Event())
+    texts = [log.read_text().strip() for log in tmp_path.glob("bridge-*.log")]
+    assert (len(texts), texts.count("bridge ran")) == (KEEP_RUN_LOGS, 3)  # the oldest written went, not the newest
 
 
 @pytest.mark.skipif(sys.platform != "win32" or _BRIDGE_EXE is None,
@@ -509,6 +523,29 @@ def test_the_modules_check_fails_a_kit_dll_from_elsewhere_and_only_reports_a_for
     failing, foreign = selftest._outside_kit(loaded, r"C:\Kit", r"C:\Windows", kit_names)
     assert failing == [system_crt, other_python, other_opencv]
     assert foreign == [av]
+
+
+def test_the_self_test_leaves_no_temp_folder_and_its_working_folder_as_it_found_it(tmp_path, monkeypatch, environ):
+    from src.app.config import Settings  # noqa: PLC0415
+
+    monkeypatch.setitem(Settings.model_config, "env_file", Settings.model_config["env_file"])
+    temp, app = tmp_path / "temp", tmp_path / "app"
+    temp.mkdir()
+    app.mkdir()
+    kit_config.write(app / kit_config.KIT_FILE, _cfg())
+    monkeypatch.setattr(tempfile, "tempdir", str(temp))
+    monkeypatch.setattr(selftest, "CHECKS", [("kit", selftest.check_kit), ("settings", selftest.check_settings)])
+    monkeypatch.chdir(tmp_path)
+    root = logging.getLogger()
+    handlers, level = root.handlers[:], root.level
+    try:
+        assert selftest.run(tmp_path / "report.json", app) == 0, (tmp_path / "report.json").read_text()
+    finally:
+        for handler in set(root.handlers) - set(handlers):
+            handler.close()
+        root.handlers[:] = handlers
+        root.setLevel(level)
+    assert (os.getcwd(), list(temp.iterdir())) == (str(tmp_path), [])
 
 
 def test_the_sidecar_process_reads_no_env_file_where_it_runs(tmp_path, monkeypatch, environ):

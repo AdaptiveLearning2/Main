@@ -566,8 +566,8 @@ healthy), `EEG_SIM_OPTICS`, `EEG_SPECTRUM_SOURCE`, `EEG_SPECTRUM_POISON_SECONDS`
 it would pass half the backend's `INGEST_MAX_ROWS_PER_MINUTE` default.
 
 **The native bridge reads its own env directly, not through `config.py`**: `MUSE_BRIDGE_PORT`
-(8765), `MUSE_ENABLE_OPTICS` (off), `MUSE_OPTICS_PRESET` (`1035`), `MUSE_AUTO_RECONNECT`,
-`MUSE_LIVENESS_TIMEOUT_MS` (8000). **Set them with the launcher flag, never by editing a `.env`** —
+(8765), `MUSE_ENABLE_OPTICS` (off), `MUSE_OPTICS_PRESET` (`1035`), `MUSE_AUTO_RECONNECT`, `MUSE_LIVENESS_TIMEOUT_MS`
+(8000), `MUSE_SCAN_IDLE_MS` (120000). **Set them with the launcher flag, never by editing a `.env`** —
 the bridge is a C++ process calling `getenv`, so a `MUSE_ENABLE_OPTICS` line in `EEGResearch/.env`
 is read by nothing. That is the version of this mistake that looks like it worked.
 ---

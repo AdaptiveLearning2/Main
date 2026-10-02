@@ -350,6 +350,10 @@ no status line or bug report can mistake it for hardware), `connect` pairs it, `
 pairing fields follow that state. Before this, a sim run could never exercise the pairing sequence, the adopt path or a
 drop.
 
+**The bridge scans only when asked, as the simulator does.** `refresh` starts a scan and `connect` ends it; a scan no
+refresh renewed for `MUSE_SCAN_IDLE_MS` (120 s) stops, unless auto-reconnect owns it. The page refreshes before every
+pairing, so a bridge up from sign-in keeps the radio quiet until a lesson pairs. `scanning` on the status line says which.
+
 **`eeg_age_ms` is a packet clock, and the sidecar's sample stream stands in for the packets, deliberately**: null for
 `PAIR_SETTLE_SECONDS` (5 s) after every connect, the way the bridge zeroes its clock on CONNECTED; then the time since
 the last delivered sample, stamped on every `read_sample` *and on stream start*, so a running stream keeps it under one

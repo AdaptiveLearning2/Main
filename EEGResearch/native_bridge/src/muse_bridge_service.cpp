@@ -50,6 +50,26 @@ long long liveness_timeout_ms() {
     return value;
 }
 
+#if defined(ENABLE_LIBMUSE)
+// A scan is for pairing, which the page starts with a refresh; past this with none, it is radio time for nothing.
+long long scan_idle_ms() {
+    static const long long value = [] {
+        const char* raw = std::getenv("MUSE_SCAN_IDLE_MS");
+        if (!raw || !*raw) {
+            return 120000LL;
+        }
+        char* end = nullptr;
+        const long parsed = std::strtol(raw, &end, 10);
+        if (end == raw || *end != '\0' || parsed < 1000) {
+            std::cerr << "Invalid MUSE_SCAN_IDLE_MS='" << raw << "'; using 120000\n";
+            return 120000LL;
+        }
+        return static_cast<long long>(parsed);
+    }();
+    return value;
+}
+#endif
+
 // Wait before each attempt: short first (most BLE drops are momentary), then backing off.
 constexpr long long RECONNECT_BACKOFF_MS[] = {2000, 4000, 8000, 16000, 30000};
 static_assert(sizeof(RECONNECT_BACKOFF_MS) / sizeof(RECONNECT_BACKOFF_MS[0])
@@ -184,8 +204,7 @@ bool MuseBridgeService::start() {
 
     manager_->set_muse_listener(muse_listener_);
     manager_->remove_from_list_after(0);
-    refresh_bluetooth_state();
-    manager_->start_listening();
+    refresh_bluetooth_state();  // no scan yet: the first refresh starts one, so a bridge up from sign-in is quiet
 #endif
 
     return true;
@@ -212,6 +231,7 @@ void MuseBridgeService::stop() {
     }
     if (manager_) {
         manager_->stop_listening();
+        scanning_.store(false);
         manager_.reset();
     }
     {
@@ -236,6 +256,8 @@ void MuseBridgeService::refresh_scan() {
     refresh_bluetooth_state();
     manager_->stop_listening();
     manager_->start_listening();
+    scan_requested_ms_.store(steady_now_ms());
+    scanning_.store(true);
 #endif
 }
 
@@ -403,6 +425,7 @@ bool MuseBridgeService::connect_named(const std::string& name) {
     }
 
     manager_->stop_listening();
+    scanning_.store(false);
     chosen->register_connection_listener(connection_listener_);
     // Raw 4-channel EEG at 220Hz (PRESET_21). All registered before run_asynchronously().
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::EEG);
@@ -1084,6 +1107,26 @@ bool MuseBridgeService::is_muse_connected() const {
 #if defined(ENABLE_LIBMUSE)
     std::lock_guard<std::mutex> lock(queue_mutex_);
     return connected_;
+#else
+    return false;
+#endif
+}
+
+void MuseBridgeService::stop_scan_if_idle() {
+#if defined(ENABLE_LIBMUSE)
+    if (!manager_ || !scanning_.load() || reconnect_armed_.load() || reconnect_in_flight_.load()
+            || steady_now_ms() - scan_requested_ms_.load() < scan_idle_ms()) {
+        return;
+    }
+    manager_->stop_listening();
+    scanning_.store(false);
+    std::cerr << "scan stopped: no refresh in " << scan_idle_ms() << "ms\n";
+#endif
+}
+
+bool MuseBridgeService::is_scanning() const {
+#if defined(ENABLE_LIBMUSE)
+    return scanning_.load();
 #else
     return false;
 #endif

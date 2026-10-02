@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <csignal>
 #include <iomanip>
@@ -73,6 +74,7 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
     o << ",\"bridge_mode\":\"" << svc.bridge_mode() << "\""
       << ",\"muse_connected\":" << (svc.is_muse_connected() ? "true" : "false")
       << ",\"muse_discovered\":" << (svc.is_muse_discovered() ? "true" : "false")
+      << ",\"scanning\":" << (svc.is_scanning() ? "true" : "false")
       << ",\"bluetooth_enabled\":" << (svc.bluetooth_enabled() ? "true" : "false")
       << ",\"connection_state\":" << svc.connection_state();
 
@@ -326,6 +328,8 @@ unsigned short read_port_from_env() {
 } // namespace
 
 int main() {
+    // Unbuffered: stdout to a log file is otherwise held in a buffer that a terminated bridge never writes.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     // Paths are printed as UTF-8, which a console on an OEM code page garbles.
     const Utf8ConsoleOutput utf8_console;
     std::signal(SIGINT, handle_signal);
@@ -398,6 +402,7 @@ int main() {
 
         // Before the EEG branch, which `continue`s: the watchdog must run every iteration.
         muse_service.service_auto_reconnect();
+        muse_service.stop_scan_if_idle();
 
         // Drain optics fully: behind poll_frame's 200ms wait, 64Hz bursts would jitter RMSSD timestamps.
         OpticsFrame optics{};

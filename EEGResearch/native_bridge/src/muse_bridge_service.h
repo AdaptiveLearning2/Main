@@ -158,8 +158,11 @@ public:
     /** How long a notch packet keeps raw EEG suppressed; notch arrives well under 1s apart. */
     static constexpr long long NOTCH_STALE_MS = 2000;
 
-    /** BLE rescan: stop_listening + start_listening (matches GettingData32 Refresh). */
+    /** BLE rescan: stop_listening + start_listening (matches GettingData32 Refresh); the only way a scan starts. */
     void refresh_scan();
+    /** Ends a scan no refresh renewed for MUSE_SCAN_IDLE_MS, unless auto-reconnect owns it. Main loop only. */
+    void stop_scan_if_idle();
+    bool is_scanning() const;
     /** Connect to a headband by exact name from muse_names(); returns false if not found. */
     bool connect_named(const std::string& name);
     /** Disconnect and drop the active Muse handle. */
@@ -247,6 +250,8 @@ private:
     long long optics_seq_{0};
     bool connected_{false};
     bool discovered_{false};
+    std::atomic<bool> scanning_{false};
+    std::atomic<long long> scan_requested_ms_{0};
     int last_connection_state_{0};
     std::vector<std::string> muse_names_;
     std::string active_muse_name_;

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
+import json
 import logging
 import os
 import re
@@ -251,6 +253,67 @@ def test_the_kit_does_not_restart_the_real_bridge_when_its_token_folder_is_missi
     supervisor = BridgeSupervisor([str(_BRIDGE_EXE)], env, tmp_path / "logs", sleep=sleeps)
     assert supervisor.run(threading.Event()) == "no-restart"
     assert (supervisor.runs, sleeps.waits) == (1, [])
+
+
+REAL_BRIDGE = pytest.mark.skipif(sys.platform != "win32" or _BRIDGE_EXE is None,
+                                 reason="needs a muse_native_bridge.exe built after the last change to its source")
+
+
+def _real_bridge_env(home, **extra) -> tuple[int, dict[str, str]]:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    env = kit_config.bridge_env(_cfg(), dict(os.environ))
+    env.update(LOCALAPPDATA=str(home), MUSE_BRIDGE_PORT=str(port), **extra)
+    return port, env
+
+
+def _bridge_token(home, port: int) -> str:
+    token = home / "AdaptiveLearning" / f"muse_bridge_{port}.token"
+    deadline = time.monotonic() + 20
+    while not (token.is_file() and token.stat().st_size):
+        assert time.monotonic() < deadline, "no bridge token after 20 s"
+        time.sleep(0.1)
+    return token.read_text(encoding="ascii").strip()
+
+
+@REAL_BRIDGE
+def test_the_bridge_run_log_keeps_its_start_up_lines_when_the_supervisor_stops_it(tmp_path):
+    port, env = _real_bridge_env(tmp_path)
+    supervisor = BridgeSupervisor([str(_BRIDGE_EXE)], env, tmp_path / "logs")
+    stop = threading.Event()
+    runner = threading.Thread(target=supervisor.run, args=(stop,))
+    runner.start()
+    try:
+        selftest._bridge_status(port, _bridge_token(tmp_path, port))  # its main loop answers, so start-up has printed
+    finally:
+        stop.set()
+        runner.join(20)
+    (log,) = (tmp_path / "logs").glob("bridge-*.log")
+    assert f"listening on 127.0.0.1:{port}" in log.read_text(encoding="utf-8", errors="replace")
+
+
+@REAL_BRIDGE
+def test_the_bridge_scans_only_when_asked_and_stops_once_nobody_asks(tmp_path):
+    port, env = _real_bridge_env(tmp_path, MUSE_SCAN_IDLE_MS="1500")
+    bridge = subprocess.Popen([str(_BRIDGE_EXE)], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    try:
+        token = _bridge_token(tmp_path, port)
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
+            conn.sendall(f"AUTH {token}\n".encode())
+            lines = (json.loads(line) for line in conn.makefile("rb") if line.startswith(b"{"))
+            statuses = (s for s in lines if "bridge_mode" in s)  # 5 a second while no headband streams
+            first = next(statuses)
+            if first["bridge_mode"] != "libmuse":
+                pytest.skip("scanning is libMuse's; this is the synthetic build")
+            assert first["scanning"] is False  # up, as from sign-in, and quiet
+            conn.sendall(b'{"cmd":"refresh"}\n')
+            assert any(s["scanning"] for s in itertools.islice(statuses, 10))
+            assert any(not s["scanning"] for s in itertools.islice(statuses, 25))  # 1.5 s idle, within 5 s
+    finally:
+        bridge.kill()
+        bridge.wait(10)
 
 
 @pytest.mark.parametrize("code,text", [(1, "1"), (78, "78"), (-1073741515, "0xC0000135"), (3221225781, "0xC0000135")])

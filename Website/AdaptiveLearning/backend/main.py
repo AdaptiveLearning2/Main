@@ -1059,10 +1059,10 @@ def _claim_session_close(session_id: str, ended_at: str) -> bool:
     """Stamp `ended_at` on a session that has none yet. True if this caller won. Never raises.
 
     The conditional update is the claim, so racing closes cannot double-credit.
-    Empty result = lost; `test_postgrest_update_returns_the_updated_row` pins that.
+    It asks for the stamped row by name, so an empty result means another close won.
     """
     try:
-        claimed = supabase.table("sessions").update({"ended_at": ended_at}) \
+        claimed = supabase.table("sessions").update({"ended_at": ended_at}, returning=ReturnMethod.representation) \
             .eq("id", session_id).is_("ended_at", "null").execute().data or []
     except Exception as e:                                     # noqa: BLE001
         print(f"[session:close] could not stamp {session_id}: {e}")

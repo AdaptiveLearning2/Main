@@ -37,21 +37,22 @@ export default function TeacherSettings() {
     navigate('/login')
   }
 
-  const saveName = async () => {
+  const saveName = () => {
     setSavingName(true)
-    try {
-      await apiFetch('/api/profile/me', {
-        method: 'PUT',
-        body: { display_name: displayName.trim() },
+    return apiFetch('/api/profile/me', {
+      method: 'PUT',
+      body: { display_name: displayName.trim() },
+    })
+      .then(() => {
+        // The sidebar and dashboard greeting read the shared name.
+        refreshProfile()
+        toast.success('Saved.')
       })
-      // The sidebar and dashboard greeting read the shared name.
-      refreshProfile()
-      toast.success('Saved.')
-    } catch (e) {
-      console.error('[settings] display name not saved', e)
-      toast.error('That could not be saved.')
-    }
-    setSavingName(false)
+      .catch(e => {
+        console.error('[settings] display name not saved', e)
+        toast.error('That could not be saved.')
+      })
+      .finally(() => setSavingName(false))
   }
 
   const changePassword = async () => {

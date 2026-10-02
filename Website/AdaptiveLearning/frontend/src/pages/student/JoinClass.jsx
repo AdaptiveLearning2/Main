@@ -27,19 +27,18 @@ export default function JoinClass() {
 
   useEffect(loadClasses, [])
 
-  const handleJoin = async (e) => {
+  const handleJoin = (e) => {
     e.preventDefault()
     if (!code.trim()) return
     setLoading(true)
-    try {
-      const cls = await apiFetch('/api/classes/join', { method: 'POST', body: { join_code: code.trim().toUpperCase() } })
-      toast.success(`Joined "${cls.name}"! 🎉`)
-      setCode('')
-      setClasses(await apiFetch('/api/classes'))
-    } catch (err) {
-      toast.error(err.message || 'Could not join class')
-    }
-    setLoading(false)
+    return apiFetch('/api/classes/join', { method: 'POST', body: { join_code: code.trim().toUpperCase() } })
+      .then(async (cls) => {
+        toast.success(`Joined "${cls.name}"! 🎉`)
+        setCode('')
+        setClasses(await apiFetch('/api/classes'))
+      })
+      .catch(err => toast.error(err.message || 'Could not join class'))
+      .finally(() => setLoading(false))
   }
 
   return (

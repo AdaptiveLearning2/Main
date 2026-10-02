@@ -14,18 +14,18 @@ export default function Login() {
   const { signIn } = useAuth()
   const navigate   = useNavigate()
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault()
     setLoading(true)
-    try {
-      await signIn(email, password)
-      // HomeRedirect picks the destination from the resolved role, not `user_metadata.role`.
-      navigate('/')
-      toast.success('Welcome back! 👋')
-    } catch (err) {
-      toast.error(signInMessage(err))
-    }
-    setLoading(false)
+    return Promise.resolve()
+      .then(() => signIn(email, password))
+      .then(() => {
+        // HomeRedirect picks the destination from the resolved role, not `user_metadata.role`.
+        navigate('/')
+        toast.success('Welcome back! 👋')
+      })
+      .catch(err => toast.error(signInMessage(err)))
+      .finally(() => setLoading(false))
   }
 
   return (

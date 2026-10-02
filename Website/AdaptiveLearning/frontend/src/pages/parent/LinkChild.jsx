@@ -18,18 +18,17 @@ export default function ParentLinkChild() {
     e.preventDefault()
     if (!code.trim()) return
     setLoading(true)
-    try {
-      const res = await apiFetch('/api/parent/link-child', {
-        method: 'POST',
-        // The code alphabet has no lowercase, so a typed `a` means `A`.
-        body: { link_code: code.trim().toUpperCase() }
+    return apiFetch('/api/parent/link-child', {
+      method: 'POST',
+      // The code alphabet has no lowercase, so a typed `a` means `A`.
+      body: { link_code: code.trim().toUpperCase() }
+    })
+      .then(res => {
+        toast.success(`Linked to ${res.child_name}! 🎉`)
+        navigate('/parent')
       })
-      toast.success(`Linked to ${res.child_name}! 🎉`)
-      navigate('/parent')
-    } catch (err) {
-      toast.error(err.message || 'Could not link child')
-    }
-    setLoading(false)
+      .catch(err => toast.error(err.message || 'Could not link child'))
+      .finally(() => setLoading(false))
   }
 
   return (

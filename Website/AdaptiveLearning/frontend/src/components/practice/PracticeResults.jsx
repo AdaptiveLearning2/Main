@@ -18,21 +18,20 @@ export default function PracticeResults({ session, result, onRestart }) {
   const [tipsLoading, setTipsLoading] = useState(false)
   const [tipsFailed, setTipsFailed] = useState(false)
 
-  async function loadTips() {
+  function loadTips() {
     if (!user?.id) return
     setTipsLoading(true)
     setTipsFailed(false)
-    try {
-      const res = await apiFetch(`/api/students/${user.id}/learning-strategies`, {
-        method: 'POST',
-        body: { practice_session_id: session.id },
+    return apiFetch(`/api/students/${user.id}/learning-strategies`, {
+      method: 'POST',
+      body: { practice_session_id: session.id },
+    })
+      .then(setTips)
+      .catch(e => {
+        console.error('Failed to load study tips:', e)
+        setTipsFailed(true)
       })
-      setTips(res)
-    } catch (e) {
-      console.error('Failed to load study tips:', e)
-      setTipsFailed(true)
-    }
-    setTipsLoading(false)
+      .finally(() => setTipsLoading(false))
   }
 
   const finalAcc = isTest && session.questions_answered

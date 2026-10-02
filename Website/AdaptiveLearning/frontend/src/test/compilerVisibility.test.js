@@ -37,10 +37,10 @@ const UNBUILDABLE = [
   ['an inline arrow as a default', 'const go = (v, f = x => x) => f(v)'],
 ]
 
-// The two shapes this codebase uses instead.
+// What is built: the chain this codebase uses for cleanup that must run, and a try of plain statements.
 const BUILDABLE = [
   ['a promise chain', 'const go = () => { setBusy(true); return save().catch(e => console.error(e)).finally(() => setBusy(false)) }'],
-  ['plain statements in a try, cleanup after', 'const go = async () => { setBusy(true); try { await save() } catch (e) { console.error(e) } setBusy(false) }'],
+  ['a try of plain statements', 'const go = async () => { try { await save() } catch (e) { console.error(e) } }'],
 ]
 
 describe('a component the compiler cannot build is reported, not skipped silently', () => {

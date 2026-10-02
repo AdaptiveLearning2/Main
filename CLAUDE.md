@@ -1684,7 +1684,7 @@ Both shapes have since bitten, and the corrections are the load-bearing half:
   `ChildDetail.jsx` and `ClassDetail.jsx` do the same: the pattern for any page whose state belongs to one route param.
 - **The compiler behind these rules skips a component it cannot build**, and `react-hooks/todo` (on) reports it: a
   `finally`; a `throw`, `?.`, `||` or ternary inside a `try`; `??=`; an inline arrow as a default parameter. Use a promise
-  chain, which an effect's loader needs anyway (state set after an `await` still counts), or plain statements in a `try`.
+  chain: its `.finally` runs even when the catch throws, and an effect's loader needs one (state after an `await` counts).
 - **The render-time adjustment compares against the previous *render*, and that is not always the question.**
   `useValueChange` (`hooks/useValueChange.js`) is the extracted form and is right for `Flags.jsx`. It was wrong for
   `FlowDot.jsx`, which needs the last value it *acted on*: the pulse timer clears the live state, so a timestamp that
@@ -2032,8 +2032,8 @@ conditional, so two closes racing — a delayed `/end` against the sweep — bot
 credited the session's *cumulative* counts, landing every answer twice in the lifetime totals. `/end`'s read of
 `ended_at` is not the guard; that read and the write are two statements. `_claim_session_close` is:
 `is_("ended_at","null")` matches at most one row, and the rows the update returns decide: none means another close
-won. **That holds only while the update returns its row** (`return=representation`, postgrest's default, pinned by
-`test_postgrest_update_returns_the_updated_row`); under `minimal` every close would skip its credit, rollup and archive.
+won. **It asks for them by name** (`returning=representation`): under `minimal` every result is empty and every close
+would skip its credit, rollup and archive, so the default is not trusted.
 
 Stopping the poller stays at the call sites — it takes different ids at each — and **before the call** is the whole
 of the ordering rule, pinned by `test_every_close_site_stops_the_poller_first`.

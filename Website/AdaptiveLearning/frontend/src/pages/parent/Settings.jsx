@@ -58,19 +58,18 @@ export default function ParentSettings() {
     return () => { cancelled = true }
   }, [])
 
-  const saveName = async () => {
+  const saveName = () => {
     setSavingName(true)
-    try {
-      await apiFetch('/api/profile/me', {
-        method: 'PUT',
-        body: { display_name: displayName.trim() },
+    return apiFetch('/api/profile/me', {
+      method: 'PUT',
+      body: { display_name: displayName.trim() },
+    })
+      .then(() => toast.success('Saved.'))
+      .catch(e => {
+        console.error('[parent settings] display name not saved', e)
+        toast.error('That could not be saved.')
       })
-      toast.success('Saved.')
-    } catch (e) {
-      console.error('[parent settings] display name not saved', e)
-      toast.error('That could not be saved.')
-    }
-    setSavingName(false)
+      .finally(() => setSavingName(false))
   }
 
   const unlink = (child) => {

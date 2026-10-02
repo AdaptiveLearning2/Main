@@ -66,6 +66,19 @@ it('does not admit anyone when the check itself fails, and says it failed', asyn
   expect(screen.queryByText(/redirected/)).not.toBeInTheDocument()
 })
 
+it('does not check again when a token refresh replaces the user object', async () => {
+  // Same account, new object: a re-check that failed would replace an open console with an error.
+  apiFetch.mockResolvedValue({ is_admin: true })
+  const { rerender } = render(<AdminGuard><div>console</div></AdminGuard>)
+  await screen.findByText('console')
+
+  authState = { user: { id: 'u1', refreshed: true }, loading: false }
+  rerender(<AdminGuard><div>console</div></AdminGuard>)
+
+  expect(screen.getByText('console')).toBeInTheDocument()
+  expect(apiFetch).toHaveBeenCalledTimes(1)
+})
+
 it('checks again on Try again, and admits an admin once the check answers', async () => {
   apiFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'))
   apiFetch.mockResolvedValueOnce({ is_admin: true })

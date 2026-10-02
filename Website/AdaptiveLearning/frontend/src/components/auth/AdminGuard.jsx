@@ -17,8 +17,11 @@ export default function AdminGuard({ children }) {
   const [failed, setFailed] = useState(null)
   const [attempt, setAttempt] = useState(0)
 
+  // Keyed on the id: a token refresh replaces the user object, and must not re-check an open console.
+  const userId = user?.id ?? null
+
   useEffect(() => {
-    if (loading || !user) return
+    if (loading || !userId) return
     let cancelled = false
     apiFetch('/api/admin/me')
       .then(() => { if (!cancelled) setAllowed(true) })
@@ -28,7 +31,7 @@ export default function AdminGuard({ children }) {
         else setFailed(e)
       })
     return () => { cancelled = true }
-  }, [loading, user, attempt])
+  }, [loading, userId, attempt])
 
   function retry() {
     setFailed(null)

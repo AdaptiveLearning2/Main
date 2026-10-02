@@ -123,26 +123,25 @@ export default function ConsentChannels({ studentId, role, studentName = null })
 
   useEffect(() => { load() }, [load])
 
-  const commit = async (key, next) => {
+  const commit = (key, next) => {
     setSaving(key)
     setError(null)
     setErasureNote(null)
-    try {
-      const updated = await apiFetch(`/api/consent/${studentId}`, {
-        method: 'PUT', body: { [key]: next },
-      })
-      setChannels(updated.channels)
-    } catch (e) {
-      // 409: the state moved under us. Reload, don't retry.
-      if (e.status === 409) {
-        await load('This was changed somewhere else. Reloaded — please check and try again.')
-      } else {
+    return apiFetch(`/api/consent/${studentId}`, {
+      method: 'PUT', body: { [key]: next },
+    })
+      .then(updated => setChannels(updated.channels))
+      .catch(e => {
+        // 409: the state moved under us. Reload, don't retry.
+        if (e.status === 409) {
+          return load('This was changed somewhere else. Reloaded — please check and try again.')
+        }
         setError(String(e.message || e))
-      }
-    }
-    // `load` never rejects, so nothing above can skip this.
-    setSaving(null)
-    setConfirming(null)
+      })
+      .finally(() => {
+        setSaving(null)
+        setConfirming(null)
+      })
   }
 
   const openErasure = (key) => {

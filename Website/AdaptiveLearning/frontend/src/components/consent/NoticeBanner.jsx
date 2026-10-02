@@ -38,14 +38,12 @@ export default function NoticeBanner({
   const [busy, setBusy] = useState(false)
   const t = TONES[tone]
 
-  const acknowledge = async () => {
+  const acknowledge = () => {
     setBusy(true)
-    try {
-      await onAcknowledge()
-    } catch {
-      // Swallowed; the banner stays up.
-    }
-    setBusy(false)
+    return Promise.resolve()
+      .then(onAcknowledge)
+      .catch(() => { /* Swallowed; the banner stays up. */ })
+      .finally(() => setBusy(false))
   }
 
   return (

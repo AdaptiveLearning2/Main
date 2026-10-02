@@ -654,8 +654,9 @@ GRANT EXECUTE ON FUNCTION "public"."my_function"("uuid", integer) TO "service_ro
   classic privilege-escalation vector.
 - **End the migration with `NOTIFY pgrst, 'reload schema';`** so PostgREST picks up the new RPC.
 - **`CREATE INDEX CONCURRENTLY` is not available in migrations** — Supabase wraps each in a
-  transaction, and plain `CREATE INDEX` takes an `ACCESS EXCLUSIVE` lock while building. On a large
-  table, build it manually with `CONCURRENTLY` first; the `IF NOT EXISTS` then no-ops.
+  transaction, and plain `CREATE INDEX` takes a `SHARE` lock while building: reads continue, every
+  write waits, so on a signal table ingest stalls. On a large table, build it manually with
+  `CONCURRENTLY` first; the `IF NOT EXISTS` then no-ops.
 
 ## When changing an existing function's signature
 

@@ -116,12 +116,20 @@ def test_the_endpoint_refuses_values_the_column_would_refuse(field, value):
         main.UpdateProfileRequest(**{field: value})
 
 
-class _ProfileTable:
-    """`profiles` for `update_my_profile`: records each update; the re-read finds the row or fails."""
+_STORED = {"id": STUDENT["id"], "display_name": "S", "role": "student", "difficulty_bias": 0,
+           "practice_reminders": True, "updated_at": None, "avatar_path": "not for the page"}
 
-    def __init__(self, reread_fails=False):
-        self.written = []
-        self._reread_fails = reread_fails
+
+class _ProfileTable:
+    """`profiles` for `update_my_profile`: an update answers with the row as stored, as PostgREST does.
+
+    `row=None` is an account with no profile row; `reads_fail` fails every read that is not an update.
+    """
+
+    def __init__(self, row=_STORED, reads_fail=False):
+        self.row = dict(row) if row is not None else None
+        self.written, self.reads = [], 0
+        self._reads_fail = reads_fail
 
     def table(self, _name):
         client = self
@@ -129,7 +137,7 @@ class _ProfileTable:
         class _Q:
             def update(self, obj):
                 client.written.append(dict(obj))
-                self._update = True
+                self._update = obj
                 return self
 
             def select(self, *_a, **_k): return self
@@ -137,9 +145,14 @@ class _ProfileTable:
             def limit(self, *_a):        return self
 
             def execute(self):
-                if client._reread_fails and not getattr(self, "_update", False):
+                if getattr(self, "_update", None) is not None:
+                    if client.row is not None:
+                        client.row.update(self._update)
+                    return type("R", (), {"data": [dict(client.row)] if client.row else []})()
+                client.reads += 1
+                if client._reads_fail:
                     raise RuntimeError("profiles read failed")
-                return type("R", (), {"data": [{"id": STUDENT["id"], "practice_reminders": False}]})()
+                return type("R", (), {"data": [dict(client.row)] if client.row else []})()
 
         return _Q()
 
@@ -168,14 +181,20 @@ def test_a_profile_edit_stamps_updated_at_in_utc_with_its_offset(monkeypatch):
     assert stamps == [timedelta(0)], client.written
 
 
-def test_a_save_answers_with_the_row_it_read_back(monkeypatch):
-    assert _save(monkeypatch, _ProfileTable(), practice_reminders=False)["practice_reminders"] is False
+def test_a_save_answers_with_the_row_as_stored_in_its_named_columns(monkeypatch):
+    saved = _save(monkeypatch, _ProfileTable(), practice_reminders=False)
+    assert saved["practice_reminders"] is False
+    assert "avatar_path" not in saved and "updated_at" not in saved
 
 
-def test_a_save_whose_read_back_fails_is_an_error_not_the_placeholder(monkeypatch):
-    """The page adopts what a save returns, so placeholder defaults would be saved on the next tap."""
-    client = _ProfileTable(reread_fails=True)
+def test_a_save_reads_nothing_after_its_update(monkeypatch):
+    """A read failing after a landed save would make the page restore the old value and save it back."""
+    client = _ProfileTable(reads_fail=True)
+    assert _save(monkeypatch, client, practice_reminders=False)["practice_reminders"] is False
+    assert client.reads == 0
+
+
+def test_a_save_for_an_account_with_no_profile_row_is_a_404(monkeypatch):
     with pytest.raises(main.HTTPException) as exc:
-        _save(monkeypatch, client, practice_reminders=False)
-    assert exc.value.status_code == 503 and "Saved" in exc.value.detail
-    assert len(client.written) == 1
+        _save(monkeypatch, _ProfileTable(row=None), practice_reminders=False)
+    assert exc.value.status_code == 404

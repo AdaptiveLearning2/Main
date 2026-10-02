@@ -2511,14 +2511,14 @@ _PROFILE_SELF_COLUMNS = ("id, display_name, email, role, grade_level, difficulty
                          "session_duration_minutes, practice_reminders, created_at")
 
 
-def _own_profile(uid: str, unread: str = "Your profile could not be loaded") -> dict:
+def _own_profile(uid: str) -> dict:
     """The caller's own row; a failed or missing read is an error, never `_profile`'s placeholder."""
     try:
         rows = supabase.table("profiles").select(_PROFILE_SELF_COLUMNS) \
             .eq("id", uid).limit(1).execute().data
     except Exception as e:                                     # noqa: BLE001
         print(f"[profile] could not read {uid[:8]}: {e}")
-        raise HTTPException(503, unread)
+        raise HTTPException(503, "Your profile could not be loaded")
     if not rows:
         raise HTTPException(404, "No profile exists for this account")
     return rows[0]
@@ -2547,9 +2547,11 @@ def update_my_profile(payload: UpdateProfileRequest, request: Request):
             ("practice_reminders", payload.practice_reminders),
         ) if value is not None
     }
+    stored = None
     if fields:
         fields["updated_at"] = _utc_now().isoformat()
-        supabase.table("profiles").update(fields).eq("id", user["id"]).execute()
+        # The update returns the row as stored: no second read to fail after the save has landed.
+        stored = supabase.table("profiles").update(fields).eq("id", user["id"]).execute().data or []
     if payload.display_name is not None:
         try:
             supabase.auth.admin.update_user_by_id(
@@ -2559,8 +2561,13 @@ def update_my_profile(payload: UpdateProfileRequest, request: Request):
             )
         except Exception as e:
             print("metadata sync failed:", e)
-    # Not `_profile`: a page that adopts its placeholder saves those defaults on the next tap.
-    return _own_profile(user["id"], "Saved, but your profile could not be re-read; reload to see it")
+    if stored is None:
+        return _own_profile(user["id"])
+    if not stored:
+        raise HTTPException(404, "No profile exists for this account")
+    # Not `_profile`'s placeholder: the page adopts what a save returns and sends it on the next tap.
+    columns = [c.strip() for c in _PROFILE_SELF_COLUMNS.split(",")]
+    return {c: stored[0][c] for c in columns if c in stored[0]}
 
 
 # ─── questions ───────────────────────────────────────────────────────────

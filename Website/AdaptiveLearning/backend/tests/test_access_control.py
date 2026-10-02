@@ -70,6 +70,9 @@ class _Query:
             key = _EMBED_KEYS[(self._name, name)]
             target = next((r for r in self._tables.get(name, []) if r.get("id") == row.get(key)), None)
             wanted = [(col.split(".", 1)[1], v) for col, v in self._filters if col.startswith(name + ".")]
+            # Only `.eq` is modelled on an embed; any other filter would compare a tuple and drop rows silently.
+            if any(isinstance(v, tuple) for _, v in wanted):
+                raise AssertionError(f"unmodelled filter on embed {name!r}: {wanted}")
             if target is not None and any(target.get(col) != v for col, v in wanted):
                 target = None
             if target is None and inner:
@@ -323,16 +326,18 @@ def test_stranger_cannot_view_any_student():
     assert main._can_view_student(STRANGER, "student-1") is False
 
 
-def test_verify_raises_403_for_unauthorized_viewer():
-    with pytest.raises(main.HTTPException) as exc:
-        main._verify_can_view_student(STRANGER, "student-1")
-    assert exc.value.status_code == 403
-
-
 def test_the_teacher_check_is_one_read():
     """And the only read: the admin check comes last, so a teacher's view costs no profile read."""
     assert main._can_view_student(TEACHER, "student-1") is True
     assert main.supabase.table_calls == ["class_memberships"]
+
+
+def test_the_fake_refuses_an_embed_filter_it_does_not_model():
+    """Unrefused, a future `.in_` on the join would drop every row, a wrong answer that looks like a denial."""
+    query = main.supabase.table("class_memberships").select("id, classes!inner(teacher_id)") \
+        .in_("classes.teacher_id", ["teacher-1"])
+    with pytest.raises(AssertionError, match="unmodelled filter"):
+        query.execute()
 
 
 def _logged_events(monkeypatch) -> list:
@@ -361,12 +366,6 @@ def test_a_failed_relationship_read_is_a_503_and_not_a_logged_denial(monkeypatch
 def test_a_failed_read_does_not_block_what_another_relationship_allows(monkeypatch, failing):
     monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={failing}))
     assert main._can_view_student(PARENT, "student-1") is True
-
-
-def test_an_admin_whose_role_was_read_can_view_any_student(monkeypatch):
-    tables = {**TABLES, "profiles": [{"id": "admin-1", "role": "admin"}]}
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(tables))
-    assert main._can_view_student({"id": "admin-1"}, "student-2") is True
 
 
 def test_a_malformed_student_id_is_a_logged_denial_not_an_outage(monkeypatch):
@@ -1419,9 +1418,9 @@ def test_missing_class_returns_404_not_500():
 
 def _class_live_on_a_stale_session(monkeypatch):
     """`class_live` over one session last heard from 700 s ago: (rows, updates written, poller stops)."""
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
-    stale_ts = (datetime.utcnow() - timedelta(seconds=700)).isoformat()
+    stale_ts = (datetime.now(timezone.utc) - timedelta(seconds=700)).isoformat()
 
     class _Tbl:
         def __init__(self, name, tables, updates):

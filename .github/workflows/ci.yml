@@ -50,6 +50,28 @@ jobs:
         working-directory: EEGResearch/native_bridge
         run: cmake --build build --config Release
 
+      # Every test file that only runs on Windows (test_ci_windows_tests.py keeps the list whole); the token
+      # tests run the bridge just built, since OFF still writes its token.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install EEGResearch (with dev deps)
+        working-directory: EEGResearch
+        run: pip install -e ".[dev]"
+
+      - name: Windows-only launcher and bridge tests
+        working-directory: EEGResearch
+        env:
+          EEG_SOURCE: sim
+          API_TOKEN: dummy-learner-token-for-ci
+          ADMIN_TOKEN: dummy-admin-token-for-ci
+        run: >-
+          pytest -rfEs tests/test_kit_launcher.py tests/test_launcher_hosted.py
+          tests/test_bridge_supervisor.py tests/test_bridge_token_path.py
+          tests/test_launcher_device_registry.py tests/test_launcher_env_encoding.py
+          tests/test_run_pilot_muse.py tests/test_start_ps1_native_stderr.py tests/test_capture_optics.py
+
   website-backend:
     name: Website backend tests
     runs-on: ubuntu-latest
@@ -256,8 +278,8 @@ jobs:
         working-directory: EEGResearch
         run: |
           status=0
-          for lock in requirements.lock requirements-dev.lock \
-                      requirements-face.lock requirements-gaze.lock; do
+          for lock in requirements.lock requirements-dev.lock requirements-face.lock \
+                      requirements-gaze.lock installer/requirements-kit.lock; do
             echo "::group::$lock"
             pip-audit -r "$lock" --no-deps --disable-pip || status=1
             echo "::endgroup::"

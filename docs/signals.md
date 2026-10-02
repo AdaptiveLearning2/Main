@@ -311,6 +311,34 @@ configuration the session was launched with; nothing else has to change, because
 adapter reconnects on its own and the page treats the restarted bridge's "not connected" as a drop.
 `EEGResearch/tests/test_bridge_supervisor.py` drives the loop against a stub `.cmd` (Windows only).
 
+### The student kit runs both with no toolchain
+
+`EEGResearch/src/kit` is the launcher frozen into `AdaptiveLearningSensors.exe`; `EEGResearch/scripts/build_student_kit.ps1`
+builds it into an Inno Setup installer (`EEGResearch/installer`). It is `start.ps1 -Hosted -Muse -Optics -Camera -Gaze`
+read from `kit.json`, which `src/kit/config.py` refuses for exactly the reasons `Test-HostedArgs` refuses its arguments:
+`tests/launcher_cases.py` is the one table both are tested against.
+
+- **The environment, never a `.env`.** It removes every `Settings` name and every `MUSE_*` name before setting its own,
+  so nothing from the session or a profile reaches either process, and the bridge never sees the tokens. The sidecar's
+  `Settings` read no `.env` at all, so one left in the data folder changes nothing. `ADMIN_TOKEN` is fresh on every
+  start: under push, every endpoint the page calls takes the learner token.
+- **One copy per machine**, `Global\AdaptiveLearningSensors`, so a second person signed in at once gets no sensors. The
+  sidecar drops a connection from another Windows session before reading a byte of it, since a page's session start
+  carries its student's login token; it checks who owns the connection's other end. Both children are in a
+  kill-on-close job, so neither outlives the launcher however that ends. `--stop` sets
+  `Global\AdaptiveLearningSensorsStop` and returns only once the copy has exited; the installer waits on that.
+- **Two supervised children.** The sidecar runs as the launcher's own exe with `--sidecar`, so a crash in camera code
+  is restarted like a bridge crash; it watches the same stop event and shuts itself down, flushing its push client,
+  with 10 s before it is ended. The restart policy is this section's in Python, stopping on 0 and on 78. Past the
+  budget it retries every 300 s rather than giving up, since nobody is watching. Each run logs to its own file; the
+  newest ten are kept. matplotlib's font list lives in the data folder: PyInstaller gives each process a new temp
+  folder, so mediapipe's import rebuilt it at every lesson's first camera frame.
+- **`--self-test`** runs before every installer is built: the models on a real portrait, the sidecar on port 0, and
+  the bridge started, authenticated and required to answer `bridge_mode: libmuse` with its C++ runtime loaded from
+  `bridge\` itself. A blank frame cannot tell a working model from one that never detects, and a launch that works
+  cannot show where the runtime came from: the bridge inherits the frozen launcher's DLL folder, `_internal\`, ahead of
+  System32. The four runtime files are the only names the two share, and `bridge\` is searched first.
+
 It is deliberately **not** a Windows service or a scheduled task: moving the exe out of the launcher
 window is how those variables get lost. The debug panel's *Link* row tells a dead bridge from a
 dropped headband — `consecutive_errors` climbing with `eeg_age_ms` absent is the bridge gone,
@@ -328,6 +356,10 @@ the heart badge had, from `lib/signalAge.js` — `STALE_AFTER_S` there mirrors t
 no status line or bug report can mistake it for hardware), `connect` pairs it, `disconnect` clears both, and the
 pairing fields follow that state. Before this, a sim run could never exercise the pairing sequence, the adopt path or a
 drop.
+
+**The bridge scans only when asked, as the simulator does.** `refresh` starts a scan and `connect` ends it; a scan no
+refresh renewed for `MUSE_SCAN_IDLE_MS` (120 s) stops, unless auto-reconnect owns it. The page refreshes before every
+pairing, so a bridge up from sign-in keeps the radio quiet until a lesson pairs. `scanning` on the status line says which.
 
 **`eeg_age_ms` is a packet clock, and the sidecar's sample stream stands in for the packets, deliberately**: null for
 `PAIR_SETTLE_SECONDS` (5 s) after every connect, the way the bridge zeroes its clock on CONNECTED; then the time since
@@ -508,7 +540,7 @@ otherwise be handed the token and could feed fabricated EEG. One running as the 
 settings only. `getenv` returns the ANSI code page's best fit, so a user folder outside
 it (`Łódź`) comes back as one that does not exist and the token cannot be written. A failed write has its own message,
 never the port-conflict one. `EEGResearch/tests/test_bridge_token_path.py` runs the built exe against such a folder;
-it skips where no exe is built, which includes CI (that job only compiles).
+it skips where no exe is built, and CI's Windows job runs it against the OFF build it compiles.
 
 ### RMSSD is an enrichment, and a null one is normal
 

@@ -382,7 +382,7 @@ function Get-BridgeCommand {
     }
     if ($hosted) {
         $cmd = (Get-ClearCommand @('MUSE_BRIDGE_PORT', 'MUSE_ENABLE_OPTICS', 'MUSE_OPTICS_PRESET',
-            'MUSE_LIVENESS_TIMEOUT_MS', 'MUSE_AUTO_RECONNECT')) + $cmd
+            'MUSE_LIVENESS_TIMEOUT_MS', 'MUSE_AUTO_RECONNECT', 'MUSE_SCAN_IDLE_MS')) + $cmd
     }
     return $cmd
 }

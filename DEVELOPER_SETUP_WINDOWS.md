@@ -200,7 +200,17 @@ Then restart `.\start.ps1 -Muse`.
 
 The website and its backend are hosted; a student machine runs only the bridge and the EEG sidecar,
 which pushes readings to the hosted backend. That backend must run `INGEST_MODE=push`, since it
-cannot reach a student's machine. Each machine needs the headband setup above, plus the sidecar's
+cannot reach a student's machine.
+
+**With the student kit (no toolchain).** Run `AdaptiveLearningSensors-Setup-<version>.exe` once,
+approved by an administrator, and turn Bluetooth on. The sensors then start at every sign-in with no
+window: the student opens the site, signs in and clicks **Connect Headband**. The webcam stays off
+until the page starts a session. **Stop sensors** and **Start sensors** are in the Start menu, and the
+logs are in `%LOCALAPPDATA%\AdaptiveLearning\Sensors\logs`. Windows' camera access for desktop apps
+has to be on, and a Windows N edition needs the Media Feature Pack. Only one person signed in at a
+time gets sensors. Building the kit is below.
+
+**From a checkout (developers).** Each machine needs the headband setup above, plus the sidecar's
 `.env` and camera extras once:
 
 ```powershell
@@ -224,6 +234,28 @@ Open the site in this machine's browser, sign in, and click **Connect Headband**
 `VITE_EEG_LOCAL_TOKEN` exactly, or every call from the page to the sidecar is refused. The machine
 keeps its own `ADMIN_TOKEN`. `-Hosted` is refused without `-Muse`, because the simulator would push
 made-up readings to real records.
+
+### Building the student kit
+
+Needs Python 3.14 on PATH, Visual Studio 2026 with the C++ workload, CMake, the libMuse SDK folder,
+and Inno Setup 6 (`winget install --id JRSoftware.InnoSetup -e --scope user`). From the repo root:
+
+```powershell
+.\EEGResearch\scripts\build_student_kit.ps1 -BackendUrl https://<backend>.onrender.com `
+    -FrontendOrigin https://<site>.pages.dev -LearnerToken <the site's VITE_EEG_LOCAL_TOKEN> -Version 0.1.0
+```
+
+It refuses the arguments for the reasons `-Hosted` refuses its own, then builds the bridge with
+libMuse, freezes the sidecar from a fresh venv installed from `requirements-gaze.lock` and
+`installer\requirements-kit.lock`, fetches and verifies both camera models, and checks every bundled
+DLL. It then self-tests the result: the models on a real face, and the bridge as a libMuse build
+loading its C++ runtime from its own folder. The installer and its SHA-256 land in `EEGResearch\dist\kit`.
+
+- `-SkipInstaller` stops after the self-test.
+- `-SignToolArgs` signs both exes and the installer, for example with Artifact Signing. An unsigned
+  kit makes SmartScreen warn on first run.
+- The site address and token are in `kit.json` beside the installed exe. To change them, build
+  again, or edit that file as an administrator and restart the sensors.
 
 ---
 

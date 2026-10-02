@@ -206,7 +206,7 @@ npm run dev
 | `-NoEmotion` | FER+ off, and skips the 35 MB model fetch entirely. |
 | `-Optics` (`-OpticsPreset 103N`) | Headband optical channels. Refused without `-Muse`. |
 | `-LocalCalm` | `EEG_SPECTRUM_SOURCE=local`. Refused without `-Muse`, and refused outright by `start.sh`. |
-| `-Hosted` (`-BackendUrl`, `-FrontendOrigin`, `-LearnerToken`) | Student machine for the hosted site: bridge and sidecar only, pushing to the backend with the site's shared token. Refused without `-Muse` (the simulator streams unpaired, so it would push made-up EEG) and outright by `start.sh`. Tests: `test_launcher_hosted.py`. |
+| `-Hosted` (`-BackendUrl`, `-FrontendOrigin`, `-LearnerToken`) | Student machine for the hosted site: bridge and sidecar only, pushing to the backend with the site's shared token. Refused without `-Muse` (the simulator streams unpaired, so it would push made-up EEG) and outright by `start.sh`. Tests: `test_launcher_hosted.py`. The student kit (`EEGResearch/src/kit`, see `docs/signals.md`) sets the same values from `kit.json`, checked against the same table (`tests/launcher_cases.py`). |
 
 **Every model-backed flag provisions its model at setup, not on the first frame of a lesson** — a
 4 MB download in front of a student reads as a broken feature rather than an incomplete install.
@@ -293,7 +293,7 @@ evidence the app can import something: `anthropic` was in the root venv and abse
 imports it lazily, so not at boot. Install a new runtime dependency into `backend/.venv` in the
 same change that pins it.
 
-All three venvs are on Python 3.14.7, **and so is CI** — `ci.yml`'s four `setup-python` pins say
+All three venvs are on Python 3.14.7, **and so is CI** — `ci.yml`'s six `setup-python` pins say
 `3.14`, the minor rather than the patch, because `setup-python` fails outright on an exact version
 the runner image does not have. They sat at 3.12 for a month after development moved, so CI was
 testing an interpreter nobody ran; keep them together. `EEGResearch/requirements*.lock` are
@@ -328,12 +328,13 @@ CI (`.github/workflows/ci.yml`) runs **nine** jobs on PRs and pushes to `main`: 
 `Native bridge build`, `Website backend tests`, `Database grants`, `Comment length`, `Database migrations`,
 `Frontend tests, build & lint`, `Dependency scan`, `Secret scan`. Counted by name, so a tenth on the
 PR page is new or undocumented rather than a stale number. (Two more come from integrations, not CI:
-`Supabase Preview`, always skipped, and `Cloudflare Pages`, a preview deploy of the frontend.)
+`Supabase Preview`, always skipped, and `Cloudflare Pages`, a preview deploy of the frontend.) `Native bridge
+build` runs every Windows-only test file too, its list held whole by `test_ci_windows_tests.py`.
 
 **`EEGResearch/.github/workflows/ci.yml` exists and has never run.** GitHub reads workflows only
-from the repository root's `.github/workflows/`, so a nested one is an ordinary file. It is the only
-thing that installs the `requirements*.lock` files, which is why they went stale without anything
-going red. **Moving it to the root is not a one-line fix**: those locks are Windows-resolved, so it
+from the repository root's `.github/workflows/`, so a nested one is an ordinary file. No CI job installs
+the `requirements*.lock` files (only the kit build does, the gaze lock, off CI), so a stale one turns
+nothing red. **Moving it to the root is not a one-line fix**: those locks are Windows-resolved, so it
 would install them on ubuntu — see *Three venvs* for what that costs and what to do first.
 
 ### The two scanners, and what they are allowed to be red about
@@ -343,7 +344,7 @@ step names the advisory and the fixed version, so a red run says what to do. Tun
 until it passes is tuning the detector to the disease.
 
 It audits **three Python sets, because they are three different installs** — the backend's pinned
-`requirements-dev.txt`, the sidecar's `pyproject`, and the four committed `.lock` files. The first
+`requirements-dev.txt`, the sidecar's `pyproject`, and the five committed `.lock` files (the kit's is `installer/`). The first
 two are audited *as installed*, not as files: `requirements.txt` pins direct dependencies only, so
 auditing the file alone would miss the transitive tree, which is where `starlette`, `idna` and
 `urllib3` live. The locks are audited `--no-deps`, since the point of a lock is that it already
@@ -565,8 +566,8 @@ healthy), `EEG_SIM_OPTICS`, `EEG_SPECTRUM_SOURCE`, `EEG_SPECTRUM_POISON_SECONDS`
 it would pass half the backend's `INGEST_MAX_ROWS_PER_MINUTE` default.
 
 **The native bridge reads its own env directly, not through `config.py`**: `MUSE_BRIDGE_PORT`
-(8765), `MUSE_ENABLE_OPTICS` (off), `MUSE_OPTICS_PRESET` (`1035`), `MUSE_AUTO_RECONNECT`,
-`MUSE_LIVENESS_TIMEOUT_MS` (8000). **Set them with the launcher flag, never by editing a `.env`** —
+(8765), `MUSE_ENABLE_OPTICS` (off), `MUSE_OPTICS_PRESET` (`1035`), `MUSE_AUTO_RECONNECT`, `MUSE_LIVENESS_TIMEOUT_MS`
+(8000), `MUSE_SCAN_IDLE_MS` (120000). **Set them with the launcher flag, never by editing a `.env`** —
 the bridge is a C++ process calling `getenv`, so a `MUSE_ENABLE_OPTICS` line in `EEGResearch/.env`
 is read by nothing. That is the version of this mistake that looks like it worked.
 ---

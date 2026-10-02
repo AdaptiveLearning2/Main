@@ -12,35 +12,22 @@ from pathlib import Path
 
 import pytest
 from dotenv import dotenv_values
+from launcher_cases import ADDRESS_CASES, BACKEND, BRIDGE_VARS, NORMALISED, ORIGIN, ROOT, TOKEN
 
 from src.app.config import Settings
 
-ROOT = Path(__file__).resolve().parents[2]
 POWERSHELL = shutil.which("powershell")
 BASH = shutil.which("bash")
 WINDOWS = pytest.mark.skipif(sys.platform != "win32" or POWERSHELL is None, reason="start.ps1 is Windows")
 
-BACKEND = "https://main-u0ki.onrender.com"
-ORIGIN = "https://adaptive.pages.dev"
-TOKEN = "Ab3_dEf-" * 5 + "xyz"  # 43 characters of token_urlsafe's alphabet, as start.ps1 makes
 LOCAL = Settings.model_fields["allowed_origins"].default
+FLAG = {"backend": "-BackendUrl", "origin": "-FrontendOrigin", "token": "-LearnerToken"}
 
 GOOD = {"hosted": True, "muse": True, "backend": BACKEND, "origin": ORIGIN, "token": TOKEN, "env": True}
 ARG_CASES = [
-    # (change from GOOD, the substring each expected refusal carries)
-    ({}, []),
-    ({"backend": BACKEND + "/", "origin": ORIGIN + "/"}, []),
+    # (change from GOOD, the substring each expected refusal carries); the kit's tests share the address cases.
+    *((change, sorted(FLAG[f] for f in refused)) for change, refused in ADDRESS_CASES),
     ({"muse": False}, ["needs -Muse"]),
-    ({"backend": "http://main-u0ki.onrender.com"}, ["-BackendUrl"]),
-    ({"backend": BACKEND + "/api"}, ["-BackendUrl"]),
-    ({"backend": ""}, ["-BackendUrl"]),
-    ({"backend": "https://user:pw@main-u0ki.onrender.com"}, ["-BackendUrl"]),
-    ({"origin": ORIGIN + "/login"}, ["-FrontendOrigin"]),
-    ({"origin": "http://adaptive.pages.dev"}, ["-FrontendOrigin"]),
-    ({"origin": "https://user@adaptive.pages.dev"}, ["-FrontendOrigin"]),
-    ({"token": ""}, ["-LearnerToken"]),
-    ({"token": "replace-me-learner-token"}, ["-LearnerToken"]),
-    ({"token": "has a space"}, ["-LearnerToken"]),
     ({"env": False}, [".env.example"]),
     ({"muse": False, "env": False}, ["needs -Muse", ".env.example"]),
     # Without -Hosted nothing is required, but a hosted argument alone is a mistake worth saying.
@@ -164,6 +151,18 @@ def test_the_hosted_keys_reach_every_copy_and_are_written_as_a_browser_sends_the
 
 
 @WINDOWS
+@pytest.mark.parametrize("given,expected", NORMALISED)
+def test_the_hosted_addresses_are_written_as_a_browser_sends_them(tmp_path, given, expected):
+    # The kit's test_kit_launcher.py runs the same table through kit.json.
+    env = tmp_path / ".env"
+    env.write_text("EEG_SOURCE=muse\n", encoding="utf-8")
+    r = _ps(tmp_path, f"Set-HostedSidecarEnv '{env}' '{given}' '{given}'\n", "Set-HostedSidecarEnv", "Set-EnvKey")
+    assert r.returncode == 0, r.stderr
+    v = dotenv_values(env)
+    assert (v["BACKEND_URL"], v["ALLOWED_ORIGINS"]) == (expected, expected)
+
+
+@WINDOWS
 @pytest.mark.parametrize("current,expected", [
     (f"ALLOWED_ORIGINS={ORIGIN}", f"{ORIGIN},{LOCAL}"),
     ("ALLOWED_ORIGINS=http://localhost:4173", f"http://localhost:4173,{LOCAL}"),
@@ -181,11 +180,6 @@ def test_a_local_run_adds_the_local_origins_and_keeps_every_other(tmp_path, curr
 
 
 LEFTOVERS = {"EEG_SOURCE": "sim", "API_TOKEN": "t", "EEG_DEVICES": "default:sim", "MUSE_BRIDGE_PORT": "8766"}
-_BRIDGE_SRC = "".join(p.read_text(encoding="utf-8", errors="ignore")
-                      for p in (ROOT / "EEGResearch" / "native_bridge" / "src").rglob("*") if p.is_file())
-# Direct getenv names plus every "MUSE_*" literal: a name read through a helper (env_flag_off) has no getenv beside it.
-BRIDGE_VARS = sorted((set(re.findall(r'getenv\("([A-Z_]+)"\)', _BRIDGE_SRC))
-                      | set(re.findall(r'"(MUSE_[A-Z_]+)"', _BRIDGE_SRC))) - {"LOCALAPPDATA"})
 
 
 def _clean_env(where: str, leftovers: dict) -> dict:

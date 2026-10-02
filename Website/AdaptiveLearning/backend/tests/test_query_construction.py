@@ -159,3 +159,69 @@ def test_the_detector_sees_each_shape(snippet, why):
                 and n.func.attr in PARSED_ARG_METHODS)
     args = call.args[:1] if call.func.attr == "rpc" else call.args
     assert any(_dynamic_kind(a) for a in args), why
+
+
+# ── a write whose rows decide something asks for them ──────────────────────
+
+def _base_name(node):
+    """The name a call chain starts from (`q` in `q.eq(...).execute()`), or None."""
+    while isinstance(node, (ast.Call, ast.Attribute)):
+        node = node.func if isinstance(node, ast.Call) else node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _row_reading_writes(tree, module):
+    """`.update()`/`.delete()` on a table whose returned rows are read: (module, function, line, named)."""
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    found = []
+    for func in ast.walk(tree):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for call in ast.walk(func):
+            if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                    and call.func.attr in ("update", "delete")
+                    and "table(" in ast.unparse(call.func.value)):
+                continue
+            top, reads = call, False
+            while isinstance(parents.get(top), (ast.Call, ast.Attribute)):
+                top = parents[top]
+                reads |= isinstance(top, ast.Attribute) and top.attr == "data"
+            # A builder kept in a name (`q = ...`) is read wherever `q`'s chain takes `.data`.
+            holder = parents.get(top)
+            if not reads and isinstance(holder, ast.Assign) and len(holder.targets) == 1:
+                name = getattr(holder.targets[0], "id", None)
+                reads = any(isinstance(n, ast.Attribute) and n.attr == "data" and _base_name(n.value) == name
+                            for n in ast.walk(func))
+            if reads:
+                named = any(k.arg == "returning" for k in call.keywords)
+                found.append((module, func.name, call.lineno, named))
+    return found
+
+
+def _all_row_reading_writes():
+    found = []
+    for path in sorted(BACKEND.glob("*.py")):
+        found += _row_reading_writes(ast.parse(path.read_text(encoding="utf-8-sig")), path.name)
+    return found
+
+
+def test_a_write_whose_rows_decide_something_asks_for_them():
+    """Empty rows read as "no match" (a 404, a 409, a lost close); under `return=minimal` every write is empty."""
+    sites = _all_row_reading_writes()
+    # A scan that finds nothing passes while checking nothing.
+    assert len(sites) >= 8, sites
+    unnamed = [s for s in sites if not s[3]]
+    assert not unnamed, ("Pass returning=ReturnMethod.representation; the client's default is not a contract:\n"
+                         + "\n".join(f"  {m}:{ln} {fn}()" for m, fn, ln, _ in unnamed))
+
+
+@pytest.mark.parametrize("body, reads", [
+    ('    rows = supabase.table("t").update({}).eq("id", 1).execute().data', True),
+    ('    q = supabase.table("t").delete().eq("id", 1)\n    out = q.execute().data', True),
+    ('    res = supabase.table("t").delete().eq("id", 1).execute()\n    return bool(res.data)', True),
+    ('    supabase.table("t").update({}).eq("id", 1).execute()', False),
+    ('    q = supabase.table("t").delete().eq("id", 1)\n    q.execute()', False),
+], ids=["chained", "builder-in-a-name", "response-in-a-name", "rows-unread", "builder-rows-unread"])
+def test_the_write_detector_sees_each_shape(body, reads):
+    found = _row_reading_writes(ast.parse(f"def handler():\n{body}\n"), "m.py")
+    assert bool(found) is reads, (body, found)

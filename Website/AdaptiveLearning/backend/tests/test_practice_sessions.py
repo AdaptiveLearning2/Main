@@ -75,7 +75,7 @@ class _Client:
                 self._single = True
                 return self
 
-            def insert(self, row):
+            def insert(self, row, **_kw):
                 self._insert = row
                 return self
 

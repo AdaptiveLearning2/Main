@@ -83,37 +83,35 @@ export default function Profile() {
   }, [shownCode])
 
   // Optimistic; reconcile with the stored (clamped) row, revert on failure.
-  const savePrefs = async (updated) => {
+  const savePrefs = (updated) => {
     const previous = prefs
     setPrefs(updated)
     setPrefsBusy(true)
-    try {
-      const saved = await apiFetch('/api/profile/me', { method: 'PUT', body: updated })
-      setProfile(saved)
-      setPrefs(prefsFrom(saved))
-    } catch (e) {
-      setPrefs(previous)
-      toast.error(e.message || 'Could not save that setting')
-    } finally {
-      setPrefsBusy(false)
-    }
+    return apiFetch('/api/profile/me', { method: 'PUT', body: updated })
+      .then(saved => {
+        setProfile(saved)
+        setPrefs(prefsFrom(saved))
+      })
+      .catch(e => {
+        setPrefs(previous)
+        toast.error(e.message || 'Could not save that setting')
+      })
+      .finally(() => setPrefsBusy(false))
   }
 
   const saveProfile = async () => {
     setSaving(true)
-    try {
-      const updated = await apiFetch('/api/profile/me', {
-        method: 'PUT',
-        body: { display_name: editName.trim() || null, grade_level: editGrade || null }
+    return apiFetch('/api/profile/me', {
+      method: 'PUT',
+      body: { display_name: editName.trim() || null, grade_level: editGrade || null }
+    })
+      .then(updated => {
+        setProfile(updated)
+        refreshProfile()
+        toast.success('Profile saved')
       })
-      setProfile(updated)
-      refreshProfile()
-      toast.success('Profile saved')
-    } catch (e) {
-      toast.error(e.message || 'Could not save profile')
-    } finally {
-      setSaving(false)
-    }
+      .catch(e => toast.error(e.message || 'Could not save profile'))
+      .finally(() => setSaving(false))
   }
 
   const copyCode = () => {
@@ -123,18 +121,16 @@ export default function Profile() {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const createCode = async () => {
+  const createCode = () => {
     setCodeBusy(true)
-    try {
-      const res = await apiFetch('/api/student/link-code', { method: 'POST' })
-      setLinkCode(res)
-      // An earlier failed read must stop suppressing this code.
-      setCodeRetrieved(true)
-    } catch (e) {
-      toast.error(e.message || 'Could not create a code')
-    } finally {
-      setCodeBusy(false)
-    }
+    return apiFetch('/api/student/link-code', { method: 'POST' })
+      .then(res => {
+        setLinkCode(res)
+        // An earlier failed read must stop suppressing this code.
+        setCodeRetrieved(true)
+      })
+      .catch(e => toast.error(e.message || 'Could not create a code'))
+      .finally(() => setCodeBusy(false))
   }
 
   const acc      = stats?.total_questions > 0 ? Math.round((stats.total_correct / stats.total_questions) * 100) : 0

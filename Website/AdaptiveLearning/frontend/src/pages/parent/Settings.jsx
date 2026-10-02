@@ -58,35 +58,33 @@ export default function ParentSettings() {
     return () => { cancelled = true }
   }, [])
 
-  const saveName = async () => {
+  const saveName = () => {
     setSavingName(true)
-    try {
-      await apiFetch('/api/profile/me', {
-        method: 'PUT',
-        body: { display_name: displayName.trim() },
+    return apiFetch('/api/profile/me', {
+      method: 'PUT',
+      body: { display_name: displayName.trim() },
+    })
+      .then(() => toast.success('Saved.'))
+      .catch(e => {
+        console.error('[parent settings] display name not saved', e)
+        toast.error('That could not be saved.')
       })
-      toast.success('Saved.')
-    } catch (e) {
-      console.error('[parent settings] display name not saved', e)
-      toast.error('That could not be saved.')
-    } finally {
-      setSavingName(false)
-    }
+      .finally(() => setSavingName(false))
   }
 
-  const unlink = async (child) => {
+  const unlink = (child) => {
     setUnlinking(child.user_id)
-    try {
-      await apiFetch(`/api/parent/children/${child.user_id}`, { method: 'DELETE' })
-      setChildren(list => (list || []).filter(c => c.user_id !== child.user_id))
-      setConfirmingUnlink(null)
-      toast.success(`Unlinked from ${child.name || 'your child'}.`)
-    } catch (e) {
-      console.error('[parent settings] unlink failed', e)
-      toast.error('That could not be unlinked.')
-    } finally {
-      setUnlinking(null)
-    }
+    return apiFetch(`/api/parent/children/${child.user_id}`, { method: 'DELETE' })
+      .then(() => {
+        setChildren(list => (list || []).filter(c => c.user_id !== child.user_id))
+        setConfirmingUnlink(null)
+        toast.success(`Unlinked from ${child.name || 'your child'}.`)
+      })
+      .catch(e => {
+        console.error('[parent settings] unlink failed', e)
+        toast.error('That could not be unlinked.')
+      })
+      .finally(() => setUnlinking(null))
   }
 
   const joined = fmtDate(joinedAt)

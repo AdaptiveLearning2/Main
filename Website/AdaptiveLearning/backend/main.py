@@ -1059,10 +1059,10 @@ def _claim_session_close(session_id: str, ended_at: str) -> bool:
     """Stamp `ended_at` on a session that has none yet. True if this caller won. Never raises.
 
     The conditional update is the claim, so racing closes cannot double-credit.
-    Empty result = lost; `test_postgrest_update_returns_the_updated_row` pins that.
+    It asks for the stamped row by name, so an empty result means another close won.
     """
     try:
-        claimed = supabase.table("sessions").update({"ended_at": ended_at}) \
+        claimed = supabase.table("sessions").update({"ended_at": ended_at}, returning=ReturnMethod.representation) \
             .eq("id", session_id).is_("ended_at", "null").execute().data or []
     except Exception as e:                                     # noqa: BLE001
         print(f"[session:close] could not stamp {session_id}: {e}")
@@ -2826,7 +2826,7 @@ def start_session(payload: StartSessionRequest, request: Request):
         "questions_answered": 0,
         "correct_answers":    0,
     }
-    res = supabase.table("sessions").insert(obj).execute()
+    res = supabase.table("sessions").insert(obj, returning=ReturnMethod.representation).execute()
 
     # Pre-warm the queue at the student's own difficulty bias.
     profile = _profile(user["id"])
@@ -3012,7 +3012,7 @@ def start_practice_session(payload: StartPracticeSessionRequest, request: Reques
         "topics":     payload.topics,
         "difficulty": payload.difficulty,
         "grade_level": grade,
-    }).execute()
+    }, returning=ReturnMethod.representation).execute()
     return res.data[0]
 
 
@@ -4576,7 +4576,7 @@ def create_class(payload: CreateClassRequest, request: Request):
         "name":        payload.name,
         "grade_level": payload.grade_level,
         "join_code":   _unused_join_code(),
-    }).execute()
+    }, returning=ReturnMethod.representation).execute()
     return res.data[0]
 
 
@@ -5745,7 +5745,8 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
             return _shape_consent(_consent(student_id), student_id, _erasures(student_id))
 
         # Conditional on every flag decided against; if it moved, no match -> 409.
-        q = supabase.table("signal_consent").update(fields).eq("user_id", student_id)
+        q = supabase.table("signal_consent").update(fields, returning=ReturnMethod.representation) \
+            .eq("user_id", student_id)
         for col, was in guards.items():
             q = q.eq(col, was)
         written = q.execute().data or []
@@ -5852,7 +5853,7 @@ def ack_consent(request: Request):
     user = get_user(request)
     try:
         written = supabase.table("signal_consent") \
-            .update({"student_ack_at": _utc_now().isoformat()}) \
+            .update({"student_ack_at": _utc_now().isoformat()}, returning=ReturnMethod.representation) \
             .eq("user_id", user["id"]).execute().data or []
     except Exception as e:
         print(f"[consent:ack] {user['id']}: {e}")
@@ -6046,12 +6047,12 @@ def _write_ingest_rows(table: str, rows: list[dict], on_conflict: str,
     """Upsert admitted rows and return how many were new; a replayed or failed row is given back."""
     key = f"{user_id}:{channel}"
     try:
-        resp = supabase.table(table).upsert(rows, on_conflict=on_conflict,
-                                            ignore_duplicates=True).execute()
+        resp = supabase.table(table).upsert(rows, on_conflict=on_conflict, ignore_duplicates=True,
+                                            returning=ReturnMethod.representation).execute()
     except Exception:
         _INGEST_ROW_LIMITER.release(key, len(rows))
         raise
-    # What the database wrote (needs return=representation); push_client counts from it.
+    # What the database wrote; push_client counts from it.
     written = len(resp.data or [])
     _INGEST_ROW_LIMITER.release(key, len(rows) - written)
     return written
@@ -6582,8 +6583,8 @@ def _release_idle_pairing(device_id: str, owner: str) -> bool:
     _uncache_pairing(device_id)
     cutoff = (_utc_now() - timedelta(seconds=_PAIRING_IDLE_SEC)).isoformat()
     try:
-        return bool(supabase.table("station_pairings").delete().eq("device_id", device_id)
-                    .eq("user_id", owner).lt("seen_at", cutoff).execute().data)
+        return bool(supabase.table("station_pairings").delete(returning=ReturnMethod.representation)
+                    .eq("device_id", device_id).eq("user_id", owner).lt("seen_at", cutoff).execute().data)
     except Exception as e:
         print(f"[eeg] could not release the idle pairing on {device_id}: {type(e).__name__}")
         return False
@@ -7025,7 +7026,7 @@ def unlink_child(child_id: str, request: Request):
     Consent and recorded signals are untouched. 404 if no such link.
     """
     user = get_user(request)
-    res = supabase.table("parent_child_links").delete()         .eq("parent_id", user["id"]).eq("child_id", child_id).execute()
+    res = supabase.table("parent_child_links").delete(returning=ReturnMethod.representation)         .eq("parent_id", user["id"]).eq("child_id", child_id).execute()
     if not res.data:
         raise HTTPException(404, "Not linked to this child")
     return {"ok": True, "child_id": child_id}
@@ -7062,7 +7063,7 @@ def ack_parent_links(request: Request):
     """
     user = get_user(request)
     try:
-        written = supabase.table("parent_child_links")             .update({"student_ack_at": _utc_now().isoformat()})             .eq("child_id", user["id"]).is_("student_ack_at", "null")             .execute().data or []
+        written = supabase.table("parent_child_links")             .update({"student_ack_at": _utc_now().isoformat()}, returning=ReturnMethod.representation)             .eq("child_id", user["id"]).is_("student_ack_at", "null")             .execute().data or []
     except Exception as e:
         print(f"[parent-links:ack] {user['id']}: {e}")
         raise HTTPException(500, "Could not acknowledge")

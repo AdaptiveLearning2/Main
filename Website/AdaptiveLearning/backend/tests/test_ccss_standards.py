@@ -100,7 +100,7 @@ class _Query:
         self.n = n
         return self
 
-    def insert(self, row):
+    def insert(self, row, **_kw):
         self.inserted = row
         return self
 

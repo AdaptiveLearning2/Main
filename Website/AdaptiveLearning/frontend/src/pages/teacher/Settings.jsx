@@ -37,22 +37,22 @@ export default function TeacherSettings() {
     navigate('/login')
   }
 
-  const saveName = async () => {
+  const saveName = () => {
     setSavingName(true)
-    try {
-      await apiFetch('/api/profile/me', {
-        method: 'PUT',
-        body: { display_name: displayName.trim() },
+    return apiFetch('/api/profile/me', {
+      method: 'PUT',
+      body: { display_name: displayName.trim() },
+    })
+      .then(() => {
+        // The sidebar and dashboard greeting read the shared name.
+        refreshProfile()
+        toast.success('Saved.')
       })
-      // The sidebar and dashboard greeting read the shared name.
-      refreshProfile()
-      toast.success('Saved.')
-    } catch (e) {
-      console.error('[settings] display name not saved', e)
-      toast.error('That could not be saved.')
-    } finally {
-      setSavingName(false)
-    }
+      .catch(e => {
+        console.error('[settings] display name not saved', e)
+        toast.error('That could not be saved.')
+      })
+      .finally(() => setSavingName(false))
   }
 
   const changePassword = async () => {
@@ -60,28 +60,24 @@ export default function TeacherSettings() {
     if (pw.next.length < 6)      return toast.error('Use at least 6 characters.')
 
     setSavingPw(true)
-    try {
-      // updateUser doesn't verify the current password, so re-auth here first.
-      const { error: reauth } = await supabase.auth.signInWithPassword({
-        email: user?.email,
-        password: pw.current,
+    // updateUser doesn't verify the current password, so re-auth here first.
+    return supabase.auth.signInWithPassword({ email: user?.email, password: pw.current })
+      .then(async ({ error: reauth }) => {
+        if (reauth) {
+          toast.error('That current password is not right.')
+          return
+        }
+        const { error } = await supabase.auth.updateUser({ password: pw.next })
+        if (error) throw error
+
+        setPw({ current: '', next: '', confirm: '' })
+        toast.success('Password updated.')
       })
-      if (reauth) {
-        toast.error('That current password is not right.')
-        return
-      }
-
-      const { error } = await supabase.auth.updateUser({ password: pw.next })
-      if (error) throw error
-
-      setPw({ current: '', next: '', confirm: '' })
-      toast.success('Password updated.')
-    } catch (e) {
-      console.error('[settings] password not changed', e)
-      toast.error(e?.message || 'The password could not be changed.')
-    } finally {
-      setSavingPw(false)
-    }
+      .catch(e => {
+        console.error('[settings] password not changed', e)
+        toast.error(e?.message || 'The password could not be changed.')
+      })
+      .finally(() => setSavingPw(false))
   }
 
   return (

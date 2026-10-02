@@ -103,6 +103,9 @@ describe('every LoadError call site is classified', () => {
       'GET /api/classes/{id}/students -- _verify_class_owner',
     'pages/teacher/ClassDetail.jsx':
       'GET /api/classes/{id} -- _verify_class_owner',
+    // The guard redirects a 403 itself; every other failure reaches LoadError.
+    'components/auth/AdminGuard.jsx':
+      'GET /api/admin/me -- _require_admin',
     // Two sites; the stricter class applies to the file.
     'pages/teacher/Live.jsx':
       'GET /api/teacher/classes/{id}/live -- _verify_class_owner',

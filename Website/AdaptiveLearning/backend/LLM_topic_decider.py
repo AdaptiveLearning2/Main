@@ -1,5 +1,6 @@
 import os
 from supabase_client import get_client
+from postgrest.types import ReturnMethod
 from dotenv import load_dotenv
 import llm_client
 from llm_json import extract_json
@@ -457,7 +458,7 @@ def add_question_to_supabase(question, difficulty):
         "options" : question["answer_options"],
         "correct_answer": question["correct_answer"],
         "created_at": str(datetime.now())
-    }).execute()
+    }, returning=ReturnMethod.representation).execute()
 
     if response.data:
         return response.data[0]["id"]

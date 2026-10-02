@@ -24,18 +24,15 @@ export default function useAdminResource({ load, pollMs = 0 }) {
   }, [refresh, pollMs])
 
   /** Run a write and adopt its result. Resolves true/false; never throws. */
-  const mutate = useCallback(async (write) => {
+  const mutate = useCallback((write) => {
     setBusy(true)
     setError(null)
-    try {
-      setData(await write())
-      return true
-    } catch (e) {
-      setError(e.message)
-      return false
-    } finally {
-      setBusy(false)
-    }
+    return Promise.resolve()
+      .then(() => write())
+      .then(result => { setData(result); return true })
+      // A rejection that is not an Error must still resolve, not throw from here.
+      .catch(e => { setError(e?.message ?? String(e)); return false })
+      .finally(() => setBusy(false))
   }, [])
 
   return { data, setData, busy, error, refresh, mutate }

@@ -218,7 +218,7 @@ class _SessionClient:
             def single(self):
                 return self
 
-            def update(self, row):
+            def update(self, row, **_k):
                 if table == "sessions":
                     client.updates.append(row)
                 return self
@@ -290,6 +290,7 @@ class _ClaimClient:
         self.answers = list(answers)
         self.claim_wins = claim_wins
         self.updates = []
+        self.returning = []
         self.deleted = []
 
     def rpc(self, name, params):
@@ -334,8 +335,9 @@ class _ClaimClient:
             def single(self):
                 return self
 
-            def update(self, row):
-                self._update = row
+            def update(self, row, returning=None, **_k):
+                # Recorded as passed, None when omitted; `minimal` answers no rows, as PostgREST does.
+                self._update, self._returning = row, returning
                 return self
 
             def insert(self, _row):
@@ -351,8 +353,10 @@ class _ClaimClient:
                     return type("R", (), {"data": []})()
                 if self._update is not None:
                     client.updates.append((table, self._update, self._conditional))
+                    client.returning.append((table, self._update, self._returning))
                     won = client.claim_wins or not self._conditional
-                    return type("R", (), {"data": [self._update] if won else []})()
+                    minimal = self._returning == main.ReturnMethod.minimal
+                    return type("R", (), {"data": [self._update] if won and not minimal else []})()
                 if table == "session_answers":
                     return type("R", (), {"data": client.answers})()
                 if table == "sessions":
@@ -390,19 +394,18 @@ def test_a_close_that_loses_the_stamp_credits_nothing(monkeypatch):
     assert credited == [], "a close that lost the stamp credited the totals anyway"
 
 
-def test_postgrest_update_returns_the_updated_row():
-    """`_claim_session_close` relies on postgrest-py's `returning=representation` default."""
-    import inspect
+def test_the_stamp_asks_for_the_row_it_stamped(monkeypatch):
+    """By name, not by the client's default: under `minimal` every close would read as lost."""
+    client = _ClaimClient({"id": "s-1", "user_id": USER, "questions_answered": 1,
+                           "correct_answers": 1, "started_at": "2026-08-15T10:00:00Z"},
+                          answers=[{"correct": True}])
+    _close_with(monkeypatch, client, [])
 
-    from postgrest._sync import request_builder
+    main._close_session(USER, {"id": "s-1", "questions_answered": 1, "correct_answers": 1,
+                               "started_at": "2026-08-15T10:00:00Z"}, "2026-08-15T11:30:00Z")
 
-    sig = inspect.signature(request_builder.SyncRequestBuilder.update)
-    default = sig.parameters["returning"].default
-
-    assert getattr(default, "value", default) == "representation", (
-        "postgrest's update() no longer returns the updated row by default, so "
-        "_claim_session_close reads every successful stamp as a lost race -- "
-        "every session close silently skips its credit, rollup and archive")
+    stamps = [returning for tbl, row, returning in client.returning if tbl == "sessions" and "ended_at" in row]
+    assert stamps == [main.ReturnMethod.representation]
 
 
 def test_the_stamp_is_conditional(monkeypatch):

@@ -657,11 +657,11 @@ class _PairingsDb:
                 self.op, self.row = "upsert", row
                 return self
 
-            def update(self, fields):
+            def update(self, fields, **_kw):
                 self.op, self.row = "update", fields
                 return self
 
-            def delete(self):
+            def delete(self, **_kw):
                 self.op = "delete"
                 return self
 

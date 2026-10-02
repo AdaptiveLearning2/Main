@@ -122,13 +122,13 @@ class _Client:
         client = self
 
         class _T:
-            def delete(_self):
+            def delete(_self, **_kw):
                 return _Delete(name, client.links, client.deletes)
 
             def select(_self, *_cols, **_kw):
                 return _Select(client.links, client.reads)
 
-            def update(_self, fields):
+            def update(_self, fields, **_kw):
                 return _Update(client.links, fields, client.reads)
 
         return _T()

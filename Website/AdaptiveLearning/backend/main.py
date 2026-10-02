@@ -3,7 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-import os, math, re, requests, random, secrets, threading, time, collections, contextlib
+import os, math, re, random, secrets, threading, time, collections, contextlib
+import anyio.to_thread
+import httpx
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta, timezone, tzinfo
@@ -20,6 +22,7 @@ import signal_mapping
 import eeg_poller
 import llm_client
 import grade_levels
+import safe_solve
 from env_config import env_number
 
 load_dotenv()
@@ -33,10 +36,17 @@ if not SUPABASE_URL or not SERVICE_ROLE_KEY:
 
 supabase = get_client(SUPABASE_URL, SERVICE_ROLE_KEY)
 
+# anyio's default of 40 threads runs every `def` route, and LLM waiters alone can hold 38.
+# Stays under the Supabase client's 128 pooled connections (supabase_client.py).
+_WORKER_THREADS = 96
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Process-lifetime hooks. Everything before the yield is startup."""
+    anyio.to_thread.current_default_thread_limiter().total_tokens = _WORKER_THREADS
     start_stale_sweeper()
+    safe_solve.start_startup_probe()
     yield
     # Join printing daemon threads first: a print during teardown is a fatal stdout-lock abort.
     try:
@@ -45,9 +55,10 @@ async def _lifespan(app: FastAPI):
         try:
             stop_stale_sweeper()
         finally:
-            # Every pool shuts down even if one raises; the last failure is re-raised.
+            # Every step runs even if one raises; the last failure is re-raised.
             failure = None
-            for shutdown in (_shutdown_strategy_pool,
+            for shutdown in (safe_solve.stop_startup_probe,
+                             _shutdown_strategy_pool,
                              _shutdown_chart_summary_pool,
                              _shutdown_admin_live_pool,
                              _shutdown_prefetch_pool,
@@ -384,6 +395,8 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
     # Not CORS-safelisted; `apiFetch` reads it to size its retry.
     expose_headers=["Retry-After"],
+    # Preflights are cached per URL; 7200 s is Chrome's cap (Starlette's default is 600).
+    max_age=7200,
 )
 
 
@@ -392,17 +405,23 @@ app.add_middleware(
 # Seconds for the GoTrue check behind every authenticated request; unbounded, a stall holds a worker.
 AUTH_CHECK_TIMEOUT = env_number("AUTH_CHECK_TIMEOUT", 5.0, float, minimum=0.5)
 
+# Pooled, so each request skips a TCP+TLS handshake. Not the Supabase client: its hook
+# rewrites every /auth/v1/ timeout, which would silently override AUTH_CHECK_TIMEOUT.
+_AUTH_HTTP = httpx.Client(http2=False, timeout=AUTH_CHECK_TIMEOUT, limits=httpx.Limits(
+    max_connections=_WORKER_THREADS, max_keepalive_connections=_WORKER_THREADS,
+    keepalive_expiry=30.0))
+
 
 def get_user(request: Request):
     token = request.headers.get("authorization", "").replace("Bearer ", "").strip()
     if not token:
         raise HTTPException(401, "Missing token")
     try:
-        resp = requests.get(f"{SUPABASE_URL}/auth/v1/user", headers={
+        resp = _AUTH_HTTP.get(f"{SUPABASE_URL}/auth/v1/user", headers={
             "Authorization": f"Bearer {token}",
             "apikey": SERVICE_ROLE_KEY
-        }, timeout=AUTH_CHECK_TIMEOUT)
-    except requests.RequestException as e:
+        })
+    except httpx.TransportError as e:
         # 503, not 401: the token was never judged, and a 401 reads as an expired session.
         print(f"[auth] could not reach the auth server: {type(e).__name__}")
         raise HTTPException(503, "Sign-in could not be checked right now")
@@ -677,7 +696,7 @@ _WINDOW_DENIED = {k for k, v in _WINDOW_STATES.items() if not v.records}
 
 # Window row cache (s). Consent is never cached: a withdrawal must apply mid-lesson.
 _RETENTION_TTL_SECONDS = 30.0
-_retention_cached: tuple[float, dict] | None = None
+_retention_cached: tuple[float, dict | None] | None = None
 _retention_lock = threading.Lock()
 
 
@@ -700,7 +719,7 @@ def _retention_window() -> dict:
         cached = _retention_cached
     if cached and now < cached[0]:
         # Only the row is cached; the state depends on today's date.
-        return _resolve_window(cached[1])
+        return _window_from_row(cached[1])
 
     try:
         rows = supabase.table("retention_window").select("*").limit(1).execute().data or []
@@ -709,13 +728,20 @@ def _retention_window() -> dict:
         # Failures are not cached.
         return {"state": WINDOW_UNREADABLE, "starts_on": None, "ends_on": None,
                 "timezone": None}
-    if not rows:
+
+    # No row is cached too: it is a denial, and the admin write clears the cache.
+    row = rows[0] if rows else None
+    with _retention_lock:
+        _retention_cached = (now + _RETENTION_TTL_SECONDS, row)
+    return _window_from_row(row)
+
+
+def _window_from_row(row: dict | None) -> dict:
+    """`_resolve_window`, or `unconfigured` when the table has no row."""
+    if row is None:
         return {"state": WINDOW_UNCONFIGURED, "starts_on": None, "ends_on": None,
                 "timezone": None}
-
-    with _retention_lock:
-        _retention_cached = (now + _RETENTION_TTL_SECONDS, rows[0])
-    return _resolve_window(rows[0])
+    return _resolve_window(row)
 
 
 def _expiry_cutoff(starts_on, ends_on, today: date, enforced=True) -> date | None:
@@ -1116,6 +1142,10 @@ _SESSION_ABANDONED_AFTER_SEC = env_number(
 # Background sweep interval (s); 0 disables it.
 _STALE_SWEEP_INTERVAL_SEC = env_number(
     "STALE_SWEEP_INTERVAL_SECONDS", 900.0, float, minimum=0.0)
+# Delay before the first pass (s), so a cold start serves its first requests before
+# the sweep and chart catch-up compete for the CPU.
+_STALE_SWEEP_FIRST_DELAY_SEC = env_number(
+    "STALE_SWEEP_FIRST_DELAY_SECONDS", 60.0, float, minimum=0.0)
 
 # Sessions closed per pass; each close renders charts and writes storage.
 _STALE_SWEEP_BATCH = 50
@@ -1306,11 +1336,13 @@ def _sweep_abandoned_sessions(limit: int = _STALE_SWEEP_BATCH) -> dict:
 
 
 def _stale_sweep_loop() -> None:
-    """Sweep once at startup, then every interval, until asked to stop.
+    """Sweep once shortly after startup, then every interval, until asked to stop.
 
     Waits on the stop event, not `sleep`, so it can be joined promptly. Sweeping
-    at startup matters because `--reload` restarts often.
+    soon after startup matters because `--reload` restarts often.
     """
+    if _STALE_SWEEP_FIRST_DELAY_SEC > 0 and _stale_sweep_stop.wait(_STALE_SWEEP_FIRST_DELAY_SEC):
+        return
     first = True
     while first or not _stale_sweep_stop.wait(_STALE_SWEEP_INTERVAL_SEC):
         first = False
@@ -6313,8 +6345,10 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
                        "subject, difficulty, figure, ccss_standard)")
                .eq("session_id", session_id).order("answered_at")
                .execute().data or [])
-    return {"cognitive": cog_data, "face": fac_data, "heart": hrt_data, "answers": answers,
-            "channels": _channel_flags(channels)}
+    # Up to 20k rows a table: a Response skips FastAPI's per-element `jsonable_encoder`
+    # walk (~170 ms per 1.8 MB). Safe because PostgREST rows are already JSON values.
+    return JSONResponse({"cognitive": cog_data, "face": fac_data, "heart": hrt_data,
+                         "answers": answers, "channels": _channel_flags(channels)})
 
 
 def _channel_flags(channels: ReportChannels) -> dict:
@@ -6906,7 +6940,9 @@ def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
         "service": None if push else eeg_client.is_alive(),
         "ingest_mode": eeg_poller.INGEST_MODE,
         "muse":    muse,
-        "poller":  _poller_status(user["id"]),
+        # Under push the poller never runs, so the mode is its reason: no consent read per tick.
+        "poller":  ({**eeg_poller.status(user["id"]), "stopped_reason": "push_ingestion"}
+                    if push else _poller_status(user["id"])),
     }
 
 

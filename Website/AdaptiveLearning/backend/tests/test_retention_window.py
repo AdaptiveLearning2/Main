@@ -85,6 +85,39 @@ def test_an_unconfigured_window_records_nothing(monkeypatch):
     assert w["state"] in main._WINDOW_DENIED
 
 
+class _CountingWindow(_Window):
+    def __init__(self, rows, raises=False):
+        super().__init__(rows, raises)
+        self.reads = 0
+
+    def execute(self):
+        self.reads += 1
+        return super().execute()
+
+
+@pytest.mark.parametrize("rows,state", [([], main.WINDOW_UNCONFIGURED),
+                                        ([_row("2000-01-01", "2099-12-31")], main.WINDOW_OPEN)])
+def test_a_read_answer_is_cached_with_or_without_a_row(monkeypatch, rows, state):
+    """No row is polled every few seconds per student; it is a denial, so caching it is safe."""
+    monkeypatch.undo()
+    main._retention_cache_clear()
+    db = _CountingWindow(rows)
+    monkeypatch.setattr(main, "supabase", db)
+    assert main._retention_window()["state"] == state
+    assert main._retention_window()["state"] == state
+    assert db.reads == 1
+
+
+def test_a_failed_read_is_never_cached(monkeypatch):
+    monkeypatch.undo()
+    main._retention_cache_clear()
+    db = _CountingWindow([], raises=True)
+    monkeypatch.setattr(main, "supabase", db)
+    assert main._retention_window()["state"] == main.WINDOW_UNREADABLE
+    assert main._retention_window()["state"] == main.WINDOW_UNREADABLE
+    assert db.reads == 2
+
+
 def test_a_failed_read_records_nothing_and_says_so(monkeypatch):
     w = _window(monkeypatch, [], raises=True)
     assert w["state"] == main.WINDOW_UNREADABLE
@@ -324,7 +357,7 @@ def test_the_timezone_fallback_cannot_itself_fail(monkeypatch):
         raise Exception("No time zone found with key UTC")
 
     monkeypatch.setattr(main, "ZoneInfo", _no_tzdata)
-    main._retention_cache = None
+    main._retention_cache_clear()
 
     tz = main._school_timezone()
 

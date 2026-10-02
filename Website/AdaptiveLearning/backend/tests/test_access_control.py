@@ -2277,6 +2277,29 @@ def test_the_app_runs_the_shutdown_on_the_way_out():
         main._STRATEGY_LLM_POOL = original_pool
 
 
+def test_startup_widens_the_thread_pool_and_starts_the_solver_probe(monkeypatch):
+    """LLM waiters alone can hold 38 of anyio's 40 threads; the probe left import to speed cold starts."""
+    import anyio.to_thread
+
+    calls = []
+    monkeypatch.setattr(main.safe_solve, "start_startup_probe", lambda: calls.append("start"))
+    monkeypatch.setattr(main.safe_solve, "stop_startup_probe", lambda *a, **k: calls.append("stop"))
+    monkeypatch.setattr(main, "start_stale_sweeper", lambda: False)
+    seen = {}
+    original_pool = main._STRATEGY_LLM_POOL
+
+    async def _cycle():
+        async with main._lifespan(main.app):
+            seen["tokens"] = anyio.to_thread.current_default_thread_limiter().total_tokens
+
+    try:
+        asyncio.run(_cycle())
+    finally:
+        main._STRATEGY_LLM_POOL = original_pool
+    assert seen["tokens"] == main._WORKER_THREADS > 40
+    assert calls == ["start", "stop"], "the probe must be started at startup and joined at shutdown"
+
+
 # ── numeric configuration ────────────────────────────────────────────────
 
 def test_bad_numeric_env_falls_back_instead_of_killing_the_process(monkeypatch):

@@ -124,24 +124,29 @@ def _unsafe_request_text(request: dict) -> str | None:
     return next((str(t) for t in texts if t is not None and not _safe_text(t)), None)
 
 
-def _probe_startup():
+def _probe_startup(stop: threading.Event | None = None):
     """Measure worker startup and clamp `SOLVE_STARTUP_BUDGET` up if it is tight.
 
-    Clamps rather than raises: this runs at import, and raising would take the
-    whole backend down. A probe that cannot run leaves the budget unchanged.
+    Clamps rather than raises: raising would take the whole backend down. A probe
+    that cannot run leaves the budget unchanged. Silent once `stop` is set.
     """
     global SOLVE_STARTUP_BUDGET_S, STARTUP_COST_S
+
+    def say(message):
+        if stop is None or not stop.is_set():
+            print(message)
+
     started = time.monotonic()
     try:
         probed = _run({"scenario": "values", "values": ["1"]}, _PROBE_TIMEOUT_S,
                       "startup probe", startup_timeout=_PROBE_TIMEOUT_S)
     except SolverUnavailable as e:
-        # Must not propagate: this runs at import.
-        print(f"[safe_solve] startup probe could not run: {e}")
+        # Must not propagate: it would take the backend down.
+        say(f"[safe_solve] startup probe could not run: {e}")
         probed = None
     elapsed = time.monotonic() - started
     if probed is None:
-        print(f"[safe_solve] startup probe failed after {elapsed:.1f}s -- the "
+        say(f"[safe_solve] startup probe failed after {elapsed:.1f}s -- the "
               f"solve subprocess could not run, so every question that needs "
               f"one will fail. Leaving SOLVE_TIMEOUT at "
               f"{_CONFIGURED_TIMEOUT_S}s; a budget guessed from a failed "
@@ -152,7 +157,7 @@ def _probe_startup():
     floor = elapsed * _STARTUP_SAFETY_FACTOR
     if SOLVE_STARTUP_BUDGET_S < floor:
         SOLVE_STARTUP_BUDGET_S = floor
-        print(f"[safe_solve] SOLVE_STARTUP_BUDGET={_CONFIGURED_STARTUP_BUDGET_S}s "
+        say(f"[safe_solve] SOLVE_STARTUP_BUDGET={_CONFIGURED_STARTUP_BUDGET_S}s "
               f"is below {_STARTUP_SAFETY_FACTOR:g}x the measured subprocess "
               f"startup of {elapsed:.2f}s on this machine. Raised to "
               f"{floor:.2f}s for this process. Left alone it would have failed "
@@ -410,8 +415,8 @@ def _run(request: dict, timeout, label: str, startup_timeout=None):
     return result
 
 
-# Runs at import so a too-slow machine says so at boot. `SOLVE_STARTUP_PROBE=0`
-# skips it for processes that never solve.
+# Started by the backend's lifespan, off the import path: on a 0.1-CPU host a sympy
+# subprocess at import delayed every cold start. `SOLVE_STARTUP_PROBE=0` skips it.
 def _startup_probe_enabled():
     """Whether the boot-time probe should run.
 
@@ -420,5 +425,25 @@ def _startup_probe_enabled():
     return os.getenv("SOLVE_STARTUP_PROBE", "1").strip().lower()         not in ("0", "false", "no")
 
 
-if _startup_probe_enabled():
-    _probe_startup()
+_probe_stop = threading.Event()
+_probe_thread = None
+
+
+def start_startup_probe() -> bool:
+    """Run `_probe_startup` in a thread, once per process; False if off or already started."""
+    global _probe_thread
+    if not _startup_probe_enabled() or _probe_thread is not None:
+        return False
+    _probe_stop.clear()
+    _probe_thread = threading.Thread(target=_probe_startup, kwargs={"stop": _probe_stop},
+                                     name="solve-probe", daemon=True)
+    _probe_thread.start()
+    return True
+
+
+def stop_startup_probe(timeout: float = 5.0) -> None:
+    """Silence the probe and join it (a print during shutdown is a fatal abort)."""
+    _probe_stop.set()
+    thread = _probe_thread
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=timeout)

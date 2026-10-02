@@ -8,9 +8,9 @@ import threading
 import httpx
 import supabase
 
-# Above the threads that can hold a request at once (anyio's 40, the worker pools, one poller per
-# pull-mode session), and all kept alive, so a burst reuses connections instead of re-handshaking.
-_LIMITS = httpx.Limits(max_connections=128, max_keepalive_connections=128)
+# Above the threads that can hold a request at once (main's 96, the worker pools, one poller per
+# pull-mode session), and all kept alive 30 s, not httpx's 5, so a quiet gap needs no re-handshake.
+_LIMITS = httpx.Limits(max_connections=128, max_keepalive_connections=128, keepalive_expiry=30.0)
 # Each service keeps the budget its own client had. The database API: Postgrest's 120 s, and a
 # starved pool fails in 10 s rather than queueing for the whole read budget.
 _REST_TIMEOUT = httpx.Timeout(120.0, connect=10.0, pool=10.0)

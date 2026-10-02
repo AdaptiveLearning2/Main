@@ -762,6 +762,20 @@ def test_non_column_keys_are_still_free_form():
     assert sample.features["signal_quality"] == "good"
 
 
+def test_status_reads_no_consent_under_push(push_mode, monkeypatch):
+    """Polled every few seconds per student; under push the poller never runs, so the mode is why."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(eeg_poller, "status", lambda _u: {"running": False})
+    monkeypatch.setattr(main, "eeg_client", _StubClient)
+    gated = []
+    monkeypatch.setattr(main, "_may_record", lambda *a, **k: gated.append(a) or {})
+
+    out = main.eeg_status(None)
+
+    assert gated == [], "a consent read ran under push"
+    assert out["poller"] == {"running": False, "stopped_reason": "push_ingestion"}
+
+
 def test_status_does_not_touch_the_sidecar_under_push(push_mode, monkeypatch):
     """The mode check must precede the probe, which 500s without EEG_API_TOKEN."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})

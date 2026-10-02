@@ -1,5 +1,8 @@
 """The solve step is bounded by a killable subprocess; see docs/question-generation.md."""
 import os
+import subprocess
+import sys
+import threading
 import time
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -193,15 +196,44 @@ def test_a_probe_that_cannot_run_keeps_the_configured_value(monkeypatch, capsys)
     assert "startup probe failed" in capsys.readouterr().out
 
 
-def test_the_probe_runs_at_import_and_leaves_the_budget_above_the_floor():
-    """The import-time call, and the post-condition with no `or budget == configured` escape."""
+def test_importing_the_solver_does_not_probe():
+    """At import, the probe's sympy subprocess delayed every cold start of a 0.1-CPU host."""
+    env = {**os.environ, "SOLVE_STARTUP_PROBE": "1"}
+    out = subprocess.run(
+        [sys.executable, "-c", "import safe_solve as s; print(s.STARTUP_COST_S, s._probe_thread)"],
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), env=env,
+        capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().splitlines()[-1] == "None None", out.stdout
+
+
+def test_the_started_probe_runs_off_thread_and_leaves_the_budget_above_the_floor(monkeypatch):
+    """The lifespan's call, and the post-condition with no `or budget == configured` escape."""
     if not safe_solve._startup_probe_enabled():
         pytest.skip("SOLVE_STARTUP_PROBE is off, so no floor was measured")
-    assert safe_solve.STARTUP_COST_S is not None, (
-        "the import-time probe did not run, so nothing measured the floor")
+    monkeypatch.setattr(safe_solve, "_probe_thread", None)
+    monkeypatch.setattr(safe_solve, "_probe_stop", threading.Event())
+    assert safe_solve.start_startup_probe() is True
+    assert safe_solve.start_startup_probe() is False, "a second start ran a second probe"
+    safe_solve._probe_thread.join(timeout=120)
+    assert safe_solve.STARTUP_COST_S is not None, "the started probe did not measure the floor"
     floor = safe_solve.STARTUP_COST_S * safe_solve._STARTUP_SAFETY_FACTOR
     # The startup budget covers the import; `SOLVE_TIMEOUT` deliberately need not clear it.
     assert safe_solve.SOLVE_STARTUP_BUDGET_S >= floor
+
+
+def test_a_probe_stopped_for_shutdown_prints_nothing(monkeypatch, capsys):
+    """Its thread may outlive the join; a print during interpreter shutdown is a fatal abort."""
+    def unavailable(*_a, **_k):
+        raise safe_solve.SolverUnavailable("no subprocess")
+
+    monkeypatch.setattr(safe_solve, "_run", unavailable)
+    stopped = threading.Event()
+    stopped.set()
+    safe_solve._probe_startup(stop=stopped)
+    assert capsys.readouterr().out == ""
+    safe_solve._probe_startup()
+    assert "startup probe" in capsys.readouterr().out, "the control: unstopped, it reports"
 
 
 def test_with_the_probe_off_the_configured_value_stands_unchecked():

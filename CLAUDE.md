@@ -329,12 +329,12 @@ CI (`.github/workflows/ci.yml`) runs **nine** jobs on PRs and pushes to `main`: 
 `Frontend tests, build & lint`, `Dependency scan`, `Secret scan`. Counted by name, so a tenth on the
 PR page is new or undocumented rather than a stale number. (Two more come from integrations, not CI:
 `Supabase Preview`, always skipped, and `Cloudflare Pages`, a preview deploy of the frontend.) `Native bridge
-build` also runs the Windows-only launcher, kit and bridge tests, against the bridge it has just built.
+build` runs every Windows-only test file too, its list held whole by `test_ci_windows_tests.py`.
 
 **`EEGResearch/.github/workflows/ci.yml` exists and has never run.** GitHub reads workflows only
-from the repository root's `.github/workflows/`, so a nested one is an ordinary file. It is the only
-thing that installs the `requirements*.lock` files, which is why they went stale without anything
-going red. **Moving it to the root is not a one-line fix**: those locks are Windows-resolved, so it
+from the repository root's `.github/workflows/`, so a nested one is an ordinary file. No CI job installs
+the `requirements*.lock` files (only the kit build does, the gaze lock, off CI), so a stale one turns
+nothing red. **Moving it to the root is not a one-line fix**: those locks are Windows-resolved, so it
 would install them on ubuntu — see *Three venvs* for what that costs and what to do first.
 
 ### The two scanners, and what they are allowed to be red about

@@ -50,8 +50,8 @@ jobs:
         working-directory: EEGResearch/native_bridge
         run: cmake --build build --config Release
 
-      # The tests that only run on Windows: the student kit's process plumbing, start.ps1, the bridge
-      # supervisor, and the token tests, which run the bridge just built (OFF still writes its token).
+      # Every test file that only runs on Windows (test_ci_windows_tests.py keeps the list whole); the token
+      # tests run the bridge just built, since OFF still writes its token.
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.14"
@@ -69,6 +69,8 @@ jobs:
         run: >-
           pytest -rfEs tests/test_kit_launcher.py tests/test_launcher_hosted.py
           tests/test_bridge_supervisor.py tests/test_bridge_token_path.py
+          tests/test_launcher_device_registry.py tests/test_launcher_env_encoding.py
+          tests/test_run_pilot_muse.py tests/test_start_ps1_native_stderr.py
 
   website-backend:
     name: Website backend tests

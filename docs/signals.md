@@ -529,7 +529,7 @@ otherwise be handed the token and could feed fabricated EEG. One running as the 
 settings only. `getenv` returns the ANSI code page's best fit, so a user folder outside
 it (`Łódź`) comes back as one that does not exist and the token cannot be written. A failed write has its own message,
 never the port-conflict one. `EEGResearch/tests/test_bridge_token_path.py` runs the built exe against such a folder;
-it skips where no exe is built, which includes CI (that job only compiles).
+it skips where no exe is built, and CI's Windows job runs it against the OFF build it compiles.
 
 ### RMSSD is an enrichment, and a null one is normal
 

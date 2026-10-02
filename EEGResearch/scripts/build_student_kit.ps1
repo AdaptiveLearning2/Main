@@ -48,11 +48,15 @@ function Find-Tool {
     throw "$name not found; looked in: $($candidates -join '; ')"
 }
 
+function Get-KitArgs {
+    # name=value: a token can start with "-" (1 in 64), and 5.1 drops an empty argument such as no preset.
+    param([string]$backend, [string]$origin, [string]$token, [int]$camera, [string]$preset, [string]$version)
+    return @("--backend-url=$backend", "--frontend-origin=$origin", "--learner-token=$token",
+             "--camera-index=$camera", "--optics-preset=$preset", "--version=$version")
+}
+
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "-Version must look like 0.1.0" }
-$kitArgs = @("--backend-url", $BackendUrl, "--frontend-origin", $FrontendOrigin, "--learner-token", $LearnerToken,
-             "--camera-index", "$CameraIndex", "--version", $Version)
-# Only when set: PowerShell 5.1 drops an empty argument to a native command, leaving the flag with no value.
-if ($OpticsPreset) { $kitArgs += @("--optics-preset", $OpticsPreset) }
+$kitArgs = Get-KitArgs $BackendUrl $FrontendOrigin $LearnerToken $CameraIndex $OpticsPreset $Version
 
 # The same check the launcher runs on kit.json, before anything slow happens. Standard library only.
 Push-Location $eeg

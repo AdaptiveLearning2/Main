@@ -88,6 +88,16 @@ def test_kit_json_reads_back_what_was_written_and_names_a_broken_file(tmp_path):
         kit_config.load(tmp_path / "absent.json")
 
 
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig", "utf-16"], ids=["utf-8", "utf-8-bom", "utf-16-bom"])
+def test_kit_json_loads_however_a_windows_editor_saved_it(tmp_path, encoding):
+    """Notepad writes UTF-8; PowerShell 5.1 writes a BOM with -Encoding UTF8, and UTF-16 with Out-File or >."""
+    path = tmp_path / "kit.json"
+    cfg = _cfg(camera_index=1, version="0.1.0")
+    kit_config.write(path, cfg)
+    path.write_text(path.read_text(encoding="utf-8"), encoding=encoding)
+    assert kit_config.load(path) == (cfg, [])
+
+
 def test_the_build_writes_kit_json_through_the_same_check(tmp_path):
     out = tmp_path / "kit.json"
     common = ["--frontend-origin", ORIGIN, "--learner-token", TOKEN]
@@ -347,15 +357,20 @@ def test_stop_succeeds_when_nothing_runs_and_fails_on_a_copy_that_will_not_stop(
         copy.wait(10)
 
 
-def _powershell(script: str) -> subprocess.CompletedProcess:
-    return subprocess.run([POWERSHELL, "-NoProfile", "-Command", script], capture_output=True, text=True, timeout=60)
+def _powershell(script: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run([POWERSHELL, "-NoProfile", "-Command", script], capture_output=True, text=True, timeout=60,
+                          cwd=cwd)
+
+
+def _build_function(name: str) -> str:
+    found = re.search(rf"^function {name} \{{.*?^\}}", BUILD_SCRIPT.read_text(encoding="utf-8"), re.S | re.M)
+    assert found, f"build_student_kit.ps1 has no {name}"
+    return found.group(0)
 
 
 def _build_step(command: str, redirect: str = "") -> subprocess.CompletedProcess:
     """The build script's Invoke-Step around COMMAND, at top level under Stop as the script calls it."""
-    step = re.search(r"^function Invoke-Step \{.*?^\}", BUILD_SCRIPT.read_text(encoding="utf-8"), re.S | re.M)
-    assert step, "build_student_kit.ps1 has no Invoke-Step"
-    return _powershell(f"$ErrorActionPreference = 'Stop'\n{step.group(0)}\n"
+    return _powershell(f"$ErrorActionPreference = 'Stop'\n{_build_function('Invoke-Step')}\n"
                        f"$x = Invoke-Step 'step' {{ {command} }} {redirect}\n\"after:$($x -join '|')\"\n"
                        "$ErrorActionPreference")
 
@@ -374,3 +389,13 @@ def test_a_build_step_survives_captured_stderr_and_fails_on_a_bad_exit_or_an_exe
                             ("& 'C:\\no\\such\\tool.exe'", "step failed: the command did not start")):
         failed = _build_step(command)
         assert "after:" not in failed.stdout and reason in failed.stderr, (command, failed.stdout, failed.stderr)
+
+
+@pytest.mark.skipif(POWERSHELL is None, reason="Windows PowerShell only")
+def test_the_build_hands_a_token_starting_with_a_dash_and_an_empty_preset_to_the_settings_check(tmp_path):
+    dash = "-" + TOKEN[1:]  # token_urlsafe starts one token in 64 with "-"
+    kit = tmp_path / "kit.json"
+    out = _powershell(f"{_build_function('Get-KitArgs')}\n$a = Get-KitArgs '{BACKEND}' '{ORIGIN}' '{dash}' 2 '' '0.1.0'\n"
+                      f"& '{PYTHON}' -m src.kit.config write '{kit}' @a; exit $LASTEXITCODE", cwd=ROOT / "EEGResearch")
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert kit_config.load(kit)[0] == KitConfig(BACKEND, ORIGIN, dash, 2, "", "0.1.0")

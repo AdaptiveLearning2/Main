@@ -6,6 +6,7 @@ Standard library only, so the build script can check its arguments with any Pyth
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import re
 import secrets
@@ -22,6 +23,7 @@ LANDMARK_MODEL = "face_landmarker.task"
 EMOTION_MODEL = "emotion-ferplus-8.onnx"
 OPTICS_PRESETS = ("1031", "1032", "1033", "1034", "1035", "1036")
 _TOKEN = re.compile(r"[A-Za-z0-9_-]+")
+_HOST = re.compile(r"[a-z0-9_.-]+")  # what [Uri]::TryCreate takes in an https host; it refuses *, \, ; and spaces
 
 
 class KitConfigError(ValueError):
@@ -49,6 +51,13 @@ def origin_of(url: str) -> str | None:
         return None
     if (parts.scheme != "https" or not parts.hostname or parts.username is not None
             or parts.password is not None or parts.path not in ("", "/")):
+        return None
+    if ":" in parts.hostname:
+        try:
+            ipaddress.IPv6Address(parts.hostname)
+        except ValueError:
+            return None
+    elif not _HOST.fullmatch(parts.hostname):
         return None
     host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
     return f"https://{host}" if port in (None, 443) else f"https://{host}:{port}"
@@ -94,9 +103,9 @@ def check(raw: dict) -> tuple[KitConfig, list[str]]:
 
 
 def load(path: Path) -> tuple[KitConfig, list[str]]:
-    """check() on the JSON object in path."""
+    """check() on the JSON object in path, saved as UTF-8 or UTF-16, BOM or none: what Windows editors write."""
     try:
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        raw = json.loads(Path(path).read_bytes())
     except OSError as exc:
         raise KitConfigError(f"Cannot read {path}: {exc}") from exc
     except ValueError as exc:

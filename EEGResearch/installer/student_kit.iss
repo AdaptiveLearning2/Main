@@ -52,6 +52,8 @@ Filename: "{app}\{#AppExe}"; Description: "Start the sensors now"; Flags: postin
 
 [UninstallRun]
 Filename: "{app}\{#AppExe}"; Parameters: "--stop"; Flags: runhidden waituntilterminated; RunOnceId: "StopSensors"
+; --stop reaches only this user's copy; elevated, this ends one in another user's session, children included.
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /T /IM {#AppExe}"; Flags: runhidden waituntilterminated; RunOnceId: "KillSensors"
 
 [UninstallDelete]
 ; Logs are per user; only a just-for-me install knows whose to remove.

@@ -29,6 +29,13 @@ ADDRESS_CASES = [
     ({"token": "replace-me-learner-token"}, {"token"}),
     ({"token": "Replace-Me-Learner-Token"}, {"token"}),
     ({"token": "has a space"}, {"token"}),
+    # Characters .NET's Uri refuses in a host, where urlsplit takes anything: a CORS mismatch on every machine.
+    ({"origin": "https://*"}, {"origin"}),
+    ({"origin": "https://*.pages.dev"}, {"origin"}),
+    ({"origin": ORIGIN + "\\"}, {"origin"}),
+    ({"origin": "https://adaptive pages.dev"}, {"origin"}),
+    ({"backend": BACKEND + ";"}, {"backend"}),
+    ({"backend": "https://main_u0ki.onrender.com"}, set()),
 ]
 
 # As a browser sends an origin, lower case and with no default port: CORS compares the strings exactly.

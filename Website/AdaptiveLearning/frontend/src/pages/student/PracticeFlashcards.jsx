@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { apiFetch } from '../../lib/api'
 import { markPracticeViewed } from '../../lib/practiceSession'
 import LoadError from '../../components/ui/LoadError'
@@ -78,7 +78,7 @@ export default function PracticeFlashcards({ session, onFinish }) {
 
   if (loading) return (
     <div className="min-h-[60vh] flex items-center justify-center">
-      <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+      <m.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
         className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full" />
     </div>
   )
@@ -97,7 +97,7 @@ export default function PracticeFlashcards({ session, onFinish }) {
       </div>
 
       <button onClick={handleFlip} className="w-full text-left" aria-label="Flip card to reveal the answer">
-        <motion.div
+        <m.div
           className="bg-white dark:bg-gray-900 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-800 p-10 min-h-[260px] flex flex-col items-center justify-center text-center cursor-pointer"
         >
           {question.question_topic && (
@@ -115,16 +115,16 @@ export default function PracticeFlashcards({ session, onFinish }) {
           ) : (
             <p className="text-sm text-gray-600 dark:text-gray-400">Tap or press Space to reveal the answer</p>
           )}
-        </motion.div>
+        </m.div>
       </button>
 
       {flipped && (
-        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-6 flex justify-end">
+        <m.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-6 flex justify-end">
           <button onClick={handleNext}
             className="px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-xl font-bold hover:from-indigo-700 hover:to-violet-700 transition shadow">
             Next →
           </button>
-        </motion.div>
+        </m.div>
       )}
     </div>
   )

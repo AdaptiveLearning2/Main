@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { LayoutDashboard, Link as LinkIcon, Settings as SettingsIcon, LogOut, Moon, Sun, ChevronLeft, ChevronRight, Menu } from 'lucide-react'
 import { useAuth }  from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
@@ -88,7 +88,7 @@ export default function ParentLayout() {
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-slate-50 dark:bg-gray-950">
-      <motion.aside animate={{ width: collapsed ? 64 : 240 }} transition={{ duration: 0.2 }}
+      <m.aside animate={{ width: collapsed ? 64 : 240 }} transition={{ duration: 0.2 }}
         className="hidden md:flex flex-col h-full bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800 relative flex-shrink-0 overflow-hidden">
         <SidebarContent collapsed={collapsed} />
         <button aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
@@ -96,7 +96,7 @@ export default function ParentLayout() {
           className="absolute -right-3 top-20 w-6 h-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full shadow flex items-center justify-center text-gray-500 hover:text-emerald-600 transition z-10 dark:text-gray-400">
           {collapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
         </button>
-      </motion.aside>
+      </m.aside>
 
       <MobileDrawer open={mobileOpen} onClose={closeMobile} label="Navigation">
         <SidebarContent mobile onClose={closeMobile} />
@@ -109,11 +109,11 @@ export default function ParentLayout() {
           <button aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'} onClick={toggleTheme} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">{dark ? <Sun size={18} className="text-gray-500 dark:text-gray-400" /> : <Moon size={18} className="text-gray-500 dark:text-gray-400" />}</button>
         </div>
         <main className="flex-1 overflow-y-auto">
-          <motion.div key={pathname} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
+          <m.div key={pathname} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
             <ErrorBoundary resetKey={pathname}>
               <Outlet />
             </ErrorBoundary>
-          </motion.div>
+          </m.div>
         </main>
       </div>
     </div>

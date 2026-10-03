@@ -5,7 +5,7 @@
  */
 
 import { useState } from 'react'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 
 /** Full class strings per tone, never interpolated (Tailwind only ships complete names). */
 const TONES = {
@@ -47,7 +47,7 @@ export default function NoticeBanner({
   }
 
   return (
-    <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
+    <m.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
                 className={`mb-4 p-4 rounded-2xl border ${t.box}`}>
       <div className="flex items-start gap-3">
         <Icon className={`${t.icon} flex-shrink-0`} size={18} />
@@ -60,6 +60,6 @@ export default function NoticeBanner({
           </button>
         </div>
       </div>
-    </motion.div>
+    </m.div>
   )
 }

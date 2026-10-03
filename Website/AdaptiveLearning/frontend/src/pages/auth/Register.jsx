@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { Mail, Lock, User, Eye, EyeOff, ArrowRight } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { signUpMessage } from '../../lib/authErrors'
@@ -68,11 +68,11 @@ export default function Register() {
   return (
     <div className="w-full max-w-md mx-auto">
       <div className="text-center mb-8">
-        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }}
+        <m.div initial={{ scale: 0 }} animate={{ scale: 1 }}
           transition={{ type: 'spring', stiffness: 200, delay: 0.1 }}
           className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-2xl shadow-xl mb-5">
           <span className="text-3xl">🧠</span>
-        </motion.div>
+        </m.div>
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">Create Account</h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1 text-sm">Join AdaptiveLearning — it's free</p>
       </div>
@@ -84,14 +84,14 @@ export default function Register() {
           <div className="grid grid-cols-3 gap-2">
             {ROLES.map(r => (
               // aria-pressed: color alone doesn't convey the selection.
-              <motion.button key={r.id} type="button" onClick={() => setRole(r.id)}
+              <m.button key={r.id} type="button" onClick={() => setRole(r.id)}
                 aria-pressed={role === r.id}
                 whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
                 className={`p-3 rounded-xl border-2 text-left transition-all ${role === r.id ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30' : 'border-gray-200 dark:border-gray-700 hover:border-indigo-300'}`}>
                 <div className="text-xl mb-1">{r.emoji}</div>
                 <div className="font-bold text-gray-900 dark:text-white text-xs">{r.title}</div>
                 <div className="text-[10px] text-gray-500 dark:text-gray-400">{r.sub}</div>
-              </motion.button>
+              </m.button>
             ))}
           </div>
         </div>
@@ -157,13 +157,13 @@ export default function Register() {
             </div>
           )}
 
-          <motion.button type="submit" disabled={loading}
+          <m.button type="submit" disabled={loading}
             whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
             className="w-full py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-xl font-bold shadow-lg disabled:opacity-60 transition-all flex items-center justify-center gap-2 mt-2">
             {loading
-              ? <motion.div animate={{ rotate: 360 }} transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }} className="w-5 h-5 border-2 border-white border-t-transparent rounded-full" />
+              ? <m.div animate={{ rotate: 360 }} transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }} className="w-5 h-5 border-2 border-white border-t-transparent rounded-full" />
               : <><span>Create {ROLES.find(r2 => r2.id === role)?.title} Account</span><ArrowRight size={16} /></>}
-          </motion.button>
+          </m.button>
         </form>
 
         <p className="text-center text-gray-500 dark:text-gray-400 text-sm mt-6">

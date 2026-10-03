@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import LoadError from '../ui/LoadError'
 
 /**
@@ -10,7 +10,7 @@ export default function Panel({
   delay = 0, className = '', children,
 }) {
   return (
-    <motion.div
+    <m.div
       initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
       transition={{ delay }}
       className={`bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm ${className}`}
@@ -28,6 +28,6 @@ export default function Panel({
           {emptyNote}
         </p>
       ) : children}
-    </motion.div>
+    </m.div>
   )
 }

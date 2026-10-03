@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { ArrowLeft, BookOpen, Target, Flame, TrendingUp } from 'lucide-react'
 import { WeeklySignalReport, SignalTrend, LiveSignalSummary, StrategyPanel, ChartSummaryPanel } from '../signals/SignalPanel'
 import { apiFetch } from '../../lib/api'
@@ -183,13 +183,13 @@ export default function StudentProgressReport({
 
   return (
     <div className="p-6 lg:p-8 pb-12">
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+      <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <Link to={backTo} className={`flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 ${backHoverClass} mb-3 transition font-semibold w-fit`}>
           <ArrowLeft size={16} /> {backLabel}
         </Link>
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">{name}'s Progress</h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">Full learning report.</p>
-      </motion.div>
+      </m.div>
 
       {loading ? (
         <div className="space-y-4">{[1,2,3].map(i => <div key={i} className="h-32 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}</div>
@@ -209,7 +209,7 @@ export default function StudentProgressReport({
               { icon: TrendingUp, label: 'Accuracy',   value: statsRead && acc !== null ? `${acc}%` : '—', color: 'bg-gradient-to-br from-violet-500 to-purple-600' },
               { icon: Flame,      label: 'Streak',     value: stat(stats?.current_streak, v => `${v}d`), color: 'bg-gradient-to-br from-orange-500 to-amber-500' },
             ].map((c, i) => (
-              <motion.div key={c.label} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.08) }}
+              <m.div key={c.label} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.08) }}
                 whileHover={{ y: -3 }}
                 className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm flex items-start justify-between">
                 <div>
@@ -219,7 +219,7 @@ export default function StudentProgressReport({
                 <div className={`p-2.5 ${c.color} rounded-xl shadow-md`}>
                   <c.icon size={18} className="text-white" />
                 </div>
-              </motion.div>
+              </m.div>
             ))}
           </div>
           {!statsRead && (
@@ -275,7 +275,7 @@ export default function StudentProgressReport({
 
           <div className="grid lg:grid-cols-2 gap-6">
             {/* topic performance */}
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.35 }}
+            <m.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.35 }}
               className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm">
               <h3 className="font-black text-gray-900 dark:text-white mb-5">Topic Performance</h3>
               {perf.length === 0 ? (
@@ -294,7 +294,7 @@ export default function StudentProgressReport({
                           <span className={`text-xs font-black ${topicAcc >= 70 ? 'text-green-600' : topicAcc >= 40 ? 'text-amber-600' : 'text-rose-600'}`}>{topicAcc}%</span>
                         </div>
                         <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
-                          <motion.div className={`h-full rounded-full ${topicAcc >= 70 ? 'bg-green-500' : topicAcc >= 40 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                          <m.div className={`h-full rounded-full ${topicAcc >= 70 ? 'bg-green-500' : topicAcc >= 40 ? 'bg-amber-500' : 'bg-rose-500'}`}
                             initial={{ width: 0 }} animate={{ width: `${topicAcc}%` }} transition={{ duration: 0.6 }} />
                         </div>
                         <p className="text-xs text-gray-600 mt-0.5 dark:text-gray-400">{p.correct_questions}/{p.attempted_questions} correct</p>
@@ -303,10 +303,10 @@ export default function StudentProgressReport({
                   })}
                 </div>
               )}
-            </motion.div>
+            </m.div>
 
             {/* session history */}
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }}
+            <m.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }}
               className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm">
               <h3 className="font-black text-gray-900 dark:text-white mb-5">Recent Sessions</h3>
               {sessions.length === 0 ? (
@@ -316,7 +316,7 @@ export default function StudentProgressReport({
                   {sessions.map((s, i) => {
                     const sAcc = s.questions_answered > 0 ? Math.round((s.correct_answers / s.questions_answered) * 100) : 0
                     return (
-                      <motion.div key={s.id} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.04) }}
+                      <m.div key={s.id} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.04) }}
                         className="flex items-center justify-between p-3 bg-slate-50 dark:bg-gray-800 rounded-xl">
                         <div>
                           <p className="text-sm font-semibold text-gray-900 dark:text-white">{s.title || 'Practice Session'}</p>
@@ -326,12 +326,12 @@ export default function StudentProgressReport({
                           <p className={`text-sm font-black ${sAcc >= 70 ? 'text-green-500' : sAcc >= 40 ? 'text-amber-500' : 'text-rose-500'}`}>{sAcc}%</p>
                           <p className="text-xs text-gray-600 dark:text-gray-400">{s.questions_answered}q</p>
                         </div>
-                      </motion.div>
+                      </m.div>
                     )
                   })}
                 </div>
               )}
-            </motion.div>
+            </m.div>
           </div>
         </div>
       )}

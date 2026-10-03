@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { apiFetch } from '../../lib/api'
 import { fetchSessionList } from '../../lib/session'
 import SkeletonList from '../../components/ui/Skeleton'
@@ -73,10 +73,10 @@ export default function History() {
 
   return (
     <div className="p-6 lg:p-8 pb-12">
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+      <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">Session History</h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">All your past practice sessions.</p>
-      </motion.div>
+      </m.div>
 
       {sessions.length > 0 && (
         <div className="grid grid-cols-3 gap-4 mb-4">
@@ -86,14 +86,14 @@ export default function History() {
             { label: 'Questions Done',  value: statTile(totalQ),   icon: '📝' },
             { label: 'Overall Accuracy', value: statTile(overallA), icon: '🎯' },
           ].map((c, i) => (
-            <motion.div key={c.label}
+            <m.div key={c.label}
               initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.08) }}
               className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-4 shadow-sm text-center"
             >
               <div className="text-2xl mb-1">{c.icon}</div>
               <div className="text-xl font-black text-gray-900 dark:text-white">{c.value}</div>
               <div className="text-xs text-gray-500 dark:text-gray-400">{c.label}</div>
-            </motion.div>
+            </m.div>
           ))}
         </div>
       )}
@@ -131,7 +131,7 @@ export default function History() {
             const acc  = s.questions_answered > 0 ? Math.round((s.correct_answers / s.questions_answered) * 100) : 0
             const done = !!s.ended_at
             return (
-              <motion.div key={s.id}
+              <m.div key={s.id}
                 initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.04) }}
                 whileHover={{ x: 4 }}
                 className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm flex items-center justify-between hover:shadow-md transition-shadow"
@@ -161,7 +161,7 @@ export default function History() {
                     <p className="text-xs text-gray-600 dark:text-gray-400">accuracy</p>
                   </div>
                 </div>
-              </motion.div>
+              </m.div>
             )
           })}
         </div>

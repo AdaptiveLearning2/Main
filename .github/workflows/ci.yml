@@ -197,9 +197,9 @@ jobs:
         working-directory: Website/AdaptiveLearning/frontend
         run: npm run lint
 
-      # Blocking: extends no shared config, so it is red iff an XSS sink was added.
+      # Blocking: extends no shared config, so it is red iff an XSS sink or a motion misuse was added.
       # This is what lets the Supabase JWT stay in localStorage.
-      - name: Lint XSS sinks (blocking)
+      - name: Lint XSS sinks and motion features (blocking)
         working-directory: Website/AdaptiveLearning/frontend
         run: npm run lint:sinks
 

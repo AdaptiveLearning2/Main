@@ -2246,10 +2246,17 @@ reached the page with no id and there was nothing to put in `session_answers.que
 has produced before is exactly as real as answering a novel one.
 
 **An answer is one call: `record_answer`.** Under a `FOR NO KEY UPDATE` lock on the session row it refuses a
-missing, foreign or ended session before any write, then writes the answer, bumps the counters and calls
-`record_topic_attempt` inside its own exception block: a failed attribution leaves the answer standing. `main.py`
-maps the outcome, `forbidden` through `_session_or_403` so it records `authz_denied` like every other refusal. A
-failed call is a 503, never a silent drop; deployed ahead of the migration, every answer fails and the log names it.
+missing, foreign or ended session before any write, then writes the answer and runs `bump_session_counters` and
+`record_topic_attempt`, each in its own exception block, so neither failing undoes the answer. `main.py` maps the
+outcome, `forbidden` through `_session_or_403` so it records `authz_denied` like every other refusal. A failed call is
+a 503, never a silent drop; deployed ahead of the migration, every answer fails and the log names it. A question
+expired since it was served fails the answer's foreign key and is a **410, never a 409**: `recordAnswer` reads a 409
+as its session ended and opens another.
+
+**A failed side step is a 200, so the log is its only symptom.** It comes back as `topic_error` or `counters_error`
+and `_log_answer_side_errors` prints it by name; a missing function (42883) names its migration. That is the
+deploy-ordering trap in its worst form: attribution stops and nothing shows but the numbers not moving. Its tests
+assert on the log line, since the response is identical either way.
 
 **The topic comes from the question row, never from the caller.** The client has to be trusted about correctness;
 letting it also name the topic would let a page credit one subject for work done in another, and

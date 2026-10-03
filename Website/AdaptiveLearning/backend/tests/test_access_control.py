@@ -1168,7 +1168,8 @@ class _OwnedSessionClient:
                     if params["p_user_id"] != client.owner:
                         return type("R", (), {"data": {"status": "forbidden", "owner": client.owner}})()
                     client.writes.append(("session_answers", "insert", params))
-                    return type("R", (), {"data": {"status": "ok", "topic": None}})()
+                    return type("R", (), {"data": {"status": "ok", "topic": None,
+                                                   "topic_error": None, "counters_error": None}})()
                 client.writes.append(("rpc", name))
                 return type("R", (), {"data": None})()
 
@@ -1204,6 +1205,9 @@ class _OwnedSessionClient:
         return _Q()
 
 
+_ANSWERED_QUESTION = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
+
+
 @pytest.mark.parametrize("endpoint", ["answer", "end"])
 def test_a_student_may_not_touch_another_students_session(monkeypatch, endpoint):
     client = _OwnedSessionClient("student-1")
@@ -1217,7 +1221,7 @@ def test_a_student_may_not_touch_another_students_session(monkeypatch, endpoint)
         if endpoint == "answer":
             main.record_answer(
                 session_id="session-1",
-                payload=main.AnswerPayload(question_id="q-1", selected_index=0,
+                payload=main.AnswerPayload(question_id=_ANSWERED_QUESTION, selected_index=0,
                                            correct=True),
                 request=None)
         else:
@@ -1243,7 +1247,7 @@ def test_the_owner_is_still_allowed(monkeypatch, endpoint):
     if endpoint == "answer":
         out = main.record_answer(
             session_id="session-1",
-            payload=main.AnswerPayload(question_id="q-1", selected_index=0,
+            payload=main.AnswerPayload(question_id=_ANSWERED_QUESTION, selected_index=0,
                                        correct=True),
             request=None)
         assert any(w[:2] == ("session_answers", "insert") for w in client.writes)

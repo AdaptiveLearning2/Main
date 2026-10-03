@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from supabase_client import get_client, pooled_http
 from postgrest.types import ReturnMethod  # supabase pins this sibling
 from typing import Any, NamedTuple
+from uuid import UUID
 
 import LLM_topic_decider
 import chart_archive
@@ -2495,7 +2496,8 @@ class StartSessionRequest(StrictModel):
     title: str | None = Field(None, max_length=_TITLE_MAX)
 
 class AnswerPayload(StrictModel):
-    question_id:    str = Field(max_length=_ID_MAX)
+    # A uuid here, or the RPC's 22P02 reads as a missing session.
+    question_id:    UUID
     selected_index: int
     correct:        bool
 
@@ -2873,6 +2875,37 @@ def start_session(payload: StartSessionRequest, request: Request):
 
     return res.data[0]
 
+
+# The answer's foreign key to its question (init migration): one expired or deleted since it was served.
+_ANSWER_QUESTION_FK = "session_answers_question_id_fkey"
+
+# Steps record_answer survives failing: (result field, function, its migration, what stops).
+_ANSWER_SIDE_STEPS = (
+    ("topic_error",    "record_topic_attempt",  "20260825000000", "no topic attribution until then"),
+    ("counters_error", "bump_session_counters", "20260826000000", "live counters will not move"),
+)
+
+
+def _names_deleted_question(exc: Exception) -> bool:
+    """Whether a failed answer write means its question no longer exists."""
+    return (getattr(exc, "code", None) == "23503"
+            and _ANSWER_QUESTION_FK in (getattr(exc, "message", None) or ""))
+
+
+def _log_answer_side_errors(out: dict, session_id: str) -> None:
+    """Log each step record_answer reports failing; the answer itself is saved."""
+    for field, fn, migration, effect in _ANSWER_SIDE_STEPS:
+        err = str(out.get(field) or "")
+        if not err:
+            continue
+        # 'SQLSTATE: message'; 42883 is undefined_function, and must name this step's own function.
+        if err.startswith("42883") and fn in err:
+            print(f"[answer] {fn} is missing from the database -- apply {migration}; "
+                  f"{effect}: {err}")
+        else:
+            print(f"[answer] saved, but {field} for {session_id}: {err}")
+
+
 @app.post("/api/sessions/{session_id}/answer")
 def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...), request: Request = None):
     user = get_user(request)
@@ -2882,7 +2915,7 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
         out = supabase.rpc("record_answer", {
             "p_session_id":     session_id,
             "p_user_id":        user["id"],
-            "p_question_id":    payload.question_id,
+            "p_question_id":    str(payload.question_id),
             "p_selected_index": payload.selected_index,
             "p_correct":        bool(payload.correct),
             "p_answered_at":    _utc_now().isoformat(),
@@ -2890,6 +2923,9 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
     except Exception as e:                                     # noqa: BLE001
         if _names_no_row(e):
             raise HTTPException(404, "Session not found")
+        if _names_deleted_question(e):
+            # 410, not 409: the page reads a 409 here as its session ended and starts another.
+            raise HTTPException(410, "This question is no longer available")
         if "PGRST202" in str(e):
             print(f"[answer] record_answer is missing from the database -- apply "
                   f"20261003000000; every answer fails until it is: {e}")
@@ -2909,6 +2945,7 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
     if status != "ok":
         print(f"[answer] record_answer answered {out!r} for {session_id}")
         raise _read_failed("This answer could not be saved; try again")
+    _log_answer_side_errors(out, session_id)
     # Best effort, after the writes: the simulator reacts to answers; hardware ignores it.
     try:
         eeg_poller.notify_answer(session_id, bool(payload.correct))

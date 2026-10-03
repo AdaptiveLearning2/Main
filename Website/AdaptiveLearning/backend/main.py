@@ -540,13 +540,14 @@ def _read_failed(detail: str) -> HTTPException:
 def _missing_rpc(e: Exception, function: str, migration: str) -> bool:
     """Whether `e` is PostgREST's PGRST202 for `function`; if so, logs the migration to apply.
 
+    One naming no function is the call the site made; one naming another is not this one.
     The caller keeps its own raise or return: a missing function is one more failed read.
     """
     if "PGRST202" not in str(e):
         return False
     message = getattr(e, "message", None)     # APIError's own field; the hint can name others
-    text = message if isinstance(message, str) else str(e)
-    if not re.search(rf"\bpublic\.{re.escape(function)}(?!\w)", text):
+    named = re.findall(r"\bpublic\.(\w+)", message if isinstance(message, str) else str(e))
+    if named and function not in named:
         return False
     print(f"[rpc] {function} is missing from the database -- apply {migration}; until it is, "
           f"every call fails and is answered as a failed read (degraded, or a 503 to try again): {e}")

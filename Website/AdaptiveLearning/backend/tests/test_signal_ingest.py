@@ -296,15 +296,18 @@ def _pgrst202(function: str):
 def test_a_missing_gate_function_names_its_migration(store, capsys):
     """Deployed ahead of 20261003000000, every batch is a 503; the log has to say why."""
     from fastapi import HTTPException
-    store["_gate_down"] = _pgrst202("ingest_gate")
+    store["_gate_down"] = RuntimeError("{'code': 'PGRST202', 'message': 'no function'}")
     with pytest.raises(HTTPException) as exc:
         _post_heart([_heart()])
     assert exc.value.status_code == 503
     assert "20261003000000" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("error", [_pgrst202("ingest_gate"), RuntimeError(str(_pgrst202("ingest_gate")))],
-                         ids=["api-error", "its-text"])
+@pytest.mark.parametrize("error", [
+    _pgrst202("ingest_gate"),
+    RuntimeError(str(_pgrst202("ingest_gate"))),
+    RuntimeError("{'code': 'PGRST202', 'message': 'no function'}"),   # the site knows which call it made
+], ids=["api-error", "its-text", "names-none"])
 def test_a_missing_function_is_named_with_its_migration(capsys, error):
     assert main._missing_rpc(error, "ingest_gate", "20261003000000") is True
     line = capsys.readouterr().out
@@ -314,10 +317,11 @@ def test_a_missing_function_is_named_with_its_migration(capsys, error):
 
 @pytest.mark.parametrize("error", [
     _pgrst202("record_answer"),
+    RuntimeError(str(_pgrst202("record_answer"))),
     _pgrst202("ingest_gate_v2"),                               # a name it is a prefix of
     RuntimeError("connection reset"),
     RuntimeError("{'code': '42883', 'message': 'function public.ingest_gate(uuid, uuid) does not exist'}"),
-], ids=["other-function", "longer-name", "not-postgrest", "other-code"])
+], ids=["other-function", "other-function-text", "longer-name", "not-postgrest", "other-code"])
 def test_anything_else_is_not_a_missing_function(capsys, error):
     """False and silent: the caller logs its own failed read, so a wrong True misnames the outage."""
     assert main._missing_rpc(error, "ingest_gate", "20261003000000") is False

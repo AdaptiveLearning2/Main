@@ -127,7 +127,7 @@ export default function Sessions() {
         )}
       </div>
         
-      {/* Otherwise the table looks complete with rows missing. */}
+      {/* A guard: the class read answers every student or none, so this shows only if that ever changes. */}
       {!loading && !failed && !allFailed && partial > 0 && (
         <div className="mb-4 rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-5 py-3">
           <p className="text-sm font-bold text-amber-900 dark:text-amber-200">
@@ -140,9 +140,9 @@ export default function Sessions() {
       {loading ? (
         <SkeletonList count={4} height="h-16" gap="space-y-2" />
       ) : failed || allFailed ? (
-        // `allFailed` has no single error, so it gets the generic sentence.
+        // `allFailed`: the backend answered and its read failed, which is LoadError's 503 sentence.
         <LoadError what="this class's sessions" onRetry={retry}
-          error={failed || undefined} />
+          error={failed || { status: 503 }} />
       ) : allRows.length === 0 ? (
         <div className="text-center py-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
           <div className="text-6xl mb-3">📭</div>

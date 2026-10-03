@@ -57,6 +57,9 @@ it('does not call a class with no readable sessions an empty one', async () => {
   expect(screen.queryByText(EMPTY)).not.toBeInTheDocument()
   // Not the partial banner either: nothing loaded.
   expect(screen.queryByText(BANNER)).not.toBeInTheDocument()
+  // The backend answered; its read failed. So "just now", never "make sure the backend is running".
+  expect(screen.getByText(/just now/i)).toBeInTheDocument()
+  expect(screen.queryByText(/backend is running/i)).not.toBeInTheDocument()
 })
 
 it('still calls a class that genuinely ran no sessions empty', async () => {

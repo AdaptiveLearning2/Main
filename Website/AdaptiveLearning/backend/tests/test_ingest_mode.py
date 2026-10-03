@@ -762,6 +762,29 @@ def test_non_column_keys_are_still_free_form():
     assert sample.features["signal_quality"] == "good"
 
 
+@pytest.mark.parametrize("window,consent,expected", [
+    ("open", {"eeg_enabled": True, "retrieved": True}, "push_ingestion"),
+    ("open", {"eeg_enabled": False, "retrieved": True}, "consent_withdrawn"),
+    ("open", {"retrieved": False}, "consent_unknown"),
+    ("after_year", {"eeg_enabled": True, "retrieved": True}, "school_year_ended"),
+])
+def test_status_under_push_names_the_mode_only_when_nothing_else_stops_recording(
+        push_mode, monkeypatch, window, consent, expected):
+    """The poller never runs under push, but "push" must not hide a refusal or a closed year."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(eeg_poller, "status", lambda _u: {"running": False})
+    monkeypatch.setattr(main, "eeg_client", _StubClient)
+    monkeypatch.setattr(main, "_consent", lambda _s: consent)
+    if window == "after_year":
+        monkeypatch.setattr(main, "_retention_window", lambda: {
+            "state": main.WINDOW_AFTER, "starts_on": "2026-09-01", "ends_on": "2027-06-30",
+            "timezone": "UTC"})
+
+    out = main.eeg_status(None)
+
+    assert out["poller"]["stopped_reason"] == expected
+
+
 def test_status_does_not_touch_the_sidecar_under_push(push_mode, monkeypatch):
     """The mode check must precede the probe, which 500s without EEG_API_TOKEN."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})

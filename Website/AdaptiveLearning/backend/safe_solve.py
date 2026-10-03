@@ -124,24 +124,31 @@ def _unsafe_request_text(request: dict) -> str | None:
     return next((str(t) for t in texts if t is not None and not _safe_text(t)), None)
 
 
-def _probe_startup():
+def _probe_startup(stop: threading.Event | None = None):
     """Measure worker startup and clamp `SOLVE_STARTUP_BUDGET` up if it is tight.
 
-    Clamps rather than raises: this runs at import, and raising would take the
-    whole backend down. A probe that cannot run leaves the budget unchanged.
+    Clamps rather than refusing to start: one tuning knob must not take the backend
+    down. A probe that cannot run leaves the budget unchanged. Silent once `stop` is set.
     """
     global SOLVE_STARTUP_BUDGET_S, STARTUP_COST_S
+
+    def say(message):
+        if stop is None or not stop.is_set():
+            print(message)
+
     started = time.monotonic()
     try:
+        # Unqueued: it runs beside live traffic, and a wait for a slot is not startup cost.
         probed = _run({"scenario": "values", "values": ["1"]}, _PROBE_TIMEOUT_S,
-                      "startup probe", startup_timeout=_PROBE_TIMEOUT_S)
+                      "startup probe", startup_timeout=_PROBE_TIMEOUT_S,
+                      queued=False, say=say)
     except SolverUnavailable as e:
-        # Must not propagate: this runs at import.
-        print(f"[safe_solve] startup probe could not run: {e}")
+        # Must not propagate: the thread would die on a traceback instead of this line.
+        say(f"[safe_solve] startup probe could not run: {e}")
         probed = None
     elapsed = time.monotonic() - started
     if probed is None:
-        print(f"[safe_solve] startup probe failed after {elapsed:.1f}s -- the "
+        say(f"[safe_solve] startup probe failed after {elapsed:.1f}s -- the "
               f"solve subprocess could not run, so every question that needs "
               f"one will fail. Leaving SOLVE_TIMEOUT at "
               f"{_CONFIGURED_TIMEOUT_S}s; a budget guessed from a failed "
@@ -152,7 +159,7 @@ def _probe_startup():
     floor = elapsed * _STARTUP_SAFETY_FACTOR
     if SOLVE_STARTUP_BUDGET_S < floor:
         SOLVE_STARTUP_BUDGET_S = floor
-        print(f"[safe_solve] SOLVE_STARTUP_BUDGET={_CONFIGURED_STARTUP_BUDGET_S}s "
+        say(f"[safe_solve] SOLVE_STARTUP_BUDGET={_CONFIGURED_STARTUP_BUDGET_S}s "
               f"is below {_STARTUP_SAFETY_FACTOR:g}x the measured subprocess "
               f"startup of {elapsed:.2f}s on this machine. Raised to "
               f"{floor:.2f}s for this process. Left alone it would have failed "
@@ -325,22 +332,28 @@ def _kill(proc):
         pass
 
 
-def _run(request: dict, timeout, label: str, startup_timeout=None):
+def _startup_budget():
+    """The startup budget now: the probe's own while it is still measuring this machine."""
+    probe = _probe_thread
+    if probe is not None and probe.is_alive():
+        return max(SOLVE_STARTUP_BUDGET_S, _PROBE_TIMEOUT_S)
+    return SOLVE_STARTUP_BUDGET_S
+
+
+def _run(request: dict, timeout, label: str, startup_timeout=None, queued=True, say=print):
     """One worker call. The result string, or None if the worker ran and
     rejected the input.
 
-    Raises `SolverUnavailable` when the worker could not be run at all.
+    Raises `SolverUnavailable` when the worker could not be run at all. `queued=False`
+    skips the concurrency cap (the probe only); `say` is where its log lines go.
     """
     request = _normalise_request(request)
     unsafe = _unsafe_request_text(request)
     if unsafe is not None:
         # A rejected reply, like any other: the caller retries or drops the question.
-        print(f"[safe_solve] refused text a sympy parse would eval ({label}): {unsafe[:40]!r}")
+        say(f"[safe_solve] refused text a sympy parse would eval ({label}): {unsafe[:40]!r}")
         return None
     budget = SOLVE_TIMEOUT_S if timeout is None else timeout
-    # Only `_probe_startup` passes this, so a tight budget cannot time out its own probe.
-    startup = SOLVE_STARTUP_BUDGET_S if startup_timeout is None \
-        else startup_timeout
 
     # Only a startup timeout is retried: that is contention and passes. A solve
     # timeout (3s vs ~10ms of arithmetic) is a genuine spin and would spin again.
@@ -348,9 +361,12 @@ def _run(request: dict, timeout, label: str, startup_timeout=None):
     reaped = False
     for index in range(attempts):
         last = index == attempts - 1
+        # Per attempt, so a retry picks up a clamp the probe made meanwhile. Only the probe
+        # passes `startup_timeout`, so a tight budget cannot time out its own measurement.
+        startup = _startup_budget() if startup_timeout is None else startup_timeout
         # Outside the try, so a queue refusal is not relabelled "could not be
         # started". Per attempt, and released before parsing the output.
-        with _solve_slot(label):
+        with (_solve_slot(label) if queued else contextlib.nullcontext()):
             try:
                 proc, stdout, stderr = _spawn(request)
             except Exception as e:              # pragma: no cover - defensive
@@ -362,9 +378,9 @@ def _run(request: dict, timeout, label: str, startup_timeout=None):
             except _Timeout as t:
                 _kill(proc)
                 if t.phase == "startup" and not last:
-                    print(f"[safe_solve] exceeded {t.budget:g}s in startup "
-                          f"({label}); retrying once -- startup is where "
-                          f"contention shows, and contention passes")
+                    say(f"[safe_solve] exceeded {t.budget:g}s in startup "
+                        f"({label}); retrying once -- startup is where "
+                        f"contention shows, and contention passes")
                     continue
                 raise SolverUnavailable(
                     f"the solver exceeded {t.budget:g}s in {t.phase} and was "
@@ -396,22 +412,22 @@ def _run(request: dict, timeout, label: str, startup_timeout=None):
             f"the solver produced unreadable output: "
             f"{raw[:200]!r}") from None
     if not answer.get("ok"):
-        print(f"[safe_solve] {answer.get('error')}")
+        say(f"[safe_solve] {answer.get('error')}")
         return None
     result = answer.get("result") or ""
     if len(result) > MAX_RESULT_CHARS:
-        print(f"[safe_solve] result of {len(result)} chars is not a usable "
-              f"answer; discarding")
+        say(f"[safe_solve] result of {len(result)} chars is not a usable "
+            f"answer; discarding")
         return None
     # Callers sympify this in-process, with the full environment; `values` is JSON, read by json.loads.
     if request.get("scenario") != "values" and not _safe_text(result):
-        print(f"[safe_solve] result is not plain arithmetic; discarding: {result[:40]!r}")
+        say(f"[safe_solve] result is not plain arithmetic; discarding: {result[:40]!r}")
         return None
     return result
 
 
-# Runs at import so a too-slow machine says so at boot. `SOLVE_STARTUP_PROBE=0`
-# skips it for processes that never solve.
+# Started by the backend's lifespan, off the import path: on a 0.1-CPU host a sympy
+# subprocess at import delayed every cold start. `SOLVE_STARTUP_PROBE=0` skips it.
 def _startup_probe_enabled():
     """Whether the boot-time probe should run.
 
@@ -420,5 +436,25 @@ def _startup_probe_enabled():
     return os.getenv("SOLVE_STARTUP_PROBE", "1").strip().lower()         not in ("0", "false", "no")
 
 
-if _startup_probe_enabled():
-    _probe_startup()
+_probe_stop = threading.Event()
+_probe_thread = None
+
+
+def start_startup_probe() -> bool:
+    """Run `_probe_startup` in a thread, once per process; False if off or already started."""
+    global _probe_thread
+    if not _startup_probe_enabled() or _probe_thread is not None:
+        return False
+    _probe_stop.clear()
+    _probe_thread = threading.Thread(target=_probe_startup, kwargs={"stop": _probe_stop},
+                                     name="solve-probe", daemon=True)
+    _probe_thread.start()
+    return True
+
+
+def stop_startup_probe(timeout: float = 5.0) -> None:
+    """Silence the probe and join it (a print during shutdown is a fatal abort)."""
+    _probe_stop.set()
+    thread = _probe_thread
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=timeout)

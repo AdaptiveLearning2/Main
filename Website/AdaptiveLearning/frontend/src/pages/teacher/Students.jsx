@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { m, AnimatePresence } from 'framer-motion'
-import { supabase } from '../../lib/supabase'
 import { Users, Search, ChevronDown, Flame, Smile, Target, TrendingUp, Zap, Heart, Activity } from 'lucide-react'
 import HideSensorDataToggle from '../../components/common/HideSensorDataToggle'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
@@ -34,19 +33,17 @@ const asPct = (value) => {
 // topic performance. "Hide sensor data" affects display only, not the request.
 async function getStudentStats(studentId)
 {
-   const [statsRes, summary, topicRes] = await Promise.all([
+   const [statsRes, summary, topicRows] = await Promise.all([
     // The endpoint adds open-session counts that user_stats lacks mid-session.
     // Caught per read so one failure can't blank the other tiles.
     apiFetch(`/api/stats/student/${studentId}`)
       .catch(err => { console.error('Failed to load student stats:', err); return { retrieved: false } }),
     apiFetch(`/api/students/${studentId}/signal-summary?days=${SIGNAL_WINDOW_DAYS}`)
       .catch(err => { console.error('Failed to load signal summary:', err); return null }),
-    supabase.from('user_math_performance')
-      .select('topic_id, attempted_questions, correct_questions, math_topics(topic_name)')
-      .eq('user_id', studentId)
+    // No topics panel on a failure, which claims nothing either way.
+    apiFetch(`/api/performance/student/${studentId}`)
+      .catch(err => { console.error('Failed to load topic performance:', err); return [] }),
   ])
-
-  if (topicRes.error) console.error('Failed to load topic performance:', topicRes.error)
 
   const userStats = statsRes
   const signals = summary || {}
@@ -97,7 +94,7 @@ async function getStudentStats(studentId)
                         consentRetrieved: signals.consent_retrieved, samples: signals.face_samples }),
     heartOff: offLabel({ on: signals.heart_included === true, revokedAt: signals.heart_revoked_at,
                          consentRetrieved: signals.consent_retrieved, samples: signals.heart_samples }),
-    topics: (topicRes.data || []).map(row => {
+    topics: (Array.isArray(topicRows) ? topicRows : []).map(row => {
       const attempted = row.attempted_questions || 0
       const correct = row.correct_questions || 0
       return {
@@ -129,45 +126,21 @@ export default function Students() {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadStudents()
-    {
-
-      const {data: { user }, error: userError } = await supabase.auth.getUser()
-      if (userError || !user )
-      {
-        if(!cancelled) { setRosterFailed(true); setLoading(false) }
+    // Every student in any class this teacher teaches, once: `{user_id, name, email, joined_at}`.
+    async function loadStudents() {
+      let rows
+      try {
+        rows = await apiFetch('/api/teacher/students')
+      } catch (e) {
+        console.error('Failed to load students:', e)
+        if (!cancelled) { setRosterFailed(true); setLoading(false) }
         return
       }
-      // Students enrolled in any class this teacher teaches.
-      const {data, error} = await supabase
-      .from('class_memberships')
-      // Named, not `*`: RLS is the only check on this read, and a column added later would ride along.
-      .select('student_id, profiles!inner(id, email, display_name, created_at), classes!inner(teacher_id)')
-      .eq('classes.teacher_id', user.id)
-
-      if (error) console.error('Failed to load students:', error)
-
-      if(cancelled)
-        return
-
-      if (error)
-      {
-        console.error('Failed to load students:', error )
-        setRosterFailed(true)
-        setLoading(false)
-        return
-      }
-    const seen = new Map()
-    for( const row of data || [])
-    {
-      if(row.profiles && !seen.has(row.student_id))
-        seen.set(row.student_id, row.profiles)
+      if (cancelled) return
+      setStudents(Array.isArray(rows) ? rows : [])
+      setRosterFailed(false)
+      setLoading(false)
     }
-
-    setStudents(Array.from(seen.values()))
-    setRosterFailed(false)
-    setLoading(false)
-  }
 
   loadStudents()
   return () => { cancelled = true}
@@ -177,7 +150,7 @@ export default function Students() {
 
   // Search name and email both.
   const filtered = students.filter(s =>
-    `${s.display_name || ''} ${s.email || ''} ${s.id || ''}`
+    `${s.name || ''} ${s.email || ''} ${s.user_id || ''}`
       .toLowerCase().includes(search.toLowerCase())
   )
 
@@ -271,18 +244,20 @@ export default function Students() {
             <span className="text-xs font-bold uppercase tracking-widest text-gray-600 text-right dark:text-gray-400">Role</span>
           </div>
           {filtered.map((s, i) => {
-            const name    = s.display_name || s.email?.split('@')[0] || s.id?.slice(0, 8)
+            // The backend names an unnamed student "Student", as the class roster does.
+            const name    = s.name || 'Student'
             // From the name being shown, so the letter and the label agree.
-            const initial = (name || '?')[0].toUpperCase()
-            const joined  = s.created_at ? new Date(s.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'
-            const isOpen = expandedId === s.id
-            const isLoadingStats = !!statsLoading[s.id]
-            const stats = statsCache[s.id]
+            const initial = name[0].toUpperCase()
+            // The earliest join across this teacher's classes, not the account's creation.
+            const joined  = s.joined_at ? new Date(s.joined_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'
+            const isOpen = expandedId === s.user_id
+            const isLoadingStats = !!statsLoading[s.user_id]
+            const stats = statsCache[s.user_id]
             return (
-              <div key={s.id} className="border-b border-gray-50 dark:border-gray-800 last:border-0">
+              <div key={s.user_id} className="border-b border-gray-50 dark:border-gray-800 last:border-0">
                 <m.button
                   type="button"
-                  onClick={() => toggleExpand(s.id)}
+                  onClick={() => toggleExpand(s.user_id)}
                   initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.03) }}
                   whileHover={{ x: 3 }}
                   className="w-full grid grid-cols-4 items-center px-5 py-4 hover:bg-slate-50 dark:hover:bg-gray-800 transition-colors text-left"

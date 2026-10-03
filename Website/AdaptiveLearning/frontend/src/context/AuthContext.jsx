@@ -59,7 +59,7 @@ export function AuthProvider({ children }) {
       setUser(prev => (prev && next && event !== 'USER_UPDATED' && prev.id === next.id
                        && prev.updated_at === next.updated_at ? prev : next))
       setAuthLoading(false)
-      // Never await a session read here (e.g. `apiFetch`): supabase-js holds an auth lock, so it deadlocks.
+      // Never await a session read here (e.g. `apiFetch`): the auth client holds a lock, so it deadlocks.
     })
     return () => subscription.unsubscribe()
   }, [])

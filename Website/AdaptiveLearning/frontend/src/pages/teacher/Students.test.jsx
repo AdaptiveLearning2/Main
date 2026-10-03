@@ -3,70 +3,19 @@ import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import Students from './Students'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
+import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
 
-// Totals from /api/stats/student/{id}, averages from /api/students/{id}/signal-summary; topics via supabase.
+// Roster from /api/teacher/students, totals from /api/stats/student/{id}, averages from
+// /api/students/{id}/signal-summary, topics from /api/performance/student/{id}.
+vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 
-vi.mock('../../lib/api', () => {
-  const apiCalls = []
-  // Next response: an object resolves, an Error rejects, a Promise is adopted as-is.
-  const state = { summary: null, userStats: null }
-  return {
-    apiFetch: (path) => {
-      apiCalls.push(path)
-      const r = String(path).includes('/api/stats/student/') ? state.userStats : state.summary
-      return r instanceof Error ? Promise.reject(r) : Promise.resolve(r)
-    },
-    __apiCalls: apiCalls,
-    __apiState: state,
-  }
-})
-
-vi.mock('../../lib/supabase', () => {
-  const fromCalls = []
-  const selectCalls = []
-  const results = {}
-  // Chainable builder; also a thenable, since the topic query is awaited straight off .eq().
-  const query = (table) => {
-    // A stored Error rejects, to exercise the throw path.
-    const settle = () => {
-      const r = results[table] ?? { data: [], error: null }
-      return r instanceof Error ? Promise.reject(r) : Promise.resolve(r)
-    }
-    const q = {
-      select: (cols) => { selectCalls.push([table, cols]); return q },
-      eq: () => q,
-      order: () => q,
-      limit: () => settle(),
-      maybeSingle: () => settle(),
-      then: (res, rej) => settle().then(res, rej),
-    }
-    return q
-  }
-  return {
-    supabase: {
-      auth: { getUser: () => Promise.resolve({ data: { user: { id: 'teacher-1' } }, error: null }) },
-      from: (table) => { fromCalls.push(table); return query(table) },
-    },
-    __fromCalls: fromCalls,
-    __selectCalls: selectCalls,
-    __results: results,
-  }
-})
-
-const { __fromCalls: fromCalls, __selectCalls: selectCalls, __results: results } =
-  await import('../../lib/supabase')
-const { __apiCalls: apiCalls, __apiState: apiState } = await import('../../lib/api')
-
-// Real `profiles` columns only: there is no `username`.
-const MEMBERSHIPS = {
-  data: [{
-    student_id: 'stu-1',
-    profiles: { id: 'stu-1', email: 'ada@example.com', display_name: 'Ada Lovelace',
-                role: 'student', grade_level: '6th Grade' },
-    classes: { teacher_id: 'teacher-1' },
-  }],
-  error: null,
-}
+// What /api/teacher/students returns: `user_id` and `name`, never `id` or `display_name`.
+const ROSTER = [
+  { user_id: 'stu-1', name: 'Ada Lovelace', email: 'ada@example.com',
+    joined_at: '2026-01-15T09:00:00+00:00' },
+  { user_id: 'stu-2', name: 'Grace Hopper', email: 'grace@example.com',
+    joined_at: '2026-02-01T09:00:00+00:00' },
+]
 
 // Seven days at 1 Hz: far above any row cap, so a count from rows cannot match.
 const WEEK_OF_SAMPLES = 51840
@@ -88,16 +37,21 @@ const USER_STATS = {
   error: null,
 }
 
-function setData({ summary = SUMMARY, userStats = USER_STATS } = {}) {
-  for (const k of Object.keys(results)) delete results[k]
-  Object.assign(results, {
-    class_memberships: MEMBERSHIPS,
-    user_math_performance: { data: [], error: null },
-  })
-  apiState.summary = summary
+// An Error rejects; anything else resolves.
+const answer = (value) => () => (value instanceof Error ? Promise.reject(value) : value)
+
+function setData({ summary = SUMMARY, userStats = USER_STATS, roster = ROSTER, topics = [] } = {}) {
   // The endpoint returns the row itself; unwrap `{ data }` fixtures, pass Errors through.
-  apiState.userStats = userStats instanceof Error ? userStats : (userStats?.data ?? userStats)
+  const stats = userStats instanceof Error ? userStats : (userStats?.data ?? userStats)
+  mockApi([
+    { match: '/api/teacher/students', handler: answer(roster) },
+    { match: /^\/api\/stats\/student\//, handler: answer(stats) },
+    { match: /\/signal-summary\?/, handler: answer(summary) },
+    { match: /^\/api\/performance\/student\//, handler: answer(topics) },
+  ])
 }
+
+const calls = () => apiFetch.mock.calls.map(([path]) => String(path))
 
 // StatCard renders value, label and subtitle in one div.
 function tile(label) {
@@ -108,23 +62,55 @@ async function expandAda() {
   await userEvent.click(await screen.findByRole('button', { name: /ada/i }))
 }
 
-const summaryCalls = () => apiCalls.filter(p => p.includes('/signal-summary'))
+const summaryCalls = () => calls().filter(p => p.includes('/signal-summary'))
 
 beforeEach(() => {
   localStorage.clear()
-  fromCalls.length = 0
-  selectCalls.length = 0
-  apiCalls.length = 0
+  resetApi()
   setData()
 })
 
-it('reads the roster by named profile columns, never `*`', async () => {
-  // RLS is the only check on this read; `*` would send whatever `profiles` gains next.
+it('reads the roster from the backend', async () => {
+  // The frontend's Supabase client only signs in; it has no tables to read.
   render(<Students />)
-  await waitFor(() => expect(selectCalls.some(([t]) => t === 'class_memberships')).toBe(true))
-  const [, cols] = selectCalls.find(([t]) => t === 'class_memberships')
-  expect(cols).toContain('profiles!inner(id, email, display_name, created_at)')
-  expect(cols).not.toMatch(/\*/)
+  expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
+  expect(calls()).toContain('/api/teacher/students')
+})
+
+it('shows the class join date the roster carries', async () => {
+  render(<Students />)
+  const row = (await screen.findByText('Grace Hopper')).closest('button')
+  const shown = new Date('2026-02-01T09:00:00+00:00')
+    .toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  expect(within(row).getByText(shown)).toBeInTheDocument()
+})
+
+it('asks for the expanded student, not the first one listed', async () => {
+  render(<Students />)
+  await userEvent.click(await screen.findByRole('button', { name: /grace/i }))
+  await waitFor(() => expect(summaryCalls()).toHaveLength(1))
+  expect(summaryCalls()[0]).toContain('/api/students/stu-2/signal-summary')
+  expect(calls()).toContain('/api/performance/student/stu-2')
+})
+
+it('shows per-topic accuracy from the backend', async () => {
+  // A `user_math_performance` row with its topic embedded, as the endpoint returns it.
+  setData({ topics: [{ user_id: 'stu-1', topic_id: 3, attempted_questions: 4,
+                       correct_questions: 3, updated_at: '2026-09-01T10:00:00+00:00',
+                       math_topics: { topic_name: 'fractions' } }] })
+  render(<Students />)
+  await expandAda()
+  expect(await screen.findByText('fractions')).toBeInTheDocument()
+  expect(screen.getByText('3/4 correct')).toBeInTheDocument()
+})
+
+it('a failed topic read costs the topics panel only', async () => {
+  setData({ topics: apiError(503) })
+  render(<Students />)
+  await expandAda()
+  await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
+  expect(tile('Total Accuracy').getByText('50%')).toBeInTheDocument()
+  expect(screen.queryByText('Per-topic accuracy')).not.toBeInTheDocument()
 })
 
 describe('signal averages', () => {
@@ -191,7 +177,7 @@ describe('a failed read', () => {
 
   it('leaves the row refetchable rather than stuck loading', async () => {
     // A throw that leaves the loading flag set makes toggleExpand treat the row as handled.
-    const statsCalls = () => apiCalls.filter(p => String(p).includes('/api/stats/student/'))
+    const statsCalls = () => calls().filter(p => p.includes('/api/stats/student/'))
     setData({ userStats: new Error('network down') })
     render(<Students />)
     await expandAda()
@@ -422,38 +408,22 @@ it('searches the name on screen, not only the email behind it', async () => {
   expect(screen.queryByText('Ada Lovelace')).not.toBeInTheDocument()
 })
 
-it('falls back to the email prefix for a student with no name set', async () => {
-  // Unreachable from the app, but the column is nullable and the SQL editor writes it.
-  results.class_memberships = {
-    data: [{
-      student_id: 'stu-1',
-      profiles: { id: 'stu-1', email: 'ada@example.com', display_name: null,
-                  role: 'student', grade_level: '6th Grade' },
-      classes: { teacher_id: 'teacher-1' },
-    }],
-    error: null,
-  }
-  render(<Students />)
-
-  expect(await screen.findByText('ada')).toBeInTheDocument()
-})
-
 it('says the roster could not be read, not that nobody has joined, and retries', async () => {
   // A teacher with thirty enrolled students was told "No students yet".
-  results.class_memberships = { data: null, error: { message: 'PostgREST down' } }
+  overrideApi('/api/teacher/students', answer(apiError(503)))
   render(<Students />)
 
   expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't load your students")
   expect(screen.queryByText('No students yet')).not.toBeInTheDocument()
 
-  results.class_memberships = MEMBERSHIPS
+  setData()
   await userEvent.click(screen.getByRole('button', { name: /try again/i }))
   expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
   expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 })
 
 it('still says No students yet for a roster that read as empty', async () => {
-  results.class_memberships = { data: [], error: null }
+  setData({ roster: [] })
   render(<Students />)
   expect(await screen.findByText('No students yet')).toBeInTheDocument()
 })

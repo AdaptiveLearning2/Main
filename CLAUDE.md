@@ -365,8 +365,9 @@ build log and leak it to a wider audience than the commit did.
 
 **A made-up credential in a test fails it too, and a later commit cannot clear it.** `generic-api-key`
 fires on a credential-ish name (`token`, `key`, `auth`, `secret`…) assigned a high-entropy literal, so
-`token = "eyJ…"` is a finding. Use a low-entropy fake or build the value at runtime; one already pushed
-stays in the PR's history, so it is silenced in `.gitleaksignore` by fingerprint.
+`token = "eyJ…"` is a finding. Use a low-entropy fake or build the value at runtime. One already pushed to
+an unmerged branch is rewritten out of it (amend, force-push with a lease), not fingerprinted: a fingerprint
+names the commit SHA, and "Rebase and merge" gives main a new SHA, which turns main's scan red.
 
 **`dependabot.yml` covers four ecosystems** and deliberately does **not** manage the `.lock` files:
 Dependabot does not regenerate `pip-compile` output, so a lock left behind by a bump it opens stays

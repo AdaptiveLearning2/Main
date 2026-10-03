@@ -4855,25 +4855,44 @@ def class_students(class_id: str, request: Request):
     return students
 
 
+_ROSTER_PAGE = 1000
+# Pages a roster read may take with no count; with one, the pages it needs plus the spare.
+_ROSTER_MAX_PAGES = 200
+_ROSTER_SPARE_PAGES = 2
+
+
 def _teacher_memberships(uid: str) -> list[dict]:
     """Every membership in a class `uid` teaches, with the student's profile; a failed read raises.
 
-    Paged by `id` until a read comes back empty (db-max-rows cuts silently).
+    Paged by `id` (db-max-rows cuts silently) until the first page's exact count is reached, or a
+    page comes back empty; a cursor that stops advancing, or pages past the bound, raise.
     """
-    rows, last = [], None
+    rows, last, total, bound, pages = [], None, None, _ROSTER_MAX_PAGES, 0
     while True:
-        # `!inner` makes the filter drop other teachers' rows; without it they come back as `classes: null`.
+        # `!inner` drops other teachers' rows, from the count too; without it they arrive as `classes: null`.
         query = supabase.table("class_memberships") \
-            .select("id, student_id, joined_at, classes!inner(teacher_id), profiles(display_name, email)") \
+            .select("id, student_id, joined_at, classes!inner(teacher_id), profiles(display_name, email)",
+                    count="exact" if last is None else None) \
             .eq("classes.teacher_id", uid)
         if last is not None:
             # A unique key, so a student's rows split across two pages are all read.
             query = query.gt("id", last)
-        page = query.order("id").limit(1000).execute().data or []
+        res = query.order("id").limit(_ROSTER_PAGE).execute()
+        page, pages = res.data or [], pages + 1
         if not page:
             return rows
+        if last is None and res.count is not None:
+            # Only the first page's count is the whole roster; a later one counts only past the cursor.
+            total, bound = res.count, -(-res.count // len(page)) + _ROSTER_SPARE_PAGES
+        # uuid text sorts as Postgres sorts uuids.
+        if last is not None and not page[-1]["id"] > last:
+            raise RuntimeError("roster cursor did not advance")
         rows += page
         last = page[-1]["id"]
+        if total is not None and len(rows) >= total:
+            return rows
+        if pages >= bound:
+            raise RuntimeError(f"roster read passed {bound} pages")
 
 
 @app.get("/api/teacher/students")

@@ -41,8 +41,9 @@ it('shows how old the newest headband reading is', async () => {
 })
 
 it('marks a reading past the live window as stale rather than dropping it', async () => {
-  // Two minutes old, past the backend's 90s live window.
-  const ts = new Date(Date.now() - 120_000).toISOString()
+  // Past the backend's 90s live window, and mid-minute: the shared clock may lag up to 1 s,
+  // so an age of exactly 120 s can round to "1m".
+  const ts = new Date(Date.now() - 150_000).toISOString()
   renderLive([student({ latest_cognitive: { ts, focus: 0.6, engagement: 0.5, stress: 0.3 } })])
   const badge = await screen.findByText(/Headband on/)
   expect(badge.textContent).toMatch(/stale, 2m ago/)

@@ -1,11 +1,13 @@
 import { it, expect } from 'vitest'
 import { downsample } from './timeline'
 
-// An hour at 4 Hz with a recording gap and three sparse heart readings, as buildTimeline shapes it.
+// An hour at 4 Hz with a 5 s dropout and three sparse heart readings, as buildTimeline shapes it.
+// The dropout sits inside one bucket, not at its start, so only the gap rule can keep it.
+const GAP = [7010, 7030]
 function session() {
   const rows = []
   for (let i = 0; i < 14_400; i++) {
-    const gap = i >= 7000 && i < 7400
+    const gap = i >= GAP[0] && i < GAP[1]
     rows.push({ t: i * 250, focus: gap ? null : 0.5 + 0.1 * Math.sin(i / 50), stress: gap ? null : 0.3 })
   }
   rows[3000].focus = 0.99                               // a spike the chart must still show
@@ -33,5 +35,5 @@ it('keeps every heart reading, the extremes, and a null inside the gap', () => {
   expect(out.some(r => r.focus === 0.99)).toBe(true)
   expect(out.some(r => r.focus === 0.01)).toBe(true)
   // Without a null between the two sides, recharts would join the line across the gap.
-  expect(out.some(r => r.t >= 7000 * 250 && r.t < 7400 * 250 && r.focus === null)).toBe(true)
+  expect(out.some(r => r.t >= GAP[0] * 250 && r.t < GAP[1] * 250 && r.focus === null)).toBe(true)
 })

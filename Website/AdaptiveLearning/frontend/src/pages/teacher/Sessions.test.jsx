@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
@@ -11,8 +11,8 @@ const { apiFetch } = await import('../../lib/api')
 
 const CLASSES = [{ id: 'c1', name: 'Year 7' }]
 const ROSTER = [
-  { user_id: 'a', name: 'Ada' },
-  { user_id: 'b', name: 'Blaise' },
+  { user_id: 'a', name: 'Ada', email: 'ada@example.test' },
+  { user_id: 'b', name: 'Blaise', email: 'blaise@example.test' },
 ]
 const SESSION = {
   id: 's1', started_at: '2026-08-15T10:00:00Z', ended_at: '2026-08-15T10:30:00Z',
@@ -82,6 +82,36 @@ it('reports a partly-loaded class as partly loaded, and shows what it has', asyn
   expect(await screen.findByText('Ada')).toBeInTheDocument()
   expect(screen.queryByText(ERROR)).not.toBeInTheDocument()
   expect(screen.queryByText(EMPTY)).not.toBeInTheDocument()
+})
+
+it('draws a nameless student as their email, else "No name set", never "Student"', async () => {
+  // `name` and `email` are null when unset, as the roster sends them.
+  wire({
+    roster: [
+      { user_id: 'a', name: 'Ada', email: 'ada@example.test' },
+      { user_id: 'b', name: null, email: 'blaise@example.test' },
+      { user_id: 'c', name: null, email: null },
+    ],
+    students: { a: [SESSION], b: [{ ...SESSION, id: 's2' }], c: [{ ...SESSION, id: 's3' }] },
+  })
+  draw()
+  // Every row lands in one render, so the rest are there once the first is.
+  await screen.findByText('Ada')
+  // The initial comes from the label shown, and is "?" with nothing to show.
+  for (const [label, initial] of [['Ada', 'A'], ['blaise@example.test', 'B'], ['No name set', '?']]) {
+    expect(within(screen.getByText(label).closest('a')).getByText(initial)).toBeInTheDocument()
+  }
+  expect(screen.getAllByRole('link').filter(row => row.textContent.includes('Student'))).toEqual([])
+})
+
+it('shows the load error, not rows named "Student", when the class read is a 503', async () => {
+  // A failed name read is a 503 from the backend, never placeholder names.
+  wire({ roster: Object.assign(new Error('Could not load this class\'s students'), { status: 503 }) })
+  draw()
+  expect(await screen.findByText(ERROR)).toBeInTheDocument()
+  expect(screen.getByText(/just now/i)).toBeInTheDocument()
+  expect(screen.queryByText(/backend is running/i)).not.toBeInTheDocument()
+  expect(screen.queryByRole('link')).not.toBeInTheDocument()
 })
 
 it('reads the whole class in one request, not one per student', async () => {

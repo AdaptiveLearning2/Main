@@ -96,8 +96,9 @@ class _FakeSupabase:
                 assert name == "ingest_gate", name
                 # The session lookup, recorded so a test can assert the rate limit kept it from being reached.
                 store["_owner_checks"].append((params["p_session_id"], params["p_user_id"]))
-                if store.get("_gate_down"):
-                    raise RuntimeError("ingest_gate read failed")
+                down = store.get("_gate_down")
+                if down:
+                    raise down if isinstance(down, Exception) else RuntimeError("ingest_gate read failed")
                 # As the function answers: the session by id whoever owns it, the caller's consent.
                 session = next((s for s in store["sessions"] if s["id"] == params["p_session_id"]), None)
                 consent = next((r for r in store["signal_consent"]
@@ -269,6 +270,25 @@ def test_a_failed_gate_read_is_a_503_that_writes_nothing(store, endpoint):
         _post(endpoint)
     assert exc.value.status_code == 503
     assert not any(store.get(t) for t in ("cognitive_signals", "face_signals", "heart_signals"))
+
+
+def test_a_session_id_that_cannot_be_a_uuid_names_no_session(store):
+    """Postgres's 22P02 from the uuid parameter is a 404, as `_row_or_404` treats it, not an outage."""
+    from fastapi import HTTPException
+    store["_gate_down"] = type("E", (Exception,), {"code": "22P02"})("invalid input syntax for type uuid")
+    with pytest.raises(HTTPException) as exc:
+        _post_heart([_heart()])
+    assert exc.value.status_code == 404
+
+
+def test_a_missing_gate_function_names_its_migration(store, capsys):
+    """Deployed ahead of 20261003000000, every batch is refused; the log has to say why."""
+    from fastapi import HTTPException
+    store["_gate_down"] = RuntimeError("{'code': 'PGRST202', 'message': 'no function'}")
+    with pytest.raises(HTTPException) as exc:
+        _post_heart([_heart()])
+    assert exc.value.status_code == 503
+    assert "20261003000000" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("endpoint", ["cognitive", "face", "heart"])

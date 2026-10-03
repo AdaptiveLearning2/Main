@@ -290,11 +290,28 @@ def _ingest_gate_result(tables, params):
             "consent": consent}
 
 
+def _viewer_relationship_result(tables, params):
+    """What `viewer_relationship` returns: teacher, parent or admin, checked in that order; else None."""
+    viewer, student = params["p_viewer"], params["p_student"]
+    teaches = {c.get("id") for c in tables.get("classes", []) if c.get("teacher_id") == viewer}
+    if any(m.get("student_id") == student and m.get("class_id") in teaches
+           for m in tables.get("class_memberships", [])):
+        return "teacher"
+    if any(link.get("parent_id") == viewer and link.get("child_id") == student
+           for link in tables.get("parent_child_links", [])):
+        return "parent"
+    if any(p.get("id") == viewer and p.get("role") == "admin" for p in tables.get("profiles", [])):
+        return "admin"
+    return None
+
+
 # Functions computed from the table fixtures unless a test gives their result outright.
 _MODELLED_RPCS = {"recent_sessions_for_users": _recent_sessions_rows,
-                  "ingest_gate": _ingest_gate_result}
+                  "ingest_gate": _ingest_gate_result,
+                  "viewer_relationship": _viewer_relationship_result}
 # The tables each modelled function reads, so `table_raises` reaches it as it would reach SQL.
-_RPC_READS = {"ingest_gate": ("sessions", "signal_consent")}
+_RPC_READS = {"ingest_gate": ("sessions", "signal_consent"),
+              "viewer_relationship": ("class_memberships", "classes", "parent_child_links", "profiles")}
 
 
 class _Rpc:
@@ -371,10 +388,24 @@ def test_stranger_cannot_view_any_student():
     assert main._can_view_student(STRANGER, "student-1") is False
 
 
-def test_the_teacher_check_is_one_read():
-    """And the only read: the admin check comes last, so a teacher's view costs no profile read."""
+def test_the_relationship_check_is_one_call_and_no_table_read():
+    """Teacher, parent and admin are one statement (assert_signal_rls.sql holds its matrix)."""
     assert main._can_view_student(TEACHER, "student-1") is True
-    assert main.supabase.table_calls == ["class_memberships"]
+    assert main.supabase.table_calls == []
+    assert main.supabase.rpc_calls == [("viewer_relationship",
+                                        {"p_viewer": "teacher-1", "p_student": "student-1"})]
+
+
+def test_a_self_view_asks_the_database_nothing():
+    assert main._can_view_student(STUDENT, "student-1") is True
+    assert (main.supabase.table_calls, main.supabase.rpc_calls) == ([], [])
+
+
+@pytest.mark.parametrize("answer", [None, "", "student", "TEACHER"])
+def test_only_a_relationship_the_function_names_admits(monkeypatch, answer):
+    """Fails closed on anything unexpected, not on falsiness alone."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, rpc_results={"viewer_relationship": answer}))
+    assert main._can_view_student(STRANGER, "student-1") is False
 
 
 def test_the_fake_refuses_an_embed_filter_it_does_not_model():
@@ -407,12 +438,6 @@ def test_a_failed_relationship_read_is_a_503_and_not_a_logged_denial(monkeypatch
     assert (exc.value.status_code, events) == (503, [])
 
 
-@pytest.mark.parametrize("failing", ["profiles", "class_memberships"])
-def test_a_failed_read_does_not_block_what_another_relationship_allows(monkeypatch, failing):
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={failing}))
-    assert main._can_view_student(PARENT, "student-1") is True
-
-
 def test_a_malformed_student_id_is_a_logged_denial_not_an_outage(monkeypatch):
     """PostgREST refuses a non-uuid with 22P02: no student has that id, so 403, not "try again"."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={
@@ -421,6 +446,17 @@ def test_a_malformed_student_id_is_a_logged_denial_not_an_outage(monkeypatch):
     with pytest.raises(main.HTTPException) as exc:
         main._verify_can_view_student(TEACHER, "not-a-uuid")
     assert (exc.value.status_code, events) == (403, ["authz_denied"])
+
+
+def test_a_missing_relationship_function_names_its_migration(monkeypatch, capsys):
+    """Deployed ahead of 20261003000000, every student read is a 503; the log has to say why."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, rpc_raises=lambda name, _p: (
+        RuntimeError("{'code': 'PGRST202', 'message': 'no function'}")
+        if name == "viewer_relationship" else None)))
+    with pytest.raises(main.HTTPException) as exc:
+        main._verify_can_view_student(TEACHER, "student-1")
+    assert exc.value.status_code == 503
+    assert "20261003000000" in capsys.readouterr().out
 
 
 def test_a_failed_access_read_asks_the_client_to_retry(monkeypatch):
@@ -1048,12 +1084,18 @@ def _summary_fake(monkeypatch, viewer, row=None, consent=None):
     return fake
 
 
+def _summary_params(fake) -> dict:
+    """The aggregate's own call; the viewer check is a call of its own before it."""
+    return next(p for name, p in fake.rpc_calls if name == "student_signal_summary")
+
+
 def test_signal_summary_endpoint_rejects_a_viewer_with_no_relationship(monkeypatch):
     fake = _summary_fake(monkeypatch, STRANGER)
     with pytest.raises(main.HTTPException) as exc:
         main.student_signal_summary("student-1", None)
     assert exc.value.status_code == 403
-    assert fake.rpc_calls == [], "access is decided before the aggregate runs"
+    assert [name for name, _ in fake.rpc_calls] == ["viewer_relationship"], \
+        "access is decided before the aggregate runs"
 
 
 def test_signal_summary_endpoint_allows_a_teacher_of_the_students_class(monkeypatch):
@@ -1086,22 +1128,22 @@ def test_signal_summary_endpoint_counts_the_whole_window_not_a_row_cap(monkeypat
 def test_signal_summary_endpoint_threads_the_opt_out(monkeypatch):
     fake = _summary_fake(monkeypatch, TEACHER)
     main.student_signal_summary("student-1", None, include_face=False)
-    assert fake.rpc_calls[0][1]["p_include_emotion"] is False
+    assert _summary_params(fake)["p_include_emotion"] is False
 
     fake.rpc_calls.clear()
     main.student_signal_summary("student-1", None)
-    assert fake.rpc_calls[0][1]["p_include_emotion"] is True, "included unless asked otherwise"
+    assert _summary_params(fake)["p_include_emotion"] is True, "included unless asked otherwise"
 
 
 def test_signal_summary_endpoint_clamps_the_day_range(monkeypatch):
     """Same bounds as the weekly report: no unbounded scan from the query string."""
     fake = _summary_fake(monkeypatch, TEACHER)
     main.student_signal_summary("student-1", None, days=9999)
-    assert fake.rpc_calls[0][1]["p_days"] == 30
+    assert _summary_params(fake)["p_days"] == 30
 
     fake.rpc_calls.clear()
     main.student_signal_summary("student-1", None, days=0)
-    assert fake.rpc_calls[0][1]["p_days"] == 1
+    assert _summary_params(fake)["p_days"] == 1
 
 
 def test_signal_summary_carries_the_dominant_emotion(monkeypatch):
@@ -1639,7 +1681,7 @@ def test_strategy_basis_aggregates_instead_of_reading_signal_rows(monkeypatch, s
 
     assert "cognitive_signals" not in fake.table_calls
     assert "face_signals" not in fake.table_calls
-    assert [name for name, _ in fake.rpc_calls] == ["student_signal_summary"]
+    assert [name for name, _ in fake.rpc_calls if name != "viewer_relationship"] == ["student_signal_summary"]
     assert out["basis"]["averages"]["focus"] == 0.7
 
 

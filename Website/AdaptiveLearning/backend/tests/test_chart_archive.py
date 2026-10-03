@@ -710,12 +710,14 @@ class _SessionsClient(_SigningClient):
                     return type("R", (), {"data": row})()
 
             return _T()
-        if name == "profiles":
-            # The viewer's own role, for the admin check.
-            return _Query([{"role": self._viewer_role}] if self._viewer_role else [])
-        if name in ("class_memberships", "parent_child_links"):
-            return _Query([])  # read, and empty: a viewer with no relationship, not a failed check
         return super().table(name)
+
+    def rpc(self, name, params):
+        if name != "viewer_relationship":
+            return super().rpc(name, params)
+        # As the function answers for a viewer with no class or link: admin by role, else nothing.
+        data = "admin" if self._viewer_role == "admin" else None
+        return type("C", (), {"execute": lambda _s: type("R", (), {"data": data})()})()
 
 
 def _charts(monkeypatch, row, viewer="viewer", **kw):

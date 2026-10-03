@@ -26,6 +26,20 @@ class _Fake:
         self.upserts = []
         self.inserts = []
 
+    def rpc(self, name, params):
+        assert name == "viewer_relationship", name
+        client = self
+
+        class _R:
+            def execute(self):
+                # As the function answers: these fixtures hold no class or link, so admin or nothing.
+                if "profiles" in client.raises:
+                    raise RuntimeError("profiles unavailable")
+                data = "admin" if params["p_viewer"] in client.admins else None
+                return type("R", (), {"data": data})()
+
+        return _R()
+
     def table(self, name):
         client, table = self, name
 

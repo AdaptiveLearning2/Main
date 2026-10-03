@@ -61,6 +61,8 @@ beforeEach(() => {
 })
 
 it('reads nothing from a live payload that latest_signals_for_sessions does not build', async () => {
+  // Checks the fixtures' keys here: inside the route a failure would read as a load error.
+  roster()
   mockApi({
     '/api/classes': () => [{ id: 'c1', name: 'Year 4' }],
     '/api/teacher/classes/c1/live': roster,

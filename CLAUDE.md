@@ -1135,8 +1135,9 @@ raises `needs_student_ack`, cleared by `POST /api/consent/ack`. A parent turning
 Discovering a sensor by noticing data appear is not consent. The banner's copy claims no earlier
 withdrawal, because a re-enable nulls `revoked_at` and nothing stored can tell the two apart.
 
-**That rule has to hold on both ingestion paths, and for a while it did not.** `/api/signals/*` has
-called `_consent()` per request since it existed; the poller writes `cognitive_signals` directly with
+**That rule has to hold on both ingestion paths, and for a while it did not.** `/api/signals/*` reads
+consent on every request, with its session in one `ingest_gate` call (a failed read is a 503 the push
+client retries, never a batch dropped as unconsented); the poller writes `cognitive_signals` directly with
 the **service-role** client, so under `pull` a withdrawal stopped nothing. Now: `/api/eeg/start` refuses
 **403** (not the 409 push uses — one says this student said no, the other says this deployment does not
 work that way), and a running poller re-reads consent every `CONSENT_RECHECK_SECONDS`.

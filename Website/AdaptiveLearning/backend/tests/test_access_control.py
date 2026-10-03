@@ -260,6 +260,9 @@ class _FakeSupabase:
         self.rpc_calls.append((name, params))
         exc = self._rpc_raises(name, params) if self._rpc_raises else None
         if name not in self._rpc_results and name in _MODELLED_RPCS:
+            # One statement in the database: any table it reads failing fails the call.
+            for table in _RPC_READS.get(name, ()):
+                exc = exc or self._failure(table)
             return _Rpc(_MODELLED_RPCS[name](self._tables, params), exc)
         return _Rpc(self._rpc_results.get(name, []), exc)
 
@@ -276,8 +279,22 @@ def _recent_sessions_rows(tables, params):
     return sorted(out, key=lambda r: str(r.get("started_at", "")))
 
 
+def _ingest_gate_result(tables, params):
+    """What `ingest_gate` returns: the session by id whoever owns it, and the caller's consent row."""
+    session = next((r for r in tables.get("sessions", [])
+                    if r.get("id") == params["p_session_id"]), None)
+    consent = next((r for r in tables.get("signal_consent", [])
+                    if r.get("user_id") == params["p_user_id"]), None)
+    return {"session": None if session is None else
+            {k: session.get(k) for k in ("user_id", "started_at", "ended_at")},
+            "consent": consent}
+
+
 # Functions computed from the table fixtures unless a test gives their result outright.
-_MODELLED_RPCS = {"recent_sessions_for_users": _recent_sessions_rows}
+_MODELLED_RPCS = {"recent_sessions_for_users": _recent_sessions_rows,
+                  "ingest_gate": _ingest_gate_result}
+# The tables each modelled function reads, so `table_raises` reaches it as it would reach SQL.
+_RPC_READS = {"ingest_gate": ("sessions", "signal_consent")}
 
 
 class _Rpc:

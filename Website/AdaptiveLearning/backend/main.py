@@ -1389,16 +1389,19 @@ def stop_stale_sweeper(timeout: float = 5.0) -> None:
         thread.join(timeout=timeout)
 
 
-def _may_record(student_id: str) -> dict:
+def _may_record(student_id: str, consent: dict | None = None) -> dict:
     """Consent **and** the retention window, composed for recording sites only.
 
     Kept out of `_consent`, whose readers must not change answer when term ends.
+    `consent` is a `_consent` answer already in hand (the ingest gate reads one).
     """
     flags = _feature_flags()
     # A bypass substitutes full consent only; `consent_bypassed` says so. Other gates still apply.
     enforced = _consent_enforcement_active(flags)
-    consent = _consent(student_id) if enforced else {
-        **_CONSENT_ENABLED_ALL, "retrieved": True, "exists": False}
+    if not enforced:
+        consent = {**_CONSENT_ENABLED_ALL, "retrieved": True, "exists": False}
+    elif consent is None:
+        consent = _consent(student_id)
     window = _retention_window()
     recording = window["state"] not in _WINDOW_DENIED
     return {**consent,
@@ -5555,10 +5558,15 @@ def _consent(student_id: str) -> dict:
     except Exception as e:
         print(f"[consent:read] {student_id}: {e}")
         return {**_CONSENT_DENIED, "retrieved": False, "exists": False}
-    if not rows:
+    return _consent_from_row(rows[0] if rows else None)
+
+
+def _consent_from_row(row: dict | None) -> dict:
+    """`_consent`'s answer for a row read successfully; None is no row, which denies."""
+    if not row:
         # `exists` False with `retrieved` True: a write should insert.
         return {**_CONSENT_DENIED, "retrieved": True, "exists": False}
-    return {**_CONSENT_DENIED, **rows[0], "retrieved": True, "exists": True}
+    return {**_CONSENT_DENIED, **row, "retrieved": True, "exists": True}
 
 
 def _consent_many(student_ids) -> dict[str, dict]:
@@ -5578,10 +5586,7 @@ def _consent_many(student_ids) -> dict[str, dict]:
         return {sid: {**_CONSENT_DENIED, "retrieved": False, "exists": False}
                 for sid in ids}
     by_id = {str(r["user_id"]): r for r in rows if r.get("user_id")}
-    return {sid: ({**_CONSENT_DENIED, **by_id[sid], "retrieved": True, "exists": True}
-                  if sid in by_id
-                  else {**_CONSENT_DENIED, "retrieved": True, "exists": False})
-            for sid in ids}
+    return {sid: _consent_from_row(by_id.get(sid)) for sid in ids}
 
 
 def _reportable_channels_many(student_ids, want_emotion: bool = True,
@@ -6154,7 +6159,31 @@ def _verify_session_owner(session_id: str, user_id: str, columns: str = "user_id
 
 # Clock drift tolerated between a sidecar's sample stamps and this server's session bounds.
 _INGEST_TS_SLACK = timedelta(minutes=10)
-_INGEST_SESSION_COLUMNS = "user_id, started_at, ended_at"
+
+
+def _ingest_gate(session_id: str, user_id: str) -> tuple[dict, dict]:
+    """The caller's own session (`user_id, started_at, ended_at`) and their consent, in one read.
+
+    Missing 404, someone else's 403 through `_session_or_403`; a failed read is a 503 with
+    nothing written, so the push client keeps the batch and sends it again.
+    """
+    try:
+        out = supabase.rpc("ingest_gate", {"p_session_id": session_id,
+                                           "p_user_id": user_id}).execute().data or {}
+    except Exception as e:                                     # noqa: BLE001
+        if _names_no_row(e):
+            raise HTTPException(404, "Session not found")
+        if "PGRST202" in str(e):
+            print(f"[ingest] ingest_gate is missing from the database -- apply "
+                  f"20261003000000; every batch is refused until it is: {e}")
+        else:
+            print(f"[ingest] could not read the gate for {session_id}: {e}")
+        raise _read_failed("Could not check this session; try again")
+    session = out.get("session") if isinstance(out, dict) else None
+    if not session:
+        raise HTTPException(404, "Session not found")
+    return (_session_or_403(session_id, user_id, row=session),
+            _consent_from_row(out.get("consent")))
 
 
 def _ingest_ts_filter(session: dict):
@@ -6183,10 +6212,10 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     user = get_user(request)
     # Rate-limit first: spares a flooding client a `sessions` query.
     _rate_limit_ingest(user["id"])
-    session = _verify_session_owner(payload.session_id, user["id"], _INGEST_SESSION_COLUMNS)
+    session, stored = _ingest_gate(payload.session_id, user["id"])
 
     # Last line of defence against a stale sidecar; fails closed, reason says which gate.
-    consent = _may_record(user["id"])
+    consent = _may_record(user["id"], consent=stored)
     if not consent["record_eeg"]:
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
                 "reason": _not_recording_reason(consent, "eeg not consented")}
@@ -6244,10 +6273,10 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
 def ingest_face(payload: FaceBatch, request: Request):
     user = get_user(request)
     _rate_limit_ingest(user["id"])
-    session = _verify_session_owner(payload.session_id, user["id"], _INGEST_SESSION_COLUMNS)
+    session, stored = _ingest_gate(payload.session_id, user["id"])
 
     # Last line of defence against a stale sidecar; fails closed.
-    consent = _may_record(user["id"])
+    consent = _may_record(user["id"], consent=stored)
     if not consent["record_camera"]:
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
                 "reason": _not_recording_reason(consent, "camera not consented")}
@@ -6292,9 +6321,9 @@ def ingest_heart(payload: HeartBatch, request: Request):
     """
     user = get_user(request)
     _rate_limit_ingest(user["id"])
-    session = _verify_session_owner(payload.session_id, user["id"], _INGEST_SESSION_COLUMNS)
+    session, stored = _ingest_gate(payload.session_id, user["id"])
 
-    consent = _may_record(user["id"])
+    consent = _may_record(user["id"], consent=stored)
     allowed = _permitted_heart_sources(consent)
     samples, malformed = _validate_each(HeartSample, payload.samples)
     kept = [s for s in samples if s.source in allowed]

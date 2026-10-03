@@ -1,7 +1,7 @@
-/** Routes render inside <LazyMotion strict>: without its features an `m` element never leaves its `initial` style. */
+/** Routes render inside <LazyMotion>: without its features an `m` element never leaves its `initial` style. */
 import { screen, waitFor } from '@testing-library/react'
 import { beforeEach, it, expect, vi } from 'vitest'
-// eslint-disable-next-line no-restricted-imports -- the one `motion` element, which strict mode must refuse
+// eslint-disable-next-line no-restricted-imports -- the one `motion` element, which App must survive
 import { motion } from 'framer-motion'
 
 vi.mock('./lib/supabase', async () => await import('./test/mocks/supabase'))
@@ -36,12 +36,9 @@ it('fades a routed page in, which only the animation features can do', async () 
   await waitFor(() => expect(wrapper.style.opacity).toBe('1'))
 }, 40_000)
 
-it('refuses a `motion` element anywhere under App, since one would pull every feature back in', () => {
+it('renders a stray `motion` element rather than blanking the app', async () => {
+  // The guards are lint:sinks and setup.js's strict wrapper; live, a miss costs bytes, not the page.
   plant.motion = true
-  const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
-  try {
-    expect(() => render(<App />)).toThrow(/rendered a `motion` component within a `LazyMotion`/)
-  } finally {
-    quiet.mockRestore()
-  }
+  render(<App />)
+  expect(await screen.findByText('planted')).toBeInTheDocument()
 })

@@ -2,6 +2,9 @@
 -- On a large table, build each CREATE by hand with CONCURRENTLY first (CLAUDE.md,
 -- Database): a plain build holds a SHARE lock, so ingest waits; IF NOT EXISTS then no-ops.
 
+-- DROP INDEX takes ACCESS EXCLUSIVE: a blocked lock fails the migration, not every read queued behind it.
+SET LOCAL lock_timeout = '5s';
+
 -- The question dedupe lookup (LLM_topic_decider.add_question_to_supabase) on every
 -- generated question. Hash: model text can exceed btree's ~2.7 KB entry limit.
 CREATE INDEX IF NOT EXISTS "questions_text_hash_idx"

@@ -4809,16 +4809,14 @@ def _can_view_student(viewer: dict, student_id: str) -> bool | None:
     if uid == student_id:
         return True
     # Teacher of their class, linked parent or admin, in one statement (20261003000000).
+    # A non-uuid on either side answers null, never an error, so it is a denial like any other.
     try:
         relationship = supabase.rpc("viewer_relationship", {
             "p_viewer": uid, "p_student": student_id}).execute().data
     except Exception as e:                                     # noqa: BLE001
-        # An id that cannot be a uuid names no student: a denial, not an outage.
-        if _names_no_row(e):
-            return False
         if "PGRST202" in str(e):
             print(f"[can_view_student] viewer_relationship is missing from the database -- apply "
-                  f"20261003000000; every student read is refused until it is: {e}")
+                  f"20261003000000; every student read answers 503 until it is: {e}")
         else:
             print(f"[can_view_student] {e}")
         return None

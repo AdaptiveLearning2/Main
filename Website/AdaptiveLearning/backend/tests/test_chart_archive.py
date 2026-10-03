@@ -715,9 +715,10 @@ class _SessionsClient(_SigningClient):
     def rpc(self, name, params):
         if name != "viewer_relationship":
             return super().rpc(name, params)
-        # As the function answers for a viewer with no class or link: admin by role, else nothing.
-        data = "admin" if self._viewer_role == "admin" else None
-        return type("C", (), {"execute": lambda _s: type("R", (), {"data": data})()})()
+        from test_access_control import _Rpc, _viewer_relationship_result
+        # The shared model: whoever asks holds `viewer_role` and no class or link.
+        profiles = [{"id": params["p_viewer"], "role": self._viewer_role}] if self._viewer_role else []
+        return _Rpc(_viewer_relationship_result({"profiles": profiles}, params))
 
 
 def _charts(monkeypatch, row, viewer="viewer", **kw):

@@ -6175,7 +6175,7 @@ def _ingest_gate(session_id: str, user_id: str) -> tuple[dict, dict]:
             raise HTTPException(404, "Session not found")
         if "PGRST202" in str(e):
             print(f"[ingest] ingest_gate is missing from the database -- apply "
-                  f"20261003000000; every batch is refused until it is: {e}")
+                  f"20261003000000; every batch answers 503 and is resent until it is: {e}")
         else:
             print(f"[ingest] could not read the gate for {session_id}: {e}")
         raise _read_failed("Could not check this session; try again")

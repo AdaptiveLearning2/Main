@@ -282,7 +282,7 @@ def test_a_session_id_that_cannot_be_a_uuid_names_no_session(store):
 
 
 def test_a_missing_gate_function_names_its_migration(store, capsys):
-    """Deployed ahead of 20261003000000, every batch is refused; the log has to say why."""
+    """Deployed ahead of 20261003000000, every batch is a 503; the log has to say why."""
     from fastapi import HTTPException
     store["_gate_down"] = RuntimeError("{'code': 'PGRST202', 'message': 'no function'}")
     with pytest.raises(HTTPException) as exc:

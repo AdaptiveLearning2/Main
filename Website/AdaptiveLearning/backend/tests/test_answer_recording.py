@@ -16,7 +16,9 @@ QUESTION = "q-1"
 
 class _Client:
     def __init__(self, subject="algebra", prior=None, topics=("algebra",), raises=(),
-                 rpc_error=None, session_user=USER, session_ended=None):
+                 rpc_error=None, session_user=USER, session_ended=None, answer=None):
+        # What `record_answer` returns: the function's own outcome vocabulary.
+        self.answer = answer if answer is not None else {"status": "ok", "topic": "algebra"}
         self.session_ended = session_ended
         self.subject = subject
         self.prior = prior
@@ -37,8 +39,10 @@ class _Client:
             def execute(self):
                 client.rpcs.append((name, params))
                 if client.rpc_error:
-                    raise RuntimeError(client.rpc_error)
-                return type("R", (), {"data": None})()
+                    raise client.rpc_error if isinstance(client.rpc_error, Exception) \
+                        else RuntimeError(client.rpc_error)
+                data = client.answer if name == "record_answer" else None
+                return type("R", (), {"data": data})()
 
         return _R()
 
@@ -98,94 +102,74 @@ class _Client:
         return _Q()
 
 
-@pytest.fixture
-def _client(monkeypatch):
-    def _install(**kw):
-        c = _Client(**kw)
-        monkeypatch.setattr(main, "supabase", c)
-        return c
-    return _install
-
-
-def test_an_attempt_is_one_statement_in_the_database(_client):
-    """One `record_topic_attempt` RPC; the arithmetic is checked in `assert_signal_rls.sql`."""
-    c = _client()
-
-    main._record_topic_attempt(USER, QUESTION, correct=True)
-
-    assert len(c.rpcs) == 1, f"expected one call, got {c.rpcs}"
-    name, params = c.rpcs[0]
-    assert name == "record_topic_attempt"
-    assert params == {"p_user_id": USER, "p_question_id": QUESTION,
-                      "p_correct": True}
-    assert c.upserts == [], "the read-modify-write is back"
-
-
-def test_a_wrong_answer_is_passed_through_as_an_attempt_that_was_not_correct(_client):
-    c = _client()
-
-    main._record_topic_attempt(USER, QUESTION, correct=False)
-
-    _, params = c.rpcs[0]
-    assert params["p_correct"] is False
-
-
-def test_the_topic_comes_from_the_question_not_the_caller(_client):
-    """A caller-named topic would let a page credit one subject for work in another."""
-    c = _client(subject="geometry", topics=("geometry",))
-
-    main._record_topic_attempt(USER, QUESTION, correct=True)
-
-    # No parameter to smuggle a topic into.
-    _, params = c.rpcs[0]
-    assert set(params) == {"p_user_id", "p_question_id", "p_correct"}
-    assert params["p_question_id"] == QUESTION
-    assert not any("topic" in k for k in params if k != "p_question_id")
-
-
-def test_a_failed_attempt_never_raises(_client):
-    """Runs after the answer is written; a failure here must not become a 500."""
-    _client(rpc_error="boom")
-
-    main._record_topic_attempt(USER, QUESTION, correct=True)  # must not raise
-
-
-def test_a_missing_function_is_reported_as_a_missing_migration(_client, capsys):
-    """PGRST202 is swallowed like any failure but never self-heals, so it is logged by name."""
-    _client(rpc_error="{'code': 'PGRST202', 'message': 'no function'}")
-
-    main._record_topic_attempt(USER, QUESTION, correct=True)
-
-    out = capsys.readouterr().out
-    assert "20260825000000" in out, f"the log does not name the migration: {out}"
-
-
-def test_the_answer_endpoint_updates_the_topic_record(monkeypatch):
-    """Wiring, not arithmetic."""
-    seen = []
-    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
-    monkeypatch.setattr(main, "supabase", _Client())
-    monkeypatch.setattr(main, "_record_topic_attempt",
-                        lambda uid, qid, correct: seen.append((uid, qid, correct)))
-
-    main.record_answer(
-        session_id="s-1",
-        payload=main.AnswerPayload(question_id=QUESTION, selected_index=2, correct=True),
-        request=None,
-    )
-
-    assert seen == [(USER, QUESTION, True)]
-
-
-def test_an_answer_is_stamped_in_utc_with_its_offset(monkeypatch):
-    client = _Client()
+def _answer(monkeypatch, client, correct=True):
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
     monkeypatch.setattr(main, "supabase", client)
-    monkeypatch.setattr(main, "_record_topic_attempt", lambda *_a: None)
-    main.record_answer(session_id="s-1", request=None,
-                       payload=main.AnswerPayload(question_id=QUESTION, selected_index=2, correct=True))
-    stamps = [row["answered_at"] for table, row in client.inserts if table == "session_answers"]
-    assert [datetime.fromisoformat(s).utcoffset() for s in stamps] == [timedelta(0)], stamps
+    return main.record_answer(
+        session_id="s-1", request=None,
+        payload=main.AnswerPayload(question_id=QUESTION, selected_index=2, correct=correct))
+
+
+def test_an_answer_is_one_call_carrying_everything_it_writes(monkeypatch):
+    """Ownership, the open-session check and the arithmetic are asserted in assert_signal_rls.sql."""
+    client = _Client()
+
+    out = _answer(monkeypatch, client, correct=False)
+
+    assert [name for name, _ in client.rpcs] == ["record_answer"]
+    params = client.rpcs[0][1]
+    # No topic parameter: the function takes the topic from the question row, never the caller.
+    assert set(params) == {"p_session_id", "p_user_id", "p_question_id", "p_selected_index",
+                           "p_correct", "p_answered_at"}
+    assert (params["p_session_id"], params["p_user_id"], params["p_question_id"],
+            params["p_selected_index"], params["p_correct"]) == ("s-1", USER, QUESTION, 2, False)
+    assert datetime.fromisoformat(params["p_answered_at"]).utcoffset() == timedelta(0)
+    assert client.inserts == [], "the answer was written outside the function"
+    assert out == {"ok": True, "topic": "algebra"}
+
+
+@pytest.mark.parametrize("answer,status", [
+    ({"status": "not_found"}, 404),
+    ({"status": "ended"}, 409),
+    # An answer this code does not know is not a success.
+    ({"status": "surprise"}, 503),
+    ({}, 503),
+])
+def test_each_refusal_is_its_own_status(monkeypatch, answer, status):
+    with pytest.raises(main.HTTPException) as caught:
+        _answer(monkeypatch, _Client(answer=answer))
+    assert caught.value.status_code == status
+
+
+def test_another_students_session_is_refused_through_the_shared_check(monkeypatch):
+    """The 403 and its authz_denied row come from _session_or_403, as for every session."""
+    events = []
+    monkeypatch.setattr(main, "_record_security_event",
+                        lambda kind, actor, subject=None, **detail: events.append((kind, actor, subject, detail)))
+    with pytest.raises(main.HTTPException) as caught:
+        _answer(monkeypatch, _Client(answer={"status": "forbidden", "owner": "student-2"}))
+    assert caught.value.status_code == 403
+    assert events == [("authz_denied", USER, "student-2",
+                       {"check": "session_owner", "session_id": "s-1"})]
+
+
+@pytest.mark.parametrize("error,status", [
+    (type("E", (Exception,), {"code": "22P02"})("not a uuid"), 404),
+    (RuntimeError("connection reset"), 503),
+])
+def test_a_failed_call_is_not_an_answer(monkeypatch, error, status):
+    """A session id that cannot be a uuid names no session; anything else is a read that failed."""
+    with pytest.raises(main.HTTPException) as caught:
+        _answer(monkeypatch, _Client(rpc_error=error))
+    assert caught.value.status_code == status
+
+
+def test_a_missing_function_is_reported_as_a_missing_migration(monkeypatch, capsys):
+    """Deployed ahead of 20261003000000, every answer fails: a 503 that says why in the log."""
+    with pytest.raises(main.HTTPException) as caught:
+        _answer(monkeypatch, _Client(rpc_error="{'code': 'PGRST202', 'message': 'no function'}"))
+    assert caught.value.status_code == 503
+    assert "20261003000000" in capsys.readouterr().out
 
 
 class _SessionClient:
@@ -659,44 +643,29 @@ def test_the_close_reads_every_column_it_credits():
         "matching how they are written")
 
 
-def test_an_answer_to_a_closed_session_is_refused_before_any_write(monkeypatch):
-    """The close already credited the totals; an answer here would count nowhere."""
-    client = _Client(session_ended="2026-09-25T10:00:00+00:00")
-    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
-    monkeypatch.setattr(main, "supabase", client)
+def test_an_answer_to_a_closed_session_tells_nobody(monkeypatch):
+    """The close already credited the totals; the function wrote nothing, and the sidecar hears nothing."""
+    notified = []
+    monkeypatch.setattr(main.eeg_poller, "notify_answer", lambda *a, **_k: notified.append(a))
     with pytest.raises(main.HTTPException) as caught:
-        main.record_answer(
-            session_id="s-1",
-            payload=main.AnswerPayload(question_id=QUESTION, selected_index=2, correct=True),
-            request=None,
-        )
+        _answer(monkeypatch, _Client(answer={"status": "ended"}))
     assert caught.value.status_code == 409
-    assert client.inserts == [] and client.rpcs == []
+    assert notified == []
 
 
 def test_the_answer_endpoint_tells_the_sidecar_after_the_writes(monkeypatch):
     """Best effort and last: a sidecar that raises must not cost the answer its 200."""
     order = []
-    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
-    monkeypatch.setattr(main, "supabase", _Client())
-    monkeypatch.setattr(main, "_record_topic_attempt",
-                        lambda uid, qid, correct: order.append("topic") or "algebra")
+    client = _Client()
+    client_rpc = client.rpc
+    monkeypatch.setattr(client, "rpc", lambda name, params: order.append(name) or client_rpc(name, params))
     monkeypatch.setattr(main.eeg_poller, "notify_answer",
                         lambda sid, correct, difficulty=None: order.append(("notify", sid, correct)))
-    out = main.record_answer(
-        session_id="s-1",
-        payload=main.AnswerPayload(question_id=QUESTION, selected_index=2, correct=False),
-        request=None,
-    )
+    out = _answer(monkeypatch, client, correct=False)
     assert out == {"ok": True, "topic": "algebra"}
-    assert order == ["topic", ("notify", "s-1", False)]
+    assert order == ["record_answer", ("notify", "s-1", False)]
 
     def boom(*_a, **_k):
         raise RuntimeError("sidecar down")
     monkeypatch.setattr(main.eeg_poller, "notify_answer", boom)
-    out = main.record_answer(
-        session_id="s-1",
-        payload=main.AnswerPayload(question_id=QUESTION, selected_index=2, correct=True),
-        request=None,
-    )
-    assert out["ok"] is True
+    assert _answer(monkeypatch, _Client())["ok"] is True

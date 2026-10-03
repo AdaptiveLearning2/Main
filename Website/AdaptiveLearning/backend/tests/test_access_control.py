@@ -1146,6 +1146,12 @@ class _OwnedSessionClient:
 
         class _R:
             def execute(self):
+                if name == "record_answer":
+                    # As the function answers (assert_signal_rls.sql): refused before any write.
+                    if params["p_user_id"] != client.owner:
+                        return type("R", (), {"data": {"status": "forbidden", "owner": client.owner}})()
+                    client.writes.append(("session_answers", "insert", params))
+                    return type("R", (), {"data": {"status": "ok", "topic": None}})()
                 client.writes.append(("rpc", name))
                 return type("R", (), {"data": None})()
 

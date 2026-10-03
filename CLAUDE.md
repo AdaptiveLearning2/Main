@@ -2244,21 +2244,18 @@ reached the page with no id and there was nothing to put in `session_answers.que
 **and returns the existing row's id on a duplicate** rather than False, because answering a question the generator
 has produced before is exactly as real as answering a novel one.
 
-**`_record_topic_attempt` derives the topic from the question row, never from the caller.** The client has to be
-trusted about correctness; letting it also name the topic would let a page credit one subject for work done in
-another, and `user_math_performance` is what the adaptive engine reads to choose what to serve next. It never
-raises: it runs after `session_answers` is written, and a topic lookup failing must not turn a recorded answer into
-"that answer could not be saved".
+**An answer is one call: `record_answer`.** Under a `FOR NO KEY UPDATE` lock on the session row it refuses a
+missing, foreign or ended session before any write, then writes the answer, bumps the counters and calls
+`record_topic_attempt` inside its own exception block: a failed attribution leaves the answer standing. `main.py`
+maps the outcome, `forbidden` through `_session_or_403` so it records `authz_denied` like every other refusal. A
+failed call is a 503, never a silent drop; deployed ahead of the migration, every answer fails and the log names it.
 
-**It is one statement in the database** (`record_topic_attempt`). It was four sequential round trips on the hottest
-path in the product, and the last two were a read-modify-write with no lock — two answers together both read the
-same counts and the second overwrote the first, losing attempts silently. `ON CONFLICT DO UPDATE` incrementing the
-*stored* value removes that rather than narrowing it. It returns the topic **name**, which `/answer` hands back to
-the page so one figure moves; nothing holds an id-to-name map, so returning the id would cost a second query. The
-arithmetic is asserted in `scripts/assert_signal_rls.sql` — the backend suite drives a fake client and can only
-check that one call is made with the right three arguments. **Its PGRST202 is the deploy-ordering trap in its worst
-form**: the helper swallows exceptions by design, so code deployed ahead of the migration stops attributing
-anything with no symptom but the numbers not moving. It logs that case by name and cites the migration.
+**The topic comes from the question row, never from the caller.** The client has to be trusted about correctness;
+letting it also name the topic would let a page credit one subject for work done in another, and
+`user_math_performance` is what the adaptive engine reads to choose what to serve next. `record_topic_attempt` is one
+`ON CONFLICT DO UPDATE` incrementing the *stored* counts, so two answers together cannot lose an attempt, and it
+returns the topic **name** for the page. The arithmetic and every refusal are asserted in
+`scripts/assert_signal_rls.sql`; the backend suite drives a fake and can only check the call and its mapping.
 
 **Topic accuracy is read from `user_math_performance`, not from the browser.** It was
 `localStorage.accuracyStats_<uid>` — the only panel whose numbers were not the database's. It disagreed with the

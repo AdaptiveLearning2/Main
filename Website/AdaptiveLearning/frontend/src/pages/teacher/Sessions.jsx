@@ -189,9 +189,9 @@ export default function Sessions() {
                 className="grid grid-cols-12 items-center px-5 py-4 border-b border-gray-50 dark:border-gray-800 last:border-0 hover:bg-slate-50 dark:hover:bg-gray-800 transition group">
                 <div className="col-span-3 flex items-center gap-3">
                   <div className="w-8 h-8 bg-gradient-to-br from-violet-400 to-purple-500 rounded-full flex items-center justify-center text-white text-xs font-black flex-shrink-0">
-                    {(s._student?.name || '?')[0].toUpperCase()}
+                    {(s._student?.name || s._student?.email || '?')[0].toUpperCase()}
                   </div>
-                  <span className="text-sm font-bold text-gray-900 dark:text-white truncate">{s._student?.name || 'Student'}</span>
+                  <span className="text-sm font-bold text-gray-900 dark:text-white truncate">{s._student?.name || s._student?.email || 'No name set'}</span>
                 </div>
                 <div className="col-span-3 text-sm text-gray-500 dark:text-gray-400">{fmtTime(s.started_at)}</div>
                 <div className="col-span-2 text-sm text-gray-500 dark:text-gray-400">{duration(s.started_at, s.ended_at, { abandoned, idle, lastActivity: s.last_activity_at })}</div>

@@ -178,6 +178,21 @@ it('a failed read says so rather than claiming the student is idle', async () =>
   expect(screen.queryByText('Never active')).not.toBeInTheDocument()
 })
 
+it('draws a nameless student as their email, else "No name set", never "Student"', async () => {
+  // As the roster sends them: `name` and `email` null when unset.
+  mockLoad(
+    { id: CLASS_ID, name: 'Algebra', join_code: 'ABC123' },
+    [{ user_id: 's1', name: 'Ada', email: 'ada@example.test' },
+     { user_id: 's2', name: null, email: 'blaise@example.test' },
+     { user_id: 's3', name: null, email: null }],
+  )
+  renderAt()
+  expect(await screen.findByText('Ada')).toBeInTheDocument()
+  expect(screen.getByText('blaise@example.test')).toBeInTheDocument()
+  expect(screen.getByText('No name set')).toBeInTheDocument()
+  expect(screen.queryByText('Student')).not.toBeInTheDocument()
+})
+
 it('survives a roster from before the column existed', async () => {
   // An older payload carries neither key: neither a failure nor a timestamp.
   mockLoad(

@@ -4846,27 +4846,99 @@ def _verify_can_view_student(viewer: dict, student_id: str):
 def class_students(class_id: str, request: Request):
     user = get_user(request)
     _verify_class_owner(class_id, user["id"])
-    memberships = supabase.table("class_memberships").select("student_id, joined_at") \
-        .eq("class_id", class_id).execute()
+    try:
+        # Names ride on the roster read, so a failed one fails the request rather than becoming "Student".
+        memberships = supabase.table("class_memberships") \
+            .select("student_id, joined_at, profiles(display_name, email)") \
+            .eq("class_id", class_id).execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[class_students] {e}")
+        raise _read_failed("Could not load this class's students; try again")
     students = []
     roster = [m["student_id"] for m in (memberships.data or [])]
     all_stats = _stats_including_open_session_many(roster)
-    profiles = _profiles_many(roster)
     last_active = _last_active_many(roster)
     for m in (memberships.data or []):
         sid = m["student_id"]
         stats = all_stats.get(sid) or {}
-        p = profiles.get(sid) or {}
+        p = m.get("profiles") or {}
         students.append({
             "user_id":   sid,
-            "name":      p.get("display_name") or "Student",
-            "email":     p.get("email") or "",
+            # None when unset: the page chooses what to draw, as on `/api/teacher/students`.
+            "name":      p.get("display_name") or None,
+            "email":     p.get("email") or None,
             "joined_at": m["joined_at"],
             # Timestamp, None (never active), or `last_active_retrieved: False`.
             **last_active.get(sid, _LAST_ACTIVE_UNKNOWN),
             **stats,
         })
     return students
+
+
+_ROSTER_PAGE = 1000
+# Pages a roster read may take with no count; with one, the pages it needs plus the spare.
+_ROSTER_MAX_PAGES = 200
+_ROSTER_SPARE_PAGES = 2
+
+
+def _teacher_memberships(uid: str) -> list[dict]:
+    """Every membership in a class `uid` teaches, with the student's profile; a failed read raises.
+
+    Paged by `id` (db-max-rows cuts silently) until the first page's exact count is reached, or a
+    page comes back empty; a cursor that stops advancing, or pages past the bound, raise.
+    """
+    rows, last, total, bound, pages = [], None, None, _ROSTER_MAX_PAGES, 0
+    while True:
+        # `!inner` drops other teachers' rows, from the count too; without it they arrive as `classes: null`.
+        query = supabase.table("class_memberships") \
+            .select("id, student_id, joined_at, classes!inner(teacher_id), profiles(display_name, email)",
+                    count="exact" if last is None else None) \
+            .eq("classes.teacher_id", uid)
+        if last is not None:
+            # A unique key, so a student's rows split across two pages are all read.
+            query = query.gt("id", last)
+        res = query.order("id").limit(_ROSTER_PAGE).execute()
+        page, pages = res.data or [], pages + 1
+        if not page:
+            return rows
+        if last is None and res.count is not None:
+            # Only the first page's count is the whole roster; a later one counts only past the cursor.
+            total, bound = res.count, -(-res.count // len(page)) + _ROSTER_SPARE_PAGES
+        # uuid text sorts as Postgres sorts uuids.
+        if last is not None and not page[-1]["id"] > last:
+            raise RuntimeError("roster cursor did not advance")
+        rows += page
+        last = page[-1]["id"]
+        if total is not None and len(rows) >= total:
+            return rows
+        if pages >= bound:
+            raise RuntimeError(f"roster read passed {bound} pages")
+
+
+@app.get("/api/teacher/students")
+def teacher_students(request: Request):
+    """Each student in any class the caller teaches, once, with their earliest join."""
+    uid = get_user(request)["id"]
+    try:
+        memberships = _teacher_memberships(uid)
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[teacher_students] {e}")
+        # 503, so the Students page keeps the load error its own failed read showed, never "Student" rows.
+        raise _read_failed("Could not load your students; try again")
+    def _instant(m):
+        at = _parse_ts(m.get("joined_at"))
+        return (at is None, at or datetime.min.replace(tzinfo=timezone.utc))
+
+    joined: dict[str, dict] = {}
+    # Oldest first by instant, so the first row seen per student is their earliest join.
+    for m in sorted(memberships, key=_instant):
+        if m.get("student_id"):
+            joined.setdefault(m["student_id"], m)
+    rows = [{"user_id": sid,
+             "name": (m.get("profiles") or {}).get("display_name") or None,
+             "email": (m.get("profiles") or {}).get("email") or None,
+             "joined_at": m.get("joined_at")} for sid, m in joined.items()]
+    return sorted(rows, key=lambda r: (r["name"] is None, (r["name"] or "").casefold(), r["user_id"]))
 
 
 # ─── teacher analytics ────────────────────────────────────────────────────

@@ -1579,6 +1579,7 @@ deny access to something the teacher can see behind the message.
 
 `/api/classes/{id}/students` returns `{user_id, name, email, joined_at, ...}`. `Students.jsx` is the exception
 that proves the rule: it reads `profiles` straight through Supabase, so its rows really do have `id`.
+`name`/`email` are null when unset, here and on `/api/teacher/students`; a page draws the email, else "No name set".
 
 Getting this wrong in a `<select>` does **not** render a blank option. **An `<option>` with an undefined
 `value` falls back to its own text content**, so `value={s.id}` over a label of `{s.display_name || s.email}`

@@ -1,6 +1,6 @@
 /** The class-average tiles: an unread average is a dash with a reason, never a measured 0. */
 import { it, expect, beforeEach, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
@@ -33,6 +33,19 @@ it('shows a failed summary read as unread, not as a streak of 0', async () => {
 
   expect(await screen.findByText('These figures could not be loaded.')).toBeInTheDocument()
   expect(streakTile()).toHaveTextContent('—')
+})
+
+it('asks for the class averages without waiting for the class list', async () => {
+  // Independent reads: chained, the summary waited one whole round trip for nothing.
+  let summaryAsked = false
+  mockApi({
+    '/api/questions?limit=5': () => [],
+    '/api/questions/count': () => ({ total: 0, retrieved: true }),
+    '/api/classes': () => new Promise(() => {}),
+    '/api/classes/summary': () => { summaryAsked = true; return {} },
+  })
+  render(<MemoryRouter><TeacherDashboard /></MemoryRouter>)
+  await waitFor(() => expect(summaryAsked).toBe(true))
 })
 
 it('shows a real average streak as a number', async () => {

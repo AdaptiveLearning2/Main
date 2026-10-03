@@ -6,6 +6,7 @@ import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import ChildWithdrewBanner from '../../components/consent/ChildWithdrewBanner'
 import { pct, valueOrReason, emotionOn as faceIncluded } from '../../components/signals/SignalPanel'
+import { stagger } from '../../lib/stagger'
 
 // Only the fields the tiles below render; keep in step with them.
 function hasSignalSummary(summary) {
@@ -89,7 +90,7 @@ export default function ParentDashboard() {
             const initial = (child.name || child.email || '?')[0].toUpperCase()
             return (
               <motion.div key={child.user_id}
-                initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }}
+                initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.1) }}
                 className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
 
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between p-5 border-b border-gray-50 dark:border-gray-800">

@@ -5,6 +5,7 @@ import { apiFetch } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
 import { toast } from 'sonner'
+import { stagger } from '../../lib/stagger'
 
 // New classes get 8 characters; older 6-character codes join until their teacher replaces them.
 const CODE_LENGTHS = [6, 8]
@@ -82,7 +83,7 @@ export default function JoinClass() {
         <div className="space-y-3">
           {classes.map((c, i) => (
             <motion.div key={c.id}
-              initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }}
+              initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.05) }}
               className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-4 shadow-sm flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-gradient-to-br from-indigo-400 to-violet-500 rounded-xl flex items-center justify-center text-white font-black text-sm shadow">

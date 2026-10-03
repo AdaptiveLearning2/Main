@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { apiFetch } from '../lib/api'
 import { clearViewPrefs } from '../lib/viewPrefs'
@@ -41,7 +41,10 @@ export function AuthProvider({ children }) {
       // Signing back in as the same account reads its role again rather than reusing this one.
       if (!session?.user) setProfile(NO_PROFILE)
       setSession(session)
-      setUser(session?.user ?? null)
+      // Same account, unchanged record (a token refresh): keep the object, so nothing keyed on it re-runs.
+      const next = session?.user ?? null
+      setUser(prev => (prev && next && event !== 'USER_UPDATED' && prev.id === next.id
+                       && prev.updated_at === next.updated_at ? prev : next))
       setAuthLoading(false)
       // Never await a session read here (e.g. `apiFetch`): supabase-js holds an auth lock, so it deadlocks.
     })
@@ -87,22 +90,22 @@ export function AuthProvider({ children }) {
   const loading = authLoading || (!!user && role === null)
 
   // `chosenName`, not `displayName`, to avoid shadowing the current user's name.
-  const signUp = async (email, password, selectedRole = 'student', chosenName = '', grade = '') => {
+  const signUp = useCallback(async (email, password, selectedRole = 'student', chosenName = '', grade = '') => {
     const data = { role: selectedRole, display_name: chosenName || email.split('@')[0] }
     // Only a student has a grade of their own; `handle_new_user` keeps only a dropdown label.
     if (selectedRole === 'student' && grade) data.grade_level = grade
     const { error } = await supabase.auth.signUp({ email, password, options: { data } })
     if (error) throw error
-  }
+  }, [])
 
-  const signIn = async (email, password) => {
+  const signIn = useCallback(async (email, password) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) throw error
-  }
+  }, [])
 
   // One sign-out at a time: a repeat click joins the one in progress.
   const signingOut = useRef(null)
-  const signOut = () => {
+  const signOut = useCallback(() => {
     if (!signingOut.current) {
       signingOut.current = (async () => {
         // Before the token is cleared; see `lib/signOutTasks.js`.
@@ -112,10 +115,15 @@ export function AuthProvider({ children }) {
       })().finally(() => { signingOut.current = null })
     }
     return signingOut.current
-  }
+  }, [])
+
+  // Every consumer re-renders when this object changes, so it changes only with its contents.
+  const value = useMemo(
+    () => ({ user, session, role, displayName, loading, refreshProfile, signUp, signIn, signOut }),
+    [user, session, role, displayName, loading, refreshProfile, signUp, signIn, signOut])
 
   return (
-    <AuthContext.Provider value={{ user, session, role, displayName, loading, refreshProfile, signUp, signIn, signOut }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   )

@@ -7,6 +7,7 @@ import { apiFetch } from '../../lib/api'
 import FocusAccuracy from '../analytics/FocusAccuracy'
 import { useLatestRequest } from '../../hooks/useLatestRequest'
 import { TOPIC_ICONS as ICONS, topicLabel } from '../../lib/topics'
+import { stagger } from '../../lib/stagger'
 
 const TOPIC_ICONS = ICONS
 // A default parameter must be a name: the compiler cannot build a component with an inline arrow there.
@@ -208,7 +209,7 @@ export default function StudentProgressReport({
               { icon: TrendingUp, label: 'Accuracy',   value: statsRead && acc !== null ? `${acc}%` : '—', color: 'bg-gradient-to-br from-violet-500 to-purple-600' },
               { icon: Flame,      label: 'Streak',     value: stat(stats?.current_streak, v => `${v}d`), color: 'bg-gradient-to-br from-orange-500 to-amber-500' },
             ].map((c, i) => (
-              <motion.div key={c.label} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}
+              <motion.div key={c.label} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.08) }}
                 whileHover={{ y: -3 }}
                 className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm flex items-start justify-between">
                 <div>
@@ -315,7 +316,7 @@ export default function StudentProgressReport({
                   {sessions.map((s, i) => {
                     const sAcc = s.questions_answered > 0 ? Math.round((s.correct_answers / s.questions_answered) * 100) : 0
                     return (
-                      <motion.div key={s.id} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.04 }}
+                      <motion.div key={s.id} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.04) }}
                         className="flex items-center justify-between p-3 bg-slate-50 dark:bg-gray-800 rounded-xl">
                         <div>
                           <p className="text-sm font-semibold text-gray-900 dark:text-white">{s.title || 'Practice Session'}</p>

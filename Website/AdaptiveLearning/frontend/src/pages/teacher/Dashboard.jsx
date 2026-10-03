@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Users, HelpCircle, BarChart3, ArrowUpRight, Brain, Zap, Copy, Check } from 'lucide-react'
@@ -7,6 +7,8 @@ import { useAuth } from '../../context/AuthContext'
 import { toast } from 'sonner'
 import SkeletonList, { Skeleton } from '../../components/ui/Skeleton'
 import StatCard from '../../components/ui/StatCard'
+import usePoll from '../../hooks/usePoll'
+import { stagger } from '../../lib/stagger'
 
 
 
@@ -32,58 +34,52 @@ export default function TeacherDashboard() {
   const headcount = (c) => c.class_memberships?.[0]?.count ?? 0
   const totalStudents = classes.reduce((sum, c) => sum + headcount(c), 0)
 
-  useEffect(() => {
-    let killed = false
-
+  // Paused while the tab is hidden; a returning tab refreshes at once.
+  usePoll(async (stopped) => {
     const loadQuestions = () => Promise.all([
       apiFetch('/api/questions?limit=5'),
       apiFetch('/api/questions/count'),
     ])
       .then(([recent, count]) => {
-        if (killed) return
+        if (stopped()) return
         setQuestions(recent || [])
         setQuestionCount(count?.retrieved === false ? null : (count?.total ?? null))
         setQuestionsFailed(false)
         return true
       })
       .catch(e => {
-        if (killed) return
+        if (stopped()) return
         console.error('Failed to load questions:', e)
         // Leave old data on screen on a failed refresh.
         setQuestionsFailed(true)
         return false
       })
-      .finally(() => { if (!killed) setLoading(false) })
+      .finally(() => { if (!stopped()) setLoading(false) })
 
-    const loadClasses = () => apiFetch('/api/classes')
-      .then(async (rows) => {
-        if (killed) return
+    // Both at once: the averages do not need the list. Their own catch blanks only the averages.
+    const loadClasses = () => Promise.all([
+      apiFetch('/api/classes'),
+      apiFetch('/api/classes/summary').catch(() => ({})),
+    ])
+      .then(([rows, averages]) => {
+        if (stopped()) return
         setClasses(rows || [])
-        // One request for all classes' averages; its own catch blanks only the averages.
-        const averages = await apiFetch('/api/classes/summary').catch(() => ({}))
-        if (killed) return
         setClassAverages(averages)
         setClassesFailed(false)
         return true
       })
       .catch(e => {
-        if (killed) return
+        if (stopped()) return
         console.error('Failed to load classes:', e)
         setClassesFailed(true)
         return false
       })
-      .finally(() => { if (!killed) setClassesLoading(false) })
+      .finally(() => { if (!stopped()) setClassesLoading(false) })
 
-    const refresh = async () => {
-      const [q, c] = await Promise.all([loadQuestions(), loadClasses()])
-      // Stamp only when both loads succeeded.
-      if (!killed && q && c) setLastUpdated(new Date())
-    }
-
-    refresh()
-    const id = setInterval(refresh, REFRESH_MS)
-    return () => { killed = true; clearInterval(id) }
-  }, [])
+    const [q, c] = await Promise.all([loadQuestions(), loadClasses()])
+    // Stamp only when both loads succeeded.
+    if (!stopped() && q && c) setLastUpdated(new Date())
+  }, { intervalMs: REFRESH_MS })
   const recentQuestions = questions.slice(0, 5)
 
   const failed = questionsFailed || classesFailed
@@ -271,7 +267,7 @@ export default function TeacherDashboard() {
               { to: '/teacher/analytics', icon: '📊', title: 'Analytics', desc: 'Question bank breakdown' },
             ].map((a, i) => (
               <Link to={a.to} key={a.to}>
-                <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.55 + i * 0.07 }}
+                <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.07, 0.55) }}
                   whileHover={{ y: -3 }}
                   className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-4 shadow-sm hover:shadow-md hover:border-violet-300 dark:hover:border-violet-700 transition group">
                   <div className="text-2xl mb-2">{a.icon}</div>
@@ -306,7 +302,7 @@ export default function TeacherDashboard() {
             <div className="space-y-2">
               {recentQuestions.map((q, i) => (
                 <motion.div key={q.id}
-                  initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.6 + i * 0.05 }}
+                  initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.05, 0.6) }}
                   whileHover={{ x: 3 }}
                   className="p-3 bg-slate-50 dark:bg-gray-800 rounded-xl"
                 >

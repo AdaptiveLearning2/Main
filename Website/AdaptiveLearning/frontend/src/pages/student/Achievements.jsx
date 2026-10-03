@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { Star } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import LoadError from '../../components/ui/LoadError'
+import { stagger } from '../../lib/stagger'
 
 const ALL = [
   { id: 'first_q',  emoji: '🎯', title: 'First Steps',      desc: 'Answer your first question',    threshold: 1,   stat: 'total_questions' },
@@ -80,7 +81,7 @@ export default function Achievements() {
             {unlocked.map((a, i) => (
               <motion.div key={a.id}
                 initial={{ opacity: 0, scale: 0.85 }} animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: i * 0.05, type: 'spring', stiffness: 150 }}
+                transition={{ delay: stagger(i, 0.05), type: 'spring', stiffness: 150 }}
                 whileHover={{ y: -4 }}
                 className="bg-white dark:bg-gray-900 rounded-2xl border-2 border-indigo-200 dark:border-indigo-800 p-5 shadow-sm hover:shadow-lg transition-shadow relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-16 h-16 bg-indigo-50 dark:bg-indigo-900/20 rounded-full -translate-y-6 translate-x-6 pointer-events-none" />
@@ -103,7 +104,7 @@ export default function Achievements() {
               const progress = stats?.[a.stat] ?? 0
               const fill     = Math.min(100, Math.round((progress / a.threshold) * 100))
               return (
-                <motion.div key={a.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.03 + 0.2 }}
+                <motion.div key={a.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: stagger(i, 0.03, 0.2) }}
                   className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 opacity-65 hover:opacity-90 transition-opacity">
                   <div className="text-4xl mb-3 grayscale">{a.emoji}</div>
                   <h3 className="font-black text-gray-700 dark:text-gray-300 text-sm mb-1">{a.title}</h3>

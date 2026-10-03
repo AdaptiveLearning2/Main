@@ -244,6 +244,27 @@ it('does not re-read the role when a token refresh replaces the session', async 
   expect(apiFetch.mock.calls.length).toBe(before)
 })
 
+it('keeps the same user object through a token refresh, and replaces it on an update', async () => {
+  // Anything keyed on `user` (an effect, a memoised child) would otherwise re-run hourly.
+  const seen = []
+  function UserProbe() {
+    const { user } = useAuth()
+    if (user && seen[seen.length - 1] !== user) seen.push(user)
+    return null
+  }
+  getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
+  apiFetch.mockResolvedValue({ role: 'teacher' })
+  render(<AuthProvider><UserProbe /><RoleProbe /></AuthProvider>)
+  await screen.findByText('role:teacher')
+
+  act(() => authCallback('TOKEN_REFRESHED', SESSION('teacher')))
+  expect(seen).toHaveLength(1)
+
+  act(() => authCallback('USER_UPDATED', { user: { id: 'u1', email: 'new@x.y', user_metadata: {} } }))
+  expect(seen).toHaveLength(2)
+  expect(seen[1].email).toBe('new@x.y')
+})
+
 it("never shows a new account the previous account's role while its own is read", async () => {
   // A shared machine: another account's session replaces this one.
   getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })

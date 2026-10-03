@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Trophy } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
+import { stagger } from '../../lib/stagger'
 
 export default function Leaderboard() {
   const [rows, setRows]       = useState([])
@@ -37,7 +38,7 @@ export default function Leaderboard() {
             return (
               <motion.div key={p.rank}
                 initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.1 + 0.1 }}
+                transition={{ delay: stagger(i, 0.1, 0.1) }}
                 className={`flex flex-col items-center ${sizes[i]}`}
               >
                 <div className="text-2xl mb-1">{['🥈','🥇','🥉'][i]}</div>
@@ -74,7 +75,7 @@ export default function Leaderboard() {
             const isMe = p.is_me
             return (
               <motion.div key={p.rank}
-                initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.03 + 0.2 }}
+                initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.03, 0.2) }}
                 whileHover={{ x: 4 }}
                 className={`flex items-center justify-between px-5 py-4 border-b border-gray-50 dark:border-gray-800 last:border-0 transition-colors hover:bg-slate-50 dark:hover:bg-gray-800 ${isMe ? 'ring-2 ring-inset ring-indigo-400' : ''}`}
               >

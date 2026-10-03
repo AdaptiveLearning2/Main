@@ -8,6 +8,7 @@ import { sliceSpec } from '../../components/charts/describeSeries'
 import { fetchQuestionCounts, fetchQuestionsCached } from '../../lib/questionsCache'
 import LoadError from '../../components/ui/LoadError'
 import { TOPICS as ALL_TOPICS, topicLabel } from '../../lib/topics'
+import { stagger } from '../../lib/stagger'
 
 const TOPICS = ALL_TOPICS
 const COLORS  = ['#6366f1','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899','#84cc16','#f97316','#14b8a6']
@@ -79,7 +80,7 @@ export default function TeacherAnalytics() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {summaryCards.map((c, i) => (
           <motion.div key={c.label}
-            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }}
+            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.1) }}
             whileHover={{ y: -4 }}
             className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm"
           >

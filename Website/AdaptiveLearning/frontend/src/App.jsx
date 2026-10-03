@@ -1,7 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 // `m` components take their features from <LazyMotion>, loaded eagerly: a failed feature chunk would
-// leave every `initial={{ opacity: 0 }}` element invisible. No `layout` or drag, so not `domMax`.
+// leave every `initial={{ opacity: 0 }}` element invisible. No drag, pan or layout: eslint.motion.js.
 import { LazyMotion, MotionConfig, domAnimation } from 'framer-motion'
 import { ThemeProvider }  from './context/ThemeContext'
 import ThemedToaster    from './components/ui/ThemedToaster'
@@ -64,7 +64,7 @@ export default function App() {
     // Honours the OS "reduce motion" setting for every animation, at the provider
     // so new ones are covered too. Fades still run; spinners stop.
     <MotionConfig reducedMotion="user">
-    <LazyMotion features={domAnimation}>
+    <LazyMotion features={domAnimation} strict>
     <ThemeProvider>
       <ThemedToaster />
       {/* Above the auth provider: its role read is the first request a cold start waits on. */}

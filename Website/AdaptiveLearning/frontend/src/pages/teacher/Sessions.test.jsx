@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
 import Sessions from './Sessions'
 
-// The roster read can succeed while individual per-student session reads fail.
+// One read per class; a student whose sessions could not be read comes back `null`.
 
 vi.mock('../../lib/api', () => ({ apiFetch: vi.fn() }))
 const { apiFetch } = await import('../../lib/api')
@@ -19,21 +19,24 @@ const SESSION = {
   questions_answered: 6, correct_answers: 4,
 }
 
-/** Route each call by URL. `students` maps user_id -> rows, or an Error. */
+/** What `/api/classes/{id}/sessions` returns: `students` maps user_id -> rows or null. */
+const classSessions = (roster, students = {}) => ({
+  students: roster,
+  sessions: Object.fromEntries(roster.map(s => [s.user_id, s.user_id in students ? students[s.user_id] : []])),
+})
+
+/** Route each call by URL; an unrouted path throws rather than reading as an empty success. */
 function wire({ classes = CLASSES, roster = ROSTER, students = {} }) {
   apiFetch.mockImplementation(async (path) => {
     if (path === '/api/classes') {
       if (classes instanceof Error) throw classes
       return classes
     }
-    if (path.endsWith('/students')) {
+    if (/^\/api\/classes\/[^/]+\/sessions$/.test(path)) {
       if (roster instanceof Error) throw roster
-      return roster
+      return classSessions(roster, students)
     }
-    const id = path.split('/').pop()
-    const out = students[id]
-    if (out instanceof Error) throw out
-    return out ?? []
+    throw new Error(`unrouted ${path}`)
   })
 }
 
@@ -46,7 +49,7 @@ const ERROR = /couldn't load this class's sessions/i
 beforeEach(() => { apiFetch.mockReset() })
 
 it('does not call a class with no readable sessions an empty one', async () => {
-  wire({ students: { a: new Error('down'), b: new Error('down') } })
+  wire({ students: { a: null, b: null } })
 
   draw()
 
@@ -54,6 +57,9 @@ it('does not call a class with no readable sessions an empty one', async () => {
   expect(screen.queryByText(EMPTY)).not.toBeInTheDocument()
   // Not the partial banner either: nothing loaded.
   expect(screen.queryByText(BANNER)).not.toBeInTheDocument()
+  // The backend answered; its read failed. So "just now", never "make sure the backend is running".
+  expect(screen.getByText(/just now/i)).toBeInTheDocument()
+  expect(screen.queryByText(/backend is running/i)).not.toBeInTheDocument()
 })
 
 it('still calls a class that genuinely ran no sessions empty', async () => {
@@ -67,7 +73,7 @@ it('still calls a class that genuinely ran no sessions empty', async () => {
 })
 
 it('reports a partly-loaded class as partly loaded, and shows what it has', async () => {
-  wire({ students: { a: [SESSION], b: new Error('down') } })
+  wire({ students: { a: [SESSION], b: null } })
 
   draw()
 
@@ -78,9 +84,23 @@ it('reports a partly-loaded class as partly loaded, and shows what it has', asyn
   expect(screen.queryByText(EMPTY)).not.toBeInTheDocument()
 })
 
+it('reads the whole class in one request, not one per student', async () => {
+  wire({ students: { a: [SESSION], b: [] } })
+  draw()
+  await screen.findByText('Ada')
+  expect(apiFetch.mock.calls.map(([path]) => path)).toEqual(['/api/classes', '/api/classes/c1/sessions'])
+})
+
+it('counts a student missing from the payload as unread, not as no sessions', async () => {
+  apiFetch.mockImplementation(async (path) => (path === '/api/classes'
+    ? CLASSES : { students: ROSTER, sessions: { a: [SESSION] } }))
+  draw()
+  expect(await screen.findByText(BANNER)).toBeInTheDocument()
+})
+
 it('offers a retry that does not need a page reload', async () => {
   // LoadError only shows its retry button when given an onRetry handler.
-  wire({ students: { a: new Error('down'), b: new Error('down') } })
+  wire({ students: { a: null, b: null } })
   draw()
   await screen.findByText(ERROR)
 
@@ -118,8 +138,8 @@ it('does not flash "no sessions yet" between a successful retry and the roster',
   let releaseRoster
   apiFetch.mockImplementation(async (path) => {
     if (path === '/api/classes') return CLASSES
-    if (path.endsWith('/students')) return new Promise(r => { releaseRoster = r })
-    return []
+    if (path.endsWith('/sessions')) return new Promise(r => { releaseRoster = r })
+    throw new Error(`unrouted ${path}`)
   })
 
   await userEvent.click(screen.getByRole('button', { name: /try again/i }))
@@ -127,20 +147,19 @@ it('does not flash "no sessions yet" between a successful retry and the roster',
   await waitFor(() => expect(releaseRoster).toBeTypeOf('function'))
   expect(screen.queryByText(EMPTY)).not.toBeInTheDocument()
 
-  releaseRoster(ROSTER)
+  releaseRoster(classSessions(ROSTER))
   await waitFor(() => expect(screen.queryByText(EMPTY)).not.toBeInTheDocument())
 })
 
 it('does not let a slow class roster repaint the list under a newer class', async () => {
-  // The roster fans out per student, so it is the slowest read to be superseded.
   const releases = {}
   apiFetch.mockImplementation(async (path) => {
     if (path === '/api/classes') return [{ id: 'c1', name: 'Year 7' }, { id: 'c2', name: 'Year 8' }]
-    if (path.endsWith('/students')) {
+    if (path.endsWith('/sessions')) {
       const id = path.split('/')[3]
       return new Promise(r => { releases[id] = r })
     }
-    return [SESSION]
+    throw new Error(`unrouted ${path}`)
   })
 
   draw()
@@ -150,10 +169,10 @@ it('does not let a slow class roster repaint the list under a newer class', asyn
   await waitFor(() => expect(releases.c2).toBeTypeOf('function'))
 
   // The newer class answers first, then the older one lands.
-  releases.c2([{ user_id: 'z', name: 'Zola' }])
+  releases.c2(classSessions([{ user_id: 'z', name: 'Zola' }], { z: [SESSION] }))
   await screen.findByText('Zola')
 
-  releases.c1([{ user_id: 'a', name: 'Ada' }])
+  releases.c1(classSessions([{ user_id: 'a', name: 'Ada' }], { a: [SESSION] }))
   await waitFor(() => expect(screen.getByText('Zola')).toBeInTheDocument())
   expect(screen.queryByText('Ada')).not.toBeInTheDocument()
 })

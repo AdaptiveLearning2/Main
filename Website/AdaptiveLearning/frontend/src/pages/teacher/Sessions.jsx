@@ -60,31 +60,21 @@ export default function Sessions() {
 
   // The class selector's onChange raises the skeleton on switch.
 
-  // Which roster read is current: the per-student fan-out is slow, so a stale
-  // response could repaint under a newly selected class.
+  // Which class read is current: a slow one could repaint under a newly selected class.
   const beginRosterRead = useLatestRequest()
 
   const loadSessions = useCallback(() => {
     if (!classId) return
     const current = beginRosterRead()
-    apiFetch(`/api/classes/${classId}/students`).then(async (kids) => {
+    // One request for the class: `{students, sessions}`, keyed by user_id.
+    apiFetch(`/api/classes/${classId}/sessions`).then((payload) => {
       if (!current()) return
-      setStudents(kids || [])
-      const map = {}
-      let missed = 0
-      await Promise.all((kids || []).map(async (k) => {
-        try {
-          map[k.user_id] = await apiFetch(`/api/sessions/student/${k.user_id}`)
-        } catch {
-          // null, not []: a failed read is not "ran no sessions".
-          map[k.user_id] = null
-          missed += 1
-        }
-      }))
-      // Re-checked after the fan-out, where a class switch usually lands.
-      if (!current()) return
+      const roster = payload?.students || []
+      const map = payload?.sessions || {}
+      setStudents(roster)
       setSessionsByStudent(map)
-      setPartial(missed)
+      // null, not []: a failed read is not "ran no sessions". A missing key counts too.
+      setPartial(roster.filter(k => map[k.user_id] == null).length)
       setFailed(false)
       setLoading(false)
     }).catch(e => {
@@ -137,7 +127,7 @@ export default function Sessions() {
         )}
       </div>
         
-      {/* Otherwise the table looks complete with rows missing. */}
+      {/* A guard: the class read answers every student or none, so this shows only if that ever changes. */}
       {!loading && !failed && !allFailed && partial > 0 && (
         <div className="mb-4 rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-5 py-3">
           <p className="text-sm font-bold text-amber-900 dark:text-amber-200">
@@ -150,9 +140,9 @@ export default function Sessions() {
       {loading ? (
         <SkeletonList count={4} height="h-16" gap="space-y-2" />
       ) : failed || allFailed ? (
-        // `allFailed` has no single error, so it gets the generic sentence.
+        // `allFailed`: the backend answered and its read failed, which is LoadError's 503 sentence.
         <LoadError what="this class's sessions" onRetry={retry}
-          error={failed || undefined} />
+          error={failed || { status: 503 }} />
       ) : allRows.length === 0 ? (
         <div className="text-center py-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
           <div className="text-6xl mb-3">📭</div>

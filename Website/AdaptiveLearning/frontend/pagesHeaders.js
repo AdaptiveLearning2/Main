@@ -22,9 +22,9 @@ export function pagesHeaders(env) {
   const csp = [
     "default-src 'self'",
     "script-src 'self'",
-    // sonner and framer-motion insert <style> elements at runtime; index.css imports Inter from Google Fonts.
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "font-src 'self' https://fonts.gstatic.com",
+    // sonner and framer-motion insert <style> elements at runtime. Inter is bundled, so fonts are 'self'.
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self'",
     // SessionReview (/teacher/sessions/:id) shows archived charts as <img> on signed Storage URLs.
     `img-src 'self' ${supabase}`,
     `connect-src 'self' ${api} ${supabase} ${sidecar}`,
@@ -43,18 +43,22 @@ export function pagesHeaders(env) {
   }
 }
 
-/** The `_headers` file Cloudflare Pages reads: one block applying to every path. */
+// Vite content-hashes every file under /assets/, so a name never serves two contents.
+// index.html keeps Pages' revalidating default, so a deploy is seen on the next load.
+export const ASSET_CACHE = 'public, max-age=31536000, immutable'
+
+/** The `_headers` file Cloudflare Pages reads: every path's policy, then the hashed assets'. */
 export function headersFile(env) {
   const lines = Object.entries(pagesHeaders(env)).map(([k, v]) => `  ${k}: ${v}`)
-  return ['/*', ...lines, ''].join('\n')
+  return ['/*', ...lines, '', '/assets/*', `  Cache-Control: ${ASSET_CACHE}`, ''].join('\n')
 }
 
-/** Reads back the `/*` block of a `_headers` file, as `{name: value}`. */
-export function parseHeadersFile(text) {
+/** Reads back one block of a `_headers` file (default `/*`), as `{name: value}`. */
+export function parseHeadersFile(text, block = '/*') {
   const headers = {}
   let inBlock = false
   for (const line of text.split(/\r?\n/)) {
-    if (!line.startsWith(' ')) { inBlock = line.trim() === '/*'; continue }
+    if (!line.startsWith(' ')) { inBlock = line.trim() === block; continue }
     const at = line.indexOf(':')
     if (inBlock && at > 0) headers[line.slice(0, at).trim()] = line.slice(at + 1).trim()
   }
@@ -77,8 +81,13 @@ export function pagesHeadersPlugin() {
         throw new Error(`pagesHeaders: no ${file}; run vite build first`)
       }
       const headers = parseHeadersFile(text)
-      server.middlewares.use((_req, res, next) => {
+      const assetHeaders = parseHeadersFile(text, '/assets/*')
+      // Both blocks apply to an asset, as on Pages.
+      server.middlewares.use((req, res, next) => {
         for (const [k, v] of Object.entries(headers)) res.setHeader(k, v)
+        if (req.url?.startsWith('/assets/')) {
+          for (const [k, v] of Object.entries(assetHeaders)) res.setHeader(k, v)
+        }
         next()
       })
     },

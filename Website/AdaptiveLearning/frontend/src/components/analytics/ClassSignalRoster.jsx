@@ -1,4 +1,4 @@
-import { offLabel, pct } from '../signals/SignalPanel'
+import { offLabel, pct } from '../../lib/signalFormat'
 import Panel from './Panel'
 import ScaleNote from '../signals/ScaleNote'
 import { combineScales } from '../../lib/scoreScale'

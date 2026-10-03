@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { headersFile, pagesHeaders, pagesHeadersPlugin, parseHeadersFile } from '../../pagesHeaders.js'
+import { ASSET_CACHE, headersFile, pagesHeaders, pagesHeadersPlugin, parseHeadersFile } from '../../pagesHeaders.js'
 import { DEFAULT_SIDECAR_URL } from '../lib/origins.js'
 import viteConfig from '../../vite.config.js'
 
@@ -39,9 +39,10 @@ it('runs only its own scripts, and never upgrades the plain-HTTP sidecar call', 
   expect(directives(csp)['frame-ancestors']).toEqual(["'none'"])
 })
 
-it('loads the Inter font index.css imports, stylesheet and files', () => {
-  expect(cspOf(ENV)['style-src']).toContain('https://fonts.googleapis.com')
-  expect(cspOf(ENV)['font-src']).toEqual(["'self'", 'https://fonts.gstatic.com'])
+it('serves Inter itself, so no stylesheet or font comes from a third party', () => {
+  // Google Fonts cost first paint a third-party round trip, and sent every pupil's IP to Google.
+  expect(cspOf(ENV)['style-src']).toEqual(["'self'", "'unsafe-inline'"])
+  expect(cspOf(ENV)['font-src']).toEqual(["'self'"])
 })
 
 it.each(['VITE_SUPABASE_URL', 'VITE_API_URL'])('refuses a build without %s', name => {
@@ -52,6 +53,16 @@ it.each(['VITE_SUPABASE_URL', 'VITE_API_URL'])('refuses a build without %s', nam
 
 it('reads back exactly the headers it writes', () => {
   expect(parseHeadersFile(headersFile(ENV))).toEqual(pagesHeaders(ENV))
+})
+
+it('caches the hashed assets for a year, and leaves every other path revalidating', () => {
+  // Pages' default for everything is max-age=0, so every chunk was re-asked on each visit.
+  const file = headersFile(ENV)
+  expect(parseHeadersFile(file, '/assets/*')).toEqual({ 'Cache-Control': ASSET_CACHE })
+  expect(ASSET_CACHE).toMatch(/max-age=31536000/)
+  expect(ASSET_CACHE).toMatch(/immutable/)
+  // On `/*` it would pin index.html, so a deploy would not be seen.
+  expect(parseHeadersFile(file)).not.toHaveProperty('Cache-Control')
 })
 
 describe('the Vite plugin', () => {
@@ -83,6 +94,29 @@ describe('the Vite plugin', () => {
 
       expect(setHeader.mock.calls).toEqual([['Content-Security-Policy', 'built-value']])
       expect(next).toHaveBeenCalled()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('makes vite preview add the asset block on /assets/ paths only', () => {
+    const root = mkdtempSync(join(tmpdir(), 'pages-headers-'))
+    try {
+      mkdirSync(join(root, 'dist'))
+      writeFileSync(join(root, 'dist', '_headers'),
+        '/*\n  X-Frame-Options: DENY\n\n/assets/*\n  Cache-Control: built-cache\n')
+      const plugin = pagesHeadersPlugin()
+      plugin.configResolved({ env: ENV, root, build: { outDir: 'dist' } })
+      let middleware
+      plugin.configurePreviewServer({ middlewares: { use: fn => { middleware = fn } } })
+
+      const asset = vi.fn()
+      middleware({ url: '/assets/index-abc.js' }, { setHeader: asset }, () => {})
+      expect(asset.mock.calls).toEqual([['X-Frame-Options', 'DENY'], ['Cache-Control', 'built-cache']])
+
+      const page = vi.fn()
+      middleware({ url: '/teacher' }, { setHeader: page }, () => {})
+      expect(page.mock.calls).toEqual([['X-Frame-Options', 'DENY']])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

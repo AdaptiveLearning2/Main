@@ -5,7 +5,7 @@ import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Activity,
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import ChildWithdrewBanner from '../../components/consent/ChildWithdrewBanner'
-import { pct, valueOrReason, emotionOn as faceIncluded } from '../../components/signals/SignalPanel'
+import { pct, valueOrReason, emotionOn as faceIncluded } from '../../lib/signalFormat'
 import { stagger } from '../../lib/stagger'
 
 // Only the fields the tiles below render; keep in step with them.

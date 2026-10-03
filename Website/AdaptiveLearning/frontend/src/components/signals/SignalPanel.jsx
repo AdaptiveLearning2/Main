@@ -11,39 +11,7 @@ import { sliceSpec } from '../charts/describeSeries'
 import AccessibleChart from '../charts/AccessibleChart'
 import SeriesFilter from '../charts/SeriesFilter'
 import { useSeriesFilter } from '../../hooks/useSeriesFilter'
-
-// Why a channel has no value. Never "no data" for something never recorded.
-const CHANNEL_STATE = {
-  revoked: since => (since ? `Off since ${since}` : 'Not recorded'),
-  // Consent read failed: we can't claim the student turned it off.
-  unknown: () => 'Unavailable',
-  // Samples arrived, none usable.
-  calibrating: () => 'Calibrating',
-  noSensor: () => 'No sensor',
-}
-
-// Short date, or null (never "Invalid Date") when there is none.
-function shortDate(iso) {
-  if (!iso) return null
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString(undefined,
-    { day: 'numeric', month: 'short' })
-}
-
-/** Tile text for a channel with no value: consent unreadable, revoked, calibrating, or no sensor. */
-export function offLabel({ on, revokedAt, consentRetrieved, samples }) {
-  if (consentRetrieved === false) return CHANNEL_STATE.unknown()
-  if (!on) return CHANNEL_STATE.revoked(shortDate(revokedAt))
-  return samples > 0 ? CHANNEL_STATE.calibrating() : CHANNEL_STATE.noSensor()
-}
-
-/**
- * A rendered value, or the reason there isn't one.
- * Every tile goes through here, so `pct()`'s 'N/A' never reaches the screen.
- */
-export function valueOrReason(value, reason) {
-  return (value && value !== 'N/A') ? value : offLabel(reason)
-}
+import { emotionOn, offLabel, pct, ratio, valueOrReason } from '../../lib/signalFormat'
 
 // muse_optics / muse_ppg / rppg are storage values, not display strings.
 const SOURCE_LABELS = {
@@ -53,20 +21,6 @@ const SOURCE_LABELS = {
 }
 function sourceLabel(source) {
   return SOURCE_LABELS[source] || source
-}
-
-// Signals arrive as 0..1 ratios. A finite number, or null: Number('') is 0,
-// so a blank must not become a confident "0%".
-function ratio(value) {
-  if (value === null || value === undefined) return null
-  if (typeof value === 'string' && value.trim() === '') return null
-  const n = Number(value)
-  return Number.isFinite(n) ? n : null
-}
-
-export function pct(value) {
-  const n = ratio(value)
-  return n === null ? 'N/A' : `${Math.round(n * 100)}%`
 }
 
 // Nulls stay null so a day with no data is a gap, not a line at zero.
@@ -79,12 +33,6 @@ function toPct(value) {
 function unit(value, suffix, digits = 0) {
   const n = ratio(value)
   return n === null ? 'N/A' : `${n.toFixed(digits)}${suffix}`
-}
-
-// `face_included` is the legacy alias; absent on both reads as on.
-export function emotionOn(report) {
-  if (report?.emotion_included !== undefined) return report.emotion_included !== false
-  return report?.face_included !== false
 }
 
 function heartOn(report) {

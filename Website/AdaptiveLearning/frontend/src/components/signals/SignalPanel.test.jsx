@@ -1,6 +1,7 @@
 import { render, screen, cleanup, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { LiveSignalSummary, WeeklySignalReport, SignalTrend, StrategyPanel, pct } from './SignalPanel'
+import { LiveSignalSummary, WeeklySignalReport, SignalTrend, StrategyPanel } from './SignalPanel'
+import { pct } from '../../lib/signalFormat'
 
 // Signals cross the wire as 0..1 ratios; unscaled, focus 0.72 prints "1%".
 

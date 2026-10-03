@@ -476,7 +476,12 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
             ? 'Sessions in this range reached the retrieval limit; the Sessions total is still the full count.'
             : 'Sessions in this range reached the retrieval limit, so the Sessions total counts only the sessions read.'}
           {' The signal figures are not affected by this limit.'}
-          {unretrieved > 0 && ` ${unretrieved} ${unretrieved === 1 ? 'day is' : 'days are'} shown as a gap because the data could not be retrieved, not because there was no activity.`}
+        </p>
+      )}
+      {/* Its own line: an unread signal day (a failed rollup read past expiry, say) is unrelated to `truncated`. */}
+      {unretrieved > 0 && (
+        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+          {`${unretrieved} ${unretrieved === 1 ? 'day is' : 'days are'} shown as a gap because the data could not be retrieved, not because there was no activity.`}
         </p>
       )}
     </div>

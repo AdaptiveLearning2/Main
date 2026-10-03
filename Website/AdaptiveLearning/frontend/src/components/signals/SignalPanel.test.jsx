@@ -136,6 +136,20 @@ describe('WeeklySignalReport', () => {
     expect(screen.getByText(/could not be retrieved, not because there was no activity/i)).toBeInTheDocument()
   })
 
+  it('explains an unread signal day even when no sessions were cut', () => {
+    // A failed rollup read past expiry: unrelated to `truncated`, and otherwise a silent quiet gap.
+    render(<WeeklySignalReport report={{
+      ...report,
+      truncated: false,
+      daily: [
+        { date: '2026-07-15', focus: null, stress: null, cognitive_retrieved: false, face_retrieved: true },
+        ...report.daily,
+      ],
+    }} />)
+    expect(screen.getByText(/1 day is shown as a gap because the data could not be retrieved/i)).toBeInTheDocument()
+    expect(screen.queryByText(/retrieval limit/i)).not.toBeInTheDocument()
+  })
+
   describe('when the sessions read was cut', () => {
     // `truncated` is the sessions read alone; the signal figures are whole-week aggregates.
     const OLD_NOTE = /most recent samples only/i

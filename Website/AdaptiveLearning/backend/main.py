@@ -2030,8 +2030,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             # Emotion rows only (gaze-only face rows excluded), matching the rollup.
             "face_samples": ((face_roll.get("sample_count") or 0) if face_roll
                              else int((face_raw or {}).get("emotion_rows") or 0)),
-            # A raw day counts its trusted rows, as its average does.
-            "heart_samples": ((heart_roll.get("sample_count") or 0) if heart_roll
+            # Trusted rows, as the day's average is: one definition before and after expiry.
+            "heart_samples": ((heart_roll.get("trusted_sample_count") or 0) if heart_roll
                               else int((heart_raw or {}).get("trusted_rows") or 0)),
         })
 

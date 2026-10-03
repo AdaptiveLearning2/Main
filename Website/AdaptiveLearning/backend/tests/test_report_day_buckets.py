@@ -341,6 +341,18 @@ def test_a_raw_days_heart_samples_are_its_trusted_readings(monkeypatch, at_three
     assert report["sample_counts"]["heart"] == 3
 
 
+def test_a_rolled_up_days_heart_samples_are_its_trusted_readings_too(monkeypatch,
+                                                                     at_three_am_utc):
+    """One definition whether a day's raw rows are still there or have expired."""
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
+        rollup=[_rollup("2026-06-09", "heart", avg_heart_rate_bpm=80.0,
+                        sample_count=3, trusted_sample_count=2)])))
+    day = _day(main._weekly_signal_report(STUDENT), "2026-06-09")
+    assert day["heart_from_rollup"] is True
+    assert day["heart_samples"] == 2
+
+
 # ── a declined channel's rollup, a lost rollup, the cut day, the no-EEG sentence ──
 
 def _rollup_query(fake):

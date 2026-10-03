@@ -99,6 +99,8 @@ class _FakeSupabase:
                 down = store.get("_gate_down")
                 if down:
                     raise down if isinstance(down, Exception) else RuntimeError("ingest_gate read failed")
+                if "_gate_answer" in store:
+                    return _Result(store["_gate_answer"])
                 # As the function answers: the session by id whoever owns it, the caller's consent.
                 session = next((s for s in store["sessions"] if s["id"] == params["p_session_id"]), None)
                 consent = next((r for r in store["signal_consent"]
@@ -281,14 +283,75 @@ def test_a_session_id_that_cannot_be_a_uuid_names_no_session(store):
     assert exc.value.status_code == 404
 
 
+def _pgrst202(function: str):
+    """PostgREST's PGRST202 as postgrest-py raises it; message and details as the local stack words them."""
+    from postgrest.exceptions import APIError
+    return APIError({
+        "code": "PGRST202", "hint": None,
+        "message": f"Could not find the function public.{function}(p_session_id, p_user_id) in the schema cache",
+        "details": f"Searched for the function public.{function} with parameters p_session_id, p_user_id "
+                   "or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache."})
+
+
 def test_a_missing_gate_function_names_its_migration(store, capsys):
     """Deployed ahead of 20261003000000, every batch is a 503; the log has to say why."""
     from fastapi import HTTPException
-    store["_gate_down"] = RuntimeError("{'code': 'PGRST202', 'message': 'no function'}")
+    store["_gate_down"] = _pgrst202("ingest_gate")
     with pytest.raises(HTTPException) as exc:
         _post_heart([_heart()])
     assert exc.value.status_code == 503
     assert "20261003000000" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("error", [_pgrst202("ingest_gate"), RuntimeError(str(_pgrst202("ingest_gate")))],
+                         ids=["api-error", "its-text"])
+def test_a_missing_function_is_named_with_its_migration(capsys, error):
+    assert main._missing_rpc(error, "ingest_gate", "20261003000000") is True
+    line = capsys.readouterr().out
+    assert "ingest_gate is missing" in line and "apply 20261003000000" in line
+    assert "503" in line and "refus" not in line
+
+
+@pytest.mark.parametrize("error", [
+    _pgrst202("record_answer"),
+    _pgrst202("ingest_gate_v2"),                               # a name it is a prefix of
+    RuntimeError("connection reset"),
+    RuntimeError("{'code': '42883', 'message': 'function public.ingest_gate(uuid, uuid) does not exist'}"),
+], ids=["other-function", "longer-name", "not-postgrest", "other-code"])
+def test_anything_else_is_not_a_missing_function(capsys, error):
+    """False and silent: the caller logs its own failed read, so a wrong True misnames the outage."""
+    assert main._missing_rpc(error, "ingest_gate", "20261003000000") is False
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("answer,shape", [
+    (None, "a NoneType"),
+    ([], "a list"),
+    ({}, "keys []"),
+    ({"session": None}, "keys ['session']"),
+    ({"session": [], "consent": None}, "session as a list"),
+    ({"session": {"user_id": STUDENT["id"]}, "consent": "yes"}, "consent as a str"),
+    ({"session": {"started_at": None}, "consent": None}, "a session with keys ['started_at']"),
+], ids=["null", "list", "empty", "no-consent-key", "session-list", "consent-str", "no-owner"])
+def test_a_gate_answer_that_is_not_its_object_is_a_failed_read(store, capsys, answer, shape):
+    """A 503 the push client resends, never a 404 that drops the batch: nobody read that it is gone."""
+    from fastapi import HTTPException
+    _consent(store, headband_optical_enabled=True)
+    store["_gate_answer"] = answer
+    with pytest.raises(HTTPException) as exc:
+        _post_heart([_heart()])
+    assert exc.value.status_code == 503
+    assert store["heart_signals"] == []
+    log = capsys.readouterr().out
+    assert "ingest_gate answered" in log and shape in log
+
+
+def test_a_gate_answer_with_no_session_is_a_404(store):
+    from fastapi import HTTPException
+    store["_gate_answer"] = {"session": None, "consent": None}
+    with pytest.raises(HTTPException) as exc:
+        _post_heart([_heart()])
+    assert exc.value.status_code == 404
 
 
 @pytest.mark.parametrize("endpoint", ["cognitive", "face", "heart"])
@@ -451,7 +514,7 @@ def test_the_rate_limit_runs_before_the_session_lookup(store, monkeypatch):
 
 
 def test_a_genuine_refusal_says_so(store):
-    """Otherwise the test above passes for the wrong reason."""
+    """A consent row read and declining names the declined sensor; an unread one is a 503 first."""
     _consent(store, eeg_enabled=True)          # both sensors declined, readably
 
     assert _post_heart([_heart()])["reason"] == "no consented heart sensor"

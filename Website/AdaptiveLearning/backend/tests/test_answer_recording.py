@@ -174,10 +174,17 @@ def test_a_failed_call_is_not_an_answer(monkeypatch, error, status):
     assert caught.value.status_code == status
 
 
+# PostgREST's body for an absent function, in the shape the local stack answers: it names the function.
+_RECORD_ANSWER_MISSING = (
+    '{"code": "PGRST202", "hint": null, "details": null, "message": "Could not find the function '
+    'public.record_answer(p_answered_at, p_correct, p_question_id, p_selected_index, p_session_id, '
+    'p_user_id) in the schema cache"}')
+
+
 def test_a_missing_function_is_reported_as_a_missing_migration(monkeypatch, capsys):
     """Deployed ahead of 20261003000000, every answer fails: a 503 that says why in the log."""
     with pytest.raises(main.HTTPException) as caught:
-        _answer(monkeypatch, _Client(rpc_error="{'code': 'PGRST202', 'message': 'no function'}"))
+        _answer(monkeypatch, _Client(rpc_error=_postgrest_error(_RECORD_ANSWER_MISSING)))
     assert caught.value.status_code == 503
     assert "20261003000000" in capsys.readouterr().out
 

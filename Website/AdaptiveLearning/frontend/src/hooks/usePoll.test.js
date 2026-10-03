@@ -20,9 +20,9 @@ function setHidden(value) {
 }
 
 function deferred() {
-  let resolve
-  const promise = new Promise(r => { resolve = r })
-  return { promise, resolve }
+  let resolve, reject
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej })
+  return { promise, resolve, reject }
 }
 
 it('calls at once, then once per interval after each call settles', async () => {
@@ -58,7 +58,7 @@ it('becoming visible during a call does not start a second chain', async () => {
   expect(fn).toHaveBeenCalledTimes(4)
 })
 
-it('pauses while hidden and calls at once on return', async () => {
+it('pauses while hidden and calls at once on a return past its due time', async () => {
   const fn = vi.fn(async () => {})
   renderHook(() => usePoll(fn, { intervalMs: 1000 }))
   setHidden(true)
@@ -67,6 +67,54 @@ it('pauses while hidden and calls at once on return', async () => {
   expect(fn).toHaveBeenCalledTimes(1)
   setHidden(false)
   await vi.advanceTimersByTimeAsync(0)
+  expect(fn).toHaveBeenCalledTimes(2)
+})
+
+it('on return, keeps a wait that was already set', async () => {
+  const fn = vi.fn(async () => {})
+  renderHook(() => usePoll(fn, { intervalMs: 1000 }))
+  await vi.advanceTimersByTimeAsync(0)       // settles at 0; the next call is due at 1000
+  setHidden(true)
+  await vi.advanceTimersByTimeAsync(400)
+  setHidden(false)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(fn).toHaveBeenCalledTimes(1)
+  await vi.advanceTimersByTimeAsync(600)
+  expect(fn).toHaveBeenCalledTimes(2)
+})
+
+it('on return, waits out the rest of the interval since the last call settled', async () => {
+  let pending = deferred()
+  const fn = vi.fn(() => pending.promise)
+  renderHook(() => usePoll(fn, { intervalMs: 1000 }))
+  setHidden(true)
+  // Settles while hidden, so no wait is set: the return has to work out what is left.
+  pending.resolve()
+  pending = { promise: Promise.resolve() }
+  await vi.advanceTimersByTimeAsync(400)
+  setHidden(false)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(fn).toHaveBeenCalledTimes(1)
+  await vi.advanceTimersByTimeAsync(599)
+  expect(fn).toHaveBeenCalledTimes(1)
+  await vi.advanceTimersByTimeAsync(1)
+  expect(fn).toHaveBeenCalledTimes(2)
+})
+
+it('on return, keeps the backed-off wait after a failure', async () => {
+  let pending = deferred()
+  const fn = vi.fn(() => pending.promise)
+  renderHook(() => usePoll(fn, { intervalMs: 1000, maxBackoffMs: 8000 }))
+  setHidden(true)
+  pending.reject(new Error('down'))           // the next wait doubles to 2000
+  pending = { promise: Promise.resolve() }
+  await vi.advanceTimersByTimeAsync(1500)
+  setHidden(false)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(fn).toHaveBeenCalledTimes(1)
+  await vi.advanceTimersByTimeAsync(499)
+  expect(fn).toHaveBeenCalledTimes(1)
+  await vi.advanceTimersByTimeAsync(1)
   expect(fn).toHaveBeenCalledTimes(2)
 })
 

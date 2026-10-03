@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import usePoll from './usePoll'
 
 /**
  * Load and mutate one admin resource (`data`, `busy`, `error`).
@@ -15,13 +16,17 @@ export default function useAdminResource({ load, pollMs = 0 }) {
     () => load().then(setData).catch(e => setError(e.message)),
     [load])
 
-  useEffect(() => { refresh() }, [refresh])
+  // With `pollMs` the poll makes the first read too, so the page asks once, not twice.
+  useEffect(() => { if (!pollMs) refresh() }, [refresh, pollMs])
 
-  useEffect(() => {
-    if (!pollMs) return undefined
-    const t = setInterval(refresh, pollMs)
-    return () => clearInterval(t)
-  }, [refresh, pollMs])
+  usePoll(async (stopped) => {
+    try {
+      const d = await load()
+      if (!stopped()) setData(d)
+    } catch (e) {
+      if (!stopped()) setError(e.message)
+    }
+  }, { intervalMs: pollMs, enabled: pollMs > 0, key: load })
 
   /** Run a write and adopt its result. Resolves true/false; never throws. */
   const mutate = useCallback((write) => {

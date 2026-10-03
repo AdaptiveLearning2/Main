@@ -56,15 +56,16 @@ export default function TeacherDashboard() {
       })
       .finally(() => { if (!stopped()) setLoading(false) })
 
-    // Both at once: the averages do not need the list. Their own catch blanks only the averages.
-    const loadClasses = () => Promise.all([
-      apiFetch('/api/classes'),
-      apiFetch('/api/classes/summary').catch(() => ({})),
-    ])
-      .then(([rows, averages]) => {
+    // Asked at once and drawn as each lands: the list never waits for the slower averages.
+    // A failed summary blanks only the averages.
+    const loadAverages = () => apiFetch('/api/classes/summary')
+      .catch(() => ({}))
+      .then(averages => { if (!stopped()) setClassAverages(averages) })
+
+    const loadClasses = () => apiFetch('/api/classes')
+      .then(rows => {
         if (stopped()) return
         setClasses(rows || [])
-        setClassAverages(averages)
         setClassesFailed(false)
         return true
       })
@@ -76,7 +77,7 @@ export default function TeacherDashboard() {
       })
       .finally(() => { if (!stopped()) setClassesLoading(false) })
 
-    const [q, c] = await Promise.all([loadQuestions(), loadClasses()])
+    const [q, c] = await Promise.all([loadQuestions(), loadClasses(), loadAverages()])
     // Stamp only when both loads succeeded.
     if (!stopped() && q && c) setLastUpdated(new Date())
   }, { intervalMs: REFRESH_MS })

@@ -25,7 +25,6 @@ const clock = {
   subscribe(listener) {
     clock.listeners.add(listener)
     if (!clock.timer) {
-      clock.now = Date.now()
       clock.timer = setInterval(() => {
         clock.now = Date.now()
         clock.listeners.forEach(l => l())
@@ -36,7 +35,12 @@ const clock = {
       if (!clock.listeners.size) { clearInterval(clock.timer); clock.timer = null }
     }
   },
-  read: () => clock.now,
+  // A render reads before it subscribes, so an idle clock catches up here. Only once a
+  // second is stale: React needs the same value from two reads in a row.
+  read: () => {
+    if (!clock.timer && Date.now() - clock.now >= 1000) clock.now = Date.now()
+    return clock.now
+  },
 }
 const useNow = () => useSyncExternalStore(clock.subscribe, clock.read)
 

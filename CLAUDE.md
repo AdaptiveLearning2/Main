@@ -1727,7 +1727,7 @@ The second is **`react/no-danger`**, which arrives with the XSS sinks below rath
 ## The XSS sinks are a second, blocking lint run, because the first one cannot fail
 
 `npm run lint` is non-blocking against the 10-error backlog, and a security rule nobody can fail is not
-enforcement. `npm run lint:sinks` (`eslint.sinks.config.js`, CI step *Lint XSS sinks*) therefore extends **no**
+enforcement. `npm run lint:sinks` (`eslint.sinks.config.js`, CI step *Lint XSS sinks and motion features*) therefore extends **no**
 shared config — the whole backlog lives in `js.configs.recommended` and the two react plugins, so it cannot reach
 this run, which is red if and only if a sink (or a motion misuse, below) was added. The rules had zero hits when
 written, which is what makes blocking possible with nothing to burn down first.
@@ -1766,12 +1766,13 @@ Two config details are load-bearing, both found by the gate failing on code it h
 itself an error (five, in source files); and it sets `reportUnusedDisableDirectives: 'off'`, because every disable
 in the tree is for a rule this run does not have.
 
-**The same gate holds the motion guard** (`eslint.motion.js`). App.jsx loads `domAnimation` into `<LazyMotion
-strict>`, so `motion` from `framer-motion` or `motion/react`, anything from either `*/client`, a dynamic import of
+**The same gate holds the motion guard** (`eslint.motion.js`). App.jsx loads `domAnimation` into `<LazyMotion>`,
+so `motion` from `framer-motion` or `motion/react`, anything from either `*/client`, a dynamic import of
 any of them, and a drag, pan or layout prop on an `m.` element (inert without `domMax`) are errors;
 `motionImports.test.js` derives that prop list from motion-dom's types. `src/test/setup.js` renders every test inside
-the same `<LazyMotion strict>`, so `m` animates as it does live — and a test about App's own `LazyMotion` must take
-the real render through `vi.importActual`, or the wrapper supplies what it tests (`App.motion.test.jsx`).
+`<LazyMotion strict>`, so `m` animates as it does live and a stray `motion` throws. **App itself is not `strict`**:
+both guards run before merge, and live a miss would blank the app where it otherwise costs ~13 KiB. A test about
+App's own `LazyMotion` takes the real render through `vi.importActual`, or the wrapper supplies what it tests.
 
 ## Muted text is `text-gray-600 dark:text-gray-400`, and a test does the arithmetic
 

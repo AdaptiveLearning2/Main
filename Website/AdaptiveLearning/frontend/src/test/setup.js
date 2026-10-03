@@ -4,7 +4,7 @@ import { LazyMotion, domAnimation } from 'framer-motion'
 import { cleanup, configure } from '@testing-library/react'
 import { afterEach, beforeAll, afterAll, vi } from 'vitest'
 
-// Every render sits in App.jsx's <LazyMotion strict>: `m` animates as it does live, and `motion` throws.
+// Every render sits in App.jsx's <LazyMotion>, made strict here: `m` animates as it does live, and `motion` throws.
 vi.mock('@testing-library/react', async importOriginal => {
   const rtl = await importOriginal()
   const inMotion = Inner => ({ children }) => createElement(LazyMotion, { features: domAnimation, strict: true },

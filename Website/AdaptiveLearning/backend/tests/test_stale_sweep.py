@@ -19,52 +19,49 @@ def catch_ups(monkeypatch):
 
 
 class _FakeDB:
-    """The sessions read plus the four activity sources, any one of which can be made to fail."""
+    """The sessions read, plus `last_activity_for_sessions` over answers and signal rows.
 
-    SIGNALS = ("cognitive_signals", "face_signals", "heart_signals")
+    Signal rows stand for ones that passed the measured-row filter, which is SQL's to apply:
+    see `test_the_activity_function_counts_only_measured_rows` and `assert_signal_rls.sql`.
+    """
 
-    def __init__(self, sessions, answers, boom=False, signals=None,
-                 boom_table="session_answers"):
+    def __init__(self, sessions, answers, boom=False, signals=None):
         self._sessions, self._answers, self._boom = sessions, answers, boom
         self._signals = signals or {}
-        self._boom_table = boom_table
-        self.filters = []
+        self.activity_asked = []
 
     def table(self, name):
-        self._t = name
+        assert name == "sessions", f"activity is read through the function, not {name}"
         return self
 
     def select(self, *a, **k): return self
     def eq(self, *a, **k): return self
-    def in_(self, *a, **k): return self
     def order(self, *a, **k): return self
     def limit(self, *a, **k): return self
 
-    # Recorded, since the measured-row filter is server-side. Nothing here executes them:
-    # see `test_the_filters_are_valid_postgrest` and `scripts/assert_signal_rls.sql`.
-
-    def or_(self, expression):
-        self.filters.append((self._t, expression))
-        return self
-
-    def filter(self, column, operator, value):
-        self.filters.append((self._t, f"{column}.{operator}.{value}"))
-        return self
-
-    def measured_columns(self, table):
-        """Which columns this table's rows were required to have, whichever filter form said so."""
-        return {term.split(".")[0]
-                for recorded, expression in self.filters if recorded == table
-                for term in expression.split(",")}
-
     def execute(self):
-        if self._boom and self._t == self._boom_table:
-            raise RuntimeError(f"{self._t} unavailable")
-        if self._t == "session_answers":
-            return type("R", (), {"data": self._answers})
-        if self._t in self.SIGNALS:
-            return type("R", (), {"data": self._signals.get(self._t, [])})
         return type("R", (), {"data": self._sessions})
+
+    def rpc(self, name, params):
+        assert name == "last_activity_for_sessions", name
+        self.activity_asked.append(list(params["p_session_ids"]))
+        fake = self
+
+        class _R:
+            def execute(self):
+                if fake._boom:
+                    raise RuntimeError("activity unavailable")
+                stamps = [(a["session_id"], a["answered_at"]) for a in fake._answers or []]
+                stamps += [(r["session_id"], r["ts"])
+                           for rows in fake._signals.values() for r in rows]
+                data = []
+                for sid in params["p_session_ids"]:
+                    mine = [t for s, t in stamps if s == sid]
+                    data.append({"session_id": sid,
+                                 "last_activity_at": max(mine, key=main._parse_ts) if mine else None})
+                return type("R", (), {"data": data})
+
+        return _R()
 
 
 def test_the_first_sweep_does_not_wait_a_whole_interval(monkeypatch):
@@ -196,49 +193,37 @@ def test_the_newest_source_wins_whichever_table_it_came_from(monkeypatch):
     assert main.student_sessions("u1", request=None)[0]["idle"] is True
 
 
-def test_a_failed_signal_read_is_unknown_too(monkeypatch):
-    """A failed source can only under-report activity, so the flag goes unknown."""
-    rows = [_session("s-partial", started_min_ago=30)]
-    _as_teacher(monkeypatch, _FakeDB(rows, answers=[], boom=True,
-                                     boom_table="heart_signals"))
-
-    out = main.student_sessions("u1", request=None)
-    assert out[0]["activity_known"] is False
-    assert out[0]["idle"] is False
-
-
-def test_a_headband_on_a_desk_does_not_keep_a_session_alive(monkeypatch):
-    """`contact_poor` rows (measurements nulled) arrive every tick, so only measured rows count.
-
-    Asserted on the filter, since it is applied server-side.
-    """
-    from datetime import timedelta
-    old = (main._utc_now() - timedelta(seconds=main._STALE_AFTER_SEC + 120)).isoformat()
-    rows = [_session("s-desk", started_min_ago=30)]
-    answers = [{"session_id": "s-desk", "answered_at": old}]
-    db = _FakeDB(rows, answers)
-    _as_teacher(monkeypatch, db)
-
-    out = main.student_sessions("u1", request=None)
-    assert out[0]["idle"] is True, "nothing measured anything; the student left"
-
-    assert db.measured_columns("cognitive_signals") == {"focus"}
-    assert db.measured_columns("heart_signals") == {"heart_rate_bpm"}
-    assert db.measured_columns("session_answers") == set(), (
-        "an answer is activity whatever the sensors were doing")
-
-
-def test_a_gaze_only_face_row_counts_as_a_measurement(monkeypatch):
-    """Under `-Gaze -NoEmotion` every `emotion` is NULL; pose refuses independently of gaze."""
-    rows = [_session("s-cam", started_min_ago=30)]
+def test_activity_is_asked_for_the_open_sessions_only(monkeypatch):
+    """One read for every open session; a closed one is not idle, so it needs none."""
+    rows = [_session("s-open", started_min_ago=30),
+            _session("s-done", ended=main._utc_now().isoformat())]
     db = _FakeDB(rows, answers=[])
     _as_teacher(monkeypatch, db)
     main.student_sessions("u1", request=None)
+    assert db.activity_asked == [["s-open"]]
 
-    face = db.measured_columns("face_signals")
-    assert "emotion" in face
-    assert "gaze_x" in face, "a gaze-only deployment measures too"
-    assert "head_yaw" in face, "pose refuses independently of gaze"
+
+def test_the_activity_function_counts_only_measured_rows():
+    """Source check, stated: the SQL copies `_ACTIVITY_SOURCES`. A filter dropped there puts a
+    headband left on a desk (`contact_poor` rows, measurements nulled) back to "live"."""
+    import re
+    from pathlib import Path
+    migrations = sorted((Path(__file__).resolve().parents[4] / "supabase" / "migrations").glob("*.sql"))
+    header = re.compile(r'CREATE\s+OR\s+REPLACE\s+FUNCTION\s+"public"\."last_activity_for_sessions"')
+    sql = re.sub(r"--[^\n]*", "", [m for m in migrations if header.search(m.read_text("utf-8"))][-1]
+                 .read_text("utf-8"))
+    body = sql[header.search(sql).start():]
+    body = body[:body.index("$$;", body.index("$$") + 2)]
+    for table, _column, measured in main._ACTIVITY_SOURCES:
+        # This table's subquery, up to its `ON true`.
+        found = re.search(r'FROM\s+"public"\."' + table + r'"\s+x(.*?)ON\s+true', body, re.S)
+        assert found, f"last_activity_for_sessions does not read {table}"
+        where = found.group(1)
+        for col in measured:
+            assert re.search(rf"x\.{col}\s+IS\s+NOT\s+NULL", where), \
+                f"{table}.{col} counts as activity in main but not in the function"
+        if not measured:
+            assert "IS NOT NULL" not in where, "an answer is activity whatever the sensors did"
 
 
 def test_a_measured_signal_row_still_counts(monkeypatch):
@@ -254,37 +239,6 @@ def test_a_measured_signal_row_still_counts(monkeypatch):
 
     assert main.student_sessions("u1", request=None)[0]["idle"] is False
 
-
-def test_the_filters_are_valid_postgrest():
-    """Built with the real client and asserted on the wire; the fake only records strings.
-
-    Also pins the single-column form `focus=not.is.null`, not a one-branch `or=(...)`.
-    """
-    from urllib.parse import unquote
-    from postgrest import SyncPostgrestClient
-
-    client = SyncPostgrestClient("http://localhost:54321/rest/v1")
-    emitted = {}
-    for table, column, measured in main._ACTIVITY_SOURCES:
-        query = (client.table(table).select(f"session_id, {column}")
-                 .in_("session_id", ["11111111-1111-1111-1111-111111111111"]))
-        if measured:
-            query = main._measured_only(query, measured)
-        emitted[table] = unquote(str(query.order(column, desc=True)
-                                     .limit(500).request.params))
-
-    assert "focus=not.is.null" in emitted["cognitive_signals"]
-    assert "heart_rate_bpm=not.is.null" in emitted["heart_signals"]
-    assert ("or=(emotion.not.is.null,gaze_x.not.is.null,head_yaw.not.is.null)"
-            in emitted["face_signals"])
-    assert "not.is.null" not in emitted["session_answers"], (
-        "an answer is activity whatever the sensors were doing")
-    for table, params in emitted.items():
-        assert "order=" in params and "limit=500" in params, (table, params)
-
-
-# Column existence is checked by `scripts/assert_signal_rls.sql` against
-# `information_schema`, deliberately not by parsing migration SQL here.
 
 def test_nothing_to_look_up_is_not_a_failed_read(monkeypatch):
     """`activity_known: False` means only "the read failed", not "no open sessions"."""

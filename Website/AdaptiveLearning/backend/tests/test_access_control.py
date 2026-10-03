@@ -259,7 +259,25 @@ class _FakeSupabase:
         params = params or {}
         self.rpc_calls.append((name, params))
         exc = self._rpc_raises(name, params) if self._rpc_raises else None
+        if name not in self._rpc_results and name in _MODELLED_RPCS:
+            return _Rpc(_MODELLED_RPCS[name](self._tables, params), exc)
         return _Rpc(self._rpc_results.get(name, []), exc)
+
+
+def _recent_sessions_rows(tables, params):
+    """What `recent_sessions_for_users` returns for the `sessions` fixture (see its SQL)."""
+    limit = max(1, min(params["p_limit"], 50))
+    out = []
+    for uid in dict.fromkeys(params["p_user_ids"]):
+        mine = sorted((r for r in tables.get("sessions", []) if r.get("user_id") == uid),
+                      key=lambda r: str(r.get("started_at", "")), reverse=True)
+        out += mine[:limit]
+    # A set-returning function promises no order, so the caller must sort; give it the worst.
+    return sorted(out, key=lambda r: str(r.get("started_at", "")))
+
+
+# Functions computed from the table fixtures unless a test gives their result outright.
+_MODELLED_RPCS = {"recent_sessions_for_users": _recent_sessions_rows}
 
 
 class _Rpc:
@@ -894,7 +912,8 @@ def test_a_failed_batch_summary_is_distinguishable_from_an_empty_one(monkeypatch
 def test_children_endpoint_marks_a_failed_batch_summary_as_unretrieved(monkeypatch):
     """The parent dashboard renders "no data yet" straight off this payload."""
     def boom(name, params):
-        return RuntimeError("connection reset")
+        # The summary read only; the sessions read is another function and another test.
+        return None if name == "recent_sessions_for_users" else RuntimeError("connection reset")
     monkeypatch.setattr(main, "supabase", _FakeSupabase({
         "parent_child_links": [{"parent_id": "parent-1", "child_id": "student-1",
                                 "created_at": "2026-01-01"}],

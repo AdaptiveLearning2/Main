@@ -195,11 +195,34 @@ it('keeps a push deployment in push mode when the health probe stops answering',
   const before = eegHealth.mock.calls.length
   // Matches `eegHealth`'s real non-429 fallback shape.
   eegHealth.mockResolvedValue({ answered: false, available: false, error: 'Failed to fetch' })
-  // Two further probes, so a wrong write has landed and painted.
-  await waitFor(() => expect(eegHealth.mock.calls.length).toBeGreaterThan(before + 1),
-                { timeout: 20000 })
+  // Two further probes, so a wrong write has landed and painted. Under push the probe
+  // waits 30 s; a visible tab re-polls at once on visibilitychange.
+  await waitFor(() => {
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(eegHealth.mock.calls.length).toBeGreaterThan(before + 1)
+  })
 
   expect(screen.getByText('on your device')).toBeInTheDocument()
+}, 30000)
+
+it('polls health and status every 30 s under push, not every few seconds', async () => {
+  // Both answers are configuration under push; at 5 s and 3 s they were 32 requests a minute.
+  eegHealth.mockResolvedValue({ available: null, ingest_mode: 'push' })
+  eegStatus.mockResolvedValue({ ingest_mode: 'push', service: null, poller: {} })
+  render(<Adaptive />)
+  expect(await screen.findByText('on your device')).toBeInTheDocument()
+  // The first wait was set before the first answer said push, so it is the pull 5 s.
+  await waitFor(() => expect(eegHealth.mock.calls.length).toBeGreaterThanOrEqual(2),
+                { timeout: 8000 })
+  await startASession()
+  await waitFor(() => expect(eegStatus).toHaveBeenCalled())
+
+  const health = eegHealth.mock.calls.length
+  const status = eegStatus.mock.calls.length
+  // Past both pull intervals (5 s, 3 s) with time to spare.
+  await new Promise(r => setTimeout(r, 6500))
+  expect(eegHealth.mock.calls.length).toBe(health)
+  expect(eegStatus.mock.calls.length).toBe(status)
 }, 30000)
 
 it('does not tear a streaming push link down because a tick did not land', async () => {
@@ -220,8 +243,11 @@ it('does not tear a streaming push link down because a tick did not land', async
 
   const before = eegStatus.mock.calls.length
   eegStatus.mockResolvedValue({ answered: false, service: false, poller: { running: false } })
-  await waitFor(() => expect(eegStatus.mock.calls.length).toBeGreaterThan(before),
-                { timeout: 8000 })
+  // Every 30 s under push; visibilitychange makes a visible tab re-poll at once.
+  await waitFor(() => {
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(eegStatus.mock.calls.length).toBeGreaterThan(before)
+  })
 
   expect(screen.getByText(/STREAMING/)).toBeInTheDocument()
   expect(screen.getByLabelText(/Headband charge 80%/)).toBeInTheDocument()

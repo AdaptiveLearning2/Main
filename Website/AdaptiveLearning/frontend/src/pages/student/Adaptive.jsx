@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
 import { endSession, recordAnswer } from '../../lib/session'
 import useEegStartReport from '../../hooks/useEegStartReport'
+import usePoll from '../../hooks/usePoll'
 import { onSignOut } from '../../lib/signOutTasks'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { reloadIfRestored } from '../../lib/pageRestore'
@@ -32,6 +33,8 @@ const RECONNECT_ATTEMPTS = 3
 const RECONNECT_BACKOFF_MS = [2000, 4000, 8000]
 // Faster status poll while recovering a drop.
 const RECONNECT_POLL_MS = 2000
+// Health and status polls under push: their answers are configuration, not live state.
+const PUSH_POLL_MS = 30_000
 // Consecutive poor contact frames before the hint shows; one frame is noise.
 const CONTACT_POOR_STREAK = 2
 // Minimum gap between disconnect toasts, for a flapping link.
@@ -347,35 +350,30 @@ export default function Adaptive() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Check EEG health independently so the button isn't stuck unavailable if session start fails
-  useEffect(() => {
-    let alive = true
-    const checkHealth = async () => {
-      try {
-        const h = await eegHealth()
-        // A refused probe says nothing about the sidecar; keep the last answer.
-        if (alive && h.refused) return setHeadband(s => ({ ...s, probeRefused: true }))
-        // Runs before a session exists, so pushMode is known before first paint.
-        if (alive) setHeadband(s => ({
-          ...s,
-          // Only a probe that landed (`answered`, not a missing `ingest_mode`)
-          // may set the mode, clear `serviceError`, or clear `probeRefused`.
-          ...(h.answered === false ? {} : {
-            pushMode: h.ingest_mode === 'push',
-            serviceError: h.error || null,
-            probeRefused: false,
-          }),
-          // Written either way: an unreached probe disables Connect, and
-          // `probeUnreachable` says it was our backend, not the sidecar.
-          available: !!h.available,
-          probeUnreachable: h.answered === false,
-        }))
-      } catch { if (alive) setHeadband(s => ({ ...s, available: false })) }
-    }
-    checkHealth()
-    const id = setInterval(checkHealth, 5000)
-    return () => { alive = false; clearInterval(id) }
-  }, [])
+  // Check EEG health independently so the button isn't stuck unavailable if session start fails.
+  // Under push its answer is fixed by configuration, so it is re-checked every 30 s, not 5.
+  usePoll(async (stopped) => {
+    try {
+      const h = await eegHealth()
+      // A refused probe says nothing about the sidecar; keep the last answer.
+      if (!stopped() && h.refused) return setHeadband(s => ({ ...s, probeRefused: true }))
+      // Runs before a session exists, so pushMode is known before first paint.
+      if (!stopped()) setHeadband(s => ({
+        ...s,
+        // Only a probe that landed (`answered`, not a missing `ingest_mode`)
+        // may set the mode, clear `serviceError`, or clear `probeRefused`.
+        ...(h.answered === false ? {} : {
+          pushMode: h.ingest_mode === 'push',
+          serviceError: h.error || null,
+          probeRefused: false,
+        }),
+        // Written either way: an unreached probe disables Connect, and
+        // `probeUnreachable` says it was our backend, not the sidecar.
+        available: !!h.available,
+        probeUnreachable: h.answered === false,
+      }))
+    } catch { if (!stopped()) setHeadband(s => ({ ...s, available: false })) }
+  }, { intervalMs: headband.pushMode ? PUSH_POLL_MS : 5000 })
 
   // Discover stations (auto-select a single one), retried until non-empty. A
   // failed read applies nothing, so `stationId` never falls back to `default`.
@@ -646,41 +644,35 @@ export default function Adaptive() {
     return creating.current
   }
 
-  // poll EEG status while connected
-  useEffect(() => {
-    if (!sessionId) return
-    let killed = false
-    const tick = async () => {
-      const s = await eegStatus(stationId)
-      if (killed) return
-      // An unlanded tick writes nothing (`eegStatus` swallows failure into a
-      // plausible-looking object). Drops belong to the telemetry poll.
-      if (s.answered === false) return
-      setHeadband(prev => ({
-        ...prev,
-        // `service` is null under push: the backend never probes the sidecar.
-        pushMode: s.ingest_mode === 'push',
-        // Authenticated, so never address-limited: a landed tick clears `probeRefused`.
-        available: !!s.service,
-        probeRefused: false,
-        // Pull only (the backend's poller), and not while reconnecting: the
-        // telemetry poll alone owns that transition.
-        ...(s.ingest_mode === 'push' || prev.phase === 'reconnecting' ? {} : {
-          connected: !!s.poller?.running,
-        }),
-        samples:   s.poller?.samples || 0,
-        lastTs:    s.poller?.last_ts || null,
-        // Pull only (telemetry covers push); typeof so 0% is a reading.
-        ...(s.ingest_mode === 'push' ? {} : {
-          battery: typeof s.muse?.ingestion?.battery_percent === 'number'
-            ? s.muse.ingestion.battery_percent : null,
-        }),
-      }))
-    }
-    tick()
-    const id = setInterval(tick, 3000)
-    return () => { killed = true; clearInterval(id) }
-  }, [sessionId, stationId])
+  // poll EEG status while connected; under push only its mode fields matter, so 30 s
+  usePoll(async (stopped) => {
+    const s = await eegStatus(stationId)
+    if (stopped()) return
+    // An unlanded tick writes nothing (`eegStatus` swallows failure into a
+    // plausible-looking object). Drops belong to the telemetry poll.
+    if (s.answered === false) return
+    setHeadband(prev => ({
+      ...prev,
+      // `service` is null under push: the backend never probes the sidecar.
+      pushMode: s.ingest_mode === 'push',
+      // Authenticated, so never address-limited: a landed tick clears `probeRefused`.
+      available: !!s.service,
+      probeRefused: false,
+      // Pull only (the backend's poller), and not while reconnecting: the
+      // telemetry poll alone owns that transition.
+      ...(s.ingest_mode === 'push' || prev.phase === 'reconnecting' ? {} : {
+        connected: !!s.poller?.running,
+      }),
+      samples:   s.poller?.samples || 0,
+      lastTs:    s.poller?.last_ts || null,
+      // Pull only (telemetry covers push); typeof so 0% is a reading.
+      ...(s.ingest_mode === 'push' ? {} : {
+        battery: typeof s.muse?.ingestion?.battery_percent === 'number'
+          ? s.muse.ingestion.battery_percent : null,
+      }),
+    }))
+  }, { intervalMs: headband.pushMode ? PUSH_POLL_MS : 3000,
+       key: `${sessionId}:${stationId}`, enabled: !!sessionId })
 
   // Push only: hand the session and token to the sidecar, and take them back
   // at the end. Under pull the poller is the writer; both would double-write.

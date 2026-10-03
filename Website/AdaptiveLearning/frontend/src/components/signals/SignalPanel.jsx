@@ -246,18 +246,20 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
     heart_rate_bpm: ratio(d.heart_rate_bpm),
     label: d.date ? d.date.slice(5) : '',
   }))
-  // Days the row cap left unread; they draw as gaps like quiet days, so say so.
+  // Signal days that could not be read draw as gaps like quiet days, so say so.
+  // Not `sessions_retrieved`: per-day session counts are not drawn here.
   const unretrieved = (report?.daily || []).filter(
     d => d.cognitive_retrieved === false
       || d.face_retrieved === false
       || d.heart_retrieved === false
-      || d.sessions_retrieved === false
   ).length
   // `=== false`, not falsy: undefined is an older payload, null the facial opt-out.
   const retrieved = report?.retrieved || {}
   const cogFailed = retrieved.cognitive === false
   const faceFailed = retrieved.face === false
   const sessionsFailed = retrieved.sessions === false
+  // Under `truncated`, a count that came back exceeds the rows read; equal means it did not.
+  const sessionsExact = (report?.sessions_recorded ?? 0) > (counts.sessions ?? 0)
   const heartFailed = retrieved.heart === false
   const anyFailed = cogFailed || faceFailed || heartFailed || sessionsFailed
   // Consent unreadable: "we couldn't find out", not "declined".
@@ -467,9 +469,13 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
           ].filter(Boolean).join(', ')} could not be loaded — the figures shown for them are not measurements.
         </p>
       )}
+      {/* `truncated` is the sessions read alone; the signal figures are whole-week aggregates. */}
       {report?.truncated && (
         <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-          Showing the most recent samples only — earlier days in this range exceeded the retrieval limit.
+          {sessionsExact
+            ? 'Sessions in this range reached the retrieval limit; the Sessions total is still the full count.'
+            : 'Sessions in this range reached the retrieval limit, so the Sessions total counts only the sessions read.'}
+          {' The signal figures are not affected by this limit.'}
           {unretrieved > 0 && ` ${unretrieved} ${unretrieved === 1 ? 'day is' : 'days are'} shown as a gap because the data could not be retrieved, not because there was no activity.`}
         </p>
       )}

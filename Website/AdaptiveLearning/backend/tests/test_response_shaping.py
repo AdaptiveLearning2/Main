@@ -457,6 +457,33 @@ def test_a_parents_child_sessions_carry_no_object_paths(monkeypatch):
     assert children[0]["sessions"][0]["id"] == "sess-1"
 
 
+# Every `user_math_performance` column, as the table stores it; the embed carries more than its name.
+_PERF_ROW = {
+    "id": "perf-1", "user_id": "kid-1", "topic_id": 3, "attempted_questions": 4,
+    "correct_questions": 3, "accuracy": 0.75, "stress": 0.4, "updated_at": _ts(2),
+    "math_topics": {"id": 3, "topic_name": "fractions"},
+}
+
+
+def test_topic_performance_sends_only_the_fields_its_panels_read(monkeypatch):
+    """`Students.jsx`, `StudentProgressReport.jsx` and `Adaptive.jsx` read these four and nothing else."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    fake = _FakeSupabase({"user_math_performance": [
+        _PERF_ROW, {**_PERF_ROW, "id": "perf-2", "user_id": "kid-2", "topic_id": 4}]})
+    monkeypatch.setattr(main, "supabase", fake)
+
+    rows = main.student_performance("kid-1", None)
+
+    (query,) = [q for t, q in zip(fake.table_calls, fake.queries) if t == "user_math_performance"]
+    assert query._cols is not None, "the read asked for every column (`*`)"
+    assert sorted(query._cols) == ["attempted_questions", "correct_questions", "math_topics", "topic_id"]
+    assert query._embed_cols == {"math_topics": ["topic_name"]}
+    assert ("user_id", "kid-1") in query.filters
+    assert rows == [{"topic_id": 3, "attempted_questions": 4, "correct_questions": 3,
+                     "math_topics": {"topic_name": "fractions"}}]
+
+
 # ── both ends of a limit, at the query ───────────────────────────────────
 # Asserted on every limit the table was sent (rule 4), so a later `.limit(1)` can't stand in.
 

@@ -3442,8 +3442,9 @@ def student_sessions(student_id: str, request: Request):
 @app.get("/api/performance/student/{student_id}")
 def student_performance(student_id: str, request: Request):
     _verify_can_view_student(get_user(request), student_id)
+    # What the three topic panels read (Students, StudentProgressReport, Adaptive), and no more.
     res = supabase.table("user_math_performance") \
-        .select("*, math_topics(topic_name)") \
+        .select("topic_id, attempted_questions, correct_questions, math_topics(topic_name)") \
         .eq("user_id", student_id).execute()
     return res.data or []
 

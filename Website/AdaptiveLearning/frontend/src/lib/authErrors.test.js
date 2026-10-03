@@ -1,6 +1,6 @@
 /** Fixtures are the error classes auth-js actually throws (`AuthApiError`, `AuthRetryableFetchError`). */
 import { describe, it, expect } from 'vitest'
-import { AuthApiError, AuthRetryableFetchError, AuthWeakPasswordError } from '@supabase/supabase-js'
+import { AuthApiError, AuthRetryableFetchError, AuthWeakPasswordError } from '@supabase/auth-js'
 import { signInMessage, signUpMessage } from './authErrors'
 
 const refused = (message, status, code) => new AuthApiError(message, status, code)

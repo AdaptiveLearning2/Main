@@ -286,7 +286,7 @@ it('does not retry a read that failed for any other reason', async () => {
 })
 
 it('does not read the role from inside the auth callback', async () => {
-  // supabase-js holds an auth lock during the callback and `apiFetch` calls `getSession()`: deadlock.
+  // The auth client holds a lock during the callback and `apiFetch` calls `getSession()`: deadlock.
   renderAuth()
   await screen.findByText('Sign out')
   apiFetch.mockClear()

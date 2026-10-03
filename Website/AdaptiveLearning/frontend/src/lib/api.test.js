@@ -6,6 +6,7 @@ vi.mock('./supabase', async () => await import('../test/mocks/supabase'))
 
 import { apiFetch, apiFetchOnUnload } from './api'
 import { authFns, buildAuthSession, resetSupabaseMock, setSession } from '../test/mocks/supabase'
+import { WAKE_AFTER_MS, _resetForTests as _resetWake, serverWaking } from './serverWake'
 
 const BASE = 'http://localhost:8000'
 
@@ -270,6 +271,23 @@ describe('Retry-After', () => {
 
     await expect(apiFetch('/api/generate-question')).rejects.toMatchObject({ status: 500 })
     expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the sleeping-server signal', () => {
+  beforeEach(() => _resetWake())
+
+  it('marks a request that has not answered after the threshold, and clears on any answer', async () => {
+    vi.useFakeTimers()
+    let respond
+    globalThis.fetch = vi.fn(() => new Promise(r => { respond = r }))
+    const call = apiFetch('/api/profile/me').catch(() => {})
+    await vi.advanceTimersByTimeAsync(WAKE_AFTER_MS)
+    expect(serverWaking()).toBe(true)
+    // An error status is still an answer: the server is up.
+    respond(failing({ status: 500 }))
+    await call
+    expect(serverWaking()).toBe(false)
   })
 })
 

@@ -216,6 +216,35 @@ it('falls back to the claim when the backend cannot be reached', async () => {
   expect(await screen.findByText('role:teacher')).toBeInTheDocument()
 })
 
+it('gives a sleeping server one longer try before falling back to the claim', async () => {
+  // Render's free tier wakes in up to a minute; the claim is wrong for any promoted account.
+  getSession.mockResolvedValue({ data: { session: SESSION('student') } })
+  const timedOut = Object.assign(new Error('timed out'), { timeout: true })
+  apiFetch.mockRejectedValueOnce(timedOut).mockResolvedValueOnce({ role: 'admin' })
+  render(<AuthProvider><RoleProbe /></AuthProvider>)
+  expect(await screen.findByText('role:admin')).toBeInTheDocument()
+  expect(apiFetch).toHaveBeenCalledTimes(2)
+  expect(apiFetch.mock.calls[1][1].timeoutMs).toBeGreaterThan(apiFetch.mock.calls[0][1].timeoutMs)
+})
+
+it('still falls back to the claim when the longer try times out too, and only then', async () => {
+  getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
+  const timedOut = Object.assign(new Error('timed out'), { timeout: true })
+  apiFetch.mockRejectedValue(timedOut)
+  render(<AuthProvider><RoleProbe /></AuthProvider>)
+  expect(await screen.findByText('role:teacher')).toBeInTheDocument()
+  expect(apiFetch).toHaveBeenCalledTimes(2)
+})
+
+it('does not retry a read that failed for any other reason', async () => {
+  // Only a timeout says "slow"; an error status is an answer, so the claim at once.
+  getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
+  apiFetch.mockRejectedValue(Object.assign(new Error('boom'), { status: 500 }))
+  render(<AuthProvider><RoleProbe /></AuthProvider>)
+  expect(await screen.findByText('role:teacher')).toBeInTheDocument()
+  expect(apiFetch).toHaveBeenCalledTimes(1)
+})
+
 it('does not read the role from inside the auth callback', async () => {
   // supabase-js holds an auth lock during the callback and `apiFetch` calls `getSession()`: deadlock.
   renderAuth()

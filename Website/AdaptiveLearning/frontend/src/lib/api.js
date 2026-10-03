@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { startRequest } from './serverWake'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -111,7 +112,16 @@ async function send(path, { method, body, signal }) {
   if (body) opts.body = JSON.stringify(body)
   if (signal) opts.signal = signal
 
-  return fetch(`${API_URL}${path}`, opts)
+  // Any HTTP status is an answer: a server that refuses is awake. A network error is not.
+  const done = startRequest()
+  try {
+    const res = await fetch(`${API_URL}${path}`, opts)
+    done(true)
+    return res
+  } catch (e) {
+    done(false)
+    throw e
+  }
 }
 
 async function finish(res) {

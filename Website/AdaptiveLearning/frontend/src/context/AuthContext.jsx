@@ -8,6 +8,8 @@ const AuthContext = createContext()
 
 /** Role read timeout: it gates `loading` for every route, and a `.catch` is not a bound. */
 const ROLE_TIMEOUT_MS = 10000
+// The retry after a timeout: Render's free tier can take most of a minute to wake.
+const COLD_START_ROLE_TIMEOUT_MS = 50_000
 
 const NO_PROFILE = { id: null, role: null, name: null }
 
@@ -66,6 +68,10 @@ export function AuthProvider({ children }) {
     if (!userId) return
     let cancelled = false
     loadProfile()
+      // A sleeping server's boot can outlast the first bound: one longer, still bounded, try.
+      .catch(e => (e?.timeout && !cancelled
+        ? apiFetch('/api/profile/me', { timeoutMs: COLD_START_ROLE_TIMEOUT_MS })
+        : Promise.reject(e)))
       .then(p => {
         if (cancelled) return
         setProfile({ id: userId, role: p?.role || claimedRole(userRef.current),

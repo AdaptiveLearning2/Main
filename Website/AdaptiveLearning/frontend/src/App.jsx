@@ -15,6 +15,7 @@ import AdminGuard         from './components/auth/AdminGuard'
 import ScrollToTop        from './components/ui/ScrollToTop'
 import RouteTitle         from './components/ui/RouteTitle'
 import PageLoader         from './components/ui/PageLoader'
+import ServerWaking       from './components/ui/ServerWaking'
 
 // Pages are lazy per route; layouts, guards and auth pages stay static (critical path).
 import Login    from './pages/auth/Login'
@@ -62,6 +63,8 @@ export default function App() {
     <MotionConfig reducedMotion="user">
     <ThemeProvider>
       <ThemedToaster />
+      {/* Above the auth provider: its role read is the first request a cold start waits on. */}
+      <ServerWaking />
       <AuthProvider>
         <BrowserRouter>
           <ScrollToTop />

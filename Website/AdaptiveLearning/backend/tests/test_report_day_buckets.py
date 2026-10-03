@@ -325,8 +325,8 @@ def test_a_week_of_untrusted_emotions_still_says_facial_readings_arrived(monkeyp
     assert report["summary"] == "Facial recognition readings were recorded this week."
 
 
-def test_a_days_heart_samples_count_rejected_readings_too(monkeypatch, at_three_am_utc):
-    """As the rollup's sample_count does; only the average is trusted-only."""
+def test_a_raw_days_heart_samples_are_its_trusted_readings(monkeypatch, at_three_am_utc):
+    """Matching the day's average; the week's `sample_counts` is what counts rejected rows."""
     _school(monkeypatch, LA)
     tables = _tables()
     tables["heart_signals"] = [
@@ -334,9 +334,11 @@ def test_a_days_heart_samples_count_rejected_readings_too(monkeypatch, at_three_
          "heart_rate_bpm": bpm, "trusted": trusted}
         for bpm, trusted in ((70.0, True), (90.0, True), (150.0, False))]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(tables))
-    day = _day(main._weekly_signal_report(STUDENT), "2026-06-11")
-    assert day["heart_samples"] == 3
+    report = main._weekly_signal_report(STUDENT)
+    day = _day(report, "2026-06-11")
+    assert day["heart_samples"] == 2
     assert day["heart_rate_bpm"] == 80.0
+    assert report["sample_counts"]["heart"] == 3
 
 
 # ── a declined channel's rollup, a lost rollup, the cut day, the no-EEG sentence ──

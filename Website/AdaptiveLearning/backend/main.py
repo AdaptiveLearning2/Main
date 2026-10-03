@@ -2030,9 +2030,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             # Emotion rows only (gaze-only face rows excluded), matching the rollup.
             "face_samples": ((face_roll.get("sample_count") or 0) if face_roll
                              else int((face_raw or {}).get("emotion_rows") or 0)),
-            # Rows retrieved, untrusted included, as the rollup's `sample_count` is.
+            # A raw day counts its trusted rows, as its average does.
             "heart_samples": ((heart_roll.get("sample_count") or 0) if heart_roll
-                              else int((heart_raw or {}).get("rows") or 0)),
+                              else int((heart_raw or {}).get("trusted_rows") or 0)),
         })
 
         # Weighted by `trusted_sample_count`; approximate for `rmssd_ms`.

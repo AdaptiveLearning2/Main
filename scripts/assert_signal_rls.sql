@@ -1692,5 +1692,112 @@ BEGIN
     END IF;
 END $$;
 
+-- ── weekly_signal_days: per school day, uncapped, trusted where the rollup is ──
+DO $$
+DECLARE
+    uid uuid; sess uuid := gen_random_uuid(); res jsonb; d jsonb;
+BEGIN
+    SELECT owner_id INTO uid FROM _ids;
+    INSERT INTO public.sessions (id, user_id) VALUES (sess, uid);
+    -- 1500 rows on one Los Angeles day: past the 1000-row PostgREST ceiling the raw read hit.
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus, stress)
+    SELECT sess, uid, '2026-09-01T16:00:00Z'::timestamptz + (g || ' s')::interval, 0.5, 0.2
+      FROM generate_series(1, 1500) g;
+    -- 05:00Z on 2 Sept is still 1 Sept in Los Angeles; its focus is null (poor contact).
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus, stress)
+    VALUES (sess, uid, '2026-09-02T05:00:00Z', NULL, 0.9);
+
+    res := public.weekly_signal_days(uid, 'cognitive', '2026-08-30T00:00:00Z', 'America/Los_Angeles');
+    IF jsonb_array_length(res->'days') IS DISTINCT FROM 1 THEN
+        RAISE EXCEPTION 'expected one Los Angeles day, got %', res->'days';
+    END IF;
+    d := res->'days'->0;
+    IF d->>'day' IS DISTINCT FROM '2026-09-01' OR (d->>'rows')::int IS DISTINCT FROM 1501 OR (d->>'focus_n')::int IS DISTINCT FROM 1500
+       OR (d->>'stress_n')::int IS DISTINCT FROM 1501 OR (d->>'stress_max')::float8 IS DISTINCT FROM 0.9 THEN
+        RAISE EXCEPTION 'cognitive day aggregate is wrong or capped: %', d;
+    END IF;
+    -- Newest row with a measurement, not the newer null-focus row.
+    IF (res->'latest'->>'focus')::float8 IS DISTINCT FROM 0.5 THEN
+        RAISE EXCEPTION 'latest cognitive is not the newest measured row: %', res->'latest';
+    END IF;
+
+    INSERT INTO public.face_signals (session_id, user_id, ts, emotion, emotion_trusted, attention)
+    VALUES (sess, uid, '2026-09-01T17:00:00Z', 'happy', true, 0.8),
+           (sess, uid, '2026-09-01T17:00:01Z', 'happy', true, NULL),
+           (sess, uid, '2026-09-01T17:00:02Z', 'sad', false, NULL),
+           (sess, uid, '2026-09-01T17:00:03Z', NULL, NULL, NULL);
+    d := public.weekly_signal_days(uid, 'emotion', '2026-08-30T00:00:00Z', 'America/Los_Angeles')->'days'->0;
+    IF (d->>'rows')::int IS DISTINCT FROM 4 OR (d->>'emotion_rows')::int IS DISTINCT FROM 3
+       OR d->'emotion_counts' IS DISTINCT FROM '{"happy": 2}'::jsonb OR (d->>'attention_n')::int IS DISTINCT FROM 1 THEN
+        RAISE EXCEPTION 'emotion day aggregate is wrong (untrusted must not count): %', d;
+    END IF;
+
+    INSERT INTO public.heart_signals (session_id, user_id, source, ts, heart_rate_bpm, rmssd_ms, trusted)
+    VALUES (sess, uid, 'muse_optics', '2026-09-01T17:00:00Z', 70, 40, true),
+           (sess, uid, 'rppg',        '2026-09-01T17:00:05Z', 150, 10, false);
+    res := public.weekly_signal_days(uid, 'heart', '2026-08-30T00:00:00Z', 'America/Los_Angeles');
+    d := res->'days'->0;
+    IF (d->>'rows')::int IS DISTINCT FROM 2 OR (d->>'trusted_rows')::int IS DISTINCT FROM 1 OR (d->>'bpm_sum')::float8 IS DISTINCT FROM 70
+       OR d->'sources' IS DISTINCT FROM '["muse_optics"]'::jsonb OR res->'latest'->>'source' IS DISTINCT FROM 'muse_optics' THEN
+        RAISE EXCEPTION 'heart day aggregate is wrong (trusted only): %', res;
+    END IF;
+
+    BEGIN
+        PERFORM public.weekly_signal_days(uid, 'eeg', now(), 'UTC');
+        RAISE EXCEPTION 'an unknown channel was accepted';
+    EXCEPTION WHEN raise_exception THEN
+        IF SQLERRM NOT LIKE '%unknown channel%' THEN RAISE; END IF;
+    END;
+    DELETE FROM public.sessions WHERE id = sess;
+END $$;
+
+-- ── recent_sessions_for_users, last_activity_for_sessions, latest_signal_ts_for_sessions ──
+DO $$
+DECLARE
+    uid uuid; s1 uuid := gen_random_uuid(); s2 uuid := gen_random_uuid(); s3 uuid := gen_random_uuid();
+    empty uuid := gen_random_uuid(); n int; seen timestamptz;
+BEGIN
+    SELECT owner_id INTO uid FROM _ids;
+    INSERT INTO public.sessions (id, user_id, started_at) VALUES
+        (s1, uid, '2030-01-01T09:00:00Z'), (s2, uid, '2030-01-02T09:00:00Z'),
+        (s3, uid, '2030-01-03T09:00:00Z'), (empty, uid, '2029-12-31T09:00:00Z');
+
+    -- The two newest, once each though the id is passed twice.
+    SELECT count(*) INTO n FROM public.recent_sessions_for_users(ARRAY[uid, uid], 2) r
+     WHERE r.id IN (s2, s3);
+    IF n IS DISTINCT FROM 2 OR (SELECT count(*) FROM public.recent_sessions_for_users(ARRAY[uid], 2)) IS DISTINCT FROM 2 THEN
+        RAISE EXCEPTION 'recent_sessions_for_users is not the newest two once each';
+    END IF;
+    IF (SELECT count(*) FROM public.recent_sessions_for_users(ARRAY[uid], 0)) IS DISTINCT FROM 1 THEN
+        RAISE EXCEPTION 'a limit below 1 is not clamped to 1';
+    END IF;
+
+    INSERT INTO public.session_answers (session_id, user_id, correct, answered_at)
+    VALUES (s1, uid, true, '2030-01-01T09:01:00Z');
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus) VALUES
+        (s1, uid, '2030-01-01T09:02:00Z', 0.5),
+        (s1, uid, '2030-01-01T09:05:00Z', NULL);   -- poor contact: not activity
+    SELECT last_activity_at INTO seen FROM public.last_activity_for_sessions(ARRAY[s1, empty])
+     WHERE session_id = s1;
+    IF seen IS DISTINCT FROM '2030-01-01T09:02:00Z'::timestamptz THEN
+        RAISE EXCEPTION 'last activity is %, expected the newest measured row at 09:02', seen;
+    END IF;
+    SELECT last_activity_at INTO seen FROM public.last_activity_for_sessions(ARRAY[s1, empty])
+     WHERE session_id = empty;
+    IF seen IS NOT NULL THEN
+        RAISE EXCEPTION 'a session with no activity reported %', seen;
+    END IF;
+
+    -- Timestamps only, never readings, and per channel.
+    SELECT ts INTO seen FROM public.latest_signal_ts_for_sessions(ARRAY[s1], 'cognitive');
+    IF seen IS DISTINCT FROM '2030-01-01T09:05:00Z'::timestamptz THEN
+        RAISE EXCEPTION 'latest cognitive ts is %, expected 09:05', seen;
+    END IF;
+    IF EXISTS (SELECT 1 FROM public.latest_signal_ts_for_sessions(ARRAY[s1], 'face')) THEN
+        RAISE EXCEPTION 'a session with no face rows reported one';
+    END IF;
+    DELETE FROM public.sessions WHERE id IN (s1, s2, s3, empty);
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

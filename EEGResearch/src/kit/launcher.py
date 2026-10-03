@@ -26,6 +26,9 @@ INSTANCE_MUTEX = r"Global\AdaptiveLearningSensors"
 STOP_EVENT = r"Global\AdaptiveLearningSensorsStop"
 STOP_WAIT_S = 15.0
 SIDECAR_STOP_S = 10.0  # its own shutdown flushes the push client; past this it is ended
+# uvicorn waits for its connections before the app's shutdown, unbounded by default: one that never
+# closes would spend all of SIDECAR_STOP_S, and the push client would never flush.
+SIDECAR_DRAIN_S = 2.0
 BRIDGE_EXE = "muse_native_bridge.exe"
 _CONSOLE_LOG_BYTES = 1_000_000
 _REFUSAL_LOG_EVERY_S = 60.0
@@ -141,7 +144,8 @@ def sidecar_config(app, port: int):
     import uvicorn  # noqa: PLC0415
 
     return uvicorn.Config(app, host="127.0.0.1", port=port, http=same_session_http(), ws="none", loop="asyncio",
-                          lifespan="on", log_config=uvicorn_log_config())
+                          lifespan="on", log_config=uvicorn_log_config(),
+                          timeout_graceful_shutdown=SIDECAR_DRAIN_S)
 
 
 def _sidecar_command(port: int) -> tuple[list[str], dict[str, str]]:

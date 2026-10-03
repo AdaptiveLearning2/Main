@@ -112,6 +112,9 @@ class Supervisor:
         try:
             proc.wait(timeout=self._graceful_s)
         except subprocess.TimeoutExpired:
+            # Said, because an ended sidecar's push client never made its final flush.
+            if self._graceful_s:
+                logger.warning("%s did not stop within %.0f s; ending it", self.name, self._graceful_s)
             proc.terminate()
             proc.wait(timeout=10)
 

@@ -329,10 +329,11 @@ read from `kit.json`, which `src/kit/config.py` refuses for exactly the reasons 
   `Global\AdaptiveLearningSensorsStop` and returns only once the copy has exited; the installer waits on that.
 - **Two supervised children.** The sidecar runs as the launcher's own exe with `--sidecar`, so a crash in camera code
   is restarted like a bridge crash; it watches the same stop event and shuts itself down, flushing its push client,
-  with 10 s before it is ended. The restart policy is this section's in Python, stopping on 0 and on 78. Past the
-  budget it retries every 300 s rather than giving up, since nobody is watching. Each run logs to its own file; the
-  newest ten are kept. matplotlib's font list lives in the data folder: PyInstaller gives each process a new temp
-  folder, so mediapipe's import rebuilt it at every lesson's first camera frame.
+  with 10 s before it is ended, which `sensors.log` records. uvicorn waits at most 2 s for open connections first, so
+  one that never closes cannot use up the 10 s. The restart policy is this section's in Python, stopping on 0 and on
+  78. Past the budget it retries every 300 s rather than giving up, since nobody is watching. Each run logs to its own
+  file; the newest ten are kept. matplotlib's font list lives in the data folder: PyInstaller gives each process a
+  new temp folder, so mediapipe's import rebuilt it at every lesson's first camera frame.
 - **`--self-test`** runs before every installer is built: the models on a real portrait, the sidecar on port 0, and
   the bridge started, authenticated and required to answer `bridge_mode: libmuse` with its C++ runtime loaded from
   `bridge\` itself. A blank frame cannot tell a working model from one that never detects, and a launch that works

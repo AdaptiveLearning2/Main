@@ -277,8 +277,7 @@ def test_the_double_write_warning_fires_on_the_real_condition(monkeypatch, capsy
     """The condition is a live poller for this session, not `INGEST_MODE == "pull"`."""
     monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
-    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": True, "retrieved": True}))
     monkeypatch.setattr(main, "supabase",
                         type("S", (), {"table": lambda _s, _n: type("Q", (), {
                             "insert": lambda _q, _r: type("E", (), {
@@ -503,8 +502,7 @@ def _capture_inserts(monkeypatch):
 def test_sensor_shaped_samples_are_converted_by_the_shared_mapper(monkeypatch):
     """The push client sends the sidecar's own payload and does no arithmetic."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
-    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": True, "retrieved": True}))
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     written = _capture_inserts(monkeypatch)
 
@@ -520,8 +518,7 @@ def test_sensor_shaped_samples_are_converted_by_the_shared_mapper(monkeypatch):
 def test_flat_samples_are_still_stored_as_given(monkeypatch):
     """The hand-posted dev shape: already-mapped rows, in table units."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
-    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": True, "retrieved": True}))
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     written = _capture_inserts(monkeypatch)
 
@@ -535,8 +532,7 @@ def test_flat_samples_are_still_stored_as_given(monkeypatch):
 def test_a_flat_sample_on_an_unknown_calm_source_withholds_stress_like_the_mapper(monkeypatch):
     """The flat shape stores the client's raw, so the calm-source check has to run here too."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
-    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": True, "retrieved": True}))
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     written = _capture_inserts(monkeypatch)
 
@@ -556,8 +552,7 @@ def test_a_flat_sample_on_an_unknown_calm_source_withholds_stress_like_the_mappe
 def test_a_flat_sample_with_a_null_calm_source_stores_no_key(monkeypatch):
     """Python reads null as sdk; the SQL calm_source_of reads a JSON null as unknown. No key agrees."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
-    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": True, "retrieved": True}))
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     written = _capture_inserts(monkeypatch)
 
@@ -572,8 +567,7 @@ def test_a_flat_sample_records_the_current_score_scale_whatever_the_client_sent(
     """A posted 999 put a scale-change caption on the student's report and hid their trend directions."""
     import signal_mapping
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
-    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": True, "retrieved": True}))
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     written = _capture_inserts(monkeypatch)
 
@@ -594,8 +588,7 @@ def test_the_cognitive_batch_is_length_bounded_like_the_others():
 
 def test_the_cognitive_endpoint_is_rate_limited(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "flooder"})
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
-    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": True, "retrieved": True}))
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     _capture_inserts(monkeypatch)
     monkeypatch.setattr(main._INGEST_LIMITER, "hits", {})
@@ -612,11 +605,9 @@ def test_the_cognitive_endpoint_is_rate_limited(monkeypatch):
 def test_eeg_samples_are_dropped_when_the_student_has_not_consented(monkeypatch):
     """The last line of defence against a stale sidecar sending after a withdrawal."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": False, "retrieved": True}))
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     written = _capture_inserts(monkeypatch)
-    monkeypatch.setattr(main, "_consent",
-                        lambda _u: {"eeg_enabled": False, "retrieved": True})
 
     out = main.ingest_cognitive(main.CognitiveBatch(
         session_id="s1", samples=[{"focus": 0.5}]), None)
@@ -626,25 +617,9 @@ def test_eeg_samples_are_dropped_when_the_student_has_not_consented(monkeypatch)
     assert out["reason"] == "eeg not consented"
 
 
-def test_an_unreadable_consent_row_records_nothing(monkeypatch):
-    """`_consent` fails closed, unlike the reporting helpers."""
-    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
-    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
-    written = _capture_inserts(monkeypatch)
-    monkeypatch.setattr(main, "_consent", lambda _u: {"retrieved": False})
-
-    out = main.ingest_cognitive(main.CognitiveBatch(
-        session_id="s1", samples=[{"focus": 0.5}]), None)
-
-    assert written == []
-    assert out["reason"] == "consent unavailable"
-
-
 def test_a_client_supplied_raw_survives_the_mapping(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
-    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": True, "retrieved": True}))
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     written = _capture_inserts(monkeypatch)
 
@@ -689,8 +664,7 @@ def test_every_stop_path_evicts_the_warning_record(stopper, monkeypatch):
 def test_derived_keys_win_on_the_push_path_too(monkeypatch):
     """The push client nests the envelope under `raw`; the mapper must read it from there."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
-    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": True, "retrieved": True}))
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     written = _capture_inserts(monkeypatch)
 
@@ -866,8 +840,7 @@ def test_both_paths_read_one_verdict(payload, expected):
 
 def test_the_push_endpoint_drops_no_signal_ticks(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
-    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": True, "retrieved": True}))
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     written = _capture_inserts(monkeypatch)
 
@@ -884,8 +857,7 @@ def test_the_push_endpoint_drops_no_signal_ticks(monkeypatch):
 
 def test_the_push_endpoint_nulls_measurements_on_bad_contact(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
-    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": True, "retrieved": True}))
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     written = _capture_inserts(monkeypatch)
 
@@ -920,8 +892,7 @@ def test_a_poor_contact_row_carries_no_confidence_either():
 def test_the_flat_ingest_shape_stores_engagement_as_focus(monkeypatch):
     """The flat branch bypasses the mapper; replay_into_backend uses it."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
-    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": True, "retrieved": True}))
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     written = _capture_inserts(monkeypatch)
     main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
@@ -949,8 +920,7 @@ def test_a_malformed_tick_stores_no_measurement_and_says_why():
 
 def test_one_malformed_sample_does_not_fail_the_batch(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
-    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": True, "retrieved": True}))
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     written = _capture_inserts(monkeypatch)
     out = main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[

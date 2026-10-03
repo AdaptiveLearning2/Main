@@ -537,6 +537,23 @@ def _read_failed(detail: str) -> HTTPException:
     return HTTPException(503, detail, headers={"Retry-After": str(_READ_RETRY_AFTER_SEC)})
 
 
+def _missing_rpc(e: Exception, function: str, migration: str) -> bool:
+    """Whether `e` is PostgREST's PGRST202 for `function`; if so, logs the migration to apply.
+
+    One naming no function is the call the site made; one naming another is not this one.
+    The caller keeps its own raise or return: a missing function is one more failed read.
+    """
+    if "PGRST202" not in str(e):
+        return False
+    message = getattr(e, "message", None)     # APIError's own field; the hint can name others
+    named = re.findall(r"\bpublic\.(\w+)", message if isinstance(message, str) else str(e))
+    if named and function not in named:
+        return False
+    print(f"[rpc] {function} is missing from the database -- apply {migration}; until it is, "
+          f"every call fails and is answered as a failed read (degraded, or a 503 to try again): {e}")
+    return True
+
+
 def _row_or_404(query, what: str) -> dict:
     """Run a `.single()` lookup: 404 when no row matches, 503 when the read fails.
 
@@ -1105,11 +1122,7 @@ def _answer_counts(session_id: str, session: dict) -> tuple[int, int, bool]:
         res = supabase.rpc("session_answer_counts",
                            {"p_session_id": session_id}).execute()
     except Exception as e:                                     # noqa: BLE001
-        if "PGRST202" in str(e):
-            print(f"[session:close] session_answer_counts is missing from the "
-                  f"database -- apply 20260826000000; crediting the stored "
-                  f"counter until then: {e}")
-        else:
+        if not _missing_rpc(e, "session_answer_counts", "20260826000000"):
             print(f"[session:close] could not recount answers for {session_id}: {e}")
         return stored_q, stored_c, False
     rows = res.data or []
@@ -1390,16 +1403,23 @@ def stop_stale_sweeper(timeout: float = 5.0) -> None:
         thread.join(timeout=timeout)
 
 
-def _may_record(student_id: str) -> dict:
+def _may_record(student_id: str, consent: "_StoredConsent | None" = None) -> dict:
     """Consent **and** the retention window, composed for recording sites only.
 
     Kept out of `_consent`, whose readers must not change answer when term ends.
+    `consent` in hand comes from `_stored_consent`; a bare dict has no provenance and raises.
     """
+    if consent is not None and not isinstance(consent, _StoredConsent):
+        raise TypeError(f"_may_record takes consent from _stored_consent, not a {type(consent).__name__}")
     flags = _feature_flags()
     # A bypass substitutes full consent only; `consent_bypassed` says so. Other gates still apply.
     enforced = _consent_enforcement_active(flags)
-    consent = _consent(student_id) if enforced else {
-        **_CONSENT_ENABLED_ALL, "retrieved": True, "exists": False}
+    if not enforced:
+        consent = {**_CONSENT_ENABLED_ALL, "retrieved": True, "exists": False}
+    elif consent is None:
+        consent = _consent(student_id)
+    else:
+        consent = consent.answer
     window = _retention_window()
     recording = window["state"] not in _WINDOW_DENIED
     return {**consent,
@@ -2923,10 +2943,7 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
         if _names_deleted_question(e):
             # 410, not 409: the page reads a 409 here as its session ended and starts another.
             raise HTTPException(410, "This question is no longer available")
-        if "PGRST202" in str(e):
-            print(f"[answer] record_answer is missing from the database -- apply "
-                  f"20261003000000; every answer fails until it is: {e}")
-        else:
+        if not _missing_rpc(e, "record_answer", "20261003000000"):
             print(f"[answer] could not record an answer for {session_id}: {e}")
         raise _read_failed("This answer could not be saved; try again")
     status = out.get("status") if isinstance(out, dict) else None
@@ -3173,10 +3190,7 @@ def record_practice_answer(practice_session_id: str = Path(...),
             "p_correct":    bool(payload.correct),
         }).execute()
     except Exception as e:                                     # noqa: BLE001
-        if "PGRST202" in str(e):
-            print(f"[practice] bump_practice_session_counters is missing from the "
-                  f"database -- apply 20260904000000; live counters will not move: {e}")
-        else:
+        if not _missing_rpc(e, "bump_practice_session_counters", "20260904000000"):
             print(f"[practice] could not bump counters for {practice_session_id}: {e}")
     return {"ok": True, "topic": topic}
 
@@ -3210,10 +3224,7 @@ def record_practice_view(practice_session_id: str = Path(...),
             "p_correct":    False,
         }).execute()
     except Exception as e:                                     # noqa: BLE001
-        if "PGRST202" in str(e):
-            print(f"[practice] bump_practice_session_counters is missing from the "
-                  f"database -- apply 20260904000000; live counters will not move: {e}")
-        else:
+        if not _missing_rpc(e, "bump_practice_session_counters", "20260904000000"):
             print(f"[practice] could not bump counters for {practice_session_id}: {e}")
     return {"ok": True, "topic": topic}
 
@@ -4941,12 +4952,7 @@ def _last_active_many(student_ids) -> dict[str, dict]:
         rows = supabase.rpc("last_active_for_users",
                             {"p_user_ids": ids}).execute().data or []
     except Exception as e:                                     # noqa: BLE001
-        # PGRST202: migration not applied; every roster degrades quietly until it is.
-        if "PGRST202" in str(e):
-            print(f"[last_active] last_active_for_users is missing from the "
-                  f"database -- apply 20260831000000; the roster will show "
-                  f"'unknown' until then: {e}")
-        else:
+        if not _missing_rpc(e, "last_active_for_users", "20260831000000"):
             print(f"[last_active] could not read for {len(ids)}: {e}")
         return {sid: dict(_LAST_ACTIVE_UNKNOWN) for sid in ids}
     found = {r.get("user_id"): r.get("last_active") for r in rows}
@@ -5592,10 +5598,25 @@ def _consent(student_id: str) -> dict:
     except Exception as e:
         print(f"[consent:read] {student_id}: {e}")
         return {**_CONSENT_DENIED, "retrieved": False, "exists": False}
-    if not rows:
+    return _consent_from_row(rows[0] if rows else None)
+
+
+def _consent_from_row(row: dict | None) -> dict:
+    """`_consent`'s answer for a row read successfully; None is no row, which denies."""
+    if not row:
         # `exists` False with `retrieved` True: a write should insert.
         return {**_CONSENT_DENIED, "retrieved": True, "exists": False}
-    return {**_CONSENT_DENIED, **rows[0], "retrieved": True, "exists": True}
+    return {**_CONSENT_DENIED, **row, "retrieved": True, "exists": True}
+
+
+class _StoredConsent(NamedTuple):
+    """A `_consent` answer for a row read elsewhere: the only consent `_may_record` takes in hand."""
+    answer: dict
+
+
+def _stored_consent(row: dict | None) -> _StoredConsent:
+    """The ingest gate's `signal_consent` row as `_consent` answers it; None is no row, which denies."""
+    return _StoredConsent(_consent_from_row(row))
 
 
 def _consent_many(student_ids) -> dict[str, dict]:
@@ -5615,10 +5636,7 @@ def _consent_many(student_ids) -> dict[str, dict]:
         return {sid: {**_CONSENT_DENIED, "retrieved": False, "exists": False}
                 for sid in ids}
     by_id = {str(r["user_id"]): r for r in rows if r.get("user_id")}
-    return {sid: ({**_CONSENT_DENIED, **by_id[sid], "retrieved": True, "exists": True}
-                  if sid in by_id
-                  else {**_CONSENT_DENIED, "retrieved": True, "exists": False})
-            for sid in ids}
+    return {sid: _consent_from_row(by_id.get(sid)) for sid in ids}
 
 
 def _reportable_channels_many(student_ids, want_emotion: bool = True,
@@ -6191,7 +6209,44 @@ def _verify_session_owner(session_id: str, user_id: str, columns: str = "user_id
 
 # Clock drift tolerated between a sidecar's sample stamps and this server's session bounds.
 _INGEST_TS_SLACK = timedelta(minutes=10)
-_INGEST_SESSION_COLUMNS = "user_id, started_at, ended_at"
+
+
+def _gate_shape_fault(out) -> str | None:
+    """None for `ingest_gate`'s object; otherwise its shape, by type and keys, never values."""
+    if not isinstance(out, dict):
+        return f"a {type(out).__name__}"
+    if not {"session", "consent"} <= out.keys():
+        return f"an object with keys {sorted(out)}"
+    for key in ("session", "consent"):
+        if out[key] is not None and not isinstance(out[key], dict):
+            return f"{key} as a {type(out[key]).__name__}"
+    if out["session"] is not None and "user_id" not in out["session"]:
+        return f"a session with keys {sorted(out['session'])}"
+    return None
+
+
+def _ingest_gate(session_id: str, user_id: str) -> tuple[dict, dict | None]:
+    """The caller's own session (`user_id, started_at, ended_at`) and their consent row, in one read.
+
+    Missing 404, someone else's 403 through `_session_or_403`. A failed read, or an answer not
+    shaped as the function's object, is a 503 with nothing written: the push client resends.
+    """
+    try:
+        out = supabase.rpc("ingest_gate", {"p_session_id": session_id,
+                                           "p_user_id": user_id}).execute().data
+    except Exception as e:                                     # noqa: BLE001
+        if _names_no_row(e):
+            raise HTTPException(404, "Session not found")
+        if not _missing_rpc(e, "ingest_gate", "20261003000000"):
+            print(f"[ingest] could not read the gate for {session_id}: {e}")
+        raise _read_failed("Could not check this session; try again")
+    fault = _gate_shape_fault(out)
+    if fault:
+        print(f"[ingest] ingest_gate answered {fault} for {session_id}; a failed read, so a 503")
+        raise _read_failed("Could not check this session; try again")
+    if out["session"] is None:
+        raise HTTPException(404, "Session not found")
+    return _session_or_403(session_id, user_id, row=out["session"]), out["consent"]
 
 
 def _ingest_ts_filter(session: dict):
@@ -6218,12 +6273,12 @@ def _ingest_ts_filter(session: dict):
 @app.post("/api/signals/cognitive")
 def ingest_cognitive(payload: CognitiveBatch, request: Request):
     user = get_user(request)
-    # Rate-limit first: spares a flooding client a `sessions` query.
+    # Rate-limit first: a flooding client never reaches the `ingest_gate` call.
     _rate_limit_ingest(user["id"])
-    session = _verify_session_owner(payload.session_id, user["id"], _INGEST_SESSION_COLUMNS)
+    session, consent_row = _ingest_gate(payload.session_id, user["id"])
 
     # Last line of defence against a stale sidecar; fails closed, reason says which gate.
-    consent = _may_record(user["id"])
+    consent = _may_record(user["id"], consent=_stored_consent(consent_row))
     if not consent["record_eeg"]:
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
                 "reason": _not_recording_reason(consent, "eeg not consented")}
@@ -6281,10 +6336,10 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
 def ingest_face(payload: FaceBatch, request: Request):
     user = get_user(request)
     _rate_limit_ingest(user["id"])
-    session = _verify_session_owner(payload.session_id, user["id"], _INGEST_SESSION_COLUMNS)
+    session, consent_row = _ingest_gate(payload.session_id, user["id"])
 
     # Last line of defence against a stale sidecar; fails closed.
-    consent = _may_record(user["id"])
+    consent = _may_record(user["id"], consent=_stored_consent(consent_row))
     if not consent["record_camera"]:
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
                 "reason": _not_recording_reason(consent, "camera not consented")}
@@ -6329,9 +6384,9 @@ def ingest_heart(payload: HeartBatch, request: Request):
     """
     user = get_user(request)
     _rate_limit_ingest(user["id"])
-    session = _verify_session_owner(payload.session_id, user["id"], _INGEST_SESSION_COLUMNS)
+    session, consent_row = _ingest_gate(payload.session_id, user["id"])
 
-    consent = _may_record(user["id"])
+    consent = _may_record(user["id"], consent=_stored_consent(consent_row))
     allowed = _permitted_heart_sources(consent)
     samples, malformed = _validate_each(HeartSample, payload.samples)
     kept = [s for s in samples if s.source in allowed]

@@ -1,5 +1,8 @@
 """The solve step is bounded by a killable subprocess; see docs/question-generation.md."""
 import os
+import subprocess
+import sys
+import threading
 import time
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -16,10 +19,10 @@ import safe_solve  # noqa: E402
 def _restore_module_state():
     """`_probe_startup` writes module globals directly, which monkeypatch cannot undo."""
     saved = (safe_solve.SOLVE_TIMEOUT_S, safe_solve.STARTUP_COST_S,
-             safe_solve._CONFIGURED_TIMEOUT_S)
+             safe_solve._CONFIGURED_TIMEOUT_S, safe_solve.SOLVE_STARTUP_BUDGET_S)
     yield
     (safe_solve.SOLVE_TIMEOUT_S, safe_solve.STARTUP_COST_S,
-     safe_solve._CONFIGURED_TIMEOUT_S) = saved
+     safe_solve._CONFIGURED_TIMEOUT_S, safe_solve.SOLVE_STARTUP_BUDGET_S) = saved
 
 
 @pytest.mark.parametrize("expression,scenario,expected", [
@@ -193,15 +196,44 @@ def test_a_probe_that_cannot_run_keeps_the_configured_value(monkeypatch, capsys)
     assert "startup probe failed" in capsys.readouterr().out
 
 
-def test_the_probe_runs_at_import_and_leaves_the_budget_above_the_floor():
-    """The import-time call, and the post-condition with no `or budget == configured` escape."""
+def test_importing_the_solver_does_not_probe():
+    """At import, the probe's sympy subprocess delayed every cold start of a 0.1-CPU host."""
+    env = {**os.environ, "SOLVE_STARTUP_PROBE": "1"}
+    out = subprocess.run(
+        [sys.executable, "-c", "import safe_solve as s; print(s.STARTUP_COST_S, s._probe_thread)"],
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), env=env,
+        capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().splitlines()[-1] == "None None", out.stdout
+
+
+def test_the_started_probe_runs_off_thread_and_leaves_the_budget_above_the_floor(monkeypatch):
+    """The lifespan's call, and the post-condition with no `or budget == configured` escape."""
     if not safe_solve._startup_probe_enabled():
         pytest.skip("SOLVE_STARTUP_PROBE is off, so no floor was measured")
-    assert safe_solve.STARTUP_COST_S is not None, (
-        "the import-time probe did not run, so nothing measured the floor")
+    monkeypatch.setattr(safe_solve, "_probe_thread", None)
+    monkeypatch.setattr(safe_solve, "_probe_stop", threading.Event())
+    assert safe_solve.start_startup_probe() is True
+    assert safe_solve.start_startup_probe() is False, "a second start ran a second probe"
+    safe_solve._probe_thread.join(timeout=120)
+    assert safe_solve.STARTUP_COST_S is not None, "the started probe did not measure the floor"
     floor = safe_solve.STARTUP_COST_S * safe_solve._STARTUP_SAFETY_FACTOR
     # The startup budget covers the import; `SOLVE_TIMEOUT` deliberately need not clear it.
     assert safe_solve.SOLVE_STARTUP_BUDGET_S >= floor
+
+
+def test_a_probe_stopped_for_shutdown_prints_nothing(monkeypatch, capsys):
+    """Its thread may outlive the join; a print during interpreter shutdown is a fatal abort."""
+    def unavailable(*_a, **_k):
+        raise safe_solve.SolverUnavailable("no subprocess")
+
+    monkeypatch.setattr(safe_solve, "_run", unavailable)
+    stopped = threading.Event()
+    stopped.set()
+    safe_solve._probe_startup(stop=stopped)
+    assert capsys.readouterr().out == ""
+    safe_solve._probe_startup()
+    assert "startup probe" in capsys.readouterr().out, "the control: unstopped, it reports"
 
 
 def test_with_the_probe_off_the_configured_value_stands_unchecked():
@@ -299,6 +331,7 @@ def _fake_worker(monkeypatch, on_await):
 
 def test_the_solve_budget_no_longer_pays_for_starting_the_worker():
     """A solve budget below the startup cost still solves only if startup is outside it."""
+    safe_solve._probe_startup()      # nothing probes at import, so measure here
     assert safe_solve.STARTUP_COST_S is not None, "the probe could not measure"
     tight = safe_solve.STARTUP_COST_S / 4
     assert safe_solve.safe_solve("2+3", "evaluate", timeout=tight) == "5"
@@ -407,7 +440,7 @@ def test_the_probe_is_not_bounded_by_the_budget_it_measures(monkeypatch):
     """A too-small `SOLVE_STARTUP_BUDGET` must not time out the probe that would clamp it."""
     seen = {}
 
-    def _record(request, timeout, label, startup_timeout=None):
+    def _record(request, timeout, label, startup_timeout=None, **_k):
         seen["startup"] = startup_timeout
         return None
 
@@ -466,3 +499,88 @@ def test_the_retry_does_not_hold_a_concurrency_permit_while_it_waits(monkeypatch
         safe_solve.safe_sympify_values(["1"])
     assert depth == [1, 1], (
         f"one permit held per attempt, not accumulated: {depth}")
+
+
+_ANSWER = ('{"ok": true, "result": "[1.0]"}', "the solve")
+
+
+class _Probe:
+    def __init__(self, alive):
+        self._alive = alive
+
+    def is_alive(self):
+        return self._alive
+
+
+def test_the_probe_does_not_queue_behind_live_solves(monkeypatch, capsys):
+    """It runs beside live traffic: a wait for a slot is not startup cost, nor a broken solver."""
+    monkeypatch.setattr(safe_solve, "SOLVE_QUEUE_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(safe_solve, "STARTUP_COST_S", None)
+    _fake_worker(monkeypatch, lambda *a: _ANSWER)
+    held = [safe_solve._solve_slots.acquire(blocking=False)
+            for _ in range(safe_solve.SOLVE_MAX_CONCURRENCY)]
+    assert all(held)
+    try:
+        with pytest.raises(safe_solve.SolverUnavailable, match="no solver slot"):
+            safe_solve.safe_sympify_values(["1"])        # the control: the slots are taken
+        safe_solve._probe_startup()
+    finally:
+        for _ in held:
+            safe_solve._solve_slots.release()
+    out = capsys.readouterr().out
+    assert safe_solve.STARTUP_COST_S is not None, out
+    assert "could not run" not in out
+
+
+@pytest.mark.parametrize("measuring,expected", [(True, safe_solve._PROBE_TIMEOUT_S), (False, 15.0)],
+                         ids=["probe-running", "probe-done"])
+def test_a_solve_before_the_probe_has_measured_gets_the_probes_budget(monkeypatch, measuring,
+                                                                      expected):
+    """Until the probe has measured this machine, the configured budget is unchecked."""
+    monkeypatch.setattr(safe_solve, "SOLVE_STARTUP_BUDGET_S", 15.0)
+    monkeypatch.setattr(safe_solve, "_probe_thread", _Probe(measuring))
+    budgets = []
+
+    def _record(proc, stdout, startup_budget, solve_budget):
+        budgets.append(startup_budget)
+        return _ANSWER
+
+    _fake_worker(monkeypatch, _record)
+    assert safe_solve.safe_sympify_values(["1"]) == [1.0]
+    assert budgets == [expected]
+
+
+def test_a_retry_picks_up_a_clamp_made_since_the_first_attempt(monkeypatch):
+    monkeypatch.setattr(safe_solve, "SOLVE_STARTUP_BUDGET_S", 15.0)
+    monkeypatch.setattr(safe_solve, "_probe_thread", None)
+    budgets = []
+
+    def _probe_lands_mid_solve(proc, stdout, startup_budget, solve_budget):
+        budgets.append(startup_budget)
+        if len(budgets) == 1:
+            safe_solve.SOLVE_STARTUP_BUDGET_S = 45.0
+            raise safe_solve._Timeout("startup", startup_budget)
+        return _ANSWER
+
+    _fake_worker(monkeypatch, _probe_lands_mid_solve)
+    assert safe_solve.safe_sympify_values(["1"]) == [1.0]
+    assert budgets == [15.0, 45.0]
+
+
+def test_a_stopped_probe_silences_the_solvers_own_lines_too(monkeypatch, capsys):
+    """The retry line is printed inside `_run`, below the probe's own gate."""
+    calls = []
+
+    def _slow_once_per_solve(proc, stdout, startup_budget, solve_budget):
+        calls.append(1)
+        if len(calls) % 2:
+            raise safe_solve._Timeout("startup", startup_budget)
+        return _ANSWER
+
+    _fake_worker(monkeypatch, _slow_once_per_solve)
+    stopped = threading.Event()
+    stopped.set()
+    safe_solve._probe_startup(stop=stopped)
+    assert capsys.readouterr().out == ""
+    safe_solve._probe_startup()
+    assert "retrying once" in capsys.readouterr().out, "the control: unstopped, it reports"

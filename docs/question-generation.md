@@ -139,7 +139,8 @@ refuse a child a question to protect nothing.
 **`GENERATION_MAX_WAITERS` is the threadpool bound, and it is not the concurrency one.** That one bounds calls *in
 flight*; this bounds callers *blocked waiting to become one*, and only the second protects the app:
 `_generation_slots.acquire(timeout=…)` blocks in the caller's own thread, and FastAPI runs these sync endpoints on
-anyio's shared ~40-slot threadpool — so at a concurrency of 8 a class of thirty starting together puts twenty-two
+anyio's shared threadpool (40 slots by default; `_lifespan` raises it to `_WORKER_THREADS`, 96) — so at a
+concurrency of 8 a class of thirty starting together puts twenty-two
 requests to sleep in threadpool slots and `/api/signals/*` queues behind them. The per-student rate limit does not
 help: that counts one student over time, this is thirty at one instant. Latent while the prefetch queue absorbed it;
 `QUESTION_QUEUE_SIZE=0` made the inline path the only path. **Both** generation endpoints take it.
@@ -152,14 +153,15 @@ shipped code. Three findings:
   so it bounds requests **in flight**; the semaphore bounds model calls inside that. A check written the obvious way
   asserted 8 + 12.
 - **The threadpool is only starved past ~40 in flight.** anyio's default limiter is exactly **40** threads (measured),
-  shared with every other sync endpoint. At 30 waiters a probe on `/api/topics` stayed at 31 ms; at 60 in flight its
+  shared with every other sync endpoint. These figures are at that default, before `_lifespan` raised it to 96, and
+  were not re-measured at 96. At 30 waiters a probe on `/api/topics` stayed at 31 ms; at 60 in flight its
   **worst** probe was **11.9 s**, at 80, **23.9 s** — while **p50 and p95 stayed under 25 ms in every run**. A
   percentile-only report shows a healthy service that is intermittently hanging for twenty seconds. **Watch the max.**
 - **The cost is refusals, and how many depends entirely on arrival.** 30 students, 2 s per call, at the old cap of 12:
   **40% served on a simultaneous start, 87% over 10 s, 100% over 30 s.** A synchronised start is a teacher saying
   "everyone start now", and on it 18 of 30 got a 503. **The cap is now 30**, which serves the whole class and costs no
-  extra model calls, only threads and waiting, since a refused student generates nothing. Not 40, because anyio's pool
-  is 40 and every other sync endpoint draws from it.
+  extra model calls, only threads and waiting, since a refused student generates nothing. Not higher, because every
+  waiter holds a threadpool slot that every other sync endpoint draws from.
 
 **The 503 carries `Retry-After: 5`, and `apiFetch` honours it** — for **GET only**, so a retry can never replay a side
 effect; both generation endpoints are GETs, which makes that free. Bounded at two retries and clamped to 10 s, because
@@ -1133,13 +1135,22 @@ suspicion, including these**: startup is ~0.8 s idle on the machine these were t
 background load. `SOLVE_RETRY_BUDGET_FACTOR` is **gone** — it widened the solve budget on a second attempt that no
 longer exists, and a knob whose name promises tuning that is not available is worse than its absence.
 
-`_probe_startup()` runs at import: it times one trivial solve and raises the **startup** budget if the configured value
-is under `_STARTUP_SAFETY_FACTOR` (3×) of the measurement. It **clamps up and logs; it never refuses to start** —
-raising there would take the whole backend down over one topic's tuning knob. A probe that cannot run keeps the
-configured value and says so separately: that means the subprocess mechanism is broken, a different problem, and a
-budget guessed from a failed measurement is worse than one someone chose. `SOLVE_STARTUP_PROBE=0` skips it. **The probe
-must escape the budget it validates** — it runs a solve, so a too-small value made it time out reporting the problem it
-should have measured; `_run` takes a `startup_timeout` override for that one caller.
+`_probe_startup()` runs on its own thread, started by `_lifespan` and joined at shutdown — not at import, where its
+sympy subprocess delayed every cold start. It times one trivial solve and raises the **startup** budget if the
+configured value is under `_STARTUP_SAFETY_FACTOR` (3×) of the measurement. It **clamps up and logs; it never refuses
+to start** — one topic's tuning knob must not take the backend down. A probe that cannot run keeps the configured value
+and says so separately: that means the subprocess mechanism is broken, a different problem, and a budget guessed from a
+failed measurement is worse than one someone chose. `SOLVE_STARTUP_PROBE=0` skips it. **The probe must escape the
+budget it validates** — it runs a solve, so a too-small value made it time out reporting the problem it should have
+measured; `_run` takes a `startup_timeout` override for that one caller.
+
+**Off the import path, it runs beside live traffic, and three things follow.** It skips the concurrency cap
+(`queued=False`), so a class that starts at once cannot make it time a queue as startup, or refuse it and log a broken
+solver. Until it finishes, every other solve gets the probe's own 60 s startup budget, since the configured value
+(15 s by default) is unchecked on that machine until then. That window is normally the first seconds after boot, but
+a hung worker keeps the probe alive about two minutes (two 60 s startup attempts), and a solve meanwhile can hold a
+slot for up to 120 s the same way. And each attempt re-reads the budget, so a retry picks up a clamp that landed meanwhile.
+Once stopped for shutdown it prints nothing, including the lines `_run` prints for it (`say=`).
 
 **A threshold that depends on how fast the machine is has to be measured on that machine, not written down.** Both
 tests around the probe got this wrong in different directions: one pinned the shipped default against the measured
@@ -1195,7 +1206,8 @@ the cause.
 
 It subclasses `llm_client.GenerationUnavailable`, so both `main.py` call sites already turn it into a **503**. A worker
 that ran and refused the input still returns `None` and still retries, because a different reply genuinely might work.
-**`_probe_startup` must catch it**: that function runs at import, and raising there would take the whole backend down.
+**`_probe_startup` must catch it**: on its own thread, an exception ends the probe on a traceback instead of the line
+that says the subprocess is broken.
 
 ## An answer's subject is the generator's own name, never the model's
 

@@ -64,6 +64,41 @@ class _FakeDB:
         return _R()
 
 
+@pytest.fixture(autouse=True)
+def _no_first_delay(monkeypatch):
+    """The loop tests below drive one pass synchronously; the startup delay has its own test."""
+    monkeypatch.setattr(main, "_STALE_SWEEP_FIRST_DELAY_SEC", 0.0)
+
+
+def test_the_startup_delay_defaults_off_outside_production(monkeypatch):
+    """`--reload` restarts within any delay, so a dev process would never sweep."""
+    monkeypatch.delenv("STALE_SWEEP_FIRST_DELAY_SECONDS", raising=False)
+    assert main._first_sweep_delay(production=False) == 0.0
+    assert main._first_sweep_delay(production=True) == 60.0
+    monkeypatch.setenv("STALE_SWEEP_FIRST_DELAY_SECONDS", "5")
+    assert main._first_sweep_delay(production=False) == main._first_sweep_delay(production=True) == 5.0
+
+
+def test_the_first_pass_waits_out_the_startup_delay_and_a_stop_ends_it(monkeypatch):
+    """A cold start serves its first requests before the sweep competes for a 0.1-CPU host."""
+    swept, waits = [], []
+
+    class _StopDuringDelay:
+        def wait(self, timeout):
+            waits.append(timeout)
+            return True                    # stopped while waiting
+
+        def is_set(self):
+            return True
+
+    monkeypatch.setattr(main, "_STALE_SWEEP_FIRST_DELAY_SEC", 60.0)
+    monkeypatch.setattr(main, "_stale_sweep_stop", _StopDuringDelay())
+    monkeypatch.setattr(main, "_sweep_abandoned_sessions", lambda *a, **k: swept.append(1) or {})
+    main._stale_sweep_loop()
+    assert waits == [60.0], "the first pass did not wait on the startup delay"
+    assert swept == [], "a stop during the delay still swept"
+
+
 def test_the_first_sweep_does_not_wait_a_whole_interval(monkeypatch):
     """A process that doesn't outlive one interval (e.g. `uvicorn --reload`) would never sweep.
 

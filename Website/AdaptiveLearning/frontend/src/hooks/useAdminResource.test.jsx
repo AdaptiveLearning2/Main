@@ -1,6 +1,45 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { it, expect } from 'vitest'
+import { it, expect, vi } from 'vitest'
 import useAdminResource from './useAdminResource'
+
+const advance = (ms) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+
+it('does not start a re-read while a slow one is in flight', async () => {
+  vi.useFakeTimers()
+  try {
+    let finish
+    const slow = vi.fn(() => new Promise(r => { finish = r }))
+    renderHook(() => useAdminResource({ load: slow, pollMs: 1000 }))
+    await advance(10_000)
+    expect(slow).toHaveBeenCalledTimes(1)
+    await act(async () => { finish({ v: 1 }) })
+    await advance(1000)
+    expect(slow).toHaveBeenCalledTimes(2)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it('pauses its re-reads while the tab is hidden', async () => {
+  vi.useFakeTimers()
+  let hidden = false
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+  const setHidden = (v) => { hidden = v; document.dispatchEvent(new Event('visibilitychange')) }
+  try {
+    const read = vi.fn(async () => ({ v: 1 }))
+    renderHook(() => useAdminResource({ load: read, pollMs: 1000 }))
+    await advance(0)
+    setHidden(true)
+    await advance(5000)
+    expect(read).toHaveBeenCalledTimes(1)
+    setHidden(false)
+    await advance(0)
+    expect(read).toHaveBeenCalledTimes(2)
+  } finally {
+    vi.useRealTimers()
+    delete document.hidden
+  }
+})
 
 // Stable across renders, as the hook requires of `load`.
 const load = () => Promise.resolve({ v: 1 })

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { motion } from 'framer-motion'
 import { Activity, Camera, Brain, Heart, Radio } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -10,10 +10,39 @@ import { emotionEmoji } from '../../lib/emotions'
 import { STALE_AFTER_S, eegWeak, formatAge } from '../../lib/signalAge'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
+import usePoll from '../../hooks/usePoll'
 
+// The sidecar pushes about every 5 s, so 2 s still shows each reading promptly.
 // POLL_MAX_MS caps the backoff while the endpoint is failing.
-const POLL_MS = 1_000
+const POLL_MS = 2_000
 const POLL_MAX_MS = 30_000
+
+// One 1 s clock for every card's "Xs ago": only the badges re-render on a tick.
+const clock = {
+  now: Date.now(),
+  listeners: new Set(),
+  timer: null,
+  subscribe(listener) {
+    clock.listeners.add(listener)
+    if (!clock.timer) {
+      clock.timer = setInterval(() => {
+        clock.now = Date.now()
+        clock.listeners.forEach(l => l())
+      }, 1000)
+    }
+    return () => {
+      clock.listeners.delete(listener)
+      if (!clock.listeners.size) { clearInterval(clock.timer); clock.timer = null }
+    }
+  },
+  // A render reads before it subscribes, so an idle clock catches up here. Only once a
+  // second is stale: React needs the same value from two reads in a row.
+  read: () => {
+    if (!clock.timer && Date.now() - clock.now >= 1000) clock.now = Date.now()
+    return clock.now
+  },
+}
+const useNow = () => useSyncExternalStore(clock.subscribe, clock.read)
 
 // Teachers see "headband" vs "camera", not raw source names like muse_optics.
 const SOURCE_LABEL = {
@@ -44,6 +73,26 @@ function Gauge({ label, value, color = 'bg-violet-500' }) {
   )
 }
 
+// One empty history for every student without one, so a memoised card sees the same prop.
+const EMPTY = []
+// Marks a failed poll in a trend. Every line breaks there; bpm by starting a new segment.
+const GAP = { focus: null, stress: null, bpm: null, gap: true }
+// Connects nulls, so a rejected heart reading is bridged; an outage is not, being a new segment.
+const BPM_LINE = { yAxisId: 'bpm', type: 'monotone', name: 'bpm', stroke: '#a855f7', strokeWidth: 1.5,
+                   dot: false, connectNulls: true, isAnimationActive: false }
+
+/** For drawing only: each point's `bpm` copied to `bpm_<n>`, where n counts the gaps before it. */
+function bpmSegments(history) {
+  let n = 0
+  const used = new Set()
+  const data = history.map(p => {
+    if (p.gap) { n += 1; return p }
+    used.add(n)
+    return { ...p, [`bpm_${n}`]: p.bpm }
+  })
+  return { data, segments: used.size ? [...used] : [0] }
+}
+
 // No `rowKey`, so no table: a rolling window has no meaningful row labels.
 const SPARK_COLUMNS = [
   { key: 'focus',      label: 'Focus',      unit: '%',    scale: asPercent },
@@ -52,23 +101,36 @@ const SPARK_COLUMNS = [
   { key: 'bpm',        label: 'Heart rate', unit: ' bpm' },
 ]
 
-function StudentCard({ student, history, now }) {
+// Presence, age and usability on one badge; grey for stale or weak.
+function HeadbandBadge({ cog }) {
+  const now = useNow()
+  const cogAgeMs = cog?.ts ? now - Date.parse(cog.ts) : null
+  const cogStale = cogAgeMs != null && cogAgeMs > STALE_AFTER_S * 1000
+  const cogWeak  = eegWeak(cog)
+  return (
+    <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${
+      cog && !cogStale && !cogWeak
+        ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300'
+        : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'}`}>
+      <Brain size={11} /> Headband {cog ? 'on' : 'off'}
+      {cog && cogAgeMs != null && ` · ${cogStale ? 'stale, ' : ''}${formatAge(cogAgeMs)}`}
+      {cogWeak && ' · weak signal'}
+    </span>
+  )
+}
+
+// Memoised: a poll that changes one student re-renders that card alone.
+const StudentCard = memo(function StudentCard({ student, history }) {
   const active = student.active_session
   const cog    = student.latest_cognitive
   const face   = student.latest_face
   const heart  = student.latest_heart
   const initial = (student.name || '?')[0].toUpperCase()
-
-  // Age of the newest headband row; `now` is a prop so every card ticks together.
-  const cogAgeMs = cog?.ts ? now - Date.parse(cog.ts) : null
-  const cogStale = cogAgeMs != null && cogAgeMs > STALE_AFTER_S * 1000
-  const cogWeak  = eegWeak(cog)
+  // The columns and sentence read `history`; only the SVG gets the segment keys.
+  const drawn = useMemo(() => bpmSegments(history || EMPTY), [history])
 
   return (
-    <motion.div
-      layout
-      className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5"
-    >
+    <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
       <div className="flex items-center gap-3 mb-4">
         <div className="w-10 h-10 bg-gradient-to-br from-violet-400 to-purple-500 rounded-full flex items-center justify-center text-white font-black">
           {initial}
@@ -83,15 +145,7 @@ function StudentCard({ student, history, now }) {
       </div>
 
       <div className="flex gap-2 mb-4 text-[10px] flex-wrap">
-        {/* Presence, age and usability on one badge; grey for stale or weak. */}
-        <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${
-          cog && !cogStale && !cogWeak
-            ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300'
-            : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'}`}>
-          <Brain size={11} /> Headband {cog ? 'on' : 'off'}
-          {cog && cogAgeMs != null && ` · ${cogStale ? 'stale, ' : ''}${formatAge(cogAgeMs)}`}
-          {cogWeak && ' · weak signal'}
-        </span>
+        <HeadbandBadge cog={cog} />
         <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${face ? 'bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'}`}>
           <Camera size={11} /> Camera {face ? 'on' : 'off'}
         </span>
@@ -135,15 +189,15 @@ function StudentCard({ student, history, now }) {
 
       {/* A sparkline is still a chart; the summary sentence is its reading. */}
       <AccessibleChart className="h-12 -mx-1"
-        headline={`${student.name || 'This student'}: signal trend over the last ${history?.length || 0} readings.`}
+        headline={`${student.name || 'This student'}: signal trend over the last ${history?.filter(p => !p.gap).length || 0} readings.`}
         rows={history} columns={SPARK_COLUMNS}>
-          <LineChart data={history}>
+          <LineChart data={drawn.data}>
             {/* Two axes: bpm and 0..1 ratios can't share a scale. */}
             <YAxis yAxisId="ratio" hide domain={[0, 1]} />
             <YAxis yAxisId="bpm" hide domain={['auto', 'auto']} />
             <Line yAxisId="ratio" type="monotone" dataKey="focus"      stroke="#6366f1" strokeWidth={1.5} dot={false} isAnimationActive={false} />
             <Line yAxisId="ratio" type="monotone" dataKey="stress"     stroke="#f43f5e" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-            <Line yAxisId="bpm"   type="monotone" dataKey="bpm"        stroke="#a855f7" strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
+            {drawn.segments.map(n => <Line key={n} {...BPM_LINE} dataKey={`bpm_${n}`} />)}
           </LineChart>
       </AccessibleChart>
 
@@ -157,9 +211,9 @@ function StudentCard({ student, history, now }) {
           Open full session →
         </Link>
       )}
-    </motion.div>
+    </div>
   )
-}
+})
 
 export default function Live() {
   const [classes, setClasses]     = useState([])
@@ -176,12 +230,8 @@ export default function Live() {
   // Separate from classes.length === 0, so loading doesn't show "no classes yet".
   const [loadingClasses, setLoadingClasses] = useState(true)
   const historyRef = useRef({}) // user_id -> [{focus, stress, bpm}]
-  // One clock for every card's "Xs ago", ticking even while polls fail.
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [])
+  // Per student, the stamps of the readings last appended, and the class they belong to.
+  const seenRef = useRef({ classId: null, ts: {} })
 
   // A failed class-list read is its own state, not an empty list; the error
   // object lets LoadError pick its sentence.
@@ -189,7 +239,7 @@ export default function Live() {
   const loadClasses = () => {
     setLoadingClasses(true)
     setClassesFailed(null)
-    apiFetch('/api/classes')
+    apiFetch('/api/classes', { cache: true })
       .then(rows => {
         setClasses(rows || [])
         if (rows?.length && !classId) setClassId(rows[0].id)
@@ -200,75 +250,67 @@ export default function Live() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { loadClasses() }, [])
 
-  useEffect(() => {
-    if (!classId) return
-    let killed = false
-    // Reset per class.
-    historyRef.current = {}
-
-    let delay = POLL_MS
-    let timer = null
-
-    const tick = async () => {
-      // Pause polling while the tab is hidden; visibilitychange below restarts it.
-      if (document.hidden) {
-        timer = setTimeout(tick, POLL_MS)
-        return
+  // Paused while hidden; `retryNonce` restarts it at once, skipping any backoff.
+  usePoll(async (stopped) => {
+    const cls = classId
+    if (seenRef.current.classId !== cls) {
+      historyRef.current = {}
+      seenRef.current = { classId: cls, ts: {}, failed: false }
+    }
+    let rows
+    try {
+      // Ignores "Hide sensor data": that covers reporting, not this live monitor.
+      rows = await apiFetch(`/api/teacher/classes/${cls}/live`)
+    } catch (e) {
+      if (!stopped()) {
+        seenRef.current.failed = true
+        setError(e.message)
+        setFailedFor(cls)
+        setRosterFailed(e)
       }
-      try {
-        // Ignores "Hide sensor data": that covers reporting, not this live monitor.
-        const rows = await apiFetch(`/api/teacher/classes/${classId}/live`)
-        if (killed) return
-        rows.forEach(r => {
-          const c = r.latest_cognitive
-          const h = r.latest_heart
-          // Heart and EEG are consented independently; skip only if both are missing.
-          if (!c && !h) return
-          // Rebuilt, never mutated: React may freeze a rendered array.
-          const arr = historyRef.current[r.user_id] || []
-          // Null, not 0, for a missing or rejected reading: recharts draws a gap.
-          const point = {
-            focus:      c?.focus ?? null,
-            stress:     c?.stress ?? null,
-            bpm:        typeof h?.heart_rate_bpm === 'number' ? h.heart_rate_bpm : null,
-          }
-          historyRef.current[r.user_id] = [...arr, point].slice(-60)
-        })
-        setStudents(rows)
-        setLoadedFor(classId)
-        setFailedFor(null)
-        setRosterFailed(null)
-        delay = POLL_MS
-        if (!killed) setError(null)
-      } catch (e) {
-        if (!killed) {
-          setError(e.message)
-          setFailedFor(classId)
-          setRosterFailed(e)
-        }
-        delay = Math.min(delay * 2, POLL_MAX_MS)
+      throw e
+    }
+    if (stopped()) return
+    // First answer after an outage: break each trend so the two sides are not joined.
+    if (seenRef.current.failed) {
+      seenRef.current.failed = false
+      for (const [id, arr] of Object.entries(historyRef.current)) {
+        if (arr.length && !arr.at(-1).gap) historyRef.current[id] = [...arr, GAP].slice(-60)
       }
-      // Chained timeout, not setInterval, so a slow response can't stack polls.
-      if (!killed) timer = setTimeout(tick, delay)
     }
-
-    // Resume at full speed, skipping backoff, when the tab becomes visible.
-    const onVisible = () => {
-      if (document.hidden || killed) return
-      delay = POLL_MS
-      clearTimeout(timer)
-      tick()
-    }
-    document.addEventListener('visibilitychange', onVisible)
-
-    tick()
-    return () => {
-      killed = true
-      clearTimeout(timer)
-      document.removeEventListener('visibilitychange', onVisible)
-    }
-    // `retryNonce` restarts the poll at once, skipping any backoff.
-  }, [classId, retryNonce])
+    rows.forEach(r => {
+      const c = r.latest_cognitive
+      const h = r.latest_heart
+      // Heart and EEG are consented independently; skip only if both are missing.
+      if (!c && !h) return
+      // A poll that found the same rows is not a new reading.
+      const last = seenRef.current.ts[r.user_id]
+      if (last && last.cog === c?.ts && last.heart === h?.ts) return
+      seenRef.current.ts[r.user_id] = { cog: c?.ts, heart: h?.ts }
+      // Rebuilt, never mutated: React may freeze a rendered array.
+      const arr = historyRef.current[r.user_id] || []
+      // Null, not 0, for a missing or rejected reading: recharts draws a gap.
+      const point = {
+        focus:      c?.focus ?? null,
+        stress:     c?.stress ?? null,
+        bpm:        typeof h?.heart_rate_bpm === 'number' ? h.heart_rate_bpm : null,
+      }
+      historyRef.current[r.user_id] = [...arr, point].slice(-60)
+    })
+    // An unchanged row keeps its object, so its memoised card skips the render.
+    setStudents(prev => {
+      const before = new Map(prev.map(s => [s.user_id, s]))
+      return rows.map(r => {
+        const old = before.get(r.user_id)
+        return old && JSON.stringify(old) === JSON.stringify(r) ? old : r
+      })
+    })
+    setLoadedFor(cls)
+    setFailedFor(null)
+    setRosterFailed(null)
+    setError(null)
+  }, { intervalMs: POLL_MS, maxBackoffMs: POLL_MAX_MS, key: `${classId}:${retryNonce}`,
+       enabled: !!classId })
 
   // Roster states: skeleton (no answer yet), LoadError (failed, no rows), or
   // cards (rows in hand, with a banner if a later poll failed).
@@ -332,8 +374,7 @@ export default function Live() {
             <StudentCard
               key={s.user_id}
               student={s}
-              history={historyRef.current[s.user_id] || []}
-              now={now}
+              history={historyRef.current[s.user_id] || EMPTY}
             />
           ))}
         </div>

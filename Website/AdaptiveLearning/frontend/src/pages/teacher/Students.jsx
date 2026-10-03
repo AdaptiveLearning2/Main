@@ -5,7 +5,8 @@ import { Users, Search, ChevronDown, Flame, Smile, Target, TrendingUp, Zap, Hear
 import HideSensorDataToggle from '../../components/common/HideSensorDataToggle'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 import { apiFetch } from '../../lib/api'
-import { offLabel } from '../../components/signals/SignalPanel'
+import { offLabel } from '../../lib/signalFormat'
+import { stagger } from '../../lib/stagger'
 
 // Matches the weekly report's window.
 const SIGNAL_WINDOW_DAYS = 7
@@ -282,7 +283,7 @@ export default function Students() {
                 <motion.button
                   type="button"
                   onClick={() => toggleExpand(s.id)}
-                  initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.03 }}
+                  initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.03) }}
                   whileHover={{ x: 3 }}
                   className="w-full grid grid-cols-4 items-center px-5 py-4 hover:bg-slate-50 dark:hover:bg-gray-800 transition-colors text-left"
                 >

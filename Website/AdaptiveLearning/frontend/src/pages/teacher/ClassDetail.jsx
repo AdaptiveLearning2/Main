@@ -12,6 +12,7 @@ import ClassSignalTrend from '../../components/analytics/ClassSignalTrend'
 import ClassSignalRoster from '../../components/analytics/ClassSignalRoster'
 import LoadError from '../../components/ui/LoadError'
 import { readHideSensorData } from '../../lib/viewPrefs'
+import { stagger } from '../../lib/stagger'
 
 /** "2h ago", or null so the caller can say "never" or "unknown" itself. */
 function agoLabel(iso) {
@@ -185,7 +186,7 @@ function ClassDetailBody({ id }) {
               : ago ? `Active ${ago}` : 'Never active'
             return (
               <motion.div key={s.user_id}
-                initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}
+                initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.03) }}
                 className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 p-4 flex items-center justify-between gap-3 shadow-sm">
                 <div className="min-w-0">
                   <p className="text-lg font-bold text-gray-900 dark:text-white truncate">{s.name}</p>

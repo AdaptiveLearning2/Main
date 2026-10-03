@@ -4,6 +4,7 @@ import { apiFetch } from '../../lib/api'
 import { fetchSessionList } from '../../lib/session'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
+import { stagger } from '../../lib/stagger'
 
 // A figure nobody could establish. Not 0, which is a claim about the student.
 const UNKNOWN = '—'
@@ -86,7 +87,7 @@ export default function History() {
             { label: 'Overall Accuracy', value: statTile(overallA), icon: '🎯' },
           ].map((c, i) => (
             <motion.div key={c.label}
-              initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}
+              initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.08) }}
               className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-4 shadow-sm text-center"
             >
               <div className="text-2xl mb-1">{c.icon}</div>
@@ -131,7 +132,7 @@ export default function History() {
             const done = !!s.ended_at
             return (
               <motion.div key={s.id}
-                initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.04 }}
+                initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.04) }}
                 whileHover={{ x: 4 }}
                 className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm flex items-center justify-between hover:shadow-md transition-shadow"
               >

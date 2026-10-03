@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useParams, useLocation, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, Brain, Camera, CheckCircle2, XCircle, Activity, ChevronDown } from 'lucide-react'
@@ -17,6 +17,10 @@ import QuestionFigure from '../../components/questions/QuestionFigure'
 import CCSSBadge from '../../components/questions/CCSSBadge'
 import { correctIndex, optionList } from '../../lib/answerKey'
 import { fmtDate } from '../../lib/dates'
+import { buildTimeline, downsample } from '../../lib/timeline'
+
+// About two points per horizontal pixel; an hour at 4 Hz is ~14,000 rows.
+const CHART_MAX_ROWS = 1500
 
 // calibrating/unknown are shown, not dropped, so categorisation isn't overstated.
 const STRESS_COLOURS = {
@@ -84,6 +88,33 @@ function SessionReviewBody({ sessionId }) {
   // Above the early exits below, or it would be a conditional hook.
   const { hidden: hiddenSeries, toggle: toggleSeries,
           showAll: showAllSeries, shownOf } = useSeriesFilter()
+  // Derived once per payload, not on every render (opening an answer row re-renders the page).
+  const timeline = useMemo(() => buildTimeline(data), [data])
+  // The SVG only; the sentence and the sr-only table read the full series.
+  const chartRows = useMemo(() => downsample(timeline.series, CHART_MAX_ROWS), [timeline])
+  const { hasHeart } = timeline
+  // One list per series drives the lines, the sr-only columns and the toggles,
+  // so a column always names a drawn series. Ratios are 0..1, hence `asPercent`.
+  // Heart series are gated on `hasHeart`; no `engagement` (it is the focus index).
+  const TIMELINE_SERIES = useMemo(() => [
+    { key: 'focus',  label: 'Focus',      unit: '%', scale: asPercent,
+      colour: '#6366f1', axis: 'ratio', name: 'Focus',      dot: false },
+    // "EEG stress": must never share a label with the heart stress pie.
+    { key: 'stress', label: 'EEG stress', unit: '%', scale: asPercent,
+      colour: '#f43f5e', axis: 'ratio', name: 'EEG stress', dot: false },
+    ...(hasHeart ? [
+      // `dot` on: heart readings are sparse, so an isolated point needs one.
+      { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm',
+        colour: '#a855f7', axis: 'abs', name: 'Heart rate (bpm)', dot: { r: 2 } },
+      { key: 'rmssd_ms',       label: 'RMSSD',      unit: ' ms',
+        colour: '#f59e0b', axis: 'abs', name: 'RMSSD (ms)',       dot: { r: 2 } },
+    ] : []),
+  ], [hasHeart])
+  const shownSeries = useMemo(() => shownOf(TIMELINE_SERIES), [shownOf, TIMELINE_SERIES])
+  // Stable, so AccessibleChart's memoised sentence is not rebuilt over every row per render.
+  const TIMELINE_COLUMNS = useMemo(() => shownSeries.map(
+    ({ key, label, unit, scale }) => ({ key, label, unit, scale }),
+  ), [shownSeries])
 
   useEffect(() => {
     let killed = false
@@ -129,10 +160,8 @@ function SessionReviewBody({ sessionId }) {
     )
   }
 
-  const cognitive = Array.isArray(data?.cognitive) ? data.cognitive : []
-  const face      = Array.isArray(data?.face)      ? data.face      : []
-  const heart     = Array.isArray(data?.heart)     ? data.heart     : []
-  const answers   = Array.isArray(data?.answers)   ? data.answers   : []
+  const { cognitive, face, answers, series, failovers, emotionSlices, stressSlices,
+          tMin, tMax, ribbon } = timeline
 
   // A withdrawn channel is not read, so its emptiness needs its own sentence, never "no samples".
   // Absent (an older payload) reads as included: there is nothing true to say about it.
@@ -151,141 +180,9 @@ function SessionReviewBody({ sessionId }) {
     : channels.consent_retrieved === false ? 'Unavailable' : 'Off'
   const heartWithheld = withheld(channels.heart_included, channels.heart_revoked_at, 'heart-rate recording')
 
-  // Numeric ms x-axis, more stable than category strings.
-  const cognitiveByT = new Map(
-    cognitive
-      .map(c => {
-        const t = new Date(c.ts).getTime()
-        return Number.isFinite(t) ? [t, c] : null
-      })
-      .filter(Boolean),
-  )
-
-  // Heart merges into cognitive rows by nearest timestamp: Recharts wants one dataset.
-  const heartByT = heart
-    .map(h => ({ t: new Date(h.ts).getTime(), h }))
-    .filter(x => Number.isFinite(x.t))
-    .sort((a, b) => a.t - b.t)
-
-  // Union of both channels' timestamps: heart can be consented without EEG.
-  const series = Array.from(new Set([...cognitiveByT.keys(), ...heartByT.map(x => x.t)]))
-    .sort((a, b) => a - b)
-    .map(t => {
-      const c = cognitiveByT.get(t)
-      return {
-        t,
-        focus:      typeof c?.focus      === 'number' ? c.focus      : null,
-        stress:     typeof c?.stress     === 'number' ? c.stress     : null,
-      }
-    })
-
-  // Each heart reading lands on one row (the nearest), never copied across rows;
-  // `dot` on the lines makes a single point visible.
-  const rowIndexByT = series.map(r => r.t)
-  let heartCollisions = 0
-  for (const { t, h } of heartByT) {
-    // Binary search for the insertion point, then compare both neighbours.
-    let lo = 0, hiIdx = rowIndexByT.length
-    while (lo < hiIdx) {
-      const mid = (lo + hiIdx) >> 1
-      if (rowIndexByT[mid] < t) lo = mid + 1
-      else hiIdx = mid
-    }
-    const before = lo > 0 ? lo - 1 : null
-    const after  = lo < series.length ? lo : null
-    const dBefore = before !== null ? Math.abs(series[before].t - t) : Infinity
-    const dAfter  = after  !== null ? Math.abs(series[after].t  - t) : Infinity
-    const pick = dAfter < dBefore ? after : before
-    // Bounded at 15s: a reading with no row that close belongs to a gap in cognitive recording.
-    if (pick === null || Math.min(dBefore, dAfter) > 15_000) continue
-    const row = series[pick]
-    const d = Math.min(dBefore, dAfter)
-    // Two readings (e.g. headband and camera at the same instant) can land on
-    // one row. Closest wins, first wins a tie; the loser is counted, not merged or averaged.
-    if (row.heart_rate_bpm !== undefined && row._heartDist <= d) {
-      heartCollisions++
-      continue
-    }
-    if (row.heart_rate_bpm !== undefined) heartCollisions++
-    row._heartDist = d
-    row.heart_rate_bpm = typeof h.heart_rate_bpm === 'number' ? h.heart_rate_bpm : null
-    row.rmssd_ms = typeof h.rmssd_ms === 'number' ? h.rmssd_ms : null
-  }
-  if (heartCollisions) {
-    console.warn(
-      `[session-review] ${heartCollisions} heart reading(s) shared a plotted ` +
-      'timestamp with another and are not drawn; the nearest one is shown.')
-  }
-
-  const hasHeart = series.some(r => r.heart_rate_bpm !== undefined && r.heart_rate_bpm !== null)
-
-  // Heart sensor changes are marked, not spliced into one trace.
-  const failovers = []
-  for (let i = 1; i < heartByT.length; i++) {
-    if (heartByT[i].h.source && heartByT[i].h.source !== heartByT[i - 1].h.source) {
-      failovers.push({ t: heartByT[i].t, source: heartByT[i].h.source })
-    }
-  }
-
-  // Proportion, from raw samples rather than the ribbon's 10s buckets.
-  const emotionSlices = Object.entries(
-    face.reduce((acc, f) => {
-      if (!f.emotion) return acc          // a rejected window is not a reading
-      acc[f.emotion] = (acc[f.emotion] || 0) + 1
-      return acc
-    }, {}),
-  ).map(([name, value]) => ({ name, value }))
-
-  const stressSlices = Object.entries(
-    heart.reduce((acc, h) => {
-      // calibrating/unknown kept as slices, not dropped.
-      const key = h.stress_category || 'unknown'
-      acc[key] = (acc[key] || 0) + 1
-      return acc
-    }, {}),
-  ).map(([name, value]) => ({ name, value }))
-
-  const tMin = series.length ? series[0].t : 0
-  const tMax = series.length ? series[series.length - 1].t : 0
-
-  // Emotion ribbon, bucketed every ~10s.
-  const ribbon = []
-  let lastBucket = 0
-  face.forEach(f => {
-    const t = new Date(f.ts).getTime()
-    if (Number.isFinite(t) && t - lastBucket > 10_000) {
-      ribbon.push({ t, emotion: f.emotion })
-      lastBucket = t
-    }
-  })
-
   const totalAnswers   = answers.length
   const correctAnswers = answers.filter(a => a.correct).length
   const acc = totalAnswers ? Math.round((correctAnswers / totalAnswers) * 100) : 0
-
-  // One list per series drives the lines, the sr-only columns and the toggles,
-  // so a column always names a drawn series. Ratios are 0..1, hence `asPercent`.
-  // Heart series are gated on `hasHeart`; no `engagement` (it is the focus index).
-  const TIMELINE_SERIES = [
-    { key: 'focus',  label: 'Focus',      unit: '%', scale: asPercent,
-      colour: '#6366f1', axis: 'ratio', name: 'Focus',      dot: false },
-    // "EEG stress": must never share a label with the heart stress pie.
-    { key: 'stress', label: 'EEG stress', unit: '%', scale: asPercent,
-      colour: '#f43f5e', axis: 'ratio', name: 'EEG stress', dot: false },
-    ...(hasHeart ? [
-      // `dot` on: heart readings are sparse, so an isolated point needs one.
-      { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm',
-        colour: '#a855f7', axis: 'abs', name: 'Heart rate (bpm)', dot: { r: 2 } },
-      { key: 'rmssd_ms',       label: 'RMSSD',      unit: ' ms',
-        colour: '#f59e0b', axis: 'abs', name: 'RMSSD (ms)',       dot: { r: 2 } },
-    ] : []),
-  ]
-
-  const shownSeries = shownOf(TIMELINE_SERIES)
-
-  const TIMELINE_COLUMNS = shownSeries.map(
-    ({ key, label, unit, scale }) => ({ key, label, unit, scale }),
-  )
 
   // Mount an axis only for shown series: Recharts throws on a line naming a missing axis.
   const axisShown = (axis) => shownSeries.some((s) => s.axis === axis)
@@ -410,7 +307,7 @@ function SessionReviewBody({ sessionId }) {
             headline={`Session replay over ${series.length} readings.`}
             rows={series} rowKey="t" rowLabel="Seconds in"
             columns={TIMELINE_COLUMNS}>
-              <LineChart data={series} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+              <LineChart data={chartRows} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                 <XAxis
                   dataKey="t"

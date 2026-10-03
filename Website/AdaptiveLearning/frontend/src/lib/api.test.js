@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('./supabase', async () => await import('../test/mocks/supabase'))
 
-import { apiFetch, apiFetchOnUnload } from './api'
+import { apiFetch, apiFetchOnUnload, clearApiCache } from './api'
 import { authFns, buildAuthSession, resetSupabaseMock, setSession } from '../test/mocks/supabase'
+import { WAKE_AFTER_MS, _resetForTests as _resetWake, serverWaking } from './serverWake'
 
 const BASE = 'http://localhost:8000'
 
@@ -270,6 +271,237 @@ describe('Retry-After', () => {
 
     await expect(apiFetch('/api/generate-question')).rejects.toMatchObject({ status: 500 })
     expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the opt-in read cache', () => {
+  beforeEach(() => clearApiCache())
+  const fetches = () => globalThis.fetch.mock.calls.length
+
+  it('reuses a result for its lifetime, then reads again', async () => {
+    vi.useFakeTimers()
+    await apiFetch('/api/classes', { cacheMs: 1000 })
+    await apiFetch('/api/classes', { cacheMs: 1000 })
+    expect(fetches()).toBe(1)
+    vi.advanceTimersByTime(1001)
+    await apiFetch('/api/classes', { cacheMs: 1000 })
+    expect(fetches()).toBe(2)
+  })
+
+  it('keeps `cache: true` results for 30 s', async () => {
+    vi.useFakeTimers()
+    await apiFetch('/api/classes', { cache: true })
+    vi.advanceTimersByTime(29_000)
+    await apiFetch('/api/classes', { cache: true })
+    expect(fetches()).toBe(1)
+    vi.advanceTimersByTime(1_001)
+    await apiFetch('/api/classes', { cache: true })
+    expect(fetches()).toBe(2)
+  })
+
+  it('shares one request between callers that ask while it is in flight', async () => {
+    await Promise.all([apiFetch('/api/topics?grade=1', { cacheMs: 1000 }),
+                       apiFetch('/api/topics?grade=1', { cacheMs: 1000 })])
+    expect(fetches()).toBe(1)
+  })
+
+  it('never keeps a failure', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValueOnce(failing()).mockResolvedValue(ok([1]))
+    await expect(apiFetch('/api/classes', { cacheMs: 1000 })).rejects.toThrow()
+    expect(await apiFetch('/api/classes', { cacheMs: 1000 })).toEqual([1])
+  })
+
+  it('forgets a resource once anything writes to it, and only that resource', async () => {
+    await apiFetch('/api/classes', { cacheMs: 1000 })
+    await apiFetch('/api/topics', { cacheMs: 1000 })
+    await apiFetch('/api/classes/join', { method: 'POST', body: { join_code: 'X' } })
+    const before = fetches()
+    await apiFetch('/api/classes', { cacheMs: 1000 })
+    await apiFetch('/api/topics', { cacheMs: 1000 })
+    expect(fetches()).toBe(before + 1)
+  })
+
+  it('does not keep a read that was in flight when a write landed', async () => {
+    let respond
+    globalThis.fetch = vi.fn(() => new Promise(r => { respond = r }))
+    const read = apiFetch('/api/classes', { cacheMs: 1000 })
+    await vi.waitFor(() => expect(respond).toBeTypeOf('function'))
+    const answerRead = respond
+    const write = apiFetch('/api/classes', { method: 'POST', body: {} })
+    await vi.waitFor(() => expect(respond).not.toBe(answerRead))
+    // The write finishes first, so only the entry check can refuse the late, older read.
+    respond(ok({}))
+    await write
+    answerRead(ok(['stale']))
+    await read
+    globalThis.fetch = vi.fn().mockResolvedValue(ok(['fresh']))
+    expect(await apiFetch('/api/classes', { cacheMs: 1000 })).toEqual(['fresh'])
+  })
+
+  it('does not keep a read that started while a write was in flight', async () => {
+    // The server can answer that read before the write commits, so it may predate the write.
+    let respond
+    globalThis.fetch = vi.fn(() => new Promise(r => { respond = r }))
+    const write = apiFetch('/api/classes', { method: 'POST', body: {} })
+    await vi.waitFor(() => expect(respond).toBeTypeOf('function'))
+    const answerWrite = respond
+    const read = apiFetch('/api/classes', { cacheMs: 1000 })
+    await vi.waitFor(() => expect(respond).not.toBe(answerWrite))
+    respond(ok(['stale']))
+    await read
+    answerWrite(ok({}))
+    await write
+    globalThis.fetch = vi.fn().mockResolvedValue(ok(['fresh']))
+    expect(await apiFetch('/api/classes', { cacheMs: 1000 })).toEqual(['fresh'])
+  })
+
+  it("never answers one account's read with another's, though nothing cleared the cache between", async () => {
+    // Signing in over a live session fires no SIGNED_OUT; a teacher's class rows carry join codes.
+    setSession(buildAuthSession({ id: 'acct-a', accessToken: 'tok-a' }))
+    globalThis.fetch = vi.fn().mockResolvedValueOnce(ok(['a-class'])).mockResolvedValueOnce(ok(['b-class']))
+    expect(await apiFetch('/api/classes', { cache: true })).toEqual(['a-class'])
+    setSession(buildAuthSession({ id: 'acct-b', accessToken: 'tok-b' }))
+    expect(await apiFetch('/api/classes', { cache: true })).toEqual(['b-class'])
+    expect(fetches()).toBe(2)
+    expect(lastCall()[1].headers.Authorization).toBe('Bearer tok-b')
+  })
+
+  it('never joins one account to a read still in flight for another', async () => {
+    let answerA
+    globalThis.fetch = vi.fn()
+      .mockReturnValueOnce(new Promise(r => { answerA = r }))
+      .mockResolvedValueOnce(ok(['b-class']))
+    setSession(buildAuthSession({ id: 'acct-a', accessToken: 'tok-a' }))
+    const readA = apiFetch('/api/classes', { cache: true })
+    await vi.waitFor(() => expect(fetches()).toBe(1))
+    setSession(buildAuthSession({ id: 'acct-b', accessToken: 'tok-b' }))
+    expect(await apiFetch('/api/classes', { cache: true })).toEqual(['b-class'])
+    expect(lastCall()[1].headers.Authorization).toBe('Bearer tok-b')
+    answerA(ok(['a-class']))
+    expect(await readA).toEqual(['a-class'])
+  })
+
+  it("bounds a caller that joins a read in flight by that caller's own timeoutMs", async () => {
+    vi.useFakeTimers()
+    globalThis.fetch.mockReturnValue(new Promise(() => {}))
+    apiFetch('/api/classes', { cache: true }).catch(() => {})          // started with no bound
+    const joined = apiFetch('/api/classes', { cache: true, timeoutMs: 5_000 }).then(() => 'resolved', e => e)
+
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(await Promise.race([joined, Promise.resolve('pending')])).toBe('pending')
+    await vi.advanceTimersByTimeAsync(2)
+    const err = await joined
+    expect(err.timeout).toBe(true)
+    expect(err.message).toBe('Request to /api/classes timed out after 5000ms')
+    // It joined the first request rather than starting its own.
+    expect(fetches()).toBe(1)
+  })
+
+  it("never lets the first caller's shorter bound abort a read another caller still waits on", async () => {
+    vi.useFakeTimers()
+    let respond, signal
+    globalThis.fetch = vi.fn((_url, opts) => { signal = opts.signal; return new Promise(r => { respond = r }) })
+    const first = apiFetch('/api/classes', { cache: true, timeoutMs: 50 }).then(() => 'resolved', e => e)
+    const joined = apiFetch('/api/classes', { cache: true }).then(rows => rows, e => e)
+
+    await vi.advanceTimersByTimeAsync(51)
+    expect((await first).timeout).toBe(true)
+    expect(signal.aborted).toBe(false)
+    respond(ok(['rows']))
+    expect(await joined).toEqual(['rows'])
+    expect(fetches()).toBe(1)
+  })
+
+  it('aborts a shared read once every caller has given up on it, and the next caller starts afresh', async () => {
+    vi.useFakeTimers()
+    let signal
+    // Ignores the abort, so only dropping the entry can stop a later caller joining it.
+    globalThis.fetch = vi.fn((_url, opts) => { signal = opts.signal; return new Promise(() => {}) })
+    const first = apiFetch('/api/classes', { cache: true, timeoutMs: 50 }).catch(e => e)
+    const joined = apiFetch('/api/classes', { cache: true, timeoutMs: 100 }).catch(e => e)
+
+    await vi.advanceTimersByTimeAsync(51)
+    expect(signal.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(signal.aborted).toBe(true)
+    expect((await first).timeout).toBe(true)
+    expect((await joined).timeout).toBe(true)
+
+    globalThis.fetch.mockImplementation(() => Promise.resolve(ok(['fresh'])))
+    expect(await apiFetch('/api/classes', { cache: true })).toEqual(['fresh'])
+    expect(fetches()).toBe(2)
+  })
+
+  it('starts no request for a caller that gave up while its session was still being read', async () => {
+    vi.useFakeTimers()
+    authFns.getSession.mockImplementation(() => new Promise(r => setTimeout(
+      () => r({ data: { session: buildAuthSession({ accessToken: 'tok-a' }) } }), 100)))
+    const call = apiFetch('/api/classes', { cache: true, timeoutMs: 50 }).catch(e => e)
+    await vi.advanceTimersByTimeAsync(200)
+    expect((await call).timeout).toBe(true)
+    expect(fetches()).toBe(0)
+  })
+
+  it("hands every caller its own copy, so one page editing its rows cannot edit another's", async () => {
+    globalThis.fetch.mockResolvedValue(ok([{ name: 'Maths' }]))
+    const [first, joined] = await Promise.all([apiFetch('/api/classes', { cache: true }),
+                                               apiFetch('/api/classes', { cache: true })])
+    first[0].name = 'edited'
+    joined.push({ name: 'added' })
+    expect(joined[0].name).toBe('Maths')
+    expect(await apiFetch('/api/classes', { cache: true })).toEqual([{ name: 'Maths' }])
+    expect(fetches()).toBe(1)
+  })
+
+  it('caches nothing unless asked, and drops everything on clear', async () => {
+    await apiFetch('/api/classes')
+    await apiFetch('/api/classes')
+    expect(fetches()).toBe(2)
+    await apiFetch('/api/classes', { cacheMs: 1000 })
+    clearApiCache()
+    await apiFetch('/api/classes', { cacheMs: 1000 })
+    expect(fetches()).toBe(4)
+  })
+})
+
+describe('the sleeping-server signal', () => {
+  beforeEach(() => _resetWake())
+
+  it('marks a request that has not answered after the threshold, and clears on any answer', async () => {
+    vi.useFakeTimers()
+    let respond
+    globalThis.fetch = vi.fn(() => new Promise(r => { respond = r }))
+    const call = apiFetch('/api/profile/me').catch(() => {})
+    await vi.advanceTimersByTimeAsync(WAKE_AFTER_MS)
+    expect(serverWaking()).toBe(true)
+    // An error status is still an answer: the server is up.
+    respond(failing({ status: 500 }))
+    await call
+    expect(serverWaking()).toBe(false)
+  })
+
+  it('counts an error status as proof the server is awake, for the next slow request too', async () => {
+    vi.useFakeTimers()
+    globalThis.fetch = vi.fn().mockResolvedValueOnce(failing({ status: 500 }))
+      .mockReturnValue(new Promise(() => {}))
+    await apiFetch('/api/stats/me').catch(() => {})
+    apiFetch('/api/stats/me').catch(() => {})
+    await vi.advanceTimersByTimeAsync(WAKE_AFTER_MS)
+    expect(serverWaking()).toBe(false)
+  })
+
+  it('does not count a network error as an answer', async () => {
+    vi.useFakeTimers()
+    let fail
+    globalThis.fetch = vi.fn().mockReturnValueOnce(new Promise((_, r) => { fail = r }))
+      .mockReturnValue(new Promise(() => {}))
+    const first = apiFetch('/api/stats/me').catch(() => {})
+    await vi.advanceTimersByTimeAsync(0)
+    fail(new TypeError('Failed to fetch'))
+    await first
+    apiFetch('/api/stats/me').catch(() => {})
+    await vi.advanceTimersByTimeAsync(WAKE_AFTER_MS)
+    expect(serverWaking()).toBe(true)
   })
 })
 

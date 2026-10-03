@@ -41,23 +41,24 @@ BEGIN
               WHERE c.user_id = p_student_id AND c.ts >= p_since
               ORDER BY c.ts DESC LIMIT 1));
     ELSIF p_channel = 'emotion' THEN
+        -- One pass: group by day and trusted label (NULL for the rest), then fold each day.
+        -- emotion_counts sums to trusted_emotion_rows, so shares of it total 100%; emotion_rows
+        -- (labelled, trusted or not) is the rollup's emotion sample_count.
         SELECT coalesce(jsonb_agg(d ORDER BY d.day), '[]'::jsonb) INTO days FROM (
-            SELECT b.day, b.rows, b.emotion_rows, b.attention_n, b.attention_sum,
-                   coalesce(e.counts, '{}'::jsonb) AS emotion_counts
-              FROM (SELECT (ts AT TIME ZONE p_timezone)::date AS day, count(*) AS rows,
-                           count(emotion) AS emotion_rows,
+            SELECT g.day, sum(g.n)::bigint AS rows, sum(g.emotion_n)::bigint AS emotion_rows,
+                   coalesce(sum(g.n) FILTER (WHERE g.label IS NOT NULL), 0)::bigint
+                       AS trusted_emotion_rows,
+                   sum(g.attention_n)::bigint AS attention_n, sum(g.attention_sum) AS attention_sum,
+                   coalesce(jsonb_object_agg(g.label, g.n) FILTER (WHERE g.label IS NOT NULL),
+                            '{}'::jsonb) AS emotion_counts
+              FROM (SELECT (ts AT TIME ZONE p_timezone)::date AS day,
+                           CASE WHEN emotion_trusted THEN emotion END AS label,
+                           count(*) AS n, count(emotion) AS emotion_n,
                            count(attention) AS attention_n, sum(attention) AS attention_sum
                       FROM face_signals
                      WHERE user_id = p_student_id AND ts >= p_since
-                     GROUP BY 1) b
-              LEFT JOIN (SELECT day, jsonb_object_agg(emotion, n) AS counts
-                           FROM (SELECT (ts AT TIME ZONE p_timezone)::date AS day, emotion,
-                                        count(*) AS n
-                                   FROM face_signals
-                                  WHERE user_id = p_student_id AND ts >= p_since
-                                    AND emotion_trusted AND emotion IS NOT NULL
-                                  GROUP BY 1, 2) x
-                          GROUP BY day) e ON e.day = b.day) d;
+                     GROUP BY 1, 2) g
+             GROUP BY g.day) d;
         latest := coalesce(
             (SELECT jsonb_build_object('ts', f.ts, 'emotion', f.emotion)
                FROM face_signals f
@@ -101,11 +102,14 @@ REVOKE ALL ON FUNCTION "public"."weekly_signal_days"("uuid", "text", timestamptz
 GRANT EXECUTE ON FUNCTION "public"."weekly_signal_days"("uuid", "text", timestamptz, "text") TO "service_role";
 
 -- Each student's newest sessions, at most p_limit (1..50) each: "top N per student" has no
--- PostgREST form, so the Sessions page read them one student at a time.
+-- PostgREST form, so the Sessions page read them one student at a time. Rows reach a browser,
+-- so the columns are main.py's _SESSION_CLIENT_COLUMNS (test_batch_read_rpcs.py), no chart_paths.
 CREATE OR REPLACE FUNCTION "public"."recent_sessions_for_users"(
     "p_user_ids" "uuid"[],
     "p_limit" integer
-) RETURNS SETOF "public"."sessions"
+) RETURNS TABLE ("id" "uuid", "user_id" "uuid", "class_id" "uuid", "title" "text",
+                 "started_at" timestamptz, "ended_at" timestamptz,
+                 "questions_answered" integer, "correct_answers" integer)
 LANGUAGE "sql" STABLE
 SECURITY INVOKER
 SET "search_path" TO 'public'
@@ -113,7 +117,9 @@ AS $$
   SELECT s.*
     FROM (SELECT DISTINCT u.id FROM unnest(p_user_ids) AS u(id)) ids
     CROSS JOIN LATERAL (
-      SELECT * FROM "public"."sessions" x
+      SELECT x.id, x.user_id, x.class_id, x.title, x.started_at, x.ended_at,
+             x.questions_answered, x.correct_answers
+        FROM "public"."sessions" x
        WHERE x.user_id = ids.id
        ORDER BY x.started_at DESC
        LIMIT LEAST(GREATEST(p_limit, 1), 50)) s;
@@ -125,7 +131,8 @@ REVOKE ALL ON FUNCTION "public"."recent_sessions_for_users"("uuid"[], integer) F
 GRANT EXECUTE ON FUNCTION "public"."recent_sessions_for_users"("uuid"[], integer) TO "service_role";
 
 -- Each session's newest *measured* activity: an answer, or a signal row with a measurement
--- (a poor-contact row is all null). Same rule as main.py's _ACTIVITY_SOURCES; keep in step.
+-- (a poor-contact row is all null). Same rule as main.py's _ACTIVITY_SOURCES, held equal to it
+-- by backend/tests/test_batch_read_rpcs.py.
 CREATE OR REPLACE FUNCTION "public"."last_activity_for_sessions"("p_session_ids" "uuid"[])
 RETURNS TABLE ("session_id" "uuid", "last_activity_at" timestamptz)
 LANGUAGE "sql" STABLE
@@ -154,23 +161,33 @@ REVOKE ALL ON FUNCTION "public"."last_activity_for_sessions"("uuid"[]) FROM "aut
 GRANT EXECUTE ON FUNCTION "public"."last_activity_for_sessions"("uuid"[]) TO "service_role";
 
 -- The newest timestamp per session on one channel, and nothing else: the admin live view
--- may learn that signals arrive, never what they say.
+-- may learn that signals arrive, never what they say. An unknown channel raises: an empty
+-- answer would read as "never reported".
 CREATE OR REPLACE FUNCTION "public"."latest_signal_ts_for_sessions"(
     "p_session_ids" "uuid"[],
     "p_channel" "text"
 ) RETURNS TABLE ("session_id" "uuid", "ts" timestamptz)
-LANGUAGE "sql" STABLE
+LANGUAGE "plpgsql" STABLE
 SECURITY INVOKER
 SET "search_path" TO 'public'
 AS $$
-  WITH ids AS (SELECT DISTINCT u.id FROM unnest(p_session_ids) AS u(id))
-  SELECT ids.id, c.ts FROM ids CROSS JOIN LATERAL (
-    SELECT x.ts FROM "public"."cognitive_signals" x
-     WHERE p_channel = 'cognitive' AND x.session_id = ids.id ORDER BY x.ts DESC LIMIT 1) c
-  UNION ALL
-  SELECT ids.id, f.ts FROM ids CROSS JOIN LATERAL (
-    SELECT x.ts FROM "public"."face_signals" x
-     WHERE p_channel = 'face' AND x.session_id = ids.id ORDER BY x.ts DESC LIMIT 1) f;
+BEGIN
+    IF p_channel = 'cognitive' THEN
+        RETURN QUERY
+        SELECT ids.id, c.ts
+          FROM (SELECT DISTINCT u.id FROM unnest(p_session_ids) AS u(id)) ids
+         CROSS JOIN LATERAL (SELECT x.ts FROM "public"."cognitive_signals" x
+                              WHERE x.session_id = ids.id ORDER BY x.ts DESC LIMIT 1) c;
+    ELSIF p_channel = 'face' THEN
+        RETURN QUERY
+        SELECT ids.id, f.ts
+          FROM (SELECT DISTINCT u.id FROM unnest(p_session_ids) AS u(id)) ids
+         CROSS JOIN LATERAL (SELECT x.ts FROM "public"."face_signals" x
+                              WHERE x.session_id = ids.id ORDER BY x.ts DESC LIMIT 1) f;
+    ELSE
+        RAISE EXCEPTION 'latest_signal_ts_for_sessions: unknown channel %', p_channel;
+    END IF;
+END;
 $$;
 
 REVOKE ALL ON FUNCTION "public"."latest_signal_ts_for_sessions"("uuid"[], "text") FROM PUBLIC;

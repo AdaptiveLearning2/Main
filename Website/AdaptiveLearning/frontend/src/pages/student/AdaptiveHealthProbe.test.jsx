@@ -35,8 +35,13 @@ vi.mock('../../lib/sidecar', () => ({
 vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u1', email: 'a@b.c' }, role: 'student', loading: false }),
 }))
+// Push polls every 1 s here, not 30 s: under both pull intervals, so a push wait is recognisable.
+vi.mock('./pollIntervals', async (importOriginal) => ({
+  ...(await importOriginal()), PUSH_POLL_MS: 1000,
+}))
 
 import { mockApi, overrideApi, resetApi } from '../../test/mocks/apiFetch'
+import { PULL_HEALTH_POLL_MS, PULL_STATUS_POLL_MS } from './pollIntervals'
 import { eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { museState, devices } from '../../lib/sidecar'
 import Adaptive from './Adaptive'
@@ -160,6 +165,35 @@ it('leaves the refusal standing when the status tick did not answer either', asy
 })
 
 
+function setTabHidden(hidden) {
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true, get: () => (hidden ? 'hidden' : 'visible'),
+  })
+  document.dispatchEvent(new Event('visibilitychange'))
+}
+
+it('keeps polling status in a hidden tab under pull, since that poll keeps the pairing', async () => {
+  // Under pull `/api/eeg/status` refreshes the station pairing; 120 s unpolled frees the headband.
+  // No poller running, so the telemetry poll is off and this poll is the only refresher.
+  eegStatus.mockResolvedValue({ ingest_mode: 'pull', service: true, poller: { running: false } })
+  render(<Adaptive />)
+  await startASession()
+  await waitFor(() => expect(eegStatus).toHaveBeenCalled())
+
+  setTabHidden(true)
+  try {
+    const before = eegStatus.mock.calls.length
+    // Past the 3 s pull interval with time to spare.
+    await waitFor(() => expect(eegStatus.mock.calls.length).toBeGreaterThan(before + 1),
+                  { timeout: 9000 })
+  } finally {
+    setTabHidden(false)
+    delete document.hidden
+    delete document.visibilityState
+  }
+}, 25000)
+
 it('does not flip a push deployment to pull because a tick did not land', async () => {
   // Ingest mode is a fact about the installation; a failed request cannot change it.
   eegHealth.mockResolvedValue({ available: null, ingest_mode: 'push' })
@@ -188,19 +222,46 @@ const ALREADY_CONNECTED = {
 
 it('keeps a push deployment in push mode when the health probe stops answering', async () => {
   // A failed probe has no `ingest_mode`; the badge renders iff `pushMode`.
-  eegHealth.mockResolvedValue({ available: null, ingest_mode: 'push' })
+  const at = []
+  eegHealth.mockImplementation(async () => {
+    at.push(Date.now())
+    // After the first, `eegHealth`'s real non-429 fallback shape.
+    return at.length === 1 ? { available: null, ingest_mode: 'push' }
+                           : { answered: false, available: false, error: 'Failed to fetch' }
+  })
   render(<Adaptive />)
   expect(await screen.findByText('on your device')).toBeInTheDocument()
 
-  const before = eegHealth.mock.calls.length
-  // Matches `eegHealth`'s real non-429 fallback shape.
-  eegHealth.mockResolvedValue({ answered: false, available: false, error: 'Failed to fetch' })
-  // Two further probes, so a wrong write has landed and painted.
-  await waitFor(() => expect(eegHealth.mock.calls.length).toBeGreaterThan(before + 1),
-                { timeout: 20000 })
-
+  // Two unanswered probes. The wait before the first may predate the push answer; the one
+  // before the second was set after push mode rendered, so it must be the push wait.
+  await waitFor(() => expect(at.length).toBeGreaterThanOrEqual(3), { timeout: 8000 })
+  expect(at[2] - at[1]).toBeLessThan(PULL_HEALTH_POLL_MS - 1000)
   expect(screen.getByText('on your device')).toBeInTheDocument()
-}, 30000)
+}, 20000)
+
+it('polls health and status on the push interval under push, the slowest of them', async () => {
+  // Both answers are configuration under push; at 5 s and 3 s they were 32 requests a minute.
+  const real = await vi.importActual('./pollIntervals')
+  expect(real.PUSH_POLL_MS).toBeGreaterThan(Math.max(real.PULL_HEALTH_POLL_MS, real.PULL_STATUS_POLL_MS))
+
+  eegHealth.mockResolvedValue({ available: null, ingest_mode: 'push' })
+  eegStatus.mockResolvedValue({ ingest_mode: 'push', service: null, poller: {} })
+  render(<Adaptive />)
+  expect(await screen.findByText('on your device')).toBeInTheDocument()
+  // From the second probe on, every health wait is set with push mode known.
+  await waitFor(() => expect(eegHealth.mock.calls.length).toBeGreaterThanOrEqual(2),
+                { timeout: 8000 })
+  await startASession()
+  await waitFor(() => expect(eegStatus).toHaveBeenCalled())
+
+  // One more of each sooner than either pull interval allows, so both are on the push wait.
+  const health = eegHealth.mock.calls.length
+  const status = eegStatus.mock.calls.length
+  await waitFor(() => {
+    expect(eegHealth.mock.calls.length).toBeGreaterThan(health)
+    expect(eegStatus.mock.calls.length).toBeGreaterThan(status)
+  }, { timeout: PULL_STATUS_POLL_MS - 500 })
+}, 20000)
 
 it('does not tear a streaming push link down because a tick did not land', async () => {
   // Under push the telemetry poll, not this one, writes `connected` and `battery`.
@@ -220,8 +281,10 @@ it('does not tear a streaming push link down because a tick did not land', async
 
   const before = eegStatus.mock.calls.length
   eegStatus.mockResolvedValue({ answered: false, service: false, poller: { running: false } })
-  await waitFor(() => expect(eegStatus.mock.calls.length).toBeGreaterThan(before),
-                { timeout: 8000 })
+  // The next push tick, 1 s away in this file.
+  await waitFor(() => expect(eegStatus.mock.calls.length).toBeGreaterThan(before))
+  // Let that tick's write render: a wrong one would drop the link and the charge.
+  await new Promise(r => setTimeout(r, 200))
 
   expect(screen.getByText(/STREAMING/)).toBeInTheDocument()
   expect(screen.getByLabelText(/Headband charge 80%/)).toBeInTheDocument()

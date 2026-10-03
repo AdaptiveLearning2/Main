@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
 import { GRADES } from '../../lib/grades'
+import { stagger } from '../../lib/stagger'
 
 
 export default function Classes() {
@@ -24,7 +25,7 @@ export default function Classes() {
   const [editGrade, setEditGrade] = useState('')
 
   function loadClasses() {
-    return apiFetch('/api/classes')
+    return apiFetch('/api/classes', { cache: true })
       .then(rows => {
         setClasses(rows)
         setFailed(false)
@@ -149,7 +150,7 @@ export default function Classes() {
         <div className="space-y-4">
           {classes.map((cls, i) => (
             <motion.div key={cls.id}
-              initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }}
+              initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.07) }}
               onClick={() => navigate(`/teacher/classes/${cls.id}`)}
               className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden cursor-pointer hover:border-violet-300 dark:hover:border-violet-700 hover:shadow-md transition">
               <div className="flex items-center justify-between p-5 flex-wrap gap-4">

@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import { AuthProvider, useAuth } from './AuthContext'
 import { onSignOut } from '../lib/signOutTasks'
+import { _resetForTests as resetServerWake, startRequest } from '../lib/serverWake'
 
 // The display preference is per browser, so every sign-out path clears it for shared machines.
 
@@ -26,7 +27,9 @@ vi.mock('../lib/supabase', () => ({
   },
 }))
 
-vi.mock('../lib/api', () => ({ apiFetch: (...args) => apiFetch(...args) }))
+const clearApiCache = vi.fn()
+vi.mock('../lib/api', () => ({ apiFetch: (...args) => apiFetch(...args),
+                               clearApiCache: (...args) => clearApiCache(...args) }))
 
 function SignOutButton() {
   const { signOut: doSignOut } = useAuth()
@@ -70,6 +73,8 @@ beforeEach(() => {
   getSession.mockResolvedValue({ data: { session: null } })
   apiFetch.mockReset()
   apiFetch.mockResolvedValue({ role: 'student' })
+  // Module state: a test that hears an answer would otherwise mark the server awake for the rest.
+  resetServerWake()
 })
 
 it("sends a student's grade with the sign-up, and no grade for anyone else", async () => {
@@ -146,6 +151,30 @@ it('clears it on a sign-out this tab did not perform', async () => {
   await waitFor(() => expect(localStorage.getItem('teacher_hide_sensor_data')).toBeNull())
 })
 
+it("drops cached reads on either sign-out, so the next account never sees this one's", async () => {
+  // A shared school computer: the next teacher would see this one's class list for 30 s.
+  clearApiCache.mockClear()
+  renderAuth()
+  await userEvent.click(await screen.findByText('Sign out'))
+  await waitFor(() => expect(clearApiCache).toHaveBeenCalledTimes(1))
+  act(() => authCallback('SIGNED_OUT', null))
+  expect(clearApiCache).toHaveBeenCalledTimes(2)
+})
+
+it('drops cached reads when another account signs in over this one, with no sign-out between', async () => {
+  // Signing in at /login over a live session fires SIGNED_IN, never SIGNED_OUT.
+  getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
+  apiFetch.mockResolvedValue({ role: 'teacher' })
+  render(<AuthProvider><RoleProbe /></AuthProvider>)
+  await screen.findByText('role:teacher')
+  clearApiCache.mockClear()
+
+  act(() => authCallback('TOKEN_REFRESHED', SESSION('teacher')))
+  expect(clearApiCache).not.toHaveBeenCalled()
+  act(() => authCallback('SIGNED_IN', { user: { id: 'u2', user_metadata: {} } }))
+  expect(clearApiCache).toHaveBeenCalledTimes(1)
+})
+
 it('leaves it alone while the session is live', async () => {
   renderAuth()
   await screen.findByText('Sign out')
@@ -216,6 +245,46 @@ it('falls back to the claim when the backend cannot be reached', async () => {
   expect(await screen.findByText('role:teacher')).toBeInTheDocument()
 })
 
+it('gives a server that answered lately no second try: its timeout is a hang, not a boot', async () => {
+  // Before the sleeping-server test below, so a leaked answer would fail that one.
+  startRequest()(true)
+  getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
+  const timedOut = Object.assign(new Error('timed out'), { timeout: true })
+  apiFetch.mockRejectedValueOnce(timedOut).mockResolvedValueOnce({ role: 'admin' })
+  render(<AuthProvider><RoleProbe /></AuthProvider>)
+  expect(await screen.findByText('role:teacher')).toBeInTheDocument()
+  expect(apiFetch).toHaveBeenCalledTimes(1)
+})
+
+it('gives a sleeping server one longer try before falling back to the claim', async () => {
+  // Render's free tier wakes in up to a minute; the claim is wrong for any promoted account.
+  getSession.mockResolvedValue({ data: { session: SESSION('student') } })
+  const timedOut = Object.assign(new Error('timed out'), { timeout: true })
+  apiFetch.mockRejectedValueOnce(timedOut).mockResolvedValueOnce({ role: 'admin' })
+  render(<AuthProvider><RoleProbe /></AuthProvider>)
+  expect(await screen.findByText('role:admin')).toBeInTheDocument()
+  expect(apiFetch).toHaveBeenCalledTimes(2)
+  expect(apiFetch.mock.calls[1][1].timeoutMs).toBeGreaterThan(apiFetch.mock.calls[0][1].timeoutMs)
+})
+
+it('still falls back to the claim when the longer try times out too, and only then', async () => {
+  getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
+  const timedOut = Object.assign(new Error('timed out'), { timeout: true })
+  apiFetch.mockRejectedValue(timedOut)
+  render(<AuthProvider><RoleProbe /></AuthProvider>)
+  expect(await screen.findByText('role:teacher')).toBeInTheDocument()
+  expect(apiFetch).toHaveBeenCalledTimes(2)
+})
+
+it('does not retry a read that failed for any other reason', async () => {
+  // Only a timeout says "slow"; an error status is an answer, so the claim at once.
+  getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
+  apiFetch.mockRejectedValue(Object.assign(new Error('boom'), { status: 500 }))
+  render(<AuthProvider><RoleProbe /></AuthProvider>)
+  expect(await screen.findByText('role:teacher')).toBeInTheDocument()
+  expect(apiFetch).toHaveBeenCalledTimes(1)
+})
+
 it('does not read the role from inside the auth callback', async () => {
   // supabase-js holds an auth lock during the callback and `apiFetch` calls `getSession()`: deadlock.
   renderAuth()
@@ -242,6 +311,27 @@ it('does not re-read the role when a token refresh replaces the session', async 
 
   await waitFor(() => expect(screen.getByText('role:teacher')).toBeInTheDocument())
   expect(apiFetch.mock.calls.length).toBe(before)
+})
+
+it('keeps the same user object through a token refresh, and replaces it on an update', async () => {
+  // Anything keyed on `user` (an effect, a memoised child) would otherwise re-run hourly.
+  const seen = []
+  function UserProbe() {
+    const { user } = useAuth()
+    if (user && seen[seen.length - 1] !== user) seen.push(user)
+    return null
+  }
+  getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
+  apiFetch.mockResolvedValue({ role: 'teacher' })
+  render(<AuthProvider><UserProbe /><RoleProbe /></AuthProvider>)
+  await screen.findByText('role:teacher')
+
+  act(() => authCallback('TOKEN_REFRESHED', SESSION('teacher')))
+  expect(seen).toHaveLength(1)
+
+  act(() => authCallback('USER_UPDATED', { user: { id: 'u1', email: 'new@x.y', user_metadata: {} } }))
+  expect(seen).toHaveLength(2)
+  expect(seen[1].email).toBe('new@x.y')
 })
 
 it("never shows a new account the previous account's role while its own is read", async () => {

@@ -363,6 +363,12 @@ repositories — the action would go red on a missing secret rather than on a fi
 worst way for a security job to fail. `--redact`, so a finding does not reprint the secret into a
 build log and leak it to a wider audience than the commit did.
 
+**A made-up credential in a test fails it too, and a later commit cannot clear it.** `generic-api-key`
+fires on a credential-ish name (`token`, `key`, `auth`, `secret`…) assigned a high-entropy literal, so
+`token = "eyJ…"` is a finding. Use a low-entropy fake or build the value at runtime. One already pushed to
+an unmerged branch is rewritten out of it (amend, force-push with a lease), not fingerprinted: a fingerprint
+names the commit SHA, and "Rebase and merge" gives main a new SHA, which turns main's scan red.
+
 **`dependabot.yml` covers four ecosystems** and deliberately does **not** manage the `.lock` files:
 Dependabot does not regenerate `pip-compile` output, so a lock left behind by a bump it opens stays
 stale silently. That is why the scan audits the locks separately.
@@ -404,7 +410,7 @@ cmake -S . -B build_on -DENABLE_LIBMUSE=ON -DLIBMUSE_SDK_DIR=../libmuse_windows_
 It compiles enum values, SDK signatures and the guarded packet handling. It still proves nothing
 about a real headband.
 
-`npm run lint` is non-blocking against a backlog of **14** pre-existing errors (7
+`npm run lint` is non-blocking against a backlog of **10** pre-existing errors (3
 `react-refresh/only-export-components`, 5 `no-undef` on `process`/`global` in tests, 1 `no-empty`,
 1 `react-hooks/rules-of-hooks`) — none of them `no-unused-vars` or
 `react-hooks/set-state-in-effect`. Don't add to it, and don't make it blocking until it is gone.
@@ -542,7 +548,8 @@ do not: a `replace-me` token, two equal tokens, or push over plain `http://` to 
 **Backend.** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `AUTH_CHECK_TIMEOUT`, `BACKEND_PORT`, `EEG_API_URL`,
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MODE`, `INGEST_MAX_BATCH` /
 `INGEST_RATE_LIMIT` / `INGEST_RATE_WINDOW` / `INGEST_MAX_ROWS_PER_MINUTE` (per student and channel), `SESSION_ABANDONED_AFTER_HOURS` /
-`STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep and its chart catch-up), `QUESTIONS_CACHE_TTL`,
+`STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep and its chart catch-up), `STALE_SWEEP_FIRST_DELAY_SECONDS`
+(60 in production, else 0; a cold start serves requests before the first sweep), `QUESTIONS_CACHE_TTL`,
 `QUESTION_QUEUE_SIZE`, `PAIRING_IDLE_SECONDS` (120; a headband pairing its pairer's page stopped polling is released),
 `CLASS_JOIN_MISSES_PER_ADDRESS` (1000 wrong class codes an hour), the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
 `PUBLIC_*_RATE_*` / `TRUSTED_PROXY_HOPS` group under *The network edge*, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels*,
@@ -1715,7 +1722,7 @@ The second is **`react/no-danger`**, which arrives with the XSS sinks below rath
 
 ## The XSS sinks are a second, blocking lint run, because the first one cannot fail
 
-`npm run lint` is non-blocking against the 14-error backlog, and a security rule nobody can fail is not
+`npm run lint` is non-blocking against the 10-error backlog, and a security rule nobody can fail is not
 enforcement. `npm run lint:sinks` (`eslint.sinks.config.js`, CI step *Lint XSS sinks*) therefore extends **no**
 shared config — the whole backlog lives in `js.configs.recommended` and the two react plugins, so it cannot reach
 this run, which is red if and only if a sink was added. The rules had zero hits when written, which is what makes

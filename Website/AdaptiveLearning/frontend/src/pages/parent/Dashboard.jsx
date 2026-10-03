@@ -4,8 +4,11 @@ import { motion } from 'framer-motion'
 import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Activity, Sparkles, ShieldCheck } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
+import { usePrefetchWhenIdle } from '../../lib/prefetch'
+import { pages } from '../../routes'
 import ChildWithdrewBanner from '../../components/consent/ChildWithdrewBanner'
-import { pct, valueOrReason, emotionOn as faceIncluded } from '../../components/signals/SignalPanel'
+import { pct, valueOrReason, emotionOn as faceIncluded } from '../../lib/signalFormat'
+import { stagger } from '../../lib/stagger'
 
 // Only the fields the tiles below render; keep in step with them.
 function hasSignalSummary(summary) {
@@ -26,6 +29,8 @@ export default function ParentDashboard() {
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState(false)
   const name = displayName || 'there'
+  // A child's report is the usual next click, and it carries the chart library.
+  usePrefetchWhenIdle(pages.parentChild)
 
   useEffect(() => {
     let cancelled = false
@@ -89,7 +94,7 @@ export default function ParentDashboard() {
             const initial = (child.name || child.email || '?')[0].toUpperCase()
             return (
               <motion.div key={child.user_id}
-                initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }}
+                initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.1) }}
                 className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
 
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between p-5 border-b border-gray-50 dark:border-gray-800">
@@ -102,7 +107,7 @@ export default function ParentDashboard() {
                       <p className="text-xs text-gray-600 dark:text-gray-400">{child.email || 'No email available'}</p>
                     </div>
                   </div>
-                  <Link to={`/parent/child/${child.user_id}`}>
+                  <Link to={`/parent/child/${child.user_id}`} state={{ name: child.name || null }}>
                     <motion.div whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}
                       className="flex items-center justify-center gap-1.5 px-4 py-2 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 rounded-xl text-sm font-bold hover:bg-emerald-100 transition">
                       Full Report <ArrowUpRight size={14} />
@@ -166,7 +171,7 @@ export default function ParentDashboard() {
                     <ShieldCheck size={15} className="text-emerald-600 mt-0.5 shrink-0" />
                     <span>Signals are learning-state indicators only, not medical or diagnostic data.</span>
                   </div>
-                  <Link to={`/parent/child/${child.user_id}`} className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-300 hover:underline">
+                  <Link to={`/parent/child/${child.user_id}`} state={{ name: child.name || null }} className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-300 hover:underline">
                     <Sparkles size={14} /> View strategies
                   </Link>
                 </div>

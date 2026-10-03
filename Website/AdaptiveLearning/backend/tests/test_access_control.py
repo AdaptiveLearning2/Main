@@ -2279,9 +2279,11 @@ def test_shutdown_releases_the_pool_rather_than_leaving_it_behind():
         main._STRATEGY_LLM_POOL = original_pool
 
 
-def test_the_app_runs_the_shutdown_on_the_way_out():
+def test_the_app_runs_the_shutdown_on_the_way_out(monkeypatch):
     """The hook must actually be wired to the app's lifespan."""
     assert main.app.router.lifespan_context is main._lifespan
+    # A real probe is a sympy subprocess, and while alive it widens every solve's budget.
+    monkeypatch.setattr(main.safe_solve, "start_startup_probe", lambda: False)
 
     original_pool = main._STRATEGY_LLM_POOL
     main._STRATEGY_LLM_POOL = ThreadPoolExecutor(max_workers=1)
@@ -2294,6 +2296,29 @@ def test_the_app_runs_the_shutdown_on_the_way_out():
         assert main._STRATEGY_LLM_POOL is None
     finally:
         main._STRATEGY_LLM_POOL = original_pool
+
+
+def test_startup_widens_the_thread_pool_and_starts_the_solver_probe(monkeypatch):
+    """LLM waiters alone can hold 38 of anyio's 40 threads; the probe left import to speed cold starts."""
+    import anyio.to_thread
+
+    calls = []
+    monkeypatch.setattr(main.safe_solve, "start_startup_probe", lambda: calls.append("start"))
+    monkeypatch.setattr(main.safe_solve, "stop_startup_probe", lambda *a, **k: calls.append("stop"))
+    monkeypatch.setattr(main, "start_stale_sweeper", lambda: False)
+    seen = {}
+    original_pool = main._STRATEGY_LLM_POOL
+
+    async def _cycle():
+        async with main._lifespan(main.app):
+            seen["tokens"] = anyio.to_thread.current_default_thread_limiter().total_tokens
+
+    try:
+        asyncio.run(_cycle())
+    finally:
+        main._STRATEGY_LLM_POOL = original_pool
+    assert seen["tokens"] == main._WORKER_THREADS > 40
+    assert calls == ["start", "stop"], "the probe must be started at startup and joined at shutdown"
 
 
 # ── numeric configuration ────────────────────────────────────────────────

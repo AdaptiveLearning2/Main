@@ -1,6 +1,7 @@
--- The nightly delete filters on `ts < bound`, the instant the cutoff day ends in the
--- school's timezone, so each batch is an index range scan on *_ts_idx. It filtered on
--- `(ts AT TIME ZONE tz)::date <= cutoff`, which no index serves: a full scan per batch.
+-- The nightly delete bounds on `ts < bound`, the instant the cutoff day ends in the school's
+-- timezone; a filter on the local date serves no index. One DELETE per table, capped at
+-- p_batch_size * p_max_batches rows: split into statements inside one transaction, the work
+-- releases no lock and each statement re-reads every row the earlier ones deleted.
 CREATE OR REPLACE FUNCTION "public"."expire_signal_rows"(
     "p_batch_size" integer DEFAULT 5000,
     "p_max_batches" integer DEFAULT 200
@@ -18,9 +19,18 @@ DECLARE
     table_name text;
     channel    text;
     n          integer;
-    total      integer;
-    batches    integer;
     skipped    jsonb := '{}'::jsonb;
+    unreached  boolean;
+    -- Expired, and its day summarised: one test for the delete and the cap check alike.
+    eligible   text := $f$
+        s.ts < $1
+        AND EXISTS (
+            SELECT 1 FROM signal_daily_rollup r
+            WHERE r.user_id = s.user_id
+              AND r.channel = $2
+              AND r.day = (s.ts AT TIME ZONE $3)::date
+        )
+    $f$;
 BEGIN
     cutoff := expired_signal_cutoff();
     SELECT w.timezone INTO tz FROM retention_window w LIMIT 1;
@@ -39,45 +49,33 @@ BEGIN
                        WHEN 'face_signals' THEN 'emotion'
                        ELSE 'heart'
                    END;
-        total := 0;
-        batches := 0;
-        LOOP
-            EXECUTE format($f$
-                WITH doomed AS (
-                    SELECT s.ctid
-                    FROM %I s
-                    WHERE s.ts < %L::timestamptz
-                      AND EXISTS (
-                          SELECT 1 FROM signal_daily_rollup r
-                          WHERE r.user_id = s.user_id
-                            AND r.channel = %L
-                            AND r.day = (s.ts AT TIME ZONE %L)::date
-                      )
-                    LIMIT %s
-                )
-                DELETE FROM %I WHERE ctid IN (SELECT ctid FROM doomed)
-            $f$, table_name, bound, channel, tz, p_batch_size, table_name);
-            GET DIAGNOSTICS n = ROW_COUNT;
-            total := total + n;
-            batches := batches + 1;
-            EXIT WHEN n = 0 OR batches >= p_max_batches;
-        END LOOP;
-        removed := removed || jsonb_build_object(table_name, total);
-        -- Batch cap hit: unreached rows appear in neither count.
-        capped := capped || jsonb_build_object(table_name, n <> 0);
+        EXECUTE format($f$
+            WITH doomed AS (SELECT s.ctid FROM %I s WHERE %s LIMIT $4)
+            DELETE FROM %I WHERE ctid IN (SELECT ctid FROM doomed)
+        $f$, table_name, eligible, table_name)
+        USING bound, channel, tz, p_batch_size::bigint * p_max_batches;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        removed := removed || jsonb_build_object(table_name, n);
+        -- The cap was hit only if eligible rows remain; they appear in neither count.
+        unreached := false;
+        IF n = p_batch_size::bigint * p_max_batches THEN
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I s WHERE %s)', table_name, eligible)
+            INTO unreached USING bound, channel, tz;
+        END IF;
+        capped := capped || jsonb_build_object(table_name, unreached);
 
         -- Student-days kept for lack of a rollup row; nonzero means the writer is broken.
         EXECUTE format($f$
             SELECT count(*) FROM (
-                SELECT DISTINCT s.user_id, (s.ts AT TIME ZONE %L)::date AS day
+                SELECT DISTINCT s.user_id, (s.ts AT TIME ZONE $1)::date AS day
                 FROM %I s
-                WHERE s.ts < %L::timestamptz
+                WHERE s.ts < $2
             ) d
             WHERE NOT EXISTS (
                 SELECT 1 FROM signal_daily_rollup r
-                WHERE r.user_id = d.user_id AND r.channel = %L AND r.day = d.day
+                WHERE r.user_id = d.user_id AND r.channel = $3 AND r.day = d.day
             )
-        $f$, tz, table_name, bound, channel) INTO n;
+        $f$, table_name) INTO n USING tz, bound, channel;
         skipped := skipped || jsonb_build_object(table_name, n);
     END LOOP;
 

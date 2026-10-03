@@ -12,6 +12,7 @@ import QuestionFigure from '../../components/questions/QuestionFigure'
 import CCSSBadge from '../../components/questions/CCSSBadge'
 import { correctIndex, optionList } from '../../lib/answerKey'
 import { TOPICS as ALL_TOPICS, topicLabel } from '../../lib/topics'
+import { stagger } from '../../lib/stagger'
 
 const TOPICS = ['all', ...ALL_TOPICS]
 const DIFFS  = ['all','easy','medium','hard']
@@ -154,7 +155,7 @@ export default function Questions() {
 
   useEffect(() => {
     // Failure costs only the student filter, so this just logs.
-    apiFetch('/api/classes')
+    apiFetch('/api/classes', { cache: true })
       .then(rows => setClasses(rows || []))
       .catch(e => console.error('Failed to load classes:', e))
   }, [])
@@ -284,7 +285,7 @@ export default function Questions() {
             {paginated.map((q, i) => (
               // Bank rows have `id`, per-student rows `question_id`; same id.
               <motion.button key={q.id || q.question_id}
-                initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.025 }}
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: stagger(i, 0.025) }}
                 whileHover={{ x: 3 }}
                 // The student payload has no `options`, so link to the session review.
                 onClick={() => (studentMeta ? navigate(`/teacher/sessions/${q.session_id}`) : setSelected(q))}

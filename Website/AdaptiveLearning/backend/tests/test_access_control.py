@@ -29,7 +29,8 @@ class _Result:
 
 
 # The embeds main.py uses: (table, embedded table) -> the foreign key PostgREST joins on.
-_EMBED_KEYS = {("class_memberships", "classes"): "class_id"}
+_EMBED_KEYS = {("class_memberships", "classes"): "class_id",
+               ("class_memberships", "profiles"): "student_id"}
 
 
 class _Query:
@@ -56,7 +57,8 @@ class _Query:
         # Only named columns come back, as in PostgREST. With an embed ("a(b)"), whole rows: one in
         # _EMBED_KEYS is joined, any other is left to the fixture's rows.
         spec = ",".join(cols)
-        self._embeds = {m[1]: bool(m[2]) for m in re.finditer(r"(\w+)(!inner)?\(", spec)
+        self._embeds = {m[1]: (bool(m[2]), [c.strip() for c in m[3].split(",") if c.strip()])
+                        for m in re.finditer(r"(\w+)(!inner)?\(([^)]*)\)", spec)
                         if (self._name, m[1]) in _EMBED_KEYS}
         if spec and "*" not in spec and "(" not in spec:
             self._cols = [c.strip() for c in spec.split(",") if c.strip()]
@@ -68,7 +70,7 @@ class _Query:
         A filter on an embed's column empties that embed, and drops the row only under `!inner`.
         """
         out = dict(row)
-        for name, inner in self._embeds.items():
+        for name, (inner, cols) in self._embeds.items():
             key = _EMBED_KEYS[(self._name, name)]
             target = next((r for r in self._tables.get(name, []) if r.get("id") == row.get(key)), None)
             wanted = [(col.split(".", 1)[1], v) for col, v in self._filters if col.startswith(name + ".")]
@@ -79,7 +81,8 @@ class _Query:
                 target = None
             if target is None and inner:
                 return None
-            out[name] = target
+            # Only the embed's named columns, as the probe of the roster read saw.
+            out[name] = None if target is None else {c: target[c] for c in cols if c in target}
         return out
 
     def _project(self, row):

@@ -4855,31 +4855,51 @@ def class_students(class_id: str, request: Request):
     return students
 
 
+def _teacher_memberships(uid: str) -> list[dict]:
+    """Every membership in a class `uid` teaches, with the student's profile; a failed read raises.
+
+    Paged by `id` until a read comes back empty (db-max-rows cuts silently).
+    """
+    rows, last = [], None
+    while True:
+        # `!inner` makes the filter drop other teachers' rows; without it they come back as `classes: null`.
+        query = supabase.table("class_memberships") \
+            .select("id, student_id, joined_at, classes!inner(teacher_id), profiles(display_name, email)") \
+            .eq("classes.teacher_id", uid)
+        if last is not None:
+            # A unique key, so a student's rows split across two pages are all read.
+            query = query.gt("id", last)
+        page = query.order("id").limit(1000).execute().data or []
+        if not page:
+            return rows
+        rows += page
+        last = page[-1]["id"]
+
+
 @app.get("/api/teacher/students")
 def teacher_students(request: Request):
     """Each student in any class the caller teaches, once, with their earliest join."""
     uid = get_user(request)["id"]
-    classes = supabase.table("classes").select("id").eq("teacher_id", uid).execute().data or []
-    class_ids = _unique_ids(c.get("id") for c in classes)
-    if not class_ids:
-        return []
-    memberships = supabase.table("class_memberships").select("student_id, joined_at") \
-        .in_("class_id", class_ids).execute().data or []
+    try:
+        memberships = _teacher_memberships(uid)
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[teacher_students] {e}")
+        # 503, so the Students page keeps the load error its own failed read showed, never "Student" rows.
+        raise _read_failed("Could not load your students; try again")
     def _instant(m):
         at = _parse_ts(m.get("joined_at"))
         return (at is None, at or datetime.min.replace(tzinfo=timezone.utc))
 
-    joined: dict[str, str | None] = {}
+    joined: dict[str, dict] = {}
     # Oldest first by instant, so the first row seen per student is their earliest join.
     for m in sorted(memberships, key=_instant):
         if m.get("student_id"):
-            joined.setdefault(m["student_id"], m.get("joined_at"))
-    profiles = _profiles_many(list(joined))
+            joined.setdefault(m["student_id"], m)
     rows = [{"user_id": sid,
-             "name": profiles[sid].get("display_name") or "Student",
-             "email": profiles[sid].get("email") or "",
-             "joined_at": at} for sid, at in joined.items()]
-    return sorted(rows, key=lambda r: (r["name"].casefold(), r["user_id"]))
+             "name": (m.get("profiles") or {}).get("display_name") or None,
+             "email": (m.get("profiles") or {}).get("email") or None,
+             "joined_at": m.get("joined_at")} for sid, m in joined.items()]
+    return sorted(rows, key=lambda r: (r["name"] is None, (r["name"] or "").casefold(), r["user_id"]))
 
 
 # ─── teacher analytics ────────────────────────────────────────────────────

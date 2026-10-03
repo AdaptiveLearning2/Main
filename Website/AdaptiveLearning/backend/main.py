@@ -2895,8 +2895,8 @@ def _log_answer_side_errors(out: dict, session_id: str) -> None:
         err = str(out.get(field) or "")
         if not err:
             continue
-        # 42883 undefined_function, naming this step's own function rather than one it calls.
-        if "42883" in err and fn in err:
+        # 'SQLSTATE: message'; 42883 is undefined_function, and must name this step's own function.
+        if err.startswith("42883") and fn in err:
             print(f"[answer] {fn} is missing from the database -- apply {migration}; "
                   f"{effect}: {err}")
         else:

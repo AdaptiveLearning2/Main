@@ -1151,7 +1151,8 @@ class _OwnedSessionClient:
                     if params["p_user_id"] != client.owner:
                         return type("R", (), {"data": {"status": "forbidden", "owner": client.owner}})()
                     client.writes.append(("session_answers", "insert", params))
-                    return type("R", (), {"data": {"status": "ok", "topic": None}})()
+                    return type("R", (), {"data": {"status": "ok", "topic": None,
+                                                   "topic_error": None, "counters_error": None}})()
                 client.writes.append(("rpc", name))
                 return type("R", (), {"data": None})()
 

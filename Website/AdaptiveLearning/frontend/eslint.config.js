@@ -5,6 +5,7 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 import { sinkRules } from './eslint.sinks.js'
+import { withMotionRules } from './eslint.motion.js'
 
 export default defineConfig([
   // `coverage/` is generated; linting it skews the backlog count.
@@ -37,7 +38,7 @@ export default defineConfig([
       // A component the compiler cannot build is unseen by every compiler-backed hooks rule.
       'react-hooks/todo': 'error',
       // Editor feedback; CI gates on `eslint.sinks.config.js`.
-      ...sinkRules,
+      ...withMotionRules(sinkRules),
     },
   },
   {

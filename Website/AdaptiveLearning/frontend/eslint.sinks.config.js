@@ -1,13 +1,14 @@
 /**
- * The sink rules alone, so CI can block on them (`npm run lint` cannot, given its backlog).
- * Extends nothing, so it is red if and only if a sink was added.
- * Rules live in `eslint.sinks.js`.
+ * The sink and motion rules alone, so CI can block on them (`npm run lint` cannot, given its backlog).
+ * Extends nothing, so it is red if and only if a sink or a motion misuse was added.
+ * Rules live in `eslint.sinks.js` and `eslint.motion.js`.
  */
 import react from 'eslint-plugin-react'
 import reactHooks from 'eslint-plugin-react-hooks'
 import globals from 'globals'
 import { defineConfig, globalIgnores } from 'eslint/config'
 import { sinkRules } from './eslint.sinks.js'
+import { withMotionRules } from './eslint.motion.js'
 
 export default defineConfig([
   // `dist` bundles contain these patterns from React itself.
@@ -28,6 +29,6 @@ export default defineConfig([
     // `react-hooks` registered, no rules enabled: an `eslint-disable` naming an
     // undefined rule is itself an error.
     plugins: { react, 'react-hooks': reactHooks },
-    rules: sinkRules,
+    rules: withMotionRules(sinkRules),
   },
 ])

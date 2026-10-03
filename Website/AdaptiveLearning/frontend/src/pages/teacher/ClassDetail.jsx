@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { ArrowLeft, Copy, Check, GraduationCap, Users } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { toast } from 'sonner'
@@ -145,7 +145,7 @@ function ClassDetailBody({ id }) {
         <ArrowLeft size={16} /> Back to Classes
       </button>
 
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+      <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
         className="flex items-center justify-between mb-8 flex-wrap gap-4">
         <div className="flex items-center gap-4">
           <div className="w-14 h-14 bg-gradient-to-br from-violet-400 to-purple-500 rounded-xl flex items-center justify-center text-white font-black text-xl shadow">
@@ -165,7 +165,7 @@ function ClassDetailBody({ id }) {
             </div>
           </div>
         </div>
-      </motion.div>
+      </m.div>
 
       <div className="flex items-center gap-2 mb-4">
         <Users size={18} className="text-violet-600" />
@@ -185,7 +185,7 @@ function ClassDetailBody({ id }) {
               ? 'Last active unknown'
               : ago ? `Active ${ago}` : 'Never active'
             return (
-              <motion.div key={s.user_id}
+              <m.div key={s.user_id}
                 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.03) }}
                 className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 p-4 flex items-center justify-between gap-3 shadow-sm">
                 <div className="min-w-0">
@@ -196,7 +196,7 @@ function ClassDetailBody({ id }) {
                   className="shrink-0 bg-violet-600 hover:bg-violet-700 text-white rounded-xl px-4 py-2 text-sm font-bold transition">
                   Get Report
                 </button>
-              </motion.div>
+              </m.div>
             )
           })}
         </div>

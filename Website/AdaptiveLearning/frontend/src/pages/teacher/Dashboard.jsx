@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { Users, HelpCircle, BarChart3, ArrowUpRight, Brain, Zap, Copy, Check } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
@@ -113,7 +113,7 @@ export default function TeacherDashboard() {
   }
   return (
     <div className="p-6 lg:p-8 space-y-8 pb-12">
-      <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}
+      <m.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}
         className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-black text-gray-900 dark:text-white">
@@ -128,12 +128,12 @@ export default function TeacherDashboard() {
           )}
         </div>
         <Link to="/teacher/questions">
-          <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.97 }}
+          <m.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.97 }}
             className="hidden md:flex items-center gap-2 bg-gradient-to-r from-violet-600 to-purple-600 text-white px-5 py-2.5 rounded-full text-sm font-bold shadow-lg cursor-pointer">
             <HelpCircle size={16} /> Manage Questions
-          </motion.div>
+          </m.div>
         </Link>
-      </motion.div>
+      </m.div>
 
       {failed && (
         <div className="rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-5 py-3">
@@ -151,7 +151,7 @@ export default function TeacherDashboard() {
           <StatCard key={c.title} hoverTint="from-violet-400/10 to-purple-500/10" {...c} />
         ))}
       </div>
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.45 }}>
+      <m.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.45 }}>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-black text-gray-900 dark:text-white">Your Classes</h2>
           <Link to="/teacher/classes" className="text-xs text-violet-600 dark:text-violet-400 font-bold hover:underline flex items-center gap-0.5">
@@ -196,9 +196,9 @@ export default function TeacherDashboard() {
             ))}
           </div>
         )}
-      </motion.div>
+      </m.div>
         {classes.length > 0 && (
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}>
+          <m.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}>
             <h2 className="text-lg font-black text-gray-900 dark:text-white mb-3">Class Averages</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
               {classes.map(c => {
@@ -233,20 +233,20 @@ export default function TeacherDashboard() {
                 )
               })}
             </div>
-          </motion.div>
+          </m.div>
         )}
 
       <div className="grid xl:grid-cols-3 gap-6">
         <div className="xl:col-span-2 space-y-4">
-          <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.45 }}
+          <m.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.45 }}
             className="relative bg-gradient-to-br from-violet-600 via-violet-700 to-purple-800 rounded-2xl p-7 text-white overflow-hidden shadow-xl shadow-violet-200 dark:shadow-violet-950">
             <div className="absolute top-0 right-0 w-48 h-48 bg-white/10 rounded-full -translate-y-16 translate-x-16" />
             <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full translate-y-10 -translate-x-10" />
             <div className="relative">
               <div className="flex items-center gap-2 mb-3">
-                <motion.div animate={{ rotate: [0, 360] }} transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}>
+                <m.div animate={{ rotate: [0, 360] }} transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}>
                   <Zap size={16} className="text-yellow-300" />
-                </motion.div>
+                </m.div>
                 <span className="text-violet-200 text-xs font-bold uppercase tracking-widest">Teacher Tools</span>
               </div>
               <h2 className="text-2xl font-black mb-2">Manage Your Class</h2>
@@ -262,9 +262,9 @@ export default function TeacherDashboard() {
                 </Link>
               </div>
             </div>
-          </motion.div>
+          </m.div>
 
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.55 }}
+          <m.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.55 }}
             className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {[
               { to: '/teacher/students',  icon: '🎓', title: 'Students',  desc: 'View all enrolled students' },
@@ -272,7 +272,7 @@ export default function TeacherDashboard() {
               { to: '/teacher/analytics', icon: '📊', title: 'Analytics', desc: 'Question bank breakdown' },
             ].map((a, i) => (
               <Link to={a.to} key={a.to}>
-                <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.07, 0.55) }}
+                <m.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.07, 0.55) }}
                   whileHover={{ y: -3 }}
                   className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-4 shadow-sm hover:shadow-md hover:border-violet-300 dark:hover:border-violet-700 transition group">
                   <div className="text-2xl mb-2">{a.icon}</div>
@@ -281,13 +281,13 @@ export default function TeacherDashboard() {
                   <div className="flex items-center gap-1 mt-3 text-violet-600 dark:text-violet-400 text-xs font-bold group-hover:gap-2 transition-all">
                     Go <ArrowUpRight size={12} />
                   </div>
-                </motion.div>
+                </m.div>
               </Link>
             ))}
-          </motion.div>
+          </m.div>
         </div>
         
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}
+        <m.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}
           className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm h-fit">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-black text-gray-900 dark:text-white">Recent Questions</h3>
@@ -306,7 +306,7 @@ export default function TeacherDashboard() {
           ) : (
             <div className="space-y-2">
               {recentQuestions.map((q, i) => (
-                <motion.div key={q.id}
+                <m.div key={q.id}
                   initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.05, 0.6) }}
                   whileHover={{ x: 3 }}
                   className="p-3 bg-slate-50 dark:bg-gray-800 rounded-xl"
@@ -322,11 +322,11 @@ export default function TeacherDashboard() {
                       </span>
                     )}
                   </div>
-                </motion.div>
+                </m.div>
               ))}
             </div>
           )}
-        </motion.div>
+        </m.div>
       </div>
     </div>
   )

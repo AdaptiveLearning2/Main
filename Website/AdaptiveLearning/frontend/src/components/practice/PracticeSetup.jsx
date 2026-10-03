@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { toast } from 'sonner'
 import { apiFetch } from '../../lib/api'
 import LoadError from '../ui/LoadError'
@@ -86,7 +86,7 @@ export default function PracticeSetup({ onStart }) {
 
   if (loading) return (
     <div className="min-h-[60vh] flex items-center justify-center">
-      <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+      <m.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
         className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full" />
     </div>
   )

@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 
 /**
  * A dashboard headline figure. `color`/`hoverTint` are complete Tailwind class strings.
@@ -14,7 +14,7 @@ export default function StatCard({
   delay,
 }) {
   return (
-    <motion.div
+    <m.div
       initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay }}
       whileHover={{ y: -4, transition: { duration: 0.15 } }}
@@ -31,6 +31,6 @@ export default function StatCard({
           <Icon size={20} className="text-white" />
         </div>
       </div>
-    </motion.div>
+    </m.div>
   )
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { Trophy } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { stagger } from '../../lib/stagger'
@@ -21,12 +21,12 @@ export default function Leaderboard() {
 
   return (
     <div className="p-6 lg:p-8 pb-12">
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+      <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <h1 className="text-3xl font-black text-gray-900 dark:text-white flex items-center gap-3">
           <Trophy className="text-yellow-500" size={28} /> Leaderboard
         </h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">Top students in your classes by correct answers 🔥</p>
-      </motion.div>
+      </m.div>
 
       {/* podium — top 3 */}
       {!loading && rows.length >= 3 && (
@@ -36,7 +36,7 @@ export default function Leaderboard() {
             const heights = ['h-16', 'h-24', 'h-12']
             const colors  = ['bg-gray-400', 'bg-yellow-400', 'bg-orange-400']
             return (
-              <motion.div key={p.rank}
+              <m.div key={p.rank}
                 initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: stagger(i, 0.1, 0.1) }}
                 className={`flex flex-col items-center ${sizes[i]}`}
@@ -50,7 +50,7 @@ export default function Leaderboard() {
                 <div className={`w-full ${heights[i]} ${colors[i]} rounded-t-xl flex items-center justify-center text-white font-black text-lg shadow`}>
                   {p.rank}
                 </div>
-              </motion.div>
+              </m.div>
             )
           })}
         </div>
@@ -74,7 +74,7 @@ export default function Leaderboard() {
             const acc  = p.total_questions > 0 ? Math.round((p.total_correct / p.total_questions) * 100) : 0
             const isMe = p.is_me
             return (
-              <motion.div key={p.rank}
+              <m.div key={p.rank}
                 initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.03, 0.2) }}
                 whileHover={{ x: 4 }}
                 className={`flex items-center justify-between px-5 py-4 border-b border-gray-50 dark:border-gray-800 last:border-0 transition-colors hover:bg-slate-50 dark:hover:bg-gray-800 ${isMe ? 'ring-2 ring-inset ring-indigo-400' : ''}`}
@@ -104,7 +104,7 @@ export default function Leaderboard() {
                     <p className="text-xs text-gray-600 dark:text-gray-400">correct</p>
                   </div>
                 </div>
-              </motion.div>
+              </m.div>
             )
           })}
         </div>

@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import {
   LayoutDashboard, Users, HelpCircle, BarChart3, Settings, LogOut, Moon, Sun, ChevronLeft, ChevronRight, Menu, Radio, BookOpen, History,
 } from 'lucide-react'
@@ -113,7 +113,7 @@ export default function TeacherLayout() {
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-slate-50 dark:bg-gray-950">
-      <motion.aside
+      <m.aside
         animate={{ width: collapsed ? 64 : 240 }}
         transition={{ duration: 0.2, ease: 'easeInOut' }}
         className="hidden md:flex flex-col h-full bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800 relative flex-shrink-0 overflow-hidden"
@@ -126,7 +126,7 @@ export default function TeacherLayout() {
         >
           {collapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
         </button>
-      </motion.aside>
+      </m.aside>
 
       <MobileDrawer open={mobileOpen} onClose={closeMobile} label="Navigation">
         <SidebarContent mobile onClose={closeMobile} />
@@ -144,7 +144,7 @@ export default function TeacherLayout() {
         </div>
 
         <main className="flex-1 overflow-y-auto">
-          <motion.div
+          <m.div
             key={pathname}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -153,7 +153,7 @@ export default function TeacherLayout() {
             <ErrorBoundary resetKey={pathname}>
               <Outlet />
             </ErrorBoundary>
-          </motion.div>
+          </m.div>
         </main>
       </div>
     </div>

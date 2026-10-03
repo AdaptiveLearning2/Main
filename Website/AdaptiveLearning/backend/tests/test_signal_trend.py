@@ -164,7 +164,7 @@ def test_a_genuinely_empty_term_reads_as_retrieved(monkeypatch):
 # ─── what it may read ────────────────────────────────────────────────────
 
 def test_it_reads_the_rollup_and_never_the_per_sample_tables(monkeypatch):
-    """The per-sample reads are capped oldest-first, so early weeks would come back empty."""
+    """The expiry job deletes the per-sample rows; the rollup is what a term-long trend has."""
     fake = _fake(rollup=[_rollup("2026-06-08", "cognitive", avg_focus=0.5,
                                  trusted_sample_count=10)])
     monkeypatch.setattr(main, "supabase", fake)

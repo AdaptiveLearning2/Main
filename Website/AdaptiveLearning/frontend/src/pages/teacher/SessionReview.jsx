@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useParams, useLocation, Link } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { ArrowLeft, Brain, Camera, CheckCircle2, XCircle, Activity, ChevronDown } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis,
@@ -139,7 +139,7 @@ function SessionReviewBody({ sessionId }) {
   if (loading) {
     return (
       <div className="p-8 text-center text-gray-500 dark:text-gray-400">
-        <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+        <m.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
           className="w-10 h-10 border-4 border-violet-600 border-t-transparent rounded-full mx-auto mb-3" />
         Loading session…
       </div>
@@ -229,10 +229,10 @@ function SessionReviewBody({ sessionId }) {
         <ArrowLeft size={14} /> Back to live
       </Link>
 
-      <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
+      <m.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">Session Review</h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1 text-sm font-mono break-all">id: {sessionId}</p>
-      </motion.div>
+      </m.div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[

@@ -750,6 +750,11 @@ docker exec -i supabase_db_AdaptiveLearning psql -U postgres -d postgres -v ON_E
 Safe against a working database: the file is `BEGIN … ROLLBACK`. Exit 0 and a final `ROLLBACK` is a
 pass.
 
+**`scripts/assert_answer_lock.sql` is the one check that needs two connections**, so it cannot roll back: it commits
+marked fixtures through `dblink` and deletes them, also at the start of the next run. Run it as `supabase_admin`
+(`docker exec -i supabase_db_AdaptiveLearning psql -U supabase_admin …`), since dblink needs a superuser to connect
+without a password.
+
 **Do this for any change to that file, and for any migration that constrains a table it writes to.**
 CI is downstream of the merge, so a broken fixture is otherwise found after the decision to ship.
 Two things were caught the first time it was run by hand, neither visible in a diff:

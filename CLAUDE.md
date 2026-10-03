@@ -1577,9 +1577,10 @@ deny access to something the teacher can see behind the message.
 
 ## A roster row has `user_id` and `name` — not `id`, not `display_name`
 
-`/api/classes/{id}/students` returns `{user_id, name, email, joined_at, ...}`. `Students.jsx` is the exception
-that proves the rule: it reads `profiles` straight through Supabase, so its rows really do have `id`.
-`name`/`email` are null when unset, here and on `/api/teacher/students`; a page draws the email, else "No name set".
+`/api/classes/{id}/students`, `/api/classes/{id}/sessions` and `/api/teacher/students` (which `Students.jsx` reads)
+return roster rows as `{user_id, name, email, ...}`, with `name` and `email` null when unset: a page draws the email,
+else "No name set", never a made-up name. No roster comes from `profiles` (the frontend's Supabase client only signs
+in), so no roster row anywhere has `id` or `display_name`.
 
 Getting this wrong in a `<select>` does **not** render a blank option. **An `<option>` with an undefined
 `value` falls back to its own text content**, so `value={s.id}` over a label of `{s.display_name || s.email}`

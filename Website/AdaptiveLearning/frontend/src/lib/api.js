@@ -101,30 +101,48 @@ export async function apiFetch(path, { method = 'GET', body = null,
     try { return await bounded(path, { method, body, timeoutMs }) } finally { invalidate(path) }
   }
   if (!cacheMs) return bounded(path, { method, body, timeoutMs })
-  // This caller's own bound, even when it joins a request another caller started.
-  return structuredClone(await within(path, timeoutMs, cachedRead(path, cacheMs, timeoutMs)))
+  // Each caller bounds only its own wait; giving up releases its interest in the shared request.
+  const waiter = { gaveUp: false, release: () => {} }
+  const data = await within(path, timeoutMs, cachedRead(path, cacheMs, waiter),
+                            () => { waiter.gaveUp = true; waiter.release() })
+  return structuredClone(data)
 }
 
-async function cachedRead(path, cacheMs, timeoutMs) {
+async function cachedRead(path, cacheMs, waiter) {
   // The token sent is the token whose account keys the entry, so no entry answers another account.
   const { token, account } = await readSession()
+  if (waiter.gaveUp) return null      // timed out reading the session: join nothing
   const key = cacheKey(account, path)
   const hit = readCache.get(key)
-  if (hit?.promise) return hit.promise
-  if (hit && hit.expiresAt > Date.now()) return hit.data
-  const entry = { path }
-  entry.promise = bounded(path, { method: 'GET', body: null, timeoutMs, token }).then(
+  if (hit && !hit.promise && hit.expiresAt > Date.now()) return hit.data
+  const entry = hit?.promise ? hit : startSharedRead(key, path, cacheMs, token)
+  entry.waiters++
+  waiter.release = () => {
+    // Only the last waiter to give up aborts it, and drops it so the next caller starts afresh.
+    if (--entry.waiters > 0 || entry.settled) return
+    entry.controller.abort()
+    if (readCache.get(key) === entry) readCache.delete(key)
+  }
+  return entry.promise
+}
+
+/** A cached GET with no bound of its own: its waiters' bounds decide when it is abandoned. */
+function startSharedRead(key, path, cacheMs, token) {
+  const entry = { path, waiters: 0, settled: false, controller: new AbortController() }
+  entry.promise = request(path, { method: 'GET', body: null, token, signal: entry.controller.signal }).then(
     data => {
+      entry.settled = true
       // Invalidated meanwhile: the write wins, so this result is not kept.
       if (readCache.get(key) === entry) readCache.set(key, { path, data, expiresAt: Date.now() + cacheMs })
       return data
     },
     err => {
+      entry.settled = true
       if (readCache.get(key) === entry) readCache.delete(key)
       throw err
     })
   readCache.set(key, entry)
-  return entry.promise
+  return entry
 }
 
 /** Rejects with a `timeout` error once `timeoutMs` passes, calling `onExpire` first; none: no bound. */
@@ -142,11 +160,11 @@ function within(path, timeoutMs, promise, onExpire) {
   return Promise.race([promise, expired]).finally(() => clearTimeout(timer))
 }
 
-async function bounded(path, { method, body, timeoutMs, token }) {
-  if (!timeoutMs) return request(path, { method, body, token })
+async function bounded(path, { method, body, timeoutMs }) {
+  if (!timeoutMs) return request(path, { method, body })
   const controller = new AbortController()
   // Abort the request too, or it keeps running after the caller gives up.
-  return within(path, timeoutMs, request(path, { method, body, token, signal: controller.signal }),
+  return within(path, timeoutMs, request(path, { method, body, signal: controller.signal }),
                 () => controller.abort())
 }
 

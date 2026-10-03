@@ -397,6 +397,51 @@ describe('the opt-in read cache', () => {
     expect(fetches()).toBe(1)
   })
 
+  it("never lets the first caller's shorter bound abort a read another caller still waits on", async () => {
+    vi.useFakeTimers()
+    let respond, signal
+    globalThis.fetch = vi.fn((_url, opts) => { signal = opts.signal; return new Promise(r => { respond = r }) })
+    const first = apiFetch('/api/classes', { cache: true, timeoutMs: 50 }).then(() => 'resolved', e => e)
+    const joined = apiFetch('/api/classes', { cache: true }).then(rows => rows, e => e)
+
+    await vi.advanceTimersByTimeAsync(51)
+    expect((await first).timeout).toBe(true)
+    expect(signal.aborted).toBe(false)
+    respond(ok(['rows']))
+    expect(await joined).toEqual(['rows'])
+    expect(fetches()).toBe(1)
+  })
+
+  it('aborts a shared read once every caller has given up on it, and the next caller starts afresh', async () => {
+    vi.useFakeTimers()
+    let signal
+    // Ignores the abort, so only dropping the entry can stop a later caller joining it.
+    globalThis.fetch = vi.fn((_url, opts) => { signal = opts.signal; return new Promise(() => {}) })
+    const first = apiFetch('/api/classes', { cache: true, timeoutMs: 50 }).catch(e => e)
+    const joined = apiFetch('/api/classes', { cache: true, timeoutMs: 100 }).catch(e => e)
+
+    await vi.advanceTimersByTimeAsync(51)
+    expect(signal.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(signal.aborted).toBe(true)
+    expect((await first).timeout).toBe(true)
+    expect((await joined).timeout).toBe(true)
+
+    globalThis.fetch.mockImplementation(() => Promise.resolve(ok(['fresh'])))
+    expect(await apiFetch('/api/classes', { cache: true })).toEqual(['fresh'])
+    expect(fetches()).toBe(2)
+  })
+
+  it('starts no request for a caller that gave up while its session was still being read', async () => {
+    vi.useFakeTimers()
+    authFns.getSession.mockImplementation(() => new Promise(r => setTimeout(
+      () => r({ data: { session: buildAuthSession({ accessToken: 'tok-a' }) } }), 100)))
+    const call = apiFetch('/api/classes', { cache: true, timeoutMs: 50 }).catch(e => e)
+    await vi.advanceTimersByTimeAsync(200)
+    expect((await call).timeout).toBe(true)
+    expect(fetches()).toBe(0)
+  })
+
   it("hands every caller its own copy, so one page editing its rows cannot edit another's", async () => {
     globalThis.fetch.mockResolvedValue(ok([{ name: 'Maths' }]))
     const [first, joined] = await Promise.all([apiFetch('/api/classes', { cache: true }),

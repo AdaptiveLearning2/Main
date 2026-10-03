@@ -312,6 +312,33 @@ def test_a_gaze_only_row_does_not_count_as_an_emotion_sample(monkeypatch,
         "sample count")
 
 
+def test_a_week_of_untrusted_emotions_still_says_facial_readings_arrived(monkeypatch,
+                                                                         at_three_am_utc):
+    """The distribution is trusted-only; a quality gate is not a week with no camera."""
+    _school(monkeypatch, LA)
+    tables = _tables()
+    tables["face_signals"] = [{**_face_row(NOW_UTC.isoformat(), "happy"),
+                               "emotion_trusted": False}]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(tables))
+    report = main._weekly_signal_report(STUDENT, eeg_enabled=False, include_heart=False)
+    assert report["emotion_distribution"] == {}
+    assert report["summary"] == "Facial recognition readings were recorded this week."
+
+
+def test_a_days_heart_samples_count_rejected_readings_too(monkeypatch, at_three_am_utc):
+    """As the rollup's sample_count does; only the average is trusted-only."""
+    _school(monkeypatch, LA)
+    tables = _tables()
+    tables["heart_signals"] = [
+        {"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "source": "rppg",
+         "heart_rate_bpm": bpm, "trusted": trusted}
+        for bpm, trusted in ((70.0, True), (90.0, True), (150.0, False))]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(tables))
+    day = _day(main._weekly_signal_report(STUDENT), "2026-06-11")
+    assert day["heart_samples"] == 3
+    assert day["heart_rate_bpm"] == 80.0
+
+
 # ── a declined channel's rollup, a lost rollup, the cut day, the no-EEG sentence ──
 
 def _rollup_query(fake):
@@ -362,23 +389,21 @@ def test_a_lost_rollup_before_expiry_is_still_a_quiet_week(monkeypatch, at_three
     assert "No EEG" in report["summary"]
 
 
-def test_the_day_the_cap_cuts_into_is_counted_once(monkeypatch, at_three_am_utc):
-    """Tuesday's rollup is used for the cut day; its partial raw row must not be added again."""
+def test_a_day_holding_raw_rows_and_a_rollup_is_counted_once(monkeypatch, at_three_am_utc):
+    """An open session's rows sit beside a rollup written earlier that day; the week takes the raw."""
     _school(monkeypatch, LA)
     wednesday = [{"user_id": STUDENT, "ts": "2026-06-10T20:00:00+00:00", "focus": 1.0},
                  {"user_id": STUDENT, "ts": "2026-06-10T20:01:00+00:00", "focus": 1.0}]
-    tuesday = [{"user_id": STUDENT, "ts": f"2026-06-09T20:0{i}:00+00:00", "focus": 0.0}
-               for i in range(3)]
+    tuesday = [{"user_id": STUDENT, "ts": f"2026-06-09T20:0{i}:00+00:00", "focus": f}
+               for i, f in enumerate((0.0, 0.0, 0.6))]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
         cog=wednesday + tuesday,
         rollup=[_rollup("2026-06-09", "cognitive", avg_focus=0.0,
-                        sample_count=3, trusted_sample_count=3)]),
-        max_rows={"cognitive_signals": 3}))
+                        sample_count=1, trusted_sample_count=1)])))
     report = main._weekly_signal_report(STUDENT)
-    assert report["truncated"] is True
-    assert _day(report, "2026-06-09")["cognitive_from_rollup"] is True
-    # Two raw Wednesday readings at 1.0 and Tuesday's three (rolled) at 0.0: 2/5.
-    assert report["averages"]["focus"] == 0.4
+    assert _day(report, "2026-06-09")["cognitive_from_rollup"] is False
+    # Raw only: 2.6 / 5. The rollup instead of Tuesday's rows gives 0.67; both give 0.43.
+    assert report["averages"]["focus"] == 0.52
 
 
 def _face_and_heart():

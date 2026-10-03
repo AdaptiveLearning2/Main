@@ -37,9 +37,6 @@ ALLOWLIST = {
         "Column list chosen by the calling endpoint, defaulting to 'user_id'.",
     ("main.py", "_practice_session_or_403", "select", "columns"):
         "As _session_or_403.",
-    ("main.py", "_fetch", "order", "ts_col"):
-        "Timestamp column name, picked by _weekly_signal_report's caller from "
-        "a fixed set.",
     ("LLM_topic_decider.py", "_latest", "select", "columns"):
         "Column list passed by internal callers as a literal.",
     ("chart_archive.py", "rows", "select", "SIGNAL_COLUMNS[table]"):

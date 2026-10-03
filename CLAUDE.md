@@ -677,7 +677,8 @@ the revokes and the `service_role` grant against it.
 That leaves a window. Backend code calling the new signature against a database that has not run the
 migration gets PostgREST's `PGRST202`, which the callers here catch — so the failure is silent and
 the symptom is empty data rather than an error. **Apply the migration before rolling out the code
-that depends on it.**
+that depends on it.** Recognise it with `_missing_rpc(e, function, migration)`, never a new copy: it
+logs the migration to apply, and the caller keeps its own failed-read answer.
 
 Where an in-between state would be visible to a user, a temporary retry against the old signature is
 a reasonable bridge — but only where doing so cannot violate what the caller asked for, and only if
@@ -1189,7 +1190,9 @@ surfaces, the consent screen and the poller status, none of which should change 
 ended: gating there would report every channel off on the last day of school, so a parent could not read
 the history that survives until the delete job runs — and it would read as a withdrawal, a claim about a
 decision nobody made. `_may_record()` composes the two; `_consent()` stays pure and its raw flags ride
-along beside the `record_*` ones.
+along beside the `record_*` ones. Consent already in hand reaches `_may_record` only as
+`_stored_consent(row)` over the ingest gate's row — a bare dict is a `TypeError`, and the recording-sites
+test traces every `consent=` back to that call.
 
 **The timezone is the school's, not UTC**, for both the window boundaries and the weekly report's day
 buckets. The last day of school ends at local midnight; against a UTC clock it ends mid-afternoon or

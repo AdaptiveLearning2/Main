@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { LayoutDashboard, BookOpen, Target, TrendingUp, Flame, Brain, ArrowUpRight, Zap } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { fetchSessionList } from '../../lib/session'
@@ -133,7 +133,7 @@ export default function StudentDashboard() {
 
       {/* Only once both reads succeed; a failed read never nudges. */}
       {nudge?.show && (
-        <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+        <m.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
           className="bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-2xl px-5 py-4 flex flex-wrap items-center gap-3">
           <span className="text-xl">👋</span>
           <p className="text-sm font-bold text-indigo-900 dark:text-indigo-200 flex-1 min-w-[12rem]">
@@ -143,11 +143,11 @@ export default function StudentDashboard() {
             className="px-4 py-2 rounded-xl text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow transition">
             Start a session
           </button>
-        </motion.div>
+        </m.div>
       )}
 
       {/* header */}
-      <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}
+      <m.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}
         className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-3xl font-black text-gray-900 dark:text-white">
@@ -155,15 +155,15 @@ export default function StudentDashboard() {
           </h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1">Here's your learning overview.</p>
         </div>
-        <motion.div
+        <m.div
           whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.97 }}
           onClick={() => navigate('/adaptive')}
           // Wraps under the greeting on a phone rather than hiding.
           className="flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-violet-600 text-white px-5 py-2.5 rounded-full text-sm font-bold shadow-lg cursor-pointer shrink-0"
         >
           <Brain size={16} /> Start AI Session
-        </motion.div>
-      </motion.div>
+        </m.div>
+      </m.div>
 
       {/* stat cards */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
@@ -173,7 +173,7 @@ export default function StudentDashboard() {
       <div className="grid xl:grid-cols-3 gap-6">
         <div className="xl:col-span-2 space-y-4">
           {/* hero banner */}
-          <motion.div
+          <m.div
             initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.45 }}
             whileHover={{ scale: 1.005 }}
             className="relative bg-gradient-to-br from-indigo-600 via-indigo-700 to-violet-800 rounded-2xl p-7 text-white overflow-hidden shadow-xl shadow-indigo-200 dark:shadow-indigo-950 cursor-pointer"
@@ -183,9 +183,9 @@ export default function StudentDashboard() {
             <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full translate-y-10 -translate-x-10" />
             <div className="relative">
               <div className="flex items-center gap-2 mb-3">
-                <motion.div animate={{ rotate: [0, 360] }} transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}>
+                <m.div animate={{ rotate: [0, 360] }} transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}>
                   <Zap size={16} className="text-yellow-300" />
-                </motion.div>
+                </m.div>
                 <span className="text-indigo-200 text-xs font-bold uppercase tracking-widest">AI-Powered</span>
               </div>
               <h2 className="text-2xl font-black mb-2">Start Adaptive Practice</h2>
@@ -201,10 +201,10 @@ export default function StudentDashboard() {
                 </Link>
               </div>
             </div>
-          </motion.div>
+          </m.div>
 
           {/* topics grid */}
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.55 }}
+          <m.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.55 }}
             className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm">
             <h3 className="font-black text-gray-900 dark:text-white mb-4 flex items-center gap-2">
               <BookOpen size={16} className="text-indigo-600" /> Topics in the Curriculum
@@ -216,7 +216,7 @@ export default function StudentDashboard() {
                 // Unattempted and failed-read both draw a plain tile.
                 const measured = attempted > 0
                 return (
-                  <motion.div key={t}
+                  <m.div key={t}
                     initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }}
                     transition={{ delay: stagger(i, 0.03, 0.55) }}
                     whileHover={{ scale: 1.06 }}
@@ -233,7 +233,7 @@ export default function StudentDashboard() {
                         {row.accuracy}%
                       </span>
                     )}
-                  </motion.div>
+                  </m.div>
                 )
               })}
             </div>
@@ -253,19 +253,19 @@ export default function StudentDashboard() {
                 </span>
               </button>
             )}
-          </motion.div>
+          </m.div>
         </div>
 
         {/* right col */}
         <div className="space-y-4">
           {/* accuracy ring */}
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}
+          <m.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}
             className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm text-center">
             <h3 className="font-black text-gray-900 dark:text-white mb-4">Overall Accuracy</h3>
             <div className="relative inline-flex items-center justify-center w-28 h-28 mb-3">
               <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
                 <circle cx="18" cy="18" r="15.9" fill="none" stroke="#e5e7eb" strokeWidth="3" className="dark:stroke-gray-700" />
-                <motion.circle
+                <m.circle
                   cx="18" cy="18" r="15.9" fill="none"
                   stroke="url(#grad1)" strokeWidth="3" strokeLinecap="round"
                   strokeDasharray="100 100"
@@ -287,10 +287,10 @@ export default function StudentDashboard() {
             <p className="text-xs text-gray-500 dark:text-gray-400">
               {acc >= 80 ? '🔥 Crushing it!' : acc >= 50 ? '📈 Solid progress!' : '💪 Keep grinding!'}
             </p>
-          </motion.div>
+          </m.div>
 
           {/* recent sessions */}
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.6 }}
+          <m.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.6 }}
             className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-black text-gray-900 dark:text-white">Recent Sessions</h3>
@@ -315,7 +315,7 @@ export default function StudentDashboard() {
                 {sessions.map((s, i) => {
                   const pct = s.questions_answered > 0 ? Math.round((s.correct_answers / s.questions_answered) * 100) : 0
                   return (
-                    <motion.div key={s.id}
+                    <m.div key={s.id}
                       initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: stagger(i, 0.05, 0.65) }}
                       whileHover={{ x: 3 }}
@@ -329,12 +329,12 @@ export default function StudentDashboard() {
                         <p className={`text-sm font-black ${pct >= 70 ? 'text-green-500' : pct >= 40 ? 'text-amber-500' : 'text-rose-500'}`}>{pct}%</p>
                         <p className="text-xs text-gray-600 dark:text-gray-400">{s.questions_answered}q</p>
                       </div>
-                    </motion.div>
+                    </m.div>
                   )
                 })}
               </div>
             )}
-          </motion.div>
+          </m.div>
         </div>
       </div>
     </div>

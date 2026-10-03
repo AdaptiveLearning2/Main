@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
+import { m, AnimatePresence } from 'framer-motion'
 import { Users, Plus, X, Copy, Check, GraduationCap, Pencil, Save, ChevronRight, RefreshCw } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { toast } from 'sonner'
@@ -96,23 +96,23 @@ export default function Classes() {
 
   return (
     <div className="p-6 lg:p-8 pb-12">
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between mb-6">
+      <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-black text-gray-900 dark:text-white flex items-center gap-3">
             <Users className="text-violet-600" size={28} /> Classes
           </h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1">Pick a grade level — the AI uses it for every student in this class.</p>
         </div>
-        <motion.button onClick={() => setShowForm(s => !s)}
+        <m.button onClick={() => setShowForm(s => !s)}
           whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
           className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-violet-600 to-purple-600 text-white rounded-xl font-bold shadow text-sm">
           <Plus size={16} /> New Class
-        </motion.button>
-      </motion.div>
+        </m.button>
+      </m.div>
 
       <AnimatePresence>
         {showForm && (
-          <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+          <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
             className="bg-white dark:bg-gray-900 rounded-2xl border border-violet-200 dark:border-violet-800 p-5 shadow-sm mb-6">
             <form onSubmit={createClass} className="grid sm:grid-cols-[1fr_180px_auto_auto] gap-3 items-center">
               <input value={newName} onChange={e => setNewName(e.target.value)}
@@ -131,7 +131,7 @@ export default function Classes() {
                 <X size={16} className="text-gray-500 dark:text-gray-400" />
               </button>
             </form>
-          </motion.div>
+          </m.div>
         )}
       </AnimatePresence>
 
@@ -149,7 +149,7 @@ export default function Classes() {
       ) : (
         <div className="space-y-4">
           {classes.map((cls, i) => (
-            <motion.div key={cls.id}
+            <m.div key={cls.id}
               initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.07) }}
               onClick={() => navigate(`/teacher/classes/${cls.id}`)}
               className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden cursor-pointer hover:border-violet-300 dark:hover:border-violet-700 hover:shadow-md transition">
@@ -201,7 +201,7 @@ export default function Classes() {
                   View Students <ChevronRight size={15} />
                 </div>
               </div>
-            </motion.div>
+            </m.div>
           ))}
         </div>
       )}

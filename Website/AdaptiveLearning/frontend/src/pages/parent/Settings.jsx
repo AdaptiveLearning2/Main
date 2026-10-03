@@ -4,7 +4,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { ShieldCheck, User, Users, Unlink, Mail, CalendarDays, Plus } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -91,7 +91,7 @@ export default function ParentSettings() {
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
-      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+      <m.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
         <div className="flex items-center gap-3 mb-1">
           <ShieldCheck className="text-indigo-600 dark:text-indigo-400" size={22} />
           <h1 className="text-2xl font-black text-gray-900 dark:text-white">Settings</h1>
@@ -237,7 +237,7 @@ export default function ParentSettings() {
             </div>
           ))}
         </div>
-      </motion.div>
+      </m.div>
     </div>
   )
 }

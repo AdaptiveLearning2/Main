@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
@@ -1147,13 +1147,13 @@ export default function Adaptive() {
 
   return (
     <div className="p-6 lg:p-8 pb-12">
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-4">
+      <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-4">
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">🧠 AI Adaptive Practice</h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">The AI picks your weakest topic and generates a custom question.</p>
-      </motion.div>
+      </m.div>
 
       {/* HEADBAND PANEL */}
-      <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
+      <m.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
         className="mb-4 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl p-4 shadow-sm flex items-center gap-3 flex-wrap">
         <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white shadow ${
           headband.connected
@@ -1297,11 +1297,11 @@ export default function Adaptive() {
           : headband.connected                ? 'Disconnect'
           :                                   'Connect Headband' }
         </button>
-      </motion.div>
+      </m.div>
 
       {/* Disabled under pull: only the push endpoint writes `face_signals`. */}
       {camera.id && (
-        <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
+        <m.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
           className="mb-6 rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-4 flex items-center gap-4 shadow-sm">
           <div className="w-11 h-11 rounded-xl bg-fuchsia-600 grid place-items-center text-white text-lg">📷</div>
           <div className="flex-1 min-w-0">
@@ -1333,12 +1333,12 @@ export default function Adaptive() {
             }`}>
             {camera.busy ? 'Working...' : camera.running ? 'Turn off' : 'Turn on camera'}
           </button>
-        </motion.div>
+        </m.div>
       )}
 
       {/* A banner, not a modal, so it never blocks a question; dismiss keeps the preference. */}
       {timeUp && (
-        <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
+        <m.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
           className="mb-6 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-2xl px-5 py-4 flex flex-wrap items-center gap-3">
           <Clock size={18} className="text-amber-600 dark:text-amber-400" />
           <p className="text-sm font-bold text-amber-800 dark:text-amber-200 flex-1 min-w-[14rem]">
@@ -1352,12 +1352,12 @@ export default function Adaptive() {
             className="px-4 py-2 rounded-xl text-sm font-bold bg-amber-600 hover:bg-amber-700 text-white shadow transition disabled:opacity-60">
             {finishing ? 'Finishing…' : 'Finish session'}
           </button>
-        </motion.div>
+        </m.div>
       )}
 
       {/* Like the duration banner; "Keep going" keeps the goal. */}
       {goalReached && (
-        <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
+        <m.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
           className="mb-6 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-2xl px-5 py-4 flex flex-wrap items-center gap-3">
           <Sparkles size={18} className="text-emerald-600 dark:text-emerald-400" />
           <p className="text-sm font-bold text-emerald-800 dark:text-emerald-200 flex-1 min-w-[14rem]">
@@ -1371,7 +1371,7 @@ export default function Adaptive() {
             className="px-4 py-2 rounded-xl text-sm font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow transition disabled:opacity-60">
             {finishing ? 'Finishing…' : 'Finish session'}
           </button>
-        </motion.div>
+        </m.div>
       )}
 
       <div className="grid lg:grid-cols-3 gap-6">
@@ -1399,8 +1399,8 @@ export default function Adaptive() {
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
             {phase === 'idle' && (
               <div className="p-8 lg:p-10">
-                <motion.div animate={{ y: [0, -8, 0] }} transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
-                  className="text-6xl mb-4 text-center">🚀</motion.div>
+                <m.div animate={{ y: [0, -8, 0] }} transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+                  className="text-6xl mb-4 text-center">🚀</m.div>
                 <h2 className="text-xl font-black text-gray-900 dark:text-white mb-2 text-center">Ready to practice?</h2>
                 <p className="text-gray-500 dark:text-gray-400 text-sm mb-6 max-w-sm mx-auto text-center">
                   The AI analyses your performance across {(gradeTopics ?? TOPICS).length} topics and picks the one you need most.
@@ -1504,12 +1504,12 @@ export default function Adaptive() {
                 </div>
 
                 <div className="text-center">
-                  <motion.button onClick={fetchQuestion}
+                  <m.button onClick={fetchQuestion}
                     disabled={mode === 'class' && !classId}
                     whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
                     className="px-8 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-xl font-bold shadow-lg hover:from-indigo-700 hover:to-violet-700 transition disabled:opacity-50">
                     Generate Question
-                  </motion.button>
+                  </m.button>
                   {error && <p className="text-rose-500 text-sm mt-4">⚠️ Generation failed — try again.</p>}
                 </div>
               </div>
@@ -1517,7 +1517,7 @@ export default function Adaptive() {
 
             {phase === 'loading' && (
               <div className="p-10 text-center">
-                <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                <m.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
                   className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full mx-auto mb-4" />
                 <p className="text-gray-500 dark:text-gray-400">AI is picking your topic...</p>
               </div>
@@ -1578,7 +1578,7 @@ export default function Adaptive() {
                       style = 'border-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-800 dark:text-indigo-200'
                     }
                     return (
-                      <motion.button key={i} onClick={() => { if (phase !== 'question') return; setSelectedAnswer(i); setActiveButton(i) }}
+                      <m.button key={i} onClick={() => { if (phase !== 'question') return; setSelectedAnswer(i); setActiveButton(i) }}
                         disabled={phase === 'result'}
                         whileHover={phase === 'question' ? { x: 4 } : {}}
                         className={`w-full text-left p-4 rounded-xl border-2 transition-all duration-200 flex items-center gap-3 ${style}`}>
@@ -1588,7 +1588,7 @@ export default function Adaptive() {
                         <span>{Array.isArray(opt) ? opt.join(', ') : opt}</span>
                         {isResult && isCorrectOpt && <span className="ml-auto text-green-500 text-lg">✓</span>}
                         {isResult && isWrong      && <span className="ml-auto text-rose-500 text-lg">✗</span>}
-                      </motion.button>
+                      </m.button>
                     )
                   })}
                 </div>
@@ -1601,7 +1601,7 @@ export default function Adaptive() {
                 )}
 
                 {phase === 'result' && (
-                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
+                  <m.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
                     <div className={`p-4 rounded-xl text-center font-black text-lg ${correct ? 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300' : 'bg-rose-50 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300'}`}>
                       {correct ? '🎉 Correct! Great job!' : '❌ Not quite — keep going!'}
                     </div>
@@ -1611,12 +1611,12 @@ export default function Adaptive() {
                       <button onClick={() => setBias(0)}  className={`text-xs px-3 py-1.5 rounded-lg font-bold border ${bias === 0 ? 'bg-indigo-600 text-white border-indigo-600' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}>Auto</button>
                       <button onClick={() => setBias(1)}  className={`text-xs px-3 py-1.5 rounded-lg font-bold border ${bias === 1 ? 'bg-rose-500 text-white border-rose-500' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}>Harder</button>
                     </div>
-                    <motion.button onClick={fetchQuestion}
+                    <m.button onClick={fetchQuestion}
                       whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
                       className="w-full py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-xl font-bold hover:from-indigo-700 hover:to-violet-700 transition shadow">
                       Next Question →
-                    </motion.button>
-                  </motion.div>
+                    </m.button>
+                  </m.div>
                 )}
               </div>
             )}
@@ -1641,7 +1641,7 @@ export default function Adaptive() {
                     </span>
                   </div>
                   <div className="h-1.5 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
-                    <motion.div
+                    <m.div
                       className={`h-full rounded-full ${acc === null ? '' : acc >= 70 ? 'bg-green-500' : acc >= 40 ? 'bg-amber-500' : 'bg-rose-500'}`}
                       initial={{ width: 0 }}
                       animate={{ width: acc ? `${acc}%` : '0%' }}

@@ -293,10 +293,14 @@ def _pgrst202(function: str):
                    "or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache."})
 
 
-def test_a_missing_gate_function_names_its_migration(store, capsys):
+@pytest.mark.parametrize("error", [
+    RuntimeError("{'code': 'PGRST202', 'message': 'no function'}"),
+    _pgrst202("ingest_gate"),                                  # as PostgREST words it, naming the function
+], ids=["names-none", "postgrest"])
+def test_a_missing_gate_function_names_its_migration(store, capsys, error):
     """Deployed ahead of 20261003000000, every batch is a 503; the log has to say why."""
     from fastapi import HTTPException
-    store["_gate_down"] = RuntimeError("{'code': 'PGRST202', 'message': 'no function'}")
+    store["_gate_down"] = error
     with pytest.raises(HTTPException) as exc:
         _post_heart([_heart()])
     assert exc.value.status_code == 503

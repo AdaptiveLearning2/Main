@@ -20,6 +20,17 @@ DECLARE
     channel    text;
     n          integer;
     skipped    jsonb := '{}'::jsonb;
+    unreached  boolean;
+    -- Expired, and its day summarised: one test for the delete and the cap check alike.
+    eligible   text := $f$
+        s.ts < $1
+        AND EXISTS (
+            SELECT 1 FROM signal_daily_rollup r
+            WHERE r.user_id = s.user_id
+              AND r.channel = $2
+              AND r.day = (s.ts AT TIME ZONE $3)::date
+        )
+    $f$;
 BEGIN
     cutoff := expired_signal_cutoff();
     SELECT w.timezone INTO tz FROM retention_window w LIMIT 1;
@@ -39,27 +50,19 @@ BEGIN
                        ELSE 'heart'
                    END;
         EXECUTE format($f$
-            WITH doomed AS (
-                SELECT s.ctid
-                FROM %I s
-                WHERE s.ts < $1
-                  AND EXISTS (
-                      SELECT 1 FROM signal_daily_rollup r
-                      WHERE r.user_id = s.user_id
-                        AND r.channel = $2
-                        AND r.day = (s.ts AT TIME ZONE $3)::date
-                  )
-                LIMIT $4
-            )
+            WITH doomed AS (SELECT s.ctid FROM %I s WHERE %s LIMIT $4)
             DELETE FROM %I WHERE ctid IN (SELECT ctid FROM doomed)
-        $f$, table_name, table_name)
+        $f$, table_name, eligible, table_name)
         USING bound, channel, tz, p_batch_size::bigint * p_max_batches;
         GET DIAGNOSTICS n = ROW_COUNT;
         removed := removed || jsonb_build_object(table_name, n);
-        -- True once the run reaches its last allowed batch, even ending exactly on the cap;
-        -- unreached rows appear in neither count.
-        capped := capped || jsonb_build_object(
-            table_name, n > (p_max_batches - 1)::bigint * p_batch_size);
+        -- The cap was hit only if eligible rows remain; they appear in neither count.
+        unreached := false;
+        IF n = p_batch_size::bigint * p_max_batches THEN
+            EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I s WHERE %s)', table_name, eligible)
+            INTO unreached USING bound, channel, tz;
+        END IF;
+        capped := capped || jsonb_build_object(table_name, unreached);
 
         -- Student-days kept for lack of a rollup row; nonzero means the writer is broken.
         EXECUTE format($f$

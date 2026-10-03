@@ -524,13 +524,12 @@ BEGIN
     END IF;
 END $$;
 
--- Seven summarised rows and an unsummarised day, at a batch size of 2. Caps of 3, 4 and 5
--- batches: one row left and the cap reported; none left and still reported, the run having
--- reached its last batch; none left and not reported.
+-- Seven summarised rows and an unsummarised day, per (batch size, cap, rows left): the cap is
+-- reported only while summarised rows remain, so not when the limit lands on the last one.
 DO $$
 DECLARE
     uid uuid; sess_a uuid := gen_random_uuid(); sess_b uuid := gen_random_uuid();
-    result jsonb; n int; cap int; want int;
+    result jsonb; n int; c int[];
 BEGIN
     SELECT owner_id INTO uid FROM _ids;
     DELETE FROM public.signal_daily_rollup WHERE user_id = uid;
@@ -544,7 +543,8 @@ BEGIN
     VALUES (uid, DATE '2026-03-10', 'cognitive', 4, 4),
            (uid, DATE '2026-03-12', 'cognitive', 3, 3);
 
-    FOREACH cap IN ARRAY ARRAY[3, 4, 5]
+    -- 6 of 7 reached; exactly 7 of 7; a limit of 8 and of 10 over 7.
+    FOREACH c SLICE 1 IN ARRAY ARRAY[[2, 3, 1], [1, 7, 0], [2, 4, 0], [2, 5, 0]]
     LOOP
         DELETE FROM public.cognitive_signals WHERE user_id = uid;
         -- The 2026-03-11 rows are inserted among the others, so the scan meets them mid-run.
@@ -556,25 +556,24 @@ BEGIN
             (sess_a, uid, '2026-03-12T18:00:00Z'), (sess_b, uid, '2026-03-12T18:00:00Z'),
             (sess_a, uid, '2026-03-12T18:00:01Z');
 
-        result := public.expire_signal_rows(p_batch_size => 2, p_max_batches => cap);
+        result := public.expire_signal_rows(p_batch_size => c[1], p_max_batches => c[2]);
 
-        want := CASE cap WHEN 3 THEN 1 ELSE 0 END;
         SELECT count(*) INTO n FROM public.cognitive_signals
          WHERE user_id = uid AND ts <> '2026-03-11T18:00:00Z';
-        IF n <> want THEN
+        IF n <> c[3] THEN
             RAISE EXCEPTION
-                'cap %: % summarised rows left at a batch size of 2, expected %: the cap '
-                'deleted the wrong number of rows', cap, n, want;
+                'batch % cap %: % summarised rows left, expected %: the cap deleted the wrong '
+                'number of rows', c[1], c[2], n, c[3];
         END IF;
         SELECT count(*) INTO n FROM public.cognitive_signals
          WHERE user_id = uid AND ts = '2026-03-11T18:00:00Z';
         IF n <> 2 THEN
-            RAISE EXCEPTION 'cap %: a day with no rollup row lost rows mid-run: % of 2 left',
-                cap, n;
+            RAISE EXCEPTION 'batch % cap %: a day with no rollup row lost rows: % of 2 left',
+                c[1], c[2], n;
         END IF;
-        IF (result->'hit_batch_cap'->>'cognitive_signals')::boolean
-           IS DISTINCT FROM (cap < 5) THEN
-            RAISE EXCEPTION 'cap %: hit_batch_cap should be %: %', cap, cap < 5, result;
+        IF (result->'hit_batch_cap'->>'cognitive_signals')::boolean IS DISTINCT FROM (c[3] > 0) THEN
+            RAISE EXCEPTION 'batch % cap %: hit_batch_cap should be %, as % summarised rows remain: %',
+                c[1], c[2], c[3] > 0, c[3], result;
         END IF;
     END LOOP;
 

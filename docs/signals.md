@@ -115,10 +115,13 @@ well as the flat already-mapped one, and maps the first itself. Don't add a divi
   re-post duplicates them. All three signal tables now carry a dedupe key, so a re-post is a no-op —
   but this rule stands on its own: the key makes the *rows* idempotent, and nothing makes the local
   accounting so. `stop()` therefore *asks* the loop to finish and awaits it, cancelling it, or the final
-  flush, only once `SHUTDOWN_BUDGET` is spent: the whole call is bounded by the clock rather than by an
-  attempt cap (12 attempts × 3 channels × a 4 s timeout is ~144 s on a Ctrl-C), and the kit's grace is
-  built on that bound. A batch whose fate is unknown is `unaccounted`, which is neither `recorded` nor
-  `dropped_locally`.
+  flush, only once `SHUTDOWN_BUDGET` is spent. The budget starts before the lifecycle lock is taken, so a
+  start or stop holding the lock cannot double it; spent waiting there, `stop()` logs that and changes
+  nothing. So the call is bounded by the clock rather than by an attempt cap (12 attempts × 3 channels × a
+  4 s timeout is ~144 s on a Ctrl-C), overrunning only by the half second the loop is always given, and the
+  kit's grace is built on that bound. A cancellation aimed at the caller, as uvicorn's drain cancels a
+  request still running, is re-raised once the session is forgotten. A batch whose fate is unknown is
+  `unaccounted`, which is neither `recorded` nor `dropped_locally`.
 - **Delivery is counted from the backend's `inserted`, not from what was sent.** The endpoint drops
   samples for a sensor the student declined; counting sent would report a healthy session that
   recorded nothing.

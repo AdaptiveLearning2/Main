@@ -145,48 +145,73 @@ class PushClient:
             return new_session
 
     async def stop(self, *, flush: bool = True) -> None:
-        """Stop pushing and forget the token; one bounded final flush by default."""
-        async with self._lifecycle:
-            await self._stop_locked(flush=flush)
+        """Stop pushing and forget the token; one bounded final flush by default.
 
-    async def _stop_locked(self, *, flush: bool) -> None:
-        """The body of `stop()`. Assumes `_lifecycle` is held (it is not reentrant)."""
+        SHUTDOWN_BUDGET includes the wait for a start or stop holding the lock; spent there, this changes nothing."""
         deadline = time.monotonic() + SHUTDOWN_BUDGET
+        try:
+            await asyncio.wait_for(self._lifecycle.acquire(), timeout=SHUTDOWN_BUDGET)
+        except TimeoutError:
+            logger.warning("push: shutdown budget spent waiting for another start or stop; not stopped")
+            return
+        try:
+            await self._stop_locked(flush=flush, deadline=deadline)
+        finally:
+            self._lifecycle.release()
+
+    async def _stop_locked(self, *, flush: bool, deadline: float | None = None) -> None:
+        """The body of `stop()`. Assumes `_lifecycle` is held (it is not reentrant).
+
+        Ends by `deadline`, SHUTDOWN_BUDGET from now by default; a cancelled caller still forgets the session."""
+        if deadline is None:
+            deadline = time.monotonic() + SHUTDOWN_BUDGET
+        try:
+            await self._wind_down(flush=flush, deadline=deadline)
+        finally:
+            self._forget_session()
+
+    async def _wind_down(self, *, flush: bool, deadline: float) -> None:
         task, self._task = self._task, None
         if task is not None:
             # Asked to finish, not cancelled: a mid-POST cancel leaves the batch's fate unknown.
             self._stopping.set()
             self._wake.set()
             try:
-                await asyncio.wait_for(task, timeout=max(0.5, deadline - time.monotonic()))
-            except asyncio.TimeoutError:
-                task.cancel()
                 try:
+                    await asyncio.wait_for(task, timeout=max(0.5, deadline - time.monotonic()))
+                except TimeoutError:
+                    task.cancel()
                     await task
-                except asyncio.CancelledError:
-                    pass
             except asyncio.CancelledError:
-                pass
-        if flush and self._token:
-            # Loop until empty: `_flush_once` takes at most MAX_BATCH per channel.
-            for _ in range(MAX_SHUTDOWN_FLUSHES):
-                if not any(self._queues[c] for c in _CHANNELS):
-                    break
-                if time.monotonic() >= deadline:
-                    logger.warning("push: shutdown budget spent, %d sample(s) not sent",
-                                   sum(len(self._queues[c]) for c in _CHANNELS))
-                    break
-                try:
-                    # Cancelled at the deadline, as the loop is: the kit ends a sidecar that overruns it.
-                    await asyncio.wait_for(self._flush_once(), timeout=deadline - time.monotonic())
-                except asyncio.TimeoutError:
+                # The loop's own end is swallowed; one aimed at the caller, a cancelled request's, is not.
+                if asyncio.current_task().cancelling():
+                    raise
+        if not (flush and self._token):
+            return
+        # Loop until empty: `_flush_once` takes at most MAX_BATCH per channel.
+        for _ in range(MAX_SHUTDOWN_FLUSHES):
+            if not any(self._queues[c] for c in _CHANNELS):
+                return
+            if time.monotonic() >= deadline:
+                logger.warning("push: shutdown budget spent, %d sample(s) not sent",
+                               sum(len(self._queues[c]) for c in _CHANNELS))
+                return
+            budget = asyncio.timeout(deadline - time.monotonic())
+            try:
+                # Cancelled at the deadline, as the loop is: the kit ends a sidecar that overruns it.
+                async with budget:
+                    await self._flush_once()
+            except Exception as exc:  # noqa: BLE001 - shutdown must not raise
+                # A TimeoutError the flush raised itself is a failure like any other, not the budget.
+                if isinstance(exc, TimeoutError) and budget.expired():
                     logger.warning("push: shutdown budget spent mid-flush, %d sample(s) not sent",
                                    sum(len(self._queues[c]) for c in _CHANNELS))
-                    break
-                except Exception as exc:  # noqa: BLE001 - shutdown must not raise
+                else:
                     logger.warning("push: final flush failed, %d sample(s) lost: %s",
                                    sum(len(self._queues[c]) for c in _CHANNELS), exc)
-                    break
+                return
+
+    def _forget_session(self) -> None:
         self._session_id = None
         # Cleared, not merely unused: the token must not outlive the session.
         self._token = None

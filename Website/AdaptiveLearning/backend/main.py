@@ -4832,21 +4832,27 @@ def _verify_can_view_student(viewer: dict, student_id: str):
 def class_students(class_id: str, request: Request):
     user = get_user(request)
     _verify_class_owner(class_id, user["id"])
-    memberships = supabase.table("class_memberships").select("student_id, joined_at") \
-        .eq("class_id", class_id).execute()
+    try:
+        # Names ride on the roster read, so a failed one fails the request rather than becoming "Student".
+        memberships = supabase.table("class_memberships") \
+            .select("student_id, joined_at, profiles(display_name, email)") \
+            .eq("class_id", class_id).execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[class_students] {e}")
+        raise _read_failed("Could not load this class's students; try again")
     students = []
     roster = [m["student_id"] for m in (memberships.data or [])]
     all_stats = _stats_including_open_session_many(roster)
-    profiles = _profiles_many(roster)
     last_active = _last_active_many(roster)
     for m in (memberships.data or []):
         sid = m["student_id"]
         stats = all_stats.get(sid) or {}
-        p = profiles.get(sid) or {}
+        p = m.get("profiles") or {}
         students.append({
             "user_id":   sid,
-            "name":      p.get("display_name") or "Student",
-            "email":     p.get("email") or "",
+            # None when unset: the page chooses what to draw, as on `/api/teacher/students`.
+            "name":      p.get("display_name") or None,
+            "email":     p.get("email") or None,
             "joined_at": m["joined_at"],
             # Timestamp, None (never active), or `last_active_retrieved: False`.
             **last_active.get(sid, _LAST_ACTIVE_UNKNOWN),

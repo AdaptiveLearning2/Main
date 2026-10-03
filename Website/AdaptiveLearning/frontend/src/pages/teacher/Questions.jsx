@@ -248,9 +248,9 @@ export default function Questions() {
               onChange={e => { setStudentId(e.target.value); setPage(1); setLoading(true) }}
               className="appearance-none pl-3 pr-8 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-violet-500 cursor-pointer">
               <option value="">Whole bank</option>
-              {/* Roster rows carry `user_id`/`name`, not `id`/`display_name`. */}
+              {/* Roster rows carry `user_id`/`name` (null when unset), not `id`/`display_name`. */}
               {visibleRoster.map(s => (
-                <option key={s.user_id} value={s.user_id}>{s.name || s.email || s.user_id}</option>
+                <option key={s.user_id} value={s.user_id}>{s.name || s.email || 'No name set'}</option>
               ))}
             </select>
             <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-600 pointer-events-none dark:text-gray-400" />

@@ -189,7 +189,8 @@ function ClassDetailBody({ id }) {
                 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.03) }}
                 className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 p-4 flex items-center justify-between gap-3 shadow-sm">
                 <div className="min-w-0">
-                  <p className="text-lg font-bold text-gray-900 dark:text-white truncate">{s.name}</p>
+                  {/* Never a made-up name: without one the email stands in, else the card says none is set. */}
+                  <p className="text-lg font-bold text-gray-900 dark:text-white truncate">{s.name || s.email || 'No name set'}</p>
                   <p className="text-xs text-gray-600 dark:text-gray-400">{lastActive}</p>
                 </div>
                 <button onClick={() => navigate(`/teacher/students/${s.user_id}/report`, { state: { name: s.name, classId: id, className: cls?.name } })}

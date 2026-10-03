@@ -1,4 +1,4 @@
-"""The teacher's roster across classes: each student once, and only from the caller's classes."""
+"""The teacher's rosters: across classes, each student once and only from the caller's classes; and one class's."""
 import os
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -238,3 +238,41 @@ def test_pages_past_what_the_count_needs_are_a_503(monkeypatch):
         main.teacher_students(None)
     assert exc.value.status_code == 503
     assert fake.reads == 2 + main._ROSTER_SPARE_PAGES
+
+
+# ─── one class's roster: the same name rule ───────────────────────────────
+
+def test_the_class_roster_takes_names_from_its_own_read(monkeypatch):
+    fake = _as(monkeypatch, "teacher-1")
+    out = main.class_students("maths", None)
+    assert [(r["user_id"], r["name"], r["email"], r["joined_at"]) for r in out] == [
+        (ALICE, "alice", "alice@example.test", "2026-01-15T10:00:00+02:00"),
+        (BOB, "Bob", "bob@example.test", "2026-02-01T09:00:00+00:00")]
+    assert all(r["retrieved"] is True and "last_active" in r for r in out)
+    # The roster's embed is the only name read; a separate profiles read could fall back to "Student".
+    assert "profiles" not in fake.table_calls
+    assert ("class_id", "maths") in _query(fake, "class_memberships").filters
+
+
+def test_a_class_roster_student_with_no_name_is_null_not_student(monkeypatch):
+    tables = _tables()
+    tables["profiles"][1]["display_name"] = ""
+    tables["profiles"].append({"id": "student-4", "display_name": None, "email": "", "role": "student"})
+    # student-5 has no profile row at all.
+    tables["class_memberships"] += [
+        {"id": f"m{n}", "class_id": "maths", "student_id": f"student-{n}",
+         "joined_at": "2026-03-01T09:00:00+00:00"} for n in (4, 5)]
+    _as(monkeypatch, "teacher-1", tables)
+    out = main.class_students("maths", None)
+    assert [(r["user_id"], r["name"], r["email"]) for r in out] == [
+        (ALICE, "alice", "alice@example.test"), (BOB, None, "bob@example.test"),
+        ("student-4", None, None), ("student-5", None, None)]
+
+
+@pytest.mark.parametrize("table", ["profiles", "class_memberships"])
+def test_a_failed_class_roster_read_is_a_503_not_student_rows(monkeypatch, table):
+    _as(monkeypatch, "teacher-1", table_raises={table})
+    with pytest.raises(HTTPException) as exc:
+        main.class_students("maths", None)
+    assert exc.value.status_code == 503
+    assert "Retry-After" in exc.value.headers

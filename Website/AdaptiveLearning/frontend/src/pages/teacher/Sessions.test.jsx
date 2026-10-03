@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
@@ -76,6 +76,24 @@ it('reports a partly-loaded class as partly loaded, and shows what it has', asyn
   expect(await screen.findByText('Ada')).toBeInTheDocument()
   expect(screen.queryByText(ERROR)).not.toBeInTheDocument()
   expect(screen.queryByText(EMPTY)).not.toBeInTheDocument()
+})
+
+it('draws a nameless student as their email, else "No name set", never "Student"', async () => {
+  // `name` and `email` are null when unset, as the roster sends them.
+  wire({
+    roster: [
+      { user_id: 'a', name: 'Ada', email: 'ada@example.test' },
+      { user_id: 'b', name: null, email: 'blaise@example.test' },
+      { user_id: 'c', name: null, email: null },
+    ],
+    students: { a: [SESSION], b: [{ ...SESSION, id: 's2' }], c: [{ ...SESSION, id: 's3' }] },
+  })
+  draw()
+  // The initial comes from the label shown, and is "?" with nothing to show.
+  for (const [label, initial] of [['Ada', 'A'], ['blaise@example.test', 'B'], ['No name set', '?']]) {
+    expect(within((await screen.findByText(label)).closest('a')).getByText(initial)).toBeInTheDocument()
+  }
+  expect(screen.getAllByRole('link').filter(row => row.textContent.includes('Student'))).toEqual([])
 })
 
 it('offers a retry that does not need a page reload', async () => {

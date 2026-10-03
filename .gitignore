@@ -35,10 +35,6 @@ __pycache__/
 # settings.json and launch.json may legitimately be committed.
 .claude/settings.local.json
 
-# Serena's per-machine index and config; all tool-written, including project.yml.
-# Here as well as in global ignores, because a global rule stops nothing once a file is tracked.
-.serena/
-
 # Editor state; machine-specific paths.
 .vscode/
 .idea/

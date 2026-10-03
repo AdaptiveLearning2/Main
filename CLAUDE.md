@@ -1000,6 +1000,8 @@ ingest samples' readings are the exception, and say why), and a new one fails un
 **No read is uncapped: PostgREST cuts it at `db-max-rows` (1000), silently**, so a count is never a
 list's length. `/api/sessions` sends a page of rows beside the real `total` (`count="exact"`; `None` when
 none came, drawn as a dash), lifetime sums come from `/api/stats/me`, and `lib/session.js` reads it.
+A read that must be whole pages on a unique key (`.gt(id)`), and takes `count="exact"` from the **first** page
+only: a later page's count covers just the rows past the cursor.
 
 ## Access control — check the relationship, not the role name
 

@@ -18,7 +18,10 @@ function recorded(channel, payload) {
   const nested = Object.fromEntries(Object.entries(payload)
     .filter(([, value]) => value && typeof value === 'object')
     .map(([key, value]) => [key, recorded(`${channel}.${key}`, value)]))
-  const note = key => { if (typeof key === 'string') (reads[channel] ||= new Set()).add(key) }
+  // `toJSON` is JSON.stringify's own lookup, not a field read: Live compares rows by stringifying.
+  const note = key => {
+    if (typeof key === 'string' && key !== 'toJSON') (reads[channel] ||= new Set()).add(key)
+  }
   return new Proxy(payload, {
     get(target, key) { note(key); return Object.hasOwn(nested, key) ? nested[key] : target[key] },
     has(target, key) { note(key); return key in target },
@@ -58,6 +61,13 @@ function roster() {
 beforeEach(() => {
   resetApi()
   reads = {}
+})
+
+it('does not count JSON.stringify of a payload as reading an unlisted field', () => {
+  JSON.stringify(recorded('heart', { ts: 't', source: 'rppg', trusted: true,
+    heart_rate_bpm: 70, rmssd_ms: 30 }))
+  expect([...reads.heart].filter(key => !FIELDS.heart.includes(key))).toEqual([])
+  expect(reads.heart.size, 'stringify reads every field, so the recorder saw them').toBeGreaterThan(0)
 })
 
 it('reads nothing from a live payload that latest_signals_for_sessions does not build', async () => {

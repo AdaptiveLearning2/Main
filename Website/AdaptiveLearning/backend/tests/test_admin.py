@@ -9,6 +9,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 import pytest  # noqa: E402
 
 import main  # noqa: E402
+from test_access_control import _RPC_READS, _Rpc, _viewer_relationship_result  # noqa: E402
 
 ADMIN = {"id": "admin-1"}
 TEACHER = {"id": "teacher-1"}
@@ -25,6 +26,14 @@ class _Fake:
         self.raises = set(raises)
         self.upserts = []
         self.inserts = []
+
+    def rpc(self, name, params):
+        assert name == "viewer_relationship", name
+        # The shared model over this fake's profiles; it holds no class or link.
+        profiles = [{"id": STUDENT, "role": "student"}] + [{"id": a, "role": "admin"} for a in self.admins]
+        failed = self.raises & set(_RPC_READS[name])
+        return _Rpc(_viewer_relationship_result({"profiles": profiles}, params),
+                    RuntimeError(f"{sorted(failed)} unavailable") if failed else None)
 
     def table(self, name):
         client, table = self, name

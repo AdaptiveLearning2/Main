@@ -487,6 +487,8 @@ describe('the roster read', () => {
     expect(screen.queryByText('No students yet')).not.toBeInTheDocument()
     expect(screen.queryByText('Student')).not.toBeInTheDocument()
     expect(screen.queryByText('Ada Lovelace')).not.toBeInTheDocument()
+    // The backend answered: "just now", never "make sure the backend is running".
+    expect(screen.getByText("Couldn't load your students just now. Try again in a moment.")).toBeInTheDocument()
   })
 })
 

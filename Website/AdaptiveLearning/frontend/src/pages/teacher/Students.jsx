@@ -37,7 +37,10 @@ const isTextOrNull = (v) => v === null || typeof v === 'string'
 function rosterRows(body) {
   const ok = Array.isArray(body) && body.every(r =>
     typeof r?.user_id === 'string' && r.user_id !== '' && isTextOrNull(r.name) && isTextOrNull(r.email))
-  if (!ok) throw new Error('/api/teacher/students answered with an unexpected shape')
+  if (!ok) {
+    // The backend answered, so LoadError's 503 sentence ("just now"), not "make sure the backend is running".
+    throw Object.assign(new Error('/api/teacher/students answered with an unexpected shape'), { status: 503 })
+  }
   return body
 }
 

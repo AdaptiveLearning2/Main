@@ -646,19 +646,22 @@ def _weekly_channels(fake) -> set:
 
 
 def test_the_weekly_report_counts_every_reading_past_the_row_ceiling(monkeypatch):
-    """The raw read stopped at PostgREST's 1000 rows (~17 minutes of EEG); aggregates do not."""
+    """A raw read stops at PostgREST's 1000 rows (~17 minutes of EEG); an aggregate does not."""
     # 50 readings, a ceiling of 10 on any table read: only an aggregate sees all 50.
     cog = [{"user_id": "student-1", "ts": _ts(d % 7, hour=8 + d // 7), "focus": 0.2 + 0.01 * d,
             "stress": 0.4} for d in range(50)]
+    # The oldest reading (six days back, 08:00) holds both extremes: a newest-first cap drops it.
+    cog[6].update(focus=0.1, stress=0.95)
     fake = _FakeSupabase(_signal_tables(cog), max_rows=10)
     monkeypatch.setattr(main, "supabase", fake)
     report = main._weekly_signal_report("student-1")
 
     assert report["sample_counts"]["cognitive"] == 50
-    assert report["truncated"] is False, "only the sessions read can be cut now"
+    assert report["truncated"] is False, "only the sessions read can be cut"
     expected = round(sum(r["focus"] for r in cog) / len(cog), 2)
     assert report["averages"]["focus"] == expected
-    assert report["highlights"]["lowest_focus"] == 0.2, "the oldest reading counts too"
+    assert report["highlights"]["lowest_focus"] == 0.1, "the oldest reading counts too"
+    assert report["highlights"]["highest_stress"] == 0.95
     assert all(d["cognitive_retrieved"] for d in report["daily"])
 
 
@@ -1548,6 +1551,7 @@ def test_report_without_face_never_queries_face_signals(monkeypatch):
     monkeypatch.setattr(main, "supabase", fake)
     report = main._weekly_signal_report("student-1", include_emotion=False)
 
+    assert _weekly_channels(fake) == {"cognitive", "heart"}
     assert "face_signals" not in fake.table_calls
     assert report["face_included"] is False
     assert report["averages"]["face_attention"] is None

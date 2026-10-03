@@ -40,6 +40,7 @@ def test_a_declined_channel_is_never_queried(monkeypatch):
     assert (channels.heart, channels.emotion) == (False, False)
 
     main._weekly_signal_report(STUDENT, include_heart=channels.heart, include_emotion=channels.emotion)
+    assert _weekly_channels(fake) == {"cognitive"}
     assert "heart_signals" not in fake.table_calls
     assert "face_signals" not in fake.table_calls
 

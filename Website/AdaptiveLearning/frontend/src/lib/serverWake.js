@@ -26,8 +26,13 @@ export function startRequest() {
   }
 }
 
+/** No HTTP answer from the API in this page for `AWAKE_FOR_MS`, or ever: it may be asleep. */
+export function serverQuiet(now = Date.now()) {
+  return lastAnswerAt === null || now - lastAnswerAt >= AWAKE_FOR_MS
+}
+
 export function serverWaking(now = Date.now()) {
-  if (lastAnswerAt !== null && now - lastAnswerAt < AWAKE_FOR_MS) return false
+  if (!serverQuiet(now)) return false
   for (const started of inflight.values()) if (now - started >= WAKE_AFTER_MS) return true
   return false
 }

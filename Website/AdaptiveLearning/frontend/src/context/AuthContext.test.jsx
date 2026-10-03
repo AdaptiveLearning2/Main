@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import { AuthProvider, useAuth } from './AuthContext'
 import { onSignOut } from '../lib/signOutTasks'
+import { _resetForTests as resetServerWake, startRequest } from '../lib/serverWake'
 
 // The display preference is per browser, so every sign-out path clears it for shared machines.
 
@@ -72,6 +73,8 @@ beforeEach(() => {
   getSession.mockResolvedValue({ data: { session: null } })
   apiFetch.mockReset()
   apiFetch.mockResolvedValue({ role: 'student' })
+  // Module state: a test that hears an answer would otherwise mark the server awake for the rest.
+  resetServerWake()
 })
 
 it("sends a student's grade with the sign-up, and no grade for anyone else", async () => {
@@ -158,6 +161,20 @@ it("drops cached reads on either sign-out, so the next account never sees this o
   expect(clearApiCache).toHaveBeenCalledTimes(2)
 })
 
+it('drops cached reads when another account signs in over this one, with no sign-out between', async () => {
+  // Signing in at /login over a live session fires SIGNED_IN, never SIGNED_OUT.
+  getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
+  apiFetch.mockResolvedValue({ role: 'teacher' })
+  render(<AuthProvider><RoleProbe /></AuthProvider>)
+  await screen.findByText('role:teacher')
+  clearApiCache.mockClear()
+
+  act(() => authCallback('TOKEN_REFRESHED', SESSION('teacher')))
+  expect(clearApiCache).not.toHaveBeenCalled()
+  act(() => authCallback('SIGNED_IN', { user: { id: 'u2', user_metadata: {} } }))
+  expect(clearApiCache).toHaveBeenCalledTimes(1)
+})
+
 it('leaves it alone while the session is live', async () => {
   renderAuth()
   await screen.findByText('Sign out')
@@ -226,6 +243,17 @@ it('falls back to the claim when the backend cannot be reached', async () => {
   render(<AuthProvider><RoleProbe /></AuthProvider>)
 
   expect(await screen.findByText('role:teacher')).toBeInTheDocument()
+})
+
+it('gives a server that answered lately no second try: its timeout is a hang, not a boot', async () => {
+  // Before the sleeping-server test below, so a leaked answer would fail that one.
+  startRequest()(true)
+  getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
+  const timedOut = Object.assign(new Error('timed out'), { timeout: true })
+  apiFetch.mockRejectedValueOnce(timedOut).mockResolvedValueOnce({ role: 'admin' })
+  render(<AuthProvider><RoleProbe /></AuthProvider>)
+  expect(await screen.findByText('role:teacher')).toBeInTheDocument()
+  expect(apiFetch).toHaveBeenCalledTimes(1)
 })
 
 it('gives a sleeping server one longer try before falling back to the claim', async () => {

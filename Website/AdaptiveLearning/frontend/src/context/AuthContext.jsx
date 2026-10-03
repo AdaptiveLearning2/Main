@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { apiFetch, clearApiCache } from '../lib/api'
+import { serverQuiet } from '../lib/serverWake'
 import { clearViewPrefs } from '../lib/viewPrefs'
 import { runSignOutTasks } from '../lib/signOutTasks'
 
@@ -32,12 +33,22 @@ export function AuthProvider({ children }) {
   useEffect(() => { userRef.current = user }, [user])
 
   useEffect(() => {
+    // Another account drops cached reads even with no SIGNED_OUT (signing in over a live session).
+    // Cache keys carry the account too; this is the second guard.
+    let account
+    const noteAccount = (session) => {
+      const id = session?.user?.id ?? null
+      if (account !== undefined && account !== id) clearApiCache()
+      account = id
+    }
     supabase.auth.getSession().then(({ data: { session } }) => {
+      noteAccount(session)
       setSession(session)
       setUser(session?.user ?? null)
       setAuthLoading(false)
     })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      noteAccount(session)
       // Also sign-outs not via signOut(): expired refresh token, another tab.
       if (event === 'SIGNED_OUT') { clearViewPrefs(); clearApiCache() }
       // Signing back in as the same account reads its role again rather than reusing this one.
@@ -55,9 +66,9 @@ export function AuthProvider({ children }) {
 
   // Role from `profiles.role` (backend-owned). Keyed on id so a token refresh doesn't re-fetch.
   const userId = user?.id ?? null
-  const loadProfile = useCallback(() => {
+  const loadProfile = useCallback((timeoutMs = ROLE_TIMEOUT_MS) => {
     if (!userId) return Promise.resolve(null)
-    return apiFetch('/api/profile/me', { timeoutMs: ROLE_TIMEOUT_MS })
+    return apiFetch('/api/profile/me', { timeoutMs })
   }, [userId])
 
   // Derived, never reset: a new account is never routed or greeted as the previous one.
@@ -69,8 +80,9 @@ export function AuthProvider({ children }) {
     let cancelled = false
     loadProfile()
       // A sleeping server's boot can outlast the first bound: one longer, still bounded, try.
-      .catch(e => (e?.timeout && !cancelled
-        ? apiFetch('/api/profile/me', { timeoutMs: COLD_START_ROLE_TIMEOUT_MS })
+      // Only if nothing has answered lately; an awake server that timed out is hung, not booting.
+      .catch(e => (e?.timeout && !cancelled && serverQuiet()
+        ? loadProfile(COLD_START_ROLE_TIMEOUT_MS)
         : Promise.reject(e)))
       .then(p => {
         if (cancelled) return

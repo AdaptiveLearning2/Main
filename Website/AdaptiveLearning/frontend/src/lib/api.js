@@ -6,14 +6,19 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 // The last token a request carried, for a page that is going away and cannot await one.
 let lastToken = null
 
-async function getAccessToken() {
+/** The current access token and the account it belongs to; both null when signed out or unreadable. */
+async function readSession() {
   try {
     const { data } = await supabase.auth.getSession()
     lastToken = data?.session?.access_token || null
-    return lastToken
+    return { token: lastToken, account: (lastToken && data.session.user?.id) || null }
   } catch {
-    return null
+    return { token: null, account: null }
   }
+}
+
+async function getAccessToken() {
+  return (await readSession()).token
 }
 
 /**
@@ -64,15 +69,16 @@ const sleep = (ms, signal) => new Promise(resolve => {
 // How long `cache: true` reuses a read that changes only when someone writes it.
 const SHORT_CACHE_MS = 30_000
 
-// Opted-in GETs: path -> { promise } while in flight, then { data, expiresAt }.
+// Opted-in GETs, keyed by account and path: { path, promise } in flight, then { path, data, expiresAt }.
 const readCache = new Map()
+const cacheKey = (account, path) => JSON.stringify([account, path])
 
 // "/api/classes/c1/join-code" -> "/api/classes": a write there invalidates every read under it.
 const resourceOf = (path) => path.split('?')[0].split('/').slice(0, 3).join('/')
 
 function invalidate(path) {
   const resource = resourceOf(path)
-  for (const key of [...readCache.keys()]) if (resourceOf(key) === resource) readCache.delete(key)
+  for (const [key, entry] of [...readCache]) if (resourceOf(entry.path) === resource) readCache.delete(key)
 }
 
 /** Drop every cached read: on sign-out, so a shared machine's next account sees none of them. */
@@ -84,6 +90,7 @@ export function clearApiCache() {
  * `timeoutMs` is opt-in with no default (slow endpoints like strategies are legitimate).
  * It bounds the whole call, token refresh included, not just `fetch`. `cache` (GET only)
  * reuses a result, or a request in flight, for 30 s (`cacheMs` to choose); failures never.
+ * A cached result is per account, and every caller gets its own copy.
  */
 export async function apiFetch(path, { method = 'GET', body = null,
                                        timeoutMs = null, cache = false,
@@ -94,52 +101,58 @@ export async function apiFetch(path, { method = 'GET', body = null,
     try { return await bounded(path, { method, body, timeoutMs }) } finally { invalidate(path) }
   }
   if (!cacheMs) return bounded(path, { method, body, timeoutMs })
-  const hit = readCache.get(path)
+  // This caller's own bound, even when it joins a request another caller started.
+  return structuredClone(await within(path, timeoutMs, cachedRead(path, cacheMs, timeoutMs)))
+}
+
+async function cachedRead(path, cacheMs, timeoutMs) {
+  // The token sent is the token whose account keys the entry, so no entry answers another account.
+  const { token, account } = await readSession()
+  const key = cacheKey(account, path)
+  const hit = readCache.get(key)
   if (hit?.promise) return hit.promise
   if (hit && hit.expiresAt > Date.now()) return hit.data
-  const entry = {}
-  entry.promise = bounded(path, { method, body, timeoutMs }).then(
+  const entry = { path }
+  entry.promise = bounded(path, { method: 'GET', body: null, timeoutMs, token }).then(
     data => {
       // Invalidated meanwhile: the write wins, so this result is not kept.
-      if (readCache.get(path) === entry) readCache.set(path, { data, expiresAt: Date.now() + cacheMs })
+      if (readCache.get(key) === entry) readCache.set(key, { path, data, expiresAt: Date.now() + cacheMs })
       return data
     },
     err => {
-      if (readCache.get(path) === entry) readCache.delete(path)
+      if (readCache.get(key) === entry) readCache.delete(key)
       throw err
     })
-  readCache.set(path, entry)
+  readCache.set(key, entry)
   return entry.promise
 }
 
-async function bounded(path, { method, body, timeoutMs }) {
-  if (!timeoutMs) return request(path, { method, body })
-
-  const controller = new AbortController()
+/** Rejects with a `timeout` error once `timeoutMs` passes, calling `onExpire` first; none: no bound. */
+function within(path, timeoutMs, promise, onExpire) {
+  if (!timeoutMs) return promise
   let timer
   const expired = new Promise((_, reject) => {
     timer = setTimeout(() => {
-      // Abort the request too, or it keeps running after the caller gives up.
-      controller.abort()
+      onExpire?.()
       const err = new Error(`Request to ${path} timed out after ${timeoutMs}ms`)
       err.timeout = true
       reject(err)
     }, timeoutMs)
   })
-
-  try {
-    return await Promise.race([
-      request(path, { method, body, signal: controller.signal }),
-      expired,
-    ])
-  } finally {
-    clearTimeout(timer)
-  }
+  return Promise.race([promise, expired]).finally(() => clearTimeout(timer))
 }
 
-async function request(path, { method, body, signal }) {
+async function bounded(path, { method, body, timeoutMs, token }) {
+  if (!timeoutMs) return request(path, { method, body, token })
+  const controller = new AbortController()
+  // Abort the request too, or it keeps running after the caller gives up.
+  return within(path, timeoutMs, request(path, { method, body, token, signal: controller.signal }),
+                () => controller.abort())
+}
+
+async function request(path, { method, body, signal, token }) {
   for (let attempt = 0; ; attempt++) {
-    const res = await send(path, { method, body, signal })
+    const res = await send(path, { method, body, signal, token })
     // 503 + `Retry-After` is a pause, not a failure. GET only, so no side effect replays.
     const delay = res.status === 503 && method === 'GET' && attempt < RETRY_ATTEMPTS
       ? retryAfterMs(res)
@@ -149,8 +162,9 @@ async function request(path, { method, body, signal }) {
   }
 }
 
-async function send(path, { method, body, signal }) {
-  const token = await getAccessToken()
+// `token` undefined: read the session now. A cached read passes the one its key was made from.
+async function send(path, { method, body, signal, token: given }) {
+  const token = given === undefined ? await getAccessToken() : given
   const headers = { 'Content-Type': 'application/json' }
   if (token) headers.Authorization = `Bearer ${token}`
 

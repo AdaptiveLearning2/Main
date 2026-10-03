@@ -6,7 +6,7 @@ import ServerWaking from './ServerWaking'
 beforeEach(() => { vi.useFakeTimers(); _resetForTests() })
 afterEach(() => { vi.useRealTimers() })
 
-it('says the server is starting while a request waits past the threshold, then goes', () => {
+it('says a request is taking longer than usual while it waits past the threshold, then goes', () => {
   render(<ServerWaking />)
   expect(screen.queryByRole('status')).toBeNull()
 
@@ -14,8 +14,15 @@ it('says the server is starting while a request waits past the threshold, then g
   act(() => { done = startRequest() })
   expect(screen.queryByRole('status')).toBeNull()
   act(() => { vi.advanceTimersByTime(WAKE_AFTER_MS) })
-  expect(screen.getByRole('status')).toHaveTextContent(/Starting the server/)
+  expect(screen.getByRole('status')).toHaveTextContent(/taking longer than usual/)
 
   act(() => done(true))
   expect(screen.queryByRole('status')).toBeNull()
+})
+
+it('names no cause for the wait, since a slow or hung server looks the same as a sleeping one', () => {
+  render(<ServerWaking />)
+  act(() => { startRequest() })
+  act(() => { vi.advanceTimersByTime(WAKE_AFTER_MS) })
+  expect(screen.getByRole('status')).not.toHaveTextContent(/start|wak|sleep|asleep|boot|quiet spell|minute/i)
 })

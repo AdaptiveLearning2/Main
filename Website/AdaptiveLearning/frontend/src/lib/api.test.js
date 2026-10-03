@@ -355,6 +355,59 @@ describe('the opt-in read cache', () => {
     expect(await apiFetch('/api/classes', { cacheMs: 1000 })).toEqual(['fresh'])
   })
 
+  it("never answers one account's read with another's, though nothing cleared the cache between", async () => {
+    // Signing in over a live session fires no SIGNED_OUT; a teacher's class rows carry join codes.
+    setSession(buildAuthSession({ id: 'acct-a', accessToken: 'tok-a' }))
+    globalThis.fetch = vi.fn().mockResolvedValueOnce(ok(['a-class'])).mockResolvedValueOnce(ok(['b-class']))
+    expect(await apiFetch('/api/classes', { cache: true })).toEqual(['a-class'])
+    setSession(buildAuthSession({ id: 'acct-b', accessToken: 'tok-b' }))
+    expect(await apiFetch('/api/classes', { cache: true })).toEqual(['b-class'])
+    expect(fetches()).toBe(2)
+    expect(lastCall()[1].headers.Authorization).toBe('Bearer tok-b')
+  })
+
+  it('never joins one account to a read still in flight for another', async () => {
+    let answerA
+    globalThis.fetch = vi.fn()
+      .mockReturnValueOnce(new Promise(r => { answerA = r }))
+      .mockResolvedValueOnce(ok(['b-class']))
+    setSession(buildAuthSession({ id: 'acct-a', accessToken: 'tok-a' }))
+    const readA = apiFetch('/api/classes', { cache: true })
+    await vi.waitFor(() => expect(fetches()).toBe(1))
+    setSession(buildAuthSession({ id: 'acct-b', accessToken: 'tok-b' }))
+    expect(await apiFetch('/api/classes', { cache: true })).toEqual(['b-class'])
+    expect(lastCall()[1].headers.Authorization).toBe('Bearer tok-b')
+    answerA(ok(['a-class']))
+    expect(await readA).toEqual(['a-class'])
+  })
+
+  it("bounds a caller that joins a read in flight by that caller's own timeoutMs", async () => {
+    vi.useFakeTimers()
+    globalThis.fetch.mockReturnValue(new Promise(() => {}))
+    apiFetch('/api/classes', { cache: true }).catch(() => {})          // started with no bound
+    const joined = apiFetch('/api/classes', { cache: true, timeoutMs: 5_000 }).then(() => 'resolved', e => e)
+
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(await Promise.race([joined, Promise.resolve('pending')])).toBe('pending')
+    await vi.advanceTimersByTimeAsync(2)
+    const err = await joined
+    expect(err.timeout).toBe(true)
+    expect(err.message).toBe('Request to /api/classes timed out after 5000ms')
+    // It joined the first request rather than starting its own.
+    expect(fetches()).toBe(1)
+  })
+
+  it("hands every caller its own copy, so one page editing its rows cannot edit another's", async () => {
+    globalThis.fetch.mockResolvedValue(ok([{ name: 'Maths' }]))
+    const [first, joined] = await Promise.all([apiFetch('/api/classes', { cache: true }),
+                                               apiFetch('/api/classes', { cache: true })])
+    first[0].name = 'edited'
+    joined.push({ name: 'added' })
+    expect(joined[0].name).toBe('Maths')
+    expect(await apiFetch('/api/classes', { cache: true })).toEqual([{ name: 'Maths' }])
+    expect(fetches()).toBe(1)
+  })
+
   it('caches nothing unless asked, and drops everything on clear', async () => {
     await apiFetch('/api/classes')
     await apiFetch('/api/classes')

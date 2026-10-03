@@ -89,9 +89,11 @@ it('draws a nameless student as their email, else "No name set", never "Student"
     students: { a: [SESSION], b: [{ ...SESSION, id: 's2' }], c: [{ ...SESSION, id: 's3' }] },
   })
   draw()
+  // Every row lands in one render, so the rest are there once the first is.
+  await screen.findByText('Ada')
   // The initial comes from the label shown, and is "?" with nothing to show.
   for (const [label, initial] of [['Ada', 'A'], ['blaise@example.test', 'B'], ['No name set', '?']]) {
-    expect(within((await screen.findByText(label)).closest('a')).getByText(initial)).toBeInTheDocument()
+    expect(within(screen.getByText(label).closest('a')).getByText(initial)).toBeInTheDocument()
   }
   expect(screen.getAllByRole('link').filter(row => row.textContent.includes('Student'))).toEqual([])
 })

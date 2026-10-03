@@ -1952,8 +1952,6 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         return round(float(agg[f"{key}_sum"]) / n, 2) if n else None
 
     daily = []
-    # Days whose rollup is counted: their raw aggregate must not be counted a second time.
-    rolled_days: dict[str, set] = {"cognitive": set(), "emotion": set(), "heart": set()}
     # Channels with a day that may have expired and could not be read from the rollup.
     lost_channels: set[str] = set()
     for i in range(days - 1, -1, -1):
@@ -1988,9 +1986,6 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         cog_roll = _rolled("cognitive", cog_raw, cog_ok)
         face_roll = _rolled("emotion", face_raw, face_ok) if include_emotion else None
         heart_roll = _rolled("heart", heart_raw, heart_ok) if include_heart else None
-        for channel, roll in (("cognitive", cog_roll), ("emotion", face_roll), ("heart", heart_roll)):
-            if roll:
-                rolled_days[channel].add(day)
 
         daily.append({
             "date": day,
@@ -2058,12 +2053,10 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             for label, count in (face_roll.get("emotion_counts") or {}).items():
                 rolled_emotions[label] = rolled_emotions.get(label, 0) + int(count)
 
-    def _raw(days_by_date: dict, channel: str, key: str) -> tuple[float, int]:
-        """`(sum, n)` of a measurement over the days the rollup did not supply."""
+    def _raw(days_by_date: dict, key: str) -> tuple[float, int]:
+        """`(sum, n)` over the raw days; `_rolled` never takes a day that has raw rows."""
         total, n = 0.0, 0
-        for day, agg in days_by_date.items():
-            if day in rolled_days[channel]:
-                continue
+        for agg in days_by_date.values():
             count = int(agg.get(f"{key}_n") or 0)
             if count:
                 total += float(agg.get(f"{key}_sum") or 0)
@@ -2075,20 +2068,18 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         total, n = rolled_totals[key]
         return ((total + raw[0]) / (n + raw[1])) if n + raw[1] else None
 
-    focus_raw = _raw(cog_days, "cognitive", "focus")
-    stress_raw = _raw(cog_days, "cognitive", "stress")
+    focus_raw = _raw(cog_days, "focus")
+    stress_raw = _raw(cog_days, "stress")
     # Only trusted heart samples are aggregated, as in the rollup.
-    bpm_raw = _raw(heart_days, "heart", "bpm")
-    rmssd_raw = _raw(heart_days, "heart", "rmssd")
+    bpm_raw = _raw(heart_days, "bpm")
+    rmssd_raw = _raw(heart_days, "rmssd")
     # Which sensor produced the readings (accuracy differs); trusted rows plus rollup days.
     heart_sources = sorted({s for agg in heart_days.values() for s in agg.get("sources") or ()
                             if isinstance(s, str)} | rolled_sources)
 
     # Seeded from the rollup's full distribution, then the raw days on top; trusted only.
     emotion_counts: dict[str, int] = dict(rolled_emotions)
-    for day, agg in face_days.items():
-        if day in rolled_days["emotion"]:
-            continue
+    for agg in face_days.values():
         for label, count in (agg.get("emotion_counts") or {}).items():
             emotion_counts[label] = emotion_counts.get(label, 0) + int(count)
 
@@ -2097,7 +2088,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
 
     avg_focus = _round2(_week("focus", focus_raw))
     avg_stress = _round2(_week("stress", stress_raw))
-    attention = _raw(face_days, "emotion", "attention")
+    attention = _raw(face_days, "attention")
     avg_attention = round(attention[0] / attention[1], 2) if attention[1] else None
     highest_stress = max((float(a["stress_max"]) for a in cog_days.values()
                           if a.get("stress_max") is not None), default=None)
@@ -2125,8 +2116,11 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         has_heart = bpm_raw[1] > 0 or rolled_totals["heart_rate_bpm"][1] > 0
         # Emotions arrived, trusted or not: the distribution is trusted-only, the record is not.
         has_face = any(d["face_samples"] for d in daily)
-        channels = [("EEG", cog_rows > 0, cog_ok and "cognitive" not in lost_channels,
-                     eeg_enabled or cog_rows > 0)]
+        # A rolled-up day's rows arrived too, though its raw rows are gone.
+        has_eeg = cog_rows > 0 or any(d["cognitive_from_rollup"] and d["cognitive_samples"]
+                                      for d in daily)
+        channels = [("EEG", has_eeg, cog_ok and "cognitive" not in lost_channels,
+                     eeg_enabled or has_eeg)]
         if include_emotion:
             channels.append(("facial recognition", has_face,
                              face_ok and "emotion" not in lost_channels, True))

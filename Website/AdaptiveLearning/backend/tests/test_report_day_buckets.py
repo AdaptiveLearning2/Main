@@ -444,3 +444,16 @@ def test_eeg_rows_with_no_usable_score_are_not_called_absent(monkeypatch, at_thr
                                          include_emotion=False)["summary"]
     assert summary.startswith("EEG readings were recorded this week, but none gave a usable")
     assert "No EEG" not in summary
+
+
+def test_eeg_held_only_in_rolled_up_days_is_not_called_absent(monkeypatch, at_three_am_utc):
+    """Past expiry the rollup is the record; its rows arrived even with no usable average."""
+    _before_the_year(monkeypatch)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
+        rollup=[_rollup("2026-06-09", "cognitive", avg_focus=None, avg_stress=None,
+                        sample_count=40, trusted_sample_count=0)])))
+    report = main._weekly_signal_report(STUDENT, include_heart=False, include_emotion=False)
+    assert _day(report, "2026-06-09")["cognitive_from_rollup"] is True
+    assert report["summary"].startswith(
+        "EEG readings were recorded this week, but none gave a usable")
+    assert "No EEG" not in report["summary"]

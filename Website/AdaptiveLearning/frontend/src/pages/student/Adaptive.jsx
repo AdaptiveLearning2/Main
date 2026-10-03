@@ -672,7 +672,9 @@ export default function Adaptive() {
       }),
     }))
   }, { intervalMs: headband.pushMode ? PUSH_POLL_MS : 3000,
-       key: `${sessionId}:${stationId}`, enabled: !!sessionId })
+       key: `${sessionId}:${stationId}`, enabled: !!sessionId,
+       // Under pull this request refreshes the station pairing; unpolled 120 s, it is released.
+       pauseWhenHidden: !!headband.pushMode })
 
   // Push only: hand the session and token to the sidecar, and take them back
   // at the end. Under pull the poller is the writer; both would double-write.

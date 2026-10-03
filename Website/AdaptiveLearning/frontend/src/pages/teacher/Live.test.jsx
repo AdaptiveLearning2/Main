@@ -78,9 +78,8 @@ it('adds a reading to the trend only when the poll brings a new one', async () =
   })
   render(<MemoryRouter><Live /></MemoryRouter>)
   await screen.findByText(/Headband on/)
-  // A visible tab polls at once on visibilitychange, so no waiting on the interval.
+  // Two more polls on the 2 s interval.
   for (const want of [2, 3]) {
-    document.dispatchEvent(new Event('visibilitychange'))
     await waitFor(() => expect(polls).toBe(want))
   }
   await waitFor(() => expect(screen.getByRole('img', { name: /last 1 readings/ })).toBeInTheDocument())

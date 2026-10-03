@@ -160,6 +160,35 @@ it('leaves the refusal standing when the status tick did not answer either', asy
 })
 
 
+function setTabHidden(hidden) {
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true, get: () => (hidden ? 'hidden' : 'visible'),
+  })
+  document.dispatchEvent(new Event('visibilitychange'))
+}
+
+it('keeps polling status in a hidden tab under pull, since that poll keeps the pairing', async () => {
+  // Under pull `/api/eeg/status` refreshes the station pairing; 120 s unpolled frees the headband.
+  // No poller running, so the telemetry poll is off and this poll is the only refresher.
+  eegStatus.mockResolvedValue({ ingest_mode: 'pull', service: true, poller: { running: false } })
+  render(<Adaptive />)
+  await startASession()
+  await waitFor(() => expect(eegStatus).toHaveBeenCalled())
+
+  setTabHidden(true)
+  try {
+    const before = eegStatus.mock.calls.length
+    // Past the 3 s pull interval with time to spare.
+    await waitFor(() => expect(eegStatus.mock.calls.length).toBeGreaterThan(before + 1),
+                  { timeout: 9000 })
+  } finally {
+    setTabHidden(false)
+    delete document.hidden
+    delete document.visibilityState
+  }
+}, 25000)
+
 it('does not flip a push deployment to pull because a tick did not land', async () => {
   // Ingest mode is a fact about the installation; a failed request cannot change it.
   eegHealth.mockResolvedValue({ available: null, ingest_mode: 'push' })
@@ -195,12 +224,11 @@ it('keeps a push deployment in push mode when the health probe stops answering',
   const before = eegHealth.mock.calls.length
   // Matches `eegHealth`'s real non-429 fallback shape.
   eegHealth.mockResolvedValue({ answered: false, available: false, error: 'Failed to fetch' })
-  // Two further probes, so a wrong write has landed and painted. Under push the probe
-  // waits 30 s; a visible tab re-polls at once on visibilitychange.
-  await waitFor(() => {
-    document.dispatchEvent(new Event('visibilitychange'))
-    expect(eegHealth.mock.calls.length).toBeGreaterThan(before + 1)
-  })
+  // The second probe comes 5 s in: that wait was set before the first answer said push.
+  await waitFor(() => expect(eegHealth.mock.calls.length).toBeGreaterThan(before),
+                { timeout: 8000 })
+  // Let that answer's write render: a wrong one would remove the badge.
+  await new Promise(r => setTimeout(r, 200))
 
   expect(screen.getByText('on your device')).toBeInTheDocument()
 }, 30000)
@@ -243,15 +271,15 @@ it('does not tear a streaming push link down because a tick did not land', async
 
   const before = eegStatus.mock.calls.length
   eegStatus.mockResolvedValue({ answered: false, service: false, poller: { running: false } })
-  // Every 30 s under push; visibilitychange makes a visible tab re-poll at once.
-  await waitFor(() => {
-    document.dispatchEvent(new Event('visibilitychange'))
-    expect(eegStatus.mock.calls.length).toBeGreaterThan(before)
-  })
+  // Every 30 s under push, and nothing brings a tick forward: this waits out one interval.
+  await waitFor(() => expect(eegStatus.mock.calls.length).toBeGreaterThan(before),
+                { timeout: 35000 })
+  // Let that tick's write render: a wrong one would drop the link and the charge.
+  await new Promise(r => setTimeout(r, 200))
 
   expect(screen.getByText(/STREAMING/)).toBeInTheDocument()
   expect(screen.getByLabelText(/Headband charge 80%/)).toBeInTheDocument()
-}, 30000)
+}, 60000)
 
 
 it('writes nothing at all from a tick that did not land, under pull too', async () => {

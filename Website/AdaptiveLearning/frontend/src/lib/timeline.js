@@ -119,34 +119,33 @@ export function buildTimeline(data) {
            emotionSlices, stressSlices, tMin, tMax, ribbon }
 }
 
-const EXTREME_KEYS = ['focus', 'stress']
+const DRAWN_KEYS = ['focus', 'stress', 'heart_rate_bpm', 'rmssd_ms']
 
 /**
- * At most about `maxRows` rows for drawing, in order. Per bucket it keeps the first row, each
- * series' min and max, one null (so a gap still breaks the line), and every heart reading.
- * The sentence and the sr-only table keep the full series; this is for the SVG only.
+ * At most `maxRows` rows for drawing, in order: per bucket the first row and each series' min
+ * and max, plus the last row. The sentence and the sr-only table keep the full series.
  */
 export function downsample(rows, maxRows) {
   if (!Array.isArray(rows) || rows.length <= maxRows) return rows
-  // Up to seven picks a bucket: the first row, then per series its min, max and one null.
-  const buckets = Math.max(1, Math.floor(maxRows / 7))
+  // Only series with a reading take a share, so a session without heart keeps more EEG detail.
+  const keys = DRAWN_KEYS.filter(k => rows.some(r => r[k] != null))
+  // One slot held back for the last row, so the line reaches the end of the axis.
+  const buckets = Math.max(1, Math.floor((maxRows - 1) / (1 + 2 * keys.length)))
   const size = Math.ceil(rows.length / buckets)
-  const keep = new Set()
+  const keep = new Set([rows.length - 1])
   for (let start = 0; start < rows.length; start += size) {
     const end = Math.min(start + size, rows.length)
     keep.add(start)
-    for (const key of EXTREME_KEYS) {
-      let lo = -1, hi = -1, gap = -1
+    for (const key of keys) {
+      let lo = -1, hi = -1
       for (let i = start; i < end; i++) {
         const v = rows[i][key]
-        if (v == null) { if (gap < 0) gap = i; continue }
+        if (v == null) continue
         if (lo < 0 || v < rows[lo][key]) lo = i
         if (hi < 0 || v > rows[hi][key]) hi = i
       }
-      for (const i of [lo, hi, gap]) if (i >= 0) keep.add(i)
-    }
-    for (let i = start; i < end; i++) {
-      if (rows[i].heart_rate_bpm !== undefined) keep.add(i)
+      if (lo >= 0) keep.add(lo)
+      if (hi >= 0) keep.add(hi)
     }
   }
   return [...keep].sort((a, b) => a - b).map(i => rows[i])

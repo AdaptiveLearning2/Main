@@ -25,7 +25,6 @@ const clock = {
   subscribe(listener) {
     clock.listeners.add(listener)
     if (!clock.timer) {
-      clock.now = Date.now()
       clock.timer = setInterval(() => {
         clock.now = Date.now()
         clock.listeners.forEach(l => l())
@@ -36,7 +35,12 @@ const clock = {
       if (!clock.listeners.size) { clearInterval(clock.timer); clock.timer = null }
     }
   },
-  read: () => clock.now,
+  // A render reads before it subscribes, so an idle clock catches up here. Only once a
+  // second is stale: React needs the same value from two reads in a row.
+  read: () => {
+    if (!clock.timer && Date.now() - clock.now >= 1000) clock.now = Date.now()
+    return clock.now
+  },
 }
 const useNow = () => useSyncExternalStore(clock.subscribe, clock.read)
 
@@ -71,6 +75,8 @@ function Gauge({ label, value, color = 'bg-violet-500' }) {
 
 // One empty history for every student without one, so a memoised card sees the same prop.
 const EMPTY = []
+// Marks a failed poll in a trend: focus and stress break there; bpm bridges it (its line connects nulls).
+const GAP = { focus: null, stress: null, bpm: null, gap: true }
 
 // No `rowKey`, so no table: a rolling window has no meaningful row labels.
 const SPARK_COLUMNS = [
@@ -166,7 +172,7 @@ const StudentCard = memo(function StudentCard({ student, history }) {
 
       {/* A sparkline is still a chart; the summary sentence is its reading. */}
       <AccessibleChart className="h-12 -mx-1"
-        headline={`${student.name || 'This student'}: signal trend over the last ${history?.length || 0} readings.`}
+        headline={`${student.name || 'This student'}: signal trend over the last ${history?.filter(p => !p.gap).length || 0} readings.`}
         rows={history} columns={SPARK_COLUMNS}>
           <LineChart data={history}>
             {/* Two axes: bpm and 0..1 ratios can't share a scale. */}
@@ -232,7 +238,7 @@ export default function Live() {
     const cls = classId
     if (seenRef.current.classId !== cls) {
       historyRef.current = {}
-      seenRef.current = { classId: cls, ts: {} }
+      seenRef.current = { classId: cls, ts: {}, failed: false }
     }
     let rows
     try {
@@ -240,6 +246,7 @@ export default function Live() {
       rows = await apiFetch(`/api/teacher/classes/${cls}/live`)
     } catch (e) {
       if (!stopped()) {
+        seenRef.current.failed = true
         setError(e.message)
         setFailedFor(cls)
         setRosterFailed(e)
@@ -247,6 +254,13 @@ export default function Live() {
       throw e
     }
     if (stopped()) return
+    // First answer after an outage: break each trend so the two sides are not joined.
+    if (seenRef.current.failed) {
+      seenRef.current.failed = false
+      for (const [id, arr] of Object.entries(historyRef.current)) {
+        if (arr.length && !arr.at(-1).gap) historyRef.current[id] = [...arr, GAP].slice(-60)
+      }
+    }
     rows.forEach(r => {
       const c = r.latest_cognitive
       const h = r.latest_heart

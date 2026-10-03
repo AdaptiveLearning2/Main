@@ -1,6 +1,7 @@
 """The sidecar push client: no silent drops, no token outliving its session, counts from receipts."""
 
 import asyncio
+import logging
 
 import pytest
 
@@ -494,6 +495,31 @@ async def test_shutdown_flushes_the_whole_backlog(client):
 
     sent = sum(len(c["json"]["samples"]) for c in client._fake.calls)
     assert sent == MAX_BATCH * 3, f"only {sent} of {MAX_BATCH * 3} were delivered"
+
+
+@pytest.mark.anyio
+async def test_a_final_flush_the_backend_never_answers_ends_at_the_budget(monkeypatch, caplog):
+    """The kit gives the sidecar's shutdown a fixed time, so `stop()` has to end inside its budget."""
+
+    class _Unanswered(_FakeClient):
+        async def post(self, url, json=None, headers=None):
+            self.calls.append({"url": url, "json": json, "headers": headers})
+            await asyncio.Event().wait()  # accepted, and never answered
+
+    fake = _Unanswered()
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient", lambda **_k: fake)
+    monkeypatch.setattr("src.app.services.push_client.SHUTDOWN_BUDGET", 0.5)
+    pc = await _started(PushClient("http://backend:8000"))
+    pc.enqueue("cognitive", {"ts": 1})
+    pc.enqueue("face", {"ts": 1})
+
+    with caplog.at_level(logging.WARNING, logger="src.app.services.push_client"):
+        await asyncio.wait_for(pc.stop(), timeout=5)
+
+    assert [c["url"].rsplit("/", 1)[1] for c in fake.calls] == ["cognitive"]
+    assert "cognitive batch cancelled in flight; 1 sample(s) unaccounted" in caplog.text
+    assert "shutdown budget spent mid-flush, 1 sample(s) not sent" in caplog.text  # the face sample, never taken
+    assert pc._token is None and pc._session_id is None
 
 
 @pytest.mark.anyio

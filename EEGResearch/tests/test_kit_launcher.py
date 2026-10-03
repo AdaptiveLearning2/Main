@@ -617,6 +617,8 @@ def test_a_request_that_never_finishes_does_not_hold_back_the_sidecars_shutdown(
     """The push client flushes in the app's shutdown, which uvicorn runs only after its connections close."""
     import uvicorn  # noqa: PLC0415
 
+    from src.app.services import push_client  # noqa: PLC0415
+
     in_flight, shut_down = threading.Event(), threading.Event()
 
     async def app(scope, receive, send):
@@ -643,11 +645,18 @@ def test_a_request_that_never_finishes_does_not_hold_back_the_sidecars_shutdown(
             held.sendall(b"POST /upload HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\n1")
             assert in_flight.wait(10), "the request never reached the app"
             server.should_exit = True
-            # Inside the launcher's grace, with a second to spare for noticing the stop.
-            assert shut_down.wait(launcher.SIDECAR_STOP_S - 1), "the app's shutdown never ran"
+            # Early enough that the push client's whole budget, and a second to exit, still fit in the grace.
+            started_in = launcher.SIDECAR_STOP_S - push_client.SHUTDOWN_BUDGET - 1
+            assert shut_down.wait(started_in), f"the app's shutdown had not started {started_in:.0f} s on"
     finally:
         server.should_exit = True
         thread.join(20)
+
+
+def test_stop_waits_longer_than_the_sidecar_is_given_to_shut_down():
+    """Past STOP_WAIT_S the installer kills the copy, cutting short the final flush the grace exists for."""
+    # A second for the supervisor to notice the stop, and one for the launcher's own exit.
+    assert launcher.STOP_WAIT_S >= launcher.SIDECAR_STOP_S + 2
 
 
 @WINDOWS

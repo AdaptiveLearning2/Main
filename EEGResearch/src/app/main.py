@@ -66,7 +66,7 @@ async def request_timing(request: Request, call_next):
 
 @app.on_event("shutdown")
 async def _stop_pushing() -> None:
-    """Flush the queue and drop the token on shutdown; the flush is bounded by the request timeout."""
+    """Flush the queue and drop the token on shutdown, within the push client's SHUTDOWN_BUDGET."""
     if push_client is not None:
         stream_manager.set_payload_consumer(None)
         await push_client.stop()

@@ -24,8 +24,9 @@ logger = logging.getLogger("src.kit")
 
 INSTANCE_MUTEX = r"Global\AdaptiveLearningSensors"
 STOP_EVENT = r"Global\AdaptiveLearningSensorsStop"
-STOP_WAIT_S = 15.0
-SIDECAR_STOP_S = 10.0  # its own shutdown flushes the push client; past this it is ended
+STOP_WAIT_S = 20.0  # past this --stop reports the copy still running, and the installer kills it
+# The sidecar's own shutdown: SIDECAR_DRAIN_S, then the push client's SHUTDOWN_BUDGET; past this it is ended.
+SIDECAR_STOP_S = 15.0
 # uvicorn waits for its connections before the app's shutdown, unbounded by default: one that never
 # closes would spend all of SIDECAR_STOP_S, and the push client would never flush.
 SIDECAR_DRAIN_S = 2.0

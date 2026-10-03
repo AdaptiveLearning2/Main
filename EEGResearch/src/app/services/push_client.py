@@ -177,7 +177,12 @@ class PushClient:
                                    sum(len(self._queues[c]) for c in _CHANNELS))
                     break
                 try:
-                    await self._flush_once()
+                    # Cancelled at the deadline, as the loop is: the kit ends a sidecar that overruns it.
+                    await asyncio.wait_for(self._flush_once(), timeout=deadline - time.monotonic())
+                except asyncio.TimeoutError:
+                    logger.warning("push: shutdown budget spent mid-flush, %d sample(s) not sent",
+                                   sum(len(self._queues[c]) for c in _CHANNELS))
+                    break
                 except Exception as exc:  # noqa: BLE001 - shutdown must not raise
                     logger.warning("push: final flush failed, %d sample(s) lost: %s",
                                    sum(len(self._queues[c]) for c in _CHANNELS), exc)

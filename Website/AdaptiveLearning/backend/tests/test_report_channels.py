@@ -159,8 +159,10 @@ def test_one_childs_refusal_does_not_suppress_a_siblings_data(monkeypatch):
         return {str(i): {"face_included": include_emotion} for i in ids}
 
     monkeypatch.setattr(main, "_signal_summaries", _fake_summaries)
-    monkeypatch.setattr(main, "_reportable_channels",
-                        lambda cid, want=True: main.ReportChannels(True, cid == "kid-yes", True))
+    # The batch form: the dashboard reads every child's consent at once.
+    monkeypatch.setattr(main, "_reportable_channels_many",
+                        lambda ids, want=True: {cid: main.ReportChannels(True, cid == "kid-yes", True)
+                                                for cid in ids})
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "parent-1"})
     monkeypatch.setattr(main, "_profile", lambda _c: {})
     monkeypatch.setattr(main, "supabase", _FakeSupabase({
@@ -301,7 +303,8 @@ def test_children_are_grouped_on_the_flags_not_the_consent_outcome(monkeypatch):
     outcomes = {"kid-a": main.ReportChannels(False, False, True),    # declined
                 "kid-b": main.ReportChannels(False, False, False)}   # unreadable
     monkeypatch.setattr(main, "_signal_summaries", _fake_summaries)
-    monkeypatch.setattr(main, "_reportable_channels", lambda cid, want=True: outcomes[cid])
+    monkeypatch.setattr(main, "_reportable_channels_many",
+                        lambda ids, want=True: {cid: outcomes[cid] for cid in ids})
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "parent-1"})
     monkeypatch.setattr(main, "_profile", lambda _c: {})
     monkeypatch.setattr(main, "supabase", _FakeSupabase({

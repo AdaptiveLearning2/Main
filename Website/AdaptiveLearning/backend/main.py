@@ -60,7 +60,6 @@ async def _lifespan(app: FastAPI):
             for shutdown in (safe_solve.stop_startup_probe,
                              _shutdown_strategy_pool,
                              _shutdown_chart_summary_pool,
-                             _shutdown_admin_live_pool,
                              _shutdown_prefetch_pool,
                              chart_archive.shutdown_pool):
                 try:
@@ -3359,7 +3358,8 @@ def student_stats(student_id: str, request: Request):
     return _stats_including_open_session(student_id)
 
 # (table, ts column, measurement columns): a row counts only if a measurement is non-null
-# (`contact_poor` rows are all null). Keep in step with `scripts/assert_signal_rls.sql`.
+# (`contact_poor` rows are all null). The rule `last_activity_for_sessions` and
+# `last_active_for_users` apply in SQL; tests hold both to it.
 _ACTIVITY_SOURCES = (
     ("session_answers",   "answered_at", ()),
     ("cognitive_signals", "ts", ("focus",)),
@@ -3367,24 +3367,38 @@ _ACTIVITY_SOURCES = (
     ("heart_signals",     "ts", ("heart_rate_bpm",)),
 )
 
+# Sessions per student a history view shows.
+_RECENT_SESSIONS = 20
 
-def _measured_only(query, columns):
-    """Narrow to rows where at least one of `columns` is not null (one column: plain form)."""
-    if len(columns) == 1:
-        return query.filter(columns[0], "not.is", "null")
-    return query.or_(",".join(f"{c}.not.is.null" for c in columns))
+_SESSION_CLIENT_KEYS = tuple(c.strip() for c in _SESSION_CLIENT_COLUMNS.split(","))
 
 
-@app.get("/api/sessions/student/{student_id}")
-def student_sessions(student_id: str, request: Request):
-    """A student's recent sessions, marked `abandoned` (an age) and `idle` (real last activity).
+def _recent_sessions_many(user_ids, limit: int) -> dict[str, list[dict]]:
+    """Each user's newest `limit` sessions, newest first, in one call. Raises on a failed read.
 
-    Derived here so the thresholds have one definition.
+    The function returns `_SESSION_CLIENT_COLUMNS` alone; narrowing again here is a second
+    guard, so a widened function still cannot reach a browser.
     """
-    _verify_can_view_student(get_user(request), student_id)
-    res = supabase.table("sessions").select(_SESSION_CLIENT_COLUMNS) \
-        .eq("user_id", student_id).order("started_at", desc=True).limit(20).execute()
-    rows = res.data or []
+    ids = _unique_ids(user_ids)
+    if not ids:
+        return {}
+    rows = supabase.rpc("recent_sessions_for_users",
+                        {"p_user_ids": ids, "p_limit": limit}).execute().data or []
+    out: dict[str, list[dict]] = {uid: [] for uid in ids}
+    # Parsed: offset spellings of one instant sort differently as text. Unreadable sorts last.
+    for r in sorted(rows, reverse=True,
+                    key=lambda r: _parse_ts(r.get("started_at"))
+                    or datetime.min.replace(tzinfo=timezone.utc)):
+        out.setdefault(r.get("user_id"), []).append({k: r.get(k) for k in _SESSION_CLIENT_KEYS})
+    return out
+
+
+def _flag_sessions(rows: list[dict]) -> list[dict]:
+    """Mark sessions `abandoned` (an age) and `idle` (real last activity), in place, over one read.
+
+    Derived here so the thresholds have one definition. `activity_known` is False only
+    when the activity read failed, so the client never calls an unread session quiet.
+    """
     cutoff = _utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)
     for r in rows:
         started = _parse_ts(r.get("started_at"))
@@ -3392,44 +3406,24 @@ def student_sessions(student_id: str, request: Request):
         r["abandoned"] = bool(
             not r.get("ended_at") and started is not None and started < cutoff)
 
-    # Real last activity for open sessions (at most 20), for the `idle` flag.
     ids = [r["id"] for r in rows if not r.get("ended_at")]
-    last_answer: dict[str, str] = {}
-    # False only when a read failed; nothing to look up is not "unknown".
+    last_seen: dict[str, str] = {}
+    # False only when the read failed; nothing to look up is not "unknown".
     activity_known = True
     if ids:
-        # Same inputs and window as `class_live`, so the two surfaces agree.
-        newest: dict[str, tuple] = {}
-        for table, column, measured in _ACTIVITY_SOURCES:
-            try:
-                query = (supabase.table(table)
-                         .select(f"session_id, {column}")
-                         .in_("session_id", ids))
-                if measured:
-                    query = _measured_only(query, measured)
-                recent = (query.order(column, desc=True)
-                          .limit(500).execute().data or [])
-            except Exception as e:                              # noqa: BLE001
-                # Any one failing discards the partial result: it could only under-report.
-                print(f"[sessions] could not read last activity from {table}: {e}")
-                activity_known = False
-                newest = {}
-                break
-            for row in recent:
-                stamp = row.get(column)
-                when = _parse_ts(stamp) if stamp else None
-                if when is None:
-                    continue
-                sid = row.get("session_id")
-                if sid not in newest or when > newest[sid][0]:
-                    newest[sid] = (when, stamp)
-        # Compared parsed (offset spellings differ), published as the original string.
-        last_answer = {sid: stamp for sid, (_, stamp) in newest.items()}
+        try:
+            got = supabase.rpc("last_activity_for_sessions",
+                               {"p_session_ids": ids}).execute().data or []
+            last_seen = {g["session_id"]: g["last_activity_at"]
+                         for g in got if g.get("last_activity_at")}
+        except Exception as e:                                  # noqa: BLE001
+            print(f"[sessions] could not read last activity: {e}")
+            activity_known = False
 
     quiet_before = _utc_now() - timedelta(seconds=_STALE_AFTER_SEC)
     for r in rows:
         r["activity_known"] = activity_known
-        r["last_activity_at"] = last_answer.get(r["id"])
+        r["last_activity_at"] = last_seen.get(r["id"])
         if r.get("ended_at") or not activity_known:
             r["idle"] = False
             continue
@@ -3438,6 +3432,42 @@ def student_sessions(student_id: str, request: Request):
         r["idle"] = bool(seen is not None and seen < quiet_before
                          and not r["abandoned"])
     return rows
+
+
+@app.get("/api/sessions/student/{student_id}")
+def student_sessions(student_id: str, request: Request):
+    """A student's recent sessions, flagged by `_flag_sessions`."""
+    _verify_can_view_student(get_user(request), student_id)
+    res = supabase.table("sessions").select(_SESSION_CLIENT_COLUMNS) \
+        .eq("user_id", student_id).order("started_at", desc=True) \
+        .limit(_RECENT_SESSIONS).execute()
+    return _flag_sessions(res.data or [])
+
+
+@app.get("/api/classes/{class_id}/sessions")
+def class_sessions(class_id: str, request: Request):
+    """Every student's recent sessions in a class the caller owns, flagged as above.
+
+    Three reads for the class, where the Sessions page made one request per student.
+    A failed sessions read is every student's `None`, never "ran no sessions".
+    """
+    user = get_user(request)
+    _verify_class_owner(class_id, user["id"])
+    members = supabase.table("class_memberships").select("student_id") \
+        .eq("class_id", class_id).execute().data or []
+    roster = _unique_ids(m["student_id"] for m in members)
+    profiles = _profiles_many(roster)
+    students = [{"user_id": sid,
+                 "name": (profiles.get(sid) or {}).get("display_name") or "Student"}
+                for sid in roster]
+    try:
+        by_student = _recent_sessions_many(roster, _RECENT_SESSIONS)
+    except Exception as e:                                      # noqa: BLE001
+        print(f"[sessions:class] {class_id}: {e}")
+        return {"students": students, "sessions": {sid: None for sid in roster}}
+    _flag_sessions([r for rows in by_student.values() for r in rows])
+    return {"students": students,
+            "sessions": {sid: by_student.get(sid, []) for sid in roster}}
 
 @app.get("/api/performance/student/{student_id}")
 def student_performance(student_id: str, request: Request):
@@ -7300,8 +7330,8 @@ def my_children(request: Request, include_face: bool = True):
     links = supabase.table("parent_child_links").select("child_id, created_at") \
         .eq("parent_id", user["id"]).execute()
     child_ids = [lnk["child_id"] for lnk in (links.data or [])]
-    channels_by_child = {cid: _reportable_channels(cid, include_face)
-                         for cid in child_ids}
+    # One consent read for every child; fails closed per child, as `_consent` does.
+    channels_by_child = _reportable_channels_many(child_ids, include_face)
     # Keyed on the flags alone: `consent_retrieved` doesn't change the query.
     by_channels: dict[tuple[bool, bool], list[str]] = {}
     for cid, ch in channels_by_child.items():
@@ -7325,12 +7355,16 @@ def my_children(request: Request, include_face: bool = True):
     all_stats = _stats_including_open_session_many(kids)
     profiles = _profiles_many(kids)
     all_perf = _topic_performance_many(kids)
+    # "Top five per child" in one call; it has no PostgREST form, so it is a function.
+    try:
+        recent = _recent_sessions_many(kids, 5)
+    except Exception as e:                                      # noqa: BLE001
+        # `None` per child, as `class_sessions` sends: an empty list would say "no sessions".
+        print(f"[parent:children] could not read recent sessions: {e}")
+        recent = None
     for lnk in (links.data or []):
         cid = lnk["child_id"]
         stats = all_stats.get(cid) or {}
-        # Per child: "top five per child" has no PostgREST batch form.
-        sess_res = supabase.table("sessions").select(_SESSION_CLIENT_COLUMNS) \
-            .eq("user_id", cid).order("started_at", desc=True).limit(5).execute()
         p = profiles.get(cid) or {}
         children.append({
             "user_id":     cid,
@@ -7338,7 +7372,7 @@ def my_children(request: Request, include_face: bool = True):
             "email":       p.get("email") or "",
             "linked_at":   lnk["created_at"],
             "stats":       stats,
-            "sessions":    sess_res.data or [],
+            "sessions":    None if recent is None else recent.get(cid, []),
             "performance": all_perf.get(cid) or [],
             # Headline averages only, not the full weekly report.
             "signal_summary": summaries[str(cid)]
@@ -7643,29 +7677,6 @@ _STALE_AFTER_SEC = 600
 # Platform-wide open-session cap; the payload reports when it bites.
 _ADMIN_LIVE_SESSION_CAP = 200
 
-# Nothing submitted here may wait on anything else in here, or it deadlocks.
-_ADMIN_LIVE_POOL: ThreadPoolExecutor | None = None
-_admin_live_pool_lock = threading.Lock()
-
-
-def _admin_live_pool() -> ThreadPoolExecutor:
-    global _ADMIN_LIVE_POOL
-    with _admin_live_pool_lock:
-        if _ADMIN_LIVE_POOL is None:
-            _ADMIN_LIVE_POOL = ThreadPoolExecutor(max_workers=8,
-                                                  thread_name_prefix="admin-live")
-        return _ADMIN_LIVE_POOL
-
-
-def _shutdown_admin_live_pool():
-    """Drop the queue on the way out (from _lifespan). See `_shutdown_strategy_pool`."""
-    global _ADMIN_LIVE_POOL
-    with _admin_live_pool_lock:
-        pool, _ADMIN_LIVE_POOL = _ADMIN_LIVE_POOL, None
-    if pool is not None:
-        pool.shutdown(wait=False, cancel_futures=True)
-
-
 # A failed read; distinct from None ("nothing has ever arrived").
 _TS_UNREADABLE = object()
 
@@ -7673,34 +7684,25 @@ _TS_UNREADABLE = object()
 def _latest_signal_ts(session_ids: list[str]) -> dict:
     """Newest timestamp per session per channel, and nothing else.
 
-    `{session_id: {"eeg": ts|None|_TS_UNREADABLE, "camera": ...}}`. Selects `ts`
-    alone, so readings never leave the database. All reads submitted before any wait.
+    `{session_id: {"eeg": ts|None|_TS_UNREADABLE, "camera": ...}}`. The function returns
+    timestamps alone, so readings never leave the database. One read per channel, so one
+    channel failing leaves the other read.
     """
-    pool = _admin_live_pool()
-
-    def _newest(table: str, session_id: str):
-        try:
-            rows = supabase.table(table).select("ts") \
-                .eq("session_id", session_id) \
-                .order("ts", desc=True).limit(1).execute().data or []
-            return rows[0]["ts"] if rows else None
-        except Exception as e:
-            print(f"[admin:live:{table}] {session_id}: {e}")
-            return _TS_UNREADABLE
-
-    channels = (("eeg", "cognitive_signals"), ("camera", "face_signals"))
-    futures = {(sid, name): pool.submit(_newest, table, sid)
-               for sid in session_ids
-               for name, table in channels}
-
     out = {sid: {} for sid in session_ids}
-    for (sid, name), future in futures.items():
+    if not session_ids:
+        return out
+    for name, channel in (("eeg", "cognitive"), ("camera", "face")):
         try:
-            out[sid][name] = future.result()
-        except Exception as e:
-            # The pool itself failed (e.g. shutdown); `_newest` catches its own.
-            print(f"[admin:live:{name}] {sid}: {e}")
-            out[sid][name] = _TS_UNREADABLE
+            rows = supabase.rpc("latest_signal_ts_for_sessions",
+                                {"p_session_ids": list(session_ids),
+                                 "p_channel": channel}).execute().data or []
+            newest = {r.get("session_id"): r.get("ts") for r in rows}
+            for sid in session_ids:
+                out[sid][name] = newest.get(sid)
+        except Exception as e:                                  # noqa: BLE001
+            print(f"[admin:live:{channel}] {e}")
+            for sid in session_ids:
+                out[sid][name] = _TS_UNREADABLE
     return out
 
 

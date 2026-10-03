@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { motion } from 'framer-motion'
 import { Activity, Camera, Brain, Heart, Radio } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -75,8 +75,23 @@ function Gauge({ label, value, color = 'bg-violet-500' }) {
 
 // One empty history for every student without one, so a memoised card sees the same prop.
 const EMPTY = []
-// Marks a failed poll in a trend: focus and stress break there; bpm bridges it (its line connects nulls).
+// Marks a failed poll in a trend. Every line breaks there; bpm by starting a new segment.
 const GAP = { focus: null, stress: null, bpm: null, gap: true }
+// Connects nulls, so a rejected heart reading is bridged; an outage is not, being a new segment.
+const BPM_LINE = { yAxisId: 'bpm', type: 'monotone', name: 'bpm', stroke: '#a855f7', strokeWidth: 1.5,
+                   dot: false, connectNulls: true, isAnimationActive: false }
+
+/** For drawing only: each point's `bpm` copied to `bpm_<n>`, where n counts the gaps before it. */
+function bpmSegments(history) {
+  let n = 0
+  const used = new Set()
+  const data = history.map(p => {
+    if (p.gap) { n += 1; return p }
+    used.add(n)
+    return { ...p, [`bpm_${n}`]: p.bpm }
+  })
+  return { data, segments: used.size ? [...used] : [0] }
+}
 
 // No `rowKey`, so no table: a rolling window has no meaningful row labels.
 const SPARK_COLUMNS = [
@@ -111,6 +126,8 @@ const StudentCard = memo(function StudentCard({ student, history }) {
   const face   = student.latest_face
   const heart  = student.latest_heart
   const initial = (student.name || '?')[0].toUpperCase()
+  // The columns and sentence read `history`; only the SVG gets the segment keys.
+  const drawn = useMemo(() => bpmSegments(history || EMPTY), [history])
 
   return (
     <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
@@ -174,13 +191,13 @@ const StudentCard = memo(function StudentCard({ student, history }) {
       <AccessibleChart className="h-12 -mx-1"
         headline={`${student.name || 'This student'}: signal trend over the last ${history?.filter(p => !p.gap).length || 0} readings.`}
         rows={history} columns={SPARK_COLUMNS}>
-          <LineChart data={history}>
+          <LineChart data={drawn.data}>
             {/* Two axes: bpm and 0..1 ratios can't share a scale. */}
             <YAxis yAxisId="ratio" hide domain={[0, 1]} />
             <YAxis yAxisId="bpm" hide domain={['auto', 'auto']} />
             <Line yAxisId="ratio" type="monotone" dataKey="focus"      stroke="#6366f1" strokeWidth={1.5} dot={false} isAnimationActive={false} />
             <Line yAxisId="ratio" type="monotone" dataKey="stress"     stroke="#f43f5e" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-            <Line yAxisId="bpm"   type="monotone" dataKey="bpm"        stroke="#a855f7" strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
+            {drawn.segments.map(n => <Line key={n} {...BPM_LINE} dataKey={`bpm_${n}`} />)}
           </LineChart>
       </AccessibleChart>
 

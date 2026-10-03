@@ -16,6 +16,11 @@ const ROSTER = [
   { user_id: 'stu-2', name: 'Grace Hopper', email: 'grace@example.com',
     joined_at: '2026-02-01T09:00:00+00:00' },
 ]
+// A profile with no name, or no name and no email: both null, and sorted after every named row.
+const NAMELESS = { user_id: 'stu-3', name: null, email: 'kid3@example.com',
+                   joined_at: '2026-03-01T09:00:00+00:00' }
+const NAMELESS_NO_EMAIL = { user_id: 'stu-4', name: null, email: null,
+                            joined_at: '2026-03-02T09:00:00+00:00' }
 
 // Seven days at 1 Hz: far above any row cap, so a count from rows cannot match.
 const WEEK_OF_SAMPLES = 51840
@@ -408,18 +413,81 @@ it('searches the name on screen, not only the email behind it', async () => {
   expect(screen.queryByText('Ada Lovelace')).not.toBeInTheDocument()
 })
 
-it('says the roster could not be read, not that nobody has joined, and retries', async () => {
-  // A teacher with thirty enrolled students was told "No students yet".
-  overrideApi('/api/teacher/students', answer(apiError(503)))
-  render(<Students />)
+describe('the roster read', () => {
+  const rosterCalls = () => calls().filter(p => p === '/api/teacher/students')
 
-  expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't load your students")
-  expect(screen.queryByText('No students yet')).not.toBeInTheDocument()
+  it('shows each student with their own email', async () => {
+    // Two rows, so an email drawn on the wrong row fails.
+    render(<Students />)
+    for (const s of ROSTER) {
+      const row = (await screen.findByText(s.name)).closest('button')
+      expect(within(row).getByText(s.email)).toBeInTheDocument()
+    }
+  })
 
-  setData()
-  await userEvent.click(screen.getByRole('button', { name: /try again/i }))
-  expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
-  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  it('labels a nameless student by their email and says no name is set', async () => {
+    setData({ roster: [...ROSTER, NAMELESS] })
+    render(<Students />)
+    const row = (await screen.findByText(NAMELESS.email)).closest('button')
+    expect(within(row).getByText('No name set')).toBeInTheDocument()
+    // The badge is the row's only "Student": none is drawn as a name.
+    expect(within(row).getAllByText('Student')).toHaveLength(1)
+    const named = screen.getByText('Ada Lovelace').closest('button')
+    expect(within(named).queryByText('No name set')).not.toBeInTheDocument()
+  })
+
+  it('says no name is set for a student with neither a name nor an email', async () => {
+    setData({ roster: [...ROSTER, NAMELESS_NO_EMAIL] })
+    render(<Students />)
+    const row = (await screen.findByText('No name set')).closest('button')
+    expect(within(row).getAllByText('Student')).toHaveLength(1)
+    expect(within(row).getByText('?')).toBeInTheDocument()
+  })
+
+  it('answers a 503 with the load error and its retry, never a roster', async () => {
+    // As apiFetch throws it once its Retry-After retries are spent.
+    const failed = apiError(503, 'Could not load your students; try again')
+    overrideApi('/api/teacher/students', answer(failed))
+    render(<Students />)
+
+    expect(await screen.findByText("Couldn't load your students just now. Try again in a moment."))
+      .toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument()
+    expect(screen.queryByText('No students yet')).not.toBeInTheDocument()
+    // Every row carries a "Student" badge.
+    expect(screen.queryByText('Student')).not.toBeInTheDocument()
+  })
+
+  it('asks again on Try again and shows the roster that comes back', async () => {
+    overrideApi('/api/teacher/students', answer(apiError(503, 'Could not load your students; try again')))
+    render(<Students />)
+    const retry = await screen.findByRole('button', { name: /try again/i })
+    expect(rosterCalls()).toHaveLength(1)
+
+    setData()
+    await userEvent.click(retry)
+    expect(await screen.findByText('Grace Hopper')).toBeInTheDocument()
+    expect(rosterCalls()).toHaveLength(2)
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['a body that is not a list', { retrieved: false }],
+    ['a row missing its name field', [{ user_id: 'stu-1', email: 'ada@example.com',
+                                        joined_at: '2026-01-15T09:00:00+00:00' }]],
+    ['a row missing its email field', [{ user_id: 'stu-1', name: 'Ada Lovelace',
+                                         joined_at: '2026-01-15T09:00:00+00:00' }]],
+    ['a row with no id', [{ name: 'Ada Lovelace', email: 'ada@example.com',
+                            joined_at: '2026-01-15T09:00:00+00:00' }]],
+  ])('treats %s as a failed read, not a roster', async (_label, body) => {
+    setData({ roster: body })
+    render(<Students />)
+
+    expect(await screen.findByRole('button', { name: /try again/i })).toBeInTheDocument()
+    expect(screen.queryByText('No students yet')).not.toBeInTheDocument()
+    expect(screen.queryByText('Student')).not.toBeInTheDocument()
+    expect(screen.queryByText('Ada Lovelace')).not.toBeInTheDocument()
+  })
 })
 
 it('still says No students yet for a roster that read as empty', async () => {

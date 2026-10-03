@@ -32,6 +32,19 @@ class _Result:
 _EMBED_KEYS = {("class_memberships", "classes"): "class_id"}
 
 
+def _top_level(spec: str) -> list[str]:
+    """A select spec split on its top-level commas, so an embed's own column list stays whole."""
+    parts, depth, cur = [], 0, ""
+    for ch in spec:
+        if ch == "," and depth == 0:
+            parts.append(cur)
+            cur = ""
+            continue
+        depth += (ch == "(") - (ch == ")")
+        cur += ch
+    return [p.strip() for p in parts + [cur] if p.strip()]
+
+
 class _Query:
     """Minimal stand-in for the supabase-py query builder chain."""
 
@@ -50,16 +63,23 @@ class _Query:
         self._desc = False
         self._count = None
         self._cols = None
+        # Embed name -> its named columns, when the select names its top-level columns too.
+        self._embed_cols = {}
 
     def select(self, *cols, **kw):
         self._count = kw.get("count")
-        # Only named columns come back, as in PostgREST. With an embed ("a(b)"), whole rows: one in
-        # _EMBED_KEYS is joined, any other is left to the fixture's rows.
+        # Only named columns come back, as in PostgREST. An embed ("a(b)") in _EMBED_KEYS is joined,
+        # any other is left to the fixture's rows; beside `*`, whole rows.
         spec = ",".join(cols)
         self._embeds = {m[1]: bool(m[2]) for m in re.finditer(r"(\w+)(!inner)?\(", spec)
                         if (self._name, m[1]) in _EMBED_KEYS}
-        if spec and "*" not in spec and "(" not in spec:
-            self._cols = [c.strip() for c in spec.split(",") if c.strip()]
+        if spec and "*" not in spec:
+            self._cols = []
+            for part in _top_level(spec):
+                embed = re.fullmatch(r"(\w+)(?:!inner)?\((.*)\)", part)
+                self._cols.append(embed[1] if embed else part)
+                if embed:
+                    self._embed_cols[embed[1]] = [c.strip() for c in embed[2].split(",") if c.strip()]
         return self
 
     def _embed(self, row):
@@ -85,7 +105,11 @@ class _Query:
     def _project(self, row):
         if self._cols is None:
             return row
-        return {c: row[c] for c in self._cols if c in row}
+        out = {c: row[c] for c in self._cols if c in row}
+        for name, cols in self._embed_cols.items():
+            if isinstance(out.get(name), dict):
+                out[name] = {c: out[name][c] for c in cols if c in out[name]}
+        return out
 
     def order(self, col, desc=False, **_k):
         self._order, self._desc = col, desc

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { m, AnimatePresence } from 'framer-motion'
 import { Users, Search, ChevronDown, Flame, Smile, Target, TrendingUp, Zap, Heart, Activity } from 'lucide-react'
 import HideSensorDataToggle from '../../components/common/HideSensorDataToggle'
+import LoadError from '../../components/ui/LoadError'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 import { apiFetch } from '../../lib/api'
 import { offLabel } from '../../lib/signalFormat'
@@ -13,6 +14,7 @@ const SIGNAL_WINDOW_DAYS = 7
 const WINDOW_NOTE = `last ${SIGNAL_WINDOW_DAYS}d`
 const SIGNALS_UNAVAILABLE = 'signal data unavailable'
 const CONSENT_UNREAD = "consent couldn't be read"
+const NO_NAME = 'No name set'
 const eegSub = (n, failed) => {
   if (failed) return SIGNALS_UNAVAILABLE
   return n ? `${n} EEG readings · ${WINDOW_NOTE}` : `no EEG data · ${WINDOW_NOTE}`
@@ -27,6 +29,16 @@ const asPct = (value) => {
   if (value === null || value === undefined) return null
   const n = Number(value)
   return Number.isFinite(n) ? `${Math.round(n * 100)}%` : null
+}
+
+const isTextOrNull = (v) => v === null || typeof v === 'string'
+
+// Any other shape is a failed read, never a roster: an id to key on, a name and an email (null when unset).
+function rosterRows(body) {
+  const ok = Array.isArray(body) && body.every(r =>
+    typeof r?.user_id === 'string' && r.user_id !== '' && isTextOrNull(r.name) && isTextOrNull(r.email))
+  if (!ok) throw new Error('/api/teacher/students answered with an unexpected shape')
+  return body
 }
 
 // Stats, the signal summary (a server-side aggregate, not a capped read) and
@@ -113,7 +125,7 @@ export default function Students() {
   const [students, setStudents] = useState([])
   const [loading, setLoading]   = useState(true)
   // A failed roster read is not an empty class: "No students yet" would tell the teacher nobody joined.
-  const [rosterFailed, setRosterFailed] = useState(false)
+  const [rosterError, setRosterError] = useState(null)
   const [rosterAttempt, setRosterAttempt] = useState(0)
   const [search, setSearch]     = useState('')
   const [expandedId, setExpandedId] = useState(null)
@@ -130,15 +142,15 @@ export default function Students() {
     async function loadStudents() {
       let rows
       try {
-        rows = await apiFetch('/api/teacher/students')
+        rows = rosterRows(await apiFetch('/api/teacher/students'))
       } catch (e) {
         console.error('Failed to load students:', e)
-        if (!cancelled) { setRosterFailed(true); setLoading(false) }
+        if (!cancelled) { setRosterError(e); setLoading(false) }
         return
       }
       if (cancelled) return
-      setStudents(Array.isArray(rows) ? rows : [])
-      setRosterFailed(false)
+      setStudents(rows)
+      setRosterError(null)
       setLoading(false)
     }
 
@@ -146,7 +158,7 @@ export default function Students() {
   return () => { cancelled = true}
   }, [rosterAttempt])
 
-  const retryRoster = () => { setRosterFailed(false); setLoading(true); setRosterAttempt(n => n + 1) }
+  const retryRoster = () => { setRosterError(null); setLoading(true); setRosterAttempt(n => n + 1) }
 
   // Search name and email both.
   const filtered = students.filter(s =>
@@ -213,17 +225,8 @@ export default function Students() {
 
       {loading ? (
         <div className="space-y-3">{[1,2,3,4,5].map(i => <div key={i} className="h-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}</div>
-      ) : rosterFailed ? (
-        <div role="alert" className="text-center py-16">
-          <h3 className="text-xl font-black text-gray-900 dark:text-white mb-2">Couldn&apos;t load your students</h3>
-          <p className="text-gray-600 dark:text-gray-400 text-sm mb-4">
-            Your classes are unchanged; the list could not be read just now.
-          </p>
-          <button onClick={retryRoster}
-            className="px-4 py-2 rounded-xl bg-violet-600 text-white text-sm font-bold hover:bg-violet-700 transition">
-            Try again
-          </button>
-        </div>
+      ) : rosterError ? (
+        <LoadError what="your students" error={rosterError} onRetry={retryRoster} />
       ) : filtered.length === 0 ? (
         <div className="text-center py-16">
           <div className="text-6xl mb-4">🎓</div>
@@ -244,10 +247,11 @@ export default function Students() {
             <span className="text-xs font-bold uppercase tracking-widest text-gray-600 text-right dark:text-gray-400">Role</span>
           </div>
           {filtered.map((s, i) => {
-            // The backend names an unnamed student "Student", as the class roster does.
-            const name    = s.name || 'Student'
-            // From the name being shown, so the letter and the label agree.
-            const initial = name[0].toUpperCase()
+            // Never a made-up name: without one the email stands in, else the row says none is set.
+            const label   = s.name || s.email || NO_NAME
+            const sub     = s.name ? s.email : (s.email ? NO_NAME : null)
+            // From the label being shown, so the letter and the label agree.
+            const initial = s.name || s.email ? label[0].toUpperCase() : '?'
             // The earliest join across this teacher's classes, not the account's creation.
             const joined  = s.joined_at ? new Date(s.joined_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'
             const isOpen = expandedId === s.user_id
@@ -267,8 +271,8 @@ export default function Students() {
                       {initial}
                     </div>
                     <div>
-                      <p className="text-sm font-bold text-gray-900 dark:text-white">{name}</p>
-                      {s.email && <p className="text-xs text-gray-600 dark:text-gray-400">{s.email}</p>}
+                      <p className="text-sm font-bold text-gray-900 dark:text-white">{label}</p>
+                      {sub && <p className="text-xs text-gray-600 dark:text-gray-400">{sub}</p>}
                     </div>
                   </div>
                   <p className="text-sm text-gray-500 dark:text-gray-400">{joined}</p>

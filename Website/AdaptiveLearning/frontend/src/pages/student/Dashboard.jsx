@@ -11,6 +11,7 @@ import SkeletonList from '../../components/ui/Skeleton'
 import StatCard from '../../components/ui/StatCard'
 import { TOPIC_ICONS, topicsToShow } from '../../lib/topics'
 import useGradeTopics from '../../hooks/useGradeTopics'
+import { stagger } from '../../lib/stagger'
 
 const ICONS  = TOPIC_ICONS
 
@@ -217,7 +218,7 @@ export default function StudentDashboard() {
                 return (
                   <motion.div key={t}
                     initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: 0.55 + i * 0.03 }}
+                    transition={{ delay: stagger(i, 0.03, 0.55) }}
                     whileHover={{ scale: 1.06 }}
                     className={`flex flex-col items-center p-3 rounded-xl text-center gap-1 ${
                       measured ? toneFor(row.accuracy) : 'bg-slate-50 dark:bg-gray-800'}`}
@@ -316,7 +317,7 @@ export default function StudentDashboard() {
                   return (
                     <motion.div key={s.id}
                       initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.65 + i * 0.05 }}
+                      transition={{ delay: stagger(i, 0.05, 0.65) }}
                       whileHover={{ x: 3 }}
                       className="flex items-center justify-between p-3 bg-slate-50 dark:bg-gray-800 rounded-xl"
                     >

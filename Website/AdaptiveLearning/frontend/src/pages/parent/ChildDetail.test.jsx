@@ -5,7 +5,11 @@ import { vi } from 'vitest'
 // The facial opt-out means facial data is not read, not just not shown.
 
 vi.mock('../../lib/api', () => ({ apiFetch: vi.fn() }))
-vi.mock('react-router-dom', () => ({ useParams: () => ({ id: 'child-1' }) }))
+let mockLinkState = null
+vi.mock('react-router-dom', () => ({
+  useParams: () => ({ id: 'child-1' }),
+  useLocation: () => ({ state: mockLinkState }),
+}))
 
 // Stands in for the real report and records the props the page passed.
 const mockReportProps = {}
@@ -21,8 +25,19 @@ const { apiFetch } = await import('../../lib/api')
 const { default: ChildDetail } = await import('./ChildDetail')
 
 beforeEach(() => {
+  mockLinkState = null
+  for (const k of Object.keys(mockReportProps)) delete mockReportProps[k]
   apiFetch.mockReset()
   apiFetch.mockResolvedValue([{ user_id: 'child-1', name: 'Ada' }])
+})
+
+it('takes the name from the dashboard link and reads no children list', async () => {
+  // That list is the parent's heaviest read, and only the name was wanted from it.
+  mockLinkState = { name: 'Ada' }
+  render(<ChildDetail />)
+  await waitFor(() => expect(mockReportProps.initialName).toBe('Ada'))
+  expect(mockReportProps.nameFetch).toBeUndefined()
+  expect(apiFetch).not.toHaveBeenCalled()
 })
 
 it('looks the name up without reading facial data', async () => {

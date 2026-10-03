@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { cwd } from 'node:process'
 import { expect, it, vi } from 'vitest'
 
 // The real page modules load; these stand in for what they import at module scope.
@@ -22,7 +23,7 @@ it('loads nothing for a path no route renders', () => {
 
 it('covers every page route App declares', () => {
   // A text scan of App's `path="…"` attributes: the route table is JSX, not data.
-  const app = readFileSync(join(process.cwd(), 'src/App.jsx'), 'utf8')
+  const app = readFileSync(join(cwd(), 'src/App.jsx'), 'utf8')
   const declared = [...app.matchAll(/<Route\s+path="([^"]+)"/g)].map(m => m[1])
     .filter(p => !['/login', '/register', '/', '*'].includes(p))
   expect(declared.length).toBeGreaterThan(20)

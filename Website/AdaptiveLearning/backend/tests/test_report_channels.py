@@ -8,7 +8,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 import pytest  # noqa: E402
 
 import main  # noqa: E402
-from tests.test_access_control import _FakeSupabase, _ts  # noqa: E402
+from tests.test_access_control import _FakeSupabase, _ts, _weekly_channels  # noqa: E402
 
 STUDENT = "student-1"
 
@@ -40,6 +40,7 @@ def test_a_declined_channel_is_never_queried(monkeypatch):
     assert (channels.heart, channels.emotion) == (False, False)
 
     main._weekly_signal_report(STUDENT, include_heart=channels.heart, include_emotion=channels.emotion)
+    assert _weekly_channels(fake) == {"cognitive"}
     assert "heart_signals" not in fake.table_calls
     assert "face_signals" not in fake.table_calls
 
@@ -126,8 +127,11 @@ def test_the_emotion_distribution_is_exposed_not_just_its_argmax(monkeypatch):
         _consent_row(),
         cog=[{"user_id": STUDENT, "ts": _ts(1), "focus": 0.7, "stress": 0.3,
               "engagement": 0.6}],
-        face=[{"user_id": STUDENT, "ts": _ts(i), "emotion": e, "attention": 0.5}
-              for i, e in enumerate(["happy", "happy", "sad", "neutral"], start=1)],
+        face=[{"user_id": STUDENT, "ts": _ts(i), "emotion": e, "attention": 0.5,
+               "emotion_trusted": True}
+              for i, e in enumerate(["happy", "happy", "sad", "neutral"], start=1)]
+        # Untrusted, so not counted: the distribution is trusted-only, as the rollup is.
+        + [{"user_id": STUDENT, "ts": _ts(5), "emotion": "sad", "emotion_trusted": False}],
     )))
     report = main._weekly_signal_report(STUDENT)
 
@@ -159,8 +163,10 @@ def test_one_childs_refusal_does_not_suppress_a_siblings_data(monkeypatch):
         return {str(i): {"face_included": include_emotion} for i in ids}
 
     monkeypatch.setattr(main, "_signal_summaries", _fake_summaries)
-    monkeypatch.setattr(main, "_reportable_channels",
-                        lambda cid, want=True: main.ReportChannels(True, cid == "kid-yes", True))
+    # The batch form: the dashboard reads every child's consent at once.
+    monkeypatch.setattr(main, "_reportable_channels_many",
+                        lambda ids, want=True: {cid: main.ReportChannels(True, cid == "kid-yes", True)
+                                                for cid in ids})
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "parent-1"})
     monkeypatch.setattr(main, "_profile", lambda _c: {})
     monkeypatch.setattr(main, "supabase", _FakeSupabase({
@@ -192,8 +198,9 @@ def test_the_weekly_endpoint_does_not_read_a_declined_camera(monkeypatch):
 
     out = main.student_weekly_report(STUDENT, None)
 
-    assert "face_signals" not in fake.table_calls, "read a declined camera"
-    assert "heart_signals" in fake.table_calls, "skipped a consented headband"
+    assert "emotion" not in _weekly_channels(fake), "asked for a declined camera"
+    assert "heart" in _weekly_channels(fake), "skipped a consented headband"
+    assert "face_signals" not in fake.table_calls
     assert out["emotion_included"] is False
     assert out["heart_included"] is True
 
@@ -209,7 +216,7 @@ def test_the_weekly_endpoint_reads_a_declined_headband_neither_way(monkeypatch):
     out = main.student_weekly_report(STUDENT, None)
 
     assert out["emotion_included"] is True
-    assert "face_signals" in fake.table_calls
+    assert "emotion" in _weekly_channels(fake)
     # Camera consent still permits a heart reading -- from the camera.
     assert out["heart_included"] is True
 
@@ -242,15 +249,18 @@ def test_a_failed_consent_read_is_not_reported_as_a_refusal(monkeypatch):
     assert out["heart_included"] is False and out["emotion_included"] is False
 
 
-def test_heart_truncation_sets_the_truncated_flag(monkeypatch):
-    monkeypatch.setattr(main, "_REPORT_ROW_CAP", 2)
+def test_heart_readings_past_the_row_ceiling_are_all_counted(monkeypatch):
+    """Aggregated in SQL, so a ceiling on table reads no longer cuts the heart week."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
         _consent_row(),
         heart=[{"user_id": STUDENT, "ts": _ts(i), "source": "muse_optics",
-                "heart_rate_bpm": 70.0, "trusted": True} for i in range(1, 6)],
+                "heart_rate_bpm": 60.0 + i, "trusted": True} for i in range(1, 6)],
     ), max_rows={"heart_signals": 2}))
 
-    assert main._weekly_signal_report(STUDENT)["truncated"] is True
+    report = main._weekly_signal_report(STUDENT)
+    assert report["sample_counts"]["heart"] == 5
+    assert report["truncated"] is False
+    assert report["highlights"]["heart_rate_bpm"] == 63.0
 
 
 def test_untrusted_only_weeks_report_a_count_beside_a_null_average(monkeypatch):
@@ -301,7 +311,8 @@ def test_children_are_grouped_on_the_flags_not_the_consent_outcome(monkeypatch):
     outcomes = {"kid-a": main.ReportChannels(False, False, True),    # declined
                 "kid-b": main.ReportChannels(False, False, False)}   # unreadable
     monkeypatch.setattr(main, "_signal_summaries", _fake_summaries)
-    monkeypatch.setattr(main, "_reportable_channels", lambda cid, want=True: outcomes[cid])
+    monkeypatch.setattr(main, "_reportable_channels_many",
+                        lambda ids, want=True: {cid: outcomes[cid] for cid in ids})
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "parent-1"})
     monkeypatch.setattr(main, "_profile", lambda _c: {})
     monkeypatch.setattr(main, "supabase", _FakeSupabase({
@@ -382,20 +393,6 @@ def test_a_nan_score_is_dropped_rather_than_stored_as_full_engagement(monkeypatc
     assert row["focus"] is None
     assert row["engagement"] is None
     assert row["stress"] is None, "an infinite calm became a confident zero stress"
-
-
-def test_a_capped_heart_read_does_not_blank_the_days_that_came_back(monkeypatch):
-    """Coverage is per day, like the other three tables."""
-    monkeypatch.setattr(main, "_REPORT_ROW_CAP", 2)
-    rows = [{"user_id": STUDENT, "ts": _ts(i), "source": "muse_optics",
-             "heart_rate_bpm": 70.0, "trusted": True} for i in range(1, 5)]
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(
-        _tables(_consent_row(), heart=rows), max_rows={"heart_signals": 2}))
-
-    report = main._weekly_signal_report(STUDENT)
-    whole = [d for d in report["daily"] if d["heart_retrieved"] is True]
-
-    assert whole, "every day was marked unretrieved because one table was capped"
 
 
 def test_a_day_with_only_heart_data_is_not_dropped(monkeypatch):

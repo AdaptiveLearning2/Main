@@ -260,7 +260,11 @@ class _FakeSupabase:
         self.rpc_calls.append((name, params))
         exc = self._rpc_raises(name, params) if self._rpc_raises else None
         if name not in self._rpc_results and name in _MODELLED_RPCS:
-            return _Rpc(_MODELLED_RPCS[name](self._tables, params), exc)
+            # A failing table fails the function that reads it, as a failing read did.
+            if exc is None and name == "weekly_signal_days":
+                exc = self._failure(_WEEKLY_TABLES[params["p_channel"]])
+            data = None if exc else _MODELLED_RPCS[name](self._tables, params)
+            return _Rpc(data, exc)
         return _Rpc(self._rpc_results.get(name, []), exc)
 
 
@@ -276,8 +280,77 @@ def _recent_sessions_rows(tables, params):
     return sorted(out, key=lambda r: str(r.get("started_at", "")))
 
 
+_WEEKLY_TABLES = {"cognitive": "cognitive_signals", "emotion": "face_signals",
+                  "heart": "heart_signals"}
+
+
+def _weekly_signal_days_result(tables, params):
+    """What `weekly_signal_days` returns for the signal fixtures (see its SQL; trusted-only
+    where the rollup is). The SQL itself is checked in `scripts/assert_signal_rls.sql`."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(params["p_timezone"])
+    since = main._parse_ts(params["p_since"])
+    channel = params["p_channel"]
+    table = _WEEKLY_TABLES[channel]
+    rows = [r for r in tables.get(table, [])
+            if r.get("user_id") == params["p_student_id"]
+            and main._parse_ts(r.get("ts")) is not None and main._parse_ts(r["ts"]) >= since]
+    rows.sort(key=lambda r: main._parse_ts(r["ts"]))
+
+    def day_of(r):
+        return main._parse_ts(r["ts"]).astimezone(tz).date().isoformat()
+
+    def agg(values, name):
+        nums = [float(v) for v in values if v is not None]
+        return {f"{name}_n": len(nums), f"{name}_sum": sum(nums) if nums else None}
+
+    by_day: dict[str, list] = {}
+    for r in rows:
+        by_day.setdefault(day_of(r), []).append(r)
+    days = []
+    for day, mine in sorted(by_day.items()):
+        d = {"day": day, "rows": len(mine)}
+        if channel == "cognitive":
+            focus = [r.get("focus") for r in mine]
+            stress = [r.get("stress") for r in mine]
+            d.update(agg(focus, "focus"), **agg(stress, "stress"))
+            d["focus_min"] = min((v for v in focus if v is not None), default=None)
+            d["stress_max"] = max((v for v in stress if v is not None), default=None)
+        elif channel == "emotion":
+            d["emotion_rows"] = sum(1 for r in mine if r.get("emotion") is not None)
+            d.update(agg([r.get("attention") for r in mine], "attention"))
+            counts: dict[str, int] = {}
+            for r in mine:
+                if r.get("emotion_trusted") is True and r.get("emotion") is not None:
+                    counts[r["emotion"]] = counts.get(r["emotion"], 0) + 1
+            d["emotion_counts"] = counts
+        else:
+            trusted = [r for r in mine if r.get("trusted") is True]
+            d["trusted_rows"] = len(trusted)
+            d.update(agg([r.get("heart_rate_bpm") for r in trusted], "bpm"),
+                     **agg([r.get("rmssd_ms") for r in trusted], "rmssd"))
+            d["sources"] = sorted({r["source"] for r in trusted if r.get("source")})
+        days.append(d)
+
+    newest_first = rows[::-1]
+    if channel == "cognitive":
+        pick = next((r for r in newest_first if r.get("focus") is not None), None) \
+            or (newest_first[0] if newest_first else None)
+        latest = pick and {k: pick.get(k) for k in ("ts", "focus", "stress", "engagement")}
+    elif channel == "emotion":
+        pick = next((r for r in newest_first if r.get("emotion") is not None), None) \
+            or (newest_first[0] if newest_first else None)
+        latest = pick and {k: pick.get(k) for k in ("ts", "emotion")}
+    else:
+        pick = next((r for r in newest_first if r.get("trusted") is True), None)
+        latest = pick and {k: pick.get(k)
+                           for k in ("ts", "heart_rate_bpm", "rmssd_ms", "source", "trusted")}
+    return {"days": days, "latest": latest or None}
+
+
 # Functions computed from the table fixtures unless a test gives their result outright.
-_MODELLED_RPCS = {"recent_sessions_for_users": _recent_sessions_rows}
+_MODELLED_RPCS = {"recent_sessions_for_users": _recent_sessions_rows,
+                  "weekly_signal_days": _weekly_signal_days_result}
 
 
 class _Rpc:
@@ -567,37 +640,39 @@ def test_weekly_report_summary_renders_ratios_as_percentages(monkeypatch):
     assert "0.72%" not in report["summary"]
 
 
-def test_weekly_report_flags_days_it_could_not_retrieve(monkeypatch):
-    """The row cap is per table, so face rows must not hide cognitive's cutoff."""
-    # Only cognitive is capped: it reaches 3 days back while face covers 7.
-    cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5, "stress": 0.4, "engagement": 0.5}
-           for d in range(0, 7)]
-    face = [{"user_id": "student-1", "ts": _ts(d), "attention": 0.8} for d in range(0, 7)]
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(
-        _signal_tables(cog, face), max_rows={"cognitive_signals": 3}))
+def _weekly_channels(fake) -> set:
+    """The channels a report asked `weekly_signal_days` for: the request, not the payload."""
+    return {p["p_channel"] for name, p in fake.rpc_calls if name == "weekly_signal_days"}
+
+
+def test_the_weekly_report_counts_every_reading_past_the_row_ceiling(monkeypatch):
+    """A raw read stops at PostgREST's 1000 rows (~17 minutes of EEG); an aggregate does not."""
+    # 50 readings, a ceiling of 10 on any table read: only an aggregate sees all 50.
+    cog = [{"user_id": "student-1", "ts": _ts(d % 7, hour=8 + d // 7), "focus": 0.2 + 0.01 * d,
+            "stress": 0.4} for d in range(50)]
+    # The oldest reading (six days back, 08:00) holds both extremes: a newest-first cap drops it.
+    cog[6].update(focus=0.1, stress=0.95)
+    fake = _FakeSupabase(_signal_tables(cog), max_rows=10)
+    monkeypatch.setattr(main, "supabase", fake)
     report = main._weekly_signal_report("student-1")
 
-    assert report["truncated"] is True
-    days = {d["date"]: d for d in report["daily"]}
-    unretrieved = [d for d in report["daily"] if not d["cognitive_retrieved"]]
-    assert unretrieved, "older days must be flagged, not silently nulled"
-    for d in unretrieved:
-        assert d["focus"] is None
-        assert d["face_retrieved"] is True   # face data for that day is real
-        assert d["attention"] is not None
-    covered = days[_ts(0)[:10]]
-    assert covered["cognitive_retrieved"] is True
+    assert report["sample_counts"]["cognitive"] == 50
+    assert report["truncated"] is False, "only the sessions read can be cut"
+    expected = round(sum(r["focus"] for r in cog) / len(cog), 2)
+    assert report["averages"]["focus"] == expected
+    assert report["highlights"]["lowest_focus"] == 0.1, "the oldest reading counts too"
+    assert report["highlights"]["highest_stress"] == 0.95
+    assert all(d["cognitive_retrieved"] for d in report["daily"])
 
 
-def test_weekly_report_detects_truncation_from_count_not_row_length(monkeypatch):
-    """db-max-rows can cap below _REPORT_ROW_CAP, so row length cannot detect it."""
-    cog = [{"user_id": "student-1", "ts": _ts(d % 7), "focus": 0.5} for d in range(50)]
-    monkeypatch.setattr(main, "supabase",
-                        _FakeSupabase(_signal_tables(cog), max_rows=10))
-    report = main._weekly_signal_report("student-1")
-    assert len(cog) < main._REPORT_ROW_CAP, "fixture must stay under our own cap"
-    assert report["truncated"] is True
-    assert report["sample_counts"]["cognitive"] == 10
+def test_the_weekly_report_reads_signals_as_aggregates_not_rows(monkeypatch):
+    """One aggregate call per consented channel, and no signal table read row by row."""
+    fake = _FakeSupabase(_signal_tables([{"user_id": "student-1", "ts": _ts(1), "focus": 0.5}]))
+    monkeypatch.setattr(main, "supabase", fake)
+    main._weekly_signal_report("student-1")
+
+    assert _weekly_channels(fake) == {"cognitive", "emotion", "heart"}
+    assert not {"cognitive_signals", "face_signals", "heart_signals"} & set(fake.table_calls)
 
 
 def test_weekly_report_reports_session_truncation(monkeypatch):
@@ -610,24 +685,6 @@ def test_weekly_report_reports_session_truncation(monkeypatch):
 
     assert report["sample_counts"]["sessions"] == 10
     assert report["truncated"] is True
-
-
-def test_weekly_report_keeps_a_day_whose_sessions_survived_the_cap(monkeypatch):
-    """Sessions have their own cap, so a day with trimmed signals may still count sessions."""
-    cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5} for d in range(0, 7)]
-    sessions = [{"id": f"s{d}", "user_id": "student-1", "started_at": _ts(d)}
-                for d in range(0, 7)]
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(
-        _signal_tables(cog, session_rows=sessions), max_rows={"cognitive_signals": 3}))
-    # Face off, so only the session count can keep these days.
-    report = main._weekly_signal_report("student-1", include_emotion=False)
-
-    trimmed = [d for d in report["daily"] if d["cognitive_retrieved"] is False]
-    assert trimmed, "days beyond cognitive's reach must still be reported"
-    for d in trimmed:
-        assert d["focus"] is None            # not read at all
-        assert d["sessions_retrieved"] is True
-        assert d["sessions"] == 1            # but the session count was read
 
 
 def test_weekly_report_nulls_a_day_whose_sessions_were_cut(monkeypatch):
@@ -644,35 +701,8 @@ def test_weekly_report_nulls_a_day_whose_sessions_were_cut(monkeypatch):
         assert d["sessions"] is None, "0 would read as a day with no sessions"
 
 
-# ── the day the cap cut into ─────────────────────────────────────────────
-# The cap trims oldest-first; the oldest day returned is partial and is withheld.
-
-def test_weekly_report_withholds_the_day_the_cap_cut_into(monkeypatch):
-    """Three readings a day, cap of four: day 1 keeps one reading and is withheld."""
-    cog = [{"user_id": "student-1", "ts": _ts(d, hour=h),
-            "focus": 0.5, "stress": 0.4, "engagement": 0.6}
-           for d in range(0, 3) for h in (9, 12, 15)]
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(
-        _signal_tables(cog), max_rows={"cognitive_signals": 4}))
-    report = main._weekly_signal_report("student-1", include_emotion=False)
-
-    assert report["sample_counts"]["cognitive"] == 4, "fixture must actually be cut"
-    days = {d["date"]: d for d in report["daily"]}
-    whole, boundary, beyond = _ts(0)[:10], _ts(1)[:10], _ts(2)[:10]
-
-    assert days[whole]["cognitive_retrieved"] is True
-    assert days[whole]["focus"] == 0.5
-
-    # Withheld, but kept in the series because something was read for it.
-    assert boundary in days, "a partly-read day must not be dropped as absent"
-    assert days[boundary]["cognitive_retrieved"] is False
-    assert days[boundary]["focus"] is None
-    assert days[boundary]["stress"] is None
-    assert days[boundary]["engagement"] is None
-
-    assert days[beyond]["cognitive_retrieved"] is False
-    assert days[beyond]["focus"] is None
-
+# ── the day the sessions cap cut into ────────────────────────────────────
+# Sessions are still read as capped rows, oldest-first; that day is partial and withheld.
 
 def test_weekly_report_withholds_a_session_count_the_cap_cut_into(monkeypatch):
     """A count over a fraction of a day is simply wrong, with nothing to say so."""
@@ -690,22 +720,6 @@ def test_weekly_report_withholds_a_session_count_the_cap_cut_into(monkeypatch):
     # Not 1, which is what a third of the day's rows counts to.
     assert days[boundary]["sessions_retrieved"] is False
     assert days[boundary]["sessions"] is None
-
-
-def test_a_cap_landing_on_a_day_boundary_understates_rather_than_overstates(monkeypatch):
-    """A cut exactly between days is indistinguishable from mid-day, so it resolves conservatively.
-
-    A complete day may be reported partial, never the reverse. Deliberate, not an off-by-one.
-    """
-    cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5} for d in range(0, 5)]
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(
-        _signal_tables(cog), max_rows={"cognitive_signals": 3}))
-    report = main._weekly_signal_report("student-1", include_emotion=False)
-
-    days = {d["date"]: d for d in report["daily"]}
-    assert days[_ts(0)[:10]]["cognitive_retrieved"] is True
-    assert days[_ts(2)[:10]]["cognitive_retrieved"] is False
-    assert days[_ts(2)[:10]]["focus"] is None
 
 
 def test_weekly_report_counts_every_session_not_just_the_retrieved_rows(monkeypatch):
@@ -792,20 +806,6 @@ def test_a_failed_face_read_is_not_the_opt_out(monkeypatch):
     assert opted_out["retrieved"]["face"] is None
     # Neither an absence nor a failure is assertable about a read never made.
     assert "facial" not in opted_out["summary"].lower()
-
-
-def test_a_read_trimmed_to_nothing_is_not_treated_as_untrimmed(monkeypatch):
-    """A server cap of zero must not fall into the "nothing was trimmed" branch."""
-    cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5} for d in range(0, 7)]
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(
-        _signal_tables(cog, [], []), max_rows={"cognitive_signals": 0}))
-    report = main._weekly_signal_report("student-1", include_emotion=False)
-
-    assert report["truncated"] is True
-    assert report["sample_counts"]["cognitive"] == 0
-    for d in report["daily"]:
-        assert d["cognitive_retrieved"] is False
-        assert d["focus"] is None
 
 
 def test_a_quiet_week_is_still_reported_as_one(monkeypatch):
@@ -1551,6 +1551,7 @@ def test_report_without_face_never_queries_face_signals(monkeypatch):
     monkeypatch.setattr(main, "supabase", fake)
     report = main._weekly_signal_report("student-1", include_emotion=False)
 
+    assert _weekly_channels(fake) == {"cognitive", "heart"}
     assert "face_signals" not in fake.table_calls
     assert report["face_included"] is False
     assert report["averages"]["face_attention"] is None
@@ -1585,7 +1586,7 @@ def test_report_with_face_still_included_by_default(monkeypatch):
     ))
     monkeypatch.setattr(main, "supabase", fake)
     report = main._weekly_signal_report("student-1")
-    assert "face_signals" in fake.table_calls
+    assert "emotion" in _weekly_channels(fake)
     assert report["face_included"] is True
     assert report["averages"]["face_attention"] == 0.9
 

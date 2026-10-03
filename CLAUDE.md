@@ -1854,11 +1854,10 @@ is `rollup_signal_day`.
 ## The term trend reads the rollup and nothing else
 
 `/api/students/{id}/signal-trend` answers week-over-week averages, and is deliberately **not** built on
-`_weekly_signal_report`. That one reads the per-sample tables under `_REPORT_ROW_CAP`, which trims
-**oldest-first** — right for seven days and wrong for six months, because the early weeks would come back empty
-and read as a quiet term rather than as rows nobody fetched. `signal_daily_rollup` is a few hundred rows for
-half a year and needs no cap. It is also the only copy that outlives `expire_signal_rows`, and a trend is the
-surface most likely to be read *after* a year ends.
+`_weekly_signal_report`. That one aggregates every per-sample row of its week in SQL (`weekly_signal_days`),
+which is right only while those rows exist. The trend reads `signal_daily_rollup` because it is the only copy that
+outlives `expire_signal_rows`, and a trend is the surface most likely to be read *after* a year ends; half a year
+of it is a few hundred rows.
 
 **Weeks are weighted by `trusted_sample_count`, and that is derived, not chosen.** `rollup_signal_day` writes
 `avg(focus)` for cognitive and `avg(…) FILTER (WHERE trusted)` for heart; Postgres `avg()` skips nulls, so both
@@ -1895,9 +1894,9 @@ column on the roster, and focus-vs-accuracy per student. Three Postgres function
 `SECURITY INVOKER` and `service_role`-only — the backend resolves who owns the class before calling, so they are
 only ever as safe as the check above them.
 
-**They aggregate in SQL for the reason `rollup_signal_day` does, and the trap is `_REPORT_ROW_CAP`.** A class of
-thirty answering fifty a day is 45,000 rows a month, far past the 5000 cap, and the cap trims **oldest-first** —
-so a Python-side average would describe the recent tail while the early weeks read as a quiet term.
+**They aggregate in SQL for the reason `rollup_signal_day` and the weekly report do: PostgREST cuts every read at
+`db-max-rows` (1000), silently.** A class of thirty answering fifty a day is 45,000 rows a month, so a Python-side
+average would describe whichever slice the read returned while the rest read as a quiet term.
 `class_answer_buckets` returns at most 720 rows for 30 days however busy the class, because it is bounded by the
 *range* rather than by the answers.
 

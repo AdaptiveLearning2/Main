@@ -280,17 +280,6 @@ def _recent_sessions_rows(tables, params):
     return sorted(out, key=lambda r: str(r.get("started_at", "")))
 
 
-def _ingest_gate_result(tables, params):
-    """What `ingest_gate` returns: the session by id whoever owns it, and the caller's consent row."""
-    session = next((r for r in tables.get("sessions", [])
-                    if r.get("id") == params["p_session_id"]), None)
-    consent = next((r for r in tables.get("signal_consent", [])
-                    if r.get("user_id") == params["p_user_id"]), None)
-    return {"session": None if session is None else
-            {k: session.get(k) for k in ("user_id", "started_at", "ended_at")},
-            "consent": consent}
-
-
 # What Postgres's uuid input accepts: optional braces, 32 hex digits, a hyphen after any group of four.
 _PG_UUID = re.compile(r"(\{)?[0-9A-Fa-f]{4}(?:-?[0-9A-Fa-f]{4}){7}(?(1)\})")
 # The uuid columns `viewer_relationship` compares, per table it reads.
@@ -335,11 +324,9 @@ def _viewer_relationship_result(tables, params):
 
 # Functions computed from the table fixtures unless a test gives their result outright.
 _MODELLED_RPCS = {"recent_sessions_for_users": _recent_sessions_rows,
-                  "ingest_gate": _ingest_gate_result,
                   "viewer_relationship": _viewer_relationship_result}
 # The tables each modelled function reads, so `table_raises` reaches it as it would reach SQL.
-_RPC_READS = {"ingest_gate": ("sessions", "signal_consent"),
-              "viewer_relationship": ("class_memberships", "classes", "parent_child_links", "profiles")}
+_RPC_READS = {"viewer_relationship": ("class_memberships", "classes", "parent_child_links", "profiles")}
 
 
 class _Rpc:
@@ -1321,7 +1308,8 @@ class _OwnedSessionClient:
                     if params["p_user_id"] != client.owner:
                         return type("R", (), {"data": {"status": "forbidden", "owner": client.owner}})()
                     client.writes.append(("session_answers", "insert", params))
-                    return type("R", (), {"data": {"status": "ok", "topic": None}})()
+                    return type("R", (), {"data": {"status": "ok", "topic": None,
+                                                   "topic_error": None, "counters_error": None}})()
                 client.writes.append(("rpc", name))
                 return type("R", (), {"data": None})()
 
@@ -1357,6 +1345,9 @@ class _OwnedSessionClient:
         return _Q()
 
 
+_ANSWERED_QUESTION = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
+
+
 @pytest.mark.parametrize("endpoint", ["answer", "end"])
 def test_a_student_may_not_touch_another_students_session(monkeypatch, endpoint):
     client = _OwnedSessionClient("student-1")
@@ -1370,7 +1361,7 @@ def test_a_student_may_not_touch_another_students_session(monkeypatch, endpoint)
         if endpoint == "answer":
             main.record_answer(
                 session_id="session-1",
-                payload=main.AnswerPayload(question_id="q-1", selected_index=0,
+                payload=main.AnswerPayload(question_id=_ANSWERED_QUESTION, selected_index=0,
                                            correct=True),
                 request=None)
         else:
@@ -1396,7 +1387,7 @@ def test_the_owner_is_still_allowed(monkeypatch, endpoint):
     if endpoint == "answer":
         out = main.record_answer(
             session_id="session-1",
-            payload=main.AnswerPayload(question_id="q-1", selected_index=0,
+            payload=main.AnswerPayload(question_id=_ANSWERED_QUESTION, selected_index=0,
                                        correct=True),
             request=None)
         assert any(w[:2] == ("session_answers", "insert") for w in client.writes)

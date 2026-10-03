@@ -1,5 +1,6 @@
 """An answer reaches the database, attributed to the question's own topic."""
 
+import json
 import os
 from datetime import datetime, timedelta
 
@@ -7,18 +8,27 @@ os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
 import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from postgrest.exceptions import APIError, APIErrorFromJSON  # noqa: E402
 
 import main  # noqa: E402
 
 USER = "student-1"
-QUESTION = "q-1"
+QUESTION = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
+SESSION = "5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d"
+
+
+def _postgrest_error(body: str) -> APIError:
+    """An error as postgrest-py raises it from a non-2xx PostgREST body."""
+    return APIError(dict(APIErrorFromJSON.model_validate_json(body)))
 
 
 class _Client:
     def __init__(self, subject="algebra", prior=None, topics=("algebra",), raises=(),
                  rpc_error=None, session_user=USER, session_ended=None, answer=None):
         # What `record_answer` returns: the function's own outcome vocabulary.
-        self.answer = answer if answer is not None else {"status": "ok", "topic": "algebra"}
+        self.answer = answer if answer is not None else {
+            "status": "ok", "topic": "algebra", "topic_error": None, "counters_error": None}
         self.session_ended = session_ended
         self.subject = subject
         self.prior = prior
@@ -170,6 +180,94 @@ def test_a_missing_function_is_reported_as_a_missing_migration(monkeypatch, caps
         _answer(monkeypatch, _Client(rpc_error="{'code': 'PGRST202', 'message': 'no function'}"))
     assert caught.value.status_code == 503
     assert "20261003000000" in capsys.readouterr().out
+
+
+def _fk_violation(constraint: str, column: str, table: str) -> APIError:
+    """PostgREST's body for SQLSTATE 23503 raised inside the function: Postgres's own text."""
+    return _postgrest_error(json.dumps({
+        "code": "23503",
+        "message": f'insert or update on table "session_answers" violates foreign key '
+                   f'constraint "{constraint}"',
+        "details": f'Key ({column})=({QUESTION}) is not present in table "{table}".',
+        "hint": None,
+    }))
+
+
+@pytest.mark.parametrize("error,status", [
+    # Expired or deleted since it was served: no retry can save it.
+    (_fk_violation("session_answers_question_id_fkey", "question_id", "questions"), 410),
+    # Another foreign key failing is not the question's absence.
+    (_fk_violation("session_answers_user_id_fkey", "user_id", "profiles"), 503),
+    (RuntimeError("connection reset"), 503),
+])
+def test_an_answer_to_a_deleted_question_is_gone_not_retryable(monkeypatch, error, status):
+    with pytest.raises(main.HTTPException) as caught:
+        _answer(monkeypatch, _Client(rpc_error=error))
+    assert caught.value.status_code == status
+    if status == 410:
+        assert "no longer available" in caught.value.detail
+
+
+def _ok(**errors):
+    return {"status": "ok", "topic": None, "topic_error": None, "counters_error": None, **errors}
+
+
+@pytest.mark.parametrize("answer,expected", [
+    (_ok(topic_error="XX000: deadlock detected"),
+     ["topic_error", "XX000: deadlock detected"]),
+    (_ok(topic_error="42883: function public.record_topic_attempt(uuid, uuid, boolean) does not exist"),
+     ["record_topic_attempt is missing", "20260825000000"]),
+    # Named but present, and missing but another function: neither is this migration's absence.
+    (_ok(topic_error="42501: permission denied for function record_topic_attempt"),
+     ["topic_error", "42501: permission denied"]),
+    (_ok(topic_error="42883: function public.score_scale_of(text) does not exist"),
+     ["topic_error", "score_scale_of"]),
+    (_ok(counters_error="57014: canceling statement due to statement timeout"),
+     ["counters_error", "57014: canceling statement due to statement timeout"]),
+    (_ok(counters_error="42883: function public.bump_session_counters(uuid, boolean) does not exist"),
+     ["bump_session_counters is missing", "20260826000000"]),
+])
+def test_a_step_the_answer_survived_is_logged_by_name(monkeypatch, capsys, answer, expected):
+    """The outcome is a 200 either way, so only the log can tell; the answer itself is saved."""
+    out = _answer(monkeypatch, _Client(answer=answer))
+    assert out == {"ok": True, "topic": None}
+    log = capsys.readouterr().out
+    for text in expected:
+        assert text in log, f"{text!r} not logged: {log!r}"
+
+
+def test_a_clean_answer_logs_nothing(monkeypatch, capsys):
+    """Mirror of the test above, so it cannot be satisfied by logging every answer."""
+    out = _answer(monkeypatch, _Client())
+    assert out == {"ok": True, "topic": "algebra"}
+    assert "[answer]" not in capsys.readouterr().out
+
+
+def _post_answer(monkeypatch, client, question_id):
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
+    monkeypatch.setattr(main, "supabase", client)
+    return TestClient(main.app).post(
+        f"/api/sessions/{SESSION}/answer",
+        json={"question_id": question_id, "selected_index": 1, "correct": True})
+
+
+def test_a_question_id_that_cannot_be_a_uuid_is_refused_before_the_call(monkeypatch):
+    """Sent on, 22P02 came back as "Session not found" for a session that exists."""
+    client = _Client()
+    res = _post_answer(monkeypatch, client, "q-1")
+    assert res.status_code == 422
+    assert [e["loc"] for e in res.json()["detail"]] == [["body", "question_id"]]
+    assert client.rpcs == [], "a malformed id reached the database"
+
+
+def test_a_uuid_question_id_reaches_the_call_as_text(monkeypatch):
+    """A `UUID` object is not JSON; the RPC body must carry the string."""
+    client = _Client()
+    res = _post_answer(monkeypatch, client, QUESTION)
+    assert res.status_code == 200
+    assert res.json() == {"ok": True, "topic": "algebra"}
+    sent = client.rpcs[0][1]["p_question_id"]
+    assert type(sent) is str and sent == QUESTION
 
 
 class _SessionClient:

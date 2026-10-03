@@ -1358,20 +1358,18 @@ everything else here, and so it is **bounded rather than trusted**:
 
 ### The admin read surfaces send counts and timestamps, never readings
 
-`/api/admin/live-signals` answers "is data arriving" for every open session. **It selects `ts` alone**, so
-the readings never leave the database rather than being fetched and dropped on the way out. An admin has no
-relationship to those students entitling them to the values, and asking for less is a stronger version of
-that property than filtering afterwards: the test asserts on the *select*, which is the only place the
-difference shows.
+`/api/admin/live-signals` answers "is data arriving" for every open session. **It reads timestamps alone**
+(`latest_signal_ts_for_sessions` returns `session_id, ts`), so the readings never leave the database rather
+than being fetched and dropped on the way out. An admin has no relationship to those students entitling them
+to the values, and asking for less is a stronger version of that property than filtering afterwards: the test
+asserts that no signal table is read directly, which is the only place the difference shows.
 
 It shares `_LIVE_WINDOW_SEC`/`_STALE_AFTER_SEC` with `class_live` — two sets of numbers would let one page
 call a session live while the other called it stale — but **not its row reads.** `class_live` reads the
 newest row per channel for the whole roster in **one** `latest_signals_for_sessions` RPC
-(`_latest_signals_many`), and that must stay one call: an earlier version fanned a per-session read out
-into a shared four-worker pool, and fanning this endpoint's outer loop into the same pool **deadlocked** —
-the waiters and the work they wait on ended up in one queue. That pool is gone; do not reintroduce it.
-`_admin_live_pool` (8 workers) still exists for this endpoint's per-session work, and nothing submitted to
-it waits on anything else in it.
+(`_latest_signals_many`); this endpoint makes **one call per channel** for every open session, so a failed
+channel reads unreadable while the other stands. Keep both set-based, never a per-session read fanned into a
+thread pool: callers waiting on work queued in the same pool **deadlock**.
 
 **Five states per channel, and they are not a scale**: flowing, quiet, stale, **never-reported**, and
 **unreadable** (`seen: null`). The last two are the ones to keep apart — a session that never had that
@@ -1899,8 +1897,8 @@ grouping. It is still called once per endpoint rather than cached between them, 
 blank the other.
 
 **`last_active_for_users` exists because "newest row per student" has no PostgREST form.** One `in_` query ordered
-by time returns the newest rows *overall*, which is one busy student's — the same limitation `my_children`
-documents. That is why the column was absent rather than wrong. It is the greatest of two clocks
+by time returns the newest rows *overall*, which is one busy student's — the same limitation
+`_recent_sessions_many` exists for. That is why the column was absent rather than wrong. It is the greatest of two clocks
 (`started_at` and `max(answered_at)`) plus the newest session's newest sample, **never `ended_at`**: the sweep
 stamps that when it runs, weeks after the student left, and nothing records which closes were the sweep's. The
 sample is the newest session's only, so each read is one `(session_id, ts)` index lookup rather than a year of
@@ -1963,9 +1961,8 @@ roster, not the students who recorded something: a class of six where two wore a
 gating on the smaller number would expose that pair exactly when they are most identifiable. The class trend still
 renders; it is the aggregate the floor exists to protect.
 
-**`_consent_many` / `_reportable_channels_many` are the batch forms**, and a roster is where they matter:
-`my_children` keeps a per-student loop and can, since a family has a handful of children, but a class of thirty made
-thirty sequential reads on a page load. They fail closed exactly as `_consent` does and *per student* — a failed read
+**`_consent_many` / `_reportable_channels_many` are the batch forms**, used wherever a page reads more than one
+student — the cohort roster and `my_children` alike — since the single form is one read per student. They fail closed exactly as `_consent` does and *per student* — a failed read
 denies **every** requested id with `retrieved: False`, since none of them was found out, while a student with no row
 denies with `retrieved: True`. `_channels_from_consent` is the shared pure mapping, so the single and batch forms
 cannot drift and disagree about the same student on two pages.
@@ -2272,9 +2269,10 @@ Erasure here is a parent-only, confirmed action.
 
 `_profiles_many`, `_topic_performance_many`, `_open_sessions_many` and `_stats_including_open_session_many` are the
 batch forms; `class_students`, `my_children`, `class_live` and `leaderboard` use them. The stats half was batched
-first and the profile lookup was left in the loop beside it, which is the shape to watch for. One deliberate
-exception: `my_children` still reads the five most recent sessions **per child**, because "top N per group" has no
-PostgREST form — one `in_` query returns the newest five overall, which is one busy child's five.
+first and the profile lookup was left in the loop beside it, which is the shape to watch for. **"Top N per student"
+has no PostgREST form** — one `in_` query returns the newest N overall, which is one busy child's — so
+`_recent_sessions_many` (`recent_sessions_for_users`) serves `my_children` and `class_sessions` in one call. It raises,
+and each caller sends `None` for sessions it could not read, never `[]`, which would say "no sessions".
 
 ## The two model-backed panels on a report page
 

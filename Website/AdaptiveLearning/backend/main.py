@@ -3341,7 +3341,8 @@ _SESSION_CLIENT_KEYS = tuple(c.strip() for c in _SESSION_CLIENT_COLUMNS.split(",
 def _recent_sessions_many(user_ids, limit: int) -> dict[str, list[dict]]:
     """Each user's newest `limit` sessions, newest first, in one call. Raises on a failed read.
 
-    The function returns whole rows; they are narrowed to `_SESSION_CLIENT_COLUMNS` here.
+    The function returns `_SESSION_CLIENT_COLUMNS` alone; narrowing again here is a second
+    guard, so a widened function still cannot reach a browser.
     """
     ids = _unique_ids(user_ids)
     if not ids:
@@ -3349,7 +3350,10 @@ def _recent_sessions_many(user_ids, limit: int) -> dict[str, list[dict]]:
     rows = supabase.rpc("recent_sessions_for_users",
                         {"p_user_ids": ids, "p_limit": limit}).execute().data or []
     out: dict[str, list[dict]] = {uid: [] for uid in ids}
-    for r in sorted(rows, key=lambda r: str(r.get("started_at") or ""), reverse=True):
+    # Parsed: offset spellings of one instant sort differently as text. Unreadable sorts last.
+    for r in sorted(rows, reverse=True,
+                    key=lambda r: _parse_ts(r.get("started_at"))
+                    or datetime.min.replace(tzinfo=timezone.utc)):
         out.setdefault(r.get("user_id"), []).append({k: r.get(k) for k in _SESSION_CLIENT_KEYS})
     return out
 
@@ -7312,7 +7316,12 @@ def my_children(request: Request, include_face: bool = True):
     profiles = _profiles_many(kids)
     all_perf = _topic_performance_many(kids)
     # "Top five per child" in one call; it has no PostgREST form, so it is a function.
-    recent = _recent_sessions_many(kids, 5)
+    try:
+        recent = _recent_sessions_many(kids, 5)
+    except Exception as e:                                      # noqa: BLE001
+        # `None` per child, as `class_sessions` sends: an empty list would say "no sessions".
+        print(f"[parent:children] could not read recent sessions: {e}")
+        recent = None
     for lnk in (links.data or []):
         cid = lnk["child_id"]
         stats = all_stats.get(cid) or {}
@@ -7323,7 +7332,7 @@ def my_children(request: Request, include_face: bool = True):
             "email":       p.get("email") or "",
             "linked_at":   lnk["created_at"],
             "stats":       stats,
-            "sessions":    recent.get(cid, []),
+            "sessions":    None if recent is None else recent.get(cid, []),
             "performance": all_perf.get(cid) or [],
             # Headline averages only, not the full weekly report.
             "signal_summary": summaries[str(cid)]

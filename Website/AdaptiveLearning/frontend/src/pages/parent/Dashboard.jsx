@@ -171,6 +171,12 @@ export default function ParentDashboard() {
                   </Link>
                 </div>
 
+                {/* `null` is a failed read; an empty list is a child with no sessions yet. */}
+                {child.sessions === null && (
+                  <p className="px-5 py-3 border-t border-gray-50 dark:border-gray-800 text-xs text-gray-600 dark:text-gray-400">
+                    Recent sessions couldn't be loaded just now.
+                  </p>
+                )}
                 {child.sessions?.length > 0 && (
                   <div className="p-4 border-t border-gray-50 dark:border-gray-800">
                     <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3">Recent Sessions</p>

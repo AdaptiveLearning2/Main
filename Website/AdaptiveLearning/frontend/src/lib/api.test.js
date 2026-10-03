@@ -329,9 +329,27 @@ describe('the opt-in read cache', () => {
     const answerRead = respond
     const write = apiFetch('/api/classes', { method: 'POST', body: {} })
     await vi.waitFor(() => expect(respond).not.toBe(answerRead))
-    answerRead(ok(['stale']))
+    // The write finishes first, so only the entry check can refuse the late, older read.
     respond(ok({}))
+    await write
+    answerRead(ok(['stale']))
     await read
+    globalThis.fetch = vi.fn().mockResolvedValue(ok(['fresh']))
+    expect(await apiFetch('/api/classes', { cacheMs: 1000 })).toEqual(['fresh'])
+  })
+
+  it('does not keep a read that started while a write was in flight', async () => {
+    // The server can answer that read before the write commits, so it may predate the write.
+    let respond
+    globalThis.fetch = vi.fn(() => new Promise(r => { respond = r }))
+    const write = apiFetch('/api/classes', { method: 'POST', body: {} })
+    await vi.waitFor(() => expect(respond).toBeTypeOf('function'))
+    const answerWrite = respond
+    const read = apiFetch('/api/classes', { cacheMs: 1000 })
+    await vi.waitFor(() => expect(respond).not.toBe(answerWrite))
+    respond(ok(['stale']))
+    await read
+    answerWrite(ok({}))
     await write
     globalThis.fetch = vi.fn().mockResolvedValue(ok(['fresh']))
     expect(await apiFetch('/api/classes', { cacheMs: 1000 })).toEqual(['fresh'])
@@ -362,6 +380,30 @@ describe('the sleeping-server signal', () => {
     respond(failing({ status: 500 }))
     await call
     expect(serverWaking()).toBe(false)
+  })
+
+  it('counts an error status as proof the server is awake, for the next slow request too', async () => {
+    vi.useFakeTimers()
+    globalThis.fetch = vi.fn().mockResolvedValueOnce(failing({ status: 500 }))
+      .mockReturnValue(new Promise(() => {}))
+    await apiFetch('/api/stats/me').catch(() => {})
+    apiFetch('/api/stats/me').catch(() => {})
+    await vi.advanceTimersByTimeAsync(WAKE_AFTER_MS)
+    expect(serverWaking()).toBe(false)
+  })
+
+  it('does not count a network error as an answer', async () => {
+    vi.useFakeTimers()
+    let fail
+    globalThis.fetch = vi.fn().mockReturnValueOnce(new Promise((_, r) => { fail = r }))
+      .mockReturnValue(new Promise(() => {}))
+    const first = apiFetch('/api/stats/me').catch(() => {})
+    await vi.advanceTimersByTimeAsync(0)
+    fail(new TypeError('Failed to fetch'))
+    await first
+    apiFetch('/api/stats/me').catch(() => {})
+    await vi.advanceTimersByTimeAsync(WAKE_AFTER_MS)
+    expect(serverWaking()).toBe(true)
   })
 })
 

@@ -4859,10 +4859,7 @@ def _can_view_student(viewer: dict, student_id: str) -> bool | None:
         relationship = supabase.rpc("viewer_relationship", {
             "p_viewer": uid, "p_student": student_id}).execute().data
     except Exception as e:                                     # noqa: BLE001
-        if "PGRST202" in str(e):
-            print(f"[can_view_student] viewer_relationship is missing from the database -- apply "
-                  f"20261003000000; every student read answers 503 until it is: {e}")
-        else:
+        if not _missing_rpc(e, "viewer_relationship", "20261003000000"):
             print(f"[can_view_student] {e}")
         return None
     # Only a relationship it names admits; anything else, null included, is a denial.

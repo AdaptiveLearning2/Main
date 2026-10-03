@@ -552,9 +552,10 @@ def test_a_missing_relationship_function_is_a_503_and_never_an_allow(monkeypatch
         main.student_signal_summary("student-1", None)
     assert (exc.value.status_code, events) == (503, [])
     assert [name for name, _ in fake.rpc_calls] == ["viewer_relationship"], "the aggregate never ran"
-    # The caller is told to try again, so the log must not call it a refusal.
+    # The shared line, for this function; the caller is told to try again, so never "refused".
     log = capsys.readouterr().out
-    assert "answers 503" in log and "refused" not in log
+    assert "[rpc] viewer_relationship is missing from the database -- apply 20261003000000" in log
+    assert "a 503 to try again" in log and "refused" not in log
 
 
 def test_a_failed_access_read_asks_the_client_to_retry(monkeypatch):

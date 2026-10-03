@@ -2260,9 +2260,11 @@ def test_shutdown_releases_the_pool_rather_than_leaving_it_behind():
         main._STRATEGY_LLM_POOL = original_pool
 
 
-def test_the_app_runs_the_shutdown_on_the_way_out():
+def test_the_app_runs_the_shutdown_on_the_way_out(monkeypatch):
     """The hook must actually be wired to the app's lifespan."""
     assert main.app.router.lifespan_context is main._lifespan
+    # A real probe is a sympy subprocess, and while alive it widens every solve's budget.
+    monkeypatch.setattr(main.safe_solve, "start_startup_probe", lambda: False)
 
     original_pool = main._STRATEGY_LLM_POOL
     main._STRATEGY_LLM_POOL = ThreadPoolExecutor(max_workers=1)

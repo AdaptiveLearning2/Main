@@ -73,6 +73,15 @@ def _no_first_delay(monkeypatch):
     monkeypatch.setattr(main, "_STALE_SWEEP_FIRST_DELAY_SEC", 0.0)
 
 
+def test_the_startup_delay_defaults_off_outside_production(monkeypatch):
+    """`--reload` restarts within any delay, so a dev process would never sweep."""
+    monkeypatch.delenv("STALE_SWEEP_FIRST_DELAY_SECONDS", raising=False)
+    assert main._first_sweep_delay(production=False) == 0.0
+    assert main._first_sweep_delay(production=True) == 60.0
+    monkeypatch.setenv("STALE_SWEEP_FIRST_DELAY_SECONDS", "5")
+    assert main._first_sweep_delay(production=False) == main._first_sweep_delay(production=True) == 5.0
+
+
 def test_the_first_pass_waits_out_the_startup_delay_and_a_stop_ends_it(monkeypatch):
     """A cold start serves its first requests before the sweep competes for a 0.1-CPU host."""
     swept, waits = [], []

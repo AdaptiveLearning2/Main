@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
-from supabase_client import get_client
+from supabase_client import get_client, pooled_http
 from postgrest.types import ReturnMethod  # supabase pins this sibling
 from typing import Any, NamedTuple
 
@@ -36,8 +36,8 @@ if not SUPABASE_URL or not SERVICE_ROLE_KEY:
 
 supabase = get_client(SUPABASE_URL, SERVICE_ROLE_KEY)
 
-# anyio's default of 40 threads runs every `def` route, and LLM waiters alone can hold 38.
-# Stays under the Supabase client's 128 pooled connections (supabase_client.py).
+# anyio's default of 40 threads runs every `def` route, and LLM waiters alone can hold 38. Not
+# bounded by the Supabase pool's 128: with the worker pools it can exceed it (supabase_client.py).
 _WORKER_THREADS = 96
 
 
@@ -407,21 +407,24 @@ AUTH_CHECK_TIMEOUT = env_number("AUTH_CHECK_TIMEOUT", 5.0, float, minimum=0.5)
 
 # Pooled, so each request skips a TCP+TLS handshake. Not the Supabase client: its hook
 # rewrites every /auth/v1/ timeout, which would silently override AUTH_CHECK_TIMEOUT.
-_AUTH_HTTP = httpx.Client(http2=False, timeout=AUTH_CHECK_TIMEOUT, limits=httpx.Limits(
-    max_connections=_WORKER_THREADS, max_keepalive_connections=_WORKER_THREADS,
-    keepalive_expiry=30.0))
+_AUTH_HTTP = pooled_http(AUTH_CHECK_TIMEOUT)
+
+# RFC 6750's b64token. Anything else cannot be a token, and httpx raises on a non-ASCII header.
+_BEARER_TOKEN = re.compile(r"[A-Za-z0-9\-._~+/]+=*")
 
 
 def get_user(request: Request):
     token = request.headers.get("authorization", "").replace("Bearer ", "").strip()
     if not token:
         raise HTTPException(401, "Missing token")
+    if not _BEARER_TOKEN.fullmatch(token):
+        raise HTTPException(401, "Invalid token")
     try:
         resp = _AUTH_HTTP.get(f"{SUPABASE_URL}/auth/v1/user", headers={
             "Authorization": f"Bearer {token}",
             "apikey": SERVICE_ROLE_KEY
         })
-    except httpx.TransportError as e:
+    except httpx.RequestError as e:
         # 503, not 401: the token was never judged, and a 401 reads as an expired session.
         print(f"[auth] could not reach the auth server: {type(e).__name__}")
         raise HTTPException(503, "Sign-in could not be checked right now")
@@ -696,7 +699,7 @@ _WINDOW_DENIED = {k for k, v in _WINDOW_STATES.items() if not v.records}
 
 # Window row cache (s). Consent is never cached: a withdrawal must apply mid-lesson.
 _RETENTION_TTL_SECONDS = 30.0
-_retention_cached: tuple[float, dict | None] | None = None
+_retention_cached: tuple[float, dict] | None = None
 _retention_lock = threading.Lock()
 
 
@@ -719,7 +722,7 @@ def _retention_window() -> dict:
         cached = _retention_cached
     if cached and now < cached[0]:
         # Only the row is cached; the state depends on today's date.
-        return _window_from_row(cached[1])
+        return _resolve_window(cached[1])
 
     try:
         rows = supabase.table("retention_window").select("*").limit(1).execute().data or []
@@ -728,20 +731,14 @@ def _retention_window() -> dict:
         # Failures are not cached.
         return {"state": WINDOW_UNREADABLE, "starts_on": None, "ends_on": None,
                 "timezone": None}
-
-    # No row is cached too: it is a denial, and the admin write clears the cache.
-    row = rows[0] if rows else None
-    with _retention_lock:
-        _retention_cached = (now + _RETENTION_TTL_SECONDS, row)
-    return _window_from_row(row)
-
-
-def _window_from_row(row: dict | None) -> dict:
-    """`_resolve_window`, or `unconfigured` when the table has no row."""
-    if row is None:
+    if not rows:
+        # Not cached: the first row is often inserted from the SQL editor, which clears no cache.
         return {"state": WINDOW_UNCONFIGURED, "starts_on": None, "ends_on": None,
                 "timezone": None}
-    return _resolve_window(row)
+
+    with _retention_lock:
+        _retention_cached = (now + _RETENTION_TTL_SECONDS, rows[0])
+    return _resolve_window(rows[0])
 
 
 def _expiry_cutoff(starts_on, ends_on, today: date, enforced=True) -> date | None:
@@ -1142,10 +1139,16 @@ _SESSION_ABANDONED_AFTER_SEC = env_number(
 # Background sweep interval (s); 0 disables it.
 _STALE_SWEEP_INTERVAL_SEC = env_number(
     "STALE_SWEEP_INTERVAL_SECONDS", 900.0, float, minimum=0.0)
-# Delay before the first pass (s), so a cold start serves its first requests before
-# the sweep and chart catch-up compete for the CPU.
-_STALE_SWEEP_FIRST_DELAY_SEC = env_number(
-    "STALE_SWEEP_FIRST_DELAY_SECONDS", 60.0, float, minimum=0.0)
+def _first_sweep_delay(production: bool) -> float:
+    """Seconds before the first pass, so a cold start serves requests before the sweep competes.
+
+    0 by default outside production, where `--reload` restarts within any delay.
+    """
+    return env_number("STALE_SWEEP_FIRST_DELAY_SECONDS", 60.0 if production else 0.0, float,
+                      minimum=0.0)
+
+
+_STALE_SWEEP_FIRST_DELAY_SEC = _first_sweep_delay(IS_PRODUCTION)
 
 # Sessions closed per pass; each close renders charts and writes storage.
 _STALE_SWEEP_BATCH = 50
@@ -6346,7 +6349,7 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
                .eq("session_id", session_id).order("answered_at")
                .execute().data or [])
     # Up to 20k rows a table: a Response skips FastAPI's per-element `jsonable_encoder`
-    # walk (~170 ms per 1.8 MB). Safe because PostgREST rows are already JSON values.
+    # walk. Safe because PostgREST rows are already JSON values.
     return JSONResponse({"cognitive": cog_data, "face": fac_data, "heart": hrt_data,
                          "answers": answers, "channels": _channel_flags(channels)})
 
@@ -6504,10 +6507,11 @@ def class_live(class_id: str, request: Request):
 
 # ─── EEG sidecar integration ─────────────────────────���───────────────────
 
-def _poller_status(user_id: str) -> dict:
+def _poller_status(user_id: str, push: bool = False) -> dict:
     """`eeg_poller.status`, plus `stopped_reason` when it is known.
 
     Derived from current consent, not remembered on the poller, so it cannot go stale.
+    Under `push` the poller never runs, so the mode is the reason once nothing else is.
     """
     status = eeg_poller.status(user_id)
     if status.get("running"):
@@ -6525,6 +6529,8 @@ def _poller_status(user_id: str) -> dict:
     if not gate.get("eeg_enabled"):
         return {**status, "stopped_reason": "consent_withdrawn",
                 "revoked_at": gate.get("eeg_revoked_at")}
+    if push:
+        return {**status, "stopped_reason": "push_ingestion"}
     return status
 
 
@@ -6940,9 +6946,7 @@ def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
         "service": None if push else eeg_client.is_alive(),
         "ingest_mode": eeg_poller.INGEST_MODE,
         "muse":    muse,
-        # Under push the poller never runs, so the mode is its reason: no consent read per tick.
-        "poller":  ({**eeg_poller.status(user["id"]), "stopped_reason": "push_ingestion"}
-                    if push else _poller_status(user["id"])),
+        "poller":  _poller_status(user["id"], push=push),
     }
 
 

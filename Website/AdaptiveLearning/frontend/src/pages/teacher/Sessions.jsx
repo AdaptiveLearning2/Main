@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { History, Activity, CheckCircle2, ChevronRight, AlertTriangle } from 'lucide-react'
-import { apiFetch } from '../../lib/api'
+import { apiFetch, SHORT_CACHE_MS } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
 import { useLatestRequest } from '../../hooks/useLatestRequest'
@@ -41,7 +41,7 @@ export default function Sessions() {
 
   const loadClasses = useCallback(() => {
     // No setLoading(true): on retry the error stays up instead of a skeleton flash.
-    apiFetch('/api/classes').then(rows => {
+    apiFetch('/api/classes', { cacheMs: SHORT_CACHE_MS }).then(rows => {
       setClasses(rows || [])
       setFailed(false)
       if (rows?.length) {

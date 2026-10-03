@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { apiFetch } from '../lib/api'
+import { apiFetch, clearApiCache } from '../lib/api'
 import { clearViewPrefs } from '../lib/viewPrefs'
 import { runSignOutTasks } from '../lib/signOutTasks'
 
@@ -39,7 +39,7 @@ export function AuthProvider({ children }) {
     })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       // Also sign-outs not via signOut(): expired refresh token, another tab.
-      if (event === 'SIGNED_OUT') clearViewPrefs()
+      if (event === 'SIGNED_OUT') { clearViewPrefs(); clearApiCache() }
       // Signing back in as the same account reads its role again rather than reusing this one.
       if (!session?.user) setProfile(NO_PROFILE)
       setSession(session)
@@ -117,7 +117,8 @@ export function AuthProvider({ children }) {
         // Before the token is cleared; see `lib/signOutTasks.js`.
         await runSignOutTasks()
         // Even on a failed sign-out, for shared machines.
-        await Promise.resolve().then(() => supabase.auth.signOut()).finally(clearViewPrefs)
+        await Promise.resolve().then(() => supabase.auth.signOut())
+          .finally(() => { clearViewPrefs(); clearApiCache() })
       })().finally(() => { signingOut.current = null })
     }
     return signingOut.current

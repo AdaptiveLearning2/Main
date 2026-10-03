@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
-import { apiFetch } from '../../lib/api'
+import { apiFetch, SHORT_CACHE_MS } from '../../lib/api'
 import { endSession, recordAnswer } from '../../lib/session'
 import useEegStartReport from '../../hooks/useEegStartReport'
 import usePoll from '../../hooks/usePoll'
@@ -343,7 +343,7 @@ export default function Adaptive() {
 
   // load classes
   useEffect(() => {
-    apiFetch('/api/classes').then(c => {
+    apiFetch('/api/classes', { cacheMs: SHORT_CACHE_MS }).then(c => {
       setClasses(c || [])
       if ((c || []).length && !classId) setClassId(c[0].id)
     }).catch(()=>{})

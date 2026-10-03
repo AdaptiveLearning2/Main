@@ -26,7 +26,9 @@ vi.mock('../lib/supabase', () => ({
   },
 }))
 
-vi.mock('../lib/api', () => ({ apiFetch: (...args) => apiFetch(...args) }))
+const clearApiCache = vi.fn()
+vi.mock('../lib/api', () => ({ apiFetch: (...args) => apiFetch(...args),
+                               clearApiCache: (...args) => clearApiCache(...args) }))
 
 function SignOutButton() {
   const { signOut: doSignOut } = useAuth()
@@ -144,6 +146,16 @@ it('clears it on a sign-out this tab did not perform', async () => {
   await screen.findByText('Sign out')
   authCallback('SIGNED_OUT', null)
   await waitFor(() => expect(localStorage.getItem('teacher_hide_sensor_data')).toBeNull())
+})
+
+it("drops cached reads on either sign-out, so the next account never sees this one's", async () => {
+  // A shared school computer: the next teacher would see this one's class list for 30 s.
+  clearApiCache.mockClear()
+  renderAuth()
+  await userEvent.click(await screen.findByText('Sign out'))
+  await waitFor(() => expect(clearApiCache).toHaveBeenCalledTimes(1))
+  act(() => authCallback('SIGNED_OUT', null))
+  expect(clearApiCache).toHaveBeenCalledTimes(2)
 })
 
 it('leaves it alone while the session is live', async () => {

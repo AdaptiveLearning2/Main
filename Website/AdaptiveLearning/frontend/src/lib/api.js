@@ -61,12 +61,57 @@ const sleep = (ms, signal) => new Promise(resolve => {
                              { once: true })
 })
 
+/** How long a caller may reuse a read that changes only when someone writes it. */
+export const SHORT_CACHE_MS = 30_000
+
+// Opted-in GETs: path -> { promise } while in flight, then { data, expiresAt }.
+const cache = new Map()
+
+// "/api/classes/c1/join-code" -> "/api/classes": a write there invalidates every read under it.
+const resourceOf = (path) => path.split('?')[0].split('/').slice(0, 3).join('/')
+
+function invalidate(path) {
+  const resource = resourceOf(path)
+  for (const key of [...cache.keys()]) if (resourceOf(key) === resource) cache.delete(key)
+}
+
+/** Drop every cached read: on sign-out, so a shared machine's next account sees none of them. */
+export function clearApiCache() {
+  cache.clear()
+}
+
 /**
  * `timeoutMs` is opt-in with no default (slow endpoints like strategies are legitimate).
- * It bounds the whole call, token refresh included, not just `fetch`.
+ * It bounds the whole call, token refresh included, not just `fetch`. `cacheMs` (GET only)
+ * reuses a result, or a request in flight, for that long; failures are never kept.
  */
 export async function apiFetch(path, { method = 'GET', body = null,
-                                       timeoutMs = null } = {}) {
+                                       timeoutMs = null, cacheMs = null } = {}) {
+  if (method !== 'GET') {
+    // Before and after: a read racing the write must not repopulate what it changed.
+    invalidate(path)
+    try { return await bounded(path, { method, body, timeoutMs }) } finally { invalidate(path) }
+  }
+  if (!cacheMs) return bounded(path, { method, body, timeoutMs })
+  const hit = cache.get(path)
+  if (hit?.promise) return hit.promise
+  if (hit && hit.expiresAt > Date.now()) return hit.data
+  const entry = {}
+  entry.promise = bounded(path, { method, body, timeoutMs }).then(
+    data => {
+      // Invalidated meanwhile: the write wins, so this result is not kept.
+      if (cache.get(path) === entry) cache.set(path, { data, expiresAt: Date.now() + cacheMs })
+      return data
+    },
+    err => {
+      if (cache.get(path) === entry) cache.delete(path)
+      throw err
+    })
+  cache.set(path, entry)
+  return entry.promise
+}
+
+async function bounded(path, { method, body, timeoutMs }) {
   if (!timeoutMs) return request(path, { method, body })
 
   const controller = new AbortController()

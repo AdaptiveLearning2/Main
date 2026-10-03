@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Users, HelpCircle, BarChart3, ArrowUpRight, Brain, Zap, Copy, Check } from 'lucide-react'
-import { apiFetch } from '../../lib/api'
+import { apiFetch, SHORT_CACHE_MS } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import { usePrefetchWhenIdle } from '../../lib/prefetch'
 import { pages } from '../../routes'
@@ -62,7 +62,7 @@ export default function TeacherDashboard() {
 
     // Both at once: the averages do not need the list. Their own catch blanks only the averages.
     const loadClasses = () => Promise.all([
-      apiFetch('/api/classes'),
+      apiFetch('/api/classes', { cacheMs: SHORT_CACHE_MS }),
       apiFetch('/api/classes/summary').catch(() => ({})),
     ])
       .then(([rows, averages]) => {

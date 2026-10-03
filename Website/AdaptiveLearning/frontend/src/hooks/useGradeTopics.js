@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { apiFetch } from '../lib/api'
+import { apiFetch, SHORT_CACHE_MS } from '../lib/api'
 
 /**
  * `/api/topics` for `grade`: every topic's row (`{name, allowed}`), and the error if the read failed.
@@ -14,7 +14,7 @@ export function useGradeTopicsState(grade, attempt = 0) {
   useEffect(() => {
     if (!known) return
     let cancelled = false
-    apiFetch(path)
+    apiFetch(path, { cacheMs: SHORT_CACHE_MS })
       .then(rows => { if (!cancelled) setLoaded({ key, rows: rows || [], error: null }) })
       .catch(e => { if (!cancelled) setLoaded({ key, rows: null, error: e || new Error('topics') }) })
     return () => { cancelled = true }

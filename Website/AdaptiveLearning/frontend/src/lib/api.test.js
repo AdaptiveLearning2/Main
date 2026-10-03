@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('./supabase', async () => await import('../test/mocks/supabase'))
 
-import { apiFetch, apiFetchOnUnload } from './api'
+import { apiFetch, apiFetchOnUnload, clearApiCache } from './api'
 import { authFns, buildAuthSession, resetSupabaseMock, setSession } from '../test/mocks/supabase'
 import { WAKE_AFTER_MS, _resetForTests as _resetWake, serverWaking } from './serverWake'
 
@@ -271,6 +271,69 @@ describe('Retry-After', () => {
 
     await expect(apiFetch('/api/generate-question')).rejects.toMatchObject({ status: 500 })
     expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the opt-in read cache', () => {
+  beforeEach(() => clearApiCache())
+  const fetches = () => globalThis.fetch.mock.calls.length
+
+  it('reuses a result for its lifetime, then reads again', async () => {
+    vi.useFakeTimers()
+    await apiFetch('/api/classes', { cacheMs: 1000 })
+    await apiFetch('/api/classes', { cacheMs: 1000 })
+    expect(fetches()).toBe(1)
+    vi.advanceTimersByTime(1001)
+    await apiFetch('/api/classes', { cacheMs: 1000 })
+    expect(fetches()).toBe(2)
+  })
+
+  it('shares one request between callers that ask while it is in flight', async () => {
+    await Promise.all([apiFetch('/api/topics?grade=1', { cacheMs: 1000 }),
+                       apiFetch('/api/topics?grade=1', { cacheMs: 1000 })])
+    expect(fetches()).toBe(1)
+  })
+
+  it('never keeps a failure', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValueOnce(failing()).mockResolvedValue(ok([1]))
+    await expect(apiFetch('/api/classes', { cacheMs: 1000 })).rejects.toThrow()
+    expect(await apiFetch('/api/classes', { cacheMs: 1000 })).toEqual([1])
+  })
+
+  it('forgets a resource once anything writes to it, and only that resource', async () => {
+    await apiFetch('/api/classes', { cacheMs: 1000 })
+    await apiFetch('/api/topics', { cacheMs: 1000 })
+    await apiFetch('/api/classes/join', { method: 'POST', body: { join_code: 'X' } })
+    const before = fetches()
+    await apiFetch('/api/classes', { cacheMs: 1000 })
+    await apiFetch('/api/topics', { cacheMs: 1000 })
+    expect(fetches()).toBe(before + 1)
+  })
+
+  it('does not keep a read that was in flight when a write landed', async () => {
+    let respond
+    globalThis.fetch = vi.fn(() => new Promise(r => { respond = r }))
+    const read = apiFetch('/api/classes', { cacheMs: 1000 })
+    await vi.waitFor(() => expect(respond).toBeTypeOf('function'))
+    const answerRead = respond
+    const write = apiFetch('/api/classes', { method: 'POST', body: {} })
+    await vi.waitFor(() => expect(respond).not.toBe(answerRead))
+    answerRead(ok(['stale']))
+    respond(ok({}))
+    await read
+    await write
+    globalThis.fetch = vi.fn().mockResolvedValue(ok(['fresh']))
+    expect(await apiFetch('/api/classes', { cacheMs: 1000 })).toEqual(['fresh'])
+  })
+
+  it('caches nothing unless asked, and drops everything on clear', async () => {
+    await apiFetch('/api/classes')
+    await apiFetch('/api/classes')
+    expect(fetches()).toBe(2)
+    await apiFetch('/api/classes', { cacheMs: 1000 })
+    clearApiCache()
+    await apiFetch('/api/classes', { cacheMs: 1000 })
+    expect(fetches()).toBe(4)
   })
 })
 

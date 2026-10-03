@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Users, Plus, X, Copy, Check, GraduationCap, Pencil, Save, ChevronRight, RefreshCw } from 'lucide-react'
-import { apiFetch } from '../../lib/api'
+import { apiFetch, SHORT_CACHE_MS } from '../../lib/api'
 import { toast } from 'sonner'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
@@ -25,7 +25,7 @@ export default function Classes() {
   const [editGrade, setEditGrade] = useState('')
 
   function loadClasses() {
-    return apiFetch('/api/classes')
+    return apiFetch('/api/classes', { cacheMs: SHORT_CACHE_MS })
       .then(rows => {
         setClasses(rows)
         setFailed(false)

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { HelpCircle, Search, Filter, X, ChevronDown } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { fetchQuestionCount, fetchQuestionsCached } from '../../lib/questionsCache'
-import { apiFetch } from '../../lib/api'
+import { apiFetch, SHORT_CACHE_MS } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
 import useDialog from '../../hooks/useDialog'
@@ -155,7 +155,7 @@ export default function Questions() {
 
   useEffect(() => {
     // Failure costs only the student filter, so this just logs.
-    apiFetch('/api/classes')
+    apiFetch('/api/classes', { cacheMs: SHORT_CACHE_MS })
       .then(rows => setClasses(rows || []))
       .catch(e => console.error('Failed to load classes:', e))
   }, [])

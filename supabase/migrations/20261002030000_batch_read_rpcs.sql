@@ -42,9 +42,10 @@ BEGIN
               ORDER BY c.ts DESC LIMIT 1));
     ELSIF p_channel = 'emotion' THEN
         -- One pass: group by day and trusted label (NULL for the rest), then fold each day.
-        -- emotion_counts sums to trusted_emotion_rows, so shares of it total 100%.
+        -- emotion_counts sums to trusted_emotion_rows, so shares of it total 100%; emotion_rows
+        -- (labelled, trusted or not) is the rollup's emotion sample_count.
         SELECT coalesce(jsonb_agg(d ORDER BY d.day), '[]'::jsonb) INTO days FROM (
-            SELECT g.day, sum(g.n)::bigint AS rows,
+            SELECT g.day, sum(g.n)::bigint AS rows, sum(g.emotion_n)::bigint AS emotion_rows,
                    coalesce(sum(g.n) FILTER (WHERE g.label IS NOT NULL), 0)::bigint
                        AS trusted_emotion_rows,
                    sum(g.attention_n)::bigint AS attention_n, sum(g.attention_sum) AS attention_sum,
@@ -52,7 +53,7 @@ BEGIN
                             '{}'::jsonb) AS emotion_counts
               FROM (SELECT (ts AT TIME ZONE p_timezone)::date AS day,
                            CASE WHEN emotion_trusted THEN emotion END AS label,
-                           count(*) AS n,
+                           count(*) AS n, count(emotion) AS emotion_n,
                            count(attention) AS attention_n, sum(attention) AS attention_sum
                       FROM face_signals
                      WHERE user_id = p_student_id AND ts >= p_since

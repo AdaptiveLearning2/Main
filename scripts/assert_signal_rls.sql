@@ -1696,7 +1696,7 @@ END $$;
 DO $$
 DECLARE
     uid uuid := gen_random_uuid(); sess uuid := gen_random_uuid(); res jsonb; d jsonb;
-    raised boolean := false;
+    raised boolean := false; rolled int;
 BEGIN
     -- Its own student: the function aggregates every row the student has since p_since.
     INSERT INTO auth.users (id, email) VALUES (uid, 'weekly-days@test.invalid');
@@ -1739,6 +1739,13 @@ BEGIN
     IF (d->>'rows')::int IS DISTINCT FROM 4 OR (d->>'trusted_emotion_rows')::int IS DISTINCT FROM 2
        OR d->'emotion_counts' IS DISTINCT FROM '{"happy": 2}'::jsonb OR (d->>'attention_n')::int IS DISTINCT FROM 1 THEN
         RAISE EXCEPTION 'emotion day aggregate is wrong (untrusted must not count): %', d;
+    END IF;
+    -- Raw and rolled-up days must count face samples alike, so ask the rollup itself.
+    PERFORM public.rollup_signal_day(uid, '2026-09-01', 'America/Los_Angeles');
+    SELECT sample_count INTO rolled FROM public.signal_daily_rollup
+     WHERE user_id = uid AND day = '2026-09-01' AND channel = 'emotion';
+    IF (d->>'emotion_rows')::int IS DISTINCT FROM rolled THEN
+        RAISE EXCEPTION 'emotion_rows is %, the rollup''s emotion sample_count %', d->>'emotion_rows', rolled;
     END IF;
 
     INSERT INTO public.heart_signals (session_id, user_id, source, ts, heart_rate_bpm, rmssd_ms, trusted)

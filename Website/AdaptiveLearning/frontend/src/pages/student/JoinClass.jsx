@@ -18,7 +18,7 @@ export default function JoinClass() {
   const [classesFailed, setClassesFailed]   = useState(false)
 
   const loadClasses = () => {
-    apiFetch('/api/classes')
+    apiFetch('/api/classes', { cache: true })
       .then(c => { setClasses(c); setClassesFailed(false); setLoadingClasses(false) })
       // Set classesFailed, or a failed read looks like "no classes joined yet".
       .catch(e => { console.error('Failed to load classes:', e); setClassesFailed(true); setLoadingClasses(false) })
@@ -36,7 +36,7 @@ export default function JoinClass() {
       .then(async (cls) => {
         toast.success(`Joined "${cls.name}"! 🎉`)
         setCode('')
-        setClasses(await apiFetch('/api/classes'))
+        setClasses(await apiFetch('/api/classes', { cache: true }))
       })
       .catch(err => toast.error(err.message || 'Could not join class'))
       .finally(() => setLoading(false))

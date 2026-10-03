@@ -6,9 +6,13 @@ import { MemoryRouter } from 'react-router-dom'
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 vi.mock('../../context/AuthContext', () => ({ useAuth: () => ({ displayName: 'Ms Rao' }) }))
+// Records what the page warms; a real chunk load mid-test would outlive the test.
+const mockPrefetched = []
+vi.mock('../../lib/prefetch', () => ({ usePrefetchWhenIdle: loader => { mockPrefetched.push(loader) } }))
 
 import { mockApi, overrideApi, pending, resetApi } from '../../test/mocks/apiFetch'
 import TeacherDashboard from './Dashboard'
+import { pages } from '../../routes'
 
 const CLASS = { id: 'c1', name: 'Maths 5', join_code: 'ABC123', class_memberships: [{ count: 3 }] }
 
@@ -28,6 +32,11 @@ function streakTile() {
 }
 
 beforeEach(() => { resetApi() })
+
+it('warms the class page, the usual next click, once it has rendered', () => {
+  renderWith({})
+  expect(mockPrefetched).toContain(pages.classDetail)
+})
 
 it('shows a failed summary read as unread, not as a streak of 0', async () => {
   renderWith({ c1: { avgAccuracy: null, avgStreak: null, retrieved: false } })

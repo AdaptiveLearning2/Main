@@ -239,7 +239,7 @@ export default function Live() {
   const loadClasses = () => {
     setLoadingClasses(true)
     setClassesFailed(null)
-    apiFetch('/api/classes')
+    apiFetch('/api/classes', { cache: true })
       .then(rows => {
         setClasses(rows || [])
         if (rows?.length && !classId) setClassId(rows[0].id)

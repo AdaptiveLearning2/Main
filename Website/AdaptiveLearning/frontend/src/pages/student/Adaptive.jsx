@@ -342,7 +342,7 @@ export default function Adaptive() {
 
   // load classes
   useEffect(() => {
-    apiFetch('/api/classes').then(c => {
+    apiFetch('/api/classes', { cache: true }).then(c => {
       setClasses(c || [])
       if ((c || []).length && !classId) setClassId(c[0].id)
     }).catch(()=>{})

@@ -410,7 +410,7 @@ cmake -S . -B build_on -DENABLE_LIBMUSE=ON -DLIBMUSE_SDK_DIR=../libmuse_windows_
 It compiles enum values, SDK signatures and the guarded packet handling. It still proves nothing
 about a real headband.
 
-`npm run lint` is non-blocking against a backlog of **14** pre-existing errors (7
+`npm run lint` is non-blocking against a backlog of **10** pre-existing errors (3
 `react-refresh/only-export-components`, 5 `no-undef` on `process`/`global` in tests, 1 `no-empty`,
 1 `react-hooks/rules-of-hooks`) — none of them `no-unused-vars` or
 `react-hooks/set-state-in-effect`. Don't add to it, and don't make it blocking until it is gone.
@@ -1724,7 +1724,7 @@ The second is **`react/no-danger`**, which arrives with the XSS sinks below rath
 
 ## The XSS sinks are a second, blocking lint run, because the first one cannot fail
 
-`npm run lint` is non-blocking against the 14-error backlog, and a security rule nobody can fail is not
+`npm run lint` is non-blocking against the 10-error backlog, and a security rule nobody can fail is not
 enforcement. `npm run lint:sinks` (`eslint.sinks.config.js`, CI step *Lint XSS sinks*) therefore extends **no**
 shared config — the whole backlog lives in `js.configs.recommended` and the two react plugins, so it cannot reach
 this run, which is red if and only if a sink was added. The rules had zero hits when written, which is what makes

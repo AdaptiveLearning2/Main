@@ -1,4 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+/* Self-hosted, so first paint waits on no third-party stylesheet; only the subsets a page uses load. */
+@import '@fontsource-variable/inter';
 
 @tailwind base;
 @tailwind components;
@@ -11,7 +12,7 @@ html, body, #root {
 body {
   @apply bg-slate-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100;
   -webkit-font-smoothing: antialiased;
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: 'Inter Variable', system-ui, sans-serif;
 }
 
 ::-webkit-scrollbar { width: 5px; }

@@ -41,7 +41,7 @@ export default function Sessions() {
 
   const loadClasses = useCallback(() => {
     // No setLoading(true): on retry the error stays up instead of a skeleton flash.
-    apiFetch('/api/classes').then(rows => {
+    apiFetch('/api/classes', { cache: true }).then(rows => {
       setClasses(rows || [])
       setFailed(false)
       if (rows?.length) {

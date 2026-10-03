@@ -5,7 +5,7 @@ import { Users, Search, ChevronDown, Flame, Smile, Target, TrendingUp, Zap, Hear
 import HideSensorDataToggle from '../../components/common/HideSensorDataToggle'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 import { apiFetch } from '../../lib/api'
-import { offLabel } from '../../components/signals/SignalPanel'
+import { offLabel } from '../../lib/signalFormat'
 import { stagger } from '../../lib/stagger'
 
 // Matches the weekly report's window.

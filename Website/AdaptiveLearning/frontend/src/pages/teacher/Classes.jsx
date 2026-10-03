@@ -25,7 +25,7 @@ export default function Classes() {
   const [editGrade, setEditGrade] = useState('')
 
   function loadClasses() {
-    return apiFetch('/api/classes')
+    return apiFetch('/api/classes', { cache: true })
       .then(rows => {
         setClasses(rows)
         setFailed(false)

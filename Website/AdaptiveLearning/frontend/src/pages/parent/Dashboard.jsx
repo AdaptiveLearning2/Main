@@ -4,8 +4,10 @@ import { motion } from 'framer-motion'
 import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Activity, Sparkles, ShieldCheck } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
+import { usePrefetchWhenIdle } from '../../lib/prefetch'
+import { pages } from '../../routes'
 import ChildWithdrewBanner from '../../components/consent/ChildWithdrewBanner'
-import { pct, valueOrReason, emotionOn as faceIncluded } from '../../components/signals/SignalPanel'
+import { pct, valueOrReason, emotionOn as faceIncluded } from '../../lib/signalFormat'
 import { stagger } from '../../lib/stagger'
 
 // Only the fields the tiles below render; keep in step with them.
@@ -27,6 +29,8 @@ export default function ParentDashboard() {
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState(false)
   const name = displayName || 'there'
+  // A child's report is the usual next click, and it carries the chart library.
+  usePrefetchWhenIdle(pages.parentChild)
 
   useEffect(() => {
     let cancelled = false

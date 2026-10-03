@@ -155,7 +155,7 @@ export default function Questions() {
 
   useEffect(() => {
     // Failure costs only the student filter, so this just logs.
-    apiFetch('/api/classes')
+    apiFetch('/api/classes', { cache: true })
       .then(rows => setClasses(rows || []))
       .catch(e => console.error('Failed to load classes:', e))
   }, [])

@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
 import ParentDashboard from './Dashboard'
+import { pages } from '../../routes'
 
 // The facial opt-out must hold here as on the child's report.
 
@@ -9,6 +10,9 @@ vi.mock('../../lib/api', () => ({ apiFetch: vi.fn() }))
 vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { email: 'parent@example.com' } }),
 }))
+// Records what the page warms; a real chunk load mid-test would outlive the test.
+const mockPrefetched = []
+vi.mock('../../lib/prefetch', () => ({ usePrefetchWhenIdle: loader => { mockPrefetched.push(loader) } }))
 
 const { apiFetch } = await import('../../lib/api')
 
@@ -47,6 +51,12 @@ beforeEach(() => {
 function renderDashboard() {
   return render(<MemoryRouter><ParentDashboard /></MemoryRouter>)
 }
+
+it("warms a child's report, the usual next click, once the page has rendered", () => {
+  apiFetch.mockResolvedValue([])
+  renderDashboard()
+  expect(mockPrefetched).toContain(pages.parentChild)
+})
 
 
 

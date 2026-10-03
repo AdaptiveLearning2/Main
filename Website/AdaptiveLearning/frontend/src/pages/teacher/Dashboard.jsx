@@ -4,6 +4,8 @@ import { motion } from 'framer-motion'
 import { Users, HelpCircle, BarChart3, ArrowUpRight, Brain, Zap, Copy, Check } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
+import { usePrefetchWhenIdle } from '../../lib/prefetch'
+import { pages } from '../../routes'
 import { toast } from 'sonner'
 import SkeletonList, { Skeleton } from '../../components/ui/Skeleton'
 import StatCard from '../../components/ui/StatCard'
@@ -24,6 +26,8 @@ export default function TeacherDashboard() {
   const [loading, setLoading]     = useState(true)
   const [questionsFailed, setQuestionsFailed] = useState(false)
   const name = displayName || 'there'
+  // A class is the usual next click, and its page carries the chart library.
+  usePrefetchWhenIdle(pages.classDetail)
 
   const [classes, setClasses] = useState([])
   const [classAverages, setClassAverages] = useState({}) // class_id -> { avgAccuracy, avgStreak }

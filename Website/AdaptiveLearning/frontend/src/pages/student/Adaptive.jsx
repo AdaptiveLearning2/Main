@@ -6,6 +6,7 @@ import { apiFetch } from '../../lib/api'
 import { endSession, recordAnswer } from '../../lib/session'
 import useEegStartReport from '../../hooks/useEegStartReport'
 import usePoll from '../../hooks/usePoll'
+import { PUSH_POLL_MS, PULL_HEALTH_POLL_MS, PULL_STATUS_POLL_MS } from './pollIntervals'
 import { onSignOut } from '../../lib/signOutTasks'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { reloadIfRestored } from '../../lib/pageRestore'
@@ -33,8 +34,6 @@ const RECONNECT_ATTEMPTS = 3
 const RECONNECT_BACKOFF_MS = [2000, 4000, 8000]
 // Faster status poll while recovering a drop.
 const RECONNECT_POLL_MS = 2000
-// Health and status polls under push: their answers are configuration, not live state.
-const PUSH_POLL_MS = 30_000
 // Consecutive poor contact frames before the hint shows; one frame is noise.
 const CONTACT_POOR_STREAK = 2
 // Minimum gap between disconnect toasts, for a flapping link.
@@ -373,7 +372,7 @@ export default function Adaptive() {
         probeUnreachable: h.answered === false,
       }))
     } catch { if (!stopped()) setHeadband(s => ({ ...s, available: false })) }
-  }, { intervalMs: headband.pushMode ? PUSH_POLL_MS : 5000 })
+  }, { intervalMs: headband.pushMode ? PUSH_POLL_MS : PULL_HEALTH_POLL_MS })
 
   // Discover stations (auto-select a single one), retried until non-empty. A
   // failed read applies nothing, so `stationId` never falls back to `default`.
@@ -671,7 +670,7 @@ export default function Adaptive() {
           ? s.muse.ingestion.battery_percent : null,
       }),
     }))
-  }, { intervalMs: headband.pushMode ? PUSH_POLL_MS : 3000,
+  }, { intervalMs: headband.pushMode ? PUSH_POLL_MS : PULL_STATUS_POLL_MS,
        key: `${sessionId}:${stationId}`, enabled: !!sessionId,
        // Under pull this request refreshes the station pairing; unpolled 120 s, it is released.
        pauseWhenHidden: !!headband.pushMode })

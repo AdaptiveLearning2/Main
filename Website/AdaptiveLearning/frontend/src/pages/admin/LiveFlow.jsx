@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { apiFetch } from '../../lib/api'
+import usePoll from '../../hooks/usePoll'
 import FlowDot from './FlowDot'
 
 const POLL_MS = 5_000
@@ -8,15 +9,15 @@ export default function AdminLiveFlow() {
   const [data, setData] = useState(null)
   const [failed, setFailed] = useState(false)
 
-  useEffect(() => {
-    let cancelled = false
-    const tick = () => apiFetch('/api/admin/live-signals')
-      .then(d => { if (!cancelled) { setData(d); setFailed(!d.retrieved) } })
-      .catch(() => { if (!cancelled) setFailed(true) })
-    tick()
-    const t = setInterval(tick, POLL_MS)
-    return () => { cancelled = true; clearInterval(t) }
-  }, [])
+  // Paused while hidden: this page holds no station pairing to keep alive.
+  usePoll(async (stopped) => {
+    try {
+      const d = await apiFetch('/api/admin/live-signals')
+      if (!stopped()) { setData(d); setFailed(!d.retrieved) }
+    } catch {
+      if (!stopped()) setFailed(true)
+    }
+  }, { intervalMs: POLL_MS })
 
   return (
     <div className="p-6 space-y-6 max-w-4xl">

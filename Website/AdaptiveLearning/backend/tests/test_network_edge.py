@@ -71,6 +71,15 @@ def test_credentials_are_not_allowed_and_that_is_what_makes_the_list_mean_anythi
     assert main.ALLOWED_ORIGINS and "*" not in main.ALLOWED_ORIGINS
 
 
+def test_a_preflight_is_cached_for_two_hours():
+    """Every call carries Authorization, so each new URL costs a preflight; the default is 600 s."""
+    r = client.options(OPEN_PATH, headers={
+        "Origin": ALLOWED, "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "Authorization"})
+    assert r.status_code == 200
+    assert r.headers.get("access-control-max-age") == "7200"
+
+
 def test_a_method_the_api_does_not_use_is_refused_at_the_preflight():
     r = client.options(OPEN_PATH, headers={
         "Origin": ALLOWED, "Access-Control-Request-Method": "PATCH"})

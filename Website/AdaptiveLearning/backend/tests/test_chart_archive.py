@@ -1,5 +1,6 @@
 """Archiving a closed session's charts to private storage, and reading them back."""
 
+import json
 import os
 from datetime import datetime, timezone
 
@@ -14,6 +15,11 @@ import chart_render  # noqa: E402
 
 USER = "11111111-2222-3333-4444-555555555555"
 SESSION = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+def _review(main, *args, **kwargs):
+    """`session_signals` returns a Response (no `jsonable_encoder` walk); this is its body."""
+    return json.loads(main.session_signals(*args, **kwargs).body)
 
 
 # ── a fake client: three signal tables, one sessions row, one bucket ─────────
@@ -527,7 +533,7 @@ def test_session_review_reads_the_same_rows_the_archive_draws(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
     monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a, **_k: None)
 
-    reviewed = main.session_signals(SESSION, request=None)["cognitive"]
+    reviewed = _review(main, SESSION, request=None)["cognitive"]
     archived = chart_archive._fetch(client, SESSION)[0]
 
     assert len(reviewed) == 2700
@@ -1226,7 +1232,10 @@ def test_review_skips_withdrawn_channels_and_says_since_when(monkeypatch):
             return q
     monkeypatch.setattr(main, "supabase", _Answers())
 
-    out = main.session_signals(SESSION, None)
+    raw = main.session_signals(SESSION, None)
+    # A Response is what makes FastAPI skip its per-element `jsonable_encoder` walk.
+    assert isinstance(raw, main.JSONResponse), "session review fell back to the slow encoder"
+    out = json.loads(raw.body)
     assert asked == [frozenset({"face_signals", "heart_signals"})]
     assert out["channels"]["face_included"] is False and out["channels"]["heart_included"] is False
     assert out["channels"]["emotion_revoked_at"] == "2026-08-20T09:00:00+00:00"

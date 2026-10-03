@@ -8,9 +8,9 @@ import threading
 import httpx
 import supabase
 
-# Above the threads that can hold a request at once (anyio's 40, the worker pools, one poller per
-# pull-mode session), and all kept alive, so a burst reuses connections instead of re-handshaking.
-_LIMITS = httpx.Limits(max_connections=128, max_keepalive_connections=128)
+# A cap, not a guarantee: main's 96 request threads, its worker pools and one poller per pull-mode
+# session can exceed it, and the excess waits up to the pool timeout. Kept alive 30 s, not httpx's 5.
+_LIMITS = httpx.Limits(max_connections=128, max_keepalive_connections=128, keepalive_expiry=30.0)
 # Each service keeps the budget its own client had. The database API: Postgrest's 120 s, and a
 # starved pool fails in 10 s rather than queueing for the whole read budget.
 _REST_TIMEOUT = httpx.Timeout(120.0, connect=10.0, pool=10.0)
@@ -36,12 +36,17 @@ def _timeout_by_service(url: str):
     return hook
 
 
+def pooled_http(timeout) -> httpx.Client:
+    """An HTTP/1.1, redirect-following, kept-alive pool: the shape of every call to Supabase here."""
+    return httpx.Client(http2=False, follow_redirects=True, timeout=timeout, limits=_LIMITS)
+
+
 def make_client(url: str, key: str) -> "supabase.Client":
     """A new client, all sub-clients on one HTTP/1.1 pool. One-shot scripts only; else `get_client`.
 
     Resolves `supabase.create_client` at call time, so a test patching it there still applies.
     """
-    http = httpx.Client(http2=False, follow_redirects=True, timeout=_REST_TIMEOUT, limits=_LIMITS)
+    http = pooled_http(_REST_TIMEOUT)
     client = supabase.create_client(url, key, options=supabase.ClientOptions(httpx_client=http))
     # After the call, so a missing URL still fails with supabase's own error.
     http.event_hooks = {"request": [_timeout_by_service(url)]}

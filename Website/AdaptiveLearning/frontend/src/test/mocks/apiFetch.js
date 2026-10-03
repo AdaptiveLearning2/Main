@@ -74,7 +74,6 @@ export function overrideApi(match, handler, method = undefined) {
 export const apiFetchOnUnload = vi.fn()
 // The real module's cache is off here: this router answers every call afresh.
 export const clearApiCache = vi.fn()
-export const SHORT_CACHE_MS = 30_000
 
 /** Drop the routes and the recorded calls, keeping the implementation. */
 export function resetApi() {

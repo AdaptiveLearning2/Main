@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom'
 import { LineChart, Line, YAxis } from 'recharts'
 import AccessibleChart from '../../components/charts/AccessibleChart'
 import { asPercent } from '../../components/charts/describeSeries'
-import { apiFetch, SHORT_CACHE_MS } from '../../lib/api'
+import { apiFetch } from '../../lib/api'
 import { emotionEmoji } from '../../lib/emotions'
 import { STALE_AFTER_S, eegWeak, formatAge } from '../../lib/signalAge'
 import SkeletonList from '../../components/ui/Skeleton'
@@ -216,7 +216,7 @@ export default function Live() {
   const loadClasses = () => {
     setLoadingClasses(true)
     setClassesFailed(null)
-    apiFetch('/api/classes', { cacheMs: SHORT_CACHE_MS })
+    apiFetch('/api/classes', { cache: true })
       .then(rows => {
         setClasses(rows || [])
         if (rows?.length && !classId) setClassId(rows[0].id)

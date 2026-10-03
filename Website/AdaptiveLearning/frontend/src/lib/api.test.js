@@ -288,6 +288,17 @@ describe('the opt-in read cache', () => {
     expect(fetches()).toBe(2)
   })
 
+  it('keeps `cache: true` results for 30 s', async () => {
+    vi.useFakeTimers()
+    await apiFetch('/api/classes', { cache: true })
+    vi.advanceTimersByTime(29_000)
+    await apiFetch('/api/classes', { cache: true })
+    expect(fetches()).toBe(1)
+    vi.advanceTimersByTime(1_001)
+    await apiFetch('/api/classes', { cache: true })
+    expect(fetches()).toBe(2)
+  })
+
   it('shares one request between callers that ask while it is in flight', async () => {
     await Promise.all([apiFetch('/api/topics?grade=1', { cacheMs: 1000 }),
                        apiFetch('/api/topics?grade=1', { cacheMs: 1000 })])

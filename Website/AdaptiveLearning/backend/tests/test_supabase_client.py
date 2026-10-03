@@ -29,6 +29,8 @@ def test_every_sub_client_uses_the_one_http1_pool():
     pool = http._transport._pool
     assert pool._http2 is False
     assert pool._max_keepalive_connections == pool._max_connections >= 100
+    # httpx's 5 s default drops the pool in any quiet gap, so the next query re-handshakes.
+    assert pool._keepalive_expiry >= 30
     assert client.postgrest.session is http
     assert client.storage.session is http
     assert client.auth._http_client is http

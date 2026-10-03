@@ -548,7 +548,8 @@ do not: a `replace-me` token, two equal tokens, or push over plain `http://` to 
 **Backend.** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `AUTH_CHECK_TIMEOUT`, `BACKEND_PORT`, `EEG_API_URL`,
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MODE`, `INGEST_MAX_BATCH` /
 `INGEST_RATE_LIMIT` / `INGEST_RATE_WINDOW` / `INGEST_MAX_ROWS_PER_MINUTE` (per student and channel), `SESSION_ABANDONED_AFTER_HOURS` /
-`STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep and its chart catch-up), `QUESTIONS_CACHE_TTL`,
+`STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep and its chart catch-up), `STALE_SWEEP_FIRST_DELAY_SECONDS`
+(60 in production, else 0; a cold start serves requests before the first sweep), `QUESTIONS_CACHE_TTL`,
 `QUESTION_QUEUE_SIZE`, `PAIRING_IDLE_SECONDS` (120; a headband pairing its pairer's page stopped polling is released),
 `CLASS_JOIN_MISSES_PER_ADDRESS` (1000 wrong class codes an hour), the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
 `PUBLIC_*_RATE_*` / `TRUSTED_PROXY_HOPS` group under *The network edge*, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels*,

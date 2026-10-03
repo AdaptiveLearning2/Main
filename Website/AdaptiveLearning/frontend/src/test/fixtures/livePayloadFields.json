@@ -1,0 +1,7 @@
+{
+  "cognitive": ["engagement", "focus", "raw", "stress", "ts"],
+  "cognitive.raw": ["quality_basis", "signal_quality"],
+  "face": ["emotion", "ts"],
+  "heart": ["heart_rate_bpm", "rmssd_ms", "source", "trusted", "ts"],
+  "answer": ["answered_at"]
+}

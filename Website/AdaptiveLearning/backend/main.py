@@ -4855,6 +4855,33 @@ def class_students(class_id: str, request: Request):
     return students
 
 
+@app.get("/api/teacher/students")
+def teacher_students(request: Request):
+    """Each student in any class the caller teaches, once, with their earliest join."""
+    uid = get_user(request)["id"]
+    classes = supabase.table("classes").select("id").eq("teacher_id", uid).execute().data or []
+    class_ids = _unique_ids(c.get("id") for c in classes)
+    if not class_ids:
+        return []
+    memberships = supabase.table("class_memberships").select("student_id, joined_at") \
+        .in_("class_id", class_ids).execute().data or []
+    def _instant(m):
+        at = _parse_ts(m.get("joined_at"))
+        return (at is None, at or datetime.min.replace(tzinfo=timezone.utc))
+
+    joined: dict[str, str | None] = {}
+    # Oldest first by instant, so the first row seen per student is their earliest join.
+    for m in sorted(memberships, key=_instant):
+        if m.get("student_id"):
+            joined.setdefault(m["student_id"], m.get("joined_at"))
+    profiles = _profiles_many(list(joined))
+    rows = [{"user_id": sid,
+             "name": profiles[sid].get("display_name") or "Student",
+             "email": profiles[sid].get("email") or "",
+             "joined_at": at} for sid, at in joined.items()]
+    return sorted(rows, key=lambda r: (r["name"].casefold(), r["user_id"]))
+
+
 # ─── teacher analytics ────────────────────────────────────────────────────
 # All: `_verify_class_owner` before any read; `retrieved` on every payload;
 # school-timezone buckets; aggregation in Postgres. See CLAUDE.md "teacher analytics".

@@ -34,6 +34,7 @@ const RECONNECT_ATTEMPTS = 3
 const RECONNECT_BACKOFF_MS = [2000, 4000, 8000]
 // Faster status poll while recovering a drop.
 const RECONNECT_POLL_MS = 2000
+const TELEMETRY_POLL_MS = 5000
 // Consecutive poor contact frames before the hint shows; one frame is noise.
 const CONTACT_POOR_STREAK = 2
 // Minimum gap between disconnect toasts, for a flapping link.
@@ -213,6 +214,8 @@ export default function Adaptive() {
   const phaseTimer  = useRef(null)
   // State mirrors for timer-driven polls and the reconnect loop.
   const headbandRef = useRef(headband)
+  // The status poll's latest landed answer, which the telemetry poll reuses under pull.
+  const lastStatus = useRef(null)
   const recorderRef = useRef(null)
   // Last drop toast time, and whether the current drop was announced (see onDropped).
   const lastDropToast = useRef(0)
@@ -442,8 +445,13 @@ export default function Adaptive() {
         if (headband.pushMode) {
           st = await museState(stationId)
         } else {
+          // The status poll reads this endpoint every few seconds; reuse its answer, except while
+          // reconnecting, when the link coming back is what this poll is for.
+          const recent = lastStatus.current
+          const reuse = !reconnecting && recent?.stationId === stationId
+            && Date.now() - recent.at < TELEMETRY_POLL_MS
           // `eegStatus` swallows failure into a fallback; an unlanded tick writes nothing.
-          const answer = await eegStatus(stationId)
+          const answer = reuse ? recent.answer : await eegStatus(stationId)
           if (answer?.answered === false) return
           st = answer?.muse
         }
@@ -504,7 +512,7 @@ export default function Adaptive() {
       }
     }
     read()
-    const id = setInterval(read, reconnecting ? RECONNECT_POLL_MS : 5000)
+    const id = setInterval(read, reconnecting ? RECONNECT_POLL_MS : TELEMETRY_POLL_MS)
     return () => { killed = true; clearInterval(id) }
     // The handlers read through refs and setState, so they are effectively stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -650,6 +658,7 @@ export default function Adaptive() {
     // An unlanded tick writes nothing (`eegStatus` swallows failure into a
     // plausible-looking object). Drops belong to the telemetry poll.
     if (s.answered === false) return
+    lastStatus.current = { stationId, at: Date.now(), answer: s }
     setHeadband(prev => ({
       ...prev,
       // `service` is null under push: the backend never probes the sidecar.

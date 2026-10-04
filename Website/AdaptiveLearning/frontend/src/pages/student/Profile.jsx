@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { m } from 'framer-motion'
 import { Copy, Check, Save } from 'lucide-react'
 import ConsentChannels from '../../components/consent/ConsentChannels'
 import Toggle from '../../components/ui/Toggle'
 import { useAuth } from '../../context/AuthContext'
+import usePoll from '../../hooks/usePoll'
 import { apiFetch } from '../../lib/api'
 import { fetchSessionList } from '../../lib/session'
 import { GRADES } from '../../lib/grades'
@@ -66,21 +67,23 @@ export default function Profile() {
 
   // Re-read a shown code: a parent may redeem it or it may expire.
   const shownCode = linkCode?.code
+  const recheckCode = useCallback(() => apiFetch('/api/student/link-code')
+    .then(lc => {
+      // A failed read says nothing about the code; leave it standing.
+      if (lc?.retrieved === false) return
+      // Only if still the code this read was about; a "New code" may have landed.
+      setLinkCode(cur => (cur?.code !== shownCode ? cur
+        : lc?.code ? { code: lc.code, expires_at: lc.expires_at } : null))
+    })
+    .catch(() => {}), [shownCode])
+  // Not at once: the code on screen was just read or just made.
+  usePoll(recheckCode, { intervalMs: CODE_RECHECK_MS, enabled: !!shownCode, key: shownCode,
+                        immediate: false })
   useEffect(() => {
-    if (!shownCode) return
-    const recheck = () => apiFetch('/api/student/link-code')
-      .then(lc => {
-        // A failed read says nothing about the code; leave it standing.
-        if (lc?.retrieved === false) return
-        // Only if still the code this read was about; a "New code" may have landed.
-        setLinkCode(cur => (cur?.code !== shownCode ? cur
-          : lc?.code ? { code: lc.code, expires_at: lc.expires_at } : null))
-      })
-      .catch(() => {})
-    const timer = setInterval(recheck, CODE_RECHECK_MS)
-    window.addEventListener('focus', recheck)
-    return () => { clearInterval(timer); window.removeEventListener('focus', recheck) }
-  }, [shownCode])
+    if (!shownCode) return undefined
+    window.addEventListener('focus', recheckCode)
+    return () => window.removeEventListener('focus', recheckCode)
+  }, [shownCode, recheckCode])
 
   // Optimistic; reconcile with the stored (clamped) row, revert on failure.
   const savePrefs = (updated) => {

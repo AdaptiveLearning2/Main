@@ -1,12 +1,12 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 
 /**
- * Call `fn(stopped)` now, then `intervalMs` after each call settles, so calls never overlap.
- * Paused while the tab is hidden unless `pauseWhenHidden` is false; on return the next call
- * keeps its due time, backoff included. A throw doubles the next wait up to `maxBackoffMs`.
- * A new `key` restarts at once; `stopped()` turns true once that run is superseded or unmounted.
+ * Call `fn(stopped)` now (after one interval if `immediate` is false), then `intervalMs` after each
+ * call settles, so calls never overlap. Paused while the tab is hidden unless `pauseWhenHidden` is
+ * false; on return the next call keeps its due time, backoff included. A throw doubles the next wait
+ * up to `maxBackoffMs`; a new `key` restarts; `stopped()` is true once superseded or unmounted.
  */
-export default function usePoll(fn, { intervalMs, key = null, enabled = true,
+export default function usePoll(fn, { intervalMs, key = null, enabled = true, immediate = true,
                                       pauseWhenHidden = true, maxBackoffMs = null } = {}) {
   const fnRef = useRef(fn)
   const intervalRef = useRef(intervalMs)
@@ -54,11 +54,12 @@ export default function usePoll(fn, { intervalMs, key = null, enabled = true,
     }
 
     if (pauseWhenHidden) document.addEventListener('visibilitychange', onVisible)
-    run()
+    if (immediate) run()
+    else timer = setTimeout(run, delay)
     return () => {
       stopped = true
       clearTimeout(timer)
       if (pauseWhenHidden) document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [enabled, pauseWhenHidden, maxBackoffMs, key])
+  }, [enabled, immediate, pauseWhenHidden, maxBackoffMs, key])
 }

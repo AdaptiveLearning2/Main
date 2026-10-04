@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from supabase_client import get_client, pooled_http
 from postgrest.types import ReturnMethod  # supabase pins this sibling
 from typing import Any, NamedTuple
+from uuid import UUID
 
 import LLM_topic_decider
 import chart_archive
@@ -2476,7 +2477,8 @@ class StartSessionRequest(StrictModel):
     title: str | None = Field(None, max_length=_TITLE_MAX)
 
 class AnswerPayload(StrictModel):
-    question_id:    str = Field(max_length=_ID_MAX)
+    # A uuid here, or the RPC's 22P02 reads as a missing session.
+    question_id:    UUID
     selected_index: int
     correct:        bool
 
@@ -2854,68 +2856,85 @@ def start_session(payload: StartSessionRequest, request: Request):
 
     return res.data[0]
 
+
+# The answer's foreign key to its question (init migration): one expired or deleted since it was served.
+_ANSWER_QUESTION_FK = "session_answers_question_id_fkey"
+
+# Steps record_answer survives failing: (result field, function, its migration, what stops).
+_ANSWER_SIDE_STEPS = (
+    ("topic_error",    "record_topic_attempt",  "20260825000000", "no topic attribution until then"),
+    ("counters_error", "bump_session_counters", "20260826000000", "live counters will not move"),
+)
+
+
+def _names_deleted_question(exc: Exception) -> bool:
+    """Whether a failed answer write means its question no longer exists."""
+    return (getattr(exc, "code", None) == "23503"
+            and _ANSWER_QUESTION_FK in (getattr(exc, "message", None) or ""))
+
+
+def _log_answer_side_errors(out: dict, session_id: str) -> None:
+    """Log each step record_answer reports failing; the answer itself is saved."""
+    for field, fn, migration, effect in _ANSWER_SIDE_STEPS:
+        err = str(out.get(field) or "")
+        if not err:
+            continue
+        # 'SQLSTATE: message'; 42883 is undefined_function, and must name this step's own function.
+        if err.startswith("42883") and fn in err:
+            print(f"[answer] {fn} is missing from the database -- apply {migration}; "
+                  f"{effect}: {err}")
+        else:
+            print(f"[answer] saved, but {field} for {session_id}: {err}")
+
+
 @app.post("/api/sessions/{session_id}/answer")
 def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...), request: Request = None):
     user = get_user(request)
-    # Ownership before any write.
-    session = _session_or_403(session_id, user["id"], "user_id, ended_at")
-    if session.get("ended_at"):
+    # One call: ownership and an open session checked under a row lock, then the answer,
+    # the counters and the topic attempt (20261003000000). A refused session gets no write.
+    try:
+        out = supabase.rpc("record_answer", {
+            "p_session_id":     session_id,
+            "p_user_id":        user["id"],
+            "p_question_id":    str(payload.question_id),
+            "p_selected_index": payload.selected_index,
+            "p_correct":        bool(payload.correct),
+            "p_answered_at":    _utc_now().isoformat(),
+        }).execute().data or {}
+    except Exception as e:                                     # noqa: BLE001
+        if _names_no_row(e):
+            raise HTTPException(404, "Session not found")
+        if _names_deleted_question(e):
+            # 410, not 409: the page reads a 409 here as its session ended and starts another.
+            raise HTTPException(410, "This question is no longer available")
+        if "PGRST202" in str(e):
+            print(f"[answer] record_answer is missing from the database -- apply "
+                  f"20261003000000; every answer fails until it is: {e}")
+        else:
+            print(f"[answer] could not record an answer for {session_id}: {e}")
+        raise _read_failed("This answer could not be saved; try again")
+    status = out.get("status") if isinstance(out, dict) else None
+    if status == "not_found":
+        raise HTTPException(404, "Session not found")
+    if status == "forbidden":
+        # The shared refusal, so this 403 records its denial like every other.
+        _session_or_403(session_id, user["id"], row={"user_id": out.get("owner")})
+    if status == "ended":
         # Closed by the sweep, the live monitor or another tab: its totals are already
         # credited, so an answer here would count nowhere. The page starts a new session.
         raise HTTPException(409, "This session has ended")
-    supabase.table("session_answers").insert({
-        "session_id":     session_id,
-        "user_id":        user["id"],
-        "question_id":    payload.question_id,
-        "selected_index": payload.selected_index,
-        "correct":        payload.correct,
-        "answered_at":    _utc_now().isoformat(),
-    }).execute()
-    # Atomic increment in the database. Never raises: the answer row is the record
-    # and `_answer_counts` recomputes at close.
-    try:
-        supabase.rpc("bump_session_counters", {
-            "p_session_id": session_id,
-            "p_correct":    bool(payload.correct),
-        }).execute()
-    except Exception as e:                                     # noqa: BLE001
-        if "PGRST202" in str(e):
-            print(f"[answer] bump_session_counters is missing from the database "
-                  f"-- apply 20260826000000; live counters will not move: {e}")
-        else:
-            print(f"[answer] could not bump counters for {session_id}: {e}")
-    # Returned so the page can update one topic figure; None = nothing attributed.
-    topic = _record_topic_attempt(user["id"], payload.question_id, payload.correct)
+    if status != "ok":
+        print(f"[answer] record_answer answered {out!r} for {session_id}")
+        raise _read_failed("This answer could not be saved; try again")
+    _log_answer_side_errors(out, session_id)
     # Best effort, after the writes: the simulator reacts to answers; hardware ignores it.
     try:
         eeg_poller.notify_answer(session_id, bool(payload.correct))
     except Exception as e:                                     # noqa: BLE001
         print(f"[answer] could not notify the sidecar for {session_id}: {e}")
-    return {"ok": True, "topic": topic}
-
-
-def _record_topic_attempt(user_id: str, question_id: str, correct: bool) -> str | None:
-    """Add one attempt to the student's per-topic record, atomically. Never raises.
-
-    The topic comes from the question row, never the caller. Returns the topic
-    name, or None for an unknown question or topic, or any failure.
-    """
-    try:
-        res = supabase.rpc("record_topic_attempt", {
-            "p_user_id":     user_id,
-            "p_question_id": question_id,
-            "p_correct":     bool(correct),
-        }).execute()
-        topic = getattr(res, "data", None)
-        return topic if isinstance(topic, str) else None
-    except Exception as e:                                     # noqa: BLE001
-        # PGRST202: migration not applied, so every answer fails until it is.
-        if "PGRST202" in str(e):
-            print(f"[answer] record_topic_attempt is missing from the database -- "
-                  f"apply 20260825000000; no topic attribution until then: {e}")
-        else:
-            print(f"[answer] could not record topic attempt for {user_id[:8]}: {e}")
-        return None
+    # Returned so the page can update one topic figure; None = nothing attributed.
+    topic = out.get("topic")
+    return {"ok": True, "topic": topic if isinstance(topic, str) else None}
 
 @app.post("/api/sessions/{session_id}/end")
 def end_session(session_id: str = Path(...), request: Request = None):
@@ -6131,15 +6150,17 @@ def _heart_consent_for_poller(student_id: str, source: str) -> bool:
 eeg_poller.set_heart_consent_check(_heart_consent_for_poller)
 
 
-def _session_or_403(session_id: str, user_id: str, columns: str = "user_id") -> dict:
+def _session_or_403(session_id: str, user_id: str, columns: str = "user_id",
+                    row: dict | None = None) -> dict:
     """Fetch a session, refusing it unless the caller owns it. Returns the row.
 
-    Ownership only: no teacher or parent. `columns` must include `user_id`
-    (absent, it refuses everyone). A missing row is a 404 and a failed read a 503, never a way past.
+    Ownership only. `columns` must include `user_id`; `row` is one already read, skipping
+    the fetch. A missing row is a 404 and a failed read a 503, never a way past.
     """
-    row = _row_or_404(
-        supabase.table("sessions").select(columns).eq("id", session_id),
-        "Session")
+    if row is None:
+        row = _row_or_404(
+            supabase.table("sessions").select(columns).eq("id", session_id),
+            "Session")
     if row.get("user_id") != user_id:
         _record_security_event("authz_denied", user_id, row.get("user_id"),
                                check="session_owner", session_id=session_id)

@@ -1711,10 +1711,10 @@ Both shapes have since bitten, and the corrections are the load-bearing half:
   goes transiently null and comes back unchanged reads as a change and flashes "fresh data" for data that is not new.
   Keep the acted-on value in its own state that nothing else clears. **A hook parameter nobody reads is the tell.**
 - **Deriving state does not remove the need to cancel.** Every fetch that can be superseded needs a guard, and the
-  slow ones are where it matters: `Sessions.jsx`'s roster read fans out per student, so a class switch let the
-  previous class's response land last and repaint the list under the new class's name. It uses a generation ref
-  rather than a cleanup flag, because the effect is not the only caller — the retry button is the other, and a retry
-  is exactly when someone changes class rather than waiting.
+  slow ones are where it matters: on `Sessions.jsx` a slow class read let the previous class's response land last
+  and repaint the list under the new class's name. It guards with `useLatestRequest` rather than a cleanup flag,
+  because the effect is not the only caller — the retry button is the other, and a retry is exactly when someone
+  changes class rather than waiting.
 
 ## Two rules from `eslint-plugin-react` are on, and both have to stay on
 
@@ -2113,7 +2113,7 @@ prints, and a print during interpreter shutdown is a fatal stdout-lock abort.
 
 Two surfaces were asserting things the data does not support. `Sessions.jsx` decided `live = !ended_at`, so an
 abandoned session rendered a *pulsing* `● LIVE` badge indefinitely — three states now (live, `never ended`, done)
-with `abandoned` derived in `student_sessions` so the threshold has one definition rather than a second copy in the
+with `abandoned` derived in `_flag_sessions` so the threshold has one definition rather than a second copy in the
 browser. And its duration counted to `Date.now()` for open sessions, printing `83132m 45s` for a student who left
 within the hour; an abandoned session shows a dash, because we do not know when it ended.
 

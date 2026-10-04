@@ -228,6 +228,23 @@ describe('the student filter', () => {
     expect(asked.join()).not.toContain('ada@example.com')
   })
 
+  it('labels a nameless student by email, else "No name set", and keeps the id as the value', async () => {
+    // `name` and `email` are null when unset; an option with no text would be unreadable.
+    mockFilterApi({
+      '/api/classes/c-1/students': () => [
+        ...ROSTER,
+        { user_id: 's-2', name: null, email: 'grace@example.com' },
+        { user_id: 's-3', name: null, email: null },
+      ],
+    })
+    render(<Questions />, { wrapper: MemoryRouter })
+    await userEvent.selectOptions(await screen.findByLabelText('Filter by class'), 'c-1')
+    const picker = await screen.findByLabelText('Filter by student')
+    const kids = within(picker).getAllByRole('option').slice(1)
+    expect(kids.map(o => [o.value, o.textContent])).toEqual([
+      ['s-1', 'Ada'], ['s-2', 'grace@example.com'], ['s-3', 'No name set']])
+  })
+
   it('says when a question has aged out rather than just showing fewer', async () => {
     // Otherwise "answered nothing" and "questions expired" look the same.
     mockFilterApi({

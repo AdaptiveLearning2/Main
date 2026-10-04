@@ -349,7 +349,7 @@ export default function Adaptive() {
       setClasses(c || [])
       if ((c || []).length && !classId) setClassId(c[0].id)
     }).catch(()=>{})
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only; classId is read just to keep a class already chosen
   }, [])
 
   // Check EEG health independently so the button isn't stuck unavailable if session start fails.

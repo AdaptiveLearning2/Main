@@ -1347,3 +1347,8 @@ def test_shutdown_unhooks_the_stream_then_flushes_the_push_client(monkeypatch):
     with TestClient(sidecar.app):
         assert calls == []
     assert calls == [("consumer", None), "stop"]
+
+
+def test_no_on_event_hook_sits_beside_the_lifespan():
+    """With `lifespan=` set, FastAPI never runs an `@app.on_event` hook: that work belongs in `_lifespan`."""
+    assert app.router.on_startup == [] and app.router.on_shutdown == []

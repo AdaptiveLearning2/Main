@@ -1,5 +1,5 @@
 /**
- * The sink and motion rules alone, so CI can block on them (`npm run lint` cannot, given its backlog).
+ * The sink and motion rules alone, as their own CI step: no change to the main config can switch them off.
  * Extends nothing, so it is red if and only if a sink or a motion misuse was added.
  * Rules live in `eslint.sinks.js` and `eslint.motion.js`.
  */

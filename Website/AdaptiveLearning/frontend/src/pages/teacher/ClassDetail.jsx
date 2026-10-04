@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { m } from 'framer-motion'
 import { ArrowLeft, Copy, Check, GraduationCap, Users } from 'lucide-react'
@@ -49,7 +49,7 @@ function ClassDetailBody({ id }) {
   const analyticsRun = useRef(0)
 
   // The loaders set state only in a callback, as the effects require; the retries raise the skeleton.
-  function loadData() {
+  const loadData = useCallback(() => {
     // allSettled: a missing class fails both requests, and the class's own result names it.
     return Promise.allSettled([
       apiFetch(`/api/classes/${id}`),
@@ -67,14 +67,14 @@ function ClassDetailBody({ id }) {
       }
       setLoading(false)
     })
-  }
+  }, [id])
 
   function retryData() {
     setLoading(true)
     loadData()
   }
 
-  function loadAnalytics() {
+  const loadAnalytics = useCallback(() => {
     const run = ++analyticsRun.current
     // Independent reads; a rejected one becomes `retrieved: false`, as the
     // backend sends for an aggregate failed behind a 200.
@@ -97,18 +97,15 @@ function ClassDetailBody({ id }) {
       setAnalytics(next)
       setAnalyticsLoading(false)
     })
-  }
+  }, [id])
 
   function retryAnalytics() {
     setAnalyticsLoading(true)
     loadAnalytics()
   }
 
-  // The loaders read only `id`, refs and setters, so `id` is the whole dependency.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { loadData() }, [id])
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { loadAnalytics() }, [id])
+  useEffect(() => { loadData() }, [loadData])
+  useEffect(() => { loadAnalytics() }, [loadAnalytics])
 
   function copyCode() {
     if (!cls?.join_code) {

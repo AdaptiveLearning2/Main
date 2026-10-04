@@ -253,9 +253,11 @@ cmake -S . -B build_on -DENABLE_LIBMUSE=ON -DLIBMUSE_SDK_DIR=../libmuse_windows_
 It compiles enum values, SDK signatures and the guarded packet handling. It still proves nothing
 about a real headband.
 
-`npm run lint` is **blocking and clean** — no errors, no warnings — so any hit is new: fix it rather than tolerate it.
-An `eslint-disable` carries its reason on the line above, as `Adaptive.jsx` and `ClassDetail.jsx` do. `coverage/` is
-ignored by the config: linted, the result depended on whether coverage had ever been run on that checkout.
+`npm run lint` is **blocking and clean** — `--max-warnings 0`, so a warning fails it too — and any hit is new: fix it
+rather than tolerate it. Every `eslint-disable` says why, after ` -- ` in the directive or on the line above. Prefer a
+`useCallback` loader with its own deps to a disable: the rule then checks the loader, where a disable would hide the
+next dependency it gains. `coverage/` is ignored by the config: linted, the result depended on whether coverage had
+ever been run on that checkout.
 
 Dependencies are pinned: `backend/requirements.txt` (runtime, direct deps only, cross-platform by
 design — no `pip freeze`), `requirements-dev.txt` adds pytest. EEGResearch uses `pyproject.toml`

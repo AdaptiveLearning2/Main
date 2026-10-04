@@ -8,7 +8,7 @@ import { sinkRules } from './eslint.sinks.js'
 import { withMotionRules } from './eslint.motion.js'
 
 export default defineConfig([
-  // `coverage/` is generated; linting it skews the backlog count.
+  // `coverage/` is generated; linted, the result would depend on whether coverage had ever been run.
   globalIgnores(['dist', 'coverage']),
   {
     files: ['**/*.{js,jsx}'],

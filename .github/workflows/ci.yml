@@ -193,21 +193,10 @@ jobs:
           cache-dependency-path: Website/AdaptiveLearning/frontend/package-lock.json
 
       - name: Install dependencies
+        id: install
         working-directory: Website/AdaptiveLearning/frontend
         run: npm ci
 
-      # Blocking: there is no backlog left to tolerate, so any error is new.
-      - name: Lint
-        working-directory: Website/AdaptiveLearning/frontend
-        run: npm run lint
-
-      # Blocking: extends no shared config, so it is red iff an XSS sink or a motion misuse was added.
-      # This is what lets the Supabase JWT stay in localStorage.
-      - name: Lint XSS sinks and motion features (blocking)
-        working-directory: Website/AdaptiveLearning/frontend
-        run: npm run lint:sinks
-
-      # Blocking, unlike lint.
       - name: Test
         working-directory: Website/AdaptiveLearning/frontend
         run: npm test
@@ -225,6 +214,20 @@ jobs:
         working-directory: Website/AdaptiveLearning/frontend
         run: |
           grep -q "^  Content-Security-Policy: default-src 'self'" dist/_headers
+
+      # The lints run last, whatever Test and Build did, so a finding cannot hide their results.
+      # Blocking, warnings included: there is no backlog, so any finding is new.
+      - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: Website/AdaptiveLearning/frontend
+        run: npm run lint
+
+      # Blocking: extends no shared config, so it is red iff an XSS sink or a motion misuse was added.
+      # This is what lets the Supabase JWT stay in localStorage.
+      - name: Lint XSS sinks and motion features
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: Website/AdaptiveLearning/frontend
+        run: npm run lint:sinks
 
   # Known vulnerabilities in what we install. Blocking: a CVE is not a style backlog.
   # Three Python sets, since they are separate installs: backend, sidecar, and the committed .lock files.

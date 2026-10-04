@@ -121,7 +121,7 @@ describe('startPush retry', () => {
 
 describe('startPush with a supplied token', () => {
   it('does not call getSession when given one', async () => {
-    // getSession() inside onAuthStateChange deadlocks on supabase-js's auth lock.
+    // getSession() inside onAuthStateChange deadlocks on the auth client's lock.
     const fetchSpy = mockFetch(async () => ok({ status: 'pushing' }))
     getSession.mockImplementation(() => {
       throw new Error('getSession must not be called from the refresh path')

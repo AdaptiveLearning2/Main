@@ -127,6 +127,8 @@ describe('every LoadError call site is classified', () => {
     'pages/student/PracticeTest.jsx':       'own practice session',
     'pages/teacher/Analytics.jsx':          'the question bank, which is public-read',
     'pages/teacher/Classes.jsx':            'GET /api/classes -- own classes',
+    // Passes the error anyway, for the 503 sentence a failed roster read earns.
+    'pages/teacher/Students.jsx':           'GET /api/teacher/students -- own classes',
     'components/practice/PracticeSetup.jsx': 'own profile and the topic list',
   }
 

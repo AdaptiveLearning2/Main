@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { m, AnimatePresence } from 'framer-motion'
-import { supabase } from '../../lib/supabase'
 import { Users, Search, ChevronDown, Flame, Smile, Target, TrendingUp, Zap, Heart, Activity } from 'lucide-react'
 import HideSensorDataToggle from '../../components/common/HideSensorDataToggle'
+import LoadError from '../../components/ui/LoadError'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 import { apiFetch } from '../../lib/api'
 import { offLabel } from '../../lib/signalFormat'
@@ -14,6 +14,7 @@ const SIGNAL_WINDOW_DAYS = 7
 const WINDOW_NOTE = `last ${SIGNAL_WINDOW_DAYS}d`
 const SIGNALS_UNAVAILABLE = 'signal data unavailable'
 const CONSENT_UNREAD = "consent couldn't be read"
+const NO_NAME = 'No name set'
 const eegSub = (n, failed) => {
   if (failed) return SIGNALS_UNAVAILABLE
   return n ? `${n} EEG readings · ${WINDOW_NOTE}` : `no EEG data · ${WINDOW_NOTE}`
@@ -30,23 +31,34 @@ const asPct = (value) => {
   return Number.isFinite(n) ? `${Math.round(n * 100)}%` : null
 }
 
+const isTextOrNull = (v) => v === null || typeof v === 'string'
+
+// Any other shape is a failed read, never a roster: an id to key on, a name and an email (null when unset).
+function rosterRows(body) {
+  const ok = Array.isArray(body) && body.every(r =>
+    typeof r?.user_id === 'string' && r.user_id !== '' && isTextOrNull(r.name) && isTextOrNull(r.email))
+  if (!ok) {
+    // The backend answered, so LoadError's 503 sentence ("just now"), not "make sure the backend is running".
+    throw Object.assign(new Error('/api/teacher/students answered with an unexpected shape'), { status: 503 })
+  }
+  return body
+}
+
 // Stats, the signal summary (a server-side aggregate, not a capped read) and
 // topic performance. "Hide sensor data" affects display only, not the request.
 async function getStudentStats(studentId)
 {
-   const [statsRes, summary, topicRes] = await Promise.all([
+   const [statsRes, summary, topicRows] = await Promise.all([
     // The endpoint adds open-session counts that user_stats lacks mid-session.
     // Caught per read so one failure can't blank the other tiles.
     apiFetch(`/api/stats/student/${studentId}`)
       .catch(err => { console.error('Failed to load student stats:', err); return { retrieved: false } }),
     apiFetch(`/api/students/${studentId}/signal-summary?days=${SIGNAL_WINDOW_DAYS}`)
       .catch(err => { console.error('Failed to load signal summary:', err); return null }),
-    supabase.from('user_math_performance')
-      .select('topic_id, attempted_questions, correct_questions, math_topics(topic_name)')
-      .eq('user_id', studentId)
+    // No topics panel on a failure, which claims nothing either way.
+    apiFetch(`/api/performance/student/${studentId}`)
+      .catch(err => { console.error('Failed to load topic performance:', err); return [] }),
   ])
-
-  if (topicRes.error) console.error('Failed to load topic performance:', topicRes.error)
 
   const userStats = statsRes
   const signals = summary || {}
@@ -97,7 +109,7 @@ async function getStudentStats(studentId)
                         consentRetrieved: signals.consent_retrieved, samples: signals.face_samples }),
     heartOff: offLabel({ on: signals.heart_included === true, revokedAt: signals.heart_revoked_at,
                          consentRetrieved: signals.consent_retrieved, samples: signals.heart_samples }),
-    topics: (topicRes.data || []).map(row => {
+    topics: (Array.isArray(topicRows) ? topicRows : []).map(row => {
       const attempted = row.attempted_questions || 0
       const correct = row.correct_questions || 0
       return {
@@ -116,7 +128,7 @@ export default function Students() {
   const [students, setStudents] = useState([])
   const [loading, setLoading]   = useState(true)
   // A failed roster read is not an empty class: "No students yet" would tell the teacher nobody joined.
-  const [rosterFailed, setRosterFailed] = useState(false)
+  const [rosterError, setRosterError] = useState(null)
   const [rosterAttempt, setRosterAttempt] = useState(0)
   const [search, setSearch]     = useState('')
   const [expandedId, setExpandedId] = useState(null)
@@ -129,55 +141,31 @@ export default function Students() {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadStudents()
-    {
-
-      const {data: { user }, error: userError } = await supabase.auth.getUser()
-      if (userError || !user )
-      {
-        if(!cancelled) { setRosterFailed(true); setLoading(false) }
+    // Every student in any class this teacher teaches, once: `{user_id, name, email, joined_at}`.
+    async function loadStudents() {
+      let rows
+      try {
+        rows = rosterRows(await apiFetch('/api/teacher/students'))
+      } catch (e) {
+        console.error('Failed to load students:', e)
+        if (!cancelled) { setRosterError(e); setLoading(false) }
         return
       }
-      // Students enrolled in any class this teacher teaches.
-      const {data, error} = await supabase
-      .from('class_memberships')
-      // Named, not `*`: RLS is the only check on this read, and a column added later would ride along.
-      .select('student_id, profiles!inner(id, email, display_name, created_at), classes!inner(teacher_id)')
-      .eq('classes.teacher_id', user.id)
-
-      if (error) console.error('Failed to load students:', error)
-
-      if(cancelled)
-        return
-
-      if (error)
-      {
-        console.error('Failed to load students:', error )
-        setRosterFailed(true)
-        setLoading(false)
-        return
-      }
-    const seen = new Map()
-    for( const row of data || [])
-    {
-      if(row.profiles && !seen.has(row.student_id))
-        seen.set(row.student_id, row.profiles)
+      if (cancelled) return
+      setStudents(rows)
+      setRosterError(null)
+      setLoading(false)
     }
-
-    setStudents(Array.from(seen.values()))
-    setRosterFailed(false)
-    setLoading(false)
-  }
 
   loadStudents()
   return () => { cancelled = true}
   }, [rosterAttempt])
 
-  const retryRoster = () => { setRosterFailed(false); setLoading(true); setRosterAttempt(n => n + 1) }
+  const retryRoster = () => { setRosterError(null); setLoading(true); setRosterAttempt(n => n + 1) }
 
   // Search name and email both.
   const filtered = students.filter(s =>
-    `${s.display_name || ''} ${s.email || ''} ${s.id || ''}`
+    `${s.name || ''} ${s.email || ''} ${s.user_id || ''}`
       .toLowerCase().includes(search.toLowerCase())
   )
 
@@ -240,17 +228,8 @@ export default function Students() {
 
       {loading ? (
         <div className="space-y-3">{[1,2,3,4,5].map(i => <div key={i} className="h-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}</div>
-      ) : rosterFailed ? (
-        <div role="alert" className="text-center py-16">
-          <h3 className="text-xl font-black text-gray-900 dark:text-white mb-2">Couldn&apos;t load your students</h3>
-          <p className="text-gray-600 dark:text-gray-400 text-sm mb-4">
-            Your classes are unchanged; the list could not be read just now.
-          </p>
-          <button onClick={retryRoster}
-            className="px-4 py-2 rounded-xl bg-violet-600 text-white text-sm font-bold hover:bg-violet-700 transition">
-            Try again
-          </button>
-        </div>
+      ) : rosterError ? (
+        <LoadError what="your students" error={rosterError} onRetry={retryRoster} />
       ) : filtered.length === 0 ? (
         <div className="text-center py-16">
           <div className="text-6xl mb-4">🎓</div>
@@ -271,18 +250,21 @@ export default function Students() {
             <span className="text-xs font-bold uppercase tracking-widest text-gray-600 text-right dark:text-gray-400">Role</span>
           </div>
           {filtered.map((s, i) => {
-            const name    = s.display_name || s.email?.split('@')[0] || s.id?.slice(0, 8)
-            // From the name being shown, so the letter and the label agree.
-            const initial = (name || '?')[0].toUpperCase()
-            const joined  = s.created_at ? new Date(s.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'
-            const isOpen = expandedId === s.id
-            const isLoadingStats = !!statsLoading[s.id]
-            const stats = statsCache[s.id]
+            // Never a made-up name: without one the email stands in, else the row says none is set.
+            const label   = s.name || s.email || NO_NAME
+            const sub     = s.name ? s.email : (s.email ? NO_NAME : null)
+            // From the label being shown, so the letter and the label agree.
+            const initial = s.name || s.email ? label[0].toUpperCase() : '?'
+            // The earliest join across this teacher's classes, not the account's creation.
+            const joined  = s.joined_at ? new Date(s.joined_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'
+            const isOpen = expandedId === s.user_id
+            const isLoadingStats = !!statsLoading[s.user_id]
+            const stats = statsCache[s.user_id]
             return (
-              <div key={s.id} className="border-b border-gray-50 dark:border-gray-800 last:border-0">
+              <div key={s.user_id} className="border-b border-gray-50 dark:border-gray-800 last:border-0">
                 <m.button
                   type="button"
-                  onClick={() => toggleExpand(s.id)}
+                  onClick={() => toggleExpand(s.user_id)}
                   initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.03) }}
                   whileHover={{ x: 3 }}
                   className="w-full grid grid-cols-4 items-center px-5 py-4 hover:bg-slate-50 dark:hover:bg-gray-800 transition-colors text-left"
@@ -292,8 +274,8 @@ export default function Students() {
                       {initial}
                     </div>
                     <div>
-                      <p className="text-sm font-bold text-gray-900 dark:text-white">{name}</p>
-                      {s.email && <p className="text-xs text-gray-600 dark:text-gray-400">{s.email}</p>}
+                      <p className="text-sm font-bold text-gray-900 dark:text-white">{label}</p>
+                      {sub && <p className="text-xs text-gray-600 dark:text-gray-400">{sub}</p>}
                     </div>
                   </div>
                   <p className="text-sm text-gray-500 dark:text-gray-400">{joined}</p>

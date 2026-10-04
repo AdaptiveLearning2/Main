@@ -10,7 +10,7 @@ vi.mock('../../context/AuthContext', () => ({
 }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
-import { AuthApiError, AuthRetryableFetchError } from '@supabase/supabase-js'
+import { AuthApiError, AuthRetryableFetchError } from '@supabase/auth-js'
 import { toast } from 'sonner'
 import Login from './Login'
 

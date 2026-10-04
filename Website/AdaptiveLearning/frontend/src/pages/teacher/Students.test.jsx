@@ -3,70 +3,24 @@ import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import Students from './Students'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
+import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
 
-// Totals from /api/stats/student/{id}, averages from /api/students/{id}/signal-summary; topics via supabase.
+// Roster from /api/teacher/students, totals from /api/stats/student/{id}, averages from
+// /api/students/{id}/signal-summary, topics from /api/performance/student/{id}.
+vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 
-vi.mock('../../lib/api', () => {
-  const apiCalls = []
-  // Next response: an object resolves, an Error rejects, a Promise is adopted as-is.
-  const state = { summary: null, userStats: null }
-  return {
-    apiFetch: (path) => {
-      apiCalls.push(path)
-      const r = String(path).includes('/api/stats/student/') ? state.userStats : state.summary
-      return r instanceof Error ? Promise.reject(r) : Promise.resolve(r)
-    },
-    __apiCalls: apiCalls,
-    __apiState: state,
-  }
-})
-
-vi.mock('../../lib/supabase', () => {
-  const fromCalls = []
-  const selectCalls = []
-  const results = {}
-  // Chainable builder; also a thenable, since the topic query is awaited straight off .eq().
-  const query = (table) => {
-    // A stored Error rejects, to exercise the throw path.
-    const settle = () => {
-      const r = results[table] ?? { data: [], error: null }
-      return r instanceof Error ? Promise.reject(r) : Promise.resolve(r)
-    }
-    const q = {
-      select: (cols) => { selectCalls.push([table, cols]); return q },
-      eq: () => q,
-      order: () => q,
-      limit: () => settle(),
-      maybeSingle: () => settle(),
-      then: (res, rej) => settle().then(res, rej),
-    }
-    return q
-  }
-  return {
-    supabase: {
-      auth: { getUser: () => Promise.resolve({ data: { user: { id: 'teacher-1' } }, error: null }) },
-      from: (table) => { fromCalls.push(table); return query(table) },
-    },
-    __fromCalls: fromCalls,
-    __selectCalls: selectCalls,
-    __results: results,
-  }
-})
-
-const { __fromCalls: fromCalls, __selectCalls: selectCalls, __results: results } =
-  await import('../../lib/supabase')
-const { __apiCalls: apiCalls, __apiState: apiState } = await import('../../lib/api')
-
-// Real `profiles` columns only: there is no `username`.
-const MEMBERSHIPS = {
-  data: [{
-    student_id: 'stu-1',
-    profiles: { id: 'stu-1', email: 'ada@example.com', display_name: 'Ada Lovelace',
-                role: 'student', grade_level: '6th Grade' },
-    classes: { teacher_id: 'teacher-1' },
-  }],
-  error: null,
-}
+// What /api/teacher/students returns: `user_id` and `name`, never `id` or `display_name`.
+const ROSTER = [
+  { user_id: 'stu-1', name: 'Ada Lovelace', email: 'ada@example.com',
+    joined_at: '2026-01-15T09:00:00+00:00' },
+  { user_id: 'stu-2', name: 'Grace Hopper', email: 'grace@example.com',
+    joined_at: '2026-02-01T09:00:00+00:00' },
+]
+// A profile with no name, or no name and no email: both null, and sorted after every named row.
+const NAMELESS = { user_id: 'stu-3', name: null, email: 'kid3@example.com',
+                   joined_at: '2026-03-01T09:00:00+00:00' }
+const NAMELESS_NO_EMAIL = { user_id: 'stu-4', name: null, email: null,
+                            joined_at: '2026-03-02T09:00:00+00:00' }
 
 // Seven days at 1 Hz: far above any row cap, so a count from rows cannot match.
 const WEEK_OF_SAMPLES = 51840
@@ -88,16 +42,21 @@ const USER_STATS = {
   error: null,
 }
 
-function setData({ summary = SUMMARY, userStats = USER_STATS } = {}) {
-  for (const k of Object.keys(results)) delete results[k]
-  Object.assign(results, {
-    class_memberships: MEMBERSHIPS,
-    user_math_performance: { data: [], error: null },
-  })
-  apiState.summary = summary
+// An Error rejects; anything else resolves.
+const answer = (value) => () => (value instanceof Error ? Promise.reject(value) : value)
+
+function setData({ summary = SUMMARY, userStats = USER_STATS, roster = ROSTER, topics = [] } = {}) {
   // The endpoint returns the row itself; unwrap `{ data }` fixtures, pass Errors through.
-  apiState.userStats = userStats instanceof Error ? userStats : (userStats?.data ?? userStats)
+  const stats = userStats instanceof Error ? userStats : (userStats?.data ?? userStats)
+  mockApi([
+    { match: '/api/teacher/students', handler: answer(roster) },
+    { match: /^\/api\/stats\/student\//, handler: answer(stats) },
+    { match: /\/signal-summary\?/, handler: answer(summary) },
+    { match: /^\/api\/performance\/student\//, handler: answer(topics) },
+  ])
 }
+
+const calls = () => apiFetch.mock.calls.map(([path]) => String(path))
 
 // StatCard renders value, label and subtitle in one div.
 function tile(label) {
@@ -108,23 +67,55 @@ async function expandAda() {
   await userEvent.click(await screen.findByRole('button', { name: /ada/i }))
 }
 
-const summaryCalls = () => apiCalls.filter(p => p.includes('/signal-summary'))
+const summaryCalls = () => calls().filter(p => p.includes('/signal-summary'))
 
 beforeEach(() => {
   localStorage.clear()
-  fromCalls.length = 0
-  selectCalls.length = 0
-  apiCalls.length = 0
+  resetApi()
   setData()
 })
 
-it('reads the roster by named profile columns, never `*`', async () => {
-  // RLS is the only check on this read; `*` would send whatever `profiles` gains next.
+it('reads the roster from the backend', async () => {
+  // The frontend's Supabase client only signs in; it has no tables to read.
   render(<Students />)
-  await waitFor(() => expect(selectCalls.some(([t]) => t === 'class_memberships')).toBe(true))
-  const [, cols] = selectCalls.find(([t]) => t === 'class_memberships')
-  expect(cols).toContain('profiles!inner(id, email, display_name, created_at)')
-  expect(cols).not.toMatch(/\*/)
+  expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
+  expect(calls()).toContain('/api/teacher/students')
+})
+
+it('shows the class join date the roster carries', async () => {
+  render(<Students />)
+  const row = (await screen.findByText('Grace Hopper')).closest('button')
+  const shown = new Date('2026-02-01T09:00:00+00:00')
+    .toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  expect(within(row).getByText(shown)).toBeInTheDocument()
+})
+
+it('asks for the expanded student, not the first one listed', async () => {
+  render(<Students />)
+  await userEvent.click(await screen.findByRole('button', { name: /grace/i }))
+  await waitFor(() => expect(summaryCalls()).toHaveLength(1))
+  expect(summaryCalls()[0]).toContain('/api/students/stu-2/signal-summary')
+  expect(calls()).toContain('/api/performance/student/stu-2')
+})
+
+it('shows per-topic accuracy from the backend', async () => {
+  // A `user_math_performance` row with its topic embedded, as the endpoint returns it.
+  setData({ topics: [{ user_id: 'stu-1', topic_id: 3, attempted_questions: 4,
+                       correct_questions: 3, updated_at: '2026-09-01T10:00:00+00:00',
+                       math_topics: { topic_name: 'fractions' } }] })
+  render(<Students />)
+  await expandAda()
+  expect(await screen.findByText('fractions')).toBeInTheDocument()
+  expect(screen.getByText('3/4 correct')).toBeInTheDocument()
+})
+
+it('a failed topic read costs the topics panel only', async () => {
+  setData({ topics: apiError(503) })
+  render(<Students />)
+  await expandAda()
+  await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
+  expect(tile('Total Accuracy').getByText('50%')).toBeInTheDocument()
+  expect(screen.queryByText('Per-topic accuracy')).not.toBeInTheDocument()
 })
 
 describe('signal averages', () => {
@@ -191,7 +182,7 @@ describe('a failed read', () => {
 
   it('leaves the row refetchable rather than stuck loading', async () => {
     // A throw that leaves the loading flag set makes toggleExpand treat the row as handled.
-    const statsCalls = () => apiCalls.filter(p => String(p).includes('/api/stats/student/'))
+    const statsCalls = () => calls().filter(p => p.includes('/api/stats/student/'))
     setData({ userStats: new Error('network down') })
     render(<Students />)
     await expandAda()
@@ -422,38 +413,87 @@ it('searches the name on screen, not only the email behind it', async () => {
   expect(screen.queryByText('Ada Lovelace')).not.toBeInTheDocument()
 })
 
-it('falls back to the email prefix for a student with no name set', async () => {
-  // Unreachable from the app, but the column is nullable and the SQL editor writes it.
-  results.class_memberships = {
-    data: [{
-      student_id: 'stu-1',
-      profiles: { id: 'stu-1', email: 'ada@example.com', display_name: null,
-                  role: 'student', grade_level: '6th Grade' },
-      classes: { teacher_id: 'teacher-1' },
-    }],
-    error: null,
-  }
-  render(<Students />)
+describe('the roster read', () => {
+  const rosterCalls = () => calls().filter(p => p === '/api/teacher/students')
 
-  expect(await screen.findByText('ada')).toBeInTheDocument()
-})
+  it('shows each student with their own email', async () => {
+    // Two rows, so an email drawn on the wrong row fails.
+    render(<Students />)
+    for (const s of ROSTER) {
+      const row = (await screen.findByText(s.name)).closest('button')
+      expect(within(row).getByText(s.email)).toBeInTheDocument()
+    }
+  })
 
-it('says the roster could not be read, not that nobody has joined, and retries', async () => {
-  // A teacher with thirty enrolled students was told "No students yet".
-  results.class_memberships = { data: null, error: { message: 'PostgREST down' } }
-  render(<Students />)
+  it('labels a nameless student by their email and says no name is set', async () => {
+    setData({ roster: [...ROSTER, NAMELESS] })
+    render(<Students />)
+    const row = (await screen.findByText(NAMELESS.email)).closest('button')
+    expect(within(row).getByText('No name set')).toBeInTheDocument()
+    // The badge is the row's only "Student": none is drawn as a name.
+    expect(within(row).getAllByText('Student')).toHaveLength(1)
+    const named = screen.getByText('Ada Lovelace').closest('button')
+    expect(within(named).queryByText('No name set')).not.toBeInTheDocument()
+  })
 
-  expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't load your students")
-  expect(screen.queryByText('No students yet')).not.toBeInTheDocument()
+  it('says no name is set for a student with neither a name nor an email', async () => {
+    setData({ roster: [...ROSTER, NAMELESS_NO_EMAIL] })
+    render(<Students />)
+    const row = (await screen.findByText('No name set')).closest('button')
+    expect(within(row).getAllByText('Student')).toHaveLength(1)
+    expect(within(row).getByText('?')).toBeInTheDocument()
+  })
 
-  results.class_memberships = MEMBERSHIPS
-  await userEvent.click(screen.getByRole('button', { name: /try again/i }))
-  expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
-  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  it('answers a 503 with the load error and its retry, never a roster', async () => {
+    // As apiFetch throws it once its Retry-After retries are spent.
+    const failed = apiError(503, 'Could not load your students; try again')
+    overrideApi('/api/teacher/students', answer(failed))
+    render(<Students />)
+
+    expect(await screen.findByText("Couldn't load your students just now. Try again in a moment."))
+      .toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument()
+    expect(screen.queryByText('No students yet')).not.toBeInTheDocument()
+    // Every row carries a "Student" badge.
+    expect(screen.queryByText('Student')).not.toBeInTheDocument()
+  })
+
+  it('asks again on Try again and shows the roster that comes back', async () => {
+    overrideApi('/api/teacher/students', answer(apiError(503, 'Could not load your students; try again')))
+    render(<Students />)
+    const retry = await screen.findByRole('button', { name: /try again/i })
+    expect(rosterCalls()).toHaveLength(1)
+
+    setData()
+    await userEvent.click(retry)
+    expect(await screen.findByText('Grace Hopper')).toBeInTheDocument()
+    expect(rosterCalls()).toHaveLength(2)
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['a body that is not a list', { retrieved: false }],
+    ['a row missing its name field', [{ user_id: 'stu-1', email: 'ada@example.com',
+                                        joined_at: '2026-01-15T09:00:00+00:00' }]],
+    ['a row missing its email field', [{ user_id: 'stu-1', name: 'Ada Lovelace',
+                                         joined_at: '2026-01-15T09:00:00+00:00' }]],
+    ['a row with no id', [{ name: 'Ada Lovelace', email: 'ada@example.com',
+                            joined_at: '2026-01-15T09:00:00+00:00' }]],
+  ])('treats %s as a failed read, not a roster', async (_label, body) => {
+    setData({ roster: body })
+    render(<Students />)
+
+    expect(await screen.findByRole('button', { name: /try again/i })).toBeInTheDocument()
+    expect(screen.queryByText('No students yet')).not.toBeInTheDocument()
+    expect(screen.queryByText('Student')).not.toBeInTheDocument()
+    expect(screen.queryByText('Ada Lovelace')).not.toBeInTheDocument()
+    // The backend answered: "just now", never "make sure the backend is running".
+    expect(screen.getByText("Couldn't load your students just now. Try again in a moment.")).toBeInTheDocument()
+  })
 })
 
 it('still says No students yet for a roster that read as empty', async () => {
-  results.class_memberships = { data: [], error: null }
+  setData({ roster: [] })
   render(<Students />)
   expect(await screen.findByText('No students yet')).toBeInTheDocument()
 })

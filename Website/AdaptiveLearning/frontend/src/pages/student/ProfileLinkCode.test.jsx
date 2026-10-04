@@ -148,6 +148,33 @@ describe('a code on screen that stopped working', () => {
     }
   })
 
+  it('is first re-read an interval after it appears, not at once', async () => {
+    // It was read or made a moment ago: re-reading at once doubles every page load's request.
+    mockApi(happy(live))
+    render(<Profile />)
+    await screen.findByText('ABCD2345')
+    await act(async () => {})
+
+    expect(rereads()).toHaveLength(1)
+  })
+
+  it('is not re-read while the page is hidden', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+    try {
+      mockApi(happy(live))
+      render(<Profile />)
+      await screen.findByText('ABCD2345')
+      await vi.advanceTimersByTimeAsync(60_000)
+
+      // Four intervals with nobody looking: still only the page's own load.
+      expect(rereads()).toHaveLength(1)
+    } finally {
+      delete document.hidden
+      vi.useRealTimers()
+    }
+  })
+
   it('is left standing by a re-read that failed', async () => {
     // "Could not check" is not "it was used".
     mockApi(happy(live))

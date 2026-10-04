@@ -33,6 +33,29 @@ it('calls at once, then once per interval after each call settles', async () => 
   expect(fn).toHaveBeenCalledTimes(4)
 })
 
+it('waits one interval before the first call when not immediate', async () => {
+  const fn = vi.fn(async () => {})
+  renderHook(() => usePoll(fn, { intervalMs: 1000, immediate: false }))
+  expect(fn).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(999)
+  expect(fn).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(1)
+  expect(fn).toHaveBeenCalledTimes(1)
+  await vi.advanceTimersByTimeAsync(1000)
+  expect(fn).toHaveBeenCalledTimes(2)
+})
+
+it('calls on return when its first wait ended while hidden', async () => {
+  const fn = vi.fn(async () => {})
+  renderHook(() => usePoll(fn, { intervalMs: 1000, immediate: false }))
+  setHidden(true)
+  await vi.advanceTimersByTimeAsync(5000)
+  expect(fn).not.toHaveBeenCalled()
+  setHidden(false)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(fn).toHaveBeenCalledTimes(1)
+})
+
 it('never overlaps a slow call', async () => {
   const slow = deferred()
   const fn = vi.fn(() => slow.promise)

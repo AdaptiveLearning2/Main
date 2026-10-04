@@ -537,8 +537,8 @@ def _read_failed(detail: str) -> HTTPException:
     return HTTPException(503, detail, headers={"Retry-After": str(_READ_RETRY_AFTER_SEC)})
 
 
-def _missing_rpc(e: Exception, function: str, migration: str) -> bool:
-    """Whether `e` is PostgREST's PGRST202 for `function`; if so, logs the migration to apply.
+def _missing_rpc(e: Exception, function: str, migration: str, consequence: str) -> bool:
+    """Whether `e` is PostgREST's PGRST202 for `function`; if so, logs the migration and the site's `consequence`.
 
     One naming no function is the call the site made; one naming another is not this one.
     The caller keeps its own raise or return: a missing function is one more failed read.
@@ -549,8 +549,7 @@ def _missing_rpc(e: Exception, function: str, migration: str) -> bool:
     named = re.findall(r"\bpublic\.(\w+)", message if isinstance(message, str) else str(e))
     if named and function not in named:
         return False
-    print(f"[rpc] {function} is missing from the database -- apply {migration}; until it is, "
-          f"every call fails and is answered as a failed read (degraded, or a 503 to try again): {e}")
+    print(f"[rpc] {function} is missing from the database -- apply {migration}; {consequence}: {e}")
     return True
 
 
@@ -1122,7 +1121,8 @@ def _answer_counts(session_id: str, session: dict) -> tuple[int, int, bool]:
         res = supabase.rpc("session_answer_counts",
                            {"p_session_id": session_id}).execute()
     except Exception as e:                                     # noqa: BLE001
-        if not _missing_rpc(e, "session_answer_counts", "20260826000000"):
+        if not _missing_rpc(e, "session_answer_counts", "20260826000000",
+                            "a closing session credits the stored counter until then"):
             print(f"[session:close] could not recount answers for {session_id}: {e}")
         return stored_q, stored_c, False
     rows = res.data or []
@@ -2943,7 +2943,8 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
         if _names_deleted_question(e):
             # 410, not 409: the page reads a 409 here as its session ended and starts another.
             raise HTTPException(410, "This question is no longer available")
-        if not _missing_rpc(e, "record_answer", "20261003000000"):
+        if not _missing_rpc(e, "record_answer", "20261003000000",
+                            "every answer is a 503 and none is saved until then"):
             print(f"[answer] could not record an answer for {session_id}: {e}")
         raise _read_failed("This answer could not be saved; try again")
     status = out.get("status") if isinstance(out, dict) else None
@@ -3190,7 +3191,8 @@ def record_practice_answer(practice_session_id: str = Path(...),
             "p_correct":    bool(payload.correct),
         }).execute()
     except Exception as e:                                     # noqa: BLE001
-        if not _missing_rpc(e, "bump_practice_session_counters", "20260904000000"):
+        if not _missing_rpc(e, "bump_practice_session_counters", "20260904000000",
+                            "live practice counters will not move until then"):
             print(f"[practice] could not bump counters for {practice_session_id}: {e}")
     return {"ok": True, "topic": topic}
 
@@ -3224,7 +3226,8 @@ def record_practice_view(practice_session_id: str = Path(...),
             "p_correct":    False,
         }).execute()
     except Exception as e:                                     # noqa: BLE001
-        if not _missing_rpc(e, "bump_practice_session_counters", "20260904000000"):
+        if not _missing_rpc(e, "bump_practice_session_counters", "20260904000000",
+                            "live practice counters will not move until then"):
             print(f"[practice] could not bump counters for {practice_session_id}: {e}")
     return {"ok": True, "topic": topic}
 
@@ -4952,7 +4955,8 @@ def _last_active_many(student_ids) -> dict[str, dict]:
         rows = supabase.rpc("last_active_for_users",
                             {"p_user_ids": ids}).execute().data or []
     except Exception as e:                                     # noqa: BLE001
-        if not _missing_rpc(e, "last_active_for_users", "20260831000000"):
+        if not _missing_rpc(e, "last_active_for_users", "20260831000000",
+                            "every roster shows last active as unknown until then"):
             print(f"[last_active] could not read for {len(ids)}: {e}")
         return {sid: dict(_LAST_ACTIVE_UNKNOWN) for sid in ids}
     found = {r.get("user_id"): r.get("last_active") for r in rows}
@@ -6237,7 +6241,8 @@ def _ingest_gate(session_id: str, user_id: str) -> tuple[dict, dict | None]:
     except Exception as e:                                     # noqa: BLE001
         if _names_no_row(e):
             raise HTTPException(404, "Session not found")
-        if not _missing_rpc(e, "ingest_gate", "20261003000000"):
+        if not _missing_rpc(e, "ingest_gate", "20261003000000",
+                            "every signal batch is a 503, held and resent by the push client, until then"):
             print(f"[ingest] could not read the gate for {session_id}: {e}")
         raise _read_failed("Could not check this session; try again")
     fault = _gate_shape_fault(out)

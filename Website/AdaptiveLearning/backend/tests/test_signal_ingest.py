@@ -304,7 +304,10 @@ def test_a_missing_gate_function_names_its_migration(store, capsys, error):
     with pytest.raises(HTTPException) as exc:
         _post_heart([_heart()])
     assert exc.value.status_code == 503
-    assert "20261003000000" in capsys.readouterr().out
+    line = capsys.readouterr().out
+    assert "20261003000000" in line
+    # This site's own cost: batches the push client resends, never ones refused for good.
+    assert "every signal batch is a 503" in line and "refus" not in line
 
 
 @pytest.mark.parametrize("error", [
@@ -313,10 +316,28 @@ def test_a_missing_gate_function_names_its_migration(store, capsys, error):
     RuntimeError("{'code': 'PGRST202', 'message': 'no function'}"),   # the site knows which call it made
 ], ids=["api-error", "its-text", "names-none"])
 def test_a_missing_function_is_named_with_its_migration(capsys, error):
-    assert main._missing_rpc(error, "ingest_gate", "20261003000000") is True
+    assert main._missing_rpc(error, "ingest_gate", "20261003000000", "batches wait") is True
     line = capsys.readouterr().out
-    assert "ingest_gate is missing" in line and "apply 20261003000000" in line
-    assert "503" in line and "refus" not in line
+    assert "ingest_gate is missing" in line and "apply 20261003000000; batches wait:" in line
+
+
+_MISSING_RPC_SITES_FLOOR = 6
+
+
+def test_every_missing_function_site_says_what_it_costs():
+    """One sentence for every site cannot tell an operator which feature has stopped."""
+    import ast
+    import inspect
+    sites = [n for n in ast.walk(ast.parse(inspect.getsource(main)))
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_missing_rpc"]
+    assert len(sites) >= _MISSING_RPC_SITES_FLOOR, "the scan found fewer call sites than exist"
+    said = {}
+    for site in sites:
+        literal = len(site.args) == 4 and all(isinstance(a, ast.Constant) and a.value for a in site.args[1:])
+        assert literal, f"no consequence of its own: {ast.unparse(site)}"
+        said.setdefault(site.args[3].value, set()).add(site.args[1].value)
+    shared = {consequence: fns for consequence, fns in said.items() if len(fns) > 1}
+    assert not shared, f"one consequence for different functions: {shared}"
 
 
 @pytest.mark.parametrize("error", [
@@ -328,7 +349,7 @@ def test_a_missing_function_is_named_with_its_migration(capsys, error):
 ], ids=["other-function", "other-function-text", "longer-name", "not-postgrest", "other-code"])
 def test_anything_else_is_not_a_missing_function(capsys, error):
     """False and silent: the caller logs its own failed read, so a wrong True misnames the outage."""
-    assert main._missing_rpc(error, "ingest_gate", "20261003000000") is False
+    assert main._missing_rpc(error, "ingest_gate", "20261003000000", "batches wait") is False
     assert capsys.readouterr().out == ""
 
 

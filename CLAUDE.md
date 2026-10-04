@@ -677,8 +677,9 @@ the revokes and the `service_role` grant against it.
 That leaves a window. Backend code calling the new signature against a database that has not run the
 migration gets PostgREST's `PGRST202`, which the callers here catch — so the failure is silent and
 the symptom is empty data rather than an error. **Apply the migration before rolling out the code
-that depends on it.** Recognise it with `_missing_rpc(e, function, migration)`, never a new copy: it
-logs the migration to apply, and the caller keeps its own failed-read answer.
+that depends on it.** Recognise it with `_missing_rpc(e, function, migration, consequence)`, never
+a new copy: it logs the migration to apply and what that site loses until then, and the caller keeps
+its own failed-read answer.
 
 Where an in-between state would be visible to a user, a temporary retry against the old signature is
 a reasonable bridge — but only where doing so cannot violate what the caller asked for, and only if

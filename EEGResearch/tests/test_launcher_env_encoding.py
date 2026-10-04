@@ -1,4 +1,4 @@
-"""start.ps1 writes .env as UTF-8 with no BOM; see CLAUDE.md "start.ps1 rules that cost whole runs"."""
+"""start.ps1 writes .env as UTF-8 with no BOM; see docs/environments.md "start.ps1 rules that cost whole runs"."""
 
 from __future__ import annotations
 

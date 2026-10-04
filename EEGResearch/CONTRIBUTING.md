@@ -4,7 +4,7 @@
 
 All from `C:\AdaptiveLearning\EEGResearch` unless a step says otherwise. `docs/DEV_QUICKSTART.md`
 has the same steps with the verification commands; the reasons behind each rule are in the
-repo-root `CLAUDE.md` under *Running and testing*.
+repo-root `CLAUDE.md` under *Running and testing*, and in `docs/environments.md`.
 
 1. Create the venv here: `python -m venv .venv` and activate it.
 2. Install **from this directory**: `pip install -e ".[dev]"`, or `pip install -e ".[dev,face,gaze]"`

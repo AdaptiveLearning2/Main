@@ -1136,7 +1136,7 @@ def _answer_counts(session_id: str, session: dict) -> tuple[int, int, bool]:
 
 # ─── session alerts ───────────────────────────────────────────────────────
 # Operational facts about a session, never a claim about the student.
-# See CLAUDE.md, "Session alerts are operations".
+# See docs/reporting.md, "Session alerts are operations".
 
 # Which close site is running; `_close_session` cannot tell on its own.
 CLOSED_BY_STUDENT = "student"
@@ -1743,7 +1743,7 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
 
     Never the per-sample tables: the expiry job deletes those and keeps the rollup.
     Weighted by `trusted_sample_count` (stress by `_stress_weight`); `avg_rmssd_ms`
-    is approximate. See CLAUDE.md, "The term trend reads the rollup".
+    is approximate. See docs/reporting.md, "The term trend reads the rollup".
     """
     tz = _school_timezone()
     school_today = _utc_now().astimezone(tz).date()
@@ -4976,7 +4976,7 @@ def teacher_students(request: Request):
 
 # ─── teacher analytics ────────────────────────────────────────────────────
 # All: `_verify_class_owner` before any read; `retrieved` on every payload;
-# school-timezone buckets; aggregation in Postgres. See CLAUDE.md "teacher analytics".
+# school-timezone buckets; aggregation in Postgres. See docs/reporting.md "teacher analytics".
 
 # Below this, a topic's accuracy is returned but marked thin.
 _MIN_TOPIC_ATTEMPTS = 4

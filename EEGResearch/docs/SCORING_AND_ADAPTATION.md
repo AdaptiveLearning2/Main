@@ -4,7 +4,7 @@ A plain-language map of how the system reads a student's headband and uses it, w
 where each rule actually lives. Rewritten 2026-09-15: the first version (PR #26) restated formulas
 that the accuracy work of PRs #181 and #182 replaced, and it was never updated with them. **This
 file names the constants and the sections that hold them and does not repeat their values**, so
-it cannot go stale the same way. `CLAUDE.md` is what is kept current; its section *EEG focus,
+it cannot go stale the same way. `docs/signals.md` is what is kept current; its section *EEG focus,
 calm and confidence: measured on a person once, and most of it failed* is the authority, and
 `EEGResearch/tests/fixtures/EEG_REFERENCE.md` holds the measurements behind every number.
 

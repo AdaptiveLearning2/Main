@@ -97,7 +97,7 @@ chmod +x start.sh
 ./start.sh
 ```
 
-Flags, at parity with `start.ps1` (reasons in CLAUDE.md, *Running and testing*): `--muse`,
+Flags, at parity with `start.ps1` (reasons in `docs/environments.md`, *Launcher flags*): `--muse`,
 `--camera` / `--index N`, `--gaze` (implies `--camera`; needs `pip install -e ".[face,gaze]"` run
 from `EEGResearch`), `--no-emotion` (only with `--gaze`), `--optics` / `--preset 103N` (refused
 without `--muse`; the bridge itself is Windows-only), and `--local-calm`, which this launcher
@@ -110,8 +110,8 @@ hand-written multi-station list.
 This will:
 1. Start Ollama and pull `llama3.1:8b` if not already downloaded (takes a few minutes on first run).
    Skipped when `Website/AdaptiveLearning/backend/.env` sets `LLM_PROVIDER=claude`, which needs
-   `ANTHROPIC_API_KEY` there instead (the `CLAUDE_*` group is in CLAUDE.md under *Every model call
-   goes through `llm_client`*). The default is Ollama so a fresh checkout bills nothing.
+   `ANTHROPIC_API_KEY` there instead (the `CLAUDE_*` group is in `docs/question-generation.md` under
+   *Every model call goes through `llm_client`*). The default is Ollama so a fresh checkout bills nothing.
 2. Create Python venvs and install dependencies automatically if missing
 3. Install frontend `node_modules` if missing
 4. Open a Terminal.app window for each service

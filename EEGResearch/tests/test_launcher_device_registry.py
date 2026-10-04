@@ -1,4 +1,4 @@
-"""Both launchers' registry and token functions, extracted and driven against a temp .env; see CLAUDE.md "The device registry"."""
+"""Both launchers' registry and token functions, extracted and driven against a temp .env; see docs/environments.md "The device registry"."""
 
 from __future__ import annotations
 

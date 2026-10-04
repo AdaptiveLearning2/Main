@@ -1286,10 +1286,10 @@ BEGIN
     IF abs(s.stress - 0.4) > 1e-9 THEN
         RAISE EXCEPTION 'stress was not weighted on its own sample count: %', s.stress;
     END IF;
-    -- Trusted emotion only: 'happy' rolled and today, 'angry' two days ago; every 'sad' is untrusted.
-    IF s.face_samples <> 3 OR s.dominant_emotion IS DISTINCT FROM 'happy' THEN
-        RAISE EXCEPTION 'emotion counted an untrusted reading or lost a trusted one: % %',
-                        s.face_samples, s.dominant_emotion;
+    -- The label from trusted readings only ('happy' rolled and today over 'angry'; every 'sad' is
+    -- untrusted); the count is every labelled reading: 3 rolled, 1 two days ago, 4 today.
+    IF s.face_samples <> 8 OR s.dominant_emotion IS DISTINCT FROM 'happy' THEN
+        RAISE EXCEPTION 'emotion counted the wrong readings: % %', s.face_samples, s.dominant_emotion;
     END IF;
     -- Trusted heart only: 60 and 80 rolled, 90 today.
     IF s.heart_samples <> 3 OR abs(s.heart_rate_bpm - 230.0 / 3) > 1e-9 THEN
@@ -1301,6 +1301,59 @@ BEGIN
     IF s.face_samples <> 0 OR s.heart_samples <> 0 OR s.dominant_emotion IS NOT NULL
        OR s.heart_rate_bpm IS NOT NULL THEN
         RAISE EXCEPTION 'a declined channel came back from the rollup: %', s;
+    END IF;
+END $$;
+
+-- A row written before a session reaching its day closed is stale (that close's rollup failed), so
+-- the day comes from raw rows; a row whose raw rows have expired is read even while a session is open.
+
+DO $$
+DECLARE
+    usr    uuid := gen_random_uuid();
+    stale_ uuid := gen_random_uuid();  -- five days ago, closed after its day's row was written
+    open_  uuid := gen_random_uuid();  -- started four days ago, never closed
+    t0     timestamptz := date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
+    s      record;
+BEGIN
+    INSERT INTO auth.users (id, email) VALUES (usr, 'summary-stale@test.invalid');
+    INSERT INTO public.profiles (id, email, role)
+    VALUES (usr, 'summary-stale@test.invalid', 'student') ON CONFLICT (id) DO NOTHING;
+    INSERT INTO public.sessions (id, user_id, started_at, ended_at) VALUES
+        (stale_, usr, t0 - interval '5 days' + interval '9 hours', t0 - interval '5 days' + interval '11 hours'),
+        (open_, usr, t0 - interval '4 days' + interval '9 hours', NULL);
+
+    -- Five days ago: rolled with two readings at 0.3, then a third (0.9) lands, and the row is dated
+    -- before the session's close, as a close whose rollup failed leaves it.
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus, stress, engagement)
+    VALUES (stale_, usr, t0 - interval '5 days' + interval '9 hours 1 min', 0.3, NULL, 0.3),
+           (stale_, usr, t0 - interval '5 days' + interval '9 hours 2 min', 0.3, NULL, 0.3);
+    PERFORM public.rollup_signal_day(usr, (now() AT TIME ZONE 'UTC')::date - 5, 'UTC');
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus, stress, engagement)
+    VALUES (stale_, usr, t0 - interval '5 days' + interval '10 hours 30 min', 0.9, NULL, 0.9);
+    UPDATE public.signal_daily_rollup SET updated_at = t0 - interval '5 days' + interval '10 hours'
+     WHERE user_id = usr AND day = (now() AT TIME ZONE 'UTC')::date - 5;
+
+    -- Four days ago, inside the open session: readings 0.5 and 0.7, rolled up, then expired.
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus, stress, engagement)
+    VALUES (open_, usr, t0 - interval '4 days' + interval '9 hours 1 min', 0.5, NULL, 0.5),
+           (open_, usr, t0 - interval '4 days' + interval '9 hours 2 min', 0.7, NULL, 0.7);
+    PERFORM public.rollup_signal_day(usr, (now() AT TIME ZONE 'UTC')::date - 4, 'UTC');
+    DELETE FROM public.cognitive_signals WHERE session_id = open_;
+
+    -- Today: two face readings, neither trusted.
+    INSERT INTO public.face_signals (session_id, user_id, ts, emotion, emotion_trusted)
+    SELECT open_, usr, t0 + g * interval '1 min', 'sad', false FROM generate_series(1, 2) g;
+
+    SELECT * INTO s FROM public.student_signal_summary(usr, 7, true, true, 'UTC');
+
+    -- Five days ago from its three raw readings (1.5), four days ago from its row (1.2), over 5.
+    IF s.cognitive_samples <> 5 OR abs(s.focus - 2.7 / 5) > 1e-9 THEN
+        RAISE EXCEPTION 'a stale row was read over raw rows, or an expired day was dropped: %', s;
+    END IF;
+    -- Readings arrived and none was trusted: a count with no label, not a camera that saw nothing.
+    IF s.face_samples <> 2 OR s.dominant_emotion IS NOT NULL THEN
+        RAISE EXCEPTION 'untrusted readings left the count, or one became the label: % %',
+                        s.face_samples, s.dominant_emotion;
     END IF;
 END $$;
 

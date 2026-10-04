@@ -1,6 +1,6 @@
--- student_signal_summary reads settled past days from the daily rollup, and raw rows only for
--- today and for days with no rollup row or a still-open session. Emotion counts trusted readings
--- only, as rollup_signal_day and the weekly report do. Same signature; revokes restated.
+-- student_signal_summary reads a past day from its rollup row while that row is whole, and from raw
+-- rows otherwise, back to the row once they have expired. The dominant emotion counts trusted
+-- readings only, as rollup_signal_day and the weekly report do. Same signature; revokes restated.
 
 CREATE OR REPLACE FUNCTION "public"."student_signal_summary"(
   "p_student_id" "uuid",
@@ -36,22 +36,35 @@ AS $$
            (t.d - i + 1)::timestamp AT TIME ZONE p_timezone AS day_end
     FROM today t, generate_series(0, GREATEST(p_days, 1) - 1) AS i
   ),
-  settled AS (
-    -- Past days no still-open session reaches: their rollup rows hold every reading.
-    SELECT d.day
-    FROM days d, today t
-    WHERE d.day < t.d
-      AND NOT EXISTS (SELECT 1 FROM sessions s
-                      WHERE s.user_id = p_student_id AND s.ended_at IS NULL
-                        AND s.started_at < d.day_end)
+  past_rows AS (
+    -- A row is whole unless a session reaching its day is still open, or closed after the row was
+    -- written: that close's rollup failed, and nothing retries it.
+    SELECT r.*, d.day_start, d.day_end,
+           NOT EXISTS (SELECT 1 FROM sessions s
+                       WHERE s.user_id = p_student_id AND s.started_at < d.day_end
+                         AND (s.ended_at IS NULL OR s.ended_at > r.updated_at)) AS whole
+    FROM days d, today t, signal_daily_rollup r
+    WHERE d.day < t.d AND r.user_id = p_student_id AND r.day = d.day
+      AND (r.channel = 'cognitive'
+           OR (r.channel = 'heart' AND p_include_heart)
+           OR (r.channel = 'emotion' AND p_include_emotion))
   ),
   rolled AS (
-    SELECT r.*
-    FROM settled s
-    JOIN signal_daily_rollup r ON r.user_id = p_student_id AND r.day = s.day
-    WHERE r.channel = 'cognitive'
-       OR (r.channel = 'heart' AND p_include_heart)
-       OR (r.channel = 'emotion' AND p_include_emotion)
+    -- A day comes from its row while whole, and from raw rows otherwise until they have expired.
+    SELECT p.* FROM past_rows p
+    WHERE p.whole
+       OR NOT EXISTS (
+         SELECT 1 FROM cognitive_signals x
+          WHERE p.channel = 'cognitive' AND x.user_id = p_student_id
+            AND x.ts >= p.day_start AND x.ts < p.day_end
+         UNION ALL
+         SELECT 1 FROM heart_signals x
+          WHERE p.channel = 'heart' AND x.user_id = p_student_id
+            AND x.ts >= p.day_start AND x.ts < p.day_end
+         UNION ALL
+         SELECT 1 FROM face_signals x
+          WHERE p.channel = 'emotion' AND x.user_id = p_student_id
+            AND x.ts >= p.day_start AND x.ts < p.day_end)
   ),
   cog_parts AS (
     -- A rolled day adds avg × count; engagement is the focus index, so it shares focus's count.
@@ -99,8 +112,10 @@ AS $$
     GROUP BY emotion
   ),
   fac AS (
-    SELECT (SELECT avg(attention) FROM face_raw)               AS attention,
-           (SELECT COALESCE(sum(n), 0)::bigint FROM labels)    AS n,
+    SELECT (SELECT avg(attention) FROM face_raw)                              AS attention,
+           -- Every labelled reading, trusted or not: none trusted reads as Calibrating, not No sensor.
+           (SELECT COALESCE(sum(sample_count), 0) FROM rolled WHERE channel = 'emotion')
+             + (SELECT count(emotion) FROM face_raw)                          AS n,
            -- Ties go to the first label in sort order, as mode() chose.
            (SELECT emotion FROM labels GROUP BY emotion
              ORDER BY sum(n) DESC, emotion LIMIT 1)            AS emotion

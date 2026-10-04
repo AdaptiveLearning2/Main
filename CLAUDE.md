@@ -2008,9 +2008,9 @@ to null *every* average, or a leftover default renders a number where the test e
 
 **Both panels read the rollup, and that is load-bearing rather than tidy**: `expire_signal_rows` deletes the per-sample
 rows and leaves the rollup standing, so a per-sample panel beside a rollup one shows a term of class averages above
-"No sensor" for every student, on a fixed date. `student_signal_summary` reads a settled day from the rollup too,
-and raw rows only for today, a day with no rollup row, or one a still-open session reaches (its row can predate some
-readings). `class_signal_student_totals` is the same aggregation as its sibling, grouped by
+"No sensor" for every student, on a fixed date. `student_signal_summary` reads a past day from its rollup row too,
+while the row is whole — no session reaching the day still open, or closed after the row was written — and from raw
+rows otherwise, back to the row once they expire. `class_signal_student_totals` is the same aggregation as its sibling, grouped by
 student rather than by day. `test_the_roster_reads_the_rollup_and_never_the_per_sample_tables` asserts on the tables
 that must **not** be read — the two sources look identical while both hold the same data, which is every day of a
 school year except the ones after expiry, so nothing about the numbers can see this. **The roster counts days

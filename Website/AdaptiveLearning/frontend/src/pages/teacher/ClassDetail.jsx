@@ -104,7 +104,10 @@ function ClassDetailBody({ id }) {
     loadAnalytics()
   }
 
+  // The loaders read only `id`, refs and setters, so `id` is the whole dependency.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { loadData() }, [id])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { loadAnalytics() }, [id])
 
   function copyCode() {

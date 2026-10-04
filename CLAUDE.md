@@ -253,13 +253,9 @@ cmake -S . -B build_on -DENABLE_LIBMUSE=ON -DLIBMUSE_SDK_DIR=../libmuse_windows_
 It compiles enum values, SDK signatures and the guarded packet handling. It still proves nothing
 about a real headband.
 
-`npm run lint` is non-blocking against a backlog of **10** pre-existing errors (3
-`react-refresh/only-export-components`, 5 `no-undef` on `process`/`global` in tests, 1 `no-empty`,
-1 `react-hooks/rules-of-hooks`) — none of them `no-unused-vars` or
-`react-hooks/set-state-in-effect`. Don't add to it, and don't make it blocking until it is gone.
-**The count is the check, so keep it current**: against a stale 11, a reviewer concludes the change
-in front of them added three errors it did not. `coverage/` is ignored by the config for the same
-reason — linted, the number depended on whether coverage had ever been run on that checkout.
+`npm run lint` is **blocking and clean** — no errors, no warnings — so any hit is new: fix it rather than tolerate it.
+An `eslint-disable` carries its reason on the line above, as `Adaptive.jsx` and `ClassDetail.jsx` do. `coverage/` is
+ignored by the config: linted, the result depended on whether coverage had ever been run on that checkout.
 
 Dependencies are pinned: `backend/requirements.txt` (runtime, direct deps only, cross-platform by
 design — no `pip freeze`), `requirements-dev.txt` adds pytest. EEGResearch uses `pyproject.toml`

@@ -14,9 +14,10 @@ vi.mock('react-router-dom', () => ({
 // Stands in for the real report and records the props the page passed.
 const mockReportProps = {}
 vi.mock('../../components/reports/StudentProgressReport', () => ({
-  default: (props) => {
+  default: function MockReport(props) {
+    const { nameFetch } = props
     Object.assign(mockReportProps, props)
-    useEffect(() => { props.nameFetch?.().catch(() => {}) }, [props.nameFetch])
+    useEffect(() => { nameFetch?.().catch(() => {}) }, [nameFetch])
     return <div>report</div>
   },
 }))

@@ -306,7 +306,7 @@ it('still counts a live session to now', async () => {
 
 it('treats a payload with no abandoned flag as live, not abandoned', async () => {
   // An older backend does not send the field.
-  const { abandoned, ...noFlag } = OPEN_RECENT   // eslint-disable-line no-unused-vars
+  const { abandoned, ...noFlag } = OPEN_RECENT
   wire({ students: { a: [noFlag], b: [] } })
   draw()
   expect(await screen.findByText(/LIVE/)).toBeInTheDocument()

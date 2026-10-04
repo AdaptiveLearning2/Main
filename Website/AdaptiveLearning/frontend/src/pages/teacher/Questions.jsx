@@ -151,6 +151,8 @@ export default function Questions() {
 
   const retry = () => { setLoading(true); studentId ? loadStudent(studentId) : load() }
 
+  // The loaders read only the request counter and setters, so `studentId` is the whole dependency.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { studentId ? loadStudent(studentId) : load() }, [studentId])
 
   useEffect(() => {

@@ -37,15 +37,20 @@ export default defineConfig([
       'react/jsx-uses-vars': 'error',
       // A component the compiler cannot build is unseen by every compiler-backed hooks rule.
       'react-hooks/todo': 'error',
+      // A context's hook lives beside its provider.
+      'react-refresh/only-export-components': ['error', {
+        allowConstantExport: true,
+        allowExportNames: ['useAuth', 'useTheme'],
+      }],
       // Editor feedback; CI gates on `eslint.sinks.config.js`.
       ...withMotionRules(sinkRules),
     },
   },
   {
-    // vitest `globals: true` injects describe/it/expect/vi.
+    // vitest `globals: true` injects describe/it/expect/vi, and runs in Node (`process`, `global`).
     files: ['**/*.{test,spec}.{js,jsx}', 'src/test/**/*.{js,jsx}'],
     languageOptions: {
-      globals: { ...globals.browser, ...globals.vitest },
+      globals: { ...globals.browser, ...globals.vitest, ...globals.node },
     },
   },
 ])

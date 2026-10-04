@@ -196,9 +196,8 @@ jobs:
         working-directory: Website/AdaptiveLearning/frontend
         run: npm ci
 
-      # Non-blocking against a backlog of pre-existing errors (counted in CLAUDE.md; keep it current).
-      - name: Lint (non-blocking)
-        continue-on-error: true
+      # Blocking: there is no backlog left to tolerate, so any error is new.
+      - name: Lint
         working-directory: Website/AdaptiveLearning/frontend
         run: npm run lint
 

@@ -255,7 +255,7 @@ is indistinguishable from one nobody cleaned up.
   is inapplicable to a single channel and always was. One input that did not
   exist when this was written: `face_geometry` (Phase 11) now yields head pose,
   which is a motion signal independent of the periodicity being confused -- the
-  role CLAUDE.md gives the accelerometer for the headband's gait failure. It has
+  role docs/signals.md gives the accelerometer for the headband's gait failure. It has
   to be measured against the capture before it means anything.
 - **A decision recorded either way.** "Rejected again, here is the number" is a
   complete outcome by the phase's own definition.

@@ -1,4 +1,4 @@
-"""The solve step is bounded by a killable subprocess; see docs/question-generation.md."""
+"""The solve step is bounded by a killable subprocess; see docs/solvers.md."""
 import os
 import subprocess
 import sys

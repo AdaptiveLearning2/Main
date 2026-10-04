@@ -110,8 +110,8 @@ cd C:\AdaptiveLearning
 .\start.ps1
 ```
 
-Every flag the launcher takes (each is documented with its reason in CLAUDE.md, *Running and
-testing*):
+Every flag the launcher takes (each is documented with its reason in `docs/environments.md`,
+*Launcher flags*):
 
 | Flag | What it does |
 |---|---|
@@ -119,7 +119,7 @@ testing*):
 | `-Camera` / `-CameraIndex N` | Webcam device (FER+ emotion); switches ingestion to push mode. |
 | `-Gaze` | Gaze and head-pose landmarks; implies `-Camera`. Needs `pip install -e ".[face,gaze]"` run **from `EEGResearch`** and fetches the landmark model at setup. |
 | `-NoEmotion` | Turns FER+ off; only valid with `-Gaze` (gaze-only is a real, cheaper deployment). |
-| `-Optics` / `-OpticsPreset 103N` | Headband optical channels for heart rate; refused without `-Muse`. Stay on the default rung — see the bandwidth cliff in CLAUDE.md. |
+| `-Optics` / `-OpticsPreset 103N` | Headband optical channels for heart rate; refused without `-Muse`. Stay on the default rung — see the bandwidth cliff in `docs/signals.md`. |
 | `-LocalCalm` | Score calm from the sidecar's own spectrum (`EEG_SPECTRUM_SOURCE=local`); refused without `-Muse`; off by decision until a second wearer's capture. |
 
 Every key these flags control is written to the `.env` files on **both** branches of each flag,
@@ -132,8 +132,8 @@ This will:
 1. Start Ollama and pull `llama3.1:8b` if not already downloaded (takes a few minutes on first run).
    Skipped when `Website\AdaptiveLearning\backend\.env` sets `LLM_PROVIDER=claude`: every model
    call goes through `llm_client.py`, and that provider needs `ANTHROPIC_API_KEY` (plus the
-   optional `CLAUDE_*` group — model, max tokens, retries — documented in CLAUDE.md under *Every
-   model call goes through `llm_client`*). The default is Ollama so a fresh checkout bills nothing.
+   optional `CLAUDE_*` group — model, max tokens, retries — documented in `docs/question-generation.md`
+   under *Every model call goes through `llm_client`*). The default is Ollama so a fresh checkout bills nothing.
 2. Create Python venvs and install dependencies automatically if missing
 3. Install frontend `node_modules` if missing
 4. Launch a terminal window for each service

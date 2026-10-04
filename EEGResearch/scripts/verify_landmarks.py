@@ -426,7 +426,7 @@ def _verdict(square, eyes, head) -> int:
     print()
     if failures == 0:
         print("   The index table is confirmed against a real face. Record the "
-              "date in CLAUDE.md and the landmark path can be wired into the "
+              "date in docs/signals.md and the landmark path can be wired into the "
               "capture loop.")
     else:
         print(f"   {failures} check(s) failed. Do not wire this into the "

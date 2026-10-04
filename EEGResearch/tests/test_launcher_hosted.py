@@ -1,4 +1,4 @@
-"""start.ps1 -Hosted: refused before any write unless safe, and its sidecar keys win; see CLAUDE.md "Launcher flags"."""
+"""start.ps1 -Hosted: refused before any write unless safe, and its sidecar keys win; see docs/environments.md "Launcher flags"."""
 
 from __future__ import annotations
 

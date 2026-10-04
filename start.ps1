@@ -90,7 +90,7 @@ $landmarkModel = Join-Path $eegDir "models\face_landmarker.task"
 function Update-DeviceRegistry {
     # Compose EEG_DEVICES: drop the camera entry, re-point an existing `default:` entry to
     # this run's headband, keep other stations; with -camera, ensure `default:` and append it.
-    # -DryRun validates and writes nothing. See CLAUDE.md, *The device registry is composed*.
+    # -DryRun validates and writes nothing. See docs/environments.md, *The device registry is composed*.
     param([string]$path, [string]$headband, [string]$camera = "", [switch]$DryRun)
     if (!(Test-Path $path)) { return $true }
     # -Last 1: a duplicated key would make an array; dotenv takes the last.

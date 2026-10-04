@@ -175,7 +175,7 @@ recording that it was not: against ECG, on five minutes of the cleanest data
 this camera produces, the method reports noise with confidence.
 
 **Confidence does not discriminate.** 0.74 on a reading 40 bpm wrong is the same
-failure the derived-BPM motion rule in CLAUDE.md describes — high confidence on
+failure the derived-BPM motion rule in docs/signals.md describes — high confidence on
 a wrong number — arrived at by a different route. A confidence threshold in
 front of this buys nothing.
 

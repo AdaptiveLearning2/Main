@@ -52,8 +52,8 @@ The four parts here: **Orientation**, **Database**, **Privacy**, **Reporting and
 
 | Path | What it is |
 | --- | --- |
-| `Website/AdaptiveLearning/backend` | FastAPI app (`main.py`, ~9k lines) — the product API on port 8000. Also the `LLM_*_generation.py` question generators and `LLM_topic_decider.py`, which reach a model through `llm_client.py` — a local Ollama by default, the Claude API when `LLM_PROVIDER` says so. |
-| `Website/AdaptiveLearning/frontend` | React 19 + Vite + Tailwind SPA on port 5173. Routed by role: `src/pages/{student,teacher,parent,auth}`, one layout each. `src/lib/api.js` wraps the backend; `src/lib/supabase.js` holds the anon client. |
+| `Website/AdaptiveLearning/backend` | FastAPI app (`main.py`, ~8k lines) — the product API on port 8000. Also the `LLM_*_generation.py` question generators and `LLM_topic_decider.py`, which reach a model through `llm_client.py` — a local Ollama by default, the Claude API when `LLM_PROVIDER` says so. |
+| `Website/AdaptiveLearning/frontend` | React 19 + Vite + Tailwind SPA on port 5173. Routed by role: `src/pages/{student,teacher,parent,auth}`, one layout each. `src/lib/api.js` wraps the backend; `src/lib/supabase.js` holds an auth-only client (`@supabase/auth-js`, no PostgREST). |
 | `EEGResearch` | Separate FastAPI sidecar on port 8001 (`src/app`), packaged as `eeg-learning-platform`. Owns headband access and signal derivation; the website backend talks to it over HTTP only, via `backend/eeg_client.py`. |
 | `EEGResearch/native_bridge` | C++ bridge to the libMuse SDK, TCP on 8765. Windows-only (`winsock2`), and the interesting half is behind `ENABLE_LIBMUSE`. |
 | `EEGResearch/scripts` | The sidecar's capture, replay and run scripts. **Not** the root `scripts/`, which also exists and holds the database and load-test tooling — cite both by full path. |
@@ -295,9 +295,8 @@ same change that pins it.
 
 All three venvs are on Python 3.14.7, **and so is CI** — `ci.yml`'s six `setup-python` pins say
 `3.14`, the minor rather than the patch, because `setup-python` fails outright on an exact version
-the runner image does not have. They sat at 3.12 for a month after development moved, so CI was
-testing an interpreter nobody ran; keep them together. `EEGResearch/requirements*.lock` are
-generated under the same version, and its header records which one.
+the runner image does not have. Keep them together, or CI tests an interpreter nobody runs.
+`EEGResearch/requirements*.lock` are generated under the same version, and its header records which one.
 
 **Check the wheels on both platforms, not just this one.** Everything an install resolves —
 **transitive as well as direct** — ships a `cp314` wheel for each platform *it is resolved on*
@@ -636,11 +635,8 @@ cascades all three signal tables. **RLS narrows which rows a command touches, ne
 exist**, so an own-row policy is not a substitute for withholding the grant.
 
 `class_memberships`, `classes`, `profiles`, `parent_child_links`, `user_math_performance`,
-`user_stats` and `session_answers` were the next seven. This file used to say `Adaptive.jsx` upserts
-`user_math_performance` directly through PostgREST; that was true once, the write moved server-side,
-and this file was not updated. A repo-wide grep of `frontend/src` for
-`.insert(`/`.update(`/`.upsert(`/`.delete(` against the Supabase client returns **zero** matches
-today: every write in this app, `profiles` included, goes through the backend. **A stale "the
+`user_stats` and `session_answers` keep `SELECT` only, for the same reason. The frontend's Supabase client is
+auth-only, so every write in this app, `profiles` included, goes through the backend. **A stale "the
 frontend needs this" comment is exactly as dangerous as the missing revoke it excuses — re-verify
 the claim against the current write path before trusting an old grant rationale, this file's own
 included.**
@@ -807,18 +803,17 @@ process, every sub-client on one HTTP/1.1 pool; one-shot scripts build theirs wi
 
 ## The network edge: who may read a response, what rides on it, how much may be sent
 
-All of it is one block above the helpers in `main.py`, mirroring `EEGResearch/src/app/main.py`, which has had an origin
-allowlist and a headers middleware since it was written; this backend had neither.
-`backend/tests/test_network_edge.py` is the **first backend test to use `TestClient`** — every middleware here was
-unreachable from the suite by construction before it, so anything added to this block needs a test there or it is
-covered by nothing.
+All of it is one block above the helpers in `main.py`, mirroring `EEGResearch/src/app/main.py`. Middleware is reachable
+only through `TestClient`, so anything added to this block needs a test in `backend/tests/test_network_edge.py` or it
+is covered by nothing.
 
-**CORS is an allowlist, and `allow_credentials` has to be false for it to mean anything.** It was `allow_origins=["*"]`
-with `allow_credentials=True`, which Starlette serves by *reflecting* the asking Origin — a wildcard wearing an
-allowlist's clothes. Credentials here would mean cookies and there are none: the bearer token goes in a header, which a
-browser never attaches on its own. `ALLOWED_ORIGINS` defaults to the local frontend; methods are the four the API
-serves plus OPTIONS, and headers the two `lib/api.js` and the push client send. A production deploy that forgets the
-variable is refused at the edge on the first page load — loud, and the safe direction.
+**CORS is an allowlist, and `allow_credentials` has to be false for it to mean anything**: with it on, Starlette serves
+`allow_origins=["*"]` by *reflecting* the asking Origin. Credentials here would mean cookies and there are none — the
+bearer token goes in a header. `ALLOWED_ORIGINS` defaults to the local frontend; methods are the four the API serves
+plus OPTIONS, headers the two `lib/api.js` and the push client send. A deploy that forgets the variable is refused at the
+edge on the first page load — loud, and the safe direction. **Preflights are cached for 2 h (`max_age=7200`)**, one per
+URL rather than one per request. **There is no app-level gzip**: Render's edge already compresses, and gzip on a
+0.1-CPU instance would only add work.
 
 **A response header the page must read has to be named in `expose_headers`.** Only the CORS-safelisted few are
 readable cross-origin by default, and the frontend is a different origin from this API in every deployment — local dev
@@ -889,10 +884,10 @@ request carrying `X-Forwarded-For` at 0 logs a `[config]` line. Old 6-character 
 `POST /api/classes/{id}/join-code` lets the owning teacher replace one; members stay enrolled.
 
 **An address is a school, not a student**, and that sets the numbers. A class leaves through one NAT and
-`Adaptive.jsx` polls the health route every 5 s per open page, so sixty students behind one address is
-720/min before anyone answers a question; the defaults sit above that. These refuse a runaway client and
-are not a way to police a class. **The probe has its own bucket**: polled every 5 s per open lesson, it is the
-largest consumer of any budget it shares and the first thing an unrelated burst would starve. **A refused
+`Adaptive.jsx` probes the health route every 5 s per open lesson under pull (30 s under push), so sixty students
+behind one address is 720/min before anyone answers a question; the defaults sit above that. These refuse a runaway
+client and are not a way to police a class. **The probe has its own bucket**: it is the largest consumer of any
+budget it shares and the first thing an unrelated burst would starve. **A refused
 probe is a third state** — it answers neither reachable nor unreachable, so the page goes on *acting* on
 the last answer (discovery keeps running, Connect stays offered) while saying *status unavailable* rather
 than *offline*. Every surface reading it has to follow, badge and sentence alike: keeping `available` stale
@@ -909,11 +904,9 @@ the refused health probe could not, and clears `probeRefused` with the value it 
 than per field. `eegStatus` swallows its own failure into a *shaped* object — `service: false`,
 `poller: {running: false}`, no `ingest_mode` — so every field reads like an answer: the sidecar is down, the
 poller stopped, there is no charge, no samples were sent. All are invented in the browser from a request
-that never reached a backend the failure says nothing about. Guarding one field at a time fixed the fields
-named and left the neighbours: the undefined `ingest_mode` also flips push to pull, which lifts the
-exemptions that exist *because under push this poll is not the writer* of `connected` and `battery` — and
-under pull there is no exemption at all, so one failed tick took a streaming session to *Connect Headband*
-over a sentence saying the teacher can see it live, with no toast, since `phase` stayed `connected`.
+that never reached a backend the failure says nothing about. Field-by-field guards miss the neighbours: an
+undefined `ingest_mode` flips push to pull, lifting the exemptions that exist *because under push this poll is not
+the writer* of `connected` and `battery`, so one failed tick can drop a streaming session to *Connect Headband*.
 **A drop belongs to the telemetry poll in both modes** — only the bridge's own `muse_connected` says the
 headband went away, which is the whole subject of `AdaptiveReconnectPull.test.jsx`.
 
@@ -932,14 +925,12 @@ Not here, deliberately: **no `TrustedHostMiddleware`** until the production host
 known host breaks everything or is a no-op), and **no HSTS or HTTPS redirect**: both are Cloudflare zone settings,
 which cover the Pages frontend and the proxied API at once.
 
-## The archived SVGs are an HTML sink, and `colour` was the one field not escaped
+## The archived SVGs are an HTML sink, so every interpolation is escaped
 
 `chart_render.py` renders to SVG that is uploaded to storage and later handed to a browser through a
-signed URL, so every interpolation is an injection site. Text ones always ran through `html.escape`;
-the six `fill=`/`stroke=` attributes did not, and a quote in a palette value ended the attribute and
-opened one of its own — proven by the test that now covers it. Not reachable, since the palettes are
-this module's own constants, but they are a *parameter*, and "everything is escaped except colour"
-is an exception nobody would carry. Now uniform.
+signed URL, so every interpolation is an injection site — the six `fill=`/`stroke=` colour attributes
+included, though the palettes are this module's own constants: they are a *parameter*, and "everything
+is escaped except colour" is an exception nobody would carry.
 
 One input is genuinely database-sourced: `_counts(face, "emotion")` takes pie labels from
 `face_signals.emotion`. Titles and units are hardcoded at the call sites, which is a property of the
@@ -1049,10 +1040,8 @@ INSERT on `profiles` at all; a future edit grant must be a column list without `
 
 ### The frontend reads the same column, through `GET /api/profile/me`
 
-`AuthContext` used to derive its role from the claim, true while every role was chosen at sign-up and wrong the moment
-one was not: an account promoted to `admin` in the SQL editor has no `role` in its metadata, so it rendered as a
-student — while `/admin` itself worked, because `AdminGuard` asks the backend. That is the shape of the bug: the
-authoritative check was right and every surface around it read a different source.
+The claim is wrong for any role not chosen at sign-up — an account promoted to `admin` in the SQL editor has no `role`
+in its metadata — so `AuthContext` takes its role from the backend, the source `AdminGuard` asks.
 
 - **It is not in the `onAuthStateChange` callback.** `apiFetch` calls `getSession()` for the token, supabase-js holds
   an auth lock while dispatching, and awaiting it there deadlocks — the app hangs on a loader for ever. It lives in an
@@ -1072,9 +1061,15 @@ behind other waiters first. The bound covers the **whole call**, not the `fetch`
 `supabase.auth.getSession()`, which goes to the network when the token needs refreshing, so wrapping `fetch` alone
 leaves exactly the hang it was added to stop.
 
-Login and Register navigate to `/` and let `HomeRedirect` choose rather than computing a home from the claim — they
-each carried a second copy of the role-to-home map that `homeRoute.js` exists to be the only one of, keyed on the value
-that does not know about `admin`. The claim survives only as the fallback, and nothing that matters may be gated on it.
+Login and Register navigate to `/` and let `HomeRedirect` choose: `homeRoute.js` is the only role-to-home map. The claim
+survives only as the fallback, and nothing that matters may be gated on it.
+
+### A cached read is opt-in, per account, and dropped on sign-out
+
+`apiFetch(path, { cache: true })` reuses a result, or the request in flight, for 30 s; a failure is never kept, every
+caller gets its own copy, and any write invalidates every cached read under its top-level resource (`/api/classes/…`),
+both before and after it lands. Entries are keyed by account, and both sign-out paths call `clearApiCache()` beside
+`clearViewPrefs()`, so a shared school computer's next account starts with nothing cached.
 
 ### A name comes from `displayName`, never from the email
 
@@ -1327,14 +1322,12 @@ never sees a value the trigger writes.
 `AdminGuard` asks `GET /api/admin/me` rather than reading a role client-side; it is a UI convenience, and
 every `/api/admin/*` endpoint re-checks.
 
-### `profiles` rows come from a trigger, and it was missing from source control
+### `profiles` rows come from a trigger a migration creates
 
-`handle_new_user` was written for an `auth.users` trigger that **no migration created**. That was
-recorded and left, correctly, while `profiles` was decoration — it stopped being decoration when `_role`
-started gating on it, since a missing row means `_profile` degrades to a student-shaped dict and a teacher
-is refused their own classes with nothing to read. The migration creates the trigger and backfills the
-rows, and is safe against a hand-made survivor: `on conflict (id) do nothing` makes a second firing a
-no-op. Check for one under a different name after applying.
+`handle_new_user` runs from an `auth.users` trigger that a migration creates, with a backfill: `_role` gates on
+`profiles`, and a missing row degrades `_profile` to a student-shaped dict, so a teacher is refused their own classes
+with nothing to read. It is safe against a hand-made survivor — `on conflict (id) do nothing` makes a second firing a
+no-op — but check for one under a different name after applying.
 
 It deliberately **does not UPDATE existing rows**. `raw_user_meta_data` still holds whatever was typed at
 sign-up, so refreshing from it would silently demote every administrator.
@@ -1462,11 +1455,9 @@ refactor it was built to survive and blames a duplicated constructor that does n
 
 ## Every per-caller rate limit is one `_SlidingWindowLimiter`, and tests patch the object
 
-There were **five** hand-rolled copies of one sliding window — strategies, chart summary, ingest,
-generation, and the three public address budgets — each with its own dict, lock, sweep and constants.
-They had not drifted, which is the only comfortable time to merge them; the fifth arrived without anyone
-noticing there were already four. One instance per budget, each with its own lock, so the health probe at
-1800/min no longer contends with question generation.
+Strategies, chart summary, ingest, generation and the public address budgets each hold one instance with its own
+lock, so the health probe at 1800/min never contends with question generation. A new per-caller limit is another
+instance, never a hand-rolled window.
 
 **Not `llm_client`'s generation bounds**, which are a process-wide semaphore plus a daily counter — a
 different shape for a shared-availability resource, and folding it in would be a refactor for its own
@@ -1521,10 +1512,8 @@ way out is not an implementation of this.** If there is ever no way to tell the 
 the correct answer is a blank tile, not a read — never fall back to a query that reads what the caller opted
 out of. Assert on the **filter**, not the payload (rule 4).
 
-That rule now belongs to consent, which is server-side and genuinely skips the read. The viewer-side switch
-it was written for is gone: `facePref.js` was a read filter wearing the vocabulary of consent, and it needed
-a disclaimer in its own UI copy — *"this does not switch a camera on or off"* — to stop being read as one.
-**Needing that sentence was the signal the control was wrong.**
+That rule now belongs to consent, which is server-side and genuinely skips the read. **A viewer-side control that
+needs a disclaimer saying it switches no sensor off is wearing consent's vocabulary, and is the wrong control.**
 
 **The teacher's replacement deliberately breaks the rule, and says so.** `frontend/src/lib/viewPrefs.js`
 (*"Hide sensor data"*, on `/teacher/students` and `/teacher/students/:id/report`) is **client-side only: it
@@ -1685,6 +1674,16 @@ session was shorter than it was. `sample()` returns the rows alone; "was it samp
 `?? 0`: `sample()` guards a nullish `rows` internally, so deriving the flag *outside* it moved that check away from the
 guard and crashed on a comparison. **Moving a derivation out of a function moves it out of that function's guards.**
 
+## A backend poll goes through `usePoll`
+
+`hooks/usePoll.js` never overlaps calls — the next is scheduled when one settles — pauses while the tab is hidden
+(the next call keeps its due time), and doubles its wait after a throw up to `maxBackoffMs`. A `setInterval` poll
+stacks requests behind a slow backend and runs all night in a background tab. **`pauseWhenHidden: false` only where
+the poll keeps something alive**: under pull, `Adaptive.jsx`'s status poll is what holds the station pairing
+(`PAIRING_IDLE_SECONDS`). The lesson page's intervals live in `pages/student/pollIntervals.js` (30 s under push, where
+both answers are configuration); teacher Live polls at 2 s, backing off to 30 s. The `setInterval` polls left are the
+sidecar's in `Adaptive.jsx` (localhost, so they cost the backend nothing) and `Profile.jsx`'s 15 s link-code recheck.
+
 ## `set-state-in-effect` is cleared, and the shapes that cleared it are worth reusing
 
 Where the state is a reset driven by a prop changing — an acknowledgement cleared when enforcement resumes, a pulse
@@ -1718,11 +1717,9 @@ Both shapes have since bitten, and the corrections are the load-bearing half:
 
 ## Two rules from `eslint-plugin-react` are on, and both have to stay on
 
-`no-unused-vars` cannot see JSX, so without it every identifier used *only* inside markup — `motion` from
-framer-motion, an `icon: Icon` prop rendered as `<Icon />` — is reported as an unused import. That was **40 of the
-65** errors the backlog held, all false, and the noise is what hid the real ones: the same sweep found one genuinely
-dead `motion` import sitting among 33 identical false positives. The plugin's `recommended` config is deliberately
-**not** extended — it brings a large ruleset that would add to the backlog rather than clear it.
+`no-unused-vars` cannot see JSX, so without `react/jsx-uses-vars` every identifier used *only* inside markup — an
+`icon: Icon` prop rendered as `<Icon />` — is reported as an unused import, and the false hits bury the real ones. The
+plugin's `recommended` config is deliberately **not** extended: it would add to the backlog rather than clear it.
 
 `ignoreRestSiblings: true` goes with it, for the destructure-to-omit idiom (`const { x, ...rest } = obj` to build an
 object *without* `x`, which is how the tests construct a payload predating a field). The binding is unused by design;
@@ -1755,17 +1752,16 @@ alias is the same sink. Treat this, the CSP, and the absence of a markdown or La
 **A name has two spellings ordinary style produces, and they are different nodes**, so no selector here may be
 written bare for a property: `el.innerHTML` and `{innerHTML: s}` put the name in an Identifier's `.name`,
 `el['innerHTML']` and `{'innerHTML': s}` put it in a string Literal's `.value`. They go through `eitherSpelling`,
-which emits both. Written by hand this was wrong twice — once missing the member-assignment route *with a comment
-claiming otherwise*, once missing every quoted form, so
-`<div {...{'dangerouslySetInnerHTML': {__html: x}}} />` passed a green blocking gate on one pair of quotes.
-`callee.name` is the one exemption, for `eval`/`Function` as bindings, since a binding reference cannot be quoted.
+which emits both: a hand-written pair misses one, and `<div {...{'dangerouslySetInnerHTML': {__html: x}}} />` then
+passes the gate. `callee.name` is the one exemption, for `eval`/`Function` as bindings, since a binding reference
+cannot be quoted.
 
 **A template-literal computed key is a third spelling and is not covered**, deliberately: nobody writes
 ``el[`innerHTML`]`` by accident, and anyone writing one on purpose can defeat the gate with a disable comment
 instead. So this covers the spellings ordinary style produces, not every spelling the grammar allows — and the list
 above is what the rules cover, not a claim of closure.
 
-**Reading the rules is what failed both times, so `src/test/sinkRules.test.js` reads the report**: it runs ESLint
+**Reading the rules cannot show a missed spelling, so `src/test/sinkRules.test.js` reads the report**: it runs ESLint
 over source text with the same `eslint.sinks.config.js` CI uses and asserts each of 25 spellings is flagged. Its
 other half asserts six ordinary forms are *not*, so the first half cannot be satisfied by a selector matching
 everything. Both halves are load-bearing and both were checked by breaking them. The lint script still has to
@@ -1802,15 +1798,13 @@ app paints (Tailwind 3.4 stock `gray`):
 variant at all, so they rendered gray-400 in *both* modes — where it already passes. A straight
 `gray-400 → gray-600` substitution would have fixed light mode by breaking dark mode.
 
-**A dark class in one ternary branch says nothing about the grey in another.** Three badges reading
-`${on ? '… dark:text-indigo-300' : 'bg-gray-100 text-gray-400 dark:bg-gray-800'}` looked paired, so the grey
-branch was darkened without a companion and dark mode went from 5.78 to **1.94** — worse than before the fix.
-Resolve each branch separately, and model the fallback: an element with no `dark:text-` renders its bare colour
-in dark mode too.
+**A dark class in one ternary branch says nothing about the grey in another**: in
+`${on ? '… dark:text-indigo-300' : 'bg-gray-100 text-gray-400 dark:bg-gray-800'}`, darkening the grey branch without
+a companion takes dark mode from 5.78 to **1.94**. Resolve each branch separately, and model the fallback: an element
+with no `dark:text-` renders its bare colour in dark mode too.
 
-**Compute the ratio, never match a class name.** The first version of the test grepped for the literal
-`dark:text-gray-500`, so `dark:text-gray-600` — worse, at 2.35 — went straight through a green suite, and so
-did the regression above. Both were found by review, not by the test that existed to find them.
+**Compute the ratio, never match a class name**: a grep for `dark:text-gray-500` passes `dark:text-gray-600`, which is
+worse (2.35), and the ternary regression above.
 
 `text-gray-500` on white is fine at 4.83 and is left alone; it is only wrong on a `bg-gray-100` card (4.39). A
 bare grey with **no** dark companion is a separate failure the same-element check cannot see — it renders
@@ -1901,9 +1895,8 @@ trusted window in five is gated out of RMSSD. `avg_focus`, `avg_heart_rate_bpm` 
 weeks either side sitting adjacent. Weeks are whole and Monday-anchored for the same class of reason: counting
 back `weeks * 7` days from today leaves a part-week at each end that looks like a full one.
 
-**A declined channel is filtered out of the query, not out of the result.** The first version read every channel
-and dropped the declined ones in Python, on the reasoning that the alternative was three queries — a false
-choice, since one `.in_("channel", …)` narrows the single query it already made. Assert on the **filter**, not
+**A declined channel is filtered out of the query, not out of the result**: one `.in_("channel", …)` narrows the
+single query, so a declined channel is never read and then dropped in Python. Assert on the **filter**, not
 the payload. `_FakeSupabase` records every query it builds (`fake.queries`, each with `.filters`) so that
 assertion is possible at all.
 
@@ -2041,21 +2034,17 @@ asserting on that note passes either way; assert that no chart, no `sr-only` tab
 ## Every session close goes through `_close_session`
 
 **Four close sites** — `/end`, the stale-session sweep in `start_session`, `class_live`, and the background
-`_sweep_abandoned_sessions` thread — and `conftest.close_sites()` finds all four. Don't hand-write a fifth: the
-sequence was copied into each site and every copy drifted separately, none of them raising anything. The sweep
-credited a `correct_answers` it had never selected (absent column → `None` → `or 0` → an honest-looking zero), so
-every session of a student who shut the tab added its questions and *no* correct answers to their record;
-`class_live` never ran the empty-session discard, so a failed pairing it closed stayed in History for ever; and
-the credit, the rollup and the archive each shipped at different times as "the third close site to be missed".
+`_sweep_abandoned_sessions` thread — and `conftest.close_sites()` finds all four. Don't hand-write a fifth: a copied
+close sequence drifts silently — a credit reading a column it never selected (`None` → `or 0`, an honest-looking
+zero), a discard one site never runs.
 
 **Order is load-bearing: discard first**, because a rollup of nothing and an archive of four empty charts are work
 done for a session about to stop existing.
 
-**`_close_session` stamps `ended_at` itself, and the stamp is a claim.** It used to sit at each call site above the
-call, which left two things to get wrong per site and both were. `class_live` stamped and closed *before* stopping
-its poller, so a tick could insert a signal row after the discard check had looked. And no site made the stamp
-conditional, so two closes racing — a delayed `/end` against the sweep — both ran the whole sequence and both
-credited the session's *cumulative* counts, landing every answer twice in the lifetime totals. `/end`'s read of
+**`_close_session` stamps `ended_at` itself, and the stamp is a claim.** Stamped at a call site, it can land before
+the poller stops, so a tick inserts a signal row after the discard check looked; and an unconditional stamp lets two
+raced closes — a delayed `/end` against the sweep — both credit the session's *cumulative* counts, landing every
+answer twice in the lifetime totals. `/end`'s read of
 `ended_at` is not the guard; that read and the write are two statements. `_claim_session_close` is:
 `is_("ended_at","null")` matches at most one row, and the rows the update returns decide: none means another close
 won. **It asks for them by name** (`returning=representation`): under `minimal` every result is empty and every close
@@ -2092,7 +2081,7 @@ alert already points at, so `detail` carries none.
 
 Both original sweeps are **on demand** — `start_session` collects a student's strays when they next start one,
 `class_live` collects a class's when a teacher opens the monitor — so a student who never comes back is collected
-by neither. Found in production as sessions still open **two months** after they were started.
+by neither.
 
 `_sweep_abandoned_sessions` is the third, run from a background thread started in `_lifespan`. **It is a backend
 thread, not a `pg_cron` job, and that is not a preference.** Closing a session credits lifetime totals, writes the
@@ -2222,9 +2211,8 @@ of proceeding, more than `max_orphan_fraction` (default 0.5) looking orphaned re
 `{uuid}/{uuid}/…` is left alone, and `dry_run` is the default. **The bucket is listed *before* `sessions` is read**,
 and that order is a guard too — read the table first and a session created in between has objects whose id is
 missing from the snapshot, deleted as an orphan while its row sits there. Listing first can only be stale in the
-safe direction. Each guard has a test and each test was checked by breaking the guard; the first version of the
-read-failure test passed with the guard removed, because the fraction guard caught it and its message also
-mentioned sessions.
+safe direction. Each guard has a test that fails with that guard alone removed; the fraction guard also refuses a
+failed read, so the read-failure test has to tell the two refusals apart.
 
 An orphan is not a leak — `/charts` resolves the session row before signing, and the bucket has no policies — so
 this is storage that should not exist rather than data anyone can reach. It stops being fine when account deletion
@@ -2318,13 +2306,10 @@ a class of thirty would otherwise spend a model call per page.
 only decides whether a model gets a chance to replace it. Off, the endpoint never opens a socket — which is what CI
 and any deployment without a local Ollama should do. Every failure path degrades to the rules rather than erroring.
 
-The default was `false` for a long time and nothing ever flipped it — it is admin-only — so every deployment without
-an admin who enabled it had this pass silently doing nothing: every response `source: "rule-based"`,
-indistinguishable from the model being tried and always failing. The migration that flipped it also flips the
-already-seeded live row, **guarded on there being no recorded `feature_flag_changes` row for the key**, so a
-deployment where an admin deliberately turned it off is not silently overwritten. Turning it on still needs a
-working provider underneath — `_llm_strategies` catches every exception and falls back, so a misconfigured provider
-produces the exact same symptom as the flag being off.
+The migration that turned the default on also flipped the already-seeded live row, **guarded on there being no
+recorded `feature_flag_changes` row for the key**, so a deployment where an admin turned it off stays off. On still
+needs a working provider: `_llm_strategies` catches every exception and falls back, so a misconfigured provider and
+the flag being off look identical — every response `source: "rule-based"`.
 
 **Tests must pin this flag explicitly, not rely on the suite's default.** The autouse `_feature_flags_are_default`
 fixture reads live from `_FEATURE_FLAG_DEFAULTS`, so flipping the production default flipped it for the whole suite
@@ -2394,7 +2379,7 @@ yet, so no week at all — was told that one week had readings. The rollup row i
 so that state is ordinary rather than an error. **A helper that computes a count and returns it only on the success
 path cannot be asked the question the count answers.**
 
-**But the sentence for it names no cause, and the first version did.** A first session is one way to reach zero
+**But the sentence for it names no cause.** A first session is one way to reach zero
 weeks; a rollup writer that failed on every day in range is another, and so is a set of rolled days all carrying null
 for that series. The read succeeded in all three, so nothing can tell them apart — and *"from this session's own
 readings"* contradicted the session count two sentences above it whenever one of the others was the real one.

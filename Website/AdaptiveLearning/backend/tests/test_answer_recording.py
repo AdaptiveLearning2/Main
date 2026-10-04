@@ -179,7 +179,8 @@ def test_a_missing_function_is_reported_as_a_missing_migration(monkeypatch, caps
     with pytest.raises(main.HTTPException) as caught:
         _answer(monkeypatch, _Client(rpc_error="{'code': 'PGRST202', 'message': 'no function'}"))
     assert caught.value.status_code == 503
-    assert "20261003000000" in capsys.readouterr().out
+    line = capsys.readouterr().out
+    assert "20261003000000" in line and "none is saved" in line
 
 
 def _fk_violation(constraint: str, column: str, table: str) -> APIError:

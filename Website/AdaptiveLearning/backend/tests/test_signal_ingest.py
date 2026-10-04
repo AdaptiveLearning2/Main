@@ -85,18 +85,42 @@ class _FakeSupabase:
         self.store = store
 
     def table(self, name):
+        self.store["_tables_read"].append(name)
         return _Query(self.store, name)
+
+    def rpc(self, name, params):
+        store = self.store
+
+        class _Call:
+            def execute(self):
+                assert name == "ingest_gate", name
+                # The session lookup, recorded so a test can assert the rate limit kept it from being reached.
+                store["_owner_checks"].append((params["p_session_id"], params["p_user_id"]))
+                down = store.get("_gate_down")
+                if down:
+                    raise down if isinstance(down, Exception) else RuntimeError("ingest_gate read failed")
+                if "_gate_answer" in store:
+                    return _Result(store["_gate_answer"])
+                # As the function answers: the session by id whoever owns it, the caller's consent.
+                session = next((s for s in store["sessions"] if s["id"] == params["p_session_id"]), None)
+                consent = next((r for r in store["signal_consent"]
+                                if r["user_id"] == params["p_user_id"]), None)
+                return _Result({"session": session and {k: session.get(k) for k in
+                                                        ("user_id", "started_at", "ended_at")},
+                                "consent": consent})
+
+        return _Call()
 
 
 @pytest.fixture
 def store(monkeypatch):
-    st = {"signal_consent": [], "heart_signals": [], "face_signals": []}
+    st = {"signal_consent": [], "heart_signals": [], "face_signals": [],
+          # Unbounded, so a sample's time never decides a test that is not about it.
+          "sessions": [{"id": SESSION, "user_id": STUDENT["id"], "started_at": None, "ended_at": None}]}
     monkeypatch.setattr(main, "supabase", _FakeSupabase(st))
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
-    # Recorded, so a test can assert the rate limit kept it from being reached.
     st["_owner_checks"] = []
-    monkeypatch.setattr(main, "_verify_session_owner",
-                        lambda *a: st["_owner_checks"].append(a))
+    st["_tables_read"] = []
     # Each test gets its own rate-limit budget; the limiter has its own tests.
     monkeypatch.setattr(main._INGEST_LIMITER, "hits", {})
     return st
@@ -149,13 +173,12 @@ def test_an_open_session_is_bounded_by_now(monkeypatch):
 def test_the_endpoint_drops_and_counts_what_falls_outside(store, monkeypatch):
     """Rows a day off land on a day no rollup covers, and expire unsummarised."""
     _consent(store, headband_optical_enabled=True)
-    asked = []
-    monkeypatch.setattr(main, "_verify_session_owner",
-                        lambda sid, uid, columns="user_id": asked.append(columns) or _BOUNDED)
+    store["sessions"] = [{"id": SESSION, **_BOUNDED}]
     out = _post_heart([_heart(ts="2026-08-09T10:30:00Z"), _heart(ts="2026-08-08T10:30:00Z")])
     assert (out["inserted"], out["out_of_window"]) == (1, 1)
     assert [r["ts"] for r in store["heart_signals"]] == ["2026-08-09T10:30:00Z"]
-    assert asked == [main._INGEST_SESSION_COLUMNS]
+    # The bounds came from the caller's own session, asked for by id.
+    assert store["_owner_checks"] == [(SESSION, STUDENT["id"])]
 
 
 # ── consent decides what is written ──────────────────────────────────────────
@@ -229,11 +252,157 @@ def test_face_ingestion_stores_both_emotion_fields(store):
     assert "identity_confidence" not in row
 
 
-def test_consent_failing_to_read_records_nothing(store, monkeypatch):
-    monkeypatch.setattr(main, "_consent",
-                        lambda _uid: {**main._CONSENT_DENIED, "retrieved": False})
-    out = _post_heart([_heart()])
-    assert out["inserted"] == 0
+def _post(endpoint):
+    if endpoint == "cognitive":
+        return main.ingest_cognitive(main.CognitiveBatch(
+            session_id=SESSION, samples=[{"ts": "2026-08-09T10:00:00Z", "focus": 0.5}]), request=None)
+    if endpoint == "face":
+        return main.ingest_face(main.FaceBatch(
+            session_id=SESSION, samples=[{"emotion": "happy"}]), request=None)
+    return _post_heart([_heart()])
+
+
+@pytest.mark.parametrize("endpoint", ["cognitive", "face", "heart"])
+def test_a_failed_gate_read_is_a_503_that_writes_nothing(store, endpoint):
+    """Session and consent are one read: failing, it is an outage the push client retries, not a refusal."""
+    from fastapi import HTTPException
+    _consent(store, eeg_enabled=True, headband_optical_enabled=True, camera_enabled=True)
+    store["_gate_down"] = True
+    with pytest.raises(HTTPException) as exc:
+        _post(endpoint)
+    assert exc.value.status_code == 503
+    assert not any(store.get(t) for t in ("cognitive_signals", "face_signals", "heart_signals"))
+
+
+def test_a_session_id_that_cannot_be_a_uuid_names_no_session(store):
+    """Postgres's 22P02 from the uuid parameter is a 404, as `_row_or_404` treats it, not an outage."""
+    from fastapi import HTTPException
+    store["_gate_down"] = type("E", (Exception,), {"code": "22P02"})("invalid input syntax for type uuid")
+    with pytest.raises(HTTPException) as exc:
+        _post_heart([_heart()])
+    assert exc.value.status_code == 404
+
+
+def _pgrst202(function: str):
+    """PostgREST's PGRST202 as postgrest-py raises it; message and details as the local stack words them."""
+    from postgrest.exceptions import APIError
+    return APIError({
+        "code": "PGRST202", "hint": None,
+        "message": f"Could not find the function public.{function}(p_session_id, p_user_id) in the schema cache",
+        "details": f"Searched for the function public.{function} with parameters p_session_id, p_user_id "
+                   "or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache."})
+
+
+@pytest.mark.parametrize("error", [
+    RuntimeError("{'code': 'PGRST202', 'message': 'no function'}"),
+    _pgrst202("ingest_gate"),                                  # as PostgREST words it, naming the function
+], ids=["names-none", "postgrest"])
+def test_a_missing_gate_function_names_its_migration(store, capsys, error):
+    """Deployed ahead of 20261003000000, every batch is a 503; the log has to say why."""
+    from fastapi import HTTPException
+    store["_gate_down"] = error
+    with pytest.raises(HTTPException) as exc:
+        _post_heart([_heart()])
+    assert exc.value.status_code == 503
+    line = capsys.readouterr().out
+    assert "20261003000000" in line
+    # This site's own cost: batches the push client resends, never ones refused for good.
+    assert "every signal batch is a 503" in line and "refus" not in line
+
+
+@pytest.mark.parametrize("error", [
+    _pgrst202("ingest_gate"),
+    RuntimeError(str(_pgrst202("ingest_gate"))),
+    RuntimeError("{'code': 'PGRST202', 'message': 'no function'}"),   # the site knows which call it made
+], ids=["api-error", "its-text", "names-none"])
+def test_a_missing_function_is_named_with_its_migration(capsys, error):
+    assert main._missing_rpc(error, "ingest_gate", "20261003000000", "batches wait") is True
+    line = capsys.readouterr().out
+    assert "ingest_gate is missing" in line and "apply 20261003000000; batches wait:" in line
+
+
+_MISSING_RPC_SITES_FLOOR = 6
+
+
+def test_every_missing_function_site_says_what_it_costs():
+    """One sentence for every site cannot tell an operator which feature has stopped."""
+    import ast
+    import inspect
+    sites = [n for n in ast.walk(ast.parse(inspect.getsource(main)))
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_missing_rpc"]
+    assert len(sites) >= _MISSING_RPC_SITES_FLOOR, "the scan found fewer call sites than exist"
+    said = {}
+    for site in sites:
+        literal = len(site.args) == 4 and all(isinstance(a, ast.Constant) and a.value for a in site.args[1:])
+        assert literal, f"no consequence of its own: {ast.unparse(site)}"
+        said.setdefault(site.args[3].value, set()).add(site.args[1].value)
+    shared = {consequence: fns for consequence, fns in said.items() if len(fns) > 1}
+    assert not shared, f"one consequence for different functions: {shared}"
+
+
+@pytest.mark.parametrize("error", [
+    _pgrst202("record_answer"),
+    RuntimeError(str(_pgrst202("record_answer"))),
+    _pgrst202("ingest_gate_v2"),                               # a name it is a prefix of
+    RuntimeError("connection reset"),
+    RuntimeError("{'code': '42883', 'message': 'function public.ingest_gate(uuid, uuid) does not exist'}"),
+], ids=["other-function", "other-function-text", "longer-name", "not-postgrest", "other-code"])
+def test_anything_else_is_not_a_missing_function(capsys, error):
+    """False and silent: the caller logs its own failed read, so a wrong True misnames the outage."""
+    assert main._missing_rpc(error, "ingest_gate", "20261003000000", "batches wait") is False
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("answer,shape", [
+    (None, "a NoneType"),
+    ([], "a list"),
+    ({}, "keys []"),
+    ({"session": None}, "keys ['session']"),
+    ({"session": [], "consent": None}, "session as a list"),
+    ({"session": {"user_id": STUDENT["id"]}, "consent": "yes"}, "consent as a str"),
+    ({"session": {"started_at": None}, "consent": None}, "a session with keys ['started_at']"),
+], ids=["null", "list", "empty", "no-consent-key", "session-list", "consent-str", "no-owner"])
+def test_a_gate_answer_that_is_not_its_object_is_a_failed_read(store, capsys, answer, shape):
+    """A 503 the push client resends, never a 404 that drops the batch: nobody read that it is gone."""
+    from fastapi import HTTPException
+    _consent(store, headband_optical_enabled=True)
+    store["_gate_answer"] = answer
+    with pytest.raises(HTTPException) as exc:
+        _post_heart([_heart()])
+    assert exc.value.status_code == 503
+    assert store["heart_signals"] == []
+    log = capsys.readouterr().out
+    assert "ingest_gate answered" in log and shape in log
+
+
+def test_a_gate_answer_with_no_session_is_a_404(store):
+    from fastapi import HTTPException
+    store["_gate_answer"] = {"session": None, "consent": None}
+    with pytest.raises(HTTPException) as exc:
+        _post_heart([_heart()])
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.parametrize("endpoint", ["cognitive", "face", "heart"])
+def test_the_gate_is_the_only_read_before_the_write(store, endpoint):
+    """Session and consent come back together; a second consent read is the round trip this removed."""
+    _consent(store, eeg_enabled=True, headband_optical_enabled=True, camera_enabled=True)
+    _post(endpoint)
+    assert store["_owner_checks"] == [(SESSION, STUDENT["id"])]
+    assert "signal_consent" not in store["_tables_read"]
+    assert "sessions" not in store["_tables_read"]
+
+
+@pytest.mark.parametrize("owner,status", [(None, 404), ("student-2", 403)])
+def test_a_session_that_is_not_the_callers_writes_nothing(store, owner, status):
+    from fastapi import HTTPException
+    _consent(store, headband_optical_enabled=True)
+    store["sessions"] = [] if owner is None else [
+        {"id": SESSION, "user_id": owner, "started_at": None, "ended_at": None}]
+    with pytest.raises(HTTPException) as exc:
+        _post_heart([_heart()])
+    assert exc.value.status_code == status
+    assert store["heart_signals"] == []
 
 
 # ── the retry that would otherwise double every average ──────────────────────
@@ -351,7 +520,10 @@ def test_the_limit_is_per_caller(store, monkeypatch):
     store["signal_consent"].append({"user_id": "student-2",
                                     "headband_optical_enabled": True,
                                     "camera_enabled": False, "eeg_enabled": False})
-    assert _post_heart([_heart()])["ok"]
+    store["sessions"].append({"id": "session-b", "user_id": "student-2",
+                              "started_at": None, "ended_at": None})
+    assert main.ingest_heart(main.HeartBatch(session_id="session-b", samples=[_heart()]),
+                             request=None)["ok"]
 
 
 def test_the_rate_limit_runs_before_the_session_lookup(store, monkeypatch):
@@ -370,21 +542,8 @@ def test_the_rate_limit_runs_before_the_session_lookup(store, monkeypatch):
     assert len(store["_owner_checks"]) == 1, "the refused request still hit the database"
 
 
-def test_an_unreadable_consent_row_is_not_reported_as_a_refusal(store, monkeypatch):
-    """Both record nothing; only the unreadable one is a fault."""
-    monkeypatch.setattr(main, "_consent",
-                        lambda _uid: {**main._CONSENT_DENIED, "retrieved": False})
-    assert _post_heart([_heart()])["reason"] == "consent unavailable"
-
-    out = main.ingest_face(
-        main.FaceBatch(session_id=SESSION, samples=[{"emotion": "happy"}]),
-        request=None,
-    )
-    assert out["reason"] == "consent unavailable"
-
-
 def test_a_genuine_refusal_says_so(store):
-    """Otherwise the test above passes for the wrong reason."""
+    """A consent row read and declining names the declined sensor; an unread one is a 503 first."""
     _consent(store, eeg_enabled=True)          # both sensors declined, readably
 
     assert _post_heart([_heart()])["reason"] == "no consented heart sensor"
@@ -636,6 +795,8 @@ def test_the_ceiling_is_per_channel_and_shared_by_a_students_sessions(store, mon
         {"ts": f"2026-08-09T10:00:0{i}Z", "emotion": "happy"} for i in range(3)]), request=None)
     assert out["inserted"] == 3
     # Another session of the same student does not.
+    store["sessions"].append({"id": "session-2", "user_id": STUDENT["id"],
+                              "started_at": None, "ended_at": None})
     with pytest.raises(main.HTTPException) as e:
         main.ingest_heart(main.HeartBatch(session_id="session-2", samples=_hearts(3)), request=None)
     assert e.value.status_code == 429
@@ -663,6 +824,9 @@ def test_a_failed_write_gives_its_rows_back(store, monkeypatch):
             if name == "heart_signals":
                 raise RuntimeError("write failed")
             return real.table(name)
+
+        def rpc(self, name, params):
+            return real.rpc(name, params)
 
     monkeypatch.setattr(main, "supabase", _Down())
     with pytest.raises(RuntimeError):

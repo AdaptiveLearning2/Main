@@ -20,26 +20,13 @@ ALLOWLIST = {
         "-- the filter's own structural characters -- and escapes \\ and %, "
         "which are ilike's. The stripping is the control; see the comment there.",
 
-    ("main.py", "student_sessions", "select", "f'session_id, {column}'"):
-        "`column` comes from the module-level _ACTIVITY_SOURCES, never a request.",
-    ("main.py", "student_sessions", "order", "column"):
-        "_ACTIVITY_SOURCES again, in the same loop as the select above.",
-
-    ("main.py", "_measured_only", "filter", "columns[0]"):
-        "Caller passes _ACTIVITY_SOURCES entries; no request value reaches it.",
-    ("main.py", "_measured_only", "or_",
-     "','.join((f'{c}.not.is.null' for c in columns))"):
-        "Same `columns`. The join builds an or-tree from those fixed names.",
-
-    # One constant, four reads, so no copy of the column list can drift.
+    # One constant, three reads, so no copy of the column list can drift.
     ("main.py", "list_sessions", "select", "_SESSION_CLIENT_COLUMNS"):
         "A module-level literal: every `sessions` column except `chart_paths`. "
         "No interpolation and nothing from a request reaches it.",
     ("main.py", "_open_sessions_many", "select", "_SESSION_CLIENT_COLUMNS"):
         "The same constant.",
     ("main.py", "student_sessions", "select", "_SESSION_CLIENT_COLUMNS"):
-        "The same constant.",
-    ("main.py", "my_children", "select", "_SESSION_CLIENT_COLUMNS"):
         "The same constant.",
 
     ("main.py", "_summary_rpc", "rpc", "name"):
@@ -50,9 +37,6 @@ ALLOWLIST = {
         "Column list chosen by the calling endpoint, defaulting to 'user_id'.",
     ("main.py", "_practice_session_or_403", "select", "columns"):
         "As _session_or_403.",
-    ("main.py", "_fetch", "order", "ts_col"):
-        "Timestamp column name, picked by _weekly_signal_report's caller from "
-        "a fixed set.",
     ("LLM_topic_decider.py", "_latest", "select", "columns"):
         "Column list passed by internal callers as a literal.",
     ("chart_archive.py", "rows", "select", "SIGNAL_COLUMNS[table]"):

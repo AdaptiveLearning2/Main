@@ -6,6 +6,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 
 # main.py builds a Supabase client at import time and raises without these.
@@ -286,7 +287,145 @@ class _FakeSupabase:
         params = params or {}
         self.rpc_calls.append((name, params))
         exc = self._rpc_raises(name, params) if self._rpc_raises else None
+        if name not in self._rpc_results and name in _MODELLED_RPCS:
+            # One statement in the database: any table it reads failing fails the call.
+            if exc is None and name == "weekly_signal_days":
+                exc = self._failure(_WEEKLY_TABLES[params["p_channel"]])
+            for table in _RPC_READS.get(name, ()):
+                exc = exc or self._failure(table)
+            data = None if exc else _MODELLED_RPCS[name](self._tables, params)
+            return _Rpc(data, exc)
         return _Rpc(self._rpc_results.get(name, []), exc)
+
+
+def _recent_sessions_rows(tables, params):
+    """What `recent_sessions_for_users` returns for the `sessions` fixture (see its SQL)."""
+    limit = max(1, min(params["p_limit"], 50))
+    out = []
+    for uid in dict.fromkeys(params["p_user_ids"]):
+        mine = sorted((r for r in tables.get("sessions", []) if r.get("user_id") == uid),
+                      key=lambda r: str(r.get("started_at", "")), reverse=True)
+        out += mine[:limit]
+    # A set-returning function promises no order, so the caller must sort; give it the worst.
+    return sorted(out, key=lambda r: str(r.get("started_at", "")))
+
+
+# What Postgres's uuid input accepts: optional braces, 32 hex digits, a hyphen after any group of four.
+_PG_UUID = re.compile(r"(\{)?[0-9A-Fa-f]{4}(?:-?[0-9A-Fa-f]{4}){7}(?(1)\})")
+# The uuid columns `viewer_relationship` compares, per table it reads.
+_RELATIONSHIP_COLUMNS = {"classes": ("id", "teacher_id"), "class_memberships": ("class_id", "student_id"),
+                         "parent_child_links": ("parent_id", "child_id"), "profiles": ("id",)}
+
+
+def _as_uuid(value, held):
+    """`value::uuid` as the key it compares by, or None where the cast fails.
+
+    Every spelling Postgres accepts compares equal; a fixture id some row in `held` carries stands in for a uuid.
+    """
+    if not isinstance(value, str):
+        return None
+    if _PG_UUID.fullmatch(value):
+        return re.sub(r"[{}-]", "", value).lower()
+    return value if value in held else None
+
+
+def _viewer_relationship_result(tables, params):
+    """`viewer_relationship` as its SQL decides (20261003000000), from the tables it reads.
+
+    A non-uuid on either side is None before any branch; then teacher, parent, admin, else None.
+    Self has no branch: main.py decides it before the call, as the SQL expects.
+    """
+    held = {r.get(c) for t, cols in _RELATIONSHIP_COLUMNS.items() for r in tables.get(t, []) for c in cols}
+    viewer, student = _as_uuid(params["p_viewer"], held), _as_uuid(params["p_student"], held)
+    if viewer is None or student is None:
+        return None
+    key = lambda row, col: _as_uuid(row.get(col), held)  # noqa: E731
+    teaches = {key(c, "id") for c in tables.get("classes", []) if key(c, "teacher_id") == viewer} - {None}
+    if any(key(m, "student_id") == student and key(m, "class_id") in teaches
+           for m in tables.get("class_memberships", [])):
+        return "teacher"
+    if any(key(link, "parent_id") == viewer and key(link, "child_id") == student
+           for link in tables.get("parent_child_links", [])):
+        return "parent"
+    if any(key(p, "id") == viewer and p.get("role") == "admin" for p in tables.get("profiles", [])):
+        return "admin"
+    return None
+
+
+_WEEKLY_TABLES = {"cognitive": "cognitive_signals", "emotion": "face_signals",
+                  "heart": "heart_signals"}
+
+
+def _weekly_signal_days_result(tables, params):
+    """What `weekly_signal_days` returns for the signal fixtures (see its SQL; trusted-only
+    where the rollup is). The SQL itself is checked in `scripts/assert_signal_rls.sql`."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(params["p_timezone"])
+    since = main._parse_ts(params["p_since"])
+    channel = params["p_channel"]
+    table = _WEEKLY_TABLES[channel]
+    rows = [r for r in tables.get(table, [])
+            if r.get("user_id") == params["p_student_id"]
+            and main._parse_ts(r.get("ts")) is not None and main._parse_ts(r["ts"]) >= since]
+    rows.sort(key=lambda r: main._parse_ts(r["ts"]))
+
+    def day_of(r):
+        return main._parse_ts(r["ts"]).astimezone(tz).date().isoformat()
+
+    def agg(values, name):
+        nums = [float(v) for v in values if v is not None]
+        return {f"{name}_n": len(nums), f"{name}_sum": sum(nums) if nums else None}
+
+    by_day: dict[str, list] = {}
+    for r in rows:
+        by_day.setdefault(day_of(r), []).append(r)
+    days = []
+    for day, mine in sorted(by_day.items()):
+        d = {"day": day, "rows": len(mine)}
+        if channel == "cognitive":
+            focus = [r.get("focus") for r in mine]
+            stress = [r.get("stress") for r in mine]
+            d.update(agg(focus, "focus"), **agg(stress, "stress"))
+            d["focus_min"] = min((v for v in focus if v is not None), default=None)
+            d["stress_max"] = max((v for v in stress if v is not None), default=None)
+        elif channel == "emotion":
+            d["emotion_rows"] = sum(1 for r in mine if r.get("emotion") is not None)
+            d.update(agg([r.get("attention") for r in mine], "attention"))
+            counts: dict[str, int] = {}
+            for r in mine:
+                if r.get("emotion_trusted") is True and r.get("emotion") is not None:
+                    counts[r["emotion"]] = counts.get(r["emotion"], 0) + 1
+            d["emotion_counts"] = counts
+        else:
+            trusted = [r for r in mine if r.get("trusted") is True]
+            d["trusted_rows"] = len(trusted)
+            d.update(agg([r.get("heart_rate_bpm") for r in trusted], "bpm"),
+                     **agg([r.get("rmssd_ms") for r in trusted], "rmssd"))
+            d["sources"] = sorted({r["source"] for r in trusted if r.get("source")})
+        days.append(d)
+
+    newest_first = rows[::-1]
+    if channel == "cognitive":
+        pick = next((r for r in newest_first if r.get("focus") is not None), None) \
+            or (newest_first[0] if newest_first else None)
+        latest = pick and {k: pick.get(k) for k in ("ts", "focus", "stress", "engagement")}
+    elif channel == "emotion":
+        pick = next((r for r in newest_first if r.get("emotion") is not None), None) \
+            or (newest_first[0] if newest_first else None)
+        latest = pick and {k: pick.get(k) for k in ("ts", "emotion")}
+    else:
+        pick = next((r for r in newest_first if r.get("trusted") is True), None)
+        latest = pick and {k: pick.get(k)
+                           for k in ("ts", "heart_rate_bpm", "rmssd_ms", "source", "trusted")}
+    return {"days": days, "latest": latest or None}
+
+
+# Functions computed from the table fixtures unless a test gives their result outright.
+_MODELLED_RPCS = {"recent_sessions_for_users": _recent_sessions_rows,
+                  "viewer_relationship": _viewer_relationship_result,
+                  "weekly_signal_days": _weekly_signal_days_result}
+# The tables each modelled function reads, so `table_raises` reaches it as it would reach SQL.
+_RPC_READS = {"viewer_relationship": ("class_memberships", "classes", "parent_child_links", "profiles")}
 
 
 class _Rpc:
@@ -306,6 +445,7 @@ STUDENT = {"id": "student-1"}
 OTHER_STUDENT = {"id": "student-2"}
 PARENT = {"id": "parent-1"}
 STRANGER = {"id": "stranger-1"}
+ADMIN = {"id": "admin-1"}
 
 TABLES = {
     "classes": [
@@ -319,6 +459,11 @@ TABLES = {
     ],
     "parent_child_links": [
         {"id": "l1", "parent_id": "parent-1", "child_id": "student-1"},
+    ],
+    # An admin, and a teacher whose role alone must admit nobody.
+    "profiles": [
+        {"id": "admin-1", "role": "admin"},
+        {"id": "teacher-2", "role": "teacher"},
     ],
     "sessions": [
         {"id": "session-1", "user_id": "student-1"},
@@ -363,10 +508,79 @@ def test_stranger_cannot_view_any_student():
     assert main._can_view_student(STRANGER, "student-1") is False
 
 
-def test_the_teacher_check_is_one_read():
-    """And the only read: the admin check comes last, so a teacher's view costs no profile read."""
+@pytest.mark.parametrize("student", ["student-1", "student-2", "11111111-2222-3333-4444-555555555555"])
+def test_an_admin_views_any_student(monkeypatch, student):
+    """Admin is the fourth relationship: no class or link, and nothing logged as refused."""
+    events = _logged_events(monkeypatch)
+    main._verify_can_view_student(ADMIN, student)
+    assert events == []
+
+
+def test_a_teacher_role_without_the_class_is_a_logged_403(monkeypatch):
+    """teacher-2's profile says teacher and they teach class-2: the role alone admits nobody."""
+    events = _logged_events(monkeypatch)
+    with pytest.raises(main.HTTPException) as exc:
+        main._verify_can_view_student(OTHER_TEACHER, "student-1")
+    assert (exc.value.status_code, events) == (403, ["authz_denied"])
+
+
+# assert_signal_rls.sql's own fixture for `viewer_relationship`, in real uuids.
+_REL = {n: str(uuid.uuid5(uuid.NAMESPACE_URL, f"viewer-relationship/{n}")) for n in (
+    "kid", "classmate", "teacher", "other_teacher", "parent", "other_parent", "admin", "cls", "other_cls")}
+_REL_TABLES = {
+    "profiles": [{"id": _REL[n], "role": r} for n, r in (
+        ("kid", "student"), ("classmate", "student"), ("teacher", "teacher"), ("other_teacher", "teacher"),
+        ("parent", "parent"), ("other_parent", "parent"), ("admin", "admin"))],
+    "classes": [{"id": _REL["cls"], "teacher_id": _REL["teacher"]},
+                {"id": _REL["other_cls"], "teacher_id": _REL["other_teacher"]}],
+    "class_memberships": [{"class_id": _REL["cls"], "student_id": _REL["kid"]},
+                          {"class_id": _REL["cls"], "student_id": _REL["classmate"]},
+                          {"class_id": _REL["other_cls"], "student_id": _REL["classmate"]}],
+    "parent_child_links": [{"parent_id": _REL["parent"], "child_id": _REL["kid"]},
+                           {"parent_id": _REL["other_parent"], "child_id": _REL["classmate"]}],
+}
+
+
+def _ask(viewer, student):
+    return _viewer_relationship_result(_REL_TABLES, {"p_viewer": viewer, "p_student": student})
+
+
+@pytest.mark.parametrize("viewer,expected", [
+    ("teacher", "teacher"), ("other_teacher", None), ("parent", "parent"), ("other_parent", None),
+    ("admin", "admin"), ("classmate", None), ("kid", None)])
+def test_the_shared_fake_answers_the_sql_matrix(viewer, expected):
+    """The SQL's matrix, so the fake every viewer test relies on cannot drift from the function."""
+    assert _ask(_REL[viewer], _REL["kid"]) == expected
+
+
+def test_the_shared_fake_casts_its_ids_as_the_sql_does():
+    teacher, kid, admin = _REL["teacher"], _REL["kid"], _REL["admin"]
+    assert teacher.upper() != teacher, "the spelling case needs a hex letter"
+    assert _ask(teacher.upper(), kid.upper()) == "teacher"
+    # A non-uuid is None before any branch, or the admin row would match it.
+    for bad in ("not-a-uuid", "", kid + "0", "1 OR 1=1"):
+        assert _ask(admin, bad) is None, bad
+    assert _ask("not-a-uuid", kid) is None
+
+
+def test_the_relationship_check_is_one_call_and_no_table_read():
+    """Teacher, parent and admin are one statement (assert_signal_rls.sql holds its matrix)."""
     assert main._can_view_student(TEACHER, "student-1") is True
-    assert main.supabase.table_calls == ["class_memberships"]
+    assert main.supabase.table_calls == []
+    assert main.supabase.rpc_calls == [("viewer_relationship",
+                                        {"p_viewer": "teacher-1", "p_student": "student-1"})]
+
+
+def test_a_self_view_asks_the_database_nothing():
+    assert main._can_view_student(STUDENT, "student-1") is True
+    assert (main.supabase.table_calls, main.supabase.rpc_calls) == ([], [])
+
+
+@pytest.mark.parametrize("answer", [None, "", "student", "TEACHER"])
+def test_only_a_relationship_the_function_names_admits(monkeypatch, answer):
+    """Fails closed on anything unexpected, not on falsiness alone."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, rpc_results={"viewer_relationship": answer}))
+    assert main._can_view_student(STRANGER, "student-1") is False
 
 
 def test_the_fake_refuses_an_embed_filter_it_does_not_model():
@@ -399,20 +613,48 @@ def test_a_failed_relationship_read_is_a_503_and_not_a_logged_denial(monkeypatch
     assert (exc.value.status_code, events) == (503, [])
 
 
-@pytest.mark.parametrize("failing", ["profiles", "class_memberships"])
-def test_a_failed_read_does_not_block_what_another_relationship_allows(monkeypatch, failing):
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={failing}))
-    assert main._can_view_student(PARENT, "student-1") is True
-
-
-def test_a_malformed_student_id_is_a_logged_denial_not_an_outage(monkeypatch):
-    """PostgREST refuses a non-uuid with 22P02: no student has that id, so 403, not "try again"."""
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={
-        "class_memberships": _not_a_uuid(), "parent_child_links": _not_a_uuid()}))
+@pytest.mark.parametrize("viewer", [TEACHER, ADMIN], ids=["teacher", "admin"])
+def test_a_malformed_student_id_is_a_logged_denial_not_an_outage(monkeypatch, viewer):
+    """The function answers null for a non-uuid, an admin's included: 403, not "try again"."""
     events = _logged_events(monkeypatch)
     with pytest.raises(main.HTTPException) as exc:
-        main._verify_can_view_student(TEACHER, "not-a-uuid")
+        main._verify_can_view_student(viewer, "not-a-uuid")
     assert (exc.value.status_code, events) == (403, ["authz_denied"])
+    # The raw id goes to the function, which decides; main.py does not pre-screen it.
+    assert main.supabase.rpc_calls == [("viewer_relationship",
+                                        {"p_viewer": viewer["id"], "p_student": "not-a-uuid"})]
+
+
+def test_a_missing_relationship_function_names_its_migration(monkeypatch, capsys):
+    """Deployed ahead of 20261003000000, every student read is a 503; the log has to say why."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, rpc_raises=lambda name, _p: (
+        RuntimeError("{'code': 'PGRST202', 'message': 'no function'}")
+        if name == "viewer_relationship" else None)))
+    with pytest.raises(main.HTTPException) as exc:
+        main._verify_can_view_student(TEACHER, "student-1")
+    assert exc.value.status_code == 503
+    assert "20261003000000" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("viewer", [TEACHER, PARENT, ADMIN], ids=["teacher", "parent", "admin"])
+def test_a_missing_relationship_function_is_a_503_and_never_an_allow(monkeypatch, capsys, viewer):
+    """Code ahead of its migration fails closed: no relationship is assumed, and nothing is read."""
+    missing = APIError({"code": "PGRST202", "details": None, "hint": None, "message":
+                        "Could not find the function public.viewer_relationship(p_student, p_viewer)"})
+    fake = _FakeSupabase({**TABLES, "signal_consent": [_CONSENT_ALL]},
+                         rpc_results={"student_signal_summary": [_SUMMARY_ROW]},
+                         rpc_raises=lambda name, _p: missing if name == "viewer_relationship" else None)
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: viewer)
+    events = _logged_events(monkeypatch)
+    with pytest.raises(main.HTTPException) as exc:
+        main.student_signal_summary("student-1", None)
+    assert (exc.value.status_code, events) == (503, [])
+    assert [name for name, _ in fake.rpc_calls] == ["viewer_relationship"], "the aggregate never ran"
+    # This site's own cost; the caller is told to try again, so never "refused".
+    log = capsys.readouterr().out
+    assert "[rpc] viewer_relationship is missing from the database -- apply 20261003000000" in log
+    assert "every teacher, parent and admin view of a student is a 503" in log and "refused" not in log
 
 
 def test_a_failed_access_read_asks_the_client_to_retry(monkeypatch):
@@ -576,37 +818,39 @@ def test_weekly_report_summary_renders_ratios_as_percentages(monkeypatch):
     assert "0.72%" not in report["summary"]
 
 
-def test_weekly_report_flags_days_it_could_not_retrieve(monkeypatch):
-    """The row cap is per table, so face rows must not hide cognitive's cutoff."""
-    # Only cognitive is capped: it reaches 3 days back while face covers 7.
-    cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5, "stress": 0.4, "engagement": 0.5}
-           for d in range(0, 7)]
-    face = [{"user_id": "student-1", "ts": _ts(d), "attention": 0.8} for d in range(0, 7)]
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(
-        _signal_tables(cog, face), max_rows={"cognitive_signals": 3}))
+def _weekly_channels(fake) -> set:
+    """The channels a report asked `weekly_signal_days` for: the request, not the payload."""
+    return {p["p_channel"] for name, p in fake.rpc_calls if name == "weekly_signal_days"}
+
+
+def test_the_weekly_report_counts_every_reading_past_the_row_ceiling(monkeypatch):
+    """A raw read stops at PostgREST's 1000 rows (~17 minutes of EEG); an aggregate does not."""
+    # 50 readings, a ceiling of 10 on any table read: only an aggregate sees all 50.
+    cog = [{"user_id": "student-1", "ts": _ts(d % 7, hour=8 + d // 7), "focus": 0.2 + 0.01 * d,
+            "stress": 0.4} for d in range(50)]
+    # The oldest reading (six days back, 08:00) holds both extremes: a newest-first cap drops it.
+    cog[6].update(focus=0.1, stress=0.95)
+    fake = _FakeSupabase(_signal_tables(cog), max_rows=10)
+    monkeypatch.setattr(main, "supabase", fake)
     report = main._weekly_signal_report("student-1")
 
-    assert report["truncated"] is True
-    days = {d["date"]: d for d in report["daily"]}
-    unretrieved = [d for d in report["daily"] if not d["cognitive_retrieved"]]
-    assert unretrieved, "older days must be flagged, not silently nulled"
-    for d in unretrieved:
-        assert d["focus"] is None
-        assert d["face_retrieved"] is True   # face data for that day is real
-        assert d["attention"] is not None
-    covered = days[_ts(0)[:10]]
-    assert covered["cognitive_retrieved"] is True
+    assert report["sample_counts"]["cognitive"] == 50
+    assert report["truncated"] is False, "only the sessions read can be cut"
+    expected = round(sum(r["focus"] for r in cog) / len(cog), 2)
+    assert report["averages"]["focus"] == expected
+    assert report["highlights"]["lowest_focus"] == 0.1, "the oldest reading counts too"
+    assert report["highlights"]["highest_stress"] == 0.95
+    assert all(d["cognitive_retrieved"] for d in report["daily"])
 
 
-def test_weekly_report_detects_truncation_from_count_not_row_length(monkeypatch):
-    """db-max-rows can cap below _REPORT_ROW_CAP, so row length cannot detect it."""
-    cog = [{"user_id": "student-1", "ts": _ts(d % 7), "focus": 0.5} for d in range(50)]
-    monkeypatch.setattr(main, "supabase",
-                        _FakeSupabase(_signal_tables(cog), max_rows=10))
-    report = main._weekly_signal_report("student-1")
-    assert len(cog) < main._REPORT_ROW_CAP, "fixture must stay under our own cap"
-    assert report["truncated"] is True
-    assert report["sample_counts"]["cognitive"] == 10
+def test_the_weekly_report_reads_signals_as_aggregates_not_rows(monkeypatch):
+    """One aggregate call per consented channel, and no signal table read row by row."""
+    fake = _FakeSupabase(_signal_tables([{"user_id": "student-1", "ts": _ts(1), "focus": 0.5}]))
+    monkeypatch.setattr(main, "supabase", fake)
+    main._weekly_signal_report("student-1")
+
+    assert _weekly_channels(fake) == {"cognitive", "emotion", "heart"}
+    assert not {"cognitive_signals", "face_signals", "heart_signals"} & set(fake.table_calls)
 
 
 def test_weekly_report_reports_session_truncation(monkeypatch):
@@ -619,24 +863,6 @@ def test_weekly_report_reports_session_truncation(monkeypatch):
 
     assert report["sample_counts"]["sessions"] == 10
     assert report["truncated"] is True
-
-
-def test_weekly_report_keeps_a_day_whose_sessions_survived_the_cap(monkeypatch):
-    """Sessions have their own cap, so a day with trimmed signals may still count sessions."""
-    cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5} for d in range(0, 7)]
-    sessions = [{"id": f"s{d}", "user_id": "student-1", "started_at": _ts(d)}
-                for d in range(0, 7)]
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(
-        _signal_tables(cog, session_rows=sessions), max_rows={"cognitive_signals": 3}))
-    # Face off, so only the session count can keep these days.
-    report = main._weekly_signal_report("student-1", include_emotion=False)
-
-    trimmed = [d for d in report["daily"] if d["cognitive_retrieved"] is False]
-    assert trimmed, "days beyond cognitive's reach must still be reported"
-    for d in trimmed:
-        assert d["focus"] is None            # not read at all
-        assert d["sessions_retrieved"] is True
-        assert d["sessions"] == 1            # but the session count was read
 
 
 def test_weekly_report_nulls_a_day_whose_sessions_were_cut(monkeypatch):
@@ -653,35 +879,8 @@ def test_weekly_report_nulls_a_day_whose_sessions_were_cut(monkeypatch):
         assert d["sessions"] is None, "0 would read as a day with no sessions"
 
 
-# ── the day the cap cut into ─────────────────────────────────────────────
-# The cap trims oldest-first; the oldest day returned is partial and is withheld.
-
-def test_weekly_report_withholds_the_day_the_cap_cut_into(monkeypatch):
-    """Three readings a day, cap of four: day 1 keeps one reading and is withheld."""
-    cog = [{"user_id": "student-1", "ts": _ts(d, hour=h),
-            "focus": 0.5, "stress": 0.4, "engagement": 0.6}
-           for d in range(0, 3) for h in (9, 12, 15)]
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(
-        _signal_tables(cog), max_rows={"cognitive_signals": 4}))
-    report = main._weekly_signal_report("student-1", include_emotion=False)
-
-    assert report["sample_counts"]["cognitive"] == 4, "fixture must actually be cut"
-    days = {d["date"]: d for d in report["daily"]}
-    whole, boundary, beyond = _ts(0)[:10], _ts(1)[:10], _ts(2)[:10]
-
-    assert days[whole]["cognitive_retrieved"] is True
-    assert days[whole]["focus"] == 0.5
-
-    # Withheld, but kept in the series because something was read for it.
-    assert boundary in days, "a partly-read day must not be dropped as absent"
-    assert days[boundary]["cognitive_retrieved"] is False
-    assert days[boundary]["focus"] is None
-    assert days[boundary]["stress"] is None
-    assert days[boundary]["engagement"] is None
-
-    assert days[beyond]["cognitive_retrieved"] is False
-    assert days[beyond]["focus"] is None
-
+# ── the day the sessions cap cut into ────────────────────────────────────
+# Sessions are still read as capped rows, oldest-first; that day is partial and withheld.
 
 def test_weekly_report_withholds_a_session_count_the_cap_cut_into(monkeypatch):
     """A count over a fraction of a day is simply wrong, with nothing to say so."""
@@ -699,22 +898,6 @@ def test_weekly_report_withholds_a_session_count_the_cap_cut_into(monkeypatch):
     # Not 1, which is what a third of the day's rows counts to.
     assert days[boundary]["sessions_retrieved"] is False
     assert days[boundary]["sessions"] is None
-
-
-def test_a_cap_landing_on_a_day_boundary_understates_rather_than_overstates(monkeypatch):
-    """A cut exactly between days is indistinguishable from mid-day, so it resolves conservatively.
-
-    A complete day may be reported partial, never the reverse. Deliberate, not an off-by-one.
-    """
-    cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5} for d in range(0, 5)]
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(
-        _signal_tables(cog), max_rows={"cognitive_signals": 3}))
-    report = main._weekly_signal_report("student-1", include_emotion=False)
-
-    days = {d["date"]: d for d in report["daily"]}
-    assert days[_ts(0)[:10]]["cognitive_retrieved"] is True
-    assert days[_ts(2)[:10]]["cognitive_retrieved"] is False
-    assert days[_ts(2)[:10]]["focus"] is None
 
 
 def test_weekly_report_counts_every_session_not_just_the_retrieved_rows(monkeypatch):
@@ -801,20 +984,6 @@ def test_a_failed_face_read_is_not_the_opt_out(monkeypatch):
     assert opted_out["retrieved"]["face"] is None
     # Neither an absence nor a failure is assertable about a read never made.
     assert "facial" not in opted_out["summary"].lower()
-
-
-def test_a_read_trimmed_to_nothing_is_not_treated_as_untrimmed(monkeypatch):
-    """A server cap of zero must not fall into the "nothing was trimmed" branch."""
-    cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5} for d in range(0, 7)]
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(
-        _signal_tables(cog, [], []), max_rows={"cognitive_signals": 0}))
-    report = main._weekly_signal_report("student-1", include_emotion=False)
-
-    assert report["truncated"] is True
-    assert report["sample_counts"]["cognitive"] == 0
-    for d in report["daily"]:
-        assert d["cognitive_retrieved"] is False
-        assert d["focus"] is None
 
 
 def test_a_quiet_week_is_still_reported_as_one(monkeypatch):
@@ -921,7 +1090,8 @@ def test_a_failed_batch_summary_is_distinguishable_from_an_empty_one(monkeypatch
 def test_children_endpoint_marks_a_failed_batch_summary_as_unretrieved(monkeypatch):
     """The parent dashboard renders "no data yet" straight off this payload."""
     def boom(name, params):
-        return RuntimeError("connection reset")
+        # The summary read only; the sessions read is another function and another test.
+        return None if name == "recent_sessions_for_users" else RuntimeError("connection reset")
     monkeypatch.setattr(main, "supabase", _FakeSupabase({
         "parent_child_links": [{"parent_id": "parent-1", "child_id": "student-1",
                                 "created_at": "2026-01-01"}],
@@ -1039,12 +1209,18 @@ def _summary_fake(monkeypatch, viewer, row=None, consent=None):
     return fake
 
 
+def _summary_params(fake) -> dict:
+    """The aggregate's own call; the viewer check is a call of its own before it."""
+    return next(p for name, p in fake.rpc_calls if name == "student_signal_summary")
+
+
 def test_signal_summary_endpoint_rejects_a_viewer_with_no_relationship(monkeypatch):
     fake = _summary_fake(monkeypatch, STRANGER)
     with pytest.raises(main.HTTPException) as exc:
         main.student_signal_summary("student-1", None)
     assert exc.value.status_code == 403
-    assert fake.rpc_calls == [], "access is decided before the aggregate runs"
+    assert [name for name, _ in fake.rpc_calls] == ["viewer_relationship"], \
+        "access is decided before the aggregate runs"
 
 
 def test_signal_summary_endpoint_allows_a_teacher_of_the_students_class(monkeypatch):
@@ -1077,22 +1253,22 @@ def test_signal_summary_endpoint_counts_the_whole_window_not_a_row_cap(monkeypat
 def test_signal_summary_endpoint_threads_the_opt_out(monkeypatch):
     fake = _summary_fake(monkeypatch, TEACHER)
     main.student_signal_summary("student-1", None, include_face=False)
-    assert fake.rpc_calls[0][1]["p_include_emotion"] is False
+    assert _summary_params(fake)["p_include_emotion"] is False
 
     fake.rpc_calls.clear()
     main.student_signal_summary("student-1", None)
-    assert fake.rpc_calls[0][1]["p_include_emotion"] is True, "included unless asked otherwise"
+    assert _summary_params(fake)["p_include_emotion"] is True, "included unless asked otherwise"
 
 
 def test_signal_summary_endpoint_clamps_the_day_range(monkeypatch):
     """Same bounds as the weekly report: no unbounded scan from the query string."""
     fake = _summary_fake(monkeypatch, TEACHER)
     main.student_signal_summary("student-1", None, days=9999)
-    assert fake.rpc_calls[0][1]["p_days"] == 30
+    assert _summary_params(fake)["p_days"] == 30
 
     fake.rpc_calls.clear()
     main.student_signal_summary("student-1", None, days=0)
-    assert fake.rpc_calls[0][1]["p_days"] == 1
+    assert _summary_params(fake)["p_days"] == 1
 
 
 def test_signal_summary_carries_the_dominant_emotion(monkeypatch):
@@ -1154,6 +1330,13 @@ class _OwnedSessionClient:
 
         class _R:
             def execute(self):
+                if name == "record_answer":
+                    # As the function answers (assert_signal_rls.sql): refused before any write.
+                    if params["p_user_id"] != client.owner:
+                        return type("R", (), {"data": {"status": "forbidden", "owner": client.owner}})()
+                    client.writes.append(("session_answers", "insert", params))
+                    return type("R", (), {"data": {"status": "ok", "topic": None,
+                                                   "topic_error": None, "counters_error": None}})()
                 client.writes.append(("rpc", name))
                 return type("R", (), {"data": None})()
 
@@ -1189,6 +1372,9 @@ class _OwnedSessionClient:
         return _Q()
 
 
+_ANSWERED_QUESTION = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
+
+
 @pytest.mark.parametrize("endpoint", ["answer", "end"])
 def test_a_student_may_not_touch_another_students_session(monkeypatch, endpoint):
     client = _OwnedSessionClient("student-1")
@@ -1202,7 +1388,7 @@ def test_a_student_may_not_touch_another_students_session(monkeypatch, endpoint)
         if endpoint == "answer":
             main.record_answer(
                 session_id="session-1",
-                payload=main.AnswerPayload(question_id="q-1", selected_index=0,
+                payload=main.AnswerPayload(question_id=_ANSWERED_QUESTION, selected_index=0,
                                            correct=True),
                 request=None)
         else:
@@ -1228,7 +1414,7 @@ def test_the_owner_is_still_allowed(monkeypatch, endpoint):
     if endpoint == "answer":
         out = main.record_answer(
             session_id="session-1",
-            payload=main.AnswerPayload(question_id="q-1", selected_index=0,
+            payload=main.AnswerPayload(question_id=_ANSWERED_QUESTION, selected_index=0,
                                        correct=True),
             request=None)
         assert any(w[:2] == ("session_answers", "insert") for w in client.writes)
@@ -1559,6 +1745,7 @@ def test_report_without_face_never_queries_face_signals(monkeypatch):
     monkeypatch.setattr(main, "supabase", fake)
     report = main._weekly_signal_report("student-1", include_emotion=False)
 
+    assert _weekly_channels(fake) == {"cognitive", "heart"}
     assert "face_signals" not in fake.table_calls
     assert report["face_included"] is False
     assert report["averages"]["face_attention"] is None
@@ -1593,7 +1780,7 @@ def test_report_with_face_still_included_by_default(monkeypatch):
     ))
     monkeypatch.setattr(main, "supabase", fake)
     report = main._weekly_signal_report("student-1")
-    assert "face_signals" in fake.table_calls
+    assert "emotion" in _weekly_channels(fake)
     assert report["face_included"] is True
     assert report["averages"]["face_attention"] == 0.9
 
@@ -1624,7 +1811,7 @@ def test_strategy_basis_aggregates_instead_of_reading_signal_rows(monkeypatch, s
 
     assert "cognitive_signals" not in fake.table_calls
     assert "face_signals" not in fake.table_calls
-    assert [name for name, _ in fake.rpc_calls] == ["student_signal_summary"]
+    assert [name for name, _ in fake.rpc_calls if name != "viewer_relationship"] == ["student_signal_summary"]
     assert out["basis"]["averages"]["focus"] == 0.7
 
 

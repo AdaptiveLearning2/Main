@@ -1,6 +1,8 @@
 import { render, screen, cleanup, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { LiveSignalSummary, WeeklySignalReport, SignalTrend, StrategyPanel, pct } from './SignalPanel'
+import { LiveSignalSummary, WeeklySignalReport, SignalTrend, StrategyPanel } from './SignalPanel'
+import { pct } from '../../lib/signalFormat'
+import { buildWeeklyReport } from '../../test/fixtures/signalSummary'
 
 // Signals cross the wire as 0..1 ratios; unscaled, focus 0.72 prints "1%".
 
@@ -134,20 +136,62 @@ describe('WeeklySignalReport', () => {
     expect(screen.getByText(/could not be retrieved, not because there was no activity/i)).toBeInTheDocument()
   })
 
-  it('counts a day whose sessions were cut as unretrieved', () => {
-    // Sessions have their own query and cap, so a day can lose only them.
-    const truncated = {
+  it('explains an unread signal day even when no sessions were cut', () => {
+    // A failed rollup read past expiry: unrelated to `truncated`, and otherwise a silent quiet gap.
+    render(<WeeklySignalReport report={{
       ...report,
-      truncated: true,
+      truncated: false,
       daily: [
-        { date: '2026-07-15', focus: 0.7, stress: 0.3, attention: 0.8,
-          cognitive_retrieved: true, face_retrieved: true,
-          sessions: null, sessions_retrieved: false },
+        { date: '2026-07-15', focus: null, stress: null, cognitive_retrieved: false, face_retrieved: true },
         ...report.daily,
       ],
-    }
-    render(<WeeklySignalReport report={truncated} />)
-    expect(screen.getByText(/could not be retrieved, not because there was no activity/i)).toBeInTheDocument()
+    }} />)
+    expect(screen.getByText(/1 day is shown as a gap because the data could not be retrieved/i)).toBeInTheDocument()
+    expect(screen.queryByText(/retrieval limit/i)).not.toBeInTheDocument()
+  })
+
+  describe('when the sessions read was cut', () => {
+    // `truncated` is the sessions read alone; the signal figures are whole-week aggregates.
+    const OLD_NOTE = /most recent samples only/i
+    const cut = (sessionsRecorded, rowsRead, extra = {}) => buildWeeklyReport({
+      truncated: true,
+      sessions_recorded: sessionsRecorded,
+      sample_counts: { ...buildWeeklyReport().sample_counts, sessions: rowsRead },
+      ...extra,
+    })
+
+    it('says the Sessions total is still exact when the count came back', () => {
+      render(<WeeklySignalReport report={cut(137, 100)} />)
+      expect(screen.getByText(/Sessions total is still the full count/i)).toBeInTheDocument()
+      expect(screen.getByText(/signal figures are not affected/i)).toBeInTheDocument()
+      expect(screen.queryByText(/counts only the sessions read/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(OLD_NOTE)).not.toBeInTheDocument()
+    })
+
+    it('says the Sessions total counts only the sessions read when no count came back', () => {
+      // Without the count the backend reports the rows it read, so the two are equal.
+      render(<WeeklySignalReport report={cut(100, 100)} />)
+      expect(screen.getByText(/Sessions total counts only the sessions read/i)).toBeInTheDocument()
+      expect(screen.getByText(/signal figures are not affected/i)).toBeInTheDocument()
+      expect(screen.queryByText(/still the full count/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(OLD_NOTE)).not.toBeInTheDocument()
+    })
+
+    it('does not call a day that lost only its session count a gap', () => {
+      // Per-day session counts are not drawn on this chart; that day's signals are whole.
+      render(<WeeklySignalReport report={cut(137, 100, {
+        daily: [{ date: '2026-07-15', focus: 0.7, stress: 0.3,
+                  cognitive_retrieved: true, face_retrieved: true, heart_retrieved: true,
+                  sessions: null, sessions_retrieved: false }],
+      })} />)
+      expect(screen.queryByText(/shown as a gap/i)).not.toBeInTheDocument()
+    })
+
+    it('says nothing about a limit when nothing was cut', () => {
+      render(<WeeklySignalReport report={buildWeeklyReport({ truncated: false })} />)
+      expect(screen.queryByText(/retrieval limit/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(OLD_NOTE)).not.toBeInTheDocument()
+    })
   })
 
   it('renders without data', () => {

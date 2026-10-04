@@ -14,7 +14,7 @@ export function useGradeTopicsState(grade, attempt = 0) {
   useEffect(() => {
     if (!known) return
     let cancelled = false
-    apiFetch(path)
+    apiFetch(path, { cache: true })
       .then(rows => { if (!cancelled) setLoaded({ key, rows: rows || [], error: null }) })
       .catch(e => { if (!cancelled) setLoaded({ key, rows: null, error: e || new Error('topics') }) })
     return () => { cancelled = true }

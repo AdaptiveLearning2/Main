@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { m, AnimatePresence } from 'framer-motion'
 import { supabase } from '../../lib/supabase'
 import { Users, Search, ChevronDown, Flame, Smile, Target, TrendingUp, Zap, Heart, Activity } from 'lucide-react'
 import HideSensorDataToggle from '../../components/common/HideSensorDataToggle'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 import { apiFetch } from '../../lib/api'
-import { offLabel } from '../../components/signals/SignalPanel'
+import { offLabel } from '../../lib/signalFormat'
 import { stagger } from '../../lib/stagger'
 
 // Matches the weekly report's window.
@@ -220,12 +220,12 @@ export default function Students() {
 
   return (
     <div className="p-6 lg:p-8 pb-12">
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+      <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <h1 className="text-3xl font-black text-gray-900 dark:text-white flex items-center gap-3">
           <Users className="text-violet-600" size={28} /> Students
         </h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">Students enrolled in your classes.</p>
-      </motion.div>
+      </m.div>
 
       <div className="relative mb-6 max-w-sm">
         <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-600 dark:text-gray-400" />
@@ -280,7 +280,7 @@ export default function Students() {
             const stats = statsCache[s.id]
             return (
               <div key={s.id} className="border-b border-gray-50 dark:border-gray-800 last:border-0">
-                <motion.button
+                <m.button
                   type="button"
                   onClick={() => toggleExpand(s.id)}
                   initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.03) }}
@@ -299,15 +299,15 @@ export default function Students() {
                   <p className="text-sm text-gray-500 dark:text-gray-400">{joined}</p>
                   <div className="flex justify-end items-center gap-3">
                     <span className="text-xs font-bold px-2.5 py-1 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">Student</span>
-                    <motion.span animate={{ rotate: isOpen ? 180 : 0 }} transition={{ duration: 0.2 }}>
+                    <m.span animate={{ rotate: isOpen ? 180 : 0 }} transition={{ duration: 0.2 }}>
                       <ChevronDown size={16} className="text-gray-600 dark:text-gray-400" />
-                    </motion.span>
+                    </m.span>
                   </div>
-                </motion.button>
+                </m.button>
 
                                 <AnimatePresence initial={false}>
                   {isOpen && (
-                    <motion.div
+                    <m.div
                       initial={{ height: 0, opacity: 0 }}
                       animate={{ height: 'auto', opacity: 1 }}
                       exit={{ height: 0, opacity: 0 }}
@@ -445,7 +445,7 @@ export default function Students() {
                           </>
                         )}
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
                 </AnimatePresence>
               </div>

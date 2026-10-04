@@ -114,9 +114,15 @@ well as the flat already-mapped one, and maps the first itself. Don't add a divi
   committed by then; a throw — or a `task.cancel()` during the request — restores the batch and the
   re-post duplicates them. All three signal tables now carry a dedupe key, so a re-post is a no-op —
   but this rule stands on its own: the key makes the *rows* idempotent, and nothing makes the local
-  accounting so. `stop()` therefore *asks* the loop to finish and awaits it, cancelling only once
-  `SHUTDOWN_BUDGET` is spent, and is bounded by the clock rather than by an attempt cap (12 attempts
-  × 3 channels × a 4 s timeout is ~144 s on a Ctrl-C). A batch whose fate is unknown is
+  accounting so. `stop()` therefore *asks* the loop to finish and awaits it, cancelling it, or the final
+  flush, only once `SHUTDOWN_BUDGET` is spent. The budget starts before the lifecycle lock is taken, so a
+  start or stop holding the lock cannot double it; spent waiting there, `stop()` logs that, changes
+  nothing and returns False, and `/push/stop` answers 503 rather than `stopped`. So the call is bounded by the clock rather than by an attempt cap (12 attempts × 3 channels × a
+  4 s timeout is ~144 s on a Ctrl-C), overrunning only by the half second the loop is always given, and the
+  kit's grace is built on that bound. A cancellation aimed at the caller, as uvicorn's drain cancels a
+  request still running, is re-raised. A cancelled `/push/stop` keeps the queue and token, and logs the
+  count, because the shutdown's own `stop()` runs next with its own budget and flushes them; every other
+  cancelled stop forgets the session. A batch whose fate is unknown is
   `unaccounted`, which is neither `recorded` nor `dropped_locally`.
 - **Delivery is counted from the backend's `inserted`, not from what was sent.** The endpoint drops
   samples for a sensor the student declined; counting sent would report a healthy session that
@@ -329,10 +335,12 @@ read from `kit.json`, which `src/kit/config.py` refuses for exactly the reasons 
   `Global\AdaptiveLearningSensorsStop` and returns only once the copy has exited; the installer waits on that.
 - **Two supervised children.** The sidecar runs as the launcher's own exe with `--sidecar`, so a crash in camera code
   is restarted like a bridge crash; it watches the same stop event and shuts itself down, flushing its push client,
-  with 10 s before it is ended. The restart policy is this section's in Python, stopping on 0 and on 78. Past the
-  budget it retries every 300 s rather than giving up, since nobody is watching. Each run logs to its own file; the
-  newest ten are kept. matplotlib's font list lives in the data folder: PyInstaller gives each process a new temp
-  folder, so mediapipe's import rebuilt it at every lesson's first camera frame.
+  with 15 s before it is ended, which `sensors.log` records: at most 2 s of uvicorn waiting for open connections, then
+  the push client's 10 s `SHUTDOWN_BUDGET`, then the exit. `--stop` waits 20 s, since past that the installer kills
+  the copy. The restart policy is this section's in Python, stopping on 0 and on 78. Past its restart budget it
+  retries every 300 s rather than giving up, since nobody is watching. Each run logs to its own file; the newest ten
+  are kept. matplotlib's font list lives in the data folder: PyInstaller gives each process a new temp folder, so
+  mediapipe's import rebuilt it at every lesson's first camera frame.
 - **`--self-test`** runs before every installer is built: the models on a real portrait, the sidecar on port 0, and
   the bridge started, authenticated and required to answer `bridge_mode: libmuse` with its C++ runtime loaded from
   `bridge\` itself. A blank frame cannot tell a working model from one that never detects, and a launch that works

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { m, AnimatePresence } from 'framer-motion'
 import { HelpCircle, Search, Filter, X, ChevronDown } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { fetchQuestionCount, fetchQuestionsCached } from '../../lib/questionsCache'
@@ -32,12 +32,12 @@ function QuestionModal({ question, onClose }) {
   const correct = correctIndex(question, options)
 
   return (
-    <motion.div
+    <m.div
       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
       onClick={onClose}
     >
-      <motion.div
+      <m.div
         ref={panel}
         role="dialog"
         aria-modal="true"
@@ -81,8 +81,8 @@ function QuestionModal({ question, onClose }) {
           </p>
         )}
         <p className="text-xs text-gray-600 dark:text-gray-400">ID: {question.id}</p>
-      </motion.div>
-    </motion.div>
+      </m.div>
+    </m.div>
   )
 }
 
@@ -155,7 +155,7 @@ export default function Questions() {
 
   useEffect(() => {
     // Failure costs only the student filter, so this just logs.
-    apiFetch('/api/classes')
+    apiFetch('/api/classes', { cache: true })
       .then(rows => setClasses(rows || []))
       .catch(e => console.error('Failed to load classes:', e))
   }, [])
@@ -188,7 +188,7 @@ export default function Questions() {
 
   return (
     <div className="p-6 lg:p-8 pb-12">
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+      <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <h1 className="text-3xl font-black text-gray-900 dark:text-white flex items-center gap-3">
           <HelpCircle className="text-violet-600" size={28} /> Question Bank
         </h1>
@@ -204,7 +204,7 @@ export default function Questions() {
                 : `${bankTotal} questions total`
                   + (bankTotal > questions.length ? ` · showing the newest ${questions.length}` : '')}
         </p>
-      </motion.div>
+      </m.div>
 
       <div className="flex flex-wrap gap-3 mb-6">
         <div className="relative">
@@ -284,7 +284,7 @@ export default function Questions() {
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden mb-4">
             {paginated.map((q, i) => (
               // Bank rows have `id`, per-student rows `question_id`; same id.
-              <motion.button key={q.id || q.question_id}
+              <m.button key={q.id || q.question_id}
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: stagger(i, 0.025) }}
                 whileHover={{ x: 3 }}
                 // The student payload has no `options`, so link to the session review.
@@ -312,7 +312,7 @@ export default function Questions() {
                   </div>
                 </div>
                 <span className="text-xs text-gray-600 dark:text-gray-400 flex-shrink-0 pt-0.5">→</span>
-              </motion.button>
+              </m.button>
             ))}
           </div>
 

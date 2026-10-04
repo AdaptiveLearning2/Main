@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { Users, Hash, GraduationCap } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
@@ -18,7 +18,7 @@ export default function JoinClass() {
   const [classesFailed, setClassesFailed]   = useState(false)
 
   const loadClasses = () => {
-    apiFetch('/api/classes')
+    apiFetch('/api/classes', { cache: true })
       .then(c => { setClasses(c); setClassesFailed(false); setLoadingClasses(false) })
       // Set classesFailed, or a failed read looks like "no classes joined yet".
       .catch(e => { console.error('Failed to load classes:', e); setClassesFailed(true); setLoadingClasses(false) })
@@ -36,7 +36,7 @@ export default function JoinClass() {
       .then(async (cls) => {
         toast.success(`Joined "${cls.name}"! 🎉`)
         setCode('')
-        setClasses(await apiFetch('/api/classes'))
+        setClasses(await apiFetch('/api/classes', { cache: true }))
       })
       .catch(err => toast.error(err.message || 'Could not join class'))
       .finally(() => setLoading(false))
@@ -44,14 +44,14 @@ export default function JoinClass() {
 
   return (
     <div className="p-6 lg:p-8 pb-12 max-w-2xl">
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+      <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <h1 className="text-3xl font-black text-gray-900 dark:text-white flex items-center gap-3">
           <Users className="text-indigo-600" size={28} /> Join a Class
         </h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">Enter the code your teacher gave you.</p>
-      </motion.div>
+      </m.div>
 
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
+      <m.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
         className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm mb-8">
         <form onSubmit={handleJoin} className="flex gap-3">
           <div className="relative flex-1">
@@ -61,13 +61,13 @@ export default function JoinClass() {
               className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:text-white outline-none transition tracking-widest font-mono uppercase"
               placeholder="ABCD2345" maxLength={8} />
           </div>
-          <motion.button type="submit" disabled={loading || !CODE_LENGTHS.includes(code.length)}
+          <m.button type="submit" disabled={loading || !CODE_LENGTHS.includes(code.length)}
             whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
             className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-xl font-bold shadow disabled:opacity-50 disabled:cursor-not-allowed transition whitespace-nowrap">
             {loading ? '...' : 'Join Class'}
-          </motion.button>
+          </m.button>
         </form>
-      </motion.div>
+      </m.div>
 
       <h2 className="text-lg font-black text-gray-900 dark:text-white mb-4">My Classes</h2>
       {loadingClasses ? (
@@ -82,7 +82,7 @@ export default function JoinClass() {
       ) : (
         <div className="space-y-3">
           {classes.map((c, i) => (
-            <motion.div key={c.id}
+            <m.div key={c.id}
               initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.05) }}
               className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-4 shadow-sm flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -100,7 +100,7 @@ export default function JoinClass() {
                 </div>
               </div>
               <span className="text-xs font-bold text-green-600 bg-green-100 dark:bg-green-900/30 dark:text-green-400 px-3 py-1 rounded-full">Enrolled ✓</span>
-            </motion.div>
+            </m.div>
           ))}
         </div>
       )}

@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from supabase_client import get_client, pooled_http
 from postgrest.types import ReturnMethod  # supabase pins this sibling
 from typing import Any, NamedTuple
+from uuid import UUID
 
 import LLM_topic_decider
 import chart_archive
@@ -60,7 +61,6 @@ async def _lifespan(app: FastAPI):
             for shutdown in (safe_solve.stop_startup_probe,
                              _shutdown_strategy_pool,
                              _shutdown_chart_summary_pool,
-                             _shutdown_admin_live_pool,
                              _shutdown_prefetch_pool,
                              chart_archive.shutdown_pool):
                 try:
@@ -537,6 +537,22 @@ def _read_failed(detail: str) -> HTTPException:
     return HTTPException(503, detail, headers={"Retry-After": str(_READ_RETRY_AFTER_SEC)})
 
 
+def _missing_rpc(e: Exception, function: str, migration: str, consequence: str) -> bool:
+    """Whether `e` is PostgREST's PGRST202 for `function`; if so, logs the migration and the site's `consequence`.
+
+    One naming no function is the call the site made; one naming another is not this one.
+    The caller keeps its own raise or return: a missing function is one more failed read.
+    """
+    if "PGRST202" not in str(e):
+        return False
+    message = getattr(e, "message", None)     # APIError's own field; the hint can name others
+    named = re.findall(r"\bpublic\.(\w+)", message if isinstance(message, str) else str(e))
+    if named and function not in named:
+        return False
+    print(f"[rpc] {function} is missing from the database -- apply {migration}; {consequence}: {e}")
+    return True
+
+
 def _row_or_404(query, what: str) -> dict:
     """Run a `.single()` lookup: 404 when no row matches, 503 when the read fails.
 
@@ -639,9 +655,7 @@ def _profiles_many(uids) -> dict[str, dict]:
 
 # ─── biosignal reporting ─────────────────────────────────────────────────
 
-# Rows per signal table per report; ordered ts DESC, so the cap trims the OLDEST samples.
-_REPORT_ROW_CAP = 5000
-# One row per sitting, so far smaller.
+# Session rows per weekly report; ordered newest first, so the cap trims the OLDEST.
 _SESSION_ROW_CAP = 100
 
 
@@ -1105,11 +1119,8 @@ def _answer_counts(session_id: str, session: dict) -> tuple[int, int, bool]:
         res = supabase.rpc("session_answer_counts",
                            {"p_session_id": session_id}).execute()
     except Exception as e:                                     # noqa: BLE001
-        if "PGRST202" in str(e):
-            print(f"[session:close] session_answer_counts is missing from the "
-                  f"database -- apply 20260826000000; crediting the stored "
-                  f"counter until then: {e}")
-        else:
+        if not _missing_rpc(e, "session_answer_counts", "20260826000000",
+                            "a closing session credits the stored counter until then"):
             print(f"[session:close] could not recount answers for {session_id}: {e}")
         return stored_q, stored_c, False
     rows = res.data or []
@@ -1390,16 +1401,23 @@ def stop_stale_sweeper(timeout: float = 5.0) -> None:
         thread.join(timeout=timeout)
 
 
-def _may_record(student_id: str) -> dict:
+def _may_record(student_id: str, consent: "_StoredConsent | None" = None) -> dict:
     """Consent **and** the retention window, composed for recording sites only.
 
     Kept out of `_consent`, whose readers must not change answer when term ends.
+    `consent` in hand comes from `_stored_consent`; a bare dict has no provenance and raises.
     """
+    if consent is not None and not isinstance(consent, _StoredConsent):
+        raise TypeError(f"_may_record takes consent from _stored_consent, not a {type(consent).__name__}")
     flags = _feature_flags()
     # A bypass substitutes full consent only; `consent_bypassed` says so. Other gates still apply.
     enforced = _consent_enforcement_active(flags)
-    consent = _consent(student_id) if enforced else {
-        **_CONSENT_ENABLED_ALL, "retrieved": True, "exists": False}
+    if not enforced:
+        consent = {**_CONSENT_ENABLED_ALL, "retrieved": True, "exists": False}
+    elif consent is None:
+        consent = _consent(student_id)
+    else:
+        consent = consent.answer
     window = _retention_window()
     recording = window["state"] not in _WINDOW_DENIED
     return {**consent,
@@ -1723,7 +1741,7 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
                   heart_revoked_at: str | None = None):
     """Week-over-week averages, read from the rollup and nothing else.
 
-    Not `_weekly_signal_report`, whose oldest-first row cap would empty early weeks.
+    Never the per-sample tables: the expiry job deletes those and keeps the rollup.
     Weighted by `trusted_sample_count` (stress by `_stress_weight`); `avg_rmssd_ms`
     is approximate. See CLAUDE.md, "The term trend reads the rollup".
     """
@@ -1854,7 +1872,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     """Averages, highlights and per-day buckets of a student's recent signals.
 
     Callers must already have authorised the viewer. A false flag skips that
-    channel's query outright; `*_included` then reads "not requested".
+    channel's read outright; `*_included` then reads "not requested".
     """
     tz = _school_timezone()
     # From midnight of the earliest *school* day, so the oldest day is not clipped.
@@ -1864,50 +1882,49 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                              datetime.min.time(),
                              tzinfo=tz).astimezone(timezone.utc).isoformat()
 
-    def _fetch(table: str, ts_col: str, limit: int) -> tuple[list, bool, int | None, bool]:
-        """`(rows newest-first, was_cut, total, read_ok)`.
+    def _signal_days(channel: str) -> tuple[dict, dict | None, bool]:
+        """`(aggregate per school day, latest row, read_ok)`, over every row of the week.
 
-        Truncation comes from the exact count: PostgREST's ceiling can cut below `.limit()`.
+        Aggregated in SQL: a raw read stops at PostgREST's 1000 rows, ~17 minutes of EEG.
         """
         try:
-            res = supabase.table(table).select("*", count="exact") \
-                .eq("user_id", student_id).gte(ts_col, since) \
-                .order(ts_col, desc=True).limit(limit).execute()
-            rows = res.data or []
-            total = getattr(res, "count", None)
-            if not isinstance(total, int):
-                total = None
-            # No count: fall back to the length heuristic.
-            was_cut = (total > len(rows)) if total is not None else len(rows) >= limit
-            return rows, was_cut, total, True
-        except Exception as e:
-            print(f"[weekly_report:{table}] {e}")
-            return [], False, None, False
+            out = supabase.rpc("weekly_signal_days", {
+                "p_student_id": student_id, "p_channel": channel,
+                "p_since": since, "p_timezone": _tz_name(tz)}).execute().data or {}
+            return ({str(d.get("day")): d for d in out.get("days") or []},
+                    out.get("latest"), True)
+        except Exception as e:                                  # noqa: BLE001
+            print(f"[weekly_report:{channel}] {e}")
+            return {}, None, False
 
-    cog, cog_cut, _, cog_ok = _fetch("cognitive_signals", "ts", _REPORT_ROW_CAP)
+    cog_days, latest_cognitive, cog_ok = _signal_days("cognitive")
     # An opted-out channel is ok=True: nothing failed, nothing was asked for.
-    face, face_cut, _, face_ok = _fetch("face_signals", "ts", _REPORT_ROW_CAP) if include_emotion \
-        else ([], False, None, True)
-    heart, heart_cut, _, heart_ok = _fetch("heart_signals", "ts", _REPORT_ROW_CAP) if include_heart \
-        else ([], False, None, True)
-    sessions, ses_cut, ses_total, ses_ok = _fetch("sessions", "started_at", _SESSION_ROW_CAP)
+    face_days, latest_face, face_ok = _signal_days("emotion") if include_emotion \
+        else ({}, None, True)
+    heart_days, latest_heart, heart_ok = _signal_days("heart") if include_heart \
+        else ({}, None, True)
 
-    # The cap trims oldest-first; tracked per table so an uncut table cannot mask a cut one.
-    def _oldest(rows: list, ts_col: str) -> str:
-        return min([str(r.get(ts_col, "")) for r in rows if r.get(ts_col)], default="")
-
-    truncated = cog_cut or face_cut or heart_cut or ses_cut
-    # School days, since `_coverage` compares them as strings.
-    cog_oldest_day = _school_day(_oldest(cog, "ts"), tz)
-    face_oldest_day = _school_day(_oldest(face, "ts"), tz)
-    ses_oldest_day = _school_day(_oldest(sessions, "started_at"), tz)
-    heart_oldest_day = _school_day(_oldest(heart, "ts"), tz)
-
-    def _by_school_day(rows: list, ts_col: str) -> dict:
-        out: dict[str, list] = {}
-        for r in rows:
-            out.setdefault(_school_day(r.get(ts_col), tz), []).append(r)
-        return out
+    # Sessions are counted from their rows, so this read keeps a cap and the only cut.
+    try:
+        res = supabase.table("sessions").select("started_at", count="exact") \
+            .eq("user_id", student_id).gte("started_at", since) \
+            .order("started_at", desc=True).limit(_SESSION_ROW_CAP).execute()
+        sessions = res.data or []
+        ses_total = getattr(res, "count", None)
+        if not isinstance(ses_total, int):
+            ses_total = None
+        # Truncation comes from the exact count: PostgREST's ceiling can cut below `.limit()`.
+        ses_cut = (ses_total > len(sessions)) if ses_total is not None \
+            else len(sessions) >= _SESSION_ROW_CAP
+        ses_ok = True
+    except Exception as e:                                      # noqa: BLE001
+        print(f"[weekly_report:sessions] {e}")
+        sessions, ses_total, ses_cut, ses_ok = [], None, False, False
+    ses_oldest_day = _school_day(
+        min([str(r["started_at"]) for r in sessions if r.get("started_at")], default=""), tz)
+    sessions_by_day: dict[str, list] = {}
+    for r in sessions:
+        sessions_by_day.setdefault(_school_day(r.get("started_at"), tz), []).append(r)
 
     # The rollup covers days whose raw rows are gone, keyed on (day, channel).
     # Its totals feed the week's averages as (sum, n), never a mean of daily means.
@@ -1929,29 +1946,14 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                   .lte("day", school_today.isoformat())
                   .execute().data or []):
             rollup_by[(str(r.get("day")), r.get("channel"))] = r
-    except Exception as e:
+    except Exception as e:                                      # noqa: BLE001
         print(f"[weekly_report:rollup] {student_id}: {e}")
         rollup_ok = False
     # Days whose raw rows the expiry job may have deleted: with the rollup unread, an
     # empty day there is unknown, not quiet.
     expired_through = _expired_through(school_today)
 
-    cog_by_day = _by_school_day(cog, "ts")
-    face_by_day = _by_school_day(face, "ts")
-    heart_by_day = _by_school_day(heart, "ts")
-    sessions_by_day = _by_school_day(sessions, "started_at")
-
-    # Newest row with a measurement (rows can be nulled for poor contact); else the
-    # newest row, so an all-unusable channel reads "Calibrating", not "No sensor".
-    latest_cognitive = next((r for r in cog if r.get("focus") is not None), None) \
-        or (cog[0] if cog else None)
-    latest_face = next((r for r in face if r.get("emotion") is not None), None) \
-        or (face[0] if face else None)
-    # Trusted only, matching every other heart figure in this payload.
-    latest_heart = next((r for r in heart if r.get("trusted") is True), None)
-
-    # Per table per day: whole, partial (cap cut into it), missing, or failed.
-    # A partial day is withheld, never averaged from a fraction.
+    # The sessions read is the one that can be cut, so the one with partial days.
     def _coverage(ok: bool, cut: bool, oldest_day: str, day: str) -> tuple[bool, bool]:
         """(nothing was retrieved for this day, this day is complete)."""
         if not ok:
@@ -1965,77 +1967,66 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             return True, False          # the cap stopped before this day entirely
         return False, day > oldest_day  # == oldest_day is the day it cut into
 
+    def _mean(agg, key):
+        """A day's mean from its SQL sum and count, as `_avg` rounds; None with no readings."""
+        n = (agg or {}).get(f"{key}_n") or 0
+        return round(float(agg[f"{key}_sum"]) / n, 2) if n else None
+
     daily = []
-    # Days whose rollup is counted: their raw rows must not be counted a second time.
-    rolled_days: dict[str, set] = {"cognitive": set(), "emotion": set(), "heart": set()}
     # Channels with a day that may have expired and could not be read from the rollup.
     lost_channels: set[str] = set()
     for i in range(days - 1, -1, -1):
         day = (school_today - timedelta(days=i)).isoformat()
-        cog_missing, cog_whole = _coverage(cog_ok, cog_cut, cog_oldest_day, day)
-        face_missing, face_whole = _coverage(face_ok, face_cut, face_oldest_day, day)
+        cog_raw, face_raw, heart_raw = cog_days.get(day), face_days.get(day), heart_days.get(day)
         ses_missing, ses_whole = _coverage(ses_ok, ses_cut, ses_oldest_day, day)
-        heart_missing, heart_whole = _coverage(heart_ok, heart_cut, heart_oldest_day, day)
+        # Every row is aggregated, so a read that worked covers each day whole.
+        cog_whole, face_whole, heart_whole = cog_ok, face_ok, heart_ok
         if (not rollup_ok and expired_through is not None
                 and date.fromisoformat(day) <= expired_through):
             # The raw rows may be gone and the rollup is unread: an empty day is unknown.
-            for channel, by_day, included in (("cognitive", cog_by_day, True),
-                                              ("emotion", face_by_day, include_emotion),
-                                              ("heart", heart_by_day, include_heart)):
-                if included and not by_day.get(day):
+            for channel, raw, included in (("cognitive", cog_raw, True),
+                                           ("emotion", face_raw, include_emotion),
+                                           ("heart", heart_raw, include_heart)):
+                if included and not raw:
                     lost_channels.add(channel)
-            cog_whole = cog_whole and bool(cog_by_day.get(day))
-            face_whole = face_whole and bool(face_by_day.get(day))
-            heart_whole = heart_whole and bool(heart_by_day.get(day))
+            cog_whole = cog_whole and bool(cog_raw)
+            face_whole = face_whole and bool(face_raw)
+            heart_whole = heart_whole and bool(heart_raw)
         # Skip only when nothing asked for was retrieved; sessions have their own cap.
-        if (cog_missing and (face_missing or not include_emotion)
-                and (heart_missing or not include_heart) and ses_missing):
+        if (not cog_ok and (not face_ok or not include_emotion)
+                and (not heart_ok or not include_heart) and ses_missing):
             continue
-        # Raw rows where present; the rollup where absent or partial.
-        def _rolled(channel, raw_rows, whole, read_ok):
-            """The rollup row to use for this day, or None to use the raw rows.
 
-            Never after a failed raw read: the rollup can be stale.
-            """
+        def _rolled(channel, raw, read_ok):
+            """The rollup row for this day when it has no raw rows; never after a failed read."""
             if not read_ok:
                 return None
             row = rollup_by.get((day, channel))
-            return row if row is not None and (not raw_rows or not whole) else None
+            return row if row is not None and not raw else None
 
-        day_cog = cog_by_day.get(day, [])
-        day_face = face_by_day.get(day, [])
-        cog_roll = _rolled("cognitive", day_cog, cog_whole, cog_ok)
-        face_roll = (_rolled("emotion", day_face, face_whole, face_ok)
-                     if include_emotion else None)
-        # Trusted only, matching the week's averages.
-        day_heart = [r for r in heart_by_day.get(day, []) if r.get("trusted") is True]
-        heart_roll = (_rolled("heart", heart_by_day.get(day, []), heart_whole, heart_ok)
-                      if include_heart else None)
-        for channel, roll in (("cognitive", cog_roll), ("emotion", face_roll), ("heart", heart_roll)):
-            if roll:
-                rolled_days[channel].add(day)
+        cog_roll = _rolled("cognitive", cog_raw, cog_ok)
+        face_roll = _rolled("emotion", face_raw, face_ok) if include_emotion else None
+        heart_roll = _rolled("heart", heart_raw, heart_ok) if include_heart else None
 
         daily.append({
             "date": day,
             # Withheld unless the day is whole.
             "focus": (cog_roll.get("avg_focus") if cog_roll else
-                      _avg([r.get("focus") for r in day_cog]) if cog_whole else None),
+                      _mean(cog_raw, "focus") if cog_whole else None),
             "stress": (cog_roll.get("avg_stress") if cog_roll else
-                       _avg([r.get("stress") for r in day_cog]) if cog_whole else None),
+                       _mean(cog_raw, "stress") if cog_whole else None),
             # From focus, not the stored engagement -- see `_shape_summary`.
             "engagement": (cog_roll.get("avg_focus") if cog_roll else
-                           _avg([r.get("focus") for r in day_cog]) if cog_whole else None),
-            "attention": _avg([r.get("attention") for r in day_face]) if face_whole else None,
+                           _mean(cog_raw, "focus") if cog_whole else None),
+            "attention": _mean(face_raw, "attention") if face_whole else None,
             # None, not 0, for a day the cap could not reach.
             "sessions": len(sessions_by_day.get(day, []))
                         if ses_whole else None,
-            # Absolute units, not 0..1 ratios.
+            # Absolute units, not 0..1 ratios. Trusted only, matching the week's averages.
             "heart_rate_bpm": (heart_roll.get("avg_heart_rate_bpm") if heart_roll else
-                               _avg([r.get("heart_rate_bpm") for r in day_heart])
-                               if heart_whole else None),
+                               _mean(heart_raw, "bpm") if heart_whole else None),
             "rmssd_ms": (heart_roll.get("avg_rmssd_ms") if heart_roll else
-                         _avg([r.get("rmssd_ms") for r in day_heart])
-                         if heart_whole else None),
+                         _mean(heart_raw, "rmssd") if heart_whole else None),
             # False = not fully fetched; None = not requested (check `=== false`).
             "cognitive_retrieved": True if cog_roll else cog_whole,
             "face_retrieved": (None if not include_emotion else
@@ -2050,12 +2041,14 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             "heart_from_rollup": bool(heart_roll),
 
             # Sample counts keep a thin day visibly thin after raw rows are gone.
-            "cognitive_samples": (cog_roll.get("sample_count") or 0) if cog_roll else len(day_cog),
+            "cognitive_samples": ((cog_roll.get("sample_count") or 0) if cog_roll
+                                  else int((cog_raw or {}).get("rows") or 0)),
             # Emotion rows only (gaze-only face rows excluded), matching the rollup.
             "face_samples": ((face_roll.get("sample_count") or 0) if face_roll
-                             else sum(1 for r in day_face
-                                      if r.get("emotion") is not None)),
-            "heart_samples": (heart_roll.get("sample_count") or 0) if heart_roll else len(day_heart),
+                             else int((face_raw or {}).get("emotion_rows") or 0)),
+            # Trusted rows, as the day's average is: one definition before and after expiry.
+            "heart_samples": ((heart_roll.get("trusted_sample_count") or 0) if heart_roll
+                              else int((heart_raw or {}).get("trusted_rows") or 0)),
         })
 
         # Weighted by `trusted_sample_count`; approximate for `rmssd_ms`.
@@ -2081,44 +2074,50 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             for label, count in (face_roll.get("emotion_counts") or {}).items():
                 rolled_emotions[label] = rolled_emotions.get(label, 0) + int(count)
 
-    def _week(key, raw_values):
-        """The week's mean over raw samples and rolled-up days, by true sum and count."""
+    def _raw(days_by_date: dict, key: str) -> tuple[float, int]:
+        """`(sum, n)` over the raw days; `_rolled` never takes a day that has raw rows."""
+        total, n = 0.0, 0
+        for agg in days_by_date.values():
+            count = int(agg.get(f"{key}_n") or 0)
+            if count:
+                total += float(agg.get(f"{key}_sum") or 0)
+                n += count
+        return total, n
+
+    def _week(key, raw):
+        """The week's mean over raw rows and rolled-up days, by true sum and count."""
         total, n = rolled_totals[key]
-        nums = [float(v) for v in raw_values if v is not None]
-        total += sum(nums)
-        n += len(nums)
-        return (total / n) if n else None
+        return ((total + raw[0]) / (n + raw[1])) if n + raw[1] else None
 
-    def _unrolled(rows: list, channel: str) -> list:
-        """Raw rows on days the rollup did not supply; the cap's cut day is supplied by it."""
-        return [r for r in rows if _school_day(r.get("ts"), tz) not in rolled_days[channel]]
-
-    cog_week, face_week, heart_week = (_unrolled(cog, "cognitive"), _unrolled(face, "emotion"),
-                                       _unrolled(heart, "heart"))
-    # Only trusted heart samples are averaged, as in the SQL aggregate.
-    heart_rates = [r["heart_rate_bpm"] for r in heart_week
-                   if r.get("heart_rate_bpm") is not None and r.get("trusted") is True]
-    rmssd_values = [r["rmssd_ms"] for r in heart_week
-                    if r.get("rmssd_ms") is not None and r.get("trusted") is True]
+    focus_raw = _raw(cog_days, "focus")
+    stress_raw = _raw(cog_days, "stress")
+    # Only trusted heart samples are aggregated, as in the rollup.
+    bpm_raw = _raw(heart_days, "bpm")
+    rmssd_raw = _raw(heart_days, "rmssd")
     # Which sensor produced the readings (accuracy differs); trusted rows plus rollup days.
-    heart_sources = sorted({r["source"] for r in heart
-                            if r.get("source") and r.get("trusted") is True}
-                           | rolled_sources)
+    heart_sources = sorted({s for agg in heart_days.values() for s in agg.get("sources") or ()
+                            if isinstance(s, str)} | rolled_sources)
 
-    # Seeded from the rollup's full distribution, then raw rows on top.
+    # Seeded from the rollup's full distribution, then the raw days on top; trusted only.
     emotion_counts: dict[str, int] = dict(rolled_emotions)
-    for r in face_week:
-        if r.get("emotion"):
-            emotion_counts[r["emotion"]] = emotion_counts.get(r["emotion"], 0) + 1
+    for agg in face_days.values():
+        for label, count in (agg.get("emotion_counts") or {}).items():
+            emotion_counts[label] = emotion_counts.get(label, 0) + int(count)
 
     def _round2(value):
         return None if value is None else round(value, 2)
 
-    avg_focus = _round2(_week("focus", [r.get("focus") for r in cog_week]))
-    avg_stress = _round2(_week("stress", [r.get("stress") for r in cog_week]))
-    avg_attention = _avg([r.get("attention") for r in face])
-    highest_stress = max([float(r["stress"]) for r in cog if r.get("stress") is not None], default=None)
-    lowest_focus = min([float(r["focus"]) for r in cog if r.get("focus") is not None], default=None)
+    avg_focus = _round2(_week("focus", focus_raw))
+    avg_stress = _round2(_week("stress", stress_raw))
+    attention = _raw(face_days, "attention")
+    avg_attention = round(attention[0] / attention[1], 2) if attention[1] else None
+    highest_stress = max((float(a["stress_max"]) for a in cog_days.values()
+                          if a.get("stress_max") is not None), default=None)
+    lowest_focus = min((float(a["focus_min"]) for a in cog_days.values()
+                        if a.get("focus_min") is not None), default=None)
+    cog_rows = sum(int(a.get("rows") or 0) for a in cog_days.values())
+    face_rows = sum(int(a.get("rows") or 0) for a in face_days.values())
+    heart_rows = sum(int(a.get("rows") or 0) for a in heart_days.values())
 
     # Stored as 0..1 ratios.
     def _as_pct(ratio):
@@ -2135,11 +2134,16 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     else:
         # Each channel is one of: has readings, recorded nothing, or could not be read.
         # "Nothing recorded" needs a successful read and no readings, rollup included.
-        has_heart = bool(heart_rates) or rolled_totals["heart_rate_bpm"][1] > 0
-        channels = [("EEG", bool(cog), cog_ok and "cognitive" not in lost_channels,
-                     eeg_enabled or bool(cog))]
+        has_heart = bpm_raw[1] > 0 or rolled_totals["heart_rate_bpm"][1] > 0
+        # Emotions arrived, trusted or not: the distribution is trusted-only, the record is not.
+        has_face = any(d["face_samples"] for d in daily)
+        # A rolled-up day's rows arrived too, though its raw rows are gone.
+        has_eeg = cog_rows > 0 or any(d["cognitive_from_rollup"] and d["cognitive_samples"]
+                                      for d in daily)
+        channels = [("EEG", has_eeg, cog_ok and "cognitive" not in lost_channels,
+                     eeg_enabled or has_eeg)]
         if include_emotion:
-            channels.append(("facial recognition", bool(emotion_counts),
+            channels.append(("facial recognition", has_face,
                              face_ok and "emotion" not in lost_channels, True))
         if include_heart:
             channels.append(("heart rate", has_heart,
@@ -2179,7 +2183,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         "student_id": student_id,
         "days": days,
         "since": since,
-        "truncated": truncated,
+        # Only the sessions read is capped; the signal reads are SQL aggregates.
+        "truncated": ses_cut,
         # "Not requested", as distinct from "recorded nothing". `face_included`
         # is a deprecated alias of `emotion_included`.
         "face_included": include_emotion,
@@ -2196,7 +2201,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                                              key=lambda kv: (-kv[1], kv[0])))
                                  if include_emotion else None),
         "heart_sources": heart_sources if include_heart else None,
-        # Per table, since reads fail independently; None = not requested.
+        # Per read, since they fail independently; None = not requested.
         "retrieved": {
             "cognitive": cog_ok,
             "face": face_ok if include_emotion else None,
@@ -2204,17 +2209,16 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             "sessions": ses_ok,
             "rollup": rollup_ok,
         },
-        "sample_counts": {"cognitive": len(cog), "face": len(face),
-                          # Rows retrieved, untrusted included ("measured, unusable").
-                          "heart": len(heart), "sessions": len(sessions)},
+        # Rows in the week, untrusted heart included ("measured, unusable").
+        "sample_counts": {"cognitive": cog_rows, "face": face_rows,
+                          "heart": heart_rows, "sessions": len(sessions)},
         # The exact total, not the capped row count; None when the read failed.
         "sessions_recorded": (ses_total if ses_total is not None else len(sessions)) if ses_ok else None,
         "averages": {
             "focus": avg_focus,
             "stress": avg_stress,
             # From focus, not the stored engagement -- see `_shape_summary`.
-            "engagement": _round2(_week("engagement",
-                                        [r.get("focus") for r in cog_week])),
+            "engagement": _round2(_week("engagement", focus_raw)),
             "face_attention": avg_attention,
             # The score scale(s) the averages above span; see `_scale_range`.
             "score_scale": _scale_range(rollup_by.values()) if rollup_ok else None,
@@ -2223,8 +2227,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             "highest_stress": round(highest_stress, 2) if highest_stress is not None else None,
             "lowest_focus": round(lowest_focus, 2) if lowest_focus is not None else None,
             "dominant_emotion": max(emotion_counts, key=emotion_counts.get) if emotion_counts else None,
-            "heart_rate_bpm": _week("heart_rate_bpm", heart_rates),
-            "rmssd_ms": _week("rmssd_ms", rmssd_values),
+            "heart_rate_bpm": _week("heart_rate_bpm", bpm_raw),
+            "rmssd_ms": _week("rmssd_ms", rmssd_raw),
         },
         # `heart` absent, not null, when the channel was not read.
         "latest": {"cognitive": latest_cognitive, "face": latest_face,
@@ -2493,7 +2497,8 @@ class StartSessionRequest(StrictModel):
     title: str | None = Field(None, max_length=_TITLE_MAX)
 
 class AnswerPayload(StrictModel):
-    question_id:    str = Field(max_length=_ID_MAX)
+    # A uuid here, or the RPC's 22P02 reads as a missing session.
+    question_id:    UUID
     selected_index: int
     correct:        bool
 
@@ -2871,68 +2876,83 @@ def start_session(payload: StartSessionRequest, request: Request):
 
     return res.data[0]
 
+
+# The answer's foreign key to its question (init migration): one expired or deleted since it was served.
+_ANSWER_QUESTION_FK = "session_answers_question_id_fkey"
+
+# Steps record_answer survives failing: (result field, function, its migration, what stops).
+_ANSWER_SIDE_STEPS = (
+    ("topic_error",    "record_topic_attempt",  "20260825000000", "no topic attribution until then"),
+    ("counters_error", "bump_session_counters", "20260826000000", "live counters will not move"),
+)
+
+
+def _names_deleted_question(exc: Exception) -> bool:
+    """Whether a failed answer write means its question no longer exists."""
+    return (getattr(exc, "code", None) == "23503"
+            and _ANSWER_QUESTION_FK in (getattr(exc, "message", None) or ""))
+
+
+def _log_answer_side_errors(out: dict, session_id: str) -> None:
+    """Log each step record_answer reports failing; the answer itself is saved."""
+    for field, fn, migration, effect in _ANSWER_SIDE_STEPS:
+        err = str(out.get(field) or "")
+        if not err:
+            continue
+        # 'SQLSTATE: message'; 42883 is undefined_function, and must name this step's own function.
+        if err.startswith("42883") and fn in err:
+            print(f"[answer] {fn} is missing from the database -- apply {migration}; "
+                  f"{effect}: {err}")
+        else:
+            print(f"[answer] saved, but {field} for {session_id}: {err}")
+
+
 @app.post("/api/sessions/{session_id}/answer")
 def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...), request: Request = None):
     user = get_user(request)
-    # Ownership before any write.
-    session = _session_or_403(session_id, user["id"], "user_id, ended_at")
-    if session.get("ended_at"):
+    # One call: ownership and an open session checked under a row lock, then the answer,
+    # the counters and the topic attempt (20261003000000). A refused session gets no write.
+    try:
+        out = supabase.rpc("record_answer", {
+            "p_session_id":     session_id,
+            "p_user_id":        user["id"],
+            "p_question_id":    str(payload.question_id),
+            "p_selected_index": payload.selected_index,
+            "p_correct":        bool(payload.correct),
+            "p_answered_at":    _utc_now().isoformat(),
+        }).execute().data or {}
+    except Exception as e:                                     # noqa: BLE001
+        if _names_no_row(e):
+            raise HTTPException(404, "Session not found")
+        if _names_deleted_question(e):
+            # 410, not 409: the page reads a 409 here as its session ended and starts another.
+            raise HTTPException(410, "This question is no longer available")
+        if not _missing_rpc(e, "record_answer", "20261003000000",
+                            "every answer is a 503 and none is saved until then"):
+            print(f"[answer] could not record an answer for {session_id}: {e}")
+        raise _read_failed("This answer could not be saved; try again")
+    status = out.get("status") if isinstance(out, dict) else None
+    if status == "not_found":
+        raise HTTPException(404, "Session not found")
+    if status == "forbidden":
+        # The shared refusal, so this 403 records its denial like every other.
+        _session_or_403(session_id, user["id"], row={"user_id": out.get("owner")})
+    if status == "ended":
         # Closed by the sweep, the live monitor or another tab: its totals are already
         # credited, so an answer here would count nowhere. The page starts a new session.
         raise HTTPException(409, "This session has ended")
-    supabase.table("session_answers").insert({
-        "session_id":     session_id,
-        "user_id":        user["id"],
-        "question_id":    payload.question_id,
-        "selected_index": payload.selected_index,
-        "correct":        payload.correct,
-        "answered_at":    _utc_now().isoformat(),
-    }).execute()
-    # Atomic increment in the database. Never raises: the answer row is the record
-    # and `_answer_counts` recomputes at close.
-    try:
-        supabase.rpc("bump_session_counters", {
-            "p_session_id": session_id,
-            "p_correct":    bool(payload.correct),
-        }).execute()
-    except Exception as e:                                     # noqa: BLE001
-        if "PGRST202" in str(e):
-            print(f"[answer] bump_session_counters is missing from the database "
-                  f"-- apply 20260826000000; live counters will not move: {e}")
-        else:
-            print(f"[answer] could not bump counters for {session_id}: {e}")
-    # Returned so the page can update one topic figure; None = nothing attributed.
-    topic = _record_topic_attempt(user["id"], payload.question_id, payload.correct)
+    if status != "ok":
+        print(f"[answer] record_answer answered {out!r} for {session_id}")
+        raise _read_failed("This answer could not be saved; try again")
+    _log_answer_side_errors(out, session_id)
     # Best effort, after the writes: the simulator reacts to answers; hardware ignores it.
     try:
         eeg_poller.notify_answer(session_id, bool(payload.correct))
     except Exception as e:                                     # noqa: BLE001
         print(f"[answer] could not notify the sidecar for {session_id}: {e}")
-    return {"ok": True, "topic": topic}
-
-
-def _record_topic_attempt(user_id: str, question_id: str, correct: bool) -> str | None:
-    """Add one attempt to the student's per-topic record, atomically. Never raises.
-
-    The topic comes from the question row, never the caller. Returns the topic
-    name, or None for an unknown question or topic, or any failure.
-    """
-    try:
-        res = supabase.rpc("record_topic_attempt", {
-            "p_user_id":     user_id,
-            "p_question_id": question_id,
-            "p_correct":     bool(correct),
-        }).execute()
-        topic = getattr(res, "data", None)
-        return topic if isinstance(topic, str) else None
-    except Exception as e:                                     # noqa: BLE001
-        # PGRST202: migration not applied, so every answer fails until it is.
-        if "PGRST202" in str(e):
-            print(f"[answer] record_topic_attempt is missing from the database -- "
-                  f"apply 20260825000000; no topic attribution until then: {e}")
-        else:
-            print(f"[answer] could not record topic attempt for {user_id[:8]}: {e}")
-        return None
+    # Returned so the page can update one topic figure; None = nothing attributed.
+    topic = out.get("topic")
+    return {"ok": True, "topic": topic if isinstance(topic, str) else None}
 
 @app.post("/api/sessions/{session_id}/end")
 def end_session(session_id: str = Path(...), request: Request = None):
@@ -3155,10 +3175,8 @@ def record_practice_answer(practice_session_id: str = Path(...),
             "p_correct":    bool(payload.correct),
         }).execute()
     except Exception as e:                                     # noqa: BLE001
-        if "PGRST202" in str(e):
-            print(f"[practice] bump_practice_session_counters is missing from the "
-                  f"database -- apply 20260904000000; live counters will not move: {e}")
-        else:
+        if not _missing_rpc(e, "bump_practice_session_counters", "20260904000000",
+                            "live practice counters will not move until then"):
             print(f"[practice] could not bump counters for {practice_session_id}: {e}")
     return {"ok": True, "topic": topic}
 
@@ -3192,10 +3210,8 @@ def record_practice_view(practice_session_id: str = Path(...),
             "p_correct":    False,
         }).execute()
     except Exception as e:                                     # noqa: BLE001
-        if "PGRST202" in str(e):
-            print(f"[practice] bump_practice_session_counters is missing from the "
-                  f"database -- apply 20260904000000; live counters will not move: {e}")
-        else:
+        if not _missing_rpc(e, "bump_practice_session_counters", "20260904000000",
+                            "live practice counters will not move until then"):
             print(f"[practice] could not bump counters for {practice_session_id}: {e}")
     return {"ok": True, "topic": topic}
 
@@ -3359,7 +3375,8 @@ def student_stats(student_id: str, request: Request):
     return _stats_including_open_session(student_id)
 
 # (table, ts column, measurement columns): a row counts only if a measurement is non-null
-# (`contact_poor` rows are all null). Keep in step with `scripts/assert_signal_rls.sql`.
+# (`contact_poor` rows are all null). The rule `last_activity_for_sessions` and
+# `last_active_for_users` apply in SQL; tests hold both to it.
 _ACTIVITY_SOURCES = (
     ("session_answers",   "answered_at", ()),
     ("cognitive_signals", "ts", ("focus",)),
@@ -3367,24 +3384,38 @@ _ACTIVITY_SOURCES = (
     ("heart_signals",     "ts", ("heart_rate_bpm",)),
 )
 
+# Sessions per student a history view shows.
+_RECENT_SESSIONS = 20
 
-def _measured_only(query, columns):
-    """Narrow to rows where at least one of `columns` is not null (one column: plain form)."""
-    if len(columns) == 1:
-        return query.filter(columns[0], "not.is", "null")
-    return query.or_(",".join(f"{c}.not.is.null" for c in columns))
+_SESSION_CLIENT_KEYS = tuple(c.strip() for c in _SESSION_CLIENT_COLUMNS.split(","))
 
 
-@app.get("/api/sessions/student/{student_id}")
-def student_sessions(student_id: str, request: Request):
-    """A student's recent sessions, marked `abandoned` (an age) and `idle` (real last activity).
+def _recent_sessions_many(user_ids, limit: int) -> dict[str, list[dict]]:
+    """Each user's newest `limit` sessions, newest first, in one call. Raises on a failed read.
 
-    Derived here so the thresholds have one definition.
+    The function returns `_SESSION_CLIENT_COLUMNS` alone; narrowing again here is a second
+    guard, so a widened function still cannot reach a browser.
     """
-    _verify_can_view_student(get_user(request), student_id)
-    res = supabase.table("sessions").select(_SESSION_CLIENT_COLUMNS) \
-        .eq("user_id", student_id).order("started_at", desc=True).limit(20).execute()
-    rows = res.data or []
+    ids = _unique_ids(user_ids)
+    if not ids:
+        return {}
+    rows = supabase.rpc("recent_sessions_for_users",
+                        {"p_user_ids": ids, "p_limit": limit}).execute().data or []
+    out: dict[str, list[dict]] = {uid: [] for uid in ids}
+    # Parsed: offset spellings of one instant sort differently as text. Unreadable sorts last.
+    for r in sorted(rows, reverse=True,
+                    key=lambda r: _parse_ts(r.get("started_at"))
+                    or datetime.min.replace(tzinfo=timezone.utc)):
+        out.setdefault(r.get("user_id"), []).append({k: r.get(k) for k in _SESSION_CLIENT_KEYS})
+    return out
+
+
+def _flag_sessions(rows: list[dict]) -> list[dict]:
+    """Mark sessions `abandoned` (an age) and `idle` (real last activity), in place, over one read.
+
+    Derived here so the thresholds have one definition. `activity_known` is False only
+    when the activity read failed, so the client never calls an unread session quiet.
+    """
     cutoff = _utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)
     for r in rows:
         started = _parse_ts(r.get("started_at"))
@@ -3392,44 +3423,24 @@ def student_sessions(student_id: str, request: Request):
         r["abandoned"] = bool(
             not r.get("ended_at") and started is not None and started < cutoff)
 
-    # Real last activity for open sessions (at most 20), for the `idle` flag.
     ids = [r["id"] for r in rows if not r.get("ended_at")]
-    last_answer: dict[str, str] = {}
-    # False only when a read failed; nothing to look up is not "unknown".
+    last_seen: dict[str, str] = {}
+    # False only when the read failed; nothing to look up is not "unknown".
     activity_known = True
     if ids:
-        # Same inputs and window as `class_live`, so the two surfaces agree.
-        newest: dict[str, tuple] = {}
-        for table, column, measured in _ACTIVITY_SOURCES:
-            try:
-                query = (supabase.table(table)
-                         .select(f"session_id, {column}")
-                         .in_("session_id", ids))
-                if measured:
-                    query = _measured_only(query, measured)
-                recent = (query.order(column, desc=True)
-                          .limit(500).execute().data or [])
-            except Exception as e:                              # noqa: BLE001
-                # Any one failing discards the partial result: it could only under-report.
-                print(f"[sessions] could not read last activity from {table}: {e}")
-                activity_known = False
-                newest = {}
-                break
-            for row in recent:
-                stamp = row.get(column)
-                when = _parse_ts(stamp) if stamp else None
-                if when is None:
-                    continue
-                sid = row.get("session_id")
-                if sid not in newest or when > newest[sid][0]:
-                    newest[sid] = (when, stamp)
-        # Compared parsed (offset spellings differ), published as the original string.
-        last_answer = {sid: stamp for sid, (_, stamp) in newest.items()}
+        try:
+            got = supabase.rpc("last_activity_for_sessions",
+                               {"p_session_ids": ids}).execute().data or []
+            last_seen = {g["session_id"]: g["last_activity_at"]
+                         for g in got if g.get("last_activity_at")}
+        except Exception as e:                                  # noqa: BLE001
+            print(f"[sessions] could not read last activity: {e}")
+            activity_known = False
 
     quiet_before = _utc_now() - timedelta(seconds=_STALE_AFTER_SEC)
     for r in rows:
         r["activity_known"] = activity_known
-        r["last_activity_at"] = last_answer.get(r["id"])
+        r["last_activity_at"] = last_seen.get(r["id"])
         if r.get("ended_at") or not activity_known:
             r["idle"] = False
             continue
@@ -3438,6 +3449,42 @@ def student_sessions(student_id: str, request: Request):
         r["idle"] = bool(seen is not None and seen < quiet_before
                          and not r["abandoned"])
     return rows
+
+
+@app.get("/api/sessions/student/{student_id}")
+def student_sessions(student_id: str, request: Request):
+    """A student's recent sessions, flagged by `_flag_sessions`."""
+    _verify_can_view_student(get_user(request), student_id)
+    res = supabase.table("sessions").select(_SESSION_CLIENT_COLUMNS) \
+        .eq("user_id", student_id).order("started_at", desc=True) \
+        .limit(_RECENT_SESSIONS).execute()
+    return _flag_sessions(res.data or [])
+
+
+@app.get("/api/classes/{class_id}/sessions")
+def class_sessions(class_id: str, request: Request):
+    """Every student's recent sessions in a class the caller owns, flagged as above.
+
+    Three reads for the class, where the Sessions page made one request per student.
+    A failed sessions read is every student's `None`, never "ran no sessions".
+    """
+    user = get_user(request)
+    _verify_class_owner(class_id, user["id"])
+    members = supabase.table("class_memberships").select("student_id") \
+        .eq("class_id", class_id).execute().data or []
+    roster = _unique_ids(m["student_id"] for m in members)
+    profiles = _profiles_many(roster)
+    students = [{"user_id": sid,
+                 "name": (profiles.get(sid) or {}).get("display_name") or "Student"}
+                for sid in roster]
+    try:
+        by_student = _recent_sessions_many(roster, _RECENT_SESSIONS)
+    except Exception as e:                                      # noqa: BLE001
+        print(f"[sessions:class] {class_id}: {e}")
+        return {"students": students, "sessions": {sid: None for sid in roster}}
+    _flag_sessions([r for rows in by_student.values() for r in rows])
+    return {"students": students,
+            "sessions": {sid: by_student.get(sid, []) for sid in roster}}
 
 @app.get("/api/performance/student/{student_id}")
 def student_performance(student_id: str, request: Request):
@@ -4793,27 +4840,18 @@ def _can_view_student(viewer: dict, student_id: str) -> bool | None:
     uid = viewer["id"]
     if uid == student_id:
         return True
-
-    checks = (
-        # One read. Without `!inner` PostgREST keeps every membership and only empties the embed.
-        ("teacher", lambda: supabase.table("class_memberships").select("id, classes!inner(teacher_id)")
-         .eq("student_id", student_id).eq("classes.teacher_id", uid).limit(1).execute().data),
-        ("parent", lambda: supabase.table("parent_child_links").select("id")
-         .eq("parent_id", uid).eq("child_id", student_id).limit(1).execute().data),
-        # Last, as the rarest. Not `_role`, which reads a failed profile read as "student".
-        ("admin", lambda: _role_or_raise(uid) == ADMIN_ROLE),
-    )
-    unread = False
-    for name, check in checks:
-        try:
-            if check():
-                return True
-        except Exception as e:                                 # noqa: BLE001
-            # An id that cannot be a uuid names no student: a denial, not an outage.
-            if not _names_no_row(e):
-                print(f"[can_view_student:{name}] {e}")
-                unread = True
-    return None if unread else False
+    # Teacher of their class, linked parent or admin, in one statement (20261003000000).
+    # A non-uuid on either side answers null, never an error, so it is a denial like any other.
+    try:
+        relationship = supabase.rpc("viewer_relationship", {
+            "p_viewer": uid, "p_student": student_id}).execute().data
+    except Exception as e:                                     # noqa: BLE001
+        if not _missing_rpc(e, "viewer_relationship", "20261003000000",
+                            "every teacher, parent and admin view of a student is a 503 until then"):
+            print(f"[can_view_student] {e}")
+        return None
+    # Only a relationship it names admits; anything else, null included, is a denial.
+    return relationship in ("teacher", "parent", "admin")
 
 
 def _verify_can_view_student(viewer: dict, student_id: str):
@@ -4964,12 +5002,8 @@ def _last_active_many(student_ids) -> dict[str, dict]:
         rows = supabase.rpc("last_active_for_users",
                             {"p_user_ids": ids}).execute().data or []
     except Exception as e:                                     # noqa: BLE001
-        # PGRST202: migration not applied; every roster degrades quietly until it is.
-        if "PGRST202" in str(e):
-            print(f"[last_active] last_active_for_users is missing from the "
-                  f"database -- apply 20260831000000; the roster will show "
-                  f"'unknown' until then: {e}")
-        else:
+        if not _missing_rpc(e, "last_active_for_users", "20260831000000",
+                            "every roster shows last active as unknown until then"):
             print(f"[last_active] could not read for {len(ids)}: {e}")
         return {sid: dict(_LAST_ACTIVE_UNKNOWN) for sid in ids}
     found = {r.get("user_id"): r.get("last_active") for r in rows}
@@ -5615,10 +5649,25 @@ def _consent(student_id: str) -> dict:
     except Exception as e:
         print(f"[consent:read] {student_id}: {e}")
         return {**_CONSENT_DENIED, "retrieved": False, "exists": False}
-    if not rows:
+    return _consent_from_row(rows[0] if rows else None)
+
+
+def _consent_from_row(row: dict | None) -> dict:
+    """`_consent`'s answer for a row read successfully; None is no row, which denies."""
+    if not row:
         # `exists` False with `retrieved` True: a write should insert.
         return {**_CONSENT_DENIED, "retrieved": True, "exists": False}
-    return {**_CONSENT_DENIED, **rows[0], "retrieved": True, "exists": True}
+    return {**_CONSENT_DENIED, **row, "retrieved": True, "exists": True}
+
+
+class _StoredConsent(NamedTuple):
+    """A `_consent` answer for a row read elsewhere: the only consent `_may_record` takes in hand."""
+    answer: dict
+
+
+def _stored_consent(row: dict | None) -> _StoredConsent:
+    """The ingest gate's `signal_consent` row as `_consent` answers it; None is no row, which denies."""
+    return _StoredConsent(_consent_from_row(row))
 
 
 def _consent_many(student_ids) -> dict[str, dict]:
@@ -5638,10 +5687,7 @@ def _consent_many(student_ids) -> dict[str, dict]:
         return {sid: {**_CONSENT_DENIED, "retrieved": False, "exists": False}
                 for sid in ids}
     by_id = {str(r["user_id"]): r for r in rows if r.get("user_id")}
-    return {sid: ({**_CONSENT_DENIED, **by_id[sid], "retrieved": True, "exists": True}
-                  if sid in by_id
-                  else {**_CONSENT_DENIED, "retrieved": True, "exists": False})
-            for sid in ids}
+    return {sid: _consent_from_row(by_id.get(sid)) for sid in ids}
 
 
 def _reportable_channels_many(student_ids, want_emotion: bool = True,
@@ -6189,15 +6235,17 @@ def _heart_consent_for_poller(student_id: str, source: str) -> bool:
 eeg_poller.set_heart_consent_check(_heart_consent_for_poller)
 
 
-def _session_or_403(session_id: str, user_id: str, columns: str = "user_id") -> dict:
+def _session_or_403(session_id: str, user_id: str, columns: str = "user_id",
+                    row: dict | None = None) -> dict:
     """Fetch a session, refusing it unless the caller owns it. Returns the row.
 
-    Ownership only: no teacher or parent. `columns` must include `user_id`
-    (absent, it refuses everyone). A missing row is a 404 and a failed read a 503, never a way past.
+    Ownership only. `columns` must include `user_id`; `row` is one already read, skipping
+    the fetch. A missing row is a 404 and a failed read a 503, never a way past.
     """
-    row = _row_or_404(
-        supabase.table("sessions").select(columns).eq("id", session_id),
-        "Session")
+    if row is None:
+        row = _row_or_404(
+            supabase.table("sessions").select(columns).eq("id", session_id),
+            "Session")
     if row.get("user_id") != user_id:
         _record_security_event("authz_denied", user_id, row.get("user_id"),
                                check="session_owner", session_id=session_id)
@@ -6212,7 +6260,45 @@ def _verify_session_owner(session_id: str, user_id: str, columns: str = "user_id
 
 # Clock drift tolerated between a sidecar's sample stamps and this server's session bounds.
 _INGEST_TS_SLACK = timedelta(minutes=10)
-_INGEST_SESSION_COLUMNS = "user_id, started_at, ended_at"
+
+
+def _gate_shape_fault(out) -> str | None:
+    """None for `ingest_gate`'s object; otherwise its shape, by type and keys, never values."""
+    if not isinstance(out, dict):
+        return f"a {type(out).__name__}"
+    if not {"session", "consent"} <= out.keys():
+        return f"an object with keys {sorted(out)}"
+    for key in ("session", "consent"):
+        if out[key] is not None and not isinstance(out[key], dict):
+            return f"{key} as a {type(out[key]).__name__}"
+    if out["session"] is not None and "user_id" not in out["session"]:
+        return f"a session with keys {sorted(out['session'])}"
+    return None
+
+
+def _ingest_gate(session_id: str, user_id: str) -> tuple[dict, dict | None]:
+    """The caller's own session (`user_id, started_at, ended_at`) and their consent row, in one read.
+
+    Missing 404, someone else's 403 through `_session_or_403`. A failed read, or an answer not
+    shaped as the function's object, is a 503 with nothing written: the push client resends.
+    """
+    try:
+        out = supabase.rpc("ingest_gate", {"p_session_id": session_id,
+                                           "p_user_id": user_id}).execute().data
+    except Exception as e:                                     # noqa: BLE001
+        if _names_no_row(e):
+            raise HTTPException(404, "Session not found")
+        if not _missing_rpc(e, "ingest_gate", "20261003000000",
+                            "every signal batch is a 503, held and resent by the push client, until then"):
+            print(f"[ingest] could not read the gate for {session_id}: {e}")
+        raise _read_failed("Could not check this session; try again")
+    fault = _gate_shape_fault(out)
+    if fault:
+        print(f"[ingest] ingest_gate answered {fault} for {session_id}; a failed read, so a 503")
+        raise _read_failed("Could not check this session; try again")
+    if out["session"] is None:
+        raise HTTPException(404, "Session not found")
+    return _session_or_403(session_id, user_id, row=out["session"]), out["consent"]
 
 
 def _ingest_ts_filter(session: dict):
@@ -6239,12 +6325,12 @@ def _ingest_ts_filter(session: dict):
 @app.post("/api/signals/cognitive")
 def ingest_cognitive(payload: CognitiveBatch, request: Request):
     user = get_user(request)
-    # Rate-limit first: spares a flooding client a `sessions` query.
+    # Rate-limit first: a flooding client never reaches the `ingest_gate` call.
     _rate_limit_ingest(user["id"])
-    session = _verify_session_owner(payload.session_id, user["id"], _INGEST_SESSION_COLUMNS)
+    session, consent_row = _ingest_gate(payload.session_id, user["id"])
 
     # Last line of defence against a stale sidecar; fails closed, reason says which gate.
-    consent = _may_record(user["id"])
+    consent = _may_record(user["id"], consent=_stored_consent(consent_row))
     if not consent["record_eeg"]:
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
                 "reason": _not_recording_reason(consent, "eeg not consented")}
@@ -6302,10 +6388,10 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
 def ingest_face(payload: FaceBatch, request: Request):
     user = get_user(request)
     _rate_limit_ingest(user["id"])
-    session = _verify_session_owner(payload.session_id, user["id"], _INGEST_SESSION_COLUMNS)
+    session, consent_row = _ingest_gate(payload.session_id, user["id"])
 
     # Last line of defence against a stale sidecar; fails closed.
-    consent = _may_record(user["id"])
+    consent = _may_record(user["id"], consent=_stored_consent(consent_row))
     if not consent["record_camera"]:
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
                 "reason": _not_recording_reason(consent, "camera not consented")}
@@ -6350,9 +6436,9 @@ def ingest_heart(payload: HeartBatch, request: Request):
     """
     user = get_user(request)
     _rate_limit_ingest(user["id"])
-    session = _verify_session_owner(payload.session_id, user["id"], _INGEST_SESSION_COLUMNS)
+    session, consent_row = _ingest_gate(payload.session_id, user["id"])
 
-    consent = _may_record(user["id"])
+    consent = _may_record(user["id"], consent=_stored_consent(consent_row))
     allowed = _permitted_heart_sources(consent)
     samples, malformed = _validate_each(HeartSample, payload.samples)
     kept = [s for s in samples if s.source in allowed]
@@ -7372,8 +7458,8 @@ def my_children(request: Request, include_face: bool = True):
     links = supabase.table("parent_child_links").select("child_id, created_at") \
         .eq("parent_id", user["id"]).execute()
     child_ids = [lnk["child_id"] for lnk in (links.data or [])]
-    channels_by_child = {cid: _reportable_channels(cid, include_face)
-                         for cid in child_ids}
+    # One consent read for every child; fails closed per child, as `_consent` does.
+    channels_by_child = _reportable_channels_many(child_ids, include_face)
     # Keyed on the flags alone: `consent_retrieved` doesn't change the query.
     by_channels: dict[tuple[bool, bool], list[str]] = {}
     for cid, ch in channels_by_child.items():
@@ -7397,12 +7483,16 @@ def my_children(request: Request, include_face: bool = True):
     all_stats = _stats_including_open_session_many(kids)
     profiles = _profiles_many(kids)
     all_perf = _topic_performance_many(kids)
+    # "Top five per child" in one call; it has no PostgREST form, so it is a function.
+    try:
+        recent = _recent_sessions_many(kids, 5)
+    except Exception as e:                                      # noqa: BLE001
+        # `None` per child, as `class_sessions` sends: an empty list would say "no sessions".
+        print(f"[parent:children] could not read recent sessions: {e}")
+        recent = None
     for lnk in (links.data or []):
         cid = lnk["child_id"]
         stats = all_stats.get(cid) or {}
-        # Per child: "top five per child" has no PostgREST batch form.
-        sess_res = supabase.table("sessions").select(_SESSION_CLIENT_COLUMNS) \
-            .eq("user_id", cid).order("started_at", desc=True).limit(5).execute()
         p = profiles.get(cid) or {}
         children.append({
             "user_id":     cid,
@@ -7410,7 +7500,7 @@ def my_children(request: Request, include_face: bool = True):
             "email":       p.get("email") or "",
             "linked_at":   lnk["created_at"],
             "stats":       stats,
-            "sessions":    sess_res.data or [],
+            "sessions":    None if recent is None else recent.get(cid, []),
             "performance": all_perf.get(cid) or [],
             # Headline averages only, not the full weekly report.
             "signal_summary": summaries[str(cid)]
@@ -7715,29 +7805,6 @@ _STALE_AFTER_SEC = 600
 # Platform-wide open-session cap; the payload reports when it bites.
 _ADMIN_LIVE_SESSION_CAP = 200
 
-# Nothing submitted here may wait on anything else in here, or it deadlocks.
-_ADMIN_LIVE_POOL: ThreadPoolExecutor | None = None
-_admin_live_pool_lock = threading.Lock()
-
-
-def _admin_live_pool() -> ThreadPoolExecutor:
-    global _ADMIN_LIVE_POOL
-    with _admin_live_pool_lock:
-        if _ADMIN_LIVE_POOL is None:
-            _ADMIN_LIVE_POOL = ThreadPoolExecutor(max_workers=8,
-                                                  thread_name_prefix="admin-live")
-        return _ADMIN_LIVE_POOL
-
-
-def _shutdown_admin_live_pool():
-    """Drop the queue on the way out (from _lifespan). See `_shutdown_strategy_pool`."""
-    global _ADMIN_LIVE_POOL
-    with _admin_live_pool_lock:
-        pool, _ADMIN_LIVE_POOL = _ADMIN_LIVE_POOL, None
-    if pool is not None:
-        pool.shutdown(wait=False, cancel_futures=True)
-
-
 # A failed read; distinct from None ("nothing has ever arrived").
 _TS_UNREADABLE = object()
 
@@ -7745,34 +7812,25 @@ _TS_UNREADABLE = object()
 def _latest_signal_ts(session_ids: list[str]) -> dict:
     """Newest timestamp per session per channel, and nothing else.
 
-    `{session_id: {"eeg": ts|None|_TS_UNREADABLE, "camera": ...}}`. Selects `ts`
-    alone, so readings never leave the database. All reads submitted before any wait.
+    `{session_id: {"eeg": ts|None|_TS_UNREADABLE, "camera": ...}}`. The function returns
+    timestamps alone, so readings never leave the database. One read per channel, so one
+    channel failing leaves the other read.
     """
-    pool = _admin_live_pool()
-
-    def _newest(table: str, session_id: str):
-        try:
-            rows = supabase.table(table).select("ts") \
-                .eq("session_id", session_id) \
-                .order("ts", desc=True).limit(1).execute().data or []
-            return rows[0]["ts"] if rows else None
-        except Exception as e:
-            print(f"[admin:live:{table}] {session_id}: {e}")
-            return _TS_UNREADABLE
-
-    channels = (("eeg", "cognitive_signals"), ("camera", "face_signals"))
-    futures = {(sid, name): pool.submit(_newest, table, sid)
-               for sid in session_ids
-               for name, table in channels}
-
     out = {sid: {} for sid in session_ids}
-    for (sid, name), future in futures.items():
+    if not session_ids:
+        return out
+    for name, channel in (("eeg", "cognitive"), ("camera", "face")):
         try:
-            out[sid][name] = future.result()
-        except Exception as e:
-            # The pool itself failed (e.g. shutdown); `_newest` catches its own.
-            print(f"[admin:live:{name}] {sid}: {e}")
-            out[sid][name] = _TS_UNREADABLE
+            rows = supabase.rpc("latest_signal_ts_for_sessions",
+                                {"p_session_ids": list(session_ids),
+                                 "p_channel": channel}).execute().data or []
+            newest = {r.get("session_id"): r.get("ts") for r in rows}
+            for sid in session_ids:
+                out[sid][name] = newest.get(sid)
+        except Exception as e:                                  # noqa: BLE001
+            print(f"[admin:live:{channel}] {e}")
+            for sid in session_ids:
+                out[sid][name] = _TS_UNREADABLE
     return out
 
 

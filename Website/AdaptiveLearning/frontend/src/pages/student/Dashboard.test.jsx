@@ -39,7 +39,7 @@ const draw = () => render(<MemoryRouter><Dashboard /></MemoryRouter>)
 
 // Waits for that exact request to settle: until then the hook answers `null` either way.
 async function settled(path) {
-  await waitFor(() => expect(apiFetch).toHaveBeenCalledWith(path))
+  await waitFor(() => expect(apiFetch.mock.calls.some(([p]) => p === path)).toBe(true))
   const i = apiFetch.mock.calls.findIndex(([p]) => p === path)
   await act(async () => { await apiFetch.mock.results[i].value.catch(() => {}) })
 }

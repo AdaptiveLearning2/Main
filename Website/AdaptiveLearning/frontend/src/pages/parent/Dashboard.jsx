@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Activity, Sparkles, ShieldCheck } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
+import { usePrefetchWhenIdle } from '../../lib/prefetch'
+import { pages } from '../../routes'
 import ChildWithdrewBanner from '../../components/consent/ChildWithdrewBanner'
-import { pct, valueOrReason, emotionOn as faceIncluded } from '../../components/signals/SignalPanel'
+import { pct, valueOrReason, emotionOn as faceIncluded } from '../../lib/signalFormat'
 import { stagger } from '../../lib/stagger'
 
 // Only the fields the tiles below render; keep in step with them.
@@ -27,6 +29,8 @@ export default function ParentDashboard() {
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState(false)
   const name = displayName || 'there'
+  // A child's report is the usual next click, and it carries the chart library.
+  usePrefetchWhenIdle(pages.parentChild)
 
   useEffect(() => {
     let cancelled = false
@@ -40,10 +44,10 @@ export default function ParentDashboard() {
     <div className="p-6 lg:p-8 pb-12 space-y-8">
       <ChildWithdrewBanner />
 
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
+      <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">Hey, <span className="text-emerald-600">{name}</span> 👋</h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">Here's how your {children.length === 1 ? 'child is' : 'children are'} doing this week.</p>
-      </motion.div>
+      </m.div>
 
       {/* A failed refresh over existing rows is a banner, not a takeover. */}
       {error && children.length > 0 && (
@@ -60,7 +64,7 @@ export default function ParentDashboard() {
           <p className="text-gray-500 dark:text-gray-400">Couldn't load data. Make sure the backend is running.</p>
         </div>
       ) : children.length === 0 ? (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+        <m.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
           className="text-center py-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
           <div className="text-6xl mb-4">👦</div>
           <h3 className="text-xl font-black text-gray-900 dark:text-white mb-2">No children linked yet</h3>
@@ -70,7 +74,7 @@ export default function ParentDashboard() {
           <Link to="/parent/link" className="inline-flex items-center gap-2 px-6 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition shadow">
             <Users size={16} /> Link a Child
           </Link>
-        </motion.div>
+        </m.div>
       ) : (
         <div className="space-y-6">
           {children.map((child, i) => {
@@ -89,7 +93,7 @@ export default function ParentDashboard() {
             const showSignals = retrieved && hasSignalSummary(signals)
             const initial = (child.name || child.email || '?')[0].toUpperCase()
             return (
-              <motion.div key={child.user_id}
+              <m.div key={child.user_id}
                 initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.1) }}
                 className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
 
@@ -104,10 +108,10 @@ export default function ParentDashboard() {
                     </div>
                   </div>
                   <Link to={`/parent/child/${child.user_id}`} state={{ name: child.name || null }}>
-                    <motion.div whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}
+                    <m.div whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}
                       className="flex items-center justify-center gap-1.5 px-4 py-2 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 rounded-xl text-sm font-bold hover:bg-emerald-100 transition">
                       Full Report <ArrowUpRight size={14} />
-                    </motion.div>
+                    </m.div>
                   </Link>
                 </div>
 
@@ -172,6 +176,12 @@ export default function ParentDashboard() {
                   </Link>
                 </div>
 
+                {/* `null` is a failed read; an empty list is a child with no sessions yet. */}
+                {child.sessions === null && (
+                  <p className="px-5 py-3 border-t border-gray-50 dark:border-gray-800 text-xs text-gray-600 dark:text-gray-400">
+                    Recent sessions couldn't be loaded just now.
+                  </p>
+                )}
                 {child.sessions?.length > 0 && (
                   <div className="p-4 border-t border-gray-50 dark:border-gray-800">
                     <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3">Recent Sessions</p>
@@ -194,7 +204,7 @@ export default function ParentDashboard() {
                     </div>
                   </div>
                 )}
-              </motion.div>
+              </m.div>
             )
           })}
 

@@ -1,6 +1,9 @@
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import { MotionConfig } from 'framer-motion'
+// `m` components take their features from <LazyMotion>, loaded eagerly: a failed feature chunk would
+// leave every `initial={{ opacity: 0 }}` element invisible. No drag, pan or layout: eslint.motion.js.
+// Not `strict` here: lint:sinks and the tests' strict wrapper catch a stray `motion`; live it would blank the app.
+import { LazyMotion, MotionConfig, domAnimation } from 'framer-motion'
 import { ThemeProvider }  from './context/ThemeContext'
 import ThemedToaster    from './components/ui/ThemedToaster'
 import { AuthProvider }   from './context/AuthContext'
@@ -15,53 +18,58 @@ import AdminGuard         from './components/auth/AdminGuard'
 import ScrollToTop        from './components/ui/ScrollToTop'
 import RouteTitle         from './components/ui/RouteTitle'
 import PageLoader         from './components/ui/PageLoader'
+import { pages }          from './routes'
+import ServerWaking       from './components/ui/ServerWaking'
 
 // Pages are lazy per route; layouts, guards and auth pages stay static (critical path).
 import Login    from './pages/auth/Login'
 import Register from './pages/auth/Register'
 
-const StudentDashboard = lazy(() => import('./pages/student/Dashboard'))
-const Practice         = lazy(() => import('./pages/student/Practice'))
-const Adaptive         = lazy(() => import('./pages/student/Adaptive'))
-const History          = lazy(() => import('./pages/student/History'))
-const Profile          = lazy(() => import('./pages/student/Profile'))
-const Leaderboard      = lazy(() => import('./pages/student/Leaderboard'))
-const Achievements     = lazy(() => import('./pages/student/Achievements'))
-const JoinClass        = lazy(() => import('./pages/student/JoinClass'))
+const StudentDashboard = lazy(pages.studentDashboard)
+const Practice         = lazy(pages.practice)
+const Adaptive         = lazy(pages.adaptive)
+const History          = lazy(pages.history)
+const Profile          = lazy(pages.profile)
+const Leaderboard      = lazy(pages.leaderboard)
+const Achievements     = lazy(pages.achievements)
+const JoinClass        = lazy(pages.joinClass)
 
-const TeacherDashboard = lazy(() => import('./pages/teacher/Dashboard'))
-const Students         = lazy(() => import('./pages/teacher/Students'))
-const Questions        = lazy(() => import('./pages/teacher/Questions'))
-const Analytics        = lazy(() => import('./pages/teacher/Analytics'))
-const TeacherSettings  = lazy(() => import('./pages/teacher/Settings'))
-const Classes          = lazy(() => import('./pages/teacher/Classes'))
-const ClassDetail      = lazy(() => import('./pages/teacher/ClassDetail'))
-const Live             = lazy(() => import('./pages/teacher/Live'))
-const SessionReview    = lazy(() => import('./pages/teacher/SessionReview'))
-const Sessions         = lazy(() => import('./pages/teacher/Sessions'))
-const StudentReport    = lazy(() => import('./pages/teacher/StudentReport'))
+const TeacherDashboard = lazy(pages.teacherDashboard)
+const Students         = lazy(pages.students)
+const Questions        = lazy(pages.questions)
+const Analytics        = lazy(pages.analytics)
+const TeacherSettings  = lazy(pages.teacherSettings)
+const Classes          = lazy(pages.classes)
+const ClassDetail      = lazy(pages.classDetail)
+const Live             = lazy(pages.live)
+const SessionReview    = lazy(pages.sessionReview)
+const Sessions         = lazy(pages.sessions)
+const StudentReport    = lazy(pages.studentReport)
 
-const ParentDashboard  = lazy(() => import('./pages/parent/Dashboard'))
-const ParentLinkChild  = lazy(() => import('./pages/parent/LinkChild'))
-const ParentChild      = lazy(() => import('./pages/parent/ChildDetail'))
-const ParentSettings   = lazy(() => import('./pages/parent/Settings'))
+const ParentDashboard  = lazy(pages.parentDashboard)
+const ParentLinkChild  = lazy(pages.parentLinkChild)
+const ParentChild      = lazy(pages.parentChild)
+const ParentSettings   = lazy(pages.parentSettings)
 
-const AdminOverview    = lazy(() => import('./pages/admin/Overview'))
-const AdminFlags       = lazy(() => import('./pages/admin/Flags'))
-const AdminLiveFlow    = lazy(() => import('./pages/admin/LiveFlow'))
-const AdminSchoolYear  = lazy(() => import('./pages/admin/SchoolYear'))
-const AdminSecurity    = lazy(() => import('./pages/admin/SecurityEvents'))
-const AdminStudentReport = lazy(() => import('./pages/admin/StudentReport'))
+const AdminOverview    = lazy(pages.adminOverview)
+const AdminFlags       = lazy(pages.adminFlags)
+const AdminLiveFlow    = lazy(pages.adminLiveFlow)
+const AdminSchoolYear  = lazy(pages.adminSchoolYear)
+const AdminSecurity    = lazy(pages.adminSecurity)
+const AdminStudentReport = lazy(pages.adminStudentReport)
 
-const NotFound = lazy(() => import('./pages/NotFound'))
+const NotFound = lazy(pages.notFound)
 
 export default function App() {
   return (
     // Honours the OS "reduce motion" setting for every animation, at the provider
     // so new ones are covered too. Fades still run; spinners stop.
     <MotionConfig reducedMotion="user">
+    <LazyMotion features={domAnimation}>
     <ThemeProvider>
       <ThemedToaster />
+      {/* Above the auth provider: its role read is the first request a cold start waits on. */}
+      <ServerWaking />
       <AuthProvider>
         <BrowserRouter>
           <ScrollToTop />
@@ -127,6 +135,7 @@ export default function App() {
         </BrowserRouter>
       </AuthProvider>
     </ThemeProvider>
+    </LazyMotion>
     </MotionConfig>
   )
 }

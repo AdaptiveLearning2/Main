@@ -9,6 +9,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 import pytest  # noqa: E402
 
 import main  # noqa: E402
+from test_access_control import _RPC_READS, _Rpc, _viewer_relationship_result  # noqa: E402
 
 ADMIN = {"id": "admin-1"}
 TEACHER = {"id": "teacher-1"}
@@ -25,6 +26,14 @@ class _Fake:
         self.raises = set(raises)
         self.upserts = []
         self.inserts = []
+
+    def rpc(self, name, params):
+        assert name == "viewer_relationship", name
+        # The shared model over this fake's profiles; it holds no class or link.
+        profiles = [{"id": STUDENT, "role": "student"}] + [{"id": a, "role": "admin"} for a in self.admins]
+        failed = self.raises & set(_RPC_READS[name])
+        return _Rpc(_viewer_relationship_result({"profiles": profiles}, params),
+                    RuntimeError(f"{sorted(failed)} unavailable") if failed else None)
 
     def table(self, name):
         client, table = self, name
@@ -376,11 +385,33 @@ _SIGNAL_CONTENT = {"alpha", "beta", "theta", "delta", "gamma", "focus_score",
 class _LiveFake(_Fake):
     """`_Fake` plus open sessions, recording every select so tests can assert on the query."""
 
+    # The channels `latest_signal_ts_for_sessions` takes, and the table each reads.
+    _CHANNEL_TABLES = {"cognitive": "cognitive_signals", "face": "face_signals"}
+
     def __init__(self, sessions=(), signals=None, **kw):
         super().__init__(**kw)
         self.sessions = list(sessions)
         self.signals = signals or {}
         self.selects = []
+        self.rpcs = []
+
+    def rpc(self, name, params):
+        """The timestamp-only function: the newest `ts` per session on one channel."""
+        assert name == "latest_signal_ts_for_sessions", name
+        self.rpcs.append((name, params))
+        client, table = self, self._CHANNEL_TABLES[params["p_channel"]]
+
+        class _R:
+            def execute(self):
+                if table in client.raises:
+                    raise RuntimeError(f"{table} unavailable")
+                # One open session per test, so the fixtures carry no session_id.
+                newest = max((r["ts"] for r in client.signals.get(table, [])), default=None)
+                data = [{"session_id": sid, "ts": newest}
+                        for sid in params["p_session_ids"] if newest is not None]
+                return type("R", (), {"data": data})()
+
+        return _R()
 
     def table(self, name):
         client, outer = self, super().table(name)
@@ -438,13 +469,11 @@ def test_live_signals_asks_the_database_for_no_readings(monkeypatch):
 
     out = main.admin_live_signals(None)
 
-    signal_selects = [cols for table, cols in fake.selects
-                      if table in ("cognitive_signals", "face_signals")]
-    assert signal_selects, "the endpoint never read a signal table"
-    for cols in signal_selects:
-        assert cols == ("ts",), (
-            f"a signal table was queried for {cols} -- this endpoint must ask "
-            "for `ts` alone, so a reading cannot reach it to be filtered out")
+    # Through the function that returns timestamps alone, never a table read that could
+    # bring a reading back to be filtered out (its columns: scripts/assert_signal_rls.sql).
+    assert not [t for t, _ in fake.selects if t in ("cognitive_signals", "face_signals")], (
+        "a signal table was read directly")
+    assert {p["p_channel"] for _, p in fake.rpcs} == {"cognitive", "face"}
 
     flat = repr(out)
     for field in _SIGNAL_CONTENT:
@@ -487,18 +516,21 @@ def test_an_unreadable_channel_is_not_reported_as_never_reported(monkeypatch):
     assert s["eeg"]["seen"] is True, "one bad channel took a good one with it"
 
 
-def test_live_signals_submits_every_read_before_waiting_on_any():
-    """A task waiting on another in the same fixed-size pool can deadlock it."""
-    import inspect
+def test_live_signals_reads_each_channel_once_for_every_open_session(monkeypatch):
+    """Two reads whatever the number of sessions; it was two per session through a pool."""
+    ts = main._utc_now().isoformat()
+    monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
+    monkeypatch.setattr(main, "_display_names", lambda _ids: {})
+    sessions = [{"id": f"s-{i}", "user_id": STUDENT, "started_at": ts} for i in range(5)]
+    fake = _LiveFake(admins=["admin-1"], sessions=sessions,
+                     signals={"cognitive_signals": [{"ts": ts}]})
+    monkeypatch.setattr(main, "supabase", fake)
 
-    source = inspect.getsource(main._latest_signal_ts)
-    last_submit = source.rindex(".submit(")
-    first_wait = source.index(".result(")
+    out = main.admin_live_signals(None)
 
-    assert first_wait > last_submit, (
-        "a read is awaited before the rest are submitted, so the pool runs them "
-        "one at a time -- and a task that waits on a task behind it in the same "
-        "queue does not run at all")
+    assert len(fake.rpcs) == 2
+    assert all(p["p_session_ids"] == [s["id"] for s in sessions] for _, p in fake.rpcs)
+    assert all(s["eeg"]["seen"] is True for s in out["sessions"])
 
 
 def test_consent_summary_returns_counts_and_no_identities(monkeypatch):

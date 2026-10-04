@@ -114,6 +114,25 @@ it('brings the stream up at Connect and records only from the first question', a
   await waitFor(() => expect(bridge.recorders[0].start).toHaveBeenCalledWith({ record: true }))
 }, 30_000)
 
+it('reads the bridge once per status interval, the telemetry poll reusing the status answer', async () => {
+  render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+  await waitFor(() => expect(apiFetch.mock.calls.some(c => c[0] === '/api/eeg/muse/connect')).toBe(true),
+                { timeout: 10000 })
+  // Pairing reads on its own schedule; count from a steady link.
+  await new Promise(r => setTimeout(r, 1500))
+  const from = bridge.stamps.length
+  await new Promise(r => setTimeout(r, 10_000))
+
+  const reads = bridge.stamps.slice(from)
+  expect(reads.length).toBeGreaterThanOrEqual(3)
+  // Both polls asking puts a 5 s telemetry read within 1.5 s of some 3 s status read.
+  expect(Math.min(...reads.slice(1).map((t, i) => t - reads[i]))).toBeGreaterThanOrEqual(2500)
+}, 30_000)
+
 it('arms recording for the fresh session when the backend closed the one being answered', async () => {
   // The poller was writing a closed session; without this nothing records until the next question.
   recordAnswer.mockResolvedValueOnce({ ended: true }).mockResolvedValueOnce({ topic: 'expressions' })

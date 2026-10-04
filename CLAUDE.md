@@ -1683,8 +1683,8 @@ the poll keeps something alive**: under pull, `Adaptive.jsx`'s status poll is wh
 (`PAIRING_IDLE_SECONDS`). The lesson page's intervals live in `pages/student/pollIntervals.js` (30 s under push, where
 both answers are configuration); teacher Live polls at 2 s, backing off to 30 s. `immediate: false` waits an interval
 before the first call, for a value the page has just read. Three `setInterval` polls remain, all in `Adaptive.jsx` and all
-running while hidden: the headband telemetry (the sidecar under push, `/api/eeg/status` under pull), the sidecar's push
-status, and the `VITE_EEG_DEBUG` readout.
+running while hidden: the headband telemetry (the sidecar under push; under pull the status poll's latest answer, read
+afresh only while reconnecting), the sidecar's push status, and the `VITE_EEG_DEBUG` readout.
 
 ## `set-state-in-effect` is cleared, and the shapes that cleared it are worth reusing
 

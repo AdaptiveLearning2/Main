@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { m } from 'framer-motion'
 import { Activity, Camera, Brain, Heart, Radio } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -230,25 +230,32 @@ export default function Live() {
   // Separate from classes.length === 0, so loading doesn't show "no classes yet".
   const [loadingClasses, setLoadingClasses] = useState(true)
   const historyRef = useRef({}) // user_id -> [{focus, stress, bpm}]
+  // What the cards draw: historyRef as of the last landed poll, since render may not read a ref.
+  const [history, setHistory] = useState({})
   // Per student, the stamps of the readings last appended, and the class they belong to.
   const seenRef = useRef({ classId: null, ts: {} })
 
   // A failed class-list read is its own state, not an empty list; the error
   // object lets LoadError pick its sentence.
   const [classesFailed, setClassesFailed] = useState(null)
-  const loadClasses = () => {
-    setLoadingClasses(true)
-    setClassesFailed(null)
+  // The fetch alone: it sets state only once answered, so the mount effect may call it.
+  const fetchClasses = useCallback(() => {
     apiFetch('/api/classes', { cache: true })
       .then(rows => {
         setClasses(rows || [])
-        if (rows?.length && !classId) setClassId(rows[0].id)
+        // Functional, so a class already chosen is kept.
+        if (rows?.length) setClassId(prev => prev || rows[0].id)
       })
       .catch(e => setClassesFailed(e))
       .finally(() => setLoadingClasses(false))
+  }, [])
+  // Retry: back to loading first. A mount starts there.
+  const loadClasses = () => {
+    setLoadingClasses(true)
+    setClassesFailed(null)
+    fetchClasses()
   }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only; loadClasses reads classId just to keep a class already chosen
-  useEffect(() => { loadClasses() }, [])
+  useEffect(() => { fetchClasses() }, [fetchClasses])
 
   // Paused while hidden; `retryNonce` restarts it at once, skipping any backoff.
   usePoll(async (stopped) => {
@@ -305,6 +312,7 @@ export default function Live() {
         return old && JSON.stringify(old) === JSON.stringify(r) ? old : r
       })
     })
+    setHistory({ ...historyRef.current })
     setLoadedFor(cls)
     setFailedFor(null)
     setRosterFailed(null)
@@ -374,7 +382,7 @@ export default function Live() {
             <StudentCard
               key={s.user_id}
               student={s}
-              history={historyRef.current[s.user_id] || EMPTY}
+              history={history[s.user_id] || EMPTY}
             />
           ))}
         </div>

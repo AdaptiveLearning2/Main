@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useEffectEvent, useRef, useCallback } from 'react'
 import { m } from 'framer-motion'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
@@ -6,6 +6,7 @@ import { apiFetch } from '../../lib/api'
 import { endSession, recordAnswer } from '../../lib/session'
 import useEegStartReport from '../../hooks/useEegStartReport'
 import usePoll from '../../hooks/usePoll'
+import useValueChange from '../../hooks/useValueChange'
 import { PUSH_POLL_MS, PULL_HEALTH_POLL_MS, PULL_STATUS_POLL_MS } from './pollIntervals'
 import { onSignOut } from '../../lib/signOutTasks'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
@@ -117,29 +118,27 @@ export default function Adaptive() {
 
   // Keyed on the user id, not the object, so a recreated `user` doesn't re-fetch.
   const uid = user?.id
-  const loadAccuracy = useCallback(async () => {
+  // A chain: state set after an `await` counts as set synchronously in the effect.
+  const loadAccuracy = useCallback(() => {
     if (!uid) return
     // Same endpoint as StudentProgressReport: one reader, one access check.
-    let rows
-    try {
-      rows = await apiFetch(`/api/performance/student/${uid}`)
-    } catch (e) {
+    return apiFetch(`/api/performance/student/${uid}`).then(rows => {
+      const subjects = initSubjects()
+      let correct = 0, attempts = 0
+      for (const r of rows || []) {
+        const name = r.math_topics?.topic_name
+        const c = r.correct_questions || 0
+        const a = r.attempted_questions || 0
+        if (name && subjects[name]) subjects[name] = { correct: c, attempts: a }
+        correct += c
+        attempts += a
+      }
+      setAccuracyStats({ total: { correct, attempts }, subjects })
+      setAccuracyState('ready')
+    }, e => {
       console.error('[accuracy] could not load topic performance', e)
       setAccuracyState('failed')
-      return
-    }
-    const subjects = initSubjects()
-    let correct = 0, attempts = 0
-    for (const r of rows || []) {
-      const name = r.math_topics?.topic_name
-      const c = r.correct_questions || 0
-      const a = r.attempted_questions || 0
-      if (name && subjects[name]) subjects[name] = { correct: c, attempts: a }
-      correct += c
-      attempts += a
-    }
-    setAccuracyStats({ total: { correct, attempts }, subjects })
-    setAccuracyState('ready')
+    })
   }, [uid])
 
   // Mirrors the +1 the backend made, by the topic name it sent, instead of re-fetching.
@@ -247,6 +246,9 @@ export default function Adaptive() {
     }
   }, [])
 
+  // The running page-driven reconnect's token, or null; an object so a cancel
+  // reaches the loop actually running.
+  const reconnectRun = useRef(null)
   // False once the page is gone; `pairOnce` reads it between steps. Set true in
   // the effect so StrictMode's dev remount doesn't leave it false.
   const pageAlive = useRef(true)
@@ -259,9 +261,6 @@ export default function Adaptive() {
       reconnectRun.current = null
     }
   }, [])
-  // The running page-driven reconnect's token, or null; an object so a cancel
-  // reaches the loop actually running.
-  const reconnectRun = useRef(null)
   // Consecutive poor contact readings; the hint needs CONTACT_POOR_STREAK.
   const poorStreak = useRef(0)
 
@@ -293,16 +292,15 @@ export default function Adaptive() {
 
   // Per-session clock state, cleared with the session. The clock starts in
   // `fetchQuestion`, not here, so headband setup isn't charged to the session.
-  useEffect(() => {
-    if (!sessionId) {
-      setSessionStartedAt(null)
-      setElapsedMin(0)
-      setTimeUpDismissed(false)
-      // Here, since every path to "no session" runs this effect.
-      // `questionGoal` is kept: it is the sitting's choice.
-      setGoalDismissed(false)
-    }
-  }, [sessionId])
+  useValueChange(sessionId, id => {
+    if (id) return
+    setSessionStartedAt(null)
+    setElapsedMin(0)
+    setTimeUpDismissed(false)
+    // Here, since every path to "no session" changes `sessionId`.
+    // `questionGoal` is kept: it is the sitting's choice.
+    setGoalDismissed(false)
+  })
 
   useEffect(() => {
     if (!sessionStartedAt || !durationMin) return
@@ -347,16 +345,15 @@ export default function Adaptive() {
   useEffect(() => {
     apiFetch('/api/classes', { cache: true }).then(c => {
       setClasses(c || [])
-      if ((c || []).length && !classId) setClassId(c[0].id)
+      // Functional, so a class already chosen is kept.
+      if ((c || []).length) setClassId(prev => prev || c[0].id)
     }).catch(()=>{})
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only; classId is read just to keep a class already chosen
   }, [])
 
   // Check EEG health independently so the button isn't stuck unavailable if session start fails.
   // Under push its answer is fixed by configuration, so it is re-checked every 30 s, not 5.
-  usePoll(async (stopped) => {
-    try {
-      const h = await eegHealth()
+  usePoll((stopped) => eegHealth()
+    .then(h => {
       // A refused probe says nothing about the sidecar; keep the last answer.
       if (!stopped() && h.refused) return setHeadband(s => ({ ...s, probeRefused: true }))
       // Runs before a session exists, so pushMode is known before first paint.
@@ -374,8 +371,9 @@ export default function Adaptive() {
         available: !!h.available,
         probeUnreachable: h.answered === false,
       }))
-    } catch { if (!stopped()) setHeadband(s => ({ ...s, available: false })) }
-  }, { intervalMs: headband.pushMode ? PUSH_POLL_MS : PULL_HEALTH_POLL_MS })
+    })
+    .catch(() => { if (!stopped()) setHeadband(s => ({ ...s, available: false })) }),
+  { intervalMs: headband.pushMode ? PUSH_POLL_MS : PULL_HEALTH_POLL_MS })
 
   // Discover stations (auto-select a single one), retried until non-empty. A
   // failed read applies nothing, so `stationId` never falls back to `default`.
@@ -433,115 +431,134 @@ export default function Adaptive() {
       })
   }, [])
 
-  // Polls charge, contact and the BLE link in both modes (only the bridge reports
-  // a drop), and keeps polling through `reconnecting`.
-  const reconnecting = headband.phase === 'reconnecting'
-  useEffect(() => {
-    if (!(headband.connected || reconnecting) || !stationId) return
-    let killed = false
-    const read = async () => {
-      try {
-        let st
-        if (headband.pushMode) {
-          st = await museState(stationId)
-        } else {
-          // The status poll reads this endpoint every few seconds; reuse its answer, except while
-          // reconnecting, when the link coming back is what this poll is for.
-          const recent = lastStatus.current
-          const reuse = !reconnecting && recent?.stationId === stationId
-            && Date.now() - recent.at < TELEMETRY_POLL_MS
-          // `eegStatus` swallows failure into a fallback; an unlanded tick writes nothing.
-          const answer = reuse ? recent.answer : await eegStatus(stationId)
-          if (answer?.answered === false) return
-          st = answer?.muse
-        }
-        if (killed) return
-        const ing = st?.ingestion || {}
-        const prev = headbandRef.current
-        const pct = ing.battery_percent
-        // typeof, not `pct || null`: 0% is a reading.
-        const battery = typeof pct === 'number' ? pct : null
+  // Stops one device, releases the push client if nothing else streams, and
+  // syncs camera state from the device list.
+  const endPushDevice = async (deviceId) => {
+    await deviceStop(deviceId).catch(() => {})
+    const { devices: list } = await releasePushIfIdle()
+    if (list) {
+      const face = list.find(d => d.kind === 'face')
+      setCamera(c => ({ ...c, running: !!face?.running }))
+    } else {
+      // Unread list: the client was released, so nothing is delivered.
+      setCamera(c => ({ ...c, running: false }))
+    }
+  }
 
-        // `=== false`, not falsiness: an absent field is not a drop. Recovery
-        // needs EEG flowing (linkAlive), not only CONNECTED.
-        const linkUp = linkAlive(ing)
-        const dropped = ing.muse_connected === false
+  // Hardware ops: pull proxies via /api/eeg/muse/*, push calls the sidecar on
+  // loopback. `rec` is passed in so pull can use a not-yet-rendered recorder.
+  const makeHw = (rec) => headband.pushMode ? {
+    // Hardware only; delivery starts with the `sessionId` effect.
+    begin:      async () => { await deviceStart(stationId)
+                              return { ok: true, running: true } },
+    disconnect: () => museDisconnect(stationId),
+    scan:       () => museRefresh(stationId),
+    connect:    (name) => museConnect(name, stationId),
+    status:     () => museState(stationId),
+    // Not `stopPush()`: that is global and would stop the camera's delivery too.
+    end:        () => endPushDevice(stationId),
+  } : {
+    // Stream up, nothing written: `armRecording` arms recording on the first question.
+    begin:      () => rec.start({ record: false }),
+    disconnect: () => apiFetch('/api/eeg/muse/disconnect',
+                               { method: 'POST', body: { device_id: stationId } }),
+    scan:       (sid) => apiFetch('/api/eeg/muse/refresh',
+                                  { method: 'POST', body: { device_id: stationId, session_id: sid } }),
+    connect:    (name, sid) => apiFetch('/api/eeg/muse/connect',
+                                        { method: 'POST', body: { name, device_id: stationId, session_id: sid } }),
+    // `null` for an unlanded read, matching push's throw; never `{}` ("nothing connected").
+    status:     async () => {
+      const st = await eegStatus(stationId)
+      return st?.answered === false ? null : (st?.muse || {})
+    },
+    // `?.`: a racing Disconnect may already have dropped the recorder.
+    end:        () => rec?.stop(),
+  }
 
-        if (prev.phase === 'reconnecting') {
-          if (linkUp) {
-            settlingSince.current = null
-            onReconnected()
-            return
-          }
-          // A settling link is left alone until the grace expires.
-          if (linkSettling(ing)) {
-            if (settlingSince.current == null) settlingSince.current = Date.now()
-            if (Date.now() - settlingSince.current < SETTLE_GRACE_MS) return
-          } else {
-            settlingSince.current = null
-          }
-          // Show the bridge's progress; once it gives up (or an older bridge never tries), take over.
-          const bridgeTrying = ing.reconnecting === true
-          if (bridgeTrying) {
-            setHeadband(s => ({ ...s, reconnect: {
-              attempt: ing.reconnect_attempt || 0,
-              max: ing.reconnect_max_attempts || 0,
-              byBridge: true,
-            } }))
-          } else if (!reconnectRun.current) {
-            startFrontendReconnect()
-          }
-          return
-        }
+  // One scan-and-connect, reporting a reason rather than toasting. `run` is the
+  // reconnect loop's cancel token, checked between steps, as is page unmount.
+  const pairOnce = async (hw, activeSessionId, run = null) => {
+    const cancelled = () => run?.cancelled === true || !pageAlive.current
+    const phase = (p) => { if (!run) setHeadband(s => ({ ...s, phase: p })) }
 
-        // A drop needs `phase: 'connected'`: under pull `connected` is true from
-        // `/api/eeg/start`, before the scan, so it alone misreads pairing as a drop.
-        if (dropped && prev.connected && prev.phase === 'connected') {
-          onDropped(ing)
-          return
-        }
+    // Before the disconnect: it is global to the shared bridge device.
+    if (cancelled()) return { ok: false, reason: 'cancelled' }
 
-        // Steady state: charge and debounced contact.
-        const quality = contactQuality(ing)
-        if (quality === 'poor') poorStreak.current += 1
-        else poorStreak.current = 0
-        const contactPoor = quality == null ? null : poorStreak.current >= CONTACT_POOR_STREAK
-        setHeadband(s => ({ ...s, battery, contactPoor }))
-      } catch {
-        // Keep last known values; disconnect clears them.
+    // Adopt a live link (see linkAlive) rather than tearing it down and rebuilding.
+    const already = await hw.status().catch(() => null)
+    if (cancelled()) return { ok: false, reason: 'cancelled' }
+    // Unlanded read: touch nothing, since the fall-through disconnects.
+    if (already === null) return { ok: false, reason: 'status_unavailable' }
+    if (linkAlive(already?.ingestion)) {
+      clearTimeout(phaseTimer.current)
+      setHeadband(s => ({ ...s, connected: true, phase: 'connected', reconnect: null,
+                           deviceName: already.ingestion.active_muse_name || s.deviceName }))
+      return { ok: true, adopted: true }
+    }
+
+    // Disconnect a previous session first, or the next connect throws BadStateError.
+    await hw.disconnect().catch(() => {})
+    await new Promise(r => setTimeout(r, 1500))
+    if (cancelled()) return { ok: false, reason: 'cancelled' }
+
+    phase('scanning')
+    // session_id scopes the station reservation this scan claims.
+    await hw.scan(activeSessionId)
+
+    let devices = []
+    // Unlanded reads are not empty scans: `status_unavailable`, not `no_device`.
+    let scanAnswered = false
+    for (let i = 0; i < 12; i++) {
+      await new Promise(r => setTimeout(r, 1000))
+      if (cancelled()) return { ok: false, reason: 'cancelled' }
+      const st = await hw.status()
+      if (st === null) continue
+      scanAnswered = true
+      devices = st?.ingestion?.muse_devices || []
+      if (devices.length > 0) break
+      // Stop early if Bluetooth itself is off.
+      if (st?.ingestion?.bluetooth_enabled === false) return { ok: false, reason: 'bluetooth_off' }
+    }
+    if (!scanAnswered) return { ok: false, reason: 'status_unavailable' }
+    if (devices.length === 0) return { ok: false, reason: 'no_device' }
+    if (cancelled()) return { ok: false, reason: 'cancelled' }
+
+    const target = devices[0]
+    phase('connecting')
+    setHeadband(s => ({ ...s, deviceName: target }))
+    await hw.connect(target, activeSessionId)
+
+    // The bridge connects asynchronously; poll for it.
+    let connectAnswered = false
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 1000))
+      if (cancelled()) return { ok: false, reason: 'cancelled' }
+      const st = await hw.status()
+      if (st === null) continue
+      connectAnswered = true
+      if (st?.ingestion?.muse_connected) {
+        clearTimeout(phaseTimer.current)
+        setHeadband(s => ({ ...s, connected: true, phase: 'connected', reconnect: null }))
+        return { ok: true }
       }
     }
-    read()
-    const id = setInterval(read, reconnecting ? RECONNECT_POLL_MS : TELEMETRY_POLL_MS)
-    return () => { killed = true; clearInterval(id) }
-    // The handlers read through refs and setState, so they are effectively stable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [headband.connected, reconnecting, headband.pushMode, stationId])
+    // `not_connected` asks for a power-cycle, so only when a read actually landed.
+    return { ok: false, reason: connectAnswered ? 'not_connected' : 'status_unavailable' }
+  }
 
-  // A link that dropped on its own: announce once, then watch for recovery.
-  const onDropped = (ing) => {
+  const disconnectHeadband = async (hw) => {
+    clearTimeout(phaseTimer.current)
     poorStreak.current = 0
-    // A fresh settle grace per episode.
+    // A teardown ends the drop-toast episode, so the next drop is announced.
+    lastDropToast.current = 0
+    dropAnnounced.current = false
     settlingSince.current = null
-    const byBridge = ing.reconnecting === true
-    setHeadband(s => ({
-      ...s, connected: false, phase: 'reconnecting', battery: null, contactPoor: null,
-      reconnect: { attempt: ing.reconnect_attempt || 0, max: ing.reconnect_max_attempts || 0, byBridge },
-    }))
-    // Toast once per DROP_TOAST_MIN_MS, not per drop; the panel shows every one.
-    const now = Date.now()
-    if (now - lastDropToast.current >= DROP_TOAST_MIN_MS) {
-      lastDropToast.current = now
-      dropAnnounced.current = true
-      toast.warning('The headband disconnected.', {
-        description: 'Trying to reconnect. Check it is switched on and sitting on your head.',
-        duration: 8_000,
-      })
-    } else {
-      dropAnnounced.current = false
-    }
-    // Bridge isn't recovering: start this page's loop now.
-    if (!byBridge && !reconnectRun.current) startFrontendReconnect()
+    await hw.end()
+    // Drop, not reuse: it closed over the old deviceId.
+    setRecorder(null)
+    delete window.AL_currentSessionId
+    setHeadband(s => ({ ...s, connected: false, phase: 'idle', deviceName: null,
+                         battery: null, reconnect: null, contactPoor: null }))
   }
 
   const onReconnected = () => {
@@ -565,9 +582,11 @@ export default function Adaptive() {
       // An unlanded status read ends the run without spending the headband budget.
       let unreachable = false
       for (let attempt = 1; attempt <= RECONNECT_ATTEMPTS && !run.cancelled; attempt++) {
-        setHeadband(s => ({ ...s, phase: 'reconnecting',
-                             reconnect: { attempt, max: RECONNECT_ATTEMPTS, byBridge: false } }))
-        await new Promise(r => setTimeout(r, RECONNECT_BACKOFF_MS[attempt - 1]))
+        // Consts for the closures: the hooks compiler cannot build `attempt++` on a captured variable.
+        const reconnect = { attempt, max: RECONNECT_ATTEMPTS, byBridge: false }
+        const backoff = RECONNECT_BACKOFF_MS[attempt - 1]
+        setHeadband(s => ({ ...s, phase: 'reconnecting', reconnect }))
+        await new Promise(r => setTimeout(r, backoff))
         if (run.cancelled) break
         // It may have come back on its own; a settling link gets the grace
         // (shared with the telemetry poll via `settlingSince`), not a teardown.
@@ -613,6 +632,119 @@ export default function Adaptive() {
     })()
   }
 
+  // A link that dropped on its own: announce once, then watch for recovery.
+  const onDropped = (ing) => {
+    poorStreak.current = 0
+    // A fresh settle grace per episode.
+    settlingSince.current = null
+    const byBridge = ing.reconnecting === true
+    setHeadband(s => ({
+      ...s, connected: false, phase: 'reconnecting', battery: null, contactPoor: null,
+      reconnect: { attempt: ing.reconnect_attempt || 0, max: ing.reconnect_max_attempts || 0, byBridge },
+    }))
+    // Toast once per DROP_TOAST_MIN_MS, not per drop; the panel shows every one.
+    const now = Date.now()
+    if (now - lastDropToast.current >= DROP_TOAST_MIN_MS) {
+      lastDropToast.current = now
+      dropAnnounced.current = true
+      toast.warning('The headband disconnected.', {
+        description: 'Trying to reconnect. Check it is switched on and sitting on your head.',
+        duration: 8_000,
+      })
+    } else {
+      dropAnnounced.current = false
+    }
+    // Bridge isn't recovering: start this page's loop now.
+    if (!byBridge && !reconnectRun.current) startFrontendReconnect()
+  }
+
+  // The poll calls the latest handlers without restarting; they read refs and setState.
+  const handleDropped = useEffectEvent(ing => onDropped(ing))
+  const handleReconnected = useEffectEvent(() => onReconnected())
+  const takeOverReconnect = useEffectEvent(() => startFrontendReconnect())
+
+  // Polls charge, contact and the BLE link in both modes (only the bridge reports
+  // a drop), and keeps polling through `reconnecting`.
+  const reconnecting = headband.phase === 'reconnecting'
+  useEffect(() => {
+    if (!(headband.connected || reconnecting) || !stationId) return
+    let killed = false
+    // `{ st }`, or null for a tick that did not land.
+    const readState = () => {
+      if (headband.pushMode) return museState(stationId).then(st => ({ st }))
+      // The status poll reads this endpoint every few seconds; reuse its answer, except while
+      // reconnecting, when the link coming back is what this poll is for.
+      const recent = lastStatus.current
+      const reuse = !reconnecting && recent?.stationId === stationId
+        && Date.now() - recent.at < TELEMETRY_POLL_MS
+      // `eegStatus` swallows failure into a fallback; an unlanded tick writes nothing.
+      return (reuse ? Promise.resolve(recent.answer) : eegStatus(stationId))
+        .then(answer => (answer?.answered === false ? null : { st: answer?.muse }))
+    }
+    const read = () => Promise.resolve()
+      .then(readState)
+      .then(got => {
+        if (!got || killed) return
+        const ing = got.st?.ingestion || {}
+        const prev = headbandRef.current
+        const pct = ing.battery_percent
+        // typeof, not `pct || null`: 0% is a reading.
+        const battery = typeof pct === 'number' ? pct : null
+
+        // `=== false`, not falsiness: an absent field is not a drop. Recovery
+        // needs EEG flowing (linkAlive), not only CONNECTED.
+        const linkUp = linkAlive(ing)
+        const dropped = ing.muse_connected === false
+
+        if (prev.phase === 'reconnecting') {
+          if (linkUp) {
+            settlingSince.current = null
+            handleReconnected()
+            return
+          }
+          // A settling link is left alone until the grace expires.
+          if (linkSettling(ing)) {
+            if (settlingSince.current == null) settlingSince.current = Date.now()
+            if (Date.now() - settlingSince.current < SETTLE_GRACE_MS) return
+          } else {
+            settlingSince.current = null
+          }
+          // Show the bridge's progress; once it gives up (or an older bridge never tries), take over.
+          const bridgeTrying = ing.reconnecting === true
+          if (bridgeTrying) {
+            setHeadband(s => ({ ...s, reconnect: {
+              attempt: ing.reconnect_attempt || 0,
+              max: ing.reconnect_max_attempts || 0,
+              byBridge: true,
+            } }))
+          } else if (!reconnectRun.current) {
+            takeOverReconnect()
+          }
+          return
+        }
+
+        // A drop needs `phase: 'connected'`: under pull `connected` is true from
+        // `/api/eeg/start`, before the scan, so it alone misreads pairing as a drop.
+        if (dropped && prev.connected && prev.phase === 'connected') {
+          handleDropped(ing)
+          return
+        }
+
+        // Steady state: charge and debounced contact.
+        const quality = contactQuality(ing)
+        if (quality === 'poor') poorStreak.current += 1
+        else poorStreak.current = 0
+        const contactPoor = quality == null ? null : poorStreak.current >= CONTACT_POOR_STREAK
+        setHeadband(s => ({ ...s, battery, contactPoor }))
+      })
+      .catch(() => {
+        // Keep last known values; disconnect clears them.
+      })
+    read()
+    const id = setInterval(read, reconnecting ? RECONNECT_POLL_MS : TELEMETRY_POLL_MS)
+    return () => { killed = true; clearInterval(id) }
+  }, [headband.connected, reconnecting, headband.pushMode, stationId])
+
   // "Stop trying": Disconnect's teardown, after an explicit bridge disconnect
   // (only a command cancels the bridge's own attempts).
   const cancelReconnect = async () => {
@@ -627,16 +759,14 @@ export default function Adaptive() {
   // sidecar. Hardware stays paired.
   const finishSession = async () => {
     setFinishing(true)
-    try {
-      await endSession(sessionIdRef.current)
-    } finally {
+    await endSession(sessionIdRef.current).finally(() => {
       setSessionId(null)
       setSessionCount(0)
       setData(null)
       setPhase('idle')
       setFinishing(false)
       delete window.AL_currentSessionId
-    }
+    })
   }
 
   const creating = useRef(null)
@@ -786,15 +916,12 @@ export default function Adaptive() {
     if (!EEG_DEBUG) return
     // Wait until pushMode is known.
     if (headband.pushMode === undefined) return
-    const poll = async () => {
-      try {
-        // Under push, read the sidecar directly; same shape.
-        const d = headband.pushMode
-          ? await sidecarDebug(stationId || 'default')
-          : await apiFetch(`/api/eeg/debug${stationId ? `?device_id=${encodeURIComponent(stationId)}` : ''}`)
-        setEegDebug(d)
-      } catch { setEegDebug(null) }
-    }
+    // Under push, read the sidecar directly; same shape.
+    const poll = () => (headband.pushMode
+      ? sidecarDebug(stationId || 'default')
+      : apiFetch(`/api/eeg/debug${stationId ? `?device_id=${encodeURIComponent(stationId)}` : ''}`))
+      .then(d => setEegDebug(d))
+      .catch(() => setEegDebug(null))
     poll()
     debugTimer.current = setInterval(poll, 1500)
     return () => clearInterval(debugTimer.current)
@@ -808,157 +935,23 @@ export default function Adaptive() {
 
   useEffect(() => { localStorage.setItem('adaptive_mode', mode) }, [mode])
 
-  // Stops one device, releases the push client if nothing else streams, and
-  // syncs camera state from the device list.
-  const endPushDevice = async (deviceId) => {
-    await deviceStop(deviceId).catch(() => {})
-    const { devices: list } = await releasePushIfIdle()
-    if (list) {
-      const face = list.find(d => d.kind === 'face')
-      setCamera(c => ({ ...c, running: !!face?.running }))
-    } else {
-      // Unread list: the client was released, so nothing is delivered.
-      setCamera(c => ({ ...c, running: false }))
-    }
-  }
-
   const toggleCamera = async () => {
     // Push only; guarded here as well as by the disabled button.
     if (!camera.id || !headband.pushMode || camera.busy) return
     setCamera(c => ({ ...c, busy: true }))
-    try {
-      if (camera.running) {
-        // Shared helper, so the sidecar doesn't keep the student's token.
-        await endPushDevice(camera.id)
-      } else {
-        // No session: frames are dropped until a lesson consumes them.
-        await deviceStart(camera.id)
-        setCamera(c => ({ ...c, running: true }))
-      }
-    } catch (e) {
-      console.error('[camera]', e)
-      toast.error('The camera could not be switched.', {
-        description: errorDetail(e),
+    const toggled = camera.running
+      // Shared helper, so the sidecar doesn't keep the student's token.
+      ? endPushDevice(camera.id)
+      // No session: frames are dropped until a lesson consumes them.
+      : deviceStart(camera.id).then(() => setCamera(c => ({ ...c, running: true })))
+    await toggled
+      .catch(e => {
+        console.error('[camera]', e)
+        toast.error('The camera could not be switched.', {
+          description: errorDetail(e),
+        })
       })
-    } finally {
-      setCamera(c => ({ ...c, busy: false }))
-    }
-  }
-
-  // Hardware ops: pull proxies via /api/eeg/muse/*, push calls the sidecar on
-  // loopback. `rec` is passed in so pull can use a not-yet-rendered recorder.
-  const makeHw = (rec) => headband.pushMode ? {
-    // Hardware only; delivery starts with the `sessionId` effect.
-    begin:      async () => { await deviceStart(stationId)
-                              return { ok: true, running: true } },
-    disconnect: () => museDisconnect(stationId),
-    scan:       () => museRefresh(stationId),
-    connect:    (name) => museConnect(name, stationId),
-    status:     () => museState(stationId),
-    // Not `stopPush()`: that is global and would stop the camera's delivery too.
-    end:        () => endPushDevice(stationId),
-  } : {
-    // Stream up, nothing written: `armRecording` arms recording on the first question.
-    begin:      () => rec.start({ record: false }),
-    disconnect: () => apiFetch('/api/eeg/muse/disconnect',
-                               { method: 'POST', body: { device_id: stationId } }),
-    scan:       (sid) => apiFetch('/api/eeg/muse/refresh',
-                                  { method: 'POST', body: { device_id: stationId, session_id: sid } }),
-    connect:    (name, sid) => apiFetch('/api/eeg/muse/connect',
-                                        { method: 'POST', body: { name, device_id: stationId, session_id: sid } }),
-    // `null` for an unlanded read, matching push's throw; never `{}` ("nothing connected").
-    status:     async () => {
-      const st = await eegStatus(stationId)
-      return st?.answered === false ? null : (st?.muse || {})
-    },
-    // `?.`: a racing Disconnect may already have dropped the recorder.
-    end:        () => rec?.stop(),
-  }
-
-  // One scan-and-connect, reporting a reason rather than toasting. `run` is the
-  // reconnect loop's cancel token, checked between steps, as is page unmount.
-  const pairOnce = async (hw, activeSessionId, run = null) => {
-    const cancelled = () => run?.cancelled === true || !pageAlive.current
-    const phase = (p) => { if (!run) setHeadband(s => ({ ...s, phase: p })) }
-
-    // Before the disconnect: it is global to the shared bridge device.
-    if (cancelled()) return { ok: false, reason: 'cancelled' }
-
-    // Adopt a live link (see linkAlive) rather than tearing it down and rebuilding.
-    const already = await hw.status().catch(() => null)
-    if (cancelled()) return { ok: false, reason: 'cancelled' }
-    // Unlanded read: touch nothing, since the fall-through disconnects.
-    if (already === null) return { ok: false, reason: 'status_unavailable' }
-    if (linkAlive(already?.ingestion)) {
-      clearTimeout(phaseTimer.current)
-      setHeadband(s => ({ ...s, connected: true, phase: 'connected', reconnect: null,
-                           deviceName: already.ingestion.active_muse_name || s.deviceName }))
-      return { ok: true, adopted: true }
-    }
-
-    // Disconnect a previous session first, or the next connect throws BadStateError.
-    await hw.disconnect().catch(() => {})
-    await new Promise(r => setTimeout(r, 1500))
-    if (cancelled()) return { ok: false, reason: 'cancelled' }
-
-    phase('scanning')
-    // session_id scopes the station reservation this scan claims.
-    await hw.scan(activeSessionId)
-
-    let devices = []
-    // Unlanded reads are not empty scans: `status_unavailable`, not `no_device`.
-    let scanAnswered = false
-    for (let i = 0; i < 12; i++) {
-      await new Promise(r => setTimeout(r, 1000))
-      if (cancelled()) return { ok: false, reason: 'cancelled' }
-      const st = await hw.status()
-      if (st === null) continue
-      scanAnswered = true
-      devices = st?.ingestion?.muse_devices || []
-      if (devices.length > 0) break
-      // Stop early if Bluetooth itself is off.
-      if (st?.ingestion?.bluetooth_enabled === false) return { ok: false, reason: 'bluetooth_off' }
-    }
-    if (!scanAnswered) return { ok: false, reason: 'status_unavailable' }
-    if (devices.length === 0) return { ok: false, reason: 'no_device' }
-    if (cancelled()) return { ok: false, reason: 'cancelled' }
-
-    const target = devices[0]
-    phase('connecting')
-    setHeadband(s => ({ ...s, deviceName: target }))
-    await hw.connect(target, activeSessionId)
-
-    // The bridge connects asynchronously; poll for it.
-    let connectAnswered = false
-    for (let i = 0; i < 10; i++) {
-      await new Promise(r => setTimeout(r, 1000))
-      if (cancelled()) return { ok: false, reason: 'cancelled' }
-      const st = await hw.status()
-      if (st === null) continue
-      connectAnswered = true
-      if (st?.ingestion?.muse_connected) {
-        clearTimeout(phaseTimer.current)
-        setHeadband(s => ({ ...s, connected: true, phase: 'connected', reconnect: null }))
-        return { ok: true }
-      }
-    }
-    // `not_connected` asks for a power-cycle, so only when a read actually landed.
-    return { ok: false, reason: connectAnswered ? 'not_connected' : 'status_unavailable' }
-  }
-
-  const disconnectHeadband = async (hw) => {
-    clearTimeout(phaseTimer.current)
-    poorStreak.current = 0
-    // A teardown ends the drop-toast episode, so the next drop is announced.
-    lastDropToast.current = 0
-    dropAnnounced.current = false
-    settlingSince.current = null
-    await hw.end()
-    // Drop, not reuse: it closed over the old deviceId.
-    setRecorder(null)
-    delete window.AL_currentSessionId
-    setHeadband(s => ({ ...s, connected: false, phase: 'idle', deviceName: null,
-                         battery: null, reconnect: null, contactPoor: null }))
+      .finally(() => setCamera(c => ({ ...c, busy: false })))
   }
 
   const toggleHeadband = async () => {
@@ -1003,14 +996,8 @@ export default function Adaptive() {
         : s)
     }, 30000)
 
-    try {
-      setHeadband(s => ({ ...s, phase: 'starting' }))
-      const res = await hw.begin(activeSessionId)
-      if (!res?.ok && !res?.running) throw new Error(res?.error || 'Could not start EEG session')
-
-      const outcome = await pairOnce(hw, activeSessionId)
-      if (outcome.ok) return
-
+    // A failed pairing: stop what `begin` started, reset, and say why.
+    const pairingFailed = (outcome) => {
       // `begin` started a stream (pull: the backend poller, which never stops on its own).
       // Dropped, not reused: a stopped recorder has removed its `pagehide` listener.
       Promise.resolve().then(() => hw.end())
@@ -1043,15 +1030,25 @@ export default function Adaptive() {
           duration: 15_000,
         })
       }
-
-    } catch (e) {
-      console.error('[headband]', e)
-      clearTimeout(phaseTimer.current)
-      setHeadband(s => ({ ...s, phase: 'idle', deviceName: null }))
-      toast.error('The headband could not connect.', {
-        description: errorDetail(e),
-      })
     }
+
+    setHeadband(s => ({ ...s, phase: 'starting' }))
+    // One chain: any failure here, a throw included, resets the button and alerts once.
+    await Promise.resolve()
+      .then(() => hw.begin(activeSessionId))
+      .then(res => {
+        if (!res?.ok && !res?.running) throw new Error(res?.error || 'Could not start EEG session')
+        return pairOnce(hw, activeSessionId)
+      })
+      .then(outcome => { if (!outcome.ok) pairingFailed(outcome) })
+      .catch(e => {
+        console.error('[headband]', e)
+        clearTimeout(phaseTimer.current)
+        setHeadband(s => ({ ...s, phase: 'idle', deviceName: null }))
+        toast.error('The headband could not connect.', {
+          description: errorDetail(e),
+        })
+      })
   }
 
   // Pull only: arms the poller's `record` flag from the first question, replacing
@@ -1071,29 +1068,32 @@ export default function Adaptive() {
     if (!res?.ok) console.error('[headband] could not start recording', res?.error)
   }
 
-  const fetchQuestion = async () => {
+  const fetchQuestion = () => {
     setPhase('loading'); setError(false)
-    try {
-      const activeSessionId = await getOrCreateSession()
-      // Not awaited: a recording problem must not withhold a question.
-      armRecording(activeSessionId).catch(e => console.error('[headband]', e))
-      // The duration clock starts on the first question only.
-      setSessionStartedAt(prev => prev ?? Date.now())
+    return getOrCreateSession()
+      .then(activeSessionId => {
+        // Not awaited: a recording problem must not withhold a question.
+        armRecording(activeSessionId).catch(e => console.error('[headband]', e))
+        // The duration clock starts on the first question only.
+        setSessionStartedAt(prev => prev ?? Date.now())
 
-      // No user id: the backend takes the student from the bearer.
-      const params = new URLSearchParams({ bias: String(bias) })
-      if (mode === 'class' && classId) params.set('class_id', classId)
-      else if (grade)                   params.set('grade', grade)
-      params.set('session_id', activeSessionId)
+        // No user id: the backend takes the student from the bearer.
+        const params = new URLSearchParams({ bias: String(bias) })
+        if (mode === 'class' && classId) params.set('class_id', classId)
+        else if (grade)                   params.set('grade', grade)
+        params.set('session_id', activeSessionId)
 
-      const json = await apiFetch(`/api/generate-question?${params.toString()}`)
-      if (!json?.question_text) throw new Error('Invalid response')
-      setData(json)
-      setActiveButton(null); setSelectedAnswer(null)
-      setPhase('question')
-    } catch (err) {
-      console.error(err); setError(true); setPhase('idle')
-    }
+        return apiFetch(`/api/generate-question?${params.toString()}`)
+      })
+      .then(json => {
+        if (!json?.question_text) throw new Error('Invalid response')
+        setData(json)
+        setActiveButton(null); setSelectedAnswer(null)
+        setPhase('question')
+      })
+      .catch(err => {
+        console.error(err); setError(true); setPhase('idle')
+      })
   }
 
   const handleSubmit = async () => {

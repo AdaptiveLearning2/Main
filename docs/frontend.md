@@ -235,8 +235,14 @@ Both shapes have since bitten, and the corrections are the load-bearing half:
   resets all session-scoped state at once, the `err` that let a failure on A mask a B that loaded fine included.
   `ChildDetail.jsx` and `ClassDetail.jsx` do the same: the pattern for any page whose state belongs to one route param.
 - **The compiler behind these rules skips a component it cannot build**, and `react-hooks/todo` (on) reports it: a
-  `finally`; a `throw`, `?.`, `||` or ternary inside a `try`; `??=`; an inline arrow as a default parameter. Use a promise
-  chain: its `.finally` runs even when the catch throws, and an effect's loader needs one (state after an `await` counts).
+  `finally`; a `throw`, `?.`, `||` or ternary inside a `try`; `??=`; `++` on a variable a closure captures. Use a
+  promise chain: its `.finally` runs even when the catch throws, and an effect's loader needs one (state after an
+  `await` counts). The errors come in layers — the `?.` ones only once the others are gone — so lint after each pass.
+- **Declare before use.** A hook or effect that refers to something declared below it is an error, and a function that
+  calls one declared below it is treated as callable during render, so a `Date.now()` in it reads as impure.
+- **A reset that belongs to a user action splits the loader.** The mount effect calls the fetch alone, since the initial
+  state already is the reset; Next and retry call reset-then-fetch (`PracticeTest`, `PracticeFlashcards`, `Live`). An
+  effect that reacts to one value but must read the latest of others takes `useEffectEvent`, not a dependency.
 - **The render-time adjustment compares against the previous *render*, and that is not always the question.**
   `useValueChange` (`hooks/useValueChange.js`) is the extracted form and is right for `Flags.jsx`. It was wrong for
   `FlowDot.jsx`, which needs the last value it *acted on*: the pulse timer clears the live state, so a timestamp that

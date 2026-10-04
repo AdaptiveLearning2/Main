@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { m } from 'framer-motion'
 import { apiFetch } from '../../lib/api'
 import { markPracticeViewed } from '../../lib/practiceSession'
@@ -22,31 +22,34 @@ export default function PracticeFlashcards({ session, onFinish }) {
   // As PracticeTest: only the latest request writes state; mount effect runs once per session.
   const requestRef = useRef(0)
 
-  const loadCard = useCallback(async () => {
+  // The fetch alone: it sets state only once answered, so the mount effect may call it.
+  const fetchCard = useCallback(() => {
     const mine = ++requestRef.current
+    return apiFetch(`/api/practice-sessions/${session.id}/question`)
+      .then(q => { if (mine === requestRef.current) setQuestion(q) })
+      .catch(e => {
+        if (mine !== requestRef.current) return
+        console.error('Failed to load the next card:', e)
+        setFailed(true)
+      })
+      .finally(() => { if (mine === requestRef.current) setLoading(false) })
+  }, [session.id])
+
+  // Next and retry: back to a face-down, loading card first. A mount starts there.
+  const loadCard = useCallback(() => {
     setLoading(true)
     setFailed(false)
     setFlipped(false)
     flippedRef.current = false
-    try {
-      const q = await apiFetch(`/api/practice-sessions/${session.id}/question`)
-      if (mine !== requestRef.current) return
-      setQuestion(q)
-    } catch (e) {
-      if (mine !== requestRef.current) return
-      console.error('Failed to load the next card:', e)
-      setFailed(true)
-    } finally {
-      if (mine === requestRef.current) setLoading(false)
-    }
-  }, [session.id])
+    return fetchCard()
+  }, [fetchCard])
 
   const autoLoadedFor = useRef(null)
   useEffect(() => {
     if (autoLoadedFor.current === session.id) return
     autoLoadedFor.current = session.id
-    loadCard()
-  }, [loadCard, session.id])
+    fetchCard()
+  }, [fetchCard, session.id])
 
   async function handleFlip() {
     if (flippedRef.current || !question) return
@@ -65,16 +68,17 @@ export default function PracticeFlashcards({ session, onFinish }) {
     onFinish({ questions_answered: reviewedRef.current, correct_answers: 0 })
   }
 
+  // An Effect Event reads the latest state and handlers, so the listener is attached once.
+  const onKey = useEffectEvent(e => {
+    if (loading || failed) return
+    if (e.code === 'Space') { e.preventDefault(); handleFlip() }
+    else if (e.code === 'ArrowRight' && flippedRef.current) handleNext()
+  })
   useEffect(() => {
-    function onKey(e) {
-      if (loading || failed) return
-      if (e.code === 'Space') { e.preventDefault(); handleFlip() }
-      else if (e.code === 'ArrowRight' && flippedRef.current) handleNext()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- beyond refs, the handlers read question (listed) and session.id, fixed per session
-  }, [loading, failed, question])
+    const listener = e => onKey(e)
+    window.addEventListener('keydown', listener)
+    return () => window.removeEventListener('keydown', listener)
+  }, [])
 
   if (loading) return (
     <div className="min-h-[60vh] flex items-center justify-center">

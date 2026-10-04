@@ -28,7 +28,7 @@ vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u1', email: 'a@b.c' }, role: 'student', loading: false }),
 }))
 
-import { endSession } from '../../lib/session'
+import { endSession, recordAnswer } from '../../lib/session'
 import { mockApi, resetApi } from '../../test/mocks/apiFetch'
 import Adaptive from './Adaptive'
 
@@ -134,6 +134,34 @@ it('counts an answer only once it has been recorded', () => {
   expect(guarded).toBeGreaterThan(recorded)
   expect(counted).toBeGreaterThan(guarded)
 })
+
+it('shows a dismissed check-in again for the session that replaces a closed one', async () => {
+  // The dismissal belongs to the session: a closed one takes it with the rest of its state.
+  mockApi({
+    ...ROUTES,
+    // A real start is a round trip, so the page renders with no session in between.
+    'POST /api/sessions/start': () => new Promise(r => setTimeout(() => r({ id: 'sess-goal' }), 20)),
+    'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
+    'GET /api/generate-question?bias=0&grade=1st+Grade&session_id=sess-goal': () => QUESTION,
+  })
+  const answer = async () => {
+    await userEvent.click(await screen.findByRole('button', { name: /generate question|next question/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /^B\s*2$/ }))
+    await userEvent.click(screen.getByRole('button', { name: /submit answer/i }))
+    await screen.findByRole('button', { name: /next question/i })
+  }
+  const checkIn = /That is 5 questions answered/
+  render(<Adaptive />)
+  await screen.findByText(/how many questions/i)
+  await userEvent.click(screen.getByRole('button', { name: '5' }))
+  for (let i = 0; i < 5; i++) await answer()
+  await userEvent.click(await screen.findByRole('button', { name: /keep going/i }))
+  expect(screen.queryByText(checkIn)).toBeNull()
+
+  recordAnswer.mockResolvedValueOnce({ ended: true })
+  await answer()
+  expect(await screen.findByText(checkIn)).toBeInTheDocument()
+}, 20_000)
 
 it('re-arms the check-in for the next session in the sitting', async () => {
   // `goalDismissed` clears with the session, in the reset every route to "no session" passes through.

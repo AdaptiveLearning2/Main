@@ -283,7 +283,8 @@ other exactly, so they move as one (the `vitest` Dependabot group). **Resolve wi
 *through* a `node_modules` junction, emptying the main checkout's copy (drop the link with
 `cmd /c rmdir <link>` first; `npm ci` restores it). And `EEGResearch/.venv` is an editable install
 of the main checkout, so sidecar tests run from a worktree import *its* `src` unless prefixed with
-`PYTHONPATH=<worktree>/EEGResearch`; `src.app.config.__file__` shows which.
+`PYTHONPATH=<worktree>/EEGResearch`; `src.app.config.__file__` shows which. A worktree with its own
+`npm ci` overruns Windows' path limit on removal: `git -c core.longpaths=true worktree remove --force`.
 
 ### Two test-writing rules that came from real flakes
 

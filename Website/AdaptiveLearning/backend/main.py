@@ -4840,27 +4840,18 @@ def _can_view_student(viewer: dict, student_id: str) -> bool | None:
     uid = viewer["id"]
     if uid == student_id:
         return True
-
-    checks = (
-        # One read. Without `!inner` PostgREST keeps every membership and only empties the embed.
-        ("teacher", lambda: supabase.table("class_memberships").select("id, classes!inner(teacher_id)")
-         .eq("student_id", student_id).eq("classes.teacher_id", uid).limit(1).execute().data),
-        ("parent", lambda: supabase.table("parent_child_links").select("id")
-         .eq("parent_id", uid).eq("child_id", student_id).limit(1).execute().data),
-        # Last, as the rarest. Not `_role`, which reads a failed profile read as "student".
-        ("admin", lambda: _role_or_raise(uid) == ADMIN_ROLE),
-    )
-    unread = False
-    for name, check in checks:
-        try:
-            if check():
-                return True
-        except Exception as e:                                 # noqa: BLE001
-            # An id that cannot be a uuid names no student: a denial, not an outage.
-            if not _names_no_row(e):
-                print(f"[can_view_student:{name}] {e}")
-                unread = True
-    return None if unread else False
+    # Teacher of their class, linked parent or admin, in one statement (20261003000000).
+    # A non-uuid on either side answers null, never an error, so it is a denial like any other.
+    try:
+        relationship = supabase.rpc("viewer_relationship", {
+            "p_viewer": uid, "p_student": student_id}).execute().data
+    except Exception as e:                                     # noqa: BLE001
+        if not _missing_rpc(e, "viewer_relationship", "20261003000000",
+                            "every teacher, parent and admin view of a student is a 503 until then"):
+            print(f"[can_view_student] {e}")
+        return None
+    # Only a relationship it names admits; anything else, null included, is a denial.
+    return relationship in ("teacher", "parent", "admin")
 
 
 def _verify_can_view_student(viewer: dict, student_id: str):

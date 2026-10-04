@@ -1,5 +1,5 @@
 import { useCallback, useRef } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { m, AnimatePresence } from 'framer-motion'
 import { X } from 'lucide-react'
 import useDialog from '../../hooks/useDialog'
 
@@ -19,12 +19,12 @@ export default function MobileDrawer({ open, onClose, label = 'Navigation', chil
     <AnimatePresence>
       {open && (
         <>
-          <motion.div
+          <m.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="fixed inset-0 bg-black/50 z-40 md:hidden"
             onClick={close}
           />
-          <motion.aside
+          <m.aside
             ref={panel}
             // Can hold focus if nothing inside is focusable.
             tabIndex={-1}
@@ -43,7 +43,7 @@ export default function MobileDrawer({ open, onClose, label = 'Navigation', chil
               <X size={18} className="text-gray-500 dark:text-gray-400" />
             </button>
             {children}
-          </motion.aside>
+          </m.aside>
         </>
       )}
     </AnimatePresence>

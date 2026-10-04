@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { normalizeValue } from '../../lib/practiceQuestion'
 import QuestionFigure from '../questions/QuestionFigure'
 import CCSSBadge from '../questions/CCSSBadge'
@@ -47,7 +47,7 @@ export default function QuestionCard({ question: q, selected, revealed, onSelect
             style = 'border-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-800 dark:text-indigo-200'
           }
           return (
-            <motion.button key={i} onClick={() => onSelect(i)} disabled={revealed}
+            <m.button key={i} onClick={() => onSelect(i)} disabled={revealed}
               whileHover={!revealed ? { x: 4 } : {}}
               className={`w-full text-left p-4 rounded-xl border-2 transition-all duration-200 flex items-center gap-3 ${style}`}
             >
@@ -61,7 +61,7 @@ export default function QuestionCard({ question: q, selected, revealed, onSelect
               {revealed && selected === i && !isCorrectOption && (
                 <span className="ml-auto text-rose-500 text-lg">✗</span>
               )}
-            </motion.button>
+            </m.button>
           )
         })}
       </div>

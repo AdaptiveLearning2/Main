@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { Link as LinkIcon, Hash } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { toast } from 'sonner'
@@ -33,15 +33,15 @@ export default function ParentLinkChild() {
 
   return (
     <div className="p-6 lg:p-8 pb-12 max-w-lg">
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+      <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <h1 className="text-3xl font-black text-gray-900 dark:text-white flex items-center gap-3">
           <LinkIcon className="text-emerald-600" size={28} /> Link a Child
         </h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">Connect your child's account to monitor their progress.</p>
-      </motion.div>
+      </m.div>
 
       {/* instructions */}
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}
+      <m.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}
         className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded-2xl p-5 mb-6">
         <h3 className="font-black text-emerald-800 dark:text-emerald-200 mb-2">How to get your child's link code</h3>
         <ol className="space-y-2 text-sm text-emerald-700 dark:text-emerald-300">
@@ -54,9 +54,9 @@ export default function ParentLinkChild() {
           A code lasts 30 minutes and works once. Your child will be told that
           you linked to their account.
         </p>
-      </motion.div>
+      </m.div>
 
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
+      <m.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
         className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm">
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -76,15 +76,15 @@ export default function ParentLinkChild() {
             <p className="text-xs text-gray-600 mt-1 dark:text-gray-400">Eight characters, letters and digits. A code never contains the letters O or I, or the digits 0 or 1.</p>
           </div>
 
-          <motion.button type="submit" disabled={loading || !code.trim()}
+          <m.button type="submit" disabled={loading || !code.trim()}
             whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
             className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl font-bold shadow-lg disabled:opacity-50 transition-all flex items-center justify-center gap-2">
             {loading
-              ? <motion.div animate={{ rotate: 360 }} transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }} className="w-5 h-5 border-2 border-white border-t-transparent rounded-full" />
+              ? <m.div animate={{ rotate: 360 }} transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }} className="w-5 h-5 border-2 border-white border-t-transparent rounded-full" />
               : <><LinkIcon size={16} /><span>Link Child Account</span></>}
-          </motion.button>
+          </m.button>
         </form>
-      </motion.div>
+      </m.div>
     </div>
   )
 }

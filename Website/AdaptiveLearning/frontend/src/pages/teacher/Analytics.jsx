@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { BarChart3 } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, PieChart, Pie, Cell, Legend } from 'recharts'
 import ChartTooltip from '../../components/charts/ChartTooltip'
@@ -66,12 +66,12 @@ export default function TeacherAnalytics() {
 
   return (
     <div className="p-6 lg:p-8 pb-12 space-y-8">
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
+      <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
         <h1 className="text-3xl font-black text-gray-900 dark:text-white flex items-center gap-3">
           <BarChart3 className="text-violet-600" size={28} /> Analytics
         </h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">Question bank distribution and insights.</p>
-      </motion.div>
+      </m.div>
 
       {/* The cards below render "—" on failure. */}
       {failed && <LoadError what="the question bank" onRetry={retry} />}
@@ -79,7 +79,7 @@ export default function TeacherAnalytics() {
       {/* summary */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {summaryCards.map((c, i) => (
-          <motion.div key={c.label}
+          <m.div key={c.label}
             initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.1) }}
             whileHover={{ y: -4 }}
             className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm"
@@ -91,7 +91,7 @@ export default function TeacherAnalytics() {
               </div>
               <div className={`w-10 h-10 bg-gradient-to-br ${c.color} rounded-xl flex items-center justify-center text-lg shadow`}>{c.emoji}</div>
             </div>
-          </motion.div>
+          </m.div>
         ))}
       </div>
 
@@ -103,7 +103,7 @@ export default function TeacherAnalytics() {
 
       <div className="grid lg:grid-cols-3 gap-6">
         {/* bar chart */}
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }}
+        <m.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }}
           className="lg:col-span-2 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm">
           <h3 className="font-black text-gray-900 dark:text-white mb-6">Questions by Topic</h3>
           {loading ? (
@@ -130,10 +130,10 @@ export default function TeacherAnalytics() {
               </BarChart>
             </AccessibleChart>
           )}
-        </motion.div>
+        </m.div>
 
         {/* pie chart */}
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}
+        <m.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}
           className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm">
           <h3 className="font-black text-gray-900 dark:text-white mb-6">Difficulty Split</h3>
           {loading || diffData.length === 0 ? (
@@ -162,7 +162,7 @@ export default function TeacherAnalytics() {
               </div>
             ))}
           </div>
-        </motion.div>
+        </m.div>
       </div>
     </div>
   )

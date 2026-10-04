@@ -17,10 +17,16 @@ const SUPABASE_AUTH_OPTIONS = {
   flowType: 'implicit',
 }
 
+// supabase-js's own check, kept: an `sb_` key type this client predates may fail auth for that reason.
+const KNOWN_KEY_PREFIXES = ['sb_publishable_', 'sb_secret_', 'sb_temp_']
+if (supabaseAnonKey.startsWith('sb_') && !KNOWN_KEY_PREFIXES.some(p => supabaseAnonKey.startsWith(p))) {
+  console.warn('Unrecognized Supabase API key format; it is sent as-is. Auth errors may mean the key type is newer than this client.')
+}
+
 const base = new URL(supabaseUrl.trim().replace(/\/*$/, '/'))
 
-// Auth only: every table read goes through the backend. Built as supabase-js builds its own,
-// storage key included; a different key would sign every user out.
+// Auth only: every table read goes through the backend. Built as supabase-js builds its own, storage key
+// included (a different key would sign every user out); X-Client-Info is auth-js's own, naming this client.
 export const supabase = {
   auth: new AuthClient({
     url: new URL('auth/v1', base).href,

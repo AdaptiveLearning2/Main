@@ -750,6 +750,11 @@ docker exec -i supabase_db_AdaptiveLearning psql -U postgres -d postgres -v ON_E
 Safe against a working database: the file is `BEGIN … ROLLBACK`. Exit 0 and a final `ROLLBACK` is a
 pass.
 
+**`scripts/assert_answer_lock.sql` is the one check that needs two connections**, so it cannot roll back: it commits
+marked fixtures through `dblink` and deletes them, also at the start of the next run. Run it as `supabase_admin`
+(`docker exec -i supabase_db_AdaptiveLearning psql -U supabase_admin …`), since dblink needs a superuser to connect
+without a password.
+
 **Do this for any change to that file, and for any migration that constrains a table it writes to.**
 CI is downstream of the merge, so a broken fixture is otherwise found after the decision to ship.
 Two things were caught the first time it was run by hand, neither visible in a diff:
@@ -1000,6 +1005,8 @@ ingest samples' readings are the exception, and say why), and a new one fails un
 **No read is uncapped: PostgREST cuts it at `db-max-rows` (1000), silently**, so a count is never a
 list's length. `/api/sessions` sends a page of rows beside the real `total` (`count="exact"`; `None` when
 none came, drawn as a dash), lifetime sums come from `/api/stats/me`, and `lib/session.js` reads it.
+A read that must be whole pages on a unique key (`.gt(id)`), and takes `count="exact"` from the **first** page
+only: a later page's count covers just the rows past the cursor.
 
 ## Access control — check the relationship, not the role name
 
@@ -1723,10 +1730,10 @@ The second is **`react/no-danger`**, which arrives with the XSS sinks below rath
 ## The XSS sinks are a second, blocking lint run, because the first one cannot fail
 
 `npm run lint` is non-blocking against the 10-error backlog, and a security rule nobody can fail is not
-enforcement. `npm run lint:sinks` (`eslint.sinks.config.js`, CI step *Lint XSS sinks*) therefore extends **no**
+enforcement. `npm run lint:sinks` (`eslint.sinks.config.js`, CI step *Lint XSS sinks and motion features*) therefore extends **no**
 shared config — the whole backlog lives in `js.configs.recommended` and the two react plugins, so it cannot reach
-this run, which is red if and only if a sink was added. The rules had zero hits when written, which is what makes
-blocking possible with nothing to burn down first.
+this run, which is red if and only if a sink (or a motion misuse, below) was added. The rules had zero hits when
+written, which is what makes blocking possible with nothing to burn down first.
 
 `eslint.sinks.js` exports them and **both configs import it** — the main one for editor feedback, the gate for CI.
 Two literals would drift, and the copy that drifts is the one nobody runs locally.
@@ -1761,6 +1768,14 @@ Two config details are load-bearing, both found by the gate failing on code it h
 `react-hooks` **without enabling any of its rules**, because an `eslint-disable` naming a rule no config defines is
 itself an error (five, in source files); and it sets `reportUnusedDisableDirectives: 'off'`, because every disable
 in the tree is for a rule this run does not have.
+
+**The same gate holds the motion guard** (`eslint.motion.js`). App.jsx loads `domAnimation` into `<LazyMotion>`,
+so `motion` from `framer-motion` or `motion/react`, anything from either `*/client`, a dynamic import of
+any of them, and a drag, pan or layout prop on an `m.` element (inert without `domMax`) are errors;
+`motionImports.test.js` derives that prop list from motion-dom's types. `src/test/setup.js` renders every test inside
+`<LazyMotion strict>`, so `m` animates as it does live and a stray `motion` throws. **App itself is not `strict`**:
+both guards run before merge, and live a miss would blank the app where it otherwise costs ~13 KiB. A test about
+App's own `LazyMotion` takes the real render through `vi.importActual`, or the wrapper supplies what it tests.
 
 ## Muted text is `text-gray-600 dark:text-gray-400`, and a test does the arithmetic
 
@@ -1852,11 +1867,10 @@ is `rollup_signal_day`.
 ## The term trend reads the rollup and nothing else
 
 `/api/students/{id}/signal-trend` answers week-over-week averages, and is deliberately **not** built on
-`_weekly_signal_report`. That one reads the per-sample tables under `_REPORT_ROW_CAP`, which trims
-**oldest-first** — right for seven days and wrong for six months, because the early weeks would come back empty
-and read as a quiet term rather than as rows nobody fetched. `signal_daily_rollup` is a few hundred rows for
-half a year and needs no cap. It is also the only copy that outlives `expire_signal_rows`, and a trend is the
-surface most likely to be read *after* a year ends.
+`_weekly_signal_report`. That one aggregates every per-sample row of its week in SQL (`weekly_signal_days`),
+which is right only while those rows exist. The trend reads `signal_daily_rollup` because it is the only copy that
+outlives `expire_signal_rows`, and a trend is the surface most likely to be read *after* a year ends; half a year
+of it is a few hundred rows.
 
 **Weeks are weighted by `trusted_sample_count`, and that is derived, not chosen.** `rollup_signal_day` writes
 `avg(focus)` for cognitive and `avg(…) FILTER (WHERE trusted)` for heart; Postgres `avg()` skips nulls, so both
@@ -1893,9 +1907,9 @@ column on the roster, and focus-vs-accuracy per student. Three Postgres function
 `SECURITY INVOKER` and `service_role`-only — the backend resolves who owns the class before calling, so they are
 only ever as safe as the check above them.
 
-**They aggregate in SQL for the reason `rollup_signal_day` does, and the trap is `_REPORT_ROW_CAP`.** A class of
-thirty answering fifty a day is 45,000 rows a month, far past the 5000 cap, and the cap trims **oldest-first** —
-so a Python-side average would describe the recent tail while the early weeks read as a quiet term.
+**They aggregate in SQL for the reason `rollup_signal_day` and the weekly report do: PostgREST cuts every read at
+`db-max-rows` (1000), silently.** A class of thirty answering fifty a day is 45,000 rows a month, so a Python-side
+average would describe whichever slice the read returned while the rest read as a quiet term.
 `class_answer_buckets` returns at most 720 rows for 30 days however busy the class, because it is bounded by the
 *range* rather than by the answers.
 

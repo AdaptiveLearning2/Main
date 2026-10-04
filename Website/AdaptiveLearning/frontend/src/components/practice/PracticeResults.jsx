@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
@@ -40,7 +40,7 @@ export default function PracticeResults({ session, result, onRestart }) {
 
   return (
     <div className="max-w-lg mx-auto px-4 py-16 text-center">
-      <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 150 }}>
+      <m.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 150 }}>
         <div className="text-7xl mb-4">{isTest ? '🏆' : '📚'}</div>
         <h2 className="text-3xl font-black text-gray-900 dark:text-white mb-1">
           {isTest ? 'Practice Complete!' : 'Review Complete!'}
@@ -59,7 +59,7 @@ export default function PracticeResults({ session, result, onRestart }) {
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 mb-6 shadow-sm">
             <p className="text-5xl font-black text-indigo-600 mb-1">{finalAcc}%</p>
             <div className="mt-4 bg-gray-100 dark:bg-gray-800 rounded-full h-3 overflow-hidden">
-              <motion.div className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full"
+              <m.div className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full"
                 initial={{ width: 0 }} animate={{ width: `${finalAcc}%` }} transition={{ duration: 0.8, delay: 0.3 }} />
             </div>
           </div>
@@ -119,7 +119,7 @@ export default function PracticeResults({ session, result, onRestart }) {
             Dashboard
           </Link>
         </div>
-      </motion.div>
+      </m.div>
     </div>
   )
 }

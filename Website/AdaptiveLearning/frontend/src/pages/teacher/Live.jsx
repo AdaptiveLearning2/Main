@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { Activity, Camera, Brain, Heart, Radio } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { LineChart, Line, YAxis } from 'recharts'
@@ -63,7 +63,7 @@ function Gauge({ label, value, color = 'bg-violet-500' }) {
         </span>
       </div>
       <div className="h-2 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
-        <motion.div
+        <m.div
           className={`h-full ${color} rounded-full`}
           animate={{ width: `${pct}%` }}
           transition={{ duration: 0.4 }}

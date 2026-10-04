@@ -97,8 +97,9 @@ export default function Sessions() {
   // Every student's list failing is a full failure, not a partial one.
   const allFailed = students.length > 0 && partial === students.length
 
+  // Matches the label each row shows, so a nameless student is found by their email.
   const filteredRows = allRows.filter(s =>
-    (s._student?.name || '').toLowerCase().includes(search.trim().toLowerCase())
+    (s._student?.name || s._student?.email || '').toLowerCase().includes(search.trim().toLowerCase())
   )
 
   return (

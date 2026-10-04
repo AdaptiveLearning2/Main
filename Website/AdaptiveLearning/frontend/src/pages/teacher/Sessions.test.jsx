@@ -104,6 +104,28 @@ it('draws a nameless student as their email, else "No name set", never "Student"
   expect(screen.getAllByRole('link').filter(row => row.textContent.includes('Student'))).toEqual([])
 })
 
+it('finds a nameless student by the email their row shows', async () => {
+  // Ada's email does not contain her name, so a filter on email alone cannot find her.
+  wire({
+    roster: [
+      { user_id: 'a', name: 'Ada', email: 'lovelace@example.test' },
+      { user_id: 'b', name: null, email: 'blaise@example.test' },
+    ],
+    students: { a: [SESSION], b: [{ ...SESSION, id: 's2' }] },
+  })
+  draw()
+  await screen.findByText('Ada')
+  const box = screen.getByPlaceholderText(/filter by student/i)
+  await userEvent.type(box, 'blaise@')
+  expect(screen.getByText('blaise@example.test')).toBeInTheDocument()
+  expect(screen.queryByText('Ada')).not.toBeInTheDocument()
+
+  await userEvent.clear(box)
+  await userEvent.type(box, 'ada')
+  expect(screen.getByText('Ada')).toBeInTheDocument()
+  expect(screen.queryByText('blaise@example.test')).not.toBeInTheDocument()
+})
+
 it('shows the load error, not rows named "Student", when the class read is a 503', async () => {
   // A failed name read is a 503 from the backend, never placeholder names.
   wire({ roster: Object.assign(new Error('Could not load this class\'s students'), { status: 503 }) })

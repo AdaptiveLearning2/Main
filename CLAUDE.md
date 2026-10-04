@@ -254,10 +254,12 @@ It compiles enum values, SDK signatures and the guarded packet handling. It stil
 about a real headband.
 
 `npm run lint` is **blocking and clean** — `--max-warnings 0`, so a warning fails it too — and any hit is new: fix it
-rather than tolerate it. Every `eslint-disable` says why, after ` -- ` in the directive or on the line above. Prefer a
-`useCallback` loader with its own deps to a disable: the rule then checks the loader, where a disable would hide the
-next dependency it gains. `coverage/` is ignored by the config: linted, the result depended on whether coverage had
-ever been run on that checkout.
+rather than tolerate it. Every `eslint-disable` says why, after ` -- ` in the directive or on the line above. **A
+`react-hooks` disable also makes the compiler-backed rules (`refs`, `todo`, `set-state-in-effect`, …) skip the whole
+component**, so prefer a `useCallback` loader with its own deps, which the rule then checks. Four components still
+carry one — `Adaptive`, `Live`, `PracticeTest`, `PracticeFlashcards` — hiding ten compiler errors, so lint's zero does
+not cover them. `coverage/` is ignored by the config: linted, the result depended on whether coverage had ever been
+run on that checkout.
 
 Dependencies are pinned: `backend/requirements.txt` (runtime, direct deps only, cross-platform by
 design — no `pip freeze`), `requirements-dev.txt` adds pytest. EEGResearch uses `pyproject.toml`

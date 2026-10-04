@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { Copy, Check, Save } from 'lucide-react'
 import ConsentChannels from '../../components/consent/ConsentChannels'
 import Toggle from '../../components/ui/Toggle'
@@ -141,14 +141,14 @@ export default function Profile() {
 
   return (
     <div className="p-6 lg:p-8 pb-12">
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+      <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">Your Profile</h1>
-      </motion.div>
+      </m.div>
 
       <div className="grid lg:grid-cols-3 gap-6">
 
         {/* avatar / ID card */}
-        <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }}>
+        <m.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }}>
           <div className="bg-gradient-to-br from-indigo-600 to-violet-700 rounded-2xl p-7 text-white text-center shadow-xl">
             <div className="w-20 h-20 bg-white/20 rounded-full flex items-center justify-center text-4xl font-black mx-auto mb-4">
               {initials}
@@ -210,10 +210,10 @@ export default function Profile() {
               🚪 Sign Out
             </button>
           </div>
-        </motion.div>
+        </m.div>
 
         {/* tabs */}
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="lg:col-span-2 space-y-4">
+        <m.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="lg:col-span-2 space-y-4">
           <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-xl p-1 flex-wrap">
             {TABS.map(t => (
               <button key={t} onClick={() => setTab(t)}
@@ -223,7 +223,7 @@ export default function Profile() {
             ))}
           </div>
 
-          <motion.div key={tab} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
+          <m.div key={tab} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
 
             {/* OVERVIEW */}
             {tab === 'Overview' && (
@@ -250,7 +250,7 @@ export default function Profile() {
                     <span className={`text-lg font-black ${acc >= 70 ? 'text-green-500' : acc >= 40 ? 'text-amber-500' : 'text-rose-500'}`}>{acc}%</span>
                   </div>
                   <div className="h-3 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
-                    <motion.div className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full"
+                    <m.div className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full"
                       initial={{ width: 0 }} animate={{ width: `${acc}%` }} transition={{ duration: 0.8 }} />
                   </div>
                   <p className="text-xs text-gray-600 mt-2 dark:text-gray-400">
@@ -358,8 +358,8 @@ export default function Profile() {
               </div>
             )}
 
-          </motion.div>
-        </motion.div>
+          </m.div>
+        </m.div>
       </div>
     </div>
   )

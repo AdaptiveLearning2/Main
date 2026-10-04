@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { Settings } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { useTheme } from '../../context/ThemeContext'
@@ -82,12 +82,12 @@ export default function TeacherSettings() {
 
   return (
     <div className="p-6 lg:p-8 pb-12 max-w-4xl">
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+      <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <h1 className="text-3xl font-black text-gray-900 dark:text-white flex items-center gap-3">
           <Settings className="text-violet-600" size={28} /> Settings
         </h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">Manage your teacher account.</p>
-      </motion.div>
+      </m.div>
 
       <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-xl p-1 mb-6 overflow-x-auto">
         {TABS.map(t => (
@@ -98,7 +98,7 @@ export default function TeacherSettings() {
         ))}
       </div>
 
-      <motion.div key={tab} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
+      <m.div key={tab} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
 
         {tab === 'General' && (
           <div className="space-y-4">
@@ -188,7 +188,7 @@ export default function TeacherSettings() {
           </div>
         )}
 
-      </motion.div>
+      </m.div>
     </div>
   )
 }

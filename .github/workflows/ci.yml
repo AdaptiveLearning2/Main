@@ -171,6 +171,11 @@ jobs:
       - name: Assert signal-table RLS and CHECK constraints
         run: psql "$(supabase status -o env | grep '^DB_URL=' | cut -d= -f2- | tr -d '\"')" -v ON_ERROR_STOP=1 -f scripts/assert_signal_rls.sql
 
+      # Two-connection lock checks via dblink, which needs a superuser to connect without a password.
+      # The container is supabase_db_<project_id from supabase/config.toml>.
+      - name: Assert record_answer's row lock across connections
+        run: docker exec -i supabase_db_AdaptiveLearning psql -U supabase_admin -d postgres -v ON_ERROR_STOP=1 -f - < scripts/assert_answer_lock.sql
+
       - name: Stop local Supabase
         if: always()
         run: supabase stop --no-backup
@@ -197,9 +202,9 @@ jobs:
         working-directory: Website/AdaptiveLearning/frontend
         run: npm run lint
 
-      # Blocking: extends no shared config, so it is red iff an XSS sink was added.
+      # Blocking: extends no shared config, so it is red iff an XSS sink or a motion misuse was added.
       # This is what lets the Supabase JWT stay in localStorage.
-      - name: Lint XSS sinks (blocking)
+      - name: Lint XSS sinks and motion features (blocking)
         working-directory: Website/AdaptiveLearning/frontend
         run: npm run lint:sinks
 

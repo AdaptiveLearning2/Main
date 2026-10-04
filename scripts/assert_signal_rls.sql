@@ -1988,5 +1988,254 @@ BEGIN
     DELETE FROM public.sessions WHERE user_id = uid;
 END $$;
 
+-- ── ingest_gate: the session row and the caller's consent row, fetched, never decided ──
+DO $$
+DECLARE
+    uid uuid := gen_random_uuid(); owner uuid := gen_random_uuid();
+    sess uuid := gen_random_uuid(); g jsonb; keys text[];
+BEGIN
+    INSERT INTO auth.users (id, email) VALUES
+        (uid, 'ingest-gate@test.invalid'), (owner, 'ingest-gate-owner@test.invalid');
+    INSERT INTO public.sessions (id, user_id, started_at) VALUES (sess, owner, '2030-01-01T09:00:00Z');
+    INSERT INTO public.signal_consent (user_id, eeg_enabled) VALUES (uid, true);
+
+    -- Someone else's session comes back with its owner: main.py makes the 403 and its event.
+    g := public.ingest_gate(sess, uid);
+    IF g->'session'->>'user_id' IS DISTINCT FROM owner::text THEN
+        RAISE EXCEPTION 'ingest_gate session is %, expected the row and its owner', g->'session';
+    END IF;
+    IF g->'consent'->>'user_id' IS DISTINCT FROM uid::text
+       OR (g->'consent'->>'eeg_enabled')::boolean IS DISTINCT FROM true THEN
+        RAISE EXCEPTION 'ingest_gate consent is %, expected the caller''s row', g->'consent';
+    END IF;
+    -- The consent is the caller's, never the session owner's, and an absent row is null.
+    g := public.ingest_gate(sess, owner);
+    IF jsonb_typeof(g->'consent') IS DISTINCT FROM 'null' THEN
+        RAISE EXCEPTION 'a caller with no consent row got %', g->'consent';
+    END IF;
+    IF jsonb_typeof(public.ingest_gate(gen_random_uuid(), uid)->'session') IS DISTINCT FROM 'null' THEN
+        RAISE EXCEPTION 'an unknown session came back as a row';
+    END IF;
+    SELECT array_agg(k ORDER BY k) INTO keys
+      FROM jsonb_object_keys(public.ingest_gate(sess, uid)->'session') k;
+    IF keys IS DISTINCT FROM ARRAY['ended_at', 'started_at', 'user_id'] THEN
+        RAISE EXCEPTION 'ingest_gate session keys are %', keys;
+    END IF;
+    DELETE FROM public.signal_consent WHERE user_id = uid;
+    DELETE FROM public.sessions WHERE id = sess;
+END $$;
+
+-- ── viewer_relationship: teacher of the student's class, linked parent, or admin ──
+DO $$
+DECLARE
+    kid uuid := gen_random_uuid(); classmate uuid := gen_random_uuid();
+    teacher uuid := gen_random_uuid(); other_teacher uuid := gen_random_uuid();
+    parent uuid := gen_random_uuid(); other_parent uuid := gen_random_uuid();
+    admin uuid := gen_random_uuid();
+    cls uuid := gen_random_uuid(); other_cls uuid := gen_random_uuid();
+    r record; bad text; got text; raised text;
+BEGIN
+    INSERT INTO auth.users (id, email)
+    SELECT u, u::text || '@relationship.test.invalid'
+      FROM unnest(ARRAY[kid, classmate, teacher, other_teacher, parent, other_parent, admin]) u;
+    INSERT INTO public.profiles (id, email, role)
+    SELECT u, u::text || '@relationship.test.invalid', 'student'
+      FROM unnest(ARRAY[kid, classmate, teacher, other_teacher, parent, other_parent, admin]) u
+    ON CONFLICT (id) DO NOTHING;
+    -- Roles written directly: sign-up grants only the self-service ones.
+    UPDATE public.profiles SET role = 'teacher' WHERE id IN (teacher, other_teacher);
+    UPDATE public.profiles SET role = 'parent' WHERE id IN (parent, other_parent);
+    UPDATE public.profiles SET role = 'admin' WHERE id = admin;
+    INSERT INTO public.classes (id, teacher_id, name, join_code) VALUES
+        (cls, teacher, 'rel-a', 'RELA0001'), (other_cls, other_teacher, 'rel-b', 'RELB0001');
+    INSERT INTO public.class_memberships (class_id, student_id) VALUES
+        (cls, kid), (cls, classmate), (other_cls, classmate);
+    INSERT INTO public.parent_child_links (parent_id, child_id) VALUES
+        (parent, kid), (other_parent, classmate);
+
+    FOR r IN
+        SELECT e.label, e.expected, public.viewer_relationship(e.viewer::text, kid::text) AS got
+          FROM (VALUES (teacher, 'the teacher of their class', 'teacher'),
+                       (other_teacher, 'a teacher of another class', NULL),
+                       (parent, 'their linked parent', 'parent'),
+                       (other_parent, 'a classmate''s parent', NULL),
+                       (admin, 'an admin', 'admin'),
+                       (classmate, 'a classmate', NULL),
+                       (kid, 'themself (main.py decides self)', NULL)) e(viewer, label, expected)
+    LOOP
+        IF r.got IS DISTINCT FROM r.expected THEN
+            RAISE EXCEPTION 'viewer_relationship for % is %, expected %', r.label, r.got, r.expected;
+        END IF;
+    END LOOP;
+    -- Any spelling the uuid cast accepts still resolves, as it did when the parameters were uuid.
+    IF public.viewer_relationship(upper(teacher::text), upper(kid::text)) IS DISTINCT FROM 'teacher' THEN
+        RAISE EXCEPTION 'an upper-case uuid lost the teacher relationship';
+    END IF;
+    -- A path id that is no uuid is no relationship, never an error; the admin row would match anyone.
+    FOR bad IN SELECT unnest(ARRAY['not-a-uuid', '', kid::text || '0', '1 OR 1=1']) LOOP
+        raised := NULL;
+        BEGIN
+            got := public.viewer_relationship(admin::text, bad);
+        EXCEPTION WHEN OTHERS THEN
+            raised := SQLSTATE || ': ' || SQLERRM;
+        END;
+        IF raised IS NOT NULL THEN
+            RAISE EXCEPTION 'viewer_relationship raised % for student %', raised, quote_literal(bad);
+        END IF;
+        IF got IS NOT NULL THEN
+            RAISE EXCEPTION 'viewer_relationship answered % for student %', got, quote_literal(bad);
+        END IF;
+    END LOOP;
+    raised := NULL;
+    BEGIN
+        got := public.viewer_relationship('not-a-uuid', kid::text);
+    EXCEPTION WHEN OTHERS THEN
+        raised := SQLSTATE || ': ' || SQLERRM;
+    END;
+    IF raised IS NOT NULL OR got IS NOT NULL THEN
+        RAISE EXCEPTION 'a viewer that is no uuid got % (raised %)', got, raised;
+    END IF;
+    DELETE FROM public.parent_child_links WHERE child_id IN (kid, classmate);
+    DELETE FROM public.class_memberships WHERE class_id IN (cls, other_cls);
+    DELETE FROM public.classes WHERE id IN (cls, other_cls);
+END $$;
+
+-- ── record_answer: refused before any write; a failed step is returned, never undoes the answer ──
+DO $$
+DECLARE
+    uid uuid := gen_random_uuid(); other uuid := gen_random_uuid();
+    sess uuid := gen_random_uuid(); ended_sess uuid := gen_random_uuid();
+    q uuid := gen_random_uuid(); nq uuid := gen_random_uuid();
+    res jsonb; n int; srow record; original text; raised text;
+BEGIN
+    INSERT INTO auth.users (id, email) VALUES
+        (uid, 'record-answer@test.invalid'), (other, 'record-answer-other@test.invalid');
+    INSERT INTO public.math_topics (topic_name) VALUES ('assert-record-answer-topic');
+    INSERT INTO public.questions (id, subject, question_text)
+    VALUES (q, 'assert-record-answer-topic', 'three plus four'),
+           (nq, 'assert-record-answer-no-topic', 'two plus two');
+    INSERT INTO public.sessions (id, user_id, started_at) VALUES (sess, uid, '2030-01-01T09:00:00Z');
+    INSERT INTO public.sessions (id, user_id, started_at, ended_at)
+    VALUES (ended_sess, uid, '2030-01-01T08:00:00Z', '2030-01-01T08:30:00Z');
+
+    res := public.record_answer(gen_random_uuid(), uid, q, 0, true, '2030-01-01T09:01:00Z');
+    IF res->>'status' IS DISTINCT FROM 'not_found' THEN
+        RAISE EXCEPTION 'an unknown session answered %', res;
+    END IF;
+    res := public.record_answer(sess, other, q, 0, true, '2030-01-01T09:01:00Z');
+    IF res->>'status' IS DISTINCT FROM 'forbidden' OR res->>'owner' IS DISTINCT FROM uid::text THEN
+        RAISE EXCEPTION 'another student''s session answered %', res;
+    END IF;
+    res := public.record_answer(ended_sess, uid, q, 0, true, '2030-01-01T09:01:00Z');
+    IF res->>'status' IS DISTINCT FROM 'ended' THEN
+        RAISE EXCEPTION 'an ended session answered %', res;
+    END IF;
+    SELECT count(*) INTO n FROM public.session_answers WHERE session_id IN (sess, ended_sess);
+    IF n <> 0 OR EXISTS (SELECT 1 FROM public.sessions WHERE id IN (sess, ended_sess)
+                          AND questions_answered <> 0) THEN
+        RAISE EXCEPTION 'a refused answer wrote something: % answers', n;
+    END IF;
+
+    res := public.record_answer(sess, uid, q, 2, true, '2030-01-01T09:01:00Z');
+    IF res IS DISTINCT FROM '{"status": "ok", "topic": "assert-record-answer-topic",
+                              "topic_error": null, "counters_error": null}'::jsonb THEN
+        RAISE EXCEPTION 'a first answer returned %', res;
+    END IF;
+    PERFORM public.record_answer(sess, uid, q, 1, false, '2030-01-01T09:02:00Z');
+    SELECT questions_answered, correct_answers INTO srow FROM public.sessions WHERE id = sess;
+    IF srow.questions_answered <> 2 OR srow.correct_answers <> 1 THEN
+        RAISE EXCEPTION 'counters are %/%, expected 2/1', srow.questions_answered, srow.correct_answers;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM public.session_answers WHERE session_id = sess AND user_id = uid
+                     AND question_id = q AND selected_index = 2 AND correct
+                     AND answered_at = '2030-01-01T09:01:00Z') THEN
+        RAISE EXCEPTION 'the answer row was not written as given';
+    END IF;
+    IF (SELECT attempted_questions || '/' || correct_questions FROM public.user_math_performance p
+          JOIN public.math_topics t ON t.id = p.topic_id
+         WHERE p.user_id = uid AND t.topic_name = 'assert-record-answer-topic') IS DISTINCT FROM '2/1' THEN
+        RAISE EXCEPTION 'the topic record does not hold the two attempts';
+    END IF;
+
+    -- A failing attribution: the answer and its counters stand; the topic is null, the error named.
+    original := pg_get_functiondef('public.record_topic_attempt(uuid, uuid, boolean)'::regprocedure);
+    EXECUTE $f$CREATE OR REPLACE FUNCTION public.record_topic_attempt(
+                   p_user_id uuid, p_question_id uuid, p_correct boolean)
+               RETURNS text LANGUAGE plpgsql AS $b$ BEGIN RAISE EXCEPTION 'topic down'; END $b$ $f$;
+    res := public.record_answer(sess, uid, q, 0, true, '2030-01-01T09:03:00Z');
+    EXECUTE original;
+    IF res IS DISTINCT FROM '{"status": "ok", "topic": null, "topic_error": "P0001: topic down",
+                              "counters_error": null}'::jsonb THEN
+        RAISE EXCEPTION 'an answer with a failed attribution returned %', res;
+    END IF;
+    SELECT questions_answered, correct_answers INTO srow FROM public.sessions WHERE id = sess;
+    IF (SELECT count(*) FROM public.session_answers WHERE session_id = sess) <> 3
+       OR srow.questions_answered <> 3 OR srow.correct_answers <> 2 THEN
+        RAISE EXCEPTION 'a failed attribution undid the answer: counters %/%',
+            srow.questions_answered, srow.correct_answers;
+    END IF;
+
+    -- A question with no topic is not a failure: both null.
+    res := public.record_answer(sess, uid, nq, 1, false, '2030-01-01T09:04:00Z');
+    IF res IS DISTINCT FROM '{"status": "ok", "topic": null, "topic_error": null,
+                              "counters_error": null}'::jsonb THEN
+        RAISE EXCEPTION 'an answer to a question with no topic returned %', res;
+    END IF;
+
+    -- A failing counter bump goes through bump_session_counters and is returned, not raised.
+    original := pg_get_functiondef('public.bump_session_counters(uuid, boolean)'::regprocedure);
+    EXECUTE $f$CREATE OR REPLACE FUNCTION public.bump_session_counters(p_session_id uuid, p_correct boolean)
+               RETURNS TABLE (questions_answered integer, correct_answers integer)
+               LANGUAGE plpgsql AS $b$ BEGIN RAISE EXCEPTION 'counters down'; END $b$ $f$;
+    raised := NULL;
+    BEGIN
+        res := public.record_answer(sess, uid, q, 0, true, '2030-01-01T09:05:00Z');
+    EXCEPTION WHEN OTHERS THEN
+        raised := SQLSTATE || ': ' || SQLERRM;
+    END;
+    EXECUTE original;
+    IF raised IS NOT NULL THEN
+        RAISE EXCEPTION 'a failed counter bump undid the answer: %', raised;
+    END IF;
+    IF res IS DISTINCT FROM '{"status": "ok", "topic": "assert-record-answer-topic", "topic_error": null,
+                              "counters_error": "P0001: counters down"}'::jsonb THEN
+        RAISE EXCEPTION 'an answer with a failed counter bump returned %', res;
+    END IF;
+    SELECT questions_answered, correct_answers INTO srow FROM public.sessions WHERE id = sess;
+    IF (SELECT count(*) FROM public.session_answers WHERE session_id = sess) <> 5
+       OR srow.questions_answered <> 4 OR srow.correct_answers <> 2 THEN
+        RAISE EXCEPTION 'after a failed bump: % answers, counters %/%, expected 5 and 4/2',
+            (SELECT count(*) FROM public.session_answers WHERE session_id = sess),
+            srow.questions_answered, srow.correct_answers;
+    END IF;
+    IF (SELECT attempted_questions || '/' || correct_questions FROM public.user_math_performance p
+          JOIN public.math_topics t ON t.id = p.topic_id
+         WHERE p.user_id = uid AND t.topic_name = 'assert-record-answer-topic') IS DISTINCT FROM '3/2' THEN
+        RAISE EXCEPTION 'a failed counter bump skipped the topic attempt';
+    END IF;
+
+    -- A missing helper is 42883, the code main.py names; the subtransaction undoes the drops.
+    raised := NULL;
+    res := NULL;
+    BEGIN
+        DROP FUNCTION public.bump_session_counters(uuid, boolean);
+        DROP FUNCTION public.record_topic_attempt(uuid, uuid, boolean);
+        res := public.record_answer(sess, uid, q, 0, true, '2030-01-01T09:06:00Z');
+        RAISE EXCEPTION 'undo the drops';
+    EXCEPTION WHEN OTHERS THEN
+        raised := SQLERRM;
+    END;
+    IF raised IS DISTINCT FROM 'undo the drops' THEN
+        RAISE EXCEPTION 'record_answer without its helpers raised %', raised;
+    END IF;
+    IF res->>'status' IS DISTINCT FROM 'ok'
+       OR (res->>'counters_error' LIKE '42883: %') IS NOT TRUE
+       OR (res->>'topic_error' LIKE '42883: %') IS NOT TRUE THEN
+        RAISE EXCEPTION 'record_answer without its helpers returned %', res;
+    END IF;
+    DELETE FROM public.sessions WHERE id IN (sess, ended_sess);
+    DELETE FROM public.user_math_performance WHERE user_id = uid;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { apiFetch } from '../../lib/api'
 import { recordPracticeAnswer } from '../../lib/practiceSession'
 import LoadError from '../../components/ui/LoadError'
@@ -137,7 +137,7 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
 
   if (loading) return (
     <div className="min-h-[60vh] flex items-center justify-center">
-      <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+      <m.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
         className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full" />
     </div>
   )
@@ -172,12 +172,12 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
       <QuestionCard question={question} selected={selected} revealed={revealed} onSelect={handleSelect} />
 
       {revealed && (
-        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-6 flex justify-end">
+        <m.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-6 flex justify-end">
           <button onClick={handleNext} disabled={advancing}
             className="px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-xl font-bold hover:from-indigo-700 hover:to-violet-700 transition shadow disabled:opacity-60 disabled:cursor-not-allowed">
             {index + 1 >= questionCount ? 'See Results →' : 'Next →'}
           </button>
-        </motion.div>
+        </m.div>
       )}
     </div>
   )

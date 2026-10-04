@@ -677,7 +677,9 @@ the revokes and the `service_role` grant against it.
 That leaves a window. Backend code calling the new signature against a database that has not run the
 migration gets PostgREST's `PGRST202`, which the callers here catch — so the failure is silent and
 the symptom is empty data rather than an error. **Apply the migration before rolling out the code
-that depends on it.**
+that depends on it.** Recognise it with `_missing_rpc(e, function, migration, consequence)`, never
+a new copy: it logs the migration to apply and what that site loses until then, and the caller keeps
+its own failed-read answer.
 
 Where an in-between state would be visible to a user, a temporary retry against the old signature is
 a reasonable bridge — but only where doing so cannot violate what the caller asked for, and only if
@@ -749,6 +751,11 @@ docker exec -i supabase_db_AdaptiveLearning psql -U postgres -d postgres -v ON_E
 
 Safe against a working database: the file is `BEGIN … ROLLBACK`. Exit 0 and a final `ROLLBACK` is a
 pass.
+
+**`scripts/assert_answer_lock.sql` is the one check that needs two connections**, so it cannot roll back: it commits
+marked fixtures through `dblink` and deletes them, also at the start of the next run. Run it as `supabase_admin`
+(`docker exec -i supabase_db_AdaptiveLearning psql -U supabase_admin …`), since dblink needs a superuser to connect
+without a password.
 
 **Do this for any change to that file, and for any migration that constrains a table it writes to.**
 CI is downstream of the merge, so a broken fixture is otherwise found after the decision to ship.
@@ -1137,8 +1144,9 @@ raises `needs_student_ack`, cleared by `POST /api/consent/ack`. A parent turning
 Discovering a sensor by noticing data appear is not consent. The banner's copy claims no earlier
 withdrawal, because a re-enable nulls `revoked_at` and nothing stored can tell the two apart.
 
-**That rule has to hold on both ingestion paths, and for a while it did not.** `/api/signals/*` has
-called `_consent()` per request since it existed; the poller writes `cognitive_signals` directly with
+**That rule has to hold on both ingestion paths, and for a while it did not.** `/api/signals/*` reads
+consent on every request, with its session in one `ingest_gate` call (a failed read is a 503 the push
+client retries, never a batch dropped as unconsented); the poller writes `cognitive_signals` directly with
 the **service-role** client, so under `pull` a withdrawal stopped nothing. Now: `/api/eeg/start` refuses
 **403** (not the 409 push uses — one says this student said no, the other says this deployment does not
 work that way), and a running poller re-reads consent every `CONSENT_RECHECK_SECONDS`.
@@ -1190,7 +1198,9 @@ surfaces, the consent screen and the poller status, none of which should change 
 ended: gating there would report every channel off on the last day of school, so a parent could not read
 the history that survives until the delete job runs — and it would read as a withdrawal, a claim about a
 decision nobody made. `_may_record()` composes the two; `_consent()` stays pure and its raw flags ride
-along beside the `record_*` ones.
+along beside the `record_*` ones. Consent already in hand reaches `_may_record` only as
+`_stored_consent(row)` over the ingest gate's row — a bare dict is a `TypeError`, and the recording-sites
+test traces every `consent=` back to that call.
 
 **The timezone is the school's, not UTC**, for both the window boundaries and the weekly report's day
 buckets. The last day of school ends at local midnight; against a UTC clock it ends mid-afternoon or
@@ -2255,21 +2265,25 @@ reached the page with no id and there was nothing to put in `session_answers.que
 **and returns the existing row's id on a duplicate** rather than False, because answering a question the generator
 has produced before is exactly as real as answering a novel one.
 
-**`_record_topic_attempt` derives the topic from the question row, never from the caller.** The client has to be
-trusted about correctness; letting it also name the topic would let a page credit one subject for work done in
-another, and `user_math_performance` is what the adaptive engine reads to choose what to serve next. It never
-raises: it runs after `session_answers` is written, and a topic lookup failing must not turn a recorded answer into
-"that answer could not be saved".
+**An answer is one call: `record_answer`.** Under a `FOR NO KEY UPDATE` lock on the session row it refuses a
+missing, foreign or ended session before any write, then writes the answer and runs `bump_session_counters` and
+`record_topic_attempt`, each in its own exception block, so neither failing undoes the answer. `main.py` maps the
+outcome, `forbidden` through `_session_or_403` so it records `authz_denied` like every other refusal. A failed call is
+a 503, never a silent drop; deployed ahead of the migration, every answer fails and the log names it. A question
+expired since it was served fails the answer's foreign key and is a **410, never a 409**: `recordAnswer` reads a 409
+as its session ended and opens another.
 
-**It is one statement in the database** (`record_topic_attempt`). It was four sequential round trips on the hottest
-path in the product, and the last two were a read-modify-write with no lock — two answers together both read the
-same counts and the second overwrote the first, losing attempts silently. `ON CONFLICT DO UPDATE` incrementing the
-*stored* value removes that rather than narrowing it. It returns the topic **name**, which `/answer` hands back to
-the page so one figure moves; nothing holds an id-to-name map, so returning the id would cost a second query. The
-arithmetic is asserted in `scripts/assert_signal_rls.sql` — the backend suite drives a fake client and can only
-check that one call is made with the right three arguments. **Its PGRST202 is the deploy-ordering trap in its worst
-form**: the helper swallows exceptions by design, so code deployed ahead of the migration stops attributing
-anything with no symptom but the numbers not moving. It logs that case by name and cites the migration.
+**A failed side step is a 200, so the log is its only symptom.** It comes back as `topic_error` or `counters_error`
+and `_log_answer_side_errors` prints it by name; a missing function (42883) names its migration. That is the
+deploy-ordering trap in its worst form: attribution stops and nothing shows but the numbers not moving. Its tests
+assert on the log line, since the response is identical either way.
+
+**The topic comes from the question row, never from the caller.** The client has to be trusted about correctness;
+letting it also name the topic would let a page credit one subject for work done in another, and
+`user_math_performance` is what the adaptive engine reads to choose what to serve next. `record_topic_attempt` is one
+`ON CONFLICT DO UPDATE` incrementing the *stored* counts, so two answers together cannot lose an attempt, and it
+returns the topic **name** for the page. The arithmetic and every refusal are asserted in
+`scripts/assert_signal_rls.sql`; the backend suite drives a fake and can only check the call and its mapping.
 
 **Topic accuracy is read from `user_math_performance`, not from the browser.** It was
 `localStorage.accuracyStats_<uid>` — the only panel whose numbers were not the database's. It disagreed with the

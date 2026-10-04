@@ -6,6 +6,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 
 # main.py builds a Supabase client at import time and raises without these.
@@ -287,9 +288,11 @@ class _FakeSupabase:
         self.rpc_calls.append((name, params))
         exc = self._rpc_raises(name, params) if self._rpc_raises else None
         if name not in self._rpc_results and name in _MODELLED_RPCS:
-            # A failing table fails the function that reads it, as a failing read did.
+            # One statement in the database: any table it reads failing fails the call.
             if exc is None and name == "weekly_signal_days":
                 exc = self._failure(_WEEKLY_TABLES[params["p_channel"]])
+            for table in _RPC_READS.get(name, ()):
+                exc = exc or self._failure(table)
             data = None if exc else _MODELLED_RPCS[name](self._tables, params)
             return _Rpc(data, exc)
         return _Rpc(self._rpc_results.get(name, []), exc)
@@ -305,6 +308,48 @@ def _recent_sessions_rows(tables, params):
         out += mine[:limit]
     # A set-returning function promises no order, so the caller must sort; give it the worst.
     return sorted(out, key=lambda r: str(r.get("started_at", "")))
+
+
+# What Postgres's uuid input accepts: optional braces, 32 hex digits, a hyphen after any group of four.
+_PG_UUID = re.compile(r"(\{)?[0-9A-Fa-f]{4}(?:-?[0-9A-Fa-f]{4}){7}(?(1)\})")
+# The uuid columns `viewer_relationship` compares, per table it reads.
+_RELATIONSHIP_COLUMNS = {"classes": ("id", "teacher_id"), "class_memberships": ("class_id", "student_id"),
+                         "parent_child_links": ("parent_id", "child_id"), "profiles": ("id",)}
+
+
+def _as_uuid(value, held):
+    """`value::uuid` as the key it compares by, or None where the cast fails.
+
+    Every spelling Postgres accepts compares equal; a fixture id some row in `held` carries stands in for a uuid.
+    """
+    if not isinstance(value, str):
+        return None
+    if _PG_UUID.fullmatch(value):
+        return re.sub(r"[{}-]", "", value).lower()
+    return value if value in held else None
+
+
+def _viewer_relationship_result(tables, params):
+    """`viewer_relationship` as its SQL decides (20261003000000), from the tables it reads.
+
+    A non-uuid on either side is None before any branch; then teacher, parent, admin, else None.
+    Self has no branch: main.py decides it before the call, as the SQL expects.
+    """
+    held = {r.get(c) for t, cols in _RELATIONSHIP_COLUMNS.items() for r in tables.get(t, []) for c in cols}
+    viewer, student = _as_uuid(params["p_viewer"], held), _as_uuid(params["p_student"], held)
+    if viewer is None or student is None:
+        return None
+    key = lambda row, col: _as_uuid(row.get(col), held)  # noqa: E731
+    teaches = {key(c, "id") for c in tables.get("classes", []) if key(c, "teacher_id") == viewer} - {None}
+    if any(key(m, "student_id") == student and key(m, "class_id") in teaches
+           for m in tables.get("class_memberships", [])):
+        return "teacher"
+    if any(key(link, "parent_id") == viewer and key(link, "child_id") == student
+           for link in tables.get("parent_child_links", [])):
+        return "parent"
+    if any(key(p, "id") == viewer and p.get("role") == "admin" for p in tables.get("profiles", [])):
+        return "admin"
+    return None
 
 
 _WEEKLY_TABLES = {"cognitive": "cognitive_signals", "emotion": "face_signals",
@@ -377,7 +422,10 @@ def _weekly_signal_days_result(tables, params):
 
 # Functions computed from the table fixtures unless a test gives their result outright.
 _MODELLED_RPCS = {"recent_sessions_for_users": _recent_sessions_rows,
+                  "viewer_relationship": _viewer_relationship_result,
                   "weekly_signal_days": _weekly_signal_days_result}
+# The tables each modelled function reads, so `table_raises` reaches it as it would reach SQL.
+_RPC_READS = {"viewer_relationship": ("class_memberships", "classes", "parent_child_links", "profiles")}
 
 
 class _Rpc:
@@ -397,6 +445,7 @@ STUDENT = {"id": "student-1"}
 OTHER_STUDENT = {"id": "student-2"}
 PARENT = {"id": "parent-1"}
 STRANGER = {"id": "stranger-1"}
+ADMIN = {"id": "admin-1"}
 
 TABLES = {
     "classes": [
@@ -410,6 +459,11 @@ TABLES = {
     ],
     "parent_child_links": [
         {"id": "l1", "parent_id": "parent-1", "child_id": "student-1"},
+    ],
+    # An admin, and a teacher whose role alone must admit nobody.
+    "profiles": [
+        {"id": "admin-1", "role": "admin"},
+        {"id": "teacher-2", "role": "teacher"},
     ],
     "sessions": [
         {"id": "session-1", "user_id": "student-1"},
@@ -454,10 +508,79 @@ def test_stranger_cannot_view_any_student():
     assert main._can_view_student(STRANGER, "student-1") is False
 
 
-def test_the_teacher_check_is_one_read():
-    """And the only read: the admin check comes last, so a teacher's view costs no profile read."""
+@pytest.mark.parametrize("student", ["student-1", "student-2", "11111111-2222-3333-4444-555555555555"])
+def test_an_admin_views_any_student(monkeypatch, student):
+    """Admin is the fourth relationship: no class or link, and nothing logged as refused."""
+    events = _logged_events(monkeypatch)
+    main._verify_can_view_student(ADMIN, student)
+    assert events == []
+
+
+def test_a_teacher_role_without_the_class_is_a_logged_403(monkeypatch):
+    """teacher-2's profile says teacher and they teach class-2: the role alone admits nobody."""
+    events = _logged_events(monkeypatch)
+    with pytest.raises(main.HTTPException) as exc:
+        main._verify_can_view_student(OTHER_TEACHER, "student-1")
+    assert (exc.value.status_code, events) == (403, ["authz_denied"])
+
+
+# assert_signal_rls.sql's own fixture for `viewer_relationship`, in real uuids.
+_REL = {n: str(uuid.uuid5(uuid.NAMESPACE_URL, f"viewer-relationship/{n}")) for n in (
+    "kid", "classmate", "teacher", "other_teacher", "parent", "other_parent", "admin", "cls", "other_cls")}
+_REL_TABLES = {
+    "profiles": [{"id": _REL[n], "role": r} for n, r in (
+        ("kid", "student"), ("classmate", "student"), ("teacher", "teacher"), ("other_teacher", "teacher"),
+        ("parent", "parent"), ("other_parent", "parent"), ("admin", "admin"))],
+    "classes": [{"id": _REL["cls"], "teacher_id": _REL["teacher"]},
+                {"id": _REL["other_cls"], "teacher_id": _REL["other_teacher"]}],
+    "class_memberships": [{"class_id": _REL["cls"], "student_id": _REL["kid"]},
+                          {"class_id": _REL["cls"], "student_id": _REL["classmate"]},
+                          {"class_id": _REL["other_cls"], "student_id": _REL["classmate"]}],
+    "parent_child_links": [{"parent_id": _REL["parent"], "child_id": _REL["kid"]},
+                           {"parent_id": _REL["other_parent"], "child_id": _REL["classmate"]}],
+}
+
+
+def _ask(viewer, student):
+    return _viewer_relationship_result(_REL_TABLES, {"p_viewer": viewer, "p_student": student})
+
+
+@pytest.mark.parametrize("viewer,expected", [
+    ("teacher", "teacher"), ("other_teacher", None), ("parent", "parent"), ("other_parent", None),
+    ("admin", "admin"), ("classmate", None), ("kid", None)])
+def test_the_shared_fake_answers_the_sql_matrix(viewer, expected):
+    """The SQL's matrix, so the fake every viewer test relies on cannot drift from the function."""
+    assert _ask(_REL[viewer], _REL["kid"]) == expected
+
+
+def test_the_shared_fake_casts_its_ids_as_the_sql_does():
+    teacher, kid, admin = _REL["teacher"], _REL["kid"], _REL["admin"]
+    assert teacher.upper() != teacher, "the spelling case needs a hex letter"
+    assert _ask(teacher.upper(), kid.upper()) == "teacher"
+    # A non-uuid is None before any branch, or the admin row would match it.
+    for bad in ("not-a-uuid", "", kid + "0", "1 OR 1=1"):
+        assert _ask(admin, bad) is None, bad
+    assert _ask("not-a-uuid", kid) is None
+
+
+def test_the_relationship_check_is_one_call_and_no_table_read():
+    """Teacher, parent and admin are one statement (assert_signal_rls.sql holds its matrix)."""
     assert main._can_view_student(TEACHER, "student-1") is True
-    assert main.supabase.table_calls == ["class_memberships"]
+    assert main.supabase.table_calls == []
+    assert main.supabase.rpc_calls == [("viewer_relationship",
+                                        {"p_viewer": "teacher-1", "p_student": "student-1"})]
+
+
+def test_a_self_view_asks_the_database_nothing():
+    assert main._can_view_student(STUDENT, "student-1") is True
+    assert (main.supabase.table_calls, main.supabase.rpc_calls) == ([], [])
+
+
+@pytest.mark.parametrize("answer", [None, "", "student", "TEACHER"])
+def test_only_a_relationship_the_function_names_admits(monkeypatch, answer):
+    """Fails closed on anything unexpected, not on falsiness alone."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, rpc_results={"viewer_relationship": answer}))
+    assert main._can_view_student(STRANGER, "student-1") is False
 
 
 def test_the_fake_refuses_an_embed_filter_it_does_not_model():
@@ -490,20 +613,48 @@ def test_a_failed_relationship_read_is_a_503_and_not_a_logged_denial(monkeypatch
     assert (exc.value.status_code, events) == (503, [])
 
 
-@pytest.mark.parametrize("failing", ["profiles", "class_memberships"])
-def test_a_failed_read_does_not_block_what_another_relationship_allows(monkeypatch, failing):
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={failing}))
-    assert main._can_view_student(PARENT, "student-1") is True
-
-
-def test_a_malformed_student_id_is_a_logged_denial_not_an_outage(monkeypatch):
-    """PostgREST refuses a non-uuid with 22P02: no student has that id, so 403, not "try again"."""
-    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, table_raises={
-        "class_memberships": _not_a_uuid(), "parent_child_links": _not_a_uuid()}))
+@pytest.mark.parametrize("viewer", [TEACHER, ADMIN], ids=["teacher", "admin"])
+def test_a_malformed_student_id_is_a_logged_denial_not_an_outage(monkeypatch, viewer):
+    """The function answers null for a non-uuid, an admin's included: 403, not "try again"."""
     events = _logged_events(monkeypatch)
     with pytest.raises(main.HTTPException) as exc:
-        main._verify_can_view_student(TEACHER, "not-a-uuid")
+        main._verify_can_view_student(viewer, "not-a-uuid")
     assert (exc.value.status_code, events) == (403, ["authz_denied"])
+    # The raw id goes to the function, which decides; main.py does not pre-screen it.
+    assert main.supabase.rpc_calls == [("viewer_relationship",
+                                        {"p_viewer": viewer["id"], "p_student": "not-a-uuid"})]
+
+
+def test_a_missing_relationship_function_names_its_migration(monkeypatch, capsys):
+    """Deployed ahead of 20261003000000, every student read is a 503; the log has to say why."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES, rpc_raises=lambda name, _p: (
+        RuntimeError("{'code': 'PGRST202', 'message': 'no function'}")
+        if name == "viewer_relationship" else None)))
+    with pytest.raises(main.HTTPException) as exc:
+        main._verify_can_view_student(TEACHER, "student-1")
+    assert exc.value.status_code == 503
+    assert "20261003000000" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("viewer", [TEACHER, PARENT, ADMIN], ids=["teacher", "parent", "admin"])
+def test_a_missing_relationship_function_is_a_503_and_never_an_allow(monkeypatch, capsys, viewer):
+    """Code ahead of its migration fails closed: no relationship is assumed, and nothing is read."""
+    missing = APIError({"code": "PGRST202", "details": None, "hint": None, "message":
+                        "Could not find the function public.viewer_relationship(p_student, p_viewer)"})
+    fake = _FakeSupabase({**TABLES, "signal_consent": [_CONSENT_ALL]},
+                         rpc_results={"student_signal_summary": [_SUMMARY_ROW]},
+                         rpc_raises=lambda name, _p: missing if name == "viewer_relationship" else None)
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: viewer)
+    events = _logged_events(monkeypatch)
+    with pytest.raises(main.HTTPException) as exc:
+        main.student_signal_summary("student-1", None)
+    assert (exc.value.status_code, events) == (503, [])
+    assert [name for name, _ in fake.rpc_calls] == ["viewer_relationship"], "the aggregate never ran"
+    # This site's own cost; the caller is told to try again, so never "refused".
+    log = capsys.readouterr().out
+    assert "[rpc] viewer_relationship is missing from the database -- apply 20261003000000" in log
+    assert "every teacher, parent and admin view of a student is a 503" in log and "refused" not in log
 
 
 def test_a_failed_access_read_asks_the_client_to_retry(monkeypatch):
@@ -1058,12 +1209,18 @@ def _summary_fake(monkeypatch, viewer, row=None, consent=None):
     return fake
 
 
+def _summary_params(fake) -> dict:
+    """The aggregate's own call; the viewer check is a call of its own before it."""
+    return next(p for name, p in fake.rpc_calls if name == "student_signal_summary")
+
+
 def test_signal_summary_endpoint_rejects_a_viewer_with_no_relationship(monkeypatch):
     fake = _summary_fake(monkeypatch, STRANGER)
     with pytest.raises(main.HTTPException) as exc:
         main.student_signal_summary("student-1", None)
     assert exc.value.status_code == 403
-    assert fake.rpc_calls == [], "access is decided before the aggregate runs"
+    assert [name for name, _ in fake.rpc_calls] == ["viewer_relationship"], \
+        "access is decided before the aggregate runs"
 
 
 def test_signal_summary_endpoint_allows_a_teacher_of_the_students_class(monkeypatch):
@@ -1096,22 +1253,22 @@ def test_signal_summary_endpoint_counts_the_whole_window_not_a_row_cap(monkeypat
 def test_signal_summary_endpoint_threads_the_opt_out(monkeypatch):
     fake = _summary_fake(monkeypatch, TEACHER)
     main.student_signal_summary("student-1", None, include_face=False)
-    assert fake.rpc_calls[0][1]["p_include_emotion"] is False
+    assert _summary_params(fake)["p_include_emotion"] is False
 
     fake.rpc_calls.clear()
     main.student_signal_summary("student-1", None)
-    assert fake.rpc_calls[0][1]["p_include_emotion"] is True, "included unless asked otherwise"
+    assert _summary_params(fake)["p_include_emotion"] is True, "included unless asked otherwise"
 
 
 def test_signal_summary_endpoint_clamps_the_day_range(monkeypatch):
     """Same bounds as the weekly report: no unbounded scan from the query string."""
     fake = _summary_fake(monkeypatch, TEACHER)
     main.student_signal_summary("student-1", None, days=9999)
-    assert fake.rpc_calls[0][1]["p_days"] == 30
+    assert _summary_params(fake)["p_days"] == 30
 
     fake.rpc_calls.clear()
     main.student_signal_summary("student-1", None, days=0)
-    assert fake.rpc_calls[0][1]["p_days"] == 1
+    assert _summary_params(fake)["p_days"] == 1
 
 
 def test_signal_summary_carries_the_dominant_emotion(monkeypatch):
@@ -1173,6 +1330,13 @@ class _OwnedSessionClient:
 
         class _R:
             def execute(self):
+                if name == "record_answer":
+                    # As the function answers (assert_signal_rls.sql): refused before any write.
+                    if params["p_user_id"] != client.owner:
+                        return type("R", (), {"data": {"status": "forbidden", "owner": client.owner}})()
+                    client.writes.append(("session_answers", "insert", params))
+                    return type("R", (), {"data": {"status": "ok", "topic": None,
+                                                   "topic_error": None, "counters_error": None}})()
                 client.writes.append(("rpc", name))
                 return type("R", (), {"data": None})()
 
@@ -1208,6 +1372,9 @@ class _OwnedSessionClient:
         return _Q()
 
 
+_ANSWERED_QUESTION = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
+
+
 @pytest.mark.parametrize("endpoint", ["answer", "end"])
 def test_a_student_may_not_touch_another_students_session(monkeypatch, endpoint):
     client = _OwnedSessionClient("student-1")
@@ -1221,7 +1388,7 @@ def test_a_student_may_not_touch_another_students_session(monkeypatch, endpoint)
         if endpoint == "answer":
             main.record_answer(
                 session_id="session-1",
-                payload=main.AnswerPayload(question_id="q-1", selected_index=0,
+                payload=main.AnswerPayload(question_id=_ANSWERED_QUESTION, selected_index=0,
                                            correct=True),
                 request=None)
         else:
@@ -1247,7 +1414,7 @@ def test_the_owner_is_still_allowed(monkeypatch, endpoint):
     if endpoint == "answer":
         out = main.record_answer(
             session_id="session-1",
-            payload=main.AnswerPayload(question_id="q-1", selected_index=0,
+            payload=main.AnswerPayload(question_id=_ANSWERED_QUESTION, selected_index=0,
                                        correct=True),
             request=None)
         assert any(w[:2] == ("session_answers", "insert") for w in client.writes)
@@ -1644,7 +1811,7 @@ def test_strategy_basis_aggregates_instead_of_reading_signal_rows(monkeypatch, s
 
     assert "cognitive_signals" not in fake.table_calls
     assert "face_signals" not in fake.table_calls
-    assert [name for name, _ in fake.rpc_calls] == ["student_signal_summary"]
+    assert [name for name, _ in fake.rpc_calls if name != "viewer_relationship"] == ["student_signal_summary"]
     assert out["basis"]["averages"]["focus"] == 0.7
 
 

@@ -1,6 +1,8 @@
 """School-year retention window: what it denies, and that it never gates reads."""
 
+import ast
 import os
+import textwrap
 from datetime import datetime, timedelta, timezone
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -276,6 +278,64 @@ def test_the_discovery_finds_the_endpoints_we_know_about():
         assert known in sites, (known, sites)
 
 
+def _calls_to(node, name: str) -> bool:
+    """A call of `name`, bare or as an attribute (`main._consent(...)`)."""
+    return isinstance(node, ast.Call) and name in (getattr(node.func, "id", None),
+                                                   getattr(node.func, "attr", None))
+
+
+def _bound_values(tree) -> dict:
+    """Every value each local name is assigned; a tuple target maps to the whole call."""
+    bound = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                for name in (target.elts if isinstance(target, ast.Tuple) else [target]):
+                    if isinstance(name, ast.Name):
+                        bound.setdefault(name.id, []).append(node.value)
+    return bound
+
+
+def _behind(node, bound) -> list:
+    """What `node` stands for: every value its name is assigned in this function, or itself."""
+    return bound.get(node.id, [node]) if isinstance(node, ast.Name) else [node]
+
+
+def _untraced_consent(source: str) -> list[str]:
+    """Each consent handed to `_may_record` that is not `_stored_consent(<a row from _ingest_gate>)`."""
+    tree = ast.parse(textwrap.dedent(source))
+    bound = _bound_values(tree)
+    untraced = []
+    for call in (n for n in ast.walk(tree) if _calls_to(n, "_may_record")):
+        for given in [k.value for k in call.keywords if k.arg == "consent"] + call.args[1:2]:
+            if not all(_calls_to(m, "_stored_consent") and len(m.args) == 1
+                       and all(_calls_to(r, "_ingest_gate") for r in _behind(m.args[0], bound))
+                       for m in _behind(given, bound)):
+                untraced.append(ast.unparse(given))
+    return untraced
+
+
+def test_the_consent_trace_accepts_the_gate_and_flags_a_planted_dict():
+    """Otherwise the trace below could pass by seeing nothing."""
+    import inspect
+    source = inspect.getsource(main.ingest_heart)
+    assert _untraced_consent(source) == []
+    planted = source.replace("consent=_stored_consent(consent_row)", "consent={'eeg_enabled': True}")
+    assert _untraced_consent(planted) == ["{'eeg_enabled': True}"]
+    laundered = source.replace("_stored_consent(consent_row)", "_stored_consent({'eeg_enabled': True})")
+    assert _untraced_consent(laundered) == ["_stored_consent({'eeg_enabled': True})"]
+
+
+@pytest.mark.parametrize("enforced", [True, False], ids=["enforced", "bypassed"])
+def test_may_record_refuses_a_consent_it_cannot_trace(monkeypatch, enforced):
+    """A bare dict could say anything; only `_stored_consent` makes what it takes in hand."""
+    monkeypatch.setattr(main, "_consent_enforcement_active", lambda _flags: enforced)
+    with pytest.raises(TypeError, match="_stored_consent"):
+        main._may_record(STUDENT, consent={"eeg_enabled": True, "retrieved": True})
+    traced = main._may_record(STUDENT, consent=main._stored_consent({"eeg_enabled": True}))
+    assert traced["record_eeg"] is True and traced["retrieved"] is True
+
+
 @pytest.mark.parametrize("name", _recording_sites() + list(_GATING_CALLBACKS)
                          + ["eeg_start"])
 def test_every_recording_site_gates_on_the_window(name):
@@ -285,11 +345,15 @@ def test_every_recording_site_gates_on_the_window(name):
         f"{name} writes signal rows but does not consult _may_record -- it is "
         "gated on consent alone, so it records outside the school year"
     )
-    # With the paren: only the call is the mistake, not the word.
-    assert "_consent(" not in source, (
+    # Parsed, not scanned: `_stored_consent(` contains the text `_consent(`.
+    assert not any(_calls_to(n, "_consent") for n in ast.walk(ast.parse(textwrap.dedent(source)))), (
         f"{name} calls _consent directly. Use _may_record, which composes it "
         "with the retention window; the raw flags are on its result if a "
         "caller genuinely needs to tell 'they agreed' from 'may record now'."
+    )
+    assert _untraced_consent(source) == [], (
+        f"{name} hands _may_record a consent it did not get from _stored_consent over "
+        "the ingest gate's row, so nothing shows that anyone agreed to it."
     )
 
 

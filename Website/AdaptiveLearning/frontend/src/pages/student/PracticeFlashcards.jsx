@@ -35,7 +35,8 @@ export default function PracticeFlashcards({ session, onFinish }) {
       .finally(() => { if (mine === requestRef.current) setLoading(false) })
   }, [session.id])
 
-  // Next and retry: back to a face-down, loading card first. A mount starts there.
+  // Next and retry: back to a face-down, loading card first. A mount starts there, and
+  // Practice keys this page on the session, so a new session is a mount.
   const loadCard = useCallback(() => {
     setLoading(true)
     setFailed(false)

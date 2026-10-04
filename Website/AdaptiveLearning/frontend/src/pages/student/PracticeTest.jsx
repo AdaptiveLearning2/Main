@@ -56,7 +56,8 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
       .finally(() => { if (mine === requestRef.current) setLoading(false) })
   }, [session.id])
 
-  // Next and retry: back to a loading, unanswered question first. A mount starts there.
+  // Next and retry: back to a loading, unanswered question first. A mount starts there, and
+  // Practice keys this page on the session, so a new session is a mount.
   const loadQuestion = useCallback(() => {
     setLoading(true)
     setFailed(false)

@@ -162,14 +162,3 @@ it('shows a dismissed check-in again for the session that replaces a closed one'
   await answer()
   expect(await screen.findByText(checkIn)).toBeInTheDocument()
 }, 20_000)
-
-it('re-arms the check-in for the next session in the sitting', async () => {
-  // `goalDismissed` clears with the session, in the reset every route to "no session" passes through.
-  const src = readFileSync(
-    resolve(process.cwd(), 'src/pages/student/Adaptive.jsx'), 'utf8')
-  const reset = src.slice(src.indexOf('setSessionStartedAt(null)'))
-  const block = reset.slice(0, reset.indexOf('return'))
-  for (const call of ['setElapsedMin(0)', 'setTimeUpDismissed(false)', 'setGoalDismissed(false)']) {
-    expect(block).toContain(call)
-  }
-})

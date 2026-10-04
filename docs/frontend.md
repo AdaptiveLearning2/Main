@@ -243,8 +243,9 @@ Both shapes have since bitten, and the corrections are the load-bearing half:
 - **Declare before use.** A hook or effect that refers to something declared below it is an error, and a function that
   calls one declared below it is treated as callable during render, so a `Date.now()` in it reads as impure.
 - **A reset that belongs to a user action splits the loader.** The mount effect calls the fetch alone, since the initial
-  state already is the reset; Next and retry call reset-then-fetch (`PracticeTest`, `PracticeFlashcards`, `Live`). An
-  effect that reacts to one value but must read the latest of others takes `useEffectEvent`, not a dependency.
+  state already is the reset; Next and retry call reset-then-fetch (`PracticeTest`, `PracticeFlashcards`, `Live`). That
+  holds only while a new subject is a new mount, so `Practice.jsx` keys the page on its session. An effect that reacts
+  to one value but must read the latest of others takes `useEffectEvent`, not a dependency.
 - **The render-time adjustment compares against the previous *render*, and that is not always the question.**
   `useValueChange` (`hooks/useValueChange.js`) is the extracted form and is right for `Flags.jsx`. It was wrong for
   `FlowDot.jsx`, which needs the last value it *acted on*: the pulse timer clears the live state, so a timestamp that
@@ -288,28 +289,25 @@ imply another), `eval`/`window.eval`, `Function`/`new Function`, `innerHTML`/`ou
 object key, `insertAdjacentHTML`, and `write`/`writeln` matched on the method rather than on `document`, since an
 alias is the same sink. Treat this, the CSP, and the absence of a markdown or LaTeX renderer as one mitigation.
 
-**A name has two spellings ordinary style produces, and they are different nodes**, so no selector here may be
-written bare for a property: `el.innerHTML` and `{innerHTML: s}` put the name in an Identifier's `.name`,
-`el['innerHTML']` and `{'innerHTML': s}` put it in a string Literal's `.value`. They go through `eitherSpelling`,
-which emits both: a hand-written pair misses one, and `<div {...{'dangerouslySetInnerHTML': {__html: x}}} />` then
-passes the gate. `callee.name` is the one exemption, for `eval`/`Function` as bindings, since a binding reference
-cannot be quoted.
+**A literal name has three spellings, and they are different nodes**, so no selector here may be written bare for a
+property: `el.innerHTML` and `{innerHTML: s}` put the name in an Identifier's `.name`, `el['innerHTML']` and
+`{'innerHTML': s}` in a string Literal's `.value`, and ``el[`innerHTML`]`` in a template's only quasi. They go through
+`anySpelling`, which emits all three: a hand-written pair misses one, and
+`<div {...{'dangerouslySetInnerHTML': {__html: x}}} />` then passes the gate. `callee.name` is the one exemption, for
+`eval`/`Function` as bindings, since a binding reference cannot be quoted.
 
-**A template-literal computed key is a third spelling and is not covered**, deliberately: nobody writes
-``el[`innerHTML`]`` by accident, and anyone writing one on purpose can defeat the gate with a disable comment
-instead. So this covers the spellings ordinary style produces, not every spelling the grammar allows — and the list
-above is what the rules cover, not a claim of closure.
+**A key built by an expression is not covered** — ``el[`inner${x}`]``, `el['inner' + 'HTML']`, `el[name]`: no
+selector can evaluate one. With `eslint-disable` refused in app source, that is the one way past the gate, and nobody
+writes it by accident. So the list above is what the rules cover, not a claim of closure.
 
 **Reading the rules cannot show a missed spelling, so `src/test/sinkRules.test.js` reads the report**: it runs ESLint
-over source text with the same `eslint.sinks.config.js` CI uses and asserts each of 25 spellings is flagged. Its
-other half asserts six ordinary forms are *not*, so the first half cannot be satisfied by a selector matching
+over source text with the same `eslint.sinks.config.js` CI uses and asserts each of 34 spellings is flagged. Its
+other half asserts seven ordinary forms are *not*, so the first half cannot be satisfied by a selector matching
 everything. Both halves are load-bearing and both were checked by breaking them. The lint script still has to
 exist: the test proves the rules catch the forms, the script proves they are applied to the tree.
 
-Two config details are load-bearing, both found by the gate failing on code it has no opinion about: it registers
-`react-hooks` **without enabling any of its rules**, because an `eslint-disable` naming a rule no config defines is
-itself an error (five, in source files); and it sets `reportUnusedDisableDirectives: 'off'`, because every disable
-in the tree is for a rule this run does not have.
+One config detail is load-bearing: it registers `react-hooks` **without enabling any of its rules**. App source holds
+no `eslint-disable`, but a test may, and a disable naming a rule no config defines is itself an error.
 
 **The same gate holds the motion guard** (`eslint.motion.js`). App.jsx loads `domAnimation` into `<LazyMotion>`,
 so `motion` from `framer-motion` or `motion/react`, anything from either `*/client`, a dynamic import of

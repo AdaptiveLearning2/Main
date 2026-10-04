@@ -18,7 +18,8 @@ def _class_tables(sessions):
         "classes": [{"id": "class-1", "teacher_id": "teacher-1"}],
         "class_memberships": [{"class_id": "class-1", "student_id": "kid-a"},
                               {"class_id": "class-1", "student_id": "kid-b"}],
-        "profiles": [{"id": "kid-a", "display_name": "Ada"}, {"id": "kid-b", "display_name": "Ben"}],
+        "profiles": [{"id": "kid-a", "display_name": "Ada", "email": "ada@example.test"},
+                     {"id": "kid-b", "display_name": "Ben", "email": "ben@example.test"}],
         "sessions": sessions,
     }
 
@@ -43,8 +44,12 @@ def test_a_class_sessions_page_is_one_read_for_every_student(monkeypatch):
 
     calls = [p for name, p in fake.rpc_calls if name == "recent_sessions_for_users"]
     assert calls == [{"p_user_ids": ["kid-a", "kid-b"], "p_limit": main._RECENT_SESSIONS}]
-    assert out["students"] == [{"user_id": "kid-a", "name": "Ada"},
-                               {"user_id": "kid-b", "name": "Ben"}]
+    assert out["students"] == [{"user_id": "kid-a", "name": "Ada", "email": "ada@example.test"},
+                               {"user_id": "kid-b", "name": "Ben", "email": "ben@example.test"}]
+    # Names ride on the roster read; a separate profiles read could fall back to "Student".
+    assert "profiles" not in fake.table_calls
+    roster = next(q for q in fake.queries if q._name == "class_memberships")
+    assert ("class_id", "class-1") in roster.filters
     assert [s["id"] for s in out["sessions"]["kid-a"]] == ["s2", "s1"], "newest first"
     # Named columns only: `chart_paths` is a storage path nothing renders.
     assert "chart_paths" not in out["sessions"]["kid-a"][0]
@@ -69,6 +74,32 @@ def test_another_teachers_class_sessions_are_refused(monkeypatch):
     with pytest.raises(main.HTTPException) as exc:
         main.class_sessions("class-1", None)
     assert exc.value.status_code == 403
+
+
+def test_a_class_sessions_student_with_no_name_is_null_not_student(monkeypatch):
+    tables = _class_tables([])
+    tables["profiles"][1]["display_name"] = ""
+    tables["profiles"].append({"id": "kid-c", "display_name": None, "email": ""})
+    # kid-d has no profile row at all.
+    tables["class_memberships"] += [{"class_id": "class-1", "student_id": k} for k in ("kid-c", "kid-d")]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(tables))
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+
+    out = main.class_sessions("class-1", None)
+
+    assert [(s["user_id"], s["name"], s["email"]) for s in out["students"]] == [
+        ("kid-a", "Ada", "ada@example.test"), ("kid-b", None, "ben@example.test"),
+        ("kid-c", None, None), ("kid-d", None, None)]
+
+
+@pytest.mark.parametrize("table", ["profiles", "class_memberships"])
+def test_a_failed_class_sessions_roster_read_is_a_503_not_student_rows(monkeypatch, table):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_class_tables([]), table_raises={table}))
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    with pytest.raises(main.HTTPException) as exc:
+        main.class_sessions("class-1", None)
+    assert exc.value.status_code == 503
+    assert "Retry-After" in exc.value.headers
 
 
 def test_the_parent_dashboard_reads_every_childs_consent_and_sessions_once(monkeypatch):

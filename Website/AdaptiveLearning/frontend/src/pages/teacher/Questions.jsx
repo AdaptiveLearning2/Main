@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { m, AnimatePresence } from 'framer-motion'
 import { HelpCircle, Search, Filter, X, ChevronDown } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
@@ -112,7 +112,7 @@ export default function Questions() {
   // in-flight student read. A ref, not a cleanup flag, because `retry()` also calls.
   const beginQuestionRead = useLatestRequest()
 
-  const load = () => {
+  const load = useCallback(() => {
     const isCurrent = beginQuestionRead()
     // The list is capped at 1000 rows, so its length is not the bank's size.
     fetchQuestionCount().then(setBankTotal)
@@ -127,10 +127,10 @@ export default function Questions() {
         if (!isCurrent()) return
         console.error('Failed to load questions:', e); setFailed(e); setLoading(false)
       })
-  }
+  }, [beginQuestionRead])
 
   // Not cached: per student and changes as they answer.
-  const loadStudent = (id) => {
+  const loadStudent = useCallback((id) => {
     const isCurrent = beginQuestionRead()
     apiFetch(`/api/students/${id}/questions?limit=200`)
       .then(res => {
@@ -147,11 +147,11 @@ export default function Questions() {
         if (!isCurrent()) return
         console.error('Failed to load student questions:', e); setFailed(e); setLoading(false)
       })
-  }
+  }, [beginQuestionRead])
 
   const retry = () => { setLoading(true); studentId ? loadStudent(studentId) : load() }
 
-  useEffect(() => { studentId ? loadStudent(studentId) : load() }, [studentId])
+  useEffect(() => { studentId ? loadStudent(studentId) : load() }, [studentId, load, loadStudent])
 
   useEffect(() => {
     // Failure costs only the student filter, so this just logs.

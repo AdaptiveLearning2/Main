@@ -134,7 +134,7 @@ measurements were always done in a throwaway `pip install --target ... "setuptoo
 
 ## The two scanners, and what they are allowed to be red about
 
-**`Dependency scan` is blocking, unlike lint.** A CVE is not a style backlog to burn down: every
+**`Dependency scan` is blocking.** A CVE is not a style backlog to burn down: every
 step names the advisory and the fixed version, so a red run says what to do. Tuning the threshold
 until it passes is tuning the detector to the disease.
 

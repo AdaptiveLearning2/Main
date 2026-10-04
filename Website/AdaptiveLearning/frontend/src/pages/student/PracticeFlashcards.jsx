@@ -73,7 +73,7 @@ export default function PracticeFlashcards({ session, onFinish }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- beyond refs, the handlers read question (listed) and session.id, fixed per session
   }, [loading, failed, question])
 
   if (loading) return (

@@ -9,7 +9,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { apiFetch } from '../../lib/api'
 
 /** Named for the sensor, not the signal derived from it. */
-export const CHANNELS = [
+const CHANNELS = [
   {
     key: 'eeg_enabled',
     icon: '🧠',

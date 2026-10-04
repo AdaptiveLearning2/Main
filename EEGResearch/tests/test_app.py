@@ -1330,3 +1330,25 @@ def test_session_arm_restarts_the_baseline_and_is_admin_only_under_pull():
     assert client.post("/api/v1/session/arm", params={"device_id": "nope"}, headers=admin_headers).status_code == 404
     # Under pull the backend is the controller; the learner token gains nothing.
     assert client.post("/api/v1/session/arm", headers=learner_headers).status_code in (401, 403)
+
+
+def test_shutdown_unhooks_the_stream_then_flushes_the_push_client(monkeypatch):
+    """The kit's stop relies on this: the last samples go out before the sidecar exits."""
+    import src.app.main as sidecar
+
+    calls = []
+
+    class _Push:
+        async def stop(self):
+            calls.append("stop")
+
+    monkeypatch.setattr(sidecar, "push_client", _Push())
+    monkeypatch.setattr(sidecar.stream_manager, "set_payload_consumer", lambda c: calls.append(("consumer", c)))
+    with TestClient(sidecar.app):
+        assert calls == []
+    assert calls == [("consumer", None), "stop"]
+
+
+def test_no_on_event_hook_sits_beside_the_lifespan():
+    """With `lifespan=` set, FastAPI never runs an `@app.on_event` hook: that work belongs in `_lifespan`."""
+    assert app.router.on_startup == [] and app.router.on_shutdown == []

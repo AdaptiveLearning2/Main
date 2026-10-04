@@ -87,7 +87,7 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
     clearInterval(timerRef.current)
     setRevealed(true)
     postAnswer(-1)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs every tick, so postAnswer is this render's; answeredRef fires it once
   }, [timeLeft])
 
   async function postAnswer(idx) {

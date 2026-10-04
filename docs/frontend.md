@@ -252,25 +252,23 @@ Both shapes have since bitten, and the corrections are the load-bearing half:
 
 `no-unused-vars` cannot see JSX, so without `react/jsx-uses-vars` every identifier used *only* inside markup — an
 `icon: Icon` prop rendered as `<Icon />` — is reported as an unused import, and the false hits bury the real ones. The
-plugin's `recommended` config is deliberately **not** extended: it would add to the backlog rather than clear it.
+plugin's `recommended` config is deliberately **not** extended: its large ruleset would turn a clean run red.
 
 `ignoreRestSiblings: true` goes with it, for the destructure-to-omit idiom (`const { x, ...rest } = obj` to build an
 object *without* `x`, which is how the tests construct a payload predating a field). The binding is unused by design;
 deleting it to satisfy the rule would put the key back.
 
-With both, **`no-unused-vars` is clean and therefore load-bearing** — a hit is real dead code, so fix it rather than
-adding it to the backlog.
+With both, **`no-unused-vars` is clean and therefore load-bearing** — a hit is real dead code, so fix it.
 
 The second is **`react/no-danger`**, which arrives with the XSS sinks below rather than from the plugin's
 `recommended` config; that one is still not extended, for the reason above.
 
-## The XSS sinks are a second, blocking lint run, because the first one cannot fail
+## The XSS sinks are a second lint run, independent of the first
 
-`npm run lint` is non-blocking against the 10-error backlog, and a security rule nobody can fail is not
-enforcement. `npm run lint:sinks` (`eslint.sinks.config.js`, CI step *Lint XSS sinks and motion features*) therefore extends **no**
-shared config — the whole backlog lives in `js.configs.recommended` and the two react plugins, so it cannot reach
-this run, which is red if and only if a sink (or a motion misuse, below) was added. The rules had zero hits when
-written, which is what makes blocking possible with nothing to burn down first.
+`npm run lint:sinks` (`eslint.sinks.config.js`, CI step *Lint XSS sinks and motion features*) extends **no** shared
+config, so it is red if and only if a sink (or a motion misuse, below) was added, whatever happens to
+`js.configs.recommended` or the two react plugins the main run extends. Both runs block; kept apart, no rule change
+elsewhere can switch the security gate off.
 
 `eslint.sinks.js` exports them and **both configs import it** — the main one for editor feedback, the gate for CI.
 Two literals would drift, and the copy that drifts is the one nobody runs locally.

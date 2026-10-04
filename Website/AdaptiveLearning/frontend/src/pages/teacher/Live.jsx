@@ -247,7 +247,7 @@ export default function Live() {
       .catch(e => setClassesFailed(e))
       .finally(() => setLoadingClasses(false))
   }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only; loadClasses reads classId just to keep a class already chosen
   useEffect(() => { loadClasses() }, [])
 
   // Paused while hidden; `retryNonce` restarts it at once, skipping any backoff.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from time import perf_counter
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -25,12 +26,23 @@ stream_manager = StreamManager()
 # None when push is off, so there is no instance to start by accident and duplicate writers.
 push_client = PushClient(settings.backend_url) if settings.push_enabled else None
 
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    yield
+    # Flush the queue and drop the token on shutdown, within the push client's SHUTDOWN_BUDGET.
+    if push_client is not None:
+        stream_manager.set_payload_consumer(None)
+        await push_client.stop()
+
+
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
     docs_url="/docs" if settings.sidecar_docs else None,
     redoc_url="/redoc" if settings.sidecar_docs else None,
     openapi_url="/openapi.json" if settings.sidecar_docs else None,
+    lifespan=_lifespan,
 )
 
 app.add_middleware(
@@ -62,14 +74,6 @@ async def request_timing(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Process-Time"] = f"{(perf_counter() - start):.4f}"
     return response
-
-
-@app.on_event("shutdown")
-async def _stop_pushing() -> None:
-    """Flush the queue and drop the token on shutdown, within the push client's SHUTDOWN_BUDGET."""
-    if push_client is not None:
-        stream_manager.set_payload_consumer(None)
-        await push_client.stop()
 
 
 @app.get("/healthz")

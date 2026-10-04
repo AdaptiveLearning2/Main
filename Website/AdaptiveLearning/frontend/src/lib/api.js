@@ -206,7 +206,7 @@ async function finish(res) {
   if (!res.ok) {
     const txt = await res.text()
     let detail = txt
-    try { detail = JSON.parse(txt) } catch {}
+    try { detail = JSON.parse(txt) } catch { /* not JSON: the text is the detail */ }
     const err = new Error(detail?.detail || detail || res.statusText)
     err.status = res.status
     throw err

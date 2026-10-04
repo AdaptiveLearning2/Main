@@ -3465,17 +3465,25 @@ def student_sessions(student_id: str, request: Request):
 def class_sessions(class_id: str, request: Request):
     """Every student's recent sessions in a class the caller owns, flagged as above.
 
-    Three reads for the class, where the Sessions page made one request per student.
-    A failed sessions read is every student's `None`, never "ran no sessions".
+    Two reads for the class, where the Sessions page made one request per student.
+    A failed roster read is a 503; a failed sessions read is every student's `None`.
     """
     user = get_user(request)
     _verify_class_owner(class_id, user["id"])
-    members = supabase.table("class_memberships").select("student_id") \
-        .eq("class_id", class_id).execute().data or []
+    try:
+        # Names ride on the roster read, so a failed one fails the request rather than becoming "Student".
+        members = supabase.table("class_memberships") \
+            .select("student_id, profiles(display_name, email)") \
+            .eq("class_id", class_id).execute().data or []
+    except Exception as e:                                      # noqa: BLE001
+        print(f"[sessions:class] {class_id}: {e}")
+        raise _read_failed("Could not load this class's students; try again")
+    names = {m["student_id"]: m.get("profiles") or {} for m in members}
     roster = _unique_ids(m["student_id"] for m in members)
-    profiles = _profiles_many(roster)
+    # None when unset: the page chooses what to draw.
     students = [{"user_id": sid,
-                 "name": (profiles.get(sid) or {}).get("display_name") or "Student"}
+                 "name": names[sid].get("display_name") or None,
+                 "email": names[sid].get("email") or None}
                 for sid in roster]
     try:
         by_student = _recent_sessions_many(roster, _RECENT_SESSIONS)

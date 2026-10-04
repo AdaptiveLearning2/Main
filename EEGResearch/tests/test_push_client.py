@@ -1,10 +1,13 @@
 """The sidecar push client: no silent drops, no token outliving its session, counts from receipts."""
 
 import asyncio
+import logging
+import time
+import types
 
 import pytest
 
-from src.app.services.push_client import MAX_BATCH, MAX_QUEUE, MIN_BATCH, PushClient
+from src.app.services.push_client import MAX_BATCH, MAX_QUEUE, MIN_BATCH, SHUTDOWN_BUDGET, PushClient
 
 
 @pytest.fixture
@@ -494,6 +497,189 @@ async def test_shutdown_flushes_the_whole_backlog(client):
 
     sent = sum(len(c["json"]["samples"]) for c in client._fake.calls)
     assert sent == MAX_BATCH * 3, f"only {sent} of {MAX_BATCH * 3} were delivered"
+
+
+class _Unanswered(_FakeClient):
+    """Accepts every post and never answers; `posting` is set once one is in flight."""
+
+    def __init__(self):
+        super().__init__()
+        self.posting = asyncio.Event()
+
+    async def post(self, url, json=None, headers=None):
+        self.calls.append({"url": url, "json": json, "headers": headers})
+        self.posting.set()
+        await asyncio.Event().wait()
+
+
+async def _loop_mid_post(monkeypatch) -> PushClient:
+    """A started client whose loop is inside a POST the backend never answers."""
+    fake = _Unanswered()
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient", lambda **_k: fake)
+    pc = await _started(PushClient("http://backend:8000"), "s1", "tok1")
+    pc.enqueue("cognitive", {"ts": 1})
+    pc._wake.set()
+    await asyncio.wait_for(fake.posting.wait(), timeout=5)
+    return pc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("call", ["start", "stop"])
+async def test_a_request_cancelled_inside_the_internal_stop_ends_cancelled(monkeypatch, call):
+    """uvicorn cancels requests still running when its drain ends; one swallowing that went on to start or flush."""
+    pc = await _loop_mid_post(monkeypatch)
+    request = asyncio.create_task(pc.start("s2", "tok2") if call == "start" else pc.stop())
+    await asyncio.wait_for(pc._stopping.wait(), timeout=5)  # now waiting for the loop's POST to finish
+
+    request.cancel()
+    await asyncio.wait({request}, timeout=5)
+
+    assert request.cancelled(), f"the cancelled {call} ran to completion"
+    assert not pc.running and not pc._lifecycle.locked()
+    # A start discards the old session anyway; a stop's session waits for the shutdown's own stop.
+    assert (pc._session_id, pc._token) == ((None, None) if call == "start" else ("s1", "tok1"))
+
+
+@pytest.mark.anyio
+async def test_a_stop_cancelled_mid_flush_leaves_its_samples_for_the_shutdowns_stop(monkeypatch, caplog):
+    """uvicorn's drain cancels a /push/stop still sending; the app's shutdown then stops again."""
+    hung = _Unanswered()
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient", lambda **_k: hung)
+    pc = await _started(PushClient("http://backend:8000"))
+    pc.enqueue("cognitive", {"ts": 1})
+    pc.enqueue("face", {"ts": 1})
+    request = asyncio.create_task(pc.stop())
+    await asyncio.wait_for(hung.posting.wait(), timeout=5)
+
+    with caplog.at_level(logging.WARNING, logger="src.app.services.push_client"):
+        request.cancel()
+        await asyncio.wait({request}, timeout=5)
+
+    assert request.cancelled()
+    assert "stop cancelled; 1 sample(s) kept for the next stop" in caplog.text
+    answered = _FakeClient()
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient", lambda **_k: answered)
+    assert await asyncio.wait_for(pc.stop(), timeout=5) is True
+    assert [(c["url"].rsplit("/", 1)[1], c["headers"]["Authorization"]) for c in answered.calls] == [
+        ("face", "Bearer tok")]
+    assert pc._token is None and pc._session_id is None
+
+
+@pytest.mark.parametrize("stopped", [True, False])
+def test_push_stop_reports_a_stop_that_did_not_happen(monkeypatch, stopped):
+    """`stop()` gives up when another start or stop holds the lock past its budget; "stopped" would be false."""
+    from fastapi.testclient import TestClient  # noqa: PLC0415
+
+    from src.app import main as sidecar  # noqa: PLC0415
+    from src.app.config import get_settings  # noqa: PLC0415
+
+    class _Client:
+        session_id = "s1"
+
+        async def stop(self):
+            return stopped
+
+    ended = []
+    monkeypatch.setattr(sidecar, "push_client", _Client())
+    monkeypatch.setattr(sidecar.stream_manager, "end_session", lambda: ended.append(True))
+    r = TestClient(sidecar.app).post("/api/v1/push/stop",
+                                     headers={"Authorization": f"Bearer {get_settings().api_token}"})
+
+    if stopped:
+        assert (r.status_code, r.json(), ended) == (200, {"status": "stopped", "ended_session": True}, [True])
+    else:
+        assert (r.status_code, r.json(), ended) == (503, {"status": "not_stopped", "ended_session": False}, [])
+        assert r.headers["retry-after"] == "1"
+
+
+@pytest.mark.anyio
+async def test_a_stop_that_cancels_a_hung_loop_itself_returns(monkeypatch, caplog):
+    """That cancellation is the stop's own, so unlike a caller's it is not raised."""
+    monkeypatch.setattr("src.app.services.push_client.SHUTDOWN_BUDGET", 0.5)
+    pc = await _loop_mid_post(monkeypatch)
+
+    with caplog.at_level(logging.WARNING, logger="src.app.services.push_client"):
+        await asyncio.wait_for(pc.stop(), timeout=5)
+
+    assert "cognitive batch cancelled in flight; 1 sample(s) unaccounted" in caplog.text
+    assert not pc.running and pc._token is None
+
+
+@pytest.mark.anyio
+async def test_waiting_for_the_lock_is_inside_the_shutdown_budget(client, monkeypatch, caplog):
+    """Else a start or stop holding the lock makes the bound two budgets, or none."""
+    monkeypatch.setattr("src.app.services.push_client.SHUTDOWN_BUDGET", 0.5)
+    await _started(client)
+    await client._lifecycle.acquire()  # held throughout, as by a request mid-start
+    try:
+        with caplog.at_level(logging.WARNING, logger="src.app.services.push_client"):
+            stopped = await asyncio.wait_for(client.stop(), timeout=5)
+    finally:
+        client._lifecycle.release()
+
+    assert stopped is False
+    assert "shutdown budget spent waiting for another start or stop; not stopped" in caplog.text
+    assert client._token == "tok", "a stop that never held the lock changed the session"
+    assert await asyncio.wait_for(client.stop(), timeout=5) is True
+    assert client._token is None
+
+
+@pytest.mark.anyio
+async def test_a_stop_that_waited_out_the_budget_for_the_lock_flushes_nothing(client, monkeypatch, caplog):
+    """The deadline is taken before the lock, not after it, so the wait cannot start a second budget."""
+    real, skew = time.monotonic, [0.0]
+    monkeypatch.setattr("src.app.services.push_client.time", types.SimpleNamespace(monotonic=lambda: real() + skew[0]))
+    await _started(client)
+    client.enqueue("cognitive", {"ts": 1})
+    await client._lifecycle.acquire()
+    stopping = asyncio.create_task(client.stop())
+    await asyncio.sleep(0)  # one step: stop() has its deadline and is queued on the lock
+
+    skew[0] = SHUTDOWN_BUDGET  # as if the holder kept the lock for the whole budget
+    client._lifecycle.release()
+    with caplog.at_level(logging.WARNING, logger="src.app.services.push_client"):
+        await asyncio.wait_for(stopping, timeout=5)
+
+    assert client._fake.calls == []
+    assert "shutdown budget spent, 1 sample(s) not sent" in caplog.text
+    assert client._token is None
+
+
+@pytest.mark.anyio
+async def test_a_timeout_the_final_flush_raises_is_a_failed_flush_not_the_budget(monkeypatch, caplog):
+    def _times_out(*_a, **_k):
+        raise TimeoutError("connect timed out")
+
+    fake = _FakeClient(responder=_times_out)
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient", lambda **_k: fake)
+    pc = await _started(PushClient("http://backend:8000"))
+    pc.enqueue("cognitive", {"ts": 1})
+
+    with caplog.at_level(logging.WARNING, logger="src.app.services.push_client"):
+        await asyncio.wait_for(pc.stop(), timeout=5)
+
+    assert "final flush failed, 1 sample(s) lost: connect timed out" in caplog.text
+    assert "budget spent" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_a_final_flush_the_backend_never_answers_ends_at_the_budget(monkeypatch, caplog):
+    """The kit gives the sidecar's shutdown a fixed time, so `stop()` has to end inside its budget."""
+    fake = _Unanswered()
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient", lambda **_k: fake)
+    monkeypatch.setattr("src.app.services.push_client.SHUTDOWN_BUDGET", 0.5)
+    pc = await _started(PushClient("http://backend:8000"))
+    pc.enqueue("cognitive", {"ts": 1})
+    pc.enqueue("face", {"ts": 1})
+
+    with caplog.at_level(logging.WARNING, logger="src.app.services.push_client"):
+        await asyncio.wait_for(pc.stop(), timeout=5)
+
+    assert [c["url"].rsplit("/", 1)[1] for c in fake.calls] == ["cognitive"]
+    assert "cognitive batch cancelled in flight; 1 sample(s) unaccounted" in caplog.text
+    assert "shutdown budget spent mid-flush, 1 sample(s) not sent" in caplog.text  # the face sample, never taken
+    assert "final flush failed" not in caplog.text
+    assert pc._token is None and pc._session_id is None
 
 
 @pytest.mark.anyio

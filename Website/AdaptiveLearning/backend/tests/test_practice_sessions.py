@@ -473,7 +473,7 @@ def test_end_never_touches_sessions_or_its_close_machinery(_client, monkeypatch)
 
     assert "sessions" not in c.tables_touched
     assert "session_alerts" not in c.tables_touched
-    assert not any(name in ("bump_session_counters", "record_topic_attempt")
+    assert not any(name in ("bump_session_counters", "record_topic_attempt", "record_answer")
                    for name, _ in c.rpcs)
 
 

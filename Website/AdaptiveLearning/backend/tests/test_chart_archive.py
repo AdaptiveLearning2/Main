@@ -710,12 +710,15 @@ class _SessionsClient(_SigningClient):
                     return type("R", (), {"data": row})()
 
             return _T()
-        if name == "profiles":
-            # The viewer's own role, for the admin check.
-            return _Query([{"role": self._viewer_role}] if self._viewer_role else [])
-        if name in ("class_memberships", "parent_child_links"):
-            return _Query([])  # read, and empty: a viewer with no relationship, not a failed check
         return super().table(name)
+
+    def rpc(self, name, params):
+        if name != "viewer_relationship":
+            return super().rpc(name, params)
+        from test_access_control import _Rpc, _viewer_relationship_result
+        # The shared model: whoever asks holds `viewer_role` and no class or link.
+        profiles = [{"id": params["p_viewer"], "role": self._viewer_role}] if self._viewer_role else []
+        return _Rpc(_viewer_relationship_result({"profiles": profiles}, params))
 
 
 def _charts(monkeypatch, row, viewer="viewer", **kw):

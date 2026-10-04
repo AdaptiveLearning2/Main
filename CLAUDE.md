@@ -1507,7 +1507,7 @@ aggregate helper has to carry them the same way.
 ## The facial opt-out means the data is not read
 
 `include_face=False` skips the query outright — `_weekly_signal_report` never touches `face_signals`, and
-the summary RPCs take `p_include_face` so the aggregate reads no facial row either. **Nulling values on the
+the summary RPCs' `p_include_emotion`/`p_include_heart` gate rollup rows as well as raw ones. **Nulling values on the
 way out is not an implementation of this.** If there is ever no way to tell the database to skip the rows,
 the correct answer is a blank tile, not a read — never fall back to a query that reads what the caller opted
 out of. Assert on the **filter**, not the payload (rule 4).
@@ -1853,7 +1853,7 @@ exactly-once, which nothing here can promise.
 failed summary must not cost a student their session record and stats update. It rolls up every school day the
 session touched (two if it crossed local midnight), bounded so a corrupt `started_at` cannot spin.
 
-Averages are over **trusted rows only** for heart and emotion, matching what the weekly report publishes — an
+Averages are over **trusted rows only** for heart and emotion, as the weekly report and the summary publish — an
 untrusted reading is one the quality gate rejected, and averaging it here would smuggle it past that gate
 permanently. `heart_sources` deliberately **includes** untrusted sources: its job is to explain a change in the
 numbers, and a sensor whose readings were all rejected is exactly such an explanation. `trusted_sample_count` is
@@ -2006,12 +2006,11 @@ wrong and looks right, because both spellings produce the correct answer in the 
 the tests have to cover the *compound* cases**, not each flag alone; and a fixture built from a happy-path helper has
 to null *every* average, or a leftover default renders a number where the test expects a reason.
 
-**Both panels read the rollup, and that is load-bearing rather than tidy.** The roster started on
-`student_signal_summary_many`, which reads the per-sample tables — the right source for the weekly report and the
-parent dashboard, and the wrong one *here*, because this is the first place a rollup-backed panel sits directly beside
-a raw-backed one. `expire_signal_rows` deletes the per-sample rows and leaves the rollup standing, so the pair would
-have shown a full term of class averages above a table reading "No sensor" for every student in it — on a fixed date,
-rather than because anything broke. `class_signal_student_totals` is the same aggregation as its sibling, grouped by
+**Both panels read the rollup, and that is load-bearing rather than tidy**: `expire_signal_rows` deletes the per-sample
+rows and leaves the rollup standing, so a per-sample panel beside a rollup one shows a term of class averages above
+"No sensor" for every student, on a fixed date. `student_signal_summary` reads a settled day from the rollup too,
+and raw rows only for today, a day with no rollup row, or one a still-open session reaches (its row can predate some
+readings). `class_signal_student_totals` is the same aggregation as its sibling, grouped by
 student rather than by day. `test_the_roster_reads_the_rollup_and_never_the_per_sample_tables` asserts on the tables
 that must **not** be read — the two sources look identical while both hold the same data, which is every day of a
 school year except the ones after expiry, so nothing about the numbers can see this. **The roster counts days

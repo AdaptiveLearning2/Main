@@ -1215,6 +1215,95 @@ BEGIN
     END IF;
 END $$;
 
+-- ── the summary reads settled days from the rollup, and trusted emotion only ────────────
+-- A past day comes from its rollup row even once its raw rows are gone; a day a still-open
+-- session reaches comes from raw rows, since its rollup can predate some of them.
+
+DO $$
+DECLARE
+    usr   uuid := gen_random_uuid();
+    done_ uuid := gen_random_uuid();  -- closed, three days ago
+    open_ uuid := gen_random_uuid();  -- started two days ago, never closed
+    t0    timestamptz := date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
+    s     record;
+BEGIN
+    INSERT INTO auth.users (id, email) VALUES (usr, 'summary-rollup@test.invalid');
+    INSERT INTO public.profiles (id, email, role)
+    VALUES (usr, 'summary-rollup@test.invalid', 'student') ON CONFLICT (id) DO NOTHING;
+    INSERT INTO public.sessions (id, user_id, started_at, ended_at) VALUES
+        (done_, usr, t0 - interval '3 days' + interval '9 hours', t0 - interval '3 days' + interval '10 hours'),
+        (open_, usr, t0 - interval '2 days' + interval '9 hours', NULL);
+
+    -- Three days ago, rolled up and then expired: focus 0.4/0.6/0.4/0.6 with stress 0.2 on two
+    -- rows; one trusted 'happy' beside two untrusted 'sad'; trusted 60 and 80 bpm beside an untrusted 150.
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus, stress, engagement)
+    SELECT done_, usr, t0 - interval '3 days' + interval '9 hours' + g * interval '1 min',
+           CASE WHEN g % 2 = 1 THEN 0.4 ELSE 0.6 END, CASE WHEN g <= 2 THEN 0.2 END,
+           CASE WHEN g % 2 = 1 THEN 0.4 ELSE 0.6 END
+      FROM generate_series(1, 4) g;
+    INSERT INTO public.face_signals (session_id, user_id, ts, emotion, emotion_trusted)
+    SELECT done_, usr, t0 - interval '3 days' + interval '9 hours' + g * interval '1 min',
+           CASE WHEN g = 1 THEN 'happy' ELSE 'sad' END, g = 1
+      FROM generate_series(1, 3) g;
+    INSERT INTO public.heart_signals (session_id, user_id, ts, source, heart_rate_bpm, rmssd_ms, trusted)
+    VALUES (done_, usr, t0 - interval '3 days' + interval '9 hours 1 min', 'muse_optics', 60, 40, true),
+           (done_, usr, t0 - interval '3 days' + interval '9 hours 2 min', 'muse_optics', 80, 40, true),
+           (done_, usr, t0 - interval '3 days' + interval '9 hours 3 min', 'muse_optics', 150, 40, false);
+    PERFORM public.rollup_signal_day(usr, (now() AT TIME ZONE 'UTC')::date - 3, 'UTC');
+    DELETE FROM public.cognitive_signals WHERE session_id = done_;
+    DELETE FROM public.face_signals WHERE session_id = done_;
+    DELETE FROM public.heart_signals WHERE session_id = done_;
+
+    -- Two days ago, inside the open session: rolled with one row, then a second lands, so the
+    -- rollup row is stale and only the raw rows hold the day.
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus, stress, engagement)
+    VALUES (open_, usr, t0 - interval '2 days' + interval '9 hours 1 min', 0.2, 0.6, 0.2);
+    PERFORM public.rollup_signal_day(usr, (now() AT TIME ZONE 'UTC')::date - 2, 'UTC');
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus, stress, engagement)
+    VALUES (open_, usr, t0 - interval '2 days' + interval '9 hours 2 min', 0.8, 0.6, 0.8);
+    INSERT INTO public.face_signals (session_id, user_id, ts, emotion, emotion_trusted)
+    VALUES (open_, usr, t0 - interval '2 days' + interval '9 hours 1 min', 'angry', true);
+
+    -- Today, raw: focus 0.9 without stress; a trusted 'happy' beside three untrusted 'sad';
+    -- a trusted 90 bpm beside an untrusted 200.
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus, stress, engagement)
+    VALUES (open_, usr, t0 + interval '1 min', 0.9, NULL, 0.9);
+    INSERT INTO public.face_signals (session_id, user_id, ts, emotion, emotion_trusted)
+    SELECT open_, usr, t0 + g * interval '1 min', CASE WHEN g = 1 THEN 'happy' ELSE 'sad' END, g = 1
+      FROM generate_series(1, 4) g;
+    INSERT INTO public.heart_signals (session_id, user_id, ts, source, heart_rate_bpm, rmssd_ms, trusted)
+    VALUES (open_, usr, t0 + interval '1 min', 'muse_optics', 90, 50, true),
+           (open_, usr, t0 + interval '2 min', 'muse_optics', 200, 50, false);
+
+    SELECT * INTO s FROM public.student_signal_summary(usr, 7, true, true, 'UTC');
+
+    -- Every focus reading once: 2.0 rolled, 1.0 raw two days ago, 0.9 today, over 7.
+    IF s.cognitive_samples <> 7 OR abs(s.focus - 3.9 / 7) > 1e-9 THEN
+        RAISE EXCEPTION 'the summary did not combine the rolled day, the open session''s day '
+                        'and today: %', s;
+    END IF;
+    -- Stress on its own count (two at 0.2 rolled, two at 0.6 raw), not on focus's four.
+    IF abs(s.stress - 0.4) > 1e-9 THEN
+        RAISE EXCEPTION 'stress was not weighted on its own sample count: %', s.stress;
+    END IF;
+    -- Trusted emotion only: 'happy' rolled and today, 'angry' two days ago; every 'sad' is untrusted.
+    IF s.face_samples <> 3 OR s.dominant_emotion IS DISTINCT FROM 'happy' THEN
+        RAISE EXCEPTION 'emotion counted an untrusted reading or lost a trusted one: % %',
+                        s.face_samples, s.dominant_emotion;
+    END IF;
+    -- Trusted heart only: 60 and 80 rolled, 90 today.
+    IF s.heart_samples <> 3 OR abs(s.heart_rate_bpm - 230.0 / 3) > 1e-9 THEN
+        RAISE EXCEPTION 'heart did not combine the rolled day with today''s trusted reading: %', s;
+    END IF;
+
+    -- A declined channel's rollup rows are not read either.
+    SELECT * INTO s FROM public.student_signal_summary(usr, 7, false, false, 'UTC');
+    IF s.face_samples <> 0 OR s.heart_samples <> 0 OR s.dominant_emotion IS NOT NULL
+       OR s.heart_rate_bpm IS NOT NULL THEN
+        RAISE EXCEPTION 'a declined channel came back from the rollup: %', s;
+    END IF;
+END $$;
+
 -- ── the rollup records the score scale and calm source; a posted value cannot abort it ──
 -- `raw` is client-supplied, so a bad score_scale must be skipped, not abort the day's rollup
 -- (which would exempt its rows from expiry).

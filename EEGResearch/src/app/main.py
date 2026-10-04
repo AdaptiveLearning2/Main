@@ -173,14 +173,18 @@ async def push_start(body: PushStartBody, _: str = Depends(require_learner_token
 
 @app.post("/api/v1/push/stop")
 async def push_stop(_: str = Depends(require_learner_token)) -> JSONResponse:
-    """Stop pushing, flush the tail, and forget the token."""
+    """Stop pushing, flush the tail, and forget the token.
+
+    503 when another start or stop held the push client past its budget: nothing was stopped or ended."""
     if push_client is None:
         return JSONResponse({"status": "not_configured"})
     stream_manager.set_payload_consumer(None)
     # End the session only if one was pushing: pagehide fires this under pull too, and
     # ending there would wipe a live armed baseline that nothing re-arms.
     was_pushing = push_client.session_id is not None
-    await push_client.stop()
+    if not await push_client.stop():
+        return JSONResponse({"status": "not_stopped", "ended_session": False}, status_code=503,
+                            headers={"Retry-After": "1"})
     if was_pushing:
         # Push's only session end (the stream stays up); best effort.
         try:

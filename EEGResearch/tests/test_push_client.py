@@ -535,8 +535,61 @@ async def test_a_request_cancelled_inside_the_internal_stop_ends_cancelled(monke
     await asyncio.wait({request}, timeout=5)
 
     assert request.cancelled(), f"the cancelled {call} ran to completion"
-    assert not pc.running and pc._token is None and pc._session_id is None
-    assert not pc._lifecycle.locked()
+    assert not pc.running and not pc._lifecycle.locked()
+    # A start discards the old session anyway; a stop's session waits for the shutdown's own stop.
+    assert (pc._session_id, pc._token) == ((None, None) if call == "start" else ("s1", "tok1"))
+
+
+@pytest.mark.anyio
+async def test_a_stop_cancelled_mid_flush_leaves_its_samples_for_the_shutdowns_stop(monkeypatch, caplog):
+    """uvicorn's drain cancels a /push/stop still sending; the app's shutdown then stops again."""
+    hung = _Unanswered()
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient", lambda **_k: hung)
+    pc = await _started(PushClient("http://backend:8000"))
+    pc.enqueue("cognitive", {"ts": 1})
+    pc.enqueue("face", {"ts": 1})
+    request = asyncio.create_task(pc.stop())
+    await asyncio.wait_for(hung.posting.wait(), timeout=5)
+
+    with caplog.at_level(logging.WARNING, logger="src.app.services.push_client"):
+        request.cancel()
+        await asyncio.wait({request}, timeout=5)
+
+    assert request.cancelled()
+    assert "stop cancelled; 1 sample(s) kept for the next stop" in caplog.text
+    answered = _FakeClient()
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient", lambda **_k: answered)
+    assert await asyncio.wait_for(pc.stop(), timeout=5) is True
+    assert [(c["url"].rsplit("/", 1)[1], c["headers"]["Authorization"]) for c in answered.calls] == [
+        ("face", "Bearer tok")]
+    assert pc._token is None and pc._session_id is None
+
+
+@pytest.mark.parametrize("stopped", [True, False])
+def test_push_stop_reports_a_stop_that_did_not_happen(monkeypatch, stopped):
+    """`stop()` gives up when another start or stop holds the lock past its budget; "stopped" would be false."""
+    from fastapi.testclient import TestClient  # noqa: PLC0415
+
+    from src.app import main as sidecar  # noqa: PLC0415
+    from src.app.config import get_settings  # noqa: PLC0415
+
+    class _Client:
+        session_id = "s1"
+
+        async def stop(self):
+            return stopped
+
+    ended = []
+    monkeypatch.setattr(sidecar, "push_client", _Client())
+    monkeypatch.setattr(sidecar.stream_manager, "end_session", lambda: ended.append(True))
+    r = TestClient(sidecar.app).post("/api/v1/push/stop",
+                                     headers={"Authorization": f"Bearer {get_settings().api_token}"})
+
+    if stopped:
+        assert (r.status_code, r.json(), ended) == (200, {"status": "stopped", "ended_session": True}, [True])
+    else:
+        assert (r.status_code, r.json(), ended) == (503, {"status": "not_stopped", "ended_session": False}, [])
+        assert r.headers["retry-after"] == "1"
 
 
 @pytest.mark.anyio
@@ -560,13 +613,14 @@ async def test_waiting_for_the_lock_is_inside_the_shutdown_budget(client, monkey
     await client._lifecycle.acquire()  # held throughout, as by a request mid-start
     try:
         with caplog.at_level(logging.WARNING, logger="src.app.services.push_client"):
-            await asyncio.wait_for(client.stop(), timeout=5)
+            stopped = await asyncio.wait_for(client.stop(), timeout=5)
     finally:
         client._lifecycle.release()
 
+    assert stopped is False
     assert "shutdown budget spent waiting for another start or stop; not stopped" in caplog.text
     assert client._token == "tok", "a stop that never held the lock changed the session"
-    await asyncio.wait_for(client.stop(), timeout=5)
+    assert await asyncio.wait_for(client.stop(), timeout=5) is True
     assert client._token is None
 
 

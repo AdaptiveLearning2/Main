@@ -144,8 +144,8 @@ class PushClient:
                 self._task = asyncio.create_task(self._loop())
             return new_session
 
-    async def stop(self, *, flush: bool = True) -> None:
-        """Stop pushing and forget the token; one bounded final flush by default.
+    async def stop(self, *, flush: bool = True) -> bool:
+        """Stop pushing and forget the token; one bounded final flush by default. Returns whether it stopped.
 
         SHUTDOWN_BUDGET includes the wait for a start or stop holding the lock; spent there, this changes nothing."""
         deadline = time.monotonic() + SHUTDOWN_BUDGET
@@ -153,22 +153,33 @@ class PushClient:
             await asyncio.wait_for(self._lifecycle.acquire(), timeout=SHUTDOWN_BUDGET)
         except TimeoutError:
             logger.warning("push: shutdown budget spent waiting for another start or stop; not stopped")
-            return
+            return False
         try:
             await self._stop_locked(flush=flush, deadline=deadline)
         finally:
             self._lifecycle.release()
+        return True
 
     async def _stop_locked(self, *, flush: bool, deadline: float | None = None) -> None:
         """The body of `stop()`. Assumes `_lifecycle` is held (it is not reentrant).
 
-        Ends by `deadline`, SHUTDOWN_BUDGET from now by default; a cancelled caller still forgets the session."""
+        Ends by `deadline`, SHUTDOWN_BUDGET from now by default. A cancelled flushing stop keeps the queue
+        and token for the next stop; any other end forgets the session."""
         if deadline is None:
             deadline = time.monotonic() + SHUTDOWN_BUDGET
+        kept = False
         try:
             await self._wind_down(flush=flush, deadline=deadline)
+        except asyncio.CancelledError:
+            # Only shutdown cancels a stop, and its own stop then flushes what this one kept.
+            kept = flush and self._token is not None
+            if kept:
+                logger.warning("push: stop cancelled; %d sample(s) kept for the next stop",
+                               sum(len(self._queues[c]) for c in _CHANNELS))
+            raise
         finally:
-            self._forget_session()
+            if not kept:
+                self._forget_session()
 
     async def _wind_down(self, *, flush: bool, deadline: float) -> None:
         task, self._task = self._task, None

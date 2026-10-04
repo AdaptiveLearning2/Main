@@ -583,18 +583,142 @@ def _until(predicate, seconds: float):
     return None
 
 
-def test_on_stop_a_child_gets_its_grace_period_before_it_is_ended(tmp_path):
-    child = [PYTHON, "-c", "import time; time.sleep(1); print('finished by itself', flush=True)"]
-    supervisor = Supervisor(child, dict(os.environ), tmp_path, name="sidecar", graceful_s=10)
+def _stop_supervised(tmp_path, code: str, graceful_s: float) -> Supervisor:
+    supervisor = Supervisor([PYTHON, "-c", code], dict(os.environ), tmp_path, name="sidecar", graceful_s=graceful_s)
     stop = threading.Event()
     runner = threading.Thread(target=supervisor.run, args=(stop,))
     runner.start()
     assert _until(lambda: supervisor.process is not None, 10)
     stop.set()
     runner.join(20)
+    return supervisor
+
+
+def test_on_stop_a_child_gets_its_grace_period_before_it_is_ended(tmp_path, caplog):
+    with caplog.at_level(logging.WARNING, logger="src.kit.supervisor"):
+        supervisor = _stop_supervised(
+            tmp_path, "import time; time.sleep(1); print('finished by itself', flush=True)", graceful_s=10)
     assert supervisor.process.returncode == 0
     (log,) = tmp_path.glob("sidecar-*.log")
     assert "finished by itself" in log.read_text(encoding="utf-8")
+    assert "did not stop" not in caplog.text
+
+
+def test_a_child_that_outlasts_its_grace_is_ended_and_the_log_says_so(tmp_path, caplog):
+    """The kit's log is where a sidecar ended before its push client flushed has to show."""
+    with caplog.at_level(logging.WARNING, logger="src.kit.supervisor"):
+        supervisor = _stop_supervised(tmp_path, "import time; time.sleep(60)", graceful_s=1)
+    assert supervisor.process.returncode != 0
+    assert "sidecar did not stop within 1 s; ending it" in caplog.text
+
+
+@WINDOWS
+def test_a_request_that_never_finishes_does_not_hold_back_the_sidecars_shutdown():
+    """The push client flushes in the app's shutdown, which uvicorn runs only after its connections close."""
+    import uvicorn  # noqa: PLC0415
+
+    from src.app.services import push_client  # noqa: PLC0415
+
+    in_flight, shut_down = threading.Event(), threading.Event()
+
+    async def app(scope, receive, send):
+        if scope["type"] == "lifespan":
+            await receive()
+            await send({"type": "lifespan.startup.complete"})
+            await receive()
+            shut_down.set()
+            await send({"type": "lifespan.shutdown.complete"})
+        else:
+            in_flight.set()
+            while (await receive()).get("more_body"):  # a body that never finishes arriving
+                pass
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+    server = uvicorn.Server(launcher.sidecar_config(app, 0))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        assert _until(lambda: server.started, 20)
+        port = server.servers[0].sockets[0].getsockname()[1]
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as held:
+            held.sendall(b"POST /upload HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\n1")
+            assert in_flight.wait(10), "the request never reached the app"
+            server.should_exit = True
+            # Early enough that the push client's whole budget, and a second to exit, still fit in the grace.
+            started_in = launcher.SIDECAR_STOP_S - push_client.SHUTDOWN_BUDGET - 1
+            assert shut_down.wait(started_in), f"the app's shutdown had not started {started_in:.0f} s on"
+    finally:
+        server.should_exit = True
+        thread.join(20)
+
+
+# The kit's sidecar process with two fakes: asyncio's Server.wait_closed never returns, as uvicorn's did in the CI
+# run after a connection reset; and a stub app, since only the lifespan matters and the real one starts sensors.
+_SIDECAR_WHOSE_SERVER_NEVER_CLOSES = """\
+import asyncio, sys, types
+from asyncio import base_events
+
+async def app(scope, receive, send):
+    if scope["type"] == "lifespan":
+        await receive()
+        await send({"type": "lifespan.startup.complete"})
+        await receive()
+        print("the app's shutdown ran", flush=True)
+        await send({"type": "lifespan.shutdown.complete"})
+    else:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+async def never_closed(self):
+    await asyncio.Event().wait()
+
+base_events.Server.wait_closed = never_closed
+sys.modules["src.app.main"] = types.SimpleNamespace(app=app)
+from src.kit import launcher
+sys.exit(launcher.sidecar_main(int(sys.argv[1]), sys.argv[2]))
+"""
+
+
+@WINDOWS
+def test_a_server_that_never_closes_does_not_cost_the_sidecar_its_grace(tmp_path, caplog):
+    """The supervisor's grace, less the push client's budget, covers the drain uvicorn then gives up on."""
+    from src.app.services import push_client  # noqa: PLC0415
+    from src.kit import winproc  # noqa: PLC0415
+
+    local, runs = tmp_path / "local", tmp_path / "runs"
+    _, event = _names()
+    stop_signal = winproc.StopSignal(event)  # created first, as serve() does, for the sidecar to open
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    env = dict(os.environ, LOCALAPPDATA=str(local), PYTHONPATH=str(ROOT / "EEGResearch"))
+    grace = launcher.SIDECAR_STOP_S - push_client.SHUTDOWN_BUDGET
+    supervisor = Supervisor([sys.executable, "-c", _SIDECAR_WHOSE_SERVER_NEVER_CLOSES, str(port), event], env, runs,
+                            name="sidecar", graceful_s=grace)
+    stop = threading.Event()
+    runner = threading.Thread(target=supervisor.run, args=(stop,))
+    with caplog.at_level(logging.WARNING, logger="src.kit.supervisor"):
+        runner.start()
+        try:
+            assert _until(lambda: _get(f"http://127.0.0.1:{port}/") == 200, 60), "the sidecar never answered"
+            assert winproc.signal_stop(event) and stop_signal.wait(0)
+            stop.set()
+        finally:
+            stop.set()
+            runner.join(30)
+    (run_log,) = runs.glob("sidecar-*.log")
+    sidecar_log = (local / "AdaptiveLearning" / "Sensors" / "logs" / "sidecar.log").read_text(encoding="utf-8")
+    assert "did not stop within" not in caplog.text, sidecar_log
+    assert supervisor.process.returncode == 0
+    assert "the app's shutdown ran" in run_log.read_text(encoding="utf-8")
+    assert "Cancel 0 running task(s), timeout graceful shutdown exceeded" in sidecar_log
+
+
+def test_stop_waits_longer_than_the_sidecar_is_given_to_shut_down():
+    """Past STOP_WAIT_S the installer kills the copy, cutting short the final flush the grace exists for."""
+    # A second for the supervisor to notice the stop, and one for the launcher's own exit.
+    assert launcher.STOP_WAIT_S >= launcher.SIDECAR_STOP_S + 2
 
 
 @WINDOWS
@@ -701,4 +825,7 @@ def test_the_sidecar_is_restarted_after_it_dies_and_both_processes_stop_on_reque
         if (left := _sidecar_pid(port)) is not None:
             os.kill(left, signal.SIGTERM)
     log = (data / "logs" / "sidecar.log").read_text(encoding="utf-8")
-    assert "Application shutdown complete" in log  # it stopped itself, flushing its push client, rather than ended
+    kit_log = (data / "logs" / "sensors.log").read_text(encoding="utf-8")
+    # It stopped itself, flushing its push client, rather than being ended; both logs say why if not.
+    assert "Application shutdown complete" in log, f"sidecar.log:\n{log}\nsensors.log:\n{kit_log}"
+    assert "did not stop within" not in kit_log, kit_log

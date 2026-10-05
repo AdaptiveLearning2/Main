@@ -102,7 +102,7 @@ class PushClient:
         self._malformed: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         # Refused for other than size, or for size at MIN_BATCH: lost, and never retried.
         self._rejected: dict[str, int] = {channel: 0 for channel in _CHANNELS}
-        # Accepted, then not recorded by the backend's choice (consent, school year), with its latest why.
+        # Accepted, then not recorded (consent, school year, a switch, a reading with nothing in it), and why.
         self._declined: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         self._declined_reason: dict[str, str | None] = {channel: None for channel in _CHANNELS}
         # "recorded" or "declined": what the channel's latest receipt did; None before one.
@@ -521,7 +521,7 @@ class PushClient:
             "malformed": dict(self._malformed),
             # Refused, and no smaller batch would pass; lost, not retried.
             "rejected": dict(self._rejected),
-            # Accepted but not recorded, by the backend's choice; the page shows the reason.
+            # Accepted but not recorded; every drop carries the backend's reason, which the page shows.
             "declined": dict(self._declined),
             "declined_reason": dict(self._declined_reason),
             "last_result": {c: r if time.monotonic() - self._last_result_at[c] <= RESULT_FRESH_SECONDS else None

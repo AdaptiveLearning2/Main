@@ -115,6 +115,22 @@ it('keeps RECORDING for the channels being saved and names only the one that is 
   expect(within(camera).getByText(/nothing from it is being saved \(camera not consented\)/)).toBeInTheDocument()
 })
 
+it('claims no RECORDING when nothing was saved lately, as in a backend outage', async () => {
+  // Results go stale after 30 s without a receipt; the sidecar backs off for up to 120 s.
+  await renderInSession({
+    enabled: true, running: true, recorded: { cognitive: 40, heart: 3, face: 40 },
+    last_result: { cognitive: null, heart: null, face: null }, declined_reason: {},
+  })
+
+  const headband = panelOf('Muse Headband')
+  expect(await within(headband).findByText('not recording')).toBeInTheDocument()
+  expect(within(headband).queryByText('● RECORDING')).toBeNull()
+  const camera = panelOf('Camera')
+  expect(within(camera).getByText('on, not recording')).toBeInTheDocument()
+  expect(within(camera).queryByText('● RECORDING')).toBeNull()
+  expect(screen.queryByText(/Not being saved/)).toBeNull()
+})
+
 it('reads an older sidecar, which sends no last result, as recording', async () => {
   await renderInSession({ enabled: true, running: true, recorded: { cognitive: 5 } })
 

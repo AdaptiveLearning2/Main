@@ -1148,8 +1148,10 @@ export default function Adaptive() {
   const declined = CHANNEL_LABELS
     .filter(([key]) => push?.last_result?.[key] === 'declined')
     .map(([key, label]) => ({ key, label, reason: push?.declined_reason?.[key] || 'no reason given' }))
-  const savingNothing = declined.length > 0
-    && !CHANNEL_LABELS.some(([key]) => push?.last_result?.[key] === 'recorded')
+  // A fresh "recorded" is the only proof of saving: an outage or a backoff leaves every result stale.
+  const reportsResults = push?.last_result != null
+  const freshlyRecorded = (key) => !reportsResults || push.last_result[key] === 'recorded'
+  const recordingNow = !!(push?.reachable && push?.running && CHANNEL_LABELS.some(([key]) => freshlyRecorded(key)))
   const eegDeclined = headband.pushMode && declined.some(d => d.key === 'cognitive')
   const cameraDeclined = declined.find(d => d.key === 'face')
   const connectedLine = eegDeclined
@@ -1202,13 +1204,12 @@ export default function Adaptive() {
             {/* `=== false`: null is "no probe has answered yet". */}
             {!headband.probeRefused && !headband.probeUnreachable && !headband.serviceError && headband.available === false && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">offline</span>}
             {headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">on your device</span>}
-            {/* null push: nothing; known not-recording, or running with every receipt declined: amber; else RECORDING. */}
-            {headband.pushMode && push && ((push.running !== true &&
-             (push.reachable === false || push.enabled === false || push.running === false)) ||
-             (push.reachable && push.running && savingNothing)) && (
+            {/* null push: nothing; known not-running, or no fresh "recorded" from a sidecar that reports results: amber. */}
+            {headband.pushMode && push && !recordingNow && (push.reachable === false
+             || push.enabled === false || push.running === false || reportsResults) && (
               <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">not recording</span>
             )}
-            {headband.pushMode && push?.reachable && push?.running && !savingNothing && (
+            {headband.pushMode && recordingNow && (
               <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
             )}
             {headband.pushMode && pushLost > 0 && (
@@ -1337,7 +1338,7 @@ export default function Adaptive() {
             {/* RECORDING needs a session, not just a running camera. */}
             <p className="font-bold text-sm flex items-center gap-2">
               Camera
-              {camera.running && sessionId && !cameraDeclined
+              {camera.running && sessionId && freshlyRecorded('face')
                 ? <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
                 : camera.running
                   ? <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">on, not recording</span>

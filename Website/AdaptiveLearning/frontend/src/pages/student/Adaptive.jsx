@@ -203,7 +203,8 @@ export default function Adaptive() {
   const lastRecorded = useRef(null)
   // Chains start and stop so a teardown can't race an in-flight start.
   const pushHandoff = useRef(Promise.resolve())
-  // For the stable `recover` callback, which must not close over a stale id.
+  // Set beside every `setSessionId`, never copied from it by an effect: a late copy wrote a stale id
+  // back over a newer one. Handlers and the stable `recover` callback read this, not the state.
   const sessionIdRef = useRef(null)
 
   // Dev-only EEG debug panel
@@ -264,7 +265,6 @@ export default function Adaptive() {
   // Consecutive poor contact readings; the hint needs CONTACT_POOR_STREAK.
   const poorStreak = useRef(0)
 
-  useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
   useEffect(() => { headbandRef.current = headband }, [headband])
   useEffect(() => { recorderRef.current = recorder }, [recorder])
 

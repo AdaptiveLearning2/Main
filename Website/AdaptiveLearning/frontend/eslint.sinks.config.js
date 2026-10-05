@@ -15,8 +15,6 @@ export default defineConfig([
   globalIgnores(['dist', 'coverage']),
   {
     files: ['**/*.{js,jsx}'],
-    // Every `eslint-disable` in the tree is for a rule this config does not run.
-    linterOptions: { reportUnusedDisableDirectives: 'off' },
     languageOptions: {
       ecmaVersion: 'latest',
       globals: globals.browser,
@@ -26,8 +24,8 @@ export default defineConfig([
         sourceType: 'module',
       },
     },
-    // `react-hooks` registered, no rules enabled: an `eslint-disable` naming an
-    // undefined rule is itself an error.
+    // `react-hooks` registered, no rules enabled: tests may still carry a react-hooks
+    // disable, and one naming an undefined rule is itself an error.
     plugins: { react, 'react-hooks': reactHooks },
     rules: withMotionRules(sinkRules),
   },

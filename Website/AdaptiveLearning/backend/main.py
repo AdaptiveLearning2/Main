@@ -1484,23 +1484,21 @@ def _not_recording_reason(gate: dict, declined: str,
     return declined
 
 
-def _recording_state(gate: dict, record_key: str) -> str:
+def _recording_state(gate: dict, channel: str) -> str:
     """One channel's key for `GET /api/recording/me`, in `_not_recording_reason`'s order.
 
-    `unknown` is a read that failed (window or consent): it denies, but is not a refusal.
-    """
-    if gate.get(record_key):
+    `unknown` (an unreadable window or consent) is not a refusal, so any definite refusal outranks it."""
+    if gate.get(f"record_{channel}"):
         return "permitted"
-    if gate.get("window_state") == WINDOW_UNREADABLE:
-        return "unknown"
-    window = _window_meaning(gate.get("window_state")).stopped_reason
-    if window:
-        return window
-    if record_key in gate.get("switched_off", ()):
+    if gate.get("window_state") != WINDOW_UNREADABLE:
+        window = _window_meaning(gate.get("window_state")).stopped_reason
+        if window:
+            return window
+    if f"record_{channel}" in gate.get("switched_off", ()):
         return "switched_off"
-    if not gate.get("retrieved"):
-        return "unknown"
-    return "declined"
+    if gate.get("retrieved") and not gate.get(f"{channel}_enabled"):
+        return "declined"
+    return "unknown"
 
 
 def _topic_breakdown(student_id: str):
@@ -6083,8 +6081,7 @@ def my_recording_permits(request: Request):
     except Exception as e:
         print(f"[recording:me] {user['id']}: {e}")
         gate = None
-    return {c: {"state": _recording_state(gate, f"record_{c}") if gate else "unknown"}
-            for c in CONSENT_CHANNELS}
+    return {c: {"state": _recording_state(gate, c) if gate else "unknown"} for c in CONSENT_CHANNELS}
 
 
 # ─── biosignals: cognitive (headband) + face recognition ──────────────────

@@ -200,11 +200,13 @@ render. `AdaptiveCameraLifecycle.test.jsx` pins both, and that a camera already 
 
 **No sensor opens until `GET /api/recording/me` says it may record.** Per channel: `permitted`, `declined`,
 `switched_off`, `school_year_{not_started,ended,unconfigured}` or `unknown` (a failed read), in `_not_recording_reason`'s
-order; the page words each. The camera needs `camera`; under push the headband needs `eeg` **or** `headband_optical`,
-while pull's `/api/eeg/start` still demands EEG. Only switching on is gated — Turn off, Disconnect and Stop trying never
-read it — and `unknown` blocks switching on but stops nothing. The click re-asks; a refusal stops whatever runs
-(`enforcePermits`), a pairing through `pairOnce` reading `permitsRef`. Flags and window are cached 30 s and the page
-polls every `PUSH_POLL_MS`, so a switch-off takes up to a minute; an expiring consent bypass switches sensors off too.
+order but with any definite refusal above `unknown`. The camera needs `camera`; under push the headband needs `eeg`
+**or** `headband_optical` (the sidecar can't drop one channel, so declined EEG still reaches the backend's discard);
+pull's `/api/eeg/start` demands EEG. Only switching on is gated — never Turn off, Disconnect or Stop trying — and
+`unknown` stops nothing. The click re-asks; a refusal stops what runs (`enforcePermits`: a failed stop changes no state
+and the next answer retries it), a pairing via `pairOnce` reading `permitsRef`. Flags and window are cached 30 s and the
+page polls every `PUSH_POLL_MS` (hidden, only with a sensor on), so a switch-off takes up to a minute. Only while the page
+is open: closing it stops delivery, and a sensor still running is stopped at the next load if refused.
 
 All three ingest endpoints are rate-limited and length-bounded. `/api/signals/cognitive` was neither
 until the push client existed, survivable only while its sole writer was the in-process poller.

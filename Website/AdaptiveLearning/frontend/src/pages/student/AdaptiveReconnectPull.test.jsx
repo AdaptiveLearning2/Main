@@ -114,6 +114,8 @@ it('brings the stream up at Connect and records only from the first question', a
   // Same session as the pairing, so the same recorder is armed in place.
   expect(bridge.recorders).toHaveLength(1)
   await waitFor(() => expect(bridge.recorders[0].start).toHaveBeenCalledWith({ record: true }))
+  // Pull never asks: `/api/eeg/start` gates the headband on EEG consent itself.
+  expect(apiFetch.mock.calls.map(([path]) => path)).not.toContain('/api/recording/me')
 }, 30_000)
 
 it('reads the bridge once per status interval, the telemetry poll reusing the status answer', async () => {

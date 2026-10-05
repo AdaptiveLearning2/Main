@@ -107,6 +107,15 @@ def test_an_unreadable_year_is_unknown_not_a_refusal(monkeypatch):
     assert set(_states(res).values()) == {"unknown"}
 
 
+def test_a_definite_refusal_outranks_an_unreadable_year(monkeypatch, set_flag):
+    """The page stops a sensor only on a refusal, so `unknown` must not hide one."""
+    _year(monkeypatch, main.WINDOW_UNREADABLE)
+    set_flag("recording_camera_enabled", False)
+    res, _ = _ask(monkeypatch, {**ALL_ON, "eeg_enabled": False})
+    assert _states(res) == {"eeg": "declined", "headband_optical": "unknown",
+                            "camera": "switched_off"}
+
+
 def test_unreadable_consent_is_unknown_but_a_switch_still_names_itself(monkeypatch, set_flag):
     set_flag("recording_camera_enabled", False)
     res, fake = _ask(monkeypatch, raises=True)

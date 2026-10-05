@@ -48,7 +48,8 @@ vi.mock('../../context/AuthContext', () => ({
 }))
 
 import { toast } from 'sonner'
-import { deviceStart, deviceStop, museConnect, museDisconnect, museRefresh } from '../../lib/sidecar'
+import { deviceStart, deviceStop, museConnect, museDisconnect, museRefresh, museState,
+         releasePushIfIdle } from '../../lib/sidecar'
 import { apiFetch, apiError, mockApi, resetApi } from '../../test/mocks/apiFetch'
 import { buildRecordingPermits } from '../../test/fixtures/recordingPermits'
 import Adaptive from './Adaptive'
@@ -58,8 +59,9 @@ const CONNECTED = { muse_connected: true, muse_devices: ['Muse-1'], battery_perc
                     auto_reconnect: true, reconnecting: false, reconnect_attempt: 0,
                     reconnect_max_attempts: 5, reconnect_exhausted: false, eeg_age_ms: 2 }
 const HEADBAND_REFUSED = { eeg: 'declined', headband_optical: 'declined' }
-const DECLINED_CAMERA = "Camera recording is off: a parent hasn't turned it on."
-const DECLINED_HEADBAND = "Headband recording is off: a parent hasn't turned it on."
+const NOT_PERMITTED = "it isn't permitted (see Sensors on your Profile)"
+const DECLINED_CAMERA = `Camera recording is off: ${NOT_PERMITTED}.`
+const DECLINED_HEADBAND = `Headband recording is off: ${NOT_PERMITTED}.`
 const TEST_TIMEOUT = 60_000
 
 // What the route answers; tests reassign it, and each request reads it when made.
@@ -84,6 +86,11 @@ afterEach(() => cleanup())
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 const permitCalls = () => apiFetch.mock.calls.filter(([path]) => path === '/api/recording/me').length
+/** Resolves once `n` more answers have been fetched, so the one before the last has been applied. */
+const answersLanded = async (n) => {
+  const before = permitCalls()
+  await waitFor(() => expect(permitCalls()).toBeGreaterThanOrEqual(before + n))
+}
 
 async function connectHeadband() {
   render(<Adaptive />)
@@ -91,6 +98,11 @@ async function connectHeadband() {
   await waitFor(() => expect(button).toBeEnabled())
   fireEvent.click(button)
   await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+}
+
+function hideTab() {
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+  document.dispatchEvent(new Event('visibilitychange'))
 }
 
 it('keeps a declined camera off: Turn on is disabled, says why, and never starts it', async () => {
@@ -123,13 +135,22 @@ it('blocks switching on when the check fails, saying it could not check', async 
   expect(screen.getByRole('button', { name: /connect headband/i })).toBeDisabled()
 })
 
+it('words each state for itself: a refusal beside an unchecked channel, and a year never set up', async () => {
+  answer = () => buildRecordingPermits({ eeg: 'declined', headband_optical: 'unknown',
+                                         camera: 'school_year_unconfigured' })
+  render(<Adaptive />)
+  await screen.findByText(`Headband recording is off: EEG — ${NOT_PERMITTED}; `
+    + "heart rate — couldn't check, this retries on its own.")
+  expect(screen.getByText('Camera recording is off: no school year has been set up yet.')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /connect headband/i })).toBeDisabled()
+})
+
 it('lets the headband connect, and stay connected, for heart rate alone', async () => {
   answer = () => buildRecordingPermits({ eeg: 'declined', camera: 'declined' })
   await connectHeadband()
   expect(deviceStart).toHaveBeenCalledWith('default')
-  // Polls keep landing with the same answer; one channel permitted is not a refusal.
-  const before = permitCalls()
-  await waitFor(() => expect(permitCalls()).toBeGreaterThan(before + 1))
+  // Answers keep landing; one channel permitted is not a refusal.
+  await answersLanded(2)
   expect(deviceStop).not.toHaveBeenCalled()
   expect(screen.getByText(/STREAMING/)).toBeInTheDocument()
 }, TEST_TIMEOUT)
@@ -137,7 +158,7 @@ it('lets the headband connect, and stay connected, for heart rate alone', async 
 it('keeps Connect disabled when neither headband channel may record, naming each reason', async () => {
   answer = () => buildRecordingPermits({ eeg: 'declined', headband_optical: 'switched_off' })
   render(<Adaptive />)
-  await screen.findByText("Headband recording is off: EEG — a parent hasn't turned it on; "
+  await screen.findByText(`Headband recording is off: EEG — ${NOT_PERMITTED}; `
     + "heart rate — switched off by the school's administrator.")
   expect(screen.getByRole('button', { name: /connect headband/i })).toBeDisabled()
   expect(screen.getByRole('button', { name: /turn on camera/i })).toBeEnabled()
@@ -168,21 +189,55 @@ it('asks again at Connect, and does not pair a headband refused since the page l
   expect(museRefresh).not.toHaveBeenCalled()
 })
 
-it('turns off a running camera when a later answer withdraws it, once', async () => {
+it('turns off a running camera when a later answer withdraws it, once, and says so after', async () => {
   rig.cameraRunning = true
   // A slow stop, so further refusals land while it is still running.
-  deviceStop.mockImplementationOnce(() => new Promise(r => setTimeout(() => r({}), 1500)))
+  let stopped
+  deviceStop.mockImplementationOnce(() => new Promise(r => { stopped = r }))
   render(<Adaptive />)
   await screen.findByRole('button', { name: /turn off/i })
-  await waitFor(() => expect(permitCalls()).toBeGreaterThan(0))
+  await answersLanded(1)
   answer = () => buildRecordingPermits({ camera: 'declined' })
   await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('camera'))
-  const before = permitCalls()
-  await waitFor(() => expect(permitCalls()).toBeGreaterThan(before + 1))
+  await answersLanded(2)
+  // Not yet off, so not yet said.
+  expect(toast.warning).not.toHaveBeenCalled()
+  stopped({})
   await screen.findByRole('button', { name: /turn on camera/i })
-  expect(deviceStop).toHaveBeenCalledTimes(1)
+  await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+    'The camera was turned off.', { description: DECLINED_CAMERA }))
+  expect(deviceStop.mock.calls).toEqual([['camera']])
   expect(toast.warning).toHaveBeenCalledTimes(1)
-  expect(toast.warning).toHaveBeenCalledWith('The camera was turned off.', { description: DECLINED_CAMERA })
+})
+
+it('keeps a camera it could not switch off marked on, says so once, and retries', async () => {
+  rig.cameraRunning = true
+  deviceStop.mockRejectedValueOnce(new Error('sidecar busy')).mockRejectedValueOnce(new Error('sidecar busy'))
+  render(<Adaptive />)
+  await screen.findByRole('button', { name: /turn off/i })
+  answer = () => buildRecordingPermits({ camera: 'declined' })
+  // Two failed stops, then the next answer's stop lands.
+  await waitFor(() => expect(deviceStop).toHaveBeenCalledTimes(3))
+  await screen.findByRole('button', { name: /turn on camera/i })
+  expect(toast.error).toHaveBeenCalledTimes(1)
+  expect(toast.error).toHaveBeenCalledWith('The camera could not be switched off.',
+    { description: `${DECLINED_CAMERA} This retries on its own.` })
+  await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+    'The camera was turned off.', { description: DECLINED_CAMERA }))
+  expect(toast.warning).toHaveBeenCalledTimes(1)
+})
+
+it('treats a camera still listed as running after its stop as not stopped', async () => {
+  rig.cameraRunning = true
+  releasePushIfIdle.mockResolvedValueOnce(
+    { stopped: false, devices: [{ device_id: 'camera', kind: 'face', running: true }] })
+  render(<Adaptive />)
+  await screen.findByRole('button', { name: /turn off/i })
+  answer = () => buildRecordingPermits({ camera: 'declined' })
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('The camera could not be switched off.',
+    { description: `${DECLINED_CAMERA} This retries on its own.` }))
+  await waitFor(() => expect(deviceStop).toHaveBeenCalledTimes(2))
+  await screen.findByRole('button', { name: /turn on camera/i })
 })
 
 it('disconnects a connected headband when a later answer withdraws it', async () => {
@@ -190,27 +245,49 @@ it('disconnects a connected headband when a later answer withdraws it', async ()
   answer = () => buildRecordingPermits(HEADBAND_REFUSED)
   await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('default'))
   await screen.findByRole('button', { name: /connect headband/i })
-  expect(toast.warning).toHaveBeenCalledWith('The headband was disconnected.', { description: DECLINED_HEADBAND })
+  await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+    'The headband was disconnected.', { description: DECLINED_HEADBAND }))
 }, TEST_TIMEOUT)
 
-it('stops a headband found running at load when the first answer refuses it', async () => {
-  rig.headbandRunning = true
+it('keeps a headband it could not disconnect connected, says so, and retries', async () => {
+  await connectHeadband()
+  deviceStop.mockRejectedValueOnce(new Error('sidecar busy'))
   answer = () => buildRecordingPermits(HEADBAND_REFUSED)
-  render(<Adaptive />)
-  await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('default'))
-  expect(toast.warning).toHaveBeenCalledWith('The headband was disconnected.', { description: DECLINED_HEADBAND })
-})
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('The headband could not be switched off.',
+    { description: `${DECLINED_HEADBAND} This retries on its own.` }))
+  expect(screen.getByRole('button', { name: /^disconnect$/i })).toBeInTheDocument()
+  await waitFor(() => expect(deviceStop).toHaveBeenCalledTimes(2))
+  await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+    'The headband was disconnected.', { description: DECLINED_HEADBAND }))
+}, TEST_TIMEOUT)
 
-it('keeps asking while the tab is hidden, so a withdrawal still lands', async () => {
+it('keeps asking while the tab is hidden and a sensor is on, so a withdrawal still lands', async () => {
   rig.cameraRunning = true
   render(<Adaptive />)
   await screen.findByRole('button', { name: /turn off/i })
-  await waitFor(() => expect(permitCalls()).toBeGreaterThan(0))
-  Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+  await answersLanded(1)
   try {
-    document.dispatchEvent(new Event('visibilitychange'))
+    hideTab()
     answer = () => buildRecordingPermits({ camera: 'declined' })
     await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('camera'))
+  } finally {
+    delete document.hidden
+  }
+})
+
+it('stops asking while the tab is hidden and nothing is on', async () => {
+  render(<Adaptive />)
+  await screen.findByRole('button', { name: /turn on camera/i })
+  // The control: how long three answers take while visible, which bounds the hidden window below.
+  const started = Date.now()
+  await answersLanded(3)
+  const threeAnswers = Date.now() - started
+  try {
+    hideTab()
+    const hiddenAt = permitCalls()
+    await sleep(threeAnswers)
+    expect(permitCalls()).toBe(hiddenAt)
   } finally {
     delete document.hidden
   }
@@ -221,9 +298,30 @@ it('turns off a camera found running at load when the first answer refuses it', 
   answer = () => buildRecordingPermits({ camera: 'switched_off' })
   render(<Adaptive />)
   await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('camera'))
-  expect(toast.warning).toHaveBeenCalledWith('The camera was turned off.',
-    { description: "Camera recording is off: switched off by the school's administrator." })
+  await waitFor(() => expect(toast.warning).toHaveBeenCalledWith('The camera was turned off.',
+    { description: "Camera recording is off: switched off by the school's administrator." }))
 })
+
+it('stops a headband found running at load when the first answer refuses it', async () => {
+  rig.headbandRunning = true
+  answer = () => buildRecordingPermits(HEADBAND_REFUSED)
+  render(<Adaptive />)
+  await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('default'))
+  await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+    'The headband was disconnected.', { description: DECLINED_HEADBAND }))
+})
+
+it('does not stop again a headband the student already disconnected', async () => {
+  rig.headbandRunning = true
+  await connectHeadband()
+  fireEvent.click(screen.getByRole('button', { name: /^disconnect$/i }))
+  await screen.findByRole('button', { name: /connect headband/i })
+  expect(deviceStop).toHaveBeenCalledTimes(1)
+  answer = () => buildRecordingPermits(HEADBAND_REFUSED)
+  await answersLanded(2)
+  expect(deviceStop).toHaveBeenCalledTimes(1)
+  expect(toast.warning).not.toHaveBeenCalled()
+}, TEST_TIMEOUT)
 
 it('stops a camera whose start lands after it was refused', async () => {
   let started
@@ -234,8 +332,7 @@ it('stops a camera whose start lands after it was refused', async () => {
   fireEvent.click(turnOn)
   await waitFor(() => expect(deviceStart).toHaveBeenCalledWith('camera'))
   answer = () => buildRecordingPermits({ camera: 'declined' })
-  const before = permitCalls()
-  await waitFor(() => expect(permitCalls()).toBeGreaterThan(before + 1))
+  await answersLanded(2)
   started({})
   await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('camera'))
 })
@@ -244,10 +341,9 @@ it('stops nothing when a later check fails', async () => {
   rig.cameraRunning = true
   render(<Adaptive />)
   await screen.findByRole('button', { name: /turn off/i })
-  await waitFor(() => expect(permitCalls()).toBeGreaterThan(0))
+  await answersLanded(1)
   answer = () => { throw apiError(503) }
-  const before = permitCalls()
-  await waitFor(() => expect(permitCalls()).toBeGreaterThan(before + 2))
+  await answersLanded(3)
   expect(deviceStop).not.toHaveBeenCalled()
   expect(screen.getByRole('button', { name: /turn off/i })).toBeEnabled()
 })
@@ -257,7 +353,7 @@ it('lets Turn off work while the check is failing', async () => {
   answer = () => { throw apiError(503) }
   render(<Adaptive />)
   const off = await screen.findByRole('button', { name: /turn off/i })
-  await waitFor(() => expect(permitCalls()).toBeGreaterThan(0))
+  await answersLanded(2)
   expect(off).toBeEnabled()
   fireEvent.click(off)
   await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('camera'))
@@ -281,9 +377,10 @@ it('ignores an answer that lands after a newer one', async () => {
   await slow
   fireEvent.click(turnOn)
   await screen.findByRole('button', { name: /turn off/i })
+  const afterClick = calls
   release()
-  // The poll schedules its next request only once the slow one has settled.
-  await waitFor(() => expect(calls).toBeGreaterThanOrEqual(4))
+  // The old answer settles in microtasks; the next request is a whole interval later.
+  await waitFor(() => expect(calls).toBeGreaterThan(afterClick))
   expect(deviceStop).not.toHaveBeenCalled()
   expect(toast.warning).not.toHaveBeenCalled()
 })
@@ -291,8 +388,7 @@ it('ignores an answer that lands after a newer one', async () => {
 it('lets Disconnect work while the check is failing', async () => {
   await connectHeadband()
   answer = () => { throw apiError(503) }
-  const before = permitCalls()
-  await waitFor(() => expect(permitCalls()).toBeGreaterThan(before))
+  await answersLanded(2)
   expect(deviceStop).not.toHaveBeenCalled()
   const disconnect = screen.getByRole('button', { name: /^disconnect$/i })
   expect(disconnect).toBeEnabled()
@@ -300,7 +396,7 @@ it('lets Disconnect work while the check is failing', async () => {
   await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('default'))
 }, TEST_TIMEOUT)
 
-it('abandons a pairing in progress when the headband is withdrawn', async () => {
+it('abandons a pairing in progress when the headband is withdrawn, and says so once', async () => {
   // A scan that finds nothing, so the pairing would otherwise run its full 12 s.
   rig.ingestion = { muse_connected: false, muse_devices: [] }
   render(<Adaptive />)
@@ -311,9 +407,27 @@ it('abandons a pairing in progress when the headband is withdrawn', async () => 
   answer = () => buildRecordingPermits(HEADBAND_REFUSED)
   await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('default'), { timeout: 4000 })
   expect(museConnect).not.toHaveBeenCalled()
-  expect(toast.warning).toHaveBeenCalledWith('The headband was disconnected.', { description: DECLINED_HEADBAND })
+  await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+    "The headband wasn't connected.", { description: DECLINED_HEADBAND }))
+  await answersLanded(2)
+  expect(toast.warning).toHaveBeenCalledTimes(1)
   // A refusal is not "no headband found".
   expect(toast.error).not.toHaveBeenCalled()
+}, TEST_TIMEOUT)
+
+it('retries the stop of a pairing it abandoned, when that stop failed', async () => {
+  rig.ingestion = { muse_connected: false, muse_devices: [] }
+  render(<Adaptive />)
+  const connect = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(connect).toBeEnabled())
+  fireEvent.click(connect)
+  await waitFor(() => expect(museRefresh).toHaveBeenCalled())
+  deviceStop.mockRejectedValueOnce(new Error('sidecar busy'))
+  answer = () => buildRecordingPermits(HEADBAND_REFUSED)
+  // The pairing's own stop fails; the station it started is still known to run, so it is stopped again.
+  await waitFor(() => expect(deviceStop.mock.calls).toEqual([['default'], ['default']]), { timeout: 5000 })
+  await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+    'The headband was disconnected.', { description: DECLINED_HEADBAND }))
 }, TEST_TIMEOUT)
 
 it('stops the reconnect retries when a reconnecting headband is withdrawn', async () => {
@@ -323,13 +437,11 @@ it('stops the reconnect retries when a reconnecting headband is withdrawn', asyn
   await screen.findByText(/reconnecting \(attempt 1 of 3\)/, {}, { timeout: 8000 })
   const disconnects = museDisconnect.mock.calls.length
   answer = () => buildRecordingPermits(HEADBAND_REFUSED)
+  // Stop trying's teardown; that it ends the loop is pinned in AdaptiveReconnect.test.jsx.
   await waitFor(() => expect(museDisconnect.mock.calls.length).toBeGreaterThan(disconnects))
   await screen.findByRole('button', { name: /connect headband/i })
-  expect(toast.warning).toHaveBeenCalledWith('The headband was disconnected.', { description: DECLINED_HEADBAND })
-  // Past the loop's next backoff: no later attempt, and no "could not be reconnected".
-  await sleep(5000)
-  expect(screen.queryByText(/of 3\)/)).toBeNull()
-  expect(toast.error).not.toHaveBeenCalled()
+  await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+    'The headband was disconnected.', { description: DECLINED_HEADBAND }))
 }, TEST_TIMEOUT)
 
 it('does not take over the retries for a headband withdrawn while the bridge was reconnecting it', async () => {
@@ -338,12 +450,13 @@ it('does not take over the retries for a headband withdrawn while the bridge was
   await screen.findByText(/reconnecting \(attempt 1 of 5\)/, {}, { timeout: 8000 })
   // A slow teardown, so the bridge giving up lands while it is still running.
   museDisconnect.mockImplementationOnce(() => new Promise(r => setTimeout(() => r({}), 6000)))
+  const disconnects = museDisconnect.mock.calls.length
   answer = () => buildRecordingPermits(HEADBAND_REFUSED)
-  await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
-    'The headband was disconnected.', { description: DECLINED_HEADBAND }))
+  await waitFor(() => expect(museDisconnect.mock.calls.length).toBeGreaterThan(disconnects))
   rig.ingestion = { ...CONNECTED, muse_connected: false, reconnect_exhausted: true }
-  // Two telemetry ticks see the bridge give up; the page's own "of 3" loop must not start.
-  await sleep(4500)
+  // Each telemetry tick is where a takeover would start; by the second read the first tick has acted.
+  const ticks = museState.mock.calls.length
+  await waitFor(() => expect(museState.mock.calls.length).toBeGreaterThanOrEqual(ticks + 2))
   expect(screen.queryByText(/of 3\)/)).toBeNull()
-  await screen.findByRole('button', { name: /connect headband/i }, { timeout: 5000 })
+  await screen.findByRole('button', { name: /connect headband/i }, { timeout: 8000 })
 }, TEST_TIMEOUT)

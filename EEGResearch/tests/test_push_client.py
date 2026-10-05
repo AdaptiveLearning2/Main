@@ -7,7 +7,8 @@ import types
 
 import pytest
 
-from src.app.services.push_client import MAX_BATCH, MAX_QUEUE, MIN_BATCH, SHUTDOWN_BUDGET, PushClient
+from src.app.services.push_client import (MAX_BATCH, MAX_QUEUE, MIN_BATCH, RESULT_FRESH_SECONDS,
+                                          SHUTDOWN_BUDGET, PushClient)
 
 
 @pytest.fixture
@@ -205,6 +206,104 @@ async def test_a_backend_that_reports_no_duplicates_still_reads_cleanly(client,
     assert status["recorded"]["face"] == 2
     assert status["duplicates"]["face"] == 0
     assert status["unaccounted"]["face"] == 0
+
+
+def _receipts(client, monkeypatch, *bodies):
+    """Answer each post with the next receipt body in turn."""
+    queue = list(bodies)
+    fake = _FakeClient(responder=lambda *_a, **_k: _Response(body=queue.pop(0)))
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient", lambda **_k: fake)
+
+
+async def _post_one(client, channel, sample):
+    client.enqueue(channel, sample)
+    await client._flush_once()
+
+
+@pytest.mark.anyio
+async def test_a_declined_batch_is_counted_with_its_reason(client, monkeypatch):
+    """The backend accepts the post and records nothing; the page must be able to say so, and why."""
+    _receipts(client, monkeypatch,
+              {"ok": True, "inserted": 0, "dropped": 2, "reason": "eeg not consented"})
+    await _started(client)
+    client.enqueue("cognitive", {"ts": "a"})
+    await _post_one(client, "cognitive", {"ts": "b"})
+
+    status = client.status()
+    assert status["declined"]["cognitive"] == 2
+    assert status["declined_reason"]["cognitive"] == "eeg not consented"
+    assert status["last_result"]["cognitive"] == "declined"
+    assert status["recorded"]["cognitive"] == 0
+    assert status["last_result"]["face"] is None, "a channel with no receipt has no result"
+
+
+@pytest.mark.anyio
+async def test_a_channel_recorded_again_reads_as_recorded(client, monkeypatch):
+    """Consent given mid-lesson: the latest receipt decides, and the earlier decline stays counted."""
+    _receipts(client, monkeypatch,
+              {"ok": True, "inserted": 0, "dropped": 1, "reason": "camera not consented"},
+              {"ok": True, "inserted": 1, "dropped": 0, "reason": None})
+    await _started(client)
+    await _post_one(client, "face", {"ts": 0})
+    await _post_one(client, "face", {"ts": 1})
+
+    status = client.status()
+    assert status["last_result"]["face"] == "recorded"
+    assert status["declined"]["face"] == 1
+    assert status["declined_reason"]["face"] == "camera not consented"
+
+
+@pytest.mark.anyio
+async def test_a_partly_declined_batch_reads_as_recorded(client, monkeypatch):
+    """A heart batch with one sensor declined and the other recorded is still being saved."""
+    _receipts(client, monkeypatch, {"ok": True, "inserted": 1, "dropped": 1, "reason": None})
+    await _started(client)
+    client.enqueue("heart", {"ts": "a", "source": "muse_optics", "device_id": "d"})
+    await _post_one(client, "heart", {"ts": "b", "source": "rppg", "device_id": "c"})
+
+    status = client.status()
+    assert status["last_result"]["heart"] == "recorded"
+    assert status["declined"]["heart"] == 1
+
+
+@pytest.mark.anyio
+async def test_a_receipt_of_only_duplicates_leaves_the_last_result(client, monkeypatch):
+    """Rows an earlier attempt saved say nothing about whether this channel records now."""
+    _receipts(client, monkeypatch,
+              {"ok": True, "inserted": 1},
+              {"ok": True, "inserted": 0, "dropped": 0, "duplicates": 1})
+    await _started(client)
+    await _post_one(client, "cognitive", {"ts": "a"})
+    await _post_one(client, "cognitive", {"ts": "b"})
+
+    assert client.status()["last_result"]["cognitive"] == "recorded"
+
+
+@pytest.mark.anyio
+async def test_a_channel_that_stopped_sending_has_no_last_result(client, monkeypatch):
+    """A camera switched off mid-lesson must stop counting as being saved."""
+    _receipts(client, monkeypatch, {"ok": True, "inserted": 1})
+    await _started(client)
+    await _post_one(client, "face", {"ts": 0})
+    assert client.status()["last_result"]["face"] == "recorded"
+
+    client._last_result_at["face"] -= RESULT_FRESH_SECONDS + 1
+
+    assert client.status()["last_result"]["face"] is None
+
+
+@pytest.mark.anyio
+async def test_a_new_session_forgets_the_last_sessions_declines(client, monkeypatch):
+    _receipts(client, monkeypatch,
+              {"ok": True, "inserted": 0, "dropped": 1, "reason": "eeg not consented"})
+    await _started(client, "s1")
+    await _post_one(client, "cognitive", {"ts": "a"})
+
+    await client.start("s2", "tok2")
+    status = client.status()
+    assert status["declined"]["cognitive"] == 0
+    assert status["declined_reason"]["cognitive"] is None
+    assert status["last_result"]["cognitive"] is None
 
 
 @pytest.mark.anyio

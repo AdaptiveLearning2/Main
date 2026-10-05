@@ -897,8 +897,8 @@ export default function Adaptive() {
         lastRecorded.current = now
         // A restarted sidecar has no token; skip `enabled: false` (config, would 409).
         if (d.enabled !== false && !d.running) recover()
-        // Reachable and running are separate claims.
-        setPush(p => ({ ...(p || {}), ...d, reachable: true, running: !!d.enabled && !!d.running }))
+        // Reachable and running are separate claims; `answered`: only a status says whether it reports results.
+        setPush(p => ({ ...(p || {}), ...d, reachable: true, running: !!d.enabled && !!d.running, answered: true }))
       })
       .catch(() => {
         if (killed) return
@@ -1144,6 +1144,32 @@ export default function Adaptive() {
   const pushLost = ['rejected', 'malformed']
     .flatMap(k => Object.values(push?.[k] || {}))
     .reduce((a, b) => a + (Number(b) || 0), 0)
+  // One state per channel drives every badge and sentence: fresh 'recorded' or 'declined', 'waiting' (nothing
+  // back yet) or 'stale' (nothing back lately: an outage or a backoff). An older sidecar reads 'recorded'.
+  const reportsResults = push?.last_result != null
+  const channelState = (key) => {
+    if (!push?.answered) return headband.pushMode ? 'waiting' : 'recorded'
+    if (!reportsResults) return 'recorded'
+    if (push.last_result[key]) return push.last_result[key]
+    const seen = (Number(push.recorded?.[key]) || 0) + (Number(push.declined?.[key]) || 0)
+    return seen > 0 ? 'stale' : 'waiting'
+  }
+  const declined = CHANNEL_LABELS
+    .filter(([key]) => channelState(key) === 'declined')
+    .map(([key, label]) => ({ key, label, reason: push?.declined_reason?.[key] || 'no reason given' }))
+  const pushRunning = !!(push?.reachable && push?.running)
+  // The headband card speaks for the headband's EEG only, as the camera card does for the camera.
+  const eegState = headband.pushMode ? channelState('cognitive') : 'recorded'
+  const headbandRecording = pushRunning && eegState === 'recorded'
+  const headbandWaiting = pushRunning && eegState === 'waiting'
+  const cameraState = channelState('face')
+  const cameraDeclined = declined.find(d => d.key === 'face')
+  const connectedLine = {
+    declined: 'Connected, but your headband readings are not being saved, so your teacher cannot see them.',
+    waiting: 'Connected. Waiting for the first readings to be saved.',
+    stale: 'Connected, but no readings have been saved recently, so your teacher cannot see them live.',
+  }[eegState]
+    || `${headbandSamples} samples sent · teacher can see your focus & stress live`
 
   const activeClass = classes.find(c => c.id === classId)
   // The grade the backend serves: '' is none set anywhere, so its default; undefined is not
@@ -1191,12 +1217,15 @@ export default function Adaptive() {
             {/* `=== false`: null is "no probe has answered yet". */}
             {!headband.probeRefused && !headband.probeUnreachable && !headband.serviceError && headband.available === false && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">offline</span>}
             {headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">on your device</span>}
-            {/* null push: nothing; known not-recording: amber; reachable + running: RECORDING. */}
-            {headband.pushMode && push && push.running !== true &&
-             (push.reachable === false || push.enabled === false || push.running === false) && (
+            {/* EEG only. Grey while EEG has not come back yet, and only with a headband to wait on; amber when not saving. */}
+            {headband.pushMode && headbandWaiting && headband.connected && (
+              <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">waiting to save</span>
+            )}
+            {headband.pushMode && push && !headbandRecording && !headbandWaiting && (push.reachable === false
+             || push.enabled === false || push.running === false || reportsResults) && (
               <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">not recording</span>
             )}
-            {headband.pushMode && push?.reachable && push?.running && (
+            {headband.pushMode && headbandRecording && (
               <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
             )}
             {headband.pushMode && pushLost > 0 && (
@@ -1217,10 +1246,10 @@ export default function Adaptive() {
                     headband.reconnect?.attempt > 0 && headband.reconnect?.max > 0
                       ? ` (attempt ${headband.reconnect.attempt} of ${headband.reconnect.max})` : ''}…`
             )}
-            {headband.phase === 'connected'  && `${headbandSamples} samples sent · teacher can see your focus & stress live`}
+            {headband.phase === 'connected'  && connectedLine}
             {headband.phase === 'idle' && (
               headband.connected
-                ? `${headbandSamples} samples sent · teacher can see your focus & stress live`
+                ? connectedLine
                 : headband.pushMode
                   ? (push && push.enabled === false
                       ? 'The app on this computer is running but is not set up to record (PUSH_ENABLED is off). Nothing is being saved for this session.'
@@ -1261,6 +1290,12 @@ export default function Adaptive() {
           {headband.connected && headband.contactPoor === true && (
             <p className="text-[11px] font-bold text-amber-700 dark:text-amber-300 mt-1">
               ⚠ Adjust the headband so the sensors sit flat against your skin — the reading is weak.
+            </p>
+          )}
+          {/* The backend's reason, verbatim: consent, the school year or a recording switch can each be it. */}
+          {headband.pushMode && declined.length > 0 && (
+            <p role="status" className="text-[11px] font-bold text-amber-700 dark:text-amber-300 mt-1">
+              ⚠ Not being saved: {declined.map(d => `${d.label} (${d.reason})`).join(' · ')}
             </p>
           )}
         </div>
@@ -1319,8 +1354,10 @@ export default function Adaptive() {
             {/* RECORDING needs a session, not just a running camera. */}
             <p className="font-bold text-sm flex items-center gap-2">
               Camera
-              {camera.running && sessionId
+              {camera.running && sessionId && cameraState === 'recorded'
                 ? <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
+                : camera.running && sessionId && cameraState === 'waiting'
+                  ? <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">on, waiting to save</span>
                 : camera.running
                   ? <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">on, not recording</span>
                   : <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">off</span>}
@@ -1330,6 +1367,12 @@ export default function Adaptive() {
                 ? 'The camera records through the app on this computer, which this deployment is not set up for. Nothing would be saved.'
                 : camera.busy
                   ? 'Starting the camera...'
+                  : camera.running && sessionId && cameraDeclined
+                    ? `The camera is on, but nothing from it is being saved (${cameraDeclined.reason}). No video is saved.`
+                  : camera.running && sessionId && cameraState === 'waiting'
+                    ? 'The camera is on. Waiting for its first readings to be saved. No video is saved.'
+                  : camera.running && sessionId && cameraState === 'stale'
+                    ? 'The camera is on, but nothing from it has been saved recently. No video is saved.'
                   : camera.running && sessionId
                     ? 'Reading how you are finding the questions. No video is saved.'
                     : camera.running

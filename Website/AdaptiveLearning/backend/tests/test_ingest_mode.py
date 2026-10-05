@@ -855,6 +855,22 @@ def test_the_push_endpoint_drops_no_signal_ticks(monkeypatch):
     assert out["dropped"] == 1
 
 
+def test_a_dropped_tick_says_why_and_a_clean_batch_says_nothing(monkeypatch):
+    """A headband off the head is not a refusal, so its drop needs its own reason, not "unspecified"."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": True, "retrieved": True}))
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    _capture_inserts(monkeypatch)
+
+    unworn = main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"features": _UNWORN["features"]}]), None)
+    clean = main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"features": {"signal_quality": "good", "focus_score": 60.0}}]), None)
+
+    assert unworn["inserted"] == 0 and unworn["reason"] == main._NO_USABLE_EEG
+    assert clean["inserted"] == 1 and clean["reason"] is None
+
+
 def test_the_push_endpoint_nulls_measurements_on_bad_contact(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(main, "_ingest_gate", lambda *_a: (None, {"eeg_enabled": True, "retrieved": True}))

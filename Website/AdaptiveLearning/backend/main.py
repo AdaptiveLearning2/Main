@@ -1432,7 +1432,10 @@ def _may_record(student_id: str, consent: "_StoredConsent | None" = None) -> dic
                 recording and flags["recording_heart_enabled"]["enabled"]
                 and bool(consent.get("headband_optical_enabled"))),
             "record_camera": (recording and flags["recording_camera_enabled"]["enabled"]
-                              and bool(consent.get("camera_enabled")))}
+                              and bool(consent.get("camera_enabled"))),
+            # So a reason can name the switch rather than blame consent.
+            "switched_off": sorted(key for key, flag in _RECORDING_SWITCHES.items()
+                                   if not flags[flag]["enabled"])}
 
 
 def _as_sentence(text: str) -> str:
@@ -1451,14 +1454,33 @@ def _window_meaning(state: str) -> _WindowMeaning:
     return _WINDOW_STATES.get(state) or _NO_MEANING
 
 
+# The admin switch behind each `record_*` flag `_may_record` composes.
+_RECORDING_SWITCHES = {"record_eeg": "recording_eeg_enabled",
+                       "record_headband_optical": "recording_heart_enabled",
+                       "record_camera": "recording_camera_enabled"}
+_SWITCHED_OFF = "recording is switched off by an administrator"
+# A zeroed tick, as a headband off the head sends: nothing refused it.
+_NO_USABLE_EEG = "no usable reading; check the headband is on"
+
+
 def _not_recording_reason(gate: dict, declined: str,
-                          unavailable: str = "consent unavailable") -> str:
-    """Why this channel is not recording. Window first, so a closed year never points at consent."""
+                          unavailable: str = "consent unavailable", *,
+                          switches: tuple[str, ...], partly_switched: str | None = None) -> str:
+    """Why this channel is not recording: the window, then an admin switch, then consent.
+
+    `switches` names the `record_*` keys the channel records under; all off is the switch's
+    doing. `partly_switched` is for a channel of several sensors with only some switched off.
+    """
     window = _window_meaning(gate.get("window_state")).reason
     if window:
         return window
+    off = [key for key in switches if key in gate.get("switched_off", ())]
+    if switches and len(off) == len(switches):
+        return _SWITCHED_OFF
     if not gate.get("retrieved"):
         return unavailable
+    if off and partly_switched:
+        return partly_switched
     return declined
 
 
@@ -3630,6 +3652,10 @@ _HEART_SOURCES_BY_RECORD_FLAG = {
     "record_headband_optical": ("muse_optics", "muse_ppg"),
     "record_camera":           ("rppg",),
 }
+_HEART_SENSOR_DECLINED = {
+    "record_headband_optical": "headband heart sensor not consented",
+    "record_camera":           "camera not consented",
+}
 
 _STRATEGY_RATE_WINDOW = env_number("STRATEGY_RATE_WINDOW", 60.0, float, minimum=1.0)
 _STRATEGY_LIMITER = _SlidingWindowLimiter(
@@ -5713,7 +5739,7 @@ def _poller_may_record_eeg(student_id: str) -> bool:
     if gate["record_eeg"]:
         return True
     # "EEG": this is also a 403 sentence, and `_as_sentence` only capitalises letter one.
-    reason = _as_sentence(_not_recording_reason(gate, "EEG not consented"))
+    reason = _as_sentence(_not_recording_reason(gate, "EEG not consented", switches=("record_eeg",)))
     print(f"<<< [eeg-poller] {student_id[:8]}: {reason}", flush=True)
     return False
 
@@ -5724,7 +5750,7 @@ def _poller_may_record_eeg_reason(student_id: str) -> str:
     Re-reads rather than caching: runs only on a refusal, and a cache would race.
     """
     gate = _may_record(student_id)
-    return _as_sentence(_not_recording_reason(gate, "EEG not consented"))
+    return _as_sentence(_not_recording_reason(gate, "EEG not consented", switches=("record_eeg",)))
 
 
 eeg_poller.set_consent_check(_poller_may_record_eeg)
@@ -6342,7 +6368,8 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     consent = _may_record(user["id"], consent=_stored_consent(consent_row))
     if not consent["record_eeg"]:
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
-                "reason": _not_recording_reason(consent, "eeg not consented")}
+                "reason": _not_recording_reason(consent, "eeg not consented",
+                                                switches=("record_eeg",))}
 
     # Warn once when a live poller also writes this session (checked and claimed atomically).
     if eeg_poller.claim_double_write_warning(payload.session_id):
@@ -6387,11 +6414,14 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
         _admit_ingest_rows(user["id"], "cognitive", len(rows))
         inserted = _write_ingest_rows("cognitive_signals", rows, "session_id,ts",
                                       user["id"], "cognitive")
+    dropped = len(samples) - len(rows)
     return {"ok": True, "inserted": inserted,
-            "dropped": len(samples) - len(rows),
+            "dropped": dropped,
             "malformed": malformed,
             "out_of_window": out_of_window,
-            "duplicates": len(rows) - inserted}
+            "duplicates": len(rows) - inserted,
+            # Recording is permitted by here, so a drop is a reading with nothing in it.
+            "reason": _NO_USABLE_EEG if dropped else None}
 
 @app.post("/api/signals/face")
 def ingest_face(payload: FaceBatch, request: Request):
@@ -6403,7 +6433,8 @@ def ingest_face(payload: FaceBatch, request: Request):
     consent = _may_record(user["id"], consent=_stored_consent(consent_row))
     if not consent["record_camera"]:
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
-                "reason": _not_recording_reason(consent, "camera not consented")}
+                "reason": _not_recording_reason(consent, "camera not consented",
+                                                switches=("record_camera",))}
 
     samples, malformed = _validate_each(FaceSample, payload.samples)
     inside = _ingest_ts_filter(session)
@@ -6460,7 +6491,15 @@ def ingest_heart(payload: HeartBatch, request: Request):
     # Tells "every sensor declined" from "could not find out".
     reason = None
     if not allowed:
-        reason = _not_recording_reason(consent, "no consented heart sensor")
+        reason = _not_recording_reason(
+            consent, "no consented heart sensor", switches=tuple(_HEART_SOURCES_BY_RECORD_FLAG),
+            partly_switched="no heart sensor is both switched on and consented")
+    elif dropped:
+        # One sensor allowed, samples from another: name that one, so a drop never comes without a why.
+        refused = sorted({flag for s in samples if s.source not in allowed
+                          for flag, sources in _HEART_SOURCES_BY_RECORD_FLAG.items() if s.source in sources})
+        reason = "; ".join(_not_recording_reason(consent, _HEART_SENSOR_DECLINED[flag], switches=(flag,))
+                           for flag in refused) or "unknown heart sensor"
 
     rows = [r for r in (
         signal_mapping.map_heart_to_heart_signal(
@@ -6690,6 +6729,9 @@ def _poller_status(user_id: str, push: bool = False) -> dict:
         return {**status, "stopped_reason": stopped,
                 "window_starts_on": gate["window_starts_on"],
                 "window_ends_on": gate["window_ends_on"]}
+    # The switch before consent, as `_not_recording_reason` orders them.
+    if "record_eeg" in gate.get("switched_off", ()):
+        return {**status, "stopped_reason": "recording_switched_off"}
     if not gate.get("retrieved"):
         # A failed read is not a refusal.
         return {**status, "stopped_reason": "consent_unknown"}
@@ -6922,7 +6964,8 @@ def eeg_muse_connect(request: Request, body: dict = Body(...)):
         raise HTTPException(403, _as_sentence(_not_recording_reason(
             consent,
             "EEG recording is switched off for this student.",
-            "Could not check whether EEG recording is allowed, so the headband was not connected.")))
+            "Could not check whether EEG recording is allowed, so the headband was not connected.",
+            switches=("record_eeg",))))
     out = _reserve_and_call(user["id"], device_id, eeg_client.muse_connect, name, device_id,
                             session_id=body.get("session_id"))
     try:
@@ -7033,7 +7076,8 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         raise HTTPException(403, _as_sentence(_not_recording_reason(
             consent,
             "EEG recording is switched off for this student.",
-            "Could not check whether EEG recording is allowed, so it was not started.")))
+            "Could not check whether EEG recording is allowed, so it was not started.",
+            switches=("record_eeg",))))
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service is not running on port 8001")
     device_id = payload.device_id or eeg_client.DEFAULT_DEVICE_ID

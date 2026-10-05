@@ -44,6 +44,7 @@ vi.mock('../../context/AuthContext', () => ({
 
 import { pushStatus } from '../../lib/sidecar'
 import { mockApi, resetApi } from '../../test/mocks/apiFetch'
+import { buildRecordingPermits } from '../../test/fixtures/recordingPermits'
 import Adaptive from './Adaptive'
 
 // The receipts of a student with no consent on any sensor, as the sidecar reports them.
@@ -66,6 +67,7 @@ beforeEach(() => {
   bridge.ingestion = {}
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
+    'GET /api/recording/me': () => buildRecordingPermits(),
     'GET /api/classes': () => [],
     'POST /api/sessions/start': () => ({ id: 'sess-push' }),
     'GET /api/performance/student/u1': () => [],

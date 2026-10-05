@@ -1484,6 +1484,25 @@ def _not_recording_reason(gate: dict, declined: str,
     return declined
 
 
+def _recording_state(gate: dict, record_key: str) -> str:
+    """One channel's key for `GET /api/recording/me`, in `_not_recording_reason`'s order.
+
+    `unknown` is a read that failed (window or consent): it denies, but is not a refusal.
+    """
+    if gate.get(record_key):
+        return "permitted"
+    if gate.get("window_state") == WINDOW_UNREADABLE:
+        return "unknown"
+    window = _window_meaning(gate.get("window_state")).stopped_reason
+    if window:
+        return window
+    if record_key in gate.get("switched_off", ()):
+        return "switched_off"
+    if not gate.get("retrieved"):
+        return "unknown"
+    return "declined"
+
+
 def _topic_breakdown(student_id: str):
     """The student's per-topic accuracy; [] on a failed read.
 
@@ -6050,6 +6069,22 @@ def ack_consent(request: Request):
     if not written:
         raise HTTPException(404, "No consent record to acknowledge")
     return {"ok": True}
+
+
+@app.get("/api/recording/me")
+def my_recording_permits(request: Request):
+    """Whether each of the caller's sensors may record now; the lesson page asks before opening one.
+
+    Always 200: a failed read is `unknown` per channel, which the page treats as "don't switch on".
+    """
+    user = get_user(request)
+    try:
+        gate = _may_record(user["id"])
+    except Exception as e:
+        print(f"[recording:me] {user['id']}: {e}")
+        gate = None
+    return {c: {"state": _recording_state(gate, f"record_{c}") if gate else "unknown"}
+            for c in CONSENT_CHANNELS}
 
 
 # ─── biosignals: cognitive (headband) + face recognition ──────────────────

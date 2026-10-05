@@ -198,6 +198,14 @@ cleanup does not run on a tab close: the route change sends `deviceStop`, `pageh
 `deviceStopOnUnload` with `keepalive`, both reading the camera through a ref synced after every
 render. `AdaptiveCameraLifecycle.test.jsx` pins both, and that a camera already off sends nothing.
 
+**No sensor opens until `GET /api/recording/me` says it may record.** Per channel: `permitted`, `declined`,
+`switched_off`, `school_year_{not_started,ended,unconfigured}` or `unknown` (a failed read), in `_not_recording_reason`'s
+order; the page words each. The camera needs `camera`; under push the headband needs `eeg` **or** `headband_optical`,
+while pull's `/api/eeg/start` still demands EEG. Only switching on is gated — Turn off, Disconnect and Stop trying never
+read it — and `unknown` blocks switching on but stops nothing. The click re-asks; a refusal stops whatever runs
+(`enforcePermits`), a pairing through `pairOnce` reading `permitsRef`. Flags and window are cached 30 s and the page
+polls every `PUSH_POLL_MS`, so a switch-off takes up to a minute; an expiring consent bypass switches sensors off too.
+
 All three ingest endpoints are rate-limited and length-bounded. `/api/signals/cognitive` was neither
 until the push client existed, survivable only while its sole writer was the in-process poller.
 

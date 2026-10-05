@@ -27,6 +27,7 @@ vi.mock('../../context/AuthContext', () => ({
 }))
 
 import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
+import { buildRecordingPermits } from '../../test/fixtures/recordingPermits'
 import Adaptive from './Adaptive'
 
 const KINDERGARTEN = ['counting', 'comparing_numbers', 'add_and_subtract', 'teen_numbers', 'shapes']
@@ -41,6 +42,7 @@ beforeEach(() => {
   localStorage.removeItem('adaptive_mode')
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: 'Kindergarten' }),
+    'GET /api/recording/me': () => buildRecordingPermits(),
     'GET /api/performance/student/u1': () => [],
     'POST /api/sessions/start': () => ({ id: 'sess-k' }),
     'GET /api/eeg/health': () => ({ available: false }),

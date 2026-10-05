@@ -29,6 +29,7 @@ vi.mock('../../context/AuthContext', () => ({
 import { toast } from 'sonner'
 import { endSession, recordAnswer } from '../../lib/session'
 import { mockApi, overrideApi, resetApi } from '../../test/mocks/apiFetch'
+import { buildRecordingPermits } from '../../test/fixtures/recordingPermits'
 import { runSignOutTasks } from '../../lib/signOutTasks'
 import Adaptive from './Adaptive'
 
@@ -37,6 +38,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
+    'GET /api/recording/me': () => buildRecordingPermits(),
     'POST /api/sessions/start': () => ({ id: 'sess-phantom' }),
     'GET /api/eeg/health': () => ({ available: false }),
     // An array: the page iterates it, and an object throws after the test body.

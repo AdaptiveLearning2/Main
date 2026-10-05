@@ -835,6 +835,9 @@ work that way), and a running poller re-reads consent every `CONSENT_RECHECK_SEC
 `start()` raises rather than assuming yes, because an unwired deployment that assumes yes is
 indistinguishable from a wired one.
 
+**Under push the page opens the sensors, so it asks first**: `GET /api/recording/me` before switching one on, and a
+fresh refusal switches it off. The backend's discard stays the last line of defence; details in `docs/signals.md`.
+
 Tests: `backend/tests/test_consent.py`.
 
 ## Recording needs consent **and** an open school year

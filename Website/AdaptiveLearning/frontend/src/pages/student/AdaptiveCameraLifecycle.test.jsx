@@ -70,6 +70,7 @@ vi.mock('../../context/AuthContext', () => ({
 import { deviceStop, deviceStopOnUnload, devices } from '../../lib/sidecar'
 import { eegDevices } from '../../lib/signals'
 import { mockApi, resetApi } from '../../test/mocks/apiFetch'
+import { buildRecordingPermits } from '../../test/fixtures/recordingPermits'
 import Adaptive from './Adaptive'
 
 beforeEach(() => {
@@ -81,6 +82,7 @@ beforeEach(() => {
   registry.failureShape = 'error'
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '4th Grade' }),
+    'GET /api/recording/me': () => buildRecordingPermits(),
     'GET /api/classes': () => [],
     'GET /api/performance/student/u1': () => [],
   })

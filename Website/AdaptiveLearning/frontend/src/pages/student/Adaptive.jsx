@@ -760,7 +760,7 @@ export default function Adaptive() {
   const finishSession = async () => {
     setFinishing(true)
     await endSession(sessionIdRef.current).finally(() => {
-      // The ref too, not only through its effect: a Generate before that runs reused this session.
+      // The ref too, so a Generate right after Finish starts a new session rather than reusing this one.
       sessionIdRef.current = null
       setSessionId(null)
       setSessionCount(0)

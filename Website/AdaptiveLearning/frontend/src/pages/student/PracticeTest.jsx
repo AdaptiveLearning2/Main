@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { m } from 'framer-motion'
 import { apiFetch } from '../../lib/api'
 import { recordPracticeAnswer } from '../../lib/practiceSession'
@@ -36,8 +36,29 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
   // Only the latest load may write state, or a stale question replaces the shown one.
   const requestRef = useRef(0)
 
-  const loadQuestion = useCallback(async () => {
+  // The fetch alone: it sets state only once answered, so the mount effect may call it.
+  const fetchQuestion = useCallback(() => {
     const mine = ++requestRef.current
+    return apiFetch(`/api/practice-sessions/${session.id}/question`)
+      .then(raw => {
+        if (mine !== requestRef.current) return
+        const q = normalizeQuestion(raw)
+        if (!q) throw new Error('That question could not be shown')
+        setRawId(raw.id)
+        setQuestion(q)
+        setTimeLeft(TIMER)
+      })
+      .catch(e => {
+        if (mine !== requestRef.current) return
+        console.error('Failed to load a practice question:', e)
+        setFailed(true)
+      })
+      .finally(() => { if (mine === requestRef.current) setLoading(false) })
+  }, [session.id])
+
+  // Next and retry: back to a loading, unanswered question first. A mount starts there, and
+  // Practice keys this page on the session, so a new session is a mount.
+  const loadQuestion = useCallback(() => {
     setLoading(true)
     setFailed(false)
     setSelected(null)
@@ -45,21 +66,8 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
     answeredRef.current = false
     advancingRef.current = false
     setAdvancing(false)
-    try {
-      const raw = await apiFetch(`/api/practice-sessions/${session.id}/question`)
-      if (mine !== requestRef.current) return
-      const q = normalizeQuestion(raw)
-      if (!q) throw new Error('That question could not be shown')
-      setRawId(raw.id)
-      setQuestion(q)
-    } catch (e) {
-      if (mine !== requestRef.current) return
-      console.error('Failed to load a practice question:', e)
-      setFailed(true)
-    } finally {
-      if (mine === requestRef.current) setLoading(false)
-    }
-  }, [session.id])
+    return fetchQuestion()
+  }, [fetchQuestion])
 
   // Once per session id, not per effect run: StrictMode double-mounts, and
   // each `/question` is two billed model calls.
@@ -67,28 +75,8 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
   useEffect(() => {
     if (autoLoadedFor.current === session.id) return
     autoLoadedFor.current = session.id
-    loadQuestion()
-  }, [loadQuestion, session.id])
-
-  useEffect(() => {
-    if (loading || failed || !question) return
-    setTimeLeft(TIMER)
-    clearInterval(timerRef.current)
-    // Only decrements; the effect below fires the timeout once, via `answeredRef`.
-    timerRef.current = setInterval(() => {
-      setTimeLeft(t => (t <= 1 ? 0 : t - 1))
-    }, 1000)
-    return () => clearInterval(timerRef.current)
-  }, [index, loading, failed, question])
-
-  useEffect(() => {
-    if (timeLeft > 0 || answeredRef.current) return
-    answeredRef.current = true
-    clearInterval(timerRef.current)
-    setRevealed(true)
-    postAnswer(-1)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs every tick, so postAnswer is this render's; answeredRef fires it once
-  }, [timeLeft])
+    fetchQuestion()
+  }, [fetchQuestion, session.id])
 
   async function postAnswer(idx) {
     const selectedVal = idx >= 0 ? question.options[idx] : null
@@ -97,7 +85,7 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
       score: tallyRef.current.score + (isCorrect ? 1 : 0),
       answered: tallyRef.current.answered + 1,
     }
-    // Set before the `await`, since the timeout effect doesn't await `postAnswer`.
+    // Set before the `await`, since the timer doesn't await `postAnswer`.
     const promise = recordPracticeAnswer({
       sessionId: session.id,
       questionId: rawId,
@@ -105,12 +93,31 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
       correct: isCorrect,
     })
     pendingAnswerRef.current = promise
-    try {
-      await promise
-    } finally {
+    await promise.finally(() => {
       if (pendingAnswerRef.current === promise) pendingAnswerRef.current = null
-    }
+    })
   }
+
+  // The timer reads the latest `postAnswer` without restarting.
+  const postTimeout = useEffectEvent(() => postAnswer(-1))
+
+  // Counts down from the TIMER `fetchQuestion` shows. A timeout is posted once, from here:
+  // never from a state updater, which React may run twice.
+  useEffect(() => {
+    if (loading || failed || !question) return
+    const clock = { left: TIMER }
+    clearInterval(timerRef.current)
+    timerRef.current = setInterval(() => {
+      clock.left = Math.max(0, clock.left - 1)
+      setTimeLeft(clock.left)
+      if (clock.left > 0 || answeredRef.current) return
+      answeredRef.current = true
+      clearInterval(timerRef.current)
+      setRevealed(true)
+      postTimeout()
+    }, 1000)
+    return () => clearInterval(timerRef.current)
+  }, [index, loading, failed, question])
 
   async function handleSelect(idx) {
     if (answeredRef.current) return

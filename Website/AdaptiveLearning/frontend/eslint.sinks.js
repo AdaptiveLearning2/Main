@@ -1,14 +1,15 @@
 /**
  * The XSS sinks, shared by `eslint.config.js` (editor) and `eslint.sinks.config.js` (blocking CI).
  * They are what make the JWT in `localStorage` acceptable.
- * Never write a bare `[...name=]` selector for a property: use `eitherSpelling`
- * (`el.x` / `el['x']` are different nodes). Template-literal keys are not covered;
- * deliberate evasion can use an `eslint-disable` anyway.
+ * Never write a bare `[...name=]` selector for a property: use `anySpelling`
+ * (`el.x`, `el['x']` and el[`x`] are different nodes). A key built by an expression
+ * is not covered: no selector can evaluate one.
  */
 
-/** One selector matching a name written bare or quoted. `pattern`: quoted string or `/regex/`. */
-const eitherSpelling = (node, path, pattern) =>
-  `${node}[${path}.name=${pattern}], ${node}[${path}.value=${pattern}]`
+/** One selector matching a name written bare, quoted, or as a template with no `${}`. `pattern`: quoted string or `/regex/`. */
+const anySpelling = (node, path, pattern) =>
+  `${node}[${path}.name=${pattern}], ${node}[${path}.value=${pattern}], `
+  + `${node}[${path}.expressions.length=0][${path}.quasis.0.value.cooked=${pattern}]`
 
 export const sinkRules = {
   // JSX attribute only; the object and assignment routes are below.
@@ -22,7 +23,7 @@ export const sinkRules = {
       message: 'eval() executes strings as code. There is no use for it here, and its presence is what would turn a stored string into script.',
     },
     {
-      selector: eitherSpelling('MemberExpression', 'property', "'eval'"),
+      selector: anySpelling('MemberExpression', 'property', "'eval'"),
       message: 'window.eval / globalThis.eval is eval(). See the rule above it.',
     },
     {
@@ -36,36 +37,36 @@ export const sinkRules = {
       message: 'Function() compiles a string into a function, which is eval by another name.',
     },
     {
-      selector: eitherSpelling('MemberExpression', 'property', "'Function'"),
+      selector: anySpelling('MemberExpression', 'property', "'Function'"),
       message: 'window.Function is Function(), which compiles a string into a function.',
     },
     {
-      selector: eitherSpelling('AssignmentExpression', 'left.property', '/^(inner|outer)HTML$/'),
+      selector: anySpelling('AssignmentExpression', 'left.property', '/^(inner|outer)HTML$/'),
       message: 'Assigning innerHTML/outerHTML parses the string as markup. Set textContent, or render it through React.',
     },
     {
       // `Object.assign(el, {innerHTML: s})`. Also flags a destructuring read
       // (known false positive, no hits in `src`).
-      selector: eitherSpelling('Property', 'key', '/^(inner|outer)HTML$/'),
+      selector: anySpelling('Property', 'key', '/^(inner|outer)HTML$/'),
       message: 'An innerHTML/outerHTML key parses its value as markup once the object reaches an element.',
     },
     {
-      selector: eitherSpelling('CallExpression', 'callee.property', "'insertAdjacentHTML'"),
+      selector: anySpelling('CallExpression', 'callee.property', "'insertAdjacentHTML'"),
       message: 'insertAdjacentHTML parses its argument as markup, exactly as innerHTML does.',
     },
     {
       // On the method name, not `document`, so an alias is caught too.
-      selector: eitherSpelling('CallExpression', 'callee.property', '/^write(ln)?$/'),
+      selector: anySpelling('CallExpression', 'callee.property', '/^write(ln)?$/'),
       message: 'write/writeln parse their argument as markup.',
     },
     {
       // `<div {...{dangerouslySetInnerHTML: x}} />`, which `react/no-danger` misses.
-      selector: eitherSpelling('Property', 'key', "'dangerouslySetInnerHTML'"),
+      selector: anySpelling('Property', 'key', "'dangerouslySetInnerHTML'"),
       message: 'dangerouslySetInnerHTML injects unparsed markup. Nothing in this app needs it; see eslint.sinks.js.',
     },
     {
       // `props.dangerouslySetInnerHTML = x`, then spread.
-      selector: eitherSpelling('AssignmentExpression', 'left.property', "'dangerouslySetInnerHTML'"),
+      selector: anySpelling('AssignmentExpression', 'left.property', "'dangerouslySetInnerHTML'"),
       message: 'dangerouslySetInnerHTML injects unparsed markup, assigned onto a props object as much as written in JSX.',
     },
   ],

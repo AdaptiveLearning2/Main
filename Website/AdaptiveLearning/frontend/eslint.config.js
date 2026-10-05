@@ -47,6 +47,13 @@ export default defineConfig([
     },
   },
   {
+    // No `eslint-disable` in app source: a react-hooks one blinds every compiler-backed rule to
+    // the whole component. Tests keep theirs (the motion probes need one).
+    files: ['src/**/*.{js,jsx}'],
+    ignores: ['src/**/*.{test,spec}.{js,jsx}', 'src/test/**'],
+    linterOptions: { noInlineConfig: true },
+  },
+  {
     // vitest `globals: true` injects describe/it/expect/vi, and runs in Node (`process`, `global`).
     files: ['**/*.{test,spec}.{js,jsx}', 'src/test/**/*.{js,jsx}'],
     languageOptions: {

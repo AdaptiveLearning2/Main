@@ -50,6 +50,16 @@ const SINKS = [
   ['dSIH as a quoted key',         "const p = { 'dangerouslySetInnerHTML': { __html: s } }; return <div {...p} />"],
   ['dSIH assigned',                'props.dangerouslySetInnerHTML = { __html: s }'],
   ['dSIH assigned, quoted',        "props['dangerouslySetInnerHTML'] = { __html: s }"],
+  // Template keys: with `eslint-disable` refused in app source, the next way past would be these.
+  ['eval, template key',           'window[`eval`](s)'],
+  ['Function, template key',       'window[`Function`](s)'],
+  ['innerHTML, template key',      'el[`innerHTML`] = s'],
+  ['outerHTML, template key',      'el[`outerHTML`] = s'],
+  ['innerHTML template object key', 'Object.assign(el, { [`innerHTML`]: s })'],
+  ['insertAdjacentHTML, template', "el[`insertAdjacentHTML`]('beforeend', s)"],
+  ['document.write, template key', 'document[`write`](s)'],
+  ['dSIH as a template key',       'const p = { [`dangerouslySetInnerHTML`]: { __html: s } }; return <div {...p} />'],
+  ['dSIH assigned, template key',  'props[`dangerouslySetInnerHTML`] = { __html: s }'],
 ]
 
 describe('the sink gate flags', () => {
@@ -69,6 +79,7 @@ describe('the sink gate leaves alone', () => {
     ['an ordinary object key',       'const p = { title: s }; return <div {...p} />'],
     ['a function named in a string', "const name = 'eval'; return <div>{name}</div>"],
     ['reading innerText',            'const t = el.innerText; return <div>{t}</div>'],
+    ['a template key that is no sink', 'el[`textContent`] = s'],
   ])('%s', async (_name, code) => {
     expect(await lint(code)).toEqual([])
   })

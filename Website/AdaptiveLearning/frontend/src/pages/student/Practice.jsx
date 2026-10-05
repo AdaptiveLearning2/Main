@@ -35,7 +35,8 @@ export default function Practice() {
     return <PracticeResults session={session} result={result} onRestart={handleRestart} />
   }
 
+  // Keyed on the session, so a new one is a fresh mount: the mode pages' first load relies on it.
   return session.mode === 'flashcard'
-    ? <PracticeFlashcards session={session} onFinish={handleFinish} />
-    : <PracticeTest session={session} onFinish={handleFinish} questionCount={questionCount} />
+    ? <PracticeFlashcards key={session.id} session={session} onFinish={handleFinish} />
+    : <PracticeTest key={session.id} session={session} onFinish={handleFinish} questionCount={questionCount} />
 }

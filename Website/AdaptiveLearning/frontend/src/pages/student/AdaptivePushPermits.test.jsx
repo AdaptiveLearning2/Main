@@ -201,6 +201,21 @@ it('stops a headband found running at load when the first answer refuses it', as
   expect(toast.warning).toHaveBeenCalledWith('The headband was disconnected.', { description: DECLINED_HEADBAND })
 })
 
+it('keeps asking while the tab is hidden, so a withdrawal still lands', async () => {
+  rig.cameraRunning = true
+  render(<Adaptive />)
+  await screen.findByRole('button', { name: /turn off/i })
+  await waitFor(() => expect(permitCalls()).toBeGreaterThan(0))
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+  try {
+    document.dispatchEvent(new Event('visibilitychange'))
+    answer = () => buildRecordingPermits({ camera: 'declined' })
+    await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('camera'))
+  } finally {
+    delete document.hidden
+  }
+})
+
 it('turns off a camera found running at load when the first answer refuses it', async () => {
   rig.cameraRunning = true
   answer = () => buildRecordingPermits({ camera: 'switched_off' })

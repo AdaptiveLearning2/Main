@@ -862,8 +862,9 @@ two record. "Inside the configured year" and "not gating on a year at all" look 
 recording side and are very different facts about a deployment. A typo'd timezone **denies** rather than
 falling back to UTC, because a fallback moves every boundary by hours while looking like it worked, on a
 value edited by hand twice a year. "The year hasn't started" and "the year is over" reach a parent as
-different sentences; `_not_recording_reason` puts the window reason ahead of the consent one, or a
-closed year sends someone to the consent screen to fix a setting that is fine. `_poller_status` follows
+different sentences; `_not_recording_reason` puts the window reason first, then an admin recording
+switch (`switches=`, required of every caller), then consent, or a closed year or a switched-off sensor
+sends someone to the consent screen to fix a setting that is fine. `_poller_status` follows
 the same order, with its own machine-readable `stopped_reason` vocabulary (`school_year_ended`, …) — a
 poller that is not running with consent intact and nothing saying why is the silent quiet week arriving
 through the status endpoint.

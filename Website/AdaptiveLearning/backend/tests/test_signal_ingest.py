@@ -555,6 +555,37 @@ def test_a_genuine_refusal_says_so(store):
     assert out["reason"] == "camera not consented"
 
 
+@pytest.mark.parametrize("endpoint,flag,consent", [
+    ("cognitive", "recording_eeg_enabled", {"eeg_enabled": True}),
+    ("face", "recording_camera_enabled", {"camera_enabled": True}),
+])
+def test_an_admin_switch_is_named_as_the_reason_not_consent(store, set_flag, endpoint, flag, consent):
+    """A consenting student behind a switched-off channel must not read as having declined."""
+    _consent(store, **consent)
+    set_flag(flag, False)
+
+    out = _post(endpoint)
+
+    assert out["inserted"] == 0 and out["dropped"] == 1
+    assert out["reason"] == main._SWITCHED_OFF
+
+
+def test_heart_names_the_switch_only_when_every_heart_sensor_is_switched_off(store, set_flag):
+    _consent(store, headband_optical_enabled=True, camera_enabled=True)
+    flags = set_flag("recording_heart_enabled", False)
+    flags["recording_camera_enabled"] = {"enabled": False, "bypass_until": None}
+
+    assert _post_heart([_heart()])["reason"] == main._SWITCHED_OFF
+
+
+def test_heart_with_one_sensor_switched_off_and_the_other_declined_blames_neither_alone(store, set_flag):
+    """The headband is consented but switched off; the camera is on but declined."""
+    _consent(store, headband_optical_enabled=True, camera_enabled=False)
+    set_flag("recording_heart_enabled", False)
+
+    assert _post_heart([_heart()])["reason"] == "no heart sensor is both switched on and consented"
+
+
 def test_a_fully_consented_batch_reports_no_reason(store):
     _consent(store, headband_optical_enabled=True)
     assert _post_heart([_heart()])["reason"] is None

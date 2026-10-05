@@ -224,15 +224,24 @@ def test_the_reason_names_the_window_before_the_channel(monkeypatch):
         (main.WINDOW_UNCONFIGURED, "no school year"),
         (main.WINDOW_UNREADABLE, "could not check"),
     ):
+        # A switched-off channel too: a closed year is the deployment-wide fact.
         reason = main._not_recording_reason(
-            {"window_state": state, "retrieved": True}, "eeg not consented")
+            {"window_state": state, "retrieved": True, "switched_off": ["record_eeg"]},
+            "eeg not consented", switches=("record_eeg",))
         assert expected in reason, (state, reason)
         assert "not consented" not in reason
 
     # Year open: the caller's wording comes back whole, not interpolated.
     assert main._not_recording_reason(
         {"window_state": main.WINDOW_OPEN, "retrieved": True},
-        "no consented heart sensor") == "no consented heart sensor"
+        "no consented heart sensor", switches=("record_headband_optical",)) == "no consented heart sensor"
+
+
+def test_a_known_switch_outranks_an_unreadable_consent():
+    """The switch is read from the flags, not from consent, so a failed consent read cannot hide it."""
+    assert main._not_recording_reason(
+        {"window_state": main.WINDOW_OPEN, "retrieved": False, "switched_off": ["record_eeg"]},
+        "eeg not consented", switches=("record_eeg",)) == main._SWITCHED_OFF
 
 
 # ── every recording site is gated, checked together ─────────────────────────
@@ -400,6 +409,15 @@ def test_the_window_outranks_consent_in_the_status_too(monkeypatch):
         "eeg_enabled": False, "retrieved": True, "eeg_revoked_at": "2026-10-01"})
 
     assert main._poller_status(STUDENT)["stopped_reason"] == "school_year_ended"
+
+
+def test_a_switched_off_channel_explains_why_the_poller_is_not_running(monkeypatch, set_flag):
+    """Consent intact and nothing saying why is the silent quiet week; the switch is the why."""
+    monkeypatch.setattr(main.eeg_poller, "status", lambda _u: {"running": False})
+    monkeypatch.setattr(main, "_consent", lambda _s: {"eeg_enabled": True, "retrieved": True})
+    set_flag("recording_eeg_enabled", False)
+
+    assert main._poller_status(STUDENT)["stopped_reason"] == "recording_switched_off"
 
 
 def test_every_window_state_has_a_meaning():

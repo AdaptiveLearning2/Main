@@ -128,7 +128,48 @@ it('claims no RECORDING when nothing was saved lately, as in a backend outage', 
   const camera = panelOf('Camera')
   expect(within(camera).getByText('on, not recording')).toBeInTheDocument()
   expect(within(camera).queryByText('● RECORDING')).toBeNull()
+  // The sentence beside the badge says the same thing, not "Reading how you are finding the questions".
+  expect(within(camera).getByText(/nothing from it has been saved recently/)).toBeInTheDocument()
   expect(screen.queryByText(/Not being saved/)).toBeNull()
+})
+
+it('waits neutrally, rather than saying "not recording", before anything has come back', async () => {
+  await renderInSession({
+    enabled: true, running: true, recorded: { cognitive: 0, heart: 0, face: 0 },
+    declined: { cognitive: 0, heart: 0, face: 0 },
+    last_result: { cognitive: null, heart: null, face: null }, declined_reason: {},
+  })
+
+  const headband = panelOf('Muse Headband')
+  expect(await within(headband).findByText('waiting to save')).toBeInTheDocument()
+  expect(within(headband).queryByText('not recording')).toBeNull()
+  expect(within(headband).queryByText('● RECORDING')).toBeNull()
+  const camera = panelOf('Camera')
+  expect(within(camera).getByText('on, waiting to save')).toBeInTheDocument()
+  expect(within(camera).getByText(/Waiting for its first readings to be saved/)).toBeInTheDocument()
+})
+
+it('claims nothing for the camera before the sidecar has answered', async () => {
+  pushStatus.mockImplementation(() => new Promise(() => {}))
+  render(<Adaptive />)
+  await userEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+
+  const camera = panelOf('Camera')
+  expect(within(camera).getByText('on, waiting to save')).toBeInTheDocument()
+  expect(within(camera).queryByText('● RECORDING')).toBeNull()
+})
+
+it('reads a channel whose readings were only ever declined, and then went quiet, as stale', async () => {
+  await renderInSession({
+    enabled: true, running: true, recorded: { cognitive: 0, heart: 0, face: 0 },
+    declined: { cognitive: 12, heart: 0, face: 0 },
+    last_result: { cognitive: null, heart: null, face: null }, declined_reason: {},
+  })
+
+  const headband = panelOf('Muse Headband')
+  expect(await within(headband).findByText('not recording')).toBeInTheDocument()
+  expect(within(headband).queryByText('waiting to save')).toBeNull()
 })
 
 it('reads an older sidecar, which sends no last result, as recording', async () => {
@@ -138,18 +179,32 @@ it('reads an older sidecar, which sends no last result, as recording', async () 
   expect(screen.queryByText(/Not being saved/)).toBeNull()
 })
 
-it('stops telling a connected student their teacher can see them when the headband is not saved', async () => {
+/** Adopt a headband the bridge already holds, then start a session under `status`. */
+async function connectInSession(status) {
   bridge.running = true
   bridge.ingestion = { ...CONNECTED }
-  pushStatus.mockImplementation(async () => ALL_DECLINED)
+  pushStatus.mockImplementation(async () => status)
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })
   await waitFor(() => expect(button).not.toBeDisabled())
   fireEvent.click(button)
   await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
-
   await userEvent.click(screen.getByRole('button', { name: /generate question/i }))
+}
+
+it('stops telling a connected student their teacher can see them when the headband is not saved', async () => {
+  await connectInSession(ALL_DECLINED)
 
   expect(await screen.findByText(/not being saved, so your teacher cannot see them/)).toBeInTheDocument()
+  expect(screen.queryByText(/teacher can see your focus/)).toBeNull()
+}, 60_000)
+
+it('stops telling a connected student their teacher can see them when nothing was saved lately', async () => {
+  await connectInSession({
+    enabled: true, running: true, recorded: { cognitive: 30, heart: 0, face: 0 },
+    last_result: { cognitive: null, heart: null, face: null }, declined_reason: {},
+  })
+
+  expect(await screen.findByText(/no readings have been saved recently/)).toBeInTheDocument()
   expect(screen.queryByText(/teacher can see your focus/)).toBeNull()
 }, 60_000)

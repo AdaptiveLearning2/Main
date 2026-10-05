@@ -1158,15 +1158,17 @@ export default function Adaptive() {
     .filter(([key]) => channelState(key) === 'declined')
     .map(([key, label]) => ({ key, label, reason: push?.declined_reason?.[key] || 'no reason given' }))
   const pushRunning = !!(push?.reachable && push?.running)
-  const recordingNow = pushRunning && CHANNEL_LABELS.some(([key]) => channelState(key) === 'recorded')
-  const awaitingFirst = pushRunning && CHANNEL_LABELS.every(([key]) => channelState(key) === 'waiting')
+  // The headband card speaks for the headband's EEG only, as the camera card does for the camera.
+  const eegState = headband.pushMode ? channelState('cognitive') : 'recorded'
+  const headbandRecording = pushRunning && eegState === 'recorded'
+  const headbandWaiting = pushRunning && eegState === 'waiting'
   const cameraState = channelState('face')
   const cameraDeclined = declined.find(d => d.key === 'face')
   const connectedLine = {
     declined: 'Connected, but your headband readings are not being saved, so your teacher cannot see them.',
     waiting: 'Connected. Waiting for the first readings to be saved.',
     stale: 'Connected, but no readings have been saved recently, so your teacher cannot see them live.',
-  }[headband.pushMode ? channelState('cognitive') : 'recorded']
+  }[eegState]
     || `${headbandSamples} samples sent · teacher can see your focus & stress live`
 
   const activeClass = classes.find(c => c.id === classId)
@@ -1215,15 +1217,15 @@ export default function Adaptive() {
             {/* `=== false`: null is "no probe has answered yet". */}
             {!headband.probeRefused && !headband.probeUnreachable && !headband.serviceError && headband.available === false && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">offline</span>}
             {headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">on your device</span>}
-            {/* null push: nothing; nothing back yet: grey; not running, or no fresh "recorded" from a sidecar that reports results: amber. */}
-            {headband.pushMode && awaitingFirst && (
+            {/* EEG only. Grey while EEG has not come back yet, and only with a headband to wait on; amber when not saving. */}
+            {headband.pushMode && headbandWaiting && headband.connected && (
               <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">waiting to save</span>
             )}
-            {headband.pushMode && push && !recordingNow && !awaitingFirst && (push.reachable === false
+            {headband.pushMode && push && !headbandRecording && !headbandWaiting && (push.reachable === false
              || push.enabled === false || push.running === false || reportsResults) && (
               <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">not recording</span>
             )}
-            {headband.pushMode && recordingNow && (
+            {headband.pushMode && headbandRecording && (
               <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
             )}
             {headband.pushMode && pushLost > 0 && (

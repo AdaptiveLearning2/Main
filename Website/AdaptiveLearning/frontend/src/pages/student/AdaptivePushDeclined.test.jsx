@@ -140,13 +140,30 @@ it('waits neutrally, rather than saying "not recording", before anything has com
     last_result: { cognitive: null, heart: null, face: null }, declined_reason: {},
   })
 
-  const headband = panelOf('Muse Headband')
-  expect(await within(headband).findByText('waiting to save')).toBeInTheDocument()
-  expect(within(headband).queryByText('not recording')).toBeNull()
-  expect(within(headband).queryByText('● RECORDING')).toBeNull()
+  // Only a status sets `recorded`, so this line proves the status has landed.
+  await screen.findByText('0 readings recorded from this computer.')
   const camera = panelOf('Camera')
   expect(within(camera).getByText('on, waiting to save')).toBeInTheDocument()
   expect(within(camera).getByText(/Waiting for its first readings to be saved/)).toBeInTheDocument()
+  // No headband is connected, so its card has nothing to wait on and claims nothing.
+  const headband = panelOf('Muse Headband')
+  expect(within(headband).queryByText('waiting to save')).toBeNull()
+  expect(within(headband).queryByText('not recording')).toBeNull()
+  expect(within(headband).queryByText('● RECORDING')).toBeNull()
+})
+
+it('keeps the headband card off RECORDING when only the camera is being saved', async () => {
+  await renderInSession({
+    ...ALL_DECLINED,
+    last_result: { cognitive: 'declined', heart: 'declined', face: 'recorded' },
+    declined_reason: { cognitive: 'eeg not consented', heart: 'no consented heart sensor', face: null },
+  })
+
+  expect(await screen.findByText(/Not being saved:/)).toHaveTextContent('Headband (eeg not consented)')
+  const headband = panelOf('Muse Headband')
+  expect(within(headband).getByText('not recording')).toBeInTheDocument()
+  expect(within(headband).queryByText('● RECORDING')).toBeNull()
+  expect(within(panelOf('Camera')).getByText('● RECORDING')).toBeInTheDocument()
 })
 
 it('claims nothing for the camera before the sidecar has answered', async () => {
@@ -196,6 +213,18 @@ it('stops telling a connected student their teacher can see them when the headba
   await connectInSession(ALL_DECLINED)
 
   expect(await screen.findByText(/not being saved, so your teacher cannot see them/)).toBeInTheDocument()
+  expect(screen.queryByText(/teacher can see your focus/)).toBeNull()
+}, 60_000)
+
+it('waits neutrally on a connected headband before its readings come back', async () => {
+  await connectInSession({
+    enabled: true, running: true, recorded: { cognitive: 0, heart: 0, face: 0 },
+    declined: { cognitive: 0, heart: 0, face: 0 },
+    last_result: { cognitive: null, heart: null, face: null }, declined_reason: {},
+  })
+
+  expect(await within(panelOf('Muse Headband')).findByText('waiting to save')).toBeInTheDocument()
+  expect(screen.getByText('Connected. Waiting for the first readings to be saved.')).toBeInTheDocument()
   expect(screen.queryByText(/teacher can see your focus/)).toBeNull()
 }, 60_000)
 

@@ -99,6 +99,11 @@ class PushClient:
         self._malformed: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         # Refused for other than size, or for size at MIN_BATCH: lost, and never retried.
         self._rejected: dict[str, int] = {channel: 0 for channel in _CHANNELS}
+        # Accepted, then not recorded by the backend's choice (consent, school year), with its latest why.
+        self._declined: dict[str, int] = {channel: 0 for channel in _CHANNELS}
+        self._declined_reason: dict[str, str | None] = {channel: None for channel in _CHANNELS}
+        # "recorded" or "declined": what the channel's latest receipt did; None before one.
+        self._last_result: dict[str, str | None] = {channel: None for channel in _CHANNELS}
         # Per channel; only shrinks, on a size refusal, and resets with the session.
         self._batch_limit: dict[str, int] = {channel: MAX_BATCH for channel in _CHANNELS}
         self._task: asyncio.Task | None = None
@@ -236,6 +241,9 @@ class PushClient:
         self._duplicates = {channel: 0 for channel in _CHANNELS}
         self._malformed = {channel: 0 for channel in _CHANNELS}
         self._rejected = {channel: 0 for channel in _CHANNELS}
+        self._declined = {channel: 0 for channel in _CHANNELS}
+        self._declined_reason = {channel: None for channel in _CHANNELS}
+        self._last_result = {channel: None for channel in _CHANNELS}
         self._batch_limit = {channel: MAX_BATCH for channel in _CHANNELS}
 
     # ── producing ────────────────────────────────────────────────────────────
@@ -473,6 +481,14 @@ class PushClient:
         # Not added to `_sent`: recorded by an earlier attempt.
         self._duplicates[channel] += duplicates
         self._malformed[channel] += malformed
+        self._declined[channel] += dropped
+        if dropped:
+            self._declined_reason[channel] = reason
+        # A receipt of only duplicates or unreadable samples says nothing about recording now.
+        if inserted:
+            self._last_result[channel] = "recorded"
+        elif dropped:
+            self._last_result[channel] = "declined"
         if malformed:
             logger.warning("push: backend could not read %d %s sample(s); "
                            "they are lost, not retried", malformed, channel)
@@ -501,6 +517,10 @@ class PushClient:
             "malformed": dict(self._malformed),
             # Refused, and no smaller batch would pass; lost, not retried.
             "rejected": dict(self._rejected),
+            # Accepted but not recorded, by the backend's choice; the page shows the reason.
+            "declined": dict(self._declined),
+            "declined_reason": dict(self._declined_reason),
+            "last_result": dict(self._last_result),
             "batch_limit": dict(self._batch_limit),
             "backoff_seconds": self._backoff,
             "last_error": self._last_error,

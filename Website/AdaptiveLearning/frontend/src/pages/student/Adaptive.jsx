@@ -1142,6 +1142,17 @@ export default function Adaptive() {
   const pushLost = ['rejected', 'malformed']
     .flatMap(k => Object.values(push?.[k] || {}))
     .reduce((a, b) => a + (Number(b) || 0), 0)
+  // Channels whose latest receipt the backend declined to record; an older sidecar sends no `last_result`.
+  const declined = CHANNEL_LABELS
+    .filter(([key]) => push?.last_result?.[key] === 'declined')
+    .map(([key, label]) => ({ key, label, reason: push?.declined_reason?.[key] || 'no reason given' }))
+  const savingNothing = declined.length > 0
+    && !CHANNEL_LABELS.some(([key]) => push?.last_result?.[key] === 'recorded')
+  const eegDeclined = headband.pushMode && declined.some(d => d.key === 'cognitive')
+  const cameraDeclined = declined.find(d => d.key === 'face')
+  const connectedLine = eegDeclined
+    ? 'Connected, but your headband readings are not being saved, so your teacher cannot see them.'
+    : `${headbandSamples} samples sent · teacher can see your focus & stress live`
 
   const activeClass = classes.find(c => c.id === classId)
   // The grade the backend serves: '' is none set anywhere, so its default; undefined is not
@@ -1189,12 +1200,13 @@ export default function Adaptive() {
             {/* `=== false`: null is "no probe has answered yet". */}
             {!headband.probeRefused && !headband.probeUnreachable && !headband.serviceError && headband.available === false && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">offline</span>}
             {headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">on your device</span>}
-            {/* null push: nothing; known not-recording: amber; reachable + running: RECORDING. */}
-            {headband.pushMode && push && push.running !== true &&
-             (push.reachable === false || push.enabled === false || push.running === false) && (
+            {/* null push: nothing; known not-recording, or running with every receipt declined: amber; else RECORDING. */}
+            {headband.pushMode && push && ((push.running !== true &&
+             (push.reachable === false || push.enabled === false || push.running === false)) ||
+             (push.reachable && push.running && savingNothing)) && (
               <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">not recording</span>
             )}
-            {headband.pushMode && push?.reachable && push?.running && (
+            {headband.pushMode && push?.reachable && push?.running && !savingNothing && (
               <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
             )}
             {headband.pushMode && pushLost > 0 && (
@@ -1215,10 +1227,10 @@ export default function Adaptive() {
                     headband.reconnect?.attempt > 0 && headband.reconnect?.max > 0
                       ? ` (attempt ${headband.reconnect.attempt} of ${headband.reconnect.max})` : ''}…`
             )}
-            {headband.phase === 'connected'  && `${headbandSamples} samples sent · teacher can see your focus & stress live`}
+            {headband.phase === 'connected'  && connectedLine}
             {headband.phase === 'idle' && (
               headband.connected
-                ? `${headbandSamples} samples sent · teacher can see your focus & stress live`
+                ? connectedLine
                 : headband.pushMode
                   ? (push && push.enabled === false
                       ? 'The app on this computer is running but is not set up to record (PUSH_ENABLED is off). Nothing is being saved for this session.'
@@ -1259,6 +1271,12 @@ export default function Adaptive() {
           {headband.connected && headband.contactPoor === true && (
             <p className="text-[11px] font-bold text-amber-700 dark:text-amber-300 mt-1">
               ⚠ Adjust the headband so the sensors sit flat against your skin — the reading is weak.
+            </p>
+          )}
+          {/* The backend's reason, verbatim: consent, the school year or a recording switch can each be it. */}
+          {headband.pushMode && declined.length > 0 && (
+            <p role="status" className="text-[11px] font-bold text-amber-700 dark:text-amber-300 mt-1">
+              ⚠ Not being saved: {declined.map(d => `${d.label} (${d.reason})`).join(' · ')}
             </p>
           )}
         </div>
@@ -1317,7 +1335,7 @@ export default function Adaptive() {
             {/* RECORDING needs a session, not just a running camera. */}
             <p className="font-bold text-sm flex items-center gap-2">
               Camera
-              {camera.running && sessionId
+              {camera.running && sessionId && !cameraDeclined
                 ? <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
                 : camera.running
                   ? <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">on, not recording</span>
@@ -1328,6 +1346,8 @@ export default function Adaptive() {
                 ? 'The camera records through the app on this computer, which this deployment is not set up for. Nothing would be saved.'
                 : camera.busy
                   ? 'Starting the camera...'
+                  : camera.running && sessionId && cameraDeclined
+                    ? `The camera is on, but nothing from it is being saved (${cameraDeclined.reason}). No video is saved.`
                   : camera.running && sessionId
                     ? 'Reading how you are finding the questions. No video is saved.'
                     : camera.running

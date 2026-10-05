@@ -1459,6 +1459,8 @@ _RECORDING_SWITCHES = {"record_eeg": "recording_eeg_enabled",
                        "record_headband_optical": "recording_heart_enabled",
                        "record_camera": "recording_camera_enabled"}
 _SWITCHED_OFF = "recording is switched off by an administrator"
+# A zeroed tick, as a headband off the head sends: nothing refused it.
+_NO_USABLE_EEG = "no usable reading; check the headband is on"
 
 
 def _not_recording_reason(gate: dict, declined: str,
@@ -3649,6 +3651,10 @@ _INGEST_ROW_LIMITER = _SlidingWindowLimiter("ingest_rows", _INGEST_ROWS_PER_MINU
 _HEART_SOURCES_BY_RECORD_FLAG = {
     "record_headband_optical": ("muse_optics", "muse_ppg"),
     "record_camera":           ("rppg",),
+}
+_HEART_SENSOR_DECLINED = {
+    "record_headband_optical": "headband heart sensor not consented",
+    "record_camera":           "camera not consented",
 }
 
 _STRATEGY_RATE_WINDOW = env_number("STRATEGY_RATE_WINDOW", 60.0, float, minimum=1.0)
@@ -6408,11 +6414,14 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
         _admit_ingest_rows(user["id"], "cognitive", len(rows))
         inserted = _write_ingest_rows("cognitive_signals", rows, "session_id,ts",
                                       user["id"], "cognitive")
+    dropped = len(samples) - len(rows)
     return {"ok": True, "inserted": inserted,
-            "dropped": len(samples) - len(rows),
+            "dropped": dropped,
             "malformed": malformed,
             "out_of_window": out_of_window,
-            "duplicates": len(rows) - inserted}
+            "duplicates": len(rows) - inserted,
+            # Recording is permitted by here, so a drop is a reading with nothing in it.
+            "reason": _NO_USABLE_EEG if dropped else None}
 
 @app.post("/api/signals/face")
 def ingest_face(payload: FaceBatch, request: Request):
@@ -6485,6 +6494,12 @@ def ingest_heart(payload: HeartBatch, request: Request):
         reason = _not_recording_reason(
             consent, "no consented heart sensor", switches=tuple(_HEART_SOURCES_BY_RECORD_FLAG),
             partly_switched="no heart sensor is both switched on and consented")
+    elif dropped:
+        # One sensor allowed, samples from another: name that one, so a drop never comes without a why.
+        refused = sorted({flag for s in samples if s.source not in allowed
+                          for flag, sources in _HEART_SOURCES_BY_RECORD_FLAG.items() if s.source in sources})
+        reason = "; ".join(_not_recording_reason(consent, _HEART_SENSOR_DECLINED[flag], switches=(flag,))
+                           for flag in refused) or "unknown heart sensor"
 
     rows = [r for r in (
         signal_mapping.map_heart_to_heart_signal(

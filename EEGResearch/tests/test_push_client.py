@@ -7,7 +7,8 @@ import types
 
 import pytest
 
-from src.app.services.push_client import MAX_BATCH, MAX_QUEUE, MIN_BATCH, SHUTDOWN_BUDGET, PushClient
+from src.app.services.push_client import (MAX_BATCH, MAX_QUEUE, MIN_BATCH, RESULT_FRESH_SECONDS,
+                                          SHUTDOWN_BUDGET, PushClient)
 
 
 @pytest.fixture
@@ -276,6 +277,19 @@ async def test_a_receipt_of_only_duplicates_leaves_the_last_result(client, monke
     await _post_one(client, "cognitive", {"ts": "b"})
 
     assert client.status()["last_result"]["cognitive"] == "recorded"
+
+
+@pytest.mark.anyio
+async def test_a_channel_that_stopped_sending_has_no_last_result(client, monkeypatch):
+    """A camera switched off mid-lesson must stop counting as being saved."""
+    _receipts(client, monkeypatch, {"ok": True, "inserted": 1})
+    await _started(client)
+    await _post_one(client, "face", {"ts": 0})
+    assert client.status()["last_result"]["face"] == "recorded"
+
+    client._last_result_at["face"] -= RESULT_FRESH_SECONDS + 1
+
+    assert client.status()["last_result"]["face"] is None
 
 
 @pytest.mark.anyio

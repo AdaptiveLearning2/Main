@@ -127,10 +127,12 @@ well as the flat already-mapped one, and maps the first itself. Don't add a divi
 - **Delivery is counted from the backend's `inserted`, not from what was sent.** The endpoint drops
   samples for a sensor the student declined; counting sent would report a healthy session that
   recorded nothing. Those drops are `declined` per channel, with the backend's latest
-  `declined_reason`, and `last_result` says whether a channel's latest receipt recorded or declined.
-  The lesson page reads it: **● RECORDING** stands only while something is being saved, and a declined
-  channel is named with the backend's reason verbatim, since consent, the school year and a recording
-  switch all decline. A sidecar without `last_result` reads as before.
+  `declined_reason`, and `last_result` says whether a channel's latest receipt recorded or declined —
+  for `RESULT_FRESH_SECONDS` (30 s) only, so a channel that stopped sending claims neither. **Every
+  drop carries a reason**: consent, the school year, a recording switch, or a reading with nothing in
+  it (a headband off the head). The lesson page reads it: **● RECORDING** stands only while something is
+  being saved, and a declined channel is named with the backend's reason verbatim. A sidecar without
+  `last_result` reads as before.
 - **A batch refused whole is never resent unchanged**: that heads its queue for the rest of the
   lesson and its backoff throttles every channel. All three endpoints validate *per sample*
   (`main._validate_each`), so a whole-batch refusal is nearly always a size cap below ours

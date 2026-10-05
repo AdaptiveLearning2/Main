@@ -586,6 +586,29 @@ def test_heart_with_one_sensor_switched_off_and_the_other_declined_blames_neithe
     assert _post_heart([_heart()])["reason"] == "no heart sensor is both switched on and consented"
 
 
+def test_a_heart_batch_from_the_one_declined_sensor_names_it(store):
+    """The headband is consented, so something is allowed; the camera's samples still need a why."""
+    _consent(store, headband_optical_enabled=True)
+
+    out = _post_heart([_heart(source="rppg")])
+
+    assert out["dropped"] == 1
+    assert out["reason"] == "camera not consented"
+
+
+def test_a_heart_batch_from_a_switched_off_sensor_names_the_switch(store, set_flag):
+    _consent(store, headband_optical_enabled=True, camera_enabled=True)
+    set_flag("recording_camera_enabled", False)
+
+    assert _post_heart([_heart(source="rppg")])["reason"] == main._SWITCHED_OFF
+
+
+def test_a_heart_sample_from_no_known_sensor_says_so(store):
+    _consent(store, headband_optical_enabled=True)
+
+    assert _post_heart([_heart(source="mystery")])["reason"] == "unknown heart sensor"
+
+
 def test_a_fully_consented_batch_reports_no_reason(store):
     _consent(store, headband_optical_enabled=True)
     assert _post_heart([_heart()])["reason"] is None

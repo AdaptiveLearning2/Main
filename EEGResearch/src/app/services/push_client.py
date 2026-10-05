@@ -26,6 +26,9 @@ MAX_QUEUE = 600
 # Seconds per flush cycle.
 FLUSH_SECONDS = 5.0
 
+# A last result older than this claims nothing: a channel that stopped sending (a camera off) has none.
+RESULT_FRESH_SECONDS = 30.0
+
 # Batches the shutdown flush may try: the whole backlog, capped.
 MAX_SHUTDOWN_FLUSHES = MAX_QUEUE // MAX_BATCH
 
@@ -104,6 +107,7 @@ class PushClient:
         self._declined_reason: dict[str, str | None] = {channel: None for channel in _CHANNELS}
         # "recorded" or "declined": what the channel's latest receipt did; None before one.
         self._last_result: dict[str, str | None] = {channel: None for channel in _CHANNELS}
+        self._last_result_at: dict[str, float] = {channel: 0.0 for channel in _CHANNELS}
         # Per channel; only shrinks, on a size refusal, and resets with the session.
         self._batch_limit: dict[str, int] = {channel: MAX_BATCH for channel in _CHANNELS}
         self._task: asyncio.Task | None = None
@@ -244,6 +248,7 @@ class PushClient:
         self._declined = {channel: 0 for channel in _CHANNELS}
         self._declined_reason = {channel: None for channel in _CHANNELS}
         self._last_result = {channel: None for channel in _CHANNELS}
+        self._last_result_at = {channel: 0.0 for channel in _CHANNELS}
         self._batch_limit = {channel: MAX_BATCH for channel in _CHANNELS}
 
     # ── producing ────────────────────────────────────────────────────────────
@@ -485,10 +490,9 @@ class PushClient:
         if dropped:
             self._declined_reason[channel] = reason
         # A receipt of only duplicates or unreadable samples says nothing about recording now.
-        if inserted:
-            self._last_result[channel] = "recorded"
-        elif dropped:
-            self._last_result[channel] = "declined"
+        if inserted or dropped:
+            self._last_result[channel] = "recorded" if inserted else "declined"
+            self._last_result_at[channel] = time.monotonic()
         if malformed:
             logger.warning("push: backend could not read %d %s sample(s); "
                            "they are lost, not retried", malformed, channel)
@@ -520,7 +524,8 @@ class PushClient:
             # Accepted but not recorded, by the backend's choice; the page shows the reason.
             "declined": dict(self._declined),
             "declined_reason": dict(self._declined_reason),
-            "last_result": dict(self._last_result),
+            "last_result": {c: r if time.monotonic() - self._last_result_at[c] <= RESULT_FRESH_SECONDS else None
+                            for c, r in self._last_result.items()},
             "batch_limit": dict(self._batch_limit),
             "backoff_seconds": self._backoff,
             "last_error": self._last_error,

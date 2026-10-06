@@ -136,6 +136,8 @@ class PushClient:
         # "recorded" or "declined": what the channel's latest receipt did; None before one.
         self._last_result: dict[str, str | None] = {channel: None for channel in _CHANNELS}
         self._last_result_at: dict[str, float] = {channel: 0.0 for channel in _CHANNELS}
+        # Whether the channel's latest receipt was a refusal, so a run of them asks once.
+        self._refusing: dict[str, bool] = {channel: False for channel in _CHANNELS}
         # Per channel; only shrinks, on a size refusal, and resets with the session.
         self._batch_limit: dict[str, int] = {channel: MAX_BATCH for channel in _CHANNELS}
         self._task: asyncio.Task | None = None
@@ -312,9 +314,8 @@ class PushClient:
         self._declined_reason = {channel: None for channel in _CHANNELS}
         self._last_result = {channel: None for channel in _CHANNELS}
         self._last_result_at = {channel: 0.0 for channel in _CHANNELS}
-        # Whether the channel's latest receipt was a refusal, so a run of them asks once.
         self._refusing = {channel: False for channel in _CHANNELS}
-        self._batch_limit = {channel: MAX_BATCH for channel in _CHANNELS}
+        self._batch_limit ={channel: MAX_BATCH for channel in _CHANNELS}
         # The answer was about this student; the next session asks afresh.
         self._permits = None
         self._permits_due = 0.0

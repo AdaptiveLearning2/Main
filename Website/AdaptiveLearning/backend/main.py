@@ -1501,6 +1501,11 @@ def _recording_state(gate: dict, channel: str) -> str:
     return "unknown"
 
 
+def _definitely_refused(gate: dict, *channels: str) -> bool:
+    """An ingest receipt's `refused`: a channel definitely may not record, not merely unreadable."""
+    return any(_recording_state(gate, c) not in ("permitted", "unknown") for c in channels)
+
+
 def _topic_breakdown(student_id: str):
     """The student's per-topic accuracy; [] on a failed read.
 
@@ -6427,8 +6432,9 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     # Last line of defence against a stale sidecar; fails closed, reason says which gate.
     consent = _may_record(user["id"], consent=_stored_consent(consent_row))
     if not consent["record_eeg"]:
-        # `refused`: dropped because recording is not permitted, which a fresh permit answer can act on.
-        return {"ok": True, "inserted": 0, "dropped": len(payload.samples), "refused": True,
+        # `refused`: not permitted, which a fresh permit answer can act on; an unreadable gate is not that.
+        return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
+                "refused": _definitely_refused(consent, "eeg"),
                 "reason": _not_recording_reason(consent, "eeg not consented",
                                                 switches=("record_eeg",))}
 
@@ -6493,7 +6499,8 @@ def ingest_face(payload: FaceBatch, request: Request):
     # Last line of defence against a stale sidecar; fails closed.
     consent = _may_record(user["id"], consent=_stored_consent(consent_row))
     if not consent["record_camera"]:
-        return {"ok": True, "inserted": 0, "dropped": len(payload.samples), "refused": True,
+        return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
+                "refused": _definitely_refused(consent, "camera"),
                 "reason": _not_recording_reason(consent, "camera not consented",
                                                 switches=("record_camera",))}
 
@@ -6552,7 +6559,8 @@ def ingest_heart(payload: HeartBatch, request: Request):
     # Tells "every sensor declined" from "could not find out".
     reason, refused = None, False
     if not allowed:
-        refused = bool(dropped)
+        refused = bool(dropped) and _definitely_refused(
+            consent, *(flag.removeprefix("record_") for flag in _HEART_SOURCES_BY_RECORD_FLAG))
         reason = _not_recording_reason(
             consent, "no consented heart sensor", switches=tuple(_HEART_SOURCES_BY_RECORD_FLAG),
             partly_switched="no heart sensor is both switched on and consented")
@@ -6560,6 +6568,7 @@ def ingest_heart(payload: HeartBatch, request: Request):
         # One sensor allowed, samples from another: name that one, so a drop never comes without a why.
         flags = sorted({flag for s in samples if s.source not in allowed
                         for flag, sources in _HEART_SOURCES_BY_RECORD_FLAG.items() if s.source in sources})
+        # Something is allowed, so the gate was read: a sensor refused here is definitely refused.
         refused = bool(flags)
         reason = "; ".join(_not_recording_reason(consent, _HEART_SENSOR_DECLINED[flag], switches=(flag,))
                            for flag in flags) or "unknown heart sensor"

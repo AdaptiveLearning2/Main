@@ -639,6 +639,19 @@ def test_heart_marks_a_declined_sensor_refused_and_an_unknown_one_not(store):
     assert _post_heart([_heart(ts="2026-08-09T10:00:02Z")])["refused"] is False
 
 
+@pytest.mark.parametrize("endpoint", ["cognitive", "face", "heart"])
+def test_a_drop_for_a_school_year_that_could_not_be_read_is_not_marked_refused(store, monkeypatch, endpoint):
+    """A failed read, not a refusal: a permit check would answer `unknown`, which stops nothing."""
+    _consent(store, eeg_enabled=True, headband_optical_enabled=True, camera_enabled=True)
+    # The shape `_retention_window` answers a failed read with.
+    monkeypatch.setattr(main, "_retention_window", lambda: {
+        "state": main.WINDOW_UNREADABLE, "starts_on": None, "ends_on": None, "timezone": None})
+
+    out = _post(endpoint)
+
+    assert out["dropped"] == 1 and out["refused"] is False
+
+
 @pytest.mark.parametrize("endpoint", ["cognitive", "face"])
 def test_a_permitted_batch_is_not_marked_refused(store, endpoint):
     _consent(store, eeg_enabled=True, camera_enabled=True)

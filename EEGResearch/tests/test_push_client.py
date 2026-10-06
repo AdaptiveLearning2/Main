@@ -1380,6 +1380,16 @@ async def test_a_refused_batch_asks_at_once_and_stops_the_sensor(permits):
 
 
 @pytest.mark.anyio
+async def test_a_receipt_is_read_by_a_client_no_session_has_reset_yet():
+    """`_post` takes its session as arguments; past the commit nothing may raise, or saved rows are sent again."""
+    pc = PushClient("http://backend:8000")
+    fake = _FakeClient(responder=lambda *_a: _Response(
+        body={"ok": True, "inserted": 0, "dropped": 1, "refused": True, "reason": "camera not consented"}))
+    await pc._post(fake, "face", "s1", "tok", [{"ts": "a"}])
+    assert pc.status()["last_result"]["face"] == "declined"
+
+
+@pytest.mark.anyio
 async def test_a_run_of_refusals_asks_once_and_a_new_run_asks_again(permits):
     await _started(permits)
     await _answer(permits)

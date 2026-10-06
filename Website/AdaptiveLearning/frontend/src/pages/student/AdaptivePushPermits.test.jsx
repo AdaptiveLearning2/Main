@@ -492,6 +492,9 @@ it('stops every running headband station on a refusal, not only the connected on
   await waitFor(() => expect(deviceStop.mock.calls.map(([id]) => id).sort()).toEqual(['default', 'spare']))
   await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
     'The headband was disconnected.', { description: DECLINED_HEADBAND }))
+  // Together, as one: a refusal is announced once, not once per station.
+  await answersLanded(2)
+  expect(toast.warning).toHaveBeenCalledTimes(1)
 }, TEST_TIMEOUT)
 
 it('stops an abandoned pairing once, and says so once, however slow the stop', async () => {

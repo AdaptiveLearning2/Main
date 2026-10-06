@@ -161,9 +161,9 @@ def test_the_answer_names_no_user(monkeypatch):
     (main.WINDOW_UNCONFIGURED, "no school year is configured, so nothing is recorded"),
 ])
 def test_each_refusal_carries_the_ingest_endpoints_reason(monkeypatch, set_flag, state, expected):
-    res, _ = _ask(monkeypatch, {**ALL_ON, "camera_enabled": False})
+    res, _ = _ask(monkeypatch, {**ALL_ON, "eeg_enabled": False, "camera_enabled": False})
     reasons = {c: v["reason"] for c, v in res.json().items() if c in main.CONSENT_CHANNELS}
-    assert reasons == {"eeg": None, "headband_optical": None, "camera": "camera not consented"}
+    assert reasons == {"eeg": "eeg not consented", "headband_optical": None, "camera": "camera not consented"}
 
     set_flag("recording_eeg_enabled", False)
     res, _ = _ask(monkeypatch, {**ALL_ON, "headband_optical_enabled": False})

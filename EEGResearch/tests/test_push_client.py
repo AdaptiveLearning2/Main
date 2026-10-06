@@ -1350,6 +1350,8 @@ async def test_a_recheck_decides_the_next_send(permits):
     """A parent turns the camera back on and it is started: its readings go by that answer, not the last."""
     await _started(permits)
     await _answer(permits, camera="declined")
+    # Parked in its wait, so the check that decides is the one between waking and sending.
+    await asyncio.sleep(0.05)
     permits._fake.states = dict(ALL_PERMITTED)
     permits.enqueue("face", {"ts": "a"})
     permits.recheck()
@@ -1390,7 +1392,10 @@ async def test_one_device_stop_at_a_time(permits):
     await _started(permits)
     await _answer(permits, wait=False, camera="declined")
     await _until(lambda: stops)
+    first = permits._refusal_task
     await _answer(permits, wait=False, camera="declined")
+    assert permits._refusal_task is first, "a second stop began while the first was still running"
+    await asyncio.sleep(0)
     assert stops == [{"camera"}]
     release.set()
     await permits._refusal_task

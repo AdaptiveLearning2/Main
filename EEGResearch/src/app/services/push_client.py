@@ -59,15 +59,22 @@ PERMIT_CHECK_SECONDS = 30.0
 _CHANNEL_CONSENT = {"cognitive": "eeg", "face": "camera"}
 _CONSENT_CHANNELS = ("eeg", "headband_optical", "camera")
 _SENSORS = ("camera", "headband")
+# (refused sensor, still the refusing session?) -> stops that sensor's running devices.
+_RefusalHandler = Callable[[set[str], Callable[[], bool]], Awaitable[None]]
 
 
 class _Permits(NamedTuple):
     """One landed `/api/recording/me` answer. The rules behind it are the backend's; nothing is re-derived here."""
     states: dict[str, str]
     reasons: dict[str, str | None]
-    refused_sensors: frozenset[str]
+    sensors: dict[str, dict[str, bool]]
     heart_sources: dict[str, str]
     at: float  # monotonic
+
+    def answer(self) -> dict[str, Any]:
+        """As the backend gave it, for the lesson page, which reads the same fields."""
+        return {**{c: {"state": self.states[c], "reason": self.reasons[c]} for c in _CONSENT_CHANNELS},
+                "sensors": self.sensors, "heart_sources": self.heart_sources}
 
 
 class _BatchRefused(Exception):
@@ -141,17 +148,21 @@ class PushClient:
         # The latest landed answer, or None: send everything and let the backend decide.
         self._permits: _Permits | None = None
         self._permits_due = 0.0
-        # Stops the running devices of each refused sensor ("camera", "headband"); the page may be gone.
-        self._on_refused: Callable[[set[str]], Awaitable[None]] | None = None
-        # Its own task, so a slow Bluetooth disconnect holds neither the loop nor a `stop()` waiting on it.
-        self._refusal_task: asyncio.Task | None = None
+        # Stops the running devices of a refused sensor ("camera", "headband"), while the second argument
+        # says the refusing session is still current; the page may be gone.
+        self._on_refused: _RefusalHandler | None = None
+        # Per sensor, each its own task: a slow Bluetooth disconnect holds neither the loop nor a `stop()`.
+        self._refusal_tasks: dict[str, asyncio.Task] = {}
 
-    def set_refusal_handler(self, handler: Callable[[set[str]], Awaitable[None]] | None) -> None:
-        """What to call with the refused sensors after each check that refuses any."""
+    def set_refusal_handler(self, handler: _RefusalHandler | None) -> None:
+        """What to call with a refused sensor after each check that refuses one."""
         self._on_refused = handler
 
     def recheck(self) -> None:
-        """Ask again before the next send: a device just started, and must not be judged by an older answer."""
+        """Ask again before the next send: a device just started, and must not be judged by an older answer.
+
+        The answer is dropped now, not when the new one lands, so a send already under way withholds nothing."""
+        self._permits = None
         self._permits_due = 0.0
         self._wake.set()
 
@@ -439,7 +450,8 @@ class PushClient:
             permits = _Permits(
                 states={c: str(body[c]["state"]) for c in _CONSENT_CHANNELS},
                 reasons={c: body[c]["reason"] for c in _CONSENT_CHANNELS},
-                refused_sensors=frozenset(s for s in _SENSORS if body["sensors"][s]["refused"] is True),
+                sensors={s: {"allowed": body["sensors"][s]["allowed"] is True,
+                             "refused": body["sensors"][s]["refused"] is True} for s in _SENSORS},
                 heart_sources={str(k): str(v) for k, v in body["heart_sources"].items()},
                 at=time.monotonic())
         except asyncio.CancelledError:
@@ -448,15 +460,26 @@ class PushClient:
             logger.info("push: could not check what may be recorded (%s); keeping the last answer", exc)
             return
         self._permits = permits
-        stopping = self._refusal_task is not None and not self._refusal_task.done()
-        if permits.refused_sensors and self._on_refused is not None and not stopping:
-            self._refusal_task = asyncio.create_task(self._stop_refused(set(permits.refused_sensors)))
+        for sensor in (s for s, verdict in permits.sensors.items() if verdict["refused"]):
+            task = self._refusal_tasks.get(sensor)
+            # One at a time per sensor, and per sensor: a slow camera stop must not hold up the headband's.
+            if self._on_refused is not None and (task is None or task.done()):
+                self._refusal_tasks[sensor] = asyncio.create_task(self._stop_refused(sensor, self._session_id))
 
-    async def _stop_refused(self, sensors: set[str]) -> None:
+    async def _stop_refused(self, sensor: str, session_id: str | None) -> None:
+        """Stops one sensor for the session that refused it; once that session ends it stops nothing more."""
         try:
-            await self._on_refused(sensors)
+            await self._on_refused({sensor}, lambda: self._session_id == session_id)
         except Exception as exc:  # noqa: BLE001 - the next check retries
-            logger.warning("push: could not stop %s, which may not record: %s", sorted(sensors), exc)
+            logger.warning("push: could not stop the %s, which may not record: %s", sensor, exc)
+
+    async def cancel_refusals(self) -> None:
+        """For shutdown: cancels device stops still under way; a cancelled stop still runs its own cleanup."""
+        tasks = [task for task in self._refusal_tasks.values() if not task.done()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._refusal_tasks.clear()
 
     def _refused(self, consent: str | None) -> bool:
         """Refused by the latest answer; `unknown` and no answer are not refusals."""
@@ -629,7 +652,7 @@ class PushClient:
                             for c, r in self._last_result.items()},
             "batch_limit": dict(self._batch_limit),
             # The states this session sends by, and their age, which the lesson page uses in place of its own poll.
-            "permits": dict(self._permits.states) if self._permits else None,
+            "permits": self._permits.answer() if self._permits else None,
             "permits_age_seconds": round(time.monotonic() - self._permits.at, 1) if self._permits else None,
             "backoff_seconds": self._backoff,
             "last_error": self._last_error,

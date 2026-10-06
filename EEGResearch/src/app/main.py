@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from time import perf_counter
 
@@ -25,9 +26,13 @@ settings = get_settings()
 stream_manager = StreamManager()
 
 
-async def _stop_refused_sensors(sensors: set[str]) -> None:
-    """Stop each running device of a sensor the backend refuses: the lesson page that would may be gone."""
+async def _stop_refused_sensors(sensors: set[str], still_current: Callable[[], bool]) -> None:
+    """Stop each running device of a sensor the backend refuses: the lesson page that would may be gone.
+
+    Checked before each device: a refusal from a session that has since ended stops nothing more."""
     for device in stream_manager.list_devices():
+        if not still_current():
+            return
         sensor = "camera" if device["kind"] == "face" else "headband"
         if device["running"] and sensor in sensors:
             logger.warning("push: stopping %s; recording from the %s is not permitted",
@@ -54,6 +59,7 @@ async def _lifespan(_app: FastAPI):
     if push_client is not None:
         stream_manager.set_payload_consumer(None)
         await push_client.stop()
+        await push_client.cancel_refusals()
 
 
 app = FastAPI(

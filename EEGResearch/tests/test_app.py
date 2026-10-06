@@ -1342,11 +1342,15 @@ def test_shutdown_unhooks_the_stream_then_flushes_the_push_client(monkeypatch):
         async def stop(self):
             calls.append("stop")
 
+        async def cancel_refusals(self):
+            calls.append("cancel_refusals")
+
     monkeypatch.setattr(sidecar, "push_client", _Push())
     monkeypatch.setattr(sidecar.stream_manager, "set_payload_consumer", lambda c: calls.append(("consumer", c)))
     with TestClient(sidecar.app):
         assert calls == []
-    assert calls == [("consumer", None), "stop"]
+    # Device stops still under way end with the sidecar rather than outliving its shutdown.
+    assert calls == [("consumer", None), "stop", "cancel_refusals"]
 
 
 def test_a_refusal_stops_the_running_devices_of_that_sensor_only(monkeypatch):
@@ -1363,9 +1367,12 @@ def test_a_refusal_stops_the_running_devices_of_that_sensor_only(monkeypatch):
         {"device_id": "spare", "kind": "sim", "running": False},
         {"device_id": "camera", "kind": "face", "running": True}])
     monkeypatch.setattr(sidecar.stream_manager, "stop", stop)
-    asyncio.run(sidecar._stop_refused_sensors({"camera"}))
+    asyncio.run(sidecar._stop_refused_sensors({"camera"}, lambda: True))
     assert stopped == ["camera"]
-    asyncio.run(sidecar._stop_refused_sensors({"headband"}))
+    asyncio.run(sidecar._stop_refused_sensors({"headband"}, lambda: True))
+    assert stopped == ["camera", "default"]
+    # The refusing lesson has ended: a stop still working through the devices stops nothing more.
+    asyncio.run(sidecar._stop_refused_sensors({"camera", "headband"}, lambda: False))
     assert stopped == ["camera", "default"]
 
 

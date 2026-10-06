@@ -7,7 +7,7 @@ import { endSession, recordAnswer } from '../../lib/session'
 import useEegStartReport from '../../hooks/useEegStartReport'
 import usePoll from '../../hooks/usePoll'
 import useValueChange from '../../hooks/useValueChange'
-import { PUSH_POLL_MS, PULL_HEALTH_POLL_MS, PULL_STATUS_POLL_MS } from './pollIntervals'
+import { PUSH_POLL_MS, PULL_HEALTH_POLL_MS, PULL_STATUS_POLL_MS, PUSH_STATUS_POLL_MS } from './pollIntervals'
 import { onSignOut } from '../../lib/signOutTasks'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { reloadIfRestored } from '../../lib/pageRestore'
@@ -68,12 +68,10 @@ const CHANNEL_LABELS = [
   ['face',      'Camera'],
 ]
 
-// `GET /api/recording/me` (push only). Any state but `permitted` and `unknown` is a refusal.
+// `GET /api/recording/me` (push only). The verdicts are the backend's `sensors`; the states only pick words.
 const PERMIT_TIMEOUT_MS = 8000
-// The sidecar asks every 30 s while it pushes; an answer older than this and the page asks for itself.
-const SIDECAR_PERMIT_FRESH_S = 45
-const sidecarAnswerFresh = (status) => !!status?.permits
-  && typeof status.permits_age_seconds === 'number' && status.permits_age_seconds <= SIDECAR_PERMIT_FRESH_S
+// A sidecar answer stands in for the page's own while observed within this many of its poll intervals.
+const SIDECAR_FRESH_POLLS = 1.5
 const PERMIT_REASONS = {
   // Names no one: the student may have withdrawn it themselves.
   declined: "it isn't permitted (see Sensors on your Profile)",
@@ -84,26 +82,21 @@ const PERMIT_REASONS = {
   unknown: "couldn't check, this retries on its own",
 }
 const permitReason = (state) => PERMIT_REASONS[state] || "recording isn't permitted right now"
-const refuses = (state) => state !== 'permitted' && state !== 'unknown'
-
-/** One sensor from its channels' states: allowed if any is permitted, refused only if every one refuses. */
-const verdictOf = (checked, states) => ({
-  checked, states,
-  allowed: states.some(([, s]) => s === 'permitted'),
-  refused: states.every(([, s]) => refuses(s)),
-})
 
 /**
- * What an answer lets the page switch on. `answer` is undefined before the first one lands and
- * null for a failed read; both leave every channel `unknown`, which blocks switching on but never stops anything.
+ * What an answer lets the page switch on. `answer` is undefined before the first one lands and null for a
+ * failed read; then, as for an answer without `sensors`, nothing is allowed and nothing refused.
  */
 const permitVerdicts = (answer) => {
   const state = (c) => answer?.[c]?.state ?? 'unknown'
-  const checked = answer !== undefined
+  const sensor = (name, states) => ({
+    checked: answer !== undefined, states,
+    allowed: answer?.sensors?.[name]?.allowed === true,
+    refused: answer?.sensors?.[name]?.refused === true,
+  })
   return {
-    camera: verdictOf(checked, [['camera', state('camera')]]),
-    // Under push either headband channel lets it connect.
-    headband: verdictOf(checked, [['EEG', state('eeg')], ['heart rate', state('headband_optical')]]),
+    camera: sensor('camera', [['camera', state('camera')]]),
+    headband: sensor('headband', [['EEG', state('eeg')], ['heart rate', state('headband_optical')]]),
   }
 }
 
@@ -262,30 +255,40 @@ export default function Adaptive() {
   // The latest applied `/api/recording/me` answer (see `permitVerdicts`); the ref is for loops between renders.
   const [permits, setPermits] = useState({ answer: undefined })
   const permitsRef = useRef(undefined)
-  const permitSeq = useRef({ sent: 0, applied: 0 })
+  // When the applied answer was observed (ms), and when the sidecar last observed one the page took.
+  const permitsAt = useRef(-Infinity)
+  const sidecarAt = useRef(-Infinity)
   // Devices with a stop under way, kept until an effect sees them off: an effect from a render before
   // the stop's state update still sees them on, and must not stop them again (see `enforcePermits`).
   const stoppingIds = useRef(new Set())
-  // Numbered: an answer older than the last one applied changes nothing.
-  const applyPermits = (seq, answer) => {
-    if (seq <= permitSeq.current.applied) return
-    permitSeq.current.applied = seq
+  // Whether a sensor's "could not be switched off" was already said, until the sensor is seen off.
+  const stopFailed = useRef({ camera: false, headband: false })
+  // By when it was observed, not when it arrived: an older answer landing late changes nothing.
+  const applyPermits = (at, answer) => {
+    if (at <= permitsAt.current) return
+    permitsAt.current = at
+    const same = JSON.stringify(answer) === JSON.stringify(permitsRef.current)
     permitsRef.current = answer
+    // Unchanged, no re-render; but a failed stop is retried by the next answer, so that one renders.
+    if (same && !stopFailed.current.camera && !stopFailed.current.headband) return
     setPermits({ answer })
   }
   // Resolves to this request's own answer: a click decides on what it just asked, whatever else landed.
   const checkPermits = () => {
-    const seq = ++permitSeq.current.sent
+    const at = Date.now()
     return apiFetch('/api/recording/me', { timeoutMs: PERMIT_TIMEOUT_MS })
       .catch(() => null)
       .then(answer => {
-        applyPermits(seq, answer)
+        applyPermits(at, answer)
         return answer
       })
   }
-  // The sidecar's answer, from its push status: the same states, without the page asking as well.
-  const takeSidecarPermits = useEffectEvent((states) => applyPermits(++permitSeq.current.sent,
-    Object.fromEntries(Object.entries(states).map(([channel, state]) => [channel, { state }]))))
+  // The sidecar's answer, from its push status: observed `ageSeconds` ago, by the same backend.
+  const takeSidecarPermits = useEffectEvent((answer, ageSeconds) => {
+    const at = Date.now() - ageSeconds * 1000
+    sidecarAt.current = Math.max(sidecarAt.current, at)
+    applyPermits(at, answer)
+  })
   const headbandRefused = () => permitVerdicts(permitsRef.current).headband.refused
 
   // Dev-only EEG debug panel
@@ -460,10 +463,10 @@ export default function Adaptive() {
   // still lands; decided per tick (the latest render's callback), since a changing option restarts the poll.
   const sensorOn = camera.running || camera.busy || headband.connected || headband.phase !== 'idle'
     || stations.some(s => s.running)
-  // Off while the sidecar's answer, read with its push status, is fresh: one asker per lesson, not two.
-  usePoll(() => (document.hidden && !sensorOn ? null : checkPermits()),
-    { intervalMs: PUSH_POLL_MS, enabled: headband.pushMode === true && !sidecarAnswerFresh(push),
-      pauseWhenHidden: false })
+  // Nor while the sidecar's answer (push status) is recent: one asker per lesson, until the sidecar goes quiet.
+  const sidecarRecent = () => Date.now() - sidecarAt.current < PUSH_POLL_MS * SIDECAR_FRESH_POLLS
+  usePoll(() => ((document.hidden && !sensorOn) || sidecarRecent() ? null : checkPermits()),
+    { intervalMs: PUSH_POLL_MS, enabled: headband.pushMode === true, pauseWhenHidden: false })
 
   // Discover stations (auto-select a single one), retried until non-empty. A
   // failed read applies nothing, so `stationId` never falls back to `default`.
@@ -863,8 +866,6 @@ export default function Adaptive() {
 
   // A refusal switches off what it refuses, adopted at load or started since; unknown stops nothing.
   // A failed stop changes no state, so the next answer retries it. A pairing stops itself (`pairOnce`).
-  // Whether this sensor's "could not be switched off" was already said, until the sensor is seen off.
-  const stopFailed = useRef({ camera: false, headband: false })
   const stopRefused = (sensor, stop, verdict, done) => {
     stop().then(() => {
       toast.warning(done, { description: blockedLine(sensor, verdict) })
@@ -1047,15 +1048,22 @@ export default function Adaptive() {
         const prev = lastRecorded.current
         const now = d.recorded || {}
         // The first poll is only a baseline, so a reload doesn't list stale channels.
-        setRecording(prev ? CHANNEL_LABELS
+        const labels = prev ? CHANNEL_LABELS
           .filter(([key]) => (now[key] || 0) > (prev[key] || 0))
-          .map(([, label]) => label) : [])
+          .map(([, label]) => label) : []
+        // The same array, and below the same object, when nothing changed: such a read renders nothing.
+        setRecording(r => (r.join() === labels.join() ? r : labels))
         lastRecorded.current = now
         // A restarted sidecar has no token; skip `enabled: false` (config, would 409).
         if (d.enabled !== false && !d.running) recover()
+        // The sidecar's answer goes to the permit state, not here: its age differs on every read.
+        const { permits: sidecarAnswer, permits_age_seconds: sidecarAge, ...status } = d
         // Reachable and running are separate claims; `answered`: only a status says whether it reports results.
-        setPush(p => ({ ...(p || {}), ...d, reachable: true, running: !!d.enabled && !!d.running, answered: true }))
-        if (sidecarAnswerFresh(d)) takeSidecarPermits(d.permits)
+        setPush(p => {
+          const next = { ...(p || {}), ...status, reachable: true, running: !!d.enabled && !!d.running, answered: true }
+          return JSON.stringify(next) === JSON.stringify(p) ? p : next
+        })
+        if (sidecarAnswer && typeof sidecarAge === 'number') takeSidecarPermits(sidecarAnswer, sidecarAge)
       })
       .catch(() => {
         if (killed) return
@@ -1066,7 +1074,7 @@ export default function Adaptive() {
         recover()
       })
     tick()
-    const id = setInterval(tick, 10000)
+    const id = setInterval(tick, PUSH_STATUS_POLL_MS)
     return () => { killed = true; clearInterval(id) }
   }, [sessionId, headband.pushMode, recover])
 

@@ -1210,8 +1210,8 @@ async def _answer(pc, wait=True, **states):
     pc._fake.states = {**ALL_PERMITTED, **states}
     pc._permits_due = 0.0
     await pc._check_permits_if_due()
-    if wait and pc._refusal_task is not None:
-        await pc._refusal_task
+    if wait:
+        await asyncio.gather(*pc._refusal_tasks.values())
 
 
 def _posted(pc):
@@ -1221,7 +1221,7 @@ def _posted(pc):
 def _recorder():
     stops = []
 
-    async def handler(sensors):
+    async def handler(sensors, _still_current):
         stops.append(sensors)
     return stops, handler
 
@@ -1365,40 +1365,81 @@ async def test_a_recheck_decides_the_next_send(permits):
 async def test_a_push_stop_does_not_wait_for_a_device_being_stopped(permits):
     """A slow Bluetooth disconnect must not hold the shutdown inside its budget, or past it."""
     release = asyncio.Event()
-    began = []
+    began, current_after = [], []
 
-    async def slow_stop(sensors):
+    async def slow_stop(sensors, still_current):
         began.append(sensors)
         await release.wait()
+        current_after.append(still_current())
     permits.set_refusal_handler(slow_stop)
     await _started(permits)
     await _answer(permits, wait=False, camera="declined")
     await _until(lambda: began)
     assert await permits.stop()
-    assert not permits._refusal_task.done(), "the push stop returned before the device stop, as it should"
+    assert not permits._refusal_tasks["camera"].done(), "the push stop returned before the device stop"
     release.set()
-    await permits._refusal_task
+    await permits._refusal_tasks["camera"]
+    # The lesson that refused it has ended: what is left of the stop must stop nothing more.
+    assert current_after == [False]
 
 
 @pytest.mark.anyio
-async def test_one_device_stop_at_a_time(permits):
+async def test_one_stop_at_a_time_per_sensor_and_a_slow_one_holds_up_no_other(permits):
     release = asyncio.Event()
     stops = []
 
-    async def slow_stop(sensors):
+    async def slow_stop(sensors, _still_current):
         stops.append(sensors)
-        await release.wait()
+        if sensors == {"camera"}:
+            await release.wait()
     permits.set_refusal_handler(slow_stop)
     await _started(permits)
     await _answer(permits, wait=False, camera="declined")
     await _until(lambda: stops)
-    first = permits._refusal_task
-    await _answer(permits, wait=False, camera="declined")
-    assert permits._refusal_task is first, "a second stop began while the first was still running"
-    await asyncio.sleep(0)
-    assert stops == [{"camera"}]
+    first = permits._refusal_tasks["camera"]
+    await _answer(permits, wait=False, camera="declined", eeg="declined", headband_optical="declined")
+    assert permits._refusal_tasks["camera"] is first, "a second camera stop began while the first ran"
+    await _until(lambda: len(stops) > 1)
+    assert stops == [{"camera"}, {"headband"}]
     release.set()
-    await permits._refusal_task
+    await asyncio.gather(*permits._refusal_tasks.values())
+    await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_shutdown_cancels_a_device_stop_still_under_way(permits):
+    release = asyncio.Event()
+
+    async def slow_stop(_sensors, _still_current):
+        await release.wait()
+    permits.set_refusal_handler(slow_stop)
+    await _started(permits)
+    await _answer(permits, wait=False, camera="declined")
+    task = permits._refusal_tasks["camera"]
+    await permits.stop()
+    await permits.cancel_refusals()
+    assert task.cancelled()
+
+
+@pytest.mark.anyio
+async def test_a_recheck_drops_the_answer_at_once(permits):
+    """A send already under way must not withhold a just-started sensor's readings on the old answer."""
+    await _started(permits)
+    await _answer(permits, camera="declined")
+    permits.recheck()
+    assert permits.status()["permits"] is None
+    assert permits._withhold("face", [{"ts": "a"}]) == [{"ts": "a"}]
+    await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_the_status_passes_on_the_backends_answer(permits):
+    """The page reads the same fields, the sensor verdicts included, rather than re-deriving them."""
+    await _started(permits)
+    await _answer(permits, eeg="declined", headband_optical="declined")
+    passed_on = permits.status()["permits"]
+    assert passed_on == _backend_answer({**ALL_PERMITTED, "eeg": "declined", "headband_optical": "declined"})
+    assert passed_on["sensors"]["headband"] == {"allowed": False, "refused": True}
     await permits.stop()
 
 

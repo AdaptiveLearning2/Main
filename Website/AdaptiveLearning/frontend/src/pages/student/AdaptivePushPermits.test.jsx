@@ -20,17 +20,21 @@ vi.mock('../../lib/signals', () => ({
 }))
 // Short, so a withdrawal lands inside a test; the real interval is pinned in AdaptiveHealthProbe.test.jsx.
 vi.mock('./pollIntervals', async (importOriginal) => ({
-  ...(await importOriginal()), PUSH_POLL_MS: 300,
+  ...(await importOriginal()), PUSH_POLL_MS: 300, PUSH_STATUS_POLL_MS: 100,
 }))
 
 // The sidecar as each test sets it.
 const rig = { cameraRunning: false, headbandRunning: false, spare: false, spareRunning: false, ingestion: {},
-              sidecar: {} }
+              sidecar: {}, sidecarDown: false }
 vi.mock('../../lib/sidecar', () => ({
   startPush: vi.fn(async () => ({})), stopPush: vi.fn(async () => ({})),
   stopPushOnUnload: vi.fn(),
-  // `rig.sidecar` carries the sidecar's own answer, as its push status reports it.
-  pushStatus: vi.fn(async () => ({ enabled: true, running: true, recorded: {}, ...rig.sidecar })),
+  // `rig.sidecar` (or what it returns) carries the sidecar's own answer, as its push status reports it.
+  pushStatus: vi.fn(async () => {
+    if (rig.sidecarDown) throw new Error('sidecar not answering')
+    return { enabled: true, running: true, recorded: {},
+             ...(typeof rig.sidecar === 'function' ? rig.sidecar() : rig.sidecar) }
+  }),
   deviceStart: vi.fn(async () => ({})), deviceStop: vi.fn(async () => ({})),
   deviceStopOnUnload: vi.fn(),
   museRefresh: vi.fn(async () => ({})),
@@ -79,6 +83,7 @@ beforeEach(() => {
   rig.spareRunning = false
   rig.ingestion = { ...CONNECTED, muse_connected: false }
   rig.sidecar = {}
+  rig.sidecarDown = false
   answer = () => buildRecordingPermits()
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '4th Grade' }),
@@ -117,8 +122,6 @@ async function startLesson() {
   await screen.findByText('What is 2 + 2?')
 }
 
-const SIDECAR_STATES = { eeg: 'permitted', headband_optical: 'permitted', camera: 'permitted' }
-
 function hideTab() {
   Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
   document.dispatchEvent(new Event('visibilitychange'))
@@ -134,6 +137,17 @@ it('keeps a declined camera off: Turn on is disabled, says why, and never starts
   // The headband has its own answer, so it is not held back by the camera's.
   await waitFor(() => expect(screen.getByRole('button', { name: /connect headband/i })).toBeEnabled())
   expect(deviceStart).not.toHaveBeenCalled()
+})
+
+it("follows the backend's sensor verdicts rather than working them out from the states", async () => {
+  // Contrived: every state permitted, the camera's verdict not. The page must not re-derive it.
+  answer = () => ({ ...buildRecordingPermits(), sensors: { camera: { allowed: false, refused: false },
+                                                            headband: { allowed: true, refused: false } } })
+  render(<Adaptive />)
+  await screen.findByRole('button', { name: /turn on camera/i })
+  await answersLanded(2)
+  expect(screen.getByRole('button', { name: /turn on camera/i })).toBeDisabled()
+  expect(screen.getByRole('button', { name: /connect headband/i })).toBeEnabled()
 })
 
 it('says it is checking, not that the check failed, before the first answer lands', async () => {
@@ -449,21 +463,14 @@ it('retries the stop of a pairing it abandoned, when that stop failed', async ()
     'The headband was disconnected.', { description: DECLINED_HEADBAND }))
 }, TEST_TIMEOUT)
 
-it("takes the sidecar's answer during a lesson, and turns off what it refuses", async () => {
-  // The page's own answer permits the camera; only the sidecar's refuses it.
-  rig.cameraRunning = true
-  rig.sidecar = { permits: { ...SIDECAR_STATES, camera: 'declined' }, permits_age_seconds: 2 }
-  render(<Adaptive />)
-  await screen.findByRole('button', { name: /turn off/i })
-  await startLesson()
-  await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('camera'))
-  await screen.findByRole('button', { name: /turn on camera/i })
-}, TEST_TIMEOUT)
+// The sidecar's answer as its push status passes it on: the backend's, observed `age` seconds ago.
+const sidecarSays = (states, age = 0.05) => ({ permits: buildRecordingPermits(states), permits_age_seconds: age })
 
-it("stops asking for itself while the sidecar's answer is fresh, and asks again once it is stale", async () => {
-  rig.sidecar = { permits: SIDECAR_STATES, permits_age_seconds: 2 }
+/** Render, start a lesson under a fresh sidecar answer, and return a window three page polls long. */
+async function inLessonWithTheSidecarAnswering() {
+  rig.sidecar = sidecarSays({})
   render(<Adaptive />)
-  // The control: how long three of the page's own answers take, which bounds the window below.
+  // The control: how long three of the page's own answers take, which bounds the windows below.
   const started = Date.now()
   await answersLanded(3)
   const threeAnswers = Date.now() - started
@@ -474,9 +481,58 @@ it("stops asking for itself while the sidecar's answer is fresh, and asks again 
   const quiet = permitCalls()
   await sleep(threeAnswers)
   expect(permitCalls()).toBe(quiet)
-  // The sidecar stops getting answers; its next status (10 s on) is stale, and the page asks again.
-  rig.sidecar = { permits: SIDECAR_STATES, permits_age_seconds: 100 }
-  await waitFor(() => expect(permitCalls()).toBeGreaterThan(quiet), { timeout: 15000 })
+  return quiet
+}
+
+it("takes the sidecar's answer during a lesson, and turns off what it refuses", async () => {
+  // The page's own answer permits the camera; only the sidecar's refuses it.
+  rig.cameraRunning = true
+  rig.sidecar = sidecarSays({ camera: 'declined' })
+  render(<Adaptive />)
+  await screen.findByRole('button', { name: /turn off/i })
+  await startLesson()
+  await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('camera'))
+  await screen.findByRole('button', { name: /turn on camera/i })
+}, TEST_TIMEOUT)
+
+it("stops asking for itself while the sidecar's answer is recent, and asks again once it is old", async () => {
+  const quiet = await inLessonWithTheSidecarAnswering()
+  // The sidecar's own checks start failing: it keeps reporting an answer that only grows older.
+  rig.sidecar = sidecarSays({}, 100)
+  await waitFor(() => expect(permitCalls()).toBeGreaterThan(quiet))
+}, TEST_TIMEOUT)
+
+it('asks for itself again when the sidecar stops answering at all', async () => {
+  const quiet = await inLessonWithTheSidecarAnswering()
+  rig.sidecarDown = true
+  await waitFor(() => expect(permitCalls()).toBeGreaterThan(quiet))
+}, TEST_TIMEOUT)
+
+it("does not let the sidecar's older answer undo a refusal the page has just had", async () => {
+  rig.sidecar = {}
+  render(<Adaptive />)
+  await startLesson()
+  const turnOn = await screen.findByRole('button', { name: /turn on camera/i })
+  await waitFor(() => expect(turnOn).toBeEnabled())
+  // From here the sidecar keeps reporting a permit it observed just before the click.
+  const observed = Date.now()
+  rig.sidecar = () => ({ permits: buildRecordingPermits(), permits_age_seconds: (Date.now() - observed) / 1000 + 0.001 })
+  const reEnabled = []
+  const watch = new MutationObserver(() => { if (!turnOn.disabled) reEnabled.push(Date.now()) })
+  watch.observe(turnOn, { attributes: true, attributeFilter: ['disabled'] })
+  try {
+    answer = () => buildRecordingPermits({ camera: 'declined' })
+    fireEvent.click(turnOn)
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+      "The camera can't be turned on.", { description: DECLINED_CAMERA }))
+    // Several of the sidecar's statuses land, each older than the click's answer.
+    const statuses = pushStatus.mock.calls.length
+    await waitFor(() => expect(pushStatus.mock.calls.length).toBeGreaterThanOrEqual(statuses + 3))
+    expect(reEnabled).toEqual([])
+    expect(turnOn).toBeDisabled()
+  } finally {
+    watch.disconnect()
+  }
 }, TEST_TIMEOUT)
 
 it('stops every running headband station on a refusal, not only the connected one', async () => {

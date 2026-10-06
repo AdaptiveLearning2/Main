@@ -283,12 +283,13 @@ batching**, not when the sample was taken. In this recording:
 - 660 frames share a timestamp with their predecessor — about 9%.
 - The median inter-frame gap is 19 ms against a nominal 15.6, and the maximum
   is 42 ms: samples arrive in bursts rather than evenly.
-- A uniform clock at the measured rate drifts up to 103.6 ms from the stamps,
-  **40.7 ms rms**.
+- Against a least-squares line through (`seq`, `mono_ts_ms`) the stamps scatter
+  **19.2 ms rms**, 66.3 ms max. A line through the first and last stamps gives
+  35.1 / 100.3 ms, since it inherits both end stamps' own jitter.
 
 RMSSD is the root-mean-square of *successive differences* between beat
 intervals, and typical values are 20–50 ms. Feeding it timestamps carrying
-40 ms rms of transport jitter would produce a number dominated by Bluetooth
+~19 ms rms of transport jitter would produce a number dominated by Bluetooth
 scheduling rather than by heart-rate variability.
 
 **So the time base is reconstructed from sample index and the measured mean

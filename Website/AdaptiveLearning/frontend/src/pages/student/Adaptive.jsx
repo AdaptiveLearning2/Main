@@ -541,16 +541,22 @@ export default function Adaptive() {
   // device listed as running, changing no state, so the caller can retry.
   const endPushDevice = async (deviceId, { strict = false } = {}) => {
     stoppingIds.current.add(deviceId)
+    let failure = null
     const stopped = await deviceStop(deviceId).then(() => true, e => {
       stoppingIds.current.delete(deviceId)
-      if (strict) throw e
-      return false
+      // The sidecar's 503: the stream stopped, but a disconnect of this device is still running.
+      if (e?.status === 503) e.releasing = true
+      failure = e
+      return !!e?.releasing
     })
+    // Any other failed stop changes no state; a `releasing` one reads the list, which shows its stream stopped.
+    if (strict && failure && !failure.releasing) throw failure
     const { devices: list } = await releasePushIfIdle()
+    if (strict && failure && !list) throw failure
     const listed = list?.find(d => d.device_id === deviceId)
     // Still on, so no stop is under way: a later refusal may try again.
     if (listed?.running) stoppingIds.current.delete(deviceId)
-    if (strict && listed?.running) throw new Error(`${deviceId} is still running after its stop`)
+    if (strict && listed?.running) throw failure || new Error(`${deviceId} is still running after its stop`)
     if (listed || stopped) {
       const running = !!listed?.running
       // The same array when nothing changed (a camera is no station): an unchanged list renders nothing.
@@ -564,6 +570,7 @@ export default function Adaptive() {
       // Unread list: the client was released, so nothing is delivered.
       setCamera(c => ({ ...c, running: false }))
     }
+    if (strict && failure) throw failure
   }
 
   // Hardware ops: pull proxies via /api/eeg/muse/*, push calls the sidecar on
@@ -676,12 +683,14 @@ export default function Adaptive() {
     lastDropToast.current = 0
     dropAnnounced.current = false
     settlingSince.current = null
-    await hw.end()
+    // Its stream stopped and the sidecar is still letting it go (`endPushDevice`): shown off, then reported.
+    const releasing = await hw.end().then(() => null, e => { if (!e?.releasing) throw e; return e })
     // Drop, not reuse: it closed over the old deviceId.
     setRecorder(null)
     delete window.AL_currentSessionId
     setHeadband(s => ({ ...s, connected: false, phase: 'idle', deviceName: null,
                          battery: null, reconnect: null, contactPoor: null }))
+    if (releasing) throw releasing
   }
 
   const onReconnected = () => {
@@ -880,7 +889,8 @@ export default function Adaptive() {
   }
 
   // A refusal switches off what it refuses, adopted at load or started since; unknown stops nothing.
-  // A failed stop changes no state, so the next answer retries it. A pairing stops itself (`pairOnce`).
+  // A failed stop changes no state, so the next answer retries it; a `releasing` one's stream stopped: shown off.
+  // A pairing stops itself (`pairOnce`).
   const stopRefused = (sensor, stop, verdict, done) => {
     stop().then(() => {
       toast.warning(done, { description: blockedLine(sensor, verdict) })
@@ -888,6 +898,11 @@ export default function Adaptive() {
       console.error(`[permits] could not switch the ${sensor} off`, e)
       if (stopFailed.current[sensor]) return
       stopFailed.current[sensor] = true
+      if (e?.releasing) {
+        toast.warning(`The ${sensor} has stopped but is still being released.`,
+          { description: blockedLine(sensor, verdict) })
+        return
+      }
       toast.error(`The ${sensor} could not be switched off.`,
         { description: `${blockedLine(sensor, verdict)} This retries on its own.` })
     })

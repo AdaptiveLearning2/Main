@@ -89,8 +89,10 @@ class DeviceSession:
         self.running = False
         # Serialises start and stop, so one adapter is never released twice at once.
         self._lifecycle = asyncio.Lock()
-        # A cancelled stop's disconnect, still running in a thread; the next start or stop waits for it.
+        # The latest disconnect, while it runs in a thread; the next start or stop waits for it.
         self._releasing: asyncio.Future[None] | None = None
+        # Once a wait on it has timed out, later calls refuse at once rather than hold the lock again.
+        self._release_hung = False
         # Set when push is on; a plain callable so this module never depends on the network.
         self.on_payload: Callable[[dict[str, Any]], None] | None = None
 
@@ -235,7 +237,7 @@ class DeviceSession:
                 finally:
                     # Cancelled mid-disconnect, it carries on, tracked for the next start or stop.
                     if release.done():
-                        self._releasing = None
+                        self._releasing, self._release_hung = None, False
             finally:
                 # Even for a stop cancelled mid-disconnect: the next student must not inherit the baseline.
                 if was_running:
@@ -244,13 +246,15 @@ class DeviceSession:
     async def _await_release(self) -> None:
         """Called under the lock: a connect racing a disconnect loses its new link, and a second disconnect piles up."""
         if self._releasing is not None:
+            if self._release_hung and not self._releasing.done():
+                raise self._still_releasing()
             try:
                 await self._wait_for_release(self._releasing)
             except DeviceReleasing:
                 raise
             except Exception:  # noqa: BLE001, S110 - logged by `_log_release_failure`; a new start is not its caller
                 pass
-            self._releasing = None
+            self._releasing, self._release_hung = None, False
 
     async def _wait_for_release(self, release: asyncio.Future[None]) -> None:
         """Waits at most RELEASE_WAIT_SECONDS, the lock held; past it the disconnect stays tracked and this raises."""
@@ -259,7 +263,11 @@ class DeviceSession:
             await asyncio.wait_for(asyncio.shield(release), self.RELEASE_WAIT_SECONDS)
         except TimeoutError:
             logger.warning("%s: disconnect still running after %.0fs", self.device_id, self.RELEASE_WAIT_SECONDS)
-            raise DeviceReleasing(f"{self.device_id} is still disconnecting; try again shortly") from None
+            self._release_hung = True
+            raise self._still_releasing() from None
+
+    def _still_releasing(self) -> DeviceReleasing:
+        return DeviceReleasing(f"{self.device_id} has stopped but is still disconnecting; try again shortly")
 
     def _release(self) -> asyncio.Future[None]:
         """The adapter's disconnect, in a thread and tracked until it ends or the next start or stop waits for it."""

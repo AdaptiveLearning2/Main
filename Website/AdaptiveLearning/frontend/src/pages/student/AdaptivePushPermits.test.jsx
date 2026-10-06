@@ -260,6 +260,38 @@ it('keeps a camera it could not switch off marked on, says so once, and retries'
   expect(toast.warning).toHaveBeenCalledTimes(1)
 })
 
+const stillReleasing = (id) => Object.assign(new Error(`${id} has stopped but is still disconnecting`), { status: 503 })
+
+it('shows a camera whose stream stopped as off while the sidecar still releases it, and stops asking', async () => {
+  rig.cameraRunning = true
+  deviceStop.mockRejectedValueOnce(stillReleasing('camera'))
+  releasePushIfIdle.mockResolvedValueOnce(
+    { stopped: true, devices: [{ device_id: 'camera', kind: 'face', running: false }] })
+  render(<Adaptive />)
+  await screen.findByRole('button', { name: /turn off/i })
+  answer = () => buildRecordingPermits({ camera: 'declined' })
+  await screen.findByRole('button', { name: /turn on camera/i })
+  await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+    'The camera has stopped but is still being released.', { description: DECLINED_CAMERA }))
+  // Shown off, so later refusals send no stop for the sidecar to refuse again.
+  await answersLanded(2)
+  expect(deviceStop).toHaveBeenCalledTimes(1)
+  expect(toast.error).not.toHaveBeenCalled()
+  expect(toast.warning).toHaveBeenCalledTimes(1)
+})
+
+it('shows a headband whose stream stopped as disconnected while the sidecar still releases it', async () => {
+  await connectHeadband()
+  deviceStop.mockRejectedValueOnce(stillReleasing('default'))
+  answer = () => buildRecordingPermits(HEADBAND_REFUSED)
+  await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+    'The headband has stopped but is still being released.', { description: DECLINED_HEADBAND }))
+  await answersLanded(2)
+  expect(deviceStop).toHaveBeenCalledTimes(1)
+  expect(toast.error).not.toHaveBeenCalled()
+}, TEST_TIMEOUT)
+
 it('treats a camera still listed as running after its stop as not stopped', async () => {
   rig.cameraRunning = true
   releasePushIfIdle.mockResolvedValueOnce(

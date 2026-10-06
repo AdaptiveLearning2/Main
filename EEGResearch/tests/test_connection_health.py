@@ -596,6 +596,7 @@ def test_a_start_while_a_disconnect_hangs_is_refused_in_time_and_connects_nothin
             await asyncio.wait_for(session.start(), 5)
         assert order == []
         let_go.set()
+        await asyncio.wait_for(asyncio.shield(session._releasing), 5)
         await asyncio.wait_for(session.start(), 5)
         session.running = False
         session._task.cancel()
@@ -606,7 +607,7 @@ def test_a_start_while_a_disconnect_hangs_is_refused_in_time_and_connects_nothin
     assert order == ["disconnected", "connected"]
 
 
-def test_a_stop_whose_disconnect_hangs_fails_and_starts_no_second_disconnect():
+def test_a_stop_whose_disconnect_hangs_fails_and_starts_no_second_disconnect(caplog):
     """Reported as stopped, the page would say so of a device still held; each new thread would pile up."""
     session = _session()
     session.RELEASE_WAIT_SECONDS = 0.2
@@ -624,14 +625,19 @@ def test_a_stop_whose_disconnect_hangs_fails_and_starts_no_second_disconnect():
             await asyncio.wait_for(session.start(), 5)
         assert (disconnects, connected) == ([1], [])
         let_go.set()
+        # Ended, it is let go of: the device starts again.
+        await asyncio.wait_for(asyncio.shield(session._releasing), 5)
         await asyncio.wait_for(session.start(), 5)
         session.running = False
         session._task.cancel()
     try:
-        asyncio.run(run())
+        with caplog.at_level(logging.WARNING):
+            asyncio.run(run())
     finally:
         let_go.set()
     assert connected == [1]
+    # Waited on once: the later stops and the start refuse at once, not holding the lock for another wait.
+    assert caplog.text.count("disconnect still running") == 1
 
 
 def test_a_stop_cancelled_mid_disconnect_still_forgets_the_session():

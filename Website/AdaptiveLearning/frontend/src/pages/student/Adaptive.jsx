@@ -246,6 +246,10 @@ export default function Adaptive() {
   const [push, setPush]               = useState(null)
   // The session the sidecar delivers for, per push status: undefined before any answer, null when none.
   const [sidecarSession, setSidecarSession] = useState(undefined)
+  // This tab's lessons: a status still naming one it ended is that lesson winding down, not another tab's.
+  const ownSessions = useRef(new Set())
+  // Bumped on every take-over, so a status reply sent before one cannot undo it.
+  const ownershipEpoch = useRef(0)
   // Channels that delivered since the last poll, not merely consented ones.
   const [recording, setRecording]     = useState([])
   // Last poll's cumulative counts, for a delta.
@@ -547,6 +551,8 @@ export default function Adaptive() {
       .then(() => startPush(sid))
       .then(() => {
         setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null }))
+        ownSessions.current.add(sid)
+        ownershipEpoch.current += 1
         setSidecarSession(sid)
         sidecarDevices().then(list => {
           const running = !!list.find(d => d.kind === 'face')?.running
@@ -1052,6 +1058,8 @@ export default function Adaptive() {
           if (killed) return
           setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null }))
           // Taken over now, not at the next poll: a tab that saw another lesson's would say so until then.
+          ownSessions.current.add(sessionId)
+          ownershipEpoch.current += 1
           setSidecarSession(sessionId)
         })
         .catch(err => {
@@ -1116,10 +1124,13 @@ export default function Adaptive() {
   useEffect(() => {
     if (!headband.pushMode) return
     let killed = false
-    const tick = () => pushStatus()
-      .then(d => {
+    const tick = () => {
+      const epoch = ownershipEpoch.current
+      return pushStatus().then(d => {
         if (killed) return
-        setSidecarSession(d.session_id ?? null)
+        const named = d.session_id ?? null
+        const winding = named !== null && named !== sessionIdRef.current && ownSessions.current.has(named)
+        if (epoch === ownershipEpoch.current) setSidecarSession(winding ? null : named)
         // With no lesson, whose lesson it is is all this page needs; counts and messages are a lesson's.
         if (!sessionId) return
         // Another tab's lesson's counts are not this one's: no labels, and no baseline to diff against later.
@@ -1162,6 +1173,7 @@ export default function Adaptive() {
         // A failed read says nothing about whose lesson it is: one last seen as another tab's stays theirs.
         if (pushOwnerRef.current !== 'elsewhere') recover()
       })
+    }
     tick()
     const id = setInterval(tick, PUSH_STATUS_POLL_MS)
     return () => { killed = true; clearInterval(id) }

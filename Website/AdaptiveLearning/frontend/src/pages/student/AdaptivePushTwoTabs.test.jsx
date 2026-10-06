@@ -22,22 +22,26 @@ vi.mock('./pollIntervals', async (importOriginal) => ({
 }))
 // The sidecar as each test sets it: `owner` is the lesson it delivers for, and a start takes it, as the real one does.
 const rig = { owner: null, down: false, hang: false, polls: 0, cameraRunning: true,
-              bridge: { running: false, ingestion: {} } }
+              lagRelease: false, hold: false, held: [], bridge: { running: false, ingestion: {} } }
 // A stop naming another session changes nothing, as the sidecar's own check has it.
 const release = (sessionId) => { if (!sessionId || sessionId === rig.owner) rig.owner = null }
 vi.mock('../../lib/sidecar', () => ({
   startPush: vi.fn(async (sessionId) => { rig.owner = sessionId; return {} }),
-  stopPush: vi.fn(async (sessionId) => { release(sessionId); return {} }),
+  // `lagRelease`: still winding the lesson down, so its status goes on naming it for a while.
+  stopPush: vi.fn(async (sessionId) => { if (!rig.lagRelease) release(sessionId); return {} }),
   stopPushOnUnload: vi.fn((sessionId) => release(sessionId)),
   pushStatus: vi.fn(async () => {
     if (rig.hang) return new Promise(() => {})
     if (rig.down) throw new Error('sidecar not answering')
     // Rising, as a lesson that is recording: the recording chip is built from the rise between two polls.
     const n = ++rig.polls
-    return { enabled: true, running: rig.owner != null, session_id: rig.owner,
-             recorded: { cognitive: 30 + n, heart: 9 + n, face: 40 + n }, rejected: { cognitive: 0, heart: 0, face: 2 },
-             last_result: { cognitive: 'declined', heart: 'recorded', face: 'recorded' },
-             declined_reason: { cognitive: 'eeg not consented', heart: null, face: null } }
+    const reply = { enabled: true, running: rig.owner != null, session_id: rig.owner,
+                    recorded: { cognitive: 30 + n, heart: 9 + n, face: 40 + n },
+                    rejected: { cognitive: 0, heart: 0, face: 2 },
+                    last_result: { cognitive: 'declined', heart: 'recorded', face: 'recorded' },
+                    declined_reason: { cognitive: 'eeg not consented', heart: null, face: null } }
+    // `hold`: answered as the sidecar was when asked, but only when the test lets it arrive.
+    return rig.hold ? new Promise(r => rig.held.push(() => r(reply))) : reply
   }),
   deviceStart: vi.fn(async () => ({})), deviceStop: vi.fn(async () => ({})),
   deviceStopOnUnload: vi.fn(),
@@ -78,7 +82,7 @@ beforeEach(() => {
   resetApi()
   vi.clearAllMocks()
   Object.assign(rig, { owner: null, down: false, hang: false, polls: 0, cameraRunning: true,
-                       bridge: { running: false, ingestion: {} } })
+                       lagRelease: false, hold: false, held: [], bridge: { running: false, ingestion: {} } })
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
     'GET /api/recording/me': () => buildRecordingPermits(),
@@ -324,4 +328,70 @@ it('says nothing new before a lesson when the status cannot be read', async () =
 
   expect(screen.queryByText(/is not running, so nothing is being recorded/)).toBeNull()
   expect(startPush).not.toHaveBeenCalled()
+}, 30_000)
+
+it('switches the camera off on closing after its own lesson ended, while the sidecar still names that lesson', async () => {
+  render(<Adaptive />)
+  fireEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+  await pollsLanded(2)
+  rig.lagRelease = true
+
+  await act(async () => { await runSignOutTasks() })
+  await waitFor(() => expect(stopPush).toHaveBeenCalledWith('sess-push'))
+  // Replies that still name the ended lesson: it is winding down, not another tab's.
+  await pollsLanded(2)
+  expect(screen.queryByText('on, in another tab')).toBeNull()
+
+  window.dispatchEvent(new Event('pagehide'))
+  expect(deviceStopOnUnload).toHaveBeenCalledWith('camera')
+}, 30_000)
+
+it('is not undone by a status reply sent before Use this tab', async () => {
+  await inLessonTakenOver()
+  rig.hold = true
+  // A reply naming the other lesson is on its way.
+  await waitFor(() => expect(rig.held.length).toBeGreaterThan(0))
+
+  fireEvent.click(screen.getByRole('button', { name: 'Use this tab' }))
+  await waitFor(() => expect(screen.queryByText(ELSEWHERE)).toBeNull())
+  rig.held.splice(0).forEach(arrive => arrive())
+  await sleep(50)
+
+  expect(screen.queryByText(ELSEWHERE)).toBeNull()
+}, 30_000)
+
+it('is not undone by a status reply sent before its own lesson started', async () => {
+  rig.owner = 'sess-other'
+  render(<Adaptive />)
+  await screen.findByText('Camera')
+  await within(panelOf('Camera')).findByText('on, in another tab')
+  rig.hold = true
+  await waitFor(() => expect(rig.held.length).toBeGreaterThan(0))
+
+  fireEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+  await waitFor(() => expect(within(panelOf('Camera')).queryByText('on, in another tab')).toBeNull())
+  rig.held.splice(0).forEach(arrive => arrive())
+  await sleep(50)
+
+  expect(within(panelOf('Camera')).queryByText('on, in another tab')).toBeNull()
+  expect(screen.queryByText(ELSEWHERE)).toBeNull()
+}, 30_000)
+
+it('knows a lesson the status poll handed over, when the first hand-over failed, as its own once ended', async () => {
+  // The sidecar was not up for the first hand-over; the poll's recovery is what gives it the lesson.
+  startPush.mockRejectedValueOnce(new Error('sidecar not up yet'))
+  render(<Adaptive />)
+  fireEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+  await waitFor(() => expect(rig.owner).toBe('sess-push'))
+  await pollsLanded(2)
+  rig.lagRelease = true
+
+  await act(async () => { await runSignOutTasks() })
+  await pollsLanded(2)
+
+  window.dispatchEvent(new Event('pagehide'))
+  expect(deviceStopOnUnload).toHaveBeenCalledWith('camera')
 }, 30_000)

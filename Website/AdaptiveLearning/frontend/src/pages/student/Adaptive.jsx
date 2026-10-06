@@ -934,10 +934,14 @@ export default function Adaptive() {
     if (!teardown && others.length === 0) return
     // Marked now: Stop trying's teardown reaches `endPushDevice` only after its bridge disconnect.
     if (teardown) stoppingIds.current.add(stationId)
-    stopRefused('headband', () => Promise.all([
+    // Every stop settles first; a real failure outranks "still being released", being the one retried.
+    stopRefused('headband', () => Promise.allSettled([
       ...(teardown ? [teardown()] : []),
       ...others.map(id => endPushDevice(id, { strict: true })),
-    ]), v.headband, 'The headband was disconnected.')
+    ]).then(results => {
+      const failures = results.filter(r => r.status === 'rejected').map(r => r.reason)
+      if (failures.length) throw failures.find(e => !e?.releasing) || failures[0]
+    }), v.headband, 'The headband was disconnected.')
   })
   useEffect(() => { enforcePermits(permits.answer) },
     [permits, camera.running, headband.connected, headband.phase, stations])

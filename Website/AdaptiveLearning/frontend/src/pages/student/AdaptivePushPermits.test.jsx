@@ -628,6 +628,30 @@ it('stops every running headband station on a refusal, not only the connected on
   expect(toast.warning).toHaveBeenCalledTimes(1)
 }, TEST_TIMEOUT)
 
+it('announces a station that failed to stop even when another is still being released', async () => {
+  rig.spare = true
+  rig.spareRunning = true
+  // The connected station's 503 lands first; the spare's real failure after it, then its retry succeeds.
+  const firstRound = async (id) => {
+    if (id === 'default') throw stillReleasing('default')
+    await new Promise(r => setTimeout(r, 50))
+    throw new Error('sidecar busy')
+  }
+  deviceStop.mockImplementationOnce(firstRound).mockImplementationOnce(firstRound)
+  render(<Adaptive />)
+  fireEvent.change(await screen.findByRole('combobox', { name: 'Headband' }), { target: { value: 'default' } })
+  const connect = screen.getByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(connect).toBeEnabled())
+  fireEvent.click(connect)
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+  answer = () => buildRecordingPermits(HEADBAND_REFUSED)
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('The headband could not be switched off.',
+    { description: `${DECLINED_HEADBAND} This retries on its own.` }))
+  await waitFor(() => expect(deviceStop.mock.calls.filter(([id]) => id === 'spare')).toHaveLength(2))
+  expect(toast.warning).not.toHaveBeenCalledWith('The headband has stopped but is still being released.',
+    expect.anything())
+}, TEST_TIMEOUT)
+
 it('stops an abandoned pairing once, and says so once, however slow the stop', async () => {
   rig.ingestion = { muse_connected: false, muse_devices: [] }
   let stopped

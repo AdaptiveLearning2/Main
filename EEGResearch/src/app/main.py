@@ -116,7 +116,7 @@ def _unknown_device(device_id: str) -> HTTPException:
 
 
 def _releasing(exc: DeviceReleasing) -> HTTPException:
-    """Neither started nor stopped: a 503, so the page reports a failure rather than the change it asked for."""
+    """A 503: a start did not connect; a stop's stream has stopped but the device is still being let go."""
     return HTTPException(status_code=503, detail=str(exc))
 
 

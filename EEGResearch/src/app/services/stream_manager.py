@@ -32,7 +32,7 @@ class UnknownDeviceError(KeyError):
 
 
 class DeviceReleasing(RuntimeError):
-    """A disconnect of this device is still running past RELEASE_WAIT_SECONDS; it is neither started nor stopped."""
+    """A disconnect of this device is still running past RELEASE_WAIT_SECONDS: not started; a stop's stream did stop."""
 
 
 def _finite_or_none(value) -> float | None:

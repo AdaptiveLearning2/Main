@@ -580,7 +580,54 @@ def test_a_background_disconnect_that_fails_is_logged_and_the_next_start_still_c
     with caplog.at_level(logging.WARNING):
         asyncio.run(run())
     assert connected == [1]
-    assert "background disconnect failed" in caplog.text
+    assert "disconnect failed" in caplog.text
+
+
+@pytest.mark.parametrize("during", ["wind-down", "disconnect"])
+def test_a_hung_background_disconnect_is_waited_for_only_so_long(during, caplog):
+    """Waited on for ever, it would hold the device lock and leave the device unusable until a restart."""
+    session = _session()
+    session.RELEASE_WAIT_SECONDS = 0.2
+    order, _forgets, let_go, cancel_a_stop = _releasing_in_the_background(session, during)
+
+    async def run():
+        await cancel_a_stop()
+        await asyncio.wait_for(session.start(), 5)
+        session.running = False
+        session._task.cancel()
+        let_go.set()
+    try:
+        with caplog.at_level(logging.WARNING):
+            asyncio.run(run())
+    finally:
+        let_go.set()
+    assert order[:1] == ["connected"]
+    assert "disconnect still running" in caplog.text
+
+
+def test_a_stop_whose_own_disconnect_hangs_returns_and_the_device_can_start_again(caplog):
+    session = _session()
+    session.RELEASE_WAIT_SECONDS = 0.2
+    connected, let_go = [], threading.Event()
+    session.adapter.disconnect = lambda: let_go.wait(5)
+    session.adapter.connect = lambda: connected.append(1)
+
+    async def run():
+        session.running = True
+        session._task = asyncio.create_task(asyncio.sleep(60))
+        await asyncio.wait_for(session.stop(), 5)
+        await asyncio.wait_for(session.start(), 5)
+        session.running = False
+        session._task.cancel()
+        let_go.set()
+    try:
+        with caplog.at_level(logging.WARNING):
+            asyncio.run(run())
+    finally:
+        let_go.set()
+    assert connected == [1]
+    # Given up on once, by the stop: the start does not wait on it a second time.
+    assert caplog.text.count("disconnect still running") == 1
 
 
 def test_a_stop_cancelled_mid_disconnect_still_forgets_the_session():

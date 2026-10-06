@@ -220,19 +220,16 @@ class DeviceSession:
                         await task
                     except asyncio.CancelledError:
                         # The stream's own end is swallowed; one aimed at this stop (shutdown) is not,
-                        # and the link is still let go, in the background, so a stuck one cannot hold it.
+                        # and the link is still let go, in the background, tracked like any disconnect.
                         if asyncio.current_task().cancelling():
-                            self._release().add_done_callback(self._log_release_failure)
+                            self._release()
                             raise
                 # Can block on socket shutdown/thread joins.
                 release = self._release()
                 try:
-                    await asyncio.shield(release)
-                except asyncio.CancelledError:
-                    # Cancelled mid-disconnect: it carries on, tracked, with nobody left to hand a failure to.
-                    release.add_done_callback(self._log_release_failure)
-                    raise
+                    await self._wait_for_release(release)
                 finally:
+                    # Cancelled mid-disconnect, it carries on, tracked for the next start or stop.
                     if release.done():
                         self._releasing = None
             finally:
@@ -244,21 +241,32 @@ class DeviceSession:
         """Called under the lock: a connect racing the background disconnect would lose its new link."""
         if self._releasing is not None:
             try:
-                # Shielded: a cancelled waiter must not mark it done while the thread still runs.
-                await asyncio.shield(self._releasing)
+                await self._wait_for_release(self._releasing)
             except Exception:  # noqa: BLE001, S110 - logged by `_log_release_failure`; a new start is not its caller
                 pass
             self._releasing = None
 
+    async def _wait_for_release(self, release: asyncio.Future[None]) -> None:
+        """Waits at most RELEASE_WAIT_SECONDS, the lock held; past it a hung disconnect is left running, untracked."""
+        try:
+            # Shielded: a cancelled or timed-out wait must not mark it done while the thread still runs.
+            await asyncio.wait_for(asyncio.shield(release), self.RELEASE_WAIT_SECONDS)
+        except TimeoutError:
+            logger.warning("%s: disconnect still running after %.0fs; no longer waited for",
+                           self.device_id, self.RELEASE_WAIT_SECONDS)
+            if self._releasing is release:
+                self._releasing = None
+
     def _release(self) -> asyncio.Future[None]:
         """The adapter's disconnect, in a thread and tracked until it ends or the next start or stop waits for it."""
         self._releasing = asyncio.get_running_loop().run_in_executor(None, self.adapter.disconnect)
+        self._releasing.add_done_callback(self._log_release_failure)
         return self._releasing
 
     def _log_release_failure(self, release: asyncio.Future[None]) -> None:
-        """For a disconnect nobody awaits; retrieving the error also keeps asyncio from reporting it as lost."""
+        """Logged for every disconnect, since some have nobody awaiting them; retrieving it keeps asyncio quiet."""
         if not release.cancelled() and release.exception() is not None:
-            logger.warning("%s: background disconnect failed", self.device_id, exc_info=release.exception())
+            logger.warning("%s: disconnect failed", self.device_id, exc_info=release.exception())
 
     def _forget_stream(self) -> None:
         """A stopped stream is "no data", not its last reading; clear_session(), not reset(), drops the baseline."""
@@ -274,6 +282,8 @@ class DeviceSession:
 
     # Seconds requested and active preset may disagree before it counts as ignored.
     PRESET_SETTLE_SECONDS = 5.0
+    # Longest a start or stop holds the device lock waiting on a disconnect; a hung one is then left running.
+    RELEASE_WAIT_SECONDS = 10.0
 
     def _note_good_tick(self, timestamp: str) -> None:
         self.last_good_at = time.monotonic()

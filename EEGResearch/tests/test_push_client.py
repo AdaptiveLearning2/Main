@@ -1479,18 +1479,25 @@ async def test_a_check_begun_before_a_recheck_does_not_end_its_hold(permits):
     """Its answer is from before the device started, so the hold waits for one asked after."""
     await _started(permits)
     await _answer(permits, eeg="declined")
+    before = permits._permits
     permits._fake.gate = asyncio.Event()
     permits._permits_due = 0.0
     in_flight = asyncio.create_task(permits._check_permits_if_due())
     await _until(lambda: len(permits._fake.gets) == 2)
+    assert len(permits._fake.gets) == 2
     permits.recheck()
+    # Any check after this one fails, so only the one begun before the recheck can land.
+    permits._fake.status = 503
     permits._fake.gate.set()
     await in_flight
+    await _until(lambda: permits._permits is not before)
+    assert permits._permits is not before
     permits._fake.gate = None
     permits.enqueue("cognitive", {"ts": "a"})
     await permits._flush_once()
-    assert permits.status()["queued"]["cognitive"] == 1
+    assert (permits.status()["queued"]["cognitive"], permits.status()["declined"]["cognitive"]) == (1, 0)
     # Asked after the start: EEG is back on, and the held reading goes.
+    permits._fake.status = 200
     await _answer(permits)
     await permits._flush_once()
     assert _posted(permits) == ["cognitive"]

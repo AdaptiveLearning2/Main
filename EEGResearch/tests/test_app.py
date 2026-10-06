@@ -1376,6 +1376,40 @@ def test_a_refusal_stops_the_running_devices_of_that_sensor_only(monkeypatch):
     assert stopped == ["camera", "default"]
 
 
+def test_a_device_still_disconnecting_does_not_hold_up_the_other_refused_devices(monkeypatch):
+    import src.app.main as sidecar
+    from src.app.services.stream_manager import DeviceReleasing
+
+    stopped = []
+
+    async def stop(device_id):
+        stopped.append(device_id)
+        if device_id == "camera":
+            raise DeviceReleasing("camera is still disconnecting")
+
+    monkeypatch.setattr(sidecar.stream_manager, "list_devices", lambda: [
+        {"device_id": "camera", "kind": "face", "running": True},
+        {"device_id": "default", "kind": "muse", "running": True}])
+    monkeypatch.setattr(sidecar.stream_manager, "stop", stop)
+    asyncio.run(sidecar._stop_refused_sensors({"camera", "headband"}, lambda: True))
+    assert stopped == ["camera", "default"]
+
+
+@pytest.mark.parametrize("action", ["start", "stop"])
+def test_a_device_still_disconnecting_answers_503_rather_than_success(monkeypatch, action):
+    """A 200 would have the page report a camera turned off, or on, that is neither."""
+    import src.app.main as sidecar
+    from src.app.services.stream_manager import DeviceReleasing
+
+    async def refuse(_device_id):
+        raise DeviceReleasing("camera is still disconnecting; try again shortly")
+
+    monkeypatch.setattr(sidecar.stream_manager, action, refuse)
+    headers = {"Authorization": f"Bearer {get_settings().admin_token}"}
+    res = TestClient(app).post(f"/api/v1/session/{action}?device_id=camera", headers=headers)
+    assert (res.status_code, res.json()["detail"]) == (503, "camera is still disconnecting; try again shortly")
+
+
 def test_starting_a_device_makes_the_push_client_ask_again(monkeypatch):
     """A sensor turned back on is started; its readings must not go by the answer from before."""
     import src.app.main as sidecar

@@ -31,6 +31,10 @@ class UnknownDeviceError(KeyError):
     """Raised when a device_id doesn't match any device in the registry."""
 
 
+class DeviceReleasing(RuntimeError):
+    """A disconnect of this device is still running past RELEASE_WAIT_SECONDS; it is neither started nor stopped."""
+
+
 def _finite_or_none(value) -> float | None:
     """A float, or None when the value is NaN, infinite or not a number."""
     try:
@@ -238,24 +242,24 @@ class DeviceSession:
                     self._forget_stream()
 
     async def _await_release(self) -> None:
-        """Called under the lock: a connect racing the background disconnect would lose its new link."""
+        """Called under the lock: a connect racing a disconnect loses its new link, and a second disconnect piles up."""
         if self._releasing is not None:
             try:
                 await self._wait_for_release(self._releasing)
+            except DeviceReleasing:
+                raise
             except Exception:  # noqa: BLE001, S110 - logged by `_log_release_failure`; a new start is not its caller
                 pass
             self._releasing = None
 
     async def _wait_for_release(self, release: asyncio.Future[None]) -> None:
-        """Waits at most RELEASE_WAIT_SECONDS, the lock held; past it a hung disconnect is left running, untracked."""
+        """Waits at most RELEASE_WAIT_SECONDS, the lock held; past it the disconnect stays tracked and this raises."""
         try:
             # Shielded: a cancelled or timed-out wait must not mark it done while the thread still runs.
             await asyncio.wait_for(asyncio.shield(release), self.RELEASE_WAIT_SECONDS)
         except TimeoutError:
-            logger.warning("%s: disconnect still running after %.0fs; no longer waited for",
-                           self.device_id, self.RELEASE_WAIT_SECONDS)
-            if self._releasing is release:
-                self._releasing = None
+            logger.warning("%s: disconnect still running after %.0fs", self.device_id, self.RELEASE_WAIT_SECONDS)
+            raise DeviceReleasing(f"{self.device_id} is still disconnecting; try again shortly") from None
 
     def _release(self) -> asyncio.Future[None]:
         """The adapter's disconnect, in a thread and tracked until it ends or the next start or stop waits for it."""

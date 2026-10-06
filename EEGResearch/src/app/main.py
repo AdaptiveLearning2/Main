@@ -19,7 +19,7 @@ from src.app.security import (
     require_local_controller,
 )
 from src.app.services.push_client import PushClient
-from src.app.services.stream_manager import StreamManager, UnknownDeviceError
+from src.app.services.stream_manager import DeviceReleasing, StreamManager, UnknownDeviceError
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -37,7 +37,11 @@ async def _stop_refused_sensors(sensors: set[str], still_current: Callable[[], b
         if device["running"] and sensor in sensors:
             logger.warning("push: stopping %s; recording from the %s is not permitted",
                            device["device_id"], sensor)
-            await stream_manager.stop(device["device_id"])
+            try:
+                await stream_manager.stop(device["device_id"])
+            except DeviceReleasing as exc:
+                # Its stream has stopped; the next check tries again, and the other devices are not held up.
+                logger.warning("push: %s", exc)
 
 
 def _make_push_client() -> PushClient | None:
@@ -111,6 +115,11 @@ def _unknown_device(device_id: str) -> HTTPException:
     return HTTPException(status_code=404, detail=f"Unknown device_id: {device_id!r}")
 
 
+def _releasing(exc: DeviceReleasing) -> HTTPException:
+    """Neither started nor stopped: a 503, so the page reports a failure rather than the change it asked for."""
+    return HTTPException(status_code=503, detail=str(exc))
+
+
 @app.get("/api/v1/devices")
 async def list_devices(_: str = Depends(require_learner_token)) -> JSONResponse:
     return JSONResponse({"status": "ok", "data": stream_manager.list_devices()})
@@ -124,6 +133,8 @@ async def start_session(
         await stream_manager.start(device_id)
     except UnknownDeviceError:
         raise _unknown_device(device_id)
+    except DeviceReleasing as exc:
+        raise _releasing(exc)
     if push_client is not None:
         # A sensor started after a parent turned it back on must not be judged by the answer before that.
         push_client.recheck()
@@ -153,6 +164,8 @@ async def stop_session(
         await stream_manager.stop(device_id)
     except UnknownDeviceError:
         raise _unknown_device(device_id)
+    except DeviceReleasing as exc:
+        raise _releasing(exc)
     return JSONResponse({"status": "stopped"})
 
 

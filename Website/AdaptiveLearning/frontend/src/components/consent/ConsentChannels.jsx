@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { apiFetch } from '../../lib/api'
+import { announcePermitsChanged } from '../../lib/permitsChanged'
 
 /** Named for the sensor, not the signal derived from it. */
 const CHANNELS = [
@@ -130,7 +131,10 @@ export default function ConsentChannels({ studentId, role, studentName = null })
     return apiFetch(`/api/consent/${studentId}`, {
       method: 'PUT', body: { [key]: next },
     })
-      .then(updated => setChannels(updated.channels))
+      .then(updated => {
+        setChannels(updated.channels)
+        announcePermitsChanged()
+      })
       .catch(e => {
         // 409: the state moved under us. Reload, don't retry.
         if (e.status === 409) {

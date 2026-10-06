@@ -11,6 +11,7 @@ import { PUSH_POLL_MS, PULL_HEALTH_POLL_MS, PULL_STATUS_POLL_MS, PUSH_STATUS_POL
 import { onSignOut } from '../../lib/signOutTasks'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { reloadIfRestored } from '../../lib/pageRestore'
+import { onPermitsChanged } from '../../lib/permitsChanged'
 import { startPush, stopPush, stopPushOnUnload, pushStatus,
          deviceStart, deviceStop, deviceStopOnUnload, museRefresh, museConnect,
          museDisconnect, museState, devices as sidecarDevices,
@@ -247,6 +248,8 @@ export default function Adaptive() {
   const [recording, setRecording]     = useState([])
   // Last poll's cumulative counts, for a delta.
   const lastRecorded = useRef(null)
+  // Last poll's per-channel results, to see one turn to declined.
+  const lastResults = useRef({})
   // Chains start and stop so a teardown can't race an in-flight start.
   const pushHandoff = useRef(Promise.resolve())
   // Set beside every `setSessionId`, never copied from it by an effect: a late copy wrote a stale id
@@ -479,6 +482,12 @@ export default function Adaptive() {
   const sidecarRecent = () => performance.now() - sidecarAt.current < sidecarTrustMs.current
   usePoll(() => ((document.hidden && !sensorOn) || sidecarRecent() ? null : checkPermits()),
     { intervalMs: PUSH_POLL_MS, enabled: headband.pushMode === true, pauseWhenHidden: false })
+  // Whatever the poll would decide: a consent change in this browser, or a batch newly declined (the status poll).
+  const askPermitsNow = useEffectEvent(() => { checkPermits() })
+  useEffect(() => {
+    if (headband.pushMode !== true) return
+    return onPermitsChanged(() => askPermitsNow())
+  }, [headband.pushMode])
 
   // Discover stations (auto-select a single one), retried until non-empty. A
   // failed read applies nothing, so `stationId` never falls back to `default`.
@@ -1088,6 +1097,14 @@ export default function Adaptive() {
         // The same array, and below the same object, when nothing changed: such a read renders nothing.
         setRecording(r => (r.join() === labels.join() ? r : labels))
         lastRecorded.current = now
+        // Newly declined, so the latest answer may be stale (a withdrawal): ask now, unless the sidecar does
+        // (`checks_on_refusal`). A result gone stale (null) keeps the one before it, or a gap would ask again.
+        const results = Object.fromEntries(Object.entries(d.last_result || {}).filter(([, r]) => r != null))
+        if (!d.checks_on_refusal
+            && CHANNEL_LABELS.some(([k]) => results[k] === 'declined' && lastResults.current[k] !== 'declined')) {
+          askPermitsNow()
+        }
+        lastResults.current = { ...lastResults.current, ...results }
         // A restarted sidecar has no token; skip `enabled: false` (config, would 409).
         if (d.enabled !== false && !d.running) recover()
         // The sidecar's answer goes to the permit state, not here: its age differs on every read.
@@ -1361,11 +1378,8 @@ export default function Adaptive() {
   const totalAcc = accuracyStats.total.attempts > 0
     ? Math.round((accuracyStats.total.correct / accuracyStats.total.attempts) * 100) : null
 
-  // Under push there is no poller count: use `push.recorded` (cognitive +
-  // heart), the RECORDING chip's source.
-  const headbandSamples = headband.pushMode
-    ? ((push?.recorded?.cognitive || 0) + (push?.recorded?.heart || 0))
-    : headband.samples
+  // Under push there is no poller count: EEG's `push.recorded`, not heart's, which the camera can supply too.
+  const headbandSamples = headband.pushMode ? (push?.recorded?.cognitive || 0) : headband.samples
   // Readings the backend refused (whole batch, or one by one): lost, and nowhere else on screen.
   const pushLost = ['rejected', 'malformed']
     .flatMap(k => Object.values(push?.[k] || {}))
@@ -1485,10 +1499,8 @@ export default function Adaptive() {
                       ? 'The app on this computer is running but is not set up to record (PUSH_ENABLED is off). Nothing is being saved for this session.'
                     : push && push.reachable === false
                       ? 'The app on this computer is not running, so nothing is being recorded. Start it and this will change on its own.'
-                      // Stored, not sent: a sent count looks healthy for a declined sensor.
-                      : push?.recorded
-                        ? `${Object.values(push.recorded).reduce((a, b) => a + b, 0)} readings recorded from this computer.`
-                        : 'Turn on your Muse S headband, then click Connect. It pairs through the app on this computer.')
+                      // No count here: a sum over channels climbs with the camera's readings while no headband is on.
+                      : 'Turn on your Muse S headband, then click Connect. It pairs through the app on this computer.')
                   // Most specific known fact first: a stated config error, qualified
                   // (never erased) when the probe was since refused or unreached.
                   : headband.serviceError && headband.probeUnreachable

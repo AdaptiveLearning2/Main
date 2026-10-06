@@ -139,11 +139,12 @@ it('waits neutrally, rather than saying "not recording", before anything has com
   await renderInSession({
     enabled: true, running: true, recorded: { cognitive: 0, heart: 0, face: 0 },
     declined: { cognitive: 0, heart: 0, face: 0 },
+    // Unreadable readings set no result; only a status sets the lost count, which proves it has landed.
+    malformed: { cognitive: 0, heart: 0, face: 1 },
     last_result: { cognitive: null, heart: null, face: null }, declined_reason: {},
   })
 
-  // Only a status sets `recorded`, so this line proves the status has landed.
-  await screen.findByText('0 readings recorded from this computer.')
+  await screen.findByText('1 reading not saved')
   const camera = panelOf('Camera')
   expect(within(camera).getByText('on, waiting to save')).toBeInTheDocument()
   expect(within(camera).getByText(/Waiting for its first readings to be saved/)).toBeInTheDocument()
@@ -191,6 +192,19 @@ it('reads a channel whose readings were only ever declined, and then went quiet,
   expect(within(headband).queryByText('waiting to save')).toBeNull()
 })
 
+it('counts nothing on the card of a headband not connected, however much the camera records', async () => {
+  await renderInSession({
+    enabled: true, running: true, recorded: { cognitive: 0, heart: 12, face: 40 },
+    malformed: { cognitive: 0, heart: 0, face: 1 },
+    last_result: { cognitive: null, heart: 'recorded', face: 'recorded' }, declined_reason: {},
+  })
+
+  await screen.findByText('1 reading not saved')
+  const headband = panelOf('Muse Headband')
+  expect(within(headband).queryByText(/recorded from this computer/)).toBeNull()
+  expect(within(headband).getByText(/Turn on your Muse S headband, then click Connect/)).toBeInTheDocument()
+})
+
 it('reads an older sidecar, which sends no last result, as recording', async () => {
   await renderInSession({ enabled: true, running: true, recorded: { cognitive: 5 } })
 
@@ -228,6 +242,15 @@ it('waits neutrally on a connected headband before its readings come back', asyn
   expect(await within(panelOf('Muse Headband')).findByText('waiting to save')).toBeInTheDocument()
   expect(screen.getByText('Connected. Waiting for the first readings to be saved.')).toBeInTheDocument()
   expect(screen.queryByText(/teacher can see your focus/)).toBeNull()
+}, 60_000)
+
+it("counts only EEG on a connected headband's card, not heart rate the camera can supply", async () => {
+  await connectInSession({
+    enabled: true, running: true, recorded: { cognitive: 30, heart: 9, face: 40 },
+    last_result: { cognitive: 'recorded', heart: 'recorded', face: 'recorded' }, declined_reason: {},
+  })
+
+  expect(await screen.findByText(/^30 samples sent/)).toBeInTheDocument()
 }, 60_000)
 
 it('stops telling a connected student their teacher can see them when nothing was saved lately', async () => {

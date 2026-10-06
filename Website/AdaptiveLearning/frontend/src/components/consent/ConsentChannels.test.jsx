@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event'
 
 const apiFetch = vi.fn()
 vi.mock('../../lib/api', () => ({ apiFetch: (...a) => apiFetch(...a) }))
+const announcePermitsChanged = vi.fn()
+vi.mock('../../lib/permitsChanged', () => ({ announcePermitsChanged: () => announcePermitsChanged() }))
 
 import ConsentChannels from './ConsentChannels'
 
@@ -36,7 +38,7 @@ const CAMERA_OFF = {
   },
 }
 
-beforeEach(() => { apiFetch.mockReset() })
+beforeEach(() => { apiFetch.mockReset(); announcePermitsChanged.mockReset() })
 
 describe('reading', () => {
   it('maps the switch key to the channel the payload uses', async () => {
@@ -178,6 +180,34 @@ describe('the parent can switch on', () => {
     expect(await screen.findByText(/your change was not applied/)).toBeInTheDocument()
     expect(screen.queryByText(/Network down/)).not.toBeInTheDocument()
     expect(screen.queryAllByRole('switch')).toHaveLength(0)
+  })
+})
+
+describe("telling this browser's lesson pages", () => {
+  it('announces a withdrawal once the write has landed', async () => {
+    let landed
+    apiFetch.mockResolvedValueOnce(ALL_ON).mockReturnValueOnce(new Promise(r => { landed = r }))
+    render(<ConsentChannels studentId="stu-1" role="student" />)
+    await userEvent.click(await screen.findByRole('switch', { name: 'Camera' }))
+    await userEvent.click(screen.getByRole('button', { name: /Turn it off/ }))
+
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2))
+    expect(announcePermitsChanged).not.toHaveBeenCalled()
+    landed(CAMERA_OFF)
+    await waitFor(() => expect(announcePermitsChanged).toHaveBeenCalledTimes(1))
+  })
+
+  it.each([
+    ['a conflict', Object.assign(new Error('Consent changed'), { status: 409 })],
+    ['a failure', new Error('Server down')],
+  ])('announces nothing after %s', async (_name, error) => {
+    apiFetch.mockResolvedValueOnce(CAMERA_OFF).mockRejectedValueOnce(error).mockResolvedValueOnce(CAMERA_OFF)
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+    await userEvent.click(await screen.findByRole('switch', { name: 'Camera' }))
+
+    await waitFor(() => expect(apiFetch.mock.calls.length).toBeGreaterThanOrEqual(2))
+    await screen.findByText(/changed somewhere else|Server down/)
+    expect(announcePermitsChanged).not.toHaveBeenCalled()
   })
 })
 

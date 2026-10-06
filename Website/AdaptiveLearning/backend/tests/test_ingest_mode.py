@@ -869,6 +869,8 @@ def test_a_dropped_tick_says_why_and_a_clean_batch_says_nothing(monkeypatch):
 
     assert unworn["inserted"] == 0 and unworn["reason"] == main._NO_USABLE_EEG
     assert clean["inserted"] == 1 and clean["reason"] is None
+    # Not a refusal, so the sidecar has no reason to re-ask what may be recorded.
+    assert unworn["refused"] is False and clean["refused"] is False
 
 
 def test_the_push_endpoint_nulls_measurements_on_bad_contact(monkeypatch):

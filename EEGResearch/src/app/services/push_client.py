@@ -136,6 +136,8 @@ class PushClient:
         # "recorded" or "declined": what the channel's latest receipt did; None before one.
         self._last_result: dict[str, str | None] = {channel: None for channel in _CHANNELS}
         self._last_result_at: dict[str, float] = {channel: 0.0 for channel in _CHANNELS}
+        # Whether the channel's latest receipt was a refusal, so a run of them asks once.
+        self._refusing: dict[str, bool] = {channel: False for channel in _CHANNELS}
         # Per channel; only shrinks, on a size refusal, and resets with the session.
         self._batch_limit: dict[str, int] = {channel: MAX_BATCH for channel in _CHANNELS}
         self._task: asyncio.Task | None = None
@@ -312,6 +314,7 @@ class PushClient:
         self._declined_reason = {channel: None for channel in _CHANNELS}
         self._last_result = {channel: None for channel in _CHANNELS}
         self._last_result_at = {channel: 0.0 for channel in _CHANNELS}
+        self._refusing = {channel: False for channel in _CHANNELS}
         self._batch_limit = {channel: MAX_BATCH for channel in _CHANNELS}
         # The answer was about this student; the next session asks afresh.
         self._permits = None
@@ -644,6 +647,8 @@ class PushClient:
             duplicates = int(body.get("duplicates", 0))
             malformed = int(body.get("malformed", 0))
             reason = body.get("reason", "unspecified")
+            # Dropped for want of permission; an older backend sends no `refused`, so a wholly declined batch stands in.
+            refused = dropped > 0 and bool(body.get("refused", not inserted))
         except Exception as exc:  # noqa: BLE001 - see above
             # Delivered-but-unknown: the write happened.
             logger.warning("push: %s batch committed but its receipt was "
@@ -661,6 +666,10 @@ class PushClient:
             self._declined_reason[channel] = reason
         # A receipt of only duplicates or unreadable samples says nothing about recording now.
         if inserted or dropped:
+            # Refused despite the latest answer, which is then stale (a withdrawal): ask now, once per run.
+            if refused and not self._refusing[channel]:
+                self._permits_due = 0.0
+            self._refusing[channel] = refused
             self._last_result[channel] = "recorded" if inserted else "declined"
             self._last_result_at[channel] = time.monotonic()
         if malformed:
@@ -702,6 +711,8 @@ class PushClient:
             "permits_age_seconds": round(time.monotonic() - self._permits.at, 1) if self._permits else None,
             # How often it asks, so the page can tell a current answer from one the sidecar stopped renewing.
             "permits_check_seconds": PERMIT_CHECK_SECONDS,
+            # This client re-asks on a refused batch itself, so the page need not; an older one sends nothing.
+            "checks_on_refusal": True,
             "backoff_seconds": self._backoff,
             "last_error": self._last_error,
         }

@@ -213,7 +213,9 @@ class DeviceSession:
                     try:
                         await self._task
                     except asyncio.CancelledError:
-                        pass
+                        # The stream's own end is swallowed; one aimed at this stop (shutdown) is not.
+                        if asyncio.current_task().cancelling():
+                            raise
                     self._task = None
                 # Can block on socket shutdown/thread joins.
                 await asyncio.to_thread(self.adapter.disconnect)

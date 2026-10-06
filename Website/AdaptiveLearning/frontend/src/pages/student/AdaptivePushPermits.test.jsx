@@ -463,12 +463,14 @@ it('retries the stop of a pairing it abandoned, when that stop failed', async ()
     'The headband was disconnected.', { description: DECLINED_HEADBAND }))
 }, TEST_TIMEOUT)
 
-// The sidecar's answer as its push status passes it on: the backend's, observed `age` seconds ago.
-const sidecarSays = (states, age = 0.05) => ({ permits: buildRecordingPermits(states), permits_age_seconds: age })
+// The sidecar's answer as its push status passes it on: the backend's, observed `age` seconds ago, by a
+// sidecar asking every `check` seconds (as short as this file's page poll, so a quiet sidecar shows quickly).
+const sidecarSays = (states, age = 0.05, check = 0.3) => ({
+  permits: buildRecordingPermits(states), permits_age_seconds: age, permits_check_seconds: check })
 
-/** Render, start a lesson under a fresh sidecar answer, and return a window three page polls long. */
-async function inLessonWithTheSidecarAnswering() {
-  rig.sidecar = sidecarSays({})
+/** Render, start a lesson under a fresh sidecar answer, and check the page then asks nothing itself. */
+async function inLessonWithTheSidecarAnswering(sidecar = sidecarSays({})) {
+  rig.sidecar = sidecar
   render(<Adaptive />)
   // The control: how long three of the page's own answers take, which bounds the windows below.
   const started = Date.now()
@@ -502,6 +504,47 @@ it("stops asking for itself while the sidecar's answer is recent, and asks again
   await waitFor(() => expect(permitCalls()).toBeGreaterThan(quiet))
 }, TEST_TIMEOUT)
 
+it("trusts the sidecar's answer for as long as the sidecar's own check interval says", async () => {
+  // Asking every 10 s, an answer 1 s old is current, though older than 1.5 of the page's own polls.
+  await inLessonWithTheSidecarAnswering(sidecarSays({}, 1, 10))
+}, TEST_TIMEOUT)
+
+it('keeps taking answers after the clock is set back', async () => {
+  rig.cameraRunning = true
+  render(<Adaptive />)
+  await screen.findByRole('button', { name: /turn off/i })
+  await answersLanded(1)
+  const realNow = Date.now.bind(Date)
+  const behind = vi.spyOn(Date, 'now').mockImplementation(() => realNow() - 3_600_000)
+  try {
+    answer = () => buildRecordingPermits({ camera: 'declined' })
+    await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('camera'))
+  } finally {
+    behind.mockRestore()
+  }
+})
+
+it('acts on a refusal it held back for a Turn off that then failed, though the answer never changes', async () => {
+  rig.cameraRunning = true
+  render(<Adaptive />)
+  const off = await screen.findByRole('button', { name: /turn off/i })
+  await answersLanded(1)
+  let failTurnOff
+  deviceStop.mockImplementationOnce(() => new Promise((_, reject) => { failTurnOff = reject }))
+  // After the failed Turn off, the device list still shows the camera.
+  releasePushIfIdle.mockResolvedValueOnce(
+    { stopped: false, devices: [{ device_id: 'camera', kind: 'face', running: true }] })
+  fireEvent.click(off)
+  await waitFor(() => expect(deviceStop).toHaveBeenCalledTimes(1))
+  // The refusal lands while that Turn off is still under way, so it is left to it.
+  answer = () => buildRecordingPermits({ camera: 'declined' })
+  await answersLanded(2)
+  expect(deviceStop).toHaveBeenCalledTimes(1)
+  failTurnOff(new Error('sidecar busy'))
+  await waitFor(() => expect(deviceStop).toHaveBeenCalledTimes(2))
+  await screen.findByRole('button', { name: /turn on camera/i })
+})
+
 it('asks for itself again when the sidecar stops answering at all', async () => {
   const quiet = await inLessonWithTheSidecarAnswering()
   rig.sidecarDown = true
@@ -516,7 +559,7 @@ it("does not let the sidecar's older answer undo a refusal the page has just had
   await waitFor(() => expect(turnOn).toBeEnabled())
   // From here the sidecar keeps reporting a permit it observed just before the click.
   const observed = Date.now()
-  rig.sidecar = () => ({ permits: buildRecordingPermits(), permits_age_seconds: (Date.now() - observed) / 1000 + 0.001 })
+  rig.sidecar = () => sidecarSays({}, (Date.now() - observed) / 1000 + 0.001)
   const reEnabled = []
   const watch = new MutationObserver(() => { if (!turnOn.disabled) reEnabled.push(Date.now()) })
   watch.observe(turnOn, { attributes: true, attributeFilter: ['disabled'] })

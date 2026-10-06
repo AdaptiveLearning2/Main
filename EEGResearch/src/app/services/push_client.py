@@ -148,6 +148,8 @@ class PushClient:
         # The latest landed answer, or None: send everything and let the backend decide.
         self._permits: _Permits | None = None
         self._permits_due = 0.0
+        # Set by `recheck()` until the next check lands or fails; see `_held_back`.
+        self._permits_stale = False
         # Stops the running devices of a refused sensor ("camera", "headband"), while the second argument
         # says the refusing session is still current; the page may be gone.
         self._on_refused: _RefusalHandler | None = None
@@ -161,8 +163,8 @@ class PushClient:
     def recheck(self) -> None:
         """Ask again before the next send: a device just started, and must not be judged by an older answer.
 
-        The answer is dropped now, not when the new one lands, so a send already under way withholds nothing."""
-        self._permits = None
+        Until the new one lands, readings the old answer refuses are held, not dropped and not sent."""
+        self._permits_stale = True
         self._permits_due = 0.0
         self._wake.set()
 
@@ -298,6 +300,7 @@ class PushClient:
         # The answer was about this student; the next session asks afresh.
         self._permits = None
         self._permits_due = 0.0
+        self._permits_stale = False
 
     # ── producing ────────────────────────────────────────────────────────────
 
@@ -458,8 +461,11 @@ class PushClient:
             raise
         except Exception as exc:  # noqa: BLE001 - an older backend 404s; the backend still gates
             logger.info("push: could not check what may be recorded (%s); keeping the last answer", exc)
+            # The last answer stands, so nothing is left waiting for a newer one.
+            self._permits_stale = False
             return
         self._permits = permits
+        self._permits_stale = False
         for sensor in (s for s, verdict in permits.sensors.items() if verdict["refused"]):
             task = self._refusal_tasks.get(sensor)
             # One at a time per sensor, and per sensor: a slow camera stop must not hold up the headband's.
@@ -486,14 +492,23 @@ class PushClient:
         state = self._permits.states.get(consent, "unknown") if self._permits else "unknown"
         return state not in ("permitted", "unknown")
 
+    def _consent_of(self, channel: str, sample: dict[str, Any]) -> str | None:
+        """The consent channel a sample is recorded under; heart goes by its sensor, from the answer."""
+        if channel != "heart":
+            return _CHANNEL_CONSENT[channel]
+        return self._permits.heart_sources.get(sample.get("source")) if self._permits else None
+
+    def _held_back(self, channel: str, samples: list[dict[str, Any]]) -> bool:
+        """A fresh answer is on its way and the old one refuses some of these: they wait for it."""
+        return self._permits_stale and any(self._refused(self._consent_of(channel, s)) for s in samples)
+
     def _withhold(self, channel: str, samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Drop the samples the latest answer refuses, counted as declined with the backend's reason."""
         if self._permits is None:
             return samples
         kept = []
         for sample in samples:
-            consent = (self._permits.heart_sources.get(sample.get("source")) if channel == "heart"
-                       else _CHANNEL_CONSENT[channel])
+            consent = self._consent_of(channel, sample)
             if not self._refused(consent):
                 kept.append(sample)
                 continue
@@ -522,7 +537,12 @@ class PushClient:
         delivered = False
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             for channel in _CHANNELS:
-                samples = self._withhold(channel, self._take(channel))
+                samples = self._take(channel)
+                if self._held_back(channel, samples):
+                    # Neither dropped on the old answer nor sent: the next flush judges them by the new one.
+                    self._restore(channel, samples)
+                    continue
+                samples = self._withhold(channel, samples)
                 if not samples:
                     continue
                 try:
@@ -654,6 +674,8 @@ class PushClient:
             # The states this session sends by, and their age, which the lesson page uses in place of its own poll.
             "permits": self._permits.answer() if self._permits else None,
             "permits_age_seconds": round(time.monotonic() - self._permits.at, 1) if self._permits else None,
+            # How often it asks, so the page can tell a current answer from one the sidecar stopped renewing.
+            "permits_check_seconds": PERMIT_CHECK_SECONDS,
             "backoff_seconds": self._backoff,
             "last_error": self._last_error,
         }

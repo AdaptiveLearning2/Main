@@ -1422,13 +1422,49 @@ async def test_shutdown_cancels_a_device_stop_still_under_way(permits):
 
 
 @pytest.mark.anyio
-async def test_a_recheck_drops_the_answer_at_once(permits):
-    """A send already under way must not withhold a just-started sensor's readings on the old answer."""
+async def test_a_recheck_holds_what_the_old_answer_refuses_until_the_new_one(permits):
+    """A send the recheck did not get ahead of neither drops nor sends on the old answer."""
     await _started(permits)
-    await _answer(permits, camera="declined")
+    await _answer(permits, eeg="declined")
     permits.recheck()
-    assert permits.status()["permits"] is None
-    assert permits._withhold("face", [{"ts": "a"}]) == [{"ts": "a"}]
+    permits.enqueue("cognitive", {"ts": "a"})
+    permits.enqueue("face", {"ts": "a"})
+    await permits._flush_once()
+    assert _posted(permits) == ["face"]
+    status = permits.status()
+    assert (status["declined"]["cognitive"], status["queued"]["cognitive"]) == (0, 1)
+    # The new answer: EEG back on, so the reading that waited goes.
+    await _answer(permits)
+    await permits._flush_once()
+    assert _posted(permits) == ["face", "cognitive"]
+    await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_a_recheck_that_confirms_the_refusal_withholds_as_before(permits):
+    await _started(permits)
+    await _answer(permits, eeg="declined")
+    permits.recheck()
+    await _answer(permits, eeg="declined")
+    permits.enqueue("cognitive", {"ts": "a"})
+    await permits._flush_once()
+    status = permits.status()
+    assert (status["declined"]["cognitive"], status["queued"]["cognitive"]) == (1, 0)
+    await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_a_recheck_that_fails_leaves_the_last_answer_standing(permits):
+    await _started(permits)
+    await _answer(permits, eeg="declined")
+    permits.recheck()
+    permits._fake.status = 503
+    permits._permits_due = 0.0
+    await permits._check_permits_if_due()
+    permits.enqueue("cognitive", {"ts": "a"})
+    await permits._flush_once()
+    status = permits.status()
+    assert (status["declined"]["cognitive"], status["queued"]["cognitive"]) == (1, 0)
     await permits.stop()
 
 
@@ -1440,6 +1476,8 @@ async def test_the_status_passes_on_the_backends_answer(permits):
     passed_on = permits.status()["permits"]
     assert passed_on == _backend_answer({**ALL_PERMITTED, "eeg": "declined", "headband_optical": "declined"})
     assert passed_on["sensors"]["headband"] == {"allowed": False, "refused": True}
+    # With how often it asks, which is what the page judges the answer's age against.
+    assert permits.status()["permits_check_seconds"] == PERMIT_CHECK_SECONDS
     await permits.stop()
 
 

@@ -453,6 +453,33 @@ def test_two_stops_at_once_never_release_the_adapter_at_the_same_time():
     assert overlaps == []
 
 
+def test_a_stop_cancelled_while_its_stream_winds_down_is_cancelled_not_swallowed():
+    """Shutdown cancels a stop; one that swallowed it would carry on into a disconnect that can hang."""
+    session = _session()
+    disconnects = []
+    session.adapter.disconnect = lambda: disconnects.append(1)
+
+    async def run():
+        winding_down = asyncio.Event()
+
+        async def slow_stream():
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                winding_down.set()
+                await asyncio.sleep(0.5)
+                raise
+        session.running = True
+        session._task = asyncio.create_task(slow_stream())
+        stop = asyncio.create_task(session.stop())
+        await winding_down.wait()
+        stop.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stop
+    asyncio.run(run())
+    assert disconnects == []
+
+
 def test_a_stop_cancelled_mid_disconnect_still_forgets_the_session():
     """Otherwise the next student on this device inherits the last one's baseline."""
     session = _session()

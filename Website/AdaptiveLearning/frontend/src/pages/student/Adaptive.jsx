@@ -70,8 +70,9 @@ const CHANNEL_LABELS = [
 
 // `GET /api/recording/me` (push only). The verdicts are the backend's `sensors`; the states only pick words.
 const PERMIT_TIMEOUT_MS = 8000
-// A sidecar answer stands in for the page's own while observed within this many of its poll intervals.
-const SIDECAR_FRESH_POLLS = 1.5
+// A sidecar answer stands in for the page's own while observed within this many of the sidecar's own check
+// intervals (its push status says how long one is); a missed check or two, not a sidecar gone quiet.
+const SIDECAR_FRESH_CHECKS = 1.5
 const PERMIT_REASONS = {
   // Names no one: the student may have withdrawn it themselves.
   declined: "it isn't permitted (see Sensors on your Profile)",
@@ -255,9 +256,11 @@ export default function Adaptive() {
   // The latest applied `/api/recording/me` answer (see `permitVerdicts`); the ref is for loops between renders.
   const [permits, setPermits] = useState({ answer: undefined })
   const permitsRef = useRef(undefined)
-  // When the applied answer was observed (ms), and when the sidecar last observed one the page took.
+  // When the applied answer was observed, and when the sidecar last observed one the page took; on
+  // `performance.now()`, which a clock set back cannot rewind. And how long the sidecar's answer is trusted.
   const permitsAt = useRef(-Infinity)
   const sidecarAt = useRef(-Infinity)
+  const sidecarTrustMs = useRef(PUSH_POLL_MS * SIDECAR_FRESH_CHECKS)
   // Devices with a stop under way, kept until an effect sees them off: an effect from a render before
   // the stop's state update still sees them on, and must not stop them again (see `enforcePermits`).
   const stoppingIds = useRef(new Set())
@@ -269,13 +272,15 @@ export default function Adaptive() {
     permitsAt.current = at
     const same = JSON.stringify(answer) === JSON.stringify(permitsRef.current)
     permitsRef.current = answer
-    // Unchanged, no re-render; but a failed stop is retried by the next answer, so that one renders.
-    if (same && !stopFailed.current.camera && !stopFailed.current.headband) return
+    // Unchanged and refusing nothing, no re-render. A refusal renders every time: the next answer is
+    // what retries a stop that did not happen, a failed one or one a failed Turn off stood in for.
+    const v = permitVerdicts(answer)
+    if (same && !v.camera.refused && !v.headband.refused) return
     setPermits({ answer })
   }
   // Resolves to this request's own answer: a click decides on what it just asked, whatever else landed.
   const checkPermits = () => {
-    const at = Date.now()
+    const at = performance.now()
     return apiFetch('/api/recording/me', { timeoutMs: PERMIT_TIMEOUT_MS })
       .catch(() => null)
       .then(answer => {
@@ -284,9 +289,10 @@ export default function Adaptive() {
       })
   }
   // The sidecar's answer, from its push status: observed `ageSeconds` ago, by the same backend.
-  const takeSidecarPermits = useEffectEvent((answer, ageSeconds) => {
-    const at = Date.now() - ageSeconds * 1000
+  const takeSidecarPermits = useEffectEvent((answer, ageSeconds, checkSeconds) => {
+    const at = performance.now() - ageSeconds * 1000
     sidecarAt.current = Math.max(sidecarAt.current, at)
+    if (typeof checkSeconds === 'number') sidecarTrustMs.current = checkSeconds * 1000 * SIDECAR_FRESH_CHECKS
     applyPermits(at, answer)
   })
   const headbandRefused = () => permitVerdicts(permitsRef.current).headband.refused
@@ -464,7 +470,7 @@ export default function Adaptive() {
   const sensorOn = camera.running || camera.busy || headband.connected || headband.phase !== 'idle'
     || stations.some(s => s.running)
   // Nor while the sidecar's answer (push status) is recent: one asker per lesson, until the sidecar goes quiet.
-  const sidecarRecent = () => Date.now() - sidecarAt.current < PUSH_POLL_MS * SIDECAR_FRESH_POLLS
+  const sidecarRecent = () => performance.now() - sidecarAt.current < sidecarTrustMs.current
   usePoll(() => ((document.hidden && !sensorOn) || sidecarRecent() ? null : checkPermits()),
     { intervalMs: PUSH_POLL_MS, enabled: headband.pushMode === true, pauseWhenHidden: false })
 
@@ -1057,13 +1063,14 @@ export default function Adaptive() {
         // A restarted sidecar has no token; skip `enabled: false` (config, would 409).
         if (d.enabled !== false && !d.running) recover()
         // The sidecar's answer goes to the permit state, not here: its age differs on every read.
-        const { permits: sidecarAnswer, permits_age_seconds: sidecarAge, ...status } = d
+        const { permits: sidecarAnswer, permits_age_seconds: sidecarAge, permits_check_seconds: sidecarCheck,
+                ...status } = d
         // Reachable and running are separate claims; `answered`: only a status says whether it reports results.
         setPush(p => {
           const next = { ...(p || {}), ...status, reachable: true, running: !!d.enabled && !!d.running, answered: true }
           return JSON.stringify(next) === JSON.stringify(p) ? p : next
         })
-        if (sidecarAnswer && typeof sidecarAge === 'number') takeSidecarPermits(sidecarAnswer, sidecarAge)
+        if (sidecarAnswer && typeof sidecarAge === 'number') takeSidecarPermits(sidecarAnswer, sidecarAge, sidecarCheck)
       })
       .catch(() => {
         if (killed) return

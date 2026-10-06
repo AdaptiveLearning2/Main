@@ -648,11 +648,25 @@ def test_end_session_forgets_the_pending_run_where_a_gap_keeps_it():
 
 def test_stop_and_the_push_session_end_both_reach_clear_session_and_end_session():
     """push/stop is push's only session end; the stream stays up."""
+    import asyncio
     import inspect
     from src.app import main as sidecar_main
+    from src.app.config import DeviceConfig, get_settings
     from src.app.services.stream_manager import DeviceSession, StreamManager
-    stop_src = inspect.getsource(DeviceSession.stop)
-    assert "processor.clear_session()" in stop_src and "adaptation.end_session()" in stop_src
+    # Driven, not read: the cleanup may live in a helper `stop()` calls.
+    session = DeviceSession("station1", get_settings(),
+                            DeviceConfig(device_id="station1", kind="sim", host="127.0.0.1", port=8765))
+    calls = []
+    session.processor.clear_session = lambda: calls.append("clear_session")
+    session.adaptation.end_session = lambda: calls.append("end_session")
+    session.adapter.disconnect = lambda: None
+
+    async def stop_a_running_stream():
+        session.running = True
+        session._task = asyncio.create_task(asyncio.sleep(60))
+        await session.stop()
+    asyncio.run(stop_a_running_stream())
+    assert {"clear_session", "end_session"} <= set(calls)
     end_src = inspect.getsource(StreamManager.end_session)
     assert "processor.clear_session()" in end_src and "adaptation.end_session()" in end_src
     assert "stream_manager.end_session()" in inspect.getsource(sidecar_main.push_stop)

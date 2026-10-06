@@ -148,8 +148,9 @@ class PushClient:
         # The latest landed answer, or None: send everything and let the backend decide.
         self._permits: _Permits | None = None
         self._permits_due = 0.0
-        # Set by `recheck()` until the next check lands or fails; see `_held_back`.
+        # Set by `recheck()` until a check begun after it lands; see `_held_back`. Counted per recheck.
         self._permits_stale = False
+        self._permits_generation = 0
         # Stops the running devices of a refused sensor ("camera", "headband"), while the second argument
         # says the refusing session is still current; the page may be gone.
         self._on_refused: _RefusalHandler | None = None
@@ -165,6 +166,7 @@ class PushClient:
 
         Until the new one lands, readings the old answer refuses are held, not dropped and not sent."""
         self._permits_stale = True
+        self._permits_generation += 1
         self._permits_due = 0.0
         self._wake.set()
 
@@ -255,6 +257,14 @@ class PushClient:
                     raise
         if not (flush and self._token):
             return
+        if self._permits_stale:
+            # Held readings get the fresh answer if the budget allows; the final flush then holds nothing.
+            self._permits_due = 0.0
+            try:
+                async with asyncio.timeout(max(0.0, deadline - time.monotonic())):
+                    await self._check_permits_if_due()
+            except TimeoutError:
+                pass
         # Loop until empty: `_flush_once` takes at most MAX_BATCH per channel.
         for _ in range(MAX_SHUTDOWN_FLUSHES):
             if not any(self._queues[c] for c in _CHANNELS):
@@ -267,7 +277,7 @@ class PushClient:
             try:
                 # Cancelled at the deadline, as the loop is: the kit ends a sidecar that overruns it.
                 async with budget:
-                    await self._flush_once()
+                    await self._flush_once(final=True)
             except Exception as exc:  # noqa: BLE001 - shutdown must not raise
                 # A TimeoutError the flush raised itself is a failure like any other, not the budget.
                 if isinstance(exc, TimeoutError) and budget.expired():
@@ -444,6 +454,8 @@ class PushClient:
         self._permits_due = time.monotonic() + PERMIT_CHECK_SECONDS
         if not self._token:
             return
+        # Only a check begun after the latest `recheck()` can end its hold.
+        generation = self._permits_generation
         try:
             async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
                 response = await client.get(f"{self._backend_url}/api/recording/me",
@@ -461,11 +473,13 @@ class PushClient:
             raise
         except Exception as exc:  # noqa: BLE001 - an older backend 404s; the backend still gates
             logger.info("push: could not check what may be recorded (%s); keeping the last answer", exc)
-            # The last answer stands, so nothing is left waiting for a newer one.
-            self._permits_stale = False
+            if self._permits_stale:
+                # Still held, not dropped on the old answer; asked again soon rather than in a full interval.
+                self._permits_due = time.monotonic() + FLUSH_SECONDS
             return
         self._permits = permits
-        self._permits_stale = False
+        if generation == self._permits_generation:
+            self._permits_stale = False
         for sensor in (s for s, verdict in permits.sensors.items() if verdict["refused"]):
             task = self._refusal_tasks.get(sensor)
             # One at a time per sensor, and per sensor: a slow camera stop must not hold up the headband's.
@@ -525,11 +539,11 @@ class PushClient:
         logger.warning("push: flush failed (%s), backing off %.0fs",
                        exc, self._backoff)
 
-    async def _flush_once(self) -> None:
+    async def _flush_once(self, *, final: bool = False) -> None:
         """One pass over the channels. A failure in one does not cost the others.
 
         Each channel is drained just before its own POST, so a failure restores only that batch.
-        """
+        `final` (shutdown) holds nothing back: there is no later flush to judge it."""
         session_id, token = self._session_id, self._token
         if not session_id or not token:
             return
@@ -538,7 +552,7 @@ class PushClient:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             for channel in _CHANNELS:
                 samples = self._take(channel)
-                if self._held_back(channel, samples):
+                if not final and self._held_back(channel, samples):
                     # Neither dropped on the old answer nor sent: the next flush judges them by the new one.
                     self._restore(channel, samples)
                     continue

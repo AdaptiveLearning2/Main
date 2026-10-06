@@ -266,16 +266,25 @@ export default function Adaptive() {
   const stoppingIds = useRef(new Set())
   // Whether a sensor's "could not be switched off" was already said, until the sensor is seen off.
   const stopFailed = useRef({ camera: false, headband: false })
+  // State mirrors for timer-driven polls, the reconnect loop, `pagehide` and `applyPermits`, which run
+  // between renders; declared before their first reader.
+  const headbandRef = useRef(headband)
+  const cameraRef = useRef({ id: null, running: false, pushMode: undefined })
+  const stationsRef = useRef([])
+  useEffect(() => { stationsRef.current = stations }, [stations])
   // By when it was observed, not when it arrived: an older answer landing late changes nothing.
   const applyPermits = (at, answer) => {
     if (at <= permitsAt.current) return
     permitsAt.current = at
     const same = JSON.stringify(answer) === JSON.stringify(permitsRef.current)
     permitsRef.current = answer
-    // Unchanged and refusing nothing, no re-render. A refusal renders every time: the next answer is
-    // what retries a stop that did not happen, a failed one or one a failed Turn off stood in for.
+    // Unchanged, no re-render, unless it refuses a sensor that is on: the next answer is what retries a
+    // stop that did not happen, a failed one or one a failed Turn off stood in for.
     const v = permitVerdicts(answer)
-    if (same && !v.camera.refused && !v.headband.refused) return
+    const h = headbandRef.current
+    const refusedAndOn = (v.camera.refused && cameraRef.current.running)
+      || (v.headband.refused && (h.connected || h.phase !== 'idle' || stationsRef.current.some(s => s.running)))
+    if (same && !refusedAndOn) return
     setPermits({ answer })
   }
   // Resolves to this request's own answer: a click decides on what it just asked, whatever else landed.
@@ -302,8 +311,6 @@ export default function Adaptive() {
   const [debugOpen, setDebugOpen]     = useState(true)
   const debugTimer  = useRef(null)
   const phaseTimer  = useRef(null)
-  // State mirrors for timer-driven polls and the reconnect loop.
-  const headbandRef = useRef(headband)
   // The status poll's latest landed answer, which the telemetry poll reuses under pull.
   const lastStatus = useRef(null)
   const recorderRef = useRef(null)
@@ -315,7 +322,6 @@ export default function Adaptive() {
 
   // The camera stops when this page goes away (the headband stays paired): route
   // change via cleanup, tab close via `pagehide`, both reading a synced ref.
-  const cameraRef = useRef({ id: null, running: false, pushMode: undefined })
   useEffect(() => {
     cameraRef.current = { id: camera.id, running: camera.running, pushMode: headband.pushMode }
   })

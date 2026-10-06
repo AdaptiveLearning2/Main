@@ -7,7 +7,7 @@ import types
 
 import pytest
 
-from src.app.services.push_client import (MAX_BATCH, MAX_QUEUE, MIN_BATCH, PERMIT_CHECK_SECONDS,
+from src.app.services.push_client import (FLUSH_SECONDS, MAX_BATCH, MAX_QUEUE, MIN_BATCH, PERMIT_CHECK_SECONDS,
                                           RESULT_FRESH_SECONDS, SHUTDOWN_BUDGET, PushClient)
 
 
@@ -1190,10 +1190,15 @@ class _PermitClient(_FakeClient):
     def __init__(self):
         super().__init__()
         self.states, self.status, self.gets = dict(ALL_PERMITTED), 200, []
+        # Set to an Event to hold the next read open until it is set; the answer is the states at the call.
+        self.gate = None
 
     async def get(self, url, headers=None):
         self.gets.append({"url": url, "headers": headers})
-        return _Response(status_code=self.status, body=_backend_answer(self.states))
+        body, status = _backend_answer(self.states), self.status
+        if self.gate is not None:
+            await self.gate.wait()
+        return _Response(status_code=status, body=body)
 
 
 @pytest.fixture
@@ -1454,18 +1459,54 @@ async def test_a_recheck_that_confirms_the_refusal_withholds_as_before(permits):
 
 
 @pytest.mark.anyio
-async def test_a_recheck_that_fails_leaves_the_last_answer_standing(permits):
+async def test_a_recheck_that_fails_keeps_holding_and_asks_again_soon(permits):
+    """Dropped on the old answer, a re-enabled sensor's readings would be lost to one failed read."""
     await _started(permits)
     await _answer(permits, eeg="declined")
     permits.recheck()
     permits._fake.status = 503
-    permits._permits_due = 0.0
     await permits._check_permits_if_due()
     permits.enqueue("cognitive", {"ts": "a"})
     await permits._flush_once()
     status = permits.status()
-    assert (status["declined"]["cognitive"], status["queued"]["cognitive"]) == (1, 0)
+    assert (status["declined"]["cognitive"], status["queued"]["cognitive"]) == (0, 1)
+    assert permits._permits_due - time.monotonic() <= FLUSH_SECONDS
+    await permits.stop(flush=False)
+
+
+@pytest.mark.anyio
+async def test_a_check_begun_before_a_recheck_does_not_end_its_hold(permits):
+    """Its answer is from before the device started, so the hold waits for one asked after."""
+    await _started(permits)
+    await _answer(permits, eeg="declined")
+    permits._fake.gate = asyncio.Event()
+    permits._permits_due = 0.0
+    in_flight = asyncio.create_task(permits._check_permits_if_due())
+    await _until(lambda: len(permits._fake.gets) == 2)
+    permits.recheck()
+    permits._fake.gate.set()
+    await in_flight
+    permits._fake.gate = None
+    permits.enqueue("cognitive", {"ts": "a"})
+    await permits._flush_once()
+    assert permits.status()["queued"]["cognitive"] == 1
+    # Asked after the start: EEG is back on, and the held reading goes.
+    await _answer(permits)
+    await permits._flush_once()
+    assert _posted(permits) == ["cognitive"]
     await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_a_push_stop_settles_held_readings_with_a_fresh_answer(permits):
+    """The final flush has no later one to wait for: it asks, then sends or withholds, never holds."""
+    await _started(permits)
+    await _answer(permits, eeg="declined")
+    permits.recheck()
+    permits._fake.states = dict(ALL_PERMITTED)
+    permits.enqueue("cognitive", {"ts": "a"})
+    assert await permits.stop()
+    assert "cognitive" in _posted(permits)
 
 
 @pytest.mark.anyio

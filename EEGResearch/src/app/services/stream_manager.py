@@ -213,8 +213,10 @@ class DeviceSession:
                     try:
                         await self._task
                     except asyncio.CancelledError:
-                        # The stream's own end is swallowed; one aimed at this stop (shutdown) is not.
+                        # The stream's own end is swallowed; one aimed at this stop (shutdown) is not,
+                        # and the link is still let go, in the background, so a stuck one cannot hold it.
                         if asyncio.current_task().cancelling():
+                            asyncio.get_running_loop().run_in_executor(None, self._release_quietly)
                             raise
                     self._task = None
                 # Can block on socket shutdown/thread joins.
@@ -223,6 +225,13 @@ class DeviceSession:
                 # Even for a stop cancelled mid-disconnect: the next student must not inherit the baseline.
                 if was_running:
                     self._forget_stream()
+
+    def _release_quietly(self) -> None:
+        """The adapter's disconnect, off the event loop with nobody awaiting it: a failure is logged, not raised."""
+        try:
+            self.adapter.disconnect()
+        except Exception:  # noqa: BLE001 - nothing awaits this to hand an error to
+            logger.warning("%s: background disconnect failed", self.device_id, exc_info=True)
 
     def _forget_stream(self) -> None:
         """A stopped stream is "no data", not its last reading; clear_session(), not reset(), drops the baseline."""

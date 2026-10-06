@@ -453,11 +453,11 @@ def test_two_stops_at_once_never_release_the_adapter_at_the_same_time():
     assert overlaps == []
 
 
-def test_a_stop_cancelled_while_its_stream_winds_down_is_cancelled_not_swallowed():
-    """Shutdown cancels a stop; one that swallowed it would carry on into a disconnect that can hang."""
+def test_a_stop_cancelled_while_its_stream_winds_down_is_cancelled_and_still_releases_the_link():
+    """Shutdown cancels a stop: honoured at once, not after a disconnect that can hang, which runs behind it."""
     session = _session()
-    disconnects = []
-    session.adapter.disconnect = lambda: disconnects.append(1)
+    released = threading.Event()
+    session.adapter.disconnect = released.set
 
     async def run():
         winding_down = asyncio.Event()
@@ -474,10 +474,11 @@ def test_a_stop_cancelled_while_its_stream_winds_down_is_cancelled_not_swallowed
         stop = asyncio.create_task(session.stop())
         await winding_down.wait()
         stop.cancel()
+        # Raised, not swallowed: a swallowed cancel would carry on into the disconnect and return.
         with pytest.raises(asyncio.CancelledError):
             await stop
+        assert await asyncio.to_thread(released.wait, 5), "the link was never let go"
     asyncio.run(run())
-    assert disconnects == []
 
 
 def test_a_stop_cancelled_mid_disconnect_still_forgets_the_session():

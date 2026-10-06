@@ -1097,12 +1097,14 @@ export default function Adaptive() {
         // The same array, and below the same object, when nothing changed: such a read renders nothing.
         setRecording(r => (r.join() === labels.join() ? r : labels))
         lastRecorded.current = now
-        // Declined despite the latest answer, which is then stale (a withdrawal): ask now, once per change.
-        const results = d.last_result || {}
-        if (CHANNEL_LABELS.some(([k]) => results[k] === 'declined' && lastResults.current[k] !== 'declined')) {
+        // Newly declined, so the latest answer may be stale (a withdrawal): ask now, unless the sidecar does
+        // (`checks_on_refusal`). A result gone stale (null) keeps the one before it, or a gap would ask again.
+        const results = Object.fromEntries(Object.entries(d.last_result || {}).filter(([, r]) => r != null))
+        if (!d.checks_on_refusal
+            && CHANNEL_LABELS.some(([k]) => results[k] === 'declined' && lastResults.current[k] !== 'declined')) {
           askPermitsNow()
         }
-        lastResults.current = results
+        lastResults.current = { ...lastResults.current, ...results }
         // A restarted sidecar has no token; skip `enabled: false` (config, would 409).
         if (d.enabled !== false && !d.running) recover()
         // The sidecar's answer goes to the permit state, not here: its age differs on every read.

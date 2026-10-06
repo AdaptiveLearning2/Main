@@ -614,6 +614,38 @@ def test_a_fully_consented_batch_reports_no_reason(store):
     assert _post_heart([_heart()])["reason"] is None
 
 
+@pytest.mark.parametrize("endpoint", ["cognitive", "face", "heart"])
+def test_a_drop_for_want_of_permission_is_marked_refused(store, endpoint):
+    """The sidecar re-asks what may be recorded on `refused`; any other drop must not set it."""
+    _consent(store)
+
+    assert _post(endpoint)["refused"] is True
+
+
+@pytest.mark.parametrize("endpoint,flag", [("cognitive", "recording_eeg_enabled"),
+                                           ("face", "recording_camera_enabled")])
+def test_a_drop_for_a_switched_off_channel_is_marked_refused(store, set_flag, endpoint, flag):
+    _consent(store, eeg_enabled=True, camera_enabled=True)
+    set_flag(flag, False)
+
+    assert _post(endpoint)["refused"] is True
+
+
+def test_heart_marks_a_declined_sensor_refused_and_an_unknown_one_not(store):
+    _consent(store, headband_optical_enabled=True)
+
+    assert _post_heart([_heart(source="rppg")])["refused"] is True
+    assert _post_heart([_heart(source="mystery", ts="2026-08-09T10:00:01Z")])["refused"] is False
+    assert _post_heart([_heart(ts="2026-08-09T10:00:02Z")])["refused"] is False
+
+
+@pytest.mark.parametrize("endpoint", ["cognitive", "face"])
+def test_a_permitted_batch_is_not_marked_refused(store, endpoint):
+    _consent(store, eeg_enabled=True, camera_enabled=True)
+
+    assert _post(endpoint)["refused"] is False
+
+
 def test_stale_callers_are_evicted_rather_than_accumulating(store, monkeypatch):
     """Entries prune on the caller's next request, which never comes for one who left."""
     _consent(store, headband_optical_enabled=True)

@@ -149,10 +149,9 @@ using `fetch(..., {keepalive: true})`. Without it the sidecar keeps the student'
 recording for up to an hour after they walked away — a consent problem, not untidiness. `sendBeacon`
 cannot be used: it cannot set an `Authorization` header.
 
-`/api/v1/push/start` refuses with 409 when `PUSH_ENABLED` is false rather than becoming a second
-writer alongside a poller. The original reason was that `cognitive_signals` had no dedupe key;
-`cog_session_ts_key` closes that and every writer upserts against it. **The refusal stays**, because
-two writers on one channel is still a deployment nobody chose.
+`/api/v1/push/start` refuses with 409 when `PUSH_ENABLED` is false rather than becoming a second writer alongside a
+poller. Every writer upserts on `cog_session_ts_key`, so nothing would double, but two writers on one channel is a
+deployment nobody chose.
 
 ### The browser calls the sidecar directly, and two tokens are in play
 
@@ -177,43 +176,38 @@ sequence would drift and that sequence is where the ordering matters.
 both modes; the learner token *only* when `PUSH_ENABLED`. Under pull the browser gains nothing,
 because the backend is the legitimate controller there. What it grants is bounded by what the learner
 token already was: any page that could call `/api/v1/push/start` could already make the sidecar stream
-a student's signals. Pinned by
-`test_under_pull_the_learner_token_may_not_drive_the_hardware`.
+a student's signals. Pinned by `test_under_pull_the_learner_token_may_not_drive_the_hardware`.
 
 **Re-hand the token on refresh.** Supabase access tokens expire roughly hourly and a lesson can run
 longer; the sidecar holds one token per session. `Adaptive.jsx` re-calls `startPush` on
 `TOKEN_REFRESHED`, replacing the token in place — same session id, queue untouched. Without it the
 pushes 401 partway through and the samples sit in a bounded queue until dropped.
 
-**Never call `supabase.auth.getSession()` inside an `onAuthStateChange` callback.** supabase-js v2
-holds an internal auth lock while dispatching and `getSession()` waits on it, so awaiting it there
-deadlocks. Use the `session` the callback is handed; that is why `startPush` takes an optional token.
-The symptom is the worst kind: the refresh handler hangs, the sidecar keeps the expired token, and
-every push 401s for the rest of the lesson with nothing raised.
+**Never call `supabase.auth.getSession()` inside an `onAuthStateChange` callback.** supabase-js v2 holds an internal
+auth lock while dispatching and `getSession()` waits on it, so awaiting it there deadlocks. Use the `session` the
+callback is handed; that is why `startPush` takes an optional token. The symptom is the worst kind: the refresh handler
+hangs, the sidecar keeps the expired token, and every push 401s for the rest of the lesson with nothing raised.
 
-**The camera is stopped when the Adaptive page goes away; the headband is not.** The headband stays
-paired across navigation deliberately (the bridge holds the link, re-pairing costs a 12 s scan); a
-webcam has no such cost and the consent copy scopes it to the questions. Two exits, because effect
-cleanup does not run on a tab close: the route change sends `deviceStop`, `pagehide` sends
-`deviceStopOnUnload` with `keepalive`, both reading the camera through a ref synced after every
-render. `AdaptiveCameraLifecycle.test.jsx` pins both, and that a camera already off sends nothing.
+**The camera is stopped when the Adaptive page goes away; the headband is not.** The headband stays paired across
+navigation deliberately (the bridge holds the link, re-pairing costs a 12 s scan); a webcam has no such cost and the
+consent copy scopes it to the questions. Two exits, because effect cleanup does not run on a tab close: the route change
+sends `deviceStop`, `pagehide` sends `deviceStopOnUnload` with `keepalive`, both reading the camera through a ref synced
+after every render. `AdaptiveCameraLifecycle.test.jsx` pins both, and that a camera already off sends nothing.
 
 **No sensor opens until `GET /api/recording/me` says it may record.** Per channel: `permitted`, `declined`,
 `switched_off`, `school_year_{not_started,ended,unconfigured}` or `unknown` (a failed read), any definite refusal above
-`unknown`, plus each `reason`, the `sensors` verdicts and the `heart_sources` map, so no client re-derives them. The camera
-needs `camera`; under push the headband needs `eeg` **or** `headband_optical`; pull's `/api/eeg/start` demands EEG. The page
-gates only switching on — never Turn off, Disconnect or Stop trying — re-asks at the click, and stops what a refusal
-refuses (`enforcePermits`; a failed stop changes no state, the next answer retries). **The push client asks too** while it
-holds a token, every `PERMIT_CHECK_SECONDS`, when a device starts, and when the backend declines a whole batch of a
-channel that was not already declined: it withholds refused channels (counted `declined`) and stops refused sensors
-(`_stop_refused_sensors`, its own task), covering a page that died. In a lesson the page takes that answer from push status
-instead of polling, and asks at once itself when a channel's `last_result` turns to `declined` or a consent write lands in
-this browser (`lib/permitsChanged.js`, a `BroadcastChannel`). **A withdrawal is seen at the next batch**, because the
-backend's gate reads consent per request, so a sensor goes off in ~2 s from the same browser, otherwise ~7 s (one
-`FLUSH_SECONDS` batch and a check), or ~17 s with a sidecar older than that trigger. A failed read keeps the last answer.
+`unknown`, plus each `reason`, the `sensors` verdicts and the `heart_sources` map, so no client re-derives them. The
+camera needs `camera`; under push the headband needs `eeg` **or** `headband_optical`; pull's `/api/eeg/start` demands
+EEG. The page gates only switching on — never Turn off, Disconnect or Stop trying — re-asks at the click, and stops what
+a refusal refuses (`enforcePermits`; a failed stop changes no state, the next answer retries). **The push client asks
+too** while it holds a token: every `PERMIT_CHECK_SECONDS`, when a device starts, and on the first of a run of receipts
+marked `refused` (not an unworn headband's drops). It withholds refused channels (counted `declined`) and stops refused
+sensors (`_stop_refused_sensors`, its own task), covering a page that died. A lesson page takes that answer from push
+status, and asks itself on a consent write in this browser (`lib/permitsChanged.js`) or, if the sidecar lacks
+`checks_on_refusal`, a channel turning `declined`. Withdrawn consent is off in ~2 s from this browser, else ~7 s (~17 s,
+older sidecar); the year and switches are cached 30 s. A failed read keeps the last answer.
 
-All three ingest endpoints are rate-limited and length-bounded. `/api/signals/cognitive` was neither
-until the push client existed, survivable only while its sole writer was the in-process poller.
+All three ingest endpoints are rate-limited and length-bounded.
 
 ## Samples are stored during a session, not while a headband merely sits paired
 

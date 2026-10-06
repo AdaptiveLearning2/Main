@@ -792,6 +792,19 @@ it('asks once per turn to declined, and never for a recorded result', async () =
   await waitFor(() => expect(permitCalls()).toBe(quiet + 1))
   await pollsLanded(3)
   expect(permitCalls()).toBe(quiet + 1)
+  // A gap (the result goes stale), then declined again: the same run, not a new one.
+  rig.sidecar = { ...sidecarSays({}), last_result: { cognitive: null, face: 'recorded' } }
+  await pollsLanded(3)
+  rig.sidecar = { ...sidecarSays({}), last_result: { cognitive: 'declined', face: 'recorded' } }
+  await pollsLanded(3)
+  expect(permitCalls()).toBe(quiet + 1)
+}, TEST_TIMEOUT)
+
+it('leaves asking to a sidecar that re-asks on a refusal itself', async () => {
+  const quiet = await inLessonWithTheSidecarAnswering()
+  rig.sidecar = { ...sidecarSays({}), checks_on_refusal: true, last_result: { face: 'declined' } }
+  await pollsLanded(3)
+  expect(permitCalls()).toBe(quiet)
 }, TEST_TIMEOUT)
 
 it('asks at once when consent changes on another page of this browser', async () => {

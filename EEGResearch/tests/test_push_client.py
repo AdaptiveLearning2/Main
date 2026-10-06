@@ -1345,57 +1345,83 @@ async def test_a_new_session_asks_again(permits):
     await permits.stop()
 
 
-def _backend_answers(pc, inserted, dropped, reason="camera not consented"):
-    """Every post from now on gets this receipt, whatever was sent."""
-    pc._fake._responder = lambda *_a: _Response(
-        body={"ok": True, "inserted": inserted, "dropped": dropped, "reason": reason})
+def _backend_answers(pc, inserted, dropped, refused=None, reason="camera not consented"):
+    """Every post from now on gets this receipt; `refused=None` is an older backend, which sends no such field."""
+    body = {"ok": True, "inserted": inserted, "dropped": dropped, "reason": reason}
+    if refused is not None:
+        body["refused"] = refused
+    pc._fake._responder = lambda *_a: _Response(body=body)
+
+
+async def _asks_after(pc, channel, sample):
+    """Whether one post makes the loop's next pass ask what may be recorded."""
+    reads = len(pc._fake.gets)
+    await _post_one(pc, channel, sample)
+    await pc._check_permits_if_due()
+    return len(pc._fake.gets) > reads
 
 
 @pytest.mark.anyio
-async def test_a_batch_declined_after_a_recorded_one_asks_at_once_and_stops_the_sensor(permits):
+async def test_a_refused_batch_asks_at_once_and_stops_the_sensor(permits):
     """A withdrawal reaches the backend's gate before the next check is due: the camera goes off then."""
     stops, handler = _recorder()
     permits.set_refusal_handler(handler)
     await _started(permits)
     await _answer(permits)
     await _post_one(permits, "face", {"ts": "a"})
-    reads = len(permits._fake.gets)
     permits._fake.states = {**ALL_PERMITTED, "camera": "declined"}
-    _backend_answers(permits, inserted=0, dropped=1)
-    await _post_one(permits, "face", {"ts": "b"})
-    await permits._check_permits_if_due()
+    _backend_answers(permits, inserted=0, dropped=1, refused=True)
+    assert await _asks_after(permits, "face", {"ts": "b"})
     await asyncio.gather(*permits._refusal_tasks.values())
-    assert len(permits._fake.gets) == reads + 1
     assert stops == [{"camera"}]
+    # So the page leaves this to the sidecar.
+    assert permits.status()["checks_on_refusal"] is True
     await permits.stop()
 
 
 @pytest.mark.anyio
-async def test_a_channel_still_declined_does_not_ask_again(permits):
-    """An unworn headband is declined batch after batch: one check when that starts, not one per batch."""
+async def test_a_run_of_refusals_asks_once_and_a_new_run_asks_again(permits):
     await _started(permits)
     await _answer(permits)
-    _backend_answers(permits, inserted=0, dropped=1, reason="no usable reading; check the headband is on")
-    await _post_one(permits, "cognitive", {"ts": "a"})
-    await permits._check_permits_if_due()
-    reads = len(permits._fake.gets)
-    await _post_one(permits, "cognitive", {"ts": "b"})
-    await permits._check_permits_if_due()
-    assert len(permits._fake.gets) == reads
+    _backend_answers(permits, inserted=0, dropped=1, refused=True)
+    assert await _asks_after(permits, "face", {"ts": "a"})
+    assert not await _asks_after(permits, "face", {"ts": "b"})
+    _backend_answers(permits, inserted=1, dropped=0, refused=False)
+    assert not await _asks_after(permits, "face", {"ts": "c"})
+    _backend_answers(permits, inserted=0, dropped=1, refused=True)
+    assert await _asks_after(permits, "face", {"ts": "d"})
     await permits.stop()
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("inserted, dropped", [(1, 0), (1, 1)])
-async def test_a_batch_that_recorded_anything_does_not_ask_early(permits, inserted, dropped):
-    """Partly declined is routine (an unworn tick among worn ones); a withdrawal declines the whole channel."""
+async def test_a_drop_that_is_no_refusal_never_asks(permits):
+    """An unworn headband is declined batch after batch, for a reason no permit answer changes."""
     await _started(permits)
     await _answer(permits)
-    reads = len(permits._fake.gets)
+    _backend_answers(permits, inserted=0, dropped=1, refused=False,
+                     reason="no usable reading; check the headband is on")
+    assert not await _asks_after(permits, "cognitive", {"ts": "a"})
+    assert not await _asks_after(permits, "cognitive", {"ts": "b"})
+    await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_a_partly_refused_batch_asks(permits):
+    """One heart sensor withdrawn while the other still records."""
+    await _started(permits)
+    await _answer(permits)
+    _backend_answers(permits, inserted=1, dropped=1, refused=True)
+    assert await _asks_after(permits, "heart", {"ts": "a", "source": "muse_optics"})
+    await permits.stop()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("inserted, dropped, asks", [(0, 1, True), (1, 1, False), (1, 0, False)])
+async def test_with_an_older_backend_only_a_wholly_declined_batch_asks(permits, inserted, dropped, asks):
+    await _started(permits)
+    await _answer(permits)
     _backend_answers(permits, inserted=inserted, dropped=dropped)
-    await _post_one(permits, "heart", {"ts": "a", "source": "muse_optics"})
-    await permits._check_permits_if_due()
-    assert len(permits._fake.gets) == reads
+    assert await _asks_after(permits, "face", {"ts": "a"}) is asks
     await permits.stop()
 
 

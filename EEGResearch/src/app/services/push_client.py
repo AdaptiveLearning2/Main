@@ -315,7 +315,7 @@ class PushClient:
         self._last_result = {channel: None for channel in _CHANNELS}
         self._last_result_at = {channel: 0.0 for channel in _CHANNELS}
         self._refusing = {channel: False for channel in _CHANNELS}
-        self._batch_limit ={channel: MAX_BATCH for channel in _CHANNELS}
+        self._batch_limit = {channel: MAX_BATCH for channel in _CHANNELS}
         # The answer was about this student; the next session asks afresh.
         self._permits = None
         self._permits_due = 0.0

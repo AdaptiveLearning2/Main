@@ -6556,18 +6556,19 @@ def ingest_heart(payload: HeartBatch, request: Request):
     out_of_window = len(kept) - len(placed)
     kept = placed
 
+    # The consent flags of the sensors whose samples were dropped; an unknown sensor has none.
+    flags = sorted({flag for s in samples if s.source not in allowed
+                    for flag, sources in _HEART_SOURCES_BY_RECORD_FLAG.items() if s.source in sources})
     # Tells "every sensor declined" from "could not find out".
     reason, refused = None, False
     if not allowed:
-        refused = bool(dropped) and _definitely_refused(
-            consent, *(flag.removeprefix("record_") for flag in _HEART_SOURCES_BY_RECORD_FLAG))
+        # Judged by the sensors these readings came from, not every heart sensor.
+        refused = _definitely_refused(consent, *(flag.removeprefix("record_") for flag in flags))
         reason = _not_recording_reason(
             consent, "no consented heart sensor", switches=tuple(_HEART_SOURCES_BY_RECORD_FLAG),
             partly_switched="no heart sensor is both switched on and consented")
     elif dropped:
         # One sensor allowed, samples from another: name that one, so a drop never comes without a why.
-        flags = sorted({flag for s in samples if s.source not in allowed
-                        for flag, sources in _HEART_SOURCES_BY_RECORD_FLAG.items() if s.source in sources})
         # Something is allowed, so the gate was read: a sensor refused here is definitely refused.
         refused = bool(flags)
         reason = "; ".join(_not_recording_reason(consent, _HEART_SENSOR_DECLINED[flag], switches=(flag,))

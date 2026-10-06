@@ -652,6 +652,18 @@ def test_a_drop_for_a_school_year_that_could_not_be_read_is_not_marked_refused(s
     assert out["dropped"] == 1 and out["refused"] is False
 
 
+def test_heart_judges_a_refusal_by_the_sensors_its_readings_came_from(store, set_flag, monkeypatch):
+    """The camera is switched off, but these readings are the headband's, whose state could not be read."""
+    _consent(store, headband_optical_enabled=True, camera_enabled=True)
+    set_flag("recording_camera_enabled", False)
+    monkeypatch.setattr(main, "_retention_window", lambda: {
+        "state": main.WINDOW_UNREADABLE, "starts_on": None, "ends_on": None, "timezone": None})
+
+    out = _post_heart([_heart(source="muse_optics")])
+
+    assert out["dropped"] == 1 and out["refused"] is False
+
+
 @pytest.mark.parametrize("endpoint", ["cognitive", "face"])
 def test_a_permitted_batch_is_not_marked_refused(store, endpoint):
     _consent(store, eeg_enabled=True, camera_enabled=True)

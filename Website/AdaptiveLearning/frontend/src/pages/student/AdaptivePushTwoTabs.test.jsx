@@ -249,6 +249,9 @@ it("leaves another tab's lesson's camera on when a tab with no lesson closes", a
   render(<Adaptive />)
   await screen.findByText('Camera')
   expect(await within(panelOf('Camera')).findByText('on, in another tab')).toBeInTheDocument()
+  // The sentence agrees with the chip, rather than saying nothing records until a lesson starts.
+  expect(within(panelOf('Camera')).getByText(/Its readings go to the lesson in another tab or window/))
+    .toBeInTheDocument()
 
   window.dispatchEvent(new Event('pagehide'))
   cleanup()

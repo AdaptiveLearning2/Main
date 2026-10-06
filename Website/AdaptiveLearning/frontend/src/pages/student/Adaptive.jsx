@@ -546,7 +546,10 @@ export default function Adaptive() {
     if (listed?.running) stoppingIds.current.delete(deviceId)
     if (strict && listed?.running) throw new Error(`${deviceId} is still running after its stop`)
     if (listed || stopped) {
-      setStations(all => all.map(s => (s.device_id === deviceId ? { ...s, running: !!listed?.running } : s)))
+      const running = !!listed?.running
+      // The same array when nothing changed (a camera is no station): an unchanged list renders nothing.
+      setStations(all => (all.some(s => s.device_id === deviceId && s.running !== running)
+        ? all.map(s => (s.device_id === deviceId ? { ...s, running } : s)) : all))
     }
     if (list) {
       const face = list.find(d => d.kind === 'face')

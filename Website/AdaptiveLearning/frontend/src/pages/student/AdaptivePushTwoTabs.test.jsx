@@ -331,7 +331,11 @@ it('says nothing new before a lesson when the status cannot be read', async () =
 }, 30_000)
 
 it('switches the camera off on closing after its own lesson ended, while the sidecar still names that lesson', async () => {
+  // Another tab's lesson holds the sidecar first, so this lesson is this tab's by its own hand-over, not a recovery.
+  rig.owner = 'sess-other'
   render(<Adaptive />)
+  await screen.findByText('Camera')
+  await within(panelOf('Camera')).findByText('on, in another tab')
   fireEvent.click(await screen.findByRole('button', { name: /generate question/i }))
   await screen.findByText('What is 2 + 2?')
   await pollsLanded(2)

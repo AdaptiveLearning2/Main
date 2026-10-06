@@ -1349,6 +1349,35 @@ def test_shutdown_unhooks_the_stream_then_flushes_the_push_client(monkeypatch):
     assert calls == [("consumer", None), "stop"]
 
 
+def test_a_refusal_stops_the_running_devices_of_that_sensor_only(monkeypatch):
+    """The push client's check calls this; the lesson page that would stop them may be gone."""
+    import src.app.main as sidecar
+
+    stopped = []
+
+    async def stop(device_id):
+        stopped.append(device_id)
+
+    monkeypatch.setattr(sidecar.stream_manager, "list_devices", lambda: [
+        {"device_id": "default", "kind": "muse", "running": True},
+        {"device_id": "spare", "kind": "sim", "running": False},
+        {"device_id": "camera", "kind": "face", "running": True}])
+    monkeypatch.setattr(sidecar.stream_manager, "stop", stop)
+    asyncio.run(sidecar._stop_refused_sensors({"camera"}))
+    assert stopped == ["camera"]
+    asyncio.run(sidecar._stop_refused_sensors({"headband"}))
+    assert stopped == ["camera", "default"]
+
+
+def test_the_push_client_is_built_to_stop_refused_sensors(monkeypatch):
+    import src.app.main as sidecar
+
+    monkeypatch.setattr(sidecar.settings, "push_enabled", True)
+    assert sidecar._make_push_client()._on_refused is sidecar._stop_refused_sensors
+    monkeypatch.setattr(sidecar.settings, "push_enabled", False)
+    assert sidecar._make_push_client() is None
+
+
 def test_no_on_event_hook_sits_beside_the_lifespan():
     """With `lifespan=` set, FastAPI never runs an `@app.on_event` hook: that work belongs in `_lifespan`."""
     assert app.router.on_startup == [] and app.router.on_shutdown == []

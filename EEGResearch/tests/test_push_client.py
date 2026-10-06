@@ -7,8 +7,8 @@ import types
 
 import pytest
 
-from src.app.services.push_client import (MAX_BATCH, MAX_QUEUE, MIN_BATCH, RESULT_FRESH_SECONDS,
-                                          SHUTDOWN_BUDGET, PushClient)
+from src.app.services.push_client import (MAX_BATCH, MAX_QUEUE, MIN_BATCH, PERMIT_CHECK_SECONDS,
+                                          RESULT_FRESH_SECONDS, SHUTDOWN_BUDGET, PushClient)
 
 
 @pytest.fixture
@@ -1156,3 +1156,174 @@ async def test_the_synthetic_mark_travels_top_level_not_inside_raw(client):
                   "ts": "2026-08-10T10:00:10+00:00"},
     })
     assert client._queues["heart"][1]["synthetic"] is None
+
+
+# ── what the student may record: withheld, and refused sensors stopped ───────
+
+ALL_PERMITTED = {"eeg": "permitted", "headband_optical": "permitted", "camera": "permitted"}
+
+
+class _PermitClient(_FakeClient):
+    """Also answers `GET /api/recording/me` with `states`, recording each read."""
+
+    def __init__(self):
+        super().__init__()
+        self.states, self.status, self.gets = dict(ALL_PERMITTED), 200, []
+
+    async def get(self, url, headers=None):
+        self.gets.append({"url": url, "headers": headers})
+        return _Response(status_code=self.status, body={c: {"state": s} for c, s in self.states.items()})
+
+
+@pytest.fixture
+def permits(monkeypatch):
+    fake = _PermitClient()
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient", lambda **_k: fake)
+    pc = PushClient("http://backend:8000")
+    pc._fake = fake
+    return pc
+
+
+async def _answer(pc, **states):
+    """One check, now, answering `states` over all-permitted."""
+    pc._fake.states = {**ALL_PERMITTED, **states}
+    pc._permits_due = 0.0
+    await pc._check_permits_if_due()
+
+
+def _posted(pc):
+    return [call["url"].rsplit("/", 1)[1] for call in pc._fake.calls]
+
+
+def _recorder():
+    stops = []
+
+    async def handler(sensors):
+        stops.append(sensors)
+    return stops, handler
+
+
+@pytest.mark.anyio
+async def test_the_session_asks_what_it_may_record_with_the_students_token(permits):
+    await _started(permits, token="tok")
+    await _answer(permits)
+    assert permits._fake.gets
+    assert all(g == {"url": "http://backend:8000/api/recording/me", "headers": {"Authorization": "Bearer tok"}}
+               for g in permits._fake.gets)
+    await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_a_refused_channel_is_withheld_and_reads_as_declined(permits):
+    """Not sent at all, and the page still names why, as it does for a backend decline."""
+    await _started(permits)
+    await _answer(permits, eeg="declined")
+    permits.enqueue("cognitive", {"ts": "a"})
+    permits.enqueue("face", {"ts": "a"})
+    await permits._flush_once()
+    assert _posted(permits) == ["face"]
+    status = permits.status()
+    assert status["declined"]["cognitive"] == 1
+    assert status["declined_reason"]["cognitive"] == "eeg not consented"
+    assert status["last_result"]["cognitive"] == "declined"
+    assert status["recorded"]["face"] == 1
+    await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_heart_readings_are_withheld_by_their_sensor(permits):
+    await _started(permits)
+    await _answer(permits, camera="switched_off")
+    permits.enqueue("heart", {"ts": "a", "source": "rppg"})
+    permits.enqueue("heart", {"ts": "b", "source": "muse_optics"})
+    await permits._flush_once()
+    [call] = permits._fake.calls
+    assert [s["source"] for s in call["json"]["samples"]] == ["muse_optics"]
+    assert permits.status()["declined_reason"]["heart"] == "recording is switched off by an administrator"
+    await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_no_answer_or_an_unknown_one_withholds_nothing(permits):
+    """An older backend 404s the check; the backend's own gate still decides."""
+    permits._fake.status = 404
+    await _started(permits)
+    await _answer(permits)
+    assert permits.status()["permits"] is None
+    permits.enqueue("cognitive", {"ts": "a"})
+    await permits._flush_once()
+    permits._fake.status = 200
+    await _answer(permits, eeg="unknown")
+    permits.enqueue("cognitive", {"ts": "b"})
+    await permits._flush_once()
+    assert _posted(permits) == ["cognitive", "cognitive"]
+    assert permits.status()["declined"]["cognitive"] == 0
+    await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_refused_sensors_are_stopped_the_headband_only_when_both_its_channels_are(permits):
+    stops, handler = _recorder()
+    permits.set_refusal_handler(handler)
+    await _started(permits)
+    await _answer(permits, eeg="declined")
+    await _answer(permits, camera="declined")
+    await _answer(permits, eeg="declined", headband_optical="school_year_ended")
+    assert stops == [{"camera"}, {"headband"}]
+    await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_a_failed_check_keeps_the_last_answer_and_stops_nothing(permits):
+    stops, handler = _recorder()
+    permits.set_refusal_handler(handler)
+    await _started(permits)
+    await _answer(permits, camera="declined")
+    permits._fake.status = 503
+    permits._permits_due = 0.0
+    await permits._check_permits_if_due()
+    assert stops == [{"camera"}]
+    permits.enqueue("face", {"ts": "a"})
+    await permits._flush_once()
+    assert _posted(permits) == []
+    await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_the_check_waits_its_interval(permits, monkeypatch):
+    real, skew = time.monotonic, [0.0]
+    monkeypatch.setattr("src.app.services.push_client.time",
+                        types.SimpleNamespace(monotonic=lambda: real() + skew[0]))
+    await _started(permits)
+    await _answer(permits)
+    reads = len(permits._fake.gets)
+    await permits._check_permits_if_due()
+    assert len(permits._fake.gets) == reads
+    skew[0] = PERMIT_CHECK_SECONDS
+    await permits._check_permits_if_due()
+    assert len(permits._fake.gets) == reads + 1
+    await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_a_new_session_asks_again(permits):
+    await _started(permits, session_id="s1")
+    await _answer(permits, camera="declined")
+    await permits.start("s2", "tok2")
+    assert permits.status()["permits"] is None
+    await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_the_loop_checks_on_time_even_while_backing_off(permits, monkeypatch):
+    monkeypatch.setattr("src.app.services.push_client.PERMIT_CHECK_SECONDS", 0.05)
+    await _started(permits)
+    # A long backoff, as a backend refusing batches leaves.
+    permits._backoff, permits._retry_at = 60.0, time.monotonic() + 60.0
+    reads = len(permits._fake.gets)
+    for _ in range(200):
+        if len(permits._fake.gets) >= reads + 3:
+            break
+        await asyncio.sleep(0.01)
+    assert len(permits._fake.gets) >= reads + 3
+    await permits.stop(flush=False)

@@ -23,8 +23,28 @@ from src.app.services.stream_manager import StreamManager, UnknownDeviceError
 logger = logging.getLogger(__name__)
 settings = get_settings()
 stream_manager = StreamManager()
-# None when push is off, so there is no instance to start by accident and duplicate writers.
-push_client = PushClient(settings.backend_url) if settings.push_enabled else None
+
+
+async def _stop_refused_sensors(sensors: set[str]) -> None:
+    """Stop each running device of a sensor the backend refuses: the lesson page that would may be gone."""
+    for device in stream_manager.list_devices():
+        sensor = "camera" if device["kind"] == "face" else "headband"
+        if device["running"] and sensor in sensors:
+            logger.warning("push: stopping %s; recording from the %s is not permitted",
+                           device["device_id"], sensor)
+            await stream_manager.stop(device["device_id"])
+
+
+def _make_push_client() -> PushClient | None:
+    """None when push is off, so there is no instance to start by accident and duplicate writers."""
+    if not settings.push_enabled:
+        return None
+    client = PushClient(settings.backend_url)
+    client.set_refusal_handler(_stop_refused_sensors)
+    return client
+
+
+push_client = _make_push_client()
 
 
 @asynccontextmanager

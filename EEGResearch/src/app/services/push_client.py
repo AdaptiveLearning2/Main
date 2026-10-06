@@ -11,6 +11,7 @@ import asyncio
 import logging
 import time
 from collections import deque
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -50,6 +51,22 @@ _REFUSED_WHOLE = frozenset({400, 413, 422})
 
 # Halving stops here: below it a size refusal is final, so no cap turns each reading into a request.
 MIN_BATCH = 5
+
+# Seconds between reads of `/api/recording/me` while a session runs; the lesson page polls at this pace too.
+PERMIT_CHECK_SECONDS = 30.0
+
+# The consent channel each push channel is recorded under; heart goes by its sensor, as the backend maps it.
+_CHANNEL_CONSENT = {"cognitive": "eeg", "face": "camera"}
+_HEART_SOURCE_CONSENT = {"muse_optics": "headband_optical", "muse_ppg": "headband_optical", "rppg": "camera"}
+# A sensor is refused when every consent channel it serves is; under push the headband serves two.
+_SENSOR_CONSENTS = {"camera": ("camera",), "headband": ("eeg", "headband_optical")}
+# The backend's own `reason` wording, so a withheld reading reads on the page as a declined one does.
+_DECLINED_REASON = {"eeg": "eeg not consented", "headband_optical": "headband heart sensor not consented",
+                    "camera": "camera not consented"}
+_STATE_REASON = {"switched_off": "recording is switched off by an administrator",
+                 "school_year_not_started": "recording has not started for this school year",
+                 "school_year_ended": "the school year has ended",
+                 "school_year_unconfigured": "no school year is configured, so nothing is recorded"}
 
 
 class _BatchRefused(Exception):
@@ -120,6 +137,15 @@ class PushClient:
         # Monotonic deadline; the wake event can skip the sleep, so this enforces the backoff.
         self._retry_at = 0.0
         self._last_error: str | None = None
+        # The latest landed `/api/recording/me` states, or None: send everything and let the backend decide.
+        self._permits: dict[str, str] | None = None
+        self._permits_due = 0.0
+        # Stops the running devices of each refused sensor ("camera", "headband"); the page may be gone.
+        self._on_refused: Callable[[set[str]], Awaitable[None]] | None = None
+
+    def set_refusal_handler(self, handler: Callable[[set[str]], Awaitable[None]] | None) -> None:
+        """What to call with the refused sensors after each check that refuses any."""
+        self._on_refused = handler
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -250,6 +276,9 @@ class PushClient:
         self._last_result = {channel: None for channel in _CHANNELS}
         self._last_result_at = {channel: 0.0 for channel in _CHANNELS}
         self._batch_limit = {channel: MAX_BATCH for channel in _CHANNELS}
+        # The answer was about this student; the next session asks afresh.
+        self._permits = None
+        self._permits_due = 0.0
 
     # ── producing ────────────────────────────────────────────────────────────
 
@@ -361,7 +390,9 @@ class PushClient:
 
     async def _loop(self) -> None:
         while not self._stopping.is_set():
-            delay = self._backoff or FLUSH_SECONDS
+            # Before the backoff gate, and the wait ends when it is next due: a backoff must not delay a withdrawal.
+            await self._check_permits_if_due()
+            delay = min(self._backoff or FLUSH_SECONDS, max(0.0, self._permits_due - time.monotonic()))
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=delay)
             except asyncio.TimeoutError:
@@ -378,6 +409,59 @@ class PushClient:
                 raise
             except Exception as exc:  # noqa: BLE001 - the loop outlives failures
                 self._note_failure(exc)
+
+    async def _check_permits_if_due(self) -> None:
+        """Re-read what this student may record, and stop the sensors it refuses.
+
+        A failed read keeps the last answer: it says nothing new, and never switches anything off."""
+        if time.monotonic() < self._permits_due:
+            return
+        # Advanced even with no token, or the loop's wait, capped by it, would spin.
+        self._permits_due = time.monotonic() + PERMIT_CHECK_SECONDS
+        if not self._token:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+                response = await client.get(f"{self._backend_url}/api/recording/me",
+                                            headers={"Authorization": f"Bearer {self._token}"})
+            response.raise_for_status()
+            body = response.json()
+            permits = {c: str(body[c]["state"]) for c in _DECLINED_REASON}
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - an older backend 404s; the backend still gates
+            logger.info("push: could not check what may be recorded (%s); keeping the last answer", exc)
+            return
+        self._permits = permits
+        refused = {sensor for sensor, consents in _SENSOR_CONSENTS.items()
+                   if all(self._refused(c) for c in consents)}
+        if refused and self._on_refused is not None:
+            try:
+                await self._on_refused(refused)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - the next check retries
+                logger.warning("push: could not stop %s, which may not record: %s", sorted(refused), exc)
+
+    def _refused(self, consent: str) -> bool:
+        """Refused by the latest answer; `unknown` and no answer are not refusals."""
+        return (self._permits or {}).get(consent, "unknown") not in ("permitted", "unknown")
+
+    def _withhold(self, channel: str, samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Drop the samples the latest answer refuses, counted as declined with the backend's reason."""
+        kept = []
+        for sample in samples:
+            consent = (_HEART_SOURCE_CONSENT.get(sample.get("source")) if channel == "heart"
+                       else _CHANNEL_CONSENT[channel])
+            if consent is None or not self._refused(consent):
+                kept.append(sample)
+                continue
+            state = self._permits[consent]
+            self._declined[channel] += 1
+            self._declined_reason[channel] = _STATE_REASON.get(state, _DECLINED_REASON[consent])
+            self._last_result[channel] = "declined"
+            self._last_result_at[channel] = time.monotonic()
+        return kept
 
     def _note_failure(self, exc: Exception) -> None:
         self._last_error = str(exc)
@@ -398,7 +482,7 @@ class PushClient:
         delivered = False
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             for channel in _CHANNELS:
-                samples = self._take(channel)
+                samples = self._withhold(channel, self._take(channel))
                 if not samples:
                     continue
                 try:
@@ -527,6 +611,8 @@ class PushClient:
             "last_result": {c: r if time.monotonic() - self._last_result_at[c] <= RESULT_FRESH_SECONDS else None
                             for c, r in self._last_result.items()},
             "batch_limit": dict(self._batch_limit),
+            # The latest landed `/api/recording/me` states this session sends by; None before one.
+            "permits": dict(self._permits) if self._permits is not None else None,
             "backoff_seconds": self._backoff,
             "last_error": self._last_error,
         }

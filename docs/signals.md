@@ -201,12 +201,12 @@ render. `AdaptiveCameraLifecycle.test.jsx` pins both, and that a camera already 
 **No sensor opens until `GET /api/recording/me` says it may record.** Per channel: `permitted`, `declined`,
 `switched_off`, `school_year_{not_started,ended,unconfigured}` or `unknown` (a failed read), in `_not_recording_reason`'s
 order but with any definite refusal above `unknown`. The camera needs `camera`; under push the headband needs `eeg`
-**or** `headband_optical` (the sidecar can't drop one channel, so declined EEG still reaches the backend's discard);
-pull's `/api/eeg/start` demands EEG. Only switching on is gated — never Turn off, Disconnect or Stop trying — and
-`unknown` stops nothing. The click re-asks; a refusal stops what runs (`enforcePermits`: a failed stop changes no state
-and the next answer retries it), a pairing via `pairOnce` reading `permitsRef`. Flags and window are cached 30 s and the
-page polls every `PUSH_POLL_MS` (hidden, only with a sensor on), so a switch-off takes up to a minute. Only while the page
-is open: closing it stops delivery, and a sensor still running is stopped at the next load if refused.
+**or** `headband_optical`; pull's `/api/eeg/start` demands EEG. The page gates only switching on — never Turn off,
+Disconnect or Stop trying — re-asks at the click, and stops what a refusal refuses (`enforcePermits`; a failed stop changes
+no state and the next answer retries it). **The push client asks too**, every `PERMIT_CHECK_SECONDS` while it holds a
+token: it withholds refused channels, counted `declined` in the backend's wording, and stops refused sensors itself
+(`_stop_refused_sensors`), so a page that died without its unload stop is covered. A failed read keeps the last answer;
+none withholds and stops nothing. Flags and window are cached 30 s, so a switch-off takes up to a minute.
 
 All three ingest endpoints are rate-limited and length-bounded. `/api/signals/cognitive` was neither
 until the push client existed, survivable only while its sole writer was the in-process poller.

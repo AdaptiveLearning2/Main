@@ -836,7 +836,8 @@ work that way), and a running poller re-reads consent every `CONSENT_RECHECK_SEC
 indistinguishable from a wired one.
 
 **Under push the page opens the sensors, so it asks first**: `GET /api/recording/me` before switching one on, and a
-fresh refusal switches it off. The backend's discard stays the last line of defence; details in `docs/signals.md`.
+fresh refusal switches it off. The sidecar's push client asks too while it holds a token, withholding and stopping what
+is refused. The backend's discard stays the last line of defence; details in `docs/signals.md`.
 
 Tests: `backend/tests/test_consent.py`.
 

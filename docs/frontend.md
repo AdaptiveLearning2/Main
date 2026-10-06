@@ -257,8 +257,8 @@ Both shapes have since bitten, and the corrections are the load-bearing half:
   because the effect is not the only caller — the retry button is the other, and a retry is exactly when someone
   changes class rather than waiting.
 - **A ref guard ends when an effect sees the result commit, not when the promise settles.** An effect from a render
-  committed before the action's own state update still sees the old state; `Adaptive.jsx`'s `stopping` was cleared on
-  settle and stopped one camera twice in half the runs. Clear it in the effect that observes the sensor off.
+  committed before the action's own state update still sees the old state, so a guard cleared on settle lets it act
+  twice. Clear it in the effect that observes the result, as `Adaptive.jsx`'s `stoppingIds` does.
 
 ## Two rules from `eslint-plugin-react` are on, and both have to stay on
 

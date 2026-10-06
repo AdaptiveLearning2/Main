@@ -24,7 +24,7 @@ vi.mock('./pollIntervals', async (importOriginal) => ({
 }))
 
 // The sidecar as each test sets it.
-const rig = { cameraRunning: false, headbandRunning: false, ingestion: {} }
+const rig = { cameraRunning: false, headbandRunning: false, spare: false, spareRunning: false, ingestion: {} }
 vi.mock('../../lib/sidecar', () => ({
   startPush: vi.fn(async () => ({})), stopPush: vi.fn(async () => ({})),
   stopPushOnUnload: vi.fn(),
@@ -37,6 +37,7 @@ vi.mock('../../lib/sidecar', () => ({
   museState: vi.fn(async () => ({ running: true, ingestion: { ...rig.ingestion } })),
   devices: vi.fn(async () => [
     { device_id: 'default', kind: 'muse', running: rig.headbandRunning },
+    ...(rig.spare ? [{ device_id: 'spare', kind: 'muse', running: rig.spareRunning }] : []),
     { device_id: 'camera', kind: 'face', running: rig.cameraRunning },
   ]),
   releasePushIfIdle: vi.fn(async () => ({ stopped: true, devices: [] })),
@@ -72,6 +73,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   rig.cameraRunning = false
   rig.headbandRunning = false
+  rig.spare = false
+  rig.spareRunning = false
   rig.ingestion = { ...CONNECTED, muse_connected: false }
   answer = () => buildRecordingPermits()
   mockApi({
@@ -430,6 +433,102 @@ it('retries the stop of a pairing it abandoned, when that stop failed', async ()
     'The headband was disconnected.', { description: DECLINED_HEADBAND }))
 }, TEST_TIMEOUT)
 
+it('stops every running headband station on a refusal, not only the connected one', async () => {
+  rig.spare = true
+  rig.spareRunning = true
+  render(<Adaptive />)
+  fireEvent.change(await screen.findByRole('combobox', { name: 'Headband' }), { target: { value: 'default' } })
+  const connect = screen.getByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(connect).toBeEnabled())
+  fireEvent.click(connect)
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+  answer = () => buildRecordingPermits(HEADBAND_REFUSED)
+  await waitFor(() => expect(deviceStop.mock.calls.map(([id]) => id).sort()).toEqual(['default', 'spare']))
+  await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+    'The headband was disconnected.', { description: DECLINED_HEADBAND }))
+}, TEST_TIMEOUT)
+
+it('stops an abandoned pairing once, and says so once, however slow the stop', async () => {
+  rig.ingestion = { muse_connected: false, muse_devices: [] }
+  let stopped
+  deviceStop.mockImplementationOnce(() => new Promise(r => { stopped = r }))
+  render(<Adaptive />)
+  const connect = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(connect).toBeEnabled())
+  fireEvent.click(connect)
+  await waitFor(() => expect(museRefresh).toHaveBeenCalled())
+  answer = () => buildRecordingPermits(HEADBAND_REFUSED)
+  await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('default'), { timeout: 4000 })
+  // Answers land while the pairing's own stop is still under way.
+  await answersLanded(2)
+  stopped({})
+  await answersLanded(2)
+  expect(deviceStop).toHaveBeenCalledTimes(1)
+  expect(toast.warning.mock.calls.map(([title]) => title)).toEqual(["The headband wasn't connected."])
+}, TEST_TIMEOUT)
+
+it('says again that a camera could not be switched off, once it was seen off in between', async () => {
+  rig.cameraRunning = true
+  deviceStop.mockRejectedValue(new Error('sidecar busy'))
+  try {
+    render(<Adaptive />)
+    await screen.findByRole('button', { name: /turn off/i })
+    answer = () => buildRecordingPermits({ camera: 'declined' })
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1))
+    // Off by hand: the stop errors, but the device list no longer shows the camera.
+    fireEvent.click(screen.getByRole('button', { name: /turn off/i }))
+    const turnOn = await screen.findByRole('button', { name: /turn on camera/i })
+    answer = () => buildRecordingPermits()
+    await waitFor(() => expect(turnOn).toBeEnabled())
+    fireEvent.click(turnOn)
+    await screen.findByRole('button', { name: /turn off/i })
+    answer = () => buildRecordingPermits({ camera: 'declined' })
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2))
+  } finally {
+    deviceStop.mockImplementation(async () => ({}))
+  }
+})
+
+it('marks a station stopped when the device list says so, even if its stop call errored', async () => {
+  await connectHeadband()
+  deviceStop.mockRejectedValueOnce(new Error('timed out'))
+  releasePushIfIdle.mockResolvedValueOnce(
+    { stopped: true, devices: [{ device_id: 'default', kind: 'muse', running: false }] })
+  fireEvent.click(screen.getByRole('button', { name: /^disconnect$/i }))
+  await screen.findByRole('button', { name: /connect headband/i })
+  answer = () => buildRecordingPermits(HEADBAND_REFUSED)
+  await answersLanded(2)
+  expect(deviceStop).toHaveBeenCalledTimes(1)
+  expect(toast.warning).not.toHaveBeenCalled()
+}, TEST_TIMEOUT)
+
+it('ends the reconnect loop for a withdrawn headband, so it never runs out and says it could not reconnect', async () => {
+  // Every timer recorded, so the test can wait for the loop's backoff to end rather than for a guessed time.
+  const realSetTimeout = globalThis.setTimeout
+  const timers = []
+  const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((fn, ms, ...rest) => {
+    const timer = { ms, fired: false }
+    timers.push(timer)
+    return realSetTimeout(() => { timer.fired = true; fn(...rest) }, ms)
+  })
+  try {
+    await connectHeadband()
+    rig.ingestion = { ...CONNECTED, muse_connected: false, reconnect_exhausted: true, muse_devices: [] }
+    await screen.findByText(/reconnecting \(attempt 1 of 3\)/, {}, { timeout: 8000 })
+    const backoff = timers.findLast(t => t.ms === 2000)
+    const mark = timers.length
+    answer = () => buildRecordingPermits(HEADBAND_REFUSED)
+    await screen.findByRole('button', { name: /connect headband/i })
+    // A loop still running schedules attempt 2's 4 s backoff straight after attempt 1's ends.
+    await waitFor(() => expect(backoff.fired).toBe(true))
+    await new Promise(r => realSetTimeout(r, 0))
+    expect(timers.slice(mark).some(t => t.ms === 4000)).toBe(false)
+    expect(toast.error).not.toHaveBeenCalled()
+  } finally {
+    spy.mockRestore()
+  }
+}, TEST_TIMEOUT)
+
 it('stops the reconnect retries when a reconnecting headband is withdrawn', async () => {
   await connectHeadband()
   // The bridge gives up at once, so the page's own loop takes over.
@@ -437,7 +536,7 @@ it('stops the reconnect retries when a reconnecting headband is withdrawn', asyn
   await screen.findByText(/reconnecting \(attempt 1 of 3\)/, {}, { timeout: 8000 })
   const disconnects = museDisconnect.mock.calls.length
   answer = () => buildRecordingPermits(HEADBAND_REFUSED)
-  // Stop trying's teardown; that it ends the loop is pinned in AdaptiveReconnect.test.jsx.
+  // Stop trying's teardown; that it ends the loop is pinned by the test above.
   await waitFor(() => expect(museDisconnect.mock.calls.length).toBeGreaterThan(disconnects))
   await screen.findByRole('button', { name: /connect headband/i })
   await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
@@ -458,5 +557,7 @@ it('does not take over the retries for a headband withdrawn while the bridge was
   const ticks = museState.mock.calls.length
   await waitFor(() => expect(museState.mock.calls.length).toBeGreaterThanOrEqual(ticks + 2))
   expect(screen.queryByText(/of 3\)/)).toBeNull()
+  // Answers kept landing during the slow teardown; it is still the only one.
+  expect(museDisconnect).toHaveBeenCalledTimes(disconnects + 1)
   await screen.findByRole('button', { name: /connect headband/i }, { timeout: 8000 })
 }, TEST_TIMEOUT)

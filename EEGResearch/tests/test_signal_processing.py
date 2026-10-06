@@ -744,7 +744,7 @@ def test_push_stop_ends_a_session_only_if_one_was_pushing():
     from src.app import main as sidecar_main
     src = inspect.getsource(sidecar_main.push_stop)
     assert "push_client.session_id is not None" in src
-    assert src.index("was_pushing = ") < src.index("await push_client.stop()")
+    assert src.index("was_pushing = ") < src.index("await push_client.stop(")
     assert "if was_pushing:" in src and "stream_manager.end_session()" in src
 
 

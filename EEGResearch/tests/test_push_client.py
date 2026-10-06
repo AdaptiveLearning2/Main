@@ -675,7 +675,7 @@ def test_push_stop_reports_a_stop_that_did_not_happen(monkeypatch, stopped):
     class _Client:
         session_id = "s1"
 
-        async def stop(self):
+        async def stop(self, only_session=None):
             return stopped
 
     ended = []
@@ -689,6 +689,81 @@ def test_push_stop_reports_a_stop_that_did_not_happen(monkeypatch, stopped):
     else:
         assert (r.status_code, r.json(), ended) == (503, {"status": "not_stopped", "ended_session": False}, [])
         assert r.headers["retry-after"] == "1"
+
+
+def _stop_route(monkeypatch, current, stop_result=True):
+    """`POST /api/v1/push/stop` over a push client pushing for `current`; records what the route did."""
+    from fastapi.testclient import TestClient  # noqa: PLC0415
+
+    from src.app import main as sidecar  # noqa: PLC0415
+    from src.app.config import get_settings  # noqa: PLC0415
+
+    did = {"stop": [], "consumer": [], "ended": []}
+
+    class _Client:
+        session_id = current
+
+        def submit_payload(self, _payload):
+            pass
+
+        async def stop(self, only_session=None):
+            did["stop"].append(only_session)
+            return stop_result
+
+    fake = _Client()
+    monkeypatch.setattr(sidecar, "push_client", fake)
+    monkeypatch.setattr(sidecar.stream_manager, "end_session", lambda: did["ended"].append(True))
+    monkeypatch.setattr(sidecar.stream_manager, "set_payload_consumer", did["consumer"].append)
+    http = TestClient(sidecar.app)
+    headers = {"Authorization": f"Bearer {get_settings().api_token}"}
+    return (lambda body=None: http.post("/api/v1/push/stop", json=body, headers=headers)), did, fake
+
+
+def test_a_stop_naming_another_session_changes_nothing(monkeypatch):
+    """A tab closing after a newer tab's lesson took delivery over must not stop that lesson."""
+    post, did, _ = _stop_route(monkeypatch, current="s2")
+    r = post({"session_id": "s1"})
+    assert (r.status_code, r.json()) == (200, {"status": "not_current", "ended_session": False})
+    assert did == {"stop": [], "consumer": [], "ended": []}
+
+
+@pytest.mark.parametrize("body, only", [({"session_id": "s1"}, "s1"), (None, None)])
+def test_a_stop_naming_the_pushing_session_or_none_stops_it(monkeypatch, body, only):
+    """No body is an older page, which stops whatever is pushing, as before."""
+    post, did, _ = _stop_route(monkeypatch, current="s1")
+    r = post(body)
+    assert (r.status_code, r.json()) == (200, {"status": "stopped", "ended_session": True})
+    assert did == {"stop": [only], "consumer": [None], "ended": [True]}
+
+
+def test_a_stop_that_loses_the_lock_to_a_takeover_gives_the_consumer_back(monkeypatch):
+    post, did, fake = _stop_route(monkeypatch, current="s1", stop_result=None)
+    r = post({"session_id": "s1"})
+    assert (r.status_code, r.json()) == (200, {"status": "not_current", "ended_session": False})
+    assert did["consumer"] == [None, fake.submit_payload] and did["ended"] == []
+
+
+@pytest.mark.anyio
+async def test_a_stop_for_one_session_leaves_another_pushing(client):
+    await _started(client, session_id="s2", token="tok2")
+    client.enqueue("face", {"ts": "a"})
+    assert await client.stop(only_session="s1") is None
+    assert (client.session_id, client._token, client.running) == ("s2", "tok2", True)
+    assert client.status()["queued"]["face"] == 1
+    assert await client.stop(only_session="s2") is True
+    assert client.session_id is None
+
+
+@pytest.mark.anyio
+async def test_a_stop_waiting_on_a_start_for_another_session_changes_nothing(client):
+    """The newer tab's start holds the lock first; the older tab's stop is decided after it, not before."""
+    await _started(client, session_id="s1")
+    taking_over = asyncio.create_task(client.start("s2", "tok2"))
+    leaving = asyncio.create_task(client.stop(only_session="s1"))
+    assert await leaving is None
+    await taking_over
+    assert (client.session_id, client.running) == ("s2", True)
+    await client.stop()
 
 
 @pytest.mark.anyio

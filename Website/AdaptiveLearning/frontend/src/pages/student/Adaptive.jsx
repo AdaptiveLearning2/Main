@@ -244,6 +244,12 @@ export default function Adaptive() {
 
   // The sidecar's own delivery report under push; null until asked.
   const [push, setPush]               = useState(null)
+  // The session the sidecar delivers for, per push status: undefined before any answer, null when none.
+  const [sidecarSession, setSidecarSession] = useState(undefined)
+  // This tab's lessons: a status still naming one it ended is that lesson winding down, not another tab's.
+  const ownSessions = useRef(new Set())
+  // Bumped on every take-over, so a status reply sent before one cannot undo it.
+  const ownershipEpoch = useRef(0)
   // Channels that delivered since the last poll, not merely consented ones.
   const [recording, setRecording]     = useState([])
   // Last poll's cumulative counts, for a delta.
@@ -323,16 +329,22 @@ export default function Adaptive() {
   // When a reconnecting link was first seen settling (see linkSettling).
   const settlingSince = useRef(null)
 
+  // Whose lesson the one sidecar delivers for (push): this tab's, another tab's or window's (also for a tab with no
+  // lesson yet), or not known. The newest lesson takes it; a page whose lesson it isn't stops or takes back nothing.
+  const pushOwner = !sidecarSession ? 'unknown' : sidecarSession === sessionId ? 'mine' : 'elsewhere'
+  const pushOwnerRef = useRef(pushOwner)
+
   // The camera stops when this page goes away (the headband stays paired): route
   // change via cleanup, tab close via `pagehide`, both reading a synced ref.
   useEffect(() => {
     cameraRef.current = { id: camera.id, running: camera.running, pushMode: headband.pushMode }
+    pushOwnerRef.current = pushOwner
   })
   useEffect(() => {
-    // Push only, like `toggleCamera`: under pull the backend owns the device.
+    // Push only, like `toggleCamera`: under pull the backend owns the device. Not another tab's lesson's camera.
     const stoppable = () => {
       const c = cameraRef.current
-      return c.running && c.id && c.pushMode ? c.id : null
+      return c.running && c.id && c.pushMode && pushOwnerRef.current !== 'elsewhere' ? c.id : null
     }
     const onPageHide = (e) => {
       const id = stoppable()
@@ -529,14 +541,24 @@ export default function Adaptive() {
     return () => { alive = false; clearTimeout(retry) }
   }, [headband.available, headband.pushMode])
 
-  // Re-offers the session to the sidecar (initial handover and status poll).
+  // Re-offers the session to the sidecar (initial handover, status poll, Use this tab). Taking it over drops
+  // whatever another lesson had queued, and re-reads the devices: another tab may have switched the camera off.
   const recover = useCallback(() => {
     const sid = sessionIdRef.current
     if (!sid) return
     pushHandoff.current = pushHandoff.current
       .catch(() => {})
       .then(() => startPush(sid))
-      .then(() => setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null })))
+      .then(() => {
+        setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null }))
+        ownSessions.current.add(sid)
+        ownershipEpoch.current += 1
+        setSidecarSession(sid)
+        sidecarDevices().then(list => {
+          const running = !!list.find(d => d.kind === 'face')?.running
+          setCamera(c => (c.running === running ? c : { ...c, running }))
+        }, () => {})
+      })
       .catch(err => {
         // 409: the sidecar declined; re-offering won't change that.
         if (err?.status === 409) {
@@ -560,7 +582,10 @@ export default function Adaptive() {
     })
     // Any other failed stop changes no state; a `releasing` one reads the list, which shows its stream stopped.
     if (strict && failure && !failure.releasing) throw failure
-    const { devices: list } = await releasePushIfIdle()
+    // Another tab's lesson keeps its delivery: read the list, release nothing.
+    const { devices: list } = pushOwnerRef.current === 'elsewhere'
+      ? await sidecarDevices().then(d => ({ devices: d }), () => ({ devices: null }))
+      : await releasePushIfIdle(sessionIdRef.current)
     if (strict && failure && !list) throw failure
     const listed = list?.find(d => d.device_id === deviceId)
     // Still on, so no stop is under way: a later refusal may try again.
@@ -1030,7 +1055,12 @@ export default function Adaptive() {
         .catch(() => {})
         .then(() => startPush(sessionId))
         .then(() => {
-          if (!killed) setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null }))
+          if (killed) return
+          setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null }))
+          // Taken over now, not at the next poll: a tab that saw another lesson's would say so until then.
+          ownSessions.current.add(sessionId)
+          ownershipEpoch.current += 1
+          setSidecarSession(sessionId)
         })
         .catch(err => {
           if (killed) return
@@ -1050,7 +1080,8 @@ export default function Adaptive() {
 
     // Re-hand a refreshed token (hourly expiry), or pushes start 401ing.
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event !== 'TOKEN_REFRESHED' || killed) return
+      // Every tab hears the refresh; re-handing another tab's lesson's delivery would take it back.
+      if (event !== 'TOKEN_REFRESHED' || killed || pushOwnerRef.current === 'elsewhere') return
       // The callback's token: `getSession()` here deadlocks on the auth lock.
       const token = session?.access_token
       if (!token) return
@@ -1060,8 +1091,12 @@ export default function Adaptive() {
         .catch(() => {})
     })
 
-    // Cleanup doesn't run on a tab close; `pagehide` (bfcache- and mobile-safe) does.
-    const onPageHide = (e) => { stopPushOnUnload(); reloadIfRestored(e) }
+    // Cleanup doesn't run on a tab close; `pagehide` (bfcache- and mobile-safe) does. Both stop this lesson
+    // only: by the sidecar's check, and here too for an older one, which ignores the session it is given.
+    const onPageHide = (e) => {
+      if (pushOwnerRef.current !== 'elsewhere') stopPushOnUnload(sessionId)
+      reloadIfRestored(e)
+    }
     window.addEventListener('pagehide', onPageHide)
 
     return () => {
@@ -1069,29 +1104,41 @@ export default function Adaptive() {
       clearTimeout(attempt)
       window.removeEventListener('pagehide', onPageHide)
       sub?.subscription?.unsubscribe()
+      const leaving = pushOwnerRef.current !== 'elsewhere'
+      // Released by this stop; kept, the finished lesson's id would read as another tab's until the next poll.
+      if (leaving) setSidecarSession(null)
       // Chained behind any in-flight start (StrictMode remount).
       pushHandoff.current = pushHandoff.current
         .catch(() => {})
-        .then(() => stopPush())
+        .then(() => (leaving ? stopPush(sessionId) : null))
         .catch(() => {})
       setPush(null)
     }
   }, [sessionId, headband.pushMode])
 
   // Push only, once the sidecar holds this session and a headband streams; never camera-only.
-  useEegStartReport(!!(headband.pushMode && headband.connected && push?.running), sessionId)
+  useEegStartReport(!!(headband.pushMode && headband.connected && push?.running && pushOwner !== 'elsewhere'), sessionId)
 
-  // Delivery counts for the panel and recording chip; a slower poll.
+  // Delivery counts for the panel and recording chip; a slower poll. Before a lesson too, so a tab with none
+  // knows the sensors are another tab's lesson's and leaves them on when it closes.
   useEffect(() => {
-    if (!sessionId || !headband.pushMode) return
+    if (!headband.pushMode) return
     let killed = false
-    const tick = () => pushStatus()
-      .then(d => {
+    const tick = () => {
+      const epoch = ownershipEpoch.current
+      return pushStatus().then(d => {
         if (killed) return
-        const prev = lastRecorded.current
-        const now = d.recorded || {}
+        const named = d.session_id ?? null
+        const winding = named !== null && named !== sessionIdRef.current && ownSessions.current.has(named)
+        if (epoch === ownershipEpoch.current) setSidecarSession(winding ? null : named)
+        // With no lesson, whose lesson it is is all this page needs; counts and messages are a lesson's.
+        if (!sessionId) return
+        // Another tab's lesson's counts are not this one's: no labels, and no baseline to diff against later.
+        const theirs = !!d.session_id && d.session_id !== sessionIdRef.current
+        const prev = theirs ? null : lastRecorded.current
+        const now = theirs ? null : d.recorded || {}
         // The first poll is only a baseline, so a reload doesn't list stale channels.
-        const labels = prev ? CHANNEL_LABELS
+        const labels = prev && now ? CHANNEL_LABELS
           .filter(([key]) => (now[key] || 0) > (prev[key] || 0))
           .map(([, label]) => label) : []
         // The same array, and below the same object, when nothing changed: such a read renders nothing.
@@ -1118,13 +1165,15 @@ export default function Adaptive() {
         if (sidecarAnswer && typeof sidecarAge === 'number') takeSidecarPermits(sidecarAnswer, sidecarAge, sidecarCheck)
       })
       .catch(() => {
-        if (killed) return
+        if (killed || !sessionId) return
         setPush(p => ({ ...(p || {}), reachable: false, running: false }))
         setRecording([])
         // The next successful poll is a fresh baseline.
         lastRecorded.current = null
-        recover()
+        // A failed read says nothing about whose lesson it is: one last seen as another tab's stays theirs.
+        if (pushOwnerRef.current !== 'elsewhere') recover()
       })
+    }
     tick()
     const id = setInterval(tick, PUSH_STATUS_POLL_MS)
     return () => { killed = true; clearInterval(id) }
@@ -1380,14 +1429,17 @@ export default function Adaptive() {
 
   // Under push there is no poller count: EEG's `push.recorded`, not heart's, which the camera can supply too.
   const headbandSamples = headband.pushMode ? (push?.recorded?.cognitive || 0) : headband.samples
-  // Readings the backend refused (whole batch, or one by one): lost, and nowhere else on screen.
-  const pushLost = ['rejected', 'malformed']
+  // Readings the backend refused (whole batch, or one by one): lost, and nowhere else on screen. Not another
+  // tab's lesson's: every count the status carries is for the lesson the sidecar delivers for.
+  const pushLost = pushOwner === 'elsewhere' ? 0 : ['rejected', 'malformed']
     .flatMap(k => Object.values(push?.[k] || {}))
     .reduce((a, b) => a + (Number(b) || 0), 0)
   // One state per channel drives every badge and sentence: fresh 'recorded' or 'declined', 'waiting' (nothing
-  // back yet) or 'stale' (nothing back lately: an outage or a backoff). An older sidecar reads 'recorded'.
+  // back yet), 'stale' (nothing back lately: an outage or a backoff) or 'elsewhere' (another tab's lesson).
+  // An older sidecar reads 'recorded'.
   const reportsResults = push?.last_result != null
   const channelState = (key) => {
+    if (pushOwner === 'elsewhere') return 'elsewhere'
     if (!push?.answered) return headband.pushMode ? 'waiting' : 'recorded'
     if (!reportsResults) return 'recorded'
     if (push.last_result[key]) return push.last_result[key]
@@ -1410,6 +1462,7 @@ export default function Adaptive() {
     declined: 'Connected, but your headband readings are not being saved, so your teacher cannot see them.',
     waiting: 'Connected. Waiting for the first readings to be saved.',
     stale: 'Connected, but no readings have been saved recently, so your teacher cannot see them live.',
+    elsewhere: 'Connected. Your readings go to the lesson in another tab or window.',
   }[eegState]
     || `${headbandSamples} samples sent · teacher can see your focus & stress live`
 
@@ -1430,6 +1483,20 @@ export default function Adaptive() {
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">🧠 AI Adaptive Practice</h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">The AI picks your weakest topic and generates a custom question.</p>
       </m.div>
+
+      {/* The sidecar delivers one lesson at a time; the newest tab took it, and only this button takes it back. */}
+      {headband.pushMode && sessionId && pushOwner === 'elsewhere' && (
+        <div role="status"
+          className="mb-4 rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/30 p-4 flex items-center gap-3 flex-wrap">
+          <p className="flex-1 min-w-0 text-sm font-bold text-amber-800 dark:text-amber-200">
+            This lesson is also open in another tab or window. Readings go there.
+          </p>
+          <button onClick={recover}
+            className="px-4 py-2 rounded-xl text-sm font-bold bg-amber-600 hover:bg-amber-700 text-white shadow">
+            Use this tab
+          </button>
+        </div>
+      )}
 
       {/* HEADBAND PANEL */}
       <m.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
@@ -1463,8 +1530,11 @@ export default function Adaptive() {
             {headband.pushMode && headbandWaiting && headband.connected && (
               <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">waiting to save</span>
             )}
-            {headband.pushMode && push && !headbandRecording && !headbandWaiting && (push.reachable === false
-             || push.enabled === false || push.running === false || reportsResults) && (
+            {headband.pushMode && eegState === 'elsewhere' && headband.connected && (
+              <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">in another tab</span>
+            )}
+            {headband.pushMode && push && !headbandRecording && !headbandWaiting && eegState !== 'elsewhere'
+             && (push.reachable === false || push.enabled === false || push.running === false || reportsResults) && (
               <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">not recording</span>
             )}
             {headband.pushMode && headbandRecording && (
@@ -1601,6 +1671,8 @@ export default function Adaptive() {
                 ? <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
                 : camera.running && sessionId && cameraState === 'waiting'
                   ? <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">on, waiting to save</span>
+                : camera.running && cameraState === 'elsewhere'
+                  ? <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">on, in another tab</span>
                 : camera.running
                   ? <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">on, not recording</span>
                   : <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">off</span>}
@@ -1616,6 +1688,8 @@ export default function Adaptive() {
                     ? 'The camera is on. Waiting for its first readings to be saved. No video is saved.'
                   : camera.running && sessionId && cameraState === 'stale'
                     ? 'The camera is on, but nothing from it has been saved recently. No video is saved.'
+                  : camera.running && cameraState === 'elsewhere'
+                    ? 'The camera is on. Its readings go to the lesson in another tab or window. No video is saved.'
                   : camera.running && sessionId
                     ? 'Reading how you are finding the questions. No video is saved.'
                     : camera.running

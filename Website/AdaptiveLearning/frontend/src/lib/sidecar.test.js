@@ -172,6 +172,37 @@ describe('stopPushOnUnload', () => {
 
     await expect(sidecar.stopPushOnUnload()).resolves.toBeUndefined()
   })
+
+  it("names its session, so another tab's lesson keeps its delivery", async () => {
+    const fetchSpy = mockFetch(async () => ok())
+
+    await sidecar.stopPushOnUnload('s1')
+
+    const [, opts] = fetchSpy.mock.calls[0]
+    expect(JSON.parse(opts.body)).toEqual({ session_id: 's1' })
+    expect(opts.headers['Content-Type']).toBe('application/json')
+    expect(opts.keepalive).toBe(true)
+  })
+})
+
+describe('stopPush', () => {
+  it("names its session, so another tab's lesson keeps its delivery", async () => {
+    const fetchSpy = mockFetch(async () => ok({}))
+
+    await sidecar.stopPush('s1')
+
+    const [url, opts] = fetchSpy.mock.calls[0]
+    expect(url).toContain('/api/v1/push/stop')
+    expect(JSON.parse(opts.body)).toEqual({ session_id: 's1' })
+  })
+
+  it('sends no body without one, which stops whatever is pushing', async () => {
+    const fetchSpy = mockFetch(async () => ok({}))
+
+    await sidecar.stopPush()
+
+    expect(fetchSpy.mock.calls[0][1].body).toBeUndefined()
+  })
 })
 
 describe('releasePushIfIdle', () => {
@@ -238,6 +269,19 @@ describe('releasePushIfIdle', () => {
     const out = await sidecar.releasePushIfIdle()
 
     expect(out.devices).toEqual(list)
+  })
+
+  it('stops only the session it is given', async () => {
+    const stops = []
+    mockFetch(async (url, opts) => {
+      if (String(url).includes('/devices')) return devicesReply([{ device_id: 'camera', kind: 'face', running: false }])
+      stops.push(JSON.parse(opts.body))
+      return ok({})
+    })
+
+    await sidecar.releasePushIfIdle('s1')
+
+    expect(stops).toEqual([{ session_id: 's1' }])
   })
 })
 

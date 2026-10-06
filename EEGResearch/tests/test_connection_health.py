@@ -481,6 +481,70 @@ def test_a_stop_cancelled_while_its_stream_winds_down_is_cancelled_and_still_rel
     asyncio.run(run())
 
 
+def _releasing_in_the_background(session):
+    """Cancels a stop mid wind-down; its disconnect then blocks in a thread until `let_go` is set."""
+    order, entered, let_go = [], threading.Event(), threading.Event()
+
+    def disconnect():
+        entered.set()
+        let_go.wait(5)
+        order.append("disconnected")
+    session.adapter.disconnect = disconnect
+    session.adapter.connect = lambda: order.append("connected")
+
+    async def cancel_a_stop():
+        async def slow_stream():
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.2)
+                raise
+        session.running = True
+        session._task = asyncio.create_task(slow_stream())
+        stop = asyncio.create_task(session.stop())
+        await asyncio.sleep(0.05)
+        stop.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stop
+        assert await asyncio.to_thread(entered.wait, 5), "the background disconnect never began"
+        session.adapter.disconnect = lambda: order.append("disconnected again")
+    return order, let_go, cancel_a_stop
+
+
+def test_a_start_after_a_cancelled_stop_waits_for_its_background_disconnect():
+    """Connected first, the new link would be the one that disconnect lets go."""
+    session = _session()
+    order, let_go, cancel_a_stop = _releasing_in_the_background(session)
+
+    async def run():
+        await cancel_a_stop()
+        start = asyncio.create_task(session.start())
+        await asyncio.sleep(0.1)
+        assert order == []
+        let_go.set()
+        await start
+        session.running = False
+        session._task.cancel()
+    asyncio.run(run())
+    assert order == ["disconnected", "connected"]
+
+
+def test_a_stop_after_a_cancelled_stop_waits_for_its_background_disconnect():
+    """Otherwise one adapter is released twice at once, which the lock exists to prevent."""
+    session = _session()
+    order, let_go, cancel_a_stop = _releasing_in_the_background(session)
+
+    async def run():
+        await cancel_a_stop()
+        stop = asyncio.create_task(session.stop())
+        await asyncio.sleep(0.1)
+        assert order == []
+        let_go.set()
+        await stop
+    asyncio.run(run())
+    assert order == ["disconnected", "disconnected again"]
+
+
 def test_a_stop_cancelled_mid_disconnect_still_forgets_the_session():
     """Otherwise the next student on this device inherits the last one's baseline."""
     session = _session()

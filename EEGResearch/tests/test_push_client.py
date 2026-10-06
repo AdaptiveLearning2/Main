@@ -1192,12 +1192,15 @@ class _PermitClient(_FakeClient):
         self.states, self.status, self.gets = dict(ALL_PERMITTED), 200, []
         # Set to an Event to hold the next read open until it is set; the answer is the states at the call.
         self.gate = None
+        # Indexes into `gets` of the reads that have returned, in the order they did.
+        self.answered = []
 
     async def get(self, url, headers=None):
         self.gets.append({"url": url, "headers": headers})
-        body, status = _backend_answer(self.states), self.status
+        index, body, status = len(self.gets) - 1, _backend_answer(self.states), self.status
         if self.gate is not None:
             await self.gate.wait()
+        self.answered.append(index)
         return _Response(status_code=status, body=body)
 
 
@@ -1475,11 +1478,38 @@ async def test_a_recheck_that_fails_keeps_holding_and_asks_again_soon(permits):
 
 
 @pytest.mark.anyio
-async def test_a_check_begun_before_a_recheck_does_not_end_its_hold(permits):
-    """Its answer is from before the device started, so the hold waits for one asked after."""
+async def test_a_hold_whose_answer_never_comes_runs_out_and_the_last_answer_decides(permits, monkeypatch):
+    """Held for good while the backend fails, readings would overflow and read as lost, not declined."""
+    monkeypatch.setattr("src.app.services.push_client.PERMIT_HOLD_SECONDS", 0.2)
     await _started(permits)
     await _answer(permits, eeg="declined")
-    before = permits._permits
+    permits.recheck()
+    permits._fake.status = 503
+    permits.enqueue("cognitive", {"ts": "a"})
+    await permits._flush_once()
+    assert permits.status()["queued"]["cognitive"] == 1
+    await _until(lambda: time.monotonic() >= permits._hold_until)
+    assert time.monotonic() >= permits._hold_until
+    permits._permits_due = 0.0
+    await permits._check_permits_if_due()
+    # Asked again at the usual pace, not every flush.
+    assert permits._permits_due - time.monotonic() > FLUSH_SECONDS
+    await permits._flush_once()
+    status = permits.status()
+    assert (status["declined"]["cognitive"], status["queued"]["cognitive"]) == (1, 0)
+    assert status["declined_reason"]["cognitive"] == "eeg not consented"
+    await permits.stop(flush=False)
+
+
+@pytest.mark.anyio
+async def test_a_check_begun_before_a_recheck_is_set_aside(permits):
+    """Its answer is from before the device started: it neither ends the hold nor stops that device."""
+    stops, handler = _recorder()
+    permits.set_refusal_handler(handler)
+    await _started(permits)
+    await _answer(permits, eeg="declined")
+    before, passed_on = permits._permits, permits.status()["permits"]
+    permits._fake.states = {**ALL_PERMITTED, "eeg": "declined", "camera": "declined"}
     permits._fake.gate = asyncio.Event()
     permits._permits_due = 0.0
     in_flight = asyncio.create_task(permits._check_permits_if_due())
@@ -1490,8 +1520,10 @@ async def test_a_check_begun_before_a_recheck_does_not_end_its_hold(permits):
     permits._fake.status = 503
     permits._fake.gate.set()
     await in_flight
-    await _until(lambda: permits._permits is not before)
-    assert permits._permits is not before
+    await _until(lambda: 1 in permits._fake.answered)
+    assert 1 in permits._fake.answered
+    await asyncio.gather(*permits._refusal_tasks.values())
+    assert (permits._permits, permits.status()["permits"], stops) == (before, passed_on, [])
     permits._fake.gate = None
     permits.enqueue("cognitive", {"ts": "a"})
     await permits._flush_once()

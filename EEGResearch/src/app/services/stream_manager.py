@@ -85,6 +85,8 @@ class DeviceSession:
         self.running = False
         # Serialises start and stop, so one adapter is never released twice at once.
         self._lifecycle = asyncio.Lock()
+        # A cancelled stop's disconnect, still running in a thread; the next start or stop waits for it.
+        self._releasing: asyncio.Future[None] | None = None
         # Set when push is on; a plain callable so this module never depends on the network.
         self.on_payload: Callable[[dict[str, Any]], None] | None = None
 
@@ -198,6 +200,7 @@ class DeviceSession:
         async with self._lifecycle:
             if self.running:
                 return
+            await self._await_release()
             # Can block on network I/O; kept off the event loop.
             await asyncio.to_thread(self.adapter.connect)
             self.running = True
@@ -205,6 +208,7 @@ class DeviceSession:
 
     async def stop(self) -> None:
         async with self._lifecycle:
+            await self._await_release()
             was_running = self._task is not None
             self.running = False
             try:
@@ -216,7 +220,7 @@ class DeviceSession:
                         # The stream's own end is swallowed; one aimed at this stop (shutdown) is not,
                         # and the link is still let go, in the background, so a stuck one cannot hold it.
                         if asyncio.current_task().cancelling():
-                            asyncio.get_running_loop().run_in_executor(None, self._release_quietly)
+                            self._releasing = asyncio.get_running_loop().run_in_executor(None, self._release_quietly)
                             raise
                     self._task = None
                 # Can block on socket shutdown/thread joins.
@@ -225,6 +229,13 @@ class DeviceSession:
                 # Even for a stop cancelled mid-disconnect: the next student must not inherit the baseline.
                 if was_running:
                     self._forget_stream()
+
+    async def _await_release(self) -> None:
+        """Called under the lock: a connect racing the background disconnect would lose its new link."""
+        if self._releasing is not None:
+            # Shielded: a cancelled waiter must not mark it done while the thread still runs.
+            await asyncio.shield(self._releasing)
+            self._releasing = None
 
     def _release_quietly(self) -> None:
         """The adapter's disconnect, off the event loop with nobody awaiting it: a failure is logged, not raised."""

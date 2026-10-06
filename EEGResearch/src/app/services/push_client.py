@@ -54,6 +54,9 @@ MIN_BATCH = 5
 
 # Seconds between reads of `/api/recording/me` while a session runs; the lesson page polls at this pace too.
 PERMIT_CHECK_SECONDS = 30.0
+# How long readings wait for a device start's fresh answer before the last one decides; held longer they
+# would overflow the queue and read as lost rather than declined.
+PERMIT_HOLD_SECONDS = 3 * FLUSH_SECONDS
 
 # The consent channel each push channel is recorded under; heart goes by its sensor, from the answer.
 _CHANNEL_CONSENT = {"cognitive": "eeg", "face": "camera"}
@@ -151,6 +154,8 @@ class PushClient:
         # Set by `recheck()` until a check begun after it lands; see `_held_back`. Counted per recheck.
         self._permits_stale = False
         self._permits_generation = 0
+        # Monotonic end of the hold a recheck starts; see PERMIT_HOLD_SECONDS.
+        self._hold_until = 0.0
         # Stops the running devices of a refused sensor ("camera", "headband"), while the second argument
         # says the refusing session is still current; the page may be gone.
         self._on_refused: _RefusalHandler | None = None
@@ -167,6 +172,7 @@ class PushClient:
         Until the new one lands, readings the old answer refuses are held, not dropped and not sent."""
         self._permits_stale = True
         self._permits_generation += 1
+        self._hold_until = time.monotonic() + PERMIT_HOLD_SECONDS
         self._permits_due = 0.0
         self._wake.set()
 
@@ -454,7 +460,7 @@ class PushClient:
         self._permits_due = time.monotonic() + PERMIT_CHECK_SECONDS
         if not self._token:
             return
-        # Only a check begun after the latest `recheck()` can end its hold.
+        # Only a check begun after the latest `recheck()` counts.
         generation = self._permits_generation
         try:
             async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
@@ -473,13 +479,15 @@ class PushClient:
             raise
         except Exception as exc:  # noqa: BLE001 - an older backend 404s; the backend still gates
             logger.info("push: could not check what may be recorded (%s); keeping the last answer", exc)
-            if self._permits_stale:
+            if self._holding():
                 # Still held, not dropped on the old answer; asked again soon rather than in a full interval.
                 self._permits_due = time.monotonic() + FLUSH_SECONDS
             return
+        if generation != self._permits_generation:
+            # Asked before a device started: not kept, passed on or acted on, so it cannot stop that device.
+            return
         self._permits = permits
-        if generation == self._permits_generation:
-            self._permits_stale = False
+        self._permits_stale = False
         for sensor in (s for s, verdict in permits.sensors.items() if verdict["refused"]):
             task = self._refusal_tasks.get(sensor)
             # One at a time per sensor, and per sensor: a slow camera stop must not hold up the headband's.
@@ -514,7 +522,11 @@ class PushClient:
 
     def _held_back(self, channel: str, samples: list[dict[str, Any]]) -> bool:
         """A fresh answer is on its way and the old one refuses some of these: they wait for it."""
-        return self._permits_stale and any(self._refused(self._consent_of(channel, s)) for s in samples)
+        return self._holding() and any(self._refused(self._consent_of(channel, s)) for s in samples)
+
+    def _holding(self) -> bool:
+        """A recheck's answer is still awaited and its hold has not run out."""
+        return self._permits_stale and time.monotonic() < self._hold_until
 
     def _withhold(self, channel: str, samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Drop the samples the latest answer refuses, counted as declined with the backend's reason."""

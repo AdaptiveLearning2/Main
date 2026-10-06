@@ -55,6 +55,7 @@ vi.mock('../../context/AuthContext', () => ({
 import { toast } from 'sonner'
 import { recordAnswer } from '../../lib/session'
 import { apiFetch, mockApi, resetApi } from '../../test/mocks/apiFetch'
+import { buildRecordingPermits } from '../../test/fixtures/recordingPermits'
 import Adaptive from './Adaptive'
 
 // `eeg_age_ms` is required for "connected": a link counts only with EEG flowing.
@@ -80,6 +81,7 @@ beforeEach(() => {
     'GET /api/generate-question?bias=0&grade=4th+Grade&session_id=sess-1': question,
     'GET /api/generate-question?bias=0&grade=4th+Grade&session_id=sess-2': question,
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '4th Grade' }),
+    'GET /api/recording/me': () => buildRecordingPermits(),
     'GET /api/classes': () => [],
     'GET /api/performance/student/u1': () => [],
     // A new id per session.
@@ -112,6 +114,8 @@ it('brings the stream up at Connect and records only from the first question', a
   // Same session as the pairing, so the same recorder is armed in place.
   expect(bridge.recorders).toHaveLength(1)
   await waitFor(() => expect(bridge.recorders[0].start).toHaveBeenCalledWith({ record: true }))
+  // Pull never asks: `/api/eeg/start` gates the headband on EEG consent itself.
+  expect(apiFetch.mock.calls.map(([path]) => path)).not.toContain('/api/recording/me')
 }, 30_000)
 
 it('reads the bridge once per status interval, the telemetry poll reusing the status answer', async () => {
@@ -165,6 +169,7 @@ it('starts the duration clock at the first question, not at Connect', async () =
     }),
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '4th Grade',
                                     session_duration_minutes: 0.001 }),
+    'GET /api/recording/me': () => buildRecordingPermits(),
     'GET /api/classes': () => [],
     'GET /api/performance/student/u1': () => [],
     'POST /api/sessions/start': () => ({ id: `sess-${++bridge.sessions}` }),

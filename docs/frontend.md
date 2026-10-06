@@ -256,6 +256,9 @@ Both shapes have since bitten, and the corrections are the load-bearing half:
   and repaint the list under the new class's name. It guards with `useLatestRequest` rather than a cleanup flag,
   because the effect is not the only caller — the retry button is the other, and a retry is exactly when someone
   changes class rather than waiting.
+- **A ref guard ends when an effect sees the result commit, not when the promise settles.** An effect from a render
+  committed before the action's own state update still sees the old state, so a guard cleared on settle lets it act
+  twice. Clear it in the effect that observes the result, as `Adaptive.jsx`'s `stoppingIds` does.
 
 ## Two rules from `eslint-plugin-react` are on, and both have to stay on
 

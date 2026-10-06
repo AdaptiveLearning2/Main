@@ -30,6 +30,7 @@ vi.mock('../../context/AuthContext', () => ({
 }))
 
 import { mockApi, resetApi } from '../../test/mocks/apiFetch'
+import { buildRecordingPermits } from '../../test/fixtures/recordingPermits'
 import Adaptive from './Adaptive'
 
 beforeEach(() => {
@@ -37,6 +38,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
+    'GET /api/recording/me': () => buildRecordingPermits(),
     'GET /api/performance/student/u1': () => [],
     'POST /api/sessions/start': () => ({ id: 'sess-debug' }),
     'GET /api/eeg/health': () => ({ available: true, ingest_mode: 'pull' }),

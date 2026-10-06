@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import logging
 import socket
 import threading
 import time
@@ -17,7 +18,7 @@ from src.app.services.eeg_ingestion import (
     TcpMuseBridgeAdapter,
     _apply_bridge_ingestion_fields,
 )
-from src.app.services.stream_manager import DeviceSession
+from src.app.services.stream_manager import DeviceReleasing, DeviceSession
 from datetime import datetime, timezone
 
 
@@ -425,3 +426,239 @@ def test_stop_forgets_the_last_reading_with_the_rest_of_the_session():
     assert session.last_good_ts is None
     assert session.last_good_at is None
     assert session.consecutive_errors == 0
+
+
+def test_two_stops_at_once_never_release_the_adapter_at_the_same_time():
+    """The page and the push client may each stop one device in the same moment."""
+    session = _session()
+    guard = threading.Lock()
+    inside, overlaps, calls = [0], [], []
+
+    def disconnect():
+        with guard:
+            inside[0] += 1
+            calls.append(1)
+            if inside[0] > 1:
+                overlaps.append(inside[0])
+        time.sleep(0.05)
+        with guard:
+            inside[0] -= 1
+    session.adapter.disconnect = disconnect
+
+    async def run():
+        session.running = True
+        session._task = asyncio.create_task(asyncio.sleep(60))
+        await asyncio.gather(session.stop(), session.stop())
+    asyncio.run(run())
+    assert calls, "neither stop reached the adapter"
+    assert overlaps == []
+
+
+def test_a_stop_cancelled_while_its_stream_winds_down_is_cancelled_and_still_releases_the_link():
+    """Shutdown cancels a stop: honoured at once, not after a disconnect that can hang, which runs behind it."""
+    session = _session()
+    released = threading.Event()
+    session.adapter.disconnect = released.set
+
+    async def run():
+        winding_down = asyncio.Event()
+
+        async def slow_stream():
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                winding_down.set()
+                await asyncio.sleep(0.5)
+                raise
+        session.running = True
+        session._task = asyncio.create_task(slow_stream())
+        stop = asyncio.create_task(session.stop())
+        await winding_down.wait()
+        stop.cancel()
+        # Raised, not swallowed: a swallowed cancel would carry on into the disconnect and return.
+        with pytest.raises(asyncio.CancelledError):
+            await stop
+        assert await asyncio.to_thread(released.wait, 5), "the link was never let go"
+    asyncio.run(run())
+
+
+def _releasing_in_the_background(session, during):
+    """Cancels a stop `during` its wind-down or its disconnect, which then blocks until `let_go` is set."""
+    order, forgets, entered, let_go = [], [], threading.Event(), threading.Event()
+
+    def disconnect():
+        entered.set()
+        let_go.wait(5)
+        order.append("disconnected")
+    session.adapter.disconnect = disconnect
+    session.adapter.connect = lambda: order.append("connected")
+    forget = session._forget_stream
+    session._forget_stream = lambda: (forgets.append(1), forget())
+
+    async def cancel_a_stop():
+        async def slow_stream():
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.2)
+                raise
+        session.running = True
+        session._task = asyncio.create_task(slow_stream() if during == "wind-down" else asyncio.sleep(60))
+        stop = asyncio.create_task(session.stop())
+        if during == "wind-down":
+            await asyncio.sleep(0.05)
+        else:
+            assert await asyncio.to_thread(entered.wait, 5), "the disconnect never began"
+        stop.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stop
+        assert await asyncio.to_thread(entered.wait, 5), "the background disconnect never began"
+        session.adapter.disconnect = lambda: order.append("disconnected again")
+    return order, forgets, let_go, cancel_a_stop
+
+
+@pytest.mark.parametrize("during", ["wind-down", "disconnect"])
+def test_a_start_after_a_cancelled_stop_waits_for_its_background_disconnect(during):
+    """Connected first, the new link would be the one that disconnect lets go."""
+    session = _session()
+    order, _forgets, let_go, cancel_a_stop = _releasing_in_the_background(session, during)
+
+    async def run():
+        await cancel_a_stop()
+        start = asyncio.create_task(session.start())
+        await asyncio.sleep(0.1)
+        assert order == []
+        let_go.set()
+        await start
+        session.running = False
+        session._task.cancel()
+    asyncio.run(run())
+    assert order == ["disconnected", "connected"]
+
+
+@pytest.mark.parametrize("during", ["wind-down", "disconnect"])
+def test_a_stop_after_a_cancelled_stop_waits_for_its_background_disconnect(during):
+    """Otherwise one adapter is released twice at once; and a stream already forgotten is not forgotten again."""
+    session = _session()
+    order, forgets, let_go, cancel_a_stop = _releasing_in_the_background(session, during)
+
+    async def run():
+        await cancel_a_stop()
+        stop = asyncio.create_task(session.stop())
+        await asyncio.sleep(0.1)
+        assert order == []
+        let_go.set()
+        await stop
+    asyncio.run(run())
+    assert order == ["disconnected", "disconnected again"]
+    assert len(forgets) == 1
+
+
+def test_a_background_disconnect_that_fails_is_logged_and_the_next_start_still_connects(caplog):
+    session = _session()
+    connected, entered, let_go = [], threading.Event(), threading.Event()
+
+    def disconnect():
+        entered.set()
+        let_go.wait(5)
+        raise OSError("link stuck")
+    session.adapter.disconnect = disconnect
+    session.adapter.connect = lambda: connected.append(1)
+
+    async def run():
+        session.running = True
+        session._task = asyncio.create_task(asyncio.sleep(60))
+        stop = asyncio.create_task(session.stop())
+        assert await asyncio.to_thread(entered.wait, 5), "the disconnect never began"
+        stop.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stop
+        let_go.set()
+        await session.start()
+        session.running = False
+        session._task.cancel()
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(run())
+    assert connected == [1]
+    assert "disconnect failed" in caplog.text
+
+
+@pytest.mark.parametrize("during", ["wind-down", "disconnect"])
+def test_a_start_while_a_disconnect_hangs_is_refused_in_time_and_connects_nothing(during):
+    """Connected, the late disconnect would drop the new link; waited on for ever, the device lock is held for good."""
+    session = _session()
+    session.RELEASE_WAIT_SECONDS = 0.2
+    order, _forgets, let_go, cancel_a_stop = _releasing_in_the_background(session, during)
+
+    async def run():
+        await cancel_a_stop()
+        with pytest.raises(DeviceReleasing):
+            await asyncio.wait_for(session.start(), 5)
+        assert order == []
+        let_go.set()
+        await asyncio.wait_for(asyncio.shield(session._releasing), 5)
+        await asyncio.wait_for(session.start(), 5)
+        session.running = False
+        session._task.cancel()
+    try:
+        asyncio.run(run())
+    finally:
+        let_go.set()
+    assert order == ["disconnected", "connected"]
+
+
+def test_a_stop_whose_disconnect_hangs_fails_and_starts_no_second_disconnect(caplog):
+    """Reported as stopped, the page would say so of a device still held; each new thread would pile up."""
+    session = _session()
+    session.RELEASE_WAIT_SECONDS = 0.2
+    disconnects, connected, let_go = [], [], threading.Event()
+    session.adapter.disconnect = lambda: (disconnects.append(1), let_go.wait(5))
+    session.adapter.connect = lambda: connected.append(1)
+
+    async def run():
+        session.running = True
+        session._task = asyncio.create_task(asyncio.sleep(60))
+        for _ in range(3):
+            with pytest.raises(DeviceReleasing):
+                await asyncio.wait_for(session.stop(), 5)
+        with pytest.raises(DeviceReleasing):
+            await asyncio.wait_for(session.start(), 5)
+        assert (disconnects, connected) == ([1], [])
+        let_go.set()
+        # Ended, it is let go of: the device starts again.
+        await asyncio.wait_for(asyncio.shield(session._releasing), 5)
+        await asyncio.wait_for(session.start(), 5)
+        session.running = False
+        session._task.cancel()
+    try:
+        with caplog.at_level(logging.WARNING):
+            asyncio.run(run())
+    finally:
+        let_go.set()
+    assert connected == [1]
+    # Waited on once: the later stops and the start refuse at once, not holding the lock for another wait.
+    assert caplog.text.count("disconnect still running") == 1
+
+
+def test_a_stop_cancelled_mid_disconnect_still_forgets_the_session():
+    """Otherwise the next student on this device inherits the last one's baseline."""
+    session = _session()
+    asyncio.run(_tick(session))
+    assert session.last_good_ts is not None
+    entered = threading.Event()
+
+    def disconnect():
+        entered.set()
+        time.sleep(0.2)
+    session.adapter.disconnect = disconnect
+
+    async def run():
+        session.running = True
+        session._task = asyncio.create_task(asyncio.sleep(60))
+        stop = asyncio.create_task(session.stop())
+        await asyncio.to_thread(entered.wait, 5)
+        stop.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stop
+    asyncio.run(run())
+    assert session.last_good_ts is None

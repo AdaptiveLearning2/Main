@@ -7,7 +7,7 @@ import { endSession, recordAnswer } from '../../lib/session'
 import useEegStartReport from '../../hooks/useEegStartReport'
 import usePoll from '../../hooks/usePoll'
 import useValueChange from '../../hooks/useValueChange'
-import { PUSH_POLL_MS, PULL_HEALTH_POLL_MS, PULL_STATUS_POLL_MS } from './pollIntervals'
+import { PUSH_POLL_MS, PULL_HEALTH_POLL_MS, PULL_STATUS_POLL_MS, PUSH_STATUS_POLL_MS } from './pollIntervals'
 import { onSignOut } from '../../lib/signOutTasks'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { reloadIfRestored } from '../../lib/pageRestore'
@@ -67,6 +67,52 @@ const CHANNEL_LABELS = [
   ['heart',     'Heart sensor'],
   ['face',      'Camera'],
 ]
+
+// `GET /api/recording/me` (push only). The verdicts are the backend's `sensors`; the states only pick words.
+const PERMIT_TIMEOUT_MS = 8000
+// A sidecar answer stands in for the page's own while observed within this many of the sidecar's own check
+// intervals (its push status says how long one is); a missed check or two, not a sidecar gone quiet.
+const SIDECAR_FRESH_CHECKS = 1.5
+const PERMIT_REASONS = {
+  // Names no one: the student may have withdrawn it themselves.
+  declined: "it isn't permitted (see Sensors on your Profile)",
+  switched_off: "switched off by the school's administrator",
+  school_year_not_started: 'nothing is recorded outside the school year',
+  school_year_ended: 'nothing is recorded outside the school year',
+  school_year_unconfigured: 'no school year has been set up yet',
+  unknown: "couldn't check, this retries on its own",
+}
+const permitReason = (state) => PERMIT_REASONS[state] || "recording isn't permitted right now"
+
+/**
+ * What an answer lets the page switch on. `answer` is undefined before the first one lands and null for a
+ * failed read; then, as for an answer without `sensors`, nothing is allowed and nothing refused.
+ */
+const permitVerdicts = (answer) => {
+  const state = (c) => answer?.[c]?.state ?? 'unknown'
+  const sensor = (name, states) => ({
+    checked: answer !== undefined, states,
+    allowed: answer?.sensors?.[name]?.allowed === true,
+    refused: answer?.sensors?.[name]?.refused === true,
+  })
+  return {
+    camera: sensor('camera', [['camera', state('camera')]]),
+    headband: sensor('headband', [['EEG', state('eeg')], ['heart rate', state('headband_optical')]]),
+  }
+}
+
+/** Why a sensor may not be switched on, as a sentence. `sensor` is 'camera' or 'headband'. */
+const blockedLine = (sensor, verdict) => {
+  if (!verdict.checked) return `Checking whether the ${sensor} may record…`
+  if (verdict.states.every(([, s]) => s === 'unknown')) {
+    return `Couldn't check whether the ${sensor} may record; this retries on its own.`
+  }
+  const reasons = verdict.states.map(([, s]) => permitReason(s))
+  const named = new Set(reasons).size === 1
+    ? reasons[0]
+    : verdict.states.map(([label, s]) => `${label} — ${permitReason(s)}`).join('; ')
+  return `${sensor === 'camera' ? 'Camera' : 'Headband'} recording is off: ${named}.`
+}
 
 const TOPICS = ALL_TOPICS
 const ICONS  = TOPIC_ICONS
@@ -207,13 +253,64 @@ export default function Adaptive() {
   // back over a newer one. Handlers and the stable `recover` callback read this, not the state.
   const sessionIdRef = useRef(null)
 
+  // The latest applied `/api/recording/me` answer (see `permitVerdicts`); the ref is for loops between renders.
+  const [permits, setPermits] = useState({ answer: undefined })
+  const permitsRef = useRef(undefined)
+  // When the applied answer was observed, and when the sidecar last observed one the page took; on
+  // `performance.now()`, which a clock set back cannot rewind. And how long the sidecar's answer is trusted.
+  const permitsAt = useRef(-Infinity)
+  const sidecarAt = useRef(-Infinity)
+  const sidecarTrustMs = useRef(PUSH_POLL_MS * SIDECAR_FRESH_CHECKS)
+  // Devices with a stop under way, kept until an effect sees them off: an effect from a render before
+  // the stop's state update still sees them on, and must not stop them again (see `enforcePermits`).
+  const stoppingIds = useRef(new Set())
+  // Whether a sensor's "could not be switched off" was already said, until the sensor is seen off.
+  const stopFailed = useRef({ camera: false, headband: false })
+  // State mirrors for timer-driven polls, the reconnect loop, `pagehide` and `applyPermits`, which run
+  // between renders; declared before their first reader.
+  const headbandRef = useRef(headband)
+  const cameraRef = useRef({ id: null, running: false, pushMode: undefined })
+  const stationsRef = useRef([])
+  useEffect(() => { stationsRef.current = stations }, [stations])
+  // By when it was observed, not when it arrived: an older answer landing late changes nothing.
+  const applyPermits = (at, answer) => {
+    if (at <= permitsAt.current) return
+    permitsAt.current = at
+    const same = JSON.stringify(answer) === JSON.stringify(permitsRef.current)
+    permitsRef.current = answer
+    // Unchanged, no re-render, unless it refuses a sensor that is on: the next answer is what retries a
+    // stop that did not happen, a failed one or one a failed Turn off stood in for.
+    const v = permitVerdicts(answer)
+    const h = headbandRef.current
+    const refusedAndOn = (v.camera.refused && cameraRef.current.running)
+      || (v.headband.refused && (h.connected || h.phase !== 'idle' || stationsRef.current.some(s => s.running)))
+    if (same && !refusedAndOn) return
+    setPermits({ answer })
+  }
+  // Resolves to this request's own answer: a click decides on what it just asked, whatever else landed.
+  const checkPermits = () => {
+    const at = performance.now()
+    return apiFetch('/api/recording/me', { timeoutMs: PERMIT_TIMEOUT_MS })
+      .catch(() => null)
+      .then(answer => {
+        applyPermits(at, answer)
+        return answer
+      })
+  }
+  // The sidecar's answer, from its push status: observed `ageSeconds` ago, by the same backend.
+  const takeSidecarPermits = useEffectEvent((answer, ageSeconds, checkSeconds) => {
+    const at = performance.now() - ageSeconds * 1000
+    sidecarAt.current = Math.max(sidecarAt.current, at)
+    if (typeof checkSeconds === 'number') sidecarTrustMs.current = checkSeconds * 1000 * SIDECAR_FRESH_CHECKS
+    applyPermits(at, answer)
+  })
+  const headbandRefused = () => permitVerdicts(permitsRef.current).headband.refused
+
   // Dev-only EEG debug panel
   const [eegDebug, setEegDebug]       = useState(null)
   const [debugOpen, setDebugOpen]     = useState(true)
   const debugTimer  = useRef(null)
   const phaseTimer  = useRef(null)
-  // State mirrors for timer-driven polls and the reconnect loop.
-  const headbandRef = useRef(headband)
   // The status poll's latest landed answer, which the telemetry poll reuses under pull.
   const lastStatus = useRef(null)
   const recorderRef = useRef(null)
@@ -225,7 +322,6 @@ export default function Adaptive() {
 
   // The camera stops when this page goes away (the headband stays paired): route
   // change via cleanup, tab close via `pagehide`, both reading a synced ref.
-  const cameraRef = useRef({ id: null, running: false, pushMode: undefined })
   useEffect(() => {
     cameraRef.current = { id: camera.id, running: camera.running, pushMode: headband.pushMode }
   })
@@ -375,6 +471,15 @@ export default function Adaptive() {
     .catch(() => { if (!stopped()) setHeadband(s => ({ ...s, available: false })) }),
   { intervalMs: headband.pushMode ? PUSH_POLL_MS : PULL_HEALTH_POLL_MS })
 
+  // Push only: this page opens the sensors itself. Hidden, it asks only while one is on, so a withdrawal
+  // still lands; decided per tick (the latest render's callback), since a changing option restarts the poll.
+  const sensorOn = camera.running || camera.busy || headband.connected || headband.phase !== 'idle'
+    || stations.some(s => s.running)
+  // Nor while the sidecar's answer (push status) is recent: one asker per lesson, until the sidecar goes quiet.
+  const sidecarRecent = () => performance.now() - sidecarAt.current < sidecarTrustMs.current
+  usePoll(() => ((document.hidden && !sensorOn) || sidecarRecent() ? null : checkPermits()),
+    { intervalMs: PUSH_POLL_MS, enabled: headband.pushMode === true, pauseWhenHidden: false })
+
   // Discover stations (auto-select a single one), retried until non-empty. A
   // failed read applies nothing, so `stationId` never falls back to `default`.
   useEffect(() => {
@@ -431,11 +536,33 @@ export default function Adaptive() {
       })
   }, [])
 
-  // Stops one device, releases the push client if nothing else streams, and
-  // syncs camera state from the device list.
-  const endPushDevice = async (deviceId) => {
-    await deviceStop(deviceId).catch(() => {})
+  // Stops one device, releases the push client if nothing else streams, and syncs camera and station
+  // state, from the device list when it was read. `strict` throws on a stop that failed or left the
+  // device listed as running, changing no state, so the caller can retry.
+  const endPushDevice = async (deviceId, { strict = false } = {}) => {
+    stoppingIds.current.add(deviceId)
+    let failure = null
+    const stopped = await deviceStop(deviceId).then(() => true, e => {
+      stoppingIds.current.delete(deviceId)
+      // The sidecar's 503: the stream stopped, but a disconnect of this device is still running.
+      if (e?.status === 503) e.releasing = true
+      failure = e
+      return !!e?.releasing
+    })
+    // Any other failed stop changes no state; a `releasing` one reads the list, which shows its stream stopped.
+    if (strict && failure && !failure.releasing) throw failure
     const { devices: list } = await releasePushIfIdle()
+    if (strict && failure && !list) throw failure
+    const listed = list?.find(d => d.device_id === deviceId)
+    // Still on, so no stop is under way: a later refusal may try again.
+    if (listed?.running) stoppingIds.current.delete(deviceId)
+    if (strict && listed?.running) throw failure || new Error(`${deviceId} is still running after its stop`)
+    if (listed || stopped) {
+      const running = !!listed?.running
+      // The same array when nothing changed (a camera is no station): an unchanged list renders nothing.
+      setStations(all => (all.some(s => s.device_id === deviceId && s.running !== running)
+        ? all.map(s => (s.device_id === deviceId ? { ...s, running } : s)) : all))
+    }
     if (list) {
       const face = list.find(d => d.kind === 'face')
       setCamera(c => ({ ...c, running: !!face?.running }))
@@ -443,20 +570,23 @@ export default function Adaptive() {
       // Unread list: the client was released, so nothing is delivered.
       setCamera(c => ({ ...c, running: false }))
     }
+    if (strict && failure) throw failure
   }
 
   // Hardware ops: pull proxies via /api/eeg/muse/*, push calls the sidecar on
   // loopback. `rec` is passed in so pull can use a not-yet-rendered recorder.
-  const makeHw = (rec) => headband.pushMode ? {
-    // Hardware only; delivery starts with the `sessionId` effect.
+  const makeHw = (rec, { strict = false } = {}) => headband.pushMode ? {
+    // Hardware only; delivery starts with the `sessionId` effect. Marked running, so a stop that
+    // fails later still leaves it for `enforcePermits` to find.
     begin:      async () => { await deviceStart(stationId)
+                              setStations(list => list.map(s => (s.device_id === stationId ? { ...s, running: true } : s)))
                               return { ok: true, running: true } },
     disconnect: () => museDisconnect(stationId),
     scan:       () => museRefresh(stationId),
     connect:    (name) => museConnect(name, stationId),
     status:     () => museState(stationId),
     // Not `stopPush()`: that is global and would stop the camera's delivery too.
-    end:        () => endPushDevice(stationId),
+    end:        () => endPushDevice(stationId, { strict }),
   } : {
     // Stream up, nothing written: `armRecording` arms recording on the first question.
     begin:      () => rec.start({ record: false }),
@@ -478,7 +608,7 @@ export default function Adaptive() {
   // One scan-and-connect, reporting a reason rather than toasting. `run` is the
   // reconnect loop's cancel token, checked between steps, as is page unmount.
   const pairOnce = async (hw, activeSessionId, run = null) => {
-    const cancelled = () => run?.cancelled === true || !pageAlive.current
+    const cancelled = () => run?.cancelled === true || !pageAlive.current || headbandRefused()
     const phase = (p) => { if (!run) setHeadband(s => ({ ...s, phase: p })) }
 
     // Before the disconnect: it is global to the shared bridge device.
@@ -553,12 +683,14 @@ export default function Adaptive() {
     lastDropToast.current = 0
     dropAnnounced.current = false
     settlingSince.current = null
-    await hw.end()
+    // Its stream stopped and the sidecar is still letting it go (`endPushDevice`): shown off, then reported.
+    const releasing = await hw.end().then(() => null, e => { if (!e?.releasing) throw e; return e })
     // Drop, not reuse: it closed over the old deviceId.
     setRecorder(null)
     delete window.AL_currentSessionId
     setHeadband(s => ({ ...s, connected: false, phase: 'idle', deviceName: null,
                          battery: null, reconnect: null, contactPoor: null }))
+    if (releasing) throw releasing
   }
 
   const onReconnected = () => {
@@ -572,7 +704,8 @@ export default function Adaptive() {
 
   // Scan + connect with backoff, only when the bridge isn't (two drivers would fight).
   const startFrontendReconnect = () => {
-    if (reconnectRun.current) return
+    // Refused: the withdrawal effect tears the link down instead.
+    if (reconnectRun.current || headbandRefused()) return
     const run = { cancelled: false }
     reconnectRun.current = run
     ;(async () => {
@@ -747,13 +880,71 @@ export default function Adaptive() {
 
   // "Stop trying": Disconnect's teardown, after an explicit bridge disconnect
   // (only a command cancels the bridge's own attempts).
-  const cancelReconnect = async () => {
+  const cancelReconnect = async ({ strict = false } = {}) => {
     if (reconnectRun.current) reconnectRun.current.cancelled = true
     reconnectRun.current = null
-    const hw = makeHw(recorderRef.current)
+    const hw = makeHw(recorderRef.current, { strict })
     await hw.disconnect().catch(() => {})
     await disconnectHeadband(hw)
   }
+
+  // A refusal switches off what it refuses, adopted at load or started since; unknown stops nothing.
+  // A failed stop changes no state, so the next answer retries it; a `releasing` one's stream stopped: shown off.
+  // A pairing stops itself (`pairOnce`).
+  const stopRefused = (sensor, stop, verdict, done) => {
+    stop().then(() => {
+      toast.warning(done, { description: blockedLine(sensor, verdict) })
+    }, e => {
+      console.error(`[permits] could not switch the ${sensor} off`, e)
+      if (stopFailed.current[sensor]) return
+      stopFailed.current[sensor] = true
+      if (e?.releasing) {
+        toast.warning(`The ${sensor} has stopped but is still being released.`,
+          { description: blockedLine(sensor, verdict) })
+        return
+      }
+      toast.error(`The ${sensor} could not be switched off.`,
+        { description: `${blockedLine(sensor, verdict)} This retries on its own.` })
+    })
+  }
+  const enforcePermits = useEffectEvent((answer) => {
+    if (!headband.pushMode) return
+    const live = headband.connected || headband.phase === 'reconnecting'
+    const pairing = ['starting', 'scanning', 'connecting'].includes(headband.phase)
+    const stationOn = (id) => stations.some(s => s.device_id === id && s.running) || (id === stationId && live)
+    for (const id of stoppingIds.current) {
+      if (!(id === camera.id ? camera.running : stationOn(id))) stoppingIds.current.delete(id)
+    }
+    if (!camera.running) stopFailed.current.camera = false
+    if (!live && !pairing && !stations.some(s => s.running)) stopFailed.current.headband = false
+
+    const v = permitVerdicts(answer)
+    if (v.camera.refused && camera.id && camera.running && !stoppingIds.current.has(camera.id)) {
+      const id = camera.id
+      stopRefused('camera', () => endPushDevice(id, { strict: true }), v.camera, 'The camera was turned off.')
+    }
+    if (!v.headband.refused) return
+    // The live station goes through Disconnect's teardown; a pairing's station is the pairing's to stop.
+    const own = live || pairing ? stationId : null
+    const others = stations.filter(s => s.running && s.device_id !== own && !stoppingIds.current.has(s.device_id))
+      .map(s => s.device_id)
+    const teardown = !live || stoppingIds.current.has(stationId) ? null
+      : headband.phase === 'reconnecting' ? () => cancelReconnect({ strict: true })
+        : () => disconnectHeadband(makeHw(recorderRef.current, { strict: true }))
+    if (!teardown && others.length === 0) return
+    // Marked now: Stop trying's teardown reaches `endPushDevice` only after its bridge disconnect.
+    if (teardown) stoppingIds.current.add(stationId)
+    // Every stop settles first; a real failure outranks "still being released", being the one retried.
+    stopRefused('headband', () => Promise.allSettled([
+      ...(teardown ? [teardown()] : []),
+      ...others.map(id => endPushDevice(id, { strict: true })),
+    ]).then(results => {
+      const failures = results.filter(r => r.status === 'rejected').map(r => r.reason)
+      if (failures.length) throw failures.find(e => !e?.releasing) || failures[0]
+    }), v.headband, 'The headband was disconnected.')
+  })
+  useEffect(() => { enforcePermits(permits.answer) },
+    [permits, camera.running, headband.connected, headband.phase, stations])
 
   // Closes the session; clearing `sessionId` takes the token back off the
   // sidecar. Hardware stays paired.
@@ -891,14 +1082,23 @@ export default function Adaptive() {
         const prev = lastRecorded.current
         const now = d.recorded || {}
         // The first poll is only a baseline, so a reload doesn't list stale channels.
-        setRecording(prev ? CHANNEL_LABELS
+        const labels = prev ? CHANNEL_LABELS
           .filter(([key]) => (now[key] || 0) > (prev[key] || 0))
-          .map(([, label]) => label) : [])
+          .map(([, label]) => label) : []
+        // The same array, and below the same object, when nothing changed: such a read renders nothing.
+        setRecording(r => (r.join() === labels.join() ? r : labels))
         lastRecorded.current = now
         // A restarted sidecar has no token; skip `enabled: false` (config, would 409).
         if (d.enabled !== false && !d.running) recover()
+        // The sidecar's answer goes to the permit state, not here: its age differs on every read.
+        const { permits: sidecarAnswer, permits_age_seconds: sidecarAge, permits_check_seconds: sidecarCheck,
+                ...status } = d
         // Reachable and running are separate claims; `answered`: only a status says whether it reports results.
-        setPush(p => ({ ...(p || {}), ...d, reachable: true, running: !!d.enabled && !!d.running, answered: true }))
+        setPush(p => {
+          const next = { ...(p || {}), ...status, reachable: true, running: !!d.enabled && !!d.running, answered: true }
+          return JSON.stringify(next) === JSON.stringify(p) ? p : next
+        })
+        if (sidecarAnswer && typeof sidecarAge === 'number') takeSidecarPermits(sidecarAnswer, sidecarAge, sidecarCheck)
       })
       .catch(() => {
         if (killed) return
@@ -909,7 +1109,7 @@ export default function Adaptive() {
         recover()
       })
     tick()
-    const id = setInterval(tick, 10000)
+    const id = setInterval(tick, PUSH_STATUS_POLL_MS)
     return () => { killed = true; clearInterval(id) }
   }, [sessionId, headband.pushMode, recover])
 
@@ -940,11 +1140,21 @@ export default function Adaptive() {
   const toggleCamera = async () => {
     // Push only; guarded here as well as by the disabled button.
     if (!camera.id || !headband.pushMode || camera.busy) return
+    // Busy first, so a double click can't start it twice while the permit is re-read.
     setCamera(c => ({ ...c, busy: true }))
+    if (!camera.running) {
+      const fresh = permitVerdicts(await checkPermits()).camera
+      if (!fresh.allowed || !pageAlive.current) {
+        setCamera(c => ({ ...c, busy: false }))
+        if (pageAlive.current) toast.error("The camera can't be turned on.", { description: blockedLine('camera', fresh) })
+        return
+      }
+    }
     const toggled = camera.running
       // Shared helper, so the sidecar doesn't keep the student's token.
       ? endPushDevice(camera.id)
       // No session: frames are dropped until a lesson consumes them.
+      // Refused while starting: `enforcePermits` stops it once `running` lands.
       : deviceStart(camera.id).then(() => setCamera(c => ({ ...c, running: true })))
     await toggled
       .catch(e => {
@@ -961,6 +1171,16 @@ export default function Adaptive() {
     if (headband.phase === 'reconnecting') {
       await cancelReconnect()
       return
+    }
+    // Only Connect is gated. `starting` first, so a double click can't pair twice while the permit is re-read.
+    if (headband.pushMode && !headband.connected) {
+      setHeadband(s => ({ ...s, phase: 'starting' }))
+      const fresh = permitVerdicts(await checkPermits()).headband
+      if (!fresh.allowed || !pageAlive.current) {
+        setHeadband(s => ({ ...s, phase: 'idle' }))
+        if (pageAlive.current) toast.error("The headband can't be connected.", { description: blockedLine('headband', fresh) })
+        return
+      }
     }
     // Pull needs a session (its reservation is per session_id); a failure here
     // resets the button and alerts.
@@ -1008,7 +1228,13 @@ export default function Adaptive() {
       setHeadband(s => ({ ...s, phase: 'idle', deviceName: null }))
       // Long dwell: these are instructions. An unlanded read blames the check,
       // never the headband.
-      if (outcome.reason === 'status_unavailable') {
+      if (outcome.reason === 'cancelled') {
+        // A page gone needs no toast; a refusal (`pairOnce` read `permitsRef`) says why, once.
+        if (pageAlive.current && headbandRefused()) {
+          toast.warning("The headband wasn't connected.",
+            { description: blockedLine('headband', permitVerdicts(permitsRef.current).headband) })
+        }
+      } else if (outcome.reason === 'status_unavailable') {
         toast.error('Could not reach the EEG service.', {
           description: 'Your headband was not touched. This usually clears on its own — '
             + 'click Connect Headband again in a moment.',
@@ -1164,6 +1390,8 @@ export default function Adaptive() {
   const headbandWaiting = pushRunning && eegState === 'waiting'
   const cameraState = channelState('face')
   const cameraDeclined = declined.find(d => d.key === 'face')
+  // Gates switching on only (push); Off, Disconnect and Stop trying never read it.
+  const verdicts = permitVerdicts(permits.answer)
   const connectedLine = {
     declined: 'Connected, but your headband readings are not being saved, so your teacher cannot see them.',
     waiting: 'Connected. Waiting for the first readings to be saved.',
@@ -1251,7 +1479,9 @@ export default function Adaptive() {
               headband.connected
                 ? connectedLine
                 : headband.pushMode
-                  ? (push && push.enabled === false
+                  ? (!verdicts.headband.allowed
+                      ? blockedLine('headband', verdicts.headband)
+                    : push && push.enabled === false
                       ? 'The app on this computer is running but is not set up to record (PUSH_ENABLED is off). Nothing is being saved for this session.'
                     : push && push.reachable === false
                       ? 'The app on this computer is not running, so nothing is being recorded. Start it and this will change on its own.'
@@ -1331,7 +1561,8 @@ export default function Adaptive() {
         )}
         {/* Not gated on sessionId (created lazily); `available` is null under push. */}
         <button onClick={toggleHeadband}
-          disabled={(!headband.available && !headband.pushMode) || !stationId || ['starting','scanning','connecting'].includes(headband.phase)}
+          disabled={(!headband.available && !headband.pushMode) || !stationId || ['starting','scanning','connecting'].includes(headband.phase)
+            || (headband.pushMode && headband.phase === 'idle' && !headband.connected && !verdicts.headband.allowed)}
           className={`px-4 py-2 rounded-xl text-sm font-bold transition shadow disabled:opacity-50 disabled:cursor-not-allowed ${
             headband.connected || headband.phase === 'reconnecting'
               ? 'bg-rose-500 hover:bg-rose-600 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'
@@ -1377,11 +1608,13 @@ export default function Adaptive() {
                     ? 'Reading how you are finding the questions. No video is saved.'
                     : camera.running
                       ? 'The camera is on, but nothing is being recorded until you start a lesson. No video is saved.'
-                      : 'Turn on to read how you are finding the questions. No video is saved.'}
+                      : !verdicts.camera.allowed
+                        ? blockedLine('camera', verdicts.camera)
+                        : 'Turn on to read how you are finding the questions. No video is saved.'}
             </p>
           </div>
           <button onClick={toggleCamera}
-            disabled={!headband.pushMode || camera.busy}
+            disabled={!headband.pushMode || camera.busy || (!camera.running && !verdicts.camera.allowed)}
             className={`px-4 py-2 rounded-xl text-sm font-bold transition shadow disabled:opacity-50 disabled:cursor-not-allowed ${
               camera.running ? 'bg-rose-500 hover:bg-rose-600 text-white' : 'bg-fuchsia-600 hover:bg-fuchsia-700 text-white'
             }`}>

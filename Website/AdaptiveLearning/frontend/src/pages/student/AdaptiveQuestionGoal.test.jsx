@@ -30,6 +30,7 @@ vi.mock('../../context/AuthContext', () => ({
 
 import { endSession, recordAnswer } from '../../lib/session'
 import { mockApi, resetApi } from '../../test/mocks/apiFetch'
+import { buildRecordingPermits } from '../../test/fixtures/recordingPermits'
 import Adaptive from './Adaptive'
 
 beforeEach(() => {
@@ -37,6 +38,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
+    'GET /api/recording/me': () => buildRecordingPermits(),
     'GET /api/performance/student/u1': () => [],
     'POST /api/sessions/start': () => ({ id: 'sess-goal' }),
     'GET /api/eeg/health': () => ({ available: false }),
@@ -76,6 +78,7 @@ const QUESTION = { question_text: 'What is 1 + 1?', answer_options: ['1', '2'], 
 
 // `mockApi` replaces the route table, so the happy path is restated here.
 const ROUTES = {
+  'GET /api/recording/me': () => buildRecordingPermits(),
   'GET /api/performance/student/u1': () => [],
   'POST /api/sessions/start': () => ({ id: 'sess-goal' }),
   'GET /api/eeg/health': () => ({ available: false }),

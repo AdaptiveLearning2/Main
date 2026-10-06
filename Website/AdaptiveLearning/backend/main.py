@@ -1484,6 +1484,23 @@ def _not_recording_reason(gate: dict, declined: str,
     return declined
 
 
+def _recording_state(gate: dict, channel: str) -> str:
+    """One channel's key for `GET /api/recording/me`, in `_not_recording_reason`'s order.
+
+    `unknown` (an unreadable window or consent) is not a refusal, so any definite refusal outranks it."""
+    if gate.get(f"record_{channel}"):
+        return "permitted"
+    if gate.get("window_state") != WINDOW_UNREADABLE:
+        window = _window_meaning(gate.get("window_state")).stopped_reason
+        if window:
+            return window
+    if f"record_{channel}" in gate.get("switched_off", ()):
+        return "switched_off"
+    if gate.get("retrieved") and not gate.get(f"{channel}_enabled"):
+        return "declined"
+    return "unknown"
+
+
 def _topic_breakdown(student_id: str):
     """The student's per-topic accuracy; [] on a failed read.
 
@@ -6050,6 +6067,49 @@ def ack_consent(request: Request):
     if not written:
         raise HTTPException(404, "No consent record to acknowledge")
     return {"ok": True}
+
+
+# The consent channels each sensor serves: refused when all of them refuse, allowed when any permits.
+_RECORDING_SENSORS = {"camera": ("camera",), "headband": ("eeg", "headband_optical")}
+# Heart source to the consent channel it is recorded under, from the flags the ingest gate uses.
+_HEART_SOURCE_CHANNEL = {source: flag.removeprefix("record_")
+                         for flag, sources in _HEART_SOURCES_BY_RECORD_FLAG.items() for source in sources}
+# The ingest endpoints' own decline wording, so a reading the sidecar withholds reads like one they declined.
+_RECORDING_DECLINED = {"eeg": "eeg not consented",
+                       **{flag.removeprefix("record_"): text for flag, text in _HEART_SENSOR_DECLINED.items()}}
+
+
+def _recording_reason(channel: str, state: str) -> str | None:
+    """Why `channel` may not record, in the ingest endpoints' words; None when it may, or nobody knows."""
+    if state == "declined":
+        return _RECORDING_DECLINED[channel]
+    if state == "switched_off":
+        return _SWITCHED_OFF
+    return next((m.reason for m in _WINDOW_STATES.values() if m.stopped_reason == state), None)
+
+
+@app.get("/api/recording/me")
+def my_recording_permits(request: Request):
+    """Whether each of the caller's sensors may record now; the lesson page and the sidecar ask.
+
+    Always 200: a failed read is `unknown` per channel, which the page treats as "don't switch on".
+    """
+    user = get_user(request)
+    try:
+        gate = _may_record(user["id"])
+    except Exception as e:
+        print(f"[recording:me] {user['id']}: {e}")
+        gate = None
+    states = {c: _recording_state(gate, c) if gate else "unknown" for c in CONSENT_CHANNELS}
+    refused = {c: s not in ("permitted", "unknown") for c, s in states.items()}
+    return {
+        **{c: {"state": s, "reason": _recording_reason(c, s)} for c, s in states.items()},
+        # Derived here once, so the sidecar keeps no copy of the rule or the mapping.
+        "sensors": {sensor: {"allowed": any(states[c] == "permitted" for c in channels),
+                             "refused": all(refused[c] for c in channels)}
+                    for sensor, channels in _RECORDING_SENSORS.items()},
+        "heart_sources": dict(_HEART_SOURCE_CHANNEL),
+    }
 
 
 # ─── biosignals: cognitive (headband) + face recognition ──────────────────

@@ -1,6 +1,6 @@
 /** The camera stops when the page goes (unmount or `pagehide`); the headband stays paired. */
 import { it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 vi.mock('../../lib/supabase', async () => await import('../../test/mocks/supabase'))
@@ -69,7 +69,8 @@ vi.mock('../../context/AuthContext', () => ({
 
 import { deviceStop, deviceStopOnUnload, devices } from '../../lib/sidecar'
 import { eegDevices } from '../../lib/signals'
-import { mockApi, resetApi } from '../../test/mocks/apiFetch'
+import { apiFetch, mockApi, resetApi } from '../../test/mocks/apiFetch'
+import { buildRecordingPermits } from '../../test/fixtures/recordingPermits'
 import Adaptive from './Adaptive'
 
 beforeEach(() => {
@@ -81,6 +82,7 @@ beforeEach(() => {
   registry.failureShape = 'error'
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '4th Grade' }),
+    'GET /api/recording/me': () => buildRecordingPermits(),
     'GET /api/classes': () => [],
     'GET /api/performance/student/u1': () => [],
   })
@@ -101,6 +103,19 @@ async function renderWithCameraOn() {
   vi.clearAllMocks()
   return view
 }
+
+it('asks once whether the camera may record when it is turned on, without restarting its check', async () => {
+  // Real intervals here: the 30 s poll cannot land inside the click, so the count is exact.
+  registry.cameraRunning = false
+  const asked = () => apiFetch.mock.calls.filter(([path]) => path === '/api/recording/me').length
+  render(<Adaptive />)
+  const turnOn = await screen.findByRole('button', { name: /turn on camera/i })
+  await waitFor(() => expect(turnOn).toBeEnabled())
+  expect(asked()).toBe(1)
+  fireEvent.click(turnOn)
+  await screen.findByRole('button', { name: /turn off/i })
+  expect(asked()).toBe(2)
+})
 
 it('stops the camera when the page unmounts', async () => {
   const { unmount } = await renderWithCameraOn()

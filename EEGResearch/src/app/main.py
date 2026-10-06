@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from time import perf_counter
 
@@ -18,13 +19,41 @@ from src.app.security import (
     require_local_controller,
 )
 from src.app.services.push_client import PushClient
-from src.app.services.stream_manager import StreamManager, UnknownDeviceError
+from src.app.services.stream_manager import DeviceReleasing, StreamManager, UnknownDeviceError
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 stream_manager = StreamManager()
-# None when push is off, so there is no instance to start by accident and duplicate writers.
-push_client = PushClient(settings.backend_url) if settings.push_enabled else None
+
+
+async def _stop_refused_sensors(sensors: set[str], still_current: Callable[[], bool]) -> None:
+    """Stop each running device of a sensor the backend refuses: the lesson page that would may be gone.
+
+    Checked before each device: a refusal from a session that has since ended stops nothing more."""
+    for device in stream_manager.list_devices():
+        if not still_current():
+            return
+        sensor = "camera" if device["kind"] == "face" else "headband"
+        if device["running"] and sensor in sensors:
+            logger.warning("push: stopping %s; recording from the %s is not permitted",
+                           device["device_id"], sensor)
+            try:
+                await stream_manager.stop(device["device_id"])
+            except DeviceReleasing as exc:
+                # Its stream has stopped; the next check tries again, and the other devices are not held up.
+                logger.warning("push: %s", exc)
+
+
+def _make_push_client() -> PushClient | None:
+    """None when push is off, so there is no instance to start by accident and duplicate writers."""
+    if not settings.push_enabled:
+        return None
+    client = PushClient(settings.backend_url)
+    client.set_refusal_handler(_stop_refused_sensors)
+    return client
+
+
+push_client = _make_push_client()
 
 
 @asynccontextmanager
@@ -34,6 +63,7 @@ async def _lifespan(_app: FastAPI):
     if push_client is not None:
         stream_manager.set_payload_consumer(None)
         await push_client.stop()
+        await push_client.cancel_refusals()
 
 
 app = FastAPI(
@@ -85,6 +115,11 @@ def _unknown_device(device_id: str) -> HTTPException:
     return HTTPException(status_code=404, detail=f"Unknown device_id: {device_id!r}")
 
 
+def _releasing(exc: DeviceReleasing) -> HTTPException:
+    """A 503: a start did not connect; a stop's stream has stopped but the device is still being let go."""
+    return HTTPException(status_code=503, detail=str(exc))
+
+
 @app.get("/api/v1/devices")
 async def list_devices(_: str = Depends(require_learner_token)) -> JSONResponse:
     return JSONResponse({"status": "ok", "data": stream_manager.list_devices()})
@@ -98,6 +133,11 @@ async def start_session(
         await stream_manager.start(device_id)
     except UnknownDeviceError:
         raise _unknown_device(device_id)
+    except DeviceReleasing as exc:
+        raise _releasing(exc)
+    if push_client is not None:
+        # A sensor started after a parent turned it back on must not be judged by the answer before that.
+        push_client.recheck()
     return JSONResponse({"status": "running"})
 
 
@@ -124,6 +164,8 @@ async def stop_session(
         await stream_manager.stop(device_id)
     except UnknownDeviceError:
         raise _unknown_device(device_id)
+    except DeviceReleasing as exc:
+        raise _releasing(exc)
     return JSONResponse({"status": "stopped"})
 
 

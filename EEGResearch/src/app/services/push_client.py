@@ -11,7 +11,8 @@ import asyncio
 import logging
 import time
 from collections import deque
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, NamedTuple
 
 import httpx
 
@@ -50,6 +51,33 @@ _REFUSED_WHOLE = frozenset({400, 413, 422})
 
 # Halving stops here: below it a size refusal is final, so no cap turns each reading into a request.
 MIN_BATCH = 5
+
+# Seconds between reads of `/api/recording/me` while a session runs; the lesson page polls at this pace too.
+PERMIT_CHECK_SECONDS = 30.0
+# How long readings wait for a device start's fresh answer before the last one decides; held longer they
+# would overflow the queue and read as lost rather than declined.
+PERMIT_HOLD_SECONDS = 3 * FLUSH_SECONDS
+
+# The consent channel each push channel is recorded under; heart goes by its sensor, from the answer.
+_CHANNEL_CONSENT = {"cognitive": "eeg", "face": "camera"}
+_CONSENT_CHANNELS = ("eeg", "headband_optical", "camera")
+_SENSORS = ("camera", "headband")
+# (refused sensor, still the refusing session?) -> stops that sensor's running devices.
+_RefusalHandler = Callable[[set[str], Callable[[], bool]], Awaitable[None]]
+
+
+class _Permits(NamedTuple):
+    """One landed `/api/recording/me` answer. The rules behind it are the backend's; nothing is re-derived here."""
+    states: dict[str, str]
+    reasons: dict[str, str | None]
+    sensors: dict[str, dict[str, bool]]
+    heart_sources: dict[str, str]
+    at: float  # monotonic
+
+    def answer(self) -> dict[str, Any]:
+        """As the backend gave it, for the lesson page, which reads the same fields."""
+        return {**{c: {"state": self.states[c], "reason": self.reasons[c]} for c in _CONSENT_CHANNELS},
+                "sensors": self.sensors, "heart_sources": self.heart_sources}
 
 
 class _BatchRefused(Exception):
@@ -120,6 +148,33 @@ class PushClient:
         # Monotonic deadline; the wake event can skip the sleep, so this enforces the backoff.
         self._retry_at = 0.0
         self._last_error: str | None = None
+        # The latest landed answer, or None: send everything and let the backend decide.
+        self._permits: _Permits | None = None
+        self._permits_due = 0.0
+        # Set by `recheck()` until a check begun after it lands; see `_held_back`. Counted per recheck.
+        self._permits_stale = False
+        self._permits_generation = 0
+        # Monotonic end of the hold a recheck starts; see PERMIT_HOLD_SECONDS.
+        self._hold_until = 0.0
+        # Stops the running devices of a refused sensor ("camera", "headband"), while the second argument
+        # says the refusing session is still current; the page may be gone.
+        self._on_refused: _RefusalHandler | None = None
+        # Per sensor, each its own task: a slow Bluetooth disconnect holds neither the loop nor a `stop()`.
+        self._refusal_tasks: dict[str, asyncio.Task] = {}
+
+    def set_refusal_handler(self, handler: _RefusalHandler | None) -> None:
+        """What to call with a refused sensor after each check that refuses one."""
+        self._on_refused = handler
+
+    def recheck(self) -> None:
+        """Ask again before the next send: a device just started, and must not be judged by an older answer.
+
+        Until the new one lands, readings the old answer refuses are held, not dropped and not sent."""
+        self._permits_stale = True
+        self._permits_generation += 1
+        self._hold_until = time.monotonic() + PERMIT_HOLD_SECONDS
+        self._permits_due = 0.0
+        self._wake.set()
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -208,6 +263,14 @@ class PushClient:
                     raise
         if not (flush and self._token):
             return
+        if self._permits_stale:
+            # Held readings get the fresh answer if the budget allows; the final flush then holds nothing.
+            self._permits_due = 0.0
+            try:
+                async with asyncio.timeout(max(0.0, deadline - time.monotonic())):
+                    await self._check_permits_if_due()
+            except TimeoutError:
+                pass
         # Loop until empty: `_flush_once` takes at most MAX_BATCH per channel.
         for _ in range(MAX_SHUTDOWN_FLUSHES):
             if not any(self._queues[c] for c in _CHANNELS):
@@ -220,7 +283,7 @@ class PushClient:
             try:
                 # Cancelled at the deadline, as the loop is: the kit ends a sidecar that overruns it.
                 async with budget:
-                    await self._flush_once()
+                    await self._flush_once(final=True)
             except Exception as exc:  # noqa: BLE001 - shutdown must not raise
                 # A TimeoutError the flush raised itself is a failure like any other, not the budget.
                 if isinstance(exc, TimeoutError) and budget.expired():
@@ -250,6 +313,10 @@ class PushClient:
         self._last_result = {channel: None for channel in _CHANNELS}
         self._last_result_at = {channel: 0.0 for channel in _CHANNELS}
         self._batch_limit = {channel: MAX_BATCH for channel in _CHANNELS}
+        # The answer was about this student; the next session asks afresh.
+        self._permits = None
+        self._permits_due = 0.0
+        self._permits_stale = False
 
     # ── producing ────────────────────────────────────────────────────────────
 
@@ -361,7 +428,9 @@ class PushClient:
 
     async def _loop(self) -> None:
         while not self._stopping.is_set():
-            delay = self._backoff or FLUSH_SECONDS
+            # Before the backoff gate, and the wait ends when it is next due: a backoff must not delay a withdrawal.
+            await self._check_permits_if_due()
+            delay = min(self._backoff or FLUSH_SECONDS, max(0.0, self._permits_due - time.monotonic()))
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=delay)
             except asyncio.TimeoutError:
@@ -369,6 +438,8 @@ class PushClient:
             self._wake.clear()
             if self._stopping.is_set():
                 return
+            # Again before sending: `recheck()` wants this batch judged by a fresh answer.
+            await self._check_permits_if_due()
             # The deadline, not the wake event, is the authority: a full batch may flush early, never before backoff.
             if self._retry_at and time.monotonic() < self._retry_at:
                 continue
@@ -379,6 +450,100 @@ class PushClient:
             except Exception as exc:  # noqa: BLE001 - the loop outlives failures
                 self._note_failure(exc)
 
+    async def _check_permits_if_due(self) -> None:
+        """Re-read what this student may record, and stop the sensors it refuses.
+
+        A failed read keeps the last answer: it says nothing new, and never switches anything off."""
+        if time.monotonic() < self._permits_due:
+            return
+        # Advanced even with no token, or the loop's wait, capped by it, would spin.
+        self._permits_due = time.monotonic() + PERMIT_CHECK_SECONDS
+        if not self._token:
+            return
+        # Only a check begun after the latest `recheck()` counts.
+        generation = self._permits_generation
+        try:
+            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+                response = await client.get(f"{self._backend_url}/api/recording/me",
+                                            headers={"Authorization": f"Bearer {self._token}"})
+            response.raise_for_status()
+            body = response.json()
+            permits = _Permits(
+                states={c: str(body[c]["state"]) for c in _CONSENT_CHANNELS},
+                reasons={c: body[c]["reason"] for c in _CONSENT_CHANNELS},
+                sensors={s: {"allowed": body["sensors"][s]["allowed"] is True,
+                             "refused": body["sensors"][s]["refused"] is True} for s in _SENSORS},
+                heart_sources={str(k): str(v) for k, v in body["heart_sources"].items()},
+                at=time.monotonic())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - an older backend 404s; the backend still gates
+            logger.info("push: could not check what may be recorded (%s); keeping the last answer", exc)
+            if self._holding():
+                # Still held, not dropped on the old answer; asked again soon rather than in a full interval.
+                self._permits_due = time.monotonic() + FLUSH_SECONDS
+            return
+        if generation != self._permits_generation:
+            # Asked before a device started: not kept, passed on or acted on, so it cannot stop that device.
+            return
+        self._permits = permits
+        self._permits_stale = False
+        for sensor in (s for s, verdict in permits.sensors.items() if verdict["refused"]):
+            task = self._refusal_tasks.get(sensor)
+            # One at a time per sensor, and per sensor: a slow camera stop must not hold up the headband's.
+            if self._on_refused is not None and (task is None or task.done()):
+                self._refusal_tasks[sensor] = asyncio.create_task(self._stop_refused(sensor, self._session_id))
+
+    async def _stop_refused(self, sensor: str, session_id: str | None) -> None:
+        """Stops one sensor for the session that refused it; once that session ends it stops nothing more."""
+        try:
+            await self._on_refused({sensor}, lambda: self._session_id == session_id)
+        except Exception as exc:  # noqa: BLE001 - the next check retries
+            logger.warning("push: could not stop the %s, which may not record: %s", sensor, exc)
+
+    async def cancel_refusals(self) -> None:
+        """For shutdown: cancels device stops still under way; a cancelled stop still runs its own cleanup."""
+        tasks = [task for task in self._refusal_tasks.values() if not task.done()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._refusal_tasks.clear()
+
+    def _refused(self, consent: str | None) -> bool:
+        """Refused by the latest answer; `unknown` and no answer are not refusals."""
+        state = self._permits.states.get(consent, "unknown") if self._permits else "unknown"
+        return state not in ("permitted", "unknown")
+
+    def _consent_of(self, channel: str, sample: dict[str, Any]) -> str | None:
+        """The consent channel a sample is recorded under; heart goes by its sensor, from the answer."""
+        if channel != "heart":
+            return _CHANNEL_CONSENT[channel]
+        return self._permits.heart_sources.get(sample.get("source")) if self._permits else None
+
+    def _held_back(self, channel: str, samples: list[dict[str, Any]]) -> bool:
+        """A fresh answer is on its way and the old one refuses some of these: they wait for it."""
+        return self._holding() and any(self._refused(self._consent_of(channel, s)) for s in samples)
+
+    def _holding(self) -> bool:
+        """A recheck's answer is still awaited and its hold has not run out."""
+        return self._permits_stale and time.monotonic() < self._hold_until
+
+    def _withhold(self, channel: str, samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Drop the samples the latest answer refuses, counted as declined with the backend's reason."""
+        if self._permits is None:
+            return samples
+        kept = []
+        for sample in samples:
+            consent = self._consent_of(channel, sample)
+            if not self._refused(consent):
+                kept.append(sample)
+                continue
+            self._declined[channel] += 1
+            self._declined_reason[channel] = self._permits.reasons.get(consent) or "not permitted"
+            self._last_result[channel] = "declined"
+            self._last_result_at[channel] = time.monotonic()
+        return kept
+
     def _note_failure(self, exc: Exception) -> None:
         self._last_error = str(exc)
         self._backoff = min(BACKOFF_MAX, max(BACKOFF_START, self._backoff * 2))
@@ -386,11 +551,11 @@ class PushClient:
         logger.warning("push: flush failed (%s), backing off %.0fs",
                        exc, self._backoff)
 
-    async def _flush_once(self) -> None:
+    async def _flush_once(self, *, final: bool = False) -> None:
         """One pass over the channels. A failure in one does not cost the others.
 
         Each channel is drained just before its own POST, so a failure restores only that batch.
-        """
+        `final` (shutdown) holds nothing back: there is no later flush to judge it."""
         session_id, token = self._session_id, self._token
         if not session_id or not token:
             return
@@ -399,6 +564,11 @@ class PushClient:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             for channel in _CHANNELS:
                 samples = self._take(channel)
+                if not final and self._held_back(channel, samples):
+                    # Neither dropped on the old answer nor sent: the next flush judges them by the new one.
+                    self._restore(channel, samples)
+                    continue
+                samples = self._withhold(channel, samples)
                 if not samples:
                     continue
                 try:
@@ -527,6 +697,11 @@ class PushClient:
             "last_result": {c: r if time.monotonic() - self._last_result_at[c] <= RESULT_FRESH_SECONDS else None
                             for c, r in self._last_result.items()},
             "batch_limit": dict(self._batch_limit),
+            # The states this session sends by, and their age, which the lesson page uses in place of its own poll.
+            "permits": self._permits.answer() if self._permits else None,
+            "permits_age_seconds": round(time.monotonic() - self._permits.at, 1) if self._permits else None,
+            # How often it asks, so the page can tell a current answer from one the sidecar stopped renewing.
+            "permits_check_seconds": PERMIT_CHECK_SECONDS,
             "backoff_seconds": self._backoff,
             "last_error": self._last_error,
         }

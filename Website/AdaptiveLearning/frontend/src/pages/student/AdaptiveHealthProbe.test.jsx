@@ -41,6 +41,7 @@ vi.mock('./pollIntervals', async (importOriginal) => ({
 }))
 
 import { mockApi, overrideApi, resetApi } from '../../test/mocks/apiFetch'
+import { buildRecordingPermits } from '../../test/fixtures/recordingPermits'
 import { PULL_HEALTH_POLL_MS, PULL_STATUS_POLL_MS } from './pollIntervals'
 import { eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { museState, devices } from '../../lib/sidecar'
@@ -53,6 +54,7 @@ beforeEach(() => {
   eegHealth.mockResolvedValue({ available: true, ingest_mode: 'pull' })
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
+    'GET /api/recording/me': () => buildRecordingPermits(),
     'GET /api/performance/student/u1': () => [],
     'POST /api/sessions/start': () => ({ id: 'sess-probe' }),
     'GET /api/eeg/health': () => ({ available: true, ingest_mode: 'pull' }),

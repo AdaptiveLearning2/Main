@@ -117,7 +117,10 @@ it("claims nothing from another tab's lesson, and says where the readings go", a
   expect(screen.queryByText(/Not being saved/)).toBeNull()
   expect(screen.queryByText(/not saved/)).toBeNull()
   expect(within(panelOf('Muse Headband')).queryByText('not recording')).toBeNull()
-  // Nor its delivery: the recording chip is built from the counts between polls.
+  // Nor its delivery: the recording chip, shown once a question is answered, is built from the counts between polls.
+  fireEvent.click(screen.getByRole('button', { name: /^B\s*4$/ }))
+  fireEvent.click(screen.getByRole('button', { name: /submit answer/i }))
+  await screen.findByText(/1 answered/)
   await pollsLanded(3)
   expect(screen.queryByText(/Recording:/)).toBeNull()
 }, 30_000)

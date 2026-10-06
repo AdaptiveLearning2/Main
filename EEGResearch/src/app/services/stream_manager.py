@@ -83,6 +83,8 @@ class DeviceSession:
         self._preset_mismatch_since: float | None = None
         self._task: asyncio.Task[None] | None = None
         self.running = False
+        # Serialises start and stop, so one adapter is never released twice at once.
+        self._lifecycle = asyncio.Lock()
         # Set when push is on; a plain callable so this module never depends on the network.
         self.on_payload: Callable[[dict[str, Any]], None] | None = None
 
@@ -192,37 +194,45 @@ class DeviceSession:
         return payload
 
     async def start(self) -> None:
-        if self.running:
-            return
-        # Can block on network I/O; kept off the event loop.
-        await asyncio.to_thread(self.adapter.connect)
-        self.running = True
-        self._task = asyncio.create_task(self._loop())
+        # Serialised with stop: the page and the push client may each act on one device at once.
+        async with self._lifecycle:
+            if self.running:
+                return
+            # Can block on network I/O; kept off the event loop.
+            await asyncio.to_thread(self.adapter.connect)
+            self.running = True
+            self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
-        was_running = self._task is not None
-        self.running = False
-        if self._task is not None:
-            self._task.cancel()
+        async with self._lifecycle:
+            was_running = self._task is not None
+            self.running = False
             try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
-        # Can block on socket shutdown/thread joins.
-        await asyncio.to_thread(self.adapter.disconnect)
-        if was_running:
-            # A stopped stream is "no data", not its last reading; skipped when never started ("idle").
-            # clear_session(), not reset(): the next student must not inherit the baseline.
-            self.processor.clear_session()
-            self.spectrum.reset()
-            self.adaptation.end_session()
-            self._reset_heart()
-            self.latest_payload = self._no_signal_payload()
-            self.last_good_at = None
-            self.last_good_ts = None
-            self.consecutive_errors = 0
-            self._preset_mismatch_since = None
+                if self._task is not None:
+                    self._task.cancel()
+                    try:
+                        await self._task
+                    except asyncio.CancelledError:
+                        pass
+                    self._task = None
+                # Can block on socket shutdown/thread joins.
+                await asyncio.to_thread(self.adapter.disconnect)
+            finally:
+                # Even for a stop cancelled mid-disconnect: the next student must not inherit the baseline.
+                if was_running:
+                    self._forget_stream()
+
+    def _forget_stream(self) -> None:
+        """A stopped stream is "no data", not its last reading; clear_session(), not reset(), drops the baseline."""
+        self.processor.clear_session()
+        self.spectrum.reset()
+        self.adaptation.end_session()
+        self._reset_heart()
+        self.latest_payload = self._no_signal_payload()
+        self.last_good_at = None
+        self.last_good_ts = None
+        self.consecutive_errors = 0
+        self._preset_mismatch_since = None
 
     # Seconds requested and active preset may disagree before it counts as ignored.
     PRESET_SETTLE_SECONDS = 5.0

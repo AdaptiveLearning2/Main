@@ -1161,10 +1161,31 @@ async def test_the_synthetic_mark_travels_top_level_not_inside_raw(client):
 # ── what the student may record: withheld, and refused sensors stopped ───────
 
 ALL_PERMITTED = {"eeg": "permitted", "headband_optical": "permitted", "camera": "permitted"}
+# The backend's answer, as `my_recording_permits` builds it; the sidecar keeps no copy of these.
+_REASONS = {"declined": {"eeg": "eeg not consented", "headband_optical": "headband heart sensor not consented",
+                         "camera": "camera not consented"},
+            "switched_off": "recording is switched off by an administrator",
+            "school_year_ended": "the school year has ended"}
+_HEART_SOURCES = {"muse_optics": "headband_optical", "muse_ppg": "headband_optical", "rppg": "camera"}
+
+
+def _backend_answer(states):
+    def reason(channel, state):
+        found = _REASONS.get(state)
+        return found[channel] if isinstance(found, dict) else found
+
+    def refused(state):
+        return state not in ("permitted", "unknown")
+    sensors = {"camera": ("camera",), "headband": ("eeg", "headband_optical")}
+    return {**{c: {"state": s, "reason": reason(c, s)} for c, s in states.items()},
+            "sensors": {name: {"allowed": any(states[c] == "permitted" for c in channels),
+                               "refused": all(refused(states[c]) for c in channels)}
+                        for name, channels in sensors.items()},
+            "heart_sources": dict(_HEART_SOURCES)}
 
 
 class _PermitClient(_FakeClient):
-    """Also answers `GET /api/recording/me` with `states`, recording each read."""
+    """Also answers `GET /api/recording/me` for `states`, recording each read."""
 
     def __init__(self):
         super().__init__()
@@ -1172,7 +1193,7 @@ class _PermitClient(_FakeClient):
 
     async def get(self, url, headers=None):
         self.gets.append({"url": url, "headers": headers})
-        return _Response(status_code=self.status, body={c: {"state": s} for c, s in self.states.items()})
+        return _Response(status_code=self.status, body=_backend_answer(self.states))
 
 
 @pytest.fixture
@@ -1184,11 +1205,13 @@ def permits(monkeypatch):
     return pc
 
 
-async def _answer(pc, **states):
-    """One check, now, answering `states` over all-permitted."""
+async def _answer(pc, wait=True, **states):
+    """One check, now, answering `states` over all-permitted; `wait` lets any device stop it began finish."""
     pc._fake.states = {**ALL_PERMITTED, **states}
     pc._permits_due = 0.0
     await pc._check_permits_if_due()
+    if wait and pc._refusal_task is not None:
+        await pc._refusal_task
 
 
 def _posted(pc):
@@ -1311,6 +1334,66 @@ async def test_a_new_session_asks_again(permits):
     await _answer(permits, camera="declined")
     await permits.start("s2", "tok2")
     assert permits.status()["permits"] is None
+    await permits.stop()
+
+
+async def _until(condition):
+    """Yield to the loop until `condition()` holds, a bounded number of times."""
+    for _ in range(300):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.anyio
+async def test_a_recheck_decides_the_next_send(permits):
+    """A parent turns the camera back on and it is started: its readings go by that answer, not the last."""
+    await _started(permits)
+    await _answer(permits, camera="declined")
+    permits._fake.states = dict(ALL_PERMITTED)
+    permits.enqueue("face", {"ts": "a"})
+    permits.recheck()
+    await _until(lambda: permits._fake.calls)
+    assert _posted(permits) == ["face"]
+    assert permits.status()["declined"]["face"] == 0
+    await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_a_push_stop_does_not_wait_for_a_device_being_stopped(permits):
+    """A slow Bluetooth disconnect must not hold the shutdown inside its budget, or past it."""
+    release = asyncio.Event()
+    began = []
+
+    async def slow_stop(sensors):
+        began.append(sensors)
+        await release.wait()
+    permits.set_refusal_handler(slow_stop)
+    await _started(permits)
+    await _answer(permits, wait=False, camera="declined")
+    await _until(lambda: began)
+    assert await permits.stop()
+    assert not permits._refusal_task.done(), "the push stop returned before the device stop, as it should"
+    release.set()
+    await permits._refusal_task
+
+
+@pytest.mark.anyio
+async def test_one_device_stop_at_a_time(permits):
+    release = asyncio.Event()
+    stops = []
+
+    async def slow_stop(sensors):
+        stops.append(sensors)
+        await release.wait()
+    permits.set_refusal_handler(slow_stop)
+    await _started(permits)
+    await _answer(permits, wait=False, camera="declined")
+    await _until(lambda: stops)
+    await _answer(permits, wait=False, camera="declined")
+    assert stops == [{"camera"}]
+    release.set()
+    await permits._refusal_task
     await permits.stop()
 
 

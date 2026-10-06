@@ -1369,6 +1369,26 @@ def test_a_refusal_stops_the_running_devices_of_that_sensor_only(monkeypatch):
     assert stopped == ["camera", "default"]
 
 
+def test_starting_a_device_makes_the_push_client_ask_again(monkeypatch):
+    """A sensor turned back on is started; its readings must not go by the answer from before."""
+    import src.app.main as sidecar
+
+    calls = []
+
+    class _Push:
+        def recheck(self):
+            calls.append("recheck")
+
+    async def start(_device_id):
+        calls.append("start")
+
+    monkeypatch.setattr(sidecar, "push_client", _Push())
+    monkeypatch.setattr(sidecar.stream_manager, "start", start)
+    headers = {"Authorization": f"Bearer {get_settings().admin_token}"}
+    assert TestClient(app).post("/api/v1/session/start", headers=headers).status_code == 200
+    assert calls == ["start", "recheck"]
+
+
 def test_the_push_client_is_built_to_stop_refused_sensors(monkeypatch):
     import src.app.main as sidecar
 

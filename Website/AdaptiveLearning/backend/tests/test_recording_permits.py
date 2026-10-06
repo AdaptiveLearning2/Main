@@ -53,7 +53,7 @@ def _ask(monkeypatch, row=None, raises=False):
 
 
 def _states(res):
-    return {c: v["state"] for c, v in res.json().items()}
+    return {c: res.json()[c]["state"] for c in main.CONSENT_CHANNELS}
 
 
 def _year(monkeypatch, state):
@@ -151,6 +151,55 @@ def test_a_gate_that_raises_is_a_200_with_every_channel_unknown(monkeypatch):
 def test_the_answer_names_no_user(monkeypatch):
     res, _ = _ask(monkeypatch, {**ALL_ON, "user_id": STUDENT})
     body = res.json()
-    assert set(body) == set(main.CONSENT_CHANNELS)
-    assert all(set(v) == {"state"} for v in body.values())
+    assert set(body) == {*main.CONSENT_CHANNELS, "sensors", "heart_sources"}
+    assert all(set(body[c]) == {"state", "reason"} for c in main.CONSENT_CHANNELS)
     assert STUDENT not in res.text
+
+
+@pytest.mark.parametrize("state,expected", [
+    (main.WINDOW_AFTER, "the school year has ended"),
+    (main.WINDOW_UNCONFIGURED, "no school year is configured, so nothing is recorded"),
+])
+def test_each_refusal_carries_the_ingest_endpoints_reason(monkeypatch, set_flag, state, expected):
+    res, _ = _ask(monkeypatch, {**ALL_ON, "camera_enabled": False})
+    reasons = {c: v["reason"] for c, v in res.json().items() if c in main.CONSENT_CHANNELS}
+    assert reasons == {"eeg": None, "headband_optical": None, "camera": "camera not consented"}
+
+    set_flag("recording_eeg_enabled", False)
+    res, _ = _ask(monkeypatch, {**ALL_ON, "headband_optical_enabled": False})
+    assert res.json()["eeg"]["reason"] == "recording is switched off by an administrator"
+    assert res.json()["headband_optical"]["reason"] == "headband heart sensor not consented"
+
+    _year(monkeypatch, state)
+    res, _ = _ask(monkeypatch, ALL_ON)
+    assert {res.json()[c]["reason"] for c in main.CONSENT_CHANNELS} == {expected}
+
+
+def test_an_unknown_channel_gives_no_reason(monkeypatch):
+    res, _ = _ask(monkeypatch, raises=True)
+    assert {res.json()[c]["reason"] for c in main.CONSENT_CHANNELS} == {None}
+
+
+@pytest.mark.parametrize("row,camera,headband", [
+    (ALL_ON, (True, False), (True, False)),
+    # Heart rate alone still allows the headband; nothing refuses it.
+    ({**ALL_ON, "eeg_enabled": False, "camera_enabled": False}, (False, True), (True, False)),
+    ({**ALL_ON, "eeg_enabled": False, "headband_optical_enabled": False}, (True, False), (False, True)),
+])
+def test_each_sensor_is_allowed_by_any_channel_and_refused_only_by_all(monkeypatch, row, camera, headband):
+    sensors = _ask(monkeypatch, row)[0].json()["sensors"]
+    assert (sensors["camera"]["allowed"], sensors["camera"]["refused"]) == camera
+    assert (sensors["headband"]["allowed"], sensors["headband"]["refused"]) == headband
+
+
+def test_unknown_neither_allows_nor_refuses_a_sensor(monkeypatch):
+    sensors = _ask(monkeypatch, raises=True)[0].json()["sensors"]
+    assert sensors == {"camera": {"allowed": False, "refused": False},
+                       "headband": {"allowed": False, "refused": False}}
+
+
+def test_heart_sources_map_to_the_channel_the_ingest_gate_records_them_under(monkeypatch):
+    expected = {source: flag.removeprefix("record_")
+                for flag, sources in main._HEART_SOURCES_BY_RECORD_FLAG.items() for source in sources}
+    assert expected, "the ingest gate's table moved; this test is no longer reading it"
+    assert _ask(monkeypatch, ALL_ON)[0].json()["heart_sources"] == expected

@@ -199,14 +199,14 @@ cleanup does not run on a tab close: the route change sends `deviceStop`, `pageh
 render. `AdaptiveCameraLifecycle.test.jsx` pins both, and that a camera already off sends nothing.
 
 **No sensor opens until `GET /api/recording/me` says it may record.** Per channel: `permitted`, `declined`,
-`switched_off`, `school_year_{not_started,ended,unconfigured}` or `unknown` (a failed read), in `_not_recording_reason`'s
-order but with any definite refusal above `unknown`. The camera needs `camera`; under push the headband needs `eeg`
-**or** `headband_optical`; pull's `/api/eeg/start` demands EEG. The page gates only switching on — never Turn off,
-Disconnect or Stop trying — re-asks at the click, and stops what a refusal refuses (`enforcePermits`; a failed stop changes
-no state and the next answer retries it). **The push client asks too**, every `PERMIT_CHECK_SECONDS` while it holds a
-token: it withholds refused channels, counted `declined` in the backend's wording, and stops refused sensors itself
-(`_stop_refused_sensors`), so a page that died without its unload stop is covered. A failed read keeps the last answer;
-none withholds and stops nothing. Flags and window are cached 30 s, so a switch-off takes up to a minute.
+`switched_off`, `school_year_{not_started,ended,unconfigured}` or `unknown` (a failed read), any definite refusal above
+`unknown`, plus each `reason`, the `sensors` verdicts and the `heart_sources` map, so no client re-derives them. The camera
+needs `camera`; under push the headband needs `eeg` **or** `headband_optical`; pull's `/api/eeg/start` demands EEG. The page
+gates only switching on — never Turn off, Disconnect or Stop trying — re-asks at the click, and stops what a refusal
+refuses (`enforcePermits`; a failed stop changes no state, the next answer retries). **The push client asks too** while it
+holds a token, every `PERMIT_CHECK_SECONDS` and when a device starts: it withholds refused channels (counted `declined`)
+and stops refused sensors (`_stop_refused_sensors`, its own task), covering a page that died. In a lesson the page takes
+that answer from push status instead of polling. A failed read keeps the last answer; switch-offs take up to a minute.
 
 All three ingest endpoints are rate-limited and length-bounded. `/api/signals/cognitive` was neither
 until the push client existed, survivable only while its sole writer was the in-process poller.

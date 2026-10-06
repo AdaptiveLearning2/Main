@@ -24,11 +24,13 @@ vi.mock('./pollIntervals', async (importOriginal) => ({
 }))
 
 // The sidecar as each test sets it.
-const rig = { cameraRunning: false, headbandRunning: false, spare: false, spareRunning: false, ingestion: {} }
+const rig = { cameraRunning: false, headbandRunning: false, spare: false, spareRunning: false, ingestion: {},
+              sidecar: {} }
 vi.mock('../../lib/sidecar', () => ({
   startPush: vi.fn(async () => ({})), stopPush: vi.fn(async () => ({})),
   stopPushOnUnload: vi.fn(),
-  pushStatus: vi.fn(async () => ({ enabled: true, running: true, recorded: {} })),
+  // `rig.sidecar` carries the sidecar's own answer, as its push status reports it.
+  pushStatus: vi.fn(async () => ({ enabled: true, running: true, recorded: {}, ...rig.sidecar })),
   deviceStart: vi.fn(async () => ({})), deviceStop: vi.fn(async () => ({})),
   deviceStopOnUnload: vi.fn(),
   museRefresh: vi.fn(async () => ({})),
@@ -50,7 +52,7 @@ vi.mock('../../context/AuthContext', () => ({
 
 import { toast } from 'sonner'
 import { deviceStart, deviceStop, museConnect, museDisconnect, museRefresh, museState,
-         releasePushIfIdle } from '../../lib/sidecar'
+         pushStatus, releasePushIfIdle } from '../../lib/sidecar'
 import { apiFetch, apiError, mockApi, resetApi } from '../../test/mocks/apiFetch'
 import { buildRecordingPermits } from '../../test/fixtures/recordingPermits'
 import Adaptive from './Adaptive'
@@ -76,12 +78,18 @@ beforeEach(() => {
   rig.spare = false
   rig.spareRunning = false
   rig.ingestion = { ...CONNECTED, muse_connected: false }
+  rig.sidecar = {}
   answer = () => buildRecordingPermits()
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '4th Grade' }),
     'GET /api/recording/me': () => answer(),
     'GET /api/classes': () => [],
     'GET /api/performance/student/u1': () => [],
+    'POST /api/sessions/start': () => ({ id: 'sess-1' }),
+    'GET /api/generate-question?bias=0&grade=4th+Grade&session_id=sess-1': () => ({
+      id: 'q1', question_text: 'What is 2 + 2?', answer_options: ['3', '4'], correct_answer: '4',
+      subject: 'expressions', difficulty: 'easy',
+    }),
   })
 })
 
@@ -102,6 +110,14 @@ async function connectHeadband() {
   fireEvent.click(button)
   await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
 }
+
+/** A lesson: the session is what starts the push status poll, which carries the sidecar's answer. */
+async function startLesson() {
+  fireEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+}
+
+const SIDECAR_STATES = { eeg: 'permitted', headband_optical: 'permitted', camera: 'permitted' }
 
 function hideTab() {
   Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
@@ -431,6 +447,36 @@ it('retries the stop of a pairing it abandoned, when that stop failed', async ()
   await waitFor(() => expect(deviceStop.mock.calls).toEqual([['default'], ['default']]), { timeout: 5000 })
   await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
     'The headband was disconnected.', { description: DECLINED_HEADBAND }))
+}, TEST_TIMEOUT)
+
+it("takes the sidecar's answer during a lesson, and turns off what it refuses", async () => {
+  // The page's own answer permits the camera; only the sidecar's refuses it.
+  rig.cameraRunning = true
+  rig.sidecar = { permits: { ...SIDECAR_STATES, camera: 'declined' }, permits_age_seconds: 2 }
+  render(<Adaptive />)
+  await screen.findByRole('button', { name: /turn off/i })
+  await startLesson()
+  await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('camera'))
+  await screen.findByRole('button', { name: /turn on camera/i })
+}, TEST_TIMEOUT)
+
+it("stops asking for itself while the sidecar's answer is fresh, and asks again once it is stale", async () => {
+  rig.sidecar = { permits: SIDECAR_STATES, permits_age_seconds: 2 }
+  render(<Adaptive />)
+  // The control: how long three of the page's own answers take, which bounds the window below.
+  const started = Date.now()
+  await answersLanded(3)
+  const threeAnswers = Date.now() - started
+  await startLesson()
+  await waitFor(() => expect(pushStatus).toHaveBeenCalled())
+  // One window for a request already under way to land, then a window in which none may start.
+  await sleep(threeAnswers)
+  const quiet = permitCalls()
+  await sleep(threeAnswers)
+  expect(permitCalls()).toBe(quiet)
+  // The sidecar stops getting answers; its next status (10 s on) is stale, and the page asks again.
+  rig.sidecar = { permits: SIDECAR_STATES, permits_age_seconds: 100 }
+  await waitFor(() => expect(permitCalls()).toBeGreaterThan(quiet), { timeout: 15000 })
 }, TEST_TIMEOUT)
 
 it('stops every running headband station on a refusal, not only the connected one', async () => {

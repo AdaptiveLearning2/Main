@@ -70,6 +70,10 @@ const CHANNEL_LABELS = [
 
 // `GET /api/recording/me` (push only). Any state but `permitted` and `unknown` is a refusal.
 const PERMIT_TIMEOUT_MS = 8000
+// The sidecar asks every 30 s while it pushes; an answer older than this and the page asks for itself.
+const SIDECAR_PERMIT_FRESH_S = 45
+const sidecarAnswerFresh = (status) => !!status?.permits
+  && typeof status.permits_age_seconds === 'number' && status.permits_age_seconds <= SIDECAR_PERMIT_FRESH_S
 const PERMIT_REASONS = {
   // Names no one: the student may have withdrawn it themselves.
   declined: "it isn't permitted (see Sensors on your Profile)",
@@ -262,19 +266,26 @@ export default function Adaptive() {
   // Devices with a stop under way, kept until an effect sees them off: an effect from a render before
   // the stop's state update still sees them on, and must not stop them again (see `enforcePermits`).
   const stoppingIds = useRef(new Set())
-  // Numbered: an answer older than the last one applied changes nothing, and the caller gets the newer one.
+  // Numbered: an answer older than the last one applied changes nothing.
+  const applyPermits = (seq, answer) => {
+    if (seq <= permitSeq.current.applied) return
+    permitSeq.current.applied = seq
+    permitsRef.current = answer
+    setPermits({ answer })
+  }
+  // Resolves to this request's own answer: a click decides on what it just asked, whatever else landed.
   const checkPermits = () => {
     const seq = ++permitSeq.current.sent
     return apiFetch('/api/recording/me', { timeoutMs: PERMIT_TIMEOUT_MS })
       .catch(() => null)
       .then(answer => {
-        if (seq <= permitSeq.current.applied) return permitsRef.current
-        permitSeq.current.applied = seq
-        permitsRef.current = answer
-        setPermits({ answer })
+        applyPermits(seq, answer)
         return answer
       })
   }
+  // The sidecar's answer, from its push status: the same states, without the page asking as well.
+  const takeSidecarPermits = useEffectEvent((states) => applyPermits(++permitSeq.current.sent,
+    Object.fromEntries(Object.entries(states).map(([channel, state]) => [channel, { state }]))))
   const headbandRefused = () => permitVerdicts(permitsRef.current).headband.refused
 
   // Dev-only EEG debug panel
@@ -449,8 +460,10 @@ export default function Adaptive() {
   // still lands; decided per tick (the latest render's callback), since a changing option restarts the poll.
   const sensorOn = camera.running || camera.busy || headband.connected || headband.phase !== 'idle'
     || stations.some(s => s.running)
+  // Off while the sidecar's answer, read with its push status, is fresh: one asker per lesson, not two.
   usePoll(() => (document.hidden && !sensorOn ? null : checkPermits()),
-    { intervalMs: PUSH_POLL_MS, enabled: headband.pushMode === true, pauseWhenHidden: false })
+    { intervalMs: PUSH_POLL_MS, enabled: headband.pushMode === true && !sidecarAnswerFresh(push),
+      pauseWhenHidden: false })
 
   // Discover stations (auto-select a single one), retried until non-empty. A
   // failed read applies nothing, so `stationId` never falls back to `default`.
@@ -1042,6 +1055,7 @@ export default function Adaptive() {
         if (d.enabled !== false && !d.running) recover()
         // Reachable and running are separate claims; `answered`: only a status says whether it reports results.
         setPush(p => ({ ...(p || {}), ...d, reachable: true, running: !!d.enabled && !!d.running, answered: true }))
+        if (sidecarAnswerFresh(d)) takeSidecarPermits(d.permits)
       })
       .catch(() => {
         if (killed) return

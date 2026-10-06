@@ -118,6 +118,9 @@ async def start_session(
         await stream_manager.start(device_id)
     except UnknownDeviceError:
         raise _unknown_device(device_id)
+    if push_client is not None:
+        # A sensor started after a parent turned it back on must not be judged by the answer before that.
+        push_client.recheck()
     return JSONResponse({"status": "running"})
 
 

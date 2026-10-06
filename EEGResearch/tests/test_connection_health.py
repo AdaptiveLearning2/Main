@@ -425,3 +425,53 @@ def test_stop_forgets_the_last_reading_with_the_rest_of_the_session():
     assert session.last_good_ts is None
     assert session.last_good_at is None
     assert session.consecutive_errors == 0
+
+
+def test_two_stops_at_once_never_release_the_adapter_at_the_same_time():
+    """The page and the push client may each stop one device in the same moment."""
+    session = _session()
+    guard = threading.Lock()
+    inside, overlaps, calls = [0], [], []
+
+    def disconnect():
+        with guard:
+            inside[0] += 1
+            calls.append(1)
+            if inside[0] > 1:
+                overlaps.append(inside[0])
+        time.sleep(0.05)
+        with guard:
+            inside[0] -= 1
+    session.adapter.disconnect = disconnect
+
+    async def run():
+        session.running = True
+        session._task = asyncio.create_task(asyncio.sleep(60))
+        await asyncio.gather(session.stop(), session.stop())
+    asyncio.run(run())
+    assert calls, "neither stop reached the adapter"
+    assert overlaps == []
+
+
+def test_a_stop_cancelled_mid_disconnect_still_forgets_the_session():
+    """Otherwise the next student on this device inherits the last one's baseline."""
+    session = _session()
+    asyncio.run(_tick(session))
+    assert session.last_good_ts is not None
+    entered = threading.Event()
+
+    def disconnect():
+        entered.set()
+        time.sleep(0.2)
+    session.adapter.disconnect = disconnect
+
+    async def run():
+        session.running = True
+        session._task = asyncio.create_task(asyncio.sleep(60))
+        stop = asyncio.create_task(session.stop())
+        await asyncio.to_thread(entered.wait, 5)
+        stop.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stop
+    asyncio.run(run())
+    assert session.last_good_ts is None

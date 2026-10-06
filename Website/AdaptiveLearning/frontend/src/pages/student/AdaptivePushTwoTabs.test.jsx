@@ -1,6 +1,6 @@
 /** One sidecar delivers one lesson at a time; a tab whose lesson it isn't says so, and stops or takes nothing. */
 import { it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
+import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 vi.mock('../../lib/supabase', async () => await import('../../test/mocks/supabase'))
@@ -21,11 +21,14 @@ vi.mock('./pollIntervals', async (importOriginal) => ({
   ...(await importOriginal()), PUSH_STATUS_POLL_MS: 100,
 }))
 // The sidecar as each test sets it: `owner` is the lesson it delivers for, and a start takes it, as the real one does.
-const rig = { owner: null, down: false, hang: false, polls: 0, bridge: { running: false, ingestion: {} } }
+const rig = { owner: null, down: false, hang: false, polls: 0, cameraRunning: true,
+              bridge: { running: false, ingestion: {} } }
+// A stop naming another session changes nothing, as the sidecar's own check has it.
+const release = (sessionId) => { if (!sessionId || sessionId === rig.owner) rig.owner = null }
 vi.mock('../../lib/sidecar', () => ({
   startPush: vi.fn(async (sessionId) => { rig.owner = sessionId; return {} }),
-  stopPush: vi.fn(async () => ({})),
-  stopPushOnUnload: vi.fn(),
+  stopPush: vi.fn(async (sessionId) => { release(sessionId); return {} }),
+  stopPushOnUnload: vi.fn((sessionId) => release(sessionId)),
   pushStatus: vi.fn(async () => {
     if (rig.hang) return new Promise(() => {})
     if (rig.down) throw new Error('sidecar not answering')
@@ -44,7 +47,7 @@ vi.mock('../../lib/sidecar', () => ({
   museState: vi.fn(async () => ({ running: rig.bridge.running, ingestion: { ...rig.bridge.ingestion } })),
   devices: vi.fn(async () => [
     { device_id: 'default', kind: 'muse', running: rig.bridge.running },
-    { device_id: 'camera', kind: 'face', running: true },
+    { device_id: 'camera', kind: 'face', running: rig.cameraRunning },
   ]),
   releasePushIfIdle: vi.fn(async () => ({ stopped: true, devices: [] })),
   sidecarDebug: vi.fn(async () => ({})),
@@ -59,6 +62,7 @@ import { markEegStarted, recordAnswer } from '../../lib/session'
 import { deviceStop, deviceStopOnUnload, pushStatus, releasePushIfIdle, startPush, stopPush,
          stopPushOnUnload } from '../../lib/sidecar'
 import { fireAuthEvent } from '../../test/mocks/supabase'
+import { runSignOutTasks } from '../../lib/signOutTasks'
 import { mockApi, resetApi } from '../../test/mocks/apiFetch'
 import { buildRecordingPermits } from '../../test/fixtures/recordingPermits'
 import Adaptive from './Adaptive'
@@ -73,7 +77,8 @@ const ELSEWHERE = 'This lesson is also open in another tab or window. Readings g
 beforeEach(() => {
   resetApi()
   vi.clearAllMocks()
-  Object.assign(rig, { owner: null, down: false, hang: false, polls: 0, bridge: { running: false, ingestion: {} } })
+  Object.assign(rig, { owner: null, down: false, hang: false, polls: 0, cameraRunning: true,
+                       bridge: { running: false, ingestion: {} } })
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
     'GET /api/recording/me': () => buildRecordingPermits(),
@@ -111,7 +116,7 @@ it("claims nothing from another tab's lesson, and says where the readings go", a
 
   const camera = panelOf('Camera')
   expect(within(camera).getByText('on, in another tab')).toBeInTheDocument()
-  expect(within(camera).getByText(/Its readings go to this lesson in another tab or window/)).toBeInTheDocument()
+  expect(within(camera).getByText(/Its readings go to the lesson in another tab or window/)).toBeInTheDocument()
   expect(screen.queryByText('● RECORDING')).toBeNull()
   // That lesson's declined EEG and lost readings are not this one's.
   expect(screen.queryByText(/Not being saved/)).toBeNull()
@@ -232,8 +237,88 @@ it("says a connected headband's readings go to the other tab, and reports no sta
 
   const headband = panelOf('Muse Headband')
   expect(await within(headband).findByText('in another tab')).toBeInTheDocument()
-  expect(screen.getByText('Connected. Your readings go to this lesson in another tab or window.')).toBeInTheDocument()
+  expect(screen.getByText('Connected. Your readings go to the lesson in another tab or window.')).toBeInTheDocument()
   expect(screen.queryByText(/teacher can see your focus/)).toBeNull()
   await pollsLanded(3)
   expect(markEegStarted).not.toHaveBeenCalled()
 }, 60_000)
+
+// A tab with no lesson of its own: it found the camera running at load, and only the sidecar says whose it is.
+it("leaves another tab's lesson's camera on when a tab with no lesson closes", async () => {
+  rig.owner = 'sess-other'
+  render(<Adaptive />)
+  await screen.findByText('Camera')
+  expect(await within(panelOf('Camera')).findByText('on, in another tab')).toBeInTheDocument()
+
+  window.dispatchEvent(new Event('pagehide'))
+  cleanup()
+  await sleep(50)
+
+  expect(deviceStopOnUnload).not.toHaveBeenCalled()
+  expect(deviceStop).not.toHaveBeenCalled()
+}, 30_000)
+
+it('still switches the camera off when a tab with no lesson closes and no lesson is using it', async () => {
+  render(<Adaptive />)
+  await screen.findByRole('button', { name: 'Turn off' })
+  await pollsLanded(2)
+  // The status is read only for whose lesson it is: before a lesson the cards say what they always said.
+  expect(within(panelOf('Muse Headband')).queryByText('not recording')).toBeNull()
+
+  window.dispatchEvent(new Event('pagehide'))
+
+  expect(deviceStopOnUnload).toHaveBeenCalledWith('camera')
+}, 30_000)
+
+it('reads as its own lesson as soon as it starts one, not at the next poll', async () => {
+  rig.owner = 'sess-other'
+  render(<Adaptive />)
+  await screen.findByText('Camera')
+  await within(panelOf('Camera')).findByText('on, in another tab')
+  // No status answers from here: only the hand-over's own success can say the lesson is now this tab's.
+  rig.hang = true
+
+  fireEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+  await waitFor(() => expect(startPush).toHaveBeenCalledWith('sess-push'))
+
+  await waitFor(() => expect(within(panelOf('Camera')).queryByText('on, in another tab')).toBeNull())
+  expect(screen.queryByText(ELSEWHERE)).toBeNull()
+}, 30_000)
+
+it("does not read its own ended lesson as another tab's", async () => {
+  render(<Adaptive />)
+  fireEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+  await pollsLanded(2)
+  rig.hang = true
+
+  // Signing out ends the lesson with the page still open, as Finish session does.
+  await act(async () => { await runSignOutTasks() })
+
+  await waitFor(() => expect(stopPush).toHaveBeenCalledWith('sess-push'))
+  await sleep(50)
+  expect(screen.queryByText('on, in another tab')).toBeNull()
+}, 30_000)
+
+it('shows the camera off after taking over from a tab that switched it off when it closed', async () => {
+  await inLessonTakenOver()
+  expect(screen.getByRole('button', { name: 'Turn off' })).toBeInTheDocument()
+
+  // The other tab closes: its own stop releases the sidecar and switches the shared camera off.
+  rig.cameraRunning = false
+  rig.owner = null
+
+  expect(await screen.findByRole('button', { name: /turn on camera/i })).toBeInTheDocument()
+  expect(startPush).toHaveBeenLastCalledWith('sess-push')
+}, 30_000)
+
+it('says nothing new before a lesson when the status cannot be read', async () => {
+  rig.down = true
+  render(<Adaptive />)
+  await screen.findByText('Muse Headband')
+  await pollsLanded(3)
+
+  expect(screen.queryByText(/is not running, so nothing is being recorded/)).toBeNull()
+  expect(startPush).not.toHaveBeenCalled()
+}, 30_000)

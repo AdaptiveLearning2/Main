@@ -244,6 +244,8 @@ export default function Adaptive() {
 
   // The sidecar's own delivery report under push; null until asked.
   const [push, setPush]               = useState(null)
+  // The session the sidecar delivers for, per push status: undefined before any answer, null when none.
+  const [sidecarSession, setSidecarSession] = useState(undefined)
   // Channels that delivered since the last poll, not merely consented ones.
   const [recording, setRecording]     = useState([])
   // Last poll's cumulative counts, for a delta.
@@ -323,10 +325,9 @@ export default function Adaptive() {
   // When a reconnecting link was first seen settling (see linkSettling).
   const settlingSince = useRef(null)
 
-  // Whose lesson the one sidecar delivers for (push): this tab's, another tab's or window's, or not known yet.
-  // The newest lesson takes it; a page whose lesson it isn't stops nothing and takes nothing back by itself.
-  const pushOwner = !push?.answered || !push?.session_id ? 'unknown'
-    : push.session_id === sessionId ? 'mine' : 'elsewhere'
+  // Whose lesson the one sidecar delivers for (push): this tab's, another tab's or window's (also for a tab with no
+  // lesson yet), or not known. The newest lesson takes it; a page whose lesson it isn't stops or takes back nothing.
+  const pushOwner = !sidecarSession ? 'unknown' : sidecarSession === sessionId ? 'mine' : 'elsewhere'
   const pushOwnerRef = useRef(pushOwner)
 
   // The camera stops when this page goes away (the headband stays paired): route
@@ -537,14 +538,21 @@ export default function Adaptive() {
   }, [headband.available, headband.pushMode])
 
   // Re-offers the session to the sidecar (initial handover, status poll, Use this tab). Taking it over drops
-  // whatever another lesson had queued.
+  // whatever another lesson had queued, and re-reads the devices: another tab may have switched the camera off.
   const recover = useCallback(() => {
     const sid = sessionIdRef.current
     if (!sid) return
     pushHandoff.current = pushHandoff.current
       .catch(() => {})
       .then(() => startPush(sid))
-      .then(() => setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null, session_id: sid })))
+      .then(() => {
+        setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null }))
+        setSidecarSession(sid)
+        sidecarDevices().then(list => {
+          const running = !!list.find(d => d.kind === 'face')?.running
+          setCamera(c => (c.running === running ? c : { ...c, running }))
+        }, () => {})
+      })
       .catch(err => {
         // 409: the sidecar declined; re-offering won't change that.
         if (err?.status === 409) {
@@ -1041,7 +1049,10 @@ export default function Adaptive() {
         .catch(() => {})
         .then(() => startPush(sessionId))
         .then(() => {
-          if (!killed) setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null }))
+          if (killed) return
+          setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null }))
+          // Taken over now, not at the next poll: a tab that saw another lesson's would say so until then.
+          setSidecarSession(sessionId)
         })
         .catch(err => {
           if (killed) return
@@ -1086,6 +1097,8 @@ export default function Adaptive() {
       window.removeEventListener('pagehide', onPageHide)
       sub?.subscription?.unsubscribe()
       const leaving = pushOwnerRef.current !== 'elsewhere'
+      // Released by this stop; kept, the finished lesson's id would read as another tab's until the next poll.
+      if (leaving) setSidecarSession(null)
       // Chained behind any in-flight start (StrictMode remount).
       pushHandoff.current = pushHandoff.current
         .catch(() => {})
@@ -1098,13 +1111,17 @@ export default function Adaptive() {
   // Push only, once the sidecar holds this session and a headband streams; never camera-only.
   useEegStartReport(!!(headband.pushMode && headband.connected && push?.running && pushOwner !== 'elsewhere'), sessionId)
 
-  // Delivery counts for the panel and recording chip; a slower poll.
+  // Delivery counts for the panel and recording chip; a slower poll. Before a lesson too, so a tab with none
+  // knows the sensors are another tab's lesson's and leaves them on when it closes.
   useEffect(() => {
-    if (!sessionId || !headband.pushMode) return
+    if (!headband.pushMode) return
     let killed = false
     const tick = () => pushStatus()
       .then(d => {
         if (killed) return
+        setSidecarSession(d.session_id ?? null)
+        // With no lesson, whose lesson it is is all this page needs; counts and messages are a lesson's.
+        if (!sessionId) return
         // Another tab's lesson's counts are not this one's: no labels, and no baseline to diff against later.
         const theirs = !!d.session_id && d.session_id !== sessionIdRef.current
         const prev = theirs ? null : lastRecorded.current
@@ -1137,7 +1154,7 @@ export default function Adaptive() {
         if (sidecarAnswer && typeof sidecarAge === 'number') takeSidecarPermits(sidecarAnswer, sidecarAge, sidecarCheck)
       })
       .catch(() => {
-        if (killed) return
+        if (killed || !sessionId) return
         setPush(p => ({ ...(p || {}), reachable: false, running: false }))
         setRecording([])
         // The next successful poll is a fresh baseline.
@@ -1410,8 +1427,8 @@ export default function Adaptive() {
   // An older sidecar reads 'recorded'.
   const reportsResults = push?.last_result != null
   const channelState = (key) => {
-    if (!push?.answered) return headband.pushMode ? 'waiting' : 'recorded'
     if (pushOwner === 'elsewhere') return 'elsewhere'
+    if (!push?.answered) return headband.pushMode ? 'waiting' : 'recorded'
     if (!reportsResults) return 'recorded'
     if (push.last_result[key]) return push.last_result[key]
     const seen = (Number(push.recorded?.[key]) || 0) + (Number(push.declined?.[key]) || 0)
@@ -1433,7 +1450,7 @@ export default function Adaptive() {
     declined: 'Connected, but your headband readings are not being saved, so your teacher cannot see them.',
     waiting: 'Connected. Waiting for the first readings to be saved.',
     stale: 'Connected, but no readings have been saved recently, so your teacher cannot see them live.',
-    elsewhere: 'Connected. Your readings go to this lesson in another tab or window.',
+    elsewhere: 'Connected. Your readings go to the lesson in another tab or window.',
   }[eegState]
     || `${headbandSamples} samples sent · teacher can see your focus & stress live`
 
@@ -1642,7 +1659,7 @@ export default function Adaptive() {
                 ? <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
                 : camera.running && sessionId && cameraState === 'waiting'
                   ? <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">on, waiting to save</span>
-                : camera.running && sessionId && cameraState === 'elsewhere'
+                : camera.running && cameraState === 'elsewhere'
                   ? <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">on, in another tab</span>
                 : camera.running
                   ? <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">on, not recording</span>
@@ -1659,8 +1676,8 @@ export default function Adaptive() {
                     ? 'The camera is on. Waiting for its first readings to be saved. No video is saved.'
                   : camera.running && sessionId && cameraState === 'stale'
                     ? 'The camera is on, but nothing from it has been saved recently. No video is saved.'
-                  : camera.running && sessionId && cameraState === 'elsewhere'
-                    ? 'The camera is on. Its readings go to this lesson in another tab or window. No video is saved.'
+                  : camera.running && cameraState === 'elsewhere'
+                    ? 'The camera is on. Its readings go to the lesson in another tab or window. No video is saved.'
                   : camera.running && sessionId
                     ? 'Reading how you are finding the questions. No video is saved.'
                     : camera.running

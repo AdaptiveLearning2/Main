@@ -21,7 +21,7 @@ vi.mock('./pollIntervals', async (importOriginal) => ({
   ...(await importOriginal()), PUSH_STATUS_POLL_MS: 100,
 }))
 // The sidecar as each test sets it: `owner` is the lesson it delivers for, and a start takes it, as the real one does.
-const rig = { owner: null, down: false, hang: false, bridge: { running: false, ingestion: {} } }
+const rig = { owner: null, down: false, hang: false, polls: 0, bridge: { running: false, ingestion: {} } }
 vi.mock('../../lib/sidecar', () => ({
   startPush: vi.fn(async (sessionId) => { rig.owner = sessionId; return {} }),
   stopPush: vi.fn(async () => ({})),
@@ -29,8 +29,10 @@ vi.mock('../../lib/sidecar', () => ({
   pushStatus: vi.fn(async () => {
     if (rig.hang) return new Promise(() => {})
     if (rig.down) throw new Error('sidecar not answering')
+    // Rising, as a lesson that is recording: the recording chip is built from the rise between two polls.
+    const n = ++rig.polls
     return { enabled: true, running: rig.owner != null, session_id: rig.owner,
-             recorded: { cognitive: 30, heart: 9, face: 40 }, rejected: { cognitive: 0, heart: 0, face: 2 },
+             recorded: { cognitive: 30 + n, heart: 9 + n, face: 40 + n }, rejected: { cognitive: 0, heart: 0, face: 2 },
              last_result: { cognitive: 'declined', heart: 'recorded', face: 'recorded' },
              declined_reason: { cognitive: 'eeg not consented', heart: null, face: null } }
   }),
@@ -71,7 +73,7 @@ const ELSEWHERE = 'This lesson is also open in another tab or window. Readings g
 beforeEach(() => {
   resetApi()
   vi.clearAllMocks()
-  Object.assign(rig, { owner: null, down: false, hang: false, bridge: { running: false, ingestion: {} } })
+  Object.assign(rig, { owner: null, down: false, hang: false, polls: 0, bridge: { running: false, ingestion: {} } })
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
     'GET /api/recording/me': () => buildRecordingPermits(),

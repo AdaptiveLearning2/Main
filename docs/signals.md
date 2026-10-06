@@ -143,11 +143,10 @@ well as the flat already-mapped one, and maps the first itself. Don't add a divi
   would be its own refused request and trip the rate limit. Those, and a size refusal at the floor,
   are dropped and counted `rejected`. The lesson page shows `rejected` + `malformed` as *readings not saved*.
 
-The **browser** side has the matching rule: effect cleanup does not run on a tab close or hard
-refresh, so `Adaptive.jsx` also stops the sidecar from a `pagehide` listener via `stopPushOnUnload`,
-using `fetch(..., {keepalive: true})`. Without it the sidecar keeps the student's token and keeps
-recording for up to an hour after they walked away — a consent problem, not untidiness. `sendBeacon`
-cannot be used: it cannot set an `Authorization` header.
+The **browser** side has the matching rule: effect cleanup does not run on a tab close or hard refresh, so
+`Adaptive.jsx` also stops the sidecar from a `pagehide` listener via `stopPushOnUnload`, using `fetch(..., {keepalive:
+true})`. Without it the sidecar keeps the student's token and keeps recording for up to an hour after they walked away —
+a consent problem, not untidiness. `sendBeacon` cannot be used: it cannot set an `Authorization` header.
 
 `/api/v1/push/start` refuses with 409 when `PUSH_ENABLED` is false rather than becoming a second writer alongside a
 poller. Every writer upserts on `cog_session_ts_key`, so nothing would double, but two writers on one channel is a
@@ -155,33 +154,31 @@ deployment nobody chose.
 
 ### The browser calls the sidecar directly, and two tokens are in play
 
-`frontend/src/lib/sidecar.js`. Under push the hosted backend cannot reach a student's laptop, so
-lifecycle control comes from the page: it calls `http://127.0.0.1:8001` itself. An HTTPS page may do
-that — loopback is exempt from the mixed-content block; evidence and limits in
-`EEGResearch/docs/LOOPBACK_FROM_HTTPS.md`.
+`frontend/src/lib/sidecar.js`. Under push the hosted backend cannot reach a student's laptop, so lifecycle control comes
+from the page: it calls `http://127.0.0.1:8001` itself. An HTTPS page may do that — loopback is exempt from the
+mixed-content block; evidence and limits in `EEGResearch/docs/LOOPBACK_FROM_HTTPS.md`.
 
-**Don't conflate the two credentials.** `VITE_EEG_LOCAL_TOKEN` is the sidecar's own `API_TOKEN`, is
-in the client bundle, and is *not a secret* — the sidecar binds to loopback, so it separates this
-page from other pages in this browser, not one user from another. The student's Supabase access
-token is a real secret, fetched per call, and handed to the sidecar once so it can post as them.
+**Don't conflate the two credentials.** `VITE_EEG_LOCAL_TOKEN` is the sidecar's own `API_TOKEN`, is in the client
+bundle, and is *not a secret* — the sidecar binds to loopback, so it separates this page from other pages in this
+browser, not one user from another. The student's Supabase access token is a real secret, fetched per call, and handed
+to the sidecar once so it can post as them.
 
-**Those four push refusals left pairing with no path, which is why the browser has one.** The
-sidecar's own start/scan/connect routes were admin-only while the browser holds the *learner* token,
-so every push deployment answered 401 to the one channel push exists for. `sidecar.js` now calls them
-directly (`deviceStart`, `museRefresh`, `museConnect`, …) and `toggleHeadband` picks the transport
-from `headband.pushMode` — one adapter, the same seven steps, because a second copy of the pairing
-sequence would drift and that sequence is where the ordering matters.
+**Those four push refusals left pairing with no path, which is why the browser has one.** The sidecar's own
+start/scan/connect routes were admin-only while the browser holds the *learner* token, so every push deployment answered
+401 to the one channel push exists for. `sidecar.js` now calls them directly (`deviceStart`, `museRefresh`,
+`museConnect`, …) and `toggleHeadband` picks the transport from `headband.pushMode` — one adapter, the same seven steps,
+because a second copy of the pairing sequence would drift and that sequence is where the ordering matters.
 
-**`require_local_controller` is what admits it, and it is scoped to the mode on purpose.** Admin in
-both modes; the learner token *only* when `PUSH_ENABLED`. Under pull the browser gains nothing,
-because the backend is the legitimate controller there. What it grants is bounded by what the learner
-token already was: any page that could call `/api/v1/push/start` could already make the sidecar stream
-a student's signals. Pinned by `test_under_pull_the_learner_token_may_not_drive_the_hardware`.
+**`require_local_controller` is what admits it, and it is scoped to the mode on purpose.** Admin in both modes; the
+learner token *only* when `PUSH_ENABLED`. Under pull the browser gains nothing, because the backend is the legitimate
+controller there. What it grants is bounded by what the learner token already was: any page that could call
+`/api/v1/push/start` could already make the sidecar stream a student's signals. Pinned by
+`test_under_pull_the_learner_token_may_not_drive_the_hardware`.
 
-**Re-hand the token on refresh.** Supabase access tokens expire roughly hourly and a lesson can run
-longer; the sidecar holds one token per session. `Adaptive.jsx` re-calls `startPush` on
-`TOKEN_REFRESHED`, replacing the token in place — same session id, queue untouched. Without it the
-pushes 401 partway through and the samples sit in a bounded queue until dropped.
+**Re-hand the token on refresh.** Supabase access tokens expire roughly hourly and a lesson can run longer; the sidecar
+holds one token per session. `Adaptive.jsx` re-calls `startPush` on `TOKEN_REFRESHED`, replacing the token in place —
+same session id, queue untouched. Without it the pushes 401 partway through and the samples sit in a bounded queue until
+dropped.
 
 **Never call `supabase.auth.getSession()` inside an `onAuthStateChange` callback.** supabase-js v2 holds an internal
 auth lock while dispatching and `getSession()` waits on it, so awaiting it there deadlocks. Use the `session` the
@@ -193,6 +190,13 @@ navigation deliberately (the bridge holds the link, re-pairing costs a 12 s scan
 consent copy scopes it to the questions. Two exits, because effect cleanup does not run on a tab close: the route change
 sends `deviceStop`, `pagehide` sends `deviceStopOnUnload` with `keepalive`, both reading the camera through a ref synced
 after every render. `AdaptiveCameraLifecycle.test.jsx` pins both, and that a camera already off sends nothing.
+
+**One sidecar delivers one lesson at a time; the newest lesson tab takes it**, dropping the previous one's queue. Whose
+it is comes from push status's `session_id`. A page whose lesson it isn't (`pushOwner === 'elsewhere'`) reads *in
+another tab* everywhere and claims none of the status's counts; leaving, it stops neither delivery nor the camera, and
+only *Use this tab* re-hands it (not `TOKEN_REFRESHED`, not a failed read). A stop names its session (`/push/stop`
+`{session_id}`), checked under the push client's lock (`not_current` otherwise); kit 0.1.2 ignores that, so the page
+checks too. `AdaptivePushTwoTabs.test.jsx`.
 
 **No sensor opens until `GET /api/recording/me` says it may record.** Per channel: `permitted`, `declined`,
 `switched_off`, `school_year_{not_started,ended,unconfigured}` or `unknown` (a failed read), any definite refusal above
@@ -271,16 +275,14 @@ drop. `eeg_poller._poll_wait` doubles the wait per empty read up to `POLL_BACKOF
 first miss costs nothing, since an idle stream at session start is ordinary, and the cap is small
 because the consent re-check shares the loop.
 
-`Adaptive.jsx` polls the bridge in **both** modes (under pull `poller.running` never says the
-headband went away), claims a drop only from `phase: 'connected'` (under pull `connected` is the
-poller, true from `/api/eeg/start` and so before the scan has begun — keyed on it alone, every
-pairing read as a drop and the page sent a second connect over the first, three clicks to pair on
-hardware), keeps polling through the `reconnecting` phase, shows the bridge's attempt count, and
-starts `startFrontendReconnect()` only on `reconnect_exhausted` or a bridge too old to report
-`reconnecting`. **"Stop trying" sends a bridge disconnect before the usual teardown**, because
-Disconnect's teardown stops the sidecar's stream without sending the bridge a command, and only a
-command cancels its attempts. `pairOnce` takes the cancel token and checks it before the connect, so
-a cancel during the 12 s scan cannot be followed by a pairing.
+`Adaptive.jsx` polls the bridge in **both** modes (under pull `poller.running` never says the headband went away),
+claims a drop only from `phase: 'connected'` (under pull `connected` is the poller, true from `/api/eeg/start` and so
+before the scan has begun — keyed on it alone, every pairing read as a drop and the page sent a second connect over the
+first, three clicks to pair on hardware), keeps polling through the `reconnecting` phase, shows the bridge's attempt
+count, and starts `startFrontendReconnect()` only on `reconnect_exhausted` or a bridge too old to report `reconnecting`.
+**"Stop trying" sends a bridge disconnect before the usual teardown**, because Disconnect's teardown stops the sidecar's
+stream without sending the bridge a command, and only a command cancels its attempts. `pairOnce` takes the cancel token
+and checks it before the connect, so a cancel during the 12 s scan cannot be followed by a pairing.
 
 **The page's give-up path must tear down like Disconnect**, not reset state: under pull `connected`
 is the poller, which the loop never stopped, so three seconds after "could not be reconnected" the
@@ -290,13 +292,11 @@ that always says running cannot see it.
 
 ### Adoption: `linkAlive` is the one answer to "is this link alive"
 
-**Connect adopts a link the bridge already has — when EEG is flowing on it.** `pairOnce` reads the
-bridge first and, on `muse_connected: true` **with `eeg_age_ms` under `ADOPT_MAX_EEG_AGE_MS`** (3 s),
-goes straight to connected without the disconnect-then-scan. "Connected" alone is not evidence:
-libMuse keeps saying CONNECTED after EEG stops, which is why the bridge has a watchdog, and that
-disconnect is the page's only reachable bridge disconnect outside "Stop trying" — adopting a dead
-link would leave nothing able to clear it. An older bridge reports no age and falls through to the
-scan.
+**Connect adopts a link the bridge already has — when EEG is flowing on it.** `pairOnce` reads the bridge first and, on
+`muse_connected: true` **with `eeg_age_ms` under `ADOPT_MAX_EEG_AGE_MS`** (3 s), goes straight to connected without the
+disconnect-then-scan. "Connected" alone is not evidence: libMuse keeps saying CONNECTED after EEG stops, which is why
+the bridge has a watchdog, and that disconnect is the page's only reachable bridge disconnect outside "Stop trying" —
+adopting a dead link would leave nothing able to clear it. An older bridge reports no age and falls through to the scan.
 
 All three readers use `linkAlive(ing)` — Connect's adoption, the reconnect loop's "came back on its
 own" check, and the telemetry poll's recovery — because the second and third had the same gap: after
@@ -304,17 +304,15 @@ the bridge had exhausted its attempts the loop declared success on the word "con
 the same unclearable state by another door. **Test fixtures that mean "connected" must carry an
 `eeg_age_ms`.**
 
-**But "not alive" is not "dead" on the recovery paths.** The bridge zeroes its packet clock on every
-CONNECTED and reports `eeg_age_ms: null` until the first packet, and a preset switch keeps that null
-for seconds — so every successful bridge reconnect briefly reads as connected-with-no-age, and a
-reader that called that dead started a page-driven reconnect whose first act is a bridge disconnect.
-`linkSettling` names that state, and the two recovery readers give it `SETTLE_GRACE_MS` (10 s, above
-`PRESET_SETTLE_SECONDS` and the 8 s watchdog, so with the watchdog on the bridge decides first) —
-one grace shared through `settlingSince`, not one per reader. **Adoption keeps refusing it**: it needs
-positive evidence, and "no packet yet" is not that. The disconnect exists for a headband left
-streaming from a *previous* session; one streaming to us now is not that. Consequence for tests: a
-harness whose bridge starts connected is adopted without a scan, so both reconnect harnesses start
-`muse_connected: false` and flip it from their connect mock.
+**But "not alive" is not "dead" on the recovery paths.** The bridge zeroes its packet clock on every CONNECTED and
+reports `eeg_age_ms: null` until the first packet, and a preset switch keeps that null for seconds — so every successful
+bridge reconnect briefly reads as connected-with-no-age, and a reader that called that dead started a page-driven
+reconnect whose first act is a bridge disconnect. `linkSettling` names that state, and the two recovery readers give it
+`SETTLE_GRACE_MS` (10 s, above `PRESET_SETTLE_SECONDS` and the 8 s watchdog, so with the watchdog on the bridge decides
+first) — one grace shared through `settlingSince`, not one per reader. **Adoption keeps refusing it**: it needs positive
+evidence, and "no packet yet" is not that. The disconnect exists for a headband left streaming from a *previous*
+session; one streaming to us now is not that. Consequence for tests: a harness whose bridge starts connected is adopted
+without a scan, so both reconnect harnesses start `muse_connected: false` and flip it from their connect mock.
 
 ### The bridge runs under a supervisor, in the launcher's window
 

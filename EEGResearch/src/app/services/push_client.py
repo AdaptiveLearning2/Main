@@ -210,10 +210,11 @@ class PushClient:
                 self._task = asyncio.create_task(self._loop())
             return new_session
 
-    async def stop(self, *, flush: bool = True) -> bool:
+    async def stop(self, *, flush: bool = True, only_session: str | None = None) -> bool | None:
         """Stop pushing and forget the token; one bounded final flush by default. Returns whether it stopped.
 
-        SHUTDOWN_BUDGET includes the wait for a start or stop holding the lock; spent there, this changes nothing."""
+        SHUTDOWN_BUDGET includes the wait for a start or stop holding the lock; spent there, this changes nothing.
+        With `only_session`, None and nothing changed unless that session is the one pushing, decided under the lock."""
         deadline = time.monotonic() + SHUTDOWN_BUDGET
         try:
             await asyncio.wait_for(self._lifecycle.acquire(), timeout=SHUTDOWN_BUDGET)
@@ -221,6 +222,8 @@ class PushClient:
             logger.warning("push: shutdown budget spent waiting for another start or stop; not stopped")
             return False
         try:
+            if only_session is not None and only_session != self._session_id:
+                return None
             await self._stop_locked(flush=flush, deadline=deadline)
         finally:
             self._lifecycle.release()

@@ -73,20 +73,27 @@ export async function startPush(sessionId, accessTokenOverride = null) {
   })
 }
 
-/** Stop pushing, flush the tail, and drop the token. */
-export async function stopPush() {
-  return call('/api/v1/push/stop', { method: 'POST' })
+/**
+ * Stop pushing, flush the tail, and drop the token. With `sessionId`, only if that session is the one pushing:
+ * another tab's lesson may have taken delivery over. An older sidecar ignores it and stops whatever is pushing.
+ */
+export async function stopPush(sessionId) {
+  return call('/api/v1/push/stop', { method: 'POST', ...(sessionId ? { body: { session_id: sessionId } } : {}) })
 }
 
 /**
  * `stopPush` for a page that is going away (effect cleanup doesn't run on unload).
  * `keepalive`, not `sendBeacon`, which can't set `Authorization`.
  */
-export function stopPushOnUnload() {
+export function stopPushOnUnload(sessionId) {
   try {
     return fetch(`${SIDECAR_URL}/api/v1/push/stop`, {
       method: 'POST',
-      headers: SIDECAR_TOKEN ? { Authorization: `Bearer ${SIDECAR_TOKEN}` } : {},
+      headers: {
+        ...(SIDECAR_TOKEN ? { Authorization: `Bearer ${SIDECAR_TOKEN}` } : {}),
+        ...(sessionId ? { 'Content-Type': 'application/json' } : {}),
+      },
+      ...(sessionId ? { body: JSON.stringify({ session_id: sessionId }) } : {}),
       keepalive: true,
     }).catch(() => {})
   } catch {
@@ -163,20 +170,20 @@ export async function museState(deviceId) {
 }
 
 /**
- * Stop the shared (global) push client once no device is running.
- * Returns the device list it decided from, so the caller need not re-read.
+ * Stop the shared (global) push client once no device is running; with `sessionId`, only that session's
+ * delivery (see `stopPush`). Returns the device list it decided from, so the caller need not re-read.
  */
-export async function releasePushIfIdle() {
+export async function releasePushIfIdle(sessionId) {
   let list = null
   try {
     list = await devices()
   } catch {
     // Unknown: stop anyway; a token left behind is worse.
-    await stopPush().catch(() => {})
+    await stopPush(sessionId).catch(() => {})
     return { stopped: true, devices: null }
   }
   if (list.some(d => d.running)) return { stopped: false, devices: list }
-  await stopPush().catch(() => {})
+  await stopPush(sessionId).catch(() => {})
   return { stopped: true, devices: list }
 }
 

@@ -217,18 +217,32 @@ async def push_start(body: PushStartBody, _: str = Depends(require_learner_token
     return JSONResponse({"status": "pushing", "session_id": body.session_id})
 
 
+class PushStopBody(BaseModel):
+    # The lesson the page is leaving: a second tab's lesson that took delivery over must not be stopped.
+    session_id: str | None = Field(default=None, min_length=1)
+
+
 @app.post("/api/v1/push/stop")
-async def push_stop(_: str = Depends(require_learner_token)) -> JSONResponse:
-    """Stop pushing, flush the tail, and forget the token.
+async def push_stop(body: PushStopBody | None = None, _: str = Depends(require_learner_token)) -> JSONResponse:
+    """Stop pushing, flush the tail, and forget the token; with `session_id`, only if that session is pushing.
 
     503 when another start or stop held the push client past its budget: nothing was stopped or ended."""
     if push_client is None:
         return JSONResponse({"status": "not_configured"})
+    only = body.session_id if body else None
+    not_current = JSONResponse({"status": "not_current", "ended_session": False})
+    if only is not None and push_client.session_id != only:
+        return not_current
     stream_manager.set_payload_consumer(None)
     # End the session only if one was pushing: pagehide fires this under pull too, and
     # ending there would wipe a live armed baseline that nothing re-arms.
     was_pushing = push_client.session_id is not None
-    if not await push_client.stop():
+    stopped = await push_client.stop(only_session=only)
+    if stopped is None:
+        # Another lesson took delivery over while this waited for the lock: it keeps its consumer.
+        stream_manager.set_payload_consumer(push_client.submit_payload)
+        return not_current
+    if not stopped:
         return JSONResponse({"status": "not_stopped", "ended_session": False}, status_code=503,
                             headers={"Retry-After": "1"})
     if was_pushing:

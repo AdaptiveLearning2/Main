@@ -1041,7 +1041,7 @@ export default function Adaptive() {
         .catch(() => {})
         .then(() => startPush(sessionId))
         .then(() => {
-          if (!killed) setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null, session_id: sessionId }))
+          if (!killed) setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null }))
         })
         .catch(err => {
           if (killed) return

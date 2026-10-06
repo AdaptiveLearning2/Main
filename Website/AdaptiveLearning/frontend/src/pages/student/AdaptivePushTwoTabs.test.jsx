@@ -21,12 +21,13 @@ vi.mock('./pollIntervals', async (importOriginal) => ({
   ...(await importOriginal()), PUSH_STATUS_POLL_MS: 100,
 }))
 // The sidecar as each test sets it: `owner` is the lesson it delivers for, and a start takes it, as the real one does.
-const rig = { owner: null, down: false, bridge: { running: false, ingestion: {} } }
+const rig = { owner: null, down: false, hang: false, bridge: { running: false, ingestion: {} } }
 vi.mock('../../lib/sidecar', () => ({
   startPush: vi.fn(async (sessionId) => { rig.owner = sessionId; return {} }),
   stopPush: vi.fn(async () => ({})),
   stopPushOnUnload: vi.fn(),
   pushStatus: vi.fn(async () => {
+    if (rig.hang) return new Promise(() => {})
     if (rig.down) throw new Error('sidecar not answering')
     return { enabled: true, running: rig.owner != null, session_id: rig.owner,
              recorded: { cognitive: 30, heart: 9, face: 40 }, rejected: { cognitive: 0, heart: 0, face: 2 },
@@ -53,7 +54,8 @@ vi.mock('../../context/AuthContext', () => ({
 }))
 
 import { markEegStarted } from '../../lib/session'
-import { deviceStop, deviceStopOnUnload, pushStatus, startPush, stopPush, stopPushOnUnload } from '../../lib/sidecar'
+import { deviceStop, deviceStopOnUnload, pushStatus, releasePushIfIdle, startPush, stopPush,
+         stopPushOnUnload } from '../../lib/sidecar'
 import { fireAuthEvent } from '../../test/mocks/supabase'
 import { mockApi, resetApi } from '../../test/mocks/apiFetch'
 import { buildRecordingPermits } from '../../test/fixtures/recordingPermits'
@@ -69,7 +71,7 @@ const ELSEWHERE = 'This lesson is also open in another tab or window. Readings g
 beforeEach(() => {
   resetApi()
   vi.clearAllMocks()
-  Object.assign(rig, { owner: null, down: false, bridge: { running: false, ingestion: {} } })
+  Object.assign(rig, { owner: null, down: false, hang: false, bridge: { running: false, ingestion: {} } })
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
     'GET /api/recording/me': () => buildRecordingPermits(),
@@ -118,9 +120,11 @@ it("claims nothing from another tab's lesson, and says where the readings go", a
   expect(screen.queryByText(/Recording:/)).toBeNull()
 }, 30_000)
 
-it('takes delivery back with Use this tab, and reads as its own lesson again', async () => {
+it('takes delivery back with Use this tab, and reads as its own lesson at once', async () => {
   await inLessonTakenOver()
   const starts = startPush.mock.calls.length
+  // No status answers after the click: only the start's own success can say whose lesson it is now.
+  rig.hang = true
 
   fireEvent.click(screen.getByRole('button', { name: 'Use this tab' }))
 
@@ -140,6 +144,17 @@ it("stops neither another tab's lesson nor its camera on a tab close or a route 
   expect(deviceStopOnUnload).not.toHaveBeenCalled()
   expect(stopPush).not.toHaveBeenCalled()
   expect(deviceStop).not.toHaveBeenCalled()
+}, 30_000)
+
+it("turns the shared camera off from the other tab without releasing that lesson's delivery", async () => {
+  await inLessonTakenOver()
+
+  fireEvent.click(within(panelOf('Camera').parentElement).getByRole('button', { name: 'Turn off' }))
+
+  await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('camera'))
+  await sleep(50)
+  expect(releasePushIfIdle).not.toHaveBeenCalled()
+  expect(stopPush).not.toHaveBeenCalled()
 }, 30_000)
 
 it('stops its own lesson by name, and its camera, on a tab close and a route change', async () => {

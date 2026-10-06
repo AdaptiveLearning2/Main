@@ -211,20 +211,30 @@ class DeviceSession:
             await self._await_release()
             was_running = self._task is not None
             self.running = False
+            # Taken now, so a cancelled stop leaves the next one no finished stream to stop and forget again.
+            task, self._task = self._task, None
             try:
-                if self._task is not None:
-                    self._task.cancel()
+                if task is not None:
+                    task.cancel()
                     try:
-                        await self._task
+                        await task
                     except asyncio.CancelledError:
                         # The stream's own end is swallowed; one aimed at this stop (shutdown) is not,
                         # and the link is still let go, in the background, so a stuck one cannot hold it.
                         if asyncio.current_task().cancelling():
-                            self._releasing = asyncio.get_running_loop().run_in_executor(None, self._release_quietly)
+                            self._release().add_done_callback(self._log_release_failure)
                             raise
-                    self._task = None
                 # Can block on socket shutdown/thread joins.
-                await asyncio.to_thread(self.adapter.disconnect)
+                release = self._release()
+                try:
+                    await asyncio.shield(release)
+                except asyncio.CancelledError:
+                    # Cancelled mid-disconnect: it carries on, tracked, with nobody left to hand a failure to.
+                    release.add_done_callback(self._log_release_failure)
+                    raise
+                finally:
+                    if release.done():
+                        self._releasing = None
             finally:
                 # Even for a stop cancelled mid-disconnect: the next student must not inherit the baseline.
                 if was_running:
@@ -233,16 +243,22 @@ class DeviceSession:
     async def _await_release(self) -> None:
         """Called under the lock: a connect racing the background disconnect would lose its new link."""
         if self._releasing is not None:
-            # Shielded: a cancelled waiter must not mark it done while the thread still runs.
-            await asyncio.shield(self._releasing)
+            try:
+                # Shielded: a cancelled waiter must not mark it done while the thread still runs.
+                await asyncio.shield(self._releasing)
+            except Exception:  # noqa: BLE001, S110 - logged by `_log_release_failure`; a new start is not its caller
+                pass
             self._releasing = None
 
-    def _release_quietly(self) -> None:
-        """The adapter's disconnect, off the event loop with nobody awaiting it: a failure is logged, not raised."""
-        try:
-            self.adapter.disconnect()
-        except Exception:  # noqa: BLE001 - nothing awaits this to hand an error to
-            logger.warning("%s: background disconnect failed", self.device_id, exc_info=True)
+    def _release(self) -> asyncio.Future[None]:
+        """The adapter's disconnect, in a thread and tracked until it ends or the next start or stop waits for it."""
+        self._releasing = asyncio.get_running_loop().run_in_executor(None, self.adapter.disconnect)
+        return self._releasing
+
+    def _log_release_failure(self, release: asyncio.Future[None]) -> None:
+        """For a disconnect nobody awaits; retrieving the error also keeps asyncio from reporting it as lost."""
+        if not release.cancelled() and release.exception() is not None:
+            logger.warning("%s: background disconnect failed", self.device_id, exc_info=release.exception())
 
     def _forget_stream(self) -> None:
         """A stopped stream is "no data", not its last reading; clear_session(), not reset(), drops the baseline."""

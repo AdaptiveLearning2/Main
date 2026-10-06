@@ -489,12 +489,14 @@ The headband is the primary heart source (the camera is emotion-only), reaching 
   (`connect_named` setting `PRESET_21` unconditionally is not an override — `get_model()` returns `MU_02` until
   CONNECTED, so the real choice happens in `apply_model_preset`.)
 - **The window is placed on `seq`, never on `mono_ts_ms`.** The bridge's stamp records BLE *delivery* — ~9% of samples
-  share one with their predecessor and the rest arrive in bursts — so `seq` is the only real sample index, and the
+  share one with their predecessor and the rest arrive in bursts — so `seq` is the only even sample index, and the
   stamps measure only an average rate across the whole window. That rate is `seq`-span over elapsed seconds, not
   `len(rows)`: with samples dropped, counting rows reports a rate low by exactly the loss and scales every bpm down
   with it. The opposite call to `rgb_window`'s median-of-intervals, and the reason is the clock, not preference.
 - **Sample *loss* is gated separately from sample *rate*, and only the second is obvious.** `fs` comes from `seq`,
-  which counts what the headband **sent**, so it reads a healthy 64 Hz no matter how few samples arrived;
+  which the bridge assigns **on receipt**, so it reads a healthy 64 Hz however many numbered samples are lost on the
+  way to the sidecar (queue overflow, a dropped TCP line, a null optics line). A sample lost over Bluetooth is never
+  numbered, leaves no `seq` gap, and shows only as a lower `fs`;
   `window_coverage` is elapsed span, which the survivors still bracket. A window can pass both while being almost
   entirely `np.interp` output — and interpolation manufactures the smooth periodicity autocorrelation rewards, so the
   result is a *confident* wrong rate (one sample in 32 gave 55.8 bpm at confidence 1.00 against a true ~68; one in 64

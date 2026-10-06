@@ -661,6 +661,9 @@ class PushClient:
             self._declined_reason[channel] = reason
         # A receipt of only duplicates or unreadable samples says nothing about recording now.
         if inserted or dropped:
+            # Declined despite the latest answer, which is then stale (a withdrawal): ask now, once per change.
+            if not inserted and self._last_result[channel] != "declined":
+                self._permits_due = 0.0
             self._last_result[channel] = "recorded" if inserted else "declined"
             self._last_result_at[channel] = time.monotonic()
         if malformed:

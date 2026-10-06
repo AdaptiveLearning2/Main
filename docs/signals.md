@@ -204,9 +204,13 @@ render. `AdaptiveCameraLifecycle.test.jsx` pins both, and that a camera already 
 needs `camera`; under push the headband needs `eeg` **or** `headband_optical`; pull's `/api/eeg/start` demands EEG. The page
 gates only switching on — never Turn off, Disconnect or Stop trying — re-asks at the click, and stops what a refusal
 refuses (`enforcePermits`; a failed stop changes no state, the next answer retries). **The push client asks too** while it
-holds a token, every `PERMIT_CHECK_SECONDS` and when a device starts: it withholds refused channels (counted `declined`)
-and stops refused sensors (`_stop_refused_sensors`, its own task), covering a page that died. In a lesson the page takes
-that answer from push status instead of polling. A failed read keeps the last answer; switch-offs take up to a minute.
+holds a token, every `PERMIT_CHECK_SECONDS`, when a device starts, and when the backend declines a whole batch of a
+channel that was not already declined: it withholds refused channels (counted `declined`) and stops refused sensors
+(`_stop_refused_sensors`, its own task), covering a page that died. In a lesson the page takes that answer from push status
+instead of polling, and asks at once itself when a channel's `last_result` turns to `declined` or a consent write lands in
+this browser (`lib/permitsChanged.js`, a `BroadcastChannel`). **A withdrawal is seen at the next batch**, because the
+backend's gate reads consent per request, so a sensor goes off in ~2 s from the same browser, otherwise ~7 s (one
+`FLUSH_SECONDS` batch and a check), or ~17 s with a sidecar older than that trigger. A failed read keeps the last answer.
 
 All three ingest endpoints are rate-limited and length-bounded. `/api/signals/cognitive` was neither
 until the push client existed, survivable only while its sole writer was the in-process poller.

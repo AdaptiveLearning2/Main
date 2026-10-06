@@ -1345,6 +1345,60 @@ async def test_a_new_session_asks_again(permits):
     await permits.stop()
 
 
+def _backend_answers(pc, inserted, dropped, reason="camera not consented"):
+    """Every post from now on gets this receipt, whatever was sent."""
+    pc._fake._responder = lambda *_a: _Response(
+        body={"ok": True, "inserted": inserted, "dropped": dropped, "reason": reason})
+
+
+@pytest.mark.anyio
+async def test_a_batch_declined_after_a_recorded_one_asks_at_once_and_stops_the_sensor(permits):
+    """A withdrawal reaches the backend's gate before the next check is due: the camera goes off then."""
+    stops, handler = _recorder()
+    permits.set_refusal_handler(handler)
+    await _started(permits)
+    await _answer(permits)
+    await _post_one(permits, "face", {"ts": "a"})
+    reads = len(permits._fake.gets)
+    permits._fake.states = {**ALL_PERMITTED, "camera": "declined"}
+    _backend_answers(permits, inserted=0, dropped=1)
+    await _post_one(permits, "face", {"ts": "b"})
+    await permits._check_permits_if_due()
+    await asyncio.gather(*permits._refusal_tasks.values())
+    assert len(permits._fake.gets) == reads + 1
+    assert stops == [{"camera"}]
+    await permits.stop()
+
+
+@pytest.mark.anyio
+async def test_a_channel_still_declined_does_not_ask_again(permits):
+    """An unworn headband is declined batch after batch: one check when that starts, not one per batch."""
+    await _started(permits)
+    await _answer(permits)
+    _backend_answers(permits, inserted=0, dropped=1, reason="no usable reading; check the headband is on")
+    await _post_one(permits, "cognitive", {"ts": "a"})
+    await permits._check_permits_if_due()
+    reads = len(permits._fake.gets)
+    await _post_one(permits, "cognitive", {"ts": "b"})
+    await permits._check_permits_if_due()
+    assert len(permits._fake.gets) == reads
+    await permits.stop()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("inserted, dropped", [(1, 0), (1, 1)])
+async def test_a_batch_that_recorded_anything_does_not_ask_early(permits, inserted, dropped):
+    """Partly declined is routine (an unworn tick among worn ones); a withdrawal declines the whole channel."""
+    await _started(permits)
+    await _answer(permits)
+    reads = len(permits._fake.gets)
+    _backend_answers(permits, inserted=inserted, dropped=dropped)
+    await _post_one(permits, "heart", {"ts": "a", "source": "muse_optics"})
+    await permits._check_permits_if_due()
+    assert len(permits._fake.gets) == reads
+    await permits.stop()
+
+
 async def _until(condition):
     """Yield to the loop until `condition()` holds, a bounded number of times."""
     for _ in range(300):

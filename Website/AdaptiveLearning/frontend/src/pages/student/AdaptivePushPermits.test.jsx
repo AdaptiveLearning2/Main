@@ -59,6 +59,7 @@ import { deviceStart, deviceStop, museConnect, museDisconnect, museRefresh, muse
          pushStatus, releasePushIfIdle } from '../../lib/sidecar'
 import { apiFetch, apiError, mockApi, resetApi } from '../../test/mocks/apiFetch'
 import { buildRecordingPermits } from '../../test/fixtures/recordingPermits'
+import { announcePermitsChanged } from '../../lib/permitsChanged'
 import Adaptive from './Adaptive'
 
 // `eeg_age_ms` is required for "connected": a link counts only with EEG flowing.
@@ -764,4 +765,39 @@ it('does not take over the retries for a headband withdrawn while the bridge was
   // Answers kept landing during the slow teardown; it is still the only one.
   expect(museDisconnect).toHaveBeenCalledTimes(disconnects + 1)
   await screen.findByRole('button', { name: /connect headband/i }, { timeout: 8000 })
+}, TEST_TIMEOUT)
+
+// A withdrawal reaches the backend's gate at the next batch, long before a check is due: these ask at once.
+const pollsLanded = async (n) => {
+  const before = pushStatus.mock.calls.length
+  await waitFor(() => expect(pushStatus.mock.calls.length).toBeGreaterThanOrEqual(before + n))
+}
+
+it('asks at once when a channel turns to declined, and turns off the camera the answer refuses', async () => {
+  rig.cameraRunning = true
+  await inLessonWithTheSidecarAnswering()
+  answer = () => buildRecordingPermits({ camera: 'declined' })
+  // The sidecar's answer, still fresh, permits it: only the page asking again can stop the camera.
+  rig.sidecar = { ...sidecarSays({}), last_result: { face: 'declined' } }
+  await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('camera'))
+}, TEST_TIMEOUT)
+
+it('asks once per turn to declined, and never for a recorded result', async () => {
+  const quiet = await inLessonWithTheSidecarAnswering()
+  rig.sidecar = { ...sidecarSays({}), last_result: { cognitive: 'recorded', face: 'recorded' } }
+  await pollsLanded(3)
+  expect(permitCalls()).toBe(quiet)
+  // An unworn headband: declined batch after batch, and still permitted.
+  rig.sidecar = { ...sidecarSays({}), last_result: { cognitive: 'declined', face: 'recorded' } }
+  await waitFor(() => expect(permitCalls()).toBe(quiet + 1))
+  await pollsLanded(3)
+  expect(permitCalls()).toBe(quiet + 1)
+}, TEST_TIMEOUT)
+
+it('asks at once when consent changes on another page of this browser', async () => {
+  rig.cameraRunning = true
+  await inLessonWithTheSidecarAnswering()
+  answer = () => buildRecordingPermits({ camera: 'declined' })
+  announcePermitsChanged()
+  await waitFor(() => expect(deviceStop).toHaveBeenCalledWith('camera'))
 }, TEST_TIMEOUT)

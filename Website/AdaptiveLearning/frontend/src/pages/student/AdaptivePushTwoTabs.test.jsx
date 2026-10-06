@@ -55,7 +55,7 @@ vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u1', email: 'a@b.c' }, role: 'student', loading: false }),
 }))
 
-import { markEegStarted } from '../../lib/session'
+import { markEegStarted, recordAnswer } from '../../lib/session'
 import { deviceStop, deviceStopOnUnload, pushStatus, releasePushIfIdle, startPush, stopPush,
          stopPushOnUnload } from '../../lib/sidecar'
 import { fireAuthEvent } from '../../test/mocks/supabase'
@@ -117,7 +117,8 @@ it("claims nothing from another tab's lesson, and says where the readings go", a
   expect(screen.queryByText(/Not being saved/)).toBeNull()
   expect(screen.queryByText(/not saved/)).toBeNull()
   expect(within(panelOf('Muse Headband')).queryByText('not recording')).toBeNull()
-  // Nor its delivery: the recording chip, shown once a question is answered, is built from the counts between polls.
+  // Nor its delivery: the recording chip, shown once an answer is saved, is built from the counts between polls.
+  recordAnswer.mockResolvedValueOnce({ ok: true, topic: 'ordering' })
   fireEvent.click(screen.getByRole('button', { name: /^B\s*4$/ }))
   fireEvent.click(screen.getByRole('button', { name: /submit answer/i }))
   await screen.findByText(/1 answered/)

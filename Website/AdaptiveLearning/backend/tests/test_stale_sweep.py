@@ -422,3 +422,57 @@ def test_starting_a_session_closes_a_stray_when_it_was_last_active(monkeypatch):
     main.start_session(main.StartSessionRequest(title=None), request=None)
 
     assert main._parse_ts(stamps["s-stray"]) == main._parse_ts("2026-01-01T09:30:00+00:00")
+
+
+# ── a new session leaves a lesson still live in another tab ─────────────────
+
+def _start(monkeypatch, strays, answers, boom=False):
+    """`start_session` over these open sessions; (closed ids, poller-stopped ids)."""
+    closed, stopped = [], []
+    monkeypatch.setattr(main, "supabase", _StartDB(strays, answers, boom=boom))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u1"})
+    monkeypatch.setattr(main.eeg_poller, "stop", lambda sid, *a, **k: stopped.append(sid))
+    monkeypatch.setattr(main, "_close_session", lambda uid, s, ended, **k: closed.append(s["id"]))
+    monkeypatch.setattr(main, "_profile", lambda _u: {})
+    monkeypatch.setattr(main, "_served_grade", lambda *a, **k: None)
+    monkeypatch.setattr(main, "_ensure_queue", lambda *a, **k: None)
+    main.start_session(main.StartSessionRequest(title=None), request=None)
+    return closed, stopped
+
+
+def _ago(minutes):
+    from datetime import timedelta
+    return (main._utc_now() - timedelta(minutes=minutes)).isoformat()
+
+
+def test_a_lesson_answered_in_another_tab_just_now_is_left_open(monkeypatch):
+    """Closed, its next answer would 409 and split it, and that tab's new session would close this one."""
+    live, stale = _session("s-live", started_min_ago=30), _session("s-stale", started_min_ago=300)
+    closed, stopped = _start(monkeypatch, [live, stale], [
+        {"session_id": "s-live", "answered_at": _ago(1)},
+        {"session_id": "s-stale", "answered_at": _ago(200)}])
+    assert closed == ["s-stale"]
+    assert stopped == ["s-stale"], "the live tab's poller was stopped"
+
+
+def test_a_lesson_just_opened_with_nothing_answered_is_left_open(monkeypatch):
+    fresh, old = _session("s-fresh", started_min_ago=2), _session("s-old", started_min_ago=20)
+    closed, _ = _start(monkeypatch, [fresh, old], [])
+    assert closed == ["s-old"]
+
+
+def test_quiet_for_the_stale_window_is_closed(monkeypatch):
+    """The boundary is class_live's `_STALE_AFTER_SEC`, so the two agree on what has gone quiet."""
+    window = main._STALE_AFTER_SEC // 60
+    just_in = _session("s-in", started_min_ago=300)
+    just_out = _session("s-out", started_min_ago=300)
+    closed, _ = _start(monkeypatch, [just_in, just_out], [
+        {"session_id": "s-in", "answered_at": _ago(window - 1)},
+        {"session_id": "s-out", "answered_at": _ago(window + 1)}])
+    assert closed == ["s-out"]
+
+
+def test_an_unreadable_activity_closes_nothing(monkeypatch):
+    """Leaving a dead session to the sweep costs nothing; closing a live one splits it."""
+    closed, stopped = _start(monkeypatch, [_session("s-old", started_min_ago=300)], [], boom=True)
+    assert closed == [] and stopped == []

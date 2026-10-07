@@ -257,7 +257,10 @@ alert already points at, so `detail` carries none.
 
 Both original sweeps are **on demand** — `start_session` collects a student's strays when they next start one,
 `class_live` collects a class's when a teacher opens the monitor — so a student who never comes back is collected
-by neither.
+by neither. **`start_session` leaves any session active within `_STALE_AFTER_SEC`**, its start counting, and closes
+nothing when activity is unreadable: that may be a lesson live in another tab, and closing it makes that tab's next
+answer start a new session that closes this one in turn. A dead one left open costs nothing; a sweep stamps it at
+its last activity.
 
 `_sweep_abandoned_sessions` is the third, run from a background thread started in `_lifespan`. **It is a backend
 thread, not a `pg_cron` job, and that is not a preference.** Closing a session credits lifetime totals, writes the

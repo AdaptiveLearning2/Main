@@ -1317,9 +1317,17 @@ def _last_seen_many(sessions: list[dict]) -> dict[str, datetime] | None:
         got = supabase.rpc("last_activity_for_sessions",
                            {"p_session_ids": [s["id"] for s in sessions]}).execute().data or []
     except Exception as e:                                     # noqa: BLE001
-        print(f"[session:close] could not read last activity, closing at the current time: {e}")
+        print(f"[session:close] could not read last activity: {e}")
         return None
     return {g["session_id"]: ts for g in got if (ts := _parse_ts(g.get("last_activity_at")))}
+
+
+def _quiet_since(session: dict, last_seen: dict[str, datetime] | None, cutoff: datetime) -> bool:
+    """Whether nothing has happened in a session since `cutoff`, its start included; an unread activity is not quiet."""
+    if last_seen is None:
+        return False
+    seen = last_seen.get(session["id"]) or _parse_ts(session.get("started_at"))
+    return seen is not None and seen < cutoff
 
 
 def _ended_when_last_seen(session: dict, last_seen: dict[str, datetime] | None) -> str:
@@ -2919,7 +2927,11 @@ def start_session(payload: StartSessionRequest, request: Request):
         .select("id, started_at, questions_answered, correct_answers") \
         .eq("user_id", user["id"]).is_("ended_at", "null").execute().data or []
     last_seen = _last_seen_many(stale_open)
+    quiet_before = _utc_now() - timedelta(seconds=_STALE_AFTER_SEC)
     for s in stale_open:
+        if not _quiet_since(s, last_seen, quiet_before):
+            # Possibly a lesson live in another tab: closed, its next answer would split it.
+            continue
         # Also releases any pre-claim EEG reservation from a scan that never reached /start.
         eeg_poller.stop(s["id"], user["id"])
         _close_session(user["id"], s, _ended_when_last_seen(s, last_seen), closed_by=CLOSED_BY_SWEEP)

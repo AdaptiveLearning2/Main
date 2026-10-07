@@ -547,7 +547,9 @@ unreadable grade lands there too.**
 **A new topic needs five things wired, and the third fails silently.** `ALL_TOPICS` and `TOPIC_MIN_GRADE`; a `case` in
 `question_generation`'s match (which now raises by name rather than falling through to an `UnboundLocalError`); **a
 `math_topics` row, via a migration** — `record_topic_attempt` joins on `questions.subject` and attributes nothing when
-that finds none, so a topic without one serves and scores questions while crediting the work to nothing; an entry in
+that finds none, so a topic without one serves and scores questions while crediting the work to nothing
+(`test_a_new_topic_carries_a_math_topics_row` holds every topic to a migration `INSERT`, and `record_answer` logs an
+answer that matched no row — never `seed.sql`, which is gitignored and absent from CI); an entry in
 `FORBIDDEN_BANDS`; and `frontend/src/lib/topics.js`.
 
 **That last was four hardcoded lists, and was six.** `Analytics.jsx` counted the newer topics in *nothing* — its chart

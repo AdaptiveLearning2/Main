@@ -206,14 +206,14 @@ _TOPIC_NAME_VALUES = re.compile(
 
 
 def _top_level(sql: str) -> str:
-    """One file's statements that run at migration time: comments, then function bodies, removed.
+    """One file's statements that run at migration time: comments, then function and procedure bodies, removed.
 
     Comments first, so a `$$` in one cannot pair with a real one; a `DO $$` block runs, so it stays.
     """
     sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.S)
     sql = re.sub(r"--[^\n]*", "", sql)
-    return re.sub(r"(CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\b[^$]*?)\$(\w*)\$.*?\$\2\$", r"\1",
-                  sql, flags=re.S | re.I)
+    return re.sub(r"(CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b[^$]*?)\$(\w*)\$.*?\$\2\$",
+                  r"\1", sql, flags=re.S | re.I)
 
 
 def _seeded_topics(files: list[str]) -> set[str]:
@@ -251,6 +251,8 @@ def test_an_insert_it_cannot_read_fails_rather_than_counting(sql):
     "/* INSERT INTO math_topics (topic_name)\n VALUES ('a'); */",
     "CREATE FUNCTION f() RETURNS void AS $fn$ BEGIN\n"
     "  INSERT INTO math_topics (topic_name) VALUES ('a');\nEND $fn$ LANGUAGE plpgsql;",
+    "CREATE OR REPLACE PROCEDURE p() LANGUAGE plpgsql AS $$ BEGIN\n"
+    "  INSERT INTO math_topics (topic_name) VALUES ('a');\nEND $$;",
 ])
 def test_an_insert_that_does_not_run_at_migration_time_seeds_nothing(sql):
     assert _seeded_topics([sql]) == set()

@@ -232,6 +232,22 @@ are now different facts. Push needed none of this: `startPush` was already keyed
 rather than replaying a backlog — and so a paired, idle headband does not read as a sidecar that has
 stopped answering.
 
+### A pull poller ends with its page, and waits out an admin switch
+
+**`pagehide`'s `/api/eeg/stop` is the fast path, not the guarantee.** A page that dies without it — a
+crash, a laptop asleep, a keepalive that never lands — left its poller recording a child who had gone,
+and holding the station, until the sweep. So the poller stops itself once no page has polled for
+`PAIRING_IDLE_SECONDS` (`eeg_poller.PAGE_IDLE_SECONDS`, wired from `main`). The stamp is in memory:
+`_station_access` calls `page_seen` whenever the poller's own user asks about its station, which the
+lesson page's status poll does every few seconds, hidden tabs included.
+
+**A refused re-check stops the poller, except when the EEG admin switch is the only refusal**
+(`_poller_paused_by_switch`). Then it keeps the stream and the pairing, writes nothing on either
+channel, and resumes when a re-check passes — the switch can withhold recording, so turning it back on
+must not need every student to reconnect. A withdrawal, a closed year, an unreadable consent row, an
+unwired or failing pause check all still stop it. Status reports the paused poller as `running` with
+`stopped_reason: recording_switched_off`.
+
 ## The bridge owns BLE recovery, and reports it
 
 Reconnection used to be manual at all four layers at once, so a headband that fell off mid-question

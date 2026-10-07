@@ -205,10 +205,18 @@ _TOPIC_NAME_VALUES = re.compile(
     re.I | re.S)
 
 
-def _seeded_topics(sql: str) -> set[str]:
-    """Topic names the migrations' `math_topics` inserts carry; an insert in any other shape fails loudly."""
+def _top_level(sql: str) -> str:
+    """One file's statements that run at migration time: function bodies and comments removed."""
+    sql = re.sub(r"\$(\w*)\$.*?\$\1\$", "", sql, flags=re.S)
+    sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.S)
+    return re.sub(r"--[^\n]*", "", sql)
+
+
+def _seeded_topics(files: list[str]) -> set[str]:
+    """Topic names the files' `math_topics` inserts carry; an insert in any other shape fails loudly."""
     seeded = set()
-    for stmt in _MATH_TOPICS_INSERT.findall(re.sub(r"--[^\n]*", "", sql)):
+    # Per file, so one file's trailing comment cannot reach into the next.
+    for stmt in (s for sql in files for s in _MATH_TOPICS_INSERT.findall(_top_level(sql))):
         values = _TOPIC_NAME_VALUES.match(stmt)
         assert values, ("cannot read this math_topics insert; write it as "
                         f"(\"topic_name\") VALUES ('name'), ...:\n{stmt}")
@@ -222,7 +230,7 @@ def _seeded_topics(sql: str) -> set[str]:
     "INSERT INTO math_topics (topic_name) VALUES ('a'), ('b');",
 ])
 def test_every_spelling_of_a_topic_insert_is_read(sql):
-    assert _seeded_topics(sql) == {"a", "b"}
+    assert _seeded_topics([sql]) == {"a", "b"}
 
 
 @pytest.mark.parametrize("sql", [
@@ -231,23 +239,31 @@ def test_every_spelling_of_a_topic_insert_is_read(sql):
 ])
 def test_an_insert_it_cannot_read_fails_rather_than_counting(sql):
     with pytest.raises(AssertionError, match="cannot read this math_topics insert"):
-        _seeded_topics(sql)
+        _seeded_topics([sql])
 
 
-def test_a_quoted_mention_outside_an_insert_seeds_nothing():
-    sql = """-- ('a')\nSELECT 'a';\nINSERT INTO public.other ("topic_name") VALUES ('a');"""
-    assert _seeded_topics(sql) == set()
+@pytest.mark.parametrize("sql", [
+    """-- ('a')\nSELECT 'a';\nINSERT INTO public.other ("topic_name") VALUES ('a');""",
+    "/* INSERT INTO math_topics (topic_name)\n VALUES ('a'); */",
+    "CREATE FUNCTION f() RETURNS void AS $fn$ BEGIN\n"
+    "  INSERT INTO math_topics (topic_name) VALUES ('a');\nEND $fn$ LANGUAGE plpgsql;",
+])
+def test_an_insert_that_does_not_run_at_migration_time_seeds_nothing(sql):
+    assert _seeded_topics([sql]) == set()
+
+
+def test_a_trailing_comment_does_not_reach_into_the_next_file():
+    files = ["SELECT 1; -- no newline at the end",
+             "INSERT INTO math_topics (topic_name) VALUES ('a');"]
+    assert _seeded_topics(files) == {"a"}
 
 
 def test_a_new_topic_carries_a_math_topics_row():
     """`record_topic_attempt` joins on `math_topics.topic_name` and silently credits nothing without a row."""
     migrations = os.path.join(os.path.dirname(BACKEND), "..", "..",
                               "supabase", "migrations")
-    sql = ""
-    for name in sorted(os.listdir(migrations)):
-        if name.endswith(".sql"):
-            sql += open(os.path.join(migrations, name), encoding="utf-8").read()
-    seeded = _seeded_topics(sql)
+    seeded = _seeded_topics([open(os.path.join(migrations, name), encoding="utf-8").read()
+                             for name in sorted(os.listdir(migrations)) if name.endswith(".sql")])
 
     for topic in decider.ALL_TOPICS:
         assert topic in seeded, (

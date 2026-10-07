@@ -1153,7 +1153,7 @@ BEGIN
 END $$;
 
 -- ── a stack built from migrations alone can attribute every original topic ──
--- Seeded by 20261008000000; before it, only a local seed.sql held them.
+-- Seeded by 20261008000000, not by seed.sql, which CI never runs.
 
 DO $$
 DECLARE

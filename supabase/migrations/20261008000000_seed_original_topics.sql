@@ -1,5 +1,4 @@
--- The original ten topics, seeded before migrations tracked this table; a stack built
--- from migrations alone had none, so record_topic_attempt credited their answers to nothing.
+-- The ten topics no other migration seeds. Without a math_topics row, attempts credit nothing.
 -- By name, never an explicit id, or a regenerated seed.sql collides.
 
 INSERT INTO "public"."math_topics" ("topic_name")

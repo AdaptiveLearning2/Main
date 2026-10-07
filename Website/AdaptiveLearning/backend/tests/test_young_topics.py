@@ -197,6 +197,48 @@ def test_algebraic_notation_is_refused_at_these_grades(reply):
 
 # --- the wiring a new topic needs -----------------------------------------
 
+_MATH_TOPICS_INSERT = re.compile(
+    r'INSERT\s+INTO\s+(?:"?public"?\s*\.\s*)?"?math_topics"?(?!\w)[^;]*;', re.I)
+# The one shape read: a (topic_name) column list and single-value tuples.
+_TOPIC_NAME_VALUES = re.compile(
+    r'INSERT\s+INTO\s+[^(]*\(\s*"?topic_name"?\s*\)\s*VALUES\s*(.*?)(?:\s+ON\s+CONFLICT\b.*)?;\Z',
+    re.I | re.S)
+
+
+def _seeded_topics(sql: str) -> set[str]:
+    """Topic names the migrations' `math_topics` inserts carry; an insert in any other shape fails loudly."""
+    seeded = set()
+    for stmt in _MATH_TOPICS_INSERT.findall(re.sub(r"--[^\n]*", "", sql)):
+        values = _TOPIC_NAME_VALUES.match(stmt)
+        assert values, ("cannot read this math_topics insert; write it as "
+                        f"(\"topic_name\") VALUES ('name'), ...:\n{stmt}")
+        seeded.update(re.findall(r"\(\s*'([^']+)'\s*\)", values.group(1)))
+    return seeded
+
+
+@pytest.mark.parametrize("sql", [
+    """INSERT INTO "public"."math_topics" ("topic_name") VALUES ('a'), ('b') ON CONFLICT ("topic_name") DO NOTHING;""",
+    "insert into public.math_topics (topic_name) values ('a'),\n ('b');",
+    "INSERT INTO math_topics (topic_name) VALUES ('a'), ('b');",
+])
+def test_every_spelling_of_a_topic_insert_is_read(sql):
+    assert _seeded_topics(sql) == {"a", "b"}
+
+
+@pytest.mark.parametrize("sql", [
+    """INSERT INTO "public"."math_topics" ("topic_name", "note") VALUES ('a', 'b');""",
+    "INSERT INTO public.math_topics (topic_name) SELECT 'a';",
+])
+def test_an_insert_it_cannot_read_fails_rather_than_counting(sql):
+    with pytest.raises(AssertionError, match="cannot read this math_topics insert"):
+        _seeded_topics(sql)
+
+
+def test_a_quoted_mention_outside_an_insert_seeds_nothing():
+    sql = """-- ('a')\nSELECT 'a';\nINSERT INTO public.other ("topic_name") VALUES ('a');"""
+    assert _seeded_topics(sql) == set()
+
+
 def test_a_new_topic_carries_a_math_topics_row():
     """`record_topic_attempt` joins on `math_topics.topic_name` and silently credits nothing without a row."""
     migrations = os.path.join(os.path.dirname(BACKEND), "..", "..",
@@ -205,11 +247,7 @@ def test_a_new_topic_carries_a_math_topics_row():
     for name in sorted(os.listdir(migrations)):
         if name.endswith(".sql"):
             sql += open(os.path.join(migrations, name), encoding="utf-8").read()
-    # Only names a math_topics INSERT carries count; a quoted mention elsewhere seeds nothing.
-    sql = re.sub(r"--[^\n]*", "", sql)
-    seeded = set()
-    for insert in re.findall(r'INSERT INTO "public"\."math_topics"[^;]*;', sql, re.I):
-        seeded.update(re.findall(r"'([a-z_]+)'", insert))
+    seeded = _seeded_topics(sql)
 
     for topic in decider.ALL_TOPICS:
         assert topic in seeded, (

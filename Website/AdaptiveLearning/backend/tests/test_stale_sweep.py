@@ -375,3 +375,36 @@ def test_a_failed_activity_read_closes_at_the_sweep_time(monkeypatch):
     out, stamps, before = _sweep(monkeypatch, _SweepDB([s], [], boom=True))
     assert out["closed"] == 1
     assert main._parse_ts(stamps["s-old"]) >= before
+
+
+class _StartDB(_SweepDB):
+    """`start_session`'s stray read, then the new session's insert."""
+
+    def insert(self, obj, **_k):
+        self._inserting = obj
+        return self
+
+    def execute(self):
+        obj = getattr(self, "_inserting", None)
+        if obj is not None:
+            self._inserting = None
+            return type("R", (), {"data": [{"id": "s-new", **obj}]})
+        return super().execute()
+
+
+def test_starting_a_session_closes_a_stray_when_it_was_last_active(monkeypatch):
+    stray = _session("s-stray", started_min_ago=600)
+    monkeypatch.setattr(main, "supabase", _StartDB(
+        [stray], [{"session_id": "s-stray", "answered_at": "2026-01-01T09:30:00+00:00"}]))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u1"})
+    monkeypatch.setattr(main.eeg_poller, "stop", lambda *a, **k: None)
+    stamps = {}
+    monkeypatch.setattr(main, "_close_session",
+                        lambda uid, s, ended, **k: stamps.update({s["id"]: ended}))
+    monkeypatch.setattr(main, "_profile", lambda _u: {})
+    monkeypatch.setattr(main, "_served_grade", lambda *a, **k: None)
+    monkeypatch.setattr(main, "_ensure_queue", lambda *a, **k: None)
+
+    main.start_session(main.StartSessionRequest(title=None), request=None)
+
+    assert main._parse_ts(stamps["s-stray"]) == main._parse_ts("2026-01-01T09:30:00+00:00")

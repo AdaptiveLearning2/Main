@@ -1309,6 +1309,27 @@ _stale_sweep_stop = threading.Event()
 _stale_sweep_thread: threading.Thread | None = None
 
 
+def _last_seen_many(sessions: list[dict]) -> dict[str, datetime] | None:
+    """Each session's last activity, by id; None when the read failed. Never raises."""
+    if not sessions:
+        return {}
+    try:
+        got = supabase.rpc("last_activity_for_sessions",
+                           {"p_session_ids": [s["id"] for s in sessions]}).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[session:close] could not read last activity, closing at the current time: {e}")
+        return None
+    return {g["session_id"]: ts for g in got if (ts := _parse_ts(g.get("last_activity_at")))}
+
+
+def _ended_when_last_seen(session: dict, last_seen: dict[str, datetime] | None) -> str:
+    """A swept session ends when the student was last seen, else at its start; now only if that was unread."""
+    if last_seen is None:
+        return _utc_now().isoformat()
+    ended = last_seen.get(session["id"]) or _parse_ts(session.get("started_at")) or _utc_now()
+    return ended.isoformat()
+
+
 def _sweep_abandoned_sessions(limit: int = _STALE_SWEEP_BATCH) -> dict:
     """Close sessions left open past `_SESSION_ABANDONED_AFTER_SEC`; returns counts.
 
@@ -1325,18 +1346,7 @@ def _sweep_abandoned_sessions(limit: int = _STALE_SWEEP_BATCH) -> dict:
         return {"found": 0, "closed": 0, "discarded": 0, "failed": 0,
                 "retrieved": False}
 
-    # Ended when the student was last seen, not when the sweep noticed; unread, the sweep's time.
-    last_seen: dict[str, datetime] = {}
-    if rows:
-        try:
-            got = supabase.rpc("last_activity_for_sessions",
-                               {"p_session_ids": [s["id"] for s in rows]}).execute().data or []
-            last_seen = {g["session_id"]: ts for g in got
-                         if (ts := _parse_ts(g.get("last_activity_at")))}
-        except Exception as e:                                 # noqa: BLE001
-            print(f"[stale_sweep] could not read last activity, closing at the sweep time: {e}")
-            last_seen = None
-
+    last_seen = _last_seen_many(rows)
     closed = discarded = failed = 0
     for s in rows:
         uid = s.get("user_id")
@@ -1345,10 +1355,7 @@ def _sweep_abandoned_sessions(limit: int = _STALE_SWEEP_BATCH) -> dict:
         try:
             # Poller first, so no tick lands after the discard check.
             eeg_poller.stop(s["id"], uid)
-            ended = _utc_now()
-            if last_seen is not None:
-                ended = last_seen.get(s["id"]) or _parse_ts(s.get("started_at")) or ended
-            out = _close_session(uid, s, ended.isoformat(),
+            out = _close_session(uid, s, _ended_when_last_seen(s, last_seen),
                                  closed_by=CLOSED_BY_SWEEP)
             if out.get("discarded"):
                 discarded += 1
@@ -2911,11 +2918,11 @@ def start_session(payload: StartSessionRequest, request: Request):
     stale_open = supabase.table("sessions") \
         .select("id, started_at, questions_answered, correct_answers") \
         .eq("user_id", user["id"]).is_("ended_at", "null").execute().data or []
+    last_seen = _last_seen_many(stale_open)
     for s in stale_open:
         # Also releases any pre-claim EEG reservation from a scan that never reached /start.
         eeg_poller.stop(s["id"], user["id"])
-        stale_ended = _utc_now().isoformat()
-        _close_session(user["id"], s, stale_ended, closed_by=CLOSED_BY_SWEEP)
+        _close_session(user["id"], s, _ended_when_last_seen(s, last_seen), closed_by=CLOSED_BY_SWEEP)
 
 
     obj  = {

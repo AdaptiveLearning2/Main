@@ -5797,17 +5797,28 @@ def _poller_may_record_eeg_reason(student_id: str) -> str:
     return _as_sentence(_not_recording_reason(gate, "EEG not consented", switches=("record_eeg",)))
 
 
-def _poller_paused_by_switch(student_id: str) -> bool:
-    """Whether the EEG admin switch is the only refusal, so a running poller waits for it rather than stops."""
-    gate = _may_record(student_id)
+def _paused_by_switch(gate: dict) -> bool:
+    """Whether the EEG admin switch is the only refusal in this `_may_record` gate."""
     return ("record_eeg" in gate["switched_off"]
             and gate["window_state"] not in _WINDOW_DENIED
             and bool(gate.get("retrieved")) and bool(gate.get("eeg_enabled")))
 
 
+def _poller_recheck(student_id: str) -> str:
+    """A running poller's verdict over one read: 'record', 'pause' (the switch alone) or 'stop'."""
+    gate = _may_record(student_id)
+    if gate["record_eeg"]:
+        return "record"
+    if _paused_by_switch(gate):
+        return "pause"
+    reason = _as_sentence(_not_recording_reason(gate, "EEG not consented", switches=("record_eeg",)))
+    print(f"<<< [eeg-poller] {student_id[:8]}: {reason}", flush=True)
+    return "stop"
+
+
 eeg_poller.set_consent_check(_poller_may_record_eeg)
 eeg_poller.set_consent_reason_check(_poller_may_record_eeg_reason)
-eeg_poller.set_pause_check(_poller_paused_by_switch)
+eeg_poller.set_recheck(_poller_recheck)
 
 
 def _IS_DUPLICATE_KEY(exc: Exception) -> bool:
@@ -6796,8 +6807,9 @@ def class_live(class_id: str, request: Request):
                 # `sid` is the student. Stop the poller before closing, or a tick
                 # can land a row after the discard check looked.
                 eeg_poller.stop(sid2, sid)
-                # Ended when the student was last seen, not when this read noticed.
-                _close_session(sid, sess, last_activity, closed_by=CLOSED_BY_SWEEP)
+                # Ended when last seen, by the sweep's definition (measured rows), not this card's.
+                _close_session(sid, sess, _ended_when_last_seen(sess, _last_seen_many([sess])),
+                               closed_by=CLOSED_BY_SWEEP)
                 active = None; latest_cog = None; latest_face = None; latest_heart = None
             elif last_activity and last_activity >= live_cutoff:
                 active = sess

@@ -177,21 +177,16 @@ class _Poller(threading.Thread):
             # Re-read consent so a mid-lesson withdrawal takes effect.
             if now - self._consent_checked_at >= CONSENT_RECHECK_SECONDS:
                 self._consent_checked_at = now
-                try:
-                    still_consented = _consent_check(self.user_id) if _consent_check else False
-                except Exception as e:
-                    # Fails closed.
-                    still_consented = False
-                    print(f"!!! [eeg-poller] consent re-check failed, stopping: {e}", flush=True)
-                if still_consented and self.withheld:
+                verdict = self._recheck()
+                if verdict == "record" and self.withheld:
                     print(f">>> [eeg-poller] session={self.session_id[:8]}: recording resumed", flush=True)
                     self.withheld = False
-                elif not still_consented and self._paused_by_switch():
+                elif verdict == "pause":
                     if not self.withheld:
                         print(f"<<< [eeg-poller] session={self.session_id[:8]}: recording withheld "
                               "by an admin switch; re-checking", flush=True)
                     self.withheld = True
-                elif not still_consented:
+                elif verdict != "record":
                     # Stops pull-mode heart recording too, deliberately: errs toward recording less.
                     print(f"<<< [eeg-poller] stopping session={self.session_id[:8]}: "
                           "recording no longer permitted", flush=True)
@@ -270,13 +265,16 @@ class _Poller(threading.Thread):
 
         print(f"<<< [eeg-poller] STOPPED user={self.user_id[:8]} session={self.session_id[:8]} samples={self.samples} errors={self.errors}", flush=True)
 
-    def _paused_by_switch(self) -> bool:
-        """Whether only an admin switch refused, so the poller waits rather than stops. Fails toward stopping."""
+    def _recheck(self) -> str:
+        """'record', 'pause' (only an admin switch refuses) or 'stop'; one permission read. Fails closed."""
         try:
-            return bool(_pause_check(self.user_id)) if _pause_check else False
+            if _recheck_fn is not None:
+                # The caller stops on anything but 'record' or 'pause'.
+                return _recheck_fn(self.user_id)
+            return "record" if _consent_check and _consent_check(self.user_id) else "stop"
         except Exception as e:
-            print(f"!!! [eeg-poller] pause check failed, stopping: {e}", flush=True)
-            return False
+            print(f"!!! [eeg-poller] consent re-check failed, stopping: {e}", flush=True)
+            return "stop"
 
     def stop(self):
         self._stop_event.set()
@@ -425,13 +423,14 @@ def set_consent_reason_check(fn) -> None:
     _consent_reason_check = fn
 
 
-# Optional: `fn(user_id) -> bool`, true when only an admin switch refuses. Unwired, a refusal stops.
-_pause_check = None
+# Optional: `fn(user_id) -> 'record' | 'pause' | 'stop'` for a running poller's re-check.
+# Unwired, the re-check is `_consent_check`, and a refusal stops.
+_recheck_fn = None
 
 
-def set_pause_check(fn) -> None:
-    global _pause_check
-    _pause_check = fn
+def set_recheck(fn) -> None:
+    global _recheck_fn
+    _recheck_fn = fn
 
 
 # Seconds without a page poll before a poller stops itself; None (unwired) never does.

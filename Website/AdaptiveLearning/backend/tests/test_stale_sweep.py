@@ -287,8 +287,11 @@ def test_nothing_to_look_up_is_not_a_failed_read(monkeypatch):
 
 # ── the live monitor closes only a session whose sensor went quiet ──────────
 
-def _live(monkeypatch, latest, stamps=None):
-    """`class_live` for one student whose open session started 15 minutes ago; `stamps` collects each close's `ended_at`."""
+def _live(monkeypatch, latest, stamps=None, measured=None):
+    """`class_live` for one student whose open session started 15 minutes ago.
+
+    `stamps` collects each close's `ended_at`; `measured(started)` is what `last_activity_for_sessions` answers.
+    """
     from datetime import datetime, timedelta
     started = (datetime.utcnow() - timedelta(seconds=900)).isoformat()
     session = {"id": "sess-1", "user_id": "stu-1", "started_at": started}
@@ -308,6 +311,12 @@ def _live(monkeypatch, latest, stamps=None):
             q.select = q.eq = lambda *a, **k: q
             q.execute = lambda: type("R", (), {"data": [{"student_id": "stu-1"}]})()
             return q
+
+        def rpc(self, name, params):
+            assert name == "last_activity_for_sessions" and params["p_session_ids"] == ["sess-1"]
+            at = measured(started) if measured else None
+            return type("Q", (), {"execute": lambda _s: type("R", (), {
+                "data": [{"session_id": "sess-1", "last_activity_at": at}]})()})()
     monkeypatch.setattr(main, "supabase", _Members())
     return main.class_live("class-1", None), closed
 
@@ -325,16 +334,21 @@ def test_a_sensor_that_went_quiet_still_closes(monkeypatch):
 
 
 def test_a_quiet_session_closes_at_its_last_reading_not_now(monkeypatch):
-    """The live monitor's close stamps when the student was last seen."""
+    """Last seen as the sweep defines it: a newer reading with nothing in it (headband off the head) does not count."""
+    from datetime import datetime, timedelta
     stamps, seen = [], {}
 
     def latest(started):
-        seen["ts"] = started
-        return {"cognitive": {"ts": started, "focus": 0.5}}
+        empty = (datetime.fromisoformat(started) + timedelta(seconds=60)).isoformat()
+        return {"cognitive": {"ts": empty, "focus": None}}
 
-    _, closed = _live(monkeypatch, latest, stamps=stamps)
+    def measured(started):
+        seen["ts"] = started + "+00:00"
+        return seen["ts"]
+
+    _, closed = _live(monkeypatch, latest, stamps=stamps, measured=measured)
     assert closed == ["sess-1"]
-    assert stamps == [seen["ts"]]
+    assert [main._parse_ts(s) for s in stamps] == [main._parse_ts(seen["ts"])]
 
 
 # ── the sweep stamps the last activity, not the sweep time ──────────────────

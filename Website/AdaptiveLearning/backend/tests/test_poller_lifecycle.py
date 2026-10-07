@@ -120,15 +120,14 @@ def test_another_users_request_does_not_mark_the_page_seen(monkeypatch):
 # ── an admin switch withholds recording; turned back on, it resumes ─────────
 
 def test_a_switched_off_poller_waits_writes_nothing_and_resumes(monkeypatch, stream):
-    allowed = {"ok": True}
-    eeg_poller.set_consent_check(lambda _u: allowed["ok"])
-    eeg_poller.set_pause_check(lambda _u: True)
+    verdict = {"now": "record"}
+    eeg_poller.set_recheck(lambda _u: verdict["now"])
     db = _FakeSupabase()
     eeg_poller.start(db, "u1", "s1", "default")
     p = eeg_poller._active["s1"]
     assert _wait(lambda: _eeg_writes(db)), "never recorded before the switch"
 
-    allowed["ok"] = False
+    verdict["now"] = "pause"
     assert _wait(lambda: p.withheld)
     # Withheld is set at the top of a loop, before that loop's write: nothing after this counts.
     written, read = len(_eeg_writes(db)), len(stream)
@@ -137,49 +136,53 @@ def test_a_switched_off_poller_waits_writes_nothing_and_resumes(monkeypatch, str
     assert eeg_poller.is_polling("s1"), "the switch stopped the poller instead of pausing it"
     assert eeg_poller.status("u1")["withheld"] is True
 
-    allowed["ok"] = True
+    verdict["now"] = "record"
     assert _wait(lambda: len(_eeg_writes(db)) > written), "recording did not resume"
     assert p.withheld is False
 
 
-@pytest.mark.parametrize("pause", [lambda _u: False, None, "raises"])
-def test_any_other_refusal_still_stops(monkeypatch, stream, pause):
-    """Consent withdrawn, unwired, or a failed check: the poller stops, as before."""
-    if pause == "raises":
-        def pause(_u):
-            raise RuntimeError("consent unreadable")
+def _raises(_u):
+    raise RuntimeError("consent unreadable")
+
+
+@pytest.mark.parametrize("recheck", ["stop", "something else", "raises", "unwired"])
+def test_any_other_verdict_still_stops(monkeypatch, stream, recheck):
+    """A refusal, an unknown verdict, a failed check, or an unwired one over a refused consent check."""
     allowed = {"ok": True}
     eeg_poller.set_consent_check(lambda _u: allowed["ok"])
-    eeg_poller.set_pause_check(pause)
     eeg_poller.start(_FakeSupabase(), "u1", "s1", "default")
+    eeg_poller.set_recheck({"raises": _raises, "unwired": None}.get(recheck, lambda _u: recheck))
     allowed["ok"] = False
     assert _wait(lambda: not eeg_poller.is_polling("s1"))
 
 
 def _gate(**over):
-    gate = {"switched_off": ["record_eeg"], "window_state": "open",
+    gate = {"record_eeg": False, "switched_off": ["record_eeg"], "window_state": "open",
             "retrieved": True, "eeg_enabled": True}
     return {**gate, **over}
 
 
-@pytest.mark.parametrize("gate,paused", [
-    (_gate(), True),
-    (_gate(switched_off=[]), False),                                  # refused for another reason
-    (_gate(switched_off=["record_headband_optical"]), False),
-    (_gate(eeg_enabled=False), False),                                # consent withdrawn too
-    (_gate(retrieved=False), False),                                  # could not check consent
-    (_gate(window_state=next(iter(main._WINDOW_DENIED))), False),     # the school year closed too
+@pytest.mark.parametrize("gate,verdict", [
+    (_gate(record_eeg=True, switched_off=[]), "record"),
+    (_gate(), "pause"),
+    (_gate(switched_off=[]), "stop"),                                  # refused for another reason
+    (_gate(switched_off=["record_headband_optical"]), "stop"),
+    (_gate(eeg_enabled=False), "stop"),                                # consent withdrawn too
+    (_gate(retrieved=False), "stop"),                                  # could not check consent
+    (_gate(window_state=next(iter(main._WINDOW_DENIED))), "stop"),     # the school year closed too
 ])
-def test_only_the_eeg_switch_alone_pauses(monkeypatch, gate, paused):
-    monkeypatch.setattr(main, "_may_record", lambda _s: gate)
-    assert main._poller_paused_by_switch("u1") is paused
+def test_only_the_eeg_switch_alone_pauses(monkeypatch, gate, verdict):
+    reads = []
+    monkeypatch.setattr(main, "_may_record", lambda _s: reads.append(1) or gate)
+    assert main._poller_recheck("u1") == verdict
+    assert reads == [1], "one re-check, one permission read"
 
 
-def test_main_wires_the_pause_check():
+def test_main_wires_the_recheck():
     import importlib
-    eeg_poller.set_pause_check(None)
+    eeg_poller.set_recheck(None)
     importlib.reload(main)
-    assert eeg_poller._pause_check is main._poller_paused_by_switch
+    assert eeg_poller._recheck_fn is main._poller_recheck
 
 
 def test_a_withheld_poller_reports_the_switch_without_a_consent_read(monkeypatch):

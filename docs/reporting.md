@@ -210,10 +210,9 @@ asserting on that note passes either way; assert that no chart, no `sr-only` tab
 close sequence drifts silently — a credit reading a column it never selected (`None` → `or 0`, an honest-looking
 zero), a discard one site never runs.
 
-**The three sweeping sites stamp when the student was last seen, not when they noticed** — `_last_seen_many` (the
-`last_activity_for_sessions` read), falling back to the start for a session with no activity, and to now only when
-the read fails; `class_live` uses the newest reading it already has. Stamped "now", an abandoned session's duration
-ran to the sweep.
+**The three sweeping sites stamp when the student was last seen, not when they noticed**, all through
+`_last_seen_many` (the `last_activity_for_sessions` read, measured rows only — not `class_live`'s newest reading,
+which counts an empty one): the start for a session with no activity, now only when the read fails.
 
 **Order is load-bearing: discard first**, because a rollup of nothing and an archive of four empty charts are work
 done for a session about to stop existing.

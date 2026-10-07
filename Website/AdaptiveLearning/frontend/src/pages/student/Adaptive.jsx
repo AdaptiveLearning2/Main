@@ -224,6 +224,8 @@ export default function Adaptive() {
     // `pushMode` unset until a health check lands. `available` null until a probe
     // answers ("not checked" is not "down"); gates read null as falsy.
     available: null, connected: false, samples: 0, lastTs: null,
+    // Pull only: the poller runs but an admin switch has it writing nothing.
+    withheld: false,
     // `reconnecting`: a dropped link being recovered; `connected` stays false throughout.
     phase: 'idle', // idle | starting | scanning | connecting | connected | reconnecting
     deviceName: null,
@@ -1034,6 +1036,7 @@ export default function Adaptive() {
       ...(s.ingest_mode === 'push' ? {} : {
         battery: typeof s.muse?.ingestion?.battery_percent === 'number'
           ? s.muse.ingestion.battery_percent : null,
+        withheld: !!s.poller?.running && !!s.poller?.withheld,
       }),
     }))
   }, { intervalMs: headband.pushMode ? PUSH_POLL_MS : PULL_STATUS_POLL_MS,
@@ -1446,12 +1449,17 @@ export default function Adaptive() {
     const seen = (Number(push.recorded?.[key]) || 0) + (Number(push.declined?.[key]) || 0)
     return seen > 0 ? 'stale' : 'waiting'
   }
-  const declined = CHANNEL_LABELS
-    .filter(([key]) => channelState(key) === 'declined')
-    .map(([key, label]) => ({ key, label, reason: push?.declined_reason?.[key] || 'no reason given' }))
+  // Under pull a withheld poller writes neither headband channel; the switch is the only reason it pauses.
+  const pullWithheld = !headband.pushMode && headband.connected && headband.withheld
+  const declined = pullWithheld
+    ? CHANNEL_LABELS.filter(([key]) => key !== 'face')
+      .map(([key, label]) => ({ key, label, reason: PERMIT_REASONS.switched_off }))
+    : CHANNEL_LABELS
+      .filter(([key]) => channelState(key) === 'declined')
+      .map(([key, label]) => ({ key, label, reason: push?.declined_reason?.[key] || 'no reason given' }))
   const pushRunning = !!(push?.reachable && push?.running)
   // The headband card speaks for the headband's EEG only, as the camera card does for the camera.
-  const eegState = headband.pushMode ? channelState('cognitive') : 'recorded'
+  const eegState = headband.pushMode ? channelState('cognitive') : pullWithheld ? 'declined' : 'recorded'
   const headbandRecording = pushRunning && eegState === 'recorded'
   const headbandWaiting = pushRunning && eegState === 'waiting'
   const cameraState = channelState('face')
@@ -1605,7 +1613,7 @@ export default function Adaptive() {
             </p>
           )}
           {/* The backend's reason, verbatim: consent, the school year or a recording switch can each be it. */}
-          {headband.pushMode && declined.length > 0 && (
+          {(headband.pushMode || pullWithheld) && declined.length > 0 && (
             <p role="status" className="text-[11px] font-bold text-amber-700 dark:text-amber-300 mt-1">
               ⚠ Not being saved: {declined.map(d => `${d.label} (${d.reason})`).join(' · ')}
             </p>
@@ -1754,7 +1762,7 @@ export default function Adaptive() {
               {/* Pull has no sidecar counts, so use headband.connected. */}
               <RecordingIndicator channels={
                 headband.pushMode ? recording
-                  : headband.connected ? ['Headband'] : []
+                  : headband.connected && !pullWithheld ? ['Headband'] : []
               } />
               <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 px-4 py-2 flex items-center gap-2 shadow-sm">
                 <span className="text-sm font-bold text-gray-700 dark:text-gray-300">📝 {sessionCount} answered</span>

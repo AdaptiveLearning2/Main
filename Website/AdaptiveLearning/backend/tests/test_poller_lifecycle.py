@@ -89,8 +89,12 @@ def test_another_page_does_not_keep_it_alive(monkeypatch, stream, user, device):
         t.join()
 
 
-def test_main_wires_the_pairing_idle_limit():
-    assert eeg_poller.PAGE_IDLE_SECONDS == main._PAIRING_IDLE_SEC
+def test_main_wires_the_pairing_idle_limit(monkeypatch):
+    """Through a reload: another file reloads `eeg_poller`, which resets the attribute."""
+    import importlib
+    monkeypatch.setattr(eeg_poller, "PAGE_IDLE_SECONDS", None)
+    importlib.reload(main)
+    assert eeg_poller.PAGE_IDLE_SECONDS == main._PAIRING_IDLE_SEC is not None
 
 
 def test_the_owners_status_poll_marks_the_page_seen(monkeypatch):

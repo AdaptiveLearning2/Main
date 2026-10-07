@@ -1152,6 +1152,22 @@ BEGIN
     END IF;
 END $$;
 
+-- ── a stack built from migrations alone can attribute every original topic ──
+-- Seeded by 20261008000000; before it, only a local seed.sql held them.
+
+DO $$
+DECLARE
+    missing text;
+BEGIN
+    SELECT string_agg(name, ', ') INTO missing
+      FROM unnest(ARRAY['geometry', 'algebra', 'expressions', 'ordering', 'rationals',
+                        'mean', 'median', 'mode', 'probability', 'angle_relationships']) AS name
+     WHERE NOT EXISTS (SELECT 1 FROM public.math_topics t WHERE t.topic_name = name);
+    IF missing IS NOT NULL THEN
+        RAISE EXCEPTION 'math_topics has no row for %, so their answers attribute to nothing', missing;
+    END IF;
+END $$;
+
 -- ── the batch summary agrees with the body it delegates to ──────────────────
 -- `student_signal_summary_many` must stay a fan-out over `student_signal_summary`, and the
 -- channel flags must gate the read. Its own student, so counts do not depend on blocks above.

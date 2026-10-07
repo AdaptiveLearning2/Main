@@ -1,6 +1,7 @@
 """`missing_number` (1.OA.8) and `patterns` (1.NBT.1): total solvers that refuse rather than guess."""
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -197,25 +198,21 @@ def test_algebraic_notation_is_refused_at_these_grades(reply):
 # --- the wiring a new topic needs -----------------------------------------
 
 def test_a_new_topic_carries_a_math_topics_row():
-    """`record_topic_attempt` joins on `math_topics.topic_name` and silently credits nothing without a row.
-
-    The original ten predate migrations tracking this table.
-    """
-    SEEDED_BEFORE_MIGRATIONS_TRACKED_THEM = {
-        "geometry", "algebra", "expressions", "ordering", "rationals",
-        "mean", "median", "mode", "probability", "angle_relationships",
-    }
+    """`record_topic_attempt` joins on `math_topics.topic_name` and silently credits nothing without a row."""
     migrations = os.path.join(os.path.dirname(BACKEND), "..", "..",
                               "supabase", "migrations")
     sql = ""
     for name in sorted(os.listdir(migrations)):
         if name.endswith(".sql"):
             sql += open(os.path.join(migrations, name), encoding="utf-8").read()
+    # Only names a math_topics INSERT carries count; a quoted mention elsewhere seeds nothing.
+    sql = re.sub(r"--[^\n]*", "", sql)
+    seeded = set()
+    for insert in re.findall(r'INSERT INTO "public"\."math_topics"[^;]*;', sql, re.I):
+        seeded.update(re.findall(r"'([a-z_]+)'", insert))
 
     for topic in decider.ALL_TOPICS:
-        if topic in SEEDED_BEFORE_MIGRATIONS_TRACKED_THEM:
-            continue
-        assert f"'{topic}'" in sql, (
+        assert topic in seeded, (
             f"{topic} has no math_topics row in any migration. Without one, "
             "record_topic_attempt credits every answer on it to nothing.")
 

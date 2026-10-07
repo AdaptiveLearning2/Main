@@ -2996,6 +2996,10 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
         print(f"[answer] could not notify the sidecar for {session_id}: {e}")
     # Returned so the page can update one topic figure; None = nothing attributed.
     topic = out.get("topic")
+    if not isinstance(topic, str) and not out.get("topic_error"):
+        # Ran cleanly and matched no topic: the question's subject has no math_topics row.
+        print(f"[answer] saved, but no math_topics row for question {payload.question_id}'s "
+              f"subject; its topic attempt counts nowhere")
     return {"ok": True, "topic": topic if isinstance(topic, str) else None}
 
 @app.post("/api/sessions/{session_id}/end")

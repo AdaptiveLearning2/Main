@@ -71,6 +71,10 @@ class _Poller(threading.Thread):
         self._stop_event = threading.Event()
         # Whether ticks are written. Off, it keeps the device stream up but stores nothing.
         self.recording  = True
+        # An admin switch refused recording: nothing is written until a re-check passes.
+        self.withheld   = False
+        # Refreshed by the pairer's page polls (`page_seen`); a poller nobody watches stops.
+        self.last_page_seen = time.monotonic()
         self.last_ts    = None
         self.samples    = 0
         self.errors     = 0
@@ -163,8 +167,14 @@ class _Poller(threading.Thread):
         loops = 0
         while not self._stop_event.is_set():
             loops += 1
-            # Re-read consent so a mid-lesson withdrawal takes effect.
             now = time.monotonic()
+            # The page died without its pagehide stop (crash, sleep, a lost beacon).
+            if PAGE_IDLE_SECONDS is not None and now - self.last_page_seen > PAGE_IDLE_SECONDS:
+                print(f"<<< [eeg-poller] stopping session={self.session_id[:8]}: "
+                      f"no page has polled for {PAGE_IDLE_SECONDS:.0f}s", flush=True)
+                self._stop_event.set()
+                break
+            # Re-read consent so a mid-lesson withdrawal takes effect.
             if now - self._consent_checked_at >= CONSENT_RECHECK_SECONDS:
                 self._consent_checked_at = now
                 try:
@@ -173,7 +183,15 @@ class _Poller(threading.Thread):
                     # Fails closed.
                     still_consented = False
                     print(f"!!! [eeg-poller] consent re-check failed, stopping: {e}", flush=True)
-                if not still_consented:
+                if still_consented and self.withheld:
+                    print(f">>> [eeg-poller] session={self.session_id[:8]}: recording resumed", flush=True)
+                    self.withheld = False
+                elif not still_consented and self._paused_by_switch():
+                    if not self.withheld:
+                        print(f"<<< [eeg-poller] session={self.session_id[:8]}: recording withheld "
+                              "by an admin switch; re-checking", flush=True)
+                    self.withheld = True
+                elif not still_consented:
                     # Stops pull-mode heart recording too, deliberately: errs toward recording less.
                     print(f"<<< [eeg-poller] stopping session={self.session_id[:8]}: "
                           "recording no longer permitted", flush=True)
@@ -186,12 +204,13 @@ class _Poller(threading.Thread):
             if loops <= 3 or loops % 10 == 0:
                 print(f">>> [eeg-poller] loop={loops} got_data={bool(data)} ts={data.get('timestamp') if data else None}", flush=True)
 
-            if data and not self.recording:
+            if data and (not self.recording or self.withheld):
                 # Not recording: advance last_ts so arming starts from the live tick.
                 if data.get("timestamp"):
                     self.last_ts = data["timestamp"]
                 if loops <= 3 or loops % 10 == 0:
-                    print(f">>> [eeg-poller] loop={loops} not recording (no question started), skipping", flush=True)
+                    why = "withheld by an admin switch" if self.withheld else "no question started"
+                    print(f">>> [eeg-poller] loop={loops} not recording ({why}), skipping", flush=True)
                 self._stop_event.wait(_poll_wait(self.consecutive_misses))
                 continue
 
@@ -250,6 +269,14 @@ class _Poller(threading.Thread):
             print(f"!!! [eeg-poller] could not stop eeg session: {e}", flush=True)
 
         print(f"<<< [eeg-poller] STOPPED user={self.user_id[:8]} session={self.session_id[:8]} samples={self.samples} errors={self.errors}", flush=True)
+
+    def _paused_by_switch(self) -> bool:
+        """Whether only an admin switch refused, so the poller waits rather than stops. Fails toward stopping."""
+        try:
+            return bool(_pause_check(self.user_id)) if _pause_check else False
+        except Exception as e:
+            print(f"!!! [eeg-poller] pause check failed, stopping: {e}", flush=True)
+            return False
 
     def stop(self):
         self._stop_event.set()
@@ -396,6 +423,27 @@ def set_consent_reason_check(fn) -> None:
     """Register `fn(user_id) -> str` explaining why recording is not permitted. Optional."""
     global _consent_reason_check
     _consent_reason_check = fn
+
+
+# Optional: `fn(user_id) -> bool`, true when only an admin switch refuses. Unwired, a refusal stops.
+_pause_check = None
+
+
+def set_pause_check(fn) -> None:
+    global _pause_check
+    _pause_check = fn
+
+
+# Seconds without a page poll before a poller stops itself; None (unwired) never does.
+PAGE_IDLE_SECONDS: float | None = None
+
+
+def page_seen(user_id: str, device_id: str) -> None:
+    """The pairer's page polled: keep its poller on this station alive."""
+    with _lock:
+        for p in _active.values():
+            if p.user_id == user_id and p.device_id == device_id:
+                p.last_page_seen = time.monotonic()
 
 
 def _arm_sidecar_baseline(device_id: str) -> None:
@@ -639,6 +687,7 @@ def status(user_id: str) -> dict:
                     "running":    True,
                     # Running is not recording (paired, no question yet).
                     "recording":  p.recording,
+                    "withheld":   p.withheld,
                     "session_id": sid,
                     "device_id":  p.device_id,
                     "samples":    p.samples,

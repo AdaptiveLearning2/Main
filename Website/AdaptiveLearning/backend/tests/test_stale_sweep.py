@@ -287,8 +287,8 @@ def test_nothing_to_look_up_is_not_a_failed_read(monkeypatch):
 
 # ── the live monitor closes only a session whose sensor went quiet ──────────
 
-def _live(monkeypatch, latest):
-    """`class_live` for one student whose open session started 15 minutes ago."""
+def _live(monkeypatch, latest, stamps=None):
+    """`class_live` for one student whose open session started 15 minutes ago; `stamps` collects each close's `ended_at`."""
     from datetime import datetime, timedelta
     started = (datetime.utcnow() - timedelta(seconds=900)).isoformat()
     session = {"id": "sess-1", "user_id": "stu-1", "started_at": started}
@@ -298,7 +298,8 @@ def _live(monkeypatch, latest):
     monkeypatch.setattr(main, "_profiles_many", lambda ids: {})
     monkeypatch.setattr(main, "_open_sessions_many", lambda ids: {"stu-1": [session]})
     monkeypatch.setattr(main, "_latest_signals_many", lambda ids: {"sess-1": latest(started)})
-    monkeypatch.setattr(main, "_close_session", lambda *a, **k: closed.append(a[1]["id"]))
+    monkeypatch.setattr(main, "_close_session", lambda *a, **k: (
+        closed.append(a[1]["id"]), stamps is not None and stamps.append(a[2])))
     monkeypatch.setattr(main.eeg_poller, "stop", lambda *a, **k: None)
 
     class _Members:
@@ -321,3 +322,56 @@ def test_a_sensorless_student_on_one_question_is_not_closed(monkeypatch):
 def test_a_sensor_that_went_quiet_still_closes(monkeypatch):
     out, closed = _live(monkeypatch, lambda started: {"cognitive": {"ts": started, "focus": 0.5}})
     assert closed == ["sess-1"]
+
+
+def test_a_quiet_session_closes_at_its_last_reading_not_now(monkeypatch):
+    """The live monitor's close stamps when the student was last seen."""
+    stamps, seen = [], {}
+
+    def latest(started):
+        seen["ts"] = started
+        return {"cognitive": {"ts": started, "focus": 0.5}}
+
+    _, closed = _live(monkeypatch, latest, stamps=stamps)
+    assert closed == ["sess-1"]
+    assert stamps == [seen["ts"]]
+
+
+# ── the sweep stamps the last activity, not the sweep time ──────────────────
+
+class _SweepDB(_FakeDB):
+    def is_(self, *a, **k): return self
+    def lt(self, *a, **k): return self
+
+
+def _sweep(monkeypatch, db):
+    stamps = {}
+    monkeypatch.setattr(main, "supabase", db)
+    monkeypatch.setattr(main.eeg_poller, "stop", lambda *a, **k: None)
+    monkeypatch.setattr(main, "_close_session",
+                        lambda uid, s, ended, **k: stamps.update({s["id"]: ended}) or {"discarded": False})
+    before = main._utc_now()
+    out = main._sweep_abandoned_sessions()
+    return out, stamps, before
+
+
+def test_the_sweep_closes_a_session_when_it_was_last_active(monkeypatch):
+    s = _session("s-old", started_min_ago=300)
+    _, stamps, _ = _sweep(monkeypatch, _SweepDB(
+        [s], [{"session_id": "s-old", "answered_at": "2026-01-01T10:05:00+00:00"},
+              {"session_id": "s-old", "answered_at": "2026-01-01T10:02:00+00:00"}]))
+    assert main._parse_ts(stamps["s-old"]) == main._parse_ts("2026-01-01T10:05:00+00:00")
+
+
+def test_a_session_with_no_activity_closes_at_its_start(monkeypatch):
+    s = _session("s-empty", started_min_ago=300)
+    _, stamps, _ = _sweep(monkeypatch, _SweepDB([s], []))
+    assert main._parse_ts(stamps["s-empty"]) == main._parse_ts(s["started_at"])
+
+
+def test_a_failed_activity_read_closes_at_the_sweep_time(monkeypatch):
+    """Reporting fails open: the session still closes, stamped as before."""
+    s = _session("s-old", started_min_ago=300)
+    out, stamps, before = _sweep(monkeypatch, _SweepDB([s], [], boom=True))
+    assert out["closed"] == 1
+    assert main._parse_ts(stamps["s-old"]) >= before

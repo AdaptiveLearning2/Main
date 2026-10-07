@@ -63,8 +63,11 @@ def _consent_allows_polling():
     # `main` wires the real check at import; imported first, it cannot overwrite this one.
     import main  # noqa: F401
     eeg_poller.set_consent_check(lambda _student_id: True)
+    # Unwired, a refusal stops the poller; the pause cases wire their own.
+    eeg_poller.set_pause_check(None)
     yield
     eeg_poller.set_consent_check(None)
+    eeg_poller.set_pause_check(None)
 
 
 @pytest.fixture(autouse=True)

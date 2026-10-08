@@ -3762,6 +3762,13 @@ _CLINICAL_TERMS = re.compile(
     re.IGNORECASE,
 )
 
+# A cause for a missing reading, which the summary cannot know: a sensor off is turned off, never broken.
+# Not "fail": "could not be read" is honestly rephrased as "failed to load".
+_CAUSE_TERMS = re.compile(
+    r"\b(stopped working|stops working|broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*)\b",
+    re.IGNORECASE,
+)
+
 # Leading "1.", "2)", "-", "*", "•" from a numbered or bulleted model reply.
 _LIST_MARKER = re.compile(r"^\s*(?:\d+\s*[\).:]|[-*•])\s*")
 
@@ -4513,7 +4520,9 @@ def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
         "sentence each, keeping the same order and the same meaning.\n"
         "Do not add any number, percentage or figure that is not already in "
         "these points, do not move a number from one point to another, and do "
-        "not draw a conclusion the points do not state.\n"
+        "not draw a conclusion the points do not state. Never say or imply why a "
+        "sensor was off or a reading is missing (for example that it broke or "
+        "stopped working): keep the points' own words for it.\n"
         f"Return exactly {len(baseline)} points as a numbered list, no preamble.\n\n"
         + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(baseline))
     )
@@ -4527,6 +4536,9 @@ def _validated_chart_summary(raw: str, allowed: set[float],
     two allowed numbers between measurements still passes.
     """
     if _CLINICAL_TERMS.search(raw or ""):
+        return None
+    if _CAUSE_TERMS.search(raw or ""):
+        print("[chart_summary:llm] rejected: it names a cause for a missing reading")
         return None
     lines = _parse_strategy_lines(raw)
     # Exactly the baseline's length: fewer means a point was silently dropped.

@@ -3916,52 +3916,63 @@ _CAUSE_TERMS = re.compile(
     r"\b(stopped working|stops working|"
     r"broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|lost (?:the )?connection|"
     r"(?:\w+n['’]t|not|never|no longer)\s+(?:be\s+able\s+to\s+)?(?:connect|pair|sync)\w*|"
+    r"ran out of (?:battery|power|charge)|out of battery|(?:low|dead|flat) battery|"
+    r"battery (?:died|ran (?:out|low|flat)|was (?:dead|flat|low|empty))|"
     r"technical (?:problem|issue|difficult)\w*)\b",
     re.IGNORECASE,
 )
 
-# A negated failure verb ("didn't work", "has not been recording", "never worked", "no longer works").
-# "Didn't work out as planned" is an idiom about a plan, not a device.
-_NEGATED_FAILURE = re.compile(
-    r"\b(\w+n['’]t|not|never|no\s+longer)(\s+been)?\s+(?:work|function|record|respond)(s|ed|ing)?\b"
-    r"(?!\s+out\s+(?:as|well|for|the\s+way)\b)",
+# A failure phrase whose subject decides it. Not "record": "wasn't recording because it was turned
+# off" is the absence the summary must state. "Didn't work out as planned" is about a plan.
+_FAILURE_PHRASE = re.compile(
+    r"\b(?:(?P<neg>\w+n['’]t|not|never|no\s+longer)(?:\s+been)?\s+(?:work|function|respond)(?:s|ed|ing)?\b"
+    r"(?!\s+out\s+(?:as|well|for|the\s+way)\b)|"
+    r"(?:stopped|stops)\s+responding\b|"
+    r"fail(?:s|ed)?\s+to\s+(?:connect|pair|sync|respond|work)\b|"
+    r"ha(?:d|s|ve)\s+(?:(?:some|a\s+few|several|many|any)\s+)?(?:issues|problems|trouble)\b)",
     re.IGNORECASE)
-# A passive ("was not recorded", "hasn't been recorded") states an absence, which the summary must.
-_BE_FORMS = frozenset({"is", "was", "are", "were", "be", "isn't", "wasn't", "aren't", "weren't",
-                       "isn’t", "wasn’t", "aren’t", "weren’t"})
 
-# The verb's subject decides: a person ("the student didn't work on fractions") is effort; anything else
-# ("the recording wasn't working") is a cause. Bare "not" has no auxiliary, so it needs a named thing.
+# A person subject ("the student didn't work on fractions") is effort; any other ("the recording wasn't
+# working", "they", a device's name) is a cause. Bare "not" has no auxiliary, so it needs a named thing.
 _PERSON_SUBJECTS = frozenset({"student", "students", "child", "children", "kid", "kids", "learner",
-                              "learners", "pupil", "pupils", "he", "she", "they", "i", "we", "you", "who"})
+                              "learners", "pupil", "pupils", "daughter", "daughters", "son", "sons",
+                              "girl", "girls", "boy", "boys", "classmate", "classmates",
+                              "he", "she", "i", "we", "you", "who"})
 _THING_SUBJECTS = frozenset({"sensor", "sensors", "headband", "headbands", "camera", "cameras", "webcam",
                              "eeg", "heart", "pulse", "device", "devices", "muse", "recording", "readings",
                              "connection", "equipment", "feed", "signal", "it"})
 _AUXILIARIES = frozenset({"do", "does", "did", "is", "was", "are", "were", "am", "has", "have", "had",
                           "can", "could", "will", "would", "should", "may", "might", "must"})
+_ADVERBS = frozenset({"sometimes", "often", "usually", "occasionally", "still", "also", "just", "really",
+                      "ever", "always", "again", "then", "mostly", "rarely", "actually", "simply"})
 _SENTENCE_END = re.compile(r"[.!?;:\n]")
+
+
+def _phrase_subject(words: list[str]) -> str:
+    """The subject before a failure phrase, past adverbs and a relative "who/that <verb>"."""
+    while words and words[-1].lower() in _ADVERBS:
+        words = words[:-1]
+    if len(words) >= 3 and words[-2].lower() in ("who", "that"):
+        words = words[:-2]
+    return re.sub(r"['’]s$", "", words[-1]).lower() if words else ""
 
 
 def _names_a_cause(text: str) -> bool:
     """Whether a summary says why a reading is missing (broken, disconnected, a sensor not working)."""
     if _CAUSE_TERMS.search(text):
         return True
-    for m in _NEGATED_FAILURE.finditer(text):
+    for m in _FAILURE_PHRASE.finditer(text):
         words = re.findall(r"[\w’'-]+", _SENTENCE_END.split(text[:m.start()])[-1])
-        negation, bare = m.group(1).lower(), m.group(1).lower() == "not"
+        bare = (m.group("neg") or "").lower() == "not"
+        while words and words[-1].lower() in _ADVERBS:
+            words = words[:-1]
         if bare and words and words[-1].lower() in _AUXILIARIES:
-            negation = words[-1].lower()
             words, bare = words[:-1], False
-        if (m.group(3) or "").lower() == "ed" and (m.group(2) or negation in _BE_FORMS):
-            continue
-        subject = re.sub(r"['’]s$", "", words[-1]) if words else ""
+        subject = _phrase_subject(words)
         if bare:
-            if subject.lower() in _THING_SUBJECTS:
+            if subject in _THING_SUBJECTS:
                 return True
-            continue
-        # A capital mid-sentence is a name ("on days Ada didn't work"); first in its sentence it may not be.
-        named = len(words) > 1 and subject[:1].isupper() and subject.lower() not in _THING_SUBJECTS
-        if subject.lower() not in _PERSON_SUBJECTS and not named:
+        elif subject not in _PERSON_SUBJECTS:
             return True
     return False
 

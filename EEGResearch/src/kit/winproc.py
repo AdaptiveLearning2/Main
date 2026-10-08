@@ -286,24 +286,40 @@ def loaded_modules(pid: int | None = None) -> list[str]:
 
 # --- for the self-updater, which runs as SYSTEM -----------------------------------------------------------------
 
-def _token_information(kind: int) -> ctypes.Array:
-    process = _api().GetCurrentProcess()
-    token = wintypes.HANDLE()
-    if not _advapi.OpenProcessToken(process, TOKEN_QUERY, ctypes.byref(token)):
+def _query_token(token, kind: int) -> ctypes.Array:
+    needed = wintypes.DWORD()
+    _advapi.GetTokenInformation(token, kind, None, 0, ctypes.byref(needed))
+    buffer = ctypes.create_string_buffer(needed.value)
+    if not _advapi.GetTokenInformation(token, kind, buffer, needed, ctypes.byref(needed)):
         raise ctypes.WinError(ctypes.get_last_error())
+    return buffer
+
+
+def own_token():
+    """This process's token, opened for query; the caller closes it."""
+    token = wintypes.HANDLE()
+    if not _advapi.OpenProcessToken(_api().GetCurrentProcess(), TOKEN_QUERY, ctypes.byref(token)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return token
+
+
+def _token_information(kind: int) -> ctypes.Array:
+    token = own_token()
     try:
-        needed = wintypes.DWORD()
-        _advapi.GetTokenInformation(token, kind, None, 0, ctypes.byref(needed))
-        buffer = ctypes.create_string_buffer(needed.value)
-        if not _advapi.GetTokenInformation(token, kind, buffer, needed, ctypes.byref(needed)):
-            raise ctypes.WinError(ctypes.get_last_error())
-        return buffer
+        return _query_token(token, kind)
     finally:
         _k32.CloseHandle(token)
 
 
+def token_user_sid(token) -> bytes:
+    """The SID of the user a token belongs to."""
+    user = _query_token(token, TOKEN_USER)  # TOKEN_USER: the SID pointer comes first
+    sid = ctypes.c_void_p.from_buffer(user).value
+    return ctypes.string_at(sid, _advapi.GetLengthSid(sid))
+
+
 def running_as_system() -> bool:
-    user = _token_information(TOKEN_USER)  # TOKEN_USER: the SID pointer comes first
+    user = _token_information(TOKEN_USER)
     return bool(_advapi.IsWellKnownSid(ctypes.c_void_p.from_buffer(user).value, WIN_LOCAL_SYSTEM_SID))
 
 
@@ -496,7 +512,19 @@ def _session_text(session: int, kind: int) -> str:
 
 
 def session_user_sid(session: int) -> bytes | None:
-    """The SID of the user signed in to session, or None."""
+    """The SID of the user signed in to session, or None. As SYSTEM, from the session's own token."""
+    token = wintypes.HANDLE()
+    if _wts.WTSQueryUserToken(session, ctypes.byref(token)):
+        try:
+            return token_user_sid(token)
+        finally:
+            _k32.CloseHandle(token)
+    return sid_by_account_name(session)
+
+
+def sid_by_account_name(session: int) -> bytes | None:
+    """The session user's SID by name lookup, for a caller without SYSTEM's token access: it can fail for an
+    Entra ID account, or a domain account off the network."""
     user, domain = _session_text(session, WTS_USER_NAME), _session_text(session, WTS_DOMAIN_NAME)
     if not user:
         return None

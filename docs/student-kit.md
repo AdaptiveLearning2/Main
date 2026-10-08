@@ -61,7 +61,8 @@ Scheduler ends a run at an action that cannot, so the installers go through `cmd
   signed in under 3 minutes ago, or is idle: no input for 30 minutes and no lesson streaming, which the kit reads from
   its sidecar's push status, since a student can watch with the headband on and touch nothing. Windows reports no idle
   time for a console session, so the running kit sets `Global\AdaptiveLearningSensorsIdle-<session>`, and the updater
-  believes it only when that session's own user owns it: another user could create it first. A session with no kit
+  believes it only when that session's own user, read from the session's token, owns it: another user could create it
+  first. A session with no kit
   reporting and no recent sign-in counts as a lesson; one switched away from has nobody at it. The launcher stands
   aside while `apply.exe` or `rollback.exe` is linked and `attempt.json` is under 15 minutes old.
 - **Never a downgrade from the feed; the way back is the version running now.** Only a newer version is staged, and
@@ -72,7 +73,8 @@ Scheduler ends a run at an action that cannot, so the installers go through `cmd
 - **No install is taken as passed without its check.** `attempt.json` records `installing`, `passed`, `failed`,
   `setup_failed` or `repairing`, and action 1 finishes whatever an earlier run left, in a quiet window: an install whose
   check never ran is checked; one whose new version never ran its check is blocked, and the way back reinstalled
-  unless that run's `rollback.log` ends a finished install, since setup may have been cut short; a failed check whose
+  unless that run's `rollback.log` records a finished install (read as UTF-8 or UTF-16), since setup may have been
+  cut short; a failed check whose
   rollback did not take is rolled back again, three times in all. A failed setup proves nothing about the version, so
   it is blocked on its third try. A blocked version stays blocked until a newer one is published. The installers'
   logs are set aside when a run is armed, so a log found later is that run's. If a link fails, the attempt is removed

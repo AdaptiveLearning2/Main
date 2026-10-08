@@ -7,6 +7,7 @@ is actions 1, 3 and 5, and registers the task. Standard library, `cryptography` 
 from __future__ import annotations
 
 import base64
+import codecs
 import datetime as dt
 import hashlib
 import http.client
@@ -268,7 +269,7 @@ def count_setup_failure(updates: Path, version: Version) -> int:
 
 
 ATTEMPT_STATES = ("installing", "passed", "failed", "setup_failed", "repairing")
-SETUP_SUCCEEDED = b"Installation process succeeded."  # the line Inno Setup's /LOG ends a completed install with
+SETUP_SUCCEEDED = "Installation process succeeded."  # the line Inno Setup's /LOG ends a completed install with
 
 
 def read_attempt(updates: Path) -> dict | None:
@@ -291,11 +292,23 @@ def _retire_logs(updates: Path) -> None:
             os.replace(updates / f"{name}.log", updates / f"{name}.previous.log")
 
 
+def log_text(raw: bytes) -> str:
+    """An installer log as text: Inno 6 writes UTF-8 with a BOM (tests/fixtures/inno_setup_completed.log.gz holds a
+    real one); UTF-16, with or without its BOM, is read too, so another encoding cannot hide a finished install."""
+    if raw.startswith(codecs.BOM_UTF8):
+        return raw.decode("utf-8-sig", "replace")
+    if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return raw.decode("utf-16", "replace")
+    if b"\0" in raw[:256]:
+        return raw.decode("utf-16-le", "replace")
+    return raw.decode("utf-8", "replace")
+
+
 def rollback_completed(updates: Path, since: float) -> bool:
     """Whether the rollback installer ran to the end after since: its log is written only once it runs."""
     log = updates / "rollback.log"
     try:
-        return log.stat().st_mtime >= since and SETUP_SUCCEEDED in log.read_bytes()
+        return log.stat().st_mtime >= since and SETUP_SUCCEEDED in log_text(log.read_bytes())
     except OSError:
         return False
 

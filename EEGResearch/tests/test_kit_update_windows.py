@@ -87,6 +87,31 @@ def test_the_idle_flag_reaches_a_reader_in_another_process(tmp_path):
     assert winproc.idle_seconds() >= 0
 
 
+def test_the_session_user_from_a_token_is_the_one_the_name_lookup_finds():
+    # As SYSTEM, session_user_sid reads the session's token; here, the same reading of this process's own token.
+    token = winproc.own_token()
+    try:
+        from_token = winproc.token_user_sid(token)
+    finally:
+        winproc._k32.CloseHandle(token)
+    assert from_token == winproc.sid_by_account_name(winproc.own_session())
+    assert from_token == winproc.session_user_sid(winproc.own_session())  # not SYSTEM: the lookup it falls back to
+
+
+def test_with_the_sessions_token_the_name_lookup_is_never_needed(monkeypatch):
+    def query_user_token(session, out):  # as SYSTEM gets it: here, this process's own token stands in
+        out._obj.value = winproc.own_token().value
+        return True
+
+    monkeypatch.setattr(winproc._wts, "WTSQueryUserToken", query_user_token)
+    monkeypatch.setattr(winproc, "sid_by_account_name", lambda session: None)  # an Entra ID account, say
+    token = winproc.own_token()
+    try:
+        assert winproc.session_user_sid(winproc.own_session()) == winproc.token_user_sid(token)
+    finally:
+        winproc._k32.CloseHandle(token)
+
+
 def test_an_idle_flag_another_user_owns_is_ignored(monkeypatch):
     mine = winproc.own_session()
     flag = winproc.IdleFlag(mine)

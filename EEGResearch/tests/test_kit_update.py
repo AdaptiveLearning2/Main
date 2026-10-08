@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import codecs
 import datetime as dt
+import gzip
 import hashlib
 import http.client
 import http.server
@@ -526,9 +528,27 @@ def _rollback_log(app: Path, text: bytes, mtime: float) -> None:
     os.utime(log, (mtime, mtime))
 
 
-def test_a_version_that_could_not_start_and_was_rolled_back_is_not_reinstalled_again(tmp_path, signer):
+# The head and tail of a real /LOG: Inno Setup 6.7.3 rolling this kit back as SYSTEM, in the Sandbox trial.
+REAL_LOG = gzip.decompress((EEG / "tests" / "fixtures" / "inno_setup_completed.log.gz").read_bytes())
+REAL_TEXT = REAL_LOG.decode("utf-8-sig")
+ENCODINGS = {"as written (UTF-8, BOM)": REAL_LOG, "UTF-8": REAL_TEXT.encode("utf-8"),
+             "UTF-16, BOM": REAL_TEXT.encode("utf-16"), "UTF-16LE": REAL_TEXT.encode("utf-16-le"),
+             "UTF-16BE, BOM": codecs.BOM_UTF16_BE + REAL_TEXT.encode("utf-16-be")}
+
+
+def test_the_real_log_is_utf8_with_a_bom_and_ends_a_finished_install():
+    assert REAL_LOG.startswith(codecs.BOM_UTF8) and update.SETUP_SUCCEEDED in REAL_TEXT
+
+
+@pytest.mark.parametrize("raw", ENCODINGS.values(), ids=ENCODINGS.keys())
+def test_a_finished_install_reads_in_any_encoding_inno_could_use(raw):
+    assert update.log_text(raw) == REAL_TEXT
+
+
+@pytest.mark.parametrize("raw", ENCODINGS.values(), ids=ENCODINGS.keys())
+def test_a_version_that_could_not_start_and_was_rolled_back_is_not_reinstalled_again(tmp_path, signer, raw):
     app = left(tmp_path, "0.2.0", "installing")
-    _rollback_log(app, b"... Writing uninstall key values.\r\n... " + update.SETUP_SUCCEEDED + b"\r\n", 1000.0 + 60)
+    _rollback_log(app, raw, 1000.0 + 60)
     net = gate(feed(signer))
     update.check_for_update(app, machine(net, signer))
     assert "could not run its check and was rolled back" in status(app)["last_install"]
@@ -538,8 +558,8 @@ def test_a_version_that_could_not_start_and_was_rolled_back_is_not_reinstalled_a
 
 
 @pytest.mark.parametrize("text, mtime", [
-    (b"Fatal exception\r\n", 1000.0 + 60),  # it ran, and did not finish
-    (update.SETUP_SUCCEEDED, 1000.0 - 60),  # an earlier run's
+    (REAL_LOG.replace(update.SETUP_SUCCEEDED.encode(), b"Fatal exception"), 1000.0 + 60),  # it ran, and did not finish
+    (REAL_LOG, 1000.0 - 60),  # an earlier run's
 ])
 def test_a_rollback_log_that_shows_no_finished_rollback_this_run_still_repairs(tmp_path, signer, text, mtime):
     app = left(tmp_path, "0.2.0", "installing")

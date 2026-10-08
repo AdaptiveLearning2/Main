@@ -7809,7 +7809,7 @@ def my_children(request: Request, include_face: bool = True):
 
     summaries: dict | None = {}
     for (heart_flag, emotion_flag), group in by_channels.items():
-        part = _signal_summaries(group, _PARENT_SUMMARY_DAYS, include_heart=heart_flag,
+        part = _signal_summaries(group, days=_PARENT_SUMMARY_DAYS, include_heart=heart_flag,
                                  include_emotion=emotion_flag,
                                  channels_by_student=channels_by_child)
         if part is None:

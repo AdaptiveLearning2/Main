@@ -6,6 +6,7 @@ run on a real portrait, since a blank frame cannot tell a working model from one
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import ntpath
@@ -283,6 +284,27 @@ def check_modules(ctx):
     return {"outside": failing, "foreign": foreign}
 
 
+def check_update(ctx):
+    """The updater can verify a feed in this build, refuses a tampered one, and has keys to verify real ones with."""
+    from src.kit import update, update_keys  # noqa: PLC0415
+
+    test_key = update.load_keys({"test": update_keys.TEST_SIGNER})
+    manifest, _ = update.verify_feed(update_keys.TEST_FEED, test_key)
+    outer = json.loads(update_keys.TEST_FEED)
+    signature = bytearray(base64.b64decode(outer["signature"]))
+    signature[0] ^= 1
+    tampered = json.dumps({**outer, "signature": base64.b64encode(signature).decode("ascii")}).encode("ascii")
+    try:
+        update.verify_feed(tampered, test_key)
+    except update.FeedError:
+        pass
+    else:
+        raise CheckFailed("a feed with a changed signature was accepted")
+    keys = update.load_keys(update_keys.PUBLIC_KEYS)
+    require(bool(keys), "no signing keys in update_keys.PUBLIC_KEYS: this kit could never verify an update")
+    return {"keys": sorted(keys), "test_feed": update.version_text(manifest.release.version)}
+
+
 def _versions() -> dict:
     from importlib import metadata  # noqa: PLC0415
 
@@ -297,7 +319,7 @@ def _versions() -> dict:
 
 CHECKS = [("kit", check_kit), ("settings", check_settings), ("haar", check_haar), ("emotion", check_emotion),
           ("landmarks", check_landmarks), ("server", check_server), ("bridge", check_bridge),
-          ("modules", check_modules)]
+          ("update", check_update), ("modules", check_modules)]
 
 
 def run(report_path: Path, app: Path) -> int:

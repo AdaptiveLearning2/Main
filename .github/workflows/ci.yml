@@ -71,6 +71,7 @@ jobs:
           tests/test_bridge_supervisor.py tests/test_bridge_token_path.py
           tests/test_launcher_device_registry.py tests/test_launcher_env_encoding.py
           tests/test_run_pilot_muse.py tests/test_start_ps1_native_stderr.py tests/test_capture_optics.py
+          tests/test_kit_update_windows.py
 
   website-backend:
     name: Website backend tests
@@ -200,6 +201,10 @@ jobs:
       - name: Test
         working-directory: Website/AdaptiveLearning/frontend
         run: npm test
+
+      # The kit's download gate: a Cloudflare Worker, here because this is the job with Node.
+      - name: Update gate tests
+        run: node --test EEGResearch/installer/update_gate/worker.test.mjs
 
       - name: Build
         working-directory: Website/AdaptiveLearning/frontend

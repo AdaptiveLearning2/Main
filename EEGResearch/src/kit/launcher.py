@@ -1,7 +1,7 @@
 """The kit's entry: per machine, one launcher supervising the sidecar and the bridge in their own processes.
 
 No window; logs under %LOCALAPPDATA%. `--stop` ends the running copy and waits for it; `--self-test REPORT`
-checks a build. See docs/signals.md.
+checks a build; update.MODES are the update task's. See docs/student-kit.md.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ SIDECAR_STOP_S = 15.0
 # closes would spend all of SIDECAR_STOP_S, and the push client would never flush.
 SIDECAR_DRAIN_S = 2.0
 BRIDGE_EXE = "muse_native_bridge.exe"
+UPDATE_MODES = ("--update", "--after-update", "--start-sessions", "--register-task")  # update.MODES, kept light
 _CONSOLE_LOG_BYTES = 1_000_000
 _REFUSAL_LOG_EVERY_S = 60.0
 _last_refusal_logged = 0.0
@@ -163,8 +164,11 @@ def _sidecar_command(port: int) -> tuple[list[str], dict[str, str]]:
 
 def serve(app: Path) -> int:
     """The normal run, until --stop or a failure; 0 also when another copy already holds the machine."""
-    from src.kit import winproc  # noqa: PLC0415
+    from src.kit import update, winproc  # noqa: PLC0415
 
+    if update.applying(app):
+        print("an update is being installed; the update task starts the sensors after it", flush=True)
+        return 0
     instance = winproc.SingleInstance(INSTANCE_MUTEX)
     if not instance.acquired:
         print("another copy of the sensors is already running; this one exits", flush=True)
@@ -275,6 +279,12 @@ def request_stop() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    # The update task's modes, before any stdio: theirs goes under {app}\updates, and only once they may run.
+    mode = next((a for a in argv if a in UPDATE_MODES), None)
+    if mode is not None:
+        from src.kit import update  # noqa: PLC0415
+
+        return update.main(mode, app_dir()) if argv == [mode] else 2
     parser = argparse.ArgumentParser(prog="AdaptiveLearningSensors")
     choice = parser.add_mutually_exclusive_group()
     choice.add_argument("--stop", action="store_true", help="stop the running copy and wait until it has exited")

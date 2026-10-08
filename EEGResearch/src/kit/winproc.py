@@ -1,4 +1,5 @@
-"""Windows process plumbing for the kit: one copy per machine, a stop signal, children that die with it.
+"""Windows process plumbing for the kit: one copy per machine, a stop signal, children that die with it, and what
+the SYSTEM updater needs: who is signed in, and starting the sensors as them.
 
 Importable anywhere (CI imports the kit on Linux); calling these off Windows raises OSError.
 """
@@ -10,6 +11,7 @@ import os
 import socket
 import sys
 from ctypes import wintypes
+from typing import NamedTuple
 
 ERROR_FILE_NOT_FOUND = 2
 ERROR_ACCESS_DENIED = 5
@@ -24,6 +26,12 @@ PROCESS_QUERY_INFORMATION, PROCESS_VM_READ = 0x0400, 0x0010
 SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX = 0x0001, 0x0002
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+TOKEN_QUERY, TOKEN_USER, TOKEN_ELEVATION = 0x0008, 1, 20
+WIN_LOCAL_SYSTEM_SID = 22
+WTS_ACTIVE, WTS_DISCONNECTED, WTS_SESSION_INFO = 0, 4, 24
+CREATE_UNICODE_ENVIRONMENT, CREATE_BREAKAWAY_FROM_JOB = 0x00000400, 0x01000000
+WINHTTP_ACCESS_TYPE_NAMED_PROXY = 3
+_FILETIME_UNIX_OFFSET_S = 11_644_473_600  # 1601-01-01 to 1970-01-01
 
 if sys.platform == "win32":
     _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -58,8 +66,28 @@ if sys.platform == "win32":
     _iphlpapi.GetExtendedTcpTable.argtypes = [wintypes.LPVOID, ctypes.POINTER(wintypes.DWORD), wintypes.BOOL,
                                               wintypes.ULONG, ctypes.c_int, wintypes.ULONG]
     _iphlpapi.GetExtendedTcpTable.restype = wintypes.DWORD
+    _advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    _advapi.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    _advapi.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
+                                            ctypes.POINTER(wintypes.DWORD)]
+    _advapi.IsWellKnownSid.argtypes = [wintypes.LPVOID, ctypes.c_int]
+    _advapi.CreateProcessAsUserW.argtypes = [wintypes.HANDLE, wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.LPVOID,
+                                             wintypes.LPVOID, wintypes.BOOL, wintypes.DWORD, wintypes.LPVOID,
+                                             wintypes.LPCWSTR, wintypes.LPVOID, wintypes.LPVOID]
+    _wts = ctypes.WinDLL("wtsapi32", use_last_error=True)
+    _wts.WTSEnumerateSessionsW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+                                           ctypes.POINTER(wintypes.LPVOID), ctypes.POINTER(wintypes.DWORD)]
+    _wts.WTSQuerySessionInformationW.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_int,
+                                                 ctypes.POINTER(wintypes.LPVOID), ctypes.POINTER(wintypes.DWORD)]
+    _wts.WTSQueryUserToken.argtypes = [wintypes.ULONG, ctypes.POINTER(wintypes.HANDLE)]
+    _wts.WTSFreeMemory.argtypes = [wintypes.LPVOID]
+    _userenv = ctypes.WinDLL("userenv", use_last_error=True)
+    _userenv.CreateEnvironmentBlock.argtypes = [ctypes.POINTER(wintypes.LPVOID), wintypes.HANDLE, wintypes.BOOL]
+    _userenv.DestroyEnvironmentBlock.argtypes = [wintypes.LPVOID]
+    _winhttp = ctypes.WinDLL("winhttp", use_last_error=True)
+    _k32.GlobalFree.argtypes = [wintypes.LPVOID]
 else:
-    _k32 = _psapi = _iphlpapi = None
+    _k32 = _psapi = _iphlpapi = _advapi = _wts = _userenv = _winhttp = None
 
 
 def _api():
@@ -241,3 +269,182 @@ def loaded_modules(pid: int | None = None) -> list[str]:
     finally:
         if close:
             k32.CloseHandle(handle)
+
+
+# --- for the self-updater, which runs as SYSTEM -----------------------------------------------------------------
+
+def _token_information(kind: int) -> ctypes.Array:
+    process = _api().GetCurrentProcess()
+    token = wintypes.HANDLE()
+    if not _advapi.OpenProcessToken(process, TOKEN_QUERY, ctypes.byref(token)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        needed = wintypes.DWORD()
+        _advapi.GetTokenInformation(token, kind, None, 0, ctypes.byref(needed))
+        buffer = ctypes.create_string_buffer(needed.value)
+        if not _advapi.GetTokenInformation(token, kind, buffer, needed, ctypes.byref(needed)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return buffer
+    finally:
+        _k32.CloseHandle(token)
+
+
+def running_as_system() -> bool:
+    user = _token_information(TOKEN_USER)  # TOKEN_USER: the SID pointer comes first
+    return bool(_advapi.IsWellKnownSid(ctypes.c_void_p.from_buffer(user).value, WIN_LOCAL_SYSTEM_SID))
+
+
+def running_elevated() -> bool:
+    return bool(wintypes.DWORD.from_buffer(_token_information(TOKEN_ELEVATION)).value)
+
+
+class Session(NamedTuple):
+    id: int
+    active: bool  # at the keyboard, as against switched away from
+    logon: float | None  # Unix time; None when Windows would not say
+
+
+class _SessionInfo(ctypes.Structure):
+    _fields_ = [("SessionId", wintypes.DWORD), ("pWinStationName", wintypes.LPWSTR), ("State", ctypes.c_int)]
+
+
+class _WtsInfo(ctypes.Structure):
+    """WTSINFOW."""
+    _fields_ = [("State", ctypes.c_int), *((n, wintypes.DWORD) for n in ("SessionId", "a", "b", "c", "d", "e", "f")),
+                ("WinStationName", wintypes.WCHAR * 32), ("Domain", wintypes.WCHAR * 17),
+                ("UserName", wintypes.WCHAR * 21), ("ConnectTime", ctypes.c_longlong),
+                ("DisconnectTime", ctypes.c_longlong), ("LastInputTime", ctypes.c_longlong),
+                ("LogonTime", ctypes.c_longlong), ("CurrentTime", ctypes.c_longlong)]
+
+
+def _session_info(session: int) -> _WtsInfo | None:
+    buffer, size = wintypes.LPVOID(), wintypes.DWORD()
+    if not _wts.WTSQuerySessionInformationW(None, session, WTS_SESSION_INFO, ctypes.byref(buffer), ctypes.byref(size)):
+        return None
+    try:
+        return _WtsInfo.from_buffer_copy(ctypes.string_at(buffer, ctypes.sizeof(_WtsInfo)))
+    finally:
+        _wts.WTSFreeMemory(buffer)
+
+
+def signed_in_sessions() -> list[Session]:
+    """Every session someone is signed in to, at the keyboard or switched away. One Windows will not describe counts
+    too, with no sign-in time, so the updater takes it for a lesson under way."""
+    _api()
+    listing, count = wintypes.LPVOID(), wintypes.DWORD()
+    if not _wts.WTSEnumerateSessionsW(None, 0, 1, ctypes.byref(listing), ctypes.byref(count)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        rows = [(r.SessionId, r.State) for r in (_SessionInfo * count.value).from_address(listing.value)]
+    finally:
+        _wts.WTSFreeMemory(listing)
+    found = []
+    for session, state in rows:
+        if state not in (WTS_ACTIVE, WTS_DISCONNECTED):
+            continue
+        info = _session_info(session)
+        if info is not None and not info.UserName:
+            continue  # session 0, or a sign-in screen
+        logon = info.LogonTime / 1e7 - _FILETIME_UNIX_OFFSET_S if info and info.LogonTime else None
+        found.append(Session(session, state == WTS_ACTIVE, logon))
+    return found
+
+
+class _StartupInfo(ctypes.Structure):
+    _fields_ = [("cb", wintypes.DWORD), ("lpReserved", wintypes.LPWSTR), ("lpDesktop", wintypes.LPWSTR),
+                ("lpTitle", wintypes.LPWSTR), *((n, wintypes.DWORD) for n in "xyXYcCaf"),
+                ("wShowWindow", wintypes.WORD), ("cbReserved2", wintypes.WORD), ("lpReserved2", wintypes.LPVOID),
+                ("hStdInput", wintypes.HANDLE), ("hStdOutput", wintypes.HANDLE), ("hStdError", wintypes.HANDLE)]
+
+
+class _ProcessInformation(ctypes.Structure):
+    _fields_ = [("hProcess", wintypes.HANDLE), ("hThread", wintypes.HANDLE), ("dwProcessId", wintypes.DWORD),
+                ("dwThreadId", wintypes.DWORD)]
+
+
+def _start_as(token, exe: str, cwd: str, environment) -> bool:
+    info = _StartupInfo(cb=ctypes.sizeof(_StartupInfo), lpDesktop="winsta0\\default")
+    process = _ProcessInformation()
+    # Out of the task's job where it allows that, so the task's end cannot take the sensors with it.
+    for flags in (CREATE_UNICODE_ENVIRONMENT | CREATE_BREAKAWAY_FROM_JOB, CREATE_UNICODE_ENVIRONMENT):
+        command = ctypes.create_unicode_buffer(f'"{exe}"')  # CreateProcess may write to its command line
+        if _advapi.CreateProcessAsUserW(token, None, command, None, None, False, flags, environment, cwd,
+                                        ctypes.byref(info), ctypes.byref(process)):
+            _k32.CloseHandle(process.hThread)
+            _k32.CloseHandle(process.hProcess)
+            return True
+        if ctypes.get_last_error() != ERROR_ACCESS_DENIED:
+            return False
+    return False
+
+
+def start_in_sessions(exe: str, cwd: str) -> list[int]:
+    """exe in each session at the keyboard, as that session's user with their environment; needs SYSTEM."""
+    started = []
+    for session in signed_in_sessions():
+        if not session.active:
+            continue
+        token = wintypes.HANDLE()
+        if not _wts.WTSQueryUserToken(session.id, ctypes.byref(token)):
+            continue
+        environment = wintypes.LPVOID()
+        try:
+            if not _userenv.CreateEnvironmentBlock(ctypes.byref(environment), token, False):
+                continue
+            try:
+                if _start_as(token, exe, cwd, environment):
+                    started.append(session.id)
+            finally:
+                _userenv.DestroyEnvironmentBlock(environment)
+        finally:
+            _k32.CloseHandle(token)
+    return started
+
+
+class _ProxyInfo(ctypes.Structure):
+    _fields_ = [("dwAccessType", wintypes.DWORD), ("lpszProxy", wintypes.LPVOID), ("lpszProxyBypass", wintypes.LPVOID)]
+
+
+def https_proxy(spec: str | None) -> str | None:
+    """WinHTTP's proxy setting ("host:port", or "http=a:1;https=b:2") as the proxy URL for https traffic."""
+    entries = [e.strip() for e in (spec or "").replace(" ", ";").split(";") if e.strip()]
+    chosen = next((e.split("=", 1)[1] for e in entries if e.lower().startswith("https=")), None)
+    chosen = chosen or next((e for e in entries if "=" not in e), None)
+    if not chosen:
+        return None
+    return chosen if "://" in chosen else f"http://{chosen}"
+
+
+def winhttp_proxy() -> str | None:
+    """The machine's WinHTTP proxy (`netsh winhttp show proxy`), where IT sets one for SYSTEM's traffic."""
+    _api()
+    info = _ProxyInfo()
+    if not _winhttp.WinHttpGetDefaultProxyConfiguration(ctypes.byref(info)):
+        return None
+    try:
+        if info.dwAccessType != WINHTTP_ACCESS_TYPE_NAMED_PROXY or not info.lpszProxy:
+            return None
+        return https_proxy(ctypes.wstring_at(info.lpszProxy))
+    finally:
+        for pointer in (info.lpszProxy, info.lpszProxyBypass):
+            if pointer:
+                _k32.GlobalFree(pointer)
+
+
+def machine_guid() -> str | None:
+    """Windows' own id for this installation, or None if it cannot be read."""
+    try:
+        import winreg  # noqa: PLC0415 -- Windows only
+
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography", 0,
+                            winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+            value, _ = winreg.QueryValueEx(key, "MachineGuid")
+    except (ImportError, OSError):
+        return None
+    return value if isinstance(value, str) and value else None
+
+
+def system_path(environ=os.environ) -> str:
+    """PATH holding Windows' own folders only."""
+    root = environ.get("SystemRoot") or r"C:\Windows"
+    return ";".join([rf"{root}\System32", root, rf"{root}\System32\Wbem"])

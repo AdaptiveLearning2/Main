@@ -23,7 +23,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=9.0.3",
-  "pip-tools>=7.5.0"
+  "pip-tools>=7.5.0",
+  # The kit's self-updater verifies feed signatures with it; the kit build pins it in requirements-kit.lock.
+  "cryptography>=50.0.2"
 ]
 # Camera capture; optional, so the sidecar boots without it. No rPPG library: pulse is `pos_rppg`.
 # opencv < 5: `cv2.data.haarcascades` and CAP_PROP_* are unverified on 5.x and CI has no OpenCV.

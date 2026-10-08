@@ -141,11 +141,12 @@ describe('test mode', () => {
       grade_level: '5th Grade', questions_answered: 0, correct_answers: 0,
     }), 'POST')
     let ended = false
+    // With a network's latency: an instant reply replaces Done before the second click lands.
     overrideApi('/api/practice-sessions/sess-1/end', () => {
       const reply = ended ? { ok: true, already_closed: true, questions_answered: 0, correct_answers: 0 }
         : { ok: true, topic_summary: {} }
       ended = true
-      return reply
+      return new Promise(resolve => setTimeout(() => resolve(reply), 50))
     }, 'POST')
     await startATestSession()
     await screen.findByText('What is 2 + 2?')

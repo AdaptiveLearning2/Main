@@ -487,6 +487,14 @@ def test_end_is_idempotent_and_does_not_recompute(_client, monkeypatch):
     assert c.updates == []
 
 
+def test_end_reports_a_session_the_sweep_closed_first(_client, monkeypatch):
+    """Read open, closed by the sweep before the update: the summary written is the sweep's."""
+    _as(monkeypatch, USER)
+    _client(sessions=[_OWNED_SESSION])
+    monkeypatch.setattr(main, "_close_practice_session", lambda *_a: None)
+    assert main.end_practice_session(SESSION, None) == {"ok": True, "already_closed": True}
+
+
 def test_end_never_touches_sessions_or_its_close_machinery(_client, monkeypatch):
     """No rollup/chart-archive/alert machinery built for signal-bearing `sessions` rows."""
     _as(monkeypatch, USER)

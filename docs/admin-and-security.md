@@ -5,8 +5,8 @@ as anywhere — the canary, the four numbered rules, access control, consent, an
 Read those first.
 
 **Read this file when you are touching** an `/api/admin/*` endpoint or an admin page, the security
-log (`security_events`, `_record_security_event`), the 403 a new endpoint answers, or a rate limiter
-(`_SlidingWindowLimiter`) or a test of one.
+log (`security_events`, `_record_security_event`), the operational counters (`ops_metrics`, `ops_counters`),
+the 403 a new endpoint answers, or a rate limiter (`_SlidingWindowLimiter`) or a test of one.
 
 ## The admin read surfaces send counts and timestamps, never readings
 
@@ -39,6 +39,33 @@ teardown, which failed three unrelated tests in teardown for a reason nothing in
 explain. `pytest --setup-plan` shows the ordering directly. Two more autouse fixtures swap database-backed state
 the same way: the daily question budget and the station pairer run in memory for every test but their own, which
 take the real functions from `real_claim_daily_question()` / `real_pairing_funcs()`.
+
+## Operational counters are hourly cells keyed by what, never by whom
+
+`backend/ops_metrics.py` keeps `(UTC hour, kind, key) → n, sum, max` in memory and flushes it every
+`OPS_FLUSH_SECONDS` (60) through `ops_counters_add` into `ops_counters`. **In the database, not in memory**,
+because Render Free sleeps and restarts, and an in-memory "today" would cover the minutes since the last cold
+start. A failed flush keeps its cells for the next one; past `_MAX_PENDING` new cells drop and are counted
+(`dropped`). Reads merge the unflushed cells, so the current hour is never a flush behind. Kept 90 days
+(`expire_ops_counters`, 03:50).
+
+**A key never holds an id, a caller or an address.** Refusals are `"<status> <method> <route template>"`,
+taken from the matched route (`/api/sessions/{session_id}/end`), never `request.url.path`, which carries the
+id. A request refused before routing — the public limiter's 429, a declared-length 413 — is matched against
+the router by `_route_template`, for the same reason. 404 is not counted: it is a mistyped URL, not a refusal.
+The middleware is outside `public_rate_limit` and the size cap, so both are seen.
+
+| kind | key | written by |
+| --- | --- | --- |
+| `refusal` | status, method, route template | `count_refusals` middleware |
+| `llm_call` | `<provider>:ok`, `:unavailable:<reason>`, `:error:<Exception>` | `llm_client.generate_text` |
+| `llm_latency_ms` | provider (sum and max; includes waiting for a slot) | same |
+| `llm_tokens` | `<provider>:in` / `:out` | same, from the provider's usage fields |
+| `question` | `served:inline`/`served:queue`, `prefetched`, `prefetch_failed`, `prefetch_discarded` | `generate_question`, `_prefetch_worker` |
+
+`/api/admin/generation` and `/api/admin/refusals` read them; `hours` is clamped to a week. The cost is an
+**estimate** from `CLAUDE_PRICE_*_PER_MTOK` (claude-haiku-4-5 list prices by default) and says so. The daily
+call ceiling is `llm_client`'s in-memory window, so the page labels it **"this server process"**.
 
 ## The security log records that something happened, never what was in it
 

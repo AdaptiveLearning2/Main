@@ -1,7 +1,7 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { m } from 'framer-motion'
 import {
-  ShieldCheck, ToggleLeft, CalendarRange, Activity, ScrollText, LogOut, Moon, Sun, ChevronLeft, ChevronRight, Menu,
+  ShieldCheck, ToggleLeft, CalendarRange, Activity, ScrollText, Gauge, LogOut, Moon, Sun, ChevronLeft, ChevronRight, Menu,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
@@ -16,6 +16,7 @@ const NAV = [
   { path: '/admin/live',     label: 'Data flow',   icon: Activity },
   { path: '/admin/year',     label: 'School year', icon: CalendarRange },
   { path: '/admin/security', label: 'Security log', icon: ScrollText },
+  { path: '/admin/engine',   label: 'Engine',      icon: Gauge },
 ]
 
 function SidebarContent({ collapsed, mobile, onClose }) {

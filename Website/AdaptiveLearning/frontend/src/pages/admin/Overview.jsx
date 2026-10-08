@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { CheckCircle2, AlertTriangle, HelpCircle, Search, ExternalLink } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
+import { GenerationSummary, RefusalSummary } from './Engine'
 
 const STATUS = {
   ok:       { Icon: CheckCircle2,  cls: 'text-emerald-600 dark:text-emerald-400' },
@@ -168,6 +169,16 @@ export default function AdminOverview() {
       <section className="space-y-3">
         <h2 className="text-sm font-black uppercase tracking-wide text-gray-500 dark:text-gray-400">System health</h2>
         <HealthStrip />
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500 dark:text-gray-400">Refused requests, this hour and last</h2>
+        <RefusalSummary />
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500 dark:text-gray-400">Question generation</h2>
+        <GenerationSummary />
       </section>
 
       <section className="space-y-3">

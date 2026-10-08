@@ -56,6 +56,7 @@ const AdminFlags       = lazy(pages.adminFlags)
 const AdminLiveFlow    = lazy(pages.adminLiveFlow)
 const AdminSchoolYear  = lazy(pages.adminSchoolYear)
 const AdminSecurity    = lazy(pages.adminSecurity)
+const AdminEngine      = lazy(pages.adminEngine)
 const AdminStudentReport = lazy(pages.adminStudentReport)
 
 const NotFound = lazy(pages.notFound)
@@ -124,6 +125,7 @@ export default function App() {
               <Route path="/admin/live"  element={<AdminLiveFlow />} />
               <Route path="/admin/year"  element={<AdminSchoolYear />} />
               <Route path="/admin/security" element={<AdminSecurity />} />
+              <Route path="/admin/engine" element={<AdminEngine />} />
               <Route path="/admin/students/:id/report" element={<AdminStudentReport />} />
             </Route>
 

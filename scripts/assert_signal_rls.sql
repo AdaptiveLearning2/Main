@@ -2395,5 +2395,33 @@ BEGIN
     DELETE FROM public.user_math_performance WHERE user_id = uid;
 END $$;
 
+
+-- ─── ops_counters_add: two flushes into one cell add n and sum, keep the larger max ──
+DO $$
+DECLARE
+    c record;
+BEGIN
+    PERFORM public.ops_counters_add(
+        '[{"hour":"2000-01-01T10:00:00+00:00","kind":"t","key":"k","n":2,"sum":30,"max":20},
+          {"hour":"2000-01-01T10:00:00+00:00","kind":"t","key":"plain","n":1,"sum":null,"max":null}]');
+    PERFORM public.ops_counters_add(
+        '[{"hour":"2000-01-01T10:00:00+00:00","kind":"t","key":"k","n":3,"sum":5,"max":4},
+          {"hour":"2000-01-01T10:00:00+00:00","kind":"t","key":"plain","n":4,"sum":null,"max":null}]');
+
+    SELECT "n", "sum", "max" INTO c FROM public.ops_counters WHERE "kind" = 't' AND "key" = 'k';
+    IF c.n <> 5 OR c.sum <> 35 OR c.max <> 20 THEN
+        RAISE EXCEPTION 'ops_counters_add merged a measured cell into %', c;
+    END IF;
+    SELECT "n", "sum", "max" INTO c FROM public.ops_counters WHERE "kind" = 't' AND "key" = 'plain';
+    IF c.n <> 5 OR c.sum IS NOT NULL OR c.max IS NOT NULL THEN
+        RAISE EXCEPTION 'ops_counters_add merged a plain count into %', c;
+    END IF;
+
+    IF (public.expire_ops_counters()->>'deleted')::int < 2
+       OR EXISTS (SELECT 1 FROM public.ops_counters WHERE "kind" = 't') THEN
+        RAISE EXCEPTION 'expire_ops_counters left a cell older than 90 days';
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

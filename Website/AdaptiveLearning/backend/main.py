@@ -1575,7 +1575,7 @@ class ReportChannels(NamedTuple):
     """Which optional channels a report may read, and whether consent was readable.
 
     `consent_retrieved` separates "nobody consented" from "could not read consent".
-    `*_revoked_at` lets a tile say "Off since <date>".
+    `*_revoked_at` lets a tile say "Off since <date>"; `*_erased_at`, that a parent erased its past.
     """
     heart: bool
     emotion: bool
@@ -1585,6 +1585,9 @@ class ReportChannels(NamedTuple):
     # Consent only, not a read filter: the cognitive channel is always read.
     eeg: bool = True
     eeg_revoked_at: str | None = None
+    eeg_erased_at: str | None = None
+    heart_erased_at: str | None = None
+    emotion_erased_at: str | None = None
 
 
 def _reportable_channels(student_id: str, want_emotion: bool = True,
@@ -1594,25 +1597,30 @@ def _reportable_channels(student_id: str, want_emotion: bool = True,
     Consent is resolved here and fails closed. `want_*` can only narrow; no
     client sends it and it is not a privacy boundary.
     """
-    return _channels_from_consent(_consent(student_id), want_emotion, want_heart)
+    return _channels_from_consent(_consent(student_id), want_emotion, want_heart,
+                                  erasures=_erasures(student_id))
+
+
+def _latest(*stamps):
+    """The latest of some timestamps, as instants not text; None when there are none."""
+    stamps = [t for t in stamps if t]
+    # Unparseable sorts last.
+    return max(stamps, key=lambda t: _parse_ts(t) or datetime.min.replace(tzinfo=timezone.utc),
+               default=None)
 
 
 def _channels_from_consent(consent: dict, want_emotion: bool = True,
-                           want_heart: bool = True) -> ReportChannels:
-    """The consent row -> channels mapping, shared by the single and batch forms."""
+                           want_heart: bool = True, erasures: dict | None = None) -> ReportChannels:
+    """The consent row -> channels mapping, shared by the single and batch forms.
+
+    `erasures` is `_erasures()`'s {sensor: erased_at}; heart is either sensor's, the later one.
+    """
+    erasures = erasures or {}
     heart = bool(consent.get("headband_optical_enabled")) or bool(consent.get("camera_enabled"))
     emotion = bool(consent.get("camera_enabled"))
     # Heart is off only when both sensors are; it stopped at the later revocation.
-    heart_revoked = None
-    if not heart:
-        stamps = [consent.get("headband_optical_revoked_at"),
-                  consent.get("camera_revoked_at")]
-        stamps = [t for t in stamps if t]
-        # Compared as instants, not text; unparseable sorts last.
-        heart_revoked = max(
-            stamps,
-            key=lambda t: _parse_ts(t) or datetime.min.replace(tzinfo=timezone.utc),
-            default=None)
+    heart_revoked = None if heart else _latest(consent.get("headband_optical_revoked_at"),
+                                               consent.get("camera_revoked_at"))
     eeg = bool(consent.get("eeg_enabled"))
     return ReportChannels(heart=want_heart and heart,
                           emotion=want_emotion and emotion,
@@ -1620,7 +1628,17 @@ def _channels_from_consent(consent: dict, want_emotion: bool = True,
                           heart_revoked_at=heart_revoked,
                           emotion_revoked_at=None if emotion else consent.get("camera_revoked_at"),
                           eeg=eeg,
-                          eeg_revoked_at=None if eeg else consent.get("eeg_revoked_at"))
+                          eeg_revoked_at=None if eeg else consent.get("eeg_revoked_at"),
+                          eeg_erased_at=erasures.get("eeg"),
+                          heart_erased_at=_latest(erasures.get("headband_optical"), erasures.get("camera")),
+                          emotion_erased_at=erasures.get("camera"))
+
+
+def _erased_fields(ch: "ReportChannels | None") -> dict:
+    """The three `*_erased_at` payload keys, beside `*_revoked_at`; all None with no channels in hand."""
+    return {"eeg_erased_at": ch.eeg_erased_at if ch else None,
+            "heart_erased_at": ch.heart_erased_at if ch else None,
+            "emotion_erased_at": ch.emotion_erased_at if ch else None}
 
 
 def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: bool):
@@ -1638,7 +1656,8 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                     emotion_revoked_at: str | None = None,
                     heart_revoked_at: str | None = None,
                     eeg_enabled: bool = True,
-                    eeg_revoked_at: str | None = None) -> dict:
+                    eeg_revoked_at: str | None = None,
+                    erased: dict | None = None) -> dict:
     """Just the headline averages, aggregated in Postgres; a declined channel is never read.
 
     Carries `dominant_emotion`, which `_signal_summaries` does not.
@@ -1660,7 +1679,8 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                              emotion_revoked_at=emotion_revoked_at,
                              heart_revoked_at=heart_revoked_at,
                              eeg_enabled=eeg_enabled,
-                             eeg_revoked_at=eeg_revoked_at)
+                             eeg_revoked_at=eeg_revoked_at,
+                             erased=erased)
     summary["score_scale"] = _scale_ranges_many([student_id], days).get(str(student_id))
     # Not in `_shape_summary`: the batch RPC has no such field.
     summary["dominant_emotion"] = (row or {}).get("dominant_emotion") if include_emotion else None
@@ -1675,7 +1695,8 @@ _EMPTY_SUMMARY = {"consent_retrieved": True, "score_scale": None,
                   # `face_included` is a deprecated alias of `emotion_included`.
                   "face_included": True, "emotion_included": True,
                   "heart_included": True, "retrieved": True,
-                  "eeg_enabled": True, "eeg_revoked_at": None}
+                  "eeg_enabled": True, "eeg_revoked_at": None,
+                  **_erased_fields(None)}
 
 
 def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True,
@@ -1683,19 +1704,21 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
                    emotion_revoked_at: str | None = None,
                    heart_revoked_at: str | None = None,
                    eeg_enabled: bool = True,
-                   eeg_revoked_at: str | None = None) -> dict:
+                   eeg_revoked_at: str | None = None,
+                   erased: dict | None = None) -> dict:
     """The summary payload.
 
     `retrieved: False` means the aggregate read failed, as distinct from nothing
     recorded or not requested. Any surface showing "no data" must check it.
     """
+    erased = erased or _erased_fields(None)
     if not row:
         return {**_EMPTY_SUMMARY, "face_included": include_emotion,
                 "emotion_included": include_emotion, "heart_included": include_heart,
                 "retrieved": retrieved, "consent_retrieved": consent_retrieved,
                 "emotion_revoked_at": emotion_revoked_at,
                 "heart_revoked_at": heart_revoked_at,
-                "eeg_enabled": eeg_enabled, "eeg_revoked_at": eeg_revoked_at}
+                "eeg_enabled": eeg_enabled, "eeg_revoked_at": eeg_revoked_at, **erased}
     return {
         "focus": row.get("focus"),
         "stress": row.get("stress"),
@@ -1724,6 +1747,7 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
         # Consent, not an inclusion flag: the cognitive channel is always read.
         "eeg_enabled": eeg_enabled,
         "eeg_revoked_at": eeg_revoked_at,
+        **erased,
     }
 
 
@@ -1762,7 +1786,8 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
             emotion_revoked_at=ch.emotion_revoked_at if ch else None,
             heart_revoked_at=ch.heart_revoked_at if ch else None,
             eeg_enabled=ch.eeg if ch else True,
-            eeg_revoked_at=ch.eeg_revoked_at if ch else None)
+            eeg_revoked_at=ch.eeg_revoked_at if ch else None,
+            erased=_erased_fields(ch))
         out[str(sid)]["score_scale"] = scales.get(str(sid))
     return out
 
@@ -3628,6 +3653,7 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
                                 heart_revoked_at=channels.heart_revoked_at,
                                 eeg_enabled=channels.eeg,
                                 eeg_revoked_at=channels.eeg_revoked_at),
+        **_erased_fields(channels),
     }
 
 
@@ -3646,7 +3672,8 @@ def student_signal_summary(student_id: str, request: Request, days: int = 7, inc
                            emotion_revoked_at=channels.emotion_revoked_at,
                            heart_revoked_at=channels.heart_revoked_at,
                            eeg_enabled=channels.eeg,
-                           eeg_revoked_at=channels.eeg_revoked_at)
+                           eeg_revoked_at=channels.eeg_revoked_at,
+                           erased=_erased_fields(channels))
 
 
 @app.get("/api/students/{student_id}/topic-breakdown")
@@ -5419,6 +5446,7 @@ def _cohort_student_row(sid: str, totals: dict | None, channels: ReportChannels,
         "eeg_revoked_at": channels.eeg_revoked_at,
         "heart_revoked_at": channels.heart_revoked_at,
         "emotion_revoked_at": channels.emotion_revoked_at,
+        **_erased_fields(channels),
         "consent_retrieved": channels.consent_retrieved,
         "retrieved": retrieved,
     }
@@ -5808,8 +5836,10 @@ def _consent_many(student_ids) -> dict[str, dict]:
 
 def _reportable_channels_many(student_ids, want_emotion: bool = True,
                               want_heart: bool = True) -> dict[str, ReportChannels]:
-    """`_reportable_channels` for a roster, over one consent read."""
-    return {sid: _channels_from_consent(consent, want_emotion, want_heart)
+    """`_reportable_channels` for a roster, over one consent read and one erasure read."""
+    erasures = _erasures_many(student_ids)
+    return {sid: _channels_from_consent(consent, want_emotion, want_heart,
+                                        erasures=erasures.get(str(sid)))
             for sid, consent in _consent_many(student_ids).items()}
 
 
@@ -5951,6 +5981,24 @@ def _erasures(student_id: str) -> dict:
     except Exception:
         return {}
     return {r["channel"]: r["erased_at"] for r in rows if r.get("channel")}
+
+
+def _erasures_many(student_ids) -> dict[str, dict]:
+    """`_erasures` for a roster, in one query: `{student_id: {channel: erased_at}}`. Fails open to {}."""
+    ids = _unique_ids(student_ids)
+    if not ids:
+        return {}
+    try:
+        rows = supabase.table("signal_erasure").select("user_id, channel, erased_at") \
+            .in_("user_id", ids).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[erasure:read_many] {len(ids)} students: {e}")
+        return {}
+    out: dict[str, dict] = {}
+    for r in rows:
+        if r.get("user_id") and r.get("channel"):
+            out.setdefault(str(r["user_id"]), {})[r["channel"]] = r["erased_at"]
+    return out
 
 
 @app.get("/api/consent/{student_id}")
@@ -7725,7 +7773,8 @@ def my_children(request: Request, include_face: bool = True):
                                                 emotion_revoked_at=channels_by_child[cid].emotion_revoked_at,
                                                 heart_revoked_at=channels_by_child[cid].heart_revoked_at,
                                                 eeg_enabled=channels_by_child[cid].eeg,
-                                                eeg_revoked_at=channels_by_child[cid].eeg_revoked_at),
+                                                eeg_revoked_at=channels_by_child[cid].eeg_revoked_at,
+                                                erased=_erased_fields(channels_by_child[cid])),
         })
     return children
 

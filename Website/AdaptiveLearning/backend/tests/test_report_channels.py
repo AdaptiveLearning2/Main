@@ -499,3 +499,80 @@ def test_the_batch_summary_without_a_consent_map_still_returns_a_payload(monkeyp
     assert out["kid-a"]["eeg_enabled"] is True
     assert out["kid-a"]["eeg_revoked_at"] is None
     assert out["kid-a"]["consent_retrieved"] is True
+
+
+# ── an erasure is reported, so an erased past never reads as "No sensor" ──────
+
+def _erasure(channel, at, user_id=STUDENT):
+    return {"user_id": user_id, "channel": channel, "erased_at": at}
+
+
+def _weekly(monkeypatch, tables, **fake_kw):
+    fake = _FakeSupabase(tables, **fake_kw)
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    monkeypatch.setattr(main, "_profile", lambda _s: {"display_name": "Kid"})
+    return main.student_weekly_report(STUDENT, None), fake
+
+
+def test_the_weekly_endpoint_says_which_channels_were_erased(monkeypatch):
+    """Consent is still on after an erasure, so without these the tiles read "No sensor"."""
+    tables = {**_tables(_consent_row()), "signal_erasure": [
+        _erasure("headband_optical", "2026-10-07T00:40:00+00:00"),
+        _erasure("eeg", "2026-10-06T09:00:00+00:00"),
+        # Another child's erasure is not this one's.
+        _erasure("camera", "2026-10-05T09:00:00+00:00", user_id="someone-else"),
+    ]}
+    out, fake = _weekly(monkeypatch, tables)
+
+    assert out["eeg_erased_at"] == "2026-10-06T09:00:00+00:00"
+    assert out["heart_erased_at"] == "2026-10-07T00:40:00+00:00"
+    assert out["emotion_erased_at"] is None
+    # Read for this student, by filter (rule 4).
+    reads = [q for name, q in zip(fake.table_calls, fake.queries) if name == "signal_erasure"]
+    assert reads and all(("user_id", STUDENT) in q.filters for q in reads), [q.filters for q in reads]
+
+
+def test_heart_is_erased_at_the_later_of_its_two_sensors(monkeypatch):
+    tables = {**_tables(_consent_row()), "signal_erasure": [
+        _erasure("camera", "2026-10-07T08:00:00+00:00"),
+        _erasure("headband_optical", "2026-10-06T08:00:00+00:00"),
+    ]}
+    out, _ = _weekly(monkeypatch, tables)
+    assert out["heart_erased_at"] == "2026-10-07T08:00:00+00:00"
+    assert out["emotion_erased_at"] == "2026-10-07T08:00:00+00:00"
+
+
+def test_an_unreadable_erasure_table_reports_none_and_the_report_still_loads(monkeypatch):
+    """Fails open, unlike consent: it only picks a tile's words."""
+    out, _ = _weekly(monkeypatch, {**_tables(_consent_row()), "signal_erasure": []},
+                     table_raises={"signal_erasure"})
+    assert (out["eeg_erased_at"], out["heart_erased_at"], out["emotion_erased_at"]) == (None, None, None)
+    assert out["eeg_enabled"] is True
+
+
+def test_the_roster_reads_erasures_once_and_stamps_each_child_its_own(monkeypatch):
+    fake = _FakeSupabase({
+        "signal_consent": [_consent_row("kid-a"), _consent_row("kid-b")],
+        "signal_erasure": [_erasure("eeg", "2026-10-06T09:00:00+00:00", user_id="kid-a")],
+    })
+    monkeypatch.setattr(main, "supabase", fake)
+
+    channels = main._reportable_channels_many(["kid-a", "kid-b"])
+
+    assert channels["kid-a"].eeg_erased_at == "2026-10-06T09:00:00+00:00"
+    assert channels["kid-b"].eeg_erased_at is None
+    assert fake.table_calls.count("signal_erasure") == 1
+
+
+def test_every_summary_payload_carries_the_erasure_fields(monkeypatch):
+    """The signal-summary, cohort-roster and parent-dashboard payloads, beside `*_revoked_at`."""
+    ch = main.ReportChannels(True, True, True, eeg_erased_at="E", heart_erased_at="H", emotion_erased_at="F")
+    want = {"eeg_erased_at": "E", "heart_erased_at": "H", "emotion_erased_at": "F"}
+    row = main._cohort_student_row("kid-a", {}, ch, True)
+    empty = main._shape_summary(None, erased=main._erased_fields(ch))
+    full = main._shape_summary({"focus": 0.5}, erased=main._erased_fields(ch))
+    for payload in (row, empty, full):
+        assert {k: payload[k] for k in want} == want
+    assert {k: main._shape_summary(None)[k] for k in want} == dict.fromkeys(want)

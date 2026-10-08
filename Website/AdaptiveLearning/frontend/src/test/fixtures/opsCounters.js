@@ -17,6 +17,7 @@ export function buildGeneration(over = {}) {
     questions: { 'served:inline': 5, 'served:queue': 15, prefetched: 16, prefetch_failed: 2 },
     hourly: [{ hour: '2026-10-08T14:00:00+00:00', ok: 40, failed: 4 }],
     daily_ceiling: { used: 44, limit: 2500, scope: 'this server process' },
+    complete: true,
     dropped: 0,
     ...over,
   }
@@ -35,6 +36,7 @@ export function buildRefusals(over = {}) {
     recent: [refusal(503, '/api/generate-question', 4)],
     recent_from: '2026-10-08T13:00:00+00:00',
     hourly: [{ hour: '2026-10-08T14:00:00+00:00', count: 8 }],
+    complete: true,
     dropped: 0,
     ...over,
   }

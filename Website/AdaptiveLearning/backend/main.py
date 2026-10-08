@@ -372,25 +372,6 @@ async def public_rate_limit(request: Request, call_next):
         status_code=429, headers={"Retry-After": str(refused_after)})
 
 
-@app.middleware("http")
-async def security_headers(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Cache-Control"] = "no-store"
-    # The webcam opens on the frontend origin; this one has no document to use it.
-    response.headers["Permissions-Policy"] = \
-        "camera=(), microphone=(), geolocation=(), payment=()"
-    # This server serves no HTML, so its responses are not a document. FastAPI's
-    # docs are exempt (off in production).
-    if not request.url.path.startswith(_DOCS_PATHS):
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'none'; frame-ancestors 'none'; "
-            "base-uri 'none'; form-action 'none'")
-    return response
-
-
 def _route_template(scope) -> str:
     """The matched route's path template (`/api/sessions/{session_id}/end`), never the raw path."""
     route = scope.get("route")
@@ -407,18 +388,34 @@ def _route_template(scope) -> str:
     return partial or "<unmatched>"
 
 
-# Outside `public_rate_limit` and the size cap, so their 429s and 413s are counted too.
-# The key is status, method and route template: never an id, a caller or an address.
+def _count_refusal(request: Request, status: int) -> None:
+    # Status, method and route template: never an id, a caller or an address. 404 is a typo.
+    if status >= 400 and status != 404:
+        ops_metrics.bump("refusal", f"{status} {request.method} {_route_template(request.scope)}")
+
+
+# Also counts refusals: outside `public_rate_limit` and the size cap, it sees their 429s and 413s.
 @app.middleware("http")
-async def count_refusals(request: Request, call_next):
+async def security_headers(request: Request, call_next):
     try:
         response = await call_next(request)
     except Exception:
-        ops_metrics.bump("refusal", f"500 {request.method} {_route_template(request.scope)}")
+        _count_refusal(request, 500)
         raise
-    status = response.status_code
-    if status >= 400 and status != 404:   # 404 is a mistyped URL, not a refusal
-        ops_metrics.bump("refusal", f"{status} {request.method} {_route_template(request.scope)}")
+    _count_refusal(request, response.status_code)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Cache-Control"] = "no-store"
+    # The webcam opens on the frontend origin; this one has no document to use it.
+    response.headers["Permissions-Policy"] = \
+        "camera=(), microphone=(), geolocation=(), payment=()"
+    # This server serves no HTML, so its responses are not a document. FastAPI's
+    # docs are exempt (off in production).
+    if not request.url.path.startswith(_DOCS_PATHS):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; frame-ancestors 'none'; "
+            "base-uri 'none'; form-action 'none'")
     return response
 
 
@@ -8441,10 +8438,12 @@ def admin_generation(request: Request, hours: int = 24):
                             "output": CLAUDE_PRICE_OUTPUT_PER_MTOK},
         "questions": questions,
         "hourly": sorted(hourly.values(), key=lambda h: h["hour"]),
-        # In memory and per process: a restart starts the 24 h window again.
-        "daily_ceiling": {"used": llm_client._calls_in_window(),
-                          "limit": llm_client.GENERATION_DAILY_CALL_LIMIT,
-                          "scope": "this server process"},
+        # In memory and per process: a restart starts the 24 h window again. Claude calls only.
+        "daily_ceiling": ({"used": llm_client._calls_in_window(),
+                           "limit": llm_client.GENERATION_DAILY_CALL_LIMIT,
+                           "scope": "this server process"}
+                          if llm_client.LLM_PROVIDER == "claude" else None),
+        "complete": got["complete"],
         "dropped": got["dropped"],
     }
 
@@ -8457,8 +8456,7 @@ def admin_refusals(request: Request, hours: int = 24):
     got = ops_metrics.read(supabase, ["refusal"], hours)
 
     # Buckets are whole UTC hours, so "recent" is this hour's bucket and the one before it.
-    recent_from = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(
-        minute=0, second=0, microsecond=0)
+    recent_from = ops_metrics.since_hour(2)
     totals: dict[str, int] = {}
     recent: dict[str, int] = {}
     hourly: dict[str, int] = {}
@@ -8482,6 +8480,7 @@ def admin_refusals(request: Request, hours: int = 24):
         "recent": _rows(recent),
         "recent_from": recent_from.isoformat(),
         "hourly": [{"hour": h, "count": n} for h, n in sorted(hourly.items())],
+        "complete": got["complete"],
         "dropped": got["dropped"],
     }
 

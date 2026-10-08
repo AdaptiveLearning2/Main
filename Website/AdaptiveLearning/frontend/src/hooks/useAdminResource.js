@@ -2,19 +2,20 @@ import { useCallback, useEffect, useState } from 'react'
 import usePoll from './usePoll'
 
 /**
- * Load and mutate one admin resource (`data`, `busy`, `error`).
- * A failed refresh keeps the last good `data`, so the error can sit over it.
- * @param load    returns a promise of the payload; memoise it, or the effect re-runs every render.
- * @param pollMs  re-read interval, for values (like the consent bypass) that expire without a write.
+ * Load and mutate one admin resource. A failed refresh keeps the last good `data`. `error` is a
+ * message (reads and writes); `loadError` is the last read's Error with `.status`, cleared by a good read.
+ * `load` must be memoised (or the effect re-runs every render); `pollMs` re-reads values that expire.
  */
 export default function useAdminResource({ load, pollMs = 0 }) {
   const [data, setData] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  const [loadError, setLoadError] = useState(null)
 
-  const refresh = useCallback(
-    () => load().then(setData).catch(e => setError(e.message)),
-    [load])
+  const loaded = useCallback(d => { setData(d); setLoadError(null) }, [])
+  const failed = useCallback(e => { setError(e.message); setLoadError(e) }, [])
+
+  const refresh = useCallback(() => load().then(loaded).catch(failed), [load, loaded, failed])
 
   // With `pollMs` the poll makes the first read too, so the page asks once, not twice.
   useEffect(() => { if (!pollMs) refresh() }, [refresh, pollMs])
@@ -22,9 +23,9 @@ export default function useAdminResource({ load, pollMs = 0 }) {
   usePoll(async (stopped) => {
     try {
       const d = await load()
-      if (!stopped()) setData(d)
+      if (!stopped()) loaded(d)
     } catch (e) {
-      if (!stopped()) setError(e.message)
+      if (!stopped()) failed(e)
     }
   }, { intervalMs: pollMs, enabled: pollMs > 0, key: load })
 
@@ -40,5 +41,5 @@ export default function useAdminResource({ load, pollMs = 0 }) {
       .finally(() => setBusy(false))
   }, [])
 
-  return { data, setData, busy, error, refresh, mutate }
+  return { data, setData, busy, error, loadError, refresh, mutate }
 }

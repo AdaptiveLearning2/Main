@@ -37,15 +37,29 @@ class _Query:
         self.filters.append(("gte", col, value))
         return self
 
+    def gt(self, col, value):
+        self.filters.append(("gt", col, value))
+        return self
+
     def order(self, col):
+        self.filters.append(("order", col))
+        return self
+
+    def limit(self, n):
+        self.filters.append(("limit", n))
         return self
 
     def execute(self):
+        # PostgREST's semantics for the filters the read uses, and its silent cap at `max_rows`.
         self.owner.reads.append(self.filters)
         if self.owner.read_error:
             raise RuntimeError("read failed")
         kinds = next(f[2] for f in self.filters if f[0] == "in")
-        return type("R", (), {"data": [r for r in self.owner.stored if r["kind"] in kinds]})()
+        after = next((f[2] for f in self.filters if f[0] == "gt"), 0)
+        cap = min([f[1] for f in self.filters if f[0] == "limit"] + [self.owner.max_rows])
+        rows = sorted((r for r in self.owner.stored if r["kind"] in kinds and r["id"] > after),
+                      key=lambda r: r["id"])
+        return type("R", (), {"data": rows[:cap]})()
 
 
 class _Rpc:
@@ -62,8 +76,10 @@ class _Rpc:
 class _Fake:
     """`ops_counters` as PostgREST returns it: `hour` comes back as a timestamptz string."""
 
-    def __init__(self, stored=(), rpc_error=False, read_error=False):
-        self.stored = list(stored)
+    def __init__(self, stored=(), rpc_error=False, read_error=False, max_rows=1000):
+        # Ids as the identity column hands them out, in insertion order.
+        self.stored = [{"id": i + 1, **r} for i, r in enumerate(stored)]
+        self.max_rows = max_rows
         self.rpc_error = rpc_error
         self.read_error = read_error
         self.rpcs = []
@@ -143,7 +159,67 @@ def test_a_read_asks_only_for_the_kinds_and_the_hours_it_was_given():
     assert ("in", "kind", ("refusal",)) in filters
     [gte] = [f for f in filters if f[0] == "gte"]
     assert gte[1] == "hour"
-    assert datetime.fromisoformat(gte[2]) == datetime.fromisoformat(_hour(-6))
+    # Six buckets, this one included: not seven.
+    assert datetime.fromisoformat(gte[2]) == datetime.fromisoformat(_hour(-5))
+
+
+def test_a_read_pages_past_the_servers_row_cap(monkeypatch):
+    monkeypatch.setattr(ops_metrics, "_PAGE_ROWS", 2)
+    fake = _Fake([_row("refusal", f"429 GET /r{i}", 1) for i in range(5)], max_rows=2)
+
+    got = ops_metrics.read(fake, ["refusal"], 1)
+
+    assert got["complete"] is True
+    assert sorted(r["key"] for r in got["rows"]) == [f"429 GET /r{i}" for i in range(5)]
+    # Keyset on id, each page after the last id of the one before.
+    assert [next(f[2] for f in page if f[0] == "gt") for page in fake.reads] == [0, 2, 4]
+    assert all(("order", "id") in page for page in fake.reads)
+
+
+def test_a_read_that_runs_out_of_pages_says_it_is_incomplete(monkeypatch):
+    monkeypatch.setattr(ops_metrics, "_PAGE_ROWS", 2)
+    monkeypatch.setattr(ops_metrics, "_MAX_PAGES", 2)
+    fake = _Fake([_row("refusal", f"429 GET /r{i}", 1) for i in range(5)], max_rows=2)
+
+    got = ops_metrics.read(fake, ["refusal"], 1)
+
+    assert got["retrieved"] is True
+    assert got["complete"] is False
+    assert len(got["rows"]) == 4
+
+
+def test_counts_put_back_past_the_cap_are_counted_as_dropped(monkeypatch):
+    monkeypatch.setattr(ops_metrics, "_MAX_PENDING", 2)
+    ops_metrics.bump("refusal", "429 GET /a")
+    ops_metrics.bump("refusal", "429 GET /b")
+    rows = ops_metrics._drain()
+    ops_metrics.bump("refusal", "429 GET /c")
+    ops_metrics.bump("refusal", "429 GET /d")
+
+    ops_metrics._restore(rows)
+
+    assert ops_metrics.read(_Fake(), ["refusal"], 1)["dropped"] == 2
+
+
+def test_a_flush_still_waiting_when_stop_gives_up_never_prints(monkeypatch, capsys):
+    release = threading.Event()
+
+    class _Slow(_Fake):
+        def rpc(self, name, params):
+            release.wait(5)
+            raise RuntimeError("database gone")
+
+    monkeypatch.setattr(ops_metrics, "OPS_FLUSH_SECONDS", 0.01)
+    ops_metrics.bump("question", "prefetched")
+    ops_metrics.start(lambda: _Slow())
+    [thread] = [t for t in threading.enumerate() if t.name == "ops-flush"]
+
+    ops_metrics.stop(timeout=0.05)
+    release.set()
+    thread.join(5)
+
+    assert not thread.is_alive()
+    assert "[ops_metrics]" not in capsys.readouterr().out
 
 
 def test_a_read_merges_unflushed_counts_into_the_stored_hour():
@@ -291,6 +367,7 @@ def test_generation_totals_outcomes_waits_tokens_and_cost(monkeypatch, _admin):
         _row("llm_tokens", "claude:out", 100_000),
         _row("question", "served:inline", 4),
     ]))
+    monkeypatch.setattr(llm_client, "LLM_PROVIDER", "claude")
     monkeypatch.setattr(main, "CLAUDE_PRICE_INPUT_PER_MTOK", 1.0)
     monkeypatch.setattr(main, "CLAUDE_PRICE_OUTPUT_PER_MTOK", 5.0)
 
@@ -314,7 +391,16 @@ def test_generation_reads_only_its_own_kinds(monkeypatch, _admin):
     [filters] = fake.reads
     assert ("in", "kind", ("llm_call", "llm_latency_ms", "llm_tokens", "question")) in filters
     gte = next(f[2] for f in filters if f[0] == "gte")
-    assert datetime.fromisoformat(gte) == datetime.fromisoformat(_hour(-main._OPS_MAX_HOURS))
+    assert datetime.fromisoformat(gte) == datetime.fromisoformat(_hour(1 - main._OPS_MAX_HOURS))
+
+
+def test_there_is_no_call_ceiling_under_ollama(monkeypatch, _admin):
+    monkeypatch.setattr(main, "supabase", _Fake())
+    monkeypatch.setattr(llm_client, "LLM_PROVIDER", "ollama")
+    assert main.admin_generation(None)["daily_ceiling"] is None
+
+    monkeypatch.setattr(llm_client, "LLM_PROVIDER", "claude")
+    assert main.admin_generation(None)["daily_ceiling"]["scope"] == "this server process"
 
 
 def test_refusals_split_the_key_and_sort_by_count(monkeypatch, _admin):

@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 
-import { apiFetch, mockApi, overrideApi, resetApi } from '../../test/mocks/apiFetch'
+import { apiError, apiFetch, mockApi, overrideApi, resetApi } from '../../test/mocks/apiFetch'
 import {
   GENERATION_PATH, REFUSALS_PATH, buildGeneration, buildRefusals,
 } from '../../test/fixtures/opsCounters'
@@ -97,5 +97,52 @@ describe("the Overview's card", () => {
     render(<MemoryRouter><RefusalSummary /></MemoryRouter>)
     expect(await screen.findByText(/\/api\/generate-question/)).toBeInTheDocument()
     expect(screen.queryByText(/\{student_id\}\/report/)).not.toBeInTheDocument()
+  })
+
+  it('names its own counts and the refusal, not the page or an outage', async () => {
+    overrideApi(REFUSALS_PATH, () => { throw apiError(403) })
+    render(<MemoryRouter><RefusalSummary /></MemoryRouter>)
+    expect(await screen.findByText("You don't have access to refusal counts.")).toBeInTheDocument()
+    expect(screen.queryByText(/backend is running/)).not.toBeInTheDocument()
+  })
+
+  it('keeps the counts it has when a later refresh fails, and says so', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(<MemoryRouter><RefusalSummary /></MemoryRouter>)
+      expect(await screen.findByText(/\/api\/generate-question/)).toBeInTheDocument()
+
+      overrideApi(REFUSALS_PATH, () => { throw apiError(503) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(61_000) })
+
+      expect(screen.getByText(/The last refresh failed \(503\)/)).toBeInTheDocument()
+      expect(screen.getByText(/\/api\/generate-question/)).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('what the counts can and cannot say', () => {
+  it('shows no call ceiling where none applies', async () => {
+    overrideApi(GENERATION_PATH, () => buildGeneration({ provider: 'ollama', model: null, daily_ceiling: null }))
+    page()
+    await screen.findByText('20')
+    expect(screen.queryByText(/Daily call ceiling/)).not.toBeInTheDocument()
+  })
+
+  it('says a read that stopped at the row cap is short', async () => {
+    overrideApi(REFUSALS_PATH, () => buildRefusals({ complete: false }))
+    page()
+    expect(await screen.findByText(/Only part of this period could be read/)).toBeInTheDocument()
+  })
+
+  it('does not call a pushed-out prefetch one whose lesson ended', async () => {
+    overrideApi(GENERATION_PATH, () => buildGeneration({
+      questions: { 'served:inline': 5, 'served:queue': 15, prefetched: 16, prefetch_discarded: 3 },
+    }))
+    page()
+    expect(await screen.findByText(/3 discarded because their lesson ended or its queue was full/))
+      .toBeInTheDocument()
   })
 })

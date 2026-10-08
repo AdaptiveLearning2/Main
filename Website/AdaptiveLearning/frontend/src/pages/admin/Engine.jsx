@@ -51,9 +51,40 @@ function Unread({ what }) {
   )
 }
 
+// A read stopped at the row cap: the newest hours are missing, so the totals are low.
+function Partial() {
+  return (
+    <p className="text-xs text-amber-800 dark:text-amber-300">
+      Only part of this period could be read; the totals below are too low.
+    </p>
+  )
+}
+
 function useOps(path) {
   const load = useCallback(() => apiFetch(path), [path])
   return useAdminResource({ load, pollMs: POLL_MS })
+}
+
+// Before the first read, a failure is the whole card; after it, the last counts stay with a note.
+function OpsState({ res, what, children }) {
+  const { data, loadError } = res
+  if (!data) {
+    return loadError
+      ? <LoadError error={loadError} what={what} />
+      : <p className="text-sm text-gray-600 dark:text-gray-400">Loading…</p>
+  }
+  return (
+    <>
+      {loadError && (
+        <p className="text-xs text-amber-800 dark:text-amber-300">
+          The last refresh failed{loadError.status ? ` (${loadError.status})` : ''}; these are the counts read before it.
+        </p>
+      )}
+      {!data.retrieved && <Unread what={`Stored ${what}`} />}
+      {data.retrieved && data.complete === false && <Partial />}
+      {children(data)}
+    </>
+  )
 }
 
 function sum(values) {
@@ -68,45 +99,55 @@ function generationTotals(d) {
   return { ok, failed, served: (q['served:inline'] || 0) + (q['served:queue'] || 0) }
 }
 
-/** Overview's card: model calls today and the daily ceiling. */
+// Only Claude calls have a ceiling; under Ollama the payload sends none.
+function CeilingTile({ ceiling }) {
+  if (!ceiling) return null
+  return <Tile label="Daily call ceiling" value={`${ceiling.used} / ${ceiling.limit}`} hint={ceiling.scope} />
+}
+
+function DetailLink() {
+  return (
+    <Link to="/admin/engine" className="text-xs font-semibold text-slate-700 dark:text-slate-300 underline">
+      Generation and refusals in detail
+    </Link>
+  )
+}
+
+/** Overview's card: model calls in the last 24 hours and the daily ceiling. */
 export function GenerationSummary() {
-  const { data, error } = useOps(GENERATION)
-  if (error) return <LoadError error={error} />
-  if (!data) return <p className="text-sm text-gray-600 dark:text-gray-400">Loading…</p>
-  const { ok, failed, served } = generationTotals(data)
-  const ceiling = data.daily_ceiling
   return (
     <div className="space-y-2">
-      {!data.retrieved && <Unread what="Stored generation counts" />}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Tile label="Questions served, 24 h" value={served} />
-        <Tile label="Model calls ok" value={ok} />
-        <Tile label="Model calls failed" value={failed} />
-        <Tile label="Daily call ceiling" value={`${ceiling.used} / ${ceiling.limit}`}
-              hint={ceiling.scope} />
-      </div>
-      <Link to="/admin/engine" className="text-xs font-semibold text-slate-700 dark:text-slate-300 underline">
-        Generation and refusals in detail
-      </Link>
+      <OpsState res={useOps(GENERATION)} what="generation counts">
+        {data => {
+          const { ok, failed, served } = generationTotals(data)
+          return (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <Tile label="Questions served, 24 h" value={served} />
+              <Tile label="Model calls ok" value={ok} />
+              <Tile label="Model calls failed" value={failed} />
+              <CeilingTile ceiling={data.daily_ceiling} />
+            </div>
+          )
+        }}
+      </OpsState>
+      <DetailLink />
     </div>
   )
 }
 
 /** Overview's card: refusals in this hour's and the previous hour's buckets. */
 export function RefusalSummary() {
-  const { data, error } = useOps(REFUSALS)
-  if (error) return <LoadError error={error} />
-  if (!data) return <p className="text-sm text-gray-600 dark:text-gray-400">Loading…</p>
-  const recent = data.recent || []
   return (
     <div className="space-y-2">
-      {!data.retrieved && <Unread what="Stored refusal counts" />}
-      {recent.length === 0
-        ? <p className="text-sm text-gray-600 dark:text-gray-400">No refused requests this hour or last.</p>
-        : <RefusalTable rows={recent.slice(0, 5)} />}
-      <Link to="/admin/engine" className="text-xs font-semibold text-slate-700 dark:text-slate-300 underline">
-        Generation and refusals in detail
-      </Link>
+      <OpsState res={useOps(REFUSALS)} what="refusal counts">
+        {data => {
+          const recent = data.recent || []
+          return recent.length === 0
+            ? <p className="text-sm text-gray-600 dark:text-gray-400">No refused requests this hour or last.</p>
+            : <RefusalTable rows={recent.slice(0, 5)} />
+        }}
+      </OpsState>
+      <DetailLink />
     </div>
   )
 }
@@ -137,11 +178,7 @@ function RefusalTable({ rows }) {
   )
 }
 
-function Generation() {
-  const { data, error } = useOps(GENERATION)
-  if (error) return <LoadError error={error} />
-  if (!data) return <p className="text-sm text-gray-600 dark:text-gray-400">Loading…</p>
-
+function GenerationDetail({ data }) {
   const { ok, failed, served } = generationTotals(data)
   const failures = Object.entries(data.outcomes || {}).filter(([k]) => !k.endsWith(':ok'))
   const waits = Object.entries(data.waits || {})
@@ -151,7 +188,6 @@ function Generation() {
 
   return (
     <div className="space-y-3">
-      {!data.retrieved && <Unread what="Stored generation counts" />}
       {data.retrieved && nothing && (
         <p className="text-sm text-gray-600 dark:text-gray-400">No model calls recorded in the last 24 hours.</p>
       )}
@@ -160,8 +196,7 @@ function Generation() {
               hint={`${q['served:queue'] || 0} from the queue, ${q['served:inline'] || 0} made on the spot`} />
         <Tile label="Model calls ok" value={ok} />
         <Tile label="Model calls failed" value={failed} />
-        <Tile label="Daily call ceiling" value={`${data.daily_ceiling.used} / ${data.daily_ceiling.limit}`}
-              hint={data.daily_ceiling.scope} />
+        <CeilingTile ceiling={data.daily_ceiling} />
         {waits.map(([provider, w]) => (
           <Tile key={provider} label={`Mean wait (${provider})`}
                 value={w.mean_ms == null ? '—' : `${(w.mean_ms / 1000).toFixed(1)} s`}
@@ -184,7 +219,7 @@ function Generation() {
       {(q.prefetch_failed || q.prefetch_discarded) ? (
         <p className="text-xs text-gray-600 dark:text-gray-400">
           Prefetch: {q.prefetched || 0} queued, {q.prefetch_failed || 0} failed,
-          {' '}{q.prefetch_discarded || 0} made for a lesson that had ended.
+          {' '}{q.prefetch_discarded || 0} discarded because their lesson ended or its queue was full.
         </p>
       ) : null}
       {data.dropped > 0 && (
@@ -196,17 +231,30 @@ function Generation() {
   )
 }
 
-function Refusals() {
-  const { data, error } = useOps(REFUSALS)
-  if (error) return <LoadError error={error} />
-  if (!data) return <p className="text-sm text-gray-600 dark:text-gray-400">Loading…</p>
+function RefusalDetail({ data }) {
   const rows = data.refusals || []
+  if (data.retrieved && rows.length === 0) {
+    return <p className="text-sm text-gray-600 dark:text-gray-400">No refused requests in the last 24 hours.</p>
+  }
+  return rows.length > 0 ? <RefusalTable rows={rows} /> : null
+}
+
+function Generation() {
   return (
     <div className="space-y-3">
-      {!data.retrieved && <Unread what="Stored refusal counts" />}
-      {data.retrieved && rows.length === 0
-        ? <p className="text-sm text-gray-600 dark:text-gray-400">No refused requests in the last 24 hours.</p>
-        : rows.length > 0 && <RefusalTable rows={rows} />}
+      <OpsState res={useOps(GENERATION)} what="generation counts">
+        {data => <GenerationDetail data={data} />}
+      </OpsState>
+    </div>
+  )
+}
+
+function Refusals() {
+  return (
+    <div className="space-y-3">
+      <OpsState res={useOps(REFUSALS)} what="refusal counts">
+        {data => <RefusalDetail data={data} />}
+      </OpsState>
     </div>
   )
 }

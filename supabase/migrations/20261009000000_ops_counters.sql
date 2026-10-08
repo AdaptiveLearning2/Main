@@ -2,6 +2,8 @@
 -- Counts and durations only: a key never names a person, an address or a reading.
 
 CREATE TABLE IF NOT EXISTS "public"."ops_counters" (
+    -- Keyset for paging reads past PostgREST's row cap; an upsert keeps a cell's id.
+    "id"   bigint           GENERATED ALWAYS AS IDENTITY UNIQUE,
     "hour" timestamptz      NOT NULL,   -- UTC hour the events fell in
     "kind" text             NOT NULL,
     "key"  text             NOT NULL,

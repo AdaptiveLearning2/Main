@@ -18,7 +18,12 @@ _pending: dict[tuple[str, str, str], list] = {}   # -> [n, sum | None, max | Non
 _dropped = 0
 
 _stop = threading.Event()
+_silenced = threading.Event()
 _thread: threading.Thread | None = None
+
+# PostgREST cuts any read at `db-max-rows` (1000), silently; reads page by `id` up to this many pages.
+_PAGE_ROWS = 1000
+_MAX_PAGES = 50
 
 
 def _hour(now: datetime | None = None) -> str:
@@ -62,12 +67,14 @@ def _drain() -> list[dict]:
 
 
 def _restore(rows: list[dict]) -> None:
+    global _dropped
     for r in rows:
         with _lock:
             cell_key = (r["hour"], r["kind"], r["key"])
             cell = _pending.get(cell_key)
             if cell is None:
                 if len(_pending) >= _MAX_PENDING:
+                    _dropped += 1
                     continue
                 _pending[cell_key] = [r["n"], r["sum"], r["max"]]
                 continue
@@ -78,7 +85,10 @@ def _restore(rows: list[dict]) -> None:
 
 
 def flush(client) -> bool:
-    """Write everything pending; on failure it stays pending for the next flush."""
+    """Write everything pending; on failure it stays pending for the next flush.
+
+    Not idempotent: a write that lands but whose reply is lost is sent again (docs/admin-and-security.md).
+    """
     rows = _drain()
     if not rows:
         return True
@@ -86,7 +96,9 @@ def flush(client) -> bool:
         client.rpc("ops_counters_add", {"p_rows": rows}).execute()
         return True
     except Exception as e:                                     # noqa: BLE001
-        print(f"[ops_metrics] flush of {len(rows)} cells failed, kept for the next one: {e}")
+        # Silent once `stop` gave up waiting: a print during interpreter exit is a fatal abort.
+        if not _silenced.is_set():
+            print(f"[ops_metrics] flush of {len(rows)} cells failed, kept for the next one: {e}")
         _restore(rows)
         return False
 
@@ -103,6 +115,7 @@ def start(client_of: Callable[[], object]) -> bool:
     if OPS_FLUSH_SECONDS <= 0 or (_thread and _thread.is_alive()):
         return False
     _stop.clear()
+    _silenced.clear()
     _thread = threading.Thread(target=_loop, args=(client_of,), name="ops-flush", daemon=True)
     _thread.start()
     return True
@@ -115,6 +128,8 @@ def stop(timeout: float = 5.0) -> None:
     thread, _thread = _thread, None
     if thread and thread.is_alive():
         thread.join(timeout=timeout)
+        if thread.is_alive():
+            _silenced.set()
 
 
 def reset() -> None:
@@ -123,6 +138,7 @@ def reset() -> None:
     with _lock:
         _pending.clear()
         _dropped = 0
+    _silenced.clear()
 
 
 def pending() -> dict[tuple[str, str], int]:
@@ -135,22 +151,28 @@ def pending() -> dict[tuple[str, str], int]:
 
 
 def read(client, kinds: list[str], hours: int) -> dict:
-    """Stored and pending cells for `kinds` over the last `hours`, as `{retrieved, rows, dropped}`.
+    """Stored and pending cells for `kinds` in the last `hours` hourly buckets, this one included.
 
-    Rows are `{hour, kind, key, n, sum, max}`; pending ones are merged in so the
-    current hour is never a flush behind. `retrieved` is false if the read failed.
+    Returns `{retrieved, complete, rows, dropped}`; rows are `{hour, kind, key, n, sum, max}`, with
+    pending cells merged so the current hour is never a flush behind. `complete` is false past `_MAX_PAGES`.
     """
-    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).replace(
-        minute=0, second=0, microsecond=0)
+    since = since_hour(hours)
     merged: dict[tuple[str, str, str], dict] = {}
-    retrieved = True
+    retrieved, complete = True, True
     try:
-        res = (client.table("ops_counters").select("hour,kind,key,n,sum,max")
-               .in_("kind", kinds).gte("hour", since.isoformat())
-               .order("hour").execute())
-        for r in res.data or []:
-            hour = datetime.fromisoformat(str(r["hour"])).astimezone(timezone.utc).isoformat()
-            merged[(hour, r["kind"], r["key"])] = {**r, "hour": hour}
+        last_id = 0
+        for page in range(_MAX_PAGES):
+            batch = (client.table("ops_counters").select("id,hour,kind,key,n,sum,max")
+                     .in_("kind", kinds).gte("hour", since.isoformat()).gt("id", last_id)
+                     .order("id").limit(_PAGE_ROWS).execute()).data or []
+            for r in batch:
+                hour = datetime.fromisoformat(str(r["hour"])).astimezone(timezone.utc).isoformat()
+                merged[(hour, r["kind"], r["key"])] = {k: v for k, v in r.items() if k != "id"} | {"hour": hour}
+            if len(batch) < _PAGE_ROWS:
+                break
+            last_id = batch[-1]["id"]
+        else:
+            complete = False
     except Exception as e:                                     # noqa: BLE001
         print(f"[ops_metrics] read failed: {e}")
         retrieved = False
@@ -166,4 +188,10 @@ def read(client, kinds: list[str], hours: int) -> dict:
             row["sum"] = (row["sum"] or 0.0) + s
             row["max"] = m if row["max"] is None else max(row["max"], m)
     rows = sorted(merged.values(), key=lambda r: (r["hour"], r["kind"], r["key"]))
-    return {"retrieved": retrieved, "rows": rows, "dropped": _dropped}
+    return {"retrieved": retrieved, "complete": complete, "rows": rows, "dropped": _dropped}
+
+
+def since_hour(hours: int, now: datetime | None = None) -> datetime:
+    """Start of the oldest of the last `hours` hourly buckets, the current one included."""
+    now = (now or datetime.now(timezone.utc)).replace(minute=0, second=0, microsecond=0)
+    return now - timedelta(hours=hours - 1)

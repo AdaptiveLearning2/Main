@@ -28,6 +28,9 @@ ALLOWLIST = {
         "The same constant.",
     ("main.py", "student_sessions", "select", "_SESSION_CLIENT_COLUMNS"):
         "The same constant.",
+    ("main.py", "list_practice_sessions", "select", "_PRACTICE_CLIENT_COLUMNS"):
+        "A module-level literal: the `practice_sessions` columns History and PracticeHistory read. "
+        "No interpolation and nothing from a request reaches it.",
 
     ("main.py", "_summary_rpc", "rpc", "name"):
         "The RPC name, passed by internal callers as a literal.",

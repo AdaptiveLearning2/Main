@@ -20,7 +20,10 @@ export async function recordPracticeAnswer({ sessionId, questionId, selectedInde
     })
   } catch (e) {
     console.error('[practice answer] not recorded', e)
-    toast.error('That answer could not be saved.')
+    // 409: the session is closed, so a retry cannot save it either.
+    toast.error(e?.status === 409
+      ? 'This practice session has already ended, so that answer was not saved.'
+      : 'That answer could not be saved.')
     return null
   }
 }

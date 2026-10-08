@@ -585,19 +585,28 @@ def test_the_roster_reads_erasures_once_and_stamps_each_child_its_own(monkeypatc
 
     channels = main._reportable_channels_many(["kid-a", "kid-b"])
 
-    assert main._erased_fields(channels["kid-a"], 7)["eeg_erased_at"] == at
-    assert main._erased_fields(channels["kid-b"], 7)["eeg_erased_at"] is None
+    since = main._window_start(7)
+    assert main._erased_fields(channels["kid-a"], since)["eeg_erased_at"] == at
+    assert main._erased_fields(channels["kid-b"], since)["eeg_erased_at"] is None
     assert fake.table_calls.count("signal_erasure") == 1
 
 
 def test_the_window_starts_at_school_midnight_as_the_report_does(monkeypatch):
-    """A rolling UTC "now minus days" let an erasure up to a day before the window read as inside it."""
-    from datetime import timedelta
+    """A rolling UTC "now minus days" let an erasure up to a day before the window read as inside it.
+
+    In a school zone behind UTC, so a start taken at UTC midnight is a different instant.
+    """
+    from datetime import datetime, timedelta, timezone
+    from zoneinfo import ZoneInfo
+    monkeypatch.setattr(main, "_school_timezone", lambda: ZoneInfo("America/Los_Angeles"))
+    # 20:00 on 7 October at the school, already the 8th in UTC.
+    monkeypatch.setattr(main, "_utc_now", lambda: datetime(2026, 10, 8, 3, 0, tzinfo=timezone.utc))
     start = main._window_start(7)
+    assert start == datetime(2026, 10, 1, 7, 0, tzinfo=timezone.utc)   # 1 October, 00:00 PDT
     ch = lambda at: main.ReportChannels(True, True, True, erasures={"eeg": at})  # noqa: E731
-    assert main._erased_fields(ch((start - timedelta(minutes=1)).isoformat()), 7)["eeg_erased_at"] is None
+    assert main._erased_fields(ch((start - timedelta(minutes=1)).isoformat()), start)["eeg_erased_at"] is None
     inside = (start + timedelta(minutes=1)).isoformat()
-    assert main._erased_fields(ch(inside), 7)["eeg_erased_at"] == inside
+    assert main._erased_fields(ch(inside), start)["eeg_erased_at"] == inside
     # The weekly report reads from this same start.
     fake = _FakeSupabase(_tables(_consent_row()))
     monkeypatch.setattr(main, "supabase", fake)
@@ -612,9 +621,10 @@ def test_every_summary_payload_carries_the_erasure_fields_inside_its_window():
     ch = main.ReportChannels(True, True, True, erasures={"eeg": recent, "headband_optical": old, "camera": recent},
                              heart_sensors=("headband_optical",))
     want = {"eeg_erased_at": recent, "heart_erased_at": None, "emotion_erased_at": recent}
-    row = main._cohort_student_row("kid-a", {}, ch, True, 30)
-    empty = main._shape_summary(None, erased=main._erased_fields(ch, 30))
-    full = main._shape_summary({"focus": 0.5}, erased=main._erased_fields(ch, 30))
+    since = main._window_start(30)
+    row = main._cohort_student_row("kid-a", {}, ch, True, since)
+    empty = main._shape_summary(None, erased=main._erased_fields(ch, since))
+    full = main._shape_summary({"focus": 0.5}, erased=main._erased_fields(ch, since))
     for payload in (row, empty, full):
         assert {k: payload[k] for k in want} == want
     assert {k: main._shape_summary(None)[k] for k in want} == dict.fromkeys(want)

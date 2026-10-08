@@ -115,6 +115,30 @@ describe('test mode', () => {
       expect(toastError).toHaveBeenCalledWith('That answer could not be saved.')
     })
   })
+
+  it('says an answer to a session that has ended was not saved, rather than a generic failure', async () => {
+    overrideApi('/api/practice-sessions/sess-1/answer', () => { throw apiError(409, 'ended') }, 'POST')
+    await startATestSession()
+    await screen.findByText('What is 2 + 2?')
+
+    await userEvent.click(screen.getByRole('button', { name: /4/ }))
+
+    await waitFor(() => {
+      expect(toastError).toHaveBeenCalledWith('This practice session has already ended, so that answer was not saved.')
+    })
+  })
+
+  it('shows a session the backend closed as ended, with a new session instead of a retry', async () => {
+    overrideApi('/api/practice-sessions/sess-1/question', () => { throw apiError(409, 'ended') }, 'GET')
+    await startATestSession()
+
+    await screen.findByText(/this practice session has already ended/i)
+    expect(screen.queryByText(/backend is running/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /start a new session/i }))
+    await screen.findByText(/pick what to study/i)
+  })
 })
 
 // The results screen is covered in PracticeResults.test.jsx.

@@ -3,6 +3,7 @@ import { m } from 'framer-motion'
 import { apiFetch } from '../../lib/api'
 import { recordPracticeAnswer } from '../../lib/practiceSession'
 import LoadError from '../../components/ui/LoadError'
+import SessionEnded from '../../components/practice/SessionEnded'
 import QuestionCard from '../../components/practice/QuestionCard'
 import { normalizeQuestion, normalizeValue } from '../../lib/practiceQuestion'
 
@@ -11,11 +12,12 @@ const TIMER = 60
 /** Test mode: sequential, timed, scored; one generated question per request.
  * `onFinish` gets `{questions_answered, correct_answers}` after `questionCount` answers.
  */
-export default function PracticeTest({ session, onFinish, questionCount = 10 }) {
+export default function PracticeTest({ session, onFinish, onRestart, questionCount = 10 }) {
   const [question, setQuestion] = useState(null)
   const [rawId, setRawId] = useState(null)
   const [index, setIndex] = useState(0)
   const [loading, setLoading] = useState(true)
+  // The error itself, so a closed session (409) is not shown as an outage.
   const [failed, setFailed] = useState(false)
   const [selected, setSelected] = useState(null)
   const [revealed, setRevealed] = useState(false)
@@ -51,7 +53,7 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
       .catch(e => {
         if (mine !== requestRef.current) return
         console.error('Failed to load a practice question:', e)
-        setFailed(true)
+        setFailed(e)
       })
       .finally(() => { if (mine === requestRef.current) setLoading(false) })
   }, [session.id])
@@ -151,7 +153,9 @@ export default function PracticeTest({ session, onFinish, questionCount = 10 }) 
 
   if (failed || !question) return (
     <div className="max-w-lg mx-auto px-4 py-8">
-      <LoadError what="the next question" onRetry={loadQuestion} />
+      {failed?.status === 409
+        ? <SessionEnded onRestart={onRestart} />
+        : <LoadError what="the next question" error={failed} onRetry={loadQuestion} />}
     </div>
   )
 

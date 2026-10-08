@@ -73,6 +73,10 @@ class _Client:
                 self._preds = getattr(self, "_preds", []) + [lambda r: (r.get(col) or "") < val]
                 return self
 
+            def gt(self, col, val):
+                self._preds = getattr(self, "_preds", []) + [lambda r: (r.get(col) or "") > val]
+                return self
+
             def order(self, col, desc=False, **_k):
                 self._order = (col, desc)
                 return self
@@ -89,7 +93,7 @@ class _Client:
                 self._insert = row
                 return self
 
-            def update(self, row):
+            def update(self, row, **_kw):
                 self._update = row
                 return self
 
@@ -545,34 +549,87 @@ def test_a_practice_session_left_open_past_the_cut_is_abandoned_not_in_progress(
     assert flags == {"left": True, "live": False, "done": False}
 
 
-def test_the_sweep_closes_an_abandoned_practice_session_at_its_last_answer(_client, monkeypatch):
-    """Not the sweep's time, and not a live one, and not one already closed."""
+def test_a_long_practice_session_still_in_use_is_not_abandoned(_client, monkeypatch):
+    """Idleness, not age: the sweep would leave it open, so the list must not call it unfinished."""
     from datetime import timedelta
+    _as(monkeypatch, USER)
     now = main._utc_now()
     old = (now - timedelta(seconds=main._SESSION_ABANDONED_AFTER_SEC + 3600)).isoformat()
-    last = (now - timedelta(seconds=main._SESSION_ABANDONED_AFTER_SEC)).isoformat()
+    _client(sessions=[dict(_OWNED_SESSION, id="long", started_at=old, ended_at=None)],
+            answers=[{"practice_session_id": "long", "topic": "ordering", "correct": True,
+                      "answered_at": (now - timedelta(minutes=2)).isoformat()}])
+    assert [r["abandoned"] for r in main.list_practice_sessions(None)] == [False]
+
+
+def test_the_sweep_closes_an_abandoned_practice_session_at_its_last_answer(_client, monkeypatch):
+    """Not the sweep's time, and not a live one, a long one still in use, or one already closed."""
+    from datetime import timedelta
+    monkeypatch.setattr(main, "_practice_sweep_after", None)
+    now = main._utc_now()
+    old = (now - timedelta(seconds=main._SESSION_ABANDONED_AFTER_SEC + 3600)).isoformat()
+    last = (now - timedelta(seconds=main._SESSION_ABANDONED_AFTER_SEC + 60)).isoformat()
     c = _client(
         sessions=[dict(_OWNED_SESSION, id="left", started_at=old, ended_at=None),
                   dict(_OWNED_SESSION, id="empty", started_at=old, ended_at=None),
+                  dict(_OWNED_SESSION, id="long", started_at=old, ended_at=None),
                   dict(_OWNED_SESSION, id="live", started_at=now.isoformat(), ended_at=None),
                   dict(_OWNED_SESSION, id="done", started_at=old, ended_at=last)],
         answers=[{"practice_session_id": "left", "topic": "ordering", "correct": True, "answered_at": old},
-                 {"practice_session_id": "left", "topic": "ordering", "correct": False, "answered_at": last}])
+                 {"practice_session_id": "left", "topic": "ordering", "correct": False, "answered_at": last},
+                 {"practice_session_id": "long", "topic": "ordering", "correct": True,
+                  "answered_at": (now - timedelta(minutes=2)).isoformat()}])
 
     out = main._sweep_abandoned_practice()
 
-    assert out == {"found": 2, "closed": 2, "failed": 0, "retrieved": True}
+    assert out == {"found": 3, "closed": 2, "active": 1, "failed": 0, "retrieved": True}
     assert c.sessions["left"]["ended_at"] == last
     assert c.sessions["left"]["topic_summary"] == {"ordering": {"attempted": 2, "correct": 50}}
     assert c.sessions["empty"]["ended_at"] == old          # no answers: its start
+    assert c.sessions["long"]["ended_at"] is None
     assert c.sessions["live"]["ended_at"] is None
     assert c.sessions["done"]["ended_at"] == last
+
+
+def test_sessions_the_sweep_keeps_skipping_cannot_hold_every_batch(_client, monkeypatch):
+    """The cursor moves past a full batch, so the next pass reaches the idle session behind it."""
+    from datetime import timedelta
+    monkeypatch.setattr(main, "_practice_sweep_after", None)
+    now = main._utc_now()
+    old = (now - timedelta(seconds=main._SESSION_ABANDONED_AFTER_SEC + 3600)).isoformat()
+    c = _client(sessions=[dict(_OWNED_SESSION, id="a-long", started_at=old, ended_at=None),
+                          dict(_OWNED_SESSION, id="b-idle", started_at=old, ended_at=None)],
+                answers=[{"practice_session_id": "a-long", "topic": "ordering", "correct": True,
+                          "answered_at": now.isoformat()}])
+
+    first = main._sweep_abandoned_practice(limit=1)
+    second = main._sweep_abandoned_practice(limit=1)
+
+    assert (first["active"], second["closed"]) == (1, 1)
+    assert c.sessions["b-idle"]["ended_at"] == old
+    main._sweep_abandoned_practice(limit=1)
+    assert main._practice_sweep_after is None              # a short page: the next pass starts over
+
+
+def test_the_sweep_counts_only_the_closes_it_made(_client, monkeypatch):
+    """A session the student's Finish closed between the list and the update is not the sweep's."""
+    from datetime import timedelta
+    monkeypatch.setattr(main, "_practice_sweep_after", None)
+    old = (main._utc_now() - timedelta(seconds=main._SESSION_ABANDONED_AFTER_SEC + 3600)).isoformat()
+    c = _client(sessions=[dict(_OWNED_SESSION, id="s", started_at=old, ended_at=None)])
+    real = main._practice_last_activity
+
+    def finish_first(row):
+        c.sessions[row["id"]]["ended_at"] = old             # Finish lands mid-pass
+        return real(row)
+    monkeypatch.setattr(main, "_practice_last_activity", finish_first)
+
+    assert main._sweep_abandoned_practice()["closed"] == 0
 
 
 def test_a_close_never_restamps_a_session_already_closed(_client):
     """A student's Finish racing the sweep: whichever lands second must not move the first's stamp."""
     c = _client(sessions=[dict(_OWNED_SESSION, id="s", ended_at="2026-10-01T10:00:00+00:00")])
-    main._close_practice_session("s", "2026-10-01T16:00:00+00:00")
+    assert main._close_practice_session("s", "2026-10-01T16:00:00+00:00") is None
     assert c.sessions["s"]["ended_at"] == "2026-10-01T10:00:00+00:00"
 
 

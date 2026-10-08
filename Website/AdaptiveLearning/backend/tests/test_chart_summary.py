@@ -149,7 +149,8 @@ def test_a_clinical_term_anywhere_in_the_reply_rejects_it():
 
 @pytest.mark.parametrize("cause", ["stopped working", "broke", "had a fault", "malfunctioned",
                                    "disconnected", "wasn't working", "wasn’t working", "didn't work",
-                                   "lost connection", "had technical problems"])
+                                   "is not working", "didn't work at all", "lost connection",
+                                   "had technical problems"])
 def test_a_reply_that_names_a_cause_for_a_turned_off_sensor_is_rejected(cause):
     """The run's wording: a withdrawal read as "before the sensor stopped working"."""
     basis = _basis()
@@ -173,11 +174,15 @@ def test_a_reply_saying_a_read_failed_is_still_accepted():
     assert main._validated_chart_summary(reply, allowed, 1) is not None
 
 
-def test_a_reply_that_says_not_working_in_passing_is_still_accepted():
-    """Bare "not working" is not a cause for a sensor: "not working hard enough" must not reject a reply."""
-    lines = ["Focus was lower on days spent not working through many questions at once."]
-    allowed = main._chart_summary_figures(lines)
-    assert main._validated_chart_summary(f"1. {lines[0]}", allowed, 1) is not None
+@pytest.mark.parametrize("line", [
+    "Focus was lower on days spent not working through many questions at once.",
+    "Focus was lower on days the student didn't work through many questions.",
+    "Focus was higher on days the student did not work hard on fractions.",
+])
+def test_a_reply_that_describes_the_students_work_is_still_accepted(line):
+    """"Work" about the student's effort is not a cause for a sensor, so the filter leaves it."""
+    allowed = main._chart_summary_figures([line])
+    assert main._validated_chart_summary(f"1. {line}", allowed, 1) is not None
 
 
 def test_the_prompt_forbids_naming_a_cause():

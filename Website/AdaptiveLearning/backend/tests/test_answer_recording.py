@@ -237,6 +237,14 @@ def test_a_step_the_answer_survived_is_logged_by_name(monkeypatch, capsys, answe
         assert text in log, f"{text!r} not logged: {log!r}"
 
 
+def test_an_answer_no_topic_matched_is_logged(monkeypatch, capsys):
+    """`record_topic_attempt` returns null without raising when the subject has no math_topics row."""
+    out = _answer(monkeypatch, _Client(answer=_ok()))
+    assert out == {"ok": True, "topic": None}
+    log = capsys.readouterr().out
+    assert "no math_topics row" in log and QUESTION in log, log
+
+
 def test_a_clean_answer_logs_nothing(monkeypatch, capsys):
     """Mirror of the test above, so it cannot be satisfied by logging every answer."""
     out = _answer(monkeypatch, _Client())

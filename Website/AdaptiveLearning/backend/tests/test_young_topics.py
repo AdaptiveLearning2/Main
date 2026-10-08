@@ -1,6 +1,7 @@
 """`missing_number` (1.OA.8) and `patterns` (1.NBT.1): total solvers that refuse rather than guess."""
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -196,26 +197,91 @@ def test_algebraic_notation_is_refused_at_these_grades(reply):
 
 # --- the wiring a new topic needs -----------------------------------------
 
-def test_a_new_topic_carries_a_math_topics_row():
-    """`record_topic_attempt` joins on `math_topics.topic_name` and silently credits nothing without a row.
+_MATH_TOPICS_INSERT = re.compile(
+    r'INSERT\s+INTO\s+(?:"?public"?\s*\.\s*)?"?math_topics"?(?!\w)[^;]*;', re.I)
+# The one shape read: a (topic_name) column list and single-value tuples.
+_TOPIC_NAME_VALUES = re.compile(
+    r'INSERT\s+INTO\s+[^(]*\(\s*"?topic_name"?\s*\)\s*VALUES\s*(.*?)(?:\s+ON\s+CONFLICT\b.*)?;\Z',
+    re.I | re.S)
 
-    The original ten predate migrations tracking this table.
+
+def _top_level(sql: str) -> str:
+    """One file's statements that run at migration time: comments, then function and procedure bodies, removed.
+
+    Comments first, so a `$$` in one cannot pair with a real one; a `DO $$` block runs, so it stays.
     """
-    SEEDED_BEFORE_MIGRATIONS_TRACKED_THEM = {
-        "geometry", "algebra", "expressions", "ordering", "rationals",
-        "mean", "median", "mode", "probability", "angle_relationships",
-    }
+    sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.S)
+    sql = re.sub(r"--[^\n]*", "", sql)
+    return re.sub(r"(CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b[^$]*?)\$(\w*)\$.*?\$\2\$",
+                  r"\1", sql, flags=re.S | re.I)
+
+
+def _seeded_topics(files: list[str]) -> set[str]:
+    """Topic names the files' `math_topics` inserts carry; an insert in any other shape fails loudly."""
+    seeded = set()
+    # Per file, so one file's trailing comment cannot reach into the next.
+    for stmt in (s for sql in files for s in _MATH_TOPICS_INSERT.findall(_top_level(sql))):
+        values = _TOPIC_NAME_VALUES.match(stmt)
+        assert values, ("cannot read this math_topics insert; write it as "
+                        f"(\"topic_name\") VALUES ('name'), ...:\n{stmt}")
+        seeded.update(re.findall(r"\(\s*'([^']+)'\s*\)", values.group(1)))
+    return seeded
+
+
+@pytest.mark.parametrize("sql", [
+    """INSERT INTO "public"."math_topics" ("topic_name") VALUES ('a'), ('b') ON CONFLICT ("topic_name") DO NOTHING;""",
+    "insert into public.math_topics (topic_name) values ('a'),\n ('b');",
+    "INSERT INTO math_topics (topic_name) VALUES ('a'), ('b');",
+])
+def test_every_spelling_of_a_topic_insert_is_read(sql):
+    assert _seeded_topics([sql]) == {"a", "b"}
+
+
+@pytest.mark.parametrize("sql", [
+    """INSERT INTO "public"."math_topics" ("topic_name", "note") VALUES ('a', 'b');""",
+    "INSERT INTO public.math_topics (topic_name) SELECT 'a';",
+])
+def test_an_insert_it_cannot_read_fails_rather_than_counting(sql):
+    with pytest.raises(AssertionError, match="cannot read this math_topics insert"):
+        _seeded_topics([sql])
+
+
+@pytest.mark.parametrize("sql", [
+    """-- ('a')\nSELECT 'a';\nINSERT INTO public.other ("topic_name") VALUES ('a');""",
+    "/* INSERT INTO math_topics (topic_name)\n VALUES ('a'); */",
+    "CREATE FUNCTION f() RETURNS void AS $fn$ BEGIN\n"
+    "  INSERT INTO math_topics (topic_name) VALUES ('a');\nEND $fn$ LANGUAGE plpgsql;",
+    "CREATE OR REPLACE PROCEDURE p() LANGUAGE plpgsql AS $$ BEGIN\n"
+    "  INSERT INTO math_topics (topic_name) VALUES ('a');\nEND $$;",
+])
+def test_an_insert_that_does_not_run_at_migration_time_seeds_nothing(sql):
+    assert _seeded_topics([sql]) == set()
+
+
+@pytest.mark.parametrize("sql", [
+    "DO $$ BEGIN\n  INSERT INTO math_topics (topic_name) VALUES ('a');\nEND $$;",
+    "-- costs $$ in a comment\nINSERT INTO math_topics (topic_name) VALUES ('a');\n"
+    "CREATE FUNCTION f() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql;",
+])
+def test_an_insert_that_runs_at_migration_time_counts(sql):
+    assert _seeded_topics([sql]) == {"a"}
+
+
+def test_a_trailing_comment_does_not_reach_into_the_next_file():
+    files = ["SELECT 1; -- no newline at the end",
+             "INSERT INTO math_topics (topic_name) VALUES ('a');"]
+    assert _seeded_topics(files) == {"a"}
+
+
+def test_a_new_topic_carries_a_math_topics_row():
+    """`record_topic_attempt` joins on `math_topics.topic_name` and silently credits nothing without a row."""
     migrations = os.path.join(os.path.dirname(BACKEND), "..", "..",
                               "supabase", "migrations")
-    sql = ""
-    for name in sorted(os.listdir(migrations)):
-        if name.endswith(".sql"):
-            sql += open(os.path.join(migrations, name), encoding="utf-8").read()
+    seeded = _seeded_topics([open(os.path.join(migrations, name), encoding="utf-8").read()
+                             for name in sorted(os.listdir(migrations)) if name.endswith(".sql")])
 
     for topic in decider.ALL_TOPICS:
-        if topic in SEEDED_BEFORE_MIGRATIONS_TRACKED_THEM:
-            continue
-        assert f"'{topic}'" in sql, (
+        assert topic in seeded, (
             f"{topic} has no math_topics row in any migration. Without one, "
             "record_topic_attempt credits every answer on it to nothing.")
 

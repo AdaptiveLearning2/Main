@@ -338,6 +338,12 @@ export default function Adaptive() {
   // lesson yet), or not known. The newest lesson takes it; a page whose lesson it isn't stops or takes back nothing.
   const pushOwner = !sidecarSession ? 'unknown' : sidecarSession === sessionId ? 'mine' : 'elsewhere'
   const pushOwnerRef = useRef(pushOwner)
+  // Sets the ref with the state, not after the render: a token refresh landing between the two would
+  // otherwise read the old owner, and re-hand another tab's lesson or skip this one's.
+  const adoptSidecarSession = useCallback((sid) => {
+    pushOwnerRef.current = !sid ? 'unknown' : sid === sessionIdRef.current ? 'mine' : 'elsewhere'
+    setSidecarSession(sid)
+  }, [])
 
   // The camera stops when this page goes away (the headband stays paired): route
   // change via cleanup, tab close via `pagehide`, both reading a synced ref.
@@ -575,7 +581,7 @@ export default function Adaptive() {
         setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null }))
         ownSessions.current.add(sid)
         ownershipEpoch.current += 1
-        setSidecarSession(sid)
+        adoptSidecarSession(sid)
         sidecarDevices().then(list => {
           const running = !!list.find(d => d.kind === 'face')?.running
           setCamera(c => (c.running === running ? c : { ...c, running }))
@@ -587,7 +593,7 @@ export default function Adaptive() {
           setPush(p => ({ ...(p || {}), running: false, reachable: true, enabled: false }))
         }
       })
-  }, [])
+  }, [adoptSidecarSession])
 
   // Stops one device, releases the push client if nothing else streams, and syncs camera and station
   // state, from the device list when it was read. `strict` throws on a stop that failed or left the
@@ -1091,7 +1097,7 @@ export default function Adaptive() {
           // Taken over now, not at the next poll: a tab that saw another lesson's would say so until then.
           ownSessions.current.add(sessionId)
           ownershipEpoch.current += 1
-          setSidecarSession(sessionId)
+          adoptSidecarSession(sessionId)
         })
         .catch(err => {
           if (killed) return
@@ -1137,7 +1143,7 @@ export default function Adaptive() {
       sub?.subscription?.unsubscribe()
       const leaving = pushOwnerRef.current !== 'elsewhere'
       // Released by this stop; kept, the finished lesson's id would read as another tab's until the next poll.
-      if (leaving) setSidecarSession(null)
+      if (leaving) adoptSidecarSession(null)
       // Chained behind any in-flight start (StrictMode remount).
       pushHandoff.current = pushHandoff.current
         .catch(() => {})
@@ -1145,7 +1151,7 @@ export default function Adaptive() {
         .catch(() => {})
       setPush(null)
     }
-  }, [sessionId, headband.pushMode])
+  }, [sessionId, headband.pushMode, adoptSidecarSession])
 
   // Push only, once the sidecar holds this session and a headband streams; never camera-only.
   useEegStartReport(!!(headband.pushMode && headband.connected && push?.running && pushOwner !== 'elsewhere'), sessionId)
@@ -1161,7 +1167,7 @@ export default function Adaptive() {
         if (killed) return
         const named = d.session_id ?? null
         const winding = named !== null && named !== sessionIdRef.current && ownSessions.current.has(named)
-        if (epoch === ownershipEpoch.current) setSidecarSession(winding ? null : named)
+        if (epoch === ownershipEpoch.current) adoptSidecarSession(winding ? null : named)
         // With no lesson, whose lesson it is is all this page needs; counts and messages are a lesson's.
         if (!sessionId) return
         // Another tab's lesson's counts are not this one's: no labels, and no baseline to diff against later.
@@ -1208,7 +1214,7 @@ export default function Adaptive() {
     tick()
     const id = setInterval(tick, PUSH_STATUS_POLL_MS)
     return () => { killed = true; clearInterval(id) }
-  }, [sessionId, headband.pushMode, recover])
+  }, [sessionId, headband.pushMode, recover, adoptSidecarSession])
 
   // Poll EEG debug snapshot (dev only)
   useEffect(() => {

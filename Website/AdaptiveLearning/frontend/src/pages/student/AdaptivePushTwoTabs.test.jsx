@@ -205,6 +205,37 @@ it("does not take another tab's lesson back on a token refresh, and re-hands its
   expect(starts).toBeGreaterThan(0)
 }, 30_000)
 
+// Runs `then` from the DOM change itself, before the effects of that render: where a slow machine lands a refresh.
+function onScreenChange(check, then) {
+  const observer = new MutationObserver(() => {
+    if (check()) { observer.disconnect(); then() }
+  })
+  observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+  return observer
+}
+
+it('acts on a token refresh by the owner the screen shows, even before that render\'s effects run', async () => {
+  await inLessonTakenOver()
+
+  // Taken back: a refresh right then re-hands this lesson.
+  const n = startPush.mock.calls.length
+  const ours = onScreenChange(() => !screen.queryByText(ELSEWHERE),
+                              () => fireAuthEvent('TOKEN_REFRESHED', { access_token: 'fresh' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Use this tab' }))
+  await waitFor(() => expect(startPush.mock.calls.slice(n)).toContainEqual(['sess-push', 'fresh']))
+  ours.disconnect()
+
+  // Taken by another tab: a refresh right then takes nothing back.
+  const m = startPush.mock.calls.length
+  const theirs = onScreenChange(() => !!screen.queryByText(ELSEWHERE),
+                                () => fireAuthEvent('TOKEN_REFRESHED', { access_token: 'fresher' }))
+  rig.owner = 'sess-other'
+  await screen.findByText(ELSEWHERE)
+  theirs.disconnect()
+  await pollsLanded(3)
+  expect(startPush.mock.calls.slice(m)).toEqual([])
+}, 30_000)
+
 it("does not take another tab's lesson back when a status read fails, and recovers its own", async () => {
   await inLessonTakenOver()
   const starts = startPush.mock.calls.length

@@ -3921,19 +3921,21 @@ _CONNECT_FAILURE = re.compile(
 _DEVICE_NAMED = (
     # "It" only as the object itself: "connect the ideas to it" is maths.
     r"\s+(?:(?:to|with)\s+)?(?:it|them)\b|"
-    r"\s+(?:[\w'’-]+\s+){0,3}?(?:headband|headset|headphone|earbud|earphone|camera|webcam|sensor|device|muse|"
+    # Anywhere in the clause: "couldn't connect in class with the headband".
+    r"\s+(?:[\w'’-]+\s+){0,6}?(?:headband|headset|headphone|earbud|earphone|camera|webcam|sensor|device|muse|"
     r"bluetooth|eeg|laptop|computer|tablet|phone|watch|tracker|monitor|microphone|mic|wi-?fi|internet|"
     r"network|app)(?:s|es)?\b")
 _DEVICE_NAMED_AFTER = re.compile(_DEVICE_NAMED, re.IGNORECASE)
 _DEVICE_AFTER = re.compile(
     r"\s*(?:[.,;:!?)]|$)|\s+(?:properly|again|reliably|at\s+all|yesterday|today(?!['’]))\b|"
-    # A preposition only before a time: "in the morning", not "in her head" or "on a deeper level".
-    # Whole words, up to four in ("for the rest of the session"); a number only as a date, not "2 of the".
-    # A time word ends its clause: "in class." is when, "in class discussions" is where the thinking was.
+    # A preposition before a whole time word up to four in, not "in her head"; a number only as a date.
+    # The time ends its clause or another time follows: "in class yesterday" is when, "in class
+    # discussions" is where the thinking was.
     r"\s+(?:on|at|for|during|after|before|until|in)\s+(?:[\w'’-]+\s+){0,4}?(?:\d{1,2}(?:st|nd|rd|th)?\b"
     r"(?!\s+of\b)|(?:morning|afternoon|evening|night|lesson|session|class|day|week|start|beginning|end|"
     r"update|restart|break|lunch|recess|(?:mon|tues|wednes|thurs|fri|satur|sun)day)s?\b"
-    r"(?=\s*(?:[.,;:!?)]|$)|\s+(?:and|but|so|because|as|when|while|or|until)\b))|"
+    r"(?=\s*(?:[.,;:!?)]|$)|\s+(?:and|but|so|because|as|when|while|or|until|yesterday|today|tonight|"
+    r"either|too|again|anymore|at\s+all|before|after|during|this|that|last|on|at|in)\b))|"
     + _DEVICE_NAMED,
     re.IGNORECASE)
 

@@ -268,6 +268,12 @@ def test_a_reply_that_describes_the_students_work_is_still_accepted(line):
                                   "The student couldn't connect after the update.",
                                   "The student couldn't connect in class.",
                                   "The student couldn't connect on Monday morning and gave up.",
+                                  # A time followed by another time or an adverb, and a device further on.
+                                  "The student couldn't connect in class yesterday.",
+                                  "The student couldn't connect in class either.",
+                                  "The student couldn't connect in the morning before school.",
+                                  "The student couldn't connect for most of the lesson today.",
+                                  "The student couldn't connect in class with the headband.",
                                   "The student couldn't pair her earbuds.",
                                   "The student had trouble syncing her watch.",
                                   # "was not" is a negation like "wasn't", so any non-person subject counts.

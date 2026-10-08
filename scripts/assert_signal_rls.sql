@@ -2400,6 +2400,7 @@ END $$;
 DO $$
 DECLARE
     c record;
+    deleted integer;
 BEGIN
     PERFORM public.ops_counters_add(
         '[{"hour":"2000-01-01T10:00:00+00:00","kind":"t","key":"k","n":2,"sum":30,"max":20},
@@ -2417,9 +2418,10 @@ BEGIN
         RAISE EXCEPTION 'ops_counters_add merged a plain count into %', c;
     END IF;
 
-    IF (public.expire_ops_counters()->>'deleted')::int < 2
-       OR EXISTS (SELECT 1 FROM public.ops_counters WHERE "kind" = 't') THEN
-        RAISE EXCEPTION 'expire_ops_counters left a cell older than 90 days';
+    -- Two statements: within one, the EXISTS reads the snapshot from before the delete.
+    deleted := (public.expire_ops_counters()->>'deleted')::int;
+    IF deleted < 2 OR EXISTS (SELECT 1 FROM public.ops_counters WHERE "kind" = 't') THEN
+        RAISE EXCEPTION 'expire_ops_counters deleted % and left a cell older than 90 days', deleted;
     END IF;
 END $$;
 

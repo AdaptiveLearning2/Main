@@ -3910,14 +3910,21 @@ _CLINICAL_TERMS = re.compile(
     re.IGNORECASE,
 )
 
+# What follows a connect verb when a device is being connected: nothing, a device, or when/where.
+# "Connect fractions to decimals" is maths, so another object is not a cause.
+_DEVICE_OBJECT = (r"(?=\s*(?:[.,;:!?)]|$)|\s+(?:properly|again|reliably|at\s+all)\b|"
+                  r"\s+(?:on|at|for|during|after|before|until|in|today|yesterday)\b|"
+                  r"\s+(?:(?:to|with)\s+)?(?:(?:the|her|his|their|its|a|my|your)\s+)?"
+                  r"(?:headband|camera|webcam|sensor|device|muse|bluetooth|eeg|laptop|computer|tablet|it|them)\b)")
+
 # A cause for a missing reading, which the summary cannot know: a sensor off is turned off, never broken.
 # Not "fail": "could not be read" is honestly rephrased as "failed to load".
 _CAUSE_TERMS = re.compile(
     r"\b(stopped working|stops working|"
     r"broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|lost (?:the )?connection|"
-    # Connecting is the device's, whoever the subject: "couldn't connect" and "failed to connect" alike.
-    r"(?:\w+n['’]t|not|never|no longer)\s+(?:be\s+able\s+to\s+)?(?:connect|pair|sync)\w*|"
-    r"fail(?:s|ed|ing)?\s+to\s+(?:connect|pair|sync)\w*|"
+    # Connecting a device is the device's, whoever the subject: "couldn't", "failed to", "had trouble".
+    r"(?:(?:\w+n['’]t|not|never|no longer)\s+(?:be\s+able\s+to\s+)?|fail(?:s|ed|ing)?\s+to\s+|"
+    r"(?:trouble|problems?|issues?|difficult(?:y|ies))\s+)(?:connect|pair|sync)\w*" + _DEVICE_OBJECT + r"|"
     r"ran out of (?:battery|power|charge)|out of battery|(?:low|dead|flat) battery|"
     r"battery (?:died|ran (?:out|low|flat)|was (?:dead|flat|low|empty))|"
     r"technical (?:problem|issue|difficult)\w*)\b",

@@ -242,6 +242,10 @@ def test_a_reply_that_describes_the_students_work_is_still_accepted(line):
                                   # Connecting is the device's whoever the subject, as "couldn't connect" is.
                                   "The student failed to connect the headband.",
                                   "The student couldn't connect the headband.",
+                                  "The student had trouble connecting the headband.",
+                                  "The student had problems pairing it.",
+                                  "The headband couldn't connect on Monday.",
+                                  "The camera failed to connect to the laptop.",
                                   # "was not" is a negation like "wasn't", so any non-person subject counts.
                                   "On Monday the Bluetooth was not working.",
                                   "The Bluetooth also was not working."])
@@ -269,6 +273,10 @@ def test_a_sensor_not_working_is_a_cause_whatever_follows(text):
     # A group of people, and people named by where they are.
     "The class had trouble with fractions.",
     "The students in the class didn't work on fractions.",
+    # Connecting ideas is maths, not a device.
+    "The student failed to connect fractions to decimals.",
+    "She couldn't connect the two ideas.",
+    "The student had trouble connecting fractions to decimals.",
 ])
 def test_a_person_as_the_subject_is_effort_not_a_cause(text):
     assert not main._names_a_cause(text)

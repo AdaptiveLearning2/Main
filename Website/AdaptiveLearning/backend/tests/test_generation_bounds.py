@@ -596,3 +596,31 @@ def test_a_refused_claim_refunds_nothing(budget_db):
     assert wait is not None
     refund()
     assert [name for name, _p in db.calls] == ["claim_daily_question"]
+
+
+# ─── a failed generation leaves a cause on record ─────────────────────────
+
+def test_a_decider_that_raises_is_logged_with_its_cause_and_still_fails(monkeypatch, capsys):
+    """Before, the app logged nothing: only uvicorn's traceback, if anyone kept that window."""
+    def _crash(*_a, **_k):
+        raise ValueError("no solver for this topic")
+
+    with pytest.raises(ValueError):
+        _generate(monkeypatch, decider=_crash)
+    log = capsys.readouterr().out
+    assert "[generate] failed for kid" in log and "ValueError: no solver for this topic" in log, log
+
+
+def test_a_decider_that_returns_nothing_is_logged(monkeypatch, capsys):
+    with pytest.raises(HTTPException):
+        _generate(monkeypatch, decider=lambda *_a, **_k: None)
+    assert "[generate] the decider returned no question for kid" in capsys.readouterr().out
+
+
+def test_a_served_question_says_whether_it_was_queued(monkeypatch):
+    """A queued question's steering label was read when it was made, not when it is served."""
+    _queued_then_inline(monkeypatch, "7th Grade", [("7th Grade", 0)])
+    first = main.generate_question(request=None, grade=None, class_id=None, bias=0, session_id=None)
+    assert (first["question_text"], first["served_from"]) == ("made for 7th Grade 0", "queue")
+    second = main.generate_question(request=None, grade="5th Grade", class_id=None, bias=0, session_id=None)
+    assert (second["question_text"], second["served_from"]) == ("inline for 5th Grade 0", "inline")

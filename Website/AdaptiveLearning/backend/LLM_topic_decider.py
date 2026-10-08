@@ -827,6 +827,8 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
     # Diagnostic only, never shown to the student: carries raw internals like confidence.
     question["signal_reason"]   = signal_state.reason if signal_state else "no session"
     question["signal_channels"] = signal_state.channels if signal_state else {}
+    # When the label above was read; a prefetched question is served later, so it can be stale.
+    question["signal_read_at"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
     question["difficulty"]   = difficulty
 
     return question

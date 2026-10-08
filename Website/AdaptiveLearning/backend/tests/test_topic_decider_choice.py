@@ -115,3 +115,14 @@ def test_kindergarten_gets_a_kindergarten_question_either_way(decider):
     assert kindergarten and kindergarten.isdisjoint(td._allowed_topics("1"))
     assert [topic in kindergarten for topic, _ in served] == [True, True]
     assert set(t.strip() for t in _topics_line(prompts[0]).split(",")) == kindergarten
+
+
+def test_the_question_says_when_its_steering_label_was_read(decider):
+    """A prefetched question is served later; the stamp is how a reader tells its label is old."""
+    import datetime as dt
+    run, _, _ = decider
+    before = dt.datetime.now(dt.timezone.utc)
+    question = run('{"topic": "ordering", "difficulty": "easy"}')
+    after = dt.datetime.now(dt.timezone.utc)
+    read_at = dt.datetime.fromisoformat(question["signal_read_at"])
+    assert before <= read_at <= after

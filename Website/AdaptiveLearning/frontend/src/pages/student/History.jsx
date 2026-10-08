@@ -17,6 +17,9 @@ const PENDING = (
 
 const numberOr = v => (typeof v === 'number' ? v : null)
 
+// `GET /api/practice-sessions` answers at most this many, newest first, with no total.
+const PRACTICE_SHOWN = 20
+
 export default function History() {
   const [sessions, setSessions] = useState([])
   // Real session count, not `sessions.length` past the cap; `null` if uncounted.
@@ -27,6 +30,8 @@ export default function History() {
   const [stats, setStats]       = useState(undefined)
   const [loading, setLoading]   = useState(true)
   const [failed, setFailed]     = useState(false)
+  // Practice sessions, a separate table: `undefined` in flight, `null` failed (not "none").
+  const [practice, setPractice] = useState(undefined)
   const [filter, setFilter]     = useState('all')
 
   // Only the newest run writes, so a slow earlier failure can't undo a retry.
@@ -38,6 +43,9 @@ export default function History() {
       // No body is a failed read too, not "still loading".
       .then(s => { if (current()) setStats(s && s.retrieved !== false ? s : null) })
       .catch(() => { if (current()) setStats(null) })
+    apiFetch('/api/practice-sessions')
+      .then(rows => { if (current()) setPractice(Array.isArray(rows) ? rows : null) })
+      .catch(e => { if (current()) { console.error('Failed to load practice sessions:', e); setPractice(null) } })
     fetchSessionList()
       .then(r => {
         if (!current()) return
@@ -54,11 +62,17 @@ export default function History() {
   }
 
   // Reset here, not in `load`, which the mount effect also runs (set-state-in-effect).
-  const retry = () => { setLoading(true); setStats(undefined); load() }
+  const retry = () => { setLoading(true); setStats(undefined); setPractice(undefined); load() }
 
   useEffect(load, [])
 
-  const filtered = sessions.filter(s => {
+  // Both kinds, newest first; practice joins once its read lands, and a failed one is said below.
+  const rows = [
+    ...sessions.map(s => ({ ...s, kind: 'adaptive' })),
+    ...(practice || []).map(p => ({ ...p, kind: 'practice' })),
+  ].sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
+
+  const filtered = rows.filter(s => {
     if (filter === 'complete')   return !!s.ended_at
     if (filter === 'inprogress') return !s.ended_at
     return true
@@ -75,16 +89,17 @@ export default function History() {
     <div className="p-6 lg:p-8 pb-12">
       <m.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">Session History</h1>
-        <p className="text-gray-500 dark:text-gray-400 mt-1">All your past practice sessions.</p>
+        <p className="text-gray-500 dark:text-gray-400 mt-1">Your adaptive lessons and practice sessions.</p>
       </m.div>
 
       {sessions.length > 0 && (
         <div className="grid grid-cols-3 gap-4 mb-4">
           {[
-            // The backend's count, never the length of the capped list.
-            { label: 'Total Sessions', value: total ?? UNKNOWN,   icon: '📋' },
-            { label: 'Questions Done',  value: statTile(totalQ),   icon: '📝' },
-            { label: 'Overall Accuracy', value: statTile(overallA), icon: '🎯' },
+            // The backend's count, never the length of the capped list. Adaptive only: practice is not
+            // credited to the lifetime totals.
+            { label: 'Adaptive Sessions', value: total ?? UNKNOWN,   icon: '📋' },
+            { label: 'Adaptive Questions', value: statTile(totalQ),   icon: '📝' },
+            { label: 'Adaptive Accuracy',  value: statTile(overallA), icon: '🎯' },
           ].map((c, i) => (
             <m.div key={c.label}
               initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: stagger(i, 0.08) }}
@@ -101,8 +116,20 @@ export default function History() {
       {/* State the cap; only on `true`, since `null` means unknown. */}
       {truncated === true && (
         <p className="text-xs text-gray-600 dark:text-gray-400 mb-4">
-          Showing your {sessions.length} most recent sessions
+          Showing your {sessions.length} most recent adaptive sessions
           {typeof total === 'number' ? ` of ${total}` : ''}.
+        </p>
+      )}
+      {/* The practice list is capped at 20 with no count, so a full page can only say "up to". */}
+      {practice?.length >= PRACTICE_SHOWN && (
+        <p className="text-xs text-gray-600 dark:text-gray-400 mb-4">
+          Showing your {PRACTICE_SHOWN} most recent practice sessions.
+        </p>
+      )}
+      {!loading && !failed && practice === null && (
+        <p role="status" className="text-sm text-amber-700 dark:text-amber-300 mb-4">
+          Couldn't load your practice sessions, so only adaptive lessons are listed.{' '}
+          <button onClick={retry} className="underline font-semibold">Try again</button>
         </p>
       )}
 
@@ -128,10 +155,15 @@ export default function History() {
       ) : (
         <div className="space-y-3">
           {filtered.map((s, i) => {
+            // Flashcards are ungraded: `questions_answered` counts cards seen and `correct_answers` stays 0.
+            const flashcards = s.kind === 'practice' && s.mode === 'flashcard'
             const acc  = s.questions_answered > 0 ? Math.round((s.correct_answers / s.questions_answered) * 100) : 0
             const done = !!s.ended_at
+            const title = s.kind === 'practice'
+              ? `Practice · ${flashcards ? 'Flashcards' : 'Test'}`
+              : s.title || 'Adaptive Session'
             return (
-              <m.div key={s.id}
+              <m.div key={`${s.kind}:${s.id}`}
                 initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: stagger(i, 0.04) }}
                 whileHover={{ x: 4 }}
                 className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm flex items-center justify-between hover:shadow-md transition-shadow"
@@ -141,7 +173,7 @@ export default function History() {
                     {done ? '✅' : '⏳'}
                   </div>
                   <div>
-                    <p className="font-bold text-gray-900 dark:text-white">{s.title || 'Practice Session'}</p>
+                    <p className="font-bold text-gray-900 dark:text-white">{title}</p>
                     <p className="text-xs text-gray-600 mt-0.5 dark:text-gray-400">
                       {new Date(s.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </p>
@@ -150,15 +182,21 @@ export default function History() {
                 <div className="flex items-center gap-6 text-right">
                   <div className="hidden sm:block">
                     <p className="text-sm font-black text-gray-900 dark:text-white">{s.questions_answered}</p>
-                    <p className="text-xs text-gray-600 dark:text-gray-400">questions</p>
+                    <p className="text-xs text-gray-600 dark:text-gray-400">{flashcards ? 'cards' : 'questions'}</p>
                   </div>
-                  <div className="hidden sm:block">
-                    <p className="text-sm font-black text-gray-900 dark:text-white">{s.correct_answers}</p>
-                    <p className="text-xs text-gray-600 dark:text-gray-400">correct</p>
-                  </div>
+                  {!flashcards && (
+                    <div className="hidden sm:block">
+                      <p className="text-sm font-black text-gray-900 dark:text-white">{s.correct_answers}</p>
+                      <p className="text-xs text-gray-600 dark:text-gray-400">correct</p>
+                    </div>
+                  )}
                   <div>
-                    <p className={`text-lg font-black ${acc >= 70 ? 'text-green-500' : acc >= 40 ? 'text-amber-500' : 'text-rose-500'}`}>{acc}%</p>
-                    <p className="text-xs text-gray-600 dark:text-gray-400">accuracy</p>
+                    {flashcards ? (
+                      <p className="text-lg font-black text-gray-900 dark:text-white">{UNKNOWN}</p>
+                    ) : (
+                      <p className={`text-lg font-black ${acc >= 70 ? 'text-green-500' : acc >= 40 ? 'text-amber-500' : 'text-rose-500'}`}>{acc}%</p>
+                    )}
+                    <p className="text-xs text-gray-600 dark:text-gray-400">{flashcards ? 'not graded' : 'accuracy'}</p>
                   </div>
                 </div>
               </m.div>

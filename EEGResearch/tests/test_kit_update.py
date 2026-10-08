@@ -59,13 +59,13 @@ def feed(private, release=NEW, rollout=100, rollback=OLD, published=NOW) -> byte
     return kit_release.sign(private, release, rollout, rollback, published)
 
 
-def resign(private, change) -> bytes:
-    """A feed whose manifest change() edited, signed properly: refused only for what it says."""
+def resign(private, change, prefix: bytes = update.FEED_PREFIX) -> bytes:
+    """A feed whose manifest change() edited, signed but never read back: refused only for what it says."""
     manifest = {**NEW, "published": NOW.isoformat(), "rollout": 100, "rollback_to": OLD}
     change(manifest)
     signed = json.dumps(manifest).encode()
     return json.dumps({"manifest": base64.b64encode(signed).decode(),
-                       "signature": base64.b64encode(private.sign(update.FEED_PREFIX + signed)).decode()}).encode()
+                       "signature": base64.b64encode(private.sign(prefix + signed)).decode()}).encode()
 
 
 # --- the feed -------------------------------------------------------------------------------------------------
@@ -93,14 +93,14 @@ def _flip_manifest_byte(raw: bytes) -> bytes:
 @pytest.mark.parametrize("make", [
     pytest.param(lambda p: _flip_manifest_byte(feed(p)), id="tampered manifest"),
     pytest.param(lambda p: feed(Ed25519PrivateKey.generate()), id="unknown key"),
-    pytest.param(lambda p: json.dumps({"manifest": json.loads(feed(p))["manifest"], "signature": base64.b64encode(
-        p.sign(base64.b64decode(json.loads(feed(p))["manifest"]))).decode()}).encode(), id="signed without the prefix"),
+    pytest.param(lambda p: resign(p, lambda m: None, prefix=b""), id="signed without the prefix"),
     pytest.param(lambda p: b"not json", id="not json"),
     pytest.param(lambda p: json.dumps({"manifest": "@@", "signature": "@@"}).encode(), id="not base64"),
 ])
 def test_a_feed_not_signed_by_a_kit_key_is_refused(signer, make):
+    raw = make(signer)  # outside the raises: a fixture's own FeedError must not pass for the refusal
     with pytest.raises(update.FeedError):
-        update.verify_feed(make(signer), raw_key(signer))
+        update.verify_feed(raw, raw_key(signer))
 
 
 @pytest.mark.parametrize("change, reason", [
@@ -120,8 +120,9 @@ def test_a_feed_not_signed_by_a_kit_key_is_refused(signer, make):
     (lambda m: m.update(rollback_to={**OLD, "file": "evil.exe"}), "file"),
 ])
 def test_a_signed_manifest_is_still_refused_for_what_it_says(signer, change, reason):
+    raw = resign(signer, change)
     with pytest.raises(update.FeedError, match=reason):
-        update.verify_feed(resign(signer, change), raw_key(signer))
+        update.verify_feed(raw, raw_key(signer))
 
 
 def test_names_a_newer_publisher_adds_are_ignored(signer):

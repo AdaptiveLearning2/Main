@@ -220,6 +220,8 @@ def test_a_reply_that_describes_the_students_work_is_still_accepted(line):
                                   "The Muse wasn't working.",
                                   "The equipment wasn't working.",
                                   "The camera's feed wasn't working.",
+                                  # First in its sentence, a capital is not taken for a name.
+                                  "The headband was new. Bluetooth wasn't working.",
                                   # The sensor further back than the verb's own subject.
                                   "The headband the student wore wasn't working.",
                                   "The headband, which was new, wasn't working.",

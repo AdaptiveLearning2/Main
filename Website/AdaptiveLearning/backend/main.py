@@ -3918,12 +3918,22 @@ _CONNECT_FAILURE = re.compile(
 
 # After a person's connect failure, what makes it a device's: nothing, a manner or a date, or a device
 # word within a few words ("the new headband", "the heart sensor"). "Connect fractions to decimals" is maths.
+_DEVICE_NAMED = (
+    # "It" only as the object itself: "connect the ideas to it" is maths.
+    r"\s+(?:(?:to|with)\s+)?(?:it|them)\b|"
+    r"\s+(?:[\w'’-]+\s+){0,3}?(?:headband|headset|headphone|earbud|earphone|camera|webcam|sensor|device|muse|"
+    r"bluetooth|eeg|laptop|computer|tablet|phone|watch|tracker|monitor|microphone|mic|wi-?fi|internet|"
+    r"network|app)(?:s|es)?\b")
+_DEVICE_NAMED_AFTER = re.compile(_DEVICE_NAMED, re.IGNORECASE)
 _DEVICE_AFTER = re.compile(
-    r"\s*(?:[.,;:!?)]|$)|\s+(?:properly|again|reliably|at\s+all|yesterday)\b|"
-    r"\s+on\s+(?:\d|(?:mon|tues|wednes|thurs|fri|satur|sun)day)|"
-    r"\s+(?:[\w'’-]+\s+){0,3}?(?:headband|headset|camera|webcam|sensor|device|muse|bluetooth|eeg|laptop|"
-    r"computer|tablet|app|it|them)s?\b",
+    r"\s*(?:[.,;:!?)]|$)|\s+(?:properly|again|reliably|at\s+all|yesterday|today(?!['’]))\b|"
+    r"\s+(?:on|at|for|during|after|before|until|in)\s+(?!\w+['’]s\b)|" + _DEVICE_NAMED,
     re.IGNORECASE)
+
+# Subjects a connect failure can have that are neither people nor devices: "the idea didn't connect with her".
+_IDEA_SUBJECTS = frozenset({"idea", "ideas", "lesson", "lessons", "concept", "concepts", "topic", "topics",
+                            "explanation", "explanations", "example", "examples", "material", "content",
+                            "method", "methods", "question", "questions", "story", "stories"})
 
 # A cause for a missing reading, which the summary cannot know: a sensor off is turned off, never broken.
 # Not "fail": "could not be read" is honestly rephrased as "failed to load".
@@ -3995,6 +4005,9 @@ def _names_a_cause(text: str) -> bool:
         subject, bare = _subject_of(text, m)
         if subject in _PERSON_SUBJECTS:
             if _DEVICE_AFTER.match(text, m.end()):
+                return True
+        elif subject in _IDEA_SUBJECTS:
+            if _DEVICE_NAMED_AFTER.match(text, m.end()):
                 return True
         elif _subject_names_a_cause(subject, bare):
             return True

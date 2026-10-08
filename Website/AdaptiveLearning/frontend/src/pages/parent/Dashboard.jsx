@@ -88,7 +88,7 @@ export default function ParentDashboard() {
             // The EEG channel's reason for a missing figure, from the fields the summary carries.
             const eeg = { on: signals.eeg_enabled !== false, revokedAt: signals.eeg_revoked_at,
                           consentRetrieved: signals.consent_retrieved,
-                          samples: signals.cognitive_samples }
+                          samples: signals.cognitive_samples, erasedAt: signals.eeg_erased_at }
             const retrieved = signalsRetrieved(signals)
             const showSignals = retrieved && hasSignalSummary(signals)
             const initial = (child.name || child.email || '?')[0].toUpperCase()

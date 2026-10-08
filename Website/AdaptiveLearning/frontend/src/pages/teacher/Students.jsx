@@ -103,12 +103,14 @@ async function getStudentStats(studentId)
     // What each tile says with no figure, as every signal tile does (`offLabel`).
     eegOff: offLabel({ on: signals.eeg_enabled !== false, revokedAt: signals.eeg_revoked_at,
                        consentRetrieved: signals.consent_retrieved,
-                       samples: signals.cognitive_samples }),
+                       samples: signals.cognitive_samples, erasedAt: signals.eeg_erased_at }),
     faceOff: offLabel({ on: signals.emotion_included !== false && signals.face_included !== false,
                         revokedAt: signals.emotion_revoked_at,
-                        consentRetrieved: signals.consent_retrieved, samples: signals.face_samples }),
+                        consentRetrieved: signals.consent_retrieved, samples: signals.face_samples,
+                        erasedAt: signals.emotion_erased_at }),
     heartOff: offLabel({ on: signals.heart_included === true, revokedAt: signals.heart_revoked_at,
-                         consentRetrieved: signals.consent_retrieved, samples: signals.heart_samples }),
+                         consentRetrieved: signals.consent_retrieved, samples: signals.heart_samples,
+                         erasedAt: signals.heart_erased_at }),
     topics: (Array.isArray(topicRows) ? topicRows : []).map(row => {
       const attempted = row.attempted_questions || 0
       const correct = row.correct_questions || 0

@@ -153,6 +153,14 @@ describe('signal averages', () => {
     await waitFor(() => expect(tile('Focus Score').getByText('No sensor')).toBeInTheDocument())
   })
 
+  it('says an erased channel was erased rather than no sensor', async () => {
+    setData({ summary: { ...SUMMARY, focus: null, cognitive_samples: 0,
+                         eeg_erased_at: '2026-10-07T00:40:00Z' } })
+    render(<Students />)
+    await expandAda()
+    await waitFor(() => expect(tile('Focus Score').getByText(/^Erased /)).toBeInTheDocument())
+  })
+
   it('does not render a missing field as NaN%', async () => {
     // Number(undefined) is NaN and Number(null) is 0.
     setData({ summary: {} })

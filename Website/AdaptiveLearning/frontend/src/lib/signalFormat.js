@@ -8,6 +8,8 @@ const CHANNEL_STATE = {
   unknown: () => 'Unavailable',
   // Samples arrived, none usable.
   calibrating: () => 'Calibrating',
+  // A parent erased its past; consent may be on, so this is not "No sensor".
+  erased: on => (on ? `Erased ${on}` : 'Erased'),
   noSensor: () => 'No sensor',
 }
 
@@ -19,11 +21,13 @@ function shortDate(iso) {
     { day: 'numeric', month: 'short' })
 }
 
-/** Tile text for a channel with no value: consent unreadable, revoked, calibrating, or no sensor. */
-export function offLabel({ on, revokedAt, consentRetrieved, samples }) {
+/** Tile text for a channel with no value: consent unreadable, revoked, calibrating, erased, or no sensor. */
+export function offLabel({ on, revokedAt, consentRetrieved, samples, erasedAt = null }) {
   if (consentRetrieved === false) return CHANNEL_STATE.unknown()
   if (!on) return CHANNEL_STATE.revoked(shortDate(revokedAt))
-  return samples > 0 ? CHANNEL_STATE.calibrating() : CHANNEL_STATE.noSensor()
+  if (samples > 0) return CHANNEL_STATE.calibrating()
+  // Samples since the erasure win above; with none, the empty past is the erasure, not a missing sensor.
+  return erasedAt ? CHANNEL_STATE.erased(shortDate(erasedAt)) : CHANNEL_STATE.noSensor()
 }
 
 /**

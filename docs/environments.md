@@ -188,8 +188,9 @@ do not: a `replace-me` token, two equal tokens, or push over plain `http://` to 
 `QUESTION_QUEUE_SIZE`, `PAIRING_IDLE_SECONDS` (120; a headband pairing its pairer's page stopped polling is released),
 `CLASS_JOIN_MISSES_PER_ADDRESS` (1000 wrong class codes an hour), the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
 `PUBLIC_*_RATE_*` / `TRUSTED_PROXY_HOPS` group under *The network edge* in `CLAUDE.md`, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels* in `docs/reporting.md`,
-the `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` groups in `docs/question-generation.md`, and the `SOLVE_*` group in
-`docs/solvers.md`.
+the `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` groups in `docs/question-generation.md` (except `CLAUDE_PRICE_INPUT_PER_MTOK` /
+`CLAUDE_PRICE_OUTPUT_PER_MTOK`, which with `OPS_FLUSH_SECONDS` are under *Operational counters* in `docs/admin-and-security.md`),
+and the `SOLVE_*` group in `docs/solvers.md`.
 
 `QUESTIONS_CACHE_TTL` (30 s) fronts `GET /api/questions`, bounded at 32 entries **and** by `_QUESTIONS_MAX`
 on `limit`: the entry count bounds how many, the clamp how big, and the key is built from the clamped,

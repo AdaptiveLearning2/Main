@@ -68,3 +68,30 @@ it('resolves false and frees the controls when a write rejects with no Error at 
   expect(result.current.busy).toBe(false)
   expect(result.current.data).toEqual({ v: 1 })
 })
+
+it('keeps a failed read as an Error with its status, and clears it on the next good read', async () => {
+  vi.useFakeTimers()
+  try {
+    const refused = Object.assign(new Error('nope'), { status: 503 })
+    const read = vi.fn()
+      .mockResolvedValue({ v: 2 })
+      .mockResolvedValueOnce({ v: 1 })
+      .mockRejectedValueOnce(refused)
+    const { result } = renderHook(() => useAdminResource({ load: read, pollMs: 1000 }))
+    await advance(0)
+    expect(result.current.data).toEqual({ v: 1 })
+
+    await advance(1000)
+    // The last good data stays beside the failure.
+    expect(result.current.loadError).toBe(refused)
+    expect(result.current.loadError.status).toBe(503)
+    expect(result.current.data).toEqual({ v: 1 })
+
+    // usePoll backs off after a throw, so allow for the longer wait.
+    await advance(5000)
+    expect(result.current.loadError).toBeNull()
+    expect(result.current.data).toEqual({ v: 2 })
+  } finally {
+    vi.useRealTimers()
+  }
+})

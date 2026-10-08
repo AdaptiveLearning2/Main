@@ -50,6 +50,10 @@ CALLER_NUMBERS = {
         ("handler", "100."),
     ("admin_security_events", "limit"):
         ("handler", "_SECURITY_EVENTS_MAX."),
+    ("admin_generation", "hours"):
+        ("handler", "_OPS_MAX_HOURS (a week of hourly counters)."),
+    ("admin_refusals", "hours"):
+        ("handler", "_OPS_MAX_HOURS (a week of hourly counters)."),
     ("admin_student_search", "limit"):
         ("handler", "25, over a term already refused below two characters."),
     ("list_sessions", "limit"):

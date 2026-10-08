@@ -16,7 +16,7 @@ window when it held everything. The most self-contained areas are docs, read on 
 | **`docs/solvers.md`** | a solver (`safe_solve`, `geometry_solvers`, `angle_solvers`, `hs_solvers`), a distractor generator, the bounded sympy worker, or a `SOLVE_*` setting |
 | **`docs/frontend.md`** | anything under `Website/AdaptiveLearning/frontend`: a page, component or hook, `lib/api.js` or `AuthContext`, a chart, a test or the doubles in `src/test/`, the lint configs, or a Tailwind colour |
 | **`docs/reporting.md`** | a reporting endpoint or the function behind it (weekly report, signal summary, term trend, cohort panels, teacher analytics), `signal_daily_rollup` or `rollup_signal_day`, a session close or either sweep, session alerts, archived charts, how an answer is recorded, or the strategies and chart-summary panels |
-| **`docs/admin-and-security.md`** | an `/api/admin/*` endpoint or admin page, the security log, the 403 a new endpoint answers, or a rate limiter or a test of one |
+| **`docs/admin-and-security.md`** | an `/api/admin/*` endpoint or admin page, the security log, the operational counters (`ops_metrics`), the 403 a new endpoint answers, or a rate limiter or a test of one |
 | **`docs/student-kit.md`** | the student kit (`EEGResearch/src/kit`), its installer, `kit_build.py` or `kit_release.py`, the update gate Worker, `build_student_kit.ps1` or `publish_kit_update.ps1`, or anything the kit's self-updater or its scheduled task does |
 | **`docs/environments.md`** | `start.ps1` / `start.sh` or a launcher flag, `EEG_DEVICES`, a venv, a dependency pin or `requirements*.lock`, the `Dependency scan` or `Secret scan` job, `dependabot.yml`, or a setting's name or default |
 

@@ -648,3 +648,54 @@ def test_the_audit_write_does_not_stop_the_event_loop(monkeypatch):
     assert refused.status_code == 429
     assert observed == [True], \
         "the audit insert ran on the event loop, so nothing else could run"
+
+
+# ─── refusal counters (ops_metrics) ──────────────────────────────────────
+
+def _refusals():
+    import ops_metrics
+    return {key: n for (kind, key), n in ops_metrics.pending().items() if kind == "refusal"}
+
+
+def test_a_refusal_is_counted_by_route_template_never_by_the_id_in_the_path():
+    r = client.post("/api/sessions/abc-123-secret/end")
+    assert r.status_code >= 400
+
+    counted = _refusals()
+    assert counted == {f"{r.status_code} POST /api/sessions/{{session_id}}/end": 1}
+    assert not any("abc-123-secret" in key for key in counted)
+
+
+def test_the_public_limiters_429_is_counted_though_it_answers_before_routing(monkeypatch):
+    _tighten(monkeypatch, limit=1)
+
+    client.get(OPEN_PATH)
+    assert client.get(OPEN_PATH).status_code == 429
+
+    assert _refusals() == {f"429 GET {OPEN_PATH}": 1}
+
+
+def test_a_declared_oversized_body_is_counted_against_its_route():
+    r = client.post("/api/classes", content=b"x" * (main._MAX_BODY_BYTES + 1),
+                    headers={"content-type": "application/json"})
+    assert r.status_code == 413
+
+    assert _refusals() == {"413 POST /api/classes": 1}
+
+
+def test_a_mistyped_url_and_a_success_are_not_refusals():
+    assert client.get("/api/definitely-not-a-route").status_code == 404
+    assert client.get(OPEN_PATH).status_code == 200
+
+    assert _refusals() == {}
+
+
+def test_an_unhandled_exception_is_counted_as_a_500(monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(main, "get_user", boom)
+
+    r = TestClient(main.app, raise_server_exceptions=False).post("/api/sessions/s1/end")
+    assert r.status_code == 500
+
+    assert _refusals() == {"500 POST /api/sessions/{session_id}/end": 1}

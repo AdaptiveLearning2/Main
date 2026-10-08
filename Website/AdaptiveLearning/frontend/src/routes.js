@@ -34,6 +34,7 @@ export const pages = {
   adminLiveFlow:    () => import('./pages/admin/LiveFlow'),
   adminSchoolYear:  () => import('./pages/admin/SchoolYear'),
   adminSecurity:    () => import('./pages/admin/SecurityEvents'),
+  adminEngine:      () => import('./pages/admin/Engine'),
   adminStudentReport: () => import('./pages/admin/StudentReport'),
 
   notFound:         () => import('./pages/NotFound'),
@@ -54,6 +55,7 @@ export const ROUTES = [
   ['/parent/child/:id', 'parentChild'], ['/parent/settings', 'parentSettings'],
   ['/admin', 'adminOverview'], ['/admin/flags', 'adminFlags'], ['/admin/live', 'adminLiveFlow'],
   ['/admin/year', 'adminSchoolYear'], ['/admin/security', 'adminSecurity'],
+  ['/admin/engine', 'adminEngine'],
   ['/admin/students/:id/report', 'adminStudentReport'],
 ]
 

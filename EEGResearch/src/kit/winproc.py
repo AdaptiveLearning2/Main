@@ -94,6 +94,9 @@ if sys.platform == "win32":
                                         ctypes.POINTER(wintypes.LPVOID), ctypes.POINTER(wintypes.LPVOID),
                                         ctypes.POINTER(wintypes.LPVOID), ctypes.POINTER(wintypes.LPVOID)]
     _advapi.GetSecurityInfo.restype = wintypes.DWORD
+    _advapi.SetSecurityInfo.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.DWORD, wintypes.LPVOID,
+                                        wintypes.LPVOID, wintypes.LPVOID, wintypes.LPVOID]
+    _advapi.SetSecurityInfo.restype = wintypes.DWORD
     _advapi.GetLengthSid.argtypes = [wintypes.LPVOID]
     _advapi.GetLengthSid.restype = wintypes.DWORD
     _advapi.LookupAccountNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPVOID,
@@ -496,6 +499,14 @@ class IdleFlag:
         self.handle = _api().CreateEventW(None, True, False, IDLE_EVENT.format(session=session))
         if not self.handle:
             raise ctypes.WinError(ctypes.get_last_error())
+        # An elevated token makes Administrators the owner, which the updater would not believe: name the user.
+        # On a flag someone else created first, this is refused, and the updater goes on not believing it.
+        token = own_token()
+        try:
+            user = ctypes.create_string_buffer(token_user_sid(token))
+        finally:
+            _k32.CloseHandle(token)
+        _advapi.SetSecurityInfo(self.handle, SE_KERNEL_OBJECT, OWNER_SECURITY_INFORMATION, user, None, None, None)
 
     def set(self, idle: bool) -> None:
         (_k32.SetEvent if idle else _k32.ResetEvent)(self.handle)

@@ -62,7 +62,7 @@ Scheduler ends a run at an action that cannot, so the installers go through `cmd
   its sidecar's push status, since a student can watch with the headband on and touch nothing. Windows reports no idle
   time for a console session, so the running kit sets `Global\AdaptiveLearningSensorsIdle-<session>`, and the updater
   believes it only when that session's own user, read from the session's token, owns it: another user could create it
-  first. A session with no kit
+  first. The kit sets that owner itself, since an elevated token would otherwise make it Administrators. A session with no kit
   reporting and no recent sign-in counts as a lesson; one switched away from has nobody at it. The launcher stands
   aside while `apply.exe` or `rollback.exe` is linked and `attempt.json` is under 15 minutes old.
 - **Never a downgrade from the feed; the way back is the version running now.** Only a newer version is staged, and

@@ -20,6 +20,8 @@ _dropped = 0
 _stop = threading.Event()
 _silenced = threading.Event()
 _print_lock = threading.Lock()
+# How long `stop` lets a print already under way finish; a print takes microseconds unless stdout is blocked.
+_PRINT_WAIT_SECONDS = 2.0
 _thread: threading.Thread | None = None
 
 # PostgREST cuts any read at `db-max-rows` (1000), silently; reads page by `id` up to this many pages.
@@ -132,8 +134,11 @@ def stop(timeout: float = 5.0) -> None:
     if thread and thread.is_alive():
         thread.join(timeout=timeout)
         if thread.is_alive():
-            with _print_lock:
-                _silenced.set()
+            # Bounded too: a print stuck on a blocked stdout must not hang shutdown.
+            locked = _print_lock.acquire(timeout=_PRINT_WAIT_SECONDS)
+            _silenced.set()
+            if locked:
+                _print_lock.release()
 
 
 def reset() -> None:

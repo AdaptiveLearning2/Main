@@ -257,6 +257,37 @@ def test_a_print_already_under_way_finishes_before_stop_returns(monkeypatch):
     assert events == ["print", "stopped"]
 
 
+def test_a_print_stuck_on_stdout_cannot_hang_stop(monkeypatch):
+    """Ordering, not duration: stop returns while the print is still stuck, and silences anyway."""
+    stuck, release = threading.Event(), threading.Event()
+
+    class _Failing(_Fake):
+        def rpc(self, name, params):
+            raise RuntimeError("database gone")
+
+    def blocked_print(*_a, **_k):
+        stuck.set()
+        release.wait(10)
+
+    monkeypatch.setattr(ops_metrics, "print", blocked_print, raising=False)
+    monkeypatch.setattr(ops_metrics, "OPS_FLUSH_SECONDS", 0.01)
+    monkeypatch.setattr(ops_metrics, "_PRINT_WAIT_SECONDS", 0.1)
+    ops_metrics.bump("question", "prefetched")
+    ops_metrics.start(lambda: _Failing())
+    [flusher] = [t for t in threading.enumerate() if t.name == "ops-flush"]
+    assert stuck.wait(5)
+
+    stopper = threading.Thread(target=lambda: ops_metrics.stop(timeout=0.05))
+    stopper.start()
+    stopper.join(5)
+    returned_while_stuck = not stopper.is_alive() and not release.is_set()
+    release.set()
+    flusher.join(5)
+
+    assert returned_while_stuck
+    assert ops_metrics._silenced.is_set()
+
+
 def test_a_read_merges_unflushed_counts_into_the_stored_hour():
     # PostgREST's rendering of a timestamptz, not Python's isoformat.
     stored = [{"hour": _hour().replace("T", " ").replace("+00:00", "+00"), "kind": "refusal",

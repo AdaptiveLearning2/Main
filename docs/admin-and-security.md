@@ -48,7 +48,9 @@ because Render Free sleeps and restarts, and an in-memory "today" would cover th
 start. A failed flush keeps its cells for the next one; past `_MAX_PENDING` new cells drop and are counted
 (`dropped`), restored ones included. **A flush is not idempotent**: one that lands but whose reply is lost is
 sent again, so a count can be high by one flush. Rare, and the price of a single upsert with no flush ids.
-Once `stop` gives up waiting for a flush, that flush stays silent, since a print during exit is fatal. Kept 90 days
+Once `stop` gives up waiting for a flush, that flush stays silent, since a print during exit is fatal: `stop`
+silences it under the print's lock, so a print under way finishes first, waiting at most `_PRINT_WAIT_SECONDS`
+so a blocked stdout cannot hang shutdown. Kept 90 days
 (`expire_ops_counters`, 03:50).
 
 Reads merge the unflushed cells, so the current hour is never a flush behind. **They page by `id`**

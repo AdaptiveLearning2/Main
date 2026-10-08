@@ -1007,6 +1007,14 @@ export default function Adaptive() {
   const finishSession = async () => {
     setFinishing(true)
     await endSession(sessionIdRef.current).finally(() => {
+      if (headband.pushMode === false) {
+        // Pull: closing the session stopped the poller and freed the station for the next student.
+        recorderRef.current?.stop()
+        recorderRef.current = null
+        setRecorder(null)
+        setHeadband(s => ({ ...s, connected: false, phase: 'idle', deviceName: null,
+                             battery: null, reconnect: null, contactPoor: null, withheld: false }))
+      }
       // The ref too, so a Generate right after Finish starts a new session rather than reusing this one.
       sessionIdRef.current = null
       setSessionId(null)
@@ -1795,6 +1803,13 @@ export default function Adaptive() {
                     🎯 {totalAcc}% accuracy
                   </span>
                 </div>
+              )}
+              {/* Any time there is an answer; while a check-in banner shows, its own button is the one. */}
+              {!timeUp && !goalReached && (
+                <button onClick={finishSession} disabled={finishing}
+                  className="ml-auto px-4 py-2 rounded-xl text-sm font-bold border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition disabled:opacity-60">
+                  {finishing ? 'Finishing…' : 'Finish session'}
+                </button>
               )}
             </div>
           )}

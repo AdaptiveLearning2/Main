@@ -199,8 +199,8 @@ it('starts the duration clock at the first question, not at Connect', async () =
   expect(screen.getByText(/That is your 0\.001 minutes/)).toBeInTheDocument()
 }, 90_000)
 
-it('stops the finished session\'s recorder before starting the next one\'s', async () => {
-  // Each recorder's `pagehide` listener is removed only by its `stop()`.
+it('frees the station at Finish: stops its recorder, shows Connect, and records the next lesson only after Connect', async () => {
+  // Each recorder's `pagehide` listener is removed only by its `stop()`; closing the session frees the station.
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })
   await waitFor(() => expect(button).not.toBeDisabled())
@@ -223,15 +223,21 @@ it('stops the finished session\'s recorder before starting the next one\'s', asy
   fireEvent.click(await screen.findByRole('button', { name: /finish session/i }))
   await screen.findByRole('button', { name: /generate question/i })
   expect(bridge.recorders).toHaveLength(1)
-
-  fireEvent.click(screen.getByRole('button', { name: /generate question/i }))
-  await screen.findByText(/What is 2 \+ 2\?/)
-  await waitFor(() => expect(bridge.recorders).toHaveLength(2))
   expect(bridge.recorders[0].sessionId).toBe('sess-1')
   expect(bridge.recorders[0].stop).toHaveBeenCalledTimes(1)
+  expect(screen.getByRole('button', { name: /connect headband/i })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /disconnect/i })).toBeNull()
+
+  // The next lesson, with no headband: nothing is armed on a station this page no longer holds.
+  // `armRecording` runs before the question is shown, so its absence is decided by then.
+  fireEvent.click(screen.getByRole('button', { name: /generate question/i }))
+  await screen.findByText(/What is 2 \+ 2\?/)
+  expect(bridge.recorders).toHaveLength(1)
+
+  fireEvent.click(screen.getByRole('button', { name: /connect headband/i }))
+  await waitFor(() => expect(bridge.recorders).toHaveLength(2), { timeout: 10000 })
   expect(bridge.recorders[1].sessionId).toBe('sess-2')
-  await waitFor(() => expect(bridge.recorders[1].start).toHaveBeenCalledWith({ record: true }))
-}, 30_000)
+}, 40_000)
 
 it('abandons a pairing when the page unmounts, instead of scanning for a page that is gone', async () => {
   const { unmount } = render(<Adaptive />)
@@ -505,4 +511,20 @@ it('leaves its lesson open on the way out while an answer is still being saved',
   await screen.findByText(/1 answered/)
   window.dispatchEvent(new Event('pagehide'))
   expect(ends()).toEqual(['/api/sessions/sess-1/end'])
+}, 30_000)
+
+it('offers Finish once a session has an answer, whatever the goal, and Finish closes it', async () => {
+  const { endSession } = await import('../../lib/session')
+  render(<Adaptive />)
+  // No limit (the default goal) and no duration: before this change, no Finish ever appeared.
+  fireEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText(/What is 2 \+ 2\?/)
+  expect(screen.queryByRole('button', { name: /finish session/i })).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: /^B\s*4$/ }))
+  fireEvent.click(screen.getByRole('button', { name: /submit answer/i }))
+  await screen.findByText(/1 answered/)
+  fireEvent.click(screen.getByRole('button', { name: /finish session/i }))
+  await waitFor(() => expect(endSession).toHaveBeenCalledWith('sess-1'))
+  await screen.findByRole('button', { name: /generate question/i })
 }, 30_000)

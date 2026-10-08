@@ -3915,17 +3915,30 @@ _CLINICAL_TERMS = re.compile(
 _CAUSE_TERMS = re.compile(
     r"\b(stopped working|stops working|"
     r"broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|lost (?:the )?connection|"
+    r"(?:\w+n['’]t|not|never|no longer)\s+(?:be\s+able\s+to\s+)?(?:connect|pair|sync)\w*|"
     r"technical (?:problem|issue|difficult)\w*)\b",
     re.IGNORECASE,
 )
 
-# Any negation ("doesn't", "hasn't been", bare "not"). A cause only when a sensor is its subject (below).
-_NEGATED_WORK = re.compile(r"\b(?:\w+n['’]t|not)(?:\s+been)?\s+work(?:s|ed|ing)?\b", re.IGNORECASE)
+# A negated failure verb ("didn't work", "has not been recording", "never worked", "no longer works").
+# "Didn't work out as planned" is an idiom about a plan, not a device.
+_NEGATED_FAILURE = re.compile(
+    r"\b(\w+n['’]t|not|never|no\s+longer)(\s+been)?\s+(?:work|function|record|respond)(s|ed|ing)?\b"
+    r"(?!\s+out\s+(?:as|well|for|the\s+way)\b)",
+    re.IGNORECASE)
+# A passive ("was not recorded", "hasn't been recorded") states an absence, which the summary must.
+_BE_FORMS = frozenset({"is", "was", "are", "were", "be", "isn't", "wasn't", "aren't", "weren't",
+                       "isn’t", "wasn’t", "aren’t", "weren’t"})
 
-# The subject a negated "work" needs, among the three words before it in its sentence: "the
-# student didn't work on fractions" is effort, "the headband wasn't working on Monday" a cause.
-_SENSOR_SUBJECTS = frozenset({"sensor", "sensors", "headband", "headbands", "camera", "cameras", "webcam",
-                              "eeg", "heart", "pulse", "device", "devices", "it"})
+# The verb's subject decides: a person ("the student didn't work on fractions") is effort; anything else
+# ("the recording wasn't working") is a cause. Bare "not" has no auxiliary, so it needs a named thing.
+_PERSON_SUBJECTS = frozenset({"student", "students", "child", "children", "kid", "kids", "learner",
+                              "learners", "pupil", "pupils", "he", "she", "they", "i", "we", "you", "who"})
+_THING_SUBJECTS = frozenset({"sensor", "sensors", "headband", "headbands", "camera", "cameras", "webcam",
+                             "eeg", "heart", "pulse", "device", "devices", "muse", "recording", "readings",
+                             "connection", "equipment", "feed", "signal", "it"})
+_AUXILIARIES = frozenset({"do", "does", "did", "is", "was", "are", "were", "am", "has", "have", "had",
+                          "can", "could", "will", "would", "should", "may", "might", "must"})
 _SENTENCE_END = re.compile(r"[.!?;:\n]")
 
 
@@ -3933,9 +3946,22 @@ def _names_a_cause(text: str) -> bool:
     """Whether a summary says why a reading is missing (broken, disconnected, a sensor not working)."""
     if _CAUSE_TERMS.search(text):
         return True
-    for m in _NEGATED_WORK.finditer(text):
-        before = _SENTENCE_END.split(text[:m.start()])[-1]
-        if _SENSOR_SUBJECTS.intersection(w.lower() for w in re.findall(r"[\w’']+", before)[-3:]):
+    for m in _NEGATED_FAILURE.finditer(text):
+        words = re.findall(r"[\w’'-]+", _SENTENCE_END.split(text[:m.start()])[-1])
+        negation, bare = m.group(1).lower(), m.group(1).lower() == "not"
+        if bare and words and words[-1].lower() in _AUXILIARIES:
+            negation = words[-1].lower()
+            words, bare = words[:-1], False
+        if (m.group(3) or "").lower() == "ed" and (m.group(2) or negation in _BE_FORMS):
+            continue
+        subject = re.sub(r"['’]s$", "", words[-1]) if words else ""
+        if bare:
+            if subject.lower() in _THING_SUBJECTS:
+                return True
+            continue
+        # A capital mid-sentence is a name ("on days Ada didn't work"); first in its sentence it may not be.
+        named = len(words) > 1 and subject[:1].isupper() and subject.lower() not in _THING_SUBJECTS
+        if subject.lower() not in _PERSON_SUBJECTS and not named:
             return True
     return False
 

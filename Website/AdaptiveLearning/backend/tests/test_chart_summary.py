@@ -212,14 +212,44 @@ def test_a_reply_that_describes_the_students_work_is_still_accepted(line):
                                   "The headband wasn't working on some days.",
                                   "The webcam wasn't working on today.",
                                   "The headband was new. It wasn't working on the first day.",
-                                  "The headband didn't work through the session."])
+                                  "The headband didn't work through the session.",
+                                  # Subjects no list names: anything but a person is a cause.
+                                  "The recording wasn't working.",
+                                  "The readings weren't working.",
+                                  "The connection wasn't working.",
+                                  "The Muse wasn't working.",
+                                  "The equipment wasn't working.",
+                                  "The camera's feed wasn't working.",
+                                  # The sensor further back than the verb's own subject.
+                                  "The headband the student wore wasn't working.",
+                                  "The headband, which was new, wasn't working.",
+                                  # Other failure verbs.
+                                  "The headband never worked.",
+                                  "The headband couldn't connect.",
+                                  "The headband did not record on Monday.",
+                                  "The camera no longer works.",
+                                  "The heart sensor has not been recording."])
 def test_a_sensor_not_working_is_a_cause_whatever_follows(text):
     assert main._names_a_cause(text)
 
 
-def test_a_sensor_in_an_earlier_sentence_is_not_the_subject():
-    # Within three words of the verb, so only the sentence boundary keeps it out.
-    assert not main._names_a_cause("Focus came from the headband. She didn't work on fractions.")
+@pytest.mark.parametrize("text", [
+    "Focus came from the headband. She didn't work on fractions.",
+    "On days Ada didn't work on fractions, focus was higher.",
+    "Focus was higher on days they did not work on word problems.",
+    "The student who never worked ahead had steadier focus.",
+    "Focus was lower on days the student did not record an answer quickly.",
+    "It didn't work out as planned, so the session was shorter.",
+])
+def test_a_person_as_the_subject_is_effort_not_a_cause(text):
+    assert not main._names_a_cause(text)
+
+
+@pytest.mark.parametrize("text", ["Heart rate was not recorded because the sensor was turned off.",
+                                  "Heart rate hasn't been recorded since 3 August.",
+                                  "Expression readings weren't recorded this week."])
+def test_a_passive_states_an_absence_not_a_cause(text):
+    assert not main._names_a_cause(text)
 
 
 def test_the_prompt_forbids_naming_a_cause():

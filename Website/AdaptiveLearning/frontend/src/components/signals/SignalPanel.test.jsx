@@ -931,3 +931,21 @@ describe('choosing which measurements a chart draws', () => {
     expect(screen.getByRole('columnheader', { name: /stress/i })).toBeInTheDocument()
   })
 })
+
+test('an erased heart channel says it was erased, not that there is no sensor', () => {
+  // The run: a parent erased headband heart; consent stayed on and no heart rows remained.
+  const erased = { ...heartReport, highlights: { ...heartReport.highlights, heart_rate_bpm: null, rmssd_ms: null },
+                   sample_counts: { ...heartReport.sample_counts, heart: 0 },
+                   heart_erased_at: '2026-10-07T00:40:00Z' }
+  render(<WeeklySignalReport report={erased} />)
+
+  const bpmTile = screen.getByText(/Avg Heart Rate/i).closest('div')
+  expect(within(bpmTile).getByText(/^Erased /)).toBeInTheDocument()
+  expect(screen.queryByText('No sensor')).not.toBeInTheDocument()
+})
+
+test('readings recorded after an erasure are shown, not the erasure', () => {
+  render(<WeeklySignalReport report={{ ...heartReport, heart_erased_at: '2026-10-01T00:00:00Z' }} />)
+  const bpmTile = screen.getByText(/Avg Heart Rate/i).closest('div')
+  expect(within(bpmTile).getByText('72 bpm')).toBeInTheDocument()
+})

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { endPracticeSession } from '../../lib/practiceSession'
 import PracticeSetup from '../../components/practice/PracticeSetup'
 import PracticeResults from '../../components/practice/PracticeResults'
@@ -18,10 +18,19 @@ export default function Practice() {
     setResult(null)
   }, [])
 
+  // One `/end` per session: a second (double-clicked Done) answers already_closed for our own close.
+  const finishedFor = useRef(null)
   const handleFinish = useCallback(async (liveCounts) => {
+    if (!session || finishedFor.current === session.id) return
+    finishedFor.current = session.id
     setSession(s => (s ? { ...s, ...liveCounts } : s))
     const closed = await endPracticeSession(session?.id)
-    setResult({ topic_summary: closed?.topic_summary || {} })
+    // Closed before Finish (the sweep): the stored counts, since the tally includes refused answers.
+    if (closed?.already_closed && typeof closed.questions_answered === 'number') {
+      setSession(s => (s ? { ...s, questions_answered: closed.questions_answered,
+                             correct_answers: closed.correct_answers ?? 0 } : s))
+    }
+    setResult({ topic_summary: closed?.topic_summary || {}, alreadyClosed: !!closed?.already_closed })
   }, [session])
 
   const handleRestart = useCallback(() => {
@@ -37,6 +46,7 @@ export default function Practice() {
 
   // Keyed on the session, so a new one is a fresh mount: the mode pages' first load relies on it.
   return session.mode === 'flashcard'
-    ? <PracticeFlashcards key={session.id} session={session} onFinish={handleFinish} />
-    : <PracticeTest key={session.id} session={session} onFinish={handleFinish} questionCount={questionCount} />
+    ? <PracticeFlashcards key={session.id} session={session} onFinish={handleFinish} onRestart={handleRestart} />
+    : <PracticeTest key={session.id} session={session} onFinish={handleFinish} onRestart={handleRestart}
+                    questionCount={questionCount} />
 }

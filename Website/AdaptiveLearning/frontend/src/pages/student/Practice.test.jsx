@@ -115,6 +115,72 @@ describe('test mode', () => {
       expect(toastError).toHaveBeenCalledWith('That answer could not be saved.')
     })
   })
+
+  it('shows the stored close when the session had ended before Finish, and says so', async () => {
+    overrideApi('/api/practice-sessions/start', () => ({
+      id: 'sess-1', mode: 'flashcard', topics: ['ordering'], difficulty: 'medium',
+      grade_level: '5th Grade', questions_answered: 0, correct_answers: 0,
+    }), 'POST')
+    overrideApi('/api/practice-sessions/sess-1/end', () => ({
+      ok: true, already_closed: true, questions_answered: 2, correct_answers: 0,
+      topic_summary: { ordering: { attempted: 2, correct: null } },
+    }), 'POST')
+    await startATestSession()
+    await screen.findByText('What is 2 + 2?')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Done' }))
+
+    expect(await screen.findByText(/had already ended/i)).toBeInTheDocument()
+    expect(screen.getByText(/you reviewed 2 cards/i)).toBeInTheDocument()
+    expect(screen.getByText(/2 questions/)).toBeInTheDocument()
+  })
+
+  it('ends a session once for a double-clicked Done, so its own close never reads as already ended', async () => {
+    overrideApi('/api/practice-sessions/start', () => ({
+      id: 'sess-1', mode: 'flashcard', topics: ['ordering'], difficulty: 'medium',
+      grade_level: '5th Grade', questions_answered: 0, correct_answers: 0,
+    }), 'POST')
+    let ended = false
+    // With a network's latency: an instant reply replaces Done before the second click lands.
+    overrideApi('/api/practice-sessions/sess-1/end', () => {
+      const reply = ended ? { ok: true, already_closed: true, questions_answered: 0, correct_answers: 0 }
+        : { ok: true, topic_summary: {} }
+      ended = true
+      return new Promise(resolve => setTimeout(() => resolve(reply), 50))
+    }, 'POST')
+    await startATestSession()
+    await screen.findByText('What is 2 + 2?')
+
+    await userEvent.dblClick(screen.getByRole('button', { name: 'Done' }))
+
+    await screen.findByText(/review complete/i)
+    expect(apiFetch.mock.calls.filter(([p]) => p === '/api/practice-sessions/sess-1/end')).toHaveLength(1)
+    expect(screen.queryByText(/had already ended/i)).not.toBeInTheDocument()
+  })
+
+  it('says an answer to a session that has ended was not saved, rather than a generic failure', async () => {
+    overrideApi('/api/practice-sessions/sess-1/answer', () => { throw apiError(409, 'ended') }, 'POST')
+    await startATestSession()
+    await screen.findByText('What is 2 + 2?')
+
+    await userEvent.click(screen.getByRole('button', { name: /4/ }))
+
+    await waitFor(() => {
+      expect(toastError).toHaveBeenCalledWith('This practice session has already ended, so that answer was not saved.')
+    })
+  })
+
+  it('shows a session the backend closed as ended, with a new session instead of a retry', async () => {
+    overrideApi('/api/practice-sessions/sess-1/question', () => { throw apiError(409, 'ended') }, 'GET')
+    await startATestSession()
+
+    await screen.findByText(/this practice session has already ended/i)
+    expect(screen.queryByText(/backend is running/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /start a new session/i }))
+    await screen.findByText(/pick what to study/i)
+  })
 })
 
 // The results screen is covered in PracticeResults.test.jsx.

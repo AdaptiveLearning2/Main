@@ -17,12 +17,14 @@ function reasons(summary) {
       revokedAt: summary?.eeg_revoked_at ?? null,
       consentRetrieved: summary?.consent_retrieved,
       samples: summary?.cognitive_samples,
+      erasedAt: summary?.eeg_erased_at ?? null,
     },
     heart: {
       on: summary?.heart_included !== false,
       revokedAt: summary?.heart_revoked_at ?? null,
       consentRetrieved: summary?.consent_retrieved,
       samples: summary?.heart_samples,
+      erasedAt: summary?.heart_erased_at ?? null,
     },
   }
 }

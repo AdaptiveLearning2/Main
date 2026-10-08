@@ -499,3 +499,132 @@ def test_the_batch_summary_without_a_consent_map_still_returns_a_payload(monkeyp
     assert out["kid-a"]["eeg_enabled"] is True
     assert out["kid-a"]["eeg_revoked_at"] is None
     assert out["kid-a"]["consent_retrieved"] is True
+
+
+# ── an erasure is reported, so an erased past never reads as "No sensor" ──────
+
+def _ago(days):
+    from datetime import timedelta
+    return (main._utc_now() - timedelta(days=days)).isoformat()
+
+
+def _erasure(channel, at, user_id=STUDENT):
+    return {"user_id": user_id, "channel": channel, "erased_at": at}
+
+
+def _weekly(monkeypatch, tables, **fake_kw):
+    fake = _FakeSupabase(tables, **fake_kw)
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    monkeypatch.setattr(main, "_profile", lambda _s: {"display_name": "Kid"})
+    return main.student_weekly_report(STUDENT, None), fake
+
+
+def test_the_weekly_endpoint_says_which_channels_were_erased(monkeypatch):
+    """Consent is still on after an erasure, so without these the tiles read "No sensor"."""
+    hb, eeg = _ago(1), _ago(2)
+    # The run's QA-6: headband heart consented, camera not.
+    tables = {**_tables(_consent_row(camera=False)), "signal_erasure": [
+        _erasure("headband_optical", hb),
+        _erasure("eeg", eeg),
+        # Another child's erasure is not this one's.
+        _erasure("camera", _ago(1), user_id="someone-else"),
+    ]}
+    out, fake = _weekly(monkeypatch, tables)
+
+    assert out["eeg_erased_at"] == eeg
+    assert out["heart_erased_at"] == hb
+    assert out["emotion_erased_at"] is None
+    # Read for this student, by filter (rule 4).
+    reads = [q for name, q in zip(fake.table_calls, fake.queries) if name == "signal_erasure"]
+    assert reads and all(("user_id", STUDENT) in q.filters for q in reads), [q.filters for q in reads]
+
+
+def test_an_erasure_before_the_window_took_nothing_from_it(monkeypatch):
+    """An empty week after an old erasure is "No sensor", not the erasure's doing."""
+    tables = {**_tables(_consent_row()), "signal_erasure": [
+        _erasure("eeg", _ago(40)), _erasure("headband_optical", _ago(40)), _erasure("camera", _ago(40))]}
+    out, _ = _weekly(monkeypatch, tables)
+    assert (out["eeg_erased_at"], out["heart_erased_at"], out["emotion_erased_at"]) == (None, None, None)
+
+
+@pytest.mark.parametrize("consent,erased,expect", [
+    # Both sensors consented, both erased: the later one.
+    (dict(headband=True, camera=True), {"headband_optical": 2, "camera": 1}, "camera"),
+    # The camera erased, the headband still consented and unerased: its empty week is not explained.
+    (dict(headband=True, camera=True), {"camera": 1}, None),
+    # Only the headband consented, and erased.
+    (dict(headband=True, camera=False), {"headband_optical": 1}, "headband_optical"),
+    # An old camera erasure and a recent headband one: the camera's took nothing from this week.
+    (dict(headband=True, camera=True), {"headband_optical": 1, "camera": 40}, None),
+])
+def test_heart_is_erased_only_when_every_consented_heart_sensor_was(monkeypatch, consent, erased, expect):
+    stamps = {sensor: _ago(days) for sensor, days in erased.items()}
+    tables = {**_tables(_consent_row(**consent)),
+              "signal_erasure": [_erasure(s, at) for s, at in stamps.items()]}
+    out, _ = _weekly(monkeypatch, tables)
+    assert out["heart_erased_at"] == (stamps[expect] if expect else None)
+
+
+def test_an_unreadable_erasure_table_reports_none_and_the_report_still_loads(monkeypatch):
+    """Fails open, unlike consent: it only picks a tile's words."""
+    out, _ = _weekly(monkeypatch, {**_tables(_consent_row()), "signal_erasure": []},
+                     table_raises={"signal_erasure"})
+    assert (out["eeg_erased_at"], out["heart_erased_at"], out["emotion_erased_at"]) == (None, None, None)
+    assert out["eeg_enabled"] is True
+
+
+def test_the_roster_reads_erasures_once_and_stamps_each_child_its_own(monkeypatch):
+    at = _ago(1)
+    fake = _FakeSupabase({
+        "signal_consent": [_consent_row("kid-a"), _consent_row("kid-b")],
+        "signal_erasure": [_erasure("eeg", at, user_id="kid-a")],
+    })
+    monkeypatch.setattr(main, "supabase", fake)
+
+    channels = main._reportable_channels_many(["kid-a", "kid-b"])
+
+    since = main._window_start(7)
+    assert main._erased_fields(channels["kid-a"], since)["eeg_erased_at"] == at
+    assert main._erased_fields(channels["kid-b"], since)["eeg_erased_at"] is None
+    assert fake.table_calls.count("signal_erasure") == 1
+
+
+def test_the_window_starts_at_school_midnight_as_the_report_does(monkeypatch):
+    """A rolling UTC "now minus days" let an erasure up to a day before the window read as inside it.
+
+    In a school zone behind UTC, so a start taken at UTC midnight is a different instant.
+    """
+    from datetime import datetime, timedelta, timezone
+    from zoneinfo import ZoneInfo
+    monkeypatch.setattr(main, "_school_timezone", lambda: ZoneInfo("America/Los_Angeles"))
+    # 20:00 on 7 October at the school, already the 8th in UTC.
+    monkeypatch.setattr(main, "_utc_now", lambda: datetime(2026, 10, 8, 3, 0, tzinfo=timezone.utc))
+    start = main._window_start(7)
+    assert start == datetime(2026, 10, 1, 7, 0, tzinfo=timezone.utc)   # 1 October, 00:00 PDT
+    ch = lambda at: main.ReportChannels(True, True, True, erasures={"eeg": at})  # noqa: E731
+    assert main._erased_fields(ch((start - timedelta(minutes=1)).isoformat()), start)["eeg_erased_at"] is None
+    inside = (start + timedelta(minutes=1)).isoformat()
+    assert main._erased_fields(ch(inside), start)["eeg_erased_at"] == inside
+    # The weekly report reads from this same start.
+    fake = _FakeSupabase(_tables(_consent_row()))
+    monkeypatch.setattr(main, "supabase", fake)
+    main._weekly_signal_report(STUDENT, 7)
+    sent = {p["p_since"] for name, p in fake.rpc_calls if name == "weekly_signal_days"}
+    assert sent == {start.isoformat()}
+
+
+def test_every_summary_payload_carries_the_erasure_fields_inside_its_window():
+    """The signal-summary, cohort-roster and parent-dashboard payloads, beside `*_revoked_at`."""
+    recent, old = _ago(2), _ago(40)
+    ch = main.ReportChannels(True, True, True, erasures={"eeg": recent, "headband_optical": old, "camera": recent},
+                             heart_sensors=("headband_optical",))
+    want = {"eeg_erased_at": recent, "heart_erased_at": None, "emotion_erased_at": recent}
+    since = main._window_start(30)
+    row = main._cohort_student_row("kid-a", {}, ch, True, since)
+    empty = main._shape_summary(None, erased=main._erased_fields(ch, since))
+    full = main._shape_summary({"focus": 0.5}, erased=main._erased_fields(ch, since))
+    for payload in (row, empty, full):
+        assert {k: payload[k] for k in want} == want
+    assert {k: main._shape_summary(None)[k] for k in want} == dict.fromkeys(want)

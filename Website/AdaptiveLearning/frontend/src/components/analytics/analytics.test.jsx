@@ -557,6 +557,19 @@ describe('ClassSignalRoster', () => {
     expect(screen.queryByRole('cell', { name: '0' })).not.toBeInTheDocument()
   })
 
+  it('says a student whose heart and EEG were erased had them erased, not no sensor', () => {
+    // The run: the roster read "No sensor" for QA-6 after a parent's erasure.
+    render(<ClassSignalRoster data={{
+      retrieved: true, days: 30, class_size: 5,
+      per_student: [student('a', {
+        focus: null, stress: null, heart_rate_bpm: null, cognitive_samples: 0, heart_samples: 0,
+        retrieved: true, eeg_erased_at: '2026-10-07T00:40:00Z', heart_erased_at: '2026-10-07T00:40:00Z',
+      })],
+    }} />)
+    expect(screen.queryByText(/no sensor/i)).not.toBeInTheDocument()
+    expect(screen.getAllByText(/^Erased /).length).toBeGreaterThanOrEqual(3)
+  })
+
   it('still separates a real empty channel from an unread one', () => {
     // Teeth for the test above: with `retrieved: true` zero counts are a genuine finding.
     render(<ClassSignalRoster data={{

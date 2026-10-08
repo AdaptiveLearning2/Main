@@ -195,6 +195,19 @@ it('says why a weekly focus figure is missing, not a raw N/A', async () => {
   expect(screen.queryByText('N/A')).not.toBeInTheDocument()
 })
 
+it('says the weekly focus was erased, with EEG still on, rather than no sensor', async () => {
+  apiFetch.mockImplementation(() => Promise.resolve([{
+    ...withFace[0],
+    signal_summary: { ...withFace[0].signal_summary, focus: null, stress: null,
+                      cognitive_samples: 0, eeg_enabled: true, consent_retrieved: true,
+                      eeg_erased_at: '2026-10-07T00:40:00Z' },
+  }]))
+  renderDashboard()
+
+  expect(await screen.findByText('Weekly Focus')).toBeInTheDocument()
+  expect(statTile('Weekly Focus')).toHaveTextContent(/^Erased /)
+})
+
 it('asks for the children without a viewer-side flag', async () => {
   // Consent on Settings controls recording, not a switch on this query.
   renderDashboard()

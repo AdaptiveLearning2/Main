@@ -1394,6 +1394,10 @@ def _stale_sweep_loop() -> None:
             _sweep_abandoned_sessions()
         except Exception as e:                                 # noqa: BLE001
             print(f"[stale_sweep] pass failed: {e}")
+        try:
+            _sweep_abandoned_practice()
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[practice_sweep] pass failed: {e}")
         # Its own guard: an archive cancelled at shutdown or failed is retried from here.
         try:
             chart_archive.archive_missing(supabase)
@@ -1575,7 +1579,7 @@ class ReportChannels(NamedTuple):
     """Which optional channels a report may read, and whether consent was readable.
 
     `consent_retrieved` separates "nobody consented" from "could not read consent".
-    `*_revoked_at` lets a tile say "Off since <date>".
+    `*_revoked_at` lets a tile say "Off since <date>"; `*_erased_at`, that a parent erased its past.
     """
     heart: bool
     emotion: bool
@@ -1585,6 +1589,9 @@ class ReportChannels(NamedTuple):
     # Consent only, not a read filter: the cognitive channel is always read.
     eeg: bool = True
     eeg_revoked_at: str | None = None
+    # `_erasures()`'s {sensor: erased_at}, and the heart sensors consented now; `_erased_fields` windows them.
+    erasures: dict | None = None
+    heart_sensors: tuple = ()
 
 
 def _reportable_channels(student_id: str, want_emotion: bool = True,
@@ -1594,25 +1601,30 @@ def _reportable_channels(student_id: str, want_emotion: bool = True,
     Consent is resolved here and fails closed. `want_*` can only narrow; no
     client sends it and it is not a privacy boundary.
     """
-    return _channels_from_consent(_consent(student_id), want_emotion, want_heart)
+    return _channels_from_consent(_consent(student_id), want_emotion, want_heart,
+                                  erasures=_erasures(student_id))
+
+
+def _latest(*stamps):
+    """The latest of some timestamps, as instants not text; None when there are none."""
+    stamps = [t for t in stamps if t]
+    # Unparseable sorts last.
+    return max(stamps, key=lambda t: _parse_ts(t) or datetime.min.replace(tzinfo=timezone.utc),
+               default=None)
 
 
 def _channels_from_consent(consent: dict, want_emotion: bool = True,
-                           want_heart: bool = True) -> ReportChannels:
-    """The consent row -> channels mapping, shared by the single and batch forms."""
+                           want_heart: bool = True, erasures: dict | None = None) -> ReportChannels:
+    """The consent row -> channels mapping, shared by the single and batch forms.
+
+    `erasures` is `_erasures()`'s {sensor: erased_at}; `_erased_fields` decides what a report says.
+    """
+    heart_sensors = tuple(s for s in ("headband_optical", "camera") if consent.get(f"{s}_enabled"))
     heart = bool(consent.get("headband_optical_enabled")) or bool(consent.get("camera_enabled"))
     emotion = bool(consent.get("camera_enabled"))
     # Heart is off only when both sensors are; it stopped at the later revocation.
-    heart_revoked = None
-    if not heart:
-        stamps = [consent.get("headband_optical_revoked_at"),
-                  consent.get("camera_revoked_at")]
-        stamps = [t for t in stamps if t]
-        # Compared as instants, not text; unparseable sorts last.
-        heart_revoked = max(
-            stamps,
-            key=lambda t: _parse_ts(t) or datetime.min.replace(tzinfo=timezone.utc),
-            default=None)
+    heart_revoked = None if heart else _latest(consent.get("headband_optical_revoked_at"),
+                                               consent.get("camera_revoked_at"))
     eeg = bool(consent.get("eeg_enabled"))
     return ReportChannels(heart=want_heart and heart,
                           emotion=want_emotion and emotion,
@@ -1620,7 +1632,37 @@ def _channels_from_consent(consent: dict, want_emotion: bool = True,
                           heart_revoked_at=heart_revoked,
                           emotion_revoked_at=None if emotion else consent.get("camera_revoked_at"),
                           eeg=eeg,
-                          eeg_revoked_at=None if eeg else consent.get("eeg_revoked_at"))
+                          eeg_revoked_at=None if eeg else consent.get("eeg_revoked_at"),
+                          erasures=dict(erasures or {}),
+                          heart_sensors=heart_sensors)
+
+
+def _window_start(days: int, tz=None) -> datetime:
+    """Midnight of the earliest school day in the last `days`, in UTC: the reports' own start."""
+    tz = tz or _school_timezone()
+    school_today = _utc_now().astimezone(tz).date()
+    # `datetime.min.time()`: `time` here is the stdlib module, which has no `min`.
+    return datetime.combine(school_today - timedelta(days=days - 1), datetime.min.time(),
+                            tzinfo=tz).astimezone(timezone.utc)
+
+
+_NO_ERASURES = {"eeg_erased_at": None, "heart_erased_at": None, "emotion_erased_at": None}
+
+
+def _erased_fields(ch: "ReportChannels", since: datetime) -> dict:
+    """The three `*_erased_at` payload keys, beside `*_revoked_at`; `since` is `_window_start`'s.
+
+    Only an erasure inside the window: an earlier one took nothing from it, so an empty tile is not
+    its doing. Heart: every consented heart sensor erased inside it, at the latest of them.
+    """
+    def within(at):
+        t = _parse_ts(at) if at else None
+        return at if t and t >= since else None
+    erasures = ch.erasures or {}
+    heart = [within(erasures.get(s)) for s in ch.heart_sensors]
+    return {"eeg_erased_at": within(erasures.get("eeg")),
+            "heart_erased_at": _latest(*heart) if heart and all(heart) else None,
+            "emotion_erased_at": within(erasures.get("camera"))}
 
 
 def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: bool):
@@ -1638,7 +1680,8 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                     emotion_revoked_at: str | None = None,
                     heart_revoked_at: str | None = None,
                     eeg_enabled: bool = True,
-                    eeg_revoked_at: str | None = None) -> dict:
+                    eeg_revoked_at: str | None = None,
+                    erased: dict | None = None) -> dict:
     """Just the headline averages, aggregated in Postgres; a declined channel is never read.
 
     Carries `dominant_emotion`, which `_signal_summaries` does not.
@@ -1660,7 +1703,8 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                              emotion_revoked_at=emotion_revoked_at,
                              heart_revoked_at=heart_revoked_at,
                              eeg_enabled=eeg_enabled,
-                             eeg_revoked_at=eeg_revoked_at)
+                             eeg_revoked_at=eeg_revoked_at,
+                             erased=erased)
     summary["score_scale"] = _scale_ranges_many([student_id], days).get(str(student_id))
     # Not in `_shape_summary`: the batch RPC has no such field.
     summary["dominant_emotion"] = (row or {}).get("dominant_emotion") if include_emotion else None
@@ -1675,7 +1719,8 @@ _EMPTY_SUMMARY = {"consent_retrieved": True, "score_scale": None,
                   # `face_included` is a deprecated alias of `emotion_included`.
                   "face_included": True, "emotion_included": True,
                   "heart_included": True, "retrieved": True,
-                  "eeg_enabled": True, "eeg_revoked_at": None}
+                  "eeg_enabled": True, "eeg_revoked_at": None,
+                  **_NO_ERASURES}
 
 
 def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True,
@@ -1683,19 +1728,21 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
                    emotion_revoked_at: str | None = None,
                    heart_revoked_at: str | None = None,
                    eeg_enabled: bool = True,
-                   eeg_revoked_at: str | None = None) -> dict:
+                   eeg_revoked_at: str | None = None,
+                   erased: dict | None = None) -> dict:
     """The summary payload.
 
     `retrieved: False` means the aggregate read failed, as distinct from nothing
     recorded or not requested. Any surface showing "no data" must check it.
     """
+    erased = erased or _NO_ERASURES
     if not row:
         return {**_EMPTY_SUMMARY, "face_included": include_emotion,
                 "emotion_included": include_emotion, "heart_included": include_heart,
                 "retrieved": retrieved, "consent_retrieved": consent_retrieved,
                 "emotion_revoked_at": emotion_revoked_at,
                 "heart_revoked_at": heart_revoked_at,
-                "eeg_enabled": eeg_enabled, "eeg_revoked_at": eeg_revoked_at}
+                "eeg_enabled": eeg_enabled, "eeg_revoked_at": eeg_revoked_at, **erased}
     return {
         "focus": row.get("focus"),
         "stress": row.get("stress"),
@@ -1724,6 +1771,7 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
         # Consent, not an inclusion flag: the cognitive channel is always read.
         "eeg_enabled": eeg_enabled,
         "eeg_revoked_at": eeg_revoked_at,
+        **erased,
     }
 
 
@@ -1751,6 +1799,7 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
         rows = [rows]
     out = {}
     scales = _scale_ranges_many([str(s) for s in student_ids], days)
+    since = _window_start(days)
     for r in rows:
         sid = r.get("student_id")
         if not sid:
@@ -1762,7 +1811,8 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
             emotion_revoked_at=ch.emotion_revoked_at if ch else None,
             heart_revoked_at=ch.heart_revoked_at if ch else None,
             eeg_enabled=ch.eeg if ch else True,
-            eeg_revoked_at=ch.eeg_revoked_at if ch else None)
+            eeg_revoked_at=ch.eeg_revoked_at if ch else None,
+            erased=_erased_fields(ch, since) if ch else _NO_ERASURES)
         out[str(sid)]["score_scale"] = scales.get(str(sid))
     return out
 
@@ -1949,12 +1999,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     channel's read outright; `*_included` then reads "not requested".
     """
     tz = _school_timezone()
-    # From midnight of the earliest *school* day, so the oldest day is not clipped.
     school_today = _utc_now().astimezone(tz).date()
-    # `datetime.min.time()`: `time` here is the stdlib module, which has no `min`.
-    since = datetime.combine(school_today - timedelta(days=days - 1),
-                             datetime.min.time(),
-                             tzinfo=tz).astimezone(timezone.utc).isoformat()
+    since = _window_start(days, tz).isoformat()
 
     def _signal_days(channel: str) -> tuple[dict, dict | None, bool]:
         """`(aggregate per school day, latest row, read_ok)`, over every row of the week.
@@ -3311,14 +3357,30 @@ def record_practice_view(practice_session_id: str = Path(...),
 def end_practice_session(practice_session_id: str = Path(...), request: Request = None):
     """Stamps a close and summarizes topic_summary. Nothing else.
 
-    Not a `sessions` close site: the stamp key goes through a local variable so
-    `conftest.close_sites()` does not match it. `test_practice_session_end_is_not_a_close_site` pins this.
+    Not a `sessions` close site: `_close_practice_session` writes the stamp, so
+    `conftest.close_sites()` does not match it. `test_end_practice_session_is_not_a_close_site` pins this.
     """
     user = get_user(request)
     session = _practice_session_or_403(practice_session_id, user["id"], "*")
     if session.get("ended_at"):
-        return {"ok": True, "already_closed": True}
+        return _already_closed_reply(session)
+    summary = _close_practice_session(practice_session_id, _utc_now().isoformat())
+    if summary is None:                                         # the sweep closed it first
+        return _already_closed_reply(_practice_session_or_403(practice_session_id, user["id"], "*"))
+    return {"ok": True, "topic_summary": summary}
 
+
+def _already_closed_reply(row: dict) -> dict:
+    """The stored close: its breakdown and the counts the answers that landed made, not the page's tally."""
+    return {"ok": True, "already_closed": True, "topic_summary": row.get("topic_summary") or {},
+            "questions_answered": row.get("questions_answered"), "correct_answers": row.get("correct_answers")}
+
+
+def _close_practice_session(practice_session_id: str, ended_at: str) -> dict | None:
+    """Stamp a practice session closed and summarize its topics; the end route's and the sweep's one copy.
+
+    None if it was already closed. The stamp key is a local variable so `conftest.close_sites()` skips it.
+    """
     answers = supabase.table("practice_session_answers").select("topic, correct") \
         .eq("practice_session_id", practice_session_id).execute().data or []
     buckets: dict[str, dict] = {}
@@ -3342,20 +3404,98 @@ def end_practice_session(practice_session_id: str = Path(...), request: Request 
     }
 
     close_stamp_field = "ended_at"
-    update = {close_stamp_field: _utc_now().isoformat(), "topic_summary": topic_summary}
-    supabase.table("practice_sessions").update(update).eq("id", practice_session_id).execute()
+    update = {close_stamp_field: ended_at, "topic_summary": topic_summary}
+    res = supabase.table("practice_sessions").update(update, returning=ReturnMethod.representation) \
+        .eq("id", practice_session_id).is_(close_stamp_field, "null").execute()
     with _practice_last_topic_lock:
         _practice_last_topic.pop(practice_session_id, None)
-    return {"ok": True, "topic_summary": topic_summary}
+    return topic_summary if res.data else None
+
+
+def _practice_last_activity(row: dict) -> str:
+    """A practice session's last answer or view, else its start. Raises on a failed read."""
+    last = (supabase.table("practice_session_answers").select("answered_at")
+            .eq("practice_session_id", row["id"]).order("answered_at", desc=True)
+            .limit(1).execute().data or [])
+    return (last[0].get("answered_at") if last else None) or row["started_at"]
+
+
+def _practice_idle_since(row: dict) -> str | None:
+    """Its last activity if it is past the age cut (`_is_abandoned`) and quiet as long, else None.
+
+    The sweep's and the list's one idle rule: a long session still in use is not idle. Raises on a failed read.
+    """
+    if not _is_abandoned(row):
+        return None
+    last = _practice_last_activity(row)
+    t = _parse_ts(last)                                         # an unparseable stamp is not evidence
+    return last if t is not None and t < _utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC) else None
+
+
+# The sweep's id cursor, so sessions it keeps skipping or failing cannot hold every batch.
+_practice_sweep_after: str | None = None
+
+
+def _sweep_abandoned_practice(limit: int = _STALE_SWEEP_BATCH) -> dict:
+    """Close practice sessions idle past `_SESSION_ABANDONED_AFTER_SEC`, at their last activity; returns counts.
+
+    Nothing else closes one left by closing the tab, and open it reads "in progress" for ever.
+    """
+    global _practice_sweep_after
+    cutoff = _utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)
+    try:
+        query = (supabase.table("practice_sessions").select("id, started_at")
+                 .is_("ended_at", "null").lt("started_at", cutoff.isoformat()))
+        if _practice_sweep_after:
+            query = query.gt("id", _practice_sweep_after)
+        rows = query.order("id").limit(limit).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[practice_sweep] could not list abandoned practice sessions: {e}")
+        return {"found": 0, "closed": 0, "active": 0, "failed": 0, "retrieved": False}
+    # A short page is the end of the list: the next pass starts over.
+    _practice_sweep_after = rows[-1]["id"] if len(rows) >= limit else None
+    closed = active = failed = 0
+    for s in rows:
+        try:
+            last = _practice_idle_since(s)
+            if last is None:
+                active += 1
+                continue
+            if _close_practice_session(s["id"], last) is not None:
+                closed += 1
+        except Exception as e:                                 # noqa: BLE001
+            failed += 1
+            print(f"[practice_sweep] could not close {s.get('id')}: {e}")
+    if rows:
+        print(f"[practice_sweep] {len(rows)} open past the cut: {closed} closed, {active} still active, "
+              f"{failed} failed")
+    return {"found": len(rows), "closed": closed, "active": active, "failed": failed, "retrieved": True}
 
 
 @app.get("/api/practice-sessions")
 def list_practice_sessions(request: Request):
-    """The caller's own past practice sessions, most recent first, capped at 20."""
+    """The caller's own past practice sessions, most recent first, capped at 20.
+
+    `abandoned` (`_practice_idle_since`) covers the gap until `_sweep_abandoned_practice` closes it;
+    null when its activity read failed.
+    """
     user = get_user(request)
-    res = supabase.table("practice_sessions").select("*") \
+    res = supabase.table("practice_sessions").select(_PRACTICE_CLIENT_COLUMNS) \
         .eq("user_id", user["id"]).order("started_at", desc=True).limit(20).execute()
-    return res.data or []
+    rows = res.data or []
+    for r in rows:
+        try:
+            # Reads only for the caller's own sessions open past the age cut, which the sweep soon closes.
+            r["abandoned"] = _practice_idle_since(r) is not None
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[practice_sessions] last-activity read failed: {e}")
+            r["abandoned"] = None
+    return rows
+
+
+# Practice-session columns a browser may receive (History, PracticeHistory).
+_PRACTICE_CLIENT_COLUMNS = ("id, mode, topics, difficulty, started_at, ended_at, "
+                            "questions_answered, correct_answers")
 
 
 # ─── stats ───────────────────────────────────────────────────────────────
@@ -3501,18 +3641,24 @@ def _recent_sessions_many(user_ids, limit: int) -> dict[str, list[dict]]:
     return out
 
 
+def _is_abandoned(row: dict) -> bool:
+    """Open past `_SESSION_ABANDONED_AFTER_SEC` (an age, not idleness); adaptive and practice rows alike.
+
+    An unparseable start is not evidence.
+    """
+    started = _parse_ts(row.get("started_at"))
+    cutoff = _utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)
+    return bool(not row.get("ended_at") and started is not None and started < cutoff)
+
+
 def _flag_sessions(rows: list[dict]) -> list[dict]:
     """Mark sessions `abandoned` (an age) and `idle` (real last activity), in place, over one read.
 
     Derived here so the thresholds have one definition. `activity_known` is False only
     when the activity read failed, so the client never calls an unread session quiet.
     """
-    cutoff = _utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)
     for r in rows:
-        started = _parse_ts(r.get("started_at"))
-        # Open sessions only; an unparseable start is not evidence.
-        r["abandoned"] = bool(
-            not r.get("ended_at") and started is not None and started < cutoff)
+        r["abandoned"] = _is_abandoned(r)
 
     ids = [r["id"] for r in rows if not r.get("ended_at")]
     last_seen: dict[str, str] = {}
@@ -3628,6 +3774,7 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
                                 heart_revoked_at=channels.heart_revoked_at,
                                 eeg_enabled=channels.eeg,
                                 eeg_revoked_at=channels.eeg_revoked_at),
+        **_erased_fields(channels, _window_start(max(1, min(days, 30)))),
     }
 
 
@@ -3646,7 +3793,8 @@ def student_signal_summary(student_id: str, request: Request, days: int = 7, inc
                            emotion_revoked_at=channels.emotion_revoked_at,
                            heart_revoked_at=channels.heart_revoked_at,
                            eeg_enabled=channels.eeg,
-                           eeg_revoked_at=channels.eeg_revoked_at)
+                           eeg_revoked_at=channels.eeg_revoked_at,
+                           erased=_erased_fields(channels, _window_start(max(1, min(days, 30)))))
 
 
 @app.get("/api/students/{student_id}/topic-breakdown")
@@ -3759,6 +3907,20 @@ _CLINICAL_TERMS = re.compile(
     r"patients|(?:a|an|the|any|your|their)\s+patient|"
     r"therap(?:y|ist|ies)|treatment\w*|neurolog\w*|"
     r"cognitive impairment|special (?:needs|education\w*)|iep)\b",
+    re.IGNORECASE,
+)
+
+# A cause for a missing reading, which the summary cannot know: a sensor off is turned off, never broken.
+# Not "fail": "could not be read" is honestly rephrased as "failed to load".
+_CAUSE_TERMS = re.compile(
+    # Any negation ("doesn't", "hasn't been", bare "not"). Effort is not a cause: "didn't work through the
+    # questions", "didn't work on fractions"; "on" a date or day ("wasn't working on 3 August") still is.
+    r"\b(stopped working|stops working|(?:\w+n['’]t|not)(?:\s+been)?\s+"
+    r"work(?:s|ed|ing)?\b(?!\s+(?:(?:through|out|hard|harder|much|ahead|together|towards?)\b|on\s+(?!\d|"
+    r"(?:the|that|this|each|every)\b|(?:mon|tues|wednes|thurs|fri|satur|sun)day|"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))))|"
+    r"broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|lost (?:the )?connection|"
+    r"technical (?:problem|issue|difficult)\w*)\b",
     re.IGNORECASE,
 )
 
@@ -4513,7 +4675,9 @@ def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
         "sentence each, keeping the same order and the same meaning.\n"
         "Do not add any number, percentage or figure that is not already in "
         "these points, do not move a number from one point to another, and do "
-        "not draw a conclusion the points do not state.\n"
+        "not draw a conclusion the points do not state. Never say or imply why a "
+        "sensor was off or a reading is missing (for example that it broke or "
+        "stopped working): keep the points' own words for it.\n"
         f"Return exactly {len(baseline)} points as a numbered list, no preamble.\n\n"
         + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(baseline))
     )
@@ -4527,6 +4691,9 @@ def _validated_chart_summary(raw: str, allowed: set[float],
     two allowed numbers between measurements still passes.
     """
     if _CLINICAL_TERMS.search(raw or ""):
+        return None
+    if _CAUSE_TERMS.search(raw or ""):
+        print("[chart_summary:llm] rejected: it names a cause for a missing reading")
         return None
     lines = _parse_strategy_lines(raw)
     # Exactly the baseline's length: fewer means a point was silently dropped.
@@ -5383,7 +5550,7 @@ def _class_signal_totals(student_ids: list[str], days: int,
 
 
 def _cohort_student_row(sid: str, totals: dict | None, channels: ReportChannels,
-                        retrieved: bool) -> dict:
+                        retrieved: bool, since: datetime) -> dict:
     """One roster row: the student's averages, and why any of them is missing.
 
     Consent fields are stamped per student: the RPC cannot return revocation dates.
@@ -5407,6 +5574,7 @@ def _cohort_student_row(sid: str, totals: dict | None, channels: ReportChannels,
         "eeg_revoked_at": channels.eeg_revoked_at,
         "heart_revoked_at": channels.heart_revoked_at,
         "emotion_revoked_at": channels.emotion_revoked_at,
+        **_erased_fields(channels, since),
         "consent_retrieved": channels.consent_retrieved,
         "retrieved": retrieved,
     }
@@ -5566,13 +5734,14 @@ def _cohort_signals(class_id: str, days: int) -> dict:
     scale_by_user = _scale_ranges_many(roster, days) if trend_retrieved else {}
     if len(roster) >= _COHORT_MIN_STUDENTS:
         profiles = _profiles_many(roster)
+        since = _window_start(days)
         # Every roster student gets a row, including those with nothing recorded.
         per_student = [{
             "student_id": sid,
             "display_name": (profiles.get(sid) or {}).get("display_name") or "Student",
             "summary": {**_cohort_student_row(sid, summaries.get(sid),
                                               channels_by_student[sid],
-                                              summaries_retrieved),
+                                              summaries_retrieved, since),
                         "score_scale": scale_by_user.get(sid)},
         } for sid in roster]
 
@@ -5796,8 +5965,10 @@ def _consent_many(student_ids) -> dict[str, dict]:
 
 def _reportable_channels_many(student_ids, want_emotion: bool = True,
                               want_heart: bool = True) -> dict[str, ReportChannels]:
-    """`_reportable_channels` for a roster, over one consent read."""
-    return {sid: _channels_from_consent(consent, want_emotion, want_heart)
+    """`_reportable_channels` for a roster, over one consent read and one erasure read."""
+    erasures = _erasures_many(student_ids)
+    return {sid: _channels_from_consent(consent, want_emotion, want_heart,
+                                        erasures=erasures.get(str(sid)))
             for sid, consent in _consent_many(student_ids).items()}
 
 
@@ -5939,6 +6110,24 @@ def _erasures(student_id: str) -> dict:
     except Exception:
         return {}
     return {r["channel"]: r["erased_at"] for r in rows if r.get("channel")}
+
+
+def _erasures_many(student_ids) -> dict[str, dict]:
+    """`_erasures` for a roster, in one query: `{student_id: {channel: erased_at}}`. Fails open to {}."""
+    ids = _unique_ids(student_ids)
+    if not ids:
+        return {}
+    try:
+        rows = supabase.table("signal_erasure").select("user_id, channel, erased_at") \
+            .in_("user_id", ids).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[erasure:read_many] {len(ids)} students: {e}")
+        return {}
+    out: dict[str, dict] = {}
+    for r in rows:
+        if r.get("user_id") and r.get("channel"):
+            out.setdefault(str(r["user_id"]), {})[r["channel"]] = r["erased_at"]
+    return out
 
 
 @app.get("/api/consent/{student_id}")
@@ -7647,6 +7836,10 @@ def ack_parent_consent_notices(payload: ConsentNoticeAck, request: Request):
     return {"ok": True}
 
 
+# The parent dashboard's week: its averages and its erasure window must be the same days.
+_PARENT_SUMMARY_DAYS = 7
+
+
 @app.get("/api/parent/children")
 def my_children(request: Request, include_face: bool = True):
     """A parent's linked children with their headline signal averages.
@@ -7666,8 +7859,9 @@ def my_children(request: Request, include_face: bool = True):
         by_channels.setdefault((ch.heart, ch.emotion), []).append(cid)
 
     summaries: dict | None = {}
+    since = _window_start(_PARENT_SUMMARY_DAYS)
     for (heart_flag, emotion_flag), group in by_channels.items():
-        part = _signal_summaries(group, include_heart=heart_flag,
+        part = _signal_summaries(group, days=_PARENT_SUMMARY_DAYS, include_heart=heart_flag,
                                  include_emotion=emotion_flag,
                                  channels_by_student=channels_by_child)
         if part is None:
@@ -7713,7 +7907,8 @@ def my_children(request: Request, include_face: bool = True):
                                                 emotion_revoked_at=channels_by_child[cid].emotion_revoked_at,
                                                 heart_revoked_at=channels_by_child[cid].heart_revoked_at,
                                                 eeg_enabled=channels_by_child[cid].eeg,
-                                                eeg_revoked_at=channels_by_child[cid].eeg_revoked_at),
+                                                eeg_revoked_at=channels_by_child[cid].eeg_revoked_at,
+                                                erased=_erased_fields(channels_by_child[cid], since)),
         })
     return children
 

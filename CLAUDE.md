@@ -1105,7 +1105,7 @@ to True and are not a privacy boundary; don't build one on them.
 
 ## A tile never says "no data" for something that was not recorded
 
-`SignalPanel`'s `offLabel` picks between four states, and every tile goes through `valueOrReason` rather than
+`SignalPanel`'s `offLabel` picks between five states, and every tile goes through `valueOrReason` rather than
 branching on the channel flag itself:
 
 | State | Shown | Because |
@@ -1113,6 +1113,7 @@ branching on the channel flag itself:
 | consent withdrawn | `Off since <date>` | the date comes from `*_revoked_at` on the payload |
 | consent unreadable | `Unavailable` | "the student turned this off" is a claim a failed read has not earned |
 | read, samples arrived, none usable | `Calibrating` | a rejected window or a baseline still forming |
+| read, no samples, past erased | `Erased <date>` | `*_erased_at`, only inside the tile's window (heart: every consented sensor erased); consent is often still on |
 | read, no samples at all | `No sensor` | consented, but nothing produced anything |
 
 Branching on the flag alone is the trap: it leaves `pct()`'s own `'N/A'` standing whenever a *consented*

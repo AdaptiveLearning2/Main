@@ -81,3 +81,14 @@ it('reports a card that could not load, with a retry', async () => {
   draw()
   expect(await screen.findByText(/couldn't load the next card/i)).toBeInTheDocument()
 })
+
+it('shows a session the backend closed as ended, offering a new one instead of a retry', async () => {
+  overrideApi('/api/practice-sessions/sess-1/question', () => { throw apiError(409, 'ended') })
+  const onRestart = vi.fn()
+  render(<PracticeFlashcards session={SESSION} onFinish={vi.fn()} onRestart={onRestart} />)
+
+  await screen.findByText(/this practice session has already ended/i)
+  expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: /start a new session/i }))
+  expect(onRestart).toHaveBeenCalledTimes(1)
+})

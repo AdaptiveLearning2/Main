@@ -53,6 +53,8 @@ export const CHANNEL_REASONS = {
   /** Never 'Off since undefined'. */
   revokedUndated: { on: false, revokedAt: null, consentRetrieved: true, samples: 0 },
   calibrating: { on: true, revokedAt: null, consentRetrieved: true, samples: 42 },
+  /** Consent on, nothing left: a parent erased it. */
+  erased: { on: true, revokedAt: null, consentRetrieved: true, samples: 0, erasedAt: '2026-10-07T00:40:00Z' },
   noSensor: { on: true, revokedAt: null, consentRetrieved: true, samples: 0 },
 }
 
@@ -62,5 +64,6 @@ export const CHANNEL_LABELS = {
   revoked: 'Off since',
   revokedUndated: 'Not recorded',
   calibrating: 'Calibrating',
+  erased: 'Erased ',
   noSensor: 'No sensor',
 }

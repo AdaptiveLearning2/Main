@@ -278,7 +278,11 @@ last activity, and applies it only to a session with sensor rows: with no sensor
 sends nothing, so silence proves nothing and the session waits for this sweep. This one only has to catch the
 session nobody has touched since June, so it errs long — closing a
 live one would discard the question a child is part way through answering. `STALE_SWEEP_INTERVAL_SECONDS=0`
-disables it.
+disables it. **The same pass closes idle practice sessions** (`_sweep_abandoned_practice`), which nothing else ends:
+open past `_SESSION_ABANDONED_AFTER_SEC` *and* no answer or view for as long, closed at that last activity through the
+end route's own `_close_practice_session`. Idleness, not age, because a closed one refuses the next answer with a 409.
+The practice list's `abandoned` flag reads the same `_practice_idle_since` (null if that read fails); the adaptive flag is the age alone
+(`_is_abandoned`). Each pass resumes from an id cursor, so sessions it keeps skipping cannot hold the batch.
 
 Safe in several workers at once via `_claim_session_close`. **The thread must be joined**, like the pollers — it
 prints, and a print during interpreter shutdown is a fatal stdout-lock abort.

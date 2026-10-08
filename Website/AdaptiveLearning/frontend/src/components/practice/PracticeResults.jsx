@@ -55,6 +55,12 @@ export default function PracticeResults({ session, result, onRestart }) {
           </p>
         )}
 
+        {result?.alreadyClosed && (
+          <p role="status" className="text-sm text-amber-700 dark:text-amber-300 mb-6">
+            This session had already ended, so only the answers saved before then are counted.
+          </p>
+        )}
+
         {finalAcc !== null && (
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 mb-6 shadow-sm">
             <p className="text-5xl font-black text-indigo-600 mb-1">{finalAcc}%</p>

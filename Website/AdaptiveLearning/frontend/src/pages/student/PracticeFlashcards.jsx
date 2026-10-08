@@ -3,6 +3,7 @@ import { m } from 'framer-motion'
 import { apiFetch } from '../../lib/api'
 import { markPracticeViewed } from '../../lib/practiceSession'
 import LoadError from '../../components/ui/LoadError'
+import SessionEnded from '../../components/practice/SessionEnded'
 import { normalizeValue } from '../../lib/practiceQuestion'
 import QuestionFigure from '../../components/questions/QuestionFigure'
 import CCSSBadge from '../../components/questions/CCSSBadge'
@@ -10,9 +11,10 @@ import CCSSBadge from '../../components/questions/CCSSBadge'
 /** Flashcard mode: self-paced, no timer, no score, no deck size; "Done" ends it.
  * `onFinish` gets `{questions_answered, correct_answers: 0}`.
  */
-export default function PracticeFlashcards({ session, onFinish }) {
+export default function PracticeFlashcards({ session, onFinish, onRestart }) {
   const [question, setQuestion] = useState(null)
   const [loading, setLoading] = useState(true)
+  // The error itself, so a closed session (409) is not shown as an outage.
   const [failed, setFailed] = useState(false)
   const [flipped, setFlipped] = useState(false)
   const [reviewed, setReviewed] = useState(0)
@@ -30,7 +32,7 @@ export default function PracticeFlashcards({ session, onFinish }) {
       .catch(e => {
         if (mine !== requestRef.current) return
         console.error('Failed to load the next card:', e)
-        setFailed(true)
+        setFailed(e)
       })
       .finally(() => { if (mine === requestRef.current) setLoading(false) })
   }, [session.id])
@@ -90,7 +92,9 @@ export default function PracticeFlashcards({ session, onFinish }) {
 
   if (failed || !question) return (
     <div className="max-w-lg mx-auto px-4 py-8">
-      <LoadError what="the next card" onRetry={loadCard} />
+      {failed?.status === 409
+        ? <SessionEnded onRestart={onRestart} />
+        : <LoadError what="the next card" error={failed} onRetry={loadCard} />}
     </div>
   )
 

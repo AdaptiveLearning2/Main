@@ -46,6 +46,7 @@ function faceReason(report, faceOn) {
     revokedAt: report?.emotion_revoked_at,
     consentRetrieved: report?.consent_retrieved,
     samples: report?.sample_counts?.face,
+    erasedAt: report?.emotion_erased_at,
   }
 }
 
@@ -64,6 +65,17 @@ function eegReason(report) {
       || (on && report?.retrieved?.cognitive === false)
       ? false : report?.consent_retrieved,
     samples: report?.sample_counts?.cognitive,
+    erasedAt: report?.eeg_erased_at,
+  }
+}
+
+/** The offLabel reason for a shown heart tile: consented, so only samples and an erasure decide. */
+function heartReason(report) {
+  return {
+    on: true,
+    consentRetrieved: report?.consent_retrieved,
+    samples: report?.sample_counts?.heart,
+    erasedAt: report?.heart_erased_at,
   }
 }
 
@@ -388,21 +400,13 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
           <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
             <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Avg Heart Rate</p>
             <p className="font-bold text-gray-900 dark:text-white">
-              {valueOrReason(unit(highlights.heart_rate_bpm, ' bpm'), {
-                on: true,
-                consentRetrieved: report?.consent_retrieved,
-                samples: report?.sample_counts?.heart,
-              })}
+              {valueOrReason(unit(highlights.heart_rate_bpm, ' bpm'), heartReason(report))}
             </p>
           </div>
           <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
             <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Avg RMSSD</p>
             <p className="font-bold text-gray-900 dark:text-white">
-              {valueOrReason(unit(highlights.rmssd_ms, ' ms'), {
-                on: true,
-                consentRetrieved: report?.consent_retrieved,
-                samples: report?.sample_counts?.heart,
-              })}
+              {valueOrReason(unit(highlights.rmssd_ms, ' ms'), heartReason(report))}
             </p>
           </div>
           <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">

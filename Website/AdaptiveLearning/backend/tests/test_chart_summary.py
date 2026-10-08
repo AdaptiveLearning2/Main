@@ -147,6 +147,57 @@ def test_a_clinical_term_anywhere_in_the_reply_rejects_it():
     assert main._validated_chart_summary(reply, allowed, len(lines)) is None
 
 
+@pytest.mark.parametrize("cause", ["stopped working", "broke", "had a fault", "malfunctioned",
+                                   "disconnected", "wasn't working", "wasn’t working", "didn't work",
+                                   "is not working", "didn't work at all", "doesn't work",
+                                   "hasn't been working", "sensor not working", "lost connection",
+                                   "had technical problems"])
+def test_a_reply_that_names_a_cause_for_a_turned_off_sensor_is_rejected(cause):
+    """The run's wording: a withdrawal read as "before the sensor stopped working"."""
+    basis = _basis()
+    basis["channels"]["heart"] = {"enabled": False, "samples": 0,
+                                  "revoked_at": "2026-08-03T16:00:00+00:00"}
+    lines = main._rule_based_chart_summary(basis)
+    allowed = main._chart_summary_figures(lines)
+    faithful = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(lines))
+    assert main._validated_chart_summary(faithful, allowed, len(lines)) is not None
+    assert "turned off on 3 August" in faithful
+    caused = faithful.replace("turned off on 3 August", f"{cause} on 3 August")
+    assert caused != faithful
+    assert main._validated_chart_summary(caused, allowed, len(lines)) is None
+
+
+def test_a_reply_saying_a_read_failed_is_still_accepted():
+    """"Could not be read" rephrased as "failed to load" names no cause, so the filter leaves it."""
+    lines = ["This student's practice totals could not be read, so the totals are not shown here today."]
+    allowed = main._chart_summary_figures(lines)
+    reply = "1. This student's practice totals failed to load, so the totals are not shown here today."
+    assert main._validated_chart_summary(reply, allowed, 1) is not None
+
+
+@pytest.mark.parametrize("line", [
+    "Focus was lower on days spent not working through many questions at once.",
+    "Focus was lower on days the student didn't work through many questions.",
+    "Focus was higher on days the student did not work hard on fractions.",
+    "Focus was higher on days the student didn't work on fractions.",
+])
+def test_a_reply_that_describes_the_students_work_is_still_accepted(line):
+    """"Work" about the student's effort is not a cause for a sensor, so the filter leaves it."""
+    allowed = main._chart_summary_figures([line])
+    assert main._validated_chart_summary(f"1. {line}", allowed, 1) is not None
+
+
+@pytest.mark.parametrize("text", ["The heart sensor wasn't working on Monday.",
+                                  "The headband was not working on the 3rd."])
+def test_not_working_on_a_day_is_still_a_cause(text):
+    assert main._CAUSE_TERMS.search(text)
+
+
+def test_the_prompt_forbids_naming_a_cause():
+    prompt = main._chart_summary_prompt(_basis(), ["One point about focus that is long enough to pass."])
+    assert "stopped working" in prompt and "why a sensor was off" in prompt
+
+
 def test_a_degenerate_reply_of_fragments_is_rejected():
     """Well-formed and not a summary -- the floor, not just the ceiling."""
     assert main._validated_chart_summary("1. a\n2. b\n3. c", set(), 3) is None

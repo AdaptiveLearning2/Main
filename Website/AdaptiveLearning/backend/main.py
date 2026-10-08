@@ -3921,8 +3921,11 @@ _CONNECT_FAILURE = re.compile(
 _DEVICE_NAMED = (
     # "It" only as the object itself: "connect the ideas to it" is maths.
     r"\s+(?:(?:to|with)\s+)?(?:it|them)\b|"
-    # Anywhere in the clause: "couldn't connect in class with the headband".
-    r"\s+(?:[\w'’-]+\s+){0,6}?(?:headband|headset|headphone|earbud|earphone|camera|webcam|sensor|device|muse|"
+    # Up the clause ("couldn't connect in class with the headband"), but not where the material was shown
+    # ("on the tablet") or past a "what"/"which" clause: those devices are not what was being connected.
+    r"\s+(?:(?!(?:on|from|via|through|what|which|who)\b)[\w'’-]+\s+){0,6}?"
+    r"(?:(?:the|a|an|her|his|their|its|my|your|that|this)\s+)?(?:(?!(?:on|from|via|through)\b)[\w'’-]+\s+)?"
+    r"(?:headband|headset|headphone|earbud|earphone|camera|webcam|sensor|device|muse|"
     r"bluetooth|eeg|laptop|computer|tablet|phone|watch|tracker|monitor|microphone|mic|wi-?fi|internet|"
     r"network|app)(?:s|es)?\b")
 _DEVICE_NAMED_AFTER = re.compile(_DEVICE_NAMED, re.IGNORECASE)

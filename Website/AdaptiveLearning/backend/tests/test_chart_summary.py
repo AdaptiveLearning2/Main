@@ -327,6 +327,11 @@ def test_a_sensor_not_working_is_a_cause_whatever_follows(text):
     # A time word that does not end its clause is a place or a thing.
     "She couldn't connect in class discussions.",
     "She couldn't connect during break time with her classmates' ideas.",
+    # A device only as where the material was shown, or inside a "what" clause.
+    "The student couldn't connect fractions to the examples on the tablet.",
+    "The student couldn't connect fractions to examples on tablets.",
+    "The idea didn't connect with what she saw on the app.",
+    "The student couldn't connect what the app showed to the lesson.",
 ])
 def test_a_person_as_the_subject_is_effort_not_a_cause(text):
     assert not main._names_a_cause(text)

@@ -3912,13 +3912,19 @@ _CLINICAL_TERMS = re.compile(
 
 # A cause for a missing reading, which the summary cannot know: a sensor off is turned off, never broken.
 # Not "fail": "could not be read" is honestly rephrased as "failed to load".
+# A date or day after "on": whole words only, so "decimals", "octagons" and "3-digit numbers" are subjects.
+_ON_A_DATE = (r"(?:\d{1,2}(?:st|nd|rd|th)?\b(?![-\w])|the\s+\d{1,2}(?:st|nd|rd|th)\b|"
+              r"(?:that|this|each|every)\s+(?:day|week|morning|afternoon|evening)\b|"
+              r"(?:mon|tues|wednes|thurs|fri|satur|sun)days?\b|"
+              r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|"
+              r"sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b)")
+
 _CAUSE_TERMS = re.compile(
     # Any negation ("doesn't", "hasn't been", bare "not"). Effort is not a cause: "didn't work through the
     # questions", "didn't work on fractions"; "on" a date or day ("wasn't working on 3 August") still is.
     r"\b(stopped working|stops working|(?:\w+n['’]t|not)(?:\s+been)?\s+"
-    r"work(?:s|ed|ing)?\b(?!\s+(?:(?:through|out|hard|harder|much|ahead|together|towards?)\b|on\s+(?!\d|"
-    r"(?:the|that|this|each|every)\b|(?:mon|tues|wednes|thurs|fri|satur|sun)day|"
-    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))))|"
+    r"work(?:s|ed|ing)?\b(?!\s+(?:(?:through|out|hard|harder|much|ahead|together|towards?)\b|"
+    r"on\s+(?!" + _ON_A_DATE + r")))|"
     r"broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|lost (?:the )?connection|"
     r"technical (?:problem|issue|difficult)\w*)\b",
     re.IGNORECASE,

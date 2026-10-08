@@ -1394,6 +1394,10 @@ def _stale_sweep_loop() -> None:
             _sweep_abandoned_sessions()
         except Exception as e:                                 # noqa: BLE001
             print(f"[stale_sweep] pass failed: {e}")
+        try:
+            _sweep_abandoned_practice()
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[practice_sweep] pass failed: {e}")
         # Its own guard: an archive cancelled at shutdown or failed is retried from here.
         try:
             chart_archive.archive_missing(supabase)
@@ -1585,9 +1589,9 @@ class ReportChannels(NamedTuple):
     # Consent only, not a read filter: the cognitive channel is always read.
     eeg: bool = True
     eeg_revoked_at: str | None = None
-    eeg_erased_at: str | None = None
-    heart_erased_at: str | None = None
-    emotion_erased_at: str | None = None
+    # `_erasures()`'s {sensor: erased_at}, and the heart sensors consented now; `_erased_fields` windows them.
+    erasures: dict | None = None
+    heart_sensors: tuple = ()
 
 
 def _reportable_channels(student_id: str, want_emotion: bool = True,
@@ -1613,13 +1617,9 @@ def _channels_from_consent(consent: dict, want_emotion: bool = True,
                            want_heart: bool = True, erasures: dict | None = None) -> ReportChannels:
     """The consent row -> channels mapping, shared by the single and batch forms.
 
-    `erasures` is `_erasures()`'s {sensor: erased_at}. Heart is erased only if every consented heart
-    sensor was, at the later date: one sensor's erasure says nothing about the other's empty week.
+    `erasures` is `_erasures()`'s {sensor: erased_at}; `_erased_fields` decides what a report says.
     """
-    erasures = erasures or {}
-    heart_sensors = [s for s in ("headband_optical", "camera") if consent.get(f"{s}_enabled")]
-    heart_erased = (_latest(*(erasures.get(s) for s in heart_sensors))
-                    if all(erasures.get(s) for s in heart_sensors) else None)
+    heart_sensors = tuple(s for s in ("headband_optical", "camera") if consent.get(f"{s}_enabled"))
     heart = bool(consent.get("headband_optical_enabled")) or bool(consent.get("camera_enabled"))
     emotion = bool(consent.get("camera_enabled"))
     # Heart is off only when both sensors are; it stopped at the later revocation.
@@ -1633,25 +1633,38 @@ def _channels_from_consent(consent: dict, want_emotion: bool = True,
                           emotion_revoked_at=None if emotion else consent.get("camera_revoked_at"),
                           eeg=eeg,
                           eeg_revoked_at=None if eeg else consent.get("eeg_revoked_at"),
-                          eeg_erased_at=erasures.get("eeg"),
-                          heart_erased_at=heart_erased,
-                          emotion_erased_at=erasures.get("camera"))
+                          erasures=dict(erasures or {}),
+                          heart_sensors=heart_sensors)
 
 
-def _erased_fields(ch: "ReportChannels | None", days: int | None = None) -> dict:
-    """The three `*_erased_at` payload keys, beside `*_revoked_at`; all None with no channels in hand.
+def _window_start(days: int, tz=None) -> datetime:
+    """Midnight of the earliest school day in the last `days`, in UTC: the reports' own start."""
+    tz = tz or _school_timezone()
+    school_today = _utc_now().astimezone(tz).date()
+    # `datetime.min.time()`: `time` here is the stdlib module, which has no `min`.
+    return datetime.combine(school_today - timedelta(days=days - 1), datetime.min.time(),
+                            tzinfo=tz).astimezone(timezone.utc)
 
-    Only an erasure inside the last `days`: an earlier one took nothing from this window, so its
-    empty tile is not the erasure's doing.
+
+_NO_ERASURES = {"eeg_erased_at": None, "heart_erased_at": None, "emotion_erased_at": None}
+
+
+def _erased_fields(ch: "ReportChannels", days: int) -> dict:
+    """The three `*_erased_at` payload keys, beside `*_revoked_at`.
+
+    Only an erasure inside the window: an earlier one took nothing from it, so an empty tile is not
+    its doing. Heart: every consented heart sensor erased inside it, at the latest of them.
     """
-    since = _utc_now() - timedelta(days=days) if days else None
+    since = _window_start(days)
 
     def within(at):
         t = _parse_ts(at) if at else None
-        return at if t and (since is None or t >= since) else None
-    return {"eeg_erased_at": within(ch.eeg_erased_at) if ch else None,
-            "heart_erased_at": within(ch.heart_erased_at) if ch else None,
-            "emotion_erased_at": within(ch.emotion_erased_at) if ch else None}
+        return at if t and t >= since else None
+    erasures = ch.erasures or {}
+    heart = [within(erasures.get(s)) for s in ch.heart_sensors]
+    return {"eeg_erased_at": within(erasures.get("eeg")),
+            "heart_erased_at": _latest(*heart) if heart and all(heart) else None,
+            "emotion_erased_at": within(erasures.get("camera"))}
 
 
 def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: bool):
@@ -1709,7 +1722,7 @@ _EMPTY_SUMMARY = {"consent_retrieved": True, "score_scale": None,
                   "face_included": True, "emotion_included": True,
                   "heart_included": True, "retrieved": True,
                   "eeg_enabled": True, "eeg_revoked_at": None,
-                  **_erased_fields(None)}
+                  **_NO_ERASURES}
 
 
 def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True,
@@ -1724,7 +1737,7 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
     `retrieved: False` means the aggregate read failed, as distinct from nothing
     recorded or not requested. Any surface showing "no data" must check it.
     """
-    erased = erased or _erased_fields(None)
+    erased = erased or _NO_ERASURES
     if not row:
         return {**_EMPTY_SUMMARY, "face_included": include_emotion,
                 "emotion_included": include_emotion, "heart_included": include_heart,
@@ -1800,7 +1813,7 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
             heart_revoked_at=ch.heart_revoked_at if ch else None,
             eeg_enabled=ch.eeg if ch else True,
             eeg_revoked_at=ch.eeg_revoked_at if ch else None,
-            erased=_erased_fields(ch, days))
+            erased=_erased_fields(ch, days) if ch else _NO_ERASURES)
         out[str(sid)]["score_scale"] = scales.get(str(sid))
     return out
 
@@ -1987,12 +2000,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     channel's read outright; `*_included` then reads "not requested".
     """
     tz = _school_timezone()
-    # From midnight of the earliest *school* day, so the oldest day is not clipped.
     school_today = _utc_now().astimezone(tz).date()
-    # `datetime.min.time()`: `time` here is the stdlib module, which has no `min`.
-    since = datetime.combine(school_today - timedelta(days=days - 1),
-                             datetime.min.time(),
-                             tzinfo=tz).astimezone(timezone.utc).isoformat()
+    since = _window_start(days, tz).isoformat()
 
     def _signal_days(channel: str) -> tuple[dict, dict | None, bool]:
         """`(aggregate per school day, latest row, read_ok)`, over every row of the week.
@@ -3356,7 +3365,14 @@ def end_practice_session(practice_session_id: str = Path(...), request: Request 
     session = _practice_session_or_403(practice_session_id, user["id"], "*")
     if session.get("ended_at"):
         return {"ok": True, "already_closed": True}
+    return {"ok": True, "topic_summary": _close_practice_session(practice_session_id, _utc_now().isoformat())}
 
+
+def _close_practice_session(practice_session_id: str, ended_at: str) -> dict:
+    """Stamp a practice session closed and summarize its topics; the end route's and the sweep's one copy.
+
+    Not a `sessions` close site: the stamp key goes through a local variable (see `end_practice_session`).
+    """
     answers = supabase.table("practice_session_answers").select("topic, correct") \
         .eq("practice_session_id", practice_session_id).execute().data or []
     buckets: dict[str, dict] = {}
@@ -3380,28 +3396,55 @@ def end_practice_session(practice_session_id: str = Path(...), request: Request 
     }
 
     close_stamp_field = "ended_at"
-    update = {close_stamp_field: _utc_now().isoformat(), "topic_summary": topic_summary}
-    supabase.table("practice_sessions").update(update).eq("id", practice_session_id).execute()
+    update = {close_stamp_field: ended_at, "topic_summary": topic_summary}
+    supabase.table("practice_sessions").update(update).eq("id", practice_session_id) \
+        .is_(close_stamp_field, "null").execute()
     with _practice_last_topic_lock:
         _practice_last_topic.pop(practice_session_id, None)
-    return {"ok": True, "topic_summary": topic_summary}
+    return topic_summary
+
+
+def _sweep_abandoned_practice(limit: int = _STALE_SWEEP_BATCH) -> dict:
+    """Close practice sessions open past `_SESSION_ABANDONED_AFTER_SEC`, at their last answer; returns counts.
+
+    Nothing else closes one left by closing the tab, and open it reads "in progress" for ever.
+    """
+    cutoff = (_utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)).isoformat()
+    try:
+        rows = (supabase.table("practice_sessions").select("id, started_at")
+                .is_("ended_at", "null").lt("started_at", cutoff)
+                .order("started_at").limit(limit).execute().data or [])
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[practice_sweep] could not list abandoned practice sessions: {e}")
+        return {"found": 0, "closed": 0, "failed": 0, "retrieved": False}
+    closed = failed = 0
+    for s in rows:
+        try:
+            last = (supabase.table("practice_session_answers").select("answered_at")
+                    .eq("practice_session_id", s["id"]).order("answered_at", desc=True)
+                    .limit(1).execute().data or [])
+            _close_practice_session(s["id"], (last[0]["answered_at"] if last else None) or s["started_at"])
+            closed += 1
+        except Exception as e:                                 # noqa: BLE001
+            failed += 1
+            print(f"[practice_sweep] could not close {s.get('id')}: {e}")
+    if rows:
+        print(f"[practice_sweep] {len(rows)} abandoned: {closed} closed, {failed} failed")
+    return {"found": len(rows), "closed": closed, "failed": failed, "retrieved": True}
 
 
 @app.get("/api/practice-sessions")
 def list_practice_sessions(request: Request):
     """The caller's own past practice sessions, most recent first, capped at 20.
 
-    `abandoned`: open past `_SESSION_ABANDONED_AFTER_SEC`. No sweep closes a practice session, so
-    one left by closing the tab stays open, and is not "in progress".
+    `abandoned` (`_is_abandoned`) covers the gap until `_sweep_abandoned_practice` closes it.
     """
     user = get_user(request)
     res = supabase.table("practice_sessions").select(_PRACTICE_CLIENT_COLUMNS) \
         .eq("user_id", user["id"]).order("started_at", desc=True).limit(20).execute()
-    cutoff = _utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)
     rows = res.data or []
     for r in rows:
-        started = _parse_ts(r.get("started_at"))
-        r["abandoned"] = bool(not r.get("ended_at") and started is not None and started < cutoff)
+        r["abandoned"] = _is_abandoned(r)
     return rows
 
 
@@ -3553,18 +3596,24 @@ def _recent_sessions_many(user_ids, limit: int) -> dict[str, list[dict]]:
     return out
 
 
+def _is_abandoned(row: dict) -> bool:
+    """Open past `_SESSION_ABANDONED_AFTER_SEC` (an age, not idleness); adaptive and practice rows alike.
+
+    An unparseable start is not evidence.
+    """
+    started = _parse_ts(row.get("started_at"))
+    cutoff = _utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)
+    return bool(not row.get("ended_at") and started is not None and started < cutoff)
+
+
 def _flag_sessions(rows: list[dict]) -> list[dict]:
     """Mark sessions `abandoned` (an age) and `idle` (real last activity), in place, over one read.
 
     Derived here so the thresholds have one definition. `activity_known` is False only
     when the activity read failed, so the client never calls an unread session quiet.
     """
-    cutoff = _utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)
     for r in rows:
-        started = _parse_ts(r.get("started_at"))
-        # Open sessions only; an unparseable start is not evidence.
-        r["abandoned"] = bool(
-            not r.get("ended_at") and started is not None and started < cutoff)
+        r["abandoned"] = _is_abandoned(r)
 
     ids = [r["id"] for r in rows if not r.get("ended_at")]
     last_seen: dict[str, str] = {}
@@ -3819,8 +3868,9 @@ _CLINICAL_TERMS = re.compile(
 # A cause for a missing reading, which the summary cannot know: a sensor off is turned off, never broken.
 # Not "fail": "could not be read" is honestly rephrased as "failed to load".
 _CAUSE_TERMS = re.compile(
-    r"\b(stopped working|stops working|(?:wasn't|was not|weren't|isn't|not) working|broke|broken|"
-    r"faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|technical (?:problem|issue|difficult)\w*)\b",
+    r"\b(stopped working|stops working|(?:wasn['’]t|was not|weren['’]t|isn['’]t|didn['’]t|did not) work\w*|"
+    r"broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|lost (?:the )?connection|"
+    r"technical (?:problem|issue|difficult)\w*)\b",
     re.IGNORECASE,
 )
 
@@ -5450,7 +5500,7 @@ def _class_signal_totals(student_ids: list[str], days: int,
 
 
 def _cohort_student_row(sid: str, totals: dict | None, channels: ReportChannels,
-                        retrieved: bool, days: int | None = None) -> dict:
+                        retrieved: bool, days: int) -> dict:
     """One roster row: the student's averages, and why any of them is missing.
 
     Consent fields are stamped per student: the RPC cannot return revocation dates.
@@ -7735,6 +7785,10 @@ def ack_parent_consent_notices(payload: ConsentNoticeAck, request: Request):
     return {"ok": True}
 
 
+# The parent dashboard's week: its averages and its erasure window must be the same days.
+_PARENT_SUMMARY_DAYS = 7
+
+
 @app.get("/api/parent/children")
 def my_children(request: Request, include_face: bool = True):
     """A parent's linked children with their headline signal averages.
@@ -7755,7 +7809,7 @@ def my_children(request: Request, include_face: bool = True):
 
     summaries: dict | None = {}
     for (heart_flag, emotion_flag), group in by_channels.items():
-        part = _signal_summaries(group, include_heart=heart_flag,
+        part = _signal_summaries(group, _PARENT_SUMMARY_DAYS, include_heart=heart_flag,
                                  include_emotion=emotion_flag,
                                  channels_by_student=channels_by_child)
         if part is None:
@@ -7802,7 +7856,8 @@ def my_children(request: Request, include_face: bool = True):
                                                 heart_revoked_at=channels_by_child[cid].heart_revoked_at,
                                                 eeg_enabled=channels_by_child[cid].eeg,
                                                 eeg_revoked_at=channels_by_child[cid].eeg_revoked_at,
-                                                erased=_erased_fields(channels_by_child[cid], 7)),
+                                                erased=_erased_fields(channels_by_child[cid],
+                                                                      _PARENT_SUMMARY_DAYS)),
         })
     return children
 

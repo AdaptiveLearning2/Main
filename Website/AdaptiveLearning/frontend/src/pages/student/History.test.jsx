@@ -298,3 +298,15 @@ it('shows a practice session left open as not finished, and keeps it out of In P
   expect(screen.getAllByText('Practice · Test')).toHaveLength(1)
   expect(screen.queryByText(/not finished/i)).not.toBeInTheDocument()
 })
+
+it('shows no accuracy for a session with no answers, never a red 0%', async () => {
+  const empty = { ...PRACTICE, id: 'p-empty', ended_at: null, abandoned: true,
+                  questions_answered: 0, correct_answers: 0 }
+  serve(page([]), STATS, [empty])
+
+  render(<History />)
+
+  expect(await screen.findByText('Practice · Test')).toBeInTheDocument()
+  expect(screen.queryByText('0%')).not.toBeInTheDocument()
+  expect(screen.getByText('accuracy').previousElementSibling.textContent).toBe('—')
+})

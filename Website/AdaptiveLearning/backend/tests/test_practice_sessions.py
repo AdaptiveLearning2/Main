@@ -63,6 +63,16 @@ class _Client:
                 self._filters[col] = val
                 return self
 
+            # Filtered like `eq`, so a dropped `is_`/`lt` changes which rows match.
+            def is_(self, col, val):
+                assert val == "null", val
+                self._preds = getattr(self, "_preds", []) + [lambda r: r.get(col) is None]
+                return self
+
+            def lt(self, col, val):
+                self._preds = getattr(self, "_preds", []) + [lambda r: (r.get(col) or "") < val]
+                return self
+
             def order(self, col, desc=False, **_k):
                 self._order = (col, desc)
                 return self
@@ -87,6 +97,8 @@ class _Client:
                 out = rows
                 for col, val in self._filters.items():
                     out = [r for r in out if r.get(col) == val]
+                for pred in getattr(self, "_preds", []):
+                    out = [r for r in out if pred(r)]
                 return out
 
             def execute(self):
@@ -104,6 +116,8 @@ class _Client:
                     if self._update is not None:
                         sid = self._filters.get("id")
                         row = client.sessions.get(sid)
+                        if row is not None and not self._matching([row]):
+                            row = None          # a conditional update that matched nothing
                         if row is not None:
                             row.update(self._update)
                         client.updates.append(("practice_sessions", dict(self._update), sid))
@@ -126,6 +140,11 @@ class _Client:
                         client.inserted_answers.append(row)
                         return type("R", (), {"data": [row]})()
                     rows = self._matching(client.answers)
+                    if self._order:
+                        col, desc = self._order
+                        rows = sorted(rows, key=lambda r: r.get(col) or "", reverse=desc)
+                    if self._limit is not None:
+                        rows = rows[:self._limit]
                     return type("R", (), {"data": rows})()
 
                 if name == "questions":
@@ -526,6 +545,44 @@ def test_a_practice_session_left_open_past_the_cut_is_abandoned_not_in_progress(
     assert flags == {"left": True, "live": False, "done": False}
 
 
+def test_the_sweep_closes_an_abandoned_practice_session_at_its_last_answer(_client, monkeypatch):
+    """Not the sweep's time, and not a live one, and not one already closed."""
+    from datetime import timedelta
+    now = main._utc_now()
+    old = (now - timedelta(seconds=main._SESSION_ABANDONED_AFTER_SEC + 3600)).isoformat()
+    last = (now - timedelta(seconds=main._SESSION_ABANDONED_AFTER_SEC)).isoformat()
+    c = _client(
+        sessions=[dict(_OWNED_SESSION, id="left", started_at=old, ended_at=None),
+                  dict(_OWNED_SESSION, id="empty", started_at=old, ended_at=None),
+                  dict(_OWNED_SESSION, id="live", started_at=now.isoformat(), ended_at=None),
+                  dict(_OWNED_SESSION, id="done", started_at=old, ended_at=last)],
+        answers=[{"practice_session_id": "left", "topic": "ordering", "correct": True, "answered_at": old},
+                 {"practice_session_id": "left", "topic": "ordering", "correct": False, "answered_at": last}])
+
+    out = main._sweep_abandoned_practice()
+
+    assert out == {"found": 2, "closed": 2, "failed": 0, "retrieved": True}
+    assert c.sessions["left"]["ended_at"] == last
+    assert c.sessions["left"]["topic_summary"] == {"ordering": {"attempted": 2, "correct": 50}}
+    assert c.sessions["empty"]["ended_at"] == old          # no answers: its start
+    assert c.sessions["live"]["ended_at"] is None
+    assert c.sessions["done"]["ended_at"] == last
+
+
+def test_the_sweep_runs_the_practice_pass(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "_STALE_SWEEP_FIRST_DELAY_SEC", 0.0)
+    monkeypatch.setattr(main, "_sweep_abandoned_sessions", lambda: calls.append("sessions"))
+    monkeypatch.setattr(main, "_sweep_abandoned_practice", lambda: calls.append("practice"))
+    monkeypatch.setattr(main.chart_archive, "archive_missing", lambda *_a, **_k: main._stale_sweep_stop.set())
+    main._stale_sweep_stop.clear()
+    try:
+        main._stale_sweep_loop()
+    finally:
+        main._stale_sweep_stop.clear()
+    assert calls == ["sessions", "practice"]
+
+
 # ─── the per-session topic-rotation state is bounded ────────────────────
 
 def test_topic_rotation_state_is_evicted_when_a_session_ends(_client, monkeypatch):
@@ -614,3 +671,11 @@ def test_a_practice_question_that_never_arrived_is_not_charged(_client, monkeypa
     assert exc.value.status_code == 503
 
     assert main._GENERATION_DAILY_LIMITER.check(USER) is None, "the failed question was charged"
+
+
+def test_the_column_list_has_every_field_the_two_pages_read():
+    """History and PracticeHistory read these; a column dropped from the list renders blank, silently."""
+    read = {"id", "mode", "topics", "started_at", "ended_at", "questions_answered", "correct_answers"}
+    listed = {c.strip() for c in main._PRACTICE_CLIENT_COLUMNS.split(",")}
+    assert read <= listed, read - listed
+    assert "user_id" not in listed and "topic_summary" not in listed

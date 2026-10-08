@@ -278,7 +278,9 @@ last activity, and applies it only to a session with sensor rows: with no sensor
 sends nothing, so silence proves nothing and the session waits for this sweep. This one only has to catch the
 session nobody has touched since June, so it errs long — closing a
 live one would discard the question a child is part way through answering. `STALE_SWEEP_INTERVAL_SECONDS=0`
-disables it.
+disables it. **The same pass closes abandoned practice sessions** (`_sweep_abandoned_practice`, at their last answer,
+through the end route's own `_close_practice_session`), which nothing else ends; `_is_abandoned` is the one age rule
+both kinds' `abandoned` flag and both sweeps' cut read.
 
 Safe in several workers at once via `_claim_session_close`. **The thread must be joined**, like the pollers — it
 prints, and a print during interpreter shutdown is a fatal stdout-lock abort.

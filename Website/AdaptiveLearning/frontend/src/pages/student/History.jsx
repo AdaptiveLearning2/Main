@@ -158,7 +158,8 @@ export default function History() {
           {filtered.map((s, i) => {
             // Flashcards are ungraded: `questions_answered` counts cards seen and `correct_answers` stays 0.
             const flashcards = s.kind === 'practice' && s.mode === 'flashcard'
-            const acc  = s.questions_answered > 0 ? Math.round((s.correct_answers / s.questions_answered) * 100) : 0
+            // No answers is no accuracy, never a 0% (rule 2).
+            const acc  = s.questions_answered > 0 ? Math.round((s.correct_answers / s.questions_answered) * 100) : null
             const done = !!s.ended_at
             const title = s.kind === 'practice'
               ? `Practice · ${flashcards ? 'Flashcards' : 'Test'}`
@@ -193,7 +194,7 @@ export default function History() {
                     </div>
                   )}
                   <div>
-                    {flashcards ? (
+                    {flashcards || acc === null ? (
                       <p className="text-lg font-black text-gray-900 dark:text-white">{UNKNOWN}</p>
                     ) : (
                       <p className={`text-lg font-black ${acc >= 70 ? 'text-green-500' : acc >= 40 ? 'text-amber-500' : 'text-rose-500'}`}>{acc}%</p>

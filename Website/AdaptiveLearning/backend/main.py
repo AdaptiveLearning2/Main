@@ -3927,7 +3927,10 @@ _DEVICE_NAMED = (
 _DEVICE_NAMED_AFTER = re.compile(_DEVICE_NAMED, re.IGNORECASE)
 _DEVICE_AFTER = re.compile(
     r"\s*(?:[.,;:!?)]|$)|\s+(?:properly|again|reliably|at\s+all|yesterday|today(?!['’]))\b|"
-    r"\s+(?:on|at|for|during|after|before|until|in)\s+|" + _DEVICE_NAMED,
+    # A preposition only before a time: "in the morning", not "in her head" or "on a deeper level".
+    r"\s+(?:on|at|for|during|after|before|until|in)\s+(?:[\w'’-]+\s+){0,2}?(?:\d|morning|afternoon|evening|"
+    r"night|lesson|session|class|day|week|start|beginning|end|(?:mon|tues|wednes|thurs|fri|satur|sun)day)|"
+    + _DEVICE_NAMED,
     re.IGNORECASE)
 
 # Subjects a connect failure can have that are neither people nor devices: "the idea didn't connect with her".
@@ -3992,7 +3995,8 @@ def _subject_of(text: str, m: re.Match) -> tuple[str, bool]:
 
 
 def _subject_names_a_cause(subject: str, bare: bool) -> bool:
-    return subject in _THING_SUBJECTS if bare else subject not in _PERSON_SUBJECTS
+    # An idea failing ("the method didn't work for her") is teaching, as a person's is effort.
+    return subject in _THING_SUBJECTS if bare else subject not in _PERSON_SUBJECTS | _IDEA_SUBJECTS
 
 
 def _names_a_cause(text: str) -> bool:

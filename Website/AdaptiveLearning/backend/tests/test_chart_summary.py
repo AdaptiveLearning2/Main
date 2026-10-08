@@ -241,7 +241,10 @@ def test_a_reply_that_describes_the_students_work_is_still_accepted(line):
                                   "The headband failed to connect.",
                                   # Connecting is the device's whoever the subject, as "couldn't connect" is.
                                   "The student failed to connect the headband.",
-                                  "The student couldn't connect the headband."])
+                                  "The student couldn't connect the headband.",
+                                  # "was not" is a negation like "wasn't", so any non-person subject counts.
+                                  "On Monday the Bluetooth was not working.",
+                                  "The Bluetooth also was not working."])
 def test_a_sensor_not_working_is_a_cause_whatever_follows(text):
     assert main._names_a_cause(text)
 

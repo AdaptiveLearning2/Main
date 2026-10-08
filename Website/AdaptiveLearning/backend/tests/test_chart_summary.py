@@ -266,6 +266,8 @@ def test_a_reply_that_describes_the_students_work_is_still_accepted(line):
                                   "The student couldn't connect for most of the lesson.",
                                   "The student couldn't connect for the rest of the session.",
                                   "The student couldn't connect after the update.",
+                                  "The student couldn't connect in class.",
+                                  "The student couldn't connect on Monday morning and gave up.",
                                   "The student couldn't pair her earbuds.",
                                   "The student had trouble syncing her watch.",
                                   # "was not" is a negation like "wasn't", so any non-person subject counts.
@@ -316,6 +318,9 @@ def test_a_sensor_not_working_is_a_cause_whatever_follows(text):
     "The student couldn't connect in her daydreams.",
     "The student couldn't connect at the weekend's quiz.",
     "The student couldn't connect for 2 of the questions.",
+    # A time word that does not end its clause is a place or a thing.
+    "She couldn't connect in class discussions.",
+    "She couldn't connect during break time with her classmates' ideas.",
 ])
 def test_a_person_as_the_subject_is_effort_not_a_cause(text):
     assert not main._names_a_cause(text)

@@ -3929,9 +3929,11 @@ _DEVICE_AFTER = re.compile(
     r"\s*(?:[.,;:!?)]|$)|\s+(?:properly|again|reliably|at\s+all|yesterday|today(?!['’]))\b|"
     # A preposition only before a time: "in the morning", not "in her head" or "on a deeper level".
     # Whole words, up to four in ("for the rest of the session"); a number only as a date, not "2 of the".
+    # A time word ends its clause: "in class." is when, "in class discussions" is where the thinking was.
     r"\s+(?:on|at|for|during|after|before|until|in)\s+(?:[\w'’-]+\s+){0,4}?(?:\d{1,2}(?:st|nd|rd|th)?\b"
     r"(?!\s+of\b)|(?:morning|afternoon|evening|night|lesson|session|class|day|week|start|beginning|end|"
-    r"update|restart|break|lunch|recess|(?:mon|tues|wednes|thurs|fri|satur|sun)day)s?\b(?!['’]))|"
+    r"update|restart|break|lunch|recess|(?:mon|tues|wednes|thurs|fri|satur|sun)day)s?\b"
+    r"(?=\s*(?:[.,;:!?)]|$)|\s+(?:and|but|so|because|as|when|while|or|until)\b))|"
     + _DEVICE_NAMED,
     re.IGNORECASE)
 

@@ -459,3 +459,50 @@ it('says a poller paused by the admin switch is not saving, and says so no longe
   await screen.findByText(/teacher can see your focus & stress live/, {}, { timeout: 10000 })
   expect(screen.queryByText(/Not being saved/)).toBeNull()
 }, 60_000)
+
+// ── this tab's own earlier lesson, after a reload ─────────────────────────────
+
+it('ends the lesson this tab left open before a reload, and remembers the new one', async () => {
+  const { endSession } = await import('../../lib/session')
+  window.sessionStorage.setItem('adaptive:tab-session', 'sess-old')
+  try {
+    render(<Adaptive />)
+    await waitFor(() => expect(endSession).toHaveBeenCalledWith('sess-old'))
+    expect(endSession).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+    await screen.findByText(/What is 2 \+ 2\?/)
+    expect(window.sessionStorage.getItem('adaptive:tab-session')).toBe('sess-1')
+  } finally {
+    window.sessionStorage.clear()
+  }
+}, 30_000)
+
+it('ends nothing on a first load, and forgets its lesson when the page unmounts', async () => {
+  const { endSession } = await import('../../lib/session')
+  window.sessionStorage.clear()
+  const { unmount } = render(<Adaptive />)
+  fireEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText(/What is 2 \+ 2\?/)
+  expect(endSession).not.toHaveBeenCalled()
+  expect(window.sessionStorage.getItem('adaptive:tab-session')).toBe('sess-1')
+
+  unmount()
+  expect(endSession).toHaveBeenCalledWith('sess-1')
+  expect(window.sessionStorage.getItem('adaptive:tab-session')).toBeNull()
+}, 30_000)
+
+it('still loads when storage is unavailable, and ends nothing', async () => {
+  const { endSession } = await import('../../lib/session')
+  // Blocked site data: reading `sessionStorage` itself throws.
+  const spy = vi.spyOn(window, 'sessionStorage', 'get').mockImplementation(() => { throw new Error('blocked') })
+  try {
+    render(<Adaptive />)
+    fireEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+    await screen.findByText(/What is 2 \+ 2\?/)
+    expect(endSession).not.toHaveBeenCalled()
+    expect(spy).toHaveBeenCalled()
+  } finally {
+    spy.mockRestore()
+  }
+}, 30_000)

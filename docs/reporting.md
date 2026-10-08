@@ -259,8 +259,11 @@ Both original sweeps are **on demand** — `start_session` collects a student's 
 `class_live` collects a class's when a teacher opens the monitor — so a student who never comes back is collected
 by neither. **`start_session` leaves any session active within `_STALE_AFTER_SEC`**, its start counting, and closes
 nothing when activity is unreadable: that may be a lesson live in another tab, and closing it makes that tab's next
-answer start a new session that closes this one in turn. A dead one left open costs nothing; a sweep stamps it at
-its last activity.
+answer start a new session that closes this one in turn. A tab's own last lesson is not left to that guess:
+`Adaptive.jsx` keeps it in `sessionStorage` (per tab, kept across a reload or a reopened tab) and ends it on load.
+**What is left open is not free** — uncredited and "in progress" until a later start finds it quiet or the 6 h
+sweep closes it: a tab closed and the lesson begun in a new one within 10 min, or a live tab whose only readings in
+that time were empty ones (a loose headband counts as quiet).
 
 `_sweep_abandoned_sessions` is the third, run from a background thread started in `_lifespan`. **It is a backend
 thread, not a `pg_cron` job, and that is not a preference.** Closing a session credits lifetime totals, writes the

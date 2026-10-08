@@ -126,6 +126,18 @@ const initSubjects = () => {
   const s = {}; TOPICS.forEach(t => { s[t] = { correct: 0, attempts: 0 } }); return s
 }
 
+// This tab's open lesson. Storage can be absent or throw (private mode, blocked site data): then nothing is ended.
+const TAB_SESSION_KEY = 'adaptive:tab-session'
+function readTabSession() {
+  try { return window.sessionStorage.getItem(TAB_SESSION_KEY) } catch { return null }
+}
+function writeTabSession(id) {
+  try {
+    if (id) window.sessionStorage.setItem(TAB_SESSION_KEY, id)
+    else window.sessionStorage.removeItem(TAB_SESSION_KEY)
+  } catch { /* no storage: a reload leaves the lesson to the sweep, as before */ }
+}
+
 /**
  * `headband.pushMode` mirrors the backend's `ingest_mode`. Pull: the backend
  * polls the sidecar; hardware goes through `/api/eeg/*`. Push: this page drives
@@ -385,7 +397,19 @@ export default function Adaptive() {
   // one with answers is closed. A tab close is left to the stale sweep.
   useEffect(() => () => {
     if (sessionIdRef.current) endSession(sessionIdRef.current)
+    writeTabSession(null)
   }, [])
+
+  // A reload or a reopened tab skips the unmount above, and the backend cannot tell this tab's last lesson
+  // from another tab's live one. sessionStorage is this tab's alone and survives both, so the page ends it.
+  const [previousSession] = useState(readTabSession)
+  const previousEnded = useRef(false)
+  useEffect(() => {
+    if (!previousSession || previousEnded.current) return
+    previousEnded.current = true
+    endSession(previousSession)
+  }, [previousSession])
+  useEffect(() => { writeTabSession(sessionId) }, [sessionId])
 
   // Sign-out clears the token before unmount, so the cleanup above would 401.
   // The last attempt: cleared first so a failure is not retried tokenless, and state too so

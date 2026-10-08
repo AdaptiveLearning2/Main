@@ -87,6 +87,17 @@ def test_the_idle_flag_reaches_a_reader_in_another_process(tmp_path):
     assert winproc.idle_seconds() >= 0
 
 
+def test_an_idle_flag_another_user_owns_is_ignored(monkeypatch):
+    mine = winproc.own_session()
+    flag = winproc.IdleFlag(mine)
+    flag.set(True)
+    assert winproc.owner_sid(flag.handle) == winproc.session_user_sid(mine)
+    assert winproc.session_idle(mine) is True
+    system = bytes([1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0])  # S-1-5-18: as if someone else's session
+    monkeypatch.setattr(winproc, "session_user_sid", lambda session: system)
+    assert winproc.session_idle(mine) is None
+
+
 def test_the_scan_finds_a_secret_in_either_encoding_or_a_settings_file(tmp_path):
     sys.path.insert(0, str(EEG / "installer"))
     import kit_build  # noqa: PLC0415 -- imports winreg

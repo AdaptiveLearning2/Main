@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import faulthandler
+import json
 import logging
 import logging.handlers
 import os
@@ -15,6 +16,7 @@ import socket
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 from src.kit import config as kit_config
@@ -33,6 +35,7 @@ SIDECAR_DRAIN_S = 2.0
 BRIDGE_EXE = "muse_native_bridge.exe"
 UPDATE_MODES = ("--update", "--after-update", "--start-sessions", "--register-task")  # update.MODES, kept light
 IDLE_REPORT_S = 30.0
+_LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # loopback: never through a configured proxy
 _CONSOLE_LOG_BYTES = 1_000_000
 _REFUSAL_LOG_EVERY_S = 60.0
 _last_refusal_logged = 0.0
@@ -212,7 +215,8 @@ def serve(app: Path) -> int:
         if session is None:
             raise OSError("Windows would not name this session")
         idle = winproc.IdleFlag(session)
-        threading.Thread(target=report_idle, args=(stop, idle), name="idle-reporter", daemon=True).start()
+        streaming = lambda: sidecar_streaming(kit_config.SIDECAR_PORT, cfg.learner_token)  # noqa: E731
+        threading.Thread(target=report_idle, args=(stop, idle, streaming), name="idle-reporter", daemon=True).start()
     except OSError as exc:
         logger.warning("not reporting idle time to the update task (%s); it then installs only at sign-in", exc)
     bridge = Supervisor([str(app / "bridge" / BRIDGE_EXE)], bridge_env, logs)
@@ -267,14 +271,27 @@ def run_sidecar(stop: threading.Event, stop_signal, port: int) -> int:
     return 0 if asked.is_set() else 1
 
 
-def report_idle(stop: threading.Event, flag, idle_seconds=None) -> None:
-    """Keeps the session's idle flag current, so the update task can install once nobody has touched it for a while."""
+def sidecar_streaming(port: int, token: str) -> bool | None:
+    """Whether the sidecar is pushing a lesson's samples; None when it does not say."""
+    request = urllib.request.Request(f"http://127.0.0.1:{port}/api/v1/push/status",
+                                     headers={"Authorization": f"Bearer {token}"})
+    try:
+        with _LOCAL.open(request, timeout=5) as response:
+            data = json.loads(response.read(65536)).get("data", {})
+    except (OSError, ValueError, AttributeError):
+        return None
+    return bool(data.get("running"))
+
+
+def report_idle(stop: threading.Event, flag, streaming, idle_seconds=None) -> None:
+    """Keeps the session's idle flag current: set only after IDLE_FREE_S with no input and no lesson streaming,
+    so the update task never takes a student watching with the headband on for gone."""
     from src.kit import update, winproc  # noqa: PLC0415
 
     idle_seconds = idle_seconds or winproc.idle_seconds
     while True:
         try:
-            flag.set(idle_seconds() >= update.IDLE_FREE_S)
+            flag.set(idle_seconds() >= update.IDLE_FREE_S and streaming() is False)
         except OSError:
             flag.set(False)  # unknown counts as someone at the keyboard
         if stop.wait(IDLE_REPORT_S):

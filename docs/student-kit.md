@@ -48,7 +48,7 @@ Scheduler ends a run at an action that cannot, so the installers go through `cmd
 | 2 | `cmd` with `apply.exe` | The Update installer, silently, when action 1 linked it; nothing otherwise |
 | 3 | `--after-update` | The self-test, by the version now installed, when this run linked `rollback.exe` for an unchecked install. A pass removes `rollback.exe`; a fail blocks the version |
 | 4 | `cmd` with `rollback.exe` | The way back, when still linked: after a failed check, or when the new version could not start |
-| 5 | `--start-sessions` | After an install, check or rollback this run: the sensors again in each session at the keyboard, as its user |
+| 5 | `--start-sessions` | Unlinks both installers, so the run is over for the launcher too; then, after an install, check or rollback this run, the sensors again in each session at the keyboard, as its user |
 
 - **Two layers, two jobs.** The gate's download key decides who can download; the feed's Ed25519 signature, and the
   SHA-256 and size it carries, decide what is installed. A leaked key lets someone download the kit, never makes a
@@ -58,10 +58,12 @@ Scheduler ends a run at an action that cannot, so the installers go through `cmd
   a feed older than the newest it has read of it (`seen.json`): re-signing at `rollout` 0 cannot be undone by serving
   the earlier feed again.
 - **Only when nobody is mid-lesson.** An install stops the sensors, so it waits until every session at the keyboard
-  signed in under 3 minutes ago, or has had no input for 30. Windows reports no idle time for a console session, so
-  the running kit sets `Global\AdaptiveLearningSensorsIdle-<session>` while its session is idle, and a session with
-  no kit reporting and no recent sign-in counts as a lesson. A session switched away from has nobody at it. The
-  launcher stands aside while `apply.exe` or `rollback.exe` is linked and `attempt.json` is under 15 minutes old.
+  signed in under 3 minutes ago, or is idle: no input for 30 minutes and no lesson streaming, which the kit reads from
+  its sidecar's push status, since a student can watch with the headband on and touch nothing. Windows reports no idle
+  time for a console session, so the running kit sets `Global\AdaptiveLearningSensorsIdle-<session>`, and the updater
+  believes it only when that session's own user owns it: another user could create it first. A session with no kit
+  reporting and no recent sign-in counts as a lesson; one switched away from has nobody at it. The launcher stands
+  aside while `apply.exe` or `rollback.exe` is linked and `attempt.json` is under 15 minutes old.
 - **Never a downgrade from the feed; the way back is the version running now.** Only a newer version is staged, and
   only when the feed's signed `history`, every installer the published feeds have named, lists the installed
   version's own: a rollback returns to what ran here, never to a version this computer skipped or a later one halted.
@@ -69,10 +71,13 @@ Scheduler ends a run at an action that cannot, so the installers go through `cmd
   published, or that computer never updates.
 - **No install is taken as passed without its check.** `attempt.json` records `installing`, `passed`, `failed`,
   `setup_failed` or `repairing`, and action 1 finishes whatever an earlier run left, in a quiet window: an install whose
-  check never ran is checked; one whose new version never ran its check is blocked and the way back reinstalled, since
-  setup may have been cut short; a failed check whose rollback did not happen is rolled back again. A failed setup
-  proves nothing about the version, so it is blocked on its third try. A blocked version stays blocked until a newer
-  one is published. If a link fails, the attempt is removed with it, so nothing is blocked for not running.
+  check never ran is checked; one whose new version never ran its check is blocked, and the way back reinstalled
+  unless that run's `rollback.log` ends a finished install, since setup may have been cut short; a failed check whose
+  rollback did not take is rolled back again, three times in all. A failed setup proves nothing about the version, so
+  it is blocked on its third try. A blocked version stays blocked until a newer one is published. The installers'
+  logs are set aside when a run is armed, so a log found later is that run's. If a link fails, the attempt is removed
+  with it, so nothing is blocked for not running; if the staged way back went missing, it is fetched again, against
+  the SHA-256 `attempt.json` keeps.
 - **An install clears the code first.** `[InstallDelete]` removes `_internal\` and `bridge\` before copying, since an
   older version over a newer one would otherwise keep DLLs both folders load first.
 - **Rollout.** The signed `rollout` is a percentage; each computer's bucket is a hash of its `MachineGuid`, so the

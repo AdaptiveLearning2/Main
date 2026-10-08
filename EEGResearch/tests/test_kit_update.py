@@ -10,6 +10,7 @@ import http.server
 import json
 import logging
 import os
+import socket
 import subprocess
 import sys
 import textwrap
@@ -277,7 +278,7 @@ def test_a_due_update_is_staged_and_armed_when_nobody_is_signed_in(tmp_path, sig
     updates = app / "updates"
     assert (updates / "apply.exe").read_bytes() == NEW_BODY
     assert (updates / "rollback.exe").read_bytes() == OLD_BODY
-    assert attempt_of(app) == {"version": "0.2.1", "way_back": "0.2.0", "at": NOW.timestamp(), "check": "installing"}
+    assert attempt_of(app) == {"version": "0.2.1", "way_back": OLD, "at": NOW.timestamp(), "check": "installing"}
     assert status(app)["state"] == "installing" and status(app)["signed_by"] == "everyday"
     assert net.requests == [("/v1/feed/latest.json", f"Bearer {KEY}"), (f"/v1/files/{NEW['file']}", f"Bearer {KEY}"),
                             (f"/v1/files/{OLD['file']}", f"Bearer {KEY}")]
@@ -456,14 +457,14 @@ def test_the_real_opener_refuses_redirects_too():
 
 # --- an earlier run's install, finished by action 1 ----------------------------------------------------------------
 
-def left(tmp_path: Path, installed: str, check: str) -> Path:
+def left(tmp_path: Path, installed: str, check: str, **extra) -> Path:
     """A kit whose earlier run armed 0.2.1 over 0.2.0 and recorded check; both installers still staged."""
     app = kit(tmp_path, version=installed)
     updates = app / "updates"
     updates.mkdir()
     (updates / NEW["file"]).write_bytes(NEW_BODY)
     (updates / OLD["file"]).write_bytes(OLD_BODY)
-    attempt = {"version": "0.2.1", "way_back": "0.2.0", "at": 0, "check": check}
+    attempt = {"version": "0.2.1", "way_back": OLD, "at": 1000.0, "check": check, **extra}
     (updates / "attempt.json").write_text(json.dumps(attempt), encoding="utf-8")
     return app
 
@@ -516,7 +517,65 @@ def test_a_setup_that_keeps_failing_is_blocked_on_its_third_try(tmp_path, signer
         assert f"try {tries} of 3" in status(app)["last_install"]
         assert ((0, 2, 1) in update.read_blocked(app / "updates")) is (tries == 3)
         (app / "updates" / "attempt.json").write_text(json.dumps(
-            {"version": "0.2.1", "way_back": "0.2.0", "at": 0, "check": "setup_failed"}), encoding="utf-8")
+            {"version": "0.2.1", "way_back": OLD, "at": 0, "check": "setup_failed"}), encoding="utf-8")
+
+
+def _rollback_log(app: Path, text: bytes, mtime: float) -> None:
+    log = app / "updates" / "rollback.log"
+    log.write_bytes(text)
+    os.utime(log, (mtime, mtime))
+
+
+def test_a_version_that_could_not_start_and_was_rolled_back_is_not_reinstalled_again(tmp_path, signer):
+    app = left(tmp_path, "0.2.0", "installing")
+    _rollback_log(app, b"... Writing uninstall key values.\r\n... " + update.SETUP_SUCCEEDED + b"\r\n", 1000.0 + 60)
+    net = gate(feed(signer))
+    update.check_for_update(app, machine(net, signer))
+    assert "could not run its check and was rolled back" in status(app)["last_install"]
+    assert not (app / "updates" / "rollback.exe").exists() and not (app / "updates" / "attempt.json").exists()
+    assert (0, 2, 1) in update.read_blocked(app / "updates")
+    assert net.requests[0][0] == "/v1/feed/latest.json"  # settled, so the run goes on to the feed
+
+
+@pytest.mark.parametrize("text, mtime", [
+    (b"Fatal exception\r\n", 1000.0 + 60),  # it ran, and did not finish
+    (update.SETUP_SUCCEEDED, 1000.0 - 60),  # an earlier run's
+])
+def test_a_rollback_log_that_shows_no_finished_rollback_this_run_still_repairs(tmp_path, signer, text, mtime):
+    app = left(tmp_path, "0.2.0", "installing")
+    _rollback_log(app, text, mtime)
+    update.check_for_update(app, machine(gate(feed(signer)), signer))
+    assert status(app)["state"] == "repairing" and (app / "updates" / "rollback.exe").read_bytes() == OLD_BODY
+    assert not (app / "updates" / "rollback.log").exists()  # set aside, so the repair's own log is the one read next
+    assert (app / "updates" / "rollback.previous.log").read_bytes() == text
+
+
+@pytest.mark.parametrize("damage", ["missing", "altered"])
+def test_a_way_back_that_went_missing_is_fetched_again(tmp_path, signer, damage):
+    app = left(tmp_path, "0.2.1", "installing")
+    staged = app / "updates" / OLD["file"]
+    staged.unlink() if damage == "missing" else staged.write_bytes(b"x" * OLD["size"])
+    net = gate(feed(signer))
+    update.check_for_update(app, machine(net, signer))
+    assert status(app)["state"] == "checking" and (app / "updates" / "rollback.exe").read_bytes() == OLD_BODY
+    assert [path for path, _ in net.requests] == [f"/v1/files/{OLD['file']}"]
+
+
+def test_a_way_back_that_cannot_be_fetched_says_why(tmp_path, signer):
+    app = left(tmp_path, "0.2.1", "installing")
+    (app / "update.json").unlink()
+    (app / "updates" / OLD["file"]).unlink()
+    assert update.check_for_update(app, machine(gate(feed(signer)), signer)) == 1
+    assert "cannot be fetched again" in status(app)["detail"] and (app / "updates" / "attempt.json").exists()
+
+
+def test_a_rollback_that_keeps_failing_is_tried_three_times_in_all(tmp_path, signer):
+    app = left(tmp_path, "0.2.1", "failed", rollbacks=2)
+    update.check_for_update(app, machine(gate(feed(signer)), signer))
+    assert status(app)["state"] == "rolling_back" and attempt_of(app)["rollbacks"] == 3
+    update.check_for_update(app, machine(gate(feed(signer)), signer))
+    assert "3 rollbacks to 0.2.0 did not take" in status(app)["last_install"]
+    assert not (app / "updates" / "attempt.json").exists() and not (app / "updates" / "rollback.exe").exists()
 
 
 # --- actions 3 and 5, and the launcher standing aside -------------------------------------------------------------
@@ -527,7 +586,7 @@ def armed(tmp_path: Path, installed: str, at: float | None = None) -> Path:
     updates.mkdir()
     (updates / "apply.exe").write_bytes(NEW_BODY)
     (updates / "rollback.exe").write_bytes(OLD_BODY)
-    attempt = {"version": "0.2.1", "way_back": "0.2.0", "at": time.time() if at is None else at, "check": "installing"}
+    attempt = {"version": "0.2.1", "way_back": OLD, "at": time.time() if at is None else at, "check": "installing"}
     (updates / "attempt.json").write_text(json.dumps(attempt), encoding="utf-8")
     return app
 
@@ -613,6 +672,15 @@ def test_sessions_are_started_only_after_an_install_this_run(tmp_path, monkeypat
     assert len(calls) == 1
 
 
+def test_the_runs_end_unlinks_both_installers_so_a_later_sign_in_starts_the_sensors(tmp_path, monkeypatch):
+    monkeypatch.setattr(winproc, "start_in_sessions", lambda exe, cwd: [])
+    app = armed(tmp_path, "0.2.0")  # as after a rollback: rollback.exe still linked, attempt.json fresh
+    (app / "updates" / "apply.exe").unlink()
+    assert update.applying(app)
+    update.start_sessions(app)
+    assert not (app / "updates" / "rollback.exe").exists() and not update.applying(app)
+
+
 @pytest.mark.parametrize("link", ["apply.exe", "rollback.exe"])
 def test_the_launcher_stands_aside_while_an_install_or_rollback_is_fresh(tmp_path, monkeypatch, link):
     app = armed(tmp_path, "0.2.0")
@@ -629,7 +697,7 @@ def test_the_launcher_stands_aside_while_an_install_or_rollback_is_fresh(tmp_pat
     assert not update.applying(app)
 
 
-def test_the_kit_reports_its_session_idle_only_past_the_threshold():
+def test_the_kit_reports_its_session_idle_only_with_no_input_and_no_lesson_streaming():
     class Flag:
         def __init__(self):
             self.values = []
@@ -637,24 +705,67 @@ def test_the_kit_reports_its_session_idle_only_past_the_threshold():
         def set(self, idle):
             self.values.append(idle)
 
-    readings = iter([update.IDLE_FREE_S - 1, update.IDLE_FREE_S, OSError("no")])
+    # (seconds since input, streaming): each pair is one report
+    readings = iter([(update.IDLE_FREE_S - 1, False), (update.IDLE_FREE_S, False), (update.IDLE_FREE_S, True),
+                     (update.IDLE_FREE_S, None), (OSError("no"), False)])
+    current = []
 
     def idle_seconds():
-        value = next(readings)
-        if isinstance(value, Exception):
-            raise value
-        return value
+        current[:] = [next(readings)]
+        if isinstance(current[0][0], Exception):
+            raise current[0][0]
+        return current[0][0]
 
-    class Stop:  # three reports, then stop
+    class Stop:
         calls = 0
 
         def wait(self, seconds):
             Stop.calls += 1
-            return Stop.calls == 3
+            return Stop.calls == 5
 
     flag = Flag()
-    launcher.report_idle(Stop(), flag, idle_seconds)
-    assert flag.values == [False, True, False]  # unknown counts as someone at the keyboard
+    launcher.report_idle(Stop(), flag, lambda: current[0][1], idle_seconds)
+    # Unknown counts as someone there, whether the input or the stream is what could not be read.
+    assert flag.values == [False, True, False, False, False]
+
+
+@pytest.mark.parametrize("answer, expected", [
+    ((200, {"status": "ok", "data": {"enabled": True, "running": True}}), True),
+    ((200, {"status": "ok", "data": {"enabled": True, "running": False}}), False),
+    ((200, {"status": "ok", "data": {"enabled": False}}), False),
+    ((401, {"detail": "Unauthorized"}), None),
+    ((200, "not an object"), None),
+])
+def test_sidecar_streaming_asks_the_push_status_with_the_learner_token(answer, expected):
+    seen = []
+
+    class Sidecar(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append((self.path, self.headers.get("Authorization")))
+            body = json.dumps(answer[1]).encode()
+            self.send_response(answer[0])
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Sidecar)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        assert launcher.sidecar_streaming(server.server_port, KEY) is expected
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert seen == [("/api/v1/push/status", f"Bearer {KEY}")]
+
+
+def test_a_sidecar_that_does_not_answer_is_not_known_to_be_idle():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]  # bound and not listening: refused
+        assert launcher.sidecar_streaming(port, KEY) is None
 
 
 # --- who may run what --------------------------------------------------------------------------------------------

@@ -268,35 +268,55 @@ def count_setup_failure(updates: Path, version: Version) -> int:
 
 
 ATTEMPT_STATES = ("installing", "passed", "failed", "setup_failed", "repairing")
+SETUP_SUCCEEDED = b"Installation process succeeded."  # the line Inno Setup's /LOG ends a completed install with
 
 
 def read_attempt(updates: Path) -> dict | None:
-    """attempt.json, the install this task armed: {version, way_back, at, check}, check one of ATTEMPT_STATES."""
+    """attempt.json, the install this task armed: {version, way_back (a release), at, check, rollbacks}."""
     attempt = _read_json(updates / "attempt.json")
     if not isinstance(attempt, dict) or attempt.get("check") not in ATTEMPT_STATES:
         return None
     try:
         parse_version(attempt.get("version"))
-        parse_version(attempt.get("way_back"))
+        _release(attempt.get("way_back"))
     except FeedError:
         return None
     return attempt
 
 
-def _arm_rollback(updates: Path, attempt: dict, check: str, now: float) -> None:
-    """rollback.exe for this run's action 4, and this run's time for action 5."""
-    os.link(updates / installer_name(parse_version(attempt["way_back"])), updates / ROLLBACK)
+def _retire_logs(updates: Path) -> None:
+    """The installers' logs move aside when a run is armed, so a log found later is that run's own."""
+    for name in ("apply", "rollback"):
+        if (updates / f"{name}.log").exists():
+            os.replace(updates / f"{name}.log", updates / f"{name}.previous.log")
+
+
+def rollback_completed(updates: Path, since: float) -> bool:
+    """Whether the rollback installer ran to the end after since: its log is written only once it runs."""
+    log = updates / "rollback.log"
+    try:
+        return log.stat().st_mtime >= since and SETUP_SUCCEEDED in log.read_bytes()
+    except OSError:
+        return False
+
+
+def _arm_rollback(updates: Path, attempt: dict, check: str, now: float, ensure: Callable[[Release], Path]) -> None:
+    """rollback.exe for this run's action 4, staged again first if it went missing, and this run's time for action 5."""
+    staged = ensure(_release(attempt["way_back"]))
+    _retire_logs(updates)
+    os.link(staged, updates / ROLLBACK)
     _write_json(updates / "attempt.json", {**attempt, "check": check, "at": now})
 
 
-def resume_attempt(updates: Path, installed: Version, free: Callable[[], bool],
-                   now: float) -> tuple[str | None, str | None]:
+def resume_attempt(updates: Path, installed: Version, free: Callable[[], bool], now: float,
+                   ensure: Callable[[Release], Path]) -> tuple[str | None, str | None]:
     """Action 1's first step, finishing an earlier run's install: (None, note) once it is settled, or this run's
     (state, detail) when the run is spent on it. An install with no recorded check is never taken as passed."""
     attempt = read_attempt(updates)
     if attempt is None:
         return None, None
-    version, check, back = parse_version(attempt["version"]), attempt["check"], attempt["way_back"]
+    version, check = parse_version(attempt["version"]), attempt["check"]
+    back = attempt["way_back"]["version"]
     name = version_text(version)
     settled = updates / "attempt.json"
     if check == "passed":
@@ -314,22 +334,30 @@ def resume_attempt(updates: Path, installed: Version, free: Callable[[], bool],
     if check == "failed" and installed != version:
         settled.unlink()
         return None, f"{name} failed its check and was rolled back to {version_text(installed)}"
-    if check == "failed":  # action 4 did not take it back, so it runs again
+    if check == "failed":  # action 4 did not take it back, so it runs again, a few times at most
+        rollbacks = int(attempt.get("rollbacks", 1))
+        if rollbacks >= MAX_SETUP_TRIES:
+            settled.unlink()
+            return None, f"{name} failed its check and {rollbacks} rollbacks to {back} did not take; it stays " \
+                         "installed, blocked, until a newer version (see rollback.log)"
         if not free():
             return "rollback_waiting", f"{name} failed its check and is still installed; it is rolled back to {back} " \
                                        "once nobody is mid-lesson"
-        _arm_rollback(updates, attempt, "failed", now)
+        _arm_rollback(updates, {**attempt, "rollbacks": rollbacks + 1}, "failed", now, ensure)
         return "rolling_back", f"{name} failed its check and is still installed; rolling back to {back}"
     if installed == version:  # installed, then the run was cut short before its check
         if not free():
             return "check_waiting", f"{name} was installed but never checked; it is checked once nobody is mid-lesson"
-        _arm_rollback(updates, attempt, "installing", now)
+        _arm_rollback(updates, attempt, "installing", now, ensure)
         return "checking", f"{name} was installed but never checked; checking it now"
     block(updates, version)  # it never ran its check: it could not start, or setup itself was cut short
+    if rollback_completed(updates, float(attempt["at"])):  # it could not start, and that run's action 4 took it back
+        settled.unlink()
+        return None, f"{name} could not run its check and was rolled back to {back}; it is blocked here"
     if not free():
         return "repair_waiting", f"{name} never ran its check and is blocked; {back} is reinstalled once nobody " \
                                  "is mid-lesson"
-    _arm_rollback(updates, attempt, "repairing", now)
+    _arm_rollback(updates, attempt, "repairing", now, ensure)
     return "repairing", f"{name} never ran its check and is blocked; reinstalling {back} so the install is whole"
 
 
@@ -466,10 +494,17 @@ def check_for_update(app: Path, machine: Machine) -> int:
         _unlink(updates / name)
     status = {"checked_at": dt.datetime.fromtimestamp(machine.now(), dt.UTC).isoformat(timespec="seconds")}
     free = lambda: quiet(machine.sessions())  # noqa: E731 -- asked only where an answer changes what happens
+
+    def ensure(release: Release) -> Path:  # a staged installer, fetched again if something removed or damaged it
+        settings = update_settings.load(app / update_settings.UPDATE_FILE)
+        if settings is None:
+            raise FeedError(f"{release.file} is not staged, and with no update.json it cannot be fetched again")
+        return download(machine.net(), settings, release, updates)
+
     try:
         installed = installed_version(app)
         status["installed"] = version_text(installed)
-        state, note = resume_attempt(updates, installed, free, machine.now())
+        state, note = resume_attempt(updates, installed, free, machine.now(), ensure)
         status["last_install"] = note
         if state is not None:
             return _finish(updates, status, state, note)
@@ -493,16 +528,18 @@ def check_for_update(app: Path, machine: Machine) -> int:
         _prune(updates, decision.stage)
         if not free():
             return _finish(updates, status, "staged", f"{decision.detail}; it installs once nobody is mid-lesson")
-        _arm_install(updates, manifest.release.version, installed, staged, machine.now())
+        _arm_install(updates, manifest.release.version, decision.stage[1], staged, machine.now())
         return _finish(updates, status, "installing", decision.detail)
     except (FeedError, update_settings.UpdateSettingsError, OSError, ValueError, http.client.HTTPException) as exc:
         return _finish(updates, status, "failed", f"{type(exc).__name__}: {exc}", code=1)
 
 
-def _arm_install(updates: Path, version: Version, installed: Version, staged: list[Path], now: float) -> None:
+def _arm_install(updates: Path, version: Version, way_back: Release, staged: list[Path], now: float) -> None:
     """attempt.json, then both links; if a link fails, none of it stays, so no version is blocked for not running."""
-    _write_json(updates / "attempt.json", {"version": version_text(version), "way_back": version_text(installed),
-                                            "at": now, "check": "installing"})
+    _retire_logs(updates)
+    _write_json(updates / "attempt.json", {"version": version_text(version), "at": now, "check": "installing",
+                                            "way_back": {"version": version_text(way_back.version), "file": way_back.file,
+                                                         "sha256": way_back.sha256, "size": way_back.size}})
     try:
         os.link(staged[1], updates / ROLLBACK)  # before apply.exe: action 2 must never run without its way back
         os.link(staged[0], updates / APPLY)
@@ -561,6 +598,8 @@ def after_update(app: Path, run_check: Callable[[Path, Path], int]) -> int:
 
 def start_sessions(app: Path, now: float | None = None) -> int:
     """Action 5: after an install, check or rollback this run, the sensors again in each session at the keyboard."""
+    for name in (APPLY, ROLLBACK):  # the run is over: left linked, they would keep a later sign-in's launcher waiting
+        _unlink(updates_dir(app) / name)
     attempt = read_attempt(updates_dir(app))
     if attempt is None or (time.time() if now is None else now) - float(attempt.get("at", 0)) > 3600:
         return 0  # the task's own time limit is an hour, so an older attempt was not this run's

@@ -29,6 +29,8 @@ JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 TOKEN_QUERY, TOKEN_USER, TOKEN_ELEVATION = 0x0008, 1, 20
 WIN_LOCAL_SYSTEM_SID = 22
 WTS_ACTIVE, WTS_DISCONNECTED, WTS_SESSION_INFO = 0, 4, 24
+WTS_USER_NAME, WTS_DOMAIN_NAME = 5, 7
+SE_KERNEL_OBJECT, OWNER_SECURITY_INFORMATION, READ_CONTROL = 6, 0x1, 0x00020000
 CREATE_UNICODE_ENVIRONMENT, CREATE_BREAKAWAY_FROM_JOB = 0x00000400, 0x01000000
 WINHTTP_ACCESS_TYPE_NAMED_PROXY = 3
 _FILETIME_UNIX_OFFSET_S = 11_644_473_600  # 1601-01-01 to 1970-01-01
@@ -87,6 +89,16 @@ if sys.platform == "win32":
     _winhttp = ctypes.WinDLL("winhttp", use_last_error=True)
     _k32.GlobalFree.argtypes = [wintypes.LPVOID]
     _k32.GetTickCount.restype = wintypes.DWORD
+    _k32.LocalFree.argtypes = [wintypes.LPVOID]
+    _advapi.GetSecurityInfo.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.DWORD, ctypes.POINTER(wintypes.LPVOID),
+                                        ctypes.POINTER(wintypes.LPVOID), ctypes.POINTER(wintypes.LPVOID),
+                                        ctypes.POINTER(wintypes.LPVOID), ctypes.POINTER(wintypes.LPVOID)]
+    _advapi.GetSecurityInfo.restype = wintypes.DWORD
+    _advapi.GetLengthSid.argtypes = [wintypes.LPVOID]
+    _advapi.GetLengthSid.restype = wintypes.DWORD
+    _advapi.LookupAccountNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPVOID,
+                                           ctypes.POINTER(wintypes.DWORD), wintypes.LPWSTR,
+                                           ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(ctypes.c_int)]
 else:
     _k32 = _psapi = _iphlpapi = _advapi = _wts = _userenv = _winhttp = None
 
@@ -473,12 +485,52 @@ class IdleFlag:
         (_k32.SetEvent if idle else _k32.ResetEvent)(self.handle)
 
 
+def _session_text(session: int, kind: int) -> str:
+    buffer, size = wintypes.LPVOID(), wintypes.DWORD()
+    if not _wts.WTSQuerySessionInformationW(None, session, kind, ctypes.byref(buffer), ctypes.byref(size)):
+        return ""
+    try:
+        return ctypes.wstring_at(buffer.value)
+    finally:
+        _wts.WTSFreeMemory(buffer)
+
+
+def session_user_sid(session: int) -> bytes | None:
+    """The SID of the user signed in to session, or None."""
+    user, domain = _session_text(session, WTS_USER_NAME), _session_text(session, WTS_DOMAIN_NAME)
+    if not user:
+        return None
+    sid, sid_size = ctypes.create_string_buffer(256), wintypes.DWORD(256)
+    found, found_size, use = ctypes.create_unicode_buffer(256), wintypes.DWORD(256), ctypes.c_int()
+    name = f"{domain}\\{user}" if domain else user
+    if not _advapi.LookupAccountNameW(None, name, sid, ctypes.byref(sid_size), found, ctypes.byref(found_size),
+                                      ctypes.byref(use)):
+        return None
+    return sid.raw[:_advapi.GetLengthSid(sid)]
+
+
+def owner_sid(handle) -> bytes | None:
+    """The SID owning a kernel object, which only its creator (or an administrator) sets."""
+    owner, descriptor = wintypes.LPVOID(), wintypes.LPVOID()
+    if _advapi.GetSecurityInfo(handle, SE_KERNEL_OBJECT, OWNER_SECURITY_INFORMATION, ctypes.byref(owner), None, None,
+                               None, ctypes.byref(descriptor)):
+        return None
+    try:
+        return ctypes.string_at(owner.value, _advapi.GetLengthSid(owner))
+    finally:
+        _k32.LocalFree(descriptor)
+
+
 def session_idle(session: int) -> bool | None:
-    """The kit's idle report for a session: None when no kit in it is reporting."""
-    handle = _api().OpenEventW(SYNCHRONIZE, False, IDLE_EVENT.format(session=session))
+    """The kit's idle report for a session: None when no kit in it is reporting, or when the flag is not owned by
+    that session's own user, since another signed-in user could create it first to start an install mid-lesson."""
+    handle = _api().OpenEventW(SYNCHRONIZE | READ_CONTROL, False, IDLE_EVENT.format(session=session))
     if not handle:
         return None
     try:
+        owner = owner_sid(handle)
+        if owner is None or owner != session_user_sid(session):
+            return None
         return _k32.WaitForSingleObject(handle, 0) == WAIT_OBJECT_0
     finally:
         _k32.CloseHandle(handle)

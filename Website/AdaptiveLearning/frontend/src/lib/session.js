@@ -21,7 +21,8 @@ export async function recordAnswer({ sessionId, questionId, selectedIndex, corre
     // 409: closed under the page (the sweep, the live monitor, another tab); the caller retries.
     if (e?.status === 409) return { ended: true }
     console.error('[answer] not recorded', e)
-    toast.error('That answer could not be saved.')
+    // 410: the question was deleted since it was served; nothing to retry, and nothing the student did.
+    toast.error(e?.status === 410 ? 'This question is no longer available.' : 'That answer could not be saved.')
     return null
   }
 }

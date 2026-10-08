@@ -18,6 +18,20 @@ it('reports a session closed under the page as ended, without a toast', async ()
   expect(toast.error).not.toHaveBeenCalled()
 })
 
+it('says a deleted question is gone, not that saving failed, and starts no new session', async () => {
+  mockApi({ 'POST /api/sessions/s1/answer': () => { throw apiError(410, 'This question is no longer available') } })
+
+  await expect(recordAnswer(ANSWER)).resolves.toBeNull()
+  expect(toast.error).toHaveBeenCalledWith('This question is no longer available.')
+})
+
+it('still says the answer could not be saved for any other failure', async () => {
+  mockApi({ 'POST /api/sessions/s1/answer': () => { throw apiError(503) } })
+
+  await expect(recordAnswer(ANSWER)).resolves.toBeNull()
+  expect(toast.error).toHaveBeenCalledWith('That answer could not be saved.')
+})
+
 it('reports a push EEG start for the session it names', async () => {
   mockApi({ 'POST /api/sessions/s1/eeg-started': () => ({ ok: true }) })
 

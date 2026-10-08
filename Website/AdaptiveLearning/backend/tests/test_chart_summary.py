@@ -238,7 +238,10 @@ def test_a_reply_that_describes_the_students_work_is_still_accepted(line):
                                   "The camera had issues on Monday.",
                                   "The headband ran out of battery.",
                                   "The battery died halfway through.",
-                                  "The headband failed to connect."])
+                                  "The headband failed to connect.",
+                                  # Connecting is the device's whoever the subject, as "couldn't connect" is.
+                                  "The student failed to connect the headband.",
+                                  "The student couldn't connect the headband."])
 def test_a_sensor_not_working_is_a_cause_whatever_follows(text):
     assert main._names_a_cause(text)
 
@@ -256,6 +259,13 @@ def test_a_sensor_not_working_is_a_cause_whatever_follows(text):
     "Students who struggled didn't work on the bonus questions.",
     "Your daughter didn't work on fractions this week.",
     "The student had trouble with fractions on Monday.",
+    # An adverb before the auxiliary, and an auxiliary before the phrase's own verb.
+    "The student also did not work ahead.",
+    "The student has had trouble with fractions.",
+    "The student also has had trouble with fractions.",
+    # A group of people, and people named by where they are.
+    "The class had trouble with fractions.",
+    "The students in the class didn't work on fractions.",
 ])
 def test_a_person_as_the_subject_is_effort_not_a_cause(text):
     assert not main._names_a_cause(text)

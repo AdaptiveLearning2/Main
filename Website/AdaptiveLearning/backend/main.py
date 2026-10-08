@@ -3915,7 +3915,9 @@ _CLINICAL_TERMS = re.compile(
 _CAUSE_TERMS = re.compile(
     r"\b(stopped working|stops working|"
     r"broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|lost (?:the )?connection|"
+    # Connecting is the device's, whoever the subject: "couldn't connect" and "failed to connect" alike.
     r"(?:\w+n['’]t|not|never|no longer)\s+(?:be\s+able\s+to\s+)?(?:connect|pair|sync)\w*|"
+    r"fail(?:s|ed|ing)?\s+to\s+(?:connect|pair|sync)\w*|"
     r"ran out of (?:battery|power|charge)|out of battery|(?:low|dead|flat) battery|"
     r"battery (?:died|ran (?:out|low|flat)|was (?:dead|flat|low|empty))|"
     r"technical (?:problem|issue|difficult)\w*)\b",
@@ -3928,7 +3930,7 @@ _FAILURE_PHRASE = re.compile(
     r"\b(?:(?P<neg>\w+n['’]t|not|never|no\s+longer)(?:\s+been)?\s+(?:work|function|respond)(?:s|ed|ing)?\b"
     r"(?!\s+out\s+(?:as|well|for|the\s+way)\b)|"
     r"(?:stopped|stops)\s+responding\b|"
-    r"fail(?:s|ed)?\s+to\s+(?:connect|pair|sync|respond|work)\b|"
+    r"fail(?:s|ed)?\s+to\s+(?:respond|work)\b|"
     r"ha(?:d|s|ve)\s+(?:(?:some|a\s+few|several|many|any)\s+)?(?:issues|problems|trouble)\b)",
     re.IGNORECASE)
 
@@ -3937,6 +3939,7 @@ _FAILURE_PHRASE = re.compile(
 _PERSON_SUBJECTS = frozenset({"student", "students", "child", "children", "kid", "kids", "learner",
                               "learners", "pupil", "pupils", "daughter", "daughters", "son", "sons",
                               "girl", "girls", "boy", "boys", "classmate", "classmates",
+                              "class", "classes", "group", "groups", "everyone", "everybody",
                               "he", "she", "i", "we", "you", "who"})
 _THING_SUBJECTS = frozenset({"sensor", "sensors", "headband", "headbands", "camera", "cameras", "webcam",
                              "eeg", "heart", "pulse", "device", "devices", "muse", "recording", "readings",
@@ -3962,10 +3965,10 @@ def _names_a_cause(text: str) -> bool:
     for m in _FAILURE_PHRASE.finditer(text):
         words = re.findall(r"[\w’'-]+", _SENTENCE_END.split(text[:m.start()])[-1])
         bare = (m.group("neg") or "").lower() == "not"
-        while words and words[-1].lower() in _ADVERBS:
+        # Adverbs and auxiliaries in any order ("also did not", "has had"); an auxiliary makes "not" a negation.
+        while words and words[-1].lower() in _ADVERBS | _AUXILIARIES:
+            bare = bare and words[-1].lower() not in _AUXILIARIES
             words = words[:-1]
-        if bare and words and words[-1].lower() in _AUXILIARIES:
-            words, bare = words[:-1], False
         subject = _phrase_subject(words)
         if bare:
             if subject in _THING_SUBJECTS:

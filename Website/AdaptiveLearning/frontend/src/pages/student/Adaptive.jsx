@@ -31,6 +31,11 @@ const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
 // Device-list retry while empty (the sidecar often starts later); matches the health check.
 const DISCOVERY_RETRY_MS = 5000
 
+// Whose lesson the sidecar delivers for, from its session and this page's: one rule for the screen and the ref.
+function ownerOf(sidecarSession, sessionId) {
+  return !sidecarSession ? 'unknown' : sidecarSession === sessionId ? 'mine' : 'elsewhere'
+}
+
 // Page-driven headband recovery, only once the bridge has given up (or is too old to try).
 const RECONNECT_ATTEMPTS = 3
 const RECONNECT_BACKOFF_MS = [2000, 4000, 8000]
@@ -336,20 +341,24 @@ export default function Adaptive() {
 
   // Whose lesson the one sidecar delivers for (push): this tab's, another tab's or window's (also for a tab with no
   // lesson yet), or not known. The newest lesson takes it; a page whose lesson it isn't stops or takes back nothing.
-  const pushOwner = !sidecarSession ? 'unknown' : sidecarSession === sessionId ? 'mine' : 'elsewhere'
+  const pushOwner = ownerOf(sidecarSession, sessionId)
   const pushOwnerRef = useRef(pushOwner)
-  // Sets the ref with the state, not after the render: a token refresh landing between the two would
-  // otherwise read the old owner, and re-hand another tab's lesson or skip this one's.
+  const sidecarSessionRef = useRef(sidecarSession)
+  // The ref is written only here and when the lesson changes, never after a render: a token refresh landing
+  // between a render and its effects would read the old owner, and re-hand another tab's lesson or skip this one's.
   const adoptSidecarSession = useCallback((sid) => {
-    pushOwnerRef.current = !sid ? 'unknown' : sid === sessionIdRef.current ? 'mine' : 'elsewhere'
+    sidecarSessionRef.current = sid
+    pushOwnerRef.current = ownerOf(sid, sessionIdRef.current)
     setSidecarSession(sid)
   }, [])
+  useEffect(() => {
+    pushOwnerRef.current = ownerOf(sidecarSessionRef.current, sessionIdRef.current)
+  }, [sessionId])
 
   // The camera stops when this page goes away (the headband stays paired): route
   // change via cleanup, tab close via `pagehide`, both reading a synced ref.
   useEffect(() => {
     cameraRef.current = { id: camera.id, running: camera.running, pushMode: headband.pushMode }
-    pushOwnerRef.current = pushOwner
   })
   useEffect(() => {
     // Push only, like `toggleCamera`: under pull the backend owns the device. Not another tab's lesson's camera.

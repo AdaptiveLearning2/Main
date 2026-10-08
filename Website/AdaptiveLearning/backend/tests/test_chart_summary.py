@@ -245,6 +245,8 @@ def test_a_sensor_not_working_is_a_cause_whatever_follows(text):
 
 @pytest.mark.parametrize("text", [
     "Focus came from the headband. She didn't work on fractions.",
+    # A sensor ending the previous sentence is not the subject of a bare "not".
+    "Readings came from the headband. Not working through every question kept focus steady.",
     "Focus was higher on days she did not work on word problems.",
     "The student who never worked ahead had steadier focus.",
     "Focus was lower on days the student did not record an answer quickly.",

@@ -3949,9 +3949,7 @@ _SENTENCE_END = re.compile(r"[.!?;:\n]")
 
 
 def _phrase_subject(words: list[str]) -> str:
-    """The subject before a failure phrase, past adverbs and a relative "who/that <verb>"."""
-    while words and words[-1].lower() in _ADVERBS:
-        words = words[:-1]
+    """The subject before a failure phrase, past a relative "who/that <verb>"."""
     if len(words) >= 3 and words[-2].lower() in ("who", "that"):
         words = words[:-2]
     return re.sub(r"['’]s$", "", words[-1]).lower() if words else ""

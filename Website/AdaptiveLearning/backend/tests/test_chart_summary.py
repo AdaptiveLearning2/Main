@@ -260,6 +260,7 @@ def test_a_reply_that_describes_the_students_work_is_still_accepted(line):
                                   "The student couldn't connect during the lesson.",
                                   "The student couldn't connect in the morning.",
                                   "The student couldn't connect today.",
+                                  "The student couldn't connect during today's lesson.",
                                   "The student couldn't pair her earbuds.",
                                   "The student had trouble syncing her watch.",
                                   # "was not" is a negation like "wasn't", so any non-person subject counts.

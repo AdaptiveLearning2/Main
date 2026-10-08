@@ -3927,7 +3927,7 @@ _DEVICE_NAMED = (
 _DEVICE_NAMED_AFTER = re.compile(_DEVICE_NAMED, re.IGNORECASE)
 _DEVICE_AFTER = re.compile(
     r"\s*(?:[.,;:!?)]|$)|\s+(?:properly|again|reliably|at\s+all|yesterday|today(?!['’]))\b|"
-    r"\s+(?:on|at|for|during|after|before|until|in)\s+(?!\w+['’]s\b)|" + _DEVICE_NAMED,
+    r"\s+(?:on|at|for|during|after|before|until|in)\s+|" + _DEVICE_NAMED,
     re.IGNORECASE)
 
 # Subjects a connect failure can have that are neither people nor devices: "the idea didn't connect with her".

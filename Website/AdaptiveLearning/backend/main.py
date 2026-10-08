@@ -3948,19 +3948,121 @@ _CLINICAL_TERMS = re.compile(
     re.IGNORECASE,
 )
 
+# A connect failure; its subject decides it, as `_FAILURE_PHRASE`'s does ("wasn't connected yet" included).
+_CONNECT_FAILURE = re.compile(
+    r"\b(?:(?P<neg>\w+n['’]t|not|never|no\s+longer)\s+(?:be(?:en)?\s+)?(?:able\s+to\s+)?|"
+    r"fail(?:s|ed|ing)?\s+to\s+|(?:trouble|problems?|issues?|difficult(?:y|ies))\s+)(?:connect|pair|sync)\w*",
+    re.IGNORECASE)
+
+# After a person's connect failure, what makes it a device's: nothing, a manner or a date, or a device
+# word within a few words ("the new headband", "the heart sensor"). "Connect fractions to decimals" is maths.
+_DEVICE_NAMED = (
+    # "It" only as the object itself: "connect the ideas to it" is maths.
+    r"\s+(?:(?:to|with)\s+)?(?:it|them)\b|"
+    # Up the clause ("couldn't connect in class with the headband"), but not where the material was shown
+    # ("on the tablet") or past a "what"/"which" clause: those devices are not what was being connected.
+    r"\s+(?:(?!(?:on|from|via|through|what|which|who)\b)[\w'’-]+\s+){0,6}?"
+    r"(?:(?:the|a|an|her|his|their|its|my|your|that|this)\s+)?(?:(?!(?:on|from|via|through)\b)[\w'’-]+\s+)?"
+    r"(?:headband|headset|headphone|earbud|earphone|camera|webcam|sensor|device|muse|"
+    r"bluetooth|eeg|laptop|computer|tablet|phone|watch|tracker|monitor|microphone|mic|wi-?fi|internet|"
+    r"network|app)(?:s|es)?\b")
+_DEVICE_NAMED_AFTER = re.compile(_DEVICE_NAMED, re.IGNORECASE)
+_DEVICE_AFTER = re.compile(
+    r"\s*(?:[.,;:!?)]|$)|\s+(?:properly|again|reliably|at\s+all|yesterday|today(?!['’]))\b|"
+    # A preposition before a whole time word up to four in, not "in her head"; a number only as a date.
+    # The time ends its clause or another time follows: "in class yesterday" is when, "in class
+    # discussions" is where the thinking was.
+    r"\s+(?:on|at|for|during|after|before|until|in)\s+(?:[\w'’-]+\s+){0,4}?(?:\d{1,2}(?:st|nd|rd|th)?\b"
+    r"(?!\s+of\b)|(?:morning|afternoon|evening|night|lesson|session|class|day|week|start|beginning|end|"
+    r"update|restart|break|lunch|recess|(?:mon|tues|wednes|thurs|fri|satur|sun)day)s?\b"
+    r"(?=\s*(?:[.,;:!?)]|$)|\s+(?:and|but|so|because|as|when|while|or|until|yesterday|today|tonight|"
+    r"either|too|again|anymore|at\s+all|before|after|during|this|that|last|on|at|in)\b))|"
+    + _DEVICE_NAMED,
+    re.IGNORECASE)
+
+# Subjects a connect failure can have that are neither people nor devices: "the idea didn't connect with her".
+_IDEA_SUBJECTS = frozenset({"idea", "ideas", "lesson", "lessons", "concept", "concepts", "topic", "topics",
+                            "explanation", "explanations", "example", "examples", "material", "content",
+                            "method", "methods", "question", "questions", "story", "stories"})
+
 # A cause for a missing reading, which the summary cannot know: a sensor off is turned off, never broken.
 # Not "fail": "could not be read" is honestly rephrased as "failed to load".
 _CAUSE_TERMS = re.compile(
-    # Any negation ("doesn't", "hasn't been", bare "not"). Effort is not a cause: "didn't work through the
-    # questions", "didn't work on fractions"; "on" a date or day ("wasn't working on 3 August") still is.
-    r"\b(stopped working|stops working|(?:\w+n['’]t|not)(?:\s+been)?\s+"
-    r"work(?:s|ed|ing)?\b(?!\s+(?:(?:through|out|hard|harder|much|ahead|together|towards?)\b|on\s+(?!\d|"
-    r"(?:the|that|this|each|every)\b|(?:mon|tues|wednes|thurs|fri|satur|sun)day|"
-    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))))|"
+    r"\b(stopped working|stops working|"
     r"broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|lost (?:the )?connection|"
+    r"ran out of (?:battery|power|charge)|out of battery|(?:low|dead|flat) battery|"
+    r"battery (?:died|ran (?:out|low|flat)|was (?:dead|flat|low|empty))|"
     r"technical (?:problem|issue|difficult)\w*)\b",
     re.IGNORECASE,
 )
+
+# A failure phrase whose subject decides it. Not "record": "wasn't recording because it was turned
+# off" is the absence the summary must state. "Didn't work out as planned" is about a plan.
+_FAILURE_PHRASE = re.compile(
+    r"\b(?:(?P<neg>\w+n['’]t|not|never|no\s+longer)(?:\s+been)?\s+(?:work|function|respond)(?:s|ed|ing)?\b"
+    r"(?!\s+out\s+(?:as|well|for|the\s+way)\b)|"
+    r"(?:stopped|stops)\s+responding\b|"
+    r"fail(?:s|ed)?\s+to\s+(?:respond|work)\b|"
+    r"ha(?:d|s|ve)\s+(?:(?:some|a\s+few|several|many|any)\s+)?(?:issues|problems|trouble)\b)",
+    re.IGNORECASE)
+
+# A person subject ("the student didn't work on fractions") is effort; any other ("the recording wasn't
+# working", "they", a device's name) is a cause. Bare "not" has no auxiliary, so it needs a named thing.
+_PERSON_SUBJECTS = frozenset({"student", "students", "child", "children", "kid", "kids", "learner",
+                              "learners", "pupil", "pupils", "daughter", "daughters", "son", "sons",
+                              "girl", "girls", "boy", "boys", "classmate", "classmates",
+                              "class", "classes", "group", "groups", "everyone", "everybody",
+                              "he", "she", "i", "we", "you", "who"})
+_THING_SUBJECTS = frozenset({"sensor", "sensors", "headband", "headbands", "camera", "cameras", "webcam",
+                             "eeg", "heart", "pulse", "device", "devices", "muse", "recording", "readings",
+                             "connection", "equipment", "feed", "signal", "it"})
+_AUXILIARIES = frozenset({"do", "does", "did", "is", "was", "are", "were", "am", "has", "have", "had",
+                          "can", "could", "will", "would", "should", "may", "might", "must"})
+_ADVERBS = frozenset({"sometimes", "often", "usually", "occasionally", "still", "also", "just", "really",
+                      "ever", "always", "again", "then", "mostly", "rarely", "actually", "simply"})
+_SENTENCE_END = re.compile(r"[.!?;:\n]")
+
+
+def _phrase_subject(words: list[str]) -> str:
+    """The subject before a failure phrase, past a relative "who/that <verb>"."""
+    if len(words) >= 3 and words[-2].lower() in ("who", "that"):
+        words = words[:-2]
+    return re.sub(r"['’]s$", "", words[-1]).lower() if words else ""
+
+
+def _subject_of(text: str, m: re.Match) -> tuple[str, bool]:
+    """The phrase's subject, and whether its "not" is bare (no auxiliary before it)."""
+    words = re.findall(r"[\w’'-]+", _SENTENCE_END.split(text[:m.start()])[-1])
+    bare = (m.group("neg") or "").lower() == "not"
+    # Adverbs and auxiliaries in any order ("also did not", "has had"); an auxiliary makes "not" a negation.
+    while words and words[-1].lower() in _ADVERBS | _AUXILIARIES:
+        bare = bare and words[-1].lower() not in _AUXILIARIES
+        words = words[:-1]
+    return _phrase_subject(words), bare
+
+
+def _subject_names_a_cause(subject: str, bare: bool) -> bool:
+    # An idea failing ("the method didn't work for her") is teaching, as a person's is effort.
+    return subject in _THING_SUBJECTS if bare else subject not in _PERSON_SUBJECTS | _IDEA_SUBJECTS
+
+
+def _names_a_cause(text: str) -> bool:
+    """Whether a summary says why a reading is missing (broken, disconnected, a sensor not working)."""
+    if _CAUSE_TERMS.search(text):
+        return True
+    if any(_subject_names_a_cause(*_subject_of(text, m)) for m in _FAILURE_PHRASE.finditer(text)):
+        return True
+    for m in _CONNECT_FAILURE.finditer(text):
+        subject, bare = _subject_of(text, m)
+        if subject in _PERSON_SUBJECTS:
+            if _DEVICE_AFTER.match(text, m.end()):
+                return True
+        elif subject in _IDEA_SUBJECTS:
+            if _DEVICE_NAMED_AFTER.match(text, m.end()):
+                return True
+        elif _subject_names_a_cause(subject, bare):
+            return True
+    return False
 
 # Leading "1.", "2)", "-", "*", "•" from a numbered or bulleted model reply.
 _LIST_MARKER = re.compile(r"^\s*(?:\d+\s*[\).:]|[-*•])\s*")
@@ -4730,7 +4832,7 @@ def _validated_chart_summary(raw: str, allowed: set[float],
     """
     if _CLINICAL_TERMS.search(raw or ""):
         return None
-    if _CAUSE_TERMS.search(raw or ""):
+    if _names_a_cause(raw or ""):
         print("[chart_summary:llm] rejected: it names a cause for a missing reading")
         return None
     lines = _parse_strategy_lines(raw)

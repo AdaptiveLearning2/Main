@@ -180,6 +180,17 @@ def test_a_reply_saying_a_read_failed_is_still_accepted():
     "Focus was lower on days the student didn't work through many questions.",
     "Focus was higher on days the student did not work hard on fractions.",
     "Focus was higher on days the student didn't work on fractions.",
+    # A month's or a date's first letters, not a date.
+    "Focus was higher on days the student didn't work on decimals.",
+    "Focus was higher on days the student didn't work on octagons.",
+    "Focus was higher on days the student didn't work on the harder questions.",
+    "Focus was higher on days the student didn't work on 3-digit numbers.",
+    "Focus was higher on days the student didn't work on this topic.",
+    # A number after "on" is a subject when a student is doing the work.
+    "Focus was higher on days the student didn't work on 10 questions.",
+    "Focus was higher on days the student didn't work on 2nd grade content.",
+    # A sensor named earlier in the sentence is not the subject of the work.
+    "Heart rate was higher on days the student didn't work on fractions.",
 ])
 def test_a_reply_that_describes_the_students_work_is_still_accepted(line):
     """"Work" about the student's effort is not a cause for a sensor, so the filter leaves it."""
@@ -188,9 +199,152 @@ def test_a_reply_that_describes_the_students_work_is_still_accepted(line):
 
 
 @pytest.mark.parametrize("text", ["The heart sensor wasn't working on Monday.",
-                                  "The headband was not working on the 3rd."])
-def test_not_working_on_a_day_is_still_a_cause(text):
-    assert main._CAUSE_TERMS.search(text)
+                                  "The headband was not working on the 3rd.",
+                                  "The headband was not working on Dec 3.",
+                                  "The camera wasn't working on 12 October.",
+                                  "The camera wasn't working on that day.",
+                                  # Days no date list named: the sensor as subject is what counts.
+                                  "The headband wasn't working on the first day.",
+                                  "The camera wasn't working on the day of the test.",
+                                  "The heart sensor wasn't working on that occasion.",
+                                  "The headband wasn't working on Wed.",
+                                  "The camera wasn't working on weekends.",
+                                  "The headband wasn't working on some days.",
+                                  "The webcam wasn't working on today.",
+                                  "The headband was new. It wasn't working on the first day.",
+                                  "The headband didn't work through the session.",
+                                  # Subjects no list names: anything but a person is a cause.
+                                  "The recording wasn't working.",
+                                  "The readings weren't working.",
+                                  "The connection wasn't working.",
+                                  "The Muse wasn't working.",
+                                  "The equipment wasn't working.",
+                                  "The camera's feed wasn't working.",
+                                  # First in its sentence, a capital is not taken for a name.
+                                  "The headband was new. Bluetooth wasn't working.",
+                                  # The sensor further back than the verb's own subject.
+                                  "The headband the student wore wasn't working.",
+                                  "The headband, which was new, wasn't working.",
+                                  # "They" may be the devices; a capital mid-sentence is a device's name.
+                                  "The headband and camera were new, but they weren't working.",
+                                  "On Monday the Athena wasn't working.",
+                                  "On Monday the Bluetooth wasn't working.",
+                                  "1) Bluetooth wasn't working.",
+                                  # Other failure verbs and phrases.
+                                  "The headband never worked.",
+                                  "The headband couldn't connect.",
+                                  "The camera no longer works.",
+                                  "The headband stopped responding.",
+                                  "The camera had issues on Monday.",
+                                  "The headband ran out of battery.",
+                                  "The battery died halfway through.",
+                                  "The headband failed to connect.",
+                                  # Connecting is the device's whoever the subject, as "couldn't connect" is.
+                                  "The student failed to connect the headband.",
+                                  "The student couldn't connect the headband.",
+                                  "The student had trouble connecting the headband.",
+                                  "The student had problems pairing it.",
+                                  "The headband couldn't connect on Monday.",
+                                  "The camera failed to connect to the laptop.",
+                                  # A device as the subject: any connect failure, whatever follows.
+                                  "The headband couldn't connect to the app.",
+                                  "The headband couldn't connect over Bluetooth.",
+                                  "The headband couldn't connect that day.",
+                                  "The headband wasn't connected yet.",
+                                  "The headband hasn't been connected since Monday.",
+                                  # A person as the subject: a device word past an adjective or a compound.
+                                  "The student couldn't connect the new headband.",
+                                  "The student couldn't connect the heart sensor.",
+                                  "The student couldn't connect the headset.",
+                                  # A person's connect failure with a time, and devices beyond the headband.
+                                  "The student couldn't connect during the lesson.",
+                                  "The student couldn't connect in the morning.",
+                                  "The student couldn't connect today.",
+                                  "The student couldn't connect during today's lesson.",
+                                  "The student couldn't connect in today's session.",
+                                  "The student couldn't connect on Monday.",
+                                  "The student couldn't connect for most of the lesson.",
+                                  "The student couldn't connect for the rest of the session.",
+                                  "The student couldn't connect after the update.",
+                                  "The student couldn't connect in class.",
+                                  "The student couldn't connect on Monday morning and gave up.",
+                                  # A time followed by another time or an adverb, and a device further on.
+                                  "The student couldn't connect in class yesterday.",
+                                  "The student couldn't connect in class either.",
+                                  "The student couldn't connect in the morning before school.",
+                                  "The student couldn't connect for most of the lesson today.",
+                                  "The student couldn't connect in class with the headband.",
+                                  "The student couldn't pair her earbuds.",
+                                  "The student had trouble syncing her watch.",
+                                  # "was not" is a negation like "wasn't", so any non-person subject counts.
+                                  "On Monday the Bluetooth was not working.",
+                                  "The Bluetooth also was not working."])
+def test_a_sensor_not_working_is_a_cause_whatever_follows(text):
+    assert main._names_a_cause(text)
+
+
+@pytest.mark.parametrize("text", [
+    "Focus came from the headband. She didn't work on fractions.",
+    # A sensor ending the previous sentence is not the subject of a bare "not".
+    "Readings came from the headband. Not working through every question kept focus steady.",
+    "Focus was higher on days she did not work on word problems.",
+    "The student who never worked ahead had steadier focus.",
+    "Focus was lower on days the student did not record an answer quickly.",
+    "It didn't work out as planned, so the session was shorter.",
+    # The subject past an adverb, a relative clause, and a family noun.
+    "The student sometimes didn't work through the harder questions.",
+    "Students who struggled didn't work on the bonus questions.",
+    "Your daughter didn't work on fractions this week.",
+    "The student had trouble with fractions on Monday.",
+    # An adverb before the auxiliary, and an auxiliary before the phrase's own verb.
+    "The student also did not work ahead.",
+    "The student has had trouble with fractions.",
+    "The student also has had trouble with fractions.",
+    # A group of people, and people named by where they are.
+    "The class had trouble with fractions.",
+    "The students in the class didn't work on fractions.",
+    # Connecting ideas is maths, not a device.
+    "The student failed to connect fractions to decimals.",
+    "She couldn't connect the two ideas.",
+    "The student had trouble connecting fractions to decimals.",
+    "The student couldn't connect today's lesson to last week's.",
+    # An idea as the subject, and "it" past the object.
+    "The idea didn't connect with her.",
+    "The lesson didn't connect.",
+    "The student couldn't connect the ideas to it.",
+    # An idea failing is teaching; a preposition that is not a time is not a when.
+    "The method didn't work for her.",
+    "The explanation didn't work at first.",
+    "The student couldn't connect on a deeper level.",
+    "The student couldn't connect the steps in her head.",
+    "She couldn't connect in her head why it mattered.",
+    "The student couldn't connect for long with the harder questions.",
+    # A time word inside another word, or a count rather than a date.
+    "The student couldn't connect ideas in the classroom discussion.",
+    "The student couldn't connect in her daydreams.",
+    "The student couldn't connect at the weekend's quiz.",
+    "The student couldn't connect for 2 of the questions.",
+    # A time word that does not end its clause is a place or a thing.
+    "She couldn't connect in class discussions.",
+    "She couldn't connect during break time with her classmates' ideas.",
+    # A device only as where the material was shown, or inside a "what" clause.
+    "The student couldn't connect fractions to the examples on the tablet.",
+    "The student couldn't connect fractions to examples on tablets.",
+    "The idea didn't connect with what she saw on the app.",
+    "The student couldn't connect what the app showed to the lesson.",
+])
+def test_a_person_as_the_subject_is_effort_not_a_cause(text):
+    assert not main._names_a_cause(text)
+
+
+@pytest.mark.parametrize("text", ["Heart rate was not recorded because the sensor was turned off.",
+                                  "Heart rate hasn't been recorded since 3 August.",
+                                  "Expression readings weren't recorded this week.",
+                                  # "Recording" in any form states the absence, not why.
+                                  "The sensor wasn't recording heart rate because it was turned off on 3 October.",
+                                  "The headband has not recorded anything since 3 October."])
+def test_saying_nothing_was_recorded_is_an_absence_not_a_cause(text):
+    assert not main._names_a_cause(text)
 
 
 def test_the_prompt_forbids_naming_a_cause():

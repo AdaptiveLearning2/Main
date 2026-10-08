@@ -1411,7 +1411,8 @@ export default function Adaptive() {
         return apiFetch(`/api/generate-question?${params.toString()}`)
       })
       .then(json => {
-        if (!json?.question_text) throw new Error('Invalid response')
+        // Logged below; the keys say what came back instead, since no server log records a 200.
+        if (!json?.question_text) throw new Error(`No question_text in the response (keys: ${Object.keys(json || {}).join(', ') || 'none'})`)
         setData(json)
         setActiveButton(null); setSelectedAnswer(null)
         setPhase('question')

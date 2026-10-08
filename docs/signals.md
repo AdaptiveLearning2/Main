@@ -441,7 +441,7 @@ derived `True` survives. The first cut marked the poller path only and a camera 
 exists to prevent: the mapper rule again.
 
 `optics_window` builds the last 25 s on demand from the clock — a pulse at a resting rate drawn per simulator
-(`HEART_REST_BPM_RANGE`, 62–84) with a slow drift, raised by misses through the same decaying task bias, a second
+(`HEART_REST_BPM_RANGE`, 62–84) with a slow drift, raised by misses via the task bias (+2 bpm a miss, τ 90 s), a second
 harmonic so a spectral argmax cannot read double, and independent noise per channel so the beat consensus has four
 opinions of one heart — at 64 Hz on the bottom rung's four channels, complete and gap-free. History exists while the
 stream is up *and* a device is paired, from whichever began later, and is cleared with the stream, the link or
@@ -608,7 +608,7 @@ calibration). Only a trusted rate counts; anything else gets nulls, which fusion
   10-minute drop. A reading with no aware stamp restarts it too. It is **fixed for
   the session** (a rolling reference would decay a sustained rise back to "low"), survives a dropped lock, and is
   forgotten by `_reset_heart`, so the next student calibrates afresh. Known limit: a student already aroused when
-  calibration runs gets a high baseline, and the score under-reports for the whole session.
+  calibration runs gets a high baseline and reads low all session, as a sim student wrong from question one does.
 - **The category is heart rate alone**: +5 bpm over baseline is `moderate`, +10 is `high`; both clear the 2.1 bpm
   seated error, and neither is validated on a child. The score is 50 at baseline and 100 at +20 bpm, clamped.
 - **RMSSD nudges the score and never the category**: ±10 points per halving or doubling against an RMSSD baseline

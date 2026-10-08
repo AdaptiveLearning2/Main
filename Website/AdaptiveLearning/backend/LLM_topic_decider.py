@@ -714,6 +714,8 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
 
     # From the database, not the sidecar, so this works when EEG is unreachable.
     session_perf = get_session_performance(session_id)
+    # Stamped here, before generation (which can take a minute), so a queued label's age is not understated.
+    signal_read_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
     signal_state = get_session_signal_state(session_id, user_id)
     eeg_label    = signal_state.label if signal_state else "no_eeg"
     # Only what the grade may see: a pick outside it is replaced at random by `_safe_topic`.
@@ -827,6 +829,8 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
     # Diagnostic only, never shown to the student: carries raw internals like confidence.
     question["signal_reason"]   = signal_state.reason if signal_state else "no session"
     question["signal_channels"] = signal_state.channels if signal_state else {}
+    # When the label was read; a prefetched question is served later, so it can be stale.
+    question["signal_read_at"] = signal_read_at
     question["difficulty"]   = difficulty
 
     return question

@@ -175,3 +175,22 @@ it('shows a dismissed check-in again for the session that replaces a closed one'
   await answer()
   expect(await screen.findByText(checkIn)).toBeInTheDocument()
 }, 20_000)
+
+it('logs what came back when a generation answers 200 with no question', async () => {
+  // No server log records a 200, so the page's own log is the only trace of what arrived.
+  mockApi({
+    ...ROUTES,
+    'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
+    'GET /api/generate-question?bias=0&grade=1st+Grade&session_id=sess-goal': () => ({ detail: 'odd' }),
+  })
+  const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    render(<Adaptive />)
+    await userEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+    await screen.findByText(/generation failed/i)
+    const messages = logged.mock.calls.map(([e]) => String(e?.message ?? e))
+    expect(messages.some(m => m.includes('No question_text') && m.includes('keys: detail'))).toBe(true)
+  } finally {
+    logged.mockRestore()
+  }
+})

@@ -2873,7 +2873,8 @@ def generate_question(
         while len(queues) > _PREFETCH_KEPT_QUEUES and idle:
             queues.pop(idle.pop(0))
 
-    if not question:
+    inline = not question
+    if inline:
         print(f"[generate] generating inline for {user_id[:8]}")
         refund = _admit_generation(user_id)
         try:
@@ -2891,7 +2892,13 @@ def generate_question(
                     # 503: a configured ceiling was reached; never silently serve another source.
                     print(f"[generate] refused for {user_id[:8]}: {e}")
                     raise HTTPException(503, "Question generation is temporarily unavailable.")
+                except Exception as e:
+                    # Re-raised as the 500 it always was; logged so the failure has a cause on record.
+                    print(f"[generate] failed for {user_id[:8]} at {effective_grade!r}, bias {manual_bias}: "
+                          f"{type(e).__name__}: {e}")
+                    raise
             if not question:
+                print(f"[generate] the decider returned no question for {user_id[:8]} at {effective_grade!r}")
                 raise HTTPException(500, "Failed to generate question")
         except Exception:
             # No question reached the student, so it does not count against their day.
@@ -2909,6 +2916,8 @@ def generate_question(
 
     question["effective_grade"] = effective_grade
     question["bias"]            = manual_bias
+    # A queued question's `eeg_label` was read when it was made (`signal_read_at`), not now.
+    question["served_from"]     = "inline" if inline else "queue"
 
     _ensure_queue(user_id, effective_grade, manual_bias, session_id)
 

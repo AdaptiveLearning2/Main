@@ -117,12 +117,25 @@ def test_kindergarten_gets_a_kindergarten_question_either_way(decider):
     assert set(t.strip() for t in _topics_line(prompts[0]).split(",")) == kindergarten
 
 
-def test_the_question_says_when_its_steering_label_was_read(decider):
-    """A prefetched question is served later; the stamp is how a reader tells its label is old."""
+def test_the_question_says_when_its_steering_label_was_read(monkeypatch):
+    """Stamped at the read, not after generation (which can take a minute), or a queued label looks fresher."""
     import datetime as dt
-    run, _, _ = decider
-    before = dt.datetime.now(dt.timezone.utc)
-    question = run('{"topic": "ordering", "difficulty": "easy"}')
-    after = dt.datetime.now(dt.timezone.utc)
+    import time
+    marks = {}
+    monkeypatch.setattr(td, "get_user_performance", lambda _u: _rows())
+    monkeypatch.setattr(td, "get_user_history", lambda _u: collections.defaultdict(collections.deque))
+    monkeypatch.setattr(td, "get_session_performance", lambda _s: None)
+    monkeypatch.setattr(td, "get_session_signal_state",
+                        lambda _s, _u: marks.setdefault("read", dt.datetime.now(dt.timezone.utc)) and None)
+    monkeypatch.setattr(td, "_attach_stored_id", lambda _q, _d: None)
+    monkeypatch.setattr(td.llm_client, "generate_text", lambda _p: '{"topic": "ordering", "difficulty": "easy"}')
+
+    def slow_generation(*_a):
+        marks["generating"] = dt.datetime.now(dt.timezone.utc)
+        time.sleep(0.05)
+        return {"question_text": "q"}
+    monkeypatch.setattr(td, "question_generation", slow_generation)
+
+    question = td.LLM_single_prompt_topic_and_difficulty_decider("u1", "9th Grade")
     read_at = dt.datetime.fromisoformat(question["signal_read_at"])
-    assert before <= read_at <= after
+    assert read_at <= marks["read"] < marks["generating"], (read_at, marks)

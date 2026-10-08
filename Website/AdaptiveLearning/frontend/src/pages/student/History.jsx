@@ -171,7 +171,7 @@ export default function History() {
                 className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm flex items-center justify-between hover:shadow-md transition-shadow"
               >
                 <div className="flex items-center gap-4">
-                  <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-lg flex-shrink-0 ${done ? 'bg-green-50 dark:bg-green-900/30' : s.abandoned ? 'bg-slate-100 dark:bg-gray-800' : 'bg-amber-50 dark:bg-amber-900/30'}`}>
+                  <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-lg flex-shrink-0 ${done ? 'bg-green-50 dark:bg-green-900/30' : s.abandoned || s.abandoned === null ? 'bg-slate-100 dark:bg-gray-800' : 'bg-amber-50 dark:bg-amber-900/30'}`}>
                     {done ? '✅' : s.abandoned ? '⏹️' : s.abandoned === null ? '❔' : '⏳'}
                   </div>
                   <div>

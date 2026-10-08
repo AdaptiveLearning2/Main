@@ -179,11 +179,18 @@ def test_a_reply_saying_a_read_failed_is_still_accepted():
     "Focus was lower on days spent not working through many questions at once.",
     "Focus was lower on days the student didn't work through many questions.",
     "Focus was higher on days the student did not work hard on fractions.",
+    "Focus was higher on days the student didn't work on fractions.",
 ])
 def test_a_reply_that_describes_the_students_work_is_still_accepted(line):
     """"Work" about the student's effort is not a cause for a sensor, so the filter leaves it."""
     allowed = main._chart_summary_figures([line])
     assert main._validated_chart_summary(f"1. {line}", allowed, 1) is not None
+
+
+@pytest.mark.parametrize("text", ["The heart sensor wasn't working on Monday.",
+                                  "The headband was not working on the 3rd."])
+def test_not_working_on_a_day_is_still_a_cause(text):
+    assert main._CAUSE_TERMS.search(text)
 
 
 def test_the_prompt_forbids_naming_a_cause():

@@ -135,6 +135,28 @@ describe('test mode', () => {
     expect(screen.getByText(/2 questions/)).toBeInTheDocument()
   })
 
+  it('ends a session once for a double-clicked Done, so its own close never reads as already ended', async () => {
+    overrideApi('/api/practice-sessions/start', () => ({
+      id: 'sess-1', mode: 'flashcard', topics: ['ordering'], difficulty: 'medium',
+      grade_level: '5th Grade', questions_answered: 0, correct_answers: 0,
+    }), 'POST')
+    let ended = false
+    overrideApi('/api/practice-sessions/sess-1/end', () => {
+      const reply = ended ? { ok: true, already_closed: true, questions_answered: 0, correct_answers: 0 }
+        : { ok: true, topic_summary: {} }
+      ended = true
+      return reply
+    }, 'POST')
+    await startATestSession()
+    await screen.findByText('What is 2 + 2?')
+
+    await userEvent.dblClick(screen.getByRole('button', { name: 'Done' }))
+
+    await screen.findByText(/review complete/i)
+    expect(apiFetch.mock.calls.filter(([p]) => p === '/api/practice-sessions/sess-1/end')).toHaveLength(1)
+    expect(screen.queryByText(/had already ended/i)).not.toBeInTheDocument()
+  })
+
   it('says an answer to a session that has ended was not saved, rather than a generic failure', async () => {
     overrideApi('/api/practice-sessions/sess-1/answer', () => { throw apiError(409, 'ended') }, 'POST')
     await startATestSession()

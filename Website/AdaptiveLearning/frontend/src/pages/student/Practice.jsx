@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { endPracticeSession } from '../../lib/practiceSession'
 import PracticeSetup from '../../components/practice/PracticeSetup'
 import PracticeResults from '../../components/practice/PracticeResults'
@@ -18,7 +18,11 @@ export default function Practice() {
     setResult(null)
   }, [])
 
+  // One `/end` per session: a second (double-clicked Done) answers already_closed for our own close.
+  const finishedFor = useRef(null)
   const handleFinish = useCallback(async (liveCounts) => {
+    if (!session || finishedFor.current === session.id) return
+    finishedFor.current = session.id
     setSession(s => (s ? { ...s, ...liveCounts } : s))
     const closed = await endPracticeSession(session?.id)
     // Closed before Finish (the sweep): the stored counts, since the tally includes refused answers.

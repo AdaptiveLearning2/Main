@@ -306,6 +306,8 @@ it('says an open practice session whose idleness was unread is unknown, and not 
   render(<History />)
 
   expect(await screen.findByText(/status unavailable/i)).toBeInTheDocument()
+  // Not the in-progress amber either.
+  expect(screen.getByText('❔').className).not.toMatch(/amber/)
   await userEvent.click(screen.getByRole('button', { name: 'In Progress' }))
   expect(screen.queryByText('Practice · Test')).not.toBeInTheDocument()
 })

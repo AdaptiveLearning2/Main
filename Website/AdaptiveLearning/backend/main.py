@@ -3913,9 +3913,12 @@ _CLINICAL_TERMS = re.compile(
 # A cause for a missing reading, which the summary cannot know: a sensor off is turned off, never broken.
 # Not "fail": "could not be read" is honestly rephrased as "failed to load".
 _CAUSE_TERMS = re.compile(
-    # Any negation ("doesn't", "hasn't been", bare "not"); "didn't work through the questions" is effort.
+    # Any negation ("doesn't", "hasn't been", bare "not"). Effort is not a cause: "didn't work through the
+    # questions", "didn't work on fractions"; "on" a date or day ("wasn't working on 3 August") still is.
     r"\b(stopped working|stops working|(?:\w+n['’]t|not)(?:\s+been)?\s+"
-    r"work(?:s|ed|ing)?\b(?!\s+(?:through|out|hard|harder|much|ahead|together|towards?)\b)|"
+    r"work(?:s|ed|ing)?\b(?!\s+(?:(?:through|out|hard|harder|much|ahead|together|towards?)\b|on\s+(?!\d|"
+    r"(?:the|that|this|each|every)\b|(?:mon|tues|wednes|thurs|fri|satur|sun)day|"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))))|"
     r"broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|lost (?:the )?connection|"
     r"technical (?:problem|issue|difficult)\w*)\b",
     re.IGNORECASE,

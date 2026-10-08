@@ -39,37 +39,50 @@ read from `kit.json`, which `src/kit/config.py` refuses for exactly the reasons 
 `src/kit/update.py`, run by the task `AdaptiveLearning Sensors Update`, which an all-users install into
 `%ProgramFiles%\AdaptiveLearning Sensors` registers when *Keep the sensors up to date* is ticked (the default; IT
 unticks it with `/MERGETASKS="!autoupdate"`). SYSTEM; at boot, at any sign-in, and hourly at a minute drawn at install;
-one run at a time, on battery too, an hour at most. Its five actions run in order whatever the one before exited with:
+one run at a time, on battery too, an hour at most. Its five actions run in order, and each always launches: Task
+Scheduler ends a run at an action that cannot, so the installers go through `cmd`'s `if exist`:
 
 | # | Action | What it does |
 | --- | --- | --- |
-| 1 | `--update` | Blocks the last install if it did not stick, reads the feed, stages what is due; when quiet, hard-links `apply.exe` and `rollback.exe` and writes `attempt.json` |
-| 2 | `updates\apply.exe` | The Update installer, silently. Absent, the action fails and nothing happens |
-| 3 | `--after-update` | Only after an install this run, by the version now installed: the self-test. A pass removes `rollback.exe`; a fail blocks the version |
-| 4 | `updates\rollback.exe` | The way back, still there after a failed check, or when the new version could not even start |
-| 5 | `--start-sessions` | Only after an install this run: the sensors again in each session at the keyboard, as its user |
+| 1 | `--update` | Finishes an earlier run's install if one is unsettled; otherwise reads the feed and stages what is due, and when quiet links `apply.exe` and `rollback.exe` and writes `attempt.json` |
+| 2 | `cmd` with `apply.exe` | The Update installer, silently, when action 1 linked it; nothing otherwise |
+| 3 | `--after-update` | The self-test, by the version now installed, when this run linked `rollback.exe` for an unchecked install. A pass removes `rollback.exe`; a fail blocks the version |
+| 4 | `cmd` with `rollback.exe` | The way back, when still linked: after a failed check, or when the new version could not start |
+| 5 | `--start-sessions` | After an install, check or rollback this run: the sensors again in each session at the keyboard, as its user |
 
 - **Two layers, two jobs.** The gate's download key decides who can download; the feed's Ed25519 signature, and the
   SHA-256 and size it carries, decide what is installed. A leaked key lets someone download the kit, never makes a
   computer install anything. The signature covers `FEED_PREFIX` and the manifest's bytes; `update_keys.PUBLIC_KEYS`
   holds the everyday key and an offline recovery key, and either can sign.
-- **Only when nobody is mid-lesson.** An install stops the sensors, so it waits until nobody is signed in, or everyone
-  signed in under 3 minutes ago. A session Windows will not describe counts as a lesson. The launcher stands aside
-  while `apply.exe` exists and `attempt.json` is under 15 minutes old; action 5 starts it after.
-- **Never a downgrade from the feed.** Only a newer version is staged. The one way back is the local rollback to the
-  manifest's `rollback_to`, which the publish script takes from what `latest.json` named before, and which is at least
-  0.2.0, the first version with `--update`: a kit rolled back below it could never update again. A feed naming no way
-  back is never installed.
-- **A version that failed here is never retried.** Action 3 blocks it on a failed check; action 1 blocks any
-  `attempt.json` version that `version.txt` does not now read, which covers a version whose Python cannot start, where
-  action 3 never ran. It stays blocked until a newer one is published.
+- **A halt stays halted.** The manifest names its feed, so canary cannot be served as latest, and a computer refuses
+  a feed older than the newest it has read of it (`seen.json`): re-signing at `rollout` 0 cannot be undone by serving
+  the earlier feed again.
+- **Only when nobody is mid-lesson.** An install stops the sensors, so it waits until every session at the keyboard
+  signed in under 3 minutes ago, or has had no input for 30. Windows reports no idle time for a console session, so
+  the running kit sets `Global\AdaptiveLearningSensorsIdle-<session>` while its session is idle, and a session with
+  no kit reporting and no recent sign-in counts as a lesson. A session switched away from has nobody at it. The
+  launcher stands aside while `apply.exe` or `rollback.exe` is linked and `attempt.json` is under 15 minutes old.
+- **Never a downgrade from the feed; the way back is the version running now.** Only a newer version is staged, and
+  only when the feed's signed `history`, every installer the published feeds have named, lists the installed
+  version's own: a rollback returns to what ran here, never to a version this computer skipped or a later one halted.
+  History starts at 0.2.0, the first version with `--update`, so every version that reaches a computer must be
+  published, or that computer never updates.
+- **No install is taken as passed without its check.** `attempt.json` records `installing`, `passed`, `failed`,
+  `setup_failed` or `repairing`, and action 1 finishes whatever an earlier run left, in a quiet window: an install whose
+  check never ran is checked; one whose new version never ran its check is blocked and the way back reinstalled, since
+  setup may have been cut short; a failed check whose rollback did not happen is rolled back again. A failed setup
+  proves nothing about the version, so it is blocked on its third try. A blocked version stays blocked until a newer
+  one is published. If a link fails, the attempt is removed with it, so nothing is blocked for not running.
+- **An install clears the code first.** `[InstallDelete]` removes `_internal\` and `bridge\` before copying, since an
+  older version over a newer one would otherwise keep DLLs both folders load first.
 - **Rollout.** The signed `rollout` is a percentage; each computer's bucket is a hash of its `MachineGuid`, so the
   same computers go first. One whose id cannot be read takes the last bucket.
 - **Settings in `update.json`, not `kit.json`.** `config.check` refuses a name it does not know, and after a rollback
   an older launcher reads the newer kit's files; `update.json`'s reader ignores unknown names for the same reason. An
   Update installer carries neither file: the build copies the kit without them, `kit_build.py scan` fails on either
-  secret in ASCII or UTF-16, and it refuses (exit 7) where no `kit.json` is installed. `version.txt` is the installed
-  version, since `kit.json`'s goes stale.
+  secret in ASCII or UTF-16, and it refuses (exit 7) where no `kit.json` is installed. The download key lives in a
+  file and reaches Python through `KIT_DOWNLOAD_KEY`, never a command line. `version.txt` is the installed version,
+  since `kit.json`'s goes stale.
 - **SYSTEM runs nothing a student can write.** Every update mode exits 2, writing nothing, unless it is SYSTEM (an
   admin, to register) running from exactly `%ProgramFiles%\AdaptiveLearning Sensors`. PATH is cut to Windows' folders
   before anything else loads. Redirects are refused, since following one sends the key to another host, and a download

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from dataclasses import asdict, dataclass
@@ -16,6 +17,7 @@ from pathlib import Path
 UPDATE_FILE = "update.json"
 GATE_URL = "https://kit-updates.akashravi04.workers.dev"  # the download gate (installer/update_gate)
 FEEDS = ("latest", "canary")
+KEY_VAR = "KIT_DOWNLOAD_KEY"  # how the build hands over the key: a command line lands in history and the process list
 _KEY = re.compile(r"[A-Za-z0-9_-]{32,128}")
 
 
@@ -59,18 +61,17 @@ def write(path: Path, settings: UpdateSettings) -> None:
     Path(path).write_text(json.dumps(asdict(settings), indent=2) + "\n", encoding="utf-8")
 
 
-def main(argv: list[str] | None = None) -> int:
-    """`check` prints every refusal; `write PATH` writes update.json as well."""
+def main(argv: list[str] | None = None, environ=os.environ) -> int:
+    """`check` prints every refusal; `write PATH` writes update.json as well. The key comes from KEY_VAR."""
     parser = argparse.ArgumentParser(prog="python -m src.kit.update_settings")
     parser.add_argument("action", choices=["check", "write"])
     parser.add_argument("path", nargs="?", type=Path)
     parser.add_argument("--feed", default="latest")
-    parser.add_argument("--key", required=True)
     args = parser.parse_args(argv)
     if args.action == "write" and args.path is None:
         parser.error("write needs the path of the update.json to write")
     try:
-        settings = check({"feed": args.feed, "key": args.key})
+        settings = check({"feed": args.feed, "key": environ.get(KEY_VAR, "")})
     except UpdateSettingsError as exc:
         print(exc, file=sys.stderr)
         return 1

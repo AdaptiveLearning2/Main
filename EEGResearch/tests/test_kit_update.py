@@ -9,6 +9,7 @@ import http.client
 import http.server
 import json
 import logging
+import os
 import subprocess
 import sys
 import textwrap
@@ -26,6 +27,7 @@ from launcher_cases import ROOT
 
 from src.kit import config as kit_config
 from src.kit import launcher, selftest, update, update_keys, update_settings, winproc
+from src.kit.update import Presence
 
 sys.path.insert(0, str(ROOT / "EEGResearch" / "installer"))
 import kit_release  # noqa: E402
@@ -35,6 +37,8 @@ NOW = dt.datetime(2026, 10, 8, 12, tzinfo=dt.UTC)
 KEY = "k" * 43
 PROGRAM_FILES = r"C:\Program Files"
 APP = rf"{PROGRAM_FILES}\AdaptiveLearning Sensors"
+FREE = [Presence(30.0, True, None)]  # just signed in
+BUSY = [Presence(900.0, True, None)]  # signed in a while, and no idle report
 
 
 @pytest.fixture(scope="module")
@@ -55,13 +59,13 @@ NEW, NEW_BODY = installer("0.2.1", b"new installer bytes")
 OLD, OLD_BODY = installer("0.2.0", b"old installer")
 
 
-def feed(private, release=NEW, rollout=100, rollback=OLD, published=NOW) -> bytes:
-    return kit_release.sign(private, release, rollout, rollback, published)
+def feed(private, release=NEW, rollout=100, history=(OLD,), published=NOW, name="latest") -> bytes:
+    return kit_release.sign(private, release, rollout, list(history), published, name)
 
 
 def resign(private, change, prefix: bytes = update.FEED_PREFIX) -> bytes:
     """A feed whose manifest change() edited, signed but never read back: refused only for what it says."""
-    manifest = {**NEW, "published": NOW.isoformat(), "rollout": 100, "rollback_to": OLD}
+    manifest = {**NEW, "feed": "latest", "published": NOW.isoformat(), "rollout": 100, "history": [OLD]}
     change(manifest)
     signed = json.dumps(manifest).encode()
     return json.dumps({"manifest": base64.b64encode(signed).decode(),
@@ -71,16 +75,23 @@ def resign(private, change, prefix: bytes = update.FEED_PREFIX) -> bytes:
 # --- the feed -------------------------------------------------------------------------------------------------
 
 def test_a_signed_feed_reads_back_with_its_signer(signer):
-    manifest, by = update.verify_feed(feed(signer), raw_key(signer))
-    assert by == "everyday"
+    manifest, by = update.verify_feed(feed(signer), raw_key(signer), "latest")
+    assert by == "everyday" and manifest.feed == "latest"
     assert manifest.release == update.Release((0, 2, 1), NEW["file"], NEW["sha256"], NEW["size"])
-    assert manifest.rollback_to.version == (0, 2, 0) and manifest.rollout == 100 and manifest.published == NOW
+    assert manifest.history == (update.Release((0, 2, 0), OLD["file"], OLD["sha256"], OLD["size"]),)
+    assert manifest.rollout == 100 and manifest.published == NOW
 
 
 def test_either_baked_key_can_sign(signer):
     other = Ed25519PrivateKey.generate()
     keys = {**update.load_keys({"recovery": kit_release.public_text(other)}), **raw_key(signer)}
     assert update.verify_feed(feed(other), keys)[1] == "recovery"
+
+
+def test_one_feed_cannot_be_served_as_the_other(signer):
+    with pytest.raises(update.FeedError, match="canary"):
+        update.verify_feed(feed(signer, name="canary"), raw_key(signer), "latest")
+    assert update.verify_feed(feed(signer, name="canary"), raw_key(signer), "canary")[0].feed == "canary"
 
 
 def _flip_manifest_byte(raw: bytes) -> bytes:
@@ -115,9 +126,13 @@ def test_a_feed_not_signed_by_a_kit_key_is_refused(signer, make):
     (lambda m: m.update(rollout=101), "rollout"),
     (lambda m: m.update(rollout=-1), "rollout"),
     (lambda m: m.update(published="2026-10-08T12:00:00"), "time zone"),
-    (lambda m: m.update(rollback_to=installer("0.1.3", b"x")[0]), "rollback_to"),
-    (lambda m: m.update(rollback_to=installer("0.2.1", b"x")[0]), "rollback_to"),
-    (lambda m: m.update(rollback_to={**OLD, "file": "evil.exe"}), "file"),
+    (lambda m: m.update(feed="beta"), "feed"),
+    (lambda m: m.pop("feed"), "feed"),
+    (lambda m: m.pop("history"), "history"),
+    (lambda m: m.update(history=[installer("0.1.3", b"x")[0]]), "history"),
+    (lambda m: m.update(history=[installer("0.2.1", b"x")[0]]), "history"),
+    (lambda m: m.update(history=[OLD, OLD]), "twice"),
+    (lambda m: m.update(history=[{**OLD, "file": "evil.exe"}]), "file"),
 ])
 def test_a_signed_manifest_is_still_refused_for_what_it_says(signer, change, reason):
     raw = resign(signer, change)
@@ -131,7 +146,7 @@ def test_names_a_newer_publisher_adds_are_ignored(signer):
 
 
 def test_the_rollback_floor_itself_is_allowed(signer):
-    assert update.verify_feed(feed(signer), raw_key(signer))[0].rollback_to.version == update.ROLLBACK_FLOOR
+    assert update.verify_feed(feed(signer), raw_key(signer))[0].history[0].version == update.ROLLBACK_FLOOR
 
 
 # --- what a computer decides ----------------------------------------------------------------------------------
@@ -149,7 +164,7 @@ def manifest_of(private, **kwargs) -> update.Manifest:
     ((0, 2, 0), set(), 9, {"rollout": 10}, "eligible"),
     ((0, 2, 0), set(), 0, {"rollout": 0}, "not_in_rollout"),
     ((0, 2, 0), set(), 99, {"rollout": 100}, "eligible"),
-    ((0, 2, 0), set(), 0, {"rollback": None}, "no_rollback"),
+    ((0, 2, 0), set(), 0, {"history": ()}, "no_rollback"),
 ])
 def test_decide(signer, installed, blocked, bucket, kwargs, state):
     decision = update.decide(installed, manifest_of(signer, **kwargs), blocked, bucket)
@@ -157,17 +172,31 @@ def test_decide(signer, installed, blocked, bucket, kwargs, state):
     assert bool(decision.stage) == (state == "eligible")
 
 
-def test_an_eligible_decision_stages_the_release_and_its_way_back(signer):
-    stage = update.decide((0, 2, 0), manifest_of(signer), set(), 0).stage
-    assert [r.version for r in stage] == [(0, 2, 1), (0, 2, 0)]
+def test_the_way_back_is_the_installed_versions_own_installer(signer):
+    middle, _ = installer("0.3.0", b"a version this computer never ran")
+    manifest = manifest_of(signer, release=installer("0.4.0", b"newest")[0], history=(OLD, middle))
+    assert [r.version for r in update.decide((0, 2, 0), manifest, set(), 0).stage] == [(0, 4, 0), (0, 2, 0)]
+    assert [r.version for r in update.decide((0, 3, 0), manifest, set(), 0).stage] == [(0, 4, 0), (0, 3, 0)]
+    skipped = manifest_of(signer, release=installer("0.4.0", b"newest")[0], history=(middle,))
+    assert update.decide((0, 2, 0), skipped, set(), 0).state == "no_rollback"  # never 0.3.0, which it never ran
 
 
-@pytest.mark.parametrize("ages, expected", [
-    ([], True), ([5.0], True), ([update.QUIET_SESSION_S - 0.1], True), ([update.QUIET_SESSION_S], False),
-    ([None], False), ([5.0, 3600.0], False), ([-1.0], False),
+@pytest.mark.parametrize("sessions, expected", [
+    ([], True),
+    ([Presence(5.0, True, None)], True),
+    ([Presence(update.QUIET_SESSION_S - 0.1, True, None)], True),
+    ([Presence(update.QUIET_SESSION_S, True, None)], False),
+    ([Presence(None, True, None)], False),
+    ([Presence(-1.0, True, None)], False),
+    ([Presence(5.0, True, None), Presence(3600.0, True, None)], False),
+    ([Presence(3600.0, True, True)], True),  # the kit reports nobody has touched it for IDLE_FREE_S
+    ([Presence(None, True, True)], True),
+    ([Presence(3600.0, True, False)], False),
+    ([Presence(3600.0, False, None)], True),  # switched away from: nobody is at it
+    ([Presence(3600.0, False, None), Presence(3600.0, True, None)], False),
 ])
-def test_quiet_means_nobody_signed_in_or_everyone_only_just_did(ages, expected):
-    assert update.quiet(ages) is expected
+def test_quiet_means_no_lesson_can_be_under_way(sessions, expected):
+    assert update.quiet(sessions) is expected
 
 
 def test_the_rollout_bucket_is_fixed_per_computer_and_spread_across_them():
@@ -229,13 +258,17 @@ def kit(tmp_path: Path, version: str = "0.2.0", settings: dict | None = None) ->
     return app
 
 
-def machine(net: FakeNet, private, ages=(), guid="any") -> update.Machine:
-    return update.Machine(lambda: list(ages), lambda: guid, lambda: net, lambda: raw_key(private),
-                          now=lambda: NOW.timestamp())
+def machine(net: FakeNet, private, sessions=(), guid="any", now=NOW) -> update.Machine:
+    return update.Machine(lambda: list(sessions), lambda: guid, lambda: net, lambda: raw_key(private),
+                          now=lambda: now.timestamp())
 
 
 def status(app: Path) -> dict:
     return json.loads((app / "updates" / "status.json").read_text(encoding="utf-8"))
+
+
+def attempt_of(app: Path) -> dict:
+    return json.loads((app / "updates" / "attempt.json").read_bytes())
 
 
 def test_a_due_update_is_staged_and_armed_when_nobody_is_signed_in(tmp_path, signer):
@@ -244,8 +277,7 @@ def test_a_due_update_is_staged_and_armed_when_nobody_is_signed_in(tmp_path, sig
     updates = app / "updates"
     assert (updates / "apply.exe").read_bytes() == NEW_BODY
     assert (updates / "rollback.exe").read_bytes() == OLD_BODY
-    assert json.loads((updates / "attempt.json").read_bytes()) == {"version": "0.2.1", "from": "0.2.0",
-                                                                    "at": NOW.timestamp()}
+    assert attempt_of(app) == {"version": "0.2.1", "way_back": "0.2.0", "at": NOW.timestamp(), "check": "installing"}
     assert status(app)["state"] == "installing" and status(app)["signed_by"] == "everyday"
     assert net.requests == [("/v1/feed/latest.json", f"Bearer {KEY}"), (f"/v1/files/{NEW['file']}", f"Bearer {KEY}"),
                             (f"/v1/files/{OLD['file']}", f"Bearer {KEY}")]
@@ -253,16 +285,22 @@ def test_a_due_update_is_staged_and_armed_when_nobody_is_signed_in(tmp_path, sig
 
 def test_mid_lesson_it_only_stages(tmp_path, signer):
     app = kit(tmp_path)
-    assert update.check_for_update(app, machine(gate(feed(signer)), signer, ages=[30.0, 900.0])) == 0
+    assert update.check_for_update(app, machine(gate(feed(signer)), signer, sessions=FREE + BUSY)) == 0
     updates = app / "updates"
     assert not (updates / "apply.exe").exists() and not (updates / "rollback.exe").exists()
     assert not (updates / "attempt.json").exists()
     assert (updates / NEW["file"]).read_bytes() == NEW_BODY and status(app)["state"] == "staged"
 
 
+def test_an_idle_session_left_signed_in_lets_it_install(tmp_path, signer):
+    app = kit(tmp_path)
+    update.check_for_update(app, machine(gate(feed(signer)), signer, sessions=[Presence(7200.0, True, True)]))
+    assert status(app)["state"] == "installing"
+
+
 def test_a_staged_installer_is_not_downloaded_again(tmp_path, signer):
     app, net = kit(tmp_path), gate(feed(signer))
-    update.check_for_update(app, machine(net, signer, ages=[900.0]))
+    update.check_for_update(app, machine(net, signer, sessions=BUSY))
     net.requests.clear()
     update.check_for_update(app, machine(net, signer))
     assert [path for path, _ in net.requests] == ["/v1/feed/latest.json"]
@@ -272,9 +310,28 @@ def test_a_staged_installer_is_not_downloaded_again(tmp_path, signer):
 def test_the_canary_feed_is_the_one_asked_for(tmp_path, signer):
     app = kit(tmp_path, settings={"feed": "canary", "key": KEY})
     net = gate(b"")
-    net.files["/v1/feed/canary.json"] = feed(signer)
+    net.files["/v1/feed/canary.json"] = feed(signer, name="canary")
     update.check_for_update(app, machine(net, signer))
     assert net.requests[0][0] == "/v1/feed/canary.json" and status(app)["state"] == "installing"
+
+
+def test_the_latest_feed_served_at_the_canary_address_is_refused(tmp_path, signer):
+    app = kit(tmp_path, settings={"feed": "canary", "key": KEY})
+    net = gate(b"")
+    net.files["/v1/feed/canary.json"] = feed(signer)
+    assert update.check_for_update(app, machine(net, signer)) == 1
+    assert "not 'canary'" in status(app)["detail"]
+
+
+def test_an_older_feed_served_again_is_refused(tmp_path, signer):
+    app = kit(tmp_path, version="0.2.1")
+    halted = feed(signer, rollout=0, published=NOW)
+    update.check_for_update(app, machine(gate(halted), signer))
+    assert json.loads((app / "updates" / "seen.json").read_bytes()) == {"latest": NOW.isoformat()}
+    replayed = feed(signer, rollout=100, published=NOW - dt.timedelta(days=1))
+    assert update.check_for_update(app, machine(gate(replayed), signer)) == 1
+    assert "served again" in status(app)["detail"]
+    assert update.check_for_update(app, machine(gate(halted), signer)) == 0  # the same feed again is fine
 
 
 def test_a_blocked_version_is_never_downloaded_or_armed(tmp_path, signer):
@@ -286,23 +343,21 @@ def test_a_blocked_version_is_never_downloaded_or_armed(tmp_path, signer):
     assert not (app / "updates" / "apply.exe").exists() and status(app)["state"] == "blocked"
 
 
-def test_an_install_that_did_not_stick_is_blocked_even_when_its_check_never_ran(tmp_path, signer):
-    app, net = kit(tmp_path), gate(feed(signer))
-    (app / "updates").mkdir()
-    (app / "updates" / "attempt.json").write_text('{"version": "0.2.1", "from": "0.2.0", "at": 0}', encoding="utf-8")
-    update.check_for_update(app, machine(net, signer))
-    assert json.loads((app / "updates" / "blocked.json").read_bytes()) == ["0.2.1"]
-    assert "did not stick" in status(app)["last_install"]
-    assert status(app)["state"] == "blocked" and not (app / "updates" / "apply.exe").exists()
+def test_a_failed_link_leaves_no_attempt_to_block(tmp_path, signer, monkeypatch):
+    app = kit(tmp_path)
+    links = []
 
+    def link(src, dst):
+        links.append(dst)
+        if len(links) == 2:
+            raise OSError("no room")
+        Path(dst).write_bytes(Path(src).read_bytes())
 
-def test_an_install_that_stuck_is_settled_without_blocking(tmp_path, signer):
-    app = kit(tmp_path, version="0.2.1")
-    (app / "updates").mkdir()
-    (app / "updates" / "attempt.json").write_text('{"version": "0.2.1", "from": "0.2.0", "at": 0}', encoding="utf-8")
-    update.check_for_update(app, machine(gate(feed(signer)), signer))
-    assert not (app / "updates" / "blocked.json").exists() and not (app / "updates" / "attempt.json").exists()
-    assert status(app)["state"] == "up_to_date" and "passed" in status(app)["last_install"]
+    monkeypatch.setattr(update.os, "link", link)
+    assert update.check_for_update(app, machine(gate(feed(signer)), signer)) == 1
+    updates = app / "updates"
+    assert not (updates / "attempt.json").exists() and not (updates / "rollback.exe").exists()
+    assert not (updates / "apply.exe").exists() and not (updates / "blocked.json").exists()
 
 
 def test_a_previous_runs_links_are_removed_before_anything_else(tmp_path, signer):
@@ -330,7 +385,7 @@ def test_a_download_that_is_not_the_feeds_is_refused_and_removed(tmp_path, signe
     net = gate(feed(signer), **{NEW["file"]: served})
     assert update.check_for_update(app, machine(net, signer)) == 1
     assert status(app)["state"] == "failed" and reason in status(app)["detail"]
-    assert [p.name for p in (app / "updates").iterdir()] == ["status.json"]
+    assert sorted(p.name for p in (app / "updates").iterdir()) == ["seen.json", "status.json"]
 
 
 def test_a_connection_cut_mid_download_is_reported(tmp_path, signer):
@@ -399,6 +454,71 @@ def test_the_real_opener_refuses_redirects_too():
     assert any(isinstance(h, update._RefuseRedirects) for h in update.opener("http://proxy:8080").handlers)
 
 
+# --- an earlier run's install, finished by action 1 ----------------------------------------------------------------
+
+def left(tmp_path: Path, installed: str, check: str) -> Path:
+    """A kit whose earlier run armed 0.2.1 over 0.2.0 and recorded check; both installers still staged."""
+    app = kit(tmp_path, version=installed)
+    updates = app / "updates"
+    updates.mkdir()
+    (updates / NEW["file"]).write_bytes(NEW_BODY)
+    (updates / OLD["file"]).write_bytes(OLD_BODY)
+    attempt = {"version": "0.2.1", "way_back": "0.2.0", "at": 0, "check": check}
+    (updates / "attempt.json").write_text(json.dumps(attempt), encoding="utf-8")
+    return app
+
+
+@pytest.mark.parametrize("installed, check, sessions, state, armed, blocked", [
+    ("0.2.1", "installing", FREE, "checking", True, False),  # cut after setup, before its check
+    ("0.2.1", "installing", BUSY, "check_waiting", False, False),
+    ("0.2.0", "installing", FREE, "repairing", True, True),  # could not start, or setup was cut short
+    ("0.2.0", "installing", BUSY, "repair_waiting", False, True),
+    ("0.2.1", "failed", FREE, "rolling_back", True, True),  # the rollback did not happen
+    ("0.2.1", "failed", BUSY, "rollback_waiting", False, True),
+])
+def test_an_unsettled_install_spends_the_next_run_and_only_when_quiet(tmp_path, signer, installed, check, sessions,
+                                                                      state, armed, blocked):
+    app = left(tmp_path, installed, check)
+    if check == "failed":
+        update.block(app / "updates", (0, 2, 1))  # as action 3 did
+    net = gate(feed(signer))
+    update.check_for_update(app, machine(net, signer, sessions=sessions))
+    updates = app / "updates"
+    assert status(app)["state"] == state and net.requests == []
+    assert (updates / "rollback.exe").exists() is armed and not (updates / "apply.exe").exists()
+    if armed:
+        assert (updates / "rollback.exe").read_bytes() == OLD_BODY
+        assert attempt_of(app)["at"] == NOW.timestamp() and attempt_of(app)["check"] == {
+            "checking": "installing", "repairing": "repairing", "rolling_back": "failed"}[state]
+    assert ((0, 2, 1) in update.read_blocked(updates)) is blocked
+
+
+@pytest.mark.parametrize("installed, check, note, blocked", [
+    ("0.2.1", "passed", "passed its check", False),
+    ("0.2.0", "failed", "rolled back to 0.2.0", False),
+    ("0.2.0", "repairing", "was reinstalled", False),
+    ("0.2.0", "setup_failed", "try 1 of 3", False),
+])
+def test_a_settled_install_is_noted_and_the_run_goes_on_to_the_feed(tmp_path, signer, installed, check, note,
+                                                                    blocked):
+    app = left(tmp_path, installed, check)
+    net = gate(feed(signer))
+    update.check_for_update(app, machine(net, signer, sessions=BUSY))
+    assert note in status(app)["last_install"] and net.requests[0][0] == "/v1/feed/latest.json"
+    assert not (app / "updates" / "attempt.json").exists()
+    assert ((0, 2, 1) in update.read_blocked(app / "updates")) is blocked
+
+
+def test_a_setup_that_keeps_failing_is_blocked_on_its_third_try(tmp_path, signer):
+    app = left(tmp_path, "0.2.0", "setup_failed")
+    for tries in (1, 2, 3):
+        update.check_for_update(app, machine(gate(feed(signer)), signer, sessions=BUSY))
+        assert f"try {tries} of 3" in status(app)["last_install"]
+        assert ((0, 2, 1) in update.read_blocked(app / "updates")) is (tries == 3)
+        (app / "updates" / "attempt.json").write_text(json.dumps(
+            {"version": "0.2.1", "way_back": "0.2.0", "at": 0, "check": "setup_failed"}), encoding="utf-8")
+
+
 # --- actions 3 and 5, and the launcher standing aside -------------------------------------------------------------
 
 def armed(tmp_path: Path, installed: str, at: float | None = None) -> Path:
@@ -407,7 +527,7 @@ def armed(tmp_path: Path, installed: str, at: float | None = None) -> Path:
     updates.mkdir()
     (updates / "apply.exe").write_bytes(NEW_BODY)
     (updates / "rollback.exe").write_bytes(OLD_BODY)
-    attempt = {"version": "0.2.1", "from": "0.2.0", "at": time.time() if at is None else at}
+    attempt = {"version": "0.2.1", "way_back": "0.2.0", "at": time.time() if at is None else at, "check": "installing"}
     (updates / "attempt.json").write_text(json.dumps(attempt), encoding="utf-8")
     return app
 
@@ -417,8 +537,7 @@ def test_a_passed_check_disarms_the_rollback(tmp_path):
     assert update.after_update(app, lambda report, a: 0) == 0
     updates = app / "updates"
     assert not (updates / "apply.exe").exists() and not (updates / "rollback.exe").exists()
-    assert json.loads((updates / "attempt.json").read_bytes())["check"] == "passed"
-    assert not (updates / "blocked.json").exists()
+    assert attempt_of(app)["check"] == "passed" and not (updates / "blocked.json").exists()
 
 
 @pytest.mark.parametrize("check", [lambda report, a: 1, lambda report, a: 1 / 0], ids=["fails", "raises"])
@@ -427,22 +546,39 @@ def test_a_failed_check_blocks_the_version_and_leaves_the_rollback_armed(tmp_pat
     assert update.after_update(app, check) == 1
     updates = app / "updates"
     assert not (updates / "apply.exe").exists() and (updates / "rollback.exe").read_bytes() == OLD_BODY
-    assert json.loads((updates / "blocked.json").read_bytes()) == ["0.2.1"]
+    assert json.loads((updates / "blocked.json").read_bytes()) == ["0.2.1"] and attempt_of(app)["check"] == "failed"
 
 
-def test_a_setup_that_failed_leaves_nothing_to_roll_back(tmp_path):
+def test_a_setup_that_failed_leaves_nothing_to_roll_back_and_says_so(tmp_path):
     app = armed(tmp_path, "0.2.0")
     ran = []
     assert update.after_update(app, lambda report, a: ran.append(1)) == 1
     assert ran == [] and not (app / "updates" / "rollback.exe").exists()
+    assert attempt_of(app)["check"] == "setup_failed" and not (app / "updates" / "blocked.json").exists()
 
 
-def test_with_nothing_installed_this_run_the_check_does_not_run(tmp_path):
+def test_a_check_armed_without_an_install_still_runs(tmp_path):
     app = armed(tmp_path, "0.2.1")
-    (app / "updates" / "apply.exe").unlink()
+    (app / "updates" / "apply.exe").unlink()  # action 1 armed only rollback.exe: the install was an earlier run's
+    assert update.after_update(app, lambda report, a: 0) == 0
+    assert attempt_of(app)["check"] == "passed"
+
+
+@pytest.mark.parametrize("check", ["passed", "failed", "setup_failed", "repairing"])
+def test_the_check_runs_only_for_an_unchecked_install(tmp_path, check):
+    app = armed(tmp_path, "0.2.1")
+    (app / "updates" / "attempt.json").write_text(json.dumps({**attempt_of(app), "check": check}), encoding="utf-8")
     ran = []
     assert update.after_update(app, lambda report, a: ran.append(1)) == 0
     assert ran == [] and (app / "updates" / "rollback.exe").exists()
+
+
+def test_with_nothing_armed_this_run_the_check_does_not_run(tmp_path):
+    app = armed(tmp_path, "0.2.1")
+    (app / "updates" / "rollback.exe").unlink()  # not quiet: action 1 left it unarmed
+    ran = []
+    assert update.after_update(app, lambda report, a: ran.append(1)) == 0
+    assert ran == [] and attempt_of(app)["check"] == "installing"
 
 
 def test_the_check_reports_beside_the_updates_and_the_update_log_survives_it(tmp_path):
@@ -477,8 +613,10 @@ def test_sessions_are_started_only_after_an_install_this_run(tmp_path, monkeypat
     assert len(calls) == 1
 
 
-def test_the_launcher_stands_aside_while_an_install_is_fresh(tmp_path, monkeypatch):
+@pytest.mark.parametrize("link", ["apply.exe", "rollback.exe"])
+def test_the_launcher_stands_aside_while_an_install_or_rollback_is_fresh(tmp_path, monkeypatch, link):
     app = armed(tmp_path, "0.2.0")
+    (app / "updates" / ({"apply.exe", "rollback.exe"} - {link}).pop()).unlink()
     assert update.applying(app)
     assert not update.applying(app, now=time.time() + update.APPLY_FRESH_S + 1)
 
@@ -487,8 +625,36 @@ def test_the_launcher_stands_aside_while_an_install_is_fresh(tmp_path, monkeypat
 
     monkeypatch.setattr(winproc, "SingleInstance", never)
     assert launcher.serve(app) == 0
-    (app / "updates" / "apply.exe").unlink()
+    (app / "updates" / link).unlink()
     assert not update.applying(app)
+
+
+def test_the_kit_reports_its_session_idle_only_past_the_threshold():
+    class Flag:
+        def __init__(self):
+            self.values = []
+
+        def set(self, idle):
+            self.values.append(idle)
+
+    readings = iter([update.IDLE_FREE_S - 1, update.IDLE_FREE_S, OSError("no")])
+
+    def idle_seconds():
+        value = next(readings)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    class Stop:  # three reports, then stop
+        calls = 0
+
+        def wait(self, seconds):
+            Stop.calls += 1
+            return Stop.calls == 3
+
+    flag = Flag()
+    launcher.report_idle(Stop(), flag, idle_seconds)
+    assert flag.values == [False, True, False]  # unknown counts as someone at the keyboard
 
 
 # --- who may run what --------------------------------------------------------------------------------------------
@@ -539,17 +705,19 @@ def test_the_launchers_modes_are_the_updaters_and_take_no_arguments(monkeypatch)
 NS = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
 
 
-def test_the_task_runs_as_system_with_five_actions_in_order():
-    root = ET.fromstring(update.task_xml(Path(APP), 7).replace('encoding="UTF-16"', ""))
+def test_the_task_runs_as_system_with_five_always_launchable_actions_in_order():
+    root = ET.fromstring(update.task_xml(Path(APP), 7, r"D:\Win").replace('encoding="UTF-16"', ""))
     assert root.find("t:Principals/t:Principal/t:UserId", NS).text == "S-1-5-18"
     actions = [(e.find("t:Command", NS).text, e.find("t:Arguments", NS).text)
                for e in root.findall("t:Actions/t:Exec", NS)]
     updates = rf"{APP}\updates"
-    assert [c for c, _ in actions] == [f'"{APP}\\{update.EXE}"', f'"{updates}\\apply.exe"', f'"{APP}\\{update.EXE}"',
-                                       f'"{updates}\\rollback.exe"', f'"{APP}\\{update.EXE}"']
-    assert [a.split()[0] for a in (a for _, a in actions)] == ["--update", "/VERYSILENT", "--after-update",
-                                                              "/VERYSILENT", "--start-sessions"]
-    assert f'/LOG="{updates}\\apply.log"' in actions[1][1] and f'/LOG="{updates}\\rollback.log"' in actions[3][1]
+    exe, cmd = f'"{APP}\\{update.EXE}"', '"D:\\Win\\System32\\cmd.exe"'
+    assert [c for c, _ in actions] == [exe, cmd, exe, cmd, exe]  # the kit's own exe and cmd: neither can be missing
+    assert [actions[0][1], actions[2][1], actions[4][1]] == ["--update", "--after-update", "--start-sessions"]
+    for (_, arguments), link, log in [(actions[1], "apply", "apply"), (actions[3], "rollback", "rollback")]:
+        target = f"{updates}\\{link}.exe"
+        assert arguments == (f'/d /s /c "if exist "{target}" "{target}" {update.SETUP_ARGS} '
+                             f'/LOG="{updates}\\{log}.log""')
     triggers = [child.tag.split("}")[1] for child in root.find("t:Triggers", NS)]
     assert triggers == ["BootTrigger", "LogonTrigger", "TimeTrigger"]
     assert root.find("t:Triggers/t:LogonTrigger/t:UserId", NS) is None  # any user's sign-in
@@ -572,10 +740,12 @@ def test_registering_writes_utf16_and_never_replaces_the_task_it_runs_from(tmp_p
 
     monkeypatch.setattr(update.subprocess, "run", run)
     monkeypatch.setattr(winproc, "running_as_system", lambda: False)
+    monkeypatch.setenv("SystemRoot", r"E:\Windows")
     exists = False
     assert update.register_task(app) == 0
     written = (app / "updates" / "task.xml").read_bytes()
     assert written[:2] == b"\xff\xfe" and "S-1-5-18" in written.decode("utf-16")
+    assert r"E:\Windows\System32\cmd.exe" in written.decode("utf-16")
     assert runs[-1] == ["/Create", "/TN", update.TASK_NAME, "/XML", str(app / "updates" / "task.xml"), "/F"]
     exists = True
     monkeypatch.setattr(winproc, "running_as_system", lambda: True)
@@ -584,9 +754,19 @@ def test_registering_writes_utf16_and_never_replaces_the_task_it_runs_from(tmp_p
     assert runs == [["/Query", "/TN", update.TASK_NAME]]
 
 
-def test_the_installer_names_the_same_task():
+def _iss() -> str:
     # Inno Setup script, not Python: text is the only way to read it.
-    assert f'#define UpdateTask "{update.TASK_NAME}"' in (EEG / "installer" / "student_kit.iss").read_text("utf-8")
+    return (EEG / "installer" / "student_kit.iss").read_text("utf-8")
+
+
+def test_the_installer_names_the_same_task():
+    assert f'#define UpdateTask "{update.TASK_NAME}"' in _iss()
+
+
+def test_the_installer_clears_the_code_folders_before_copying():
+    section = _iss().split("[InstallDelete]", 1)[1].split("\n[", 1)[0]
+    assert 'Name: "{app}\\_internal"' in section and 'Name: "{app}\\bridge"' in section
+    assert "updates" not in section and "kit.json" not in section
 
 
 # --- settings, kit.json, and what --update imports ----------------------------------------------------------------
@@ -611,11 +791,13 @@ def test_kit_json_stays_free_of_updater_names():
         kit_config.check({**good, "feed": "latest"})  # why update.json is a file of its own
 
 
-def test_update_settings_cli_writes_what_it_checked(tmp_path):
+def test_update_settings_cli_takes_the_key_from_the_environment_only(tmp_path):
     out = tmp_path / "update.json"
-    assert update_settings.main(["write", str(out), "--feed", "canary", f"--key={KEY}"]) == 0
+    assert update_settings.main(["write", str(out), "--feed", "canary"], {update_settings.KEY_VAR: KEY}) == 0
     assert json.loads(out.read_bytes()) == {"feed": "canary", "key": KEY}
-    assert update_settings.main(["check", "--key=short"]) == 1
+    assert update_settings.main(["check"], {}) == 1
+    with pytest.raises(SystemExit):
+        update_settings.main(["check", f"--key={KEY}"], {update_settings.KEY_VAR: KEY})  # no such argument
 
 
 def test_the_update_mode_imports_nothing_of_the_sidecar(tmp_path, signer):
@@ -662,6 +844,15 @@ def test_newkey_writes_an_encrypted_key_and_never_over_another(tmp_path):
         kit_release.new_key(path, b"correct horse battery")
 
 
+def test_newdownloadkey_writes_a_key_the_settings_accept_and_never_over_another(tmp_path):
+    path = tmp_path / "download.key"
+    kit_release.new_download_key(path)
+    key = path.read_text(encoding="ascii")
+    assert update_settings.check({"key": key}).key == key and key == key.strip()
+    with pytest.raises(FileExistsError):
+        kit_release.new_download_key(path)
+
+
 def test_release_of_reads_an_update_installer_only(tmp_path):
     good = tmp_path / NEW["file"]
     good.write_bytes(NEW_BODY)
@@ -672,38 +863,46 @@ def test_release_of_reads_an_update_installer_only(tmp_path):
         kit_release.release_of(setup)
 
 
+def test_history_gathers_every_published_installer_older_than_this_one(signer):
+    v030, _ = installer("0.3.0", b"three")
+    v031, _ = installer("0.3.1", b"canary three one")
+    latest = manifest_of(signer, release=v030, history=(OLD, NEW))
+    canary = manifest_of(signer, release=v031, history=(OLD, NEW, v030), name="canary")
+    this, _ = installer("0.3.1", b"canary three one")
+    assert [e["version"] for e in kit_release.history_from([latest, canary], this)] == ["0.2.0", "0.2.1", "0.3.0"]
+    assert kit_release.history_from([], this) == []
+    with pytest.raises(SystemExit, match="other bytes"):
+        kit_release.history_from([canary], installer("0.3.1", b"rebuilt")[0])
+    clash = manifest_of(signer, release=v031, history=(installer("0.2.0", b"another 0.2.0")[0],), name="canary")
+    with pytest.raises(SystemExit, match="two installers"):
+        kit_release.history_from([latest, clash], installer("0.4.0", b"x")[0])
+
+
 def test_signing_refuses_a_key_the_kits_do_not_trust(tmp_path, monkeypatch):
     path = tmp_path / "stray.pem"
     kit_release.new_key(path, b"correct horse battery")
     (tmp_path / NEW["file"]).write_bytes(NEW_BODY)
     monkeypatch.setattr(kit_release.getpass, "getpass", lambda prompt="": "correct horse battery")
     with pytest.raises(SystemExit, match="not in update_keys"):
-        kit_release.main(["sign", "--key", str(path), "--installer", str(tmp_path / NEW["file"]), "--rollout", "10",
-                          "--out", str(tmp_path / "feed.json")])
+        kit_release.main(["sign", "--key", str(path), "--installer", str(tmp_path / NEW["file"]), "--feed", "canary",
+                          "--rollout", "10", "--out", str(tmp_path / "feed.json")])
     assert not (tmp_path / "feed.json").exists()
 
 
-def test_signing_takes_the_way_back_from_a_published_feed(tmp_path, monkeypatch):
+def test_signing_lists_the_published_ways_back(tmp_path, monkeypatch):
     path = tmp_path / "everyday.pem"
     public = kit_release.new_key(path, b"correct horse battery")
     monkeypatch.setattr(update_keys, "PUBLIC_KEYS", {"everyday": public})
     monkeypatch.setattr(kit_release.getpass, "getpass", lambda prompt="": "correct horse battery")
     private = kit_release.load_key(path, b"correct horse battery")
-    (tmp_path / "old.json").write_bytes(kit_release.sign(private, OLD, 100, None, NOW))
+    (tmp_path / "old.json").write_bytes(kit_release.sign(private, OLD, 100, [], NOW, "latest"))
     (tmp_path / NEW["file"]).write_bytes(NEW_BODY)
-    assert kit_release.main(["sign", "--key", str(path), "--installer", str(tmp_path / NEW["file"]), "--rollout", "10",
-                             "--rollback-to-feed", str(tmp_path / "old.json"), "--out", str(tmp_path / "f.json")]) == 0
+    assert kit_release.main(["sign", "--key", str(path), "--installer", str(tmp_path / NEW["file"]), "--feed", "latest",
+                             "--rollout", "10", "--history-from", str(tmp_path / "old.json"),
+                             "--out", str(tmp_path / "f.json")]) == 0
     manifest, by = kit_release.verify((tmp_path / "f.json").read_bytes())
-    assert by == "everyday" and manifest.rollout == 10 and manifest.rollback_to.sha256 == OLD["sha256"]
-
-
-def test_a_rollout_change_keeps_the_published_way_back(signer):
-    published = update.verify_feed(feed(signer, rollout=10), raw_key(signer))[0]
-    assert kit_release.way_back(published, NEW) == OLD
-    assert kit_release.way_back(update.verify_feed(feed(signer, release=OLD, rollback=None), raw_key(signer))[0],
-                                NEW) == OLD
-    with pytest.raises(SystemExit, match="other bytes"):
-        kit_release.way_back(published, {**NEW, "sha256": "0" * 64})
+    assert by == "everyday" and manifest.rollout == 10 and manifest.feed == "latest"
+    assert [entry.sha256 for entry in manifest.history] == [OLD["sha256"]]
 
 
 def test_the_self_test_fails_a_build_with_no_keys(monkeypatch, signer):

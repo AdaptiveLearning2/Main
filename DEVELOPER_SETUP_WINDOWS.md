@@ -246,7 +246,7 @@ repo root:
 ```powershell
 .\EEGResearch\scripts\build_student_kit.ps1 -BackendUrl https://<backend>.onrender.com `
     -FrontendOrigin https://<site>.pages.dev -LearnerToken <the site's VITE_EEG_LOCAL_TOKEN> `
-    -DownloadKey <the update gate's DOWNLOAD_KEY> -Version 0.2.0
+    -DownloadKeyFile E:\kit-keys\download.key -Version 0.2.0
 ```
 
 It refuses the arguments for the reasons `-Hosted` refuses its own, then builds the bridge with
@@ -287,47 +287,51 @@ Then, from the repo root:
    EEGResearch\.venv\Scripts\python.exe EEGResearch\installer\kit_release.py newkey E:\kit-keys\everyday.pem
    ```
 
-2. The download key, straight to the clipboard and never shown. It goes in every Setup installer
-   (`-DownloadKey`), so changing it means reinstalling Setup everywhere.
+2. The download key, into a file beside the signing keys, so it is never on a command line or the
+   clipboard. It goes in every Setup installer (`-DownloadKeyFile`), so changing it means
+   reinstalling Setup everywhere.
 
    ```powershell
-   EEGResearch\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))" | Set-Clipboard
+   EEGResearch\.venv\Scripts\python.exe EEGResearch\installer\kit_release.py newdownloadkey E:\kit-keys\download.key
    ```
 
-3. The gate, signed in with `npx wrangler login`, then its key from the clipboard:
+3. The gate, signed in with `npx wrangler login`, then its key from that file:
 
    ```powershell
    cd EEGResearch\installer\update_gate; npx --yes wrangler@4.148.0 deploy
-   (Get-Clipboard -Raw).Trim() | npx --yes wrangler@4.148.0 secret put DOWNLOAD_KEY
+   Get-Content -Raw E:\kit-keys\download.key | npx --yes wrangler@4.148.0 secret put DOWNLOAD_KEY
    ```
 
 **Each release.** Build it, then publish the Update installer to the canary feed, which only kits
 built with `-UpdateFeed canary` follow:
 
 ```powershell
-.\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey E:\kit-keys\everyday.pem
+.\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey E:\kit-keys\everyday.pem -DownloadKeyFile E:\kit-keys\download.key
 ```
 
-It asks for the download key and the API token, each from the clipboard when you press Enter, and
-for the key's passphrase. Once the canary computer has the version and works with a real headband,
+It asks for the key's passphrase, and for the API token, read from the clipboard when you press
+Enter and then removed from it and from clipboard history (Win+V). Once the canary computer has the version and works with a real headband,
 promote it to a tenth of computers, then to all:
 
 ```powershell
-.\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey E:\kit-keys\everyday.pem -Promote -Rollout 10
+.\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey E:\kit-keys\everyday.pem -DownloadKeyFile E:\kit-keys\download.key -Promote -Rollout 10
 ```
 
 ```powershell
-.\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey E:\kit-keys\everyday.pem -Promote -Rollout 100
+.\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey E:\kit-keys\everyday.pem -DownloadKeyFile E:\kit-keys\download.key -Promote -Rollout 100
 ```
 
-The way back is whatever `latest.json` named before, so the first version ever published (0.2.0,
-`-Promote`) names none and no kit installs it: it is there to roll back to. A published installer
-is never replaced; a fix is a new version.
+Each feed lists every installer the published feeds have named, and a computer installs only
+when its own version is among them, since that is where a failed check rolls it back to. So
+publish every version that reaches a computer, starting with 0.2.0 (`-Promote`): with nothing
+published before it, it lists no way back and no kit installs it. A published installer is never
+replaced; a fix is a new version.
 
 **What a computer did** is in `C:\Program Files\AdaptiveLearning Sensors\updates\status.json`
-(`state` is one of `up_to_date`, `staged`, `installing`, `blocked`, `not_in_rollout`,
-`no_rollback`, `not_set_up` or `failed`, with `detail` saying why), beside `update.log` and the
-installers' own logs.
+(`state` says what this run did: `up_to_date`, `staged`, `installing`, `blocked`, `not_in_rollout`,
+`no_rollback`, `not_set_up` or `failed`, or, finishing an earlier install, `checking`,
+`rolling_back` or `repairing`, each with a `_waiting` form while someone is mid-lesson; `detail`
+says why), beside `update.log` and the installers' own logs.
 
 ### For school IT
 

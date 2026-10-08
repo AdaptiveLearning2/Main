@@ -1,5 +1,5 @@
-"""Signs the kit's update feeds. newkey: a passphrase-protected signing key. sign: a feed for one Update installer.
-verify: a feed against the keys baked into the kit. See DEVELOPER_SETUP_WINDOWS.md, "Publishing a kit update".
+"""Signs the kit's update feeds. newkey: a passphrase-protected signing key. newdownloadkey: the gate's key, to a file.
+sign: a feed for one Update installer. verify: a feed against the kit's keys. See DEVELOPER_SETUP_WINDOWS.md.
 
 A feed is {manifest, signature}, the Ed25519 signature over update.FEED_PREFIX and the manifest's bytes.
 """
@@ -13,6 +13,7 @@ import getpass
 import hashlib
 import json
 import re
+import secrets
 import sys
 from pathlib import Path
 
@@ -22,7 +23,7 @@ sys.path.insert(0, str(EEG))
 from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 
-from src.kit import update, update_keys  # noqa: E402
+from src.kit import update, update_keys, update_settings  # noqa: E402
 
 
 def public_text(private: Ed25519PrivateKey) -> str:
@@ -38,6 +39,12 @@ def new_key(path: Path, passphrase: bytes) -> str:
     with open(path, "xb") as f:  # a signing key is never overwritten
         f.write(pem)
     return public_text(private)
+
+
+def new_download_key(path: Path) -> None:
+    """The gate's download key, to a file that must not exist: never on a command line or the clipboard."""
+    with open(path, "x", encoding="ascii", newline="") as f:
+        f.write(secrets.token_urlsafe(32))
 
 
 def load_key(path: Path, passphrase: bytes) -> Ed25519PrivateKey:
@@ -64,25 +71,34 @@ def as_release(release: update.Release) -> dict:
             "size": release.size}
 
 
-def way_back(published: update.Manifest, release: dict) -> dict | None:
-    """The version a published feed names; when that is this very release, a rollout change, the feed's own way back."""
-    if update.version_text(published.release.version) != release["version"]:
-        return as_release(published.release)
-    if published.release.sha256 != release["sha256"]:
-        raise SystemExit(f"the published feed names {release['version']} with other bytes")
-    return as_release(published.rollback_to) if published.rollback_to else None
+def history_from(published: list[update.Manifest], release: dict) -> list[dict]:
+    """Every installer the published feeds name, older than release: the ways back a computer may need.
+
+    One version with two different installers stops the publish, as does this version published with other bytes.
+    """
+    this = update.parse_version(release["version"])
+    found: dict[update.Version, update.Release] = {}
+    for manifest in published:
+        for entry in (*manifest.history, manifest.release):
+            if entry.version == this and entry.sha256 != release["sha256"]:
+                raise SystemExit(f"{release['version']} is already published with other bytes")
+            if entry.version >= this:
+                continue
+            if found.setdefault(entry.version, entry).sha256 != entry.sha256:
+                raise SystemExit(f"the published feeds name two installers for {update.version_text(entry.version)}")
+    return [as_release(found[v]) for v in sorted(found) if v >= update.ROLLBACK_FLOOR]
 
 
-def sign(private: Ed25519PrivateKey, release: dict, rollout: int, rollback_to: dict | None,
-         published: dt.datetime) -> bytes:
+def sign(private: Ed25519PrivateKey, release: dict, rollout: int, history: list[dict], published: dt.datetime,
+         feed: str) -> bytes:
     """The feed's bytes, read back through the kit's own verifier against the key that signed them."""
-    manifest = {**release, "published": published.isoformat(timespec="seconds"), "rollout": rollout,
-                "rollback_to": rollback_to}
+    manifest = {**release, "feed": feed, "published": published.isoformat(timespec="seconds"), "rollout": rollout,
+                "history": history}
     signed = json.dumps(manifest, sort_keys=True).encode("utf-8")
     signature = private.sign(update.FEED_PREFIX + signed)
     body = json.dumps({"manifest": base64.b64encode(signed).decode("ascii"),
                        "signature": base64.b64encode(signature).decode("ascii")}, indent=2).encode("ascii") + b"\n"
-    update.verify_feed(body, update.load_keys({"signer": public_text(private)}))
+    update.verify_feed(body, update.load_keys({"signer": public_text(private)}), feed)
     return body
 
 
@@ -105,11 +121,14 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     newkey = commands.add_parser("newkey", help="make a signing key; prints the public key for update_keys.py")
     newkey.add_argument("path", type=Path)
+    commands.add_parser("newdownloadkey", help="make the gate's download key, in a file").add_argument("path", type=Path)
     signer = commands.add_parser("sign", help="write a signed feed for one Update installer")
     signer.add_argument("--key", type=Path, required=True)
     signer.add_argument("--installer", type=Path, required=True)
+    signer.add_argument("--feed", choices=update_settings.FEEDS, required=True)
     signer.add_argument("--rollout", type=int, required=True, help="percent of computers, 0-100")
-    signer.add_argument("--rollback-to-feed", type=Path, help="a published feed whose version is the way back")
+    signer.add_argument("--history-from", type=Path, action="append", default=[],
+                        help="a published feed; its installers become ways back (repeat for each feed)")
     signer.add_argument("--out", type=Path, required=True)
     checker = commands.add_parser("verify", help="read a feed as a kit would; prints its manifest")
     checker.add_argument("path", type=Path)
@@ -120,21 +139,25 @@ def main(argv: list[str] | None = None) -> int:
         print("Add that line to PUBLIC_KEYS in EEGResearch/src/kit/update_keys.py; keep the key file off the repo.",
               file=sys.stderr)
         return 0
+    if args.command == "newdownloadkey":
+        new_download_key(args.path)
+        print(f"wrote {args.path}")
+        return 0
     if args.command == "verify":
         manifest, by = verify(args.path.read_bytes())
-        print(json.dumps({**as_release(manifest.release), "published": manifest.published.isoformat(),
-                          "rollout": manifest.rollout, "signed_by": by,
-                          "rollback_to": as_release(manifest.rollback_to) if manifest.rollback_to else None}))
+        print(json.dumps({**as_release(manifest.release), "feed": manifest.feed,
+                          "published": manifest.published.isoformat(), "rollout": manifest.rollout, "signed_by": by,
+                          "history": [update.version_text(entry.version) for entry in manifest.history]}))
         return 0
     private = load_key(args.key, _passphrase())
     if public_text(private) not in update_keys.PUBLIC_KEYS.values():
         raise SystemExit("that key is not in update_keys.PUBLIC_KEYS, so no kit would accept what it signs")
     release = release_of(args.installer)
-    rollback = way_back(verify(args.rollback_to_feed.read_bytes())[0], release) if args.rollback_to_feed else None
-    body = sign(private, release, args.rollout, rollback, dt.datetime.now(dt.UTC))
+    history = history_from([verify(path.read_bytes())[0] for path in args.history_from], release)
+    body = sign(private, release, args.rollout, history, dt.datetime.now(dt.UTC), args.feed)
     with open(args.out, "xb") as f:
         f.write(body)
-    print(f"wrote {args.out}")
+    print(f"wrote {args.out}, with ways back to {', '.join(entry['version'] for entry in history) or 'nothing'}")
     return 0
 
 

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path, PureWindowsPath
 
 import pytest
 from launcher_cases import ROOT
@@ -60,6 +62,29 @@ def test_a_student_running_an_update_mode_gets_2_and_nothing_is_written(tmp_path
                                 timeout=60)
         assert result.returncode == 2, (mode, result.stderr)
     assert list(app.iterdir()) == []
+
+
+def test_an_installer_action_launches_whether_or_not_its_installer_is_there(tmp_path):
+    updates = PureWindowsPath(tmp_path / "Program Files x" / "AdaptiveLearning Sensors" / "updates")
+    Path(updates).mkdir(parents=True)
+    command, arguments = update.installer_action(os.environ["SystemRoot"], updates / "apply.exe", updates / "apply.log")
+    line = f'"{command}" {arguments}'  # as Task Scheduler starts it: the quoted command, then its arguments
+    assert subprocess.run(line, capture_output=True, timeout=30).returncode == 0  # absent: nothing to do
+    # robocopy as the installer exits 16, which cmd itself never does: it launched, from a path with spaces.
+    shutil.copy(Path(os.environ["SystemRoot"]) / "System32" / "robocopy.exe", Path(updates) / "apply.exe")
+    assert subprocess.run(line, capture_output=True, timeout=30).returncode == 16
+
+
+def test_the_idle_flag_reaches_a_reader_in_another_process(tmp_path):
+    mine = winproc.own_session()
+    flag = winproc.IdleFlag(mine)
+    read = [sys.executable, "-c", f"from src.kit import winproc; print(winproc.session_idle({mine}))"]
+    env = {**os.environ, "PYTHONPATH": str(EEG)}
+    for value in (True, False):
+        flag.set(value)
+        assert subprocess.run(read, cwd=EEG, env=env, capture_output=True, text=True).stdout.strip() == str(value)
+    assert winproc.session_idle(987654) is None  # no kit there to report
+    assert winproc.idle_seconds() >= 0
 
 
 def test_the_scan_finds_a_secret_in_either_encoding_or_a_settings_file(tmp_path):

@@ -86,6 +86,7 @@ if sys.platform == "win32":
     _userenv.DestroyEnvironmentBlock.argtypes = [wintypes.LPVOID]
     _winhttp = ctypes.WinDLL("winhttp", use_last_error=True)
     _k32.GlobalFree.argtypes = [wintypes.LPVOID]
+    _k32.GetTickCount.restype = wintypes.DWORD
 else:
     _k32 = _psapi = _iphlpapi = _advapi = _wts = _userenv = _winhttp = None
 
@@ -442,6 +443,45 @@ def machine_guid() -> str | None:
     except (ImportError, OSError):
         return None
     return value if isinstance(value, str) and value else None
+
+
+IDLE_EVENT = r"Global\AdaptiveLearningSensorsIdle-{session}"  # Windows reports no idle time for a console session
+
+
+class _LastInput(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
+
+def idle_seconds() -> float:
+    """Seconds since the last keyboard or mouse input in this process's session."""
+    _api()
+    info = _LastInput(cbSize=ctypes.sizeof(_LastInput))
+    if not ctypes.WinDLL("user32", use_last_error=True).GetLastInputInfo(ctypes.byref(info)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return ((_k32.GetTickCount() - info.dwTime) & 0xFFFFFFFF) / 1000  # both are 32-bit millisecond tick counts
+
+
+class IdleFlag:
+    """The named event the running kit sets while its session has been idle, for the SYSTEM updater to read."""
+
+    def __init__(self, session: int) -> None:
+        self.handle = _api().CreateEventW(None, True, False, IDLE_EVENT.format(session=session))
+        if not self.handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def set(self, idle: bool) -> None:
+        (_k32.SetEvent if idle else _k32.ResetEvent)(self.handle)
+
+
+def session_idle(session: int) -> bool | None:
+    """The kit's idle report for a session: None when no kit in it is reporting."""
+    handle = _api().OpenEventW(SYNCHRONIZE, False, IDLE_EVENT.format(session=session))
+    if not handle:
+        return None
+    try:
+        return _k32.WaitForSingleObject(handle, 0) == WAIT_OBJECT_0
+    finally:
+        _k32.CloseHandle(handle)
 
 
 def system_path(environ=os.environ) -> str:

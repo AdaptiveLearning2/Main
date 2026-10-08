@@ -32,6 +32,7 @@ SIDECAR_STOP_S = 15.0
 SIDECAR_DRAIN_S = 2.0
 BRIDGE_EXE = "muse_native_bridge.exe"
 UPDATE_MODES = ("--update", "--after-update", "--start-sessions", "--register-task")  # update.MODES, kept light
+IDLE_REPORT_S = 30.0
 _CONSOLE_LOG_BYTES = 1_000_000
 _REFUSAL_LOG_EVERY_S = 60.0
 _last_refusal_logged = 0.0
@@ -206,6 +207,14 @@ def serve(app: Path) -> int:
 
     stop = threading.Event()
     threading.Thread(target=_watch_for_stop, args=(stop, stop_signal), name="stop-watcher", daemon=True).start()
+    try:
+        session = winproc.own_session()
+        if session is None:
+            raise OSError("Windows would not name this session")
+        idle = winproc.IdleFlag(session)
+        threading.Thread(target=report_idle, args=(stop, idle), name="idle-reporter", daemon=True).start()
+    except OSError as exc:
+        logger.warning("not reporting idle time to the update task (%s); it then installs only at sign-in", exc)
     bridge = Supervisor([str(app / "bridge" / BRIDGE_EXE)], bridge_env, logs)
     bridge_thread = threading.Thread(target=bridge.run, args=(stop,), name="bridge-supervisor")
     bridge_thread.start()
@@ -256,6 +265,20 @@ def run_sidecar(stop: threading.Event, stop_signal, port: int) -> int:
         stop.set()
         watcher.join(timeout=5)
     return 0 if asked.is_set() else 1
+
+
+def report_idle(stop: threading.Event, flag, idle_seconds=None) -> None:
+    """Keeps the session's idle flag current, so the update task can install once nobody has touched it for a while."""
+    from src.kit import update, winproc  # noqa: PLC0415
+
+    idle_seconds = idle_seconds or winproc.idle_seconds
+    while True:
+        try:
+            flag.set(idle_seconds() >= update.IDLE_FREE_S)
+        except OSError:
+            flag.set(False)  # unknown counts as someone at the keyboard
+        if stop.wait(IDLE_REPORT_S):
+            return
 
 
 def _watch_for_stop(stop: threading.Event, stop_signal, on_stop=None) -> None:

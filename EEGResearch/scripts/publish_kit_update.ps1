@@ -1,24 +1,25 @@
 <#
 .SYNOPSIS
 Publishes a built kit's Update installer to the update gate's bucket, then a signed feed naming it: canary.json by
-default, latest.json with -Promote. The way back (rollback_to) is always what latest.json named before.
+default, latest.json with -Promote. The feed lists every installer the published feeds name, as ways back.
 
 .DESCRIPTION
-Run in a terminal after build_student_kit.ps1, since it asks for things: the download key and the Cloudflare API
-token (R2 edit), each read from the clipboard when you press Enter and never shown, and the signing key's
-passphrase. It accepts only the installer whose SHA-256 the build recorded, never overwrites a published installer,
-uploads the installer before the feed, and reads both back through the gate before reporting success. See
-DEVELOPER_SETUP_WINDOWS.md, "Publishing a kit update".
+Run in a terminal after build_student_kit.ps1, since it asks for two things: the signing key's passphrase, and the
+Cloudflare API token (R2 edit), read from the clipboard when you press Enter and then cleared from it and from
+clipboard history. The download key is read from -DownloadKeyFile. It accepts only the installer whose SHA-256 the
+build recorded, never replaces a published installer, uploads the installer before the feed, and reads both back
+through the gate before reporting success. See DEVELOPER_SETUP_WINDOWS.md, "Publishing a kit update".
 
 .EXAMPLE
-.\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey E:\kit-keys\everyday.pem
+.\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey E:\kit-keys\everyday.pem -DownloadKeyFile E:\kit-keys\download.key
 
 .EXAMPLE
-.\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey E:\kit-keys\everyday.pem -Promote -Rollout 10
+.\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey E:\kit-keys\everyday.pem -DownloadKeyFile E:\kit-keys\download.key -Promote -Rollout 10
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$SigningKey,
+    [Parameter(Mandatory = $true)][string]$DownloadKeyFile,
     [switch]$Promote,
     [ValidateRange(0, 100)][int]$Rollout = 100
 )
@@ -41,6 +42,7 @@ if (-not (Test-Path $installerPath) -or -not (Test-Path "$installerPath.sha256")
 $recorded = ((Get-Content -Raw "$installerPath.sha256").Trim() -split '\s+')[0]
 $hash = (Get-FileHash -Algorithm SHA256 $installerPath).Hash.ToLower()
 if ($hash -ne $recorded) { throw "$name does not match the SHA-256 the build recorded" }
+if (-not (Test-Path $DownloadKeyFile)) { throw "-DownloadKeyFile $DownloadKeyFile does not exist" }
 
 # The build's venv has the pinned cryptography; the sidecar's dev venv is the fallback.
 $py = @((Join-Path $eeg "build\kit\venv\Scripts\python.exe"), (Join-Path $eeg ".venv\Scripts\python.exe")) |
@@ -68,11 +70,13 @@ function Get-FromGate {
 }
 
 function Read-Feed {
-    # kit_release.py verify: the feed as a kit would read it, against the keys the kits trust.
-    param([string]$path)
+    # kit_release.py verify: the feed as a kit would read it, against the keys the kits trust, and named as served.
+    param([string]$path, [string]$expected)
     $text = & $py $release verify $path
     if ($LASTEXITCODE -ne 0) { throw "$path does not verify against the kits' keys" }
-    return $text | ConvertFrom-Json
+    $manifest = $text | ConvertFrom-Json
+    if ($manifest.feed -ne $expected) { throw "$path is served as $expected.json but signed as the $($manifest.feed) feed" }
+    return $manifest
 }
 
 function Invoke-Wrangler {
@@ -82,40 +86,67 @@ function Invoke-Wrangler {
     if ($LASTEXITCODE -ne 0) { throw "wrangler $($arguments[0..2] -join ' ') failed: $($output -join ' ')" }
 }
 
-$null = Read-Host "Copy the download key (the gate's DOWNLOAD_KEY), then press Enter"
-$script:downloadKey = (Get-Clipboard -Raw).Trim()
-try {
-    # What latest.json names now is the way back, for a canary as much as for a promotion.
-    $current = Join-Path $work "latest-before.json"
-    $rollbackArgs = @()
-    if ((Get-FromGate "/v1/feed/latest.json" $current) -eq 200) {
-        $before = Read-Feed $current
-        # Promoting the version latest.json already names changes its rollout and keeps its way back.
-        $same = [version]$before.version -eq [version]$Version
-        if ([version]$before.version -gt [version]$Version -or ($same -and -not $Promote)) {
-            throw "latest.json already names $($before.version); publish a newer version"
+function Clear-ClipboardSecret {
+    # Clipboard history (Win+V) keeps every copy, so the secret's entries go from there as well as the clipboard.
+    param([string]$secret)
+    try {
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime
+        $clip = [Windows.ApplicationModel.DataTransfer.Clipboard, Windows.ApplicationModel.DataTransfer, ContentType = WindowsRuntime]
+        $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+            $_.Name -eq "AsTask" -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+        } | Select-Object -First 1
+        $wait = { param($operation, [type]$result) $task = $asTask.MakeGenericMethod($result).Invoke($null, @($operation)); $null = $task.Wait(-1); $task.Result }
+        $clip::Clear()
+        $items = & $wait ($clip::GetHistoryItemsAsync()) ([Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult])
+        $removed = 0
+        foreach ($item in @($items.Items)) {
+            try { $text = & $wait ($item.Content.GetTextAsync()) ([string]) } catch { continue }  # not text
+            if ($text.Trim() -eq $secret -and $clip::DeleteItemFromHistory($item)) { $removed++ }
         }
-        $rollbackArgs = @("--rollback-to-feed", $current)
-        $wayBack = if ($same) { $before.rollback_to.version } else { $before.version }
-        Write-Host "The way back is $(if ($wayBack) { $wayBack } else { 'none' })."
-    } else {
-        Write-Host "No latest.json yet, so this feed names no way back and no kit will install it." -ForegroundColor Yellow
+        Write-Host "Cleared the clipboard and $removed copy(ies) of the token from clipboard history."
+    } catch {
+        Write-Warning "Could not clear the token from the clipboard ($($_.Exception.Message)); clear it with Win+V."
+    }
+}
+
+$script:downloadKey = (Get-Content -Raw $DownloadKeyFile).Trim()
+try {
+    # Every installer either feed names becomes a way back, so a computer on any published version can return to it.
+    $historyArgs = @()
+    foreach ($published in "latest", "canary") {
+        $path = Join-Path $work "$published-before.json"
+        if ((Get-FromGate "/v1/feed/$published.json" $path) -ne 200) { continue }
+        $before = Read-Feed $path $published
+        $historyArgs += @("--history-from", $path)
+        if ($published -eq "latest") {
+            # Promoting the version latest.json already names changes its rollout; anything else must be newer.
+            $same = [version]$before.version -eq [version]$Version
+            if ([version]$before.version -gt [version]$Version -or ($same -and -not $Promote)) {
+                throw "latest.json already names $($before.version); publish a newer version"
+            }
+        }
+    }
+    if (-not $historyArgs) {
+        Write-Host "Nothing is published yet, so this feed lists no way back and no kit installs it." -ForegroundColor Yellow
     }
 
     $already = (Get-FromGate "/v1/files/$name" (Join-Path $work "published-$name")) -eq 200
     if ($already) {
-        $published = (Get-FileHash -Algorithm SHA256 (Join-Path $work "published-$name")).Hash.ToLower()
-        if ($published -ne $hash) { throw "$name is already published with other bytes; a published version is never replaced" }
+        $publishedHash = (Get-FileHash -Algorithm SHA256 (Join-Path $work "published-$name")).Hash.ToLower()
+        if ($publishedHash -ne $hash) { throw "$name is already published with other bytes; a published version is never replaced" }
         Write-Host "$name is already published with these bytes; only the feed changes."
     }
 
     $signed = Join-Path $work "$feed.json"
     Write-Host "== Signing $feed.json for $Version at $Rollout%" -ForegroundColor Cyan
-    & $py $release sign --key $SigningKey --installer $installerPath --rollout $Rollout @rollbackArgs --out $signed
+    & $py $release sign --key $SigningKey --installer $installerPath --feed $feed --rollout $Rollout @historyArgs --out $signed
     if ($LASTEXITCODE -ne 0) { throw "signing failed" }
 
     $null = Read-Host "Copy the Cloudflare API token (R2 edit), then press Enter"
-    $env:CLOUDFLARE_API_TOKEN = (Get-Clipboard -Raw).Trim()
+    $token = (Get-Clipboard -Raw).Trim()
+    Clear-ClipboardSecret $token
+    $env:CLOUDFLARE_API_TOKEN = $token
+    $token = $null
     try {
         if (-not $already) {
             Write-Host "== Uploading $name" -ForegroundColor Cyan
@@ -132,8 +163,8 @@ try {
     $feedBack = Join-Path $work "back-$feed.json"
     if ((Get-FromGate "/v1/feed/$feed.json" $feedBack) -ne 200) { throw "the gate does not serve $feed.json" }
     if ((Get-FileHash $feedBack).Hash -ne (Get-FileHash $signed).Hash) { throw "the gate serves another $feed.json" }
-    $now = Read-Feed $feedBack
+    $now = Read-Feed $feedBack $feed
     if ($now.version -ne $Version) { throw "the published $feed.json names $($now.version), not $Version" }
 } finally { $script:downloadKey = $null }
 
-Write-Host "Published $Version to $feed.json at $Rollout%, signed by $($now.signed_by); way back: $(if ($now.rollback_to) { $now.rollback_to.version } else { 'none' })" -ForegroundColor Green
+Write-Host "Published $Version to $feed.json at $Rollout%, signed by $($now.signed_by); ways back: $(if ($now.history) { $now.history -join ', ' } else { 'none' })" -ForegroundColor Green

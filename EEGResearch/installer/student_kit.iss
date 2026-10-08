@@ -51,6 +51,11 @@ RestartApplications=no
 ; Only for an all-users install in Program Files, where students cannot write what the SYSTEM task runs.
 Name: "autoupdate"; Description: "Keep the sensors up to date automatically"; Check: CanUpdateItself
 
+[InstallDelete]
+; Before copying, so an older version installed over a newer one keeps none of its DLLs, which load first from here.
+Type: filesandordirs; Name: "{app}\_internal"
+Type: filesandordirs; Name: "{app}\bridge"
+
 [Files]
 ; For /DUpdateOnly, SourceDir is the build's copy without kit.json and update.json, scanned for both secrets.
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

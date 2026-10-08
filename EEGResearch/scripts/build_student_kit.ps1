@@ -11,14 +11,14 @@ student kit". Intermediate files go to EEGResearch\build\kit and the installer t
 The arguments are checked as start.ps1 -Hosted checks its own, before anything is built.
 
 .EXAMPLE
-.\EEGResearch\scripts\build_student_kit.ps1 -BackendUrl https://name.onrender.com -FrontendOrigin https://name.pages.dev -LearnerToken <VITE_EEG_LOCAL_TOKEN> -DownloadKey <the gate's key> -Version 0.2.0
+.\EEGResearch\scripts\build_student_kit.ps1 -BackendUrl https://name.onrender.com -FrontendOrigin https://name.pages.dev -LearnerToken <VITE_EEG_LOCAL_TOKEN> -DownloadKeyFile E:\kit-keys\download.key -Version 0.2.0
 #>
 param(
     [Parameter(Mandatory = $true)][string]$BackendUrl,
     [Parameter(Mandatory = $true)][string]$FrontendOrigin,
     [Parameter(Mandatory = $true)][string]$LearnerToken,
-    # The update gate's DOWNLOAD_KEY, written to update.json; never in the Update installer.
-    [Parameter(Mandatory = $true)][string]$DownloadKey,
+    # The file holding the update gate's DOWNLOAD_KEY (kit_release.py newdownloadkey), so the key is on no command line.
+    [Parameter(Mandatory = $true)][string]$DownloadKeyFile,
     [Parameter(Mandatory = $true)][string]$Version,
     [ValidateSet("latest", "canary")][string]$UpdateFeed = "latest",
     [ValidateRange(0, 99)][int]$CameraIndex = 0,
@@ -61,13 +61,16 @@ function Get-KitArgs {
 
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "-Version must look like 0.1.0" }
 $kitArgs = Get-KitArgs $BackendUrl $FrontendOrigin $LearnerToken $CameraIndex $OpticsPreset $Version
+if (-not (Test-Path $DownloadKeyFile)) { throw "-DownloadKeyFile $DownloadKeyFile does not exist" }
+$downloadKey = (Get-Content -Raw $DownloadKeyFile).Trim()
 
 # The same check the launcher runs on kit.json, before anything slow happens. Standard library only.
 Push-Location $eeg
+$env:KIT_DOWNLOAD_KEY = $downloadKey  # src.kit.update_settings reads it from here, never from its arguments
 try {
     Invoke-Step "Checking the arguments" { python -m src.kit.config check @kitArgs }
-    Invoke-Step "Checking the update settings" { python -m src.kit.update_settings check "--feed=$UpdateFeed" "--key=$DownloadKey" }
-} finally { Pop-Location }
+    Invoke-Step "Checking the update settings" { python -m src.kit.update_settings check "--feed=$UpdateFeed" }
+} finally { Pop-Location; Remove-Item Env:KIT_DOWNLOAD_KEY }
 $pythonVersion = & python -c "import sys; print('%d.%d' % sys.version_info[:2])"
 if ($pythonVersion -ne "3.14") { throw "Python 3.14 must be first on PATH (found $pythonVersion): the locks are resolved for it" }
 
@@ -99,12 +102,11 @@ $app = Join-Path $work "stage\AdaptiveLearningSensors"
 # The installed version, read by the updater: kit.json's goes stale once an update replaces the code.
 Set-Content -Encoding ascii -NoNewline -Path (Join-Path $app "version.txt") -Value $Version
 Push-Location $eeg
+$env:KIT_DOWNLOAD_KEY = $downloadKey
 try {
     Invoke-Step "Writing kit.json" { & $py -m src.kit.config write (Join-Path $app "kit.json") @kitArgs }
-    Invoke-Step "Writing update.json" {
-        & $py -m src.kit.update_settings write (Join-Path $app "update.json") "--feed=$UpdateFeed" "--key=$DownloadKey"
-    }
-} finally { Pop-Location }
+    Invoke-Step "Writing update.json" { & $py -m src.kit.update_settings write (Join-Path $app "update.json") "--feed=$UpdateFeed" }
+} finally { Pop-Location; Remove-Item Env:KIT_DOWNLOAD_KEY }
 Invoke-Step "Auditing every bundled binary's DLL imports" { & $py (Join-Path $installer "kit_build.py") audit $app }
 
 $report = Join-Path $work "selftest.json"
@@ -151,7 +153,7 @@ if (Test-Path $updateStage) { Remove-Item -Recurse -Force $updateStage }
 New-Item -ItemType Directory -Force $updateStage | Out-Null
 Copy-Item -Recurse -Path $app -Destination $updateApp
 Remove-Item (Join-Path $updateApp "kit.json"), (Join-Path $updateApp "update.json")
-$env:KIT_SCAN_SECRETS = "$LearnerToken`n$DownloadKey"
+$env:KIT_SCAN_SECRETS = "$LearnerToken`n$downloadKey"
 try {
     Invoke-Step "Checking the Update copy holds neither secret" { & $py (Join-Path $installer "kit_build.py") scan $updateApp }
 } finally { Remove-Item Env:KIT_SCAN_SECRETS }

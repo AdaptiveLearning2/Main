@@ -353,7 +353,8 @@ export default function Adaptive() {
   }, [])
   const adoptSessionId = useCallback((id) => {
     sessionIdRef.current = id
-    pushOwnerRef.current = ownerOf(sidecarSessionRef.current, id)
+    // A new lesson only: an ended one is still this tab's until the push cleanup stops it and clears the owner.
+    if (id) pushOwnerRef.current = ownerOf(sidecarSessionRef.current, id)
     setSessionId(id)
   }, [])
 

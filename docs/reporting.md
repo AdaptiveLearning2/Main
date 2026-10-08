@@ -93,8 +93,8 @@ blank the other.
 **`last_active_for_users` exists because "newest row per student" has no PostgREST form.** One `in_` query ordered
 by time returns the newest rows *overall*, which is one busy student's — the same limitation
 `_recent_sessions_many` exists for. That is why the column was absent rather than wrong. It is the greatest of two clocks
-(`started_at` and `max(answered_at)`) plus the newest session's newest sample, **never `ended_at`**: the sweep
-stamps that when it runs, weeks after the student left, and nothing records which closes were the sweep's. The
+(`started_at` and `max(answered_at)`) plus the newest session's newest sample, **never `ended_at`**: a sweep
+stamps the last activity it could read, but the sweep time when that read fails, and nothing records which. The
 sample is the newest session's only, so each read is one `(session_id, ts)` index lookup rather than a year of
 rows per student. **Three states on the roster** — a
 timestamp, `null` for never active, and `last_active_retrieved: false`. Collapsing the last two tells a teacher
@@ -209,6 +209,10 @@ asserting on that note passes either way; assert that no chart, no `sr-only` tab
 `_sweep_abandoned_sessions` thread — and `conftest.close_sites()` finds all four. Don't hand-write a fifth: a copied
 close sequence drifts silently — a credit reading a column it never selected (`None` → `or 0`, an honest-looking
 zero), a discard one site never runs.
+
+**The three sweeping sites stamp when the student was last seen, not when they noticed**, all through
+`_last_seen_many` (the `last_activity_for_sessions` read, measured rows only — not `class_live`'s newest reading,
+which counts an empty one): the start for a session with no activity, now only when the read fails.
 
 **Order is load-bearing: discard first**, because a rollup of nothing and an archive of four empty charts are work
 done for a session about to stop existing.

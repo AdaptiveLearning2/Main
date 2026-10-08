@@ -1309,6 +1309,27 @@ _stale_sweep_stop = threading.Event()
 _stale_sweep_thread: threading.Thread | None = None
 
 
+def _last_seen_many(sessions: list[dict]) -> dict[str, datetime] | None:
+    """Each session's last activity, by id; None when the read failed. Never raises."""
+    if not sessions:
+        return {}
+    try:
+        got = supabase.rpc("last_activity_for_sessions",
+                           {"p_session_ids": [s["id"] for s in sessions]}).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[session:close] could not read last activity, closing at the current time: {e}")
+        return None
+    return {g["session_id"]: ts for g in got if (ts := _parse_ts(g.get("last_activity_at")))}
+
+
+def _ended_when_last_seen(session: dict, last_seen: dict[str, datetime] | None) -> str:
+    """A swept session ends when the student was last seen, else at its start; now only if that was unread."""
+    if last_seen is None:
+        return _utc_now().isoformat()
+    ended = last_seen.get(session["id"]) or _parse_ts(session.get("started_at")) or _utc_now()
+    return ended.isoformat()
+
+
 def _sweep_abandoned_sessions(limit: int = _STALE_SWEEP_BATCH) -> dict:
     """Close sessions left open past `_SESSION_ABANDONED_AFTER_SEC`; returns counts.
 
@@ -1325,6 +1346,7 @@ def _sweep_abandoned_sessions(limit: int = _STALE_SWEEP_BATCH) -> dict:
         return {"found": 0, "closed": 0, "discarded": 0, "failed": 0,
                 "retrieved": False}
 
+    last_seen = _last_seen_many(rows)
     closed = discarded = failed = 0
     for s in rows:
         uid = s.get("user_id")
@@ -1333,7 +1355,7 @@ def _sweep_abandoned_sessions(limit: int = _STALE_SWEEP_BATCH) -> dict:
         try:
             # Poller first, so no tick lands after the discard check.
             eeg_poller.stop(s["id"], uid)
-            out = _close_session(uid, s, _utc_now().isoformat(),
+            out = _close_session(uid, s, _ended_when_last_seen(s, last_seen),
                                  closed_by=CLOSED_BY_SWEEP)
             if out.get("discarded"):
                 discarded += 1
@@ -2896,11 +2918,11 @@ def start_session(payload: StartSessionRequest, request: Request):
     stale_open = supabase.table("sessions") \
         .select("id, started_at, questions_answered, correct_answers") \
         .eq("user_id", user["id"]).is_("ended_at", "null").execute().data or []
+    last_seen = _last_seen_many(stale_open)
     for s in stale_open:
         # Also releases any pre-claim EEG reservation from a scan that never reached /start.
         eeg_poller.stop(s["id"], user["id"])
-        stale_ended = _utc_now().isoformat()
-        _close_session(user["id"], s, stale_ended, closed_by=CLOSED_BY_SWEEP)
+        _close_session(user["id"], s, _ended_when_last_seen(s, last_seen), closed_by=CLOSED_BY_SWEEP)
 
 
     obj  = {
@@ -5779,8 +5801,28 @@ def _poller_may_record_eeg_reason(student_id: str) -> str:
     return _as_sentence(_not_recording_reason(gate, "EEG not consented", switches=("record_eeg",)))
 
 
+def _paused_by_switch(gate: dict) -> bool:
+    """Whether the EEG admin switch is the only refusal in this `_may_record` gate."""
+    return ("record_eeg" in gate["switched_off"]
+            and gate["window_state"] not in _WINDOW_DENIED
+            and bool(gate.get("retrieved")) and bool(gate.get("eeg_enabled")))
+
+
+def _poller_recheck(student_id: str) -> str:
+    """A running poller's verdict over one read: 'record', 'pause' (the switch alone) or 'stop'."""
+    gate = _may_record(student_id)
+    if gate["record_eeg"]:
+        return "record"
+    if _paused_by_switch(gate):
+        return "pause"
+    reason = _as_sentence(_not_recording_reason(gate, "EEG not consented", switches=("record_eeg",)))
+    print(f"<<< [eeg-poller] {student_id[:8]}: {reason}", flush=True)
+    return "stop"
+
+
 eeg_poller.set_consent_check(_poller_may_record_eeg)
 eeg_poller.set_consent_reason_check(_poller_may_record_eeg_reason)
+eeg_poller.set_recheck(_poller_recheck)
 
 
 def _IS_DUPLICATE_KEY(exc: Exception) -> bool:
@@ -6769,7 +6811,8 @@ def class_live(class_id: str, request: Request):
                 # `sid` is the student. Stop the poller before closing, or a tick
                 # can land a row after the discard check looked.
                 eeg_poller.stop(sid2, sid)
-                _close_session(sid, sess, now.isoformat(),
+                # Ended when last seen, by the sweep's definition (measured rows), not this card's.
+                _close_session(sid, sess, _ended_when_last_seen(sess, _last_seen_many([sess])),
                                closed_by=CLOSED_BY_SWEEP)
                 active = None; latest_cog = None; latest_face = None; latest_heart = None
             elif last_activity and last_activity >= live_cutoff:
@@ -6798,6 +6841,9 @@ def _poller_status(user_id: str, push: bool = False) -> dict:
     """
     status = eeg_poller.status(user_id)
     if status.get("running"):
+        if status.get("withheld"):
+            # Running but writing nothing, until the switch is turned back on.
+            return {**status, "stopped_reason": "recording_switched_off"}
         return status
     # Window before consent, via `_may_record`, as at the recording sites.
     gate = _may_record(user_id)
@@ -6836,6 +6882,8 @@ def _refuse_under_push(what: str) -> None:
 
 # A pairing its pairer's page has not polled for this long is released: the tab was closed.
 _PAIRING_IDLE_SEC = env_number("PAIRING_IDLE_SECONDS", 120.0, float, minimum=15.0)
+# The same limit stops a pull poller whose page is gone; pagehide's stop is only the fast path.
+eeg_poller.PAGE_IDLE_SECONDS = _PAIRING_IDLE_SEC
 # The pairer's polls refresh `seen_at` at most this often, not on every 5 s poll.
 _PAIRING_REFRESH_SEC = 30.0
 # Owner rows only: a stale one refuses (the safe direction); a stale "free" would admit a takeover.
@@ -6955,6 +7003,7 @@ def _station_access(user_id: str, device_id: str) -> tuple[bool, dict | None]:
     if eeg_poller.live_poller_user(device_id) == user_id:
         # Their own poller holds the station: no read. Still refreshed, or a poller stopping
         # mid-lesson (consent withdrawn) leaves a pairing that already looks idle.
+        eeg_poller.page_seen(user_id, device_id)
         if not _touched_recently(user_id, device_id):
             _touch_pairing(user_id, device_id)
         return True, None

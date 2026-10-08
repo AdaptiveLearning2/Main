@@ -213,24 +213,26 @@ older sidecar); the year and switches are cached 30 s. A failed read keeps the l
 
 All three ingest endpoints are rate-limited and length-bounded.
 
-## Samples are stored during a session, not while a headband merely sits paired
+## A pull poller records from the first question until its lesson or its page ends
 
-Under pull, Connect has to start the poller — it is what starts the sidecar's device stream, and it
-feeds contact and battery to the page — and the poller used to write from its first tick. So a
-student who paired and never started a question had rows on the teacher's Live view, and a "session"
-in History, for a lesson that never happened.
+Connect starts the poller with `record: false` (the device stream up for contact and battery, nothing
+written), and `Adaptive.jsx`'s `armRecording` flips the *running* poller to `record: true` on the first
+question; ending the session stops it, so a paired headband with no question records nothing. **`record`
+defaults to `true`**, so a new caller of `/api/eeg/start` must send `false` or it records a headband merely
+paired. The headband stays paired at the bridge across a Finish. `status()` reports `recording` beside
+`running`. Push is keyed on `sessionId` instead.
+**A poller up but not recording still moves `last_ts`**, so arming starts from the live tick and an idle
+headband does not read as a sidecar gone quiet.
 
-The poller now has two states. `POST /api/eeg/start` takes `record` (default `true`, so callers
-predating the flag are unchanged): Connect sends `record: false` — stream up, nothing written — and
-`Adaptive.jsx`'s `armRecording` sends `record: true` on the first question, flipping the *running*
-poller in place rather than restarting it. Ending the session stops the poller, so the recording
-window is first question → Finish. After a Finish the next question is a new session; the headband
-stays paired at the bridge throughout. `status()` reports `recording` beside `running` because they
-are now different facts. Push needed none of this: `startPush` was already keyed on `sessionId`.
+**It stops once no page has polled for `PAIRING_IDLE_SECONDS`** (`eeg_poller.PAGE_IDLE_SECONDS`, wired
+from `main`). `pagehide`'s `/api/eeg/stop` is only the fast path; a page that dies without it must not
+leave a child recorded. `_station_access` calls `page_seen` when the poller's own user asks about its
+station, as the lesson page's status poll does, hidden tabs included.
 
-**A poller that is up but not recording still moves `last_ts`**, so arming starts from the live tick
-rather than replaying a backlog — and so a paired, idle headband does not read as a sidecar that has
-stopped answering.
+**A re-check refused by the EEG admin switch alone pauses it** (`_poller_recheck` answers `pause`): stream
+and pairing kept, nothing written on either channel, resumed when a re-check passes; status reports
+`running`, `withheld` and `stopped_reason: recording_switched_off`. Any other refusal, or a failed or
+unknown answer, stops it.
 
 ## The bridge owns BLE recovery, and reports it
 

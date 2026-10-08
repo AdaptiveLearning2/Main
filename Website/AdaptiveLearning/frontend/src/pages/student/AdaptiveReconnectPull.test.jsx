@@ -15,7 +15,7 @@ vi.mock('../../lib/session', () => ({
 }))
 
 // The bridge as relayed by /api/eeg/status; `stamps` times each read, `pollerRunning` follows the recorder.
-const bridge = { ingestion: {}, stamps: [], recorders: [], pollerRunning: false,
+const bridge = { ingestion: {}, stamps: [], recorders: [], pollerRunning: false, withheld: false,
                  // `eegStatus` swallows failure into a shaped object; this is an unlanded read.
                  unanswered: false }
 vi.mock('../../lib/signals', () => ({
@@ -34,7 +34,9 @@ vi.mock('../../lib/signals', () => ({
     if (bridge.unanswered) return { answered: false, service: false, poller: { running: false } }
     return {
       ingest_mode: 'pull', service: true,
-      poller: { running: bridge.pollerRunning, samples: 3 },
+      // `withheld` and its `stopped_reason` as `_poller_status` reports a paused poller.
+      poller: { running: bridge.pollerRunning, samples: 3,
+                ...(bridge.withheld ? { withheld: true, stopped_reason: 'recording_switched_off' } : {}) },
       muse: { available: true, running: true, ingestion: { ...bridge.ingestion } },
     }
   }),
@@ -71,6 +73,7 @@ beforeEach(() => {
   bridge.stamps = []
   bridge.recorders = []
   bridge.pollerRunning = false
+  bridge.withheld = false
   bridge.unanswered = false
   bridge.sessions = 0
   const question = () => ({
@@ -429,3 +432,30 @@ it('stops counting attempts once no attempt is running', async () => {
   expect(line).toHaveTextContent(/disconnected/)
   expect(screen.queryByText(/attempt \d+ of \d+/)).toBeNull()
 }, 90_000)
+
+it('says a poller paused by the admin switch is not saving, and says so no longer once it resumes', async () => {
+  render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+  fireEvent.click(screen.getByRole('button', { name: /generate question/i }))
+  await screen.findByText(/What is 2 \+ 2\?/)
+  fireEvent.click(screen.getByRole('button', { name: /^B\s*4$/ }))
+  fireEvent.click(screen.getByRole('button', { name: /submit answer/i }))
+  await screen.findByText(/1 answered/)
+  await screen.findByText(/teacher can see your focus & stress live/, {}, { timeout: 10000 })
+  expect(screen.getByText(/Recording: Headband/)).toBeInTheDocument()
+
+  bridge.withheld = true
+  const notice = await screen.findByText(/Not being saved/, {}, { timeout: 10000 })
+  expect(notice).toHaveTextContent("Headband (switched off by the school's administrator)")
+  expect(notice).toHaveTextContent("Heart sensor (switched off by the school's administrator)")
+  expect(screen.getByText(/not being saved, so your teacher cannot see them/)).toBeInTheDocument()
+  expect(screen.queryByText(/teacher can see your focus & stress live/)).toBeNull()
+  expect(screen.queryByText(/Recording:/)).toBeNull()
+
+  bridge.withheld = false
+  await screen.findByText(/teacher can see your focus & stress live/, {}, { timeout: 10000 })
+  expect(screen.queryByText(/Not being saved/)).toBeNull()
+}, 60_000)

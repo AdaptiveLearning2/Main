@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.routing import Match
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 import os, math, re, random, secrets, threading, time, collections, contextlib
@@ -22,6 +23,7 @@ import eeg_client
 import signal_mapping
 import eeg_poller
 import llm_client
+import ops_metrics
 import grade_levels
 import safe_solve
 from env_config import env_number
@@ -48,6 +50,8 @@ async def _lifespan(app: FastAPI):
     anyio.to_thread.current_default_thread_limiter().total_tokens = _WORKER_THREADS
     start_stale_sweeper()
     safe_solve.start_startup_probe()
+    # A lambda, so the flusher uses whatever client `supabase` names at flush time.
+    ops_metrics.start(lambda: supabase)
     yield
     # Join printing daemon threads first: a print during teardown is a fatal stdout-lock abort.
     try:
@@ -58,7 +62,8 @@ async def _lifespan(app: FastAPI):
         finally:
             # Every step runs even if one raises; the last failure is re-raised.
             failure = None
-            for shutdown in (safe_solve.stop_startup_probe,
+            for shutdown in (ops_metrics.stop,
+                             safe_solve.stop_startup_probe,
                              _shutdown_strategy_pool,
                              _shutdown_chart_summary_pool,
                              _shutdown_prefetch_pool,
@@ -367,9 +372,37 @@ async def public_rate_limit(request: Request, call_next):
         status_code=429, headers={"Retry-After": str(refused_after)})
 
 
+def _route_template(scope) -> str:
+    """The matched route's path template (`/api/sessions/{session_id}/end`), never the raw path."""
+    route = scope.get("route")
+    if route is not None:
+        return route.path
+    # Refused before routing (a 429 here, a declared-length 413): match it ourselves.
+    partial = None
+    for r in app.router.routes:
+        match, _ = r.matches(scope)
+        if match is Match.FULL:
+            return r.path
+        if match is Match.PARTIAL and partial is None:
+            partial = r.path
+    return partial or "<unmatched>"
+
+
+def _count_refusal(request: Request, status: int) -> None:
+    # Status, method and route template: never an id, a caller or an address. 404 is a typo.
+    if status >= 400 and status != 404:
+        ops_metrics.bump("refusal", f"{status} {request.method} {_route_template(request.scope)}")
+
+
+# Also counts refusals: outside `public_rate_limit` and the size cap, it sees their 429s and 413s.
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        _count_refusal(request, 500)
+        raise
+    _count_refusal(request, response.status_code)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -2559,8 +2592,12 @@ def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None
                 queue = _prefetch_cache.get(user_id, {}).get(key)
                 if queue is not None:
                     queue.append(question)
+            ops_metrics.bump("question", "prefetched" if queue is not None else "prefetch_discarded")
+        else:
+            ops_metrics.bump("question", "prefetch_failed")
     except Exception as e:
         print(f"[prefetch] failed for {user_id[:8]}: {e}")
+        ops_metrics.bump("question", "prefetch_failed")
     finally:
         # A count, not a flag: one worker finishing must not clear the others.
         _prefetch_done(user_id, key)
@@ -2964,6 +3001,7 @@ def generate_question(
     question["bias"]            = manual_bias
     # A queued question's `eeg_label` was read when it was made (`signal_read_at`), not now.
     question["served_from"]     = "inline" if inline else "queue"
+    ops_metrics.bump("question", f"served:{question['served_from']}")
 
     _ensure_queue(user_id, effective_grade, manual_bias, session_id)
 
@@ -8337,6 +8375,114 @@ def admin_health(request: Request):
     })
 
     return {"checks": checks}
+
+
+# ─── operational counters (ops_metrics) ──────────────────────────────────
+
+_OPS_MAX_HOURS = 24 * 7
+
+# Dollars per million tokens for the cost estimate; defaults are claude-haiku-4-5's list price.
+CLAUDE_PRICE_INPUT_PER_MTOK  = env_number("CLAUDE_PRICE_INPUT_PER_MTOK", 1.0, float, minimum=0.0)
+CLAUDE_PRICE_OUTPUT_PER_MTOK = env_number("CLAUDE_PRICE_OUTPUT_PER_MTOK", 5.0, float, minimum=0.0)
+
+
+@app.get("/api/admin/generation")
+def admin_generation(request: Request, hours: int = 24):
+    """Model calls, their outcomes, waits and tokens, and questions served, over `hours`.
+
+    Counts only: no prompt, no answer, no student. Cost is an estimate from list prices.
+    """
+    _require_admin(request)
+    hours = max(1, min(hours, _OPS_MAX_HOURS))
+    got = ops_metrics.read(supabase, ["llm_call", "llm_latency_ms", "llm_tokens", "question"], hours)
+
+    outcomes: dict[str, int] = {}
+    tokens: dict[str, int] = {}
+    questions: dict[str, int] = {}
+    latency: dict[str, dict] = {}
+    hourly: dict[str, dict] = {}
+    for r in got["rows"]:
+        kind, key, n = r["kind"], r["key"], r["n"]
+        if kind == "llm_call":
+            outcomes[key] = outcomes.get(key, 0) + n
+            slot = hourly.setdefault(r["hour"], {"hour": r["hour"], "ok": 0, "failed": 0})
+            slot["ok" if key.endswith(":ok") else "failed"] += n
+        elif kind == "llm_tokens":
+            tokens[key] = tokens.get(key, 0) + n
+        elif kind == "question":
+            questions[key] = questions.get(key, 0) + n
+        elif kind == "llm_latency_ms":
+            agg = latency.setdefault(key, {"calls": 0, "sum": 0.0, "max": None})
+            agg["calls"] += n
+            agg["sum"] += r["sum"] or 0.0
+            if r["max"] is not None:
+                agg["max"] = r["max"] if agg["max"] is None else max(agg["max"], r["max"])
+
+    waits = {p: {"calls": a["calls"],
+                 "mean_ms": round(a["sum"] / a["calls"]) if a["calls"] else None,
+                 "max_ms": round(a["max"]) if a["max"] is not None else None}
+             for p, a in latency.items()}
+    cost = (tokens.get("claude:in", 0) * CLAUDE_PRICE_INPUT_PER_MTOK
+            + tokens.get("claude:out", 0) * CLAUDE_PRICE_OUTPUT_PER_MTOK) / 1_000_000
+
+    return {
+        "retrieved": got["retrieved"],
+        "hours": hours,
+        "provider": llm_client.LLM_PROVIDER,
+        "model": llm_client.CLAUDE_MODEL if llm_client.LLM_PROVIDER == "claude" else None,
+        "outcomes": outcomes,
+        "waits": waits,
+        "tokens": tokens,
+        "estimated_cost_usd": round(cost, 4),
+        "prices_per_mtok": {"input": CLAUDE_PRICE_INPUT_PER_MTOK,
+                            "output": CLAUDE_PRICE_OUTPUT_PER_MTOK},
+        "questions": questions,
+        "hourly": sorted(hourly.values(), key=lambda h: h["hour"]),
+        # In memory and per process: a restart starts the 24 h window again. Claude calls only.
+        "daily_ceiling": ({"used": llm_client._calls_in_window(),
+                           "limit": llm_client.GENERATION_DAILY_CALL_LIMIT,
+                           "scope": "this server process"}
+                          if llm_client.LLM_PROVIDER == "claude" else None),
+        "complete": got["complete"],
+        "dropped": got["dropped"],
+    }
+
+
+@app.get("/api/admin/refusals")
+def admin_refusals(request: Request, hours: int = 24):
+    """Requests answered 4xx/5xx (404 aside) over `hours`, by status, method and route template."""
+    _require_admin(request)
+    hours = max(1, min(hours, _OPS_MAX_HOURS))
+    got = ops_metrics.read(supabase, ["refusal"], hours)
+
+    # Buckets are whole UTC hours, so "recent" is this hour's bucket and the one before it.
+    recent_from = ops_metrics.since_hour(2)
+    totals: dict[str, int] = {}
+    recent: dict[str, int] = {}
+    hourly: dict[str, int] = {}
+    for r in got["rows"]:
+        totals[r["key"]] = totals.get(r["key"], 0) + r["n"]
+        hourly[r["hour"]] = hourly.get(r["hour"], 0) + r["n"]
+        if datetime.fromisoformat(r["hour"]) >= recent_from:
+            recent[r["key"]] = recent.get(r["key"], 0) + r["n"]
+
+    def _rows(counts: dict[str, int]) -> list[dict]:
+        out = []
+        for key, n in counts.items():
+            status, method, route = key.split(" ", 2)
+            out.append({"status": int(status), "method": method, "route": route, "count": n})
+        return sorted(out, key=lambda x: (-x["count"], x["route"]))
+
+    return {
+        "retrieved": got["retrieved"],
+        "hours": hours,
+        "refusals": _rows(totals),
+        "recent": _rows(recent),
+        "recent_from": recent_from.isoformat(),
+        "hourly": [{"hour": h, "count": n} for h, n in sorted(hourly.items())],
+        "complete": got["complete"],
+        "dropped": got["dropped"],
+    }
 
 
 _SECURITY_EVENT_KINDS = (

@@ -3,6 +3,9 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import AdminOverview from './Overview'
 import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
+import {
+  GENERATION_PATH, REFUSALS_PATH, buildGeneration, buildRefusals,
+} from '../../test/fixtures/opsCounters'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 
@@ -30,6 +33,8 @@ beforeEach(() => {
     '/api/admin/health': HEALTH,
     '/api/admin/consent-summary': CONSENT,
     [searchPath('ada')]: { students: [ADA] },
+    [GENERATION_PATH]: buildGeneration(),
+    [REFUSALS_PATH]: buildRefusals(),
   })
 })
 afterEach(() => { cleanup(); vi.useRealTimers() })

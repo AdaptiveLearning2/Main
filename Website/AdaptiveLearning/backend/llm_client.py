@@ -8,6 +8,7 @@ import time
 from dotenv import load_dotenv
 
 import console_encoding
+import ops_metrics
 from env_config import env_number
 
 load_dotenv()
@@ -64,7 +65,12 @@ class GenerationUnavailable(RuntimeError):
     """A bound refused this call (daily ceiling or concurrency slot), or the API was unreachable.
 
     `/api/questions/generate` answers 503. Never degrade by silently serving from elsewhere.
+    `reason` is one of `concurrency`, `queued`, `daily`, `connection` (the admin counters' key).
     """
+
+    def __init__(self, message: str, reason: str = "unavailable"):
+        super().__init__(message)
+        self.reason = reason
 
 
 _anthropic_client = None
@@ -90,7 +96,7 @@ def _claim_call_slot():
         if len(_call_times) >= GENERATION_DAILY_CALL_LIMIT:
             raise GenerationUnavailable(
                 f"daily model-call ceiling reached "
-                f"({GENERATION_DAILY_CALL_LIMIT} in 24h)"
+                f"({GENERATION_DAILY_CALL_LIMIT} in 24h)", reason="daily"
             )
         _call_times.append(now)
 
@@ -112,20 +118,54 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
     `schema` are Claude-only (Ollama runs unschema'd, so downstream JSON checks stay load-bearing).
     Raises `GenerationUnavailable` for a refused bound or an unreachable API; everything else propagates.
     """
+    provider = LLM_PROVIDER if LLM_PROVIDER == "claude" else "ollama"
+    started = time.monotonic()
+    try:
+        text, tokens_in, tokens_out = _generate(
+            prompt, temperature=temperature, top_p=top_p, top_k=top_k,
+            ollama_model=ollama_model, claude_temperature=claude_temperature,
+            schema=schema, max_tokens=max_tokens, timeout=timeout)
+    except GenerationUnavailable as e:
+        ops_metrics.bump("llm_call", f"{provider}:unavailable:{e.reason}")
+        raise
+    except Exception as e:
+        ops_metrics.bump("llm_call", f"{provider}:error:{type(e).__name__}")
+        raise
+    finally:
+        # Includes waiting for a slot: the wait a student feels, not the provider's alone.
+        ops_metrics.observe("llm_latency_ms", provider, (time.monotonic() - started) * 1000)
+    ops_metrics.bump("llm_call", f"{provider}:ok")
+    ops_metrics.bump("llm_tokens", f"{provider}:in", tokens_in)
+    ops_metrics.bump("llm_tokens", f"{provider}:out", tokens_out)
+    return text
+
+
+def _usage(resp, *names) -> int:
+    """The first token count `resp` carries under `names` (mapping or object), else 0."""
+    for name in names:
+        value = resp.get(name) if isinstance(resp, dict) else getattr(resp, name, None)
+        if isinstance(value, int):
+            return value
+    return 0
+
+
+def _generate(prompt, *, temperature, top_p, top_k, ollama_model, claude_temperature,
+              schema, max_tokens, timeout):
+    """`generate_text`'s call, returning (text, input tokens, output tokens)."""
     budget = GENERATION_LLM_TIMEOUT if timeout is None else timeout
 
     queued_at = time.monotonic()
     if not _generation_slots.acquire(timeout=budget):
         raise GenerationUnavailable(
             f"no model slot free within {budget}s "
-            f"({GENERATION_MAX_CONCURRENCY} concurrent)"
+            f"({GENERATION_MAX_CONCURRENCY} concurrent)", reason="concurrency"
         )
     try:
         # What is left of the budget after queueing, so one call cannot block for ~2x `budget`.
         remaining = budget - (time.monotonic() - queued_at)
         if remaining <= 0:
             raise GenerationUnavailable(
-                f"budget of {budget}s spent waiting for a model slot")
+                f"budget of {budget}s spent waiting for a model slot", reason="queued")
         if LLM_PROVIDER == "claude":
             _claim_call_slot()
             client = _get_anthropic_client().with_options(timeout=remaining)
@@ -147,8 +187,10 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
                 # The base URL is logged because a stale `ANTHROPIC_BASE_URL` is the usual cause; the key is not.
                 raise GenerationUnavailable(
                     f"cannot reach the model API at {client.base_url} -- "
-                    f"{type(e).__name__}") from e
-            return next((b.text for b in resp.content if b.type == "text"), "")
+                    f"{type(e).__name__}", reason="connection") from e
+            usage = getattr(resp, "usage", None)
+            return (next((b.text for b in resp.content if b.type == "text"), ""),
+                    _usage(usage, "input_tokens"), _usage(usage, "output_tokens"))
 
         # An explicit Client, because module-level `generate()` has no deadline.
         from ollama import Client
@@ -160,8 +202,8 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
             options={k: v for k, v in options.items() if v is not None},
         )
         # A mapping on some client versions, an object on others.
-        if isinstance(resp, dict):
-            return resp.get("response") or ""
-        return getattr(resp, "response", "") or ""
+        text = (resp.get("response") if isinstance(resp, dict)
+                else getattr(resp, "response", "")) or ""
+        return text, _usage(resp, "prompt_eval_count"), _usage(resp, "eval_count")
     finally:
         _generation_slots.release()

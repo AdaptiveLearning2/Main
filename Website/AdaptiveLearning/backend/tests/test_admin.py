@@ -142,6 +142,8 @@ ADMIN_GETS = [
     ("admin_flag_history",
      lambda r: main.admin_flag_history("strategy_llm_enabled", r)),
     ("admin_security_events", lambda r: main.admin_security_events(r)),
+    ("admin_generation", lambda r: main.admin_generation(r)),
+    ("admin_refusals", lambda r: main.admin_refusals(r)),
 ]
 
 

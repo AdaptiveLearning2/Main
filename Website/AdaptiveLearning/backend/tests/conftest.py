@@ -108,6 +108,16 @@ def _limiters_start_empty():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _ops_counters_start_empty():
+    """No counts carried between tests, and the flusher joined after each (a lifespan starts it)."""
+    import ops_metrics
+    ops_metrics.reset()
+    yield
+    ops_metrics.stop()
+    ops_metrics.reset()
+
+
 def _default_flags():
     import main
     return {k: {"enabled": v, "bypass_until": None}

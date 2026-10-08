@@ -510,6 +510,22 @@ def test_list_practice_sessions_is_capped(_client, monkeypatch):
     assert len(rows) == 20
 
 
+def test_a_practice_session_left_open_past_the_cut_is_abandoned_not_in_progress(_client, monkeypatch):
+    """No sweep closes a practice session, so one left by closing the tab would read "in progress" for ever."""
+    from datetime import timedelta
+    _as(monkeypatch, USER)
+    now = main._utc_now()
+    hours = main._SESSION_ABANDONED_AFTER_SEC / 3600
+    _client(sessions=[
+        dict(_OWNED_SESSION, id="left", started_at=(now - timedelta(hours=hours + 1)).isoformat(), ended_at=None),
+        dict(_OWNED_SESSION, id="live", started_at=(now - timedelta(minutes=5)).isoformat(), ended_at=None),
+        dict(_OWNED_SESSION, id="done", started_at=(now - timedelta(hours=hours + 1)).isoformat(),
+             ended_at=(now - timedelta(hours=hours)).isoformat()),
+    ])
+    flags = {r["id"]: r["abandoned"] for r in main.list_practice_sessions(None)}
+    assert flags == {"left": True, "live": False, "done": False}
+
+
 # ─── the per-session topic-rotation state is bounded ────────────────────
 
 def test_topic_rotation_state_is_evicted_when_a_session_ends(_client, monkeypatch):

@@ -147,7 +147,8 @@ def test_a_clinical_term_anywhere_in_the_reply_rejects_it():
     assert main._validated_chart_summary(reply, allowed, len(lines)) is None
 
 
-@pytest.mark.parametrize("cause", ["stopped working", "broke", "had a fault", "malfunctioned"])
+@pytest.mark.parametrize("cause", ["stopped working", "broke", "had a fault", "malfunctioned",
+                                   "disconnected", "wasn't working", "had technical problems"])
 def test_a_reply_that_names_a_cause_for_a_turned_off_sensor_is_rejected(cause):
     """The run's wording: a withdrawal read as "before the sensor stopped working"."""
     basis = _basis()

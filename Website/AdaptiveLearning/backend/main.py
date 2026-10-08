@@ -1613,9 +1613,13 @@ def _channels_from_consent(consent: dict, want_emotion: bool = True,
                            want_heart: bool = True, erasures: dict | None = None) -> ReportChannels:
     """The consent row -> channels mapping, shared by the single and batch forms.
 
-    `erasures` is `_erasures()`'s {sensor: erased_at}; heart is either sensor's, the later one.
+    `erasures` is `_erasures()`'s {sensor: erased_at}. Heart is erased only if every consented heart
+    sensor was, at the later date: one sensor's erasure says nothing about the other's empty week.
     """
     erasures = erasures or {}
+    heart_sensors = [s for s in ("headband_optical", "camera") if consent.get(f"{s}_enabled")]
+    heart_erased = (_latest(*(erasures.get(s) for s in heart_sensors))
+                    if all(erasures.get(s) for s in heart_sensors) else None)
     heart = bool(consent.get("headband_optical_enabled")) or bool(consent.get("camera_enabled"))
     emotion = bool(consent.get("camera_enabled"))
     # Heart is off only when both sensors are; it stopped at the later revocation.
@@ -1630,15 +1634,24 @@ def _channels_from_consent(consent: dict, want_emotion: bool = True,
                           eeg=eeg,
                           eeg_revoked_at=None if eeg else consent.get("eeg_revoked_at"),
                           eeg_erased_at=erasures.get("eeg"),
-                          heart_erased_at=_latest(erasures.get("headband_optical"), erasures.get("camera")),
+                          heart_erased_at=heart_erased,
                           emotion_erased_at=erasures.get("camera"))
 
 
-def _erased_fields(ch: "ReportChannels | None") -> dict:
-    """The three `*_erased_at` payload keys, beside `*_revoked_at`; all None with no channels in hand."""
-    return {"eeg_erased_at": ch.eeg_erased_at if ch else None,
-            "heart_erased_at": ch.heart_erased_at if ch else None,
-            "emotion_erased_at": ch.emotion_erased_at if ch else None}
+def _erased_fields(ch: "ReportChannels | None", days: int | None = None) -> dict:
+    """The three `*_erased_at` payload keys, beside `*_revoked_at`; all None with no channels in hand.
+
+    Only an erasure inside the last `days`: an earlier one took nothing from this window, so its
+    empty tile is not the erasure's doing.
+    """
+    since = _utc_now() - timedelta(days=days) if days else None
+
+    def within(at):
+        t = _parse_ts(at) if at else None
+        return at if t and (since is None or t >= since) else None
+    return {"eeg_erased_at": within(ch.eeg_erased_at) if ch else None,
+            "heart_erased_at": within(ch.heart_erased_at) if ch else None,
+            "emotion_erased_at": within(ch.emotion_erased_at) if ch else None}
 
 
 def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: bool):
@@ -1787,7 +1800,7 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
             heart_revoked_at=ch.heart_revoked_at if ch else None,
             eeg_enabled=ch.eeg if ch else True,
             eeg_revoked_at=ch.eeg_revoked_at if ch else None,
-            erased=_erased_fields(ch))
+            erased=_erased_fields(ch, days))
         out[str(sid)]["score_scale"] = scales.get(str(sid))
     return out
 
@@ -3376,11 +3389,25 @@ def end_practice_session(practice_session_id: str = Path(...), request: Request 
 
 @app.get("/api/practice-sessions")
 def list_practice_sessions(request: Request):
-    """The caller's own past practice sessions, most recent first, capped at 20."""
+    """The caller's own past practice sessions, most recent first, capped at 20.
+
+    `abandoned`: open past `_SESSION_ABANDONED_AFTER_SEC`. No sweep closes a practice session, so
+    one left by closing the tab stays open, and is not "in progress".
+    """
     user = get_user(request)
-    res = supabase.table("practice_sessions").select("*") \
+    res = supabase.table("practice_sessions").select(_PRACTICE_CLIENT_COLUMNS) \
         .eq("user_id", user["id"]).order("started_at", desc=True).limit(20).execute()
-    return res.data or []
+    cutoff = _utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)
+    rows = res.data or []
+    for r in rows:
+        started = _parse_ts(r.get("started_at"))
+        r["abandoned"] = bool(not r.get("ended_at") and started is not None and started < cutoff)
+    return rows
+
+
+# Practice-session columns a browser may receive (History, PracticeHistory).
+_PRACTICE_CLIENT_COLUMNS = ("id, mode, topics, difficulty, started_at, ended_at, "
+                            "questions_answered, correct_answers")
 
 
 # ─── stats ───────────────────────────────────────────────────────────────
@@ -3653,7 +3680,7 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
                                 heart_revoked_at=channels.heart_revoked_at,
                                 eeg_enabled=channels.eeg,
                                 eeg_revoked_at=channels.eeg_revoked_at),
-        **_erased_fields(channels),
+        **_erased_fields(channels, max(1, min(days, 30))),
     }
 
 
@@ -3673,7 +3700,7 @@ def student_signal_summary(student_id: str, request: Request, days: int = 7, inc
                            heart_revoked_at=channels.heart_revoked_at,
                            eeg_enabled=channels.eeg,
                            eeg_revoked_at=channels.eeg_revoked_at,
-                           erased=_erased_fields(channels))
+                           erased=_erased_fields(channels, max(1, min(days, 30))))
 
 
 @app.get("/api/students/{student_id}/topic-breakdown")
@@ -3792,7 +3819,8 @@ _CLINICAL_TERMS = re.compile(
 # A cause for a missing reading, which the summary cannot know: a sensor off is turned off, never broken.
 # Not "fail": "could not be read" is honestly rephrased as "failed to load".
 _CAUSE_TERMS = re.compile(
-    r"\b(stopped working|stops working|broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*)\b",
+    r"\b(stopped working|stops working|(?:wasn't|was not|weren't|isn't|not) working|broke|broken|"
+    r"faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|technical (?:problem|issue|difficult)\w*)\b",
     re.IGNORECASE,
 )
 
@@ -5422,7 +5450,7 @@ def _class_signal_totals(student_ids: list[str], days: int,
 
 
 def _cohort_student_row(sid: str, totals: dict | None, channels: ReportChannels,
-                        retrieved: bool) -> dict:
+                        retrieved: bool, days: int | None = None) -> dict:
     """One roster row: the student's averages, and why any of them is missing.
 
     Consent fields are stamped per student: the RPC cannot return revocation dates.
@@ -5446,7 +5474,7 @@ def _cohort_student_row(sid: str, totals: dict | None, channels: ReportChannels,
         "eeg_revoked_at": channels.eeg_revoked_at,
         "heart_revoked_at": channels.heart_revoked_at,
         "emotion_revoked_at": channels.emotion_revoked_at,
-        **_erased_fields(channels),
+        **_erased_fields(channels, days),
         "consent_retrieved": channels.consent_retrieved,
         "retrieved": retrieved,
     }
@@ -5612,7 +5640,7 @@ def _cohort_signals(class_id: str, days: int) -> dict:
             "display_name": (profiles.get(sid) or {}).get("display_name") or "Student",
             "summary": {**_cohort_student_row(sid, summaries.get(sid),
                                               channels_by_student[sid],
-                                              summaries_retrieved),
+                                              summaries_retrieved, days),
                         "score_scale": scale_by_user.get(sid)},
         } for sid in roster]
 
@@ -7774,7 +7802,7 @@ def my_children(request: Request, include_face: bool = True):
                                                 heart_revoked_at=channels_by_child[cid].heart_revoked_at,
                                                 eeg_enabled=channels_by_child[cid].eeg,
                                                 eeg_revoked_at=channels_by_child[cid].eeg_revoked_at,
-                                                erased=_erased_fields(channels_by_child[cid])),
+                                                erased=_erased_fields(channels_by_child[cid], 7)),
         })
     return children
 

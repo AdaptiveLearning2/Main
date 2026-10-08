@@ -283,3 +283,18 @@ it('says a full practice page is the most recent ones, since the list has no cou
 
   expect(await screen.findByText(/showing your 20 most recent practice sessions/i)).toBeInTheDocument()
 })
+
+it('shows a practice session left open as not finished, and keeps it out of In Progress', async () => {
+  // The backend flags it (`abandoned`): no sweep closes a practice session.
+  const left = { ...PRACTICE, id: 'p-left', ended_at: null, abandoned: true }
+  const live = { ...PRACTICE, id: 'p-live', ended_at: null, abandoned: false,
+                 started_at: '2026-08-17T09:00:00Z' }
+  serve(page([]), STATS, [left, live])
+
+  render(<History />)
+
+  expect(await screen.findByText(/not finished/i)).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'In Progress' }))
+  expect(screen.getAllByText('Practice · Test')).toHaveLength(1)
+  expect(screen.queryByText(/not finished/i)).not.toBeInTheDocument()
+})

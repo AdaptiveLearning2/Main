@@ -72,9 +72,10 @@ export default function History() {
     ...(practice || []).map(p => ({ ...p, kind: 'practice' })),
   ].sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
 
+  // Open past the backend's age cut (`abandoned`) is neither complete nor in progress.
   const filtered = rows.filter(s => {
     if (filter === 'complete')   return !!s.ended_at
-    if (filter === 'inprogress') return !s.ended_at
+    if (filter === 'inprogress') return !s.ended_at && !s.abandoned
     return true
   })
 
@@ -169,13 +170,14 @@ export default function History() {
                 className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm flex items-center justify-between hover:shadow-md transition-shadow"
               >
                 <div className="flex items-center gap-4">
-                  <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-lg flex-shrink-0 ${done ? 'bg-green-50 dark:bg-green-900/30' : 'bg-amber-50 dark:bg-amber-900/30'}`}>
-                    {done ? '✅' : '⏳'}
+                  <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-lg flex-shrink-0 ${done ? 'bg-green-50 dark:bg-green-900/30' : s.abandoned ? 'bg-slate-100 dark:bg-gray-800' : 'bg-amber-50 dark:bg-amber-900/30'}`}>
+                    {done ? '✅' : s.abandoned ? '⏹️' : '⏳'}
                   </div>
                   <div>
                     <p className="font-bold text-gray-900 dark:text-white">{title}</p>
                     <p className="text-xs text-gray-600 mt-0.5 dark:text-gray-400">
                       {new Date(s.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      {!done && s.abandoned && ' · Not finished'}
                     </p>
                   </div>
                 </div>

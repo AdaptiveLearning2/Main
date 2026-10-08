@@ -21,12 +21,16 @@ vi.mock('./pollIntervals', async (importOriginal) => ({
   ...(await importOriginal()), PUSH_STATUS_POLL_MS: 100,
 }))
 // The sidecar as each test sets it: `owner` is the lesson it delivers for, and a start takes it, as the real one does.
-const rig = { owner: null, down: false, hang: false, polls: 0, cameraRunning: true,
+const rig = { owner: null, down: false, hang: false, polls: 0, cameraRunning: true, startFails: false,
               lagRelease: false, hold: false, held: [], bridge: { running: false, ingestion: {} } }
 // A stop naming another session changes nothing, as the sidecar's own check has it.
 const release = (sessionId) => { if (!sessionId || sessionId === rig.owner) rig.owner = null }
 vi.mock('../../lib/sidecar', () => ({
-  startPush: vi.fn(async (sessionId) => { rig.owner = sessionId; return {} }),
+  startPush: vi.fn(async (sessionId) => {
+    if (rig.startFails) throw new Error('sidecar busy')
+    rig.owner = sessionId
+    return {}
+  }),
   // `lagRelease`: still winding the lesson down, so its status goes on naming it for a while.
   stopPush: vi.fn(async (sessionId) => { if (!rig.lagRelease) release(sessionId); return {} }),
   stopPushOnUnload: vi.fn((sessionId) => release(sessionId)),
@@ -81,7 +85,7 @@ const ELSEWHERE = 'This lesson is also open in another tab or window. Readings g
 beforeEach(() => {
   resetApi()
   vi.clearAllMocks()
-  Object.assign(rig, { owner: null, down: false, hang: false, polls: 0, cameraRunning: true,
+  Object.assign(rig, { owner: null, down: false, hang: false, polls: 0, cameraRunning: true, startFails: false,
                        lagRelease: false, hold: false, held: [], bridge: { running: false, ingestion: {} } })
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
@@ -234,6 +238,23 @@ it('acts on a token refresh by the owner the screen shows, even before that rend
   theirs.disconnect()
   await pollsLanded(3)
   expect(startPush.mock.calls.slice(m)).toEqual([])
+}, 30_000)
+
+it('knows a lesson the sidecar already delivers for as its own once it starts, before any hand-over lands', async () => {
+  // A reload: the sidecar still names this lesson, and the hand-over keeps failing.
+  rig.owner = 'sess-push'
+  rig.startFails = true
+  render(<Adaptive />)
+  await pollsLanded(1)
+  // Held: no later status read re-states the owner, so only the lesson starting can.
+  rig.hold = true
+  fireEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText('What is 2 + 2?')
+  expect(screen.queryByText(ELSEWHERE)).toBeNull()
+
+  window.dispatchEvent(new Event('pagehide'))
+  expect(stopPushOnUnload).toHaveBeenCalledWith('sess-push')
+  rig.held.forEach(r => r())
 }, 30_000)
 
 it("does not take another tab's lesson back when a status read fails, and recovers its own", async () => {

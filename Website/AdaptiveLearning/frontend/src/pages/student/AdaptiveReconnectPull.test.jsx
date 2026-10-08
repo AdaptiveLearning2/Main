@@ -484,3 +484,25 @@ it('sends no end on the way out when the tab has no lesson', async () => {
   window.dispatchEvent(new Event('pagehide'))
   expect(apiFetchOnUnload.mock.calls.filter(([p]) => p.startsWith('/api/sessions/'))).toEqual([])
 }, 30_000)
+
+it('leaves its lesson open on the way out while an answer is still being saved', async () => {
+  const { apiFetchOnUnload } = await import('../../test/mocks/apiFetch')
+  const ends = () => apiFetchOnUnload.mock.calls.map(([p]) => p).filter(p => p.startsWith('/api/sessions/'))
+  let settle
+  recordAnswer.mockImplementationOnce(() => new Promise(r => { settle = r }))
+  render(<Adaptive />)
+  fireEvent.click(await screen.findByRole('button', { name: /generate question/i }))
+  await screen.findByText(/What is 2 \+ 2\?/)
+  fireEvent.click(screen.getByRole('button', { name: /^B\s*4$/ }))
+  fireEvent.click(screen.getByRole('button', { name: /submit answer/i }))
+  await waitFor(() => expect(recordAnswer).toHaveBeenCalled())
+
+  // Ended now, the answer could reach the backend after the end and be refused.
+  window.dispatchEvent(new Event('pagehide'))
+  expect(ends()).toEqual([])
+
+  settle({ topic: 'expressions' })
+  await screen.findByText(/1 answered/)
+  window.dispatchEvent(new Event('pagehide'))
+  expect(ends()).toEqual(['/api/sessions/sess-1/end'])
+}, 30_000)

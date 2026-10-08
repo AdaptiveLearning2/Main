@@ -264,6 +264,8 @@ export default function Adaptive() {
   // Set beside every `setSessionId`, never copied from it by an effect: a late copy wrote a stale id
   // back over a newer one. Handlers and the stable `recover` callback read this, not the state.
   const sessionIdRef = useRef(null)
+  // Answers sent and not yet settled; while any is, `pagehide` leaves the session open.
+  const answersInFlight = useRef(0)
 
   // The latest applied `/api/recording/me` answer (see `permitVerdicts`); the ref is for loops between renders.
   const [permits, setPermits] = useState({ answer: undefined })
@@ -393,7 +395,9 @@ export default function Adaptive() {
   useEffect(() => {
     const onHide = (e) => {
       const id = sessionIdRef.current
-      if (!id) return
+      // An answer still in flight could land after the end and be refused: leave it open, for a later
+      // start or the sweep, rather than lose the answer.
+      if (!id || answersInFlight.current > 0) return
       apiFetchOnUnload(`/api/sessions/${id}/end`, {})
       sessionIdRef.current = null
       // Restored from the back-forward cache, the page would answer into the session it just ended.
@@ -1415,7 +1419,9 @@ export default function Adaptive() {
     setPhase('result')
 
     const answer = { questionId: data?.id, selectedIndex: selectedAnswer, correct: isCorrect }
-    let res = await recordAnswer({ sessionId: sessionIdRef.current, ...answer })
+    // Counted while in flight, so leaving the page does not end the session under it.
+    const saving = (p) => { answersInFlight.current += 1; return p.finally(() => { answersInFlight.current -= 1 }) }
+    let res = await saving(recordAnswer({ sessionId: sessionIdRef.current, ...answer }))
     if (res?.ended) {
       // Closed server-side while this page held it: the answer goes into a fresh session.
       sessionIdRef.current = null
@@ -1423,7 +1429,7 @@ export default function Adaptive() {
       const fresh = await getOrCreateSession().catch(e => { console.error('[session]', e); return null })
       // Pull: the poller was writing the closed session; push re-hands over on `sessionId`.
       if (fresh) armRecording(fresh).catch(e => console.error('[headband]', e))
-      res = await recordAnswer({ sessionId: fresh, ...answer })
+      res = await saving(recordAnswer({ sessionId: fresh, ...answer }))
       if (res?.ended) {
         // Refused twice: say so, as every other unsaved answer does.
         toast.error('That answer could not be saved.')

@@ -263,7 +263,8 @@ answer start a new session that closes this one in turn. A tab's own lesson is n
 `Adaptive.jsx` ends it on `pagehide` (a keepalive `/end`), which a reload or a close fires and a duplicated tab does
 not — never on the next load, where a copied or stale id would end someone else's. **What is left open is not
 free** — uncredited and "in progress" until a later start finds it quiet or the 6 h sweep closes it: a page that died
-without `pagehide` or lost the keepalive, or a live tab whose only readings for 10 min were empty (a loose headband).
+without `pagehide` or lost the keepalive, one hidden while an answer was still saving (ending it then could refuse
+that answer), or a live tab whose only readings for 10 min were empty (a loose headband).
 
 `_sweep_abandoned_sessions` is the third, run from a background thread started in `_lifespan`. **It is a backend
 thread, not a `pg_cron` job, and that is not a preference.** Closing a session credits lifetime totals, writes the

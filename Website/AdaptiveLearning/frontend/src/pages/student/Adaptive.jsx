@@ -2,7 +2,7 @@ import { useState, useEffect, useEffectEvent, useRef, useCallback } from 'react'
 import { m } from 'framer-motion'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
-import { apiFetch } from '../../lib/api'
+import { apiFetch, apiFetchOnUnload } from '../../lib/api'
 import { endSession, recordAnswer } from '../../lib/session'
 import useEegStartReport from '../../hooks/useEegStartReport'
 import usePoll from '../../hooks/usePoll'
@@ -126,17 +126,6 @@ const initSubjects = () => {
   const s = {}; TOPICS.forEach(t => { s[t] = { correct: 0, attempts: 0 } }); return s
 }
 
-// This tab's open lesson. Storage can be absent or throw (private mode, blocked site data): then nothing is ended.
-const TAB_SESSION_KEY = 'adaptive:tab-session'
-function readTabSession() {
-  try { return window.sessionStorage.getItem(TAB_SESSION_KEY) } catch { return null }
-}
-function writeTabSession(id) {
-  try {
-    if (id) window.sessionStorage.setItem(TAB_SESSION_KEY, id)
-    else window.sessionStorage.removeItem(TAB_SESSION_KEY)
-  } catch { /* no storage: a reload leaves the lesson to the sweep, as before */ }
-}
 
 /**
  * `headband.pushMode` mirrors the backend's `ingest_mode`. Pull: the backend
@@ -394,22 +383,25 @@ export default function Adaptive() {
   useEffect(() => { recorderRef.current = recorder }, [recorder])
 
   // Leaving the page ends the session: an empty one is discarded server-side,
-  // one with answers is closed. A tab close is left to the stale sweep.
+  // one with answers is closed.
   useEffect(() => () => {
     if (sessionIdRef.current) endSession(sessionIdRef.current)
-    writeTabSession(null)
   }, [])
 
-  // A reload or a reopened tab skips the unmount above, and the backend cannot tell this tab's last lesson
-  // from another tab's live one. sessionStorage is this tab's alone and survives both, so the page ends it.
-  const [previousSession] = useState(readTabSession)
-  const previousEnded = useRef(false)
+  // A reload or a tab close skips the unmount above, and `start_session` cannot tell this tab's lesson from
+  // another tab's live one, so the page ends its own on the way out. A duplicated tab fires nothing here.
   useEffect(() => {
-    if (!previousSession || previousEnded.current) return
-    previousEnded.current = true
-    endSession(previousSession)
-  }, [previousSession])
-  useEffect(() => { writeTabSession(sessionId) }, [sessionId])
+    const onHide = (e) => {
+      const id = sessionIdRef.current
+      if (!id) return
+      apiFetchOnUnload(`/api/sessions/${id}/end`, {})
+      sessionIdRef.current = null
+      // Restored from the back-forward cache, the page would answer into the session it just ended.
+      reloadIfRestored(e)
+    }
+    window.addEventListener('pagehide', onHide)
+    return () => window.removeEventListener('pagehide', onHide)
+  }, [])
 
   // Sign-out clears the token before unmount, so the cleanup above would 401.
   // The last attempt: cleared first so a failure is not retried tokenless, and state too so

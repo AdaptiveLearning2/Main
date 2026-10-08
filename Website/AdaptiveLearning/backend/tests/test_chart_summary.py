@@ -218,7 +218,8 @@ def test_a_sensor_not_working_is_a_cause_whatever_follows(text):
 
 
 def test_a_sensor_in_an_earlier_sentence_is_not_the_subject():
-    assert not main._names_a_cause("The headband recorded focus. The student didn't work on fractions.")
+    # Within three words of the verb, so only the sentence boundary keeps it out.
+    assert not main._names_a_cause("Focus came from the headband. She didn't work on fractions.")
 
 
 def test_the_prompt_forbids_naming_a_cause():

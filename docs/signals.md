@@ -219,8 +219,8 @@ Connect starts the poller with `record: false` (the device stream up for contact
 written), and `Adaptive.jsx`'s `armRecording` flips the *running* poller to `record: true` on the first
 question; ending the session stops it, so a paired headband with no question records nothing. **`record`
 defaults to `true`**, so a new caller of `/api/eeg/start` must send `false` or it records a headband merely
-paired. The headband stays paired at the bridge across a Finish. `status()` reports `recording` beside
-`running`. Push is keyed on `sessionId` instead.
+paired. Finish frees the station, so the page shows Connect; the bridge keeps the headband, so it is quick.
+`status()` reports `recording` beside `running`; push is keyed on `sessionId` instead.
 **A poller up but not recording still moves `last_ts`**, so arming starts from the live tick and an idle
 headband does not read as a sidecar gone quiet.
 

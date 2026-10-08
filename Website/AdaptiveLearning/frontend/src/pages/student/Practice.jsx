@@ -21,7 +21,12 @@ export default function Practice() {
   const handleFinish = useCallback(async (liveCounts) => {
     setSession(s => (s ? { ...s, ...liveCounts } : s))
     const closed = await endPracticeSession(session?.id)
-    setResult({ topic_summary: closed?.topic_summary || {} })
+    // Closed before Finish (the sweep): the stored counts, since the tally includes refused answers.
+    if (closed?.already_closed && typeof closed.questions_answered === 'number') {
+      setSession(s => (s ? { ...s, questions_answered: closed.questions_answered,
+                             correct_answers: closed.correct_answers ?? 0 } : s))
+    }
+    setResult({ topic_summary: closed?.topic_summary || {}, alreadyClosed: !!closed?.already_closed })
   }, [session])
 
   const handleRestart = useCallback(() => {

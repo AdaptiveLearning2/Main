@@ -72,10 +72,10 @@ export default function History() {
     ...(practice || []).map(p => ({ ...p, kind: 'practice' })),
   ].sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
 
-  // Open past the backend's age cut (`abandoned`) is neither complete nor in progress.
+  // Past the backend's cut (`abandoned`) is neither complete nor in progress; null (unread) claims neither.
   const filtered = rows.filter(s => {
     if (filter === 'complete')   return !!s.ended_at
-    if (filter === 'inprogress') return !s.ended_at && !s.abandoned
+    if (filter === 'inprogress') return !s.ended_at && !s.abandoned && s.abandoned !== null
     return true
   })
 
@@ -172,13 +172,14 @@ export default function History() {
               >
                 <div className="flex items-center gap-4">
                   <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-lg flex-shrink-0 ${done ? 'bg-green-50 dark:bg-green-900/30' : s.abandoned ? 'bg-slate-100 dark:bg-gray-800' : 'bg-amber-50 dark:bg-amber-900/30'}`}>
-                    {done ? '✅' : s.abandoned ? '⏹️' : '⏳'}
+                    {done ? '✅' : s.abandoned ? '⏹️' : s.abandoned === null ? '❔' : '⏳'}
                   </div>
                   <div>
                     <p className="font-bold text-gray-900 dark:text-white">{title}</p>
                     <p className="text-xs text-gray-600 mt-0.5 dark:text-gray-400">
                       {new Date(s.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                       {!done && s.abandoned && ' · Not finished'}
+                      {!done && s.abandoned === null && ' · Status unavailable'}
                     </p>
                   </div>
                 </div>

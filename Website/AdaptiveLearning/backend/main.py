@@ -3363,11 +3363,17 @@ def end_practice_session(practice_session_id: str = Path(...), request: Request 
     user = get_user(request)
     session = _practice_session_or_403(practice_session_id, user["id"], "*")
     if session.get("ended_at"):
-        return {"ok": True, "already_closed": True}
+        return _already_closed_reply(session)
     summary = _close_practice_session(practice_session_id, _utc_now().isoformat())
     if summary is None:                                         # the sweep closed it first
-        return {"ok": True, "already_closed": True}
+        return _already_closed_reply(_practice_session_or_403(practice_session_id, user["id"], "*"))
     return {"ok": True, "topic_summary": summary}
+
+
+def _already_closed_reply(row: dict) -> dict:
+    """The stored close: its breakdown and the counts the answers that landed made, not the page's tally."""
+    return {"ok": True, "already_closed": True, "topic_summary": row.get("topic_summary") or {},
+            "questions_answered": row.get("questions_answered"), "correct_answers": row.get("correct_answers")}
 
 
 def _close_practice_session(practice_session_id: str, ended_at: str) -> dict | None:
@@ -3414,15 +3420,16 @@ def _practice_last_activity(row: dict) -> str:
     return (last[0].get("answered_at") if last else None) or row["started_at"]
 
 
-def _practice_idle(row: dict) -> bool:
-    """Past the age cut (`_is_abandoned`) and quiet as long: a long session still in use is neither.
+def _practice_idle_since(row: dict) -> str | None:
+    """Its last activity if it is past the age cut (`_is_abandoned`) and quiet as long, else None.
 
-    Raises on a failed read.
+    The sweep's and the list's one idle rule: a long session still in use is not idle. Raises on a failed read.
     """
     if not _is_abandoned(row):
-        return False
-    last = _parse_ts(_practice_last_activity(row))
-    return last is not None and last < _utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)
+        return None
+    last = _practice_last_activity(row)
+    t = _parse_ts(last)                                         # an unparseable stamp is not evidence
+    return last if t is not None and t < _utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC) else None
 
 
 # The sweep's id cursor, so sessions it keeps skipping or failing cannot hold every batch.
@@ -3450,8 +3457,8 @@ def _sweep_abandoned_practice(limit: int = _STALE_SWEEP_BATCH) -> dict:
     closed = active = failed = 0
     for s in rows:
         try:
-            last = _practice_last_activity(s)
-            if (_parse_ts(last) or cutoff) >= cutoff:           # an unparseable stamp is not evidence
+            last = _practice_idle_since(s)
+            if last is None:
                 active += 1
                 continue
             if _close_practice_session(s["id"], last) is not None:
@@ -3469,7 +3476,8 @@ def _sweep_abandoned_practice(limit: int = _STALE_SWEEP_BATCH) -> dict:
 def list_practice_sessions(request: Request):
     """The caller's own past practice sessions, most recent first, capped at 20.
 
-    `abandoned` (`_practice_idle`) covers the gap until `_sweep_abandoned_practice` closes it.
+    `abandoned` (`_practice_idle_since`) covers the gap until `_sweep_abandoned_practice` closes it;
+    null when its activity read failed.
     """
     user = get_user(request)
     res = supabase.table("practice_sessions").select(_PRACTICE_CLIENT_COLUMNS) \
@@ -3477,11 +3485,11 @@ def list_practice_sessions(request: Request):
     rows = res.data or []
     for r in rows:
         try:
-            r["abandoned"] = _practice_idle(r)
+            # Reads only for the caller's own sessions open past the age cut, which the sweep soon closes.
+            r["abandoned"] = _practice_idle_since(r) is not None
         except Exception as e:                                 # noqa: BLE001
-            # The age alone: the sweep, not this flag, decides whether it closes.
             print(f"[practice_sessions] last-activity read failed: {e}")
-            r["abandoned"] = _is_abandoned(r)
+            r["abandoned"] = None
     return rows
 
 
@@ -3905,8 +3913,8 @@ _CLINICAL_TERMS = re.compile(
 # A cause for a missing reading, which the summary cannot know: a sensor off is turned off, never broken.
 # Not "fail": "could not be read" is honestly rephrased as "failed to load".
 _CAUSE_TERMS = re.compile(
-    # "didn't work through the questions" is effort, not a sensor.
-    r"\b(stopped working|stops working|(?:(?:was|were|is|are|did)n['’]t|(?:was|were|is|are|did) not) "
+    # Any negation ("doesn't", "hasn't been", bare "not"); "didn't work through the questions" is effort.
+    r"\b(stopped working|stops working|(?:\w+n['’]t|not)(?:\s+been)?\s+"
     r"work(?:s|ed|ing)?\b(?!\s+(?:through|out|hard|harder|much|ahead|together|towards?)\b)|"
     r"broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|lost (?:the )?connection|"
     r"technical (?:problem|issue|difficult)\w*)\b",

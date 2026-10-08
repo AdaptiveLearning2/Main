@@ -20,9 +20,9 @@ export default function PracticeHistory({ sessions }) {
               </span>
             </div>
             <div className="text-gray-500 dark:text-gray-400 flex-shrink-0 ml-3">
-              {/* `abandoned` is the backend's: open past the age cut is not "in progress". */}
+              {/* `abandoned` is the backend's: idle past the cut is not "in progress"; null is unknown. */}
               {!s.ended_at
-                ? (s.abandoned ? 'Not finished' : 'In progress')
+                ? (s.abandoned === null ? 'Open' : s.abandoned ? 'Not finished' : 'In progress')
                 : s.mode === 'test'
                   // No answers is no accuracy, never 0% (rule 2).
                   ? (s.questions_answered ? `${Math.round((s.correct_answers / s.questions_answered) * 100)}%` : 'No answers')

@@ -299,6 +299,17 @@ it('shows a practice session left open as not finished, and keeps it out of In P
   expect(screen.queryByText(/not finished/i)).not.toBeInTheDocument()
 })
 
+it('says an open practice session whose idleness was unread is unknown, and not In Progress', async () => {
+  const unknown = { ...PRACTICE, id: 'p-unknown', ended_at: null, abandoned: null }
+  serve(page([]), STATS, [unknown])
+
+  render(<History />)
+
+  expect(await screen.findByText(/status unavailable/i)).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'In Progress' }))
+  expect(screen.queryByText('Practice · Test')).not.toBeInTheDocument()
+})
+
 it('shows no accuracy for a session with no answers, never a red 0%', async () => {
   const empty = { ...PRACTICE, id: 'p-empty', ended_at: null, abandoned: true,
                   questions_answered: 0, correct_answers: 0 }

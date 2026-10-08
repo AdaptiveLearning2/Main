@@ -477,22 +477,28 @@ def test_end_summarizes_correct_and_ungraded_topics_separately(_client, monkeypa
 
 def test_end_is_idempotent_and_does_not_recompute(_client, monkeypatch):
     _as(monkeypatch, USER)
-    already = dict(_OWNED_SESSION, ended_at="2026-08-25T00:00:00Z",
+    already = dict(_OWNED_SESSION, ended_at="2026-08-25T00:00:00Z", questions_answered=5, correct_answers=4,
                    topic_summary={"ordering": {"attempted": 5, "correct": 80}})
     c = _client(sessions=[already])
 
     result = main.end_practice_session(SESSION, None)
 
-    assert result == {"ok": True, "already_closed": True}
+    # The stored close, so the results page shows what was saved rather than its own tally.
+    assert result == {"ok": True, "already_closed": True, "questions_answered": 5, "correct_answers": 4,
+                      "topic_summary": {"ordering": {"attempted": 5, "correct": 80}}}
     assert c.updates == []
 
 
 def test_end_reports_a_session_the_sweep_closed_first(_client, monkeypatch):
-    """Read open, closed by the sweep before the update: the summary written is the sweep's."""
+    """Read open, closed by the sweep before the update: the reply is the sweep's stored close."""
     _as(monkeypatch, USER)
-    _client(sessions=[_OWNED_SESSION])
-    monkeypatch.setattr(main, "_close_practice_session", lambda *_a: None)
-    assert main.end_practice_session(SESSION, None) == {"ok": True, "already_closed": True}
+    c = _client(sessions=[_OWNED_SESSION])
+    swept = {"ended_at": "2026-08-25T00:00:00Z", "questions_answered": 3, "correct_answers": 1,
+             "topic_summary": {"ordering": {"attempted": 3, "correct": 33}}}
+    monkeypatch.setattr(main, "_close_practice_session", lambda *_a: c.sessions[SESSION].update(swept))
+    assert main.end_practice_session(SESSION, None) == {
+        "ok": True, "already_closed": True, "questions_answered": 3, "correct_answers": 1,
+        "topic_summary": {"ordering": {"attempted": 3, "correct": 33}}}
 
 
 def test_end_never_touches_sessions_or_its_close_machinery(_client, monkeypatch):
@@ -567,6 +573,21 @@ def test_a_long_practice_session_still_in_use_is_not_abandoned(_client, monkeypa
             answers=[{"practice_session_id": "long", "topic": "ordering", "correct": True,
                       "answered_at": (now - timedelta(minutes=2)).isoformat()}])
     assert [r["abandoned"] for r in main.list_practice_sessions(None)] == [False]
+
+
+def test_an_unread_activity_leaves_abandoned_unknown_not_guessed_from_age(_client, monkeypatch):
+    """Age alone would call a long session still in use "Not finished"."""
+    from datetime import timedelta
+    _as(monkeypatch, USER)
+    old = (main._utc_now() - timedelta(seconds=main._SESSION_ABANDONED_AFTER_SEC + 3600)).isoformat()
+    _client(sessions=[dict(_OWNED_SESSION, id="long", started_at=old, ended_at=None),
+                      dict(_OWNED_SESSION, id="new", started_at=main._utc_now().isoformat(), ended_at=None)])
+
+    def down(_row):
+        raise RuntimeError("read failed")
+    monkeypatch.setattr(main, "_practice_last_activity", down)
+    flags = {r["id"]: r["abandoned"] for r in main.list_practice_sessions(None)}
+    assert flags == {"long": None, "new": False}
 
 
 def test_the_sweep_closes_an_abandoned_practice_session_at_its_last_answer(_client, monkeypatch):

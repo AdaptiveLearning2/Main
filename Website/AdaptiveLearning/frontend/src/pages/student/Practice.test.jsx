@@ -116,6 +116,25 @@ describe('test mode', () => {
     })
   })
 
+  it('shows the stored close when the session had ended before Finish, and says so', async () => {
+    overrideApi('/api/practice-sessions/start', () => ({
+      id: 'sess-1', mode: 'flashcard', topics: ['ordering'], difficulty: 'medium',
+      grade_level: '5th Grade', questions_answered: 0, correct_answers: 0,
+    }), 'POST')
+    overrideApi('/api/practice-sessions/sess-1/end', () => ({
+      ok: true, already_closed: true, questions_answered: 2, correct_answers: 0,
+      topic_summary: { ordering: { attempted: 2, correct: null } },
+    }), 'POST')
+    await startATestSession()
+    await screen.findByText('What is 2 + 2?')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Done' }))
+
+    expect(await screen.findByText(/had already ended/i)).toBeInTheDocument()
+    expect(screen.getByText(/you reviewed 2 cards/i)).toBeInTheDocument()
+    expect(screen.getByText(/2 questions/)).toBeInTheDocument()
+  })
+
   it('says an answer to a session that has ended was not saved, rather than a generic failure', async () => {
     overrideApi('/api/practice-sessions/sess-1/answer', () => { throw apiError(409, 'ended') }, 'POST')
     await startATestSession()

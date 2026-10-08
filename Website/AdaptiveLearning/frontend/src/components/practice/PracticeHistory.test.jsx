@@ -15,6 +15,13 @@ it('says a session left open past the cut is not finished, not in progress', () 
   expect(screen.queryByText('In progress')).not.toBeInTheDocument()
 })
 
+it('claims neither when the backend could not read whether it is idle', () => {
+  render(<PracticeHistory sessions={[row({ ended_at: null, abandoned: null })]} />)
+  expect(screen.getByText('Open')).toBeInTheDocument()
+  expect(screen.queryByText('In progress')).not.toBeInTheDocument()
+  expect(screen.queryByText('Not finished')).not.toBeInTheDocument()
+})
+
 it('still says a session open now is in progress', () => {
   render(<PracticeHistory sessions={[row({ ended_at: null, abandoned: false })]} />)
   expect(screen.getByText('In progress')).toBeInTheDocument()

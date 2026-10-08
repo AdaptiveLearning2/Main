@@ -149,7 +149,8 @@ def test_a_clinical_term_anywhere_in_the_reply_rejects_it():
 
 @pytest.mark.parametrize("cause", ["stopped working", "broke", "had a fault", "malfunctioned",
                                    "disconnected", "wasn't working", "wasn’t working", "didn't work",
-                                   "is not working", "didn't work at all", "lost connection",
+                                   "is not working", "didn't work at all", "doesn't work",
+                                   "hasn't been working", "sensor not working", "lost connection",
                                    "had technical problems"])
 def test_a_reply_that_names_a_cause_for_a_turned_off_sensor_is_rejected(cause):
     """The run's wording: a withdrawal read as "before the sensor stopped working"."""

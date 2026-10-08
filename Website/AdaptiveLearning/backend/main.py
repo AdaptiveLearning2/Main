@@ -3912,23 +3912,32 @@ _CLINICAL_TERMS = re.compile(
 
 # A cause for a missing reading, which the summary cannot know: a sensor off is turned off, never broken.
 # Not "fail": "could not be read" is honestly rephrased as "failed to load".
-# A date or day after "on": whole words only, so "decimals", "octagons" and "3-digit numbers" are subjects.
-_ON_A_DATE = (r"(?:\d{1,2}(?:st|nd|rd|th)?\b(?![-\w])|the\s+\d{1,2}(?:st|nd|rd|th)\b|"
-              r"(?:that|this|each|every)\s+(?:day|week|morning|afternoon|evening)\b|"
-              r"(?:mon|tues|wednes|thurs|fri|satur|sun)days?\b|"
-              r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|"
-              r"sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b)")
-
 _CAUSE_TERMS = re.compile(
-    # Any negation ("doesn't", "hasn't been", bare "not"). Effort is not a cause: "didn't work through the
-    # questions", "didn't work on fractions"; "on" a date or day ("wasn't working on 3 August") still is.
-    r"\b(stopped working|stops working|(?:\w+n['’]t|not)(?:\s+been)?\s+"
-    r"work(?:s|ed|ing)?\b(?!\s+(?:(?:through|out|hard|harder|much|ahead|together|towards?)\b|"
-    r"on\s+(?!" + _ON_A_DATE + r")))|"
+    r"\b(stopped working|stops working|"
     r"broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|lost (?:the )?connection|"
     r"technical (?:problem|issue|difficult)\w*)\b",
     re.IGNORECASE,
 )
+
+# Any negation ("doesn't", "hasn't been", bare "not"). A cause only when a sensor is its subject (below).
+_NEGATED_WORK = re.compile(r"\b(?:\w+n['’]t|not)(?:\s+been)?\s+work(?:s|ed|ing)?\b", re.IGNORECASE)
+
+# The subject a negated "work" needs, among the three words before it in its sentence: "the
+# student didn't work on fractions" is effort, "the headband wasn't working on Monday" a cause.
+_SENSOR_SUBJECTS = frozenset({"sensor", "sensors", "headband", "headbands", "camera", "cameras", "webcam",
+                              "eeg", "heart", "pulse", "device", "devices", "it"})
+_SENTENCE_END = re.compile(r"[.!?;:\n]")
+
+
+def _names_a_cause(text: str) -> bool:
+    """Whether a summary says why a reading is missing (broken, disconnected, a sensor not working)."""
+    if _CAUSE_TERMS.search(text):
+        return True
+    for m in _NEGATED_WORK.finditer(text):
+        before = _SENTENCE_END.split(text[:m.start()])[-1]
+        if _SENSOR_SUBJECTS.intersection(w.lower() for w in re.findall(r"[\w’']+", before)[-3:]):
+            return True
+    return False
 
 # Leading "1.", "2)", "-", "*", "•" from a numbered or bulleted model reply.
 _LIST_MARKER = re.compile(r"^\s*(?:\d+\s*[\).:]|[-*•])\s*")
@@ -4698,7 +4707,7 @@ def _validated_chart_summary(raw: str, allowed: set[float],
     """
     if _CLINICAL_TERMS.search(raw or ""):
         return None
-    if _CAUSE_TERMS.search(raw or ""):
+    if _names_a_cause(raw or ""):
         print("[chart_summary:llm] rejected: it names a cause for a missing reading")
         return None
     lines = _parse_strategy_lines(raw)

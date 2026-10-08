@@ -186,6 +186,11 @@ def test_a_reply_saying_a_read_failed_is_still_accepted():
     "Focus was higher on days the student didn't work on the harder questions.",
     "Focus was higher on days the student didn't work on 3-digit numbers.",
     "Focus was higher on days the student didn't work on this topic.",
+    # A number after "on" is a subject when a student is doing the work.
+    "Focus was higher on days the student didn't work on 10 questions.",
+    "Focus was higher on days the student didn't work on 2nd grade content.",
+    # A sensor named earlier in the sentence is not the subject of the work.
+    "Heart rate was higher on days the student didn't work on fractions.",
 ])
 def test_a_reply_that_describes_the_students_work_is_still_accepted(line):
     """"Work" about the student's effort is not a cause for a sensor, so the filter leaves it."""
@@ -197,9 +202,23 @@ def test_a_reply_that_describes_the_students_work_is_still_accepted(line):
                                   "The headband was not working on the 3rd.",
                                   "The headband was not working on Dec 3.",
                                   "The camera wasn't working on 12 October.",
-                                  "The camera wasn't working on that day."])
-def test_not_working_on_a_day_is_still_a_cause(text):
-    assert main._CAUSE_TERMS.search(text)
+                                  "The camera wasn't working on that day.",
+                                  # Days no date list named: the sensor as subject is what counts.
+                                  "The headband wasn't working on the first day.",
+                                  "The camera wasn't working on the day of the test.",
+                                  "The heart sensor wasn't working on that occasion.",
+                                  "The headband wasn't working on Wed.",
+                                  "The camera wasn't working on weekends.",
+                                  "The headband wasn't working on some days.",
+                                  "The webcam wasn't working on today.",
+                                  "The headband was new. It wasn't working on the first day.",
+                                  "The headband didn't work through the session."])
+def test_a_sensor_not_working_is_a_cause_whatever_follows(text):
+    assert main._names_a_cause(text)
+
+
+def test_a_sensor_in_an_earlier_sentence_is_not_the_subject():
+    assert not main._names_a_cause("The headband recorded focus. The student didn't work on fractions.")
 
 
 def test_the_prompt_forbids_naming_a_cause():

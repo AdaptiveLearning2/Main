@@ -1,8 +1,6 @@
 /** "How many questions?" is a goal the page checks in at, never a cap that ends the session. */
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { it, expect, beforeEach, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
@@ -124,18 +122,30 @@ it('says which reminder is in force', async () => {
   expect(screen.getByText(/check in after/i)).toHaveTextContent(/15 minutes/)
 })
 
-it('counts an answer only once it has been recorded', () => {
-  // A source check: the property is an ordering (count only after a successful `recordAnswer`).
-  const src = readFileSync(
-    resolve(process.cwd(), 'src/pages/student/Adaptive.jsx'), 'utf8')
-  const submit = src.slice(src.indexOf('const handleSubmit'))
-  const body = submit.slice(0, submit.indexOf('const getAcc'))
-  const recorded = body.indexOf('await recordAnswer')
-  const guarded = body.indexOf('if (res)')
-  const counted = body.indexOf('setSessionCount')
-  expect(recorded).toBeGreaterThan(-1)
-  expect(guarded).toBeGreaterThan(recorded)
-  expect(counted).toBeGreaterThan(guarded)
+it('counts an answer only once it has been recorded', async () => {
+  mockApi({
+    ...ROUTES,
+    'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
+    'GET /api/generate-question?bias=0&grade=1st+Grade&session_id=sess-goal': () => QUESTION,
+  })
+  const answer = async () => {
+    await userEvent.click(await screen.findByRole('button', { name: /generate question|next question/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /^B\s*2$/ }))
+    await userEvent.click(screen.getByRole('button', { name: /submit answer/i }))
+  }
+  let settle
+  recordAnswer.mockImplementationOnce(() => new Promise(r => { settle = r }))
+  render(<Adaptive />)
+  await answer()
+  // Sent, not yet stored: no count.
+  await screen.findByRole('button', { name: /next question/i })
+  expect(screen.queryByText(/answered/)).toBeNull()
+  // Not stored at all (`recordAnswer` toasts and answers null): never counted.
+  await act(async () => { settle(null) })
+  expect(screen.queryByText(/answered/)).toBeNull()
+
+  await answer()
+  expect(await screen.findByText(/1 answered/)).toBeInTheDocument()
 })
 
 it('shows a dismissed check-in again for the session that replaces a closed one', async () => {

@@ -3910,21 +3910,26 @@ _CLINICAL_TERMS = re.compile(
     re.IGNORECASE,
 )
 
-# What follows a connect verb when a device is being connected: nothing, a device, or when/where.
-# "Connect fractions to decimals" is maths, so another object is not a cause.
-_DEVICE_OBJECT = (r"(?=\s*(?:[.,;:!?)]|$)|\s+(?:properly|again|reliably|at\s+all)\b|"
-                  r"\s+(?:on|at|for|during|after|before|until|in|today|yesterday)\b|"
-                  r"\s+(?:(?:to|with)\s+)?(?:(?:the|her|his|their|its|a|my|your)\s+)?"
-                  r"(?:headband|camera|webcam|sensor|device|muse|bluetooth|eeg|laptop|computer|tablet|it|them)\b)")
+# A connect failure; its subject decides it, as `_FAILURE_PHRASE`'s does ("wasn't connected yet" included).
+_CONNECT_FAILURE = re.compile(
+    r"\b(?:(?P<neg>\w+n['’]t|not|never|no\s+longer)\s+(?:be(?:en)?\s+)?(?:able\s+to\s+)?|"
+    r"fail(?:s|ed|ing)?\s+to\s+|(?:trouble|problems?|issues?|difficult(?:y|ies))\s+)(?:connect|pair|sync)\w*",
+    re.IGNORECASE)
+
+# After a person's connect failure, what makes it a device's: nothing, a manner or a date, or a device
+# word within a few words ("the new headband", "the heart sensor"). "Connect fractions to decimals" is maths.
+_DEVICE_AFTER = re.compile(
+    r"\s*(?:[.,;:!?)]|$)|\s+(?:properly|again|reliably|at\s+all|yesterday)\b|"
+    r"\s+on\s+(?:\d|(?:mon|tues|wednes|thurs|fri|satur|sun)day)|"
+    r"\s+(?:[\w'’-]+\s+){0,3}?(?:headband|headset|camera|webcam|sensor|device|muse|bluetooth|eeg|laptop|"
+    r"computer|tablet|app|it|them)s?\b",
+    re.IGNORECASE)
 
 # A cause for a missing reading, which the summary cannot know: a sensor off is turned off, never broken.
 # Not "fail": "could not be read" is honestly rephrased as "failed to load".
 _CAUSE_TERMS = re.compile(
     r"\b(stopped working|stops working|"
     r"broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|lost (?:the )?connection|"
-    # Connecting a device is the device's, whoever the subject: "couldn't", "failed to", "had trouble".
-    r"(?:(?:\w+n['’]t|not|never|no longer)\s+(?:be\s+able\s+to\s+)?|fail(?:s|ed|ing)?\s+to\s+|"
-    r"(?:trouble|problems?|issues?|difficult(?:y|ies))\s+)(?:connect|pair|sync)\w*" + _DEVICE_OBJECT + r"|"
     r"ran out of (?:battery|power|charge)|out of battery|(?:low|dead|flat) battery|"
     r"battery (?:died|ran (?:out|low|flat)|was (?:dead|flat|low|empty))|"
     r"technical (?:problem|issue|difficult)\w*)\b",
@@ -3965,22 +3970,33 @@ def _phrase_subject(words: list[str]) -> str:
     return re.sub(r"['’]s$", "", words[-1]).lower() if words else ""
 
 
+def _subject_of(text: str, m: re.Match) -> tuple[str, bool]:
+    """The phrase's subject, and whether its "not" is bare (no auxiliary before it)."""
+    words = re.findall(r"[\w’'-]+", _SENTENCE_END.split(text[:m.start()])[-1])
+    bare = (m.group("neg") or "").lower() == "not"
+    # Adverbs and auxiliaries in any order ("also did not", "has had"); an auxiliary makes "not" a negation.
+    while words and words[-1].lower() in _ADVERBS | _AUXILIARIES:
+        bare = bare and words[-1].lower() not in _AUXILIARIES
+        words = words[:-1]
+    return _phrase_subject(words), bare
+
+
+def _subject_names_a_cause(subject: str, bare: bool) -> bool:
+    return subject in _THING_SUBJECTS if bare else subject not in _PERSON_SUBJECTS
+
+
 def _names_a_cause(text: str) -> bool:
     """Whether a summary says why a reading is missing (broken, disconnected, a sensor not working)."""
     if _CAUSE_TERMS.search(text):
         return True
-    for m in _FAILURE_PHRASE.finditer(text):
-        words = re.findall(r"[\w’'-]+", _SENTENCE_END.split(text[:m.start()])[-1])
-        bare = (m.group("neg") or "").lower() == "not"
-        # Adverbs and auxiliaries in any order ("also did not", "has had"); an auxiliary makes "not" a negation.
-        while words and words[-1].lower() in _ADVERBS | _AUXILIARIES:
-            bare = bare and words[-1].lower() not in _AUXILIARIES
-            words = words[:-1]
-        subject = _phrase_subject(words)
-        if bare:
-            if subject in _THING_SUBJECTS:
+    if any(_subject_names_a_cause(*_subject_of(text, m)) for m in _FAILURE_PHRASE.finditer(text)):
+        return True
+    for m in _CONNECT_FAILURE.finditer(text):
+        subject, bare = _subject_of(text, m)
+        if subject in _PERSON_SUBJECTS:
+            if _DEVICE_AFTER.match(text, m.end()):
                 return True
-        elif subject not in _PERSON_SUBJECTS:
+        elif _subject_names_a_cause(subject, bare):
             return True
     return False
 

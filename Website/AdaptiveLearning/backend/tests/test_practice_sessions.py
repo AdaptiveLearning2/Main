@@ -569,6 +569,13 @@ def test_the_sweep_closes_an_abandoned_practice_session_at_its_last_answer(_clie
     assert c.sessions["done"]["ended_at"] == last
 
 
+def test_a_close_never_restamps_a_session_already_closed(_client):
+    """A student's Finish racing the sweep: whichever lands second must not move the first's stamp."""
+    c = _client(sessions=[dict(_OWNED_SESSION, id="s", ended_at="2026-10-01T10:00:00+00:00")])
+    main._close_practice_session("s", "2026-10-01T16:00:00+00:00")
+    assert c.sessions["s"]["ended_at"] == "2026-10-01T10:00:00+00:00"
+
+
 def test_the_sweep_runs_the_practice_pass(monkeypatch):
     calls = []
     monkeypatch.setattr(main, "_STALE_SWEEP_FIRST_DELAY_SEC", 0.0)

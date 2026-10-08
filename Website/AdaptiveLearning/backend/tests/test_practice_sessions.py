@@ -495,7 +495,9 @@ def test_end_reports_a_session_the_sweep_closed_first(_client, monkeypatch):
     c = _client(sessions=[_OWNED_SESSION])
     swept = {"ended_at": "2026-08-25T00:00:00Z", "questions_answered": 3, "correct_answers": 1,
              "topic_summary": {"ordering": {"attempted": 3, "correct": 33}}}
-    monkeypatch.setattr(main, "_close_practice_session", lambda *_a: c.sessions[SESSION].update(swept))
+    # A new row, not a mutation: the fake hands out its stored dicts, so the route's first read must go stale.
+    monkeypatch.setattr(main, "_close_practice_session",
+                        lambda *_a: c.sessions.__setitem__(SESSION, dict(c.sessions[SESSION], **swept)))
     assert main.end_practice_session(SESSION, None) == {
         "ok": True, "already_closed": True, "questions_answered": 3, "correct_answers": 1,
         "topic_summary": {"ordering": {"attempted": 3, "correct": 33}}}

@@ -19,6 +19,7 @@ _dropped = 0
 
 _stop = threading.Event()
 _silenced = threading.Event()
+_print_lock = threading.Lock()
 _thread: threading.Thread | None = None
 
 # PostgREST cuts any read at `db-max-rows` (1000), silently; reads page by `id` up to this many pages.
@@ -97,8 +98,10 @@ def flush(client) -> bool:
         return True
     except Exception as e:                                     # noqa: BLE001
         # Silent once `stop` gave up waiting: a print during interpreter exit is a fatal abort.
-        if not _silenced.is_set():
-            print(f"[ops_metrics] flush of {len(rows)} cells failed, kept for the next one: {e}")
+        # Under the lock `stop` takes to silence, so no print can start after `stop` returns.
+        with _print_lock:
+            if not _silenced.is_set():
+                print(f"[ops_metrics] flush of {len(rows)} cells failed, kept for the next one: {e}")
         _restore(rows)
         return False
 
@@ -129,7 +132,8 @@ def stop(timeout: float = 5.0) -> None:
     if thread and thread.is_alive():
         thread.join(timeout=timeout)
         if thread.is_alive():
-            _silenced.set()
+            with _print_lock:
+                _silenced.set()
 
 
 def reset() -> None:

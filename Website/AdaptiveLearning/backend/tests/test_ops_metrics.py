@@ -222,6 +222,41 @@ def test_a_flush_still_waiting_when_stop_gives_up_never_prints(monkeypatch, caps
     assert "[ops_metrics]" not in capsys.readouterr().out
 
 
+def test_a_print_already_under_way_finishes_before_stop_returns(monkeypatch):
+    """Ordering, not duration: every print starts before `stop` returns, none after."""
+    go, printing, release = threading.Event(), threading.Event(), threading.Event()
+    events = []
+
+    class _Failing(_Fake):
+        def rpc(self, name, params):
+            go.wait(5)
+            raise RuntimeError("database gone")
+
+    def slow_print(*_a, **_k):
+        events.append("print")
+        printing.set()
+        release.wait(5)
+
+    monkeypatch.setattr(ops_metrics, "print", slow_print, raising=False)
+    monkeypatch.setattr(ops_metrics, "OPS_FLUSH_SECONDS", 0.01)
+    ops_metrics.bump("question", "prefetched")
+    ops_metrics.start(lambda: _Failing())
+    [flusher] = [t for t in threading.enumerate() if t.name == "ops-flush"]
+    go.set()
+    assert printing.wait(5)
+
+    stopper = threading.Thread(target=lambda: (ops_metrics.stop(timeout=0.05), events.append("stopped")))
+    stopper.start()
+    stopper.join(0.3)
+    assert stopper.is_alive(), "stop returned while a print was still under way"
+    release.set()
+    stopper.join(5)
+    flusher.join(5)
+
+    assert not flusher.is_alive()
+    assert events == ["print", "stopped"]
+
+
 def test_a_read_merges_unflushed_counts_into_the_stored_hour():
     # PostgREST's rendering of a timestamptz, not Python's isoformat.
     stored = [{"hour": _hour().replace("T", " ").replace("+00:00", "+00"), "kind": "refusal",

@@ -115,9 +115,10 @@ function DetailLink() {
 
 /** Overview's card: model calls in the last 24 hours and the daily ceiling. */
 export function GenerationSummary() {
+  const res = useOps(GENERATION)
   return (
     <div className="space-y-2">
-      <OpsState res={useOps(GENERATION)} what="generation counts">
+      <OpsState res={res} what="generation counts">
         {data => {
           const { ok, failed, served } = generationTotals(data)
           return (
@@ -137,9 +138,10 @@ export function GenerationSummary() {
 
 /** Overview's card: refusals in this hour's and the previous hour's buckets. */
 export function RefusalSummary() {
+  const res = useOps(REFUSALS)
   return (
     <div className="space-y-2">
-      <OpsState res={useOps(REFUSALS)} what="refusal counts">
+      <OpsState res={res} what="refusal counts">
         {data => {
           const recent = data.recent || []
           return recent.length === 0
@@ -240,9 +242,10 @@ function RefusalDetail({ data }) {
 }
 
 function Generation() {
+  const res = useOps(GENERATION)
   return (
     <div className="space-y-3">
-      <OpsState res={useOps(GENERATION)} what="generation counts">
+      <OpsState res={res} what="generation counts">
         {data => <GenerationDetail data={data} />}
       </OpsState>
     </div>
@@ -250,9 +253,10 @@ function Generation() {
 }
 
 function Refusals() {
+  const res = useOps(REFUSALS)
   return (
     <div className="space-y-3">
-      <OpsState res={useOps(REFUSALS)} what="refusal counts">
+      <OpsState res={res} what="refusal counts">
         {data => <RefusalDetail data={data} />}
       </OpsState>
     </div>

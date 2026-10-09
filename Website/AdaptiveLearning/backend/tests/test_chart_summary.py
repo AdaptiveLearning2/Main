@@ -519,6 +519,23 @@ def test_an_accepted_model_reply_replaces_the_sentences_and_says_so(
     assert out["summary"] == ["one", "two", "three"]
 
 
+def test_the_response_names_its_sensor_sentences(endpoint, set_flag):
+    """The frontend hides these under "Hide sensor data"; an empty list would hide nothing."""
+    set_flag("chart_summary_llm_enabled", False)
+    out = endpoint()
+    sensor = out["basis"]["sensor_lines"]
+    assert [out["summary"][i].split()[1] for i in sensor] == ["focus", "calm", "heart"]
+
+
+def test_the_model_path_rejects_a_reply_that_calls_calm_stress(monkeypatch):
+    """The check is only as good as the call that passes the baseline into it."""
+    lines = main._rule_based_chart_summary(_basis())
+    reply = "\n".join(f"{i + 1}. {l.replace('Average calm', 'Average stress')}"
+                      for i, l in enumerate(lines))
+    monkeypatch.setattr(main.llm_client, "generate_text", lambda *a, **k: reply)
+    assert main._llm_chart_summary("prompt", lines) is None
+
+
 def test_the_three_reads_behind_one_response_report_separately(endpoint, set_flag):
     """One flag would make a partial summary read as entirely fine or entirely broken."""
     set_flag("chart_summary_llm_enabled", False)

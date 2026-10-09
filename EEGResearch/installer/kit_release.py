@@ -1,5 +1,6 @@
-"""Signs the kit's update feeds. newkey: a passphrase-protected signing key. newdownloadkey: the gate's key, to a file.
-sign: a feed for one Update installer. verify: a feed against the kit's keys. See DEVELOPER_SETUP_WINDOWS.md.
+"""Signs the kit's update feeds. newkey: a passphrase-protected signing key. newdownloadkey, newlinksecret: the gate's
+secrets, to files. sign: a feed for one Update installer. verify: a feed against the kit's keys. setup: the gate's
+setup/current.json for a Setup installer. link: a signed link to it. See DEVELOPER_SETUP_WINDOWS.md.
 
 A feed is {manifest, signature}, the Ed25519 signature over update.FEED_PREFIX and the manifest's bytes.
 """
@@ -11,10 +12,12 @@ import base64
 import datetime as dt
 import getpass
 import hashlib
+import hmac
 import json
 import re
 import secrets
 import sys
+import time
 from pathlib import Path
 
 EEG = Path(__file__).resolve().parents[1]
@@ -41,8 +44,8 @@ def new_key(path: Path, passphrase: bytes) -> str:
     return public_text(private)
 
 
-def new_download_key(path: Path) -> None:
-    """The gate's download key, to a file that must not exist: never on a command line or the clipboard."""
+def new_secret(path: Path) -> None:
+    """A gate secret (download key or link secret), to a file that must not exist: never a command line or clipboard."""
     with open(path, "x", encoding="ascii", newline="") as f:
         f.write(secrets.token_urlsafe(32))
 
@@ -54,9 +57,9 @@ def load_key(path: Path, passphrase: bytes) -> Ed25519PrivateKey:
     return key
 
 
-def release_of(installer: Path) -> dict:
-    """The feed's description of an Update installer, its version read from its name."""
-    match = re.fullmatch(r"AdaptiveLearningSensors-Update-(.+)\.exe", installer.name)
+def _described(installer: Path, kind: str) -> dict:
+    """An installer's version (from its name), name, SHA-256 and size; kind is "Update" or "Setup"."""
+    match = re.fullmatch(rf"AdaptiveLearningSensors-{kind}-(.+)\.exe", installer.name)
     version = update.parse_version(match[1] if match else None)
     digest = hashlib.sha256()
     with open(installer, "rb") as f:
@@ -64,6 +67,32 @@ def release_of(installer: Path) -> dict:
             digest.update(chunk)
     return {"version": update.version_text(version), "file": installer.name, "sha256": digest.hexdigest(),
             "size": installer.stat().st_size}
+
+
+def release_of(installer: Path) -> dict:
+    """The feed's description of an Update installer."""
+    return _described(installer, "Update")
+
+
+def setup_current(installer: Path, published: dt.datetime) -> bytes:
+    """setup/current.json, which the gate serves to an admin's signed link: the Setup installer it names."""
+    return json.dumps({**_described(installer, "Setup"), "published": published.isoformat(timespec="seconds")},
+                      indent=2, sort_keys=True).encode("ascii") + b"\n"
+
+
+LINK_TTL_S = 600
+
+
+def link_signature(secret: str, subject: str, exp: int) -> str:
+    """What the gate checks a link against: HMAC-SHA256 of "subject:exp" in hex, as backend/kit_gate.py signs it."""
+    return hmac.new(secret.encode("utf-8"), f"{subject}:{exp}".encode("ascii"), hashlib.sha256).hexdigest()
+
+
+def link(gate: str, secret: str, now: float, file: str | None = None) -> str:
+    """A link to one Setup installer, or with no file to setup/current.json, honoured for LINK_TTL_S."""
+    exp = int(now) + LINK_TTL_S
+    path, subject = (f"/v1/setup/files/{file}", f"setup:{file}") if file else ("/v1/setup/current.json", "meta")
+    return f"{gate.rstrip('/')}{path}?exp={exp}&sig={link_signature(secret, subject, exp)}"
 
 
 def as_release(release: update.Release) -> dict:
@@ -122,6 +151,14 @@ def main(argv: list[str] | None = None) -> int:
     newkey = commands.add_parser("newkey", help="make a signing key; prints the public key for update_keys.py")
     newkey.add_argument("path", type=Path)
     commands.add_parser("newdownloadkey", help="make the gate's download key, in a file").add_argument("path", type=Path)
+    commands.add_parser("newlinksecret", help="make the gate's link secret, in a file").add_argument("path", type=Path)
+    setup = commands.add_parser("setup", help="write setup/current.json for a Setup installer")
+    setup.add_argument("--installer", type=Path, required=True)
+    setup.add_argument("--out", type=Path, required=True)
+    linker = commands.add_parser("link", help="print a signed link to a Setup installer, or to setup/current.json")
+    linker.add_argument("--secret-file", type=Path, required=True)
+    linker.add_argument("--file", help="the Setup installer's name; without it, the link is to setup/current.json")
+    linker.add_argument("--gate", default=update_settings.GATE_URL)
     signer = commands.add_parser("sign", help="write a signed feed for one Update installer")
     signer.add_argument("--key", type=Path, required=True)
     signer.add_argument("--installer", type=Path, required=True)
@@ -139,9 +176,17 @@ def main(argv: list[str] | None = None) -> int:
         print("Add that line to PUBLIC_KEYS in EEGResearch/src/kit/update_keys.py; keep the key file off the repo.",
               file=sys.stderr)
         return 0
-    if args.command == "newdownloadkey":
-        new_download_key(args.path)
+    if args.command in ("newdownloadkey", "newlinksecret"):
+        new_secret(args.path)
         print(f"wrote {args.path}")
+        return 0
+    if args.command == "setup":
+        with open(args.out, "xb") as f:
+            f.write(setup_current(args.installer, dt.datetime.now(dt.UTC)))
+        print(f"wrote {args.out}")
+        return 0
+    if args.command == "link":
+        print(link(args.gate, args.secret_file.read_text(encoding="ascii").strip(), time.time(), args.file))
         return 0
     if args.command == "verify":
         manifest, by = verify(args.path.read_bytes())

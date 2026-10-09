@@ -186,7 +186,8 @@ do not: a `replace-me` token, two equal tokens, or push over plain `http://` to 
 `STALE_SWEEP_INTERVAL_SECONDS` (the second is `0` to disable the sweep and its chart catch-up), `STALE_SWEEP_FIRST_DELAY_SECONDS`
 (60 in production, else 0; a cold start serves requests before the first sweep), `QUESTIONS_CACHE_TTL`,
 `QUESTION_QUEUE_SIZE`, `PAIRING_IDLE_SECONDS` (120; a headband pairing its pairer's page stopped polling is released),
-`CLASS_JOIN_MISSES_PER_ADDRESS` (1000 wrong class codes an hour), the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
+`CLASS_JOIN_MISSES_PER_ADDRESS` (1000 wrong class codes an hour), `KIT_GATE_URL` / `KIT_LINK_SECRET` (both, or the admin
+page offers no kit installer; *The admin page's installer* in `docs/student-kit.md`), the `ENV` / `ALLOWED_ORIGINS` / `MAX_BODY_BYTES` / `INGEST_MAX_SAMPLE_BYTES` /
 `PUBLIC_*_RATE_*` / `TRUSTED_PROXY_HOPS` group under *The network edge* in `CLAUDE.md`, the `STRATEGY_*` / `CHART_SUMMARY_*` groups under *The two model-backed panels* in `docs/reporting.md`,
 the `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` groups in `docs/question-generation.md` (except `CLAUDE_PRICE_INPUT_PER_MTOK` /
 `CLAUDE_PRICE_OUTPUT_PER_MTOK`, which with `OPS_FLUSH_SECONDS` are under *Operational counters* in `docs/admin-and-security.md`),

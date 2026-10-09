@@ -415,9 +415,13 @@ def opener(proxy: str | None = None) -> urllib.request.OpenerDirector:
                                        urllib.request.HTTPSHandler(context=context), _RefuseRedirects())
 
 
+# Cloudflare refuses Python's default User-Agent in front of the gate (403, error 1010).
+USER_AGENT = "AdaptiveLearningSensors"
+
+
 def _get(net: urllib.request.OpenerDirector, path: str, key: str):
     request = urllib.request.Request(f"{update_settings.GATE_URL}{path}",
-                                     headers={"Authorization": f"Bearer {key}", "User-Agent": "AdaptiveLearningSensors"})
+                                     headers={"Authorization": f"Bearer {key}", "User-Agent": USER_AGENT})
     return net.open(request, timeout=TIMEOUT_S)
 
 

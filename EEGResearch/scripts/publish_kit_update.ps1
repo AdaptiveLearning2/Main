@@ -10,18 +10,27 @@ clipboard history. The download key is read from -DownloadKeyFile. It accepts on
 build recorded, never replaces a published installer, uploads the installer before the feed, and reads both back
 through the gate before reporting success. See DEVELOPER_SETUP_WINDOWS.md, "Publishing a kit update".
 
-.EXAMPLE
-.\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey E:\kit-keys\everyday.pem -DownloadKeyFile E:\kit-keys\download.key
+-Setup also publishes the same version's Setup installer as the one the admin page offers (setup/current.json), only
+with -Promote at 100%: the site's installer is the version every kit is moving to. It reads both back through a link
+signed with -LinkSecretFile, the secret the gate and the backend share.
 
 .EXAMPLE
-.\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey E:\kit-keys\everyday.pem -DownloadKeyFile E:\kit-keys\download.key -Promote -Rollout 10
+.\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey C:\kit-keys\everyday-2.pem -DownloadKeyFile C:\kit-keys\download.key
+
+.EXAMPLE
+.\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey C:\kit-keys\everyday-2.pem -DownloadKeyFile C:\kit-keys\download.key -Promote -Rollout 10
+
+.EXAMPLE
+.\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey C:\kit-keys\everyday-2.pem -DownloadKeyFile C:\kit-keys\download.key -Promote -Setup -LinkSecretFile C:\kit-keys\link.secret
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$SigningKey,
     [Parameter(Mandatory = $true)][string]$DownloadKeyFile,
     [switch]$Promote,
-    [ValidateRange(0, 100)][int]$Rollout = 100
+    [ValidateRange(0, 100)][int]$Rollout = 100,
+    [switch]$Setup,
+    [string]$LinkSecretFile
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,6 +52,17 @@ $recorded = ((Get-Content -Raw "$installerPath.sha256").Trim() -split '\s+')[0]
 $hash = (Get-FileHash -Algorithm SHA256 $installerPath).Hash.ToLower()
 if ($hash -ne $recorded) { throw "$name does not match the SHA-256 the build recorded" }
 if (-not (Test-Path $DownloadKeyFile)) { throw "-DownloadKeyFile $DownloadKeyFile does not exist" }
+if ($Setup) {
+    if (-not $Promote -or $Rollout -ne 100) { throw "-Setup goes with -Promote at -Rollout 100" }
+    if (-not $LinkSecretFile -or -not (Test-Path $LinkSecretFile)) { throw "-Setup needs -LinkSecretFile, the gate's link secret" }
+    $setupName = "AdaptiveLearningSensors-Setup-$Version.exe"
+    $setupPath = Join-Path $out $setupName
+    if (-not (Test-Path $setupPath) -or -not (Test-Path "$setupPath.sha256")) { throw "$setupPath and its .sha256 must both exist" }
+    $setupHash = (Get-FileHash -Algorithm SHA256 $setupPath).Hash.ToLower()
+    if ($setupHash -ne ((Get-Content -Raw "$setupPath.sha256").Trim() -split '\s+')[0]) {
+        throw "$setupName does not match the SHA-256 the build recorded"
+    }
+}
 
 # The build's venv has the pinned cryptography; the sidecar's dev venv is the fallback.
 $py = @((Join-Path $eeg "build\kit\venv\Scripts\python.exe"), (Join-Path $eeg ".venv\Scripts\python.exe")) |
@@ -67,6 +87,43 @@ function Get-FromGate {
         if ($status -eq 404) { return 404 }
         throw "the gate answered $status for $path"
     }
+}
+
+function Get-Signed {
+    # A Setup installer (-file), or setup/current.json without one, through a link signed as the admin page signs it.
+    param([string]$to, [string]$file)
+    $what = if ($file) { $file } else { "setup/current.json" }
+    $fileArgs = if ($file) { @("--file", $file) } else { @() }
+    $url = (& $py $release link --secret-file $LinkSecretFile --gate $gate @fileArgs).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "could not sign a link to $what" }
+    try {
+        $null = Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $to
+        return 200
+    } catch {
+        if ($null -eq $_.Exception.Response) { throw "the gate did not answer for ${what}: $($_.Exception.Message)" }
+        $status = [int]$_.Exception.Response.StatusCode
+        if ($status -eq 404) { return 404 }
+        # The gate marks its own refusals (docs/student-kit.md), so each names its fix.
+        $why = switch ("$status/$(Get-SetupMark $_.Exception.Response)") {
+            "403/expired" { "it judged a link signed just now out of date: this PC's clock and Cloudflare's disagree by minutes" }
+            "403/refused" { "it refused the link: -LinkSecretFile is not the gate's LINK_SECRET" }
+            "503/no-secret" { "it has no LINK_SECRET set" }
+            "401/" { "it asked for its download key, so it predates the Setup links: redeploy the Worker" }
+            default { "it answered $status" }
+        }
+        throw "the gate did not serve ${what}: $why"
+    }
+}
+
+function Get-SetupMark {
+    # The X-Kit-Setup header of a failed response: 5.1's WebResponse and 7's HttpResponseMessage keep headers apart.
+    param($response)
+    try {
+        if ($response.Headers -is [System.Net.WebHeaderCollection]) { return $response.Headers['X-Kit-Setup'] }
+        $values = $null
+        if ($response.Headers.TryGetValues('X-Kit-Setup', [ref]$values)) { return @($values)[0] }
+    } catch { }
+    return $null
 }
 
 function Read-Feed {
@@ -137,6 +194,24 @@ try {
         Write-Host "$name is already published with these bytes; only the feed changes."
     }
 
+    $setupAlready = $false
+    if ($Setup) {
+        $offered = Join-Path $work "setup-current-before.json"
+        if ((Get-Signed $offered) -eq 200) {
+            $offeredBefore = Get-Content -Raw $offered | ConvertFrom-Json
+            if ([version]$offeredBefore.version -gt [version]$Version) { throw "the admin page offers $($offeredBefore.version) already" }
+            if ($offeredBefore.version -eq $Version -and $offeredBefore.sha256 -ne $setupHash) {
+                throw "$setupName is already offered with other bytes; an offered installer is never replaced"
+            }
+            $setupAlready = $offeredBefore.version -eq $Version
+        }
+        $current = Join-Path $work "setup-current.json"
+        if (-not $setupAlready) {
+            & $py $release setup --installer $setupPath --out $current
+            if ($LASTEXITCODE -ne 0) { throw "could not write setup/current.json" }
+        }
+    }
+
     $signed = Join-Path $work "$feed.json"
     Write-Host "== Signing $feed.json for $Version at $Rollout%" -ForegroundColor Cyan
     & $py $release sign --key $SigningKey --installer $installerPath --feed $feed --rollout $Rollout @historyArgs --out $signed
@@ -154,6 +229,12 @@ try {
         }
         Write-Host "== Uploading $feed.json" -ForegroundColor Cyan  # after the installer, so no feed names a missing file
         Invoke-Wrangler @("r2", "object", "put", "$bucket/feed/$feed.json", "--file", $signed, "--remote")
+        if ($Setup -and -not $setupAlready) {
+            Write-Host "== Uploading $setupName" -ForegroundColor Cyan
+            Invoke-Wrangler @("r2", "object", "put", "$bucket/setup/$setupName", "--file", $setupPath, "--remote")
+            Write-Host "== Uploading setup/current.json" -ForegroundColor Cyan  # after the installer it names
+            Invoke-Wrangler @("r2", "object", "put", "$bucket/setup/current.json", "--file", $current, "--remote")
+        }
     } finally { Remove-Item Env:CLOUDFLARE_API_TOKEN -ErrorAction SilentlyContinue }
 
     Write-Host "== Reading both back through the gate" -ForegroundColor Cyan
@@ -165,6 +246,18 @@ try {
     if ((Get-FileHash $feedBack).Hash -ne (Get-FileHash $signed).Hash) { throw "the gate serves another $feed.json" }
     $now = Read-Feed $feedBack $feed
     if ($now.version -ne $Version) { throw "the published $feed.json names $($now.version), not $Version" }
+    if ($Setup) {
+        $metaBack = Join-Path $work "back-setup-current.json"
+        if ((Get-Signed $metaBack) -ne 200) { throw "the gate does not serve setup/current.json" }
+        $offeredNow = Get-Content -Raw $metaBack | ConvertFrom-Json
+        if ($offeredNow.version -ne $Version -or $offeredNow.sha256 -ne $setupHash) {
+            throw "the gate offers $($offeredNow.version), not this $setupName"
+        }
+        $setupBack = Join-Path $work "back-$setupName"
+        if ((Get-Signed $setupBack $setupName) -ne 200) { throw "the gate does not serve $setupName" }
+        if ((Get-FileHash -Algorithm SHA256 $setupBack).Hash.ToLower() -ne $setupHash) { throw "the gate serves other bytes for $setupName" }
+    }
 } finally { $script:downloadKey = $null }
 
 Write-Host "Published $Version to $feed.json at $Rollout%, signed by $($now.signed_by); ways back: $(if ($now.history) { $now.history -join ', ' } else { 'none' })" -ForegroundColor Green
+if ($Setup) { Write-Host "The admin page offers $setupName." -ForegroundColor Green }

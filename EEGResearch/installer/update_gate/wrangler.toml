@@ -1,4 +1,4 @@
-# Deployed from this folder with `npx wrangler deploy`; the key is a secret: `npx wrangler secret bulk`.
+# Deployed from this folder with `npx wrangler deploy`; DOWNLOAD_KEY and LINK_SECRET are secrets (`wrangler secret put`).
 name = "kit-updates"
 main = "worker.mjs"
 compatibility_date = "2026-10-01"

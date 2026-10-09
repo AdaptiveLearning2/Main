@@ -36,6 +36,7 @@ export const pages = {
   adminSecurity:    () => import('./pages/admin/SecurityEvents'),
   adminEngine:      () => import('./pages/admin/Engine'),
   adminStations:    () => import('./pages/admin/Stations'),
+  adminKit:         () => import('./pages/admin/Kit'),
   adminStudentReport: () => import('./pages/admin/StudentReport'),
 
   notFound:         () => import('./pages/NotFound'),
@@ -56,7 +57,7 @@ export const ROUTES = [
   ['/parent/child/:id', 'parentChild'], ['/parent/settings', 'parentSettings'],
   ['/admin', 'adminOverview'], ['/admin/flags', 'adminFlags'], ['/admin/live', 'adminLiveFlow'],
   ['/admin/year', 'adminSchoolYear'], ['/admin/security', 'adminSecurity'],
-  ['/admin/engine', 'adminEngine'], ['/admin/stations', 'adminStations'],
+  ['/admin/engine', 'adminEngine'], ['/admin/stations', 'adminStations'], ['/admin/kit', 'adminKit'],
   ['/admin/students/:id/report', 'adminStudentReport'],
 ]
 

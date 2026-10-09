@@ -25,6 +25,7 @@ import eeg_poller
 import llm_client
 import ops_metrics
 import grade_levels
+import kit_gate
 import safe_solve
 from env_config import env_number
 
@@ -9053,6 +9054,69 @@ def admin_student_search(request: Request, q: str = "", limit: int = 10):
         "email": r.get("email") or "",
         "grade_level": r.get("grade_level"),
     } for r in rows]}
+
+
+# ─── admin: the student kit's installer ──────────────────────────────────
+# The gate serves it only to a short link this server signs. See kit_gate.py.
+
+_KIT_GATE = kit_gate.settings()
+if _KIT_GATE is None:
+    print("[config] KIT_GATE_URL and KIT_LINK_SECRET are not both set: the admin page offers no kit installer")
+
+
+def _kit_offered() -> dict | None:
+    """The installer the gate offers, or None. An outage is a 503; a GateError that a retry cannot fix goes up."""
+    try:
+        return kit_gate.current(*_KIT_GATE, _utc_now().timestamp())
+    except kit_gate.GateError as e:
+        print(f"[admin:kit] {e}")
+        if e.retryable:
+            raise _read_failed("The kit's installer could not be looked up; try again")
+        raise
+
+
+@app.get("/api/admin/kit")
+def admin_kit(request: Request):
+    """The Setup installer the gate offers. Also `configured: false`, or a `problem` to fix; 503 if unread."""
+    _require_admin(request)
+    if _KIT_GATE is None:
+        return {"configured": False}
+    try:
+        found = _kit_offered()
+    except kit_gate.GateError as e:
+        return {"configured": True, "problem": str(e), "problem_is": e.kind}
+    if found is None:
+        return {"configured": True, "published": False}
+    return {"configured": True, "published": True, **found}
+
+
+# What the page heads a non-retryable GateError with, by its kind.
+_KIT_PROBLEM = {"setup": "The download gate is set up wrong", "publish": "The last publish did not finish"}
+
+
+class KitLinkRequest(StrictModel):
+    # The installer the page showed: a link to any other would deliver bytes it did not describe.
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$", max_length=64)
+
+
+@app.post("/api/admin/kit/download-link")
+def admin_kit_download_link(request: Request, payload: KitLinkRequest):
+    """A link to the installer the page showed, for `kit_gate.LINK_TTL_S`. It names no user and is never cached."""
+    user = _require_admin(request)
+    if _KIT_GATE is None:
+        raise HTTPException(503, "This server has no kit download gate set up")
+    try:
+        found = _kit_offered()
+    except kit_gate.GateError as e:
+        raise HTTPException(409, f"{_KIT_PROBLEM[e.kind]}: {e}")
+    if found is None:
+        raise HTTPException(409, "No installer is published any more; reload the page")
+    if found["sha256"] != payload.sha256:
+        raise HTTPException(409, "A different installer was published after this page loaded; reload it")
+    url, exp = kit_gate.link(*_KIT_GATE, _utc_now().timestamp(), found["file"])
+    print(f"[admin:kit] a download link for {user['id'][:8]}")
+    return JSONResponse({"url": url, "expires_at": datetime.fromtimestamp(exp, timezone.utc).isoformat()},
+                        headers={"Cache-Control": "no-store"})
 
 
 if __name__ == "__main__":

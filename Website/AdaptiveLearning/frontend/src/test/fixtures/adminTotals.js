@@ -35,7 +35,7 @@ export function buildConsentOps(over = {}) {
 
 export const heartDay = (over = {}) => ({
   day: '2026-10-08', source: 'muse_optics', withheld: false, students: 8, rows: 900, synthetic_rows: 450,
-  sqi_deciles: { 7: 100, 9: 500, 10: 200 }, sessions: 8, never_calibrated: 1,
+  sqi_deciles: { 7: 100, 9: 500, 10: 200 }, sessions: 8, never_calibrated: 1, still_calibrating: 2,
   median_seconds_to_calibrate: 95.0, p90_seconds_to_calibrate: 140.5, ...over,
 })
 
@@ -48,7 +48,8 @@ export function buildSignalQuality(over = {}) {
     min_students: 5,
     eeg: [
       { day: '2026-10-07', withheld: true },
-      { day: '2026-10-08', withheld: false, students: 9, samples: 5400, trusted: 4590 },
+      { day: '2026-10-08', withheld: false, students: 9, samples: 5400, trusted: 4590, partial: false },
+      { day: '2026-10-09', withheld: false, students: 6, samples: 1200, trusted: 1000, partial: true },
     ],
     heart: [heartDay(), { day: '2026-10-08', source: 'rppg', withheld: true }],
     ...over,

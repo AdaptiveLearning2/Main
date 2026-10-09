@@ -104,11 +104,12 @@ AS $$
     ),
     sessions_cal AS (
         -- A session's day is its first heart row's; calibrated once a row leaves 'calibrating' for a level.
-        SELECT session_id, source, min(day) AS day,
-               extract(epoch FROM min(ts) FILTER (WHERE stress_category IN ('low', 'moderate', 'high')) - min(ts))
-                   AS seconds_to_calibrate
-          FROM heart
-         GROUP BY session_id, source
+        SELECT h.session_id, h.source, min(h.day) AS day, bool_or(s.ended_at IS NULL) AS still_open,
+               extract(epoch FROM min(h.ts) FILTER (WHERE h.stress_category IN ('low', 'moderate', 'high'))
+                                  - min(h.ts)) AS seconds_to_calibrate
+          FROM heart h
+          LEFT JOIN sessions s ON s.id = h.session_id
+         GROUP BY h.session_id, h.source
     ),
     heart_days AS (
         SELECT day, source, count(DISTINCT user_id) AS students, count(*) AS rows,
@@ -123,7 +124,9 @@ AS $$
     ),
     cal AS (
         SELECT day, source,
-               count(*) FILTER (WHERE seconds_to_calibrate IS NULL) AS never_calibrated,
+               -- Never: the lesson ended uncalibrated. A lesson still open may yet calibrate.
+               count(*) FILTER (WHERE seconds_to_calibrate IS NULL AND NOT still_open) AS never_calibrated,
+               count(*) FILTER (WHERE seconds_to_calibrate IS NULL AND still_open) AS still_calibrating,
                count(*) AS sessions,
                percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds_to_calibrate) AS median_seconds,
                percentile_cont(0.9) WITHIN GROUP (ORDER BY seconds_to_calibrate) AS p90_seconds
@@ -133,7 +136,9 @@ AS $$
         'eeg', coalesce((SELECT jsonb_agg(
                     CASE WHEN students < p_min_students THEN jsonb_build_object('day', day, 'withheld', true)
                          ELSE jsonb_build_object('day', day, 'withheld', false, 'students', students,
-                                                 'samples', samples, 'trusted', trusted) END
+                                                 'samples', samples, 'trusted', trusted,
+                                                 -- The rollup is written at a lesson's close: today has ended lessons only.
+                                                 'partial', day = (now() AT TIME ZONE p_tz)::date) END
                     ORDER BY day) FROM eeg), '[]'::jsonb),
         'heart', coalesce((SELECT jsonb_agg(
                     CASE WHEN d.students < p_min_students
@@ -143,6 +148,7 @@ AS $$
                              'rows', d.rows, 'synthetic_rows', d.synthetic_rows,
                              'sqi_deciles', coalesce(s.deciles, '{}'::jsonb),
                              'sessions', c.sessions, 'never_calibrated', c.never_calibrated,
+                             'still_calibrating', c.still_calibrating,
                              'median_seconds_to_calibrate', round(c.median_seconds::numeric, 1),
                              'p90_seconds_to_calibrate', round(c.p90_seconds::numeric, 1)) END
                     ORDER BY d.day, d.source)

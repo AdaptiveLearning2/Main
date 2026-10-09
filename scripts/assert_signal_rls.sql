@@ -2543,18 +2543,37 @@ BEGIN
     INSERT INTO public.signal_daily_rollup (user_id, day, channel, sample_count, trusted_sample_count)
     SELECT u, '2099-01-05', 'cognitive', 100, 80 FROM unnest(s[1:5]) u;
 
+    -- All lessons still open: the uncalibrated fifth may yet calibrate, so it is not "never".
     q := public.admin_signal_quality('2099-01-05', 'UTC', 5);
     heart := q->'heart'->0;
     IF jsonb_array_length(q->'heart') <> 1 OR heart->>'source' <> 'muse_optics'
        OR (heart->>'students')::int <> 5 OR (heart->>'rows')::int <> 15 OR (heart->>'synthetic_rows')::int <> 3
        OR heart->'sqi_deciles' <> '{"9": 15}'::jsonb
-       OR (heart->>'sessions')::int <> 5 OR (heart->>'never_calibrated')::int <> 1
+       OR (heart->>'sessions')::int <> 5 OR (heart->>'never_calibrated')::int <> 0
+       OR (heart->>'still_calibrating')::int <> 1
        OR (heart->>'median_seconds_to_calibrate')::numeric <> 120 THEN
-        RAISE EXCEPTION 'admin_signal_quality heart returned %', q->'heart';
+        RAISE EXCEPTION 'admin_signal_quality heart (lessons open) returned %', q->'heart';
     END IF;
+    -- A day that is not today is whole, not partial.
     IF q->'eeg' <> jsonb_build_array(jsonb_build_object('day', '2099-01-05', 'withheld', false, 'students', 5,
-                                                         'samples', 500, 'trusted', 400)) THEN
+                                                         'samples', 500, 'trusted', 400, 'partial', false)) THEN
         RAISE EXCEPTION 'admin_signal_quality eeg returned %', q->'eeg';
+    END IF;
+
+    -- Once the fifth lesson has ended uncalibrated, it never calibrated.
+    UPDATE public.sessions SET ended_at = '2099-01-05T09:30:00Z' WHERE id = sess[5];
+    heart := public.admin_signal_quality('2099-01-05', 'UTC', 5)->'heart'->0;
+    IF (heart->>'never_calibrated')::int <> 1 OR (heart->>'still_calibrating')::int <> 0 THEN
+        RAISE EXCEPTION 'admin_signal_quality heart (lesson ended) returned %', heart;
+    END IF;
+
+    -- Today's rollup holds ended lessons only, so today's row says it is partial.
+    INSERT INTO public.signal_daily_rollup (user_id, day, channel, sample_count, trusted_sample_count)
+    SELECT u, (now() AT TIME ZONE 'UTC')::date, 'cognitive', 10, 8 FROM unnest(s[1:5]) u
+    ON CONFLICT DO NOTHING;
+    IF NOT (public.admin_signal_quality((now() AT TIME ZONE 'UTC')::date, 'UTC', 5)->'eeg') @>
+           jsonb_build_array(jsonb_build_object('day', (now() AT TIME ZONE 'UTC')::date, 'partial', true)) THEN
+        RAISE EXCEPTION 'admin_signal_quality did not mark today partial';
     END IF;
 
     -- Under the floor, a day is withheld with no figure at all.

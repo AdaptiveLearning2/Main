@@ -78,10 +78,20 @@ describe('signal quality', () => {
     expect(within(row).queryByText(/%/)).not.toBeInTheDocument()
   })
 
-  it('shows the share of usable EEG readings', async () => {
+  it('shows the share of usable EEG readings, and says only today is partial', async () => {
     render(<SignalQuality />)
     const eeg = (await screen.findByText('EEG')).closest('table')
-    expect(within(eeg).getAllByText('2026-10-08')[0].closest('tr')).toHaveTextContent('85% of 5400')
+    const whole = within(eeg).getAllByText('2026-10-08')[0].closest('tr')
+    expect(whole).toHaveTextContent('85% of 5400')
+    expect(whole).not.toHaveTextContent(/so far/)
+    expect(within(eeg).getByText('2026-10-09').closest('tr')).toHaveTextContent('so far: ended lessons only')
+  })
+
+  it('keeps lessons still calibrating apart from those that never did', async () => {
+    render(<SignalQuality />)
+    const row = (await screen.findByText('Headband')).closest('tr')
+    expect(row).toHaveTextContent('1 of 8')
+    expect(row).toHaveTextContent('2 still calibrating')
   })
 
   it('shows heart quality, calibration time and the simulated share per sensor', async () => {

@@ -146,7 +146,12 @@ function QualityDays({ data }) {
                   ? <td colSpan={2} className="py-1 text-right text-gray-600 dark:text-gray-400">Withheld: {withheld}</td>
                   : <>
                       <td className="py-1 text-right tabular-nums">{d.students}</td>
-                      <td className="py-1 text-right tabular-nums">{pct(d.trusted, d.samples)} of {d.samples}</td>
+                      <td className="py-1 text-right tabular-nums">
+                        {pct(d.trusted, d.samples)} of {d.samples}
+                        {d.partial && (
+                          <span className="block text-gray-600 dark:text-gray-400">so far: ended lessons only</span>
+                        )}
+                      </td>
                     </>}
               </tr>
             ))}
@@ -181,7 +186,14 @@ function QualityDays({ data }) {
                         <td className="py-1 text-right tabular-nums">
                           {secs(d.median_seconds_to_calibrate)} / {secs(d.p90_seconds_to_calibrate)}
                         </td>
-                        <td className="py-1 text-right tabular-nums">{d.never_calibrated} of {d.sessions}</td>
+                        <td className="py-1 text-right tabular-nums">
+                          {d.never_calibrated} of {d.sessions}
+                          {d.still_calibrating > 0 && (
+                            <span className="block text-gray-600 dark:text-gray-400">
+                              {d.still_calibrating} still calibrating
+                            </span>
+                          )}
+                        </td>
                         <td className="py-1 text-right tabular-nums">{pct(d.synthetic_rows, d.rows)}</td>
                       </>}
                 </tr>

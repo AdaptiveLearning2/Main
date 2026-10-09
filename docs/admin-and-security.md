@@ -113,6 +113,13 @@ Three read-only RPCs (`20261011000000`), each called inline (so `_missing_rpc` s
   - Today's EEG row is `partial`: the rollup is written when a lesson closes, so it holds ended lessons only, unlike the heart figures beside it.
   - `days` is clamped to 60.
 
+## Adaptive decisions
+
+**`/api/admin/adaptive?days=`** (`admin_adaptive_reasons`, `20261012000000`) gives, per school day, adaptive questions eased, raised and held, counts by `why` and by fused label, and increases withheld by the facial veto.
+- Aggregates only, with the 5-student floor; `days` is clamped to 60.
+- A decision whose `opinions` include `headband_optical` or `camera` is left out while the student has that consent off now. EEG is always read.
+- The rows themselves are signal-derived (CLAUDE.md, *Erasure* and expiry): service-role only, expired by `expire_adaptive_decisions` at 03:55, and deleted for a student by any erasure.
+
 ## The security log records that something happened, never what was in it
 
 `security_events` is append-only, written by `_record_security_event` from the access helpers, the three

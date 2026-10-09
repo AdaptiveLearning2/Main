@@ -2923,6 +2923,24 @@ def student_questions(student_id: str, request: Request, limit: int = 100):
 
 # ─── llm generation ──────────────────────────────────────────────────────
 
+def _record_adaptive_decision(user_id: str, session_id: str, question: dict, decision: dict) -> None:
+    """Store why this served question's difficulty was eased, raised or held. Never raises.
+
+    Signal-derived, so it expires with the per-sample rows and goes with any erasure
+    (20261012000000). A failed write costs the record, never the question.
+    """
+    try:
+        supabase.table("adaptive_decisions").insert({
+            "session_id": session_id, "user_id": user_id,
+            "served_from": question.get("served_from"), "difficulty": question.get("difficulty"),
+            "bias": decision.get("bias"), "why": decision.get("why"), "label": decision.get("label"),
+            "opinions": decision.get("opinions") or [],
+            "increase_withheld": bool(decision.get("increase_withheld")),
+        }, returning=ReturnMethod.minimal).execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[adaptive] could not record the decision for {session_id}: {type(e).__name__}")
+
+
 @app.get("/api/generate-question")
 def generate_question(
     request:    Request,
@@ -3021,6 +3039,10 @@ def generate_question(
     # A queued question's `eeg_label` was read when it was made (`signal_read_at`), not now.
     question["served_from"]     = "inline" if inline else "queue"
     ops_metrics.bump("question", f"served:{question['served_from']}")
+    # Stored, not sent: the page has no use for it. Written only for a question actually served.
+    decision = question.pop("adaptive_decision", None)
+    if session_id and decision:
+        _record_adaptive_decision(user_id, session_id, question, decision)
 
     _ensure_queue(user_id, effective_grade, manual_bias, session_id)
 
@@ -8834,6 +8856,38 @@ def admin_signal_quality(request: Request, days: int = 14):
         "min_students": _COHORT_MIN_STUDENTS,
         "eeg": (got or {}).get("eeg") or [],
         "heart": (got or {}).get("heart") or [],
+    }
+
+
+_ADAPTIVE_MAX_DAYS = 60
+
+
+@app.get("/api/admin/adaptive")
+def admin_adaptive(request: Request, days: int = 14):
+    """Adaptive decisions per school day: eased, raised or held, and why. Aggregates only.
+
+    A day with fewer than `_COHORT_MIN_STUDENTS` students is withheld; a withdrawn heart or camera channel's
+    decisions are left out.
+    """
+    _require_admin(request)
+    days = max(1, min(days, _ADAPTIVE_MAX_DAYS))
+    first_day = (_school_day_start().astimezone(_school_timezone()).date() - timedelta(days=days - 1))
+    got = None
+    try:
+        got = _jsonb_as(supabase.rpc("admin_adaptive_reasons", {
+            "p_since": first_day.isoformat(), "p_tz": _school_timezone_name(),
+            "p_min_students": _COHORT_MIN_STUDENTS}).execute().data, list)
+    except Exception as e:                                     # noqa: BLE001
+        if not _missing_rpc(e, "admin_adaptive_reasons", "20261012000000",
+                            "the admin adaptive-decisions panel reads nothing until then"):
+            print(f"[admin:adaptive] {e}")
+    return {
+        "retrieved": got is not None,
+        "days": days,
+        "since": first_day.isoformat(),
+        "timezone": _school_timezone_name(),
+        "min_students": _COHORT_MIN_STUDENTS,
+        "decisions": got or [],
     }
 
 

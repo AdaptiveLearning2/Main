@@ -947,7 +947,8 @@ record of the year. A job that took both would remove the thing that makes its o
 guard** — nothing summarises alerts and nothing should, so copying that guard would mean alerts never
 expire at all. It is not batched (a couple of rows per session, not thousands per hour) and has its own
 `pg_cron` job at 03:35 rather than a step inside `expire_signal_rows`, which would change that function's
-return shape and the callers reading it.
+return shape and the callers reading it. `expire_adaptive_decisions()` (03:55) is the same shape for the
+same reason: adaptive decisions are signal-derived and nothing summarises them.
 
 ## Erasure is the other request, and nothing triggers it by side effect
 
@@ -976,7 +977,8 @@ erasing one source deletes only heart days it can rebuild (raw rows left) or tha
 `stress_pie` with it — those mix both sensors into one picture and no pixel says which is which.
 Over-deletion, preferred to serving a chart that still contains what was erased. Object paths are
 **derived** in the function, never read from `chart_paths`, where they would be a delete list of the
-writer's choosing.
+writer's choosing. **Adaptive decisions go with an erasure of any channel**, by a trigger on `signal_erasure`, since
+a fused label mixes channels: the same over-deletion, in `erase_signals`' own transaction.
 
 The database half is one transaction; storage removal runs after it commits and is **counted, not
 awaited** (`charts_failed`, plus a log line). Once `chart_paths` is nulled the objects are unreachable

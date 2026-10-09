@@ -2584,5 +2584,80 @@ BEGIN
     END IF;
 END $$;
 
+-- ─── adaptive decisions: checked values, erased with any channel, expired, read in aggregate ──
+DO $$
+DECLARE
+    s uuid[] := ARRAY[gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
+                      gen_random_uuid(), gen_random_uuid(), gen_random_uuid()];
+    sess uuid[] := ARRAY[gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
+                         gen_random_uuid(), gen_random_uuid(), gen_random_uuid()];
+    got jsonb;
+    day jsonb;
+    cutoff date;
+    refused boolean := false;
+    i int;
+BEGIN
+    INSERT INTO auth.users (id, email) SELECT u, u::text || '@adaptive.test.invalid' FROM unnest(s) u;
+    INSERT INTO public.profiles (id, email, role)
+    SELECT u, u::text || '@adaptive.test.invalid', 'student' FROM unnest(s) u ON CONFLICT (id) DO NOTHING;
+    -- Students 1-5 consent to everything; the sixth has since withdrawn the headband's optics.
+    INSERT INTO public.signal_consent (user_id, eeg_enabled, headband_optical_enabled, camera_enabled)
+    SELECT u, true, true, true FROM unnest(s[1:5]) u
+    ON CONFLICT (user_id) DO UPDATE SET eeg_enabled = true, headband_optical_enabled = true, camera_enabled = true;
+    INSERT INTO public.signal_consent (user_id, eeg_enabled) VALUES (s[6], true)
+    ON CONFLICT (user_id) DO UPDATE SET headband_optical_enabled = false;
+    FOR i IN 1..6 LOOP
+        INSERT INTO public.sessions (id, user_id, started_at) VALUES (sess[i], s[i], '2099-02-02T09:00:00Z');
+        -- One eased by the heart, one raised by a correct run, per student.
+        INSERT INTO public.adaptive_decisions (session_id, user_id, served_at, bias, why, label, opinions)
+        VALUES (sess[i], s[i], '2099-02-02T09:05:00Z', -1, 'stressed', 'stressed', ARRAY['eeg', 'headband_optical']),
+               (sess[i], s[i], '2099-02-02T09:10:00Z', 1, 'correct_run', 'neutral', ARRAY['eeg']);
+    END LOOP;
+
+    BEGIN
+        INSERT INTO public.adaptive_decisions (session_id, user_id, bias, why, label)
+        VALUES (sess[1], s[1], 1, 'teacher_said_so', 'neutral');
+    EXCEPTION WHEN check_violation THEN
+        refused := true;
+    END;
+    IF NOT refused THEN
+        RAISE EXCEPTION 'adaptive_decisions took a reason the decider never gives';
+    END IF;
+
+    -- The sixth student's headband-driven decision is left out; their EEG-only one is counted.
+    got := public.admin_adaptive_reasons('2099-02-02', 'UTC', 5);
+    day := got->0;
+    IF jsonb_array_length(got) <> 1 OR (day->>'students')::int <> 6 OR (day->>'decisions')::int <> 11
+       OR (day->>'eased')::int <> 5 OR (day->>'raised')::int <> 6 OR (day->>'held')::int <> 0
+       OR day->'by_why' <> '{"stressed": 5, "correct_run": 6}'::jsonb THEN
+        RAISE EXCEPTION 'admin_adaptive_reasons returned %', got;
+    END IF;
+    IF public.admin_adaptive_reasons('2099-02-02', 'UTC', 7)->0
+       <> jsonb_build_object('day', '2099-02-02', 'withheld', true) THEN
+        RAISE EXCEPTION 'admin_adaptive_reasons did not withhold a day under the floor';
+    END IF;
+
+    -- An erasure of any one channel takes every decision of that student, and only theirs.
+    INSERT INTO public.signal_erasure (user_id, channel, erased_by) VALUES (s[1], 'camera', s[1]);
+    IF EXISTS (SELECT 1 FROM public.adaptive_decisions WHERE user_id = s[1])
+       OR (SELECT count(*) FROM public.adaptive_decisions WHERE user_id = s[2]) <> 2 THEN
+        RAISE EXCEPTION 'erasure did not take exactly the erased student''s decisions';
+    END IF;
+
+    -- Expiry takes what falls on or before the cutoff and leaves 2099 alone.
+    INSERT INTO public.adaptive_decisions (session_id, user_id, served_at, bias, why, label)
+    VALUES (sess[2], s[2], '2000-01-03T12:00:00Z', 0, 'nothing_to_act_on', 'no_eeg');
+    cutoff := public.expired_signal_cutoff();
+    got := public.expire_adaptive_decisions();
+    IF cutoff IS NULL THEN
+        IF NOT coalesce((got->>'skipped_no_window')::boolean, false) THEN
+            RAISE EXCEPTION 'expire_adaptive_decisions deleted with no window: %', got;
+        END IF;
+    ELSIF EXISTS (SELECT 1 FROM public.adaptive_decisions WHERE user_id = s[2] AND served_at < '2001-01-01')
+          OR (SELECT count(*) FROM public.adaptive_decisions WHERE user_id = s[2]) <> 2 THEN
+        RAISE EXCEPTION 'expire_adaptive_decisions with cutoff % left the wrong rows: %', cutoff, got;
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

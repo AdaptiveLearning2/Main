@@ -179,5 +179,7 @@ def test_the_decider_applies_the_shared_rule():
     """The decider calls the one rule, not a copy, and hands it the veto."""
     import inspect
     src = inspect.getsource(td.LLM_single_prompt_topic_and_difficulty_decider)
-    assert "_decide_bias(" in src
-    assert 'increase_withheld=bool(getattr(signal_state, "increase_withheld", False))' in src
+    # `_decide_bias_why` is the rule; `_decide_bias` returns its first element (test_adaptive_decisions).
+    assert "_decide_bias_why(" in src
+    assert 'increase_withheld = bool(getattr(signal_state, "increase_withheld", False))' in src
+    assert "increase_withheld=increase_withheld" in src

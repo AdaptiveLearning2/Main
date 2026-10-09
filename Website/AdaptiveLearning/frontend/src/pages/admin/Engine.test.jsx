@@ -9,12 +9,13 @@ import {
   GENERATION_PATH, REFUSALS_PATH, buildGeneration, buildRefusals,
 } from '../../test/fixtures/opsCounters'
 import { QUALITY_PATH, buildSignalQuality } from '../../test/fixtures/adminTotals'
+import { ADAPTIVE_PATH, buildAdaptive } from '../../test/fixtures/adminAdaptive'
 import AdminEngine, { RefusalSummary } from './Engine'
 
 beforeEach(() => {
   resetApi()
   mockApi({ [GENERATION_PATH]: buildGeneration(), [REFUSALS_PATH]: buildRefusals(),
-            [QUALITY_PATH]: buildSignalQuality() })
+            [QUALITY_PATH]: buildSignalQuality(), [ADAPTIVE_PATH]: buildAdaptive() })
 })
 
 const page = () => render(<MemoryRouter><AdminEngine /></MemoryRouter>)

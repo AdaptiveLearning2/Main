@@ -54,6 +54,8 @@ class FusedState:
     channels: dict[str, str] = field(default_factory=dict)
     # Facial veto on an increase; callers pushing on their own evidence must defer to it like "stressed".
     increase_withheld: bool = False
+    # Consent channels (`signal_consent`'s names) whose sensor had an opinion; no reading, safe to store.
+    opinions: tuple[str, ...] = ()
 
     @property
     def adjusted(self) -> bool:
@@ -152,6 +154,22 @@ def face_channel(
     return ChannelState("neutral", f"face {emotion.lower()}")
 
 
+# A heart source names the consent it needs, as `main._HEART_SOURCES_BY_RECORD_FLAG` does; an unknown one, none.
+_HEART_CONSENT = {"muse_optics": "headband_optical", "muse_ppg": "headband_optical", "rppg": "camera"}
+
+
+def _opinion_channels(eeg: ChannelState, heart: ChannelState, face: ChannelState) -> tuple[str, ...]:
+    """The consent channels whose sensor said something, sorted and distinct."""
+    found = set()
+    if eeg.label is not None:
+        found.add("eeg")
+    if heart.label is not None and heart.source in _HEART_CONSENT:
+        found.add(_HEART_CONSENT[heart.source])
+    if face.label is not None:
+        found.add("camera")
+    return tuple(sorted(found))
+
+
 def fuse(
     eeg: ChannelState,
     heart: ChannelState = ChannelState(),
@@ -163,7 +181,8 @@ def fuse(
 ) -> FusedState:
     """Apply the asymmetric rule across whichever channels are present."""
     channels = {"eeg": eeg.reason, "heart": heart.reason, "face": face.reason}
-    common = dict(focus=focus, calm=calm, confidence=confidence, channels=channels)
+    common = dict(focus=focus, calm=calm, confidence=confidence, channels=channels,
+                  opinions=_opinion_channels(eeg, heart, face))
 
     # 1. Ease off: either channel alone suffices. Checked first so no increase precedes it.
     if heart.label == "stressed" and eeg.label != "stressed":

@@ -375,6 +375,21 @@ def test_a_failed_name_read_is_tried_again_on_the_next_poll(monkeypatch, _admin,
     assert got["stations"][0]["pairing"]["name"] == "Ada"
 
 
+def test_a_refresh_never_leaves_a_reader_holding_a_half_built_cache(monkeypatch, _admin, _clock):
+    db = _Db(rows={"station_pairings": [_pairing("station1", "u-ada", 10)],
+                   "profiles": [{"id": "u-ada", "display_name": "Ada"}]})
+    monkeypatch.setattr(main, "supabase", db)
+    monkeypatch.setattr(eeg_poller, "snapshot", lambda: [])
+    main.admin_stations(None)
+    held = main._stations_slow            # what a concurrent request read before the refresh
+
+    monkeypatch.setattr(main, "_STATIONS_SLOW_SEC", 0.0)
+    main.admin_stations(None)
+
+    assert held["names"] == {"u-ada": "Ada"} and held["refused"] == {}
+    assert main._stations_slow is not held
+
+
 def test_the_poller_snapshot_carries_ids_and_state_never_a_reading(monkeypatch):
     poller = eeg_poller._Poller(None, "u1", "s1", "station1")   # never started
     poller.last_ts = 1234.5

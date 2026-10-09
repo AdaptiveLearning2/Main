@@ -8692,8 +8692,9 @@ def _stations_slow_reads(ids: list[str]) -> dict:
         refused[r["key"]] = refused.get(r["key"], 0) + r["n"]
     fresh = {"at": time.monotonic(), "ids": frozenset(ids), "names": names, "names_retrieved": names_retrieved,
              "refused": refused, "refusals_retrieved": refusals["retrieved"]}
-    _stations_slow.clear()
-    _stations_slow.update(fresh)
+    # Swapped in whole: a concurrent request holds either the old dict or this one, never a half-cleared one.
+    global _stations_slow
+    _stations_slow = fresh
     return fresh
 
 

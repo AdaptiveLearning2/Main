@@ -907,10 +907,58 @@ def test_unusable_heart_readings_do_not_claim_a_lesson_is_open():
     assert "finishes" not in line
 
 
-@pytest.mark.parametrize("state", ["not_requested", "not_retrieved"])
-def test_an_undescribed_heart_channel_says_nothing_about_body_arousal(state):
-    basis = _basis(usual=_usual(arousal={"state": state}))
+def test_a_declined_heart_channel_says_nothing_about_body_arousal():
+    basis = _basis(usual=_usual(arousal={"state": "not_requested"}))
     assert not any(l.startswith("Body arousal") for l in main._rule_based_chart_summary(basis))
+
+
+@pytest.mark.parametrize("state,expected", [
+    ("not_retrieved", "could not be read this time"),
+    ("unknown", "whether a lesson is still in progress could not be checked"),
+])
+def test_an_unread_body_arousal_says_so_rather_than_vanishing(state, expected):
+    line = _arousal_line(_basis(usual=_usual(arousal={"state": state})))
+    assert expected in line
+    assert "%" not in line
+
+
+def test_a_measured_share_whose_open_lessons_went_unchecked_says_so():
+    assert "could not be checked" in _arousal_line(_measured(pending=None))
+
+
+def test_poor_contact_rows_in_an_open_lesson_are_pending_not_nothing(monkeypatch):
+    """`any_rows` sees rows the usable count does not; they are a lesson, not silence."""
+    monkeypatch.setattr(main, "_reportable_channels",
+                        lambda sid, inc=True: main.ReportChannels(
+                            heart=True, emotion=False, consent_retrieved=True))
+    monkeypatch.setattr(main, "_signal_summary", lambda *a, **k: {
+        **main._EMPTY_SUMMARY, "cognitive_samples": 400, "heart_samples": 0})
+    monkeypatch.setattr(main, "_stats_including_open_session",
+                        lambda sid: {"total_questions": 0, "total_correct": 0, "retrieved": True})
+    monkeypatch.setattr(main, "_topic_breakdown_with_state", lambda sid: ([], True))
+    monkeypatch.setattr(main, "_any_rows_since", lambda table, *a: table == "heart_signals")
+
+    basis = main._chart_summary_basis("s", 7, 8, True)
+    lines = main._rule_based_chart_summary(basis)
+
+    assert basis["usual"]["body_arousal"]["state"] == "pending"
+    assert not any("recorded nothing" in l for l in lines)
+
+
+def test_an_unchecked_heart_table_leaves_body_arousal_unknown(monkeypatch):
+    monkeypatch.setattr(main, "_reportable_channels",
+                        lambda sid, inc=True: main.ReportChannels(
+                            heart=True, emotion=False, consent_retrieved=True))
+    monkeypatch.setattr(main, "_signal_summary", lambda *a, **k: {
+        **main._EMPTY_SUMMARY, "cognitive_samples": 400, "heart_samples": 0})
+    monkeypatch.setattr(main, "_stats_including_open_session",
+                        lambda sid: {"total_questions": 0, "total_correct": 0, "retrieved": True})
+    monkeypatch.setattr(main, "_topic_breakdown_with_state", lambda sid: ([], True))
+    monkeypatch.setattr(main, "_any_rows_since",
+                        lambda table, *a: None if table == "heart_signals" else True)
+
+    assert main._chart_summary_basis("s", 7, 8, True)["usual"]["body_arousal"]["state"] == \
+        "unknown"
 
 
 def test_heart_rate_variability_is_stated_beside_heart_rate():

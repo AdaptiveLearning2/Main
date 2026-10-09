@@ -275,16 +275,30 @@ def test_the_endpoint_checks_the_relationship_before_reading(monkeypatch):
 
 
 @pytest.mark.parametrize("rollup,state", [
-    ([_heart_day("2026-06-08", {"high": 2})], "measured"),
-    ([_heart_day("2026-06-08", {"calibrating": 6})], "calibrating"),
-    ([_heart_day("2026-06-08", None)], "unusable"),
-    ([_heart_day("2026-06-08", None, sources=("rppg",))], "camera_only"),
+    ([_heart_day("2026-06-01", {"high": 2})], "measured"),
+    ([_heart_day("2026-06-01", {"calibrating": 6})], "calibrating"),
+    ([_heart_day("2026-06-01", None)], "unusable"),
+    ([_heart_day("2026-06-01", None, sources=("rppg",))], "camera_only"),
     ([], "none"),
 ])
-def test_each_week_says_why_it_has_the_body_arousal_it_has(monkeypatch, rollup, state):
+def test_each_past_week_says_why_it_has_the_body_arousal_it_has(monkeypatch, rollup, state):
     monkeypatch.setattr(main, "supabase", _fake(rollup=rollup))
 
-    assert _week(main._signal_trend(STUDENT, weeks=1), "2026-06-08")["body_arousal_state"] == state
+    assert _week(main._signal_trend(STUDENT, weeks=2), "2026-06-01")["body_arousal_state"] == state
+
+
+@pytest.mark.parametrize("rollup,state", [
+    ([_heart_day("2026-06-08", {"high": 2})], "measured"),
+    ([_heart_day("2026-06-08", None)], "unknown"),
+    ([], "unknown"),
+])
+def test_the_current_week_claims_no_absence_while_a_lesson_may_be_open(monkeypatch, rollup,
+                                                                       state):
+    """The trend sees only finished lessons; this week's "none" could be one still running."""
+    monkeypatch.setattr(main, "supabase", _fake(rollup=rollup))
+
+    week = _week(main._signal_trend(STUDENT, weeks=2), "2026-06-08")
+    assert week["body_arousal_state"] == state
 
 
 def test_an_unread_or_declined_trend_week_says_so(monkeypatch):

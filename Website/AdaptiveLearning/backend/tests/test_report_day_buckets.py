@@ -578,3 +578,38 @@ def test_a_thin_share_is_flagged(monkeypatch, at_three_am_utc):
         _heart_rollup("2026-06-09", {"high": main._AROUSAL_MIN_WINDOWS})]))["body_arousal"]
 
     assert (thin["few_readings"], full["few_readings"]) == (True, False)
+
+
+def test_an_open_lesson_with_only_poor_contact_rows_is_pending(monkeypatch, at_three_am_utc):
+    """The raw aggregate names trusted sources only, so these rows name no sensor at all."""
+    tables = _with_rollup()
+    tables["heart_signals"] = [{**_heart_raw("muse_optics")[0], "trusted": False}]
+    report = _arousal(monkeypatch, tables)
+
+    assert report["body_arousal"]["state"] == "pending"
+    assert _day(report, "2026-06-11")["body_arousal_state"] == "pending"
+
+
+def test_a_trusted_camera_only_open_lesson_is_not_pending(monkeypatch, at_three_am_utc):
+    tables = _with_rollup()
+    tables["heart_signals"] = _heart_raw("rppg")
+    assert _arousal(monkeypatch, tables)["body_arousal"]["state"] == "camera_only"
+
+
+def test_a_failed_raw_heart_read_claims_no_absence(monkeypatch, at_three_am_utc):
+    raises = lambda name, p: RuntimeError("x") \
+        if name == "weekly_signal_days" and p.get("p_channel") == "heart" else None  # noqa: E731
+    report = _arousal(monkeypatch, _with_rollup(), rpc_raises=raises)
+
+    assert (report["body_arousal"]["state"], report["body_arousal"]["pending"]) == \
+        ("unknown", None)
+    assert {d["body_arousal_state"] for d in report["daily"]} == {"unknown"}
+
+
+def test_a_failed_raw_heart_read_leaves_a_measured_share_measured(monkeypatch, at_three_am_utc):
+    raises = lambda name, p: RuntimeError("x") \
+        if name == "weekly_signal_days" and p.get("p_channel") == "heart" else None  # noqa: E731
+    arousal = _arousal(monkeypatch, _with_rollup(rollup=[_heart_rollup("2026-06-09", {"high": 40})]),
+                       rpc_raises=raises)["body_arousal"]
+
+    assert (arousal["state"], arousal["pending"]) == ("measured", None)

@@ -75,10 +75,13 @@ EEG stress and never combined with it. **It is not "time above resting":** `high
 the lesson's own opening baseline (`heart_stress`), and the copy says exactly that. The rollup is written as a session
 closes, so an open session's day has no categories yet: the weekly report reads the heart rollup row even beside raw
 rows. `_body_arousal` gives every surface (week, day, report, usual) the same `state` — `measured`, `calibrating`,
-`pending` (only unrolled headband readings), `unusable` (headband rows, none classified), `camera_only` (rPPG gets no
-category), `none`, `not_requested`, `not_retrieved` — with a share of None, never 0, for every state but `measured`;
-`pending: true` beside `measured` says an open lesson is not counted, and `few_readings` flags fewer than
-`_AROUSAL_MIN_WINDOWS` classified windows.
+`pending` (heart rows not rolled up yet — poor-contact rows included, which name no sensor because the raw aggregate
+lists trusted sources only), `unusable` (headband rows, none classified), `camera_only` (rPPG gets no category),
+`none`, `unknown`, `not_requested`, `not_retrieved` — with a share of None, never 0, for every state but `measured`.
+**`unknown` is the open-lesson check failing, not an absence**: the raw heart read failed, the usual's period figure
+or `any_rows` could not be read, or it is the trend's current week (the trend sees finished lessons only). `pending`
+beside `measured` is `true` when an open lesson is not counted and `null` when that could not be checked;
+`few_readings` flags fewer than `_AROUSAL_MIN_WINDOWS` classified windows.
 
 **A declined channel is filtered out of the query, not out of the result**: one `.in_("channel", …)` narrows the
 single query, so a declined channel is never read and then dropped in Python. Assert on the **filter**, not

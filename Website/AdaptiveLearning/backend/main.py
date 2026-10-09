@@ -1923,10 +1923,12 @@ _AROUSAL_MIN_WINDOWS = 30
 
 
 def _body_arousal(counts: tuple, sensors: frozenset, pending: bool,
-                  include_heart: bool = True, read_ok: bool = True) -> dict:
+                  include_heart: bool = True, read_ok: bool = True,
+                  raw_ok: bool = True) -> dict:
     """Body arousal and the reason for its value, the same on every surface.
 
-    `pending`: headband readings from a lesson not yet rolled up, so not counted here.
+    `pending`: heart rows from a lesson not yet rolled up, so not counted here. `raw_ok`
+    False: open lessons could not be checked, so no absence is claimed (`unknown`, `pending: None`).
     See docs/reporting.md for each `state`.
     """
     out = _arousal_share(counts)
@@ -1938,6 +1940,8 @@ def _body_arousal(counts: tuple, sensors: frozenset, pending: bool,
         state = "measured"
     elif out["calibrating_windows"]:
         state = "calibrating"
+    elif not raw_ok:
+        state = "unknown"
     elif pending:
         state = "pending"
     elif "headband" in sensors:
@@ -1947,8 +1951,20 @@ def _body_arousal(counts: tuple, sensors: frozenset, pending: bool,
     else:
         state = "none"
     readable = include_heart and read_ok
-    return {**out, "state": state, "pending": bool(pending) and readable,
+    return {**out, "state": state,
+            "pending": (None if not raw_ok else bool(pending)) if readable else False,
             "few_readings": 0 < out["classified_windows"] < _AROUSAL_MIN_WINDOWS}
+
+
+def _unrolled_heart(agg: dict | None, rolled: bool) -> bool:
+    """Heart rows on a day with no rollup row yet: an open lesson, unless camera alone.
+
+    The raw aggregate names trusted sources only, so poor-contact rows name no sensor.
+    """
+    if rolled or not int((agg or {}).get("rows") or 0):
+        return False
+    sensors = _sensor_class((agg or {}).get("sources"))
+    return "headband" in sensors or not sensors
 
 
 def _scale_range(rollup_rows) -> dict | None:
@@ -2087,9 +2103,10 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
     out = []
     for monday in sorted(buckets):
         b = buckets[monday]
-        # Rollup only, so an open lesson is never visible here: `pending` cannot arise.
+        # Rollup only: an open lesson is invisible, so the current week cannot claim an absence.
         arousal = _body_arousal(b["arousal"], _sensor_class(b["heart_sources"]), False,
-                                include_heart, retrieved)
+                                include_heart, retrieved,
+                                raw_ok=monday != _week_start(school_today))
         out.append({
             "week_start": b["week_start"],
             "score_scale": _scale_range(b["scale_rows"]),
@@ -2122,11 +2139,10 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
 
 
 def _weekly_body_arousal(include_heart: bool, rollup_ok: bool, rollup_by: dict,
-                         heart_days: dict, heart_sources: list) -> dict:
+                         heart_days: dict, heart_sources: list, heart_ok: bool = True) -> dict:
     """The window's body arousal, pooled from the heart rollup rows, with a `state`.
 
-    `pending`: headband readings whose session has not closed, so no rollup row yet.
-    `unusable`: headband readings, none trusted enough to classify.
+    `heart_ok` is the raw heart read, which is how an open lesson is seen.
     """
     rolled = [r for (_day, channel), r in rollup_by.items() if channel == "heart"]
     counts = (0, 0, 0, 0)
@@ -2134,10 +2150,9 @@ def _weekly_body_arousal(include_heart: bool, rollup_ok: bool, rollup_by: dict,
         counts = _add_counts(counts, _arousal_counts(r.get("stress_counts")))
     sensors = _sensor_class(heart_sources) | _sensor_class(
         s for r in rolled for s in (r.get("heart_sources") or ()))
-    unrolled_headband = any(
-        "headband" in _sensor_class(agg.get("sources")) for day, agg in heart_days.items()
-        if (day, "heart") not in rollup_by)
-    return _body_arousal(counts, sensors, unrolled_headband, include_heart, rollup_ok)
+    unrolled = any(_unrolled_heart(agg, (day, "heart") in rollup_by)
+                   for day, agg in heart_days.items())
+    return _body_arousal(counts, sensors, unrolled, include_heart, rollup_ok, heart_ok)
 
 
 def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = True,
@@ -2287,7 +2302,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         day_arousal = _body_arousal(
             _arousal_counts(heart_rolled.get("stress_counts")),
             _sensor_class(heart_rolled.get("heart_sources")) | raw_sensors,
-            not heart_rolled and "headband" in raw_sensors, include_heart, rollup_ok)
+            _unrolled_heart(heart_raw, bool(heart_rolled)), include_heart, rollup_ok, heart_ok)
 
         daily.append({
             "date": day,
@@ -2383,7 +2398,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     heart_sources = sorted({s for agg in heart_days.values() for s in agg.get("sources") or ()
                             if isinstance(s, str)} | rolled_sources)
     body_arousal = _weekly_body_arousal(include_heart, rollup_ok, rollup_by, heart_days,
-                                        heart_sources)
+                                        heart_sources, heart_ok)
 
     # Seeded from the rollup's full distribution, then the raw days on top; trusted only.
     emotion_counts: dict[str, int] = dict(rolled_emotions)
@@ -2745,11 +2760,14 @@ def _usual_from_rows(rows: list, retrieved: bool, period_start: date, current: d
     counts = (0, 0, 0, 0)
     for r in rolled_heart:
         counts = _add_counts(counts, _arousal_counts(r.get("stress_counts")))
-    heart_samples = (current.get("heart_rate_bpm") or (None, 0))[1]
-    pending = current.get("arousal_pending", bool(heart_samples) and not rolled_heart)
-    arousal = _body_arousal(counts, sensors, pending, include_heart, retrieved)
-    current = {**current, "body_arousal": (arousal["high_share"], arousal["classified_windows"])}
     unread = set(current.get("unread") or ())
+    # Heart rows of any quality (poor contact included) from a period nothing rolled up yet.
+    heart_rows = current.get("heart_rows", bool((current.get("heart_rate_bpm") or (None, 0))[1]))
+    pending = current.get("arousal_pending", bool(heart_rows) and not rolled_heart)
+    # None (or an unread heart figure): open lessons could not be checked.
+    raw_ok = pending is not None and "heart" not in unread
+    arousal = _body_arousal(counts, sensors, bool(pending), include_heart, retrieved, raw_ok)
+    current = {**current, "body_arousal": (arousal["high_share"], arousal["classified_windows"])}
 
     measures = {}
     for m in _USUAL_MEASURES:
@@ -5038,8 +5056,18 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
     scored = [t for t in attempted if t.get("accuracy") is not None]
     # Calm is EEG stress the right way up; the trend is computed on calm itself.
     calm_weeks = [{**w, "calm": _calm_of(w.get("stress"))} for w in trend.get("weeks") or []]
-    usual = _personal_baseline(student_id, start, end, _usual_current(summary),
-                               channels.heart, channels.consent_retrieved, rollup=rollup)
+    eeg_info = _channel(channels.eeg, channels.eeg_revoked_at,
+                        summary["cognitive_samples"], "cognitive_signals")
+    heart_info = _channel(channels.heart, channels.heart_revoked_at,
+                          summary["heart_samples"], "heart_signals")
+    # Poor-contact rows count as a lesson's rows: `any_rows` sees them, the summary does not.
+    heart_rows = summary["heart_samples"] or heart_info.get("any_rows")
+    usual = _personal_baseline(
+        student_id, start, end,
+        {**_usual_current(summary),
+         **({"heart_rows": True} if heart_rows else {}),
+         **({"arousal_pending": None} if heart_info.get("any_rows", False) is None else {})},
+        channels.heart, channels.consent_retrieved, rollup=rollup)
     arousal = usual["measures"]["body_arousal"]
     return {
         "days": days,
@@ -5054,10 +5082,8 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
         "consent_retrieved": channels.consent_retrieved,
         "channels": {
             # No `emotion`: the report states no facial number.
-            "eeg": _channel(channels.eeg, channels.eeg_revoked_at,
-                            summary["cognitive_samples"], "cognitive_signals"),
-            "heart": _channel(channels.heart, channels.heart_revoked_at,
-                              summary["heart_samples"], "heart_signals"),
+            "eeg": eeg_info,
+            "heart": heart_info,
         },
         "averages": {
             "focus": summary["focus"],
@@ -5276,6 +5302,9 @@ _BODY_AROUSAL_ABSENT = {
                     "camera, so there is no reading for this period."),
     "none": ("Body arousal has no reading for this period, because the headband's heart "
              "sensor recorded nothing."),
+    "unknown": ("Body arousal has no reading for this period, and whether a lesson is still "
+                "in progress could not be checked."),
+    "not_retrieved": "Body arousal could not be read this time, so no figure is given for it.",
 }
 
 
@@ -5294,6 +5323,8 @@ def _body_arousal_sentence(basis: dict) -> str | None:
             out += " It rests on only a few readings, so treat it as rough."
         if arousal.get("pending"):
             out += " Lessons still in progress are not counted yet."
+        elif "pending" in arousal and arousal["pending"] is None:
+            out += " Whether a lesson is still in progress could not be checked."
         return out
     return _BODY_AROUSAL_ABSENT.get(state)
 

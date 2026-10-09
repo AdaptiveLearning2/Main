@@ -1125,28 +1125,19 @@ def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
         print(f"[rollup] {user_id[:8]}: {e}")
 
 
-def _claim_session_close(session_id: str, ended_at: str, reason: str) -> bool:
-    """Stamp `ended_at` and `close_reason` on a session that has neither yet. True if this caller won.
+def _claim_session_close(session_id: str, ended_at: str, reason: str) -> bool | None:
+    """Stamp `ended_at` and `close_reason` on a session that has neither yet. Never raises.
 
-    The conditional update is the claim, so racing closes cannot double-credit.
-    It asks for the stamped row by name, so an empty result means another close won. Never raises.
+    True: this caller won. False: another close already had (an empty result, asked for by name).
+    None: the write failed and the session is still open, which is not "already closed".
     """
-    def claim(fields: dict) -> list:
-        return supabase.table("sessions").update(fields, returning=ReturnMethod.representation) \
-            .eq("id", session_id).is_("ended_at", "null").execute().data or []
     try:
-        try:
-            claimed = claim({"ended_at": ended_at, "close_reason": reason})
-        except Exception as e:                                 # noqa: BLE001
-            # Bridge until 20261010000000 is applied everywhere: without the column, still close.
-            # PostgREST's missing-column error only; a CHECK violation also names the column and must fail.
-            if "PGRST204" not in str(e) or "close_reason" not in str(e):
-                raise
-            print(f"[session:close] close_reason missing (apply 20261010000000); {session_id} closes without it")
-            claimed = claim({"ended_at": ended_at})
+        claimed = supabase.table("sessions").update({"ended_at": ended_at, "close_reason": reason},
+                                                    returning=ReturnMethod.representation) \
+            .eq("id", session_id).is_("ended_at", "null").execute().data or []
     except Exception as e:                                     # noqa: BLE001
         print(f"[session:close] could not stamp {session_id}: {e}")
-        return False
+        return None
     return bool(claimed)
 
 
@@ -1332,7 +1323,11 @@ def _close_session(user_id: str, session: dict, ended_at: str,
     `closed_by` defaults to the student, so a new site must opt in to an alert; `reason` likewise.
     """
     sid = session["id"]
-    if not _claim_session_close(sid, ended_at, reason):
+    claimed = _claim_session_close(sid, ended_at, reason)
+    if claimed is None:
+        # Still open: callers must not report this as closed.
+        return {"discarded": False, "failed": True}
+    if not claimed:
         # Already closed; running again would double-credit the answers.
         return {"discarded": False, "already_closed": True}
 
@@ -1420,7 +1415,9 @@ def _sweep_abandoned_sessions(limit: int = _STALE_SWEEP_BATCH) -> dict:
             eeg_poller.stop(s["id"], uid)
             out = _close_session(uid, s, _ended_when_last_seen(s, last_seen),
                                  closed_by=CLOSED_BY_SWEEP, reason=CLOSE_REASON_SWEEP)
-            if out.get("discarded"):
+            if out.get("failed"):
+                failed += 1
+            elif out.get("discarded"):
                 discarded += 1
             else:
                 closed += 1
@@ -3172,6 +3169,9 @@ def end_session(session_id: str = Path(...), request: Request = None,
     # Timezone-aware, and read once: the rollup converts it to a school day.
     ended = _utc_now().isoformat()
     result = _close_session(user["id"], data, ended, reason=reason)
+    if result.get("failed"):
+        # 503, not "already closed": the session is still open, and the page should say the end did not land.
+        raise _read_failed("Could not end the session just now")
     if result.get("already_closed"):
         return {"ok": True, "already_closed": True}
     return {"ok": True, **({"discarded": True} if result["discarded"] else {})}

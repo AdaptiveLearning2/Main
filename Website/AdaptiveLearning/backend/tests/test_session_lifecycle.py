@@ -356,6 +356,8 @@ def test_a_five_second_poll_reads_holders_afresh_and_names_and_counts_at_most_ev
     assert _reads_of(db, "station_pairings") == 2
     assert _reads_of(db, "profiles") == 1
     assert _reads_of(db, "ops_counters") == 1
+    # Last lessons are read every poll: one can end with no station changing hands.
+    assert _reads_of(db, "sessions") == 2
 
 
 def test_a_new_holder_is_named_at_once_not_after_the_cache_expires(monkeypatch, _admin, _clock):
@@ -443,6 +445,19 @@ def test_a_release_is_shown_at_once_not_after_the_cache_expires(monkeypatch, _ad
     assert _reads_of(db, "sessions") == 2
     [s] = got["stations"]
     assert s["pairing"] is None and s["last_ended"]["close_reason"] == "finish"
+
+
+def test_a_lesson_ending_with_no_change_of_holder_is_shown_on_the_next_poll(monkeypatch, _admin, _clock):
+    # The headband was stopped earlier, so nobody holds station1; the lesson finishes later.
+    db = _Db(rows={"sessions": [_ended("station1", "superseded", "10:00")]})
+    monkeypatch.setattr(main, "supabase", db)
+    monkeypatch.setattr(eeg_poller, "snapshot", lambda: [])
+    main.admin_stations(None)
+
+    db.rows["sessions"] = [_ended("station1", "finish", "11:59"), _ended("station1", "superseded", "10:00")]
+    [s] = main.admin_stations(None)["stations"]
+
+    assert s["last_ended"]["close_reason"] == "finish"
 
 
 def test_the_school_timezone_rides_along_for_the_end_times(monkeypatch, _admin, _clock):

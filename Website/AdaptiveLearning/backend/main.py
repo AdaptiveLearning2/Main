@@ -8693,22 +8693,38 @@ def admin_today(request: Request):
 _PAGE_WATCHING_SEC = 30.0
 
 # Names and today's refusal counts change slowly, so a 5 s Stations poll reuses them this long.
+# Last lessons are read fresh: one can end with no station changing hands.
 _STATIONS_SLOW_SEC = 30.0
 _stations_slow: dict = {"at": None}
 # Today's ended lessons read for "last ended here"; a station whose last one is older than this many reads none.
 _STATIONS_LAST_ENDED_ROWS = 1000
 
 
+def _stations_last_ended(day_start: datetime) -> tuple[dict[str, dict], bool]:
+    """Each station's last lesson ended today: {device: {close_reason, ended_at}}, and whether it was read."""
+    last_ended: dict[str, dict] = {}
+    try:
+        # Newest first, so the first row per station is its last; the cap bounds a long school day.
+        for s in (supabase.table("sessions").select("eeg_device_id, close_reason, ended_at")
+                  .gte("ended_at", day_start.isoformat()).not_.is_("eeg_device_id", "null")
+                  .order("ended_at", desc=True).limit(_STATIONS_LAST_ENDED_ROWS).execute().data or []):
+            # A read, not a close; `close_sites()` takes an ended_at key literal for a hand-rolled stamp.
+            last_ended.setdefault(s["eeg_device_id"], {k: s.get(k) for k in ("close_reason", "ended_at")})
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[admin:stations] last ended: {e}")
+        return {}, False
+    return last_ended, True
+
+
 def _stations_slow_reads(ids: list[str], holds: frozenset) -> dict:
-    """Holders' names, today's `station_refused` counts and each station's last ended lesson, cached `_STATIONS_SLOW_SEC`.
+    """Holders' names and today's `station_refused` counts, cached `_STATIONS_SLOW_SEC`.
 
     `holds` is who holds which station now; any change to it, either way, or a failed read is never served from the cache.
     """
     global _stations_slow
     cached = _stations_slow
     if (cached["at"] is not None and time.monotonic() - cached["at"] < _STATIONS_SLOW_SEC
-            and cached["holds"] == holds and cached["names_retrieved"] and cached["refusals_retrieved"]
-            and cached["last_ended_retrieved"]):
+            and cached["holds"] == holds and cached["names_retrieved"] and cached["refusals_retrieved"]):
         return cached
     # Not `_profiles_many`: its placeholder "Student" would name a holder it could not read.
     names: dict[str, str] = {}
@@ -8722,26 +8738,12 @@ def _stations_slow_reads(ids: list[str], holds: frozenset) -> dict:
         except Exception as e:                                 # noqa: BLE001
             print(f"[admin:stations] names: {e}")
             names_retrieved = False
-    day_start = _school_day_start()
-    refusals = ops_metrics.read(supabase, ["station_refused"], since=day_start)
+    refusals = ops_metrics.read(supabase, ["station_refused"], since=_school_day_start())
     refused: dict[str, int] = {}
     for r in refusals["rows"]:
         refused[r["key"]] = refused.get(r["key"], 0) + r["n"]
-    last_ended: dict[str, dict] = {}
-    last_ended_retrieved = True
-    try:
-        # Newest first, so the first row per station is its last; the cap bounds a long school day.
-        for s in (supabase.table("sessions").select("eeg_device_id, close_reason, ended_at")
-                  .gte("ended_at", day_start.isoformat()).not_.is_("eeg_device_id", "null")
-                  .order("ended_at", desc=True).limit(_STATIONS_LAST_ENDED_ROWS).execute().data or []):
-            # A read, not a close; `close_sites()` takes an ended_at key literal for a hand-rolled stamp.
-            last_ended.setdefault(s["eeg_device_id"], {k: s.get(k) for k in ("close_reason", "ended_at")})
-    except Exception as e:                                     # noqa: BLE001
-        print(f"[admin:stations] last ended: {e}")
-        last_ended_retrieved = False
     fresh = {"at": time.monotonic(), "holds": holds, "names": names, "names_retrieved": names_retrieved,
-             "refused": refused, "refusals_retrieved": refusals["retrieved"],
-             "last_ended": last_ended, "last_ended_retrieved": last_ended_retrieved}
+             "refused": refused, "refusals_retrieved": refusals["retrieved"]}
     # Swapped in whole: a concurrent request holds either the old dict or this one, never a half-cleared one.
     _stations_slow = fresh
     return fresh
@@ -8770,7 +8772,7 @@ def admin_stations(request: Request):
     names, names_retrieved = slow["names"], slow["names_retrieved"]
     refused = slow["refused"]
     refusals = {"retrieved": slow["refusals_retrieved"]}
-    last_ended = slow["last_ended"]
+    last_ended, last_ended_retrieved = _stations_last_ended(_school_day_start())
 
     now = _utc_now()
     by_device: dict[str, dict] = {}
@@ -8797,7 +8799,7 @@ def admin_stations(request: Request):
         "retrieved": retrieved,
         "names_retrieved": names_retrieved,
         "refusals_retrieved": refusals["retrieved"],
-        "last_ended_retrieved": slow["last_ended_retrieved"],
+        "last_ended_retrieved": last_ended_retrieved,
         "idle_after_seconds": _PAIRING_IDLE_SEC,
         "timezone": _school_timezone_name(),
         "stations": stations,

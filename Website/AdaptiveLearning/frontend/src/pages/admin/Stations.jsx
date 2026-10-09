@@ -11,15 +11,20 @@ function ago(seconds) {
   return `${Math.round(seconds / 60)} min ago`
 }
 
-// In the school's zone, named, since "today" is the school's day; the browser's own zone only if none came.
+const TIME = { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }
+
+// In the school's zone, named, since "today" is the school's day; the browser's own (still named) if none
+// came or the zone is not recognised.
 function clock(iso, timeZone) {
   const t = iso ? new Date(iso) : null
   if (!t || Number.isNaN(t.getTime())) return ''
+  let text
   try {
-    return `at ${t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone, timeZoneName: 'short' })}`
+    text = t.toLocaleTimeString([], { ...TIME, timeZone })
   } catch {
-    return `at ${t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}`
+    text = t.toLocaleTimeString([], TIME)
   }
+  return `at ${text}`
 }
 
 // A holder's name, or why there is none: unreadable is not unnamed.

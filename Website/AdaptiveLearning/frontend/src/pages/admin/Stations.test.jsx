@@ -53,8 +53,22 @@ describe('the stations page', () => {
     }))
     page()
     const line = await screen.findByText(/Last lesson here today ended/)
-    // 16:40 UTC is 01:40 the next morning in Tokyo; the label names the zone.
-    expect(line.textContent).toMatch(/01:40\s?AM GMT\+9/)
+    // Built with the machine's own locale, so only the zone is under test, not 12- or 24-hour style.
+    const tokyo = new Date('2026-10-08T16:40:00+00:00').toLocaleTimeString([],
+      { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo', timeZoneName: 'short' })
+    expect(line.textContent).toContain(`ended at ${tokyo}:`)
+  })
+
+  it('falls back to the browser’s zone, still named, for a zone it does not recognise', async () => {
+    overrideApi(STATIONS_PATH, () => buildStations({
+      timezone: 'Not/AZone',
+      stations: [station({ last_ended: { close_reason: 'finish', ended_at: '2026-10-08T16:40:00+00:00' } })],
+    }))
+    page()
+    const line = await screen.findByText(/Last lesson here today ended/)
+    const local = new Date('2026-10-08T16:40:00+00:00').toLocaleTimeString([],
+      { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })
+    expect(line.textContent).toContain(`ended at ${local}:`)
   })
 
   it('names a null reason as unrecorded, never as a guess', async () => {

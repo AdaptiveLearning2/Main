@@ -9,6 +9,9 @@ import {
 import {
   STATIONS_PATH, TODAY_PATH, buildStations, buildToday,
 } from '../../test/fixtures/adminLifecycle'
+import {
+  CONSENT_OPS_PATH, FUNNEL_PATH, buildConsentOps, buildFunnel,
+} from '../../test/fixtures/adminTotals'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 
@@ -40,6 +43,8 @@ beforeEach(() => {
     [REFUSALS_PATH]: buildRefusals(),
     [TODAY_PATH]: buildToday(),
     [STATIONS_PATH]: buildStations(),
+    [FUNNEL_PATH]: buildFunnel(),
+    [CONSENT_OPS_PATH]: buildConsentOps(),
   })
 })
 afterEach(() => { cleanup(); vi.useRealTimers() })

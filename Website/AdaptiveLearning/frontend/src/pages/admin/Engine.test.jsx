@@ -8,11 +8,13 @@ import { apiError, apiFetch, mockApi, overrideApi, resetApi } from '../../test/m
 import {
   GENERATION_PATH, REFUSALS_PATH, buildGeneration, buildRefusals,
 } from '../../test/fixtures/opsCounters'
+import { QUALITY_PATH, buildSignalQuality } from '../../test/fixtures/adminTotals'
 import AdminEngine, { RefusalSummary } from './Engine'
 
 beforeEach(() => {
   resetApi()
-  mockApi({ [GENERATION_PATH]: buildGeneration(), [REFUSALS_PATH]: buildRefusals() })
+  mockApi({ [GENERATION_PATH]: buildGeneration(), [REFUSALS_PATH]: buildRefusals(),
+            [QUALITY_PATH]: buildSignalQuality() })
 })
 
 const page = () => render(<MemoryRouter><AdminEngine /></MemoryRouter>)

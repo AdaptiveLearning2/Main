@@ -146,6 +146,9 @@ ADMIN_GETS = [
     ("admin_refusals", lambda r: main.admin_refusals(r)),
     ("admin_today", lambda r: main.admin_today(r)),
     ("admin_stations", lambda r: main.admin_stations(r)),
+    ("admin_funnel", lambda r: main.admin_funnel(r)),
+    ("admin_consent_ops", lambda r: main.admin_consent_ops(r)),
+    ("admin_signal_quality", lambda r: main.admin_signal_quality(r)),
 ]
 
 

@@ -5,6 +5,7 @@ import { apiFetch } from '../../lib/api'
 import { GenerationSummary, RefusalSummary } from './Engine'
 import { StationHolds } from './Stations'
 import Today from './Today'
+import { ConsentChanges, Funnel } from './Totals'
 
 const STATUS = {
   ok:       { Icon: CheckCircle2,  cls: 'text-emerald-600 dark:text-emerald-400' },
@@ -199,6 +200,16 @@ export default function AdminOverview() {
         <p className="text-xs text-gray-600 dark:text-gray-400">
           Counts only. Which student agreed to what is not shown here.
         </p>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500 dark:text-gray-400">Consent changes</h2>
+        <ConsentChanges />
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500 dark:text-gray-400">Adoption</h2>
+        <Funnel />
       </section>
 
       <section className="space-y-3">

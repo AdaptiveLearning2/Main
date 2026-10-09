@@ -2461,5 +2461,109 @@ BEGIN
     END IF;
 END $$;
 
+-- ─── admin totals: the funnel counts by role, consent changes by week, signal quality by day ──
+DO $$
+DECLARE
+    s uuid[] := ARRAY[gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
+                      gen_random_uuid(), gen_random_uuid(), gen_random_uuid()];
+    sess uuid[] := ARRAY[gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
+                         gen_random_uuid(), gen_random_uuid(), gen_random_uuid()];
+    teacher uuid := gen_random_uuid();
+    parent  uuid := gen_random_uuid();
+    cls     uuid := gen_random_uuid();
+    before  jsonb;
+    after   jsonb;
+    ops     jsonb;
+    q       jsonb;
+    heart   jsonb;
+    i       int;
+BEGIN
+    before := public.admin_funnel();
+
+    INSERT INTO auth.users (id, email)
+    SELECT u, u::text || '@totals.test.invalid' FROM unnest(s || teacher || parent) u;
+    INSERT INTO public.profiles (id, email, role)
+    SELECT u, u::text || '@totals.test.invalid', 'student' FROM unnest(s || teacher || parent) u
+    ON CONFLICT (id) DO NOTHING;
+    UPDATE public.profiles SET role = 'teacher' WHERE id = teacher;
+    UPDATE public.profiles SET role = 'parent' WHERE id = parent;
+
+    INSERT INTO public.classes (id, teacher_id, name, join_code) VALUES (cls, teacher, 'totals', 'TOTL0001');
+    INSERT INTO public.class_memberships (class_id, student_id) VALUES (cls, s[1]), (cls, s[2]);
+    INSERT INTO public.parent_child_links (parent_id, child_id) VALUES (parent, s[1]);
+    -- Five consent to the headband's optics; the sixth has a row with everything off.
+    INSERT INTO public.signal_consent (user_id, headband_optical_enabled)
+    SELECT u, true FROM unnest(s[1:5]) u ON CONFLICT (user_id) DO UPDATE SET headband_optical_enabled = true;
+    INSERT INTO public.signal_consent (user_id) VALUES (s[6]) ON CONFLICT (user_id) DO NOTHING;
+    FOR i IN 1..6 LOOP
+        INSERT INTO public.sessions (id, user_id, started_at, eeg_started_at)
+        VALUES (sess[i], s[i], '2099-01-05T09:00:00Z', CASE WHEN i = 1 THEN '2099-01-05T09:01:00Z'::timestamptz END);
+    END LOOP;
+
+    after := public.admin_funnel();
+    IF (after#>>'{students,signed_up}')::int - (before#>>'{students,signed_up}')::int <> 6
+       OR (after#>>'{students,joined_class}')::int - (before#>>'{students,joined_class}')::int <> 2
+       OR (after#>>'{students,parent_linked}')::int - (before#>>'{students,parent_linked}')::int <> 1
+       OR (after#>>'{students,consenting_now}')::int - (before#>>'{students,consenting_now}')::int <> 5
+       OR (after#>>'{students,had_a_lesson}')::int - (before#>>'{students,had_a_lesson}')::int <> 6
+       OR (after#>>'{students,had_a_headband_lesson}')::int
+          - (before#>>'{students,had_a_headband_lesson}')::int <> 1
+       OR (after#>>'{teachers,class_has_a_student}')::int - (before#>>'{teachers,class_has_a_student}')::int <> 1
+       OR (after#>>'{parents,linked_a_child}')::int - (before#>>'{parents,linked_a_child}')::int <> 1 THEN
+        RAISE EXCEPTION 'admin_funnel moved from % to %', before, after;
+    END IF;
+
+    -- Two camera turn-ons a week apart land in two weeks; an erasure and a withdrawal in the first.
+    INSERT INTO public.consent_withdrawals (user_id, channel, withdrawn_at, withdrawn_by)
+    VALUES (s[1], 'headband_optical', '2099-01-05T10:00:00Z', s[1]);
+    INSERT INTO public.consent_enablements (user_id, channel, enabled_at, enabled_by)
+    VALUES (s[1], 'camera', '2099-01-06T10:00:00Z', parent), (s[2], 'camera', '2099-01-13T10:00:00Z', parent);
+    INSERT INTO public.signal_erasure (user_id, channel, erased_at, erased_by)
+    VALUES (s[3], 'eeg', '2099-01-07T10:00:00Z', parent);
+    ops := public.admin_consent_ops('2099-01-01T00:00:00Z', 'UTC');
+    IF (SELECT sum((e->>'n')::int) FROM jsonb_array_elements(ops) e) <> 4
+       OR (SELECT count(*) FROM jsonb_array_elements(ops) e WHERE e->>'kind' = 'parent_enabled') <> 2
+       OR NOT ops @> jsonb_build_array(jsonb_build_object(
+              'week', date_trunc('week', '2099-01-05'::timestamp)::date, 'channel', 'headband_optical',
+              'kind', 'withdrawn', 'n', 1)) THEN
+        RAISE EXCEPTION 'admin_consent_ops returned %', ops;
+    END IF;
+
+    -- Heart: three rows a session; students 1-4 leave calibrating at 120 s, the fifth never does.
+    FOR i IN 1..6 LOOP
+        INSERT INTO public.heart_signals (session_id, user_id, source, ts, sqi, stress_category, raw)
+        SELECT sess[i], s[i], 'muse_optics', '2099-01-05T09:00:00Z'::timestamptz + (k * 60 || ' s')::interval,
+               0.85, CASE WHEN k = 2 AND i <= 4 THEN 'low' ELSE 'calibrating' END,
+               CASE WHEN i = 1 THEN '{"synthetic": true}'::jsonb ELSE '{}'::jsonb END
+          FROM generate_series(0, 2) k;
+    END LOOP;
+    -- A camera-sourced row from a student whose camera consent is off: never counted.
+    INSERT INTO public.heart_signals (session_id, user_id, source, ts, sqi)
+    VALUES (sess[1], s[1], 'rppg', '2099-01-05T09:00:30Z', 0.5);
+    INSERT INTO public.signal_daily_rollup (user_id, day, channel, sample_count, trusted_sample_count)
+    SELECT u, '2099-01-05', 'cognitive', 100, 80 FROM unnest(s[1:5]) u;
+
+    q := public.admin_signal_quality('2099-01-05', 'UTC', 5);
+    heart := q->'heart'->0;
+    IF jsonb_array_length(q->'heart') <> 1 OR heart->>'source' <> 'muse_optics'
+       OR (heart->>'students')::int <> 5 OR (heart->>'rows')::int <> 15 OR (heart->>'synthetic_rows')::int <> 3
+       OR heart->'sqi_deciles' <> '{"9": 15}'::jsonb
+       OR (heart->>'sessions')::int <> 5 OR (heart->>'never_calibrated')::int <> 1
+       OR (heart->>'median_seconds_to_calibrate')::numeric <> 120 THEN
+        RAISE EXCEPTION 'admin_signal_quality heart returned %', q->'heart';
+    END IF;
+    IF q->'eeg' <> jsonb_build_array(jsonb_build_object('day', '2099-01-05', 'withheld', false, 'students', 5,
+                                                         'samples', 500, 'trusted', 400)) THEN
+        RAISE EXCEPTION 'admin_signal_quality eeg returned %', q->'eeg';
+    END IF;
+
+    -- Under the floor, a day is withheld with no figure at all.
+    q := public.admin_signal_quality('2099-01-05', 'UTC', 6);
+    IF q->'heart'->0 <> jsonb_build_object('day', '2099-01-05', 'source', 'muse_optics', 'withheld', true)
+       OR q->'eeg'->0 <> jsonb_build_object('day', '2099-01-05', 'withheld', true) THEN
+        RAISE EXCEPTION 'admin_signal_quality under the floor returned %', q;
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

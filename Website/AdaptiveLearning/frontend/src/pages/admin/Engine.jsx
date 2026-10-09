@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import useAdminRead from '../../hooks/useAdminRead'
 import { ReadState, Tile, Unread } from './adminUi'
+import { SignalQuality } from './Totals'
 
 const GENERATION = '/api/admin/generation?hours=24'
 const REFUSALS = '/api/admin/refusals?hours=24'
@@ -253,6 +254,10 @@ export default function AdminEngine() {
           Every 4xx and 5xx answer except 404, by route. A 503 on question generation is a bound working, not an outage.
         </p>
         <Refusals />
+      </section>
+      <section className="space-y-3">
+        <h2 className="text-sm font-black uppercase tracking-wide text-gray-600 dark:text-gray-400">Signal quality</h2>
+        <SignalQuality />
       </section>
     </div>
   )

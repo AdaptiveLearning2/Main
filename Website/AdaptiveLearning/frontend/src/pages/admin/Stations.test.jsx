@@ -46,6 +46,17 @@ describe('the stations page', () => {
     expect(within(card('station1')).queryByText(/Last lesson here/)).not.toBeInTheDocument()
   })
 
+  it('gives the end time in the school’s timezone, named, whatever the browser’s', async () => {
+    overrideApi(STATIONS_PATH, () => buildStations({
+      timezone: 'Asia/Tokyo',
+      stations: [station({ last_ended: { close_reason: 'finish', ended_at: '2026-10-08T16:40:00+00:00' } })],
+    }))
+    page()
+    const line = await screen.findByText(/Last lesson here today ended/)
+    // 16:40 UTC is 01:40 the next morning in Tokyo; the label names the zone.
+    expect(line.textContent).toMatch(/01:40\s?AM GMT\+9/)
+  })
+
   it('names a null reason as unrecorded, never as a guess', async () => {
     overrideApi(STATIONS_PATH, () => buildStations({
       stations: [station({ last_ended: { close_reason: null, ended_at: '2026-10-08T16:40:00+00:00' } })],

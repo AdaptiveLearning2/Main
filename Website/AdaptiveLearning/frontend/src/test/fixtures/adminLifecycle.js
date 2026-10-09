@@ -41,6 +41,7 @@ export function buildStations(over = {}) {
     refusals_retrieved: true,
     last_ended_retrieved: true,
     idle_after_seconds: 120,
+    timezone: 'America/Chicago',
     // A sibling, so a test about one station has another to be wrong about.
     stations: [
       station(),

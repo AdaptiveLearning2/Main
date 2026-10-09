@@ -429,6 +429,29 @@ def test_a_released_station_says_how_its_last_lesson_today_ended(monkeypatch, _a
     assert ("limit", main._STATIONS_LAST_ENDED_ROWS) in filters
 
 
+def test_a_release_is_shown_at_once_not_after_the_cache_expires(monkeypatch, _admin, _clock):
+    db = _Db(rows={"station_pairings": [_pairing("station1", "u-ada", 10)], "sessions": []})
+    monkeypatch.setattr(main, "supabase", db)
+    monkeypatch.setattr(eeg_poller, "snapshot", lambda: [])
+    main.admin_stations(None)
+
+    # Ada finishes: the pairing goes and her lesson has ended, well inside the 30 s cache.
+    db.rows["station_pairings"] = []
+    db.rows["sessions"] = [_ended("station1", "finish", "11:59")]
+    got = main.admin_stations(None)
+
+    assert _reads_of(db, "sessions") == 2
+    [s] = got["stations"]
+    assert s["pairing"] is None and s["last_ended"]["close_reason"] == "finish"
+
+
+def test_the_school_timezone_rides_along_for_the_end_times(monkeypatch, _admin, _clock):
+    monkeypatch.setattr(main, "supabase", _Db())
+    monkeypatch.setattr(main, "_school_timezone_name", lambda: "America/Chicago")
+    monkeypatch.setattr(eeg_poller, "snapshot", lambda: [])
+    assert main.admin_stations(None)["timezone"] == "America/Chicago"
+
+
 def test_a_null_reason_stays_null_not_a_guess(monkeypatch, _admin, _clock):
     monkeypatch.setattr(main, "supabase", _Db(rows={"sessions": [_ended("station2", None, "09:00")]}))
     monkeypatch.setattr(eeg_poller, "snapshot", lambda: [])

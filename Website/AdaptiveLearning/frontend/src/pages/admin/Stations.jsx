@@ -11,9 +11,15 @@ function ago(seconds) {
   return `${Math.round(seconds / 60)} min ago`
 }
 
-function clock(iso) {
+// In the school's zone, named, since "today" is the school's day; the browser's own zone only if none came.
+function clock(iso, timeZone) {
   const t = iso ? new Date(iso) : null
-  return t && !Number.isNaN(t.getTime()) ? `at ${t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''
+  if (!t || Number.isNaN(t.getTime())) return ''
+  try {
+    return `at ${t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone, timeZoneName: 'short' })}`
+  } catch {
+    return `at ${t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}`
+  }
 }
 
 // A holder's name, or why there is none: unreadable is not unnamed.
@@ -35,7 +41,7 @@ function PushNote({ data }) {
   )
 }
 
-function Station({ station, namesRetrieved, idleAfter }) {
+function Station({ station, namesRetrieved, idleAfter, timeZone }) {
   const { pairing, pollers } = station
   return (
     <li className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl px-4 py-3 space-y-1">
@@ -59,7 +65,7 @@ function Station({ station, namesRetrieved, idleAfter }) {
       )}
       {station.last_ended && (
         <p className="text-xs text-gray-600 dark:text-gray-400">
-          Last lesson here today ended {clock(station.last_ended.ended_at)}:{' '}
+          Last lesson here today ended {clock(station.last_ended.ended_at, timeZone)}:{' '}
           {reasonLabel(station.last_ended.close_reason ?? 'unrecorded')}
         </p>
       )}
@@ -97,7 +103,7 @@ function StationList({ data }) {
           <ul className="space-y-2">
             {data.stations.map(s => (
               <Station key={s.device_id} station={s} namesRetrieved={data.names_retrieved}
-                       idleAfter={data.idle_after_seconds} />
+                       idleAfter={data.idle_after_seconds} timeZone={data.timezone} />
             ))}
           </ul>
         )}

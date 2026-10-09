@@ -5,7 +5,10 @@ self-test fails, so no kit is built that could never verify an update. Made by `
 """
 
 # One key a line, named everyday or recovery: a line holding "key" beside the value reads as a credential to gitleaks.
-PUBLIC_KEYS: dict[str, str] = {}
+PUBLIC_KEYS: dict[str, str] = {
+    "everyday": "PmCi+614c84DNaIN7+Ze1+c2HazPdbiTIU4NBUXuqiE=",
+    "recovery": "QJqXonZ3JerbYPvYJF7noLJ9hNBVPwMeYJd7A/+4T3U=",
+}
 
 # A throwaway key and a feed it signed, discarded after: the self-test proves verification works in the frozen build.
 TEST_SIGNER = "R6RKKR8i7ZLe2vRKC0kntILMyUUz7X+4eHnMkYi3idc="

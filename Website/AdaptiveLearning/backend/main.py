@@ -8752,18 +8752,9 @@ def admin_stations(request: Request):
 
 # ─── read-only totals: funnel, consent changes, signal quality ───────────
 
-_TOTALS_MIGRATION = "20261011000000"
-
-
-def _admin_rpc(name: str, params: dict, shape: type, consequence: str):
-    """One admin RPC's jsonb result as `shape` (dict or list), or None if unread or misshapen."""
-    try:
-        data = supabase.rpc(name, params).execute().data
-    except Exception as e:                                     # noqa: BLE001
-        if not _missing_rpc(e, name, _TOTALS_MIGRATION, consequence):
-            print(f"[admin:{name}] {e}")
-        return None
-    # A scalar jsonb object can come back wrapped in a one-row list.
+def _jsonb_as(data, shape: type):
+    """An RPC's jsonb result as `shape` (dict or list), or None if misshapen."""
+    # A scalar jsonb object can come back wrapped in a one-row list; a one-row array must stay a list.
     if shape is dict and isinstance(data, list) and len(data) == 1:
         data = data[0]
     return data if isinstance(data, shape) else None
@@ -8773,7 +8764,13 @@ def _admin_rpc(name: str, params: dict, shape: type, consequence: str):
 def admin_funnel(request: Request):
     """How many students, teachers and parents have reached each adoption step. Counts only."""
     _require_admin(request)
-    funnel = _admin_rpc("admin_funnel", {}, dict, "the admin funnel reads nothing until then")
+    funnel = None
+    try:
+        funnel = _jsonb_as(supabase.rpc("admin_funnel", {}).execute().data, dict)
+    except Exception as e:                                     # noqa: BLE001
+        if not _missing_rpc(e, "admin_funnel", "20261011000000",
+                            "the admin funnel reads nothing until then"):
+            print(f"[admin:funnel] {e}")
     return {"retrieved": funnel is not None, "funnel": funnel}
 
 
@@ -8790,8 +8787,14 @@ def admin_consent_ops(request: Request, weeks: int = 8):
     today = _school_day_start()
     local = today.astimezone(_school_timezone())
     since = (local - timedelta(days=local.weekday() + 7 * (weeks - 1))).astimezone(timezone.utc)
-    rows = _admin_rpc("admin_consent_ops", {"p_since": since.isoformat(), "p_tz": _school_timezone_name()},
-                      list, "the admin consent-changes panel reads nothing until then")
+    rows = None
+    try:
+        rows = _jsonb_as(supabase.rpc("admin_consent_ops", {"p_since": since.isoformat(),
+                                                            "p_tz": _school_timezone_name()}).execute().data, list)
+    except Exception as e:                                     # noqa: BLE001
+        if not _missing_rpc(e, "admin_consent_ops", "20261011000000",
+                            "the admin consent-changes panel reads nothing until then"):
+            print(f"[admin:consent_ops] {e}")
     return {
         "retrieved": rows is not None,
         "weeks": weeks,
@@ -8814,10 +8817,15 @@ def admin_signal_quality(request: Request, days: int = 14):
     _require_admin(request)
     days = max(1, min(days, _SIGNAL_QUALITY_MAX_DAYS))
     first_day = (_school_day_start().astimezone(_school_timezone()).date() - timedelta(days=days - 1))
-    got = _admin_rpc("admin_signal_quality",
-                     {"p_since": first_day.isoformat(), "p_tz": _school_timezone_name(),
-                      "p_min_students": _COHORT_MIN_STUDENTS},
-                     dict, "the admin signal-quality panel reads nothing until then")
+    got = None
+    try:
+        got = _jsonb_as(supabase.rpc("admin_signal_quality", {
+            "p_since": first_day.isoformat(), "p_tz": _school_timezone_name(),
+            "p_min_students": _COHORT_MIN_STUDENTS}).execute().data, dict)
+    except Exception as e:                                     # noqa: BLE001
+        if not _missing_rpc(e, "admin_signal_quality", "20261011000000",
+                            "the admin signal-quality panel reads nothing until then"):
+            print(f"[admin:signal_quality] {e}")
     return {
         "retrieved": got is not None,
         "days": days,

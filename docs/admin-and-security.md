@@ -99,7 +99,7 @@ their last counts through a failed poll, with a note, and hand `LoadError` the r
 
 ## Funnel, consent changes and signal quality
 
-Three read-only RPCs (`20261011000000`), each read through `_admin_rpc`, which takes the expected shape. A jsonb object can come back wrapped in a one-row list, but a one-row array must not be unwrapped.
+Three read-only RPCs (`20261011000000`), each called inline (so `_missing_rpc` sees a literal name and consequence) and shaped by `_jsonb_as`. A jsonb object can come back wrapped in a one-row list, but a one-row array must not be unwrapped.
 
 - **`/api/admin/funnel`** (`admin_funnel()`): per role, how many accounts have done each step, as they stand now. It is not a history, and a later step can be larger than an earlier one. Counts are system-wide with no breakdown, so no floor applies.
 - **`/api/admin/consent-ops?weeks=`** (`admin_consent_ops`): withdrawals, parent turn-ons and erasures per school week (Monday start, in the school's zone) and channel. `weeks` is clamped to 26.

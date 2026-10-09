@@ -476,6 +476,18 @@ def test_the_parent_dashboard_agrees_with_the_report_on_unsummarised_rows(monkey
     assert children["b"]["state"] == "unknown"
 
 
+def test_a_capped_row_check_leaves_the_students_it_missed_unknown(monkeypatch):
+    """At the cap the read may have stopped before a student's rows: not "none"."""
+    monkeypatch.setattr(main, "_POSTGREST_MAX_ROWS", 2)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({"heart_signals": [
+        {"user_id": "a", "ts": NOW_UTC.isoformat()}, {"user_id": "a", "ts": NOW_UTC.isoformat()}]}))
+    assert main._heart_rows_many(["a", "b"], 7) == {"a": True, "b": None}
+
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({"heart_signals": [
+        {"user_id": "a", "ts": NOW_UTC.isoformat()}]}))
+    assert main._heart_rows_many(["a", "b"], 7) == {"a": True, "b": False}
+
+
 def test_the_parent_dashboard_checks_rows_in_one_read_however_many_children(monkeypatch):
     """One batched row check, plus one read per running lesson (child `a`)."""
     _, fake = _parent_children(monkeypatch, kids=("a", "b", "c", "d", "e"))

@@ -40,7 +40,7 @@ def test_a_kit_run_from_source_reads_its_folders_version(tmp_path):
 
 @pytest.mark.parametrize("version_txt", [
     None, b"", b"0.2", b"0.2.1-beta", b"v0.2.1", b"0.2.1.0", b"12345.0.0",
-    "٠.٢.١".encode("utf-8"),  # Arabic-Indic digits are digits to \d, not to a version
+    "٠.٢.١".encode("utf-8"),  # digits to \d, but not ASCII: the ASCII read refuses them first
     "0.2.1".encode("utf-16"),
 ])
 def test_a_kit_whose_version_does_not_read_says_so_rather_than_guessing(tmp_path, version_txt):

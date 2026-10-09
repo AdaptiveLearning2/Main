@@ -514,7 +514,7 @@ def _open_session():
 @pytest.mark.parametrize("rollup,raw_source,open_lesson,state", [
     ([_heart_rollup("2026-06-09", {"calibrating": 6})], None, False, "calibrating"),
     ([], "muse_optics", True, "pending"),
-    ([], None, True, "pending"),
+    ([], None, True, "none"),         # a lesson without the heart sensor promises nothing
     ([_heart_rollup("2026-06-09", None)], None, False, "unusable"),
     ([], "rppg", False, "camera_only"),
     ([_heart_rollup("2026-06-09", None, sources=("rppg",))], None, False, "camera_only"),
@@ -582,11 +582,43 @@ def test_a_measured_week_beside_an_open_lesson_says_that_lesson_is_not_counted(
     assert (arousal["state"], arousal["pending"]) == ("measured", True)
 
 
-def test_an_open_lesson_is_seen_even_before_its_heart_rows_arrive(monkeypatch, at_three_am_utc):
-    """A finished lesson earlier in the week must not hide one running today."""
+def test_a_running_lesson_without_heart_rows_promises_no_figure(monkeypatch, at_three_am_utc):
+    """No heart rows in it, so nothing will arrive "when the lesson finishes"."""
     tables = _with_rollup(rollup=[_heart_rollup("2026-06-09", {"high": 40})])
     tables["sessions"] = [_open_session()]
+    assert _arousal(monkeypatch, tables)["body_arousal"]["pending"] is False
+
+
+def test_a_finished_lesson_earlier_in_the_week_does_not_hide_a_running_one(monkeypatch,
+                                                                          at_three_am_utc):
+    tables = _with_rollup(rollup=[_heart_rollup("2026-06-11", {"high": 40})])
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    tables["sessions"] = [_open_session()]
     assert _arousal(monkeypatch, tables)["body_arousal"]["pending"] is True
+
+
+def test_a_session_open_past_the_abandon_window_is_not_a_running_lesson(monkeypatch,
+                                                                         at_three_am_utc):
+    """A laptop that slept mid-lesson: open until the sweep, but not in progress."""
+    tables = _with_rollup()
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    old = NOW_UTC - main.timedelta(seconds=main._SESSION_ABANDONED_AFTER_SEC + 60)
+    tables["sessions"] = [{**_open_session(), "started_at": old.isoformat()}]
+    assert _arousal(monkeypatch, tables)["body_arousal"]["state"] == "unknown"
+
+
+def test_an_earlier_unsummarised_day_is_not_part_of_todays_lesson(monkeypatch, at_three_am_utc):
+    """A failed write on a past day reads unknown, though a lesson is running today."""
+    tables = _with_rollup()
+    earlier = (NOW_UTC - main.timedelta(days=2)).isoformat()
+    tables["heart_signals"] = _heart_raw("muse_optics") + [
+        {**_heart_raw("muse_optics")[0], "ts": earlier}]
+    tables["sessions"] = [_open_session()]
+    report = _arousal(monkeypatch, tables)
+
+    assert _day(report, "2026-06-11")["body_arousal_state"] == "pending"
+    assert _day(report, "2026-06-09")["body_arousal_state"] == "unknown"
+    assert report["body_arousal"]["state"] == "unknown"
 
 
 def test_rows_never_summarised_with_no_lesson_open_are_unknown_not_pending(monkeypatch,

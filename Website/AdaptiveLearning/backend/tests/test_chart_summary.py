@@ -937,7 +937,9 @@ def test_poor_contact_rows_in_an_open_lesson_are_pending_not_nothing(monkeypatch
     from tests.test_access_control import _FakeSupabase
     monkeypatch.setattr(main, "supabase", _FakeSupabase({
         "signal_daily_rollup": [],
-        "sessions": [{"id": "o", "user_id": "s", "started_at": "2026-06-11", "ended_at": None}]}))
+        "sessions": [{"id": "o", "user_id": "s", "started_at": main._utc_now().isoformat(),
+                      "ended_at": None}],
+        "heart_signals": [{"user_id": "s", "ts": main._utc_now().isoformat(), "trusted": False}]}))
     monkeypatch.setattr(main, "_reportable_channels",
                         lambda sid, inc=True: main.ReportChannels(
                             heart=True, emotion=False, consent_retrieved=True))

@@ -391,7 +391,9 @@ def test_the_weekly_usual_is_unknown_when_open_lessons_could_not_be_checked(monk
 def _summary_endpoint(monkeypatch, sessions, heart_samples=0, any_rows=True):
     """`/signal-summary` for a heart-consented student with no rolled heart days."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({
-        "signal_daily_rollup": [_cog(d) for d in PRIOR], "sessions": sessions}))
+        "signal_daily_rollup": [_cog(d) for d in PRIOR], "sessions": sessions,
+        # A poor-contact row inside the running lesson: not in the usable count.
+        "heart_signals": [{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "trusted": False}]}))
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": STUDENT})
     monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
     monkeypatch.setattr(main, "_reportable_channels", lambda *_a: main._channels_from_consent(
@@ -421,10 +423,26 @@ def test_the_summary_never_calls_unexplained_rows_an_absence(monkeypatch, sessio
     assert _summary_endpoint(monkeypatch, sessions, any_rows=any_rows)["state"] == state
 
 
-def test_the_parent_dashboard_sees_an_open_lesson_too(monkeypatch):
+def test_a_running_lesson_with_no_heart_rows_is_not_pending_on_the_summary(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({
+        "signal_daily_rollup": [], "sessions": _OPEN, "heart_signals": []}))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": STUDENT})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    monkeypatch.setattr(main, "_reportable_channels", lambda *_a: main._channels_from_consent(
+        {"retrieved": True, "eeg_enabled": True, "headband_optical_enabled": True}))
+    monkeypatch.setattr(main, "_signal_summary", lambda *_a, **_k: {**main._EMPTY_SUMMARY})
+    monkeypatch.setattr(main, "_any_rows_since", lambda *_a: False)
+
+    arousal = main.student_signal_summary(STUDENT, None)["usual"]["body_arousal"]
+
+    assert (arousal["state"], arousal["pending"]) == ("none", False)
+
+
+def _parent_child(monkeypatch, any_rows):
     monkeypatch.setattr(main, "supabase", _FakeSupabase({
         "parent_child_links": [{"parent_id": "p", "child_id": "a", "created_at": "2026-06-01"}],
-        "signal_daily_rollup": [], "sessions": [{**_OPEN[0], "user_id": "a"}]}))
+        "signal_daily_rollup": [], "sessions": [{**_OPEN[0], "user_id": "a"}],
+        "heart_signals": [{"user_id": "a", "ts": NOW_UTC.isoformat(), "trusted": False}]}))
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "p"})
     channels = main._channels_from_consent(
         {"retrieved": True, "eeg_enabled": True, "headband_optical_enabled": True})
@@ -436,11 +454,19 @@ def test_the_parent_dashboard_sees_an_open_lesson_too(monkeypatch):
                  "_topic_performance_many"):
         monkeypatch.setattr(main, name, lambda ids: {})
     monkeypatch.setattr(main, "_recent_sessions_many", lambda ids, n: {})
-    monkeypatch.setattr(main, "_any_rows_since", lambda *_a: True)
+    monkeypatch.setattr(main, "_any_rows_since", any_rows)
+    return main.my_children(None)[0]
 
-    child = main.my_children(None)[0]
 
+def test_the_parent_dashboard_sees_an_open_lesson_too(monkeypatch):
+    child = _parent_child(monkeypatch, lambda *_a: True)
     assert child["signal_summary"]["usual"]["body_arousal"]["state"] == "pending"
+
+
+def test_the_parent_dashboard_does_not_ask_each_child_for_rows(monkeypatch):
+    asked = []
+    _parent_child(monkeypatch, lambda *a: asked.append(a) or True)
+    assert asked == []
 
 
 def test_the_weekly_report_compares_heart_while_todays_lesson_is_open(monkeypatch):

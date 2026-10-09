@@ -2140,10 +2140,11 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
 
 def _weekly_body_arousal(include_heart: bool, rollup_ok: bool, rollup_by: dict,
                          heart_days: dict, heart_sources: list, heart_ok: bool = True,
-                         open_lesson: bool | None = False) -> dict:
+                         lesson: tuple = (False, None)) -> dict:
     """The window's body arousal, pooled from the heart rollup rows, with a `state`.
 
-    `heart_ok` is the raw heart read; `open_lesson` is `_open_lessons` for this student.
+    `heart_ok` is the raw heart read; `lesson` is `(pending, first school day)` of a
+    running lesson with heart rows, as `_running_heart_lessons` gives it.
     """
     rolled = [r for (_day, channel), r in rollup_by.items() if channel == "heart"]
     counts = (0, 0, 0, 0)
@@ -2151,21 +2152,20 @@ def _weekly_body_arousal(include_heart: bool, rollup_ok: bool, rollup_by: dict,
         counts = _add_counts(counts, _arousal_counts(r.get("stress_counts")))
     sensors = _sensor_class(heart_sources) | _sensor_class(
         s for r in rolled for s in (r.get("heart_sources") or ()))
-    unrolled = any(_unrolled_heart(agg, (day, "heart") in rollup_by)
-                   for day, agg in heart_days.items())
-    return _body_arousal(counts, sensors, bool(open_lesson), include_heart, rollup_ok,
-                         _lessons_checked(heart_ok, open_lesson, unrolled))
+    uncounted = any(_unaccounted_heart(agg, (day, "heart") in rollup_by, day, lesson)
+                    for day, agg in heart_days.items())
+    return _body_arousal(counts, sensors, bool(lesson[0]), include_heart, rollup_ok,
+                         heart_ok and lesson[0] is not None and not uncounted)
 
 
-def _lessons_checked(heart_ok: bool, open_lesson: bool | None, unrolled: bool) -> bool:
-    """Whether every heart row is either counted or in an open lesson we know of.
+def _unaccounted_heart(agg: dict | None, rolled: bool, day: str, lesson: tuple) -> bool:
+    """Heart rows on `day` that neither the rollup nor the running lesson accounts for.
 
-    Unrolled rows with no lesson open were never summarised (a failed write, a missed
-    sweep): not an open lesson, and not an absence either.
+    Those were never summarised (a failed write): not a lesson in progress, not an absence.
     """
-    if not heart_ok or open_lesson is None:
-        return False
-    return open_lesson or not unrolled
+    pending, first_day = lesson
+    in_lesson = bool(pending) and first_day is not None and day >= first_day
+    return _unrolled_heart(agg, rolled) and not in_lesson
 
 
 def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = True,
@@ -2201,8 +2201,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
 
     cog_days, latest_cognitive, cog_ok = _signal_days("cognitive")
     # Whether a lesson is still open, so its uncounted heart rows read `pending`; None if unread.
-    open_ids = _open_lessons([student_id]) if include_heart else set()
-    open_lesson = None if open_ids is None else str(student_id) in open_ids
+    pending, started = _running_heart_lessons([student_id])[str(student_id)] \
+        if include_heart else (False, None)
+    lesson = (pending, _school_day(started, tz) if started else None)
     # An opted-out channel is ok=True: nothing failed, nothing was asked for.
     face_days, latest_face, face_ok = _signal_days("emotion") if include_emotion \
         else ({}, None, True)
@@ -2315,12 +2316,15 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         # Only the rollup carries heart categories, so this reads it even beside raw rows.
         heart_rolled = (rollup_by.get((day, "heart")) if include_heart else None) or {}
         raw_sensors = _sensor_class((heart_raw or {}).get("sources"))
-        day_unrolled = _unrolled_heart(heart_raw, bool(heart_rolled))
+        # This day's rows belong to the running lesson only from the day it started.
+        day_pending = bool(lesson[0]) and lesson[1] is not None and day >= lesson[1] \
+            and bool(int((heart_raw or {}).get("rows") or 0))
         day_arousal = _body_arousal(
             _arousal_counts(heart_rolled.get("stress_counts")),
             _sensor_class(heart_rolled.get("heart_sources")) | raw_sensors,
-            bool(open_lesson) and day_unrolled, include_heart, rollup_ok,
-            _lessons_checked(heart_ok, open_lesson, day_unrolled))
+            day_pending, include_heart, rollup_ok,
+            heart_ok and lesson[0] is not None
+            and not _unaccounted_heart(heart_raw, bool(heart_rolled), day, lesson))
 
         daily.append({
             "date": day,
@@ -2416,7 +2420,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     heart_sources = sorted({s for agg in heart_days.values() for s in agg.get("sources") or ()
                             if isinstance(s, str)} | rolled_sources)
     body_arousal = _weekly_body_arousal(include_heart, rollup_ok, rollup_by, heart_days,
-                                        heart_sources, heart_ok, open_lesson)
+                                        heart_sources, heart_ok, lesson)
 
     # Seeded from the rollup's full distribution, then the raw days on top; trusted only.
     emotion_counts: dict[str, int] = dict(rolled_emotions)
@@ -2786,10 +2790,11 @@ def _usual_from_rows(rows: list, retrieved: bool, period_start: date, current: d
     else:
         # Heart rows of any quality, poor contact included; None if that could not be read.
         heart_rows = current.get("heart_rows", bool((current.get("heart_rate_bpm") or (None, 0))[1]))
-        open_lesson = current.get("open_lesson", False)
-        pending = bool(open_lesson)
-        raw_ok = heart_rows is not None and \
-            _lessons_checked(True, open_lesson, bool(heart_rows) and not rolled_heart)
+        lesson = current.get("lesson_pending", False)
+        pending = bool(lesson)
+        # Rows nothing rolled up and no running lesson explains were never summarised.
+        raw_ok = heart_rows is not None and lesson is not None \
+            and not (heart_rows and not rolled_heart and not lesson)
     raw_ok = raw_ok and "heart" not in unread
     arousal = _body_arousal(counts, sensors, bool(pending), include_heart, retrieved, raw_ok)
     current = {**current, "body_arousal": (arousal["high_share"], arousal["classified_windows"])}
@@ -2834,41 +2839,77 @@ def _usual_from_rows(rows: list, retrieved: bool, period_start: date, current: d
             "measures": measures}
 
 
-def _open_lessons(student_ids) -> set[str] | None:
-    """The students with a lesson still open (`ended_at` null); None if that could not be read.
+def _open_lessons(student_ids) -> dict[str, str] | None:
+    """`{student: started_at}` of the earliest lesson still running; None if unread.
 
-    The rollup is written when a lesson closes, so this is what an uncounted lesson is.
+    Running: `ended_at` null and started inside `_SESSION_ABANDONED_AFTER_SEC`. An older open
+    session is one the sweep has not closed yet (a sleeping laptop), not a lesson in progress.
     """
     ids = [str(s) for s in student_ids]
     if not ids:
-        return set()
+        return {}
+    cutoff = (_utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)).isoformat()
     try:
-        rows = supabase.table("sessions").select("user_id").in_("user_id", ids) \
-            .is_("ended_at", "null").execute().data or []
+        rows = supabase.table("sessions").select("user_id, started_at").in_("user_id", ids) \
+            .is_("ended_at", "null").gte("started_at", cutoff).execute().data or []
     except Exception as e:                                     # noqa: BLE001
         print(f"[open_lessons] {len(ids)} students: {e}")
         return None
-    return {str(r.get("user_id")) for r in rows}
+    def when(stamp):
+        return _parse_ts(stamp) or _utc_now()
+    out: dict[str, str] = {}
+    for r in rows:
+        sid, start = str(r.get("user_id")), str(r.get("started_at") or "")
+        if start and (sid not in out or when(start) < when(out[sid])):
+            out[sid] = start
+    return out
+
+
+def _lesson_heart(open_starts: dict[str, str]) -> dict[str, bool | None]:
+    """Whether each running lesson has any heart row yet (poor contact included); None if unread.
+
+    One `limit(1)` read per running lesson, so it scales with lessons open, not students.
+    """
+    out: dict[str, bool | None] = {}
+    for sid, start in open_starts.items():
+        try:
+            out[sid] = bool(supabase.table("heart_signals").select("ts").eq("user_id", sid)
+                            .gte("ts", start).limit(1).execute().data)
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[lesson_heart] {sid[:8]}: {e}")
+            out[sid] = None
+    return out
+
+
+def _running_heart_lessons(student_ids) -> dict[str, tuple[bool | None, str | None]]:
+    """Per student, `(pending, started_at)`: a running lesson with heart rows. None if unread."""
+    starts = _open_lessons(student_ids)
+    if starts is None:
+        return {str(s): (None, None) for s in student_ids}
+    heart = _lesson_heart(starts)
+    return {str(s): (heart.get(str(s)), starts[str(s)]) if str(s) in starts else (False, None)
+            for s in student_ids}
 
 
 def _lesson_context(summaries: dict[str, dict], heart: dict[str, bool], days: int,
-                    any_rows: dict[str, bool | None] | None = None) -> dict[str, dict]:
-    """Per student, `open_lesson` and `heart_rows` for `_usual_from_rows`; None where unread.
+                    any_rows: dict[str, bool | None] | None = None,
+                    ask_rows: bool = True) -> dict[str, dict]:
+    """Per student, `lesson_pending` and `heart_rows` for `_usual_from_rows`; None where unread.
 
-    A summary counts usable heart samples only, so with none this asks whether any row
-    (poor contact included) landed. `any_rows` passes in answers a caller already has.
+    `lesson_pending`: a running lesson with heart rows. A summary counts usable samples only,
+    so with none `ask_rows` asks whether any row landed; `any_rows` passes answers already had.
     """
-    open_ids = _open_lessons([s for s in summaries if heart.get(s)])
+    running = _running_heart_lessons([s for s in summaries if heart.get(s)])
     out = {}
     for sid, summary in summaries.items():
         if not heart.get(sid):
-            out[sid] = {"open_lesson": False, "heart_rows": False}
+            out[sid] = {"lesson_pending": False, "heart_rows": False}
             continue
-        rows = bool(summary.get("heart_samples")) or (
+        pending = running[sid][0]
+        rows = bool(summary.get("heart_samples")) or bool(pending) or (
             (any_rows or {}).get(sid) if any_rows and sid in any_rows
-            else _any_rows_since("heart_signals", sid, days))
-        out[sid] = {"open_lesson": None if open_ids is None else sid in open_ids,
-                    "heart_rows": rows}
+            else _any_rows_since("heart_signals", sid, days) if ask_rows else False)
+        out[sid] = {"lesson_pending": pending, "heart_rows": rows}
     return out
 
 
@@ -8751,9 +8792,10 @@ def my_children(request: Request, include_face: bool = True):
     usual_start, usual_end = _report_period(_PARENT_SUMMARY_DAYS)
     child_summaries = {str(cid): summaries.get(str(cid)) or {"retrieved": summaries_retrieved}
                        for cid in child_ids}
+    # No per-child `any_rows` read: only running lessons are checked, so reads scale with those.
     context = _lesson_context(child_summaries,
                               {str(cid): ch.heart for cid, ch in channels_by_child.items()},
-                              _PARENT_SUMMARY_DAYS)
+                              _PARENT_SUMMARY_DAYS, ask_rows=False)
     usual = _personal_baselines_many(
         {cid: {**_usual_current(s), **context[cid]} for cid, s in child_summaries.items()},
         {str(cid): ch.heart for cid, ch in channels_by_child.items()},

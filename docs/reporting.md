@@ -78,16 +78,19 @@ rows. `_body_arousal` gives every surface (week, day, report, usual) the same `s
 `pending`, `unusable` (headband rows, none classified), `camera_only` (rPPG gets no category), `none`, `unknown`,
 `not_requested`, `not_retrieved` — with a share of None, never 0, for every state but `measured`.
 
-**`pending` means a lesson is open, read from `sessions.ended_at IS NULL` (`_open_lessons`), never inferred from a
-day with no rollup row.** That inference broke three ways: a finished lesson earlier in the period hid one running
-today, poor-contact rows (the raw aggregate names trusted sources only, so they name no sensor) read as nothing, and a
-failed rollup write read as pending for days. **`unknown` is "could not check", never an absence**: the raw heart read
-or the sessions read failed, `any_rows` could not be read, heart rows exist with no lesson open and no rollup (never
-summarised), or it is the trend's current week (the trend sees finished lessons only). The summary surfaces ask
-`any_rows` when they count no usable heart samples, so poor-contact rows still count (`_lesson_context`). `pending`
-beside `measured` is `true` when a lesson is open and `null` when that could not be checked; `few_readings` flags
-fewer than `_AROUSAL_MIN_WINDOWS` classified windows. The pending sentence names no sensor, since an open lesson's
-rows may be camera rows.
+**`pending` means a running lesson has heart rows the rollup has not counted yet** (`_running_heart_lessons`):
+`sessions.ended_at IS NULL`, started inside `_SESSION_ABANDONED_AFTER_SEC`, with at least one heart row of any quality
+since it started. It is never inferred from a day lacking a rollup row, and a lesson without heart rows is not pending.
+On the weekly report a day's rows belong to the running lesson only from the school day it started.
+
+**`unknown` is "could not check", never an absence**: the raw heart read or the sessions read failed, a lesson's heart
+rows or `any_rows` could not be read, heart rows exist that neither the rollup nor the running lesson accounts for
+(never summarised), or it is the trend's current week (the trend sees finished lessons only). The raw aggregate names
+trusted sources only, so poor-contact rows name no sensor; `/signal-summary` and the chart summary ask `any_rows` when
+they count no usable heart sample. The parent dashboard does not, so its reads scale with running lessons, not
+children. `pending` beside `measured` is `true` for a running lesson with heart rows and `null` when that could not be
+checked; `few_readings` flags fewer than `_AROUSAL_MIN_WINDOWS` classified windows. The pending sentence names no
+sensor, since a running lesson's rows may be camera rows.
 
 **A declined channel is filtered out of the query, not out of the result**: one `.in_("channel", …)` narrows the
 single query, so a declined channel is never read and then dropped in Python. Assert on the **filter**, not

@@ -117,6 +117,7 @@ Three read-only RPCs (`20261011000000`), each called inline (so `_missing_rpc` s
 
 **`/api/admin/adaptive?days=`** (`admin_adaptive_reasons`, `20261012000000`) gives, per school day, adaptive questions eased, raised and held, counts by `why` and by fused label, and increases withheld by the facial veto.
 - Aggregates only, with the 5-student floor; `days` is clamped to 60.
+- `write_failures` counts decisions that could not be stored over the same school days, from `ops_counters`; `null` means the count was unread, never zero. The panel says the figures are short by that many.
 - A decision whose `opinions` include `headband_optical` or `camera` is left out while the student has that consent off now. EEG is always read.
 - The rows themselves are signal-derived (CLAUDE.md, *Erasure* and expiry): service-role only, expired by `expire_adaptive_decisions` at 03:55, and deleted for a student by any erasure.
 

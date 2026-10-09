@@ -34,14 +34,29 @@ describe('adaptive decisions', () => {
   it('says a fortnight with no adaptive question was read', async () => {
     overrideApi(ADAPTIVE_PATH, () => buildAdaptive({ decisions: [] }))
     render(<AdaptiveDecisions />)
-    expect(await screen.findByText('No adaptive question served in the last 14 days.')).toBeInTheDocument()
+    expect(await screen.findByText('No adaptive decision recorded in the last 14 days.')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('never shows an unread answer as a quiet fortnight', async () => {
     overrideApi(ADAPTIVE_PATH, () => buildAdaptive({ retrieved: false, decisions: [] }))
     render(<AdaptiveDecisions />)
     expect(await screen.findByText(/Adaptive decisions could not be read/)).toBeInTheDocument()
-    expect(screen.queryByText(/No adaptive question/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/No adaptive decision/)).not.toBeInTheDocument()
+  })
+
+  it('says how many decisions failed to store, even when none were', async () => {
+    overrideApi(ADAPTIVE_PATH, () => buildAdaptive({ decisions: [], write_failures: 12 }))
+    render(<AdaptiveDecisions />)
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '12 decisions in the last 14 days could not be stored, so the figures here are short by that many.')
+  })
+
+  it('says an unread failure count is unread, not zero', async () => {
+    overrideApi(ADAPTIVE_PATH, () => buildAdaptive({ write_failures: null }))
+    render(<AdaptiveDecisions />)
+    expect(await screen.findByText('Failed decision writes could not be read.')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('names a refusal as one', async () => {

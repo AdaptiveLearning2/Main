@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS "public"."adaptive_decisions" (
     -- Must equal LLM_topic_decider.BIAS_WHYS.
     "why"        text        NOT NULL CHECK ("why" IN ('stressed', 'manual', 'facial_veto', 'recent_misses',
                                                        'focused', 'correct_run', 'nothing_to_act_on')),
-    -- The fused label, a fixed vocabulary (signal_fusion.FusedState); never a reading.
+    -- Must equal signal_fusion.FUSED_LABELS; never a reading.
     "label"      text        NOT NULL CHECK ("label" IN ('focused', 'stressed', 'neutral',
                                                          'insufficient_signal', 'no_eeg')),
     -- Consent channels whose sensor had an opinion; drives the withdrawn-channel exclusion.

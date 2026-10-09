@@ -1,5 +1,6 @@
 """Why each served adaptive question was eased, raised or held: the reason, its storage and the admin read."""
 
+import asyncio
 import os
 import pathlib
 import re
@@ -10,6 +11,7 @@ os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
 import pytest  # noqa: E402
+from fastapi import BackgroundTasks  # noqa: E402
 
 import LLM_topic_decider as td  # noqa: E402
 import main  # noqa: E402
@@ -43,6 +45,21 @@ def test_the_reasons_the_code_writes_are_the_ones_the_column_allows():
     sql = MIGRATION.read_text(encoding="utf-8")
     why_check = sql.split('"why"', 1)[1].split("),", 1)[0]
     assert sorted(re.findall(r"'(\w+)'", why_check)) == sorted(td.BIAS_WHYS)
+
+
+def test_the_labels_fusion_returns_are_the_ones_the_column_allows():
+    sql = MIGRATION.read_text(encoding="utf-8")
+    label_check = sql.split('"label"', 1)[1].split("),", 1)[0]
+    assert sorted(re.findall(r"'(\w+)'", label_check)) == sorted(sf.FUSED_LABELS)
+
+
+def test_fusion_returns_every_label_it_declares_and_no_other():
+    eegs = [sf.ChannelState(None, "x", cause="low_confidence"), sf.ChannelState(None, "x", cause="no_samples"),
+            sf.ChannelState("focused", "x"), sf.ChannelState("stressed", "x"), sf.ChannelState("neutral", "x")]
+    hearts = [sf.ChannelState(), sf.ChannelState("stressed", "x", "rppg"), sf.ChannelState("calm", "x", "rppg")]
+    faces = [sf.ChannelState(), sf.ChannelState("negative", "x"), sf.ChannelState("neutral", "x")]
+    seen = {sf.fuse(e, h, f).label for e in eegs for h in hearts for f in faces}
+    assert seen == set(sf.FUSED_LABELS)
 
 
 # ─── which consent channels had an opinion ───────────────────────────────
@@ -110,7 +127,12 @@ def _serve(monkeypatch, session_id, decision=DECISION, db=None):
                 **({"adaptive_decision": dict(decision)} if decision else {})}
     monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
                         lambda *_a, **_k: dict(question))
-    out = main.generate_question(request=None, grade="5th Grade", class_id=None, bias=0, session_id=session_id)
+    tasks = BackgroundTasks()
+    out = main.generate_question(request=None, background_tasks=tasks, grade="5th Grade", class_id=None, bias=0,
+                                 session_id=session_id)
+    # Nothing is written before the response; the task runs after it.
+    assert not [r for r in db.rows if r[0] == "adaptive_decisions"]
+    asyncio.run(tasks())
     return out, db
 
 
@@ -130,10 +152,20 @@ def test_a_question_with_no_session_stores_nothing(monkeypatch):
     assert not [r for r in db.rows if r[0] == "adaptive_decisions"]
 
 
-def test_a_failed_write_never_costs_the_question(monkeypatch, capsys):
+def test_a_failed_write_never_costs_the_question_and_is_counted(monkeypatch, capsys):
+    bumps = []
+    monkeypatch.setattr(main.ops_metrics, "bump", lambda kind, key, n=1: bumps.append((kind, key)))
     out, _db = _serve(monkeypatch, "sess-1", db=_Inserts(fail=True))
     assert out["question_text"] == "2+2"
     assert "[adaptive] could not record" in capsys.readouterr().out
+    assert ("adaptive_decision", "write_failed") in bumps
+
+
+def test_a_good_write_counts_no_failure(monkeypatch):
+    bumps = []
+    monkeypatch.setattr(main.ops_metrics, "bump", lambda kind, key, n=1: bumps.append((kind, key)))
+    _serve(monkeypatch, "sess-1")
+    assert ("adaptive_decision", "write_failed") not in bumps
 
 
 # ─── the admin read ──────────────────────────────────────────────────────
@@ -158,6 +190,14 @@ def _admin(monkeypatch):
     monkeypatch.setattr(main, "_require_admin", lambda _r: {"id": "admin"})
     monkeypatch.setattr(main, "_school_timezone", lambda: ZoneInfo("America/Chicago"))
     monkeypatch.setattr(main, "_utc_now", lambda: datetime(2026, 10, 8, 20, 0, tzinfo=timezone.utc))
+    reads = []
+
+    def read(_client, kinds, hours=None, since=None):
+        reads.append((kinds, since))
+        return reads_answer[0]
+    reads_answer = [{"retrieved": True, "complete": True, "dropped": 0, "rows": []}]
+    monkeypatch.setattr(main.ops_metrics, "read", read)
+    return reads, reads_answer
 
 
 DAY = {"day": "2026-10-08", "withheld": False, "students": 7, "decisions": 60, "eased": 6, "raised": 14,
@@ -181,6 +221,34 @@ def test_an_unread_answer_is_not_a_quiet_fortnight(monkeypatch, _admin):
     monkeypatch.setattr(main, "supabase", _Rpc(RuntimeError("down")))
     got = main.admin_adaptive(None)
     assert got["retrieved"] is False and got["decisions"] == []
+
+
+def test_failed_writes_are_counted_over_the_same_school_days(monkeypatch, _admin):
+    reads, answer = _admin
+    answer[0] = {"retrieved": True, "complete": True, "dropped": 0, "rows": [
+        {"hour": "2026-10-07T15:00:00+00:00", "kind": "adaptive_decision", "key": "write_failed", "n": 3},
+        {"hour": "2026-10-08T15:00:00+00:00", "kind": "adaptive_decision", "key": "write_failed", "n": 2}]}
+    monkeypatch.setattr(main, "supabase", _Rpc([]))
+
+    got = main.admin_adaptive(None, days=3)
+
+    assert got["write_failures"] == 5
+    [(kinds, since)] = reads
+    assert kinds == ["adaptive_decision"]
+    # Chicago midnight on the first day, not a UTC one.
+    assert since == datetime(2026, 10, 6, 5, 0, tzinfo=timezone.utc)
+
+
+def test_an_unread_failure_count_is_unknown_not_none_failed(monkeypatch, _admin):
+    _reads, answer = _admin
+    answer[0] = {"retrieved": False, "complete": True, "dropped": 0, "rows": []}
+    monkeypatch.setattr(main, "supabase", _Rpc([]))
+    assert main.admin_adaptive(None)["write_failures"] is None
+
+
+def test_no_failure_is_zero(monkeypatch, _admin):
+    monkeypatch.setattr(main, "supabase", _Rpc([]))
+    assert main.admin_adaptive(None)["write_failures"] == 0
 
 
 @pytest.mark.parametrize("days,expected", [(-1, 1), (0, 1), (5, 5), (10**6, 60)])

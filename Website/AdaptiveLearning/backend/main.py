@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
+from fastapi import FastAPI, Request, HTTPException, Path, Body, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.routing import Match
@@ -2927,7 +2927,7 @@ def _record_adaptive_decision(user_id: str, session_id: str, question: dict, dec
     """Store why this served question's difficulty was eased, raised or held. Never raises.
 
     Signal-derived, so it expires with the per-sample rows and goes with any erasure
-    (20261012000000). A failed write costs the record, never the question.
+    (20261012000000). A failed write costs the record, never the question, and is counted for the admin panel.
     """
     try:
         supabase.table("adaptive_decisions").insert({
@@ -2938,12 +2938,14 @@ def _record_adaptive_decision(user_id: str, session_id: str, question: dict, dec
             "increase_withheld": bool(decision.get("increase_withheld")),
         }, returning=ReturnMethod.minimal).execute()
     except Exception as e:                                     # noqa: BLE001
+        ops_metrics.bump("adaptive_decision", "write_failed")
         print(f"[adaptive] could not record the decision for {session_id}: {type(e).__name__}")
 
 
 @app.get("/api/generate-question")
 def generate_question(
     request:    Request,
+    background_tasks: BackgroundTasks,
     grade:      str | None = Query(None),
     class_id:   str | None = Query(None),
     bias:       int        = Query(0),
@@ -3039,10 +3041,11 @@ def generate_question(
     # A queued question's `eeg_label` was read when it was made (`signal_read_at`), not now.
     question["served_from"]     = "inline" if inline else "queue"
     ops_metrics.bump("question", f"served:{question['served_from']}")
-    # Stored, not sent: the page has no use for it. Written only for a question actually served.
+    # Stored, not sent: the page has no use for it. Written only for a question actually served,
+    # after the response, so the student never waits on the insert.
     decision = question.pop("adaptive_decision", None)
     if session_id and decision:
-        _record_adaptive_decision(user_id, session_id, question, decision)
+        background_tasks.add_task(_record_adaptive_decision, user_id, session_id, dict(question), decision)
 
     _ensure_queue(user_id, effective_grade, manual_bias, session_id)
 
@@ -8881,6 +8884,10 @@ def admin_adaptive(request: Request, days: int = 14):
         if not _missing_rpc(e, "admin_adaptive_reasons", "20261012000000",
                             "the admin adaptive-decisions panel reads nothing until then"):
             print(f"[admin:adaptive] {e}")
+    # Counted beside the rows, or a write path that keeps failing reads as a quiet fortnight.
+    failed = ops_metrics.read(supabase, ["adaptive_decision"],
+                              since=datetime(first_day.year, first_day.month, first_day.day,
+                                             tzinfo=_school_timezone()))
     return {
         "retrieved": got is not None,
         "days": days,
@@ -8888,6 +8895,8 @@ def admin_adaptive(request: Request, days: int = 14):
         "timezone": _school_timezone_name(),
         "min_students": _COHORT_MIN_STUDENTS,
         "decisions": got or [],
+        "write_failures": (sum(r["n"] for r in failed["rows"] if r["key"] == "write_failed")
+                           if failed["retrieved"] else None),
     }
 
 

@@ -41,10 +41,30 @@ function Day({ d, withheld }) {
   )
 }
 
+// A write that keeps failing would otherwise read as a quiet fortnight.
+function WriteFailures({ n, days }) {
+  if (n == null) return <p className="text-xs text-gray-600 dark:text-gray-400">Failed decision writes could not be read.</p>
+  if (n === 0) return null
+  return (
+    <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">
+      {n} decision{n === 1 ? '' : 's'} in the last {days} days could not be stored, so the figures here are short by that many.
+    </p>
+  )
+}
+
 function Decisions({ data }) {
+  return (
+    <div className="space-y-2">
+      <DecisionDays data={data} />
+      <WriteFailures n={data.write_failures} days={data.days} />
+    </div>
+  )
+}
+
+function DecisionDays({ data }) {
   if (!data.retrieved) return <Unread what="Adaptive decisions" />
   if (data.decisions.length === 0) {
-    return <p className="text-sm text-gray-600 dark:text-gray-400">No adaptive question served in the last {data.days} days.</p>
+    return <p className="text-sm text-gray-600 dark:text-gray-400">No adaptive decision recorded in the last {data.days} days.</p>
   }
   const withheld = `fewer than ${data.min_students} students`
   return (

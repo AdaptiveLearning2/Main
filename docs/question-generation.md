@@ -69,6 +69,8 @@ Easier/Harder still wins — and `test_decide_bias.py` brute-forces it.
 **Each served adaptive question stores which branch chose its bias.** `_decide_bias_why` is the rule: it returns `(bias, why)`, with `why` from `BIAS_WHYS`. `_decide_bias` is its first element.
 - The decider hands the route an `adaptive_decision`: bias, why, fused label, `FusedState.opinions` (the consent channels that had an opinion) and the veto.
 - The route pops it from the response and writes one `adaptive_decisions` row per question served in a session, so a prefetch that is never served writes nothing.
+- The write is a background task, run after the response is sent, so the student never waits on it. A failed write is logged and counted (`ops_counters`, `adaptive_decision`/`write_failed`).
+- `label` is `signal_fusion.FUSED_LABELS`, and the column's CHECK must equal it; a test holds both that and that `fuse` returns every label in it and no other.
 - No channel `reason` is stored, because those strings carry readings and emotion names. The admin read is in `docs/admin-and-security.md`.
 
 **`start_session` prewarms at the student's bias, not 0**, or the setting does nothing for a session's opening. The

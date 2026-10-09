@@ -18,6 +18,7 @@ export function buildAdaptive(over = {}) {
     timezone: 'America/Chicago',
     min_students: 5,
     decisions: [{ day: '2026-10-07', withheld: true }, adaptiveDay()],
+    write_failures: 0,
     ...over,
   }
 }

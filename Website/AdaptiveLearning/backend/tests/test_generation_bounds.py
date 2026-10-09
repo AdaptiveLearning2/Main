@@ -6,7 +6,7 @@ os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
 import pytest  # noqa: E402
-from fastapi import HTTPException  # noqa: E402
+from fastapi import BackgroundTasks, HTTPException  # noqa: E402
 
 import llm_client  # noqa: E402
 import main  # noqa: E402
@@ -202,7 +202,7 @@ def _generate(monkeypatch, *, decider, session_id=None):
                         "LLM_single_prompt_topic_and_difficulty_decider", decider)
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
     # Called directly, unfilled Query defaults arrive as truthy Query objects.
-    return main.generate_question(request=None, grade="5th Grade",
+    return main.generate_question(request=None, background_tasks=BackgroundTasks(), grade="5th Grade",
                                   class_id=None, bias=0, session_id=session_id)
 
 
@@ -230,7 +230,7 @@ def _grade_generated(monkeypatch, *, sent=None, saved=None, class_id=None, class
     monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
                         lambda *a, **_k: seen.append(a) or {"question_text": "2+2"})
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
-    main.generate_question(request=None, grade=sent, class_id=class_id, bias=0, session_id=None)
+    main.generate_question(request=None, background_tasks=BackgroundTasks(), grade=sent, class_id=class_id, bias=0, session_id=None)
     return seen[0][1]
 
 
@@ -254,10 +254,10 @@ def test_the_saved_grade_is_read_alone_and_only_when_none_is_sent(monkeypatch):
     monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
                         lambda *a, **_k: {"question_text": "2+2"})
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "kid"})
-    main.generate_question(request=None, grade=None, class_id=None, bias=0, session_id=None)
+    main.generate_question(request=None, background_tasks=BackgroundTasks(), grade=None, class_id=None, bias=0, session_id=None)
     reads = [q for name, q in zip(fake.table_calls, fake.queries) if name == "profiles"]
     assert len(reads) == 1 and reads[0]._cols == ["grade_level"]
-    main.generate_question(request=None, grade="3rd Grade", class_id=None, bias=0, session_id=None)
+    main.generate_question(request=None, background_tasks=BackgroundTasks(), grade="3rd Grade", class_id=None, bias=0, session_id=None)
     assert fake.table_calls.count("profiles") == 1
 
 
@@ -378,7 +378,7 @@ def _queued_then_inline(monkeypatch, saved, prepared):
     monkeypatch.setattr(main.LLM_topic_decider, "LLM_single_prompt_topic_and_difficulty_decider",
                         lambda _uid, grade, _sid, bias, **_k: {"question_text": f"inline for {grade} {bias}"})
     return lambda grade=None, bias=0, session=None: main.generate_question(
-        request=None, grade=grade, class_id=None, bias=bias, session_id=session)["question_text"]
+        request=None, background_tasks=BackgroundTasks(), grade=grade, class_id=None, bias=bias, session_id=session)["question_text"]
 
 
 def test_a_question_prepared_for_another_grade_is_never_served(monkeypatch):
@@ -451,7 +451,7 @@ def test_switching_through_many_grades_holds_one_batch_and_keeps_the_busy_queue(
     monkeypatch.setattr(main, "_prefetch_pool",
                         lambda: type("P", (), {"submit": lambda _s, fn, *a: submitted.append((fn, a))})())
     for n in range(2, 8):
-        main.generate_question(request=None, grade=f"Grade {n}", class_id=None, bias=0, session_id="s1")
+        main.generate_question(request=None, background_tasks=BackgroundTasks(), grade=f"Grade {n}", class_id=None, bias=0, session_id="s1")
     assert len(submitted) == main.QUEUE_SIZE
     busy = main._prefetch_key("Grade 2", 0, "s1")
     assert busy in main._prefetch_cache["kid"]
@@ -620,7 +620,7 @@ def test_a_decider_that_returns_nothing_is_logged(monkeypatch, capsys):
 def test_a_served_question_says_whether_it_was_queued(monkeypatch):
     """A queued question's steering label was read when it was made, not when it is served."""
     _queued_then_inline(monkeypatch, "7th Grade", [("7th Grade", 0)])
-    first = main.generate_question(request=None, grade=None, class_id=None, bias=0, session_id=None)
+    first = main.generate_question(request=None, background_tasks=BackgroundTasks(), grade=None, class_id=None, bias=0, session_id=None)
     assert (first["question_text"], first["served_from"]) == ("made for 7th Grade 0", "queue")
-    second = main.generate_question(request=None, grade="5th Grade", class_id=None, bias=0, session_id=None)
+    second = main.generate_question(request=None, background_tasks=BackgroundTasks(), grade="5th Grade", class_id=None, bias=0, session_id=None)
     assert (second["question_text"], second["served_from"]) == ("inline for 5th Grade 0", "inline")

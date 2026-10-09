@@ -26,6 +26,9 @@ NEGATIVE_EMOTIONS = frozenset({"sad", "fear", "angry", "disgust", "contempt"})
 # `trusted` is still checked: the headband categorises trusted rows only, but a row can come from elsewhere.
 ELEVATED_STRESS = frozenset({"high"})
 
+# Every label `fuse` can return; must equal adaptive_decisions' `label` CHECK (test_adaptive_decisions).
+FUSED_LABELS = ("focused", "stressed", "neutral", "insufficient_signal", "no_eeg")
+
 
 @dataclass(frozen=True)
 class ChannelState:

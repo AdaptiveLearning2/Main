@@ -457,3 +457,273 @@ def test_eeg_held_only_in_rolled_up_days_is_not_called_absent(monkeypatch, at_th
     assert report["summary"].startswith(
         "EEG readings were recorded this week, but none gave a usable")
     assert "No EEG" not in report["summary"]
+
+
+# ── body arousal: the rollup's heart categories, with a state for every absence ──
+
+def _heart_rollup(day, counts, sources=("muse_optics",)):
+    """As `rollup_signal_day` writes it: `stress_counts` is `jsonb_object_agg`, null with none."""
+    return _rollup(day, "heart", avg_heart_rate_bpm=80.0, sample_count=50,
+                   trusted_sample_count=40, heart_sources=list(sources), stress_counts=counts)
+
+
+def _heart_raw(source):
+    return [{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "source": source,
+             "heart_rate_bpm": 75.0, "trusted": True}]
+
+
+def _arousal(monkeypatch, tables, **kw):
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(tables, **kw))
+    return main._weekly_signal_report(STUDENT)
+
+
+def test_body_arousal_pools_the_windows_days_and_leaves_calibration_out(monkeypatch,
+                                                                       at_three_am_utc):
+    report = _arousal(monkeypatch, _with_rollup(rollup=[
+        _heart_rollup("2026-06-09", {"calibrating": 6, "high": 1}),
+        _heart_rollup("2026-06-10", {"low": 2, "moderate": 1}),
+    ]))
+
+    assert report["body_arousal"] == {"high_share": 0.25, "moderate_share": 0.25,
+                                      "classified_windows": 4, "calibrating_windows": 6,
+                                      "state": "measured", "pending": False,
+                                      "few_readings": True}
+    assert _day(report, "2026-06-09")["body_arousal"] == 1.0
+    assert _day(report, "2026-06-10")["body_arousal"] == 0.0, "a measured 0% is a reading"
+    assert _day(report, "2026-06-11")["body_arousal"] is None, "no rollup that day: a gap"
+
+
+def test_a_day_with_raw_rows_still_takes_its_categories_from_the_rollup(monkeypatch,
+                                                                        at_three_am_utc):
+    """The raw aggregate has no categories; dropping the rollup beside raw rows loses them."""
+    tables = _with_rollup(rollup=[_heart_rollup("2026-06-11", {"high": 3, "low": 1})])
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    report = _arousal(monkeypatch, tables)
+
+    assert _day(report, "2026-06-11")["body_arousal"] == 0.75
+    assert report["body_arousal"]["state"] == "measured"
+
+
+def _open_session():
+    """A lesson still running: the rollup is written only when `ended_at` is set."""
+    return {"id": "open-1", "user_id": STUDENT, "started_at": NOW_UTC.isoformat(),
+            "ended_at": None}
+
+
+@pytest.mark.parametrize("rollup,raw_source,open_lesson,state", [
+    ([_heart_rollup("2026-06-09", {"calibrating": 6})], None, False, "calibrating"),
+    ([], "muse_optics", True, "pending"),
+    ([], None, True, "none"),         # a lesson without the heart sensor promises nothing
+    ([_heart_rollup("2026-06-09", None)], None, False, "unusable"),
+    ([], "rppg", False, "camera_only"),
+    ([_heart_rollup("2026-06-09", None, sources=("rppg",))], None, False, "camera_only"),
+    ([], None, False, "none"),
+])
+def test_every_absence_of_body_arousal_says_which_one(monkeypatch, at_three_am_utc,
+                                                      rollup, raw_source, open_lesson, state):
+    """None of these is a 0% week: each has a share of None and its own reason."""
+    tables = _with_rollup(rollup=rollup)
+    if raw_source:
+        tables["heart_signals"] = _heart_raw(raw_source)
+    if open_lesson:
+        tables["sessions"] = [_open_session()]
+    arousal = _arousal(monkeypatch, tables)["body_arousal"]
+
+    assert arousal["state"] == state
+    assert arousal["high_share"] is None
+    assert arousal["classified_windows"] == 0
+
+
+def test_a_failed_rollup_read_leaves_body_arousal_unknown(monkeypatch, at_three_am_utc):
+    tables = _with_rollup()
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    report = _arousal(monkeypatch, tables, table_raises={"signal_daily_rollup"})
+
+    assert report["body_arousal"]["state"] == "not_retrieved"
+    assert report["body_arousal"]["high_share"] is None
+
+
+def test_a_declined_heart_channel_has_no_body_arousal_and_no_heart_read(monkeypatch,
+                                                                       at_three_am_utc):
+    _school(monkeypatch, LA)
+    fake = _FakeSupabase(_with_rollup(rollup=[_heart_rollup("2026-06-09", {"high": 5})]))
+    monkeypatch.setattr(main, "supabase", fake)
+
+    report = main._weekly_signal_report(STUDENT, include_heart=False, include_emotion=False)
+
+    assert report["body_arousal"]["state"] == "not_requested"
+    assert report["body_arousal"]["high_share"] is None
+    assert all(d["body_arousal"] is None for d in report["daily"])
+    assert ("channel", ("in", ["cognitive"])) in _rollup_query(fake).filters
+
+
+def test_each_day_says_why_it_has_no_body_arousal(monkeypatch, at_three_am_utc):
+    tables = _with_rollup(rollup=[_heart_rollup("2026-06-09", {"high": 40}),
+                                  _heart_rollup("2026-06-10", None, sources=("rppg",))])
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    tables["sessions"] = [_open_session()]
+    report = _arousal(monkeypatch, tables)
+
+    states = {d["date"]: d["body_arousal_state"] for d in report["daily"]}
+    assert states["2026-06-09"] == "measured"
+    assert states["2026-06-10"] == "camera_only"
+    assert states["2026-06-11"] == "pending", "today's headband lesson has not closed"
+    assert states["2026-06-08"] == "none"
+
+
+def test_a_measured_week_beside_an_open_lesson_says_that_lesson_is_not_counted(
+        monkeypatch, at_three_am_utc):
+    tables = _with_rollup(rollup=[_heart_rollup("2026-06-09", {"high": 40})])
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    tables["sessions"] = [_open_session()]
+    arousal = _arousal(monkeypatch, tables)["body_arousal"]
+
+    assert (arousal["state"], arousal["pending"]) == ("measured", True)
+
+
+def test_a_running_lesson_without_heart_rows_promises_no_figure(monkeypatch, at_three_am_utc):
+    """No heart rows in it, so nothing will arrive "when the lesson finishes"."""
+    tables = _with_rollup(rollup=[_heart_rollup("2026-06-09", {"high": 40})])
+    tables["sessions"] = [_open_session()]
+    assert _arousal(monkeypatch, tables)["body_arousal"]["pending"] is False
+
+
+def test_heart_rows_from_before_the_lesson_started_do_not_make_it_pending(monkeypatch,
+                                                                         at_three_am_utc):
+    """An earlier, finished lesson's rows are not this one's."""
+    tables = _with_rollup(rollup=[_heart_rollup("2026-06-09", {"high": 40})])
+    earlier = (NOW_UTC - main.timedelta(days=2)).isoformat()
+    tables["heart_signals"] = [{**_heart_raw("muse_optics")[0], "ts": earlier}]
+    tables["sessions"] = [_open_session()]
+    report = _arousal(monkeypatch, tables)
+
+    assert report["body_arousal"]["pending"] is False
+    assert _day(report, "2026-06-09")["body_arousal_state"] == "measured"
+
+
+def test_a_past_counted_day_is_not_pending_while_a_lesson_runs_today(monkeypatch,
+                                                                      at_three_am_utc):
+    """A day before the running lesson started keeps its own reason, not the lesson's."""
+    tables = _with_rollup(rollup=[_heart_rollup("2026-06-09", None)])
+    earlier = (NOW_UTC - main.timedelta(days=2)).isoformat()
+    tables["heart_signals"] = _heart_raw("muse_optics") + [
+        {**_heart_raw("muse_optics")[0], "ts": earlier}]
+    tables["sessions"] = [_open_session()]
+    report = _arousal(monkeypatch, tables)
+
+    assert _day(report, "2026-06-09")["body_arousal_state"] == "unusable"
+    assert _day(report, "2026-06-11")["body_arousal_state"] == "pending"
+
+
+def test_a_finished_lesson_earlier_in_the_week_does_not_hide_a_running_one(monkeypatch,
+                                                                          at_three_am_utc):
+    tables = _with_rollup(rollup=[_heart_rollup("2026-06-11", {"high": 40})])
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    tables["sessions"] = [_open_session()]
+    assert _arousal(monkeypatch, tables)["body_arousal"]["pending"] is True
+
+
+def test_a_session_open_past_the_abandon_window_is_not_a_running_lesson(monkeypatch,
+                                                                         at_three_am_utc):
+    """A laptop that slept mid-lesson: open until the sweep, but not in progress."""
+    tables = _with_rollup()
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    old = NOW_UTC - main.timedelta(seconds=main._SESSION_ABANDONED_AFTER_SEC + 60)
+    tables["sessions"] = [{**_open_session(), "started_at": old.isoformat()}]
+    assert _arousal(monkeypatch, tables)["body_arousal"]["state"] == "unknown"
+
+
+def test_an_earlier_unsummarised_day_is_not_part_of_todays_lesson(monkeypatch, at_three_am_utc):
+    """A failed write on a past day reads unknown, though a lesson is running today."""
+    tables = _with_rollup()
+    earlier = (NOW_UTC - main.timedelta(days=2)).isoformat()
+    tables["heart_signals"] = _heart_raw("muse_optics") + [
+        {**_heart_raw("muse_optics")[0], "ts": earlier}]
+    tables["sessions"] = [_open_session()]
+    report = _arousal(monkeypatch, tables)
+
+    assert _day(report, "2026-06-11")["body_arousal_state"] == "pending"
+    assert _day(report, "2026-06-09")["body_arousal_state"] == "unknown"
+    assert report["body_arousal"]["state"] == "unknown"
+
+
+def test_rows_never_summarised_with_no_lesson_open_are_unknown_not_pending(monkeypatch,
+                                                                           at_three_am_utc):
+    """A failed rollup write or a missed sweep: not an open lesson, and not an absence."""
+    tables = _with_rollup()
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    report = _arousal(monkeypatch, tables)
+
+    assert (report["body_arousal"]["state"], report["body_arousal"]["pending"]) == \
+        ("unknown", None)
+    assert _day(report, "2026-06-11")["body_arousal_state"] == "unknown"
+
+
+def test_an_unread_sessions_table_cannot_promise_no_lesson_is_open(monkeypatch, at_three_am_utc):
+    """No uncounted rows yet, but a lesson may have just started: the caveat is unknown."""
+    tables = _with_rollup(rollup=[_heart_rollup("2026-06-09", {"high": 40})])
+    arousal = _arousal(monkeypatch, tables, table_raises={"sessions"})["body_arousal"]
+
+    assert (arousal["state"], arousal["pending"]) == ("measured", None)
+
+
+def test_a_closed_lesson_is_not_an_open_one(monkeypatch, at_three_am_utc):
+    tables = _with_rollup()
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    tables["sessions"] = [{**_open_session(), "ended_at": NOW_UTC.isoformat()}]
+    assert _arousal(monkeypatch, tables)["body_arousal"]["state"] == "unknown"
+
+
+def test_an_unread_sessions_table_leaves_open_lessons_unknown(monkeypatch, at_three_am_utc):
+    tables = _with_rollup()
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    arousal = _arousal(monkeypatch, tables, table_raises={"sessions"})["body_arousal"]
+
+    assert (arousal["state"], arousal["pending"]) == ("unknown", None)
+
+
+def test_a_thin_share_is_flagged(monkeypatch, at_three_am_utc):
+    thin = _arousal(monkeypatch, _with_rollup(rollup=[
+        _heart_rollup("2026-06-09", {"high": main._AROUSAL_MIN_WINDOWS - 1})]))["body_arousal"]
+    full = _arousal(monkeypatch, _with_rollup(rollup=[
+        _heart_rollup("2026-06-09", {"high": main._AROUSAL_MIN_WINDOWS})]))["body_arousal"]
+
+    assert (thin["few_readings"], full["few_readings"]) == (True, False)
+
+
+def test_an_open_lesson_with_only_poor_contact_rows_is_pending(monkeypatch, at_three_am_utc):
+    """The raw aggregate names trusted sources only, so these rows name no sensor at all."""
+    tables = _with_rollup()
+    tables["heart_signals"] = [{**_heart_raw("muse_optics")[0], "trusted": False}]
+    tables["sessions"] = [_open_session()]
+    report = _arousal(monkeypatch, tables)
+
+    assert report["body_arousal"]["state"] == "pending"
+    assert _day(report, "2026-06-11")["body_arousal_state"] == "pending"
+
+
+def test_unrolled_trusted_camera_rows_are_camera_only_not_unknown(monkeypatch, at_three_am_utc):
+    """Camera rows never get a category, so a missing rollup row hides nothing about them."""
+    tables = _with_rollup()
+    tables["heart_signals"] = _heart_raw("rppg")
+    assert _arousal(monkeypatch, tables)["body_arousal"]["state"] == "camera_only"
+
+
+def test_a_failed_raw_heart_read_claims_no_absence(monkeypatch, at_three_am_utc):
+    raises = lambda name, p: RuntimeError("x") \
+        if name == "weekly_signal_days" and p.get("p_channel") == "heart" else None  # noqa: E731
+    report = _arousal(monkeypatch, _with_rollup(), rpc_raises=raises)
+
+    assert (report["body_arousal"]["state"], report["body_arousal"]["pending"]) == \
+        ("unknown", None)
+    assert {d["body_arousal_state"] for d in report["daily"]} == {"unknown"}
+
+
+def test_a_failed_raw_heart_read_leaves_a_measured_share_measured(monkeypatch, at_three_am_utc):
+    raises = lambda name, p: RuntimeError("x") \
+        if name == "weekly_signal_days" and p.get("p_channel") == "heart" else None  # noqa: E731
+    arousal = _arousal(monkeypatch, _with_rollup(rollup=[_heart_rollup("2026-06-09", {"high": 40})]),
+                       rpc_raises=raises)["body_arousal"]
+
+    assert (arousal["state"], arousal["pending"]) == ("measured", None)

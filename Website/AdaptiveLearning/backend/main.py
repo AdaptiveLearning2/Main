@@ -8716,15 +8716,15 @@ def _stations_last_ended(day_start: datetime) -> tuple[dict[str, dict], bool]:
     return last_ended, True
 
 
-def _stations_slow_reads(ids: list[str], holds: frozenset) -> dict:
+def _stations_slow_reads(ids: list[str]) -> dict:
     """Holders' names and today's `station_refused` counts, cached `_STATIONS_SLOW_SEC`.
 
-    `holds` is who holds which station now; any change to it, either way, or a failed read is never served from the cache.
+    A new holder or a failed read is never served from the cache.
     """
     global _stations_slow
     cached = _stations_slow
     if (cached["at"] is not None and time.monotonic() - cached["at"] < _STATIONS_SLOW_SEC
-            and cached["holds"] == holds and cached["names_retrieved"] and cached["refusals_retrieved"]):
+            and set(ids) <= cached["ids"] and cached["names_retrieved"] and cached["refusals_retrieved"]):
         return cached
     # Not `_profiles_many`: its placeholder "Student" would name a holder it could not read.
     names: dict[str, str] = {}
@@ -8742,7 +8742,7 @@ def _stations_slow_reads(ids: list[str], holds: frozenset) -> dict:
     refused: dict[str, int] = {}
     for r in refusals["rows"]:
         refused[r["key"]] = refused.get(r["key"], 0) + r["n"]
-    fresh = {"at": time.monotonic(), "holds": holds, "names": names, "names_retrieved": names_retrieved,
+    fresh = {"at": time.monotonic(), "ids": frozenset(ids), "names": names, "names_retrieved": names_retrieved,
              "refused": refused, "refusals_retrieved": refusals["retrieved"]}
     # Swapped in whole: a concurrent request holds either the old dict or this one, never a half-cleared one.
     _stations_slow = fresh
@@ -8766,9 +8766,7 @@ def admin_stations(request: Request):
         pairings, retrieved = [], False
     pollers = eeg_poller.snapshot()
     ids = _unique_ids([p.get("user_id") for p in pairings] + [p["user_id"] for p in pollers])
-    holds = frozenset([("pairing", p.get("device_id"), p.get("user_id"), p.get("session_id")) for p in pairings]
-                      + [("poller", p["device_id"], p["user_id"], p["session_id"]) for p in pollers])
-    slow = _stations_slow_reads(ids, holds)
+    slow = _stations_slow_reads(ids)
     names, names_retrieved = slow["names"], slow["names_retrieved"]
     refused = slow["refused"]
     refusals = {"retrieved": slow["refusals_retrieved"]}

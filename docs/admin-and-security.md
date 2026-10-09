@@ -95,7 +95,7 @@ their last counts through a failed poll, with a note, and hand `LoadError` the r
 - Pollers are this server process's.
 - Under push nothing is paired or polled here, so the list is empty and the page says why.
 - Names come from `profiles.display_name`, and are null with `names_retrieved: false` when unreadable.
-- Names and refusal counts are reused for `_STATIONS_SLOW_SEC` (30 s), so the page's 5 s poll reads pairings, pollers and last lessons fresh. Any change in who holds which station (a new holder or a release) or a failed read is never served from that cache. Last lessons are never cached: one can end with no station changing hands.
+- Names and refusal counts are reused for `_STATIONS_SLOW_SEC` (30 s), so the page's 5 s poll reads pairings, pollers and last lessons fresh. A new holder or a failed read is never served from that cache. Last lessons are never cached: one can end, or a station be released, with nothing the cache keys on changing.
 - Each station carries `last_ended`: the `close_reason` and time of the last lesson that ended on it today, from `sessions.eeg_device_id` (`20261013000000`). `/api/eeg/start` writes it on every start, so a lesson that moves headband names the latest. A released station has no pairing row, so this is what keeps it listed. The time is drawn in the school's timezone (`timezone` on the payload), named, since "today" is the school's day. Pull only; `last_ended_retrieved: false` says a released station may be missing.
 
 ## Funnel, consent changes and signal quality

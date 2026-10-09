@@ -31,6 +31,11 @@ const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
 // Device-list retry while empty (the sidecar often starts later); matches the health check.
 const DISCOVERY_RETRY_MS = 5000
 
+// Whose lesson the sidecar delivers for, from its session and this page's: one rule for the screen and the ref.
+function ownerOf(sidecarSession, sessionId) {
+  return !sidecarSession ? 'unknown' : sidecarSession === sessionId ? 'mine' : 'elsewhere'
+}
+
 // Page-driven headband recovery, only once the bridge has given up (or is too old to try).
 const RECONNECT_ATTEMPTS = 3
 const RECONNECT_BACKOFF_MS = [2000, 4000, 8000]
@@ -261,7 +266,7 @@ export default function Adaptive() {
   const lastResults = useRef({})
   // Chains start and stop so a teardown can't race an in-flight start.
   const pushHandoff = useRef(Promise.resolve())
-  // Set beside every `setSessionId`, never copied from it by an effect: a late copy wrote a stale id
+  // Set with the state by `adoptSessionId`, never copied from it by an effect: a late copy wrote a stale id
   // back over a newer one. Handlers and the stable `recover` callback read this, not the state.
   const sessionIdRef = useRef(null)
   // Answers sent and not yet settled; while any is, `pagehide` leaves the session open.
@@ -336,14 +341,27 @@ export default function Adaptive() {
 
   // Whose lesson the one sidecar delivers for (push): this tab's, another tab's or window's (also for a tab with no
   // lesson yet), or not known. The newest lesson takes it; a page whose lesson it isn't stops or takes back nothing.
-  const pushOwner = !sidecarSession ? 'unknown' : sidecarSession === sessionId ? 'mine' : 'elsewhere'
+  const pushOwner = ownerOf(sidecarSession, sessionId)
   const pushOwnerRef = useRef(pushOwner)
+  const sidecarSessionRef = useRef(sidecarSession)
+  // The ref is written only by these two, beside the state, never after a render: a token refresh or a pagehide
+  // landing between a render and its effects would read the old owner.
+  const adoptSidecarSession = useCallback((sid) => {
+    sidecarSessionRef.current = sid
+    pushOwnerRef.current = ownerOf(sid, sessionIdRef.current)
+    setSidecarSession(sid)
+  }, [])
+  const adoptSessionId = useCallback((id) => {
+    sessionIdRef.current = id
+    // A new lesson only: an ended one is still this tab's until the push cleanup stops it and clears the owner.
+    if (id) pushOwnerRef.current = ownerOf(sidecarSessionRef.current, id)
+    setSessionId(id)
+  }, [])
 
   // The camera stops when this page goes away (the headband stays paired): route
   // change via cleanup, tab close via `pagehide`, both reading a synced ref.
   useEffect(() => {
     cameraRef.current = { id: camera.id, running: camera.running, pushMode: headband.pushMode }
-    pushOwnerRef.current = pushOwner
   })
   useEffect(() => {
     // Push only, like `toggleCamera`: under pull the backend owns the device. Not another tab's lesson's camera.
@@ -412,10 +430,9 @@ export default function Adaptive() {
   // a page left up by a failed sign-out starts a new session rather than answering into this one.
   useEffect(() => onSignOut(async () => {
     const id = sessionIdRef.current
-    sessionIdRef.current = null
-    setSessionId(null)
+    adoptSessionId(null)
     if (id) await endSession(id)
-  }), [])
+  }), [adoptSessionId])
 
   // Unmount: stop the 30s connect safety timer and drop the global session id.
   useEffect(() => () => {
@@ -575,7 +592,7 @@ export default function Adaptive() {
         setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null }))
         ownSessions.current.add(sid)
         ownershipEpoch.current += 1
-        setSidecarSession(sid)
+        adoptSidecarSession(sid)
         sidecarDevices().then(list => {
           const running = !!list.find(d => d.kind === 'face')?.running
           setCamera(c => (c.running === running ? c : { ...c, running }))
@@ -587,7 +604,7 @@ export default function Adaptive() {
           setPush(p => ({ ...(p || {}), running: false, reachable: true, enabled: false }))
         }
       })
-  }, [])
+  }, [adoptSidecarSession])
 
   // Stops one device, releases the push client if nothing else streams, and syncs camera and station
   // state, from the device list when it was read. `strict` throws on a stop that failed or left the
@@ -1016,8 +1033,7 @@ export default function Adaptive() {
                              battery: null, reconnect: null, contactPoor: null, withheld: false }))
       }
       // The ref too, so a Generate right after Finish starts a new session rather than reusing this one.
-      sessionIdRef.current = null
-      setSessionId(null)
+      adoptSessionId(null)
       setSessionCount(0)
       setData(null)
       setPhase('idle')
@@ -1033,7 +1049,7 @@ export default function Adaptive() {
     if (sessionIdRef.current) return sessionIdRef.current
     if (creating.current) return creating.current
     creating.current = apiFetch('/api/sessions/start', { method: 'POST', body: { title: 'Adaptive Session' } })
-      .then(s => { sessionIdRef.current = s.id; setSessionId(s.id); return s.id })
+      .then(s => { adoptSessionId(s.id); return s.id })
       .finally(() => { creating.current = null })
     return creating.current
   }
@@ -1091,7 +1107,7 @@ export default function Adaptive() {
           // Taken over now, not at the next poll: a tab that saw another lesson's would say so until then.
           ownSessions.current.add(sessionId)
           ownershipEpoch.current += 1
-          setSidecarSession(sessionId)
+          adoptSidecarSession(sessionId)
         })
         .catch(err => {
           if (killed) return
@@ -1137,7 +1153,7 @@ export default function Adaptive() {
       sub?.subscription?.unsubscribe()
       const leaving = pushOwnerRef.current !== 'elsewhere'
       // Released by this stop; kept, the finished lesson's id would read as another tab's until the next poll.
-      if (leaving) setSidecarSession(null)
+      if (leaving) adoptSidecarSession(null)
       // Chained behind any in-flight start (StrictMode remount).
       pushHandoff.current = pushHandoff.current
         .catch(() => {})
@@ -1145,7 +1161,7 @@ export default function Adaptive() {
         .catch(() => {})
       setPush(null)
     }
-  }, [sessionId, headband.pushMode])
+  }, [sessionId, headband.pushMode, adoptSidecarSession])
 
   // Push only, once the sidecar holds this session and a headband streams; never camera-only.
   useEegStartReport(!!(headband.pushMode && headband.connected && push?.running && pushOwner !== 'elsewhere'), sessionId)
@@ -1161,7 +1177,7 @@ export default function Adaptive() {
         if (killed) return
         const named = d.session_id ?? null
         const winding = named !== null && named !== sessionIdRef.current && ownSessions.current.has(named)
-        if (epoch === ownershipEpoch.current) setSidecarSession(winding ? null : named)
+        if (epoch === ownershipEpoch.current) adoptSidecarSession(winding ? null : named)
         // With no lesson, whose lesson it is is all this page needs; counts and messages are a lesson's.
         if (!sessionId) return
         // Another tab's lesson's counts are not this one's: no labels, and no baseline to diff against later.
@@ -1208,7 +1224,7 @@ export default function Adaptive() {
     tick()
     const id = setInterval(tick, PUSH_STATUS_POLL_MS)
     return () => { killed = true; clearInterval(id) }
-  }, [sessionId, headband.pushMode, recover])
+  }, [sessionId, headband.pushMode, recover, adoptSidecarSession])
 
   // Poll EEG debug snapshot (dev only)
   useEffect(() => {
@@ -1433,8 +1449,7 @@ export default function Adaptive() {
     let res = await saving(recordAnswer({ sessionId: sessionIdRef.current, ...answer }))
     if (res?.ended) {
       // Closed server-side while this page held it: the answer goes into a fresh session.
-      sessionIdRef.current = null
-      setSessionId(null)
+      adoptSessionId(null)
       const fresh = await getOrCreateSession().catch(e => { console.error('[session]', e); return null })
       // Pull: the poller was writing the closed session; push re-hands over on `sessionId`.
       if (fresh) armRecording(fresh).catch(e => console.error('[headband]', e))

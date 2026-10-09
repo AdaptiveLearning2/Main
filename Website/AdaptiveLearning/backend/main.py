@@ -2139,10 +2139,11 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
 
 
 def _weekly_body_arousal(include_heart: bool, rollup_ok: bool, rollup_by: dict,
-                         heart_days: dict, heart_sources: list, heart_ok: bool = True) -> dict:
+                         heart_days: dict, heart_sources: list, heart_ok: bool = True,
+                         open_lesson: bool | None = False) -> dict:
     """The window's body arousal, pooled from the heart rollup rows, with a `state`.
 
-    `heart_ok` is the raw heart read, which is how an open lesson is seen.
+    `heart_ok` is the raw heart read; `open_lesson` is `_open_lessons` for this student.
     """
     rolled = [r for (_day, channel), r in rollup_by.items() if channel == "heart"]
     counts = (0, 0, 0, 0)
@@ -2152,7 +2153,19 @@ def _weekly_body_arousal(include_heart: bool, rollup_ok: bool, rollup_by: dict,
         s for r in rolled for s in (r.get("heart_sources") or ()))
     unrolled = any(_unrolled_heart(agg, (day, "heart") in rollup_by)
                    for day, agg in heart_days.items())
-    return _body_arousal(counts, sensors, unrolled, include_heart, rollup_ok, heart_ok)
+    return _body_arousal(counts, sensors, bool(open_lesson), include_heart, rollup_ok,
+                         _lessons_checked(heart_ok, open_lesson, unrolled))
+
+
+def _lessons_checked(heart_ok: bool, open_lesson: bool | None, unrolled: bool) -> bool:
+    """Whether every heart row is either counted or in an open lesson we know of.
+
+    Unrolled rows with no lesson open were never summarised (a failed write, a missed
+    sweep): not an open lesson, and not an absence either.
+    """
+    if not heart_ok or open_lesson is None:
+        return False
+    return open_lesson or not unrolled
 
 
 def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = True,
@@ -2187,6 +2200,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             return {}, None, False
 
     cog_days, latest_cognitive, cog_ok = _signal_days("cognitive")
+    # Whether a lesson is still open, so its uncounted heart rows read `pending`; None if unread.
+    open_ids = _open_lessons([student_id]) if include_heart else set()
+    open_lesson = None if open_ids is None else str(student_id) in open_ids
     # An opted-out channel is ok=True: nothing failed, nothing was asked for.
     face_days, latest_face, face_ok = _signal_days("emotion") if include_emotion \
         else ({}, None, True)
@@ -2299,10 +2315,12 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         # Only the rollup carries heart categories, so this reads it even beside raw rows.
         heart_rolled = (rollup_by.get((day, "heart")) if include_heart else None) or {}
         raw_sensors = _sensor_class((heart_raw or {}).get("sources"))
+        day_unrolled = _unrolled_heart(heart_raw, bool(heart_rolled))
         day_arousal = _body_arousal(
             _arousal_counts(heart_rolled.get("stress_counts")),
             _sensor_class(heart_rolled.get("heart_sources")) | raw_sensors,
-            _unrolled_heart(heart_raw, bool(heart_rolled)), include_heart, rollup_ok, heart_ok)
+            bool(open_lesson) and day_unrolled, include_heart, rollup_ok,
+            _lessons_checked(heart_ok, open_lesson, day_unrolled))
 
         daily.append({
             "date": day,
@@ -2398,7 +2416,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     heart_sources = sorted({s for agg in heart_days.values() for s in agg.get("sources") or ()
                             if isinstance(s, str)} | rolled_sources)
     body_arousal = _weekly_body_arousal(include_heart, rollup_ok, rollup_by, heart_days,
-                                        heart_sources, heart_ok)
+                                        heart_sources, heart_ok, open_lesson)
 
     # Seeded from the rollup's full distribution, then the raw days on top; trusted only.
     emotion_counts: dict[str, int] = dict(rolled_emotions)
@@ -2761,11 +2779,18 @@ def _usual_from_rows(rows: list, retrieved: bool, period_start: date, current: d
     for r in rolled_heart:
         counts = _add_counts(counts, _arousal_counts(r.get("stress_counts")))
     unread = set(current.get("unread") or ())
-    # Heart rows of any quality (poor contact included) from a period nothing rolled up yet.
-    heart_rows = current.get("heart_rows", bool((current.get("heart_rate_bpm") or (None, 0))[1]))
-    pending = current.get("arousal_pending", bool(heart_rows) and not rolled_heart)
-    # None (or an unread heart figure): open lessons could not be checked.
-    raw_ok = pending is not None and "heart" not in unread
+    if "arousal_pending" in current:
+        # The weekly report worked this out from its own raw rows; None is "could not check".
+        pending = current["arousal_pending"]
+        raw_ok = pending is not None
+    else:
+        # Heart rows of any quality, poor contact included; None if that could not be read.
+        heart_rows = current.get("heart_rows", bool((current.get("heart_rate_bpm") or (None, 0))[1]))
+        open_lesson = current.get("open_lesson", False)
+        pending = bool(open_lesson)
+        raw_ok = heart_rows is not None and \
+            _lessons_checked(True, open_lesson, bool(heart_rows) and not rolled_heart)
+    raw_ok = raw_ok and "heart" not in unread
     arousal = _body_arousal(counts, sensors, bool(pending), include_heart, retrieved, raw_ok)
     current = {**current, "body_arousal": (arousal["high_share"], arousal["classified_windows"])}
 
@@ -2807,6 +2832,44 @@ def _usual_from_rows(rows: list, retrieved: bool, period_start: date, current: d
             # The period's body arousal with its reason, as `_body_arousal` gives it everywhere.
             "body_arousal": arousal,
             "measures": measures}
+
+
+def _open_lessons(student_ids) -> set[str] | None:
+    """The students with a lesson still open (`ended_at` null); None if that could not be read.
+
+    The rollup is written when a lesson closes, so this is what an uncounted lesson is.
+    """
+    ids = [str(s) for s in student_ids]
+    if not ids:
+        return set()
+    try:
+        rows = supabase.table("sessions").select("user_id").in_("user_id", ids) \
+            .is_("ended_at", "null").execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[open_lessons] {len(ids)} students: {e}")
+        return None
+    return {str(r.get("user_id")) for r in rows}
+
+
+def _lesson_context(summaries: dict[str, dict], heart: dict[str, bool], days: int,
+                    any_rows: dict[str, bool | None] | None = None) -> dict[str, dict]:
+    """Per student, `open_lesson` and `heart_rows` for `_usual_from_rows`; None where unread.
+
+    A summary counts usable heart samples only, so with none this asks whether any row
+    (poor contact included) landed. `any_rows` passes in answers a caller already has.
+    """
+    open_ids = _open_lessons([s for s in summaries if heart.get(s)])
+    out = {}
+    for sid, summary in summaries.items():
+        if not heart.get(sid):
+            out[sid] = {"open_lesson": False, "heart_rows": False}
+            continue
+        rows = bool(summary.get("heart_samples")) or (
+            (any_rows or {}).get(sid) if any_rows and sid in any_rows
+            else _any_rows_since("heart_signals", sid, days))
+        out[sid] = {"open_lesson": None if open_ids is None else sid in open_ids,
+                    "heart_rows": rows}
+    return out
 
 
 def _school_today(tz=None) -> date:
@@ -4330,8 +4393,10 @@ def student_signal_summary(student_id: str, request: Request, days: int = 7, inc
                               eeg_revoked_at=channels.eeg_revoked_at,
                               erased=_erased_fields(channels, _window_start(days)))
     start, end = _report_period(days)
-    summary["usual"] = _personal_baseline(student_id, start, end, _usual_current(summary),
-                                          channels.heart, channels.consent_retrieved)
+    context = _lesson_context({student_id: summary}, {student_id: channels.heart}, days)
+    summary["usual"] = _personal_baseline(
+        student_id, start, end, {**_usual_current(summary), **context[student_id]},
+        channels.heart, channels.consent_retrieved)
     return summary
 
 
@@ -5060,14 +5125,12 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
                         summary["cognitive_samples"], "cognitive_signals")
     heart_info = _channel(channels.heart, channels.heart_revoked_at,
                           summary["heart_samples"], "heart_signals")
-    # Poor-contact rows count as a lesson's rows: `any_rows` sees them, the summary does not.
-    heart_rows = summary["heart_samples"] or heart_info.get("any_rows")
-    usual = _personal_baseline(
-        student_id, start, end,
-        {**_usual_current(summary),
-         **({"heart_rows": True} if heart_rows else {}),
-         **({"arousal_pending": None} if heart_info.get("any_rows", False) is None else {})},
-        channels.heart, channels.consent_retrieved, rollup=rollup)
+    # `any_rows` was already asked for an empty heart channel; reuse it rather than ask twice.
+    context = _lesson_context(
+        {student_id: summary}, {student_id: channels.heart}, days,
+        {student_id: heart_info["any_rows"]} if "any_rows" in heart_info else None)[student_id]
+    usual = _personal_baseline(student_id, start, end, {**_usual_current(summary), **context},
+                               channels.heart, channels.consent_retrieved, rollup=rollup)
     arousal = usual["measures"]["body_arousal"]
     return {
         "days": days,
@@ -5294,8 +5357,9 @@ def _usual_sentences(basis: dict) -> list[str]:
 _BODY_AROUSAL_ABSENT = {
     "calibrating": ("Body arousal has no reading yet for this period: the headband was still "
                     "measuring this student's starting heart rate."),
-    "pending": ("Body arousal has no reading yet for this period: it is worked out when a "
-                "lesson with the headband's heart sensor finishes."),
+    # Names no sensor: an open lesson's rows may be camera rows that never name one.
+    "pending": ("Body arousal has no reading yet for this period: a lesson is still in "
+                "progress, and it is worked out when the lesson finishes."),
     "unusable": ("Body arousal has no reading for this period: the headband's heart readings "
                  "were not steady enough to use."),
     "camera_only": ("Body arousal is measured only by the headband's heart sensor, not the "
@@ -8685,9 +8749,13 @@ def my_children(request: Request, include_face: bool = True):
     summaries_retrieved = summaries is not None
     summaries = summaries or {}
     usual_start, usual_end = _report_period(_PARENT_SUMMARY_DAYS)
+    child_summaries = {str(cid): summaries.get(str(cid)) or {"retrieved": summaries_retrieved}
+                       for cid in child_ids}
+    context = _lesson_context(child_summaries,
+                              {str(cid): ch.heart for cid, ch in channels_by_child.items()},
+                              _PARENT_SUMMARY_DAYS)
     usual = _personal_baselines_many(
-        {str(cid): _usual_current(summaries.get(str(cid)) or {"retrieved": summaries_retrieved})
-         for cid in child_ids},
+        {cid: {**_usual_current(s), **context[cid]} for cid, s in child_summaries.items()},
         {str(cid): ch.heart for cid, ch in channels_by_child.items()},
         {str(cid): ch.consent_retrieved for cid, ch in channels_by_child.items()},
         usual_start, usual_end)

@@ -891,7 +891,7 @@ def test_body_arousal_beside_an_open_lesson_says_that_lesson_is_not_counted():
 
 @pytest.mark.parametrize("state,expected", [
     ("calibrating", "still measuring this student's starting heart rate"),
-    ("pending", "worked out when a lesson with the headband's heart sensor finishes"),
+    ("pending", "a lesson is still in progress, and it is worked out when the lesson finishes"),
     ("unusable", "heart readings were not steady enough to use"),
     ("camera_only", "only by the headband's heart sensor, not the camera"),
     ("none", "the headband's heart sensor recorded nothing"),
@@ -926,8 +926,18 @@ def test_a_measured_share_whose_open_lessons_went_unchecked_says_so():
     assert "could not be checked" in _arousal_line(_measured(pending=None))
 
 
+def test_a_pending_lesson_names_no_sensor():
+    """An open lesson's rows may be camera rows, which never name a sensor."""
+    line = _arousal_line(_basis(usual=_usual(arousal={"state": "pending"})))
+    assert "headband" not in line and "camera" not in line
+
+
 def test_poor_contact_rows_in_an_open_lesson_are_pending_not_nothing(monkeypatch):
     """`any_rows` sees rows the usable count does not; they are a lesson, not silence."""
+    from tests.test_access_control import _FakeSupabase
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({
+        "signal_daily_rollup": [],
+        "sessions": [{"id": "o", "user_id": "s", "started_at": "2026-06-11", "ended_at": None}]}))
     monkeypatch.setattr(main, "_reportable_channels",
                         lambda sid, inc=True: main.ReportChannels(
                             heart=True, emotion=False, consent_retrieved=True))

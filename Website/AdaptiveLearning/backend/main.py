@@ -1884,6 +1884,42 @@ def _stress_weight(rollup_row: dict) -> int:
     return int(rollup_row.get("trusted_sample_count") or 0)
 
 
+# `heart_stress` categories that are a reading; `calibrating` is a baseline still forming.
+_AROUSAL_CLASSIFIED = ("low", "moderate", "high")
+_HEADBAND_HEART_SOURCES = frozenset({"muse_optics", "muse_ppg"})
+
+
+def _arousal_counts(stress_counts) -> tuple[int, int, int, int]:
+    """`(low, moderate, high, calibrating)` windows from a heart rollup row's `stress_counts`."""
+    counts = stress_counts if isinstance(stress_counts, dict) else {}
+
+    def n(key):
+        v = counts.get(key)
+        return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else 0
+    return n("low"), n("moderate"), n("high"), n("calibrating")
+
+
+def _add_counts(a: tuple, b: tuple) -> tuple:
+    return tuple(x + y for x, y in zip(a, b))
+
+
+def _arousal_share(counts: tuple) -> dict:
+    """Body arousal from pooled counts: shares of classified windows, None with none classified."""
+    low, moderate, high, calibrating = counts
+    classified = low + moderate + high
+    return {"high_share": round(high / classified, 4) if classified else None,
+            "moderate_share": round(moderate / classified, 4) if classified else None,
+            "classified_windows": classified,
+            "calibrating_windows": calibrating}
+
+
+def _sensor_class(sources) -> frozenset:
+    """The heart sensors a source list names, as `headband` / `camera`; unknown names add nothing."""
+    names = {s for s in (sources or ()) if isinstance(s, str)}
+    return frozenset(({"headband"} if names & _HEADBAND_HEART_SOURCES else set())
+                     | ({"camera"} if "rppg" in names else set()))
+
+
 def _scale_range(rollup_rows) -> dict | None:
     """`{"min", "max", "calm_sources"}` over cognitive rollup rows, or None if no row has a scale.
 
@@ -1961,6 +1997,7 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
             "heart_sources": set(),
             "emotion_counts": {},
             "scale_rows": [],  # cognitive rollup rows, for `_scale_range`
+            "arousal": (0, 0, 0, 0),
         }
 
     COLUMNS = {
@@ -1993,6 +2030,8 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
             b["heart_samples"] += n
             for s in (r.get("heart_sources") or []):
                 b["heart_sources"].add(s)
+            # Pooled counts, never a mean of daily shares.
+            b["arousal"] = _add_counts(b["arousal"], _arousal_counts(r.get("stress_counts")))
         elif channel == "emotion":
             b["emotion_samples"] += n
             for label, count in (r.get("emotion_counts") or {}).items():
@@ -2013,10 +2052,15 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
     out = []
     for monday in sorted(buckets):
         b = buckets[monday]
+        arousal = _arousal_share(b["arousal"])
         out.append({
             "week_start": b["week_start"],
             "score_scale": _scale_range(b["scale_rows"]),
             **{k: _mean(v) for k, v in b["sums"].items()},
+            # Share of classified heart windows `high` / `moderate`; separate from EEG stress.
+            "body_arousal": arousal["high_share"],
+            "body_arousal_moderate": arousal["moderate_share"],
+            "body_arousal_windows": arousal["classified_windows"],
             "cognitive_samples": b["cognitive_samples"],
             "heart_samples": b["heart_samples"],
             "emotion_samples": b["emotion_samples"],
@@ -2036,6 +2080,42 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
         "heart_revoked_at": heart_revoked_at,
         "timezone": str(tz),
     }
+
+
+def _weekly_body_arousal(include_heart: bool, rollup_ok: bool, rollup_by: dict,
+                         heart_days: dict, heart_sources: list) -> dict:
+    """The window's body arousal, pooled from the heart rollup rows, with a `state`.
+
+    `pending`: headband readings whose session has not closed, so no rollup row yet.
+    `unusable`: headband readings, none trusted enough to classify.
+    """
+    rolled = [r for (_day, channel), r in rollup_by.items() if channel == "heart"]
+    counts = (0, 0, 0, 0)
+    for r in rolled:
+        counts = _add_counts(counts, _arousal_counts(r.get("stress_counts")))
+    out = _arousal_share(counts)
+    sensors = _sensor_class(heart_sources) | _sensor_class(
+        s for r in rolled for s in (r.get("heart_sources") or ()))
+    unrolled_headband = any(
+        "headband" in _sensor_class(agg.get("sources")) for day, agg in heart_days.items()
+        if (day, "heart") not in rollup_by)
+    if not include_heart:
+        state = "not_requested"
+    elif not rollup_ok:
+        state = "not_retrieved"
+    elif out["classified_windows"]:
+        state = "measured"
+    elif out["calibrating_windows"]:
+        state = "calibrating"
+    elif unrolled_headband:
+        state = "pending"
+    elif "headband" in sensors:
+        state = "unusable"
+    elif "camera" in sensors:
+        state = "camera_only"
+    else:
+        state = "none"
+    return {**out, "state": state}
 
 
 def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = True,
@@ -2179,6 +2259,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         cog_roll = _rolled("cognitive", cog_raw, cog_ok)
         face_roll = _rolled("emotion", face_raw, face_ok) if include_emotion else None
         heart_roll = _rolled("heart", heart_raw, heart_ok) if include_heart else None
+        # Only the rollup carries heart categories, so this reads it even beside raw rows.
+        day_arousal = _arousal_share(_arousal_counts(
+            (rollup_by.get((day, "heart")) or {}).get("stress_counts") if include_heart else None))
 
         daily.append({
             "date": day,
@@ -2199,6 +2282,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                                _mean(heart_raw, "bpm") if heart_whole else None),
             "rmssd_ms": (heart_roll.get("avg_rmssd_ms") if heart_roll else
                          _mean(heart_raw, "rmssd") if heart_whole else None),
+            "body_arousal": day_arousal["high_share"],
+            "body_arousal_windows": day_arousal["classified_windows"],
             # False = not fully fetched; None = not requested (check `=== false`).
             "cognitive_retrieved": True if cog_roll else cog_whole,
             "face_retrieved": (None if not include_emotion else
@@ -2269,6 +2354,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     # Which sensor produced the readings (accuracy differs); trusted rows plus rollup days.
     heart_sources = sorted({s for agg in heart_days.values() for s in agg.get("sources") or ()
                             if isinstance(s, str)} | rolled_sources)
+    body_arousal = _weekly_body_arousal(include_heart, rollup_ok, rollup_by, heart_days,
+                                        heart_sources)
 
     # Seeded from the rollup's full distribution, then the raw days on top; trusted only.
     emotion_counts: dict[str, int] = dict(rolled_emotions)
@@ -2402,6 +2489,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             "heart_rate_bpm": _week("heart_rate_bpm", bpm_raw),
             "rmssd_ms": _week("rmssd_ms", rmssd_raw),
         },
+        "body_arousal": body_arousal,
         # `heart` absent, not null, when the channel was not read.
         "latest": {"cognitive": latest_cognitive, "face": latest_face,
                    **({"heart": latest_heart} if include_heart else {})},

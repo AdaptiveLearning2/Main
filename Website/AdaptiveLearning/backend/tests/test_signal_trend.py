@@ -141,6 +141,53 @@ def test_emotion_counts_add_up_across_the_week(monkeypatch):
     assert week["emotion_samples"] == 5
 
 
+# ─── body arousal (heart categories, never EEG stress) ───────────────────
+
+def _heart_day(day, counts, sources=("muse_optics",)):
+    """A heart rollup row as `rollup_signal_day` writes it: `stress_counts` is `jsonb_object_agg`."""
+    return _rollup(day, "heart", avg_heart_rate_bpm=80.0, trusted_sample_count=10,
+                   heart_sources=list(sources), stress_counts=counts)
+
+
+def test_body_arousal_pools_window_counts_rather_than_averaging_daily_shares(monkeypatch):
+    """1/1 high and 0/99 high is 1 high window in 100, not a 50% week."""
+    monkeypatch.setattr(main, "supabase", _fake(rollup=[
+        _heart_day("2026-06-08", {"high": 1}),
+        _heart_day("2026-06-09", {"low": 99}),
+    ]))
+
+    week = _week(main._signal_trend(STUDENT, weeks=1), "2026-06-08")
+
+    assert week["body_arousal"] == pytest.approx(0.01)
+    assert week["body_arousal_windows"] == 100
+
+
+def test_calibrating_windows_are_not_part_of_body_arousal(monkeypatch):
+    """A baseline still forming is no reading, so it must not dilute the share."""
+    monkeypatch.setattr(main, "supabase", _fake(rollup=[
+        _heart_day("2026-06-08", {"calibrating": 98, "high": 1, "moderate": 1, "low": 2}),
+    ]))
+
+    week = _week(main._signal_trend(STUDENT, weeks=1), "2026-06-08")
+
+    assert week["body_arousal"] == pytest.approx(0.25)
+    assert week["body_arousal_moderate"] == pytest.approx(0.25)
+    assert week["body_arousal_windows"] == 4
+
+
+def test_a_week_with_nothing_classified_has_no_body_arousal_not_zero(monkeypatch):
+    """Camera heart rows carry no category, so `stress_counts` is null: a gap, never 0%."""
+    monkeypatch.setattr(main, "supabase", _fake(rollup=[
+        _heart_day("2026-06-08", None, sources=("rppg",)),
+    ]))
+
+    week = _week(main._signal_trend(STUDENT, weeks=1), "2026-06-08")
+
+    assert week["body_arousal"] is None
+    assert week["body_arousal_moderate"] is None
+    assert week["body_arousal_windows"] == 0
+
+
 # ─── the three states ────────────────────────────────────────────────────
 
 def test_a_failed_read_is_not_a_quiet_term(monkeypatch):

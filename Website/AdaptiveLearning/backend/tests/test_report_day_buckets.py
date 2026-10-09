@@ -457,3 +457,92 @@ def test_eeg_held_only_in_rolled_up_days_is_not_called_absent(monkeypatch, at_th
     assert report["summary"].startswith(
         "EEG readings were recorded this week, but none gave a usable")
     assert "No EEG" not in report["summary"]
+
+
+# ── body arousal: the rollup's heart categories, with a state for every absence ──
+
+def _heart_rollup(day, counts, sources=("muse_optics",)):
+    """As `rollup_signal_day` writes it: `stress_counts` is `jsonb_object_agg`, null with none."""
+    return _rollup(day, "heart", avg_heart_rate_bpm=80.0, sample_count=50,
+                   trusted_sample_count=40, heart_sources=list(sources), stress_counts=counts)
+
+
+def _heart_raw(source):
+    return [{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "source": source,
+             "heart_rate_bpm": 75.0, "trusted": True}]
+
+
+def _arousal(monkeypatch, tables, **kw):
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(tables, **kw))
+    return main._weekly_signal_report(STUDENT)
+
+
+def test_body_arousal_pools_the_windows_days_and_leaves_calibration_out(monkeypatch,
+                                                                       at_three_am_utc):
+    report = _arousal(monkeypatch, _with_rollup(rollup=[
+        _heart_rollup("2026-06-09", {"calibrating": 6, "high": 1}),
+        _heart_rollup("2026-06-10", {"low": 2, "moderate": 1}),
+    ]))
+
+    assert report["body_arousal"] == {"high_share": 0.25, "moderate_share": 0.25,
+                                      "classified_windows": 4, "calibrating_windows": 6,
+                                      "state": "measured"}
+    assert _day(report, "2026-06-09")["body_arousal"] == 1.0
+    assert _day(report, "2026-06-10")["body_arousal"] == 0.0, "a measured 0% is a reading"
+    assert _day(report, "2026-06-11")["body_arousal"] is None, "no rollup that day: a gap"
+
+
+def test_a_day_with_raw_rows_still_takes_its_categories_from_the_rollup(monkeypatch,
+                                                                        at_three_am_utc):
+    """The raw aggregate has no categories; dropping the rollup beside raw rows loses them."""
+    tables = _with_rollup(rollup=[_heart_rollup("2026-06-11", {"high": 3, "low": 1})])
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    report = _arousal(monkeypatch, tables)
+
+    assert _day(report, "2026-06-11")["body_arousal"] == 0.75
+    assert report["body_arousal"]["state"] == "measured"
+
+
+@pytest.mark.parametrize("rollup,raw_source,state", [
+    ([_heart_rollup("2026-06-09", {"calibrating": 6})], None, "calibrating"),
+    ([], "muse_optics", "pending"),
+    ([_heart_rollup("2026-06-09", None)], None, "unusable"),
+    ([], "rppg", "camera_only"),
+    ([_heart_rollup("2026-06-09", None, sources=("rppg",))], None, "camera_only"),
+    ([], None, "none"),
+])
+def test_every_absence_of_body_arousal_says_which_one(monkeypatch, at_three_am_utc,
+                                                      rollup, raw_source, state):
+    """None of these is a 0% week: each has a share of None and its own reason."""
+    tables = _with_rollup(rollup=rollup)
+    if raw_source:
+        tables["heart_signals"] = _heart_raw(raw_source)
+    arousal = _arousal(monkeypatch, tables)["body_arousal"]
+
+    assert arousal["state"] == state
+    assert arousal["high_share"] is None
+    assert arousal["classified_windows"] == 0
+
+
+def test_a_failed_rollup_read_leaves_body_arousal_unknown(monkeypatch, at_three_am_utc):
+    tables = _with_rollup()
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    report = _arousal(monkeypatch, tables, table_raises={"signal_daily_rollup"})
+
+    assert report["body_arousal"]["state"] == "not_retrieved"
+    assert report["body_arousal"]["high_share"] is None
+
+
+def test_a_declined_heart_channel_has_no_body_arousal_and_no_heart_read(monkeypatch,
+                                                                       at_three_am_utc):
+    _school(monkeypatch, LA)
+    fake = _FakeSupabase(_with_rollup(rollup=[_heart_rollup("2026-06-09", {"high": 5})]))
+    monkeypatch.setattr(main, "supabase", fake)
+
+    report = main._weekly_signal_report(STUDENT, include_heart=False, include_emotion=False)
+
+    assert report["body_arousal"]["state"] == "not_requested"
+    assert report["body_arousal"]["high_share"] is None
+    assert all(d["body_arousal"] is None for d in report["daily"])
+    assert ("channel", ("in", ["cognitive"])) in _rollup_query(fake).filters

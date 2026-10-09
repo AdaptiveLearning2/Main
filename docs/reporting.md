@@ -68,6 +68,15 @@ trusted window in five is gated out of RMSSD. `avg_focus`, `avg_heart_rate_bpm` 
 weeks either side sitting adjacent. Weeks are whole and Monday-anchored for the same class of reason: counting
 back `weeks * 7` days from today leaves a part-week at each end that looks like a full one.
 
+**Body arousal is the heart rollup's categories, pooled, and only the rollup has them.** `stress_counts` holds the
+trusted windows per `heart_stress` category; the share is `high ÷ (low + moderate + high)`, pooled over the window's
+counts (a mean of daily shares weights a one-window day like a full one) with `calibrating` left out. It is never
+EEG stress and never combined with it. The rollup is written as a session closes, so an open session's day has no
+categories yet: the weekly report reads the heart rollup row even beside raw rows, and says `pending` when only
+unrolled headband readings exist. Each absence has its own `state` — `calibrating`, `pending`, `unusable` (headband
+rows, none classified), `camera_only` (rPPG gets no category), `none`, `not_requested`, `not_retrieved` — and a
+share of None, never 0.
+
 **A declined channel is filtered out of the query, not out of the result**: one `.in_("channel", …)` narrows the
 single query, so a declined channel is never read and then dropped in Python. Assert on the **filter**, not
 the payload. `_FakeSupabase` records every query it builds (`fake.queries`, each with `.filters`) so that

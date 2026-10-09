@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from starlette.routing import Match
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-import os, math, re, random, secrets, threading, time, collections, contextlib
+import os, math, re, random, secrets, threading, time, collections, contextlib, statistics
 import anyio.to_thread
 import httpx
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -2498,6 +2498,196 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     }
 
 
+# ─── a child compared with their own usual ────────────────────────────────
+# See docs/reporting.md, "A child is compared with their own usual". The floors and
+# widths are judgement calls, not measurements.
+_USUAL_WEEKS = 8
+_USUAL_MIN_DAYS = 5
+_USUAL_MIN_WEEKS = 2
+# Fewest samples behind a day (or the current period) before it counts.
+_USUAL_DAY_FLOOR = {"focus": 60, "calm": 20, "heart_rate_bpm": 30, "rmssd_ms": 30,
+                    "body_arousal": 30}
+# The typical range is at least this wide either side of the median, in the measure's unit.
+_USUAL_MIN_HALF_WIDTH = {"focus": 0.03, "calm": 0.03, "heart_rate_bpm": 2.0, "rmssd_ms": 3.0,
+                         "body_arousal": 0.03}
+_USUAL_RATIOS = frozenset({"focus", "calm", "body_arousal"})
+_USUAL_HEART = ("heart_rate_bpm", "rmssd_ms", "body_arousal")
+_USUAL_MEASURES = ("focus", "calm") + _USUAL_HEART
+
+
+def _usual_day_value(row: dict, measure: str) -> tuple[float | None, int]:
+    """`(value, samples)` one rollup row gives a measure; calm is `1 - avg_stress`."""
+    def num(v):
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    trusted = int(row.get("trusted_sample_count") or 0)
+    if measure == "focus":
+        return num(row.get("avg_focus")), trusted
+    if measure == "calm":
+        stress = num(row.get("avg_stress"))
+        return (None if stress is None else 1.0 - stress), _stress_weight(row)
+    if measure == "heart_rate_bpm":
+        return num(row.get("avg_heart_rate_bpm")), trusted
+    if measure == "rmssd_ms":
+        return num(row.get("avg_rmssd_ms")), trusted
+    share = _arousal_share(_arousal_counts(row.get("stress_counts")))
+    return share["high_share"], share["classified_windows"]
+
+
+def _usual_points(rows, measure: str, period_start: date, scale: dict | None,
+                  sensors: frozenset) -> list[tuple[date, float]]:
+    """The prior days a measure's usual is built from, one value per day.
+
+    Drops the current period, thin days, and days on another score scale, calm source
+    or heart sensor than the current period's.
+    """
+    channel = "heart" if measure in _USUAL_HEART else "cognitive"
+    points = []
+    for r in rows:
+        if r.get("channel") != channel:
+            continue
+        try:
+            day = date.fromisoformat(str(r.get("day")))
+        except (TypeError, ValueError):
+            continue
+        if day >= period_start:
+            continue
+        value, samples = _usual_day_value(r, measure)
+        if value is None or samples < _USUAL_DAY_FLOOR[measure]:
+            continue
+        if channel == "cognitive":
+            if r.get("score_scale_min") != scale["min"] or r.get("score_scale_max") != scale["max"]:
+                continue
+            if measure == "calm" and _calm_sources_union([r.get("calm_sources")]) \
+                    != scale["calm_sources"]:
+                continue
+        elif _sensor_class(r.get("heart_sources")) != sensors:
+            continue
+        points.append((day, value))
+    return points
+
+
+def _usual_range(values: list[float], measure: str) -> dict:
+    """Median and interquartile range of daily values, widened to `_USUAL_MIN_HALF_WIDTH`."""
+    median = statistics.median(values)
+    p25, _, p75 = statistics.quantiles(values, n=4, method="inclusive")
+    width = _USUAL_MIN_HALF_WIDTH[measure]
+    low, high = min(p25, median - width), max(p75, median + width)
+    if measure in _USUAL_RATIOS:
+        low, high = max(0.0, low), min(1.0, high)
+    return {k: round(v, 4) for k, v in
+            (("median", median), ("p25", p25), ("p75", p75), ("low", low), ("high", high))}
+
+
+def _usual_display(value: float, measure: str) -> int:
+    """A value as the tile prints it: whole percent for ratios, whole units otherwise."""
+    return round(value * 100) if measure in _USUAL_RATIOS else round(value)
+
+
+def _usual_verdict(current: float, band: dict, measure: str) -> str:
+    """`lower` / `higher` / `about_usual`, compared as displayed so a reader can check it."""
+    shown = _usual_display(current, measure)
+    if shown < _usual_display(band["low"], measure):
+        return "lower"
+    if shown > _usual_display(band["high"], measure):
+        return "higher"
+    return "about_usual"
+
+
+def _usual_not_comparable(measure: str, scale: dict | None, sensors: frozenset) -> str | None:
+    """Why the current period cannot be set against earlier days, or None if it can."""
+    if measure in _USUAL_HEART:
+        return "sensor_changed" if len(sensors) > 1 else None
+    if scale is None:
+        return "scale_unknown"
+    if scale["min"] != scale["max"]:
+        return "mixed_scale"
+    if measure == "calm" and len(scale["calm_sources"]) > 1:
+        return "mixed_scale"
+    return None
+
+
+def _personal_baseline(student_id: str, period_start: date, period_end: date, current: dict,
+                       include_heart: bool, consent_retrieved: bool = True) -> dict:
+    """Each measure this period against the student's own prior weeks, from the rollup.
+
+    `current` maps a measure to `(value, samples)`; `heart_sources` is the period's sensors.
+    A heart channel the caller may not read is not queried. Never raises.
+    """
+    since = period_start - timedelta(weeks=_USUAL_WEEKS)
+    channels = ["cognitive"] + (["heart"] if include_heart else [])
+    rows, retrieved = [], True
+    try:
+        rows = (supabase.table("signal_daily_rollup")
+                .select("day, channel, avg_focus, avg_stress, avg_heart_rate_bpm, avg_rmssd_ms, "
+                        "stress_counts, trusted_sample_count, stress_sample_count, "
+                        "score_scale_min, score_scale_max, calm_sources, heart_sources")
+                .eq("user_id", student_id).in_("channel", channels)
+                .gte("day", since.isoformat()).lte("day", period_end.isoformat())
+                .execute().data or [])
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[personal_baseline] {student_id}: {e}")
+        retrieved = False
+    rows = [r for r in rows if r.get("channel") in channels]
+
+    def in_period(r):
+        return str(r.get("day")) >= period_start.isoformat()
+    scale = _scale_range([r for r in rows if in_period(r)])
+    sensors = _sensor_class(current.get("heart_sources")) | _sensor_class(
+        s for r in rows if r.get("channel") == "heart" and in_period(r)
+        for s in (r.get("heart_sources") or ()))
+    # Body arousal has no other source than the rollup, so its current value is read here.
+    counts = (0, 0, 0, 0)
+    for r in rows:
+        if r.get("channel") == "heart" and in_period(r):
+            counts = _add_counts(counts, _arousal_counts(r.get("stress_counts")))
+    arousal = _arousal_share(counts)
+    current = {**current, "body_arousal": (arousal["high_share"], arousal["classified_windows"])}
+
+    measures = {}
+    for m in _USUAL_MEASURES:
+        value, samples = current.get(m) or (None, 0)
+        entry = {"status": None, "verdict": None, "reason": None, "current": None,
+                 "median": None, "p25": None, "p75": None, "low": None, "high": None,
+                 "days_used": 0, "weeks_used": 0}
+        reason = _usual_not_comparable(m, scale, sensors)
+        if not retrieved:
+            entry["status"] = "not_retrieved"
+        elif m in _USUAL_HEART and not include_heart:
+            entry["status"] = "not_requested"
+        elif value is None:
+            entry["status"] = "no_current"
+        elif samples < _USUAL_DAY_FLOOR[m]:
+            entry.update(status="too_little_this_period", current=round(value, 4))
+        elif reason:
+            entry.update(status="not_comparable", reason=reason, current=round(value, 4))
+        else:
+            points = _usual_points(rows, m, period_start, scale, sensors)
+            weeks = {_week_start(d) for d, _ in points}
+            entry.update(current=round(value, 4), days_used=len(points), weeks_used=len(weeks))
+            if len(points) < _USUAL_MIN_DAYS or len(weeks) < _USUAL_MIN_WEEKS:
+                entry["status"] = "not_enough_history"
+            else:
+                band = _usual_range([v for _, v in points], m)
+                entry.update(status="compared", verdict=_usual_verdict(value, band, m), **band)
+        measures[m] = entry
+    return {"retrieved": retrieved, "consent_retrieved": consent_retrieved,
+            "heart_included": include_heart,
+            "from": since.isoformat(), "to": (period_start - timedelta(days=1)).isoformat(),
+            "max_weeks": _USUAL_WEEKS, "min_days": _USUAL_MIN_DAYS, "min_weeks": _USUAL_MIN_WEEKS,
+            "measures": measures}
+
+
+def _report_period(days: int) -> tuple[date, date]:
+    """The first and last school day of a `days`-long report window."""
+    today = _utc_now().astimezone(_school_timezone()).date()
+    return today - timedelta(days=days - 1), today
+
+
+def _calm_of(stress) -> float | None:
+    return None if not isinstance(stress, (int, float)) or isinstance(stress, bool) \
+        else 1.0 - float(stress)
+
+
 # ─── question prefetch cache ──────────────────────────────────────────────
 # Up to QUEUE_SIZE pre-generated questions per user. 0 (default) disables it: with a
 # billed model, questions an abandoned session never answers are wasted spend.
@@ -3945,17 +4135,28 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
     _verify_can_view_student(get_user(request), student_id)
     p = _profile(student_id)
     channels = _reportable_channels(student_id, include_face)
+    days = max(1, min(days, 30))
+    report = _weekly_signal_report(student_id, days,
+                                   include_heart=channels.heart,
+                                   include_emotion=channels.emotion,
+                                   consent_retrieved=channels.consent_retrieved,
+                                   emotion_revoked_at=channels.emotion_revoked_at,
+                                   heart_revoked_at=channels.heart_revoked_at,
+                                   eeg_enabled=channels.eeg,
+                                   eeg_revoked_at=channels.eeg_revoked_at)
+    avg, hl = report["averages"], report["highlights"]
+    eeg_n = report["sample_counts"]["cognitive"]
+    heart_n = sum(d.get("heart_samples") or 0 for d in report["daily"])
+    start, end = _report_period(days)
+    usual = _personal_baseline(student_id, start, end, {
+        "focus": (avg["focus"], eeg_n), "calm": (_calm_of(avg["stress"]), eeg_n),
+        "heart_rate_bpm": (hl["heart_rate_bpm"], heart_n), "rmssd_ms": (hl["rmssd_ms"], heart_n),
+        "heart_sources": report["heart_sources"]}, channels.heart, channels.consent_retrieved)
     return {
         "student_name": p.get("display_name") or p.get("email") or "Student",
-        **_weekly_signal_report(student_id, max(1, min(days, 30)),
-                                include_heart=channels.heart,
-                                include_emotion=channels.emotion,
-                                consent_retrieved=channels.consent_retrieved,
-                                emotion_revoked_at=channels.emotion_revoked_at,
-                                heart_revoked_at=channels.heart_revoked_at,
-                                eeg_enabled=channels.eeg,
-                                eeg_revoked_at=channels.eeg_revoked_at),
-        **_erased_fields(channels, _window_start(max(1, min(days, 30)))),
+        **report,
+        "usual": usual,
+        **_erased_fields(channels, _window_start(days)),
     }
 
 
@@ -3967,15 +4168,23 @@ def student_signal_summary(student_id: str, request: Request, days: int = 7, inc
     """
     _verify_can_view_student(get_user(request), student_id)
     channels = _reportable_channels(student_id, include_face)
-    return _signal_summary(student_id, max(1, min(days, 30)),
-                           include_heart=channels.heart,
-                           include_emotion=channels.emotion,
-                           consent_retrieved=channels.consent_retrieved,
-                           emotion_revoked_at=channels.emotion_revoked_at,
-                           heart_revoked_at=channels.heart_revoked_at,
-                           eeg_enabled=channels.eeg,
-                           eeg_revoked_at=channels.eeg_revoked_at,
-                           erased=_erased_fields(channels, _window_start(max(1, min(days, 30)))))
+    days = max(1, min(days, 30))
+    summary = _signal_summary(student_id, days,
+                              include_heart=channels.heart,
+                              include_emotion=channels.emotion,
+                              consent_retrieved=channels.consent_retrieved,
+                              emotion_revoked_at=channels.emotion_revoked_at,
+                              heart_revoked_at=channels.heart_revoked_at,
+                              eeg_enabled=channels.eeg,
+                              eeg_revoked_at=channels.eeg_revoked_at,
+                              erased=_erased_fields(channels, _window_start(days)))
+    start, end = _report_period(days)
+    eeg_n, heart_n = summary["cognitive_samples"], summary["heart_samples"]
+    summary["usual"] = _personal_baseline(student_id, start, end, {
+        "focus": (summary["focus"], eeg_n), "calm": (_calm_of(summary["stress"]), eeg_n),
+        "heart_rate_bpm": (summary["heart_rate_bpm"], heart_n),
+        "rmssd_ms": (summary["rmssd_ms"], heart_n)}, channels.heart, channels.consent_retrieved)
+    return summary
 
 
 @app.get("/api/students/{student_id}/topic-breakdown")

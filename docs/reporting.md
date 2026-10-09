@@ -82,6 +82,28 @@ single query, so a declined channel is never read and then dropped in Python. As
 the payload. `_FakeSupabase` records every query it builds (`fake.queries`, each with `.filters`) so that
 assertion is possible at all.
 
+## A child is compared with their own usual
+
+`/weekly-report` and `/signal-summary` carry `usual`: each of focus, calm, heart rate, heart-rate variability and
+body arousal this period against the same student's prior 8 weeks, built by `_personal_baseline` from one named-column
+read of `signal_daily_rollup`. Calm is `1 − avg_stress`; it is the same number as EEG stress, the right way up.
+
+**One value per day, then the median and interquartile range of those days, unweighted.** The range is meant to show
+day-to-day spread, so a 4000-sample day counts once, like a 60-sample one. It is widened to at least ±3 points (±2 bpm,
+±3 ms) so a narrow history does not call a one-point move a change. A day is left out when it is in the current period,
+thinner than `_USUAL_DAY_FLOOR`, on a different score scale (focus and calm), a different calm source (calm only) or a
+different heart sensor class (heart measures). The floors and widths are judgement calls, not measurements.
+
+**The verdict compares numbers as the tile prints them**, so 65.4% beside "usual 55–65%" reads as usual and a reader
+can check every verdict against the printed range. It sets a period mean against a range of daily values, so it calls
+fewer periods unusual than a like-for-like comparison would; that is the price of being checkable.
+
+**Every non-comparison is its own status**: `not_enough_history` (fewer than 5 days, or fewer than 2 weeks),
+`too_little_this_period`, `not_comparable` (`mixed_scale`, `scale_unknown`, `sensor_changed`), `no_current`,
+`not_requested` (heart declined, and then not queried) and `not_retrieved` (the read failed). An absent `usual` is an
+older payload. It is attached in the handlers, not inside `_weekly_signal_report`, so the report's own query
+assertions still see exactly the reads they did.
+
 ## The teacher analytics aggregate in Postgres, and one of them is a table not a chart
 
 Five surfaces: a class topic heatmap, class accuracy per school day, a weekday×hour heatmap, a real last-active

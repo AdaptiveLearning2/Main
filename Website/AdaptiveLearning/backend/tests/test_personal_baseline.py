@@ -375,6 +375,19 @@ def test_the_weekly_usual_knows_an_open_lesson_is_not_counted(monkeypatch):
     assert report["usual"]["body_arousal"]["pending"] is True
 
 
+def test_the_weekly_report_compares_heart_while_todays_lesson_is_open(monkeypatch):
+    """Today's raw headband rows name the sensor, so heart is compared, not left pending."""
+    tables = _weekly_tables([_heart(d, bpm=70.0) for d in PRIOR])
+    tables["signal_consent"] = [{"user_id": STUDENT, "eeg_enabled": True,
+                                 "headband_optical_enabled": True}]
+    tables["heart_signals"] = [{"user_id": STUDENT, "ts": NOW_UTC.isoformat(),
+                                "source": "muse_optics", "heart_rate_bpm": 90.0,
+                                "trusted": True} for _ in range(40)]
+    bpm = _weekly(monkeypatch, tables)["usual"]["measures"]["heart_rate_bpm"]
+
+    assert (bpm["status"], bpm["verdict"]) == ("compared", "higher")
+
+
 def test_a_failed_weekly_eeg_read_is_unread_in_the_usual(monkeypatch):
     report = _weekly(monkeypatch, _weekly_tables([_cog(d) for d in PRIOR] + [_now_cog()]),
                      rpc_raises=lambda name, p: RuntimeError("x")

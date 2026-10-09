@@ -601,6 +601,14 @@ def test_rows_never_summarised_with_no_lesson_open_are_unknown_not_pending(monke
     assert _day(report, "2026-06-11")["body_arousal_state"] == "unknown"
 
 
+def test_an_unread_sessions_table_cannot_promise_no_lesson_is_open(monkeypatch, at_three_am_utc):
+    """No uncounted rows yet, but a lesson may have just started: the caveat is unknown."""
+    tables = _with_rollup(rollup=[_heart_rollup("2026-06-09", {"high": 40})])
+    arousal = _arousal(monkeypatch, tables, table_raises={"sessions"})["body_arousal"]
+
+    assert (arousal["state"], arousal["pending"]) == ("measured", None)
+
+
 def test_a_closed_lesson_is_not_an_open_one(monkeypatch, at_three_am_utc):
     tables = _with_rollup()
     tables["heart_signals"] = _heart_raw("muse_optics")

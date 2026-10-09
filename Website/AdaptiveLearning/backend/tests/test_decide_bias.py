@@ -7,6 +7,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 import pytest  # noqa: E402
 
 import LLM_topic_decider as td  # noqa: E402
+import signal_fusion as sf  # noqa: E402
 
 GOOD_RUN = {"answered": 5, "correct": 5, "accuracy": 1.0, "recent": [True] * 5}
 THIN_RUN = {"answered": 2, "correct": 2, "accuracy": 1.0, "recent": [True] * 2}
@@ -175,9 +176,28 @@ def test_a_negative_face_never_stops_an_ease_off():
                            increase_withheld=fused.increase_withheld) == -1
 
 
-def test_the_decider_applies_the_shared_rule():
-    """The decider calls the one rule, not a copy, and hands it the veto."""
-    import inspect
-    src = inspect.getsource(td.LLM_single_prompt_topic_and_difficulty_decider)
-    assert "_decide_bias(" in src
-    assert 'increase_withheld=bool(getattr(signal_state, "increase_withheld", False))' in src
+def _decide(monkeypatch, face):
+    """Run the decider on a good run and a focused EEG, the model asking for medium."""
+    fused = sf.fuse(sf.ChannelState("focused", "eeg focused and calm"), face=face)
+    monkeypatch.setattr(td, "get_user_performance", lambda _u: type("R", (), {"data": []})())
+    monkeypatch.setattr(td, "get_user_history", lambda _u: {"global": []})
+    monkeypatch.setattr(td, "get_session_performance", lambda _s: GOOD_RUN)
+    monkeypatch.setattr(td, "get_session_signal_state", lambda _s, _u: fused)
+    monkeypatch.setattr(td, "_allowed_topics", lambda _g: ["fractions"])
+    monkeypatch.setattr(td.llm_client, "generate_text", lambda _p: '{"topic": "fractions", "difficulty": "medium"}')
+    monkeypatch.setattr(td, "question_generation", lambda topic, difficulty, *_a: {"topic": topic})
+    monkeypatch.setattr(td, "_attach_stored_id", lambda *_a: None)
+    return td.LLM_single_prompt_topic_and_difficulty_decider("kid", "5th Grade", "sess-1")
+
+
+def test_the_decider_holds_a_vetoed_increase(monkeypatch):
+    q = _decide(monkeypatch, face=sf.ChannelState("negative", "face sad"))
+    assert q["difficulty"] == "medium"
+    assert q["adaptive_decision"]["bias"] == 0 and q["adaptive_decision"]["why"] == "facial_veto"
+    assert q["adaptive_decision"]["increase_withheld"] is True
+
+
+def test_the_decider_raises_without_the_veto(monkeypatch):
+    q = _decide(monkeypatch, face=sf.ChannelState())
+    assert q["difficulty"] == "hard"
+    assert q["adaptive_decision"]["bias"] == 1 and q["adaptive_decision"]["why"] == "focused"

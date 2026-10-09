@@ -142,23 +142,32 @@ def _decide_bias(eeg_label, session_perf, manual_bias=0, increase_withheld=False
     a "focused" reading or a correct run, and is held by a manual setting, `increase_withheld`
     (the facial veto), or recent misses. Pure, so testable without a model or database.
     """
+    return _decide_bias_why(eeg_label, session_perf, manual_bias, increase_withheld)[0]
+
+
+# Why a bias was chosen, one fixed word each: stored and counted, so never free text or a reading.
+BIAS_WHYS = ("stressed", "manual", "facial_veto", "recent_misses", "focused", "correct_run", "nothing_to_act_on")
+
+
+def _decide_bias_why(eeg_label, session_perf, manual_bias=0, increase_withheld=False):
+    """`_decide_bias`'s shift and the branch that chose it, as `(bias, why)` with `why` in BIAS_WHYS."""
     if eeg_label == "stressed":
-        return -1
+        return -1, "stressed"
     if manual_bias:
-        return manual_bias
+        return manual_bias, "manual"
     if increase_withheld:
-        return 0
+        return 0, "facial_veto"
     # Recent misses veto a push from either source: correctness has no quality gate.
     if _recent_falling(session_perf):
-        return 0
+        return 0, "recent_misses"
     if eeg_label == "focused":
-        return 1
+        return 1, "focused"
     if (session_perf
             and (session_perf.get("answered") or 0) >= PERFORMANCE_PUSH_MIN_ANSWERS
             and (session_perf.get("accuracy") or 0) >= PERFORMANCE_PUSH_ACCURACY
             and _recent_all_correct(session_perf.get("recent"))):
-        return 1
-    return 0
+        return 1, "correct_run"
+    return 0, "nothing_to_act_on"
 
 
 def _recent_falling(session_perf):
@@ -812,9 +821,9 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
 
     # Re-applied deterministically because the model doesn't reliably follow them.
     # `eeg_label` is the fused label across every consented channel, not EEG alone.
-    effective_bias = _decide_bias(
-        eeg_label, session_perf, manual_bias,
-        increase_withheld=bool(getattr(signal_state, "increase_withheld", False)))
+    increase_withheld = bool(getattr(signal_state, "increase_withheld", False))
+    effective_bias, bias_why = _decide_bias_why(
+        eeg_label, session_perf, manual_bias, increase_withheld=increase_withheld)
     if effective_bias:
         difficulty = _shift_difficulty(difficulty, effective_bias)
 
@@ -832,6 +841,12 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
     # When the label was read; a prefetched question is served later, so it can be stale.
     question["signal_read_at"] = signal_read_at
     question["difficulty"]   = difficulty
+    # What the route stores as this question's adaptive decision: no reading, no free text.
+    question["adaptive_decision"] = {
+        "bias": effective_bias, "why": bias_why, "label": eeg_label,
+        "opinions": list(getattr(signal_state, "opinions", ()) or ()),
+        "increase_withheld": increase_withheld,
+    }
 
     return question
 

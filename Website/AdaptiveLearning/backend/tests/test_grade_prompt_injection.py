@@ -8,6 +8,7 @@ os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
 import pytest  # noqa: E402
+from fastapi import BackgroundTasks  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
 import grade_levels  # noqa: E402
@@ -187,7 +188,7 @@ def test_the_query_parameter_is_checked_too(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "student-1"})
     for payload in PAYLOADS:
         with pytest.raises(main.HTTPException) as caught:
-            main.generate_question(request=None, grade=payload, session_id=None)
+            main.generate_question(request=None, background_tasks=BackgroundTasks(), grade=payload, session_id=None)
         assert caught.value.status_code == 422
 
 

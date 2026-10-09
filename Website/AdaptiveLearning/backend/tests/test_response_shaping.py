@@ -58,6 +58,8 @@ CALLER_NUMBERS = {
         ("handler", "_CONSENT_OPS_MAX_WEEKS (half a school year)."),
     ("admin_signal_quality", "days"):
         ("handler", "_SIGNAL_QUALITY_MAX_DAYS; each day scans that day's heart rows."),
+    ("admin_adaptive", "days"):
+        ("handler", "_ADAPTIVE_MAX_DAYS, the same span as signal quality."),
     ("admin_student_search", "limit"):
         ("handler", "25, over a term already refused below two characters."),
     ("list_sessions", "limit"):

@@ -25,7 +25,8 @@ export default function AdminLiveFlow() {
         <h1 className="text-2xl font-black text-gray-900 dark:text-white">Data flow</h1>
         <p className="text-sm text-gray-500 dark:text-gray-400">
           Whether signals are arriving for each open session. Not what they say — no readings,
-          values or emotion labels are sent to this page.
+          values or emotion labels are sent to this page. A student&rsquo;s own report, from the
+          Overview&rsquo;s search, shows their readings as their teacher sees them.
         </p>
       </div>
 

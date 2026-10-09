@@ -28,7 +28,7 @@ describe('InfoTip', () => {
     expect(panel).not.toBeVisible()
   })
 
-  it('opens from the keyboard, and Escape closes it with focus back on the button', async () => {
+  it('opens from the keyboard, and Escape closes it with focus still on the button', async () => {
     const user = userEvent.setup()
     const { button, panel } = setup()
     await user.tab()

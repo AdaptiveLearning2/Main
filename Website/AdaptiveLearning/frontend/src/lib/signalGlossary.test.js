@@ -77,5 +77,7 @@ describe('usualRange', () => {
   it('has no range for a measure that was not compared', () => {
     expect(usualRange('focus', { status: 'not_enough_history', low: null, high: null })).toBeNull()
     expect(usualRange('focus', undefined)).toBeNull()
+    // A range beside "Not comparable" would contradict it, whatever figures came with it.
+    expect(usualRange('focus', { status: 'not_comparable', low: 0.5, high: 0.6 })).toBeNull()
   })
 })

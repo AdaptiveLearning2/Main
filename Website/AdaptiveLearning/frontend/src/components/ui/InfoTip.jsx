@@ -1,28 +1,26 @@
-import { useId, useRef, useState } from 'react'
+import { useId, useState } from 'react'
 import { Info } from 'lucide-react'
 
 /**
  * A "what is this?" disclosure: a button that shows a short explanation below it.
- * Click or keyboard opens it, Escape closes it and returns focus; never hover-only.
+ * Click or keyboard opens it, Escape closes it; never hover-only. The panel holds no
+ * focusable content, so focus stays on the button throughout.
  * `contents`: in a `flex-wrap` row the panel takes its own full-width line.
  */
 export default function InfoTip({ label, children }) {
   const [open, setOpen] = useState(false)
   const panelId = useId()
-  const buttonRef = useRef(null)
 
   function onKeyDown(e) {
     if (e.key === 'Escape' && open) {
       e.stopPropagation()
       setOpen(false)
-      buttonRef.current?.focus()
     }
   }
 
   return (
     <span className="contents" onKeyDown={onKeyDown}>
       <button
-        ref={buttonRef}
         type="button"
         aria-expanded={open}
         aria-controls={panelId}

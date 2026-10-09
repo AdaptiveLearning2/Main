@@ -85,8 +85,10 @@ On the weekly report a day's rows belong to the running lesson only from the sch
 
 **`unknown` is "could not check", never an absence**: the raw heart read or the sessions read failed, a lesson's heart
 rows or `any_rows` could not be read, heart rows exist that neither the rollup nor the running lesson accounts for
-(never summarised), or it is the trend's current week while a lesson runs or when that could not be checked (the
-trend sees finished lessons only; its caller passes `lesson_running`, so `_signal_trend` itself reads only the rollup).
+(never summarised), or it is the trend's current week while any session is open — running, or past the abandon
+window and not yet swept, since either may hold uncounted rows — or when that could not be checked (the trend sees
+finished lessons only; its caller passes `open_session`, so `_signal_trend` itself reads only the rollup). A surface
+that needs open sessions for several answers reads them once (`_open_sessions`) and passes them on.
 The raw aggregate names trusted sources only, so poor-contact rows name no sensor; a surface that counts no usable
 heart sample asks whether any row landed, in one read for all its students (`_heart_rows_many`), so the parent
 dashboard and a child's own report give the same answer. `pending` beside `measured` is `true` for a running lesson with heart rows and `null` when that could not be

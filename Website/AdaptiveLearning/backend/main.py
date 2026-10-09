@@ -1999,12 +1999,12 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
                   emotion_revoked_at: str | None = None,
                   heart_revoked_at: str | None = None,
                   rollup: tuple[list, bool] | None = None,
-                  lesson_running: bool | None = None):
+                  open_session: bool | None = None):
     """Week-over-week averages, read from the rollup and nothing else.
 
     Weighted by `trusted_sample_count` (stress by `_stress_weight`); see docs/reporting.md,
     "The term trend reads the rollup". `rollup` is `(rows, retrieved)` already read, to share
-    one read. `lesson_running` is the caller's `_open_lessons` answer; None is unchecked.
+    one read. `open_session` is the caller's `_any_open_session` answer; None is unchecked.
     """
     tz = _school_timezone()
     school_today = _school_today(tz)
@@ -2108,7 +2108,7 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
         arousal = _body_arousal(b["arousal"], _sensor_class(b["heart_sources"]), False,
                                 include_heart, retrieved,
                                 raw_ok=monday != _week_start(school_today)
-                                or lesson_running is False)
+                                or open_session is False)
         out.append({
             "week_start": b["week_start"],
             "score_scale": _scale_range(b["scale_rows"]),
@@ -2841,41 +2841,59 @@ def _usual_from_rows(rows: list, retrieved: bool, period_start: date, current: d
             "measures": measures}
 
 
-def _open_lessons(student_ids) -> dict[str, str] | None:
-    """`{student: started_at}` of the earliest lesson still running; None if unread.
-
-    Running: `ended_at` null and started inside `_SESSION_ABANDONED_AFTER_SEC`. An older open
-    session is one the sweep has not closed yet (a sleeping laptop), not a lesson in progress.
-    """
+def _open_sessions(student_ids) -> dict[str, list[str]] | None:
+    """`{student: [started_at, ...]}` of every session still open (`ended_at` null); None if unread."""
     ids = [str(s) for s in student_ids]
     if not ids:
         return {}
-    cutoff = (_utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)).isoformat()
     try:
         rows = supabase.table("sessions").select("user_id, started_at").in_("user_id", ids) \
-            .is_("ended_at", "null").gte("started_at", cutoff).execute().data or []
+            .is_("ended_at", "null").execute().data or []
     except Exception as e:                                     # noqa: BLE001
-        print(f"[open_lessons] {len(ids)} students: {e}")
+        print(f"[open_sessions] {len(ids)} students: {e}")
         return None
-    def when(stamp):
-        return _parse_ts(stamp) or _utc_now()
-    out: dict[str, str] = {}
+    out: dict[str, list[str]] = {}
     for r in rows:
-        sid, start = str(r.get("user_id")), str(r.get("started_at") or "")
-        if start and (sid not in out or when(start) < when(out[sid])):
-            out[sid] = start
+        if r.get("started_at"):
+            out.setdefault(str(r.get("user_id")), []).append(str(r["started_at"]))
     return out
 
 
-def _lesson_running(student_id: str, include_heart: bool) -> bool | None:
-    """Whether a lesson is running for the student (`_open_lessons`); None if unread.
+def _running_starts(open_sessions: dict[str, list[str]]) -> dict[str, str]:
+    """`{student: started_at}` of the earliest open session that is a lesson still running.
 
-    Asked only when heart is consented: otherwise body arousal is `not_requested` anyway.
+    Running: started inside `_SESSION_ABANDONED_AFTER_SEC`. An older open session is one the
+    sweep has not closed yet (a sleeping laptop): not in progress, though it may hold rows.
+    """
+    cutoff = _utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)
+    out = {}
+    for sid, starts in open_sessions.items():
+        running = [s for s in starts if (_parse_ts(s) or cutoff) > cutoff]
+        if running:
+            out[sid] = min(running, key=lambda s: _parse_ts(s))
+    return out
+
+
+def _open_lessons(student_ids) -> dict[str, str] | None:
+    """`{student: started_at}` of the earliest lesson still running; None if unread."""
+    sessions = _open_sessions(student_ids)
+    return None if sessions is None else _running_starts(sessions)
+
+
+# `open_sessions` not supplied: the helper reads it. A caller that already has it passes it.
+_READ = object()
+
+
+def _any_open_session(student_id: str, include_heart: bool, open_sessions=_READ) -> bool | None:
+    """Whether any session is still open, running or not yet swept; None if unread.
+
+    Either may hold heart rows the rollup has not counted. Asked only when heart is consented.
     """
     if not include_heart:
         return False
-    starts = _open_lessons([student_id])
-    return None if starts is None else str(student_id) in starts
+    if open_sessions is _READ:
+        open_sessions = _open_sessions([student_id])
+    return None if open_sessions is None else bool(open_sessions.get(str(student_id)))
 
 
 def _lesson_heart(open_starts: dict[str, str]) -> dict[str, bool | None]:
@@ -2894,11 +2912,15 @@ def _lesson_heart(open_starts: dict[str, str]) -> dict[str, bool | None]:
     return out
 
 
-def _running_heart_lessons(student_ids) -> dict[str, tuple[bool | None, str | None]]:
+def _running_heart_lessons(student_ids, open_sessions=_READ
+                           ) -> dict[str, tuple[bool | None, str | None]]:
     """Per student, `(pending, started_at)`: a running lesson with heart rows. None if unread."""
-    starts = _open_lessons(student_ids)
-    if starts is None:
+    if open_sessions is _READ:
+        open_sessions = _open_sessions(student_ids)
+    if open_sessions is None:
         return {str(s): (None, None) for s in student_ids}
+    wanted = {str(s) for s in student_ids}
+    starts = {s: t for s, t in _running_starts(open_sessions).items() if s in wanted}
     heart = _lesson_heart(starts)
     return {str(s): (heart.get(str(s)), starts[str(s)]) if str(s) in starts else (False, None)
             for s in student_ids}
@@ -2925,14 +2947,15 @@ def _heart_rows_many(student_ids, days: int) -> dict[str, bool | None]:
 
 
 def _lesson_context(summaries: dict[str, dict], heart: dict[str, bool], days: int,
-                    any_rows: dict[str, bool | None] | None = None) -> dict[str, dict]:
+                    any_rows: dict[str, bool | None] | None = None,
+                    open_sessions=_READ) -> dict[str, dict]:
     """Per student, `lesson_pending` and `heart_rows` for `_usual_from_rows`; None where unread.
 
     `lesson_pending`: a running lesson with heart rows. A summary counts usable samples only, so
     for one with none this asks, in one read, whether any row landed; `any_rows` passes answers had.
     """
     consented = [s for s in summaries if heart.get(s)]
-    running = _running_heart_lessons(consented)
+    running = _running_heart_lessons(consented, open_sessions)
     known = dict(any_rows or {})
     ask = [s for s in consented if not summaries[s].get("heart_samples") and s not in known]
     known.update(_heart_rows_many(ask, days))
@@ -4408,7 +4431,7 @@ def student_signal_trend(student_id: str, request: Request, weeks: int = 8,
                          consent_retrieved=channels.consent_retrieved,
                          emotion_revoked_at=channels.emotion_revoked_at,
                          heart_revoked_at=channels.heart_revoked_at,
-                         lesson_running=_lesson_running(student_id, channels.heart))
+                         open_session=_any_open_session(student_id, channels.heart))
 
 
 @app.get("/api/students/{student_id}/weekly-report")
@@ -5172,6 +5195,8 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
                               eeg_revoked_at=channels.eeg_revoked_at)
     start, end = _report_period(days)
     rollup = _summary_basis_rollup(student_id, weeks, start, end, channels)
+    # One sessions read for the trend and the usual, so they cannot disagree about a lesson.
+    open_sessions = _open_sessions([student_id]) if channels.heart else {}
     trend = _signal_trend(student_id, weeks,
                           include_heart=channels.heart,
                           include_emotion=channels.emotion,
@@ -5179,7 +5204,8 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
                           emotion_revoked_at=channels.emotion_revoked_at,
                           heart_revoked_at=channels.heart_revoked_at,
                           rollup=rollup,
-                          lesson_running=_lesson_running(student_id, channels.heart))
+                          open_session=_any_open_session(student_id, channels.heart,
+                                                         open_sessions))
     stats = _stats_including_open_session(student_id)
     topics, topics_retrieved = _topic_breakdown_with_state(student_id)
     attempted = [t for t in topics if (t.get("attempted_questions") or 0) > 0]
@@ -5204,7 +5230,8 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
     # `any_rows` was already asked for an empty heart channel; reuse it rather than ask twice.
     context = _lesson_context(
         {student_id: summary}, {student_id: channels.heart}, days,
-        {student_id: heart_info["any_rows"]} if "any_rows" in heart_info else None)[student_id]
+        {student_id: heart_info["any_rows"]} if "any_rows" in heart_info else None,
+        open_sessions)[student_id]
     usual = _personal_baseline(student_id, start, end, {**_usual_current(summary), **context},
                                channels.heart, channels.consent_retrieved, rollup=rollup)
     arousal = usual["measures"]["body_arousal"]

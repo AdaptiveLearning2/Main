@@ -1210,3 +1210,23 @@ def test_a_tie_between_every_topic_is_not_read_as_one_topic():
     lines = main._rule_based_chart_summary(basis)
     assert "All 2 attempted topics are at 100%, so none stands out as strongest or weakest." in lines
     assert not any(line.startswith("Only ") for line in lines)
+
+
+def test_the_chart_summary_reads_open_sessions_once(monkeypatch):
+    """The trend and the usual must answer from one read, or a lesson closing between splits them."""
+    from tests.test_access_control import _FakeSupabase
+    fake = _FakeSupabase({"signal_daily_rollup": [], "heart_signals": [], "sessions": [
+        {"id": "o", "user_id": "s", "started_at": main._utc_now().isoformat(), "ended_at": None}]})
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "_reportable_channels",
+                        lambda sid, inc=True: main.ReportChannels(
+                            heart=True, emotion=False, consent_retrieved=True))
+    monkeypatch.setattr(main, "_signal_summary", lambda *a, **k: {
+        **main._EMPTY_SUMMARY, "cognitive_samples": 400, "heart_samples": 5})
+    monkeypatch.setattr(main, "_stats_including_open_session",
+                        lambda sid: {"total_questions": 0, "total_correct": 0, "retrieved": True})
+    monkeypatch.setattr(main, "_topic_breakdown_with_state", lambda sid: ([], True))
+
+    main._chart_summary_basis("s", 7, 8, True)
+
+    assert fake.table_calls.count("sessions") == 1

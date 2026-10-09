@@ -331,3 +331,10 @@ def test_the_current_week_stays_unknown_while_a_lesson_runs(monkeypatch):
 
 def test_the_current_week_stays_unknown_when_sessions_cannot_be_read(monkeypatch):
     assert _trend_endpoint(monkeypatch, [], table_raises=["sessions"]) == "unknown"
+
+
+def test_the_current_week_stays_unknown_beside_an_unswept_old_session(monkeypatch):
+    """Open past the abandon window, so not running, but its rows may still be uncounted."""
+    old = NOW_UTC - main.timedelta(seconds=main._SESSION_ABANDONED_AFTER_SEC + 60)
+    unswept = [{"id": "o", "user_id": STUDENT, "started_at": old.isoformat(), "ended_at": None}]
+    assert _trend_endpoint(monkeypatch, unswept) == "unknown"

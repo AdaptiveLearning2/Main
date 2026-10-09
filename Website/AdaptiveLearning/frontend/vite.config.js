@@ -17,6 +17,8 @@ export default defineConfig({
     setupFiles: './src/test/setup.js',
     css: false,
     include: ['src/**/*.{test,spec}.{js,jsx}'],
+    // Neither UTC (CI) nor a whole-hour zone, so a test can tell the browser's zone from a hard-coded one.
+    env: { TZ: 'Asia/Kolkata' },
     // No coverage thresholds on purpose: coverage is informational.
   },
 })

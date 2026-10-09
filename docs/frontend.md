@@ -79,6 +79,11 @@ the latter's account describe collapses the sidebar in its **first** test, so th
 clear. `clearViewPrefs()` is the guard, and it needs a test standing **downstream of the
 leak** to have teeth: with the switching test last in the file, removing the guard breaks nothing.
 
+**Tests run in Asia/Kolkata** (`test.env.TZ` in `vite.config.js`), on CI and every laptop alike. CI's own zone
+is UTC, where "the browser's zone" and a zone hard-coded to UTC read the same; a half-hour offset also tells a
+whole-hour bug from a right answer. Build an expected time with the machine's locale rather than a literal
+(`toLocaleTimeString([], …)`), or the test fails on a UK or Australian laptop.
+
 ## The frontend reads the same column, through `GET /api/profile/me`
 
 The claim is wrong for any role not chosen at sign-up — an account promoted to `admin` in the SQL editor has no `role`

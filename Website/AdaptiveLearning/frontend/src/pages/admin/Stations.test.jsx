@@ -66,6 +66,8 @@ describe('the stations page', () => {
     }))
     page()
     const line = await screen.findByText(/Last lesson here today ended/)
+    // vite.config.js runs tests off UTC, or a fallback hard-coded to UTC would read as the browser's zone.
+    expect(new Date('2026-10-08T16:40:00+00:00').getTimezoneOffset()).not.toBe(0)
     const local = new Date('2026-10-08T16:40:00+00:00').toLocaleTimeString([],
       { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })
     expect(line.textContent).toContain(`ended at ${local}:`)

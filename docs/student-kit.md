@@ -98,7 +98,26 @@ Scheduler ends a run at an action that cannot, so the installers go through `cmd
   `rollback.log` and the last self-test's `selftest.json`.
 - **The gate** is `installer/update_gate`, a Worker on the private bucket: `GET`/`HEAD` on the two feeds and on exact
   Update installer names, one 401 for a missing or wrong key before any route, feeds `no-store`. Cloudflare refuses
-  Python's default User-Agent in front of it (403, error 1010), so the updater must keep sending its own.
+  Python's default User-Agent in front of it (403, error 1010), so the updater and the backend each send their own.
+
+## The admin page's installer
+
+An admin downloads the current Setup installer from the **Sensors kit** page (`/admin/kit`). The installer carries this
+deployment's learner token and download key, so it is never public. Nor is it behind the download key: a browser
+following a link sends no header.
+
+- **A link is the credential.** `POST /api/admin/kit/download-link` signs `/v1/setup/current?exp=…&sig=…`: HMAC-SHA256
+  of `setup:<exp>` under `KIT_LINK_SECRET`, the gate's `LINK_SECRET`, valid 10 minutes. It names no user and is never
+  cached. The gate honours a link until `exp` and never one more than 15 minutes ahead, and answers an expired or
+  forged one with one 403 before reading the bucket. The download is a navigation, so no CSP `connect-src` is needed.
+- **The details** come from `GET /api/admin/kit`, which reads `/v1/setup/current.json` through a `meta:` link. Four
+  states: `configured: false` (the settings are unset), `published: false`, the installer's version, size, SHA-256 and
+  date, or a 503. Only the gate's own 404, marked `X-Kit-Setup: none`, means nothing is published: any other 404 is a
+  wrong `KIT_GATE_URL`, and reads as a failed read, never as an empty bucket.
+- **Publishing.** `publish_kit_update.ps1 -Setup`, only with `-Promote` at 100%: the site offers the version every kit
+  is moving to. It uploads `setup/AdaptiveLearningSensors-Setup-x.y.z.exe`, then `setup/current.json`, and never
+  replaces an offered installer with other bytes. The signature is computed three times (`worker.mjs`,
+  `backend/kit_gate.py`, `kit_release.py link`); one test vector in each keeps them equal.
 
 None of this shows a version that passes its self-test and still fails on a real headband or camera; canary, then a
 gradual rollout, is what catches that.

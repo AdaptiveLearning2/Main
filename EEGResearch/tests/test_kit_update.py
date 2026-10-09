@@ -452,6 +452,31 @@ def test_a_redirect_is_refused_rather_than_followed():
         server.server_close()
 
 
+def test_a_request_to_the_gate_names_the_kit_not_python(monkeypatch):
+    """Cloudflare answers Python's default User-Agent with a 403 before the gate sees the request."""
+    seen = []
+
+    class Gate(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append(self.headers.get_all("User-Agent"))
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Gate)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        monkeypatch.setattr(update_settings, "GATE_URL", f"http://127.0.0.1:{server.server_port}")
+        update._get(urllib.request.build_opener(update._RefuseRedirects()), "/v1/feed/latest.json", "k").close()
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert seen == [["AdaptiveLearningSensors"]]
+
+
 def test_the_real_opener_refuses_redirects_too():
     assert any(isinstance(h, update._RefuseRedirects) for h in update.opener().handlers)
     assert any(isinstance(h, update._RefuseRedirects) for h in update.opener("http://proxy:8080").handlers)
@@ -975,13 +1000,50 @@ def test_newkey_writes_an_encrypted_key_and_never_over_another(tmp_path):
         kit_release.new_key(path, b"correct horse battery")
 
 
-def test_newdownloadkey_writes_a_key_the_settings_accept_and_never_over_another(tmp_path):
-    path = tmp_path / "download.key"
-    kit_release.new_download_key(path)
+@pytest.mark.parametrize("command", ["newdownloadkey", "newlinksecret"])
+def test_each_gate_secret_is_written_to_a_file_the_settings_accept_and_never_over_another(tmp_path, command):
+    path = tmp_path / "secret"
+    assert kit_release.main([command, str(path)]) == 0
     key = path.read_text(encoding="ascii")
     assert update_settings.check({"key": key}).key == key and key == key.strip()
     with pytest.raises(FileExistsError):
-        kit_release.new_download_key(path)
+        kit_release.main([command, str(path)])
+    assert path.read_text(encoding="ascii") == key
+
+
+def test_setup_current_describes_a_setup_installer_only(tmp_path):
+    setup = tmp_path / "AdaptiveLearningSensors-Setup-0.2.1.exe"
+    setup.write_bytes(b"setup bytes")
+    assert json.loads(kit_release.setup_current(setup, NOW)) == {
+        "version": "0.2.1", "file": setup.name, "sha256": hashlib.sha256(b"setup bytes").hexdigest(), "size": 11,
+        "published": NOW.isoformat(timespec="seconds")}
+    update_installer = tmp_path / NEW["file"]
+    update_installer.write_bytes(NEW_BODY)
+    with pytest.raises(update.FeedError):
+        kit_release.setup_current(update_installer, NOW)
+
+
+def test_the_setup_command_never_writes_over_a_file(tmp_path):
+    setup = tmp_path / "AdaptiveLearningSensors-Setup-0.2.1.exe"
+    setup.write_bytes(b"setup bytes")
+    out = tmp_path / "current.json"
+    assert kit_release.main(["setup", "--installer", str(setup), "--out", str(out)]) == 0
+    assert json.loads(out.read_bytes())["file"] == setup.name
+    with pytest.raises(FileExistsError):
+        kit_release.main(["setup", "--installer", str(setup), "--out", str(out)])
+
+
+def test_a_link_carries_the_signature_the_gate_and_the_backend_compute():
+    # The same vector is asserted in update_gate/worker.test.mjs and backend/tests/test_kit_gate.py.
+    secret, exp = "link-secret-for-tests", 1791600000
+    assert kit_release.link_signature(secret, "setup", exp) == (
+        "c1fc44f6d56f32d734d035082599bead29dffdbe66ddedf9ab53a3c1935631b8")
+    assert kit_release.link_signature(secret, "meta", exp) == (
+        "8e145db21708e6554a4d8c1f5cc471620d424a936d7dec1aa957327f389a498f")
+    assert kit_release.link("https://gate.example/", secret, "meta", exp - 600 + 0.7) == (
+        f"https://gate.example/v1/setup/current.json?exp={exp}&sig=8e145db21708e6554a4d8c1f5cc471620d424a936d7dec1aa957327f389a498f")
+    assert kit_release.link("https://gate.example", secret, "setup", exp - 600).startswith(
+        f"https://gate.example/v1/setup/current?exp={exp}&sig=c1fc44f6")
 
 
 def test_release_of_reads_an_update_installer_only(tmp_path):

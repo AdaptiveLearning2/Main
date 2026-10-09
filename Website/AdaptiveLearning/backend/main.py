@@ -25,6 +25,7 @@ import eeg_poller
 import llm_client
 import ops_metrics
 import grade_levels
+import kit_gate
 import safe_solve
 from env_config import env_number
 
@@ -9053,6 +9054,42 @@ def admin_student_search(request: Request, q: str = "", limit: int = 10):
         "email": r.get("email") or "",
         "grade_level": r.get("grade_level"),
     } for r in rows]}
+
+
+# ─── admin: the student kit's installer ──────────────────────────────────
+# The gate serves it only to a short link this server signs. See kit_gate.py.
+
+_KIT_GATE = kit_gate.settings()
+if _KIT_GATE is None:
+    print("[config] KIT_GATE_URL and KIT_LINK_SECRET are not both set: the admin page offers no kit installer")
+
+
+@app.get("/api/admin/kit")
+def admin_kit(request: Request):
+    """The Setup installer the gate offers; `configured: false` without the gate's settings, 503 if unread."""
+    _require_admin(request)
+    if _KIT_GATE is None:
+        return {"configured": False}
+    try:
+        found = kit_gate.current(*_KIT_GATE, _utc_now().timestamp())
+    except kit_gate.GateError as e:
+        print(f"[admin:kit] {e}")
+        raise _read_failed("The kit's installer could not be looked up; try again")
+    if found is None:
+        return {"configured": True, "published": False}
+    return {"configured": True, "published": True, **found}
+
+
+@app.post("/api/admin/kit/download-link")
+def admin_kit_download_link(request: Request):
+    """A link the gate honours for `kit_gate.LINK_TTL_S`. It names no user and is never cached."""
+    user = _require_admin(request)
+    if _KIT_GATE is None:
+        raise HTTPException(503, "This server has no kit download gate set up")
+    url, exp = kit_gate.link(*_KIT_GATE, "setup", _utc_now().timestamp())
+    print(f"[admin:kit] a download link for {user['id'][:8]}")
+    return JSONResponse({"url": url, "expires_at": datetime.fromtimestamp(exp, timezone.utc).isoformat()},
+                        headers={"Cache-Control": "no-store"})
 
 
 if __name__ == "__main__":

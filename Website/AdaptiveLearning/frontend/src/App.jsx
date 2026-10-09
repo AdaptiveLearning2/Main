@@ -58,6 +58,7 @@ const AdminSchoolYear  = lazy(pages.adminSchoolYear)
 const AdminSecurity    = lazy(pages.adminSecurity)
 const AdminEngine      = lazy(pages.adminEngine)
 const AdminStations    = lazy(pages.adminStations)
+const AdminKit         = lazy(pages.adminKit)
 const AdminStudentReport = lazy(pages.adminStudentReport)
 
 const NotFound = lazy(pages.notFound)
@@ -128,6 +129,7 @@ export default function App() {
               <Route path="/admin/security" element={<AdminSecurity />} />
               <Route path="/admin/engine" element={<AdminEngine />} />
               <Route path="/admin/stations" element={<AdminStations />} />
+              <Route path="/admin/kit" element={<AdminKit />} />
               <Route path="/admin/students/:id/report" element={<AdminStudentReport />} />
             </Route>
 

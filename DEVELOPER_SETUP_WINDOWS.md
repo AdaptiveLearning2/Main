@@ -302,6 +302,18 @@ Then, from the repo root:
    Get-Content -Raw E:\kit-keys\download.key | npx --yes wrangler@4.148.0 secret put DOWNLOAD_KEY
    ```
 
+4. The link secret, for the admin page's **Sensors kit** download: the gate's `LINK_SECRET`, and
+   the backend's `KIT_LINK_SECRET` beside `KIT_GATE_URL` (the gate's address) on Render. Paste it
+   into Render's form from the file and clear the clipboard after; unset, the page says so.
+
+   ```powershell
+   EEGResearch\.venv\Scripts\python.exe EEGResearch\installer\kit_release.py newlinksecret E:\kit-keys\link.secret
+   ```
+
+   ```powershell
+   Get-Content -Raw E:\kit-keys\link.secret | npx --yes wrangler@4.148.0 secret put LINK_SECRET
+   ```
+
 **Each release.** Build it, then publish the Update installer to the canary feed, which only kits
 built with `-UpdateFeed canary` follow:
 
@@ -321,6 +333,9 @@ promote it to a tenth of computers, then to all:
 .\EEGResearch\scripts\publish_kit_update.ps1 -Version 0.2.1 -SigningKey E:\kit-keys\everyday.pem -DownloadKeyFile E:\kit-keys\download.key -Promote -Rollout 100
 ```
 
+At 100%, add `-Setup -LinkSecretFile E:\kit-keys\link.secret` to also offer that version's Setup
+installer on the admin page; it is read back through a signed link before the script reports success.
+
 Each feed lists every installer the published feeds have named, and a computer installs only
 when its own version is among them, since that is where a failed check rolls it back to. So
 publish every version that reaches a computer, starting with 0.2.0 (`-Promote`): with nothing
@@ -336,6 +351,7 @@ says why), beside `update.log` and the installers' own logs.
 ### For school IT
 
 The Update installer carries no site address, token or key, and only updates a kit Setup installed.
+An admin downloads the Setup installer from the site's admin console, **Sensors kit**.
 
 - **First install, IT-managed:** `AdaptiveLearningSensors-Setup-<version>.exe /VERYSILENT
   /SUPPRESSMSGBOXES /NORESTART /ALLUSERS /MERGETASKS="!autoupdate"`, so no update task is

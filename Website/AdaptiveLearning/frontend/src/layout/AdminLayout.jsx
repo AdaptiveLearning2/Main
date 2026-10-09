@@ -1,7 +1,7 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { m } from 'framer-motion'
 import {
-  ShieldCheck, ToggleLeft, CalendarRange, Activity, ScrollText, Gauge, Radio, LogOut, Moon, Sun, ChevronLeft, ChevronRight, Menu,
+  ShieldCheck, ToggleLeft, CalendarRange, Activity, ScrollText, Gauge, Radio, Download, LogOut, Moon, Sun, ChevronLeft, ChevronRight, Menu,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
@@ -18,6 +18,7 @@ const NAV = [
   { path: '/admin/security', label: 'Security log', icon: ScrollText },
   { path: '/admin/engine',   label: 'Engine',      icon: Gauge },
   { path: '/admin/stations', label: 'Stations',    icon: Radio },
+  { path: '/admin/kit',      label: 'Sensors kit', icon: Download },
 ]
 
 function SidebarContent({ collapsed, mobile, onClose }) {

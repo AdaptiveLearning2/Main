@@ -122,6 +122,14 @@ Three read-only RPCs (`20261011000000`), each called inline (so `_missing_rpc` s
 - A decision whose `opinions` include `headband_optical` or `camera` is left out while the student has that consent off now. EEG is always read.
 - The rows themselves are signal-derived (CLAUDE.md, *Erasure* and expiry): service-role only, expired by `expire_adaptive_decisions` at 03:55, and deleted for a student by any erasure.
 
+## Sensors kit
+
+**`/api/admin/kit`** reads the Setup installer the kit gate offers; **`POST /api/admin/kit/download-link`** signs a 10-minute link to it (`kit_gate.py`; the scheme is in `docs/student-kit.md`, *The admin page's installer*).
+- Admin only, like every route here, because the installer carries the site's learner token and download key.
+- `configured: false` when `KIT_GATE_URL` or `KIT_LINK_SECRET` is unset, a boot `[config]` line beside it; the link route answers 503 then.
+- A gate that cannot be read is a 503 with `Retry-After`, never `published: false`.
+- The link names no user and is sent `no-store`; issuing one prints the admin's id prefix to the server log, nothing to the security log, which records refusals.
+
 ## The security log records that something happened, never what was in it
 
 `security_events` is append-only, written by `_record_security_event` from the access helpers, the three

@@ -646,3 +646,18 @@ def test_the_parent_dashboard_stamps_each_childs_usual(monkeypatch):
 
     assert children["a"]["signal_summary"]["usual"]["measures"]["focus"]["verdict"] == "higher"
     assert children["b"]["signal_summary"]["usual"]["measures"]["focus"]["verdict"] == "lower"
+
+
+def test_open_sessions_for_a_wider_set_never_read_a_non_consented_childs_heart(monkeypatch):
+    """Consent gates the read: a running lesson of a child not asked about is never queried."""
+    fake = _FakeSupabase({"heart_signals": [
+        {"user_id": k, "ts": NOW_UTC.isoformat()} for k in ("yes", "no")]})
+    monkeypatch.setattr(main, "supabase", fake)
+    sessions = {k: [NOW_UTC.isoformat()] for k in ("yes", "no")}
+
+    out = main._running_heart_lessons(["yes"], sessions)
+
+    heart_reads = [q for name, q in zip(fake.table_calls, fake.queries) if name == "heart_signals"]
+    assert [v for c, v in heart_reads[0].filters if c == "user_id"] == ["yes"]
+    assert len(heart_reads) == 1
+    assert set(out) == {"yes"}

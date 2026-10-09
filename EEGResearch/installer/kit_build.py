@@ -1,7 +1,8 @@
 """The student kit's build steps that need Python, run by build_student_kit.ps1 with the build venv's interpreter.
 
 models: fetch and verify both camera models. freeze: PyInstaller onedir. stage: assemble the installed folder.
-audit: every DLL each binary imports is bundled beside it or ships with Windows. See DEVELOPER_SETUP_WINDOWS.md.
+audit: every DLL each binary imports is bundled beside it or ships with Windows. scan: the Update copy holds no
+secret. See DEVELOPER_SETUP_WINDOWS.md.
 """
 
 from __future__ import annotations
@@ -184,6 +185,25 @@ def audit(app: Path) -> int:
     return 1 if problems else 0
 
 
+SECRETS_VAR = "KIT_SCAN_SECRETS"  # newline-separated; an environment variable, so no secret is on a command line
+
+
+def scan(folder: Path, secrets: list[str]) -> int:
+    """Fails if a file under folder holds a secret as ASCII or UTF-16, or is a settings file: the Update copy's check."""
+    if not secrets:
+        print(f"{SECRETS_VAR} names nothing to scan for")
+        return 1
+    needles = [form for secret in secrets for form in (secret.encode("ascii"), secret.encode("utf-16-le"))]
+    files = sorted(p for p in folder.rglob("*") if p.is_file())
+    found = [p for p in files if p.name in (kit_config.KIT_FILE, "update.json")
+             or any(needle in p.read_bytes() for needle in needles)]
+    for path in found:
+        print(f"holds a secret or settings: {path.relative_to(folder)}")  # the file, never the secret
+    if not found:
+        print(f"scanned {len(files)} files under {folder}: no settings file and no secret")
+    return 1 if found else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="kit_build.py")
     sub = parser.add_subparsers(dest="step", required=True)
@@ -195,7 +215,10 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("dist", "bridge_exe", "model_dir", "out"):
         p.add_argument(name, type=Path)
     sub.add_parser("audit").add_argument("app", type=Path)
+    sub.add_parser("scan").add_argument("folder", type=Path)
     args = parser.parse_args(argv)
+    if args.step == "scan":
+        return scan(args.folder, [s for s in os.environ.get(SECRETS_VAR, "").splitlines() if s])
     if args.step == "models":
         return models(args.target)
     if args.step == "freeze":

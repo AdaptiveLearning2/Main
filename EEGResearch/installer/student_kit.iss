@@ -1,6 +1,10 @@
-; The student sensor kit's installer (Inno Setup 6). Built by EEGResearch\scripts\build_student_kit.ps1, which
-; passes /DAppVersion, /DSourceDir (the staged AdaptiveLearningSensors folder) and /DOutputDir.
+; The student sensor kit's installer (Inno Setup 6.5+). Built by EEGResearch\scripts\build_student_kit.ps1, which
+; passes /DAppVersion, /DSourceDir (the staged AdaptiveLearningSensors folder) and /DOutputDir; /DUpdateOnly
+; builds the Update installer, which carries no kit.json or update.json and changes an installed kit's code only.
 
+#if Ver < EncodeVer(6, 5, 0)
+  #error Inno Setup 6.5 or later: as SYSTEM, older versions extract into a temp folder users can write
+#endif
 #ifndef AppVersion
   #error Pass /DAppVersion=x.y.z
 #endif
@@ -11,6 +15,7 @@
   #define OutputDir "."
 #endif
 #define AppExe "AdaptiveLearningSensors.exe"
+#define UpdateTask "AdaptiveLearning Sensors Update"
 
 [Setup]
 ; Fixed for good: an upgrade finds the installed copy by this id.
@@ -29,15 +34,30 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir={#OutputDir}
+#ifdef UpdateOnly
+OutputBaseFilename=AdaptiveLearningSensors-Update-{#AppVersion}
+#else
 OutputBaseFilename=AdaptiveLearningSensors-Setup-{#AppVersion}
+#endif
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\{#AppExe}
-CloseApplications=yes
+CloseApplications=force
+CloseApplicationsFilter=*.exe,*.dll,*.pyd
 RestartApplications=no
 
+[Tasks]
+; Only for an all-users install in Program Files, where students cannot write what the SYSTEM task runs.
+Name: "autoupdate"; Description: "Keep the sensors up to date automatically"; Check: CanUpdateItself
+
+[InstallDelete]
+; Before copying, so an older version installed over a newer one keeps none of its DLLs, which load first from here.
+Type: filesandordirs; Name: "{app}\_internal"
+Type: filesandordirs; Name: "{app}\bridge"
+
 [Files]
+; For /DUpdateOnly, SourceDir is the build's copy without kit.json and update.json, scanned for both secrets.
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
@@ -47,25 +67,45 @@ Name: "{group}\Stop sensors"; Filename: "{app}\{#AppExe}"; Parameters: "--stop"
 Name: "{autostartup}\AdaptiveLearning Sensors"; Filename: "{app}\{#AppExe}"
 
 [Run]
+; Not skipifsilent: an IT install with the box ticked registers the task too, and the task's own run keeps it.
+Filename: "{app}\{#AppExe}"; Parameters: "--register-task"; Flags: runhidden waituntilterminated; Tasks: autoupdate
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""{#UpdateTask}"" /F"; Flags: runhidden waituntilterminated; Tasks: not autoupdate; Check: IsAdminInstallMode
 ; As the signed-in user, never as the admin or SYSTEM account that ran setup. A silent install waits for sign-in.
 Filename: "{app}\{#AppExe}"; Description: "Start the sensors now"; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallRun]
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""{#UpdateTask}"" /F"; Flags: runhidden waituntilterminated; RunOnceId: "DeleteUpdateTask"; Check: IsAdminInstallMode
 Filename: "{app}\{#AppExe}"; Parameters: "--stop"; Flags: runhidden waituntilterminated; RunOnceId: "StopSensors"
 ; --stop reaches only this user's copy; elevated, this ends one in another user's session, children included.
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /T /IM {#AppExe}"; Flags: runhidden waituntilterminated; RunOnceId: "KillSensors"
 
 [UninstallDelete]
+; The updater's staged installers, status and logs.
+Type: filesandordirs; Name: "{app}\updates"
 ; Logs are per user; only a just-for-me install knows whose to remove.
 Type: filesandordirs; Name: "{localappdata}\AdaptiveLearning\Sensors"; Check: not IsAdminInstallMode
 
 [Code]
+function CanUpdateItself: Boolean;
+begin
+  Result := IsAdminInstallMode and
+    (CompareText(ExpandConstant('{app}'), ExpandConstant('{commonpf64}\AdaptiveLearning Sensors')) = 0);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   OldExe: String;
   ResultCode: Integer;
 begin
   Result := '';
+#ifdef UpdateOnly
+  { An Update installer brings no settings, so it only ever updates a kit a full installer set up. Exit code 7. }
+  if not FileExists(ExpandConstant('{app}\kit.json')) then
+  begin
+    Result := 'No AdaptiveLearning Sensors kit is installed here. Install the full Setup first.';
+    Exit;
+  end;
+#endif
   OldExe := ExpandConstant('{app}\{#AppExe}');
   if FileExists(OldExe) then
   begin

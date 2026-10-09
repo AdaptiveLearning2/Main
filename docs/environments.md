@@ -17,7 +17,7 @@ a venv, a dependency pin or a `requirements*.lock`, the `Dependency scan` or `Se
 | `-NoEmotion` | FER+ off, and skips the 35 MB model fetch entirely. |
 | `-Optics` (`-OpticsPreset 103N`) | Headband optical channels. Refused without `-Muse`. |
 | `-LocalCalm` | `EEG_SPECTRUM_SOURCE=local`. Refused without `-Muse`, and refused outright by `start.sh`. |
-| `-Hosted` (`-BackendUrl`, `-FrontendOrigin`, `-LearnerToken`) | Student machine for the hosted site: bridge and sidecar only, pushing to the backend with the site's shared token. Refused without `-Muse` (the simulator streams unpaired, so it would push made-up EEG) and outright by `start.sh`. Tests: `test_launcher_hosted.py`. The student kit (`EEGResearch/src/kit`, see `docs/signals.md`) sets the same values from `kit.json`, checked against the same table (`tests/launcher_cases.py`). |
+| `-Hosted` (`-BackendUrl`, `-FrontendOrigin`, `-LearnerToken`) | Student machine for the hosted site: bridge and sidecar only, pushing to the backend with the site's shared token. Refused without `-Muse` (the simulator streams unpaired, so it would push made-up EEG) and outright by `start.sh`. Tests: `test_launcher_hosted.py`. The student kit (`EEGResearch/src/kit`, see `docs/student-kit.md`) sets the same values from `kit.json`, checked against the same table (`tests/launcher_cases.py`). |
 
 **Every model-backed flag provisions its model at setup, not on the first frame of a lesson** — a
 4 MB download in front of a student reads as a broken feature rather than an incomplete install.

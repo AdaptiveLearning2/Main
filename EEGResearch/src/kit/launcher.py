@@ -1,13 +1,14 @@
 """The kit's entry: per machine, one launcher supervising the sidecar and the bridge in their own processes.
 
 No window; logs under %LOCALAPPDATA%. `--stop` ends the running copy and waits for it; `--self-test REPORT`
-checks a build. See docs/signals.md.
+checks a build; update.MODES are the update task's. See docs/student-kit.md.
 """
 
 from __future__ import annotations
 
 import argparse
 import faulthandler
+import json
 import logging
 import logging.handlers
 import os
@@ -15,6 +16,7 @@ import socket
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 from src.kit import config as kit_config
@@ -31,6 +33,9 @@ SIDECAR_STOP_S = 15.0
 # closes would spend all of SIDECAR_STOP_S, and the push client would never flush.
 SIDECAR_DRAIN_S = 2.0
 BRIDGE_EXE = "muse_native_bridge.exe"
+UPDATE_MODES = ("--update", "--after-update", "--start-sessions", "--register-task")  # update.MODES, kept light
+IDLE_REPORT_S = 30.0
+_LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # loopback: never through a configured proxy
 _CONSOLE_LOG_BYTES = 1_000_000
 _REFUSAL_LOG_EVERY_S = 60.0
 _last_refusal_logged = 0.0
@@ -163,8 +168,11 @@ def _sidecar_command(port: int) -> tuple[list[str], dict[str, str]]:
 
 def serve(app: Path) -> int:
     """The normal run, until --stop or a failure; 0 also when another copy already holds the machine."""
-    from src.kit import winproc  # noqa: PLC0415
+    from src.kit import update, winproc  # noqa: PLC0415
 
+    if update.applying(app):
+        print("an update is being installed; the update task starts the sensors after it", flush=True)
+        return 0
     instance = winproc.SingleInstance(INSTANCE_MUTEX)
     if not instance.acquired:
         print("another copy of the sensors is already running; this one exits", flush=True)
@@ -202,6 +210,15 @@ def serve(app: Path) -> int:
 
     stop = threading.Event()
     threading.Thread(target=_watch_for_stop, args=(stop, stop_signal), name="stop-watcher", daemon=True).start()
+    try:
+        session = winproc.own_session()
+        if session is None:
+            raise OSError("Windows would not name this session")
+        idle = winproc.IdleFlag(session)
+        streaming = lambda: sidecar_streaming(kit_config.SIDECAR_PORT, cfg.learner_token)  # noqa: E731
+        threading.Thread(target=report_idle, args=(stop, idle, streaming), name="idle-reporter", daemon=True).start()
+    except OSError as exc:
+        logger.warning("not reporting idle time to the update task (%s); it then installs only at sign-in", exc)
     bridge = Supervisor([str(app / "bridge" / BRIDGE_EXE)], bridge_env, logs)
     bridge_thread = threading.Thread(target=bridge.run, args=(stop,), name="bridge-supervisor")
     bridge_thread.start()
@@ -254,6 +271,33 @@ def run_sidecar(stop: threading.Event, stop_signal, port: int) -> int:
     return 0 if asked.is_set() else 1
 
 
+def sidecar_streaming(port: int, token: str) -> bool | None:
+    """Whether the sidecar is pushing a lesson's samples; None when it does not say."""
+    request = urllib.request.Request(f"http://127.0.0.1:{port}/api/v1/push/status",
+                                     headers={"Authorization": f"Bearer {token}"})
+    try:
+        with _LOCAL.open(request, timeout=5) as response:
+            data = json.loads(response.read(65536)).get("data", {})
+    except (OSError, ValueError, AttributeError):
+        return None
+    return bool(data.get("running"))
+
+
+def report_idle(stop: threading.Event, flag, streaming, idle_seconds=None) -> None:
+    """Keeps the session's idle flag current: set only after IDLE_FREE_S with no input and no lesson streaming,
+    so the update task never takes a student watching with the headband on for gone."""
+    from src.kit import update, winproc  # noqa: PLC0415
+
+    idle_seconds = idle_seconds or winproc.idle_seconds
+    while True:
+        try:
+            flag.set(idle_seconds() >= update.IDLE_FREE_S and streaming() is False)
+        except OSError:
+            flag.set(False)  # unknown counts as someone at the keyboard
+        if stop.wait(IDLE_REPORT_S):
+            return
+
+
 def _watch_for_stop(stop: threading.Event, stop_signal, on_stop=None) -> None:
     while not stop.is_set():
         if stop_signal.wait(1.0):
@@ -275,6 +319,12 @@ def request_stop() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    # The update task's modes, before any stdio: theirs goes under {app}\updates, and only once they may run.
+    mode = next((a for a in argv if a in UPDATE_MODES), None)
+    if mode is not None:
+        from src.kit import update  # noqa: PLC0415
+
+        return update.main(mode, app_dir()) if argv == [mode] else 2
     parser = argparse.ArgumentParser(prog="AdaptiveLearningSensors")
     choice = parser.add_mutually_exclusive_group()
     choice.add_argument("--stop", action="store_true", help="stop the running copy and wait until it has exited")

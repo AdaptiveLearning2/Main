@@ -3,3 +3,5 @@
 pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.8
 pefile==2024.8.26
+# The self-updater's feed signatures (Ed25519); its cffi is the gaze lock's.
+cryptography==50.0.2

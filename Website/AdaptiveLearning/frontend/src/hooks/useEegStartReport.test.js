@@ -3,13 +3,16 @@ import { it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 
 vi.mock('../lib/session', () => ({ markEegStarted: vi.fn() }))
+vi.mock('../lib/sidecar', () => ({ sidecarKitVersion: vi.fn() }))
 
 import { markEegStarted } from '../lib/session'
+import { sidecarKitVersion } from '../lib/sidecar'
 import useEegStartReport, { EEG_START_RETRY_MS } from './useEegStartReport'
 
 beforeEach(() => {
   vi.useFakeTimers()
   vi.mocked(markEegStarted).mockReset()
+  vi.mocked(sidecarKitVersion).mockReset().mockResolvedValue(null)
 })
 afterEach(() => { vi.useRealTimers() })
 
@@ -29,11 +32,19 @@ it('reports once per session while active, and not before', async () => {
   rerender({ active: false, sessionId: 's1' })
   rerender({ active: true, sessionId: 's1' })
   await settle()
-  expect(markEegStarted.mock.calls).toEqual([['s1']])
+  expect(markEegStarted.mock.calls).toEqual([['s1', null]])
 
   rerender({ active: true, sessionId: 's2' })
   await settle()
-  expect(markEegStarted.mock.calls).toEqual([['s1'], ['s2']])
+  expect(markEegStarted.mock.calls).toEqual([['s1', null], ['s2', null]])
+})
+
+it('sends the kit version the sidecar names with the report', async () => {
+  markEegStarted.mockResolvedValue(true)
+  sidecarKitVersion.mockResolvedValue('0.2.3')
+  mount({ active: true, sessionId: 's1' })
+  await settle()
+  expect(markEegStarted.mock.calls).toEqual([['s1', '0.2.3']])
 })
 
 it('backs off after a failure, then stops', async () => {

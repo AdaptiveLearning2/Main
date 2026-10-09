@@ -1,5 +1,4 @@
 import { apiFetch } from './api'
-import { sidecarKitVersion } from './sidecar'
 import { toast } from 'sonner'
 
 /**
@@ -31,12 +30,11 @@ export async function recordAnswer({ sessionId, questionId, selectedIndex, corre
 /**
  * Push only: tell the backend a headband is streaming for this session (its alerts need it), and which student
  * kit is streaming it, for the admin page. Never throws, and silent: the student can do nothing about a failure.
+ * @param {string|null} [kitVersion]  the kit the sidecar named (`sidecarKitVersion`); none sends no body
  * @returns {Promise<boolean>} whether nothing is left to send: recorded, or the session is closed
  */
-export async function markEegStarted(sessionId) {
+export async function markEegStarted(sessionId, kitVersion = null) {
   if (!sessionId) return false
-  // Never a reason not to report: a sidecar that names no kit sends no version.
-  const kitVersion = await sidecarKitVersion()
   try {
     await apiFetch(`/api/sessions/${sessionId}/eeg-started`,
                    { method: 'POST', ...(kitVersion ? { body: { kit_version: kitVersion } } : {}) })

@@ -2,18 +2,12 @@ import { it, expect, beforeEach, vi } from 'vitest'
 
 vi.mock('./api', async () => await import('../test/mocks/apiFetch'))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
-vi.mock('./sidecar', () => ({ sidecarKitVersion: vi.fn() }))
 
 import { toast } from 'sonner'
 import { apiError, apiFetch, mockApi, resetApi } from '../test/mocks/apiFetch'
-import { sidecarKitVersion } from './sidecar'
 import { endSession, fetchSessionList, markEegStarted, recordAnswer } from './session'
 
-beforeEach(() => {
-  resetApi()
-  vi.mocked(toast.error).mockClear()
-  vi.mocked(sidecarKitVersion).mockReset().mockResolvedValue(null)
-})
+beforeEach(() => { resetApi(); vi.mocked(toast.error).mockClear() })
 
 const ANSWER = { sessionId: 's1', questionId: 'q1', selectedIndex: 2, correct: true }
 
@@ -42,14 +36,15 @@ it('reports a push EEG start for the session it names, with no body when the sid
   mockApi({ 'POST /api/sessions/s1/eeg-started': () => ({ ok: true }) })
 
   await expect(markEegStarted('s1')).resolves.toBe(true)
-  expect(apiFetch).toHaveBeenCalledWith('/api/sessions/s1/eeg-started', { method: 'POST' })
+  await expect(markEegStarted('s1', null)).resolves.toBe(true)
+  expect(apiFetch.mock.calls).toEqual([['/api/sessions/s1/eeg-started', { method: 'POST' }],
+                                       ['/api/sessions/s1/eeg-started', { method: 'POST' }]])
 })
 
-it('reports the kit version the sidecar names with the start', async () => {
-  vi.mocked(sidecarKitVersion).mockResolvedValue('0.2.3')
+it('reports the kit version with the start', async () => {
   mockApi({ 'POST /api/sessions/s1/eeg-started': () => ({ ok: true }) })
 
-  await expect(markEegStarted('s1')).resolves.toBe(true)
+  await expect(markEegStarted('s1', '0.2.3')).resolves.toBe(true)
   expect(apiFetch).toHaveBeenCalledWith('/api/sessions/s1/eeg-started',
                                         { method: 'POST', body: { kit_version: '0.2.3' } })
 })

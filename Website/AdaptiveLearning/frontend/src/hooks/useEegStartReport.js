@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { markEegStarted } from '../lib/session'
+import { sidecarKitVersion } from '../lib/sidecar'
 
 // Backoff for a failed report, per session; after the last, only a change of `active` retries.
 export const EEG_START_RETRY_MS = [5000, 30000, 120000]
@@ -22,7 +23,8 @@ export default function useEegStartReport(active, sessionId) {
     reported.current = sessionId
     if (failures.current.sessionId !== sessionId) failures.current = { sessionId, count: 0 }
     clearTimeout(timer.current)
-    markEegStarted(sessionId).then(ok => {
+    // The kit version is for the admin page; it never throws, so it never stops the report.
+    sidecarKitVersion().then(version => markEegStarted(sessionId, version)).then(ok => {
       if (ok || reported.current !== sessionId) return
       reported.current = null
       const wait = EEG_START_RETRY_MS[failures.current.count++]

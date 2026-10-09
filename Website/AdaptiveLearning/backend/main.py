@@ -8670,6 +8670,7 @@ def _stations_slow_reads(ids: list[str]) -> dict:
 
     A new holder or a failed read is never served from the cache.
     """
+    global _stations_slow
     cached = _stations_slow
     if (cached["at"] is not None and time.monotonic() - cached["at"] < _STATIONS_SLOW_SEC
             and set(ids) <= cached["ids"] and cached["names_retrieved"] and cached["refusals_retrieved"]):
@@ -8693,7 +8694,6 @@ def _stations_slow_reads(ids: list[str]) -> dict:
     fresh = {"at": time.monotonic(), "ids": frozenset(ids), "names": names, "names_retrieved": names_retrieved,
              "refused": refused, "refusals_retrieved": refusals["retrieved"]}
     # Swapped in whole: a concurrent request holds either the old dict or this one, never a half-cleared one.
-    global _stations_slow
     _stations_slow = fresh
     return fresh
 

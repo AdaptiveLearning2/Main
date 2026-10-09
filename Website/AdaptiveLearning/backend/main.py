@@ -8439,18 +8439,34 @@ def eeg_start(payload: EegSessionRequest, request: Request):
     return {"ok": True, **out}
 
 
+class EegStartedReport(StrictModel):
+    # The student kit the page's sidecar reported, for the admin page: the client's claim, gating nothing.
+    kit_version: str | None = Field(default=None, pattern=r"^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$", max_length=14)
+
+
+def _record_kit_version(session_id: str, kit_version: str) -> None:
+    """The kit version on the session, the latest reported. Never raises: it is for the admin page alone."""
+    try:
+        supabase.table("sessions").update({"kit_version": kit_version}).eq("id", session_id).execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[eeg] could not record the kit version for {session_id}: {type(e).__name__}")
+
+
 @app.post("/api/sessions/{session_id}/eeg-started")
-def session_eeg_started(session_id: str = Path(...), request: Request = None):
+def session_eeg_started(session_id: str = Path(...), request: Request = None,
+                        payload: EegStartedReport | None = None):
     """Under push, the page reports that the sidecar is streaming a headband for this session.
 
-    Push's counterpart to the stamp `/api/eeg/start` writes, which `signals_missing` needs:
-    the backend never sees a push start. Owner only, idempotent; a closed session is refused.
+    Push's counterpart to the stamp `/api/eeg/start` writes, which `signals_missing` needs: the backend never sees a
+    push start. Owner only, idempotent; a closed session is refused. A page from before the kit version sends no body.
     """
     user = get_user(request)
     session = _session_or_403(session_id, user["id"], "user_id, ended_at")
     if session.get("ended_at"):
         raise HTTPException(409, "This session has ended")
     _mark_eeg_started(session_id)
+    if payload is not None and payload.kit_version is not None:
+        _record_kit_version(session_id, payload.kit_version)
     return {"ok": True}
 
 @app.post("/api/eeg/stop")
@@ -9914,6 +9930,25 @@ def admin_kit_download_link(request: Request, payload: KitLinkRequest):
     print(f"[admin:kit] a download link for {user['id'][:8]}")
     return JSONResponse({"url": url, "expires_at": datetime.fromtimestamp(exp, timezone.utc).isoformat()},
                         headers={"Cache-Control": "no-store"})
+
+
+_KIT_VERSION_DAYS = 14
+
+
+@app.get("/api/admin/kit-versions")
+def admin_kit_versions(request: Request):
+    """Students by the newest kit version their headband lessons reported in `_KIT_VERSION_DAYS`. Counts only."""
+    _require_admin(request)
+    versions = None
+    try:
+        versions = _jsonb_as(supabase.rpc("admin_kit_versions", {
+            "p_since": (_utc_now() - timedelta(days=_KIT_VERSION_DAYS)).isoformat(),
+        }).execute().data, dict)
+    except Exception as e:                                     # noqa: BLE001
+        if not _missing_rpc(e, "admin_kit_versions", "20261014000000",
+                            "the Sensors kit page shows no kit versions until then"):
+            print(f"[admin:kit-versions] {e}")
+    return {"retrieved": versions is not None, "days": _KIT_VERSION_DAYS, "versions": versions}
 
 
 if __name__ == "__main__":

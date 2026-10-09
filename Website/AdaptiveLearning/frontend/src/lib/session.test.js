@@ -2,12 +2,18 @@ import { it, expect, beforeEach, vi } from 'vitest'
 
 vi.mock('./api', async () => await import('../test/mocks/apiFetch'))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
+vi.mock('./sidecar', () => ({ sidecarKitVersion: vi.fn() }))
 
 import { toast } from 'sonner'
 import { apiError, apiFetch, mockApi, resetApi } from '../test/mocks/apiFetch'
+import { sidecarKitVersion } from './sidecar'
 import { endSession, fetchSessionList, markEegStarted, recordAnswer } from './session'
 
-beforeEach(() => { resetApi(); vi.mocked(toast.error).mockClear() })
+beforeEach(() => {
+  resetApi()
+  vi.mocked(toast.error).mockClear()
+  vi.mocked(sidecarKitVersion).mockReset().mockResolvedValue(null)
+})
 
 const ANSWER = { sessionId: 's1', questionId: 'q1', selectedIndex: 2, correct: true }
 
@@ -32,11 +38,20 @@ it('still says the answer could not be saved for any other failure', async () =>
   expect(toast.error).toHaveBeenCalledWith('That answer could not be saved.')
 })
 
-it('reports a push EEG start for the session it names', async () => {
+it('reports a push EEG start for the session it names, with no body when the sidecar names no kit', async () => {
   mockApi({ 'POST /api/sessions/s1/eeg-started': () => ({ ok: true }) })
 
   await expect(markEegStarted('s1')).resolves.toBe(true)
   expect(apiFetch).toHaveBeenCalledWith('/api/sessions/s1/eeg-started', { method: 'POST' })
+})
+
+it('reports the kit version the sidecar names with the start', async () => {
+  vi.mocked(sidecarKitVersion).mockResolvedValue('0.2.3')
+  mockApi({ 'POST /api/sessions/s1/eeg-started': () => ({ ok: true }) })
+
+  await expect(markEegStarted('s1')).resolves.toBe(true)
+  expect(apiFetch).toHaveBeenCalledWith('/api/sessions/s1/eeg-started',
+                                        { method: 'POST', body: { kit_version: '0.2.3' } })
 })
 
 it('treats a closed session as nothing left to report, so the page does not retry it', async () => {

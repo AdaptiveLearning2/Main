@@ -373,7 +373,9 @@ Under pull `/api/eeg/start` stamps it. Under push the backend sees no start, so 
 `POST /api/sessions/{id}/eeg-started` once the sidecar holds the session and a headband streams. **That report is
 the client's claim**: a student can stamp their own sensorless session and earn it a false alert. Accepted, since
 the alert is about that session only and gates nothing. Read at `GET /api/classes/{id}/alerts`, rendered by
-`AlertFeed`.
+`AlertFeed`. The report also carries `kit_version`, the student kit the sidecar names on `/healthz`, stored on
+`sessions.kit_version` for the admin Sensors kit page: equally a claim, and it gates nothing either. A page from
+before it sends no body, which stays accepted.
 
 **The scope is the feature.** `signal_fusion` produces a `stressed` label that no teacher surface consumes, and
 routing it here was considered and rejected: it is an inference from signals this codebase already treats as weak,

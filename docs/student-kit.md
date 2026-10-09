@@ -123,6 +123,11 @@ following a link sends no header.
   the backend just signed, the clocks disagree), `refused` (the signature) and `no-secret`. The backend turns each,
   and a redirect, a 401 (a Worker deployed before these routes) or an unmarked 403 or 404 (not the gate), into a
   `problem` naming the fix, never a retry; only other answers and an unreachable gate are a 503.
+- **Kits in use.** The sidecar's `/healthz` carries `kit`: `null` outside one (no frozen exe, no `KIT_APP_DIR`),
+  `{"version": "x.y.z"}` from `version.txt`, or `{"version": null}` when that does not read as a version. The lesson
+  page sends it with its headband start (`docs/reporting.md`, *Session alerts*), and `GET /api/admin/kit-versions`
+  (`admin_kit_versions`, `20261014000000`) counts students over 14 days by the newest version their headband lessons
+  reported, with the lessons that reported none apart. A kit built before this reports none.
 - **Publishing.** `publish_kit_update.ps1 -Setup`, only with `-Promote` at 100%: the site offers the version every kit
   is moving to. It uploads `setup/AdaptiveLearningSensors-Setup-x.y.z.exe`, then `setup/current.json`, and never
   replaces an offered installer with other bytes. The signature is computed three times (`worker.mjs`,

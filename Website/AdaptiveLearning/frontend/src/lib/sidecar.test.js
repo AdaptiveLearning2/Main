@@ -78,6 +78,31 @@ describe('sidecarAlive', () => {
   })
 })
 
+describe('sidecarKitVersion', () => {
+  it("reads the kit's version from /healthz", async () => {
+    // What EEGResearch/src/app/main.py's healthz answers inside a kit.
+    const fetchSpy = mockFetch(async () => ok({ status: 'ok', kit: { version: '0.2.3' } }))
+
+    await expect(sidecar.sidecarKitVersion()).resolves.toBe('0.2.3')
+    expect(fetchSpy.mock.calls[0][0]).toMatch(/\/healthz$/)
+  })
+
+  it.each([
+    ['outside a kit', { status: 'ok', kit: null }],
+    ['a kit whose version did not read', { status: 'ok', kit: { version: null } }],
+    ['a kit too old to say', { status: 'ok' }],
+    ['a version that is not one', { status: 'ok', kit: { version: '0.2.3-beta' } }],
+  ])('is null, never a guess, %s', async (_, body) => {
+    mockFetch(async () => ok(body))
+    await expect(sidecar.sidecarKitVersion()).resolves.toBeNull()
+  })
+
+  it('is null rather than throwing when nothing answers', async () => {
+    mockFetch(async () => { throw new TypeError('Failed to fetch') })
+    await expect(sidecar.sidecarKitVersion()).resolves.toBeNull()
+  })
+})
+
 describe('pushStatus', () => {
   it('unwraps the envelope and keeps the recorded counts', async () => {
     mockFetch(async () => ok({

@@ -1,4 +1,5 @@
 import { apiFetch } from './api'
+import { sidecarKitVersion } from './sidecar'
 import { toast } from 'sonner'
 
 /**
@@ -28,14 +29,17 @@ export async function recordAnswer({ sessionId, questionId, selectedIndex, corre
 }
 
 /**
- * Push only: tell the backend a headband is streaming for this session (its alerts need it).
- * Never throws, and silent: the student can do nothing about a failure, and recording goes on.
+ * Push only: tell the backend a headband is streaming for this session (its alerts need it), and which student
+ * kit is streaming it, for the admin page. Never throws, and silent: the student can do nothing about a failure.
  * @returns {Promise<boolean>} whether nothing is left to send: recorded, or the session is closed
  */
 export async function markEegStarted(sessionId) {
   if (!sessionId) return false
+  // Never a reason not to report: a sidecar that names no kit sends no version.
+  const kitVersion = await sidecarKitVersion()
   try {
-    await apiFetch(`/api/sessions/${sessionId}/eeg-started`, { method: 'POST' })
+    await apiFetch(`/api/sessions/${sessionId}/eeg-started`,
+                   { method: 'POST', ...(kitVersion ? { body: { kit_version: kitVersion } } : {}) })
     return true
   } catch (e) {
     // 409: the session closed, and its alerts are already decided; a retry can never land.

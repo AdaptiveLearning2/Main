@@ -143,3 +143,37 @@ def test_a_missing_function_names_the_migration_to_apply(monkeypatch, capsys):
 
     assert main.admin_funnel(None)["retrieved"] is False
     assert "20261011000000" in capsys.readouterr().out
+
+
+# ─── kit versions ────────────────────────────────────────────────────────
+
+# What `admin_kit_versions` returns (20261014000000).
+KIT_VERSIONS = {"students_by_version": {"0.2.3": 11, "0.2.1": 2}, "lessons_unreported": 7, "students_unreported": 3}
+
+
+def test_kit_versions_are_one_read_over_the_last_fourteen_days(monkeypatch):
+    db = _Db(admin_kit_versions=KIT_VERSIONS)
+    monkeypatch.setattr(main, "supabase", db)
+
+    assert main.admin_kit_versions(None) == {"retrieved": True, "days": 14, "versions": KIT_VERSIONS}
+    # Fourteen days back from Thursday 8 October, 20:00 UTC.
+    assert db.calls == [("admin_kit_versions", {"p_since": "2026-09-24T20:00:00+00:00"})]
+
+
+def test_kit_versions_wrapped_in_a_one_row_list_are_unwrapped(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _Db(admin_kit_versions=[KIT_VERSIONS]))
+    assert main.admin_kit_versions(None)["versions"] == KIT_VERSIONS
+
+
+@pytest.mark.parametrize("result", [RuntimeError("rpc down"), None, [], "nonsense"])
+def test_unread_kit_versions_are_never_a_school_with_no_kits(monkeypatch, result):
+    monkeypatch.setattr(main, "supabase", _Db(admin_kit_versions=result))
+    assert main.admin_kit_versions(None) == {"retrieved": False, "days": 14, "versions": None}
+
+
+def test_kit_versions_before_their_migration_name_it(monkeypatch, capsys):
+    missing = RuntimeError("{'code': 'PGRST202', 'message': 'Could not find the function public.admin_kit_versions'}")
+    monkeypatch.setattr(main, "supabase", _Db(admin_kit_versions=missing))
+
+    assert main.admin_kit_versions(None)["retrieved"] is False
+    assert "20261014000000" in capsys.readouterr().out

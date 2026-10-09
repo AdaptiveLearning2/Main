@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import useAdminRead from '../../hooks/useAdminRead'
 import { ReadState, Tile, Unread } from './adminUi'
+import { reasonLabel } from './closeReasons'
 
 const STATIONS = '/api/admin/stations'
 
@@ -8,6 +9,22 @@ function ago(seconds) {
   if (seconds == null) return 'unknown'
   if (seconds < 90) return `${Math.round(seconds)} s ago`
   return `${Math.round(seconds / 60)} min ago`
+}
+
+const TIME = { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }
+
+// In the school's zone, named, since "today" is the school's day; the browser's own (still named) if none
+// came or the zone is not recognised.
+function clock(iso, timeZone) {
+  const t = iso ? new Date(iso) : null
+  if (!t || Number.isNaN(t.getTime())) return ''
+  let text
+  try {
+    text = t.toLocaleTimeString([], { ...TIME, timeZone })
+  } catch {
+    text = t.toLocaleTimeString([], TIME)
+  }
+  return `at ${text}`
 }
 
 // A holder's name, or why there is none: unreadable is not unnamed.
@@ -29,7 +46,7 @@ function PushNote({ data }) {
   )
 }
 
-function Station({ station, namesRetrieved, idleAfter }) {
+function Station({ station, namesRetrieved, idleAfter, timeZone }) {
   const { pairing, pollers } = station
   return (
     <li className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl px-4 py-3 space-y-1">
@@ -50,6 +67,12 @@ function Station({ station, namesRetrieved, idleAfter }) {
         </p>
       ) : (
         <p className="text-sm text-gray-600 dark:text-gray-400">Not held.</p>
+      )}
+      {station.last_ended && (
+        <p className="text-xs text-gray-600 dark:text-gray-400">
+          Last lesson here today ended {clock(station.last_ended.ended_at, timeZone)}:{' '}
+          {reasonLabel(station.last_ended.close_reason ?? 'unrecorded')}
+        </p>
       )}
       {pollers.map(p => (
         <p key={p.session_id} className="text-xs text-gray-900 dark:text-white">
@@ -74,13 +97,18 @@ function StationList({ data }) {
       {!data.refusals_retrieved && (
         <p className="text-xs text-amber-800 dark:text-amber-300">Today&rsquo;s refusal counts could not be read.</p>
       )}
+      {data.last_ended_retrieved === false && (
+        <p className="text-xs text-amber-800 dark:text-amber-300">
+          How each station&rsquo;s last lesson ended could not be read, so a released station may be missing.
+        </p>
+      )}
       {data.stations.length === 0
         ? <p className="text-sm text-gray-600 dark:text-gray-400">No station is held right now.</p>
         : (
           <ul className="space-y-2">
             {data.stations.map(s => (
               <Station key={s.device_id} station={s} namesRetrieved={data.names_retrieved}
-                       idleAfter={data.idle_after_seconds} />
+                       idleAfter={data.idle_after_seconds} timeZone={data.timezone} />
             ))}
           </ul>
         )}

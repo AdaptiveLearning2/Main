@@ -1241,13 +1241,20 @@ def _eeg_was_started(session_id: str) -> bool | None:
         return None
 
 
-def _mark_eeg_started(session_id: str) -> None:
-    """Stamp the first EEG start on the session. Never raises; a start must not fail on it."""
+def _mark_eeg_started(session_id: str, device_id: str | None = None) -> None:
+    """Stamp the first EEG start on the session, and the station it is on now. Never raises."""
     try:
         supabase.table("sessions").update({"eeg_started_at": _utc_now().isoformat()}) \
             .eq("id", session_id).is_("eeg_started_at", "null").execute()
     except Exception as e:                                     # noqa: BLE001
         print(f"[eeg] could not stamp the EEG start on {session_id}: {e}")
+    if device_id is None:
+        return
+    # The latest station, not the first: a tab can move a lesson to another headband.
+    try:
+        supabase.table("sessions").update({"eeg_device_id": device_id}).eq("id", session_id).execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[eeg] could not record the station for {session_id}: {type(e).__name__}")
 
 
 def _recording_was_expected(user_id: str) -> bool | None:
@@ -7644,7 +7651,7 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         _record_pairing(user["id"], device_id, payload.session_id)
     except Exception as e:
         print(f"[eeg] could not move the pairing on {device_id} to this session: {type(e).__name__}")
-    _mark_eeg_started(payload.session_id)
+    _mark_eeg_started(payload.session_id, device_id)
     return {"ok": True, **out}
 
 
@@ -8686,8 +8693,27 @@ def admin_today(request: Request):
 _PAGE_WATCHING_SEC = 30.0
 
 # Names and today's refusal counts change slowly, so a 5 s Stations poll reuses them this long.
+# Last lessons are read fresh: one can end with no station changing hands.
 _STATIONS_SLOW_SEC = 30.0
 _stations_slow: dict = {"at": None}
+# Today's ended lessons read for "last ended here"; a station whose last one is older than this many reads none.
+_STATIONS_LAST_ENDED_ROWS = 1000
+
+
+def _stations_last_ended(day_start: datetime) -> tuple[dict[str, dict], bool]:
+    """Each station's last lesson ended today: {device: {close_reason, ended_at}}, and whether it was read."""
+    last_ended: dict[str, dict] = {}
+    try:
+        # Newest first, so the first row per station is its last; the cap bounds a long school day.
+        for s in (supabase.table("sessions").select("eeg_device_id, close_reason, ended_at")
+                  .gte("ended_at", day_start.isoformat()).not_.is_("eeg_device_id", "null")
+                  .order("ended_at", desc=True).limit(_STATIONS_LAST_ENDED_ROWS).execute().data or []):
+            # A read, not a close; `close_sites()` takes an ended_at key literal for a hand-rolled stamp.
+            last_ended.setdefault(s["eeg_device_id"], {k: s.get(k) for k in ("close_reason", "ended_at")})
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[admin:stations] last ended: {e}")
+        return {}, False
+    return last_ended, True
 
 
 def _stations_slow_reads(ids: list[str]) -> dict:
@@ -8744,6 +8770,7 @@ def admin_stations(request: Request):
     names, names_retrieved = slow["names"], slow["names_retrieved"]
     refused = slow["refused"]
     refusals = {"retrieved": slow["refusals_retrieved"]}
+    last_ended, last_ended_retrieved = _stations_last_ended(_school_day_start())
 
     now = _utc_now()
     by_device: dict[str, dict] = {}
@@ -8760,16 +8787,19 @@ def admin_stations(request: Request):
             **p, "name": names.get(p["user_id"]),
             "page_watching": p["page_seen_seconds_ago"] < _PAGE_WATCHING_SEC,
         })
-    for device in refused:
+    for device in [*refused, *last_ended]:
         by_device.setdefault(device, {})
     stations = [{"device_id": d, "pairing": v.get("pairing"), "pollers": v.get("pollers", []),
-                 "refused_today": refused.get(d, 0)} for d, v in sorted(by_device.items())]
+                 "refused_today": refused.get(d, 0), "last_ended": last_ended.get(d)}
+                for d, v in sorted(by_device.items())]
     return {
         "ingest_mode": mode,
         "retrieved": retrieved,
         "names_retrieved": names_retrieved,
         "refusals_retrieved": refusals["retrieved"],
+        "last_ended_retrieved": last_ended_retrieved,
         "idle_after_seconds": _PAIRING_IDLE_SEC,
+        "timezone": _school_timezone_name(),
         "stations": stations,
         "poller_scope": "this server process",
     }

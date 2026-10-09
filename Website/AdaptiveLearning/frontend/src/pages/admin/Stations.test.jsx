@@ -33,6 +33,67 @@ describe('the stations page', () => {
     expect(within(card('station1')).queryByText(/page silent/)).not.toBeInTheDocument()
   })
 
+  it('says how a released station’s last lesson today ended, in words', async () => {
+    overrideApi(STATIONS_PATH, () => buildStations({
+      stations: [station(), station({ device_id: 'station3', pairing: null, pollers: [], refused_today: 0,
+                                      last_ended: { close_reason: 'sweep', ended_at: '2026-10-08T16:40:00+00:00' } })],
+    }))
+    page()
+    await screen.findByText('station3')
+    expect(within(card('station3')).getByText('Not held.')).toBeInTheDocument()
+    expect(within(card('station3')).getByText(/Last lesson here today ended .*: Closed by the sweep as abandoned/))
+      .toBeInTheDocument()
+    expect(within(card('station1')).queryByText(/Last lesson here/)).not.toBeInTheDocument()
+  })
+
+  it('gives the end time in the school’s timezone, named, whatever the browser’s', async () => {
+    overrideApi(STATIONS_PATH, () => buildStations({
+      timezone: 'Asia/Tokyo',
+      stations: [station({ last_ended: { close_reason: 'finish', ended_at: '2026-10-08T16:40:00+00:00' } })],
+    }))
+    page()
+    const line = await screen.findByText(/Last lesson here today ended/)
+    // Built with the machine's own locale, so only the zone is under test, not 12- or 24-hour style.
+    const tokyo = new Date('2026-10-08T16:40:00+00:00').toLocaleTimeString([],
+      { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo', timeZoneName: 'short' })
+    expect(line.textContent).toContain(`ended at ${tokyo}:`)
+  })
+
+  it('falls back to the browser’s zone, still named, for a zone it does not recognise', async () => {
+    overrideApi(STATIONS_PATH, () => buildStations({
+      timezone: 'Not/AZone',
+      stations: [station({ last_ended: { close_reason: 'finish', ended_at: '2026-10-08T16:40:00+00:00' } })],
+    }))
+    page()
+    const line = await screen.findByText(/Last lesson here today ended/)
+    // vite.config.js runs tests off UTC, or a fallback hard-coded to UTC would read as the browser's zone.
+    expect(new Date('2026-10-08T16:40:00+00:00').getTimezoneOffset()).not.toBe(0)
+    const local = new Date('2026-10-08T16:40:00+00:00').toLocaleTimeString([],
+      { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })
+    expect(line.textContent).toContain(`ended at ${local}:`)
+  })
+
+  it('names a null reason as unrecorded, never as a guess', async () => {
+    overrideApi(STATIONS_PATH, () => buildStations({
+      stations: [station({ last_ended: { close_reason: null, ended_at: '2026-10-08T16:40:00+00:00' } })],
+    }))
+    page()
+    expect(await screen.findByText(/Last lesson here today ended .*: Ended before reasons were recorded/))
+      .toBeInTheDocument()
+  })
+
+  it('says an unread last lesson may hide a released station', async () => {
+    overrideApi(STATIONS_PATH, () => buildStations({ last_ended_retrieved: false }))
+    page()
+    expect(await screen.findByText(/last lesson ended could not be read/)).toBeInTheDocument()
+  })
+
+  it('says nothing about last lessons when they were read', async () => {
+    page()
+    await screen.findByText('station1')
+    expect(screen.queryByText(/last lesson ended could not be read/)).not.toBeInTheDocument()
+  })
+
   it('says a name could not be read rather than that it is unset', async () => {
     overrideApi(STATIONS_PATH, () => buildStations({
       names_retrieved: false,

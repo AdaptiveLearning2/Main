@@ -209,10 +209,16 @@ class _Query:
         self.owner, self.table_name, self.filters = owner, table, []
 
     def __getattr__(self, name):
-        def chain(*a, **_k):
-            self.filters.append((name, *a))
+        def chain(*a, **k):
+            self.filters.append((name, *a, *sorted(k.items())))
             return self
         return chain
+
+    @property
+    def not_(self):
+        # postgrest's `not_` is a property negating the next filter.
+        self.filters.append(("not_",))
+        return self
 
     def execute(self):
         self.owner.reads.append((self.table_name, self.filters))
@@ -350,6 +356,8 @@ def test_a_five_second_poll_reads_holders_afresh_and_names_and_counts_at_most_ev
     assert _reads_of(db, "station_pairings") == 2
     assert _reads_of(db, "profiles") == 1
     assert _reads_of(db, "ops_counters") == 1
+    # Last lessons are read every poll: one can end with no station changing hands.
+    assert _reads_of(db, "sessions") == 2
 
 
 def test_a_new_holder_is_named_at_once_not_after_the_cache_expires(monkeypatch, _admin, _clock):
@@ -393,6 +401,92 @@ def test_a_refresh_never_leaves_a_reader_holding_a_half_built_cache(monkeypatch,
 
     assert held["names"] == {"u-ada": "Ada"} and held["refused"] == {}
     assert main._stations_slow is not held
+
+
+def _ended(device, reason, at):
+    return {"eeg_device_id": device, "close_reason": reason, "ended_at": f"2026-10-08T{at}:00+00:00"}
+
+
+def test_a_released_station_says_how_its_last_lesson_today_ended(monkeypatch, _admin, _clock):
+    # Newest first, as the read orders them.
+    db = _Db(rows={"station_pairings": [_pairing("station1", "u-ada", 10)],
+                   "sessions": [_ended("station2", "sweep", "11:40"), _ended("station1", "finish", "11:00"),
+                                _ended("station2", "finish", "10:00"), _ended("station2", None, "09:00")]})
+    monkeypatch.setattr(main, "supabase", db)
+    monkeypatch.setattr(main, "_school_timezone", lambda: ZoneInfo("America/Chicago"))
+    monkeypatch.setattr(eeg_poller, "snapshot", lambda: [])
+
+    got = main.admin_stations(None)
+
+    by = {s["device_id"]: s for s in got["stations"]}
+    assert by["station2"]["pairing"] is None
+    assert by["station2"]["last_ended"] == {"close_reason": "sweep", "ended_at": "2026-10-08T11:40:00+00:00"}
+    assert by["station1"]["last_ended"]["close_reason"] == "finish"
+    assert got["last_ended_retrieved"] is True
+    [filters] = [f for t, f in db.reads if t == "sessions"]
+    # Today's ended lessons with a station, from the school's midnight, newest first.
+    assert ("gte", "ended_at", "2026-10-08T05:00:00+00:00") in filters
+    assert filters[filters.index(("not_",)) + 1] == ("is_", "eeg_device_id", "null")
+    assert ("order", "ended_at", ("desc", True)) in filters
+    assert ("limit", main._STATIONS_LAST_ENDED_ROWS) in filters
+
+
+def test_a_release_is_shown_at_once_not_after_the_cache_expires(monkeypatch, _admin, _clock):
+    db = _Db(rows={"station_pairings": [_pairing("station1", "u-ada", 10)], "sessions": []})
+    monkeypatch.setattr(main, "supabase", db)
+    monkeypatch.setattr(eeg_poller, "snapshot", lambda: [])
+    main.admin_stations(None)
+
+    # Ada finishes: the pairing goes and her lesson has ended, well inside the 30 s cache.
+    db.rows["station_pairings"] = []
+    db.rows["sessions"] = [_ended("station1", "finish", "11:59")]
+    got = main.admin_stations(None)
+
+    assert _reads_of(db, "sessions") == 2
+    [s] = got["stations"]
+    assert s["pairing"] is None and s["last_ended"]["close_reason"] == "finish"
+
+
+def test_a_lesson_ending_with_no_change_of_holder_is_shown_on_the_next_poll(monkeypatch, _admin, _clock):
+    # The headband was stopped earlier, so nobody holds station1; the lesson finishes later.
+    db = _Db(rows={"sessions": [_ended("station1", "superseded", "10:00")]})
+    monkeypatch.setattr(main, "supabase", db)
+    monkeypatch.setattr(eeg_poller, "snapshot", lambda: [])
+    main.admin_stations(None)
+
+    db.rows["sessions"] = [_ended("station1", "finish", "11:59"), _ended("station1", "superseded", "10:00")]
+    [s] = main.admin_stations(None)["stations"]
+
+    assert s["last_ended"]["close_reason"] == "finish"
+
+
+def test_the_school_timezone_rides_along_for_the_end_times(monkeypatch, _admin, _clock):
+    monkeypatch.setattr(main, "supabase", _Db())
+    monkeypatch.setattr(main, "_school_timezone_name", lambda: "America/Chicago")
+    monkeypatch.setattr(eeg_poller, "snapshot", lambda: [])
+    assert main.admin_stations(None)["timezone"] == "America/Chicago"
+
+
+def test_a_null_reason_stays_null_not_a_guess(monkeypatch, _admin, _clock):
+    monkeypatch.setattr(main, "supabase", _Db(rows={"sessions": [_ended("station2", None, "09:00")]}))
+    monkeypatch.setattr(eeg_poller, "snapshot", lambda: [])
+    [s] = main.admin_stations(None)["stations"]
+    assert s["last_ended"]["close_reason"] is None
+
+
+def test_an_unread_last_lesson_is_not_none_ended_and_is_read_again(monkeypatch, _admin, _clock):
+    db = _Db(rows={"station_pairings": [_pairing("station1", "u-ada", 10)],
+                   "sessions": [_ended("station1", "finish", "11:00")]}, failing={"sessions"})
+    monkeypatch.setattr(main, "supabase", db)
+    monkeypatch.setattr(eeg_poller, "snapshot", lambda: [])
+
+    got = main.admin_stations(None)
+    assert got["last_ended_retrieved"] is False and got["stations"][0]["last_ended"] is None
+
+    db.failing.clear()
+    got = main.admin_stations(None)
+    assert got["last_ended_retrieved"] is True
+    assert got["stations"][0]["last_ended"]["close_reason"] == "finish"
 
 
 def test_the_poller_snapshot_carries_ids_and_state_never_a_reading(monkeypatch):

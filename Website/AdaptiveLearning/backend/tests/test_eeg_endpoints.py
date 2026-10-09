@@ -376,7 +376,7 @@ def test_start_allows_known_device_id(monkeypatch):
 def test_a_start_stamps_the_session_and_a_refused_one_does_not(monkeypatch):
     """`signals_missing` needs to know a headband was started; a refusal started nothing."""
     stamped = []
-    monkeypatch.setattr(main, "_mark_eeg_started", stamped.append)
+    monkeypatch.setattr(main, "_mark_eeg_started", lambda *a: stamped.append(a))
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
     monkeypatch.setattr(main, "_consent",
                         lambda _s: {"eeg_enabled": True, "retrieved": True})
@@ -385,11 +385,12 @@ def test_a_start_stamps_the_session_and_a_refused_one_does_not(monkeypatch):
     monkeypatch.setattr(eeg_client, "list_devices", lambda: [{"device_id": "station-a"}])
     monkeypatch.setattr(eeg_poller, "start", lambda *a, **k: {"running": True, "already": False})
     main.eeg_start(main.EegSessionRequest(session_id="session-1", device_id="station-a"), request=None)
-    assert stamped == ["session-1"]
+    # The station too, so Stations can say how a released station's last lesson ended.
+    assert stamped == [("session-1", "station-a")]
 
     with pytest.raises(main.HTTPException):
         main.eeg_start(main.EegSessionRequest(session_id="session-1", device_id="typo"), request=None)
-    assert stamped == ["session-1"]
+    assert stamped == [("session-1", "station-a")]
 
 
 def test_the_stamp_is_written_once_and_never_raises(monkeypatch):
@@ -408,6 +409,14 @@ def test_the_stamp_is_written_once_and_never_raises(monkeypatch):
     main._mark_eeg_started("session-1")
     assert calls[0] == "sessions" and "eeg_started_at" in calls[1]
     assert ("eq", "id", "session-1") in calls and ("is", "eeg_started_at", "null") in calls
+    assert not [c for c in calls if isinstance(c, dict) and "eeg_device_id" in c]
+
+    # The station is written every start, not only the first: a lesson can move headband.
+    calls.clear()
+    main._mark_eeg_started("session-1", "station-a")
+    assert {"eeg_device_id": "station-a"} in calls
+    device_eqs = calls[calls.index({"eeg_device_id": "station-a"}):]
+    assert ("eq", "id", "session-1") in device_eqs and not [c for c in device_eqs if isinstance(c, tuple) and c[0] == "is"]
 
     class _Down:
         def table(self, name):
@@ -915,7 +924,7 @@ def test_the_database_release_is_scoped_to_the_session(monkeypatch, pairings_db)
 def _start_as_a(monkeypatch, session_id):
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
     monkeypatch.setattr(main, "_session_or_403", lambda *_a, **_k: {"user_id": "user-a", "ended_at": None})
-    monkeypatch.setattr(main, "_mark_eeg_started", lambda _sid: None)
+    monkeypatch.setattr(main, "_mark_eeg_started", lambda *_a: None)
     monkeypatch.setattr(eeg_client, "list_devices", lambda: [{"device_id": "station-p"}])
     payload = type("P", (), {"session_id": session_id, "device_id": "station-p", "record": True})()
     return main.eeg_start(payload, request=None)

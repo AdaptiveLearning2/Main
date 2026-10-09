@@ -29,6 +29,7 @@ export const station = (over = {}) => ({
   pairing: { user_id: 'u-ada', name: 'Ada', session_id: 's-ada', seen_seconds_ago: 4, idle: false },
   pollers: [poller()],
   refused_today: 1,
+  last_ended: null,
   ...over,
 })
 
@@ -38,7 +39,9 @@ export function buildStations(over = {}) {
     retrieved: true,
     names_retrieved: true,
     refusals_retrieved: true,
+    last_ended_retrieved: true,
     idle_after_seconds: 120,
+    timezone: 'America/Chicago',
     // A sibling, so a test about one station has another to be wrong about.
     stations: [
       station(),

@@ -112,8 +112,9 @@ describe('every LoadError call site is classified', () => {
     // Admin-gated; `retrieved: false` deliberately does not come through LoadError.
     'pages/admin/SecurityEvents.jsx':
       'GET /api/admin/security-events -- _require_admin',
-    'pages/admin/Engine.jsx':
-      'GET /api/admin/generation, /api/admin/refusals -- _require_admin',
+    // ReadState, for Engine, Today and Stations.
+    'pages/admin/adminUi.jsx':
+      'GET /api/admin/generation, refusals, today, stations -- _require_admin',
   }
 
   const NO_REFUSAL_TO_REPORT = {

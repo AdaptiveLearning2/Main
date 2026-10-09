@@ -2425,5 +2425,41 @@ BEGIN
     END IF;
 END $$;
 
+-- ─── admin_today counts its day only; close_reason takes only the backend's reasons ──
+DO $$
+DECLARE
+    usr  uuid := gen_random_uuid();
+    a    uuid := gen_random_uuid();
+    b    uuid := gen_random_uuid();
+    c    uuid := gen_random_uuid();
+    got  jsonb;
+    refused boolean := false;
+BEGIN
+    INSERT INTO auth.users (id, email) VALUES (usr, 'today@test.invalid');
+    -- Dated in 2099 so rows the blocks above left in this transaction fall before p_since.
+    INSERT INTO public.sessions (id, user_id, started_at, ended_at, close_reason) VALUES
+        (a, usr, '2099-01-02T09:00:00Z', '2099-01-02T09:30:00Z', 'finish'),
+        (b, usr, '2099-01-02T10:00:00Z', '2099-01-02T10:30:00Z', NULL),
+        (c, usr, '2099-01-02T11:00:00Z', NULL, NULL);
+    INSERT INTO public.session_answers (session_id, user_id, correct, answered_at) VALUES
+        (a, usr, true, '2099-01-02T09:05:00Z'), (a, usr, false, '2099-01-02T09:06:00Z');
+
+    got := public.admin_today('2099-01-02T00:00:00Z');
+    IF (got->>'started')::int <> 3 OR (got->>'answers')::int <> 2 OR (got->>'active_students')::int <> 1
+       OR got->'ended_by_reason' <> '{"finish": 1, "unrecorded": 1}'::jsonb
+       OR (got->>'open_now')::int < 1 THEN
+        RAISE EXCEPTION 'admin_today returned %', got;
+    END IF;
+
+    BEGIN
+        UPDATE public.sessions SET close_reason = 'teacher' WHERE id = c;
+    EXCEPTION WHEN check_violation THEN
+        refused := true;
+    END;
+    IF NOT refused THEN
+        RAISE EXCEPTION 'close_reason took a reason the backend never writes';
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

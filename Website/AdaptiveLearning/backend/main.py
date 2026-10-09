@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from supabase_client import get_client, pooled_http
 from postgrest.types import ReturnMethod  # supabase pins this sibling
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 from uuid import UUID
 
 import LLM_topic_decider
@@ -1125,15 +1125,24 @@ def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
         print(f"[rollup] {user_id[:8]}: {e}")
 
 
-def _claim_session_close(session_id: str, ended_at: str) -> bool:
-    """Stamp `ended_at` on a session that has none yet. True if this caller won. Never raises.
+def _claim_session_close(session_id: str, ended_at: str, reason: str) -> bool:
+    """Stamp `ended_at` and `close_reason` on a session that has neither yet. True if this caller won.
 
     The conditional update is the claim, so racing closes cannot double-credit.
-    It asks for the stamped row by name, so an empty result means another close won.
+    It asks for the stamped row by name, so an empty result means another close won. Never raises.
     """
-    try:
-        claimed = supabase.table("sessions").update({"ended_at": ended_at}, returning=ReturnMethod.representation) \
+    def claim(fields: dict) -> list:
+        return supabase.table("sessions").update(fields, returning=ReturnMethod.representation) \
             .eq("id", session_id).is_("ended_at", "null").execute().data or []
+    try:
+        try:
+            claimed = claim({"ended_at": ended_at, "close_reason": reason})
+        except Exception as e:                                 # noqa: BLE001
+            # Bridge until 20261010000000 is applied everywhere: without the column, still close.
+            if "close_reason" not in str(e):
+                raise
+            print(f"[session:close] close_reason missing (apply 20261010000000); {session_id} closes without it")
+            claimed = claim({"ended_at": ended_at})
     except Exception as e:                                     # noqa: BLE001
         print(f"[session:close] could not stamp {session_id}: {e}")
         return False
@@ -1174,6 +1183,16 @@ def _answer_counts(session_id: str, session: dict) -> tuple[int, int, bool]:
 # Which close site is running; `_close_session` cannot tell on its own.
 CLOSED_BY_STUDENT = "student"
 CLOSED_BY_SWEEP = "stale_sweep"
+
+# Why a session ended, stored as `sessions.close_reason`; must equal the migration's CHECK.
+# The student's own: what the page says /end was for, or "student" when it names nothing.
+END_REASONS = ("finish", "sign_out", "page_closed")
+CLOSE_REASON_STUDENT = "student"
+CLOSE_REASON_SUPERSEDED = "superseded"
+CLOSE_REASON_LIVE_STALE = "live_stale"
+CLOSE_REASON_SWEEP = "sweep"
+CLOSE_REASONS = END_REASONS + (CLOSE_REASON_STUDENT, CLOSE_REASON_SUPERSEDED,
+                               CLOSE_REASON_LIVE_STALE, CLOSE_REASON_SWEEP)
 
 # Session age (not idleness) past which it is abandoned; errs long, since closing
 # a live session discards the question in progress.
@@ -1305,14 +1324,14 @@ def _raise_session_alerts(user_id: str, session: dict,
 
 
 def _close_session(user_id: str, session: dict, ended_at: str,
-                   closed_by: str = CLOSED_BY_STUDENT) -> dict:
-    """Everything a session close does, including stamping `ended_at` (the claim).
+                   closed_by: str = CLOSED_BY_STUDENT, reason: str = CLOSE_REASON_STUDENT) -> dict:
+    """Everything a session close does, including stamping `ended_at` and `close_reason` (the claim).
 
     Every close site goes through here; callers stop the poller *before* the call.
-    `closed_by` defaults to the student, so a new site must opt in to an alert.
+    `closed_by` defaults to the student, so a new site must opt in to an alert; `reason` likewise.
     """
     sid = session["id"]
-    if not _claim_session_close(sid, ended_at):
+    if not _claim_session_close(sid, ended_at, reason):
         # Already closed; running again would double-credit the answers.
         return {"discarded": False, "already_closed": True}
 
@@ -1323,6 +1342,8 @@ def _close_session(user_id: str, session: dict, ended_at: str,
     total_q, correct, counted = _answer_counts(sid, session)
 
     if _discard_if_nothing_recorded(sid, total_q, answers_counted=counted):
+        # The row is gone, and its reason with it: the count is the only record.
+        ops_metrics.bump("session_discarded", reason)
         return {"discarded": True}
 
     _credit_session_to_user_stats(user_id, total_q, correct, session.get("started_at"))
@@ -1397,7 +1418,7 @@ def _sweep_abandoned_sessions(limit: int = _STALE_SWEEP_BATCH) -> dict:
             # Poller first, so no tick lands after the discard check.
             eeg_poller.stop(s["id"], uid)
             out = _close_session(uid, s, _ended_when_last_seen(s, last_seen),
-                                 closed_by=CLOSED_BY_SWEEP)
+                                 closed_by=CLOSED_BY_SWEEP, reason=CLOSE_REASON_SWEEP)
             if out.get("discarded"):
                 discarded += 1
             else:
@@ -3027,7 +3048,8 @@ def start_session(payload: StartSessionRequest, request: Request):
             continue
         # Also releases any pre-claim EEG reservation from a scan that never reached /start.
         eeg_poller.stop(s["id"], user["id"])
-        _close_session(user["id"], s, _ended_when_last_seen(s, last_seen), closed_by=CLOSED_BY_SWEEP)
+        _close_session(user["id"], s, _ended_when_last_seen(s, last_seen), closed_by=CLOSED_BY_SWEEP,
+                       reason=CLOSE_REASON_SUPERSEDED)
 
 
     obj  = {
@@ -3129,9 +3151,16 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
               f"subject; its topic attempt counts nowhere")
     return {"ok": True, "topic": topic if isinstance(topic, str) else None}
 
+class EndSessionRequest(StrictModel):
+    # What the page ended it for; absent (an older client, a bare POST) is stored as "student".
+    reason: Literal["finish", "sign_out", "page_closed"] | None = None
+
+
 @app.post("/api/sessions/{session_id}/end")
-def end_session(session_id: str = Path(...), request: Request = None):
+def end_session(session_id: str = Path(...), request: Request = None,
+                payload: EndSessionRequest | None = None):
     user = get_user(request)
+    reason = (payload.reason if payload else None) or CLOSE_REASON_STUDENT
     # Ownership before stopping the poller.
     data = _session_or_403(session_id, user["id"], "*")
     # Also releases user["id"]'s pre-claim reservation, if any.
@@ -3141,7 +3170,7 @@ def end_session(session_id: str = Path(...), request: Request = None):
         return {"ok": True, "already_closed": True}
     # Timezone-aware, and read once: the rollup converts it to a school day.
     ended = _utc_now().isoformat()
-    result = _close_session(user["id"], data, ended)
+    result = _close_session(user["id"], data, ended, reason=reason)
     if result.get("already_closed"):
         return {"ok": True, "already_closed": True}
     return {"ok": True, **({"discarded": True} if result["discarded"] else {})}
@@ -7163,7 +7192,7 @@ def class_live(class_id: str, request: Request):
                 eeg_poller.stop(sid2, sid)
                 # Ended when last seen, by the sweep's definition (measured rows), not this card's.
                 _close_session(sid, sess, _ended_when_last_seen(sess, _last_seen_many([sess])),
-                               closed_by=CLOSED_BY_SWEEP)
+                               closed_by=CLOSED_BY_SWEEP, reason=CLOSE_REASON_LIVE_STALE)
                 active = None; latest_cog = None; latest_face = None; latest_heart = None
             elif last_activity and last_activity >= live_cutoff:
                 active = sess
@@ -7401,6 +7430,7 @@ def _reserve_and_call(user_id: str, device_id: str, fn, *args,
     Every failure path releases this device's reservation only.
     """
     if not _station_open_to(user_id, device_id) or not eeg_poller.reserve_device(user_id, device_id, session_id):
+        ops_metrics.bump("station_refused", device_id)
         raise HTTPException(403, "Station in use by another user")
     if not eeg_client.is_alive():
         eeg_poller.release_reservation(user_id, device_id)
@@ -7569,6 +7599,7 @@ def eeg_start(payload: EegSessionRequest, request: Request):
     )
     # Another student's paired headband is theirs, not a free station, past the reservation TTL.
     if not _station_open_to(user["id"], device_id):
+        ops_metrics.bump("station_refused", device_id)
         raise in_use
     try:
         out = eeg_poller.start(supabase, user["id"], payload.session_id, device_id,
@@ -7578,6 +7609,7 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         raise HTTPException(403, str(e))
     except eeg_poller.DeviceClaimedError:
         # A live poller or a reservation; both resolve by waiting.
+        ops_metrics.bump("station_refused", device_id)
         raise in_use
     # A tab reuses a live headband across sessions without reconnecting, so the pairing follows
     # the session now recording; left on the old one, that session's close would release it.
@@ -8584,6 +8616,113 @@ def admin_refusals(request: Request, hours: int = 24):
         "hourly": [{"hour": h, "count": n} for h, n in sorted(hourly.items())],
         "complete": got["complete"],
         "dropped": got["dropped"],
+    }
+
+
+def _school_day_start(now: datetime | None = None) -> datetime:
+    """UTC instant of the current school day's local midnight."""
+    tz = _school_timezone()
+    local = (now or _utc_now()).astimezone(tz)
+    return local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+
+
+@app.get("/api/admin/today")
+def admin_today(request: Request):
+    """Today's sessions started, ended by reason and open, answers and active students, at the school.
+
+    Counts only. Discarded empty sessions leave no row, so they come from the counters instead.
+    """
+    _require_admin(request)
+    since = _school_day_start()
+    counts = None
+    try:
+        data = supabase.rpc("admin_today", {"p_since": since.isoformat()}).execute().data
+        counts = data[0] if isinstance(data, list) else data
+    except Exception as e:                                     # noqa: BLE001
+        if not _missing_rpc(e, "admin_today", "20261010000000",
+                            "the admin Today strip reads nothing until then"):
+            print(f"[admin:today] {e}")
+    discards = ops_metrics.read(supabase, ["session_discarded"], since=since)
+    discarded: dict[str, int] = {}
+    for r in discards["rows"]:
+        discarded[r["key"]] = discarded.get(r["key"], 0) + r["n"]
+    return {
+        "since": since.isoformat(),
+        "timezone": _school_timezone_name(),
+        "retrieved": isinstance(counts, dict),
+        "counts": counts if isinstance(counts, dict) else None,
+        "discarded": discarded,
+        "discarded_retrieved": discards["retrieved"],
+    }
+
+
+# A page that polled within this long is still watching its station (pull polls every 5 s).
+_PAGE_WATCHING_SEC = 30.0
+
+
+@app.get("/api/admin/stations")
+def admin_stations(request: Request):
+    """Each headband station: who holds it, how long since their page polled, its poller, refusals today.
+
+    Poller state is this server process's. Names are null with `names_retrieved` when unreadable.
+    """
+    _require_admin(request)
+    mode = eeg_poller.INGEST_MODE
+    try:
+        pairings = supabase.table("station_pairings").select("device_id, user_id, session_id, seen_at") \
+            .order("device_id").execute().data or []
+        retrieved = True
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[admin:stations] {e}")
+        pairings, retrieved = [], False
+    pollers = eeg_poller.snapshot()
+
+    # Not `_profiles_many`: its placeholder "Student" would name a holder it could not read.
+    ids = _unique_ids([p.get("user_id") for p in pairings] + [p["user_id"] for p in pollers])
+    names: dict[str, str] = {}
+    names_retrieved = True
+    if ids:
+        try:
+            for p in (supabase.table("profiles").select("id, display_name")
+                      .in_("id", ids).execute().data or []):
+                if p.get("display_name"):
+                    names[p["id"]] = p["display_name"]
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[admin:stations] names: {e}")
+            names_retrieved = False
+
+    refusals = ops_metrics.read(supabase, ["station_refused"], since=_school_day_start())
+    refused: dict[str, int] = {}
+    for r in refusals["rows"]:
+        refused[r["key"]] = refused.get(r["key"], 0) + r["n"]
+
+    now = _utc_now()
+    by_device: dict[str, dict] = {}
+    for row in pairings:
+        seen = _parse_ts(row.get("seen_at"))
+        age = None if seen is None else round((now - seen).total_seconds(), 1)
+        by_device.setdefault(row["device_id"], {})["pairing"] = {
+            "user_id": row.get("user_id"), "name": names.get(row.get("user_id")),
+            "session_id": row.get("session_id"), "seen_seconds_ago": age,
+            "idle": age is not None and age >= _PAIRING_IDLE_SEC,
+        }
+    for p in pollers:
+        by_device.setdefault(p["device_id"], {}).setdefault("pollers", []).append({
+            **p, "name": names.get(p["user_id"]),
+            "page_watching": p["page_seen_seconds_ago"] < _PAGE_WATCHING_SEC,
+        })
+    for device in refused:
+        by_device.setdefault(device, {})
+    stations = [{"device_id": d, "pairing": v.get("pairing"), "pollers": v.get("pollers", []),
+                 "refused_today": refused.get(d, 0)} for d, v in sorted(by_device.items())]
+    return {
+        "ingest_mode": mode,
+        "retrieved": retrieved,
+        "names_retrieved": names_retrieved,
+        "refusals_retrieved": refusals["retrieved"],
+        "idle_after_seconds": _PAIRING_IDLE_SEC,
+        "stations": stations,
+        "poller_scope": "this server process",
     }
 
 

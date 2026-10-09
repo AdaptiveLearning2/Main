@@ -1409,7 +1409,7 @@ def test_the_owner_is_still_allowed(monkeypatch, endpoint):
     monkeypatch.setattr(main, "supabase", client)
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "student-1"})
     monkeypatch.setattr(main.eeg_poller, "stop", lambda *_a, **_k: {"running": False})
-    monkeypatch.setattr(main, "_close_session", lambda *_a: {"discarded": False})
+    monkeypatch.setattr(main, "_close_session", lambda *_a, **_k: {"discarded": False})
 
     if endpoint == "answer":
         out = main.record_answer(

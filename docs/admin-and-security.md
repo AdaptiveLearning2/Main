@@ -79,6 +79,20 @@ Claude calls only, so under Ollama the payload sends `null` and no tile is drawn
 their last counts through a failed poll, with a note, and hand `LoadError` the read's Error (`loadError` from
 `useAdminResource`) so a 403 or 503 is not reported as an unreachable backend.
 
+## Today and Stations
+
+**`/api/admin/today`** is one `admin_today(p_since)` read from the school day's local midnight (`_school_day_start`):
+- It returns lessons started, open now (any day), ended by `close_reason` (`unrecorded` for a null), answers, and students with a session or an answer.
+- Discarded empty sessions leave no row, so they come from the `session_discarded` counters.
+- Teacher and parent activity is recorded nowhere, and the page says so rather than showing 0.
+
+**`/api/admin/stations`** joins `station_pairings` (holder, seconds since their page polled, idle past `PAIRING_IDLE_SECONDS`) with `eeg_poller.snapshot()` and today's `station_refused` counters:
+- The snapshot carries ids, state and the page's age, never a reading.
+- A poller still running for a page silent past `_PAGE_WATCHING_SEC` is the abandoned-lesson case, and the page marks it.
+- Pollers are this server process's.
+- Under push nothing is paired or polled here, so the list is empty and the page says why.
+- Names come from `profiles.display_name`, and are null with `names_retrieved: false` when unreadable.
+
 ## The security log records that something happened, never what was in it
 
 `security_events` is append-only, written by `_record_security_event` from the access helpers, the three

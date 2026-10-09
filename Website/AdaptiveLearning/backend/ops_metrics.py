@@ -159,13 +159,15 @@ def pending() -> dict[tuple[str, str], int]:
     return out
 
 
-def read(client, kinds: list[str], hours: int) -> dict:
-    """Stored and pending cells for `kinds` in the last `hours` hourly buckets, this one included.
+def read(client, kinds: list[str], hours: int | None = None, since: datetime | None = None) -> dict:
+    """Stored and pending cells for `kinds` in the last `hours` buckets (this one included), or from `since`.
 
     Returns `{retrieved, complete, rows, dropped}`; rows are `{hour, kind, key, n, sum, max}`, with
     pending cells merged so the current hour is never a flush behind. `complete` is false past `_MAX_PAGES`.
     """
-    since = since_hour(hours)
+    # From `since`, the bucket it falls in counts whole: hourly cells cannot be split at a school midnight.
+    since = (since.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+             if since is not None else since_hour(hours))
     merged: dict[tuple[str, str, str], dict] = {}
     retrieved, complete = True, True
     try:

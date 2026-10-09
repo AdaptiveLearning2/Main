@@ -678,6 +678,17 @@ def stop_all(timeout: float = 5.0) -> int:
     return len(pollers)
 
 
+def snapshot() -> list[dict]:
+    """Every registered poller, for the admin stations view: ids, state and page age, never a reading."""
+    now = time.monotonic()
+    with _lock:
+        return [{"session_id": sid, "user_id": p.user_id, "device_id": p.device_id,
+                 "running": p.is_alive(), "recording": p.recording, "withheld": p.withheld,
+                 "page_seen_seconds_ago": round(now - p.last_page_seen, 1),
+                 "samples": p.samples, "errors": p.errors}
+                for sid, p in _active.items()]
+
+
 def status(user_id: str) -> dict:
     with _lock:
         for sid, p in _active.items():

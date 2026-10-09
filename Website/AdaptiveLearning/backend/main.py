@@ -2919,8 +2919,8 @@ def _running_heart_lessons(student_ids, open_sessions=_READ
         open_sessions = _open_sessions(student_ids)
     if open_sessions is None:
         return {str(s): (None, None) for s in student_ids}
-    wanted = {str(s) for s in student_ids}
-    starts = {s: t for s, t in _running_starts(open_sessions).items() if s in wanted}
+    # `open_sessions` covers exactly `student_ids`: read for them, or passed for them.
+    starts = _running_starts(open_sessions)
     heart = _lesson_heart(starts)
     return {str(s): (heart.get(str(s)), starts[str(s)]) if str(s) in starts else (False, None)
             for s in student_ids}

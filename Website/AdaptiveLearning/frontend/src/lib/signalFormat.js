@@ -52,6 +52,16 @@ export function pct(value) {
   return n === null ? 'N/A' : `${Math.round(n * 100)}%`
 }
 
+// EEG stress is `1 - calm`; shown as calm. Null stays null: an absence never becomes 100% calm.
+export function calmRatio(stress) {
+  const n = ratio(stress)
+  return n === null ? null : 1 - n
+}
+
+export function calmPct(stress) {
+  return pct(calmRatio(stress))
+}
+
 // `face_included` is the legacy alias; absent on both reads as on.
 export function emotionOn(report) {
   if (report?.emotion_included !== undefined) return report.emotion_included !== false

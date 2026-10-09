@@ -83,16 +83,16 @@ def setup_current(installer: Path, published: dt.datetime) -> bytes:
 LINK_TTL_S = 600
 
 
-def link_signature(secret: str, kind: str, exp: int) -> str:
-    """What the gate checks a link against: HMAC-SHA256 of "kind:exp" in hex, as backend/kit_gate.py signs it."""
-    return hmac.new(secret.encode("utf-8"), f"{kind}:{exp}".encode("ascii"), hashlib.sha256).hexdigest()
+def link_signature(secret: str, subject: str, exp: int) -> str:
+    """What the gate checks a link against: HMAC-SHA256 of "subject:exp" in hex, as backend/kit_gate.py signs it."""
+    return hmac.new(secret.encode("utf-8"), f"{subject}:{exp}".encode("ascii"), hashlib.sha256).hexdigest()
 
 
-def link(gate: str, secret: str, kind: str, now: float) -> str:
-    """A link to the Setup installer (kind "setup") or its details ("meta"), honoured for LINK_TTL_S."""
+def link(gate: str, secret: str, now: float, file: str | None = None) -> str:
+    """A link to one Setup installer, or with no file to setup/current.json, honoured for LINK_TTL_S."""
     exp = int(now) + LINK_TTL_S
-    path = "/v1/setup/current.json" if kind == "meta" else "/v1/setup/current"
-    return f"{gate.rstrip('/')}{path}?exp={exp}&sig={link_signature(secret, kind, exp)}"
+    path, subject = (f"/v1/setup/files/{file}", f"setup:{file}") if file else ("/v1/setup/current.json", "meta")
+    return f"{gate.rstrip('/')}{path}?exp={exp}&sig={link_signature(secret, subject, exp)}"
 
 
 def as_release(release: update.Release) -> dict:
@@ -155,9 +155,9 @@ def main(argv: list[str] | None = None) -> int:
     setup = commands.add_parser("setup", help="write setup/current.json for a Setup installer")
     setup.add_argument("--installer", type=Path, required=True)
     setup.add_argument("--out", type=Path, required=True)
-    linker = commands.add_parser("link", help="print a signed link to the published Setup installer or its details")
+    linker = commands.add_parser("link", help="print a signed link to a Setup installer, or to setup/current.json")
     linker.add_argument("--secret-file", type=Path, required=True)
-    linker.add_argument("--kind", choices=("setup", "meta"), required=True)
+    linker.add_argument("--file", help="the Setup installer's name; without it, the link is to setup/current.json")
     linker.add_argument("--gate", default=update_settings.GATE_URL)
     signer = commands.add_parser("sign", help="write a signed feed for one Update installer")
     signer.add_argument("--key", type=Path, required=True)
@@ -186,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {args.out}")
         return 0
     if args.command == "link":
-        print(link(args.gate, args.secret_file.read_text(encoding="ascii").strip(), args.kind, time.time()))
+        print(link(args.gate, args.secret_file.read_text(encoding="ascii").strip(), time.time(), args.file))
         return 0
     if args.command == "verify":
         manifest, by = verify(args.path.read_bytes())

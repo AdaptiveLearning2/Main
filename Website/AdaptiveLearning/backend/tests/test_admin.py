@@ -151,7 +151,8 @@ ADMIN_GETS = [
     ("admin_signal_quality", lambda r: main.admin_signal_quality(r)),
     ("admin_adaptive", lambda r: main.admin_adaptive(r)),
     ("admin_kit", lambda r: main.admin_kit(r)),
-    ("admin_kit_download_link", lambda r: main.admin_kit_download_link(r)),
+    ("admin_kit_download_link",
+     lambda r: main.admin_kit_download_link(r, main.KitLinkRequest(sha256="ab" * 32))),
 ]
 
 

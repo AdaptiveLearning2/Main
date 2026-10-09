@@ -106,14 +106,20 @@ An admin downloads the current Setup installer from the **Sensors kit** page (`/
 deployment's learner token and download key, so it is never public. Nor is it behind the download key: a browser
 following a link sends no header.
 
-- **A link is the credential.** `POST /api/admin/kit/download-link` signs `/v1/setup/current?exp=…&sig=…`: HMAC-SHA256
-  of `setup:<exp>` under `KIT_LINK_SECRET`, the gate's `LINK_SECRET`, valid 10 minutes. It names no user and is never
-  cached. The gate honours a link until `exp` and never one more than 15 minutes ahead, and answers an expired or
-  forged one with one 403 before reading the bucket. The download is a navigation, so no CSP `connect-src` is needed.
-- **The details** come from `GET /api/admin/kit`, which reads `/v1/setup/current.json` through a `meta:` link. Four
-  states: `configured: false` (the settings are unset), `published: false`, the installer's version, size, SHA-256 and
-  date, or a 503. Only the gate's own 404, marked `X-Kit-Setup: none`, means nothing is published: any other 404 is a
-  wrong `KIT_GATE_URL`, and reads as a failed read, never as an empty bucket.
+- **A link is the credential, for one file.** `POST /api/admin/kit/download-link` signs
+  `/v1/setup/files/<name>?exp=…&sig=…`: HMAC-SHA256 of `setup:<name>:<exp>` under `KIT_LINK_SECRET`, the gate's
+  `LINK_SECRET`, valid 10 minutes. It names no user and is never cached. The page sends the SHA-256 it showed, and a
+  link is signed only while that is still the offered installer (409 otherwise), so the bytes always match the page;
+  a later publish cannot change what a link serves. The gate honours a link until `exp`, never one more than 15
+  minutes ahead, and answers an expired or forged one with one 403 before reading the bucket. The download is a
+  navigation, so no CSP `connect-src` is needed.
+- **The details** come from `GET /api/admin/kit`: `/v1/setup/current.json` through a `meta:<exp>` link, then a `HEAD`
+  of the file it names, so "published" means downloadable. States: `configured: false` (settings unset), a `problem`
+  to fix, `published: false`, the installer, or a 503 to retry.
+- **The gate marks its own refusals** with `X-Kit-Setup`: `none` (nothing published), `missing` (a file not in the
+  bucket), `refused` (the signature) and `no-secret`. The backend turns each, and a redirect, a 401 (a Worker deployed
+  before these routes) or an unmarked 403 or 404 (not the gate), into a `problem` naming the fix, never a retry; only
+  other answers and an unreachable gate are a 503.
 - **Publishing.** `publish_kit_update.ps1 -Setup`, only with `-Promote` at 100%: the site offers the version every kit
   is moving to. It uploads `setup/AdaptiveLearningSensors-Setup-x.y.z.exe`, then `setup/current.json`, and never
   replaces an offered installer with other bytes. The signature is computed three times (`worker.mjs`,

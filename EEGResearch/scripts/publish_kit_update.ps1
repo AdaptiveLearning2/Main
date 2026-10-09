@@ -90,18 +90,20 @@ function Get-FromGate {
 }
 
 function Get-Signed {
-    # The Setup installer (kind setup) or setup/current.json (meta), through a link signed as the admin page signs it.
-    param([string]$kind, [string]$to)
-    $url = (& $py $release link --secret-file $LinkSecretFile --kind $kind --gate $gate).Trim()
-    if ($LASTEXITCODE -ne 0) { throw "could not sign a $kind link" }
+    # A Setup installer (-file), or setup/current.json without one, through a link signed as the admin page signs it.
+    param([string]$to, [string]$file)
+    $what = if ($file) { $file } else { "setup/current.json" }
+    $fileArgs = if ($file) { @("--file", $file) } else { @() }
+    $url = (& $py $release link --secret-file $LinkSecretFile --gate $gate @fileArgs).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "could not sign a link to $what" }
     try {
         $null = Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $to
         return 200
     } catch {
-        if ($null -eq $_.Exception.Response) { throw "the gate did not answer a $kind link: $($_.Exception.Message)" }
+        if ($null -eq $_.Exception.Response) { throw "the gate did not answer for ${what}: $($_.Exception.Message)" }
         $status = [int]$_.Exception.Response.StatusCode
         if ($status -eq 404) { return 404 }
-        throw "the gate answered $status to a $kind link: is -LinkSecretFile the gate's LINK_SECRET?"
+        throw "the gate answered $status for ${what}: is -LinkSecretFile the gate's LINK_SECRET, and the gate redeployed?"
     }
 }
 
@@ -176,7 +178,7 @@ try {
     $setupAlready = $false
     if ($Setup) {
         $offered = Join-Path $work "setup-current-before.json"
-        if ((Get-Signed "meta" $offered) -eq 200) {
+        if ((Get-Signed $offered) -eq 200) {
             $offeredBefore = Get-Content -Raw $offered | ConvertFrom-Json
             if ([version]$offeredBefore.version -gt [version]$Version) { throw "the admin page offers $($offeredBefore.version) already" }
             if ($offeredBefore.version -eq $Version -and $offeredBefore.sha256 -ne $setupHash) {
@@ -227,13 +229,13 @@ try {
     if ($now.version -ne $Version) { throw "the published $feed.json names $($now.version), not $Version" }
     if ($Setup) {
         $metaBack = Join-Path $work "back-setup-current.json"
-        if ((Get-Signed "meta" $metaBack) -ne 200) { throw "the gate does not serve setup/current.json" }
+        if ((Get-Signed $metaBack) -ne 200) { throw "the gate does not serve setup/current.json" }
         $offeredNow = Get-Content -Raw $metaBack | ConvertFrom-Json
         if ($offeredNow.version -ne $Version -or $offeredNow.sha256 -ne $setupHash) {
             throw "the gate offers $($offeredNow.version), not this $setupName"
         }
         $setupBack = Join-Path $work "back-$setupName"
-        if ((Get-Signed "setup" $setupBack) -ne 200) { throw "the gate does not serve $setupName" }
+        if ((Get-Signed $setupBack $setupName) -ne 200) { throw "the gate does not serve $setupName" }
         if ((Get-FileHash -Algorithm SHA256 $setupBack).Hash.ToLower() -ne $setupHash) { throw "the gate serves other bytes for $setupName" }
     }
 } finally { $script:downloadKey = $null }

@@ -1035,15 +1035,15 @@ def test_the_setup_command_never_writes_over_a_file(tmp_path):
 
 def test_a_link_carries_the_signature_the_gate_and_the_backend_compute():
     # The same vector is asserted in update_gate/worker.test.mjs and backend/tests/test_kit_gate.py.
-    secret, exp = "link-secret-for-tests", 1791600000
-    assert kit_release.link_signature(secret, "setup", exp) == (
-        "c1fc44f6d56f32d734d035082599bead29dffdbe66ddedf9ab53a3c1935631b8")
+    secret, exp, file = "link-secret-for-tests", 1791600000, "AdaptiveLearningSensors-Setup-0.2.1.exe"
+    assert kit_release.link_signature(secret, f"setup:{file}", exp) == (
+        "823bd77fcb80967df8ccf2f4d7a12d7fe0fb1aa5f236b703d29829a90f4c3e88")
     assert kit_release.link_signature(secret, "meta", exp) == (
         "8e145db21708e6554a4d8c1f5cc471620d424a936d7dec1aa957327f389a498f")
-    assert kit_release.link("https://gate.example/", secret, "meta", exp - 600 + 0.7) == (
+    assert kit_release.link("https://gate.example/", secret, exp - 600 + 0.7) == (
         f"https://gate.example/v1/setup/current.json?exp={exp}&sig=8e145db21708e6554a4d8c1f5cc471620d424a936d7dec1aa957327f389a498f")
-    assert kit_release.link("https://gate.example", secret, "setup", exp - 600).startswith(
-        f"https://gate.example/v1/setup/current?exp={exp}&sig=c1fc44f6")
+    assert kit_release.link("https://gate.example", secret, exp - 600, file) == (
+        f"https://gate.example/v1/setup/files/{file}?exp={exp}&sig=823bd77fcb80967df8ccf2f4d7a12d7fe0fb1aa5f236b703d29829a90f4c3e88")
 
 
 def test_release_of_reads_an_update_installer_only(tmp_path):

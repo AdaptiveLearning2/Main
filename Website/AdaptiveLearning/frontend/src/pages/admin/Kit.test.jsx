@@ -54,6 +54,18 @@ describe('the installer on offer', () => {
     expect(screen.queryByRole('button', { name: /Download the installer/ })).not.toBeInTheDocument()
   })
 
+  it('names a gate set up wrong as a fix to make, with no button and no retry', async () => {
+    overrideApi(KIT, () => ({
+      configured: true, problem: "the gate refused the link: KIT_LINK_SECRET is not the gate's LINK_SECRET",
+    }))
+    render(<AdminKit navigate={vi.fn()} />)
+    expect(await screen.findByText('The download gate is set up wrong.')).toBeInTheDocument()
+    expect(screen.getByText(/KIT_LINK_SECRET is not the gate's LINK_SECRET\. Fix it, then reload this page\./))
+      .toBeInTheDocument()
+    expect(screen.queryByText(/No installer has been published/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  })
+
   it('never shows a failed read as nothing published', async () => {
     overrideApi(KIT, () => { throw apiError(503) })
     render(<AdminKit navigate={vi.fn()} />)
@@ -63,12 +75,23 @@ describe('the installer on offer', () => {
 })
 
 describe('the download', () => {
-  it('asks the backend for a link, then goes to it', async () => {
+  it('asks the backend for a link to the installer it shows, then goes to it', async () => {
     const navigate = vi.fn()
     render(<AdminKit navigate={navigate} />)
     await userEvent.click(await screen.findByRole('button', { name: /Download the installer/ }))
-    expect(apiFetch).toHaveBeenCalledWith(LINK, { method: 'POST' })
+    expect(apiFetch).toHaveBeenCalledWith(LINK, { method: 'POST', body: { sha256: SHA } })
     expect(navigate).toHaveBeenCalledWith(URL_)
+  })
+
+  it("says in the backend's words why no link was given when the installer changed, and goes nowhere", async () => {
+    const said = 'A different installer was published after this page loaded; reload it'
+    overrideApi(LINK, () => { throw apiError(409, said) }, 'POST')
+    const navigate = vi.fn()
+    render(<AdminKit navigate={navigate} />)
+    await userEvent.click(await screen.findByRole('button', { name: /Download the installer/ }))
+    expect(await screen.findByText(said)).toBeInTheDocument()
+    expect(screen.queryByText(/Make sure the backend is running/)).not.toBeInTheDocument()
+    expect(navigate).not.toHaveBeenCalled()
   })
 
   it('names a refused link as a refusal, and goes nowhere', async () => {

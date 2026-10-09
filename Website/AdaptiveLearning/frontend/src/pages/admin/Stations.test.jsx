@@ -33,6 +33,40 @@ describe('the stations page', () => {
     expect(within(card('station1')).queryByText(/page silent/)).not.toBeInTheDocument()
   })
 
+  it('says how a released station’s last lesson today ended, in words', async () => {
+    overrideApi(STATIONS_PATH, () => buildStations({
+      stations: [station(), station({ device_id: 'station3', pairing: null, pollers: [], refused_today: 0,
+                                      last_ended: { close_reason: 'sweep', ended_at: '2026-10-08T16:40:00+00:00' } })],
+    }))
+    page()
+    await screen.findByText('station3')
+    expect(within(card('station3')).getByText('Not held.')).toBeInTheDocument()
+    expect(within(card('station3')).getByText(/Last lesson here today ended .*: Closed by the sweep as abandoned/))
+      .toBeInTheDocument()
+    expect(within(card('station1')).queryByText(/Last lesson here/)).not.toBeInTheDocument()
+  })
+
+  it('names a null reason as unrecorded, never as a guess', async () => {
+    overrideApi(STATIONS_PATH, () => buildStations({
+      stations: [station({ last_ended: { close_reason: null, ended_at: '2026-10-08T16:40:00+00:00' } })],
+    }))
+    page()
+    expect(await screen.findByText(/Last lesson here today ended .*: Ended before reasons were recorded/))
+      .toBeInTheDocument()
+  })
+
+  it('says an unread last lesson may hide a released station', async () => {
+    overrideApi(STATIONS_PATH, () => buildStations({ last_ended_retrieved: false }))
+    page()
+    expect(await screen.findByText(/last lesson ended could not be read/)).toBeInTheDocument()
+  })
+
+  it('says nothing about last lessons when they were read', async () => {
+    page()
+    await screen.findByText('station1')
+    expect(screen.queryByText(/last lesson ended could not be read/)).not.toBeInTheDocument()
+  })
+
   it('says a name could not be read rather than that it is unset', async () => {
     overrideApi(STATIONS_PATH, () => buildStations({
       names_retrieved: false,

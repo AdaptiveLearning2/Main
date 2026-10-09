@@ -1,22 +1,9 @@
 import useAdminRead from '../../hooks/useAdminRead'
 import { ReadState, Tile, Unread } from './adminUi'
+import { reasonLabel } from './closeReasons'
 
 const TODAY = '/api/admin/today'
 const POLL_MS = 60_000
-
-// `sessions.close_reason`, as words; `unrecorded` ended before the column existed.
-const REASONS = {
-  finish: 'Finished by the student',
-  sign_out: 'Signed out mid-lesson',
-  page_closed: 'Lesson page closed or left',
-  student: 'Ended by the student, no reason sent',
-  superseded: 'Closed when the student started a new lesson',
-  live_stale: 'Closed by Live after going quiet',
-  sweep: 'Closed by the sweep as abandoned',
-  unrecorded: 'Ended before reasons were recorded',
-}
-
-const reasonLabel = key => REASONS[key] || key
 
 function Counts({ data }) {
   if (!data.retrieved) return <Unread what="Today's session counts" />

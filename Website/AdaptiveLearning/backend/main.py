@@ -1241,13 +1241,20 @@ def _eeg_was_started(session_id: str) -> bool | None:
         return None
 
 
-def _mark_eeg_started(session_id: str) -> None:
-    """Stamp the first EEG start on the session. Never raises; a start must not fail on it."""
+def _mark_eeg_started(session_id: str, device_id: str | None = None) -> None:
+    """Stamp the first EEG start on the session, and the station it is on now. Never raises."""
     try:
         supabase.table("sessions").update({"eeg_started_at": _utc_now().isoformat()}) \
             .eq("id", session_id).is_("eeg_started_at", "null").execute()
     except Exception as e:                                     # noqa: BLE001
         print(f"[eeg] could not stamp the EEG start on {session_id}: {e}")
+    if device_id is None:
+        return
+    # The latest station, not the first: a tab can move a lesson to another headband.
+    try:
+        supabase.table("sessions").update({"eeg_device_id": device_id}).eq("id", session_id).execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[eeg] could not record the station for {session_id}: {type(e).__name__}")
 
 
 def _recording_was_expected(user_id: str) -> bool | None:
@@ -7644,7 +7651,7 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         _record_pairing(user["id"], device_id, payload.session_id)
     except Exception as e:
         print(f"[eeg] could not move the pairing on {device_id} to this session: {type(e).__name__}")
-    _mark_eeg_started(payload.session_id)
+    _mark_eeg_started(payload.session_id, device_id)
     return {"ok": True, **out}
 
 
@@ -8688,17 +8695,20 @@ _PAGE_WATCHING_SEC = 30.0
 # Names and today's refusal counts change slowly, so a 5 s Stations poll reuses them this long.
 _STATIONS_SLOW_SEC = 30.0
 _stations_slow: dict = {"at": None}
+# Today's ended lessons read for "last ended here"; a station whose last one is older than this many reads none.
+_STATIONS_LAST_ENDED_ROWS = 1000
 
 
 def _stations_slow_reads(ids: list[str]) -> dict:
-    """Holders' names and today's `station_refused` counts, cached `_STATIONS_SLOW_SEC`.
+    """Holders' names, today's `station_refused` counts and each station's last ended lesson, cached `_STATIONS_SLOW_SEC`.
 
     A new holder or a failed read is never served from the cache.
     """
     global _stations_slow
     cached = _stations_slow
     if (cached["at"] is not None and time.monotonic() - cached["at"] < _STATIONS_SLOW_SEC
-            and set(ids) <= cached["ids"] and cached["names_retrieved"] and cached["refusals_retrieved"]):
+            and set(ids) <= cached["ids"] and cached["names_retrieved"] and cached["refusals_retrieved"]
+            and cached["last_ended_retrieved"]):
         return cached
     # Not `_profiles_many`: its placeholder "Student" would name a holder it could not read.
     names: dict[str, str] = {}
@@ -8712,12 +8722,26 @@ def _stations_slow_reads(ids: list[str]) -> dict:
         except Exception as e:                                 # noqa: BLE001
             print(f"[admin:stations] names: {e}")
             names_retrieved = False
-    refusals = ops_metrics.read(supabase, ["station_refused"], since=_school_day_start())
+    day_start = _school_day_start()
+    refusals = ops_metrics.read(supabase, ["station_refused"], since=day_start)
     refused: dict[str, int] = {}
     for r in refusals["rows"]:
         refused[r["key"]] = refused.get(r["key"], 0) + r["n"]
+    last_ended: dict[str, dict] = {}
+    last_ended_retrieved = True
+    try:
+        # Newest first, so the first row per station is its last; the cap bounds a long school day.
+        for s in (supabase.table("sessions").select("eeg_device_id, close_reason, ended_at")
+                  .gte("ended_at", day_start.isoformat()).not_.is_("eeg_device_id", "null")
+                  .order("ended_at", desc=True).limit(_STATIONS_LAST_ENDED_ROWS).execute().data or []):
+            # A read, not a close; `close_sites()` takes an ended_at key literal for a hand-rolled stamp.
+            last_ended.setdefault(s["eeg_device_id"], {k: s.get(k) for k in ("close_reason", "ended_at")})
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[admin:stations] last ended: {e}")
+        last_ended_retrieved = False
     fresh = {"at": time.monotonic(), "ids": frozenset(ids), "names": names, "names_retrieved": names_retrieved,
-             "refused": refused, "refusals_retrieved": refusals["retrieved"]}
+             "refused": refused, "refusals_retrieved": refusals["retrieved"],
+             "last_ended": last_ended, "last_ended_retrieved": last_ended_retrieved}
     # Swapped in whole: a concurrent request holds either the old dict or this one, never a half-cleared one.
     _stations_slow = fresh
     return fresh
@@ -8744,6 +8768,7 @@ def admin_stations(request: Request):
     names, names_retrieved = slow["names"], slow["names_retrieved"]
     refused = slow["refused"]
     refusals = {"retrieved": slow["refusals_retrieved"]}
+    last_ended = slow["last_ended"]
 
     now = _utc_now()
     by_device: dict[str, dict] = {}
@@ -8760,15 +8785,17 @@ def admin_stations(request: Request):
             **p, "name": names.get(p["user_id"]),
             "page_watching": p["page_seen_seconds_ago"] < _PAGE_WATCHING_SEC,
         })
-    for device in refused:
+    for device in [*refused, *last_ended]:
         by_device.setdefault(device, {})
     stations = [{"device_id": d, "pairing": v.get("pairing"), "pollers": v.get("pollers", []),
-                 "refused_today": refused.get(d, 0)} for d, v in sorted(by_device.items())]
+                 "refused_today": refused.get(d, 0), "last_ended": last_ended.get(d)}
+                for d, v in sorted(by_device.items())]
     return {
         "ingest_mode": mode,
         "retrieved": retrieved,
         "names_retrieved": names_retrieved,
         "refusals_retrieved": refusals["retrieved"],
+        "last_ended_retrieved": slow["last_ended_retrieved"],
         "idle_after_seconds": _PAIRING_IDLE_SEC,
         "stations": stations,
         "poller_scope": "this server process",

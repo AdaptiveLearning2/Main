@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import useAdminRead from '../../hooks/useAdminRead'
 import { ReadState, Tile, Unread } from './adminUi'
+import { reasonLabel } from './closeReasons'
 
 const STATIONS = '/api/admin/stations'
 
@@ -8,6 +9,11 @@ function ago(seconds) {
   if (seconds == null) return 'unknown'
   if (seconds < 90) return `${Math.round(seconds)} s ago`
   return `${Math.round(seconds / 60)} min ago`
+}
+
+function clock(iso) {
+  const t = iso ? new Date(iso) : null
+  return t && !Number.isNaN(t.getTime()) ? `at ${t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''
 }
 
 // A holder's name, or why there is none: unreadable is not unnamed.
@@ -51,6 +57,12 @@ function Station({ station, namesRetrieved, idleAfter }) {
       ) : (
         <p className="text-sm text-gray-600 dark:text-gray-400">Not held.</p>
       )}
+      {station.last_ended && (
+        <p className="text-xs text-gray-600 dark:text-gray-400">
+          Last lesson here today ended {clock(station.last_ended.ended_at)}:{' '}
+          {reasonLabel(station.last_ended.close_reason ?? 'unrecorded')}
+        </p>
+      )}
       {pollers.map(p => (
         <p key={p.session_id} className="text-xs text-gray-900 dark:text-white">
           Poller for {who(p, namesRetrieved)}: {p.recording ? 'recording' : 'paired, not recording'}
@@ -73,6 +85,11 @@ function StationList({ data }) {
       <PushNote data={data} />
       {!data.refusals_retrieved && (
         <p className="text-xs text-amber-800 dark:text-amber-300">Today&rsquo;s refusal counts could not be read.</p>
+      )}
+      {data.last_ended_retrieved === false && (
+        <p className="text-xs text-amber-800 dark:text-amber-300">
+          How each station&rsquo;s last lesson ended could not be read, so a released station may be missing.
+        </p>
       )}
       {data.stations.length === 0
         ? <p className="text-sm text-gray-600 dark:text-gray-400">No station is held right now.</p>

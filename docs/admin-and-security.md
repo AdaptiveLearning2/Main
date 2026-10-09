@@ -97,6 +97,22 @@ their last counts through a failed poll, with a note, and hand `LoadError` the r
 - Names come from `profiles.display_name`, and are null with `names_retrieved: false` when unreadable.
 - Names and refusal counts are reused for `_STATIONS_SLOW_SEC` (30 s), so the page's 5 s poll reads only pairings and pollers fresh. A new holder or a failed read is never served from that cache.
 
+## Funnel, consent changes and signal quality
+
+Three read-only RPCs (`20261011000000`), each called inline (so `_missing_rpc` sees a literal name and consequence) and shaped by `_jsonb_as`. A jsonb object can come back wrapped in a one-row list, but a one-row array must not be unwrapped.
+
+- **`/api/admin/funnel`** (`admin_funnel()`): per role, how many accounts have done each step, as they stand now. It is not a history, and a later step can be larger than an earlier one. Counts are system-wide with no breakdown, so no floor applies.
+- **`/api/admin/consent-ops?weeks=`** (`admin_consent_ops`): withdrawals, parent turn-ons and erasures per school week (Monday start, in the school's zone) and channel. `weeks` is clamped to 26.
+  - Turn-ons exist only from `_ENABLEMENTS_RECORDED_FROM`: `consent_enablements` had no backfill.
+  - `signal_erasure` keeps the latest erasure per student and channel, so the erasure count is a lower bound.
+  - The page states both.
+- **`/api/admin/signal-quality?days=`** (`admin_signal_quality`): per school day, EEG's usable share from the rollup (always read). Per heart source, it gives an SQI decile histogram, the median and p90 seconds from a session's first heart row to its first `low|moderate|high`, sessions that never calibrated, and the simulated share (`raw.synthetic`).
+  - **Heart rows count only while that sensor's consent is on now** (`muse_optics` needs `headband_optical_enabled`, `rppg` needs `camera_enabled`), the same rule every other surface follows for a withdrawn channel.
+  - A day, or a day's source, with fewer than `_COHORT_MIN_STUDENTS` students comes back as `withheld` with no figure at all.
+  - "Never calibrated" counts only ended lessons. An open uncalibrated one is `still_calibrating`, since it may yet calibrate.
+  - Today's EEG row is `partial`: the rollup is written when a lesson closes, so it holds ended lessons only, unlike the heart figures beside it.
+  - `days` is clamped to 60.
+
 ## The security log records that something happened, never what was in it
 
 `security_events` is append-only, written by `_record_security_event` from the access helpers, the three

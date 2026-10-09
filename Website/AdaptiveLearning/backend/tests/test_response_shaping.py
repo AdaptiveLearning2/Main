@@ -54,6 +54,10 @@ CALLER_NUMBERS = {
         ("handler", "_OPS_MAX_HOURS (a week of hourly counters)."),
     ("admin_refusals", "hours"):
         ("handler", "_OPS_MAX_HOURS (a week of hourly counters)."),
+    ("admin_consent_ops", "weeks"):
+        ("handler", "_CONSENT_OPS_MAX_WEEKS (half a school year)."),
+    ("admin_signal_quality", "days"):
+        ("handler", "_SIGNAL_QUALITY_MAX_DAYS; each day scans that day's heart rows."),
     ("admin_student_search", "limit"):
         ("handler", "25, over a term already refused below two characters."),
     ("list_sessions", "limit"):

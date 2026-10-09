@@ -8750,6 +8750,93 @@ def admin_stations(request: Request):
     }
 
 
+# ─── read-only totals: funnel, consent changes, signal quality ───────────
+
+def _jsonb_as(data, shape: type):
+    """An RPC's jsonb result as `shape` (dict or list), or None if misshapen."""
+    # A scalar jsonb object can come back wrapped in a one-row list; a one-row array must stay a list.
+    if shape is dict and isinstance(data, list) and len(data) == 1:
+        data = data[0]
+    return data if isinstance(data, shape) else None
+
+
+@app.get("/api/admin/funnel")
+def admin_funnel(request: Request):
+    """How many students, teachers and parents have reached each adoption step. Counts only."""
+    _require_admin(request)
+    funnel = None
+    try:
+        funnel = _jsonb_as(supabase.rpc("admin_funnel", {}).execute().data, dict)
+    except Exception as e:                                     # noqa: BLE001
+        if not _missing_rpc(e, "admin_funnel", "20261011000000",
+                            "the admin funnel reads nothing until then"):
+            print(f"[admin:funnel] {e}")
+    return {"retrieved": funnel is not None, "funnel": funnel}
+
+
+# `consent_enablements` was created by 20260928040000 with no backfill: no turn-on before it is recorded.
+_ENABLEMENTS_RECORDED_FROM = "2026-09-28"
+_CONSENT_OPS_MAX_WEEKS = 26
+
+
+@app.get("/api/admin/consent-ops")
+def admin_consent_ops(request: Request, weeks: int = 8):
+    """Consent withdrawals, parent turn-ons and erasures per school week and channel."""
+    _require_admin(request)
+    weeks = max(1, min(weeks, _CONSENT_OPS_MAX_WEEKS))
+    today = _school_day_start()
+    local = today.astimezone(_school_timezone())
+    since = (local - timedelta(days=local.weekday() + 7 * (weeks - 1))).astimezone(timezone.utc)
+    rows = None
+    try:
+        rows = _jsonb_as(supabase.rpc("admin_consent_ops", {"p_since": since.isoformat(),
+                                                            "p_tz": _school_timezone_name()}).execute().data, list)
+    except Exception as e:                                     # noqa: BLE001
+        if not _missing_rpc(e, "admin_consent_ops", "20261011000000",
+                            "the admin consent-changes panel reads nothing until then"):
+            print(f"[admin:consent_ops] {e}")
+    return {
+        "retrieved": rows is not None,
+        "weeks": weeks,
+        "since": since.isoformat(),
+        "timezone": _school_timezone_name(),
+        "changes": rows or [],
+        "enablements_recorded_from": _ENABLEMENTS_RECORDED_FROM,
+    }
+
+
+_SIGNAL_QUALITY_MAX_DAYS = 60
+
+
+@app.get("/api/admin/signal-quality")
+def admin_signal_quality(request: Request, days: int = 14):
+    """EEG trusted share and heart SQI, time-to-calibrate and simulated share, per school day.
+
+    Aggregates only; a day with fewer than `_COHORT_MIN_STUDENTS` students is withheld.
+    """
+    _require_admin(request)
+    days = max(1, min(days, _SIGNAL_QUALITY_MAX_DAYS))
+    first_day = (_school_day_start().astimezone(_school_timezone()).date() - timedelta(days=days - 1))
+    got = None
+    try:
+        got = _jsonb_as(supabase.rpc("admin_signal_quality", {
+            "p_since": first_day.isoformat(), "p_tz": _school_timezone_name(),
+            "p_min_students": _COHORT_MIN_STUDENTS}).execute().data, dict)
+    except Exception as e:                                     # noqa: BLE001
+        if not _missing_rpc(e, "admin_signal_quality", "20261011000000",
+                            "the admin signal-quality panel reads nothing until then"):
+            print(f"[admin:signal_quality] {e}")
+    return {
+        "retrieved": got is not None,
+        "days": days,
+        "since": first_day.isoformat(),
+        "timezone": _school_timezone_name(),
+        "min_students": _COHORT_MIN_STUDENTS,
+        "eeg": (got or {}).get("eeg") or [],
+        "heart": (got or {}).get("heart") or [],
+    }
+
+
 _SECURITY_EVENT_KINDS = (
     "authz_denied", "admin_denied", "rate_limited", "consent_changed")
 _SECURITY_EVENTS_MAX = 200

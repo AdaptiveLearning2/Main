@@ -288,21 +288,15 @@ def test_no_link_is_given_for_an_installer_other_than_the_one_shown(monkeypatch,
     assert e.value.status_code == 409 and e.value.detail.startswith(says)
 
 
-def test_a_link_asked_for_naming_no_installer_is_to_the_current_one(monkeypatch, admin):
-    """A caller that sends no hash, such as a page loaded before the hash was sent, still gets a working link."""
-    asking(monkeypatch, gate())
-    body = json.loads(main.admin_kit_download_link(None, None).body)
-    assert body["url"].startswith(f"{GATE}/v1/setup/files/{SETUP}?exp={EXP}&")
-
-
-def test_through_the_app_a_post_with_no_body_gets_a_link_and_a_malformed_hash_a_422(monkeypatch, admin):
+def test_through_the_app_a_link_needs_the_hash_the_page_showed(monkeypatch, admin):
+    """No caller can skip the check that the bytes match the page: a missing or malformed hash is a 422."""
     from fastapi.testclient import TestClient
     asking(monkeypatch, gate())
     client = TestClient(main.app)
     path = "/api/admin/kit/download-link"
-    assert client.post(path).status_code == 200
     assert client.post(path, json={"sha256": SHA}).status_code == 200
-    assert client.post(path, json={"sha256": SHA.upper()}).status_code == 422
+    for body in (None, {}, {"sha256": SHA.upper()}):
+        assert client.post(path, json=body).status_code == 422, body
 
 
 def test_a_link_asked_for_during_an_outage_is_a_503_to_retry(monkeypatch, admin):

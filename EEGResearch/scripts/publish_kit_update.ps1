@@ -103,8 +103,27 @@ function Get-Signed {
         if ($null -eq $_.Exception.Response) { throw "the gate did not answer for ${what}: $($_.Exception.Message)" }
         $status = [int]$_.Exception.Response.StatusCode
         if ($status -eq 404) { return 404 }
-        throw "the gate answered $status for ${what}: is -LinkSecretFile the gate's LINK_SECRET, and the gate redeployed?"
+        # The gate marks its own refusals (docs/student-kit.md), so each names its fix.
+        $why = switch ("$status/$(Get-SetupMark $_.Exception.Response)") {
+            "403/expired" { "it judged a link signed just now out of date: this PC's clock and Cloudflare's disagree by minutes" }
+            "403/refused" { "it refused the link: -LinkSecretFile is not the gate's LINK_SECRET" }
+            "503/no-secret" { "it has no LINK_SECRET set" }
+            "401/" { "it asked for its download key, so it predates the Setup links: redeploy the Worker" }
+            default { "it answered $status" }
+        }
+        throw "the gate did not serve ${what}: $why"
     }
+}
+
+function Get-SetupMark {
+    # The X-Kit-Setup header of a failed response: 5.1's WebResponse and 7's HttpResponseMessage keep headers apart.
+    param($response)
+    try {
+        if ($response.Headers -is [System.Net.WebHeaderCollection]) { return $response.Headers['X-Kit-Setup'] }
+        $values = $null
+        if ($response.Headers.TryGetValues('X-Kit-Setup', [ref]$values)) { return @($values)[0] }
+    } catch { }
+    return $null
 }
 
 function Read-Feed {

@@ -124,7 +124,7 @@ Three read-only RPCs (`20261011000000`), each called inline (so `_missing_rpc` s
 
 ## Sensors kit
 
-**`/api/admin/kit`** reads the Setup installer the kit gate offers; **`POST /api/admin/kit/download-link`** (`{sha256}`, the one the page showed; no body, the current one) signs a 10-minute link to that file (`kit_gate.py`; the scheme is in `docs/student-kit.md`, *The admin page's installer*).
+**`/api/admin/kit`** reads the Setup installer the kit gate offers; **`POST /api/admin/kit/download-link`** (`{sha256}`, the one the page showed, required) signs a 10-minute link to that file (`kit_gate.py`; the scheme is in `docs/student-kit.md`, *The admin page's installer*).
 - Admin only, like every route here, because the installer carries the site's learner token and download key.
 - `configured: false` when `KIT_GATE_URL` or `KIT_LINK_SECRET` is unset, a boot `[config]` line beside it; the link route answers 503 then.
 - A gate or server set up wrong, or a publish left half done, is a `problem` naming the fix, with `problem_is` (`setup` or `publish`) choosing the page's heading (the link route: 409 with that sentence), not a retry. An outage is a 503 with `Retry-After`, never `published: false`.

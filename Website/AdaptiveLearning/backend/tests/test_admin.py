@@ -144,6 +144,8 @@ ADMIN_GETS = [
     ("admin_security_events", lambda r: main.admin_security_events(r)),
     ("admin_generation", lambda r: main.admin_generation(r)),
     ("admin_refusals", lambda r: main.admin_refusals(r)),
+    ("admin_today", lambda r: main.admin_today(r)),
+    ("admin_stations", lambda r: main.admin_stations(r)),
 ]
 
 

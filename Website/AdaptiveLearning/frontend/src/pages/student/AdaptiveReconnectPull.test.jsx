@@ -477,7 +477,7 @@ it('ends its own lesson on the way out with a keepalive end, and ends nothing on
   expect(endSession).not.toHaveBeenCalled()
 
   window.dispatchEvent(new Event('pagehide'))
-  expect(apiFetchOnUnload).toHaveBeenCalledWith('/api/sessions/sess-1/end', {})
+  expect(apiFetchOnUnload).toHaveBeenCalledWith('/api/sessions/sess-1/end', { reason: 'page_closed' })
   // Once: a second hide (back-forward cache) has nothing left to end.
   window.dispatchEvent(new Event('pagehide'))
   expect(apiFetchOnUnload.mock.calls.filter(([p]) => p.startsWith('/api/sessions/'))).toHaveLength(1)
@@ -525,6 +525,6 @@ it('offers Finish once a session has an answer, whatever the goal, and Finish cl
   fireEvent.click(screen.getByRole('button', { name: /submit answer/i }))
   await screen.findByText(/1 answered/)
   fireEvent.click(screen.getByRole('button', { name: /finish session/i }))
-  await waitFor(() => expect(endSession).toHaveBeenCalledWith('sess-1'))
+  await waitFor(() => expect(endSession).toHaveBeenCalledWith('sess-1', 'finish'))
   await screen.findByRole('button', { name: /generate question/i })
 }, 30_000)

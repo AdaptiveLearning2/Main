@@ -65,7 +65,7 @@ it('ends the session when the student leaves, recorded or not', async () => {
   await userEvent.click(await screen.findByRole('button', { name: /generate question/i }))
   await screen.findByText('What is 2 + 2?')
   unmount()
-  await waitFor(() => expect(endSession).toHaveBeenCalledWith('sess-phantom'))
+  await waitFor(() => expect(endSession).toHaveBeenCalledWith('sess-phantom', 'page_closed'))
 })
 
 
@@ -76,7 +76,7 @@ it('ends the session before sign-out takes the token, and only once', async () =
   await screen.findByText('What is 2 + 2?')
 
   await runSignOutTasks()
-  expect(endSession).toHaveBeenCalledWith('sess-phantom')
+  expect(endSession).toHaveBeenCalledWith('sess-phantom', 'sign_out')
 
   unmount()
   expect(endSession).toHaveBeenCalledTimes(1)

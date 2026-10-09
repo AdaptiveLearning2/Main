@@ -5,7 +5,7 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 import { toast } from 'sonner'
 import { apiError, apiFetch, mockApi, resetApi } from '../test/mocks/apiFetch'
-import { fetchSessionList, markEegStarted, recordAnswer } from './session'
+import { endSession, fetchSessionList, markEegStarted, recordAnswer } from './session'
 
 beforeEach(() => { resetApi(); vi.mocked(toast.error).mockClear() })
 
@@ -93,4 +93,14 @@ it('keeps an absent count as unknown, not as zero or as the rows it got', async 
 
   await expect(fetchSessionList()).resolves.toEqual(
     { sessions: [{ id: 's1' }, { id: 's2' }], total: null, truncated: null })
+})
+
+it('tells the backend why a session ended, and sends no body when the caller names no reason', async () => {
+  mockApi({ 'POST /api/sessions/s1/end': () => ({ ok: true }) })
+
+  await endSession('s1', 'finish')
+  expect(apiFetch).toHaveBeenLastCalledWith('/api/sessions/s1/end', { method: 'POST', body: { reason: 'finish' } })
+
+  await endSession('s1')
+  expect(apiFetch).toHaveBeenLastCalledWith('/api/sessions/s1/end', { method: 'POST' })
 })

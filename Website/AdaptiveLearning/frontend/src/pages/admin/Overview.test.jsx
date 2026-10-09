@@ -6,6 +6,9 @@ import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/m
 import {
   GENERATION_PATH, REFUSALS_PATH, buildGeneration, buildRefusals,
 } from '../../test/fixtures/opsCounters'
+import {
+  STATIONS_PATH, TODAY_PATH, buildStations, buildToday,
+} from '../../test/fixtures/adminLifecycle'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 
@@ -35,6 +38,8 @@ beforeEach(() => {
     [searchPath('ada')]: { students: [ADA] },
     [GENERATION_PATH]: buildGeneration(),
     [REFUSALS_PATH]: buildRefusals(),
+    [TODAY_PATH]: buildToday(),
+    [STATIONS_PATH]: buildStations(),
   })
 })
 afterEach(() => { cleanup(); vi.useRealTimers() })

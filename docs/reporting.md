@@ -244,6 +244,14 @@ sites: each is either in `STUDENT_DRIVEN_CLOSERS` or must pass `CLOSED_BY_SWEEP`
 someone classifies it. No property of the source separates them — `/end` and both sweeps stop the poller and call
 the same helper — which is why the list is by name.
 
+**`close_reason` records why, in the same claim as `ended_at`**:
+- `/end` takes the page's reason: `finish`, `sign_out` or `page_closed` (pagehide, or in-app navigation away). A page naming none is `student`, never a guess.
+- The sweeping sites pass their own: `superseded` (`start_session`), `live_stale` (`class_live`) and `sweep`.
+- `test_every_close_site_says_why_the_session_ended` maps each site to its reason, so a fifth site fails until classified.
+- A null reason means the session closed before the column existed. It is never back-filled.
+- A discarded session's row is gone, reason and all, so it is counted as `session_discarded:<reason>` in the ops counters instead.
+- Until `20261010000000` is applied, `_claim_session_close` retries without the column on that error alone. This is a bridge: remove it once the migration is everywhere.
+
 The exhaustiveness tests share `tests/conftest.py:close_sites()` — a closer is a function that calls
 `_close_session(` **or** writes an `"ended_at":` of its own. Both halves matter: the first catches a site drifting
 away from the helper, the second catches a new site that hand-rolls a stamp. A second test pins the helper's own

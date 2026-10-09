@@ -49,10 +49,11 @@ export async function markEegStarted(sessionId) {
  * Close a practice session. Never throws; tells the student if it failed.
  * @returns {Promise<boolean>} whether the backend confirmed the close (falsy id: false)
  */
-export async function endSession(id) {
+// `reason` is stored as the session's close reason: 'finish', 'sign_out' or 'page_closed'.
+export async function endSession(id, reason) {
   if (!id) return false
   try {
-    await apiFetch(`/api/sessions/${id}/end`, { method: 'POST' })
+    await apiFetch(`/api/sessions/${id}/end`, { method: 'POST', ...(reason ? { body: { reason } } : {}) })
     return true
   } catch (e) {
     console.error('[session] could not end', e)

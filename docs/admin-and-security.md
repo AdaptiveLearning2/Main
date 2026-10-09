@@ -57,7 +57,8 @@ Reads merge the unflushed cells, so the current hour is never a flush behind. **
 (`_PAGE_ROWS` 1000, PostgREST's silent cap) up to `_MAX_PAGES`, and say `complete: false` past it rather than
 showing a short total as whole. "The last N hours" is N hourly buckets, the current one included (`since_hour`).
 
-**A key never holds an id, a caller or an address.** Refusals are `"<status> <method> <route template>"`,
+**A key never names a person, a session, a caller or an address.** A station id (`station1`) may be one: it
+names a device, and the stations view exists to say which device. Refusals are `"<status> <method> <route template>"`,
 taken from the matched route (`/api/sessions/{session_id}/end`), never `request.url.path`, which carries the
 id. A request refused before routing — the public limiter's 429, a declared-length 413 — is matched against
 the router by `_route_template`, for the same reason. 404 is not counted: it is a mistyped URL, not a refusal.
@@ -71,6 +72,8 @@ the size cap, rather than in a middleware layer of its own.
 | `llm_latency_ms` | provider (sum and max; includes waiting for a slot) | same |
 | `llm_tokens` | `<provider>:in` / `:out` | same, from the provider's usage fields |
 | `question` | `served:inline`/`served:queue`, `prefetched`, `prefetch_failed`, `prefetch_discarded` | `generate_question`, `_prefetch_worker` |
+| `session_discarded` | the `close_reason` the discarded session would have had | `_close_session` |
+| `station_refused` | station id (a device) | `_reserve_and_call`, `eeg_start` |
 
 `/api/admin/generation` and `/api/admin/refusals` read them; `hours` is clamped to a week. The cost is an
 **estimate** from `CLAUDE_PRICE_*_PER_MTOK` (claude-haiku-4-5 list prices by default) and says so. The daily
@@ -78,6 +81,21 @@ call ceiling is `llm_client`'s in-memory window, so the page labels it **"this s
 Claude calls only, so under Ollama the payload sends `null` and no tile is drawn. The Engine page's panels keep
 their last counts through a failed poll, with a note, and hand `LoadError` the read's Error (`loadError` from
 `useAdminResource`) so a 403 or 503 is not reported as an unreachable backend.
+
+## Today and Stations
+
+**`/api/admin/today`** is one `admin_today(p_since)` read from the school day's local midnight (`_school_day_start`):
+- It returns lessons started, open now (any day), ended by `close_reason` (`unrecorded` for a null), answers, and students with a session or an answer.
+- Discarded empty sessions leave no row, so they come from the `session_discarded` counters.
+- Teacher and parent activity is recorded nowhere, and the page says so rather than showing 0.
+
+**`/api/admin/stations`** joins `station_pairings` (holder, seconds since their page polled, idle past `PAIRING_IDLE_SECONDS`) with `eeg_poller.snapshot()` and today's `station_refused` counters:
+- The snapshot carries ids, state and the page's age, never a reading.
+- A poller still running for a page silent past `_PAGE_WATCHING_SEC` is the abandoned-lesson case, and the page marks it.
+- Pollers are this server process's.
+- Under push nothing is paired or polled here, so the list is empty and the page says why.
+- Names come from `profiles.display_name`, and are null with `names_retrieved: false` when unreadable.
+- Names and refusal counts are reused for `_STATIONS_SLOW_SEC` (30 s), so the page's 5 s poll reads only pairings and pollers fresh. A new holder or a failed read is never served from that cache.
 
 ## The security log records that something happened, never what was in it
 

@@ -405,7 +405,7 @@ export default function Adaptive() {
   // Leaving the page ends the session: an empty one is discarded server-side,
   // one with answers is closed.
   useEffect(() => () => {
-    if (sessionIdRef.current) endSession(sessionIdRef.current)
+    if (sessionIdRef.current) endSession(sessionIdRef.current, 'page_closed')
   }, [])
 
   // A reload or a tab close skips the unmount above, and `start_session` cannot tell this tab's lesson from
@@ -416,7 +416,7 @@ export default function Adaptive() {
       // An answer still in flight could land after the end and be refused: leave it open, for a later
       // start or the sweep, rather than lose the answer.
       if (!id || answersInFlight.current > 0) return
-      apiFetchOnUnload(`/api/sessions/${id}/end`, {})
+      apiFetchOnUnload(`/api/sessions/${id}/end`, { reason: 'page_closed' })
       sessionIdRef.current = null
       // Restored from the back-forward cache, the page would answer into the session it just ended.
       reloadIfRestored(e)
@@ -431,7 +431,7 @@ export default function Adaptive() {
   useEffect(() => onSignOut(async () => {
     const id = sessionIdRef.current
     adoptSessionId(null)
-    if (id) await endSession(id)
+    if (id) await endSession(id, 'sign_out')
   }), [adoptSessionId])
 
   // Unmount: stop the 30s connect safety timer and drop the global session id.
@@ -1023,7 +1023,7 @@ export default function Adaptive() {
   // sidecar. Hardware stays paired.
   const finishSession = async () => {
     setFinishing(true)
-    await endSession(sessionIdRef.current).finally(() => {
+    await endSession(sessionIdRef.current, 'finish').finally(() => {
       if (headband.pushMode === false) {
         // Pull: closing the session stopped the poller and freed the station for the next student.
         recorderRef.current?.stop()

@@ -2906,7 +2906,7 @@ def _lesson_context(summaries: dict[str, dict], heart: dict[str, bool], days: in
             out[sid] = {"lesson_pending": False, "heart_rows": False}
             continue
         pending = running[sid][0]
-        rows = bool(summary.get("heart_samples")) or bool(pending) or (
+        rows = bool(summary.get("heart_samples")) or (
             (any_rows or {}).get(sid) if any_rows and sid in any_rows
             else _any_rows_since("heart_signals", sid, days) if ask_rows else False)
         out[sid] = {"lesson_pending": pending, "heart_rows": rows}

@@ -439,8 +439,10 @@ def test_a_running_lesson_with_no_heart_rows_is_not_pending_on_the_summary(monke
 
 
 def _parent_child(monkeypatch, any_rows):
+    """Child `a` has a running lesson; child `b` has none, so only a row check could ask about it."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({
-        "parent_child_links": [{"parent_id": "p", "child_id": "a", "created_at": "2026-06-01"}],
+        "parent_child_links": [{"parent_id": "p", "child_id": c, "created_at": "2026-06-01"}
+                               for c in ("a", "b")],
         "signal_daily_rollup": [], "sessions": [{**_OPEN[0], "user_id": "a"}],
         "heart_signals": [{"user_id": "a", "ts": NOW_UTC.isoformat(), "trusted": False}]}))
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "p"})

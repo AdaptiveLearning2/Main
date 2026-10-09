@@ -589,6 +589,33 @@ def test_a_running_lesson_without_heart_rows_promises_no_figure(monkeypatch, at_
     assert _arousal(monkeypatch, tables)["body_arousal"]["pending"] is False
 
 
+def test_heart_rows_from_before_the_lesson_started_do_not_make_it_pending(monkeypatch,
+                                                                         at_three_am_utc):
+    """An earlier, finished lesson's rows are not this one's."""
+    tables = _with_rollup(rollup=[_heart_rollup("2026-06-09", {"high": 40})])
+    earlier = (NOW_UTC - main.timedelta(days=2)).isoformat()
+    tables["heart_signals"] = [{**_heart_raw("muse_optics")[0], "ts": earlier}]
+    tables["sessions"] = [_open_session()]
+    report = _arousal(monkeypatch, tables)
+
+    assert report["body_arousal"]["pending"] is False
+    assert _day(report, "2026-06-09")["body_arousal_state"] == "measured"
+
+
+def test_a_past_counted_day_is_not_pending_while_a_lesson_runs_today(monkeypatch,
+                                                                      at_three_am_utc):
+    """A day before the running lesson started keeps its own reason, not the lesson's."""
+    tables = _with_rollup(rollup=[_heart_rollup("2026-06-09", None)])
+    earlier = (NOW_UTC - main.timedelta(days=2)).isoformat()
+    tables["heart_signals"] = _heart_raw("muse_optics") + [
+        {**_heart_raw("muse_optics")[0], "ts": earlier}]
+    tables["sessions"] = [_open_session()]
+    report = _arousal(monkeypatch, tables)
+
+    assert _day(report, "2026-06-09")["body_arousal_state"] == "unusable"
+    assert _day(report, "2026-06-11")["body_arousal_state"] == "pending"
+
+
 def test_a_finished_lesson_earlier_in_the_week_does_not_hide_a_running_one(monkeypatch,
                                                                           at_three_am_utc):
     tables = _with_rollup(rollup=[_heart_rollup("2026-06-11", {"high": 40})])

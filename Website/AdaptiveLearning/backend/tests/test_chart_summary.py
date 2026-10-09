@@ -836,12 +836,18 @@ def test_a_calm_trend_across_two_calm_sources_has_no_direction_either():
 
 # ── calm, body arousal and the usual ─────────────────────────────────────
 
-def _usual(**measures):
+def _usual(arousal=None, **measures):
     """`_personal_baseline`'s shape; unnamed measures are `no_current`."""
     out = {m: {"status": "no_current"} for m in main._USUAL_MEASURES}
     out.update(measures)
-    return {"retrieved": True, "heart_sensors": ["headband"],
-            "body_arousal_calibrating_windows": 0, "measures": out}
+    body = main._body_arousal((0, 0, 0, 0), frozenset(), False)
+    return {"retrieved": True, "body_arousal": {**body, **(arousal or {})}, "measures": out}
+
+
+def _measured(share=0.22, **arousal):
+    basis = _basis(usual=_usual(arousal={"state": "measured", **arousal}))
+    basis["averages"]["body_arousal"] = share
+    return basis
 
 
 def test_the_summary_says_calm_and_never_average_stress():
@@ -855,29 +861,55 @@ def test_the_calm_trend_is_read_from_calm():
     assert any("held steady from 60% to 59%" in line for line in lines)
 
 
+def _arousal_line(basis):
+    return next(l for l in main._rule_based_chart_summary(basis) if l.startswith("Body arousal"))
+
+
 def test_body_arousal_is_stated_with_its_caveat():
-    basis = _basis(usual=_usual(body_arousal={"status": "too_little_this_period"}))
-    basis["averages"]["body_arousal"] = 0.22
-    line = next(l for l in main._rule_based_chart_summary(basis) if l.startswith("Body arousal"))
+    line = _arousal_line(_measured())
     assert "22%" in line
     assert "excitement, effort and movement as well as with stress" in line
 
 
-@pytest.mark.parametrize("usual,expected", [
-    ({"body_arousal_calibrating_windows": 6}, "still learning this student's resting heart rate"),
-    ({"heart_sensors": ["camera"]}, "only by the headband's heart sensor, not the camera"),
-    ({}, "worked out when a lesson with the headband's heart sensor finishes"),
+def test_body_arousal_is_defined_as_what_heart_stress_measures():
+    """Usable readings against the lesson's own opening rate, not "lesson time" or "resting"."""
+    line = _arousal_line(_measured())
+    assert ("the share of the headband's usable heart readings that were at least 10 beats a "
+            "minute above the rate it measured at the start of each lesson") in line
+    assert "lesson time" not in line and "resting" not in line
+
+
+def test_a_thin_body_arousal_says_it_is_rough():
+    assert "only a few readings" in _arousal_line(_measured(few_readings=True))
+    assert "only a few readings" not in _arousal_line(_measured(few_readings=False))
+
+
+def test_body_arousal_beside_an_open_lesson_says_that_lesson_is_not_counted():
+    assert "still in progress are not counted" in _arousal_line(_measured(pending=True))
+    assert "still in progress" not in _arousal_line(_measured(pending=False))
+
+
+@pytest.mark.parametrize("state,expected", [
+    ("calibrating", "still measuring this student's starting heart rate"),
+    ("pending", "worked out when a lesson with the headband's heart sensor finishes"),
+    ("unusable", "heart readings were not steady enough to use"),
+    ("camera_only", "only by the headband's heart sensor, not the camera"),
+    ("none", "the headband's heart sensor recorded nothing"),
 ])
-def test_no_body_arousal_says_why_and_never_zero(usual, expected):
-    basis = _basis(usual={**_usual(), **usual})
-    lines = main._rule_based_chart_summary(basis)
-    line = next(l for l in lines if l.startswith("Body arousal"))
+def test_no_body_arousal_says_why_and_never_zero(state, expected):
+    line = _arousal_line(_basis(usual=_usual(arousal={"state": state})))
     assert expected in line
     assert "0%" not in line
 
 
-def test_a_declined_heart_channel_says_nothing_about_body_arousal():
-    basis = _basis(usual=_usual(body_arousal={"status": "not_requested"}))
+def test_unusable_heart_readings_do_not_claim_a_lesson_is_open():
+    line = _arousal_line(_basis(usual=_usual(arousal={"state": "unusable"})))
+    assert "finishes" not in line
+
+
+@pytest.mark.parametrize("state", ["not_requested", "not_retrieved"])
+def test_an_undescribed_heart_channel_says_nothing_about_body_arousal(state):
+    basis = _basis(usual=_usual(arousal={"state": state}))
     assert not any(l.startswith("Body arousal") for l in main._rule_based_chart_summary(basis))
 
 
@@ -899,7 +931,27 @@ def test_the_comparison_with_the_usual_is_in_words_only():
             "was lower than usual.") in lines
     assert ("Heart rate does not have enough earlier days yet to say what is usual for "
             "this student.") in lines
-    assert any(l.startswith("Heart-rate variability cannot be compared") for l in lines)
+    assert ("Heart-rate variability cannot be compared with earlier days, because this "
+            "period's heart readings came from more than one sensor.") in lines
+
+
+@pytest.mark.parametrize("reason,why", [
+    ("mixed_scale", "the headband's scoring changed during this period"),
+    ("scale_unknown", "this period's scoring was not recorded"),
+])
+def test_each_not_comparable_reason_gives_its_own_cause(reason, why):
+    basis = _basis(usual=_usual(calm={"status": "not_comparable", "reason": reason}))
+    assert f"Calm cannot be compared with earlier days, because {why}." in \
+        main._rule_based_chart_summary(basis)
+
+
+def test_a_period_still_being_summarised_is_not_called_a_change():
+    """An open lesson leaves the scale unknown for now; "changed" would be a false claim."""
+    basis = _basis(usual=_usual(focus={"status": "pending"}, calm={"status": "pending"}))
+    lines = main._rule_based_chart_summary(basis)
+    assert ("Focus and calm will be compared with earlier days once this period's lessons "
+            "have finished.") in lines
+    assert not any("changed" in l or "not have enough" in l for l in lines)
 
 
 def test_an_unread_usual_says_so_rather_than_saying_nothing():
@@ -909,8 +961,8 @@ def test_an_unread_usual_says_so_rather_than_saying_nothing():
 
 
 def test_sensor_lines_are_exactly_the_sentences_about_readings():
-    basis = _basis(usual=_usual(focus={"status": "compared", "verdict": "higher"}))
-    basis["averages"]["body_arousal"] = 0.1
+    basis = _measured(0.1)
+    basis["usual"]["measures"]["focus"] = {"status": "compared", "verdict": "higher"}
     lines, sensor = main._chart_summary_lines(basis)
     shown = [l for i, l in enumerate(lines) if i not in sensor]
     assert [lines[i].split()[0] for i in sensor] == \
@@ -918,13 +970,46 @@ def test_sensor_lines_are_exactly_the_sentences_about_readings():
     assert all(not any(w in l for w in ("focus", "calm", "heart", "arousal")) for l in shown)
 
 
+def _reply(lines):
+    return "\n".join(f"{i + 1}. {l}" for i, l in enumerate(lines))
+
+
+def _validate(reply_lines, lines):
+    return main._validated_chart_summary(_reply(reply_lines), main._chart_summary_figures(lines),
+                                         len(lines), lines)
+
+
+def _full_basis():
+    basis = _measured(0.22)
+    basis["usual"]["measures"]["focus"] = {"status": "compared", "verdict": "higher"}
+    basis["averages"]["rmssd_ms"] = 41.6
+    return basis
+
+
 def test_every_number_in_the_new_sentences_is_an_allowed_figure():
-    basis = _basis(usual=_usual(focus={"status": "compared", "verdict": "higher"}))
-    basis["averages"].update(rmssd_ms=41.6, body_arousal=0.22)
-    lines = main._rule_based_chart_summary(basis)
-    reply = "\n".join(f"{i + 1}. {l}" for i, l in enumerate(lines))
-    assert main._validated_chart_summary(reply, main._chart_summary_figures(lines),
-                                         len(lines), lines) == lines
+    lines = main._rule_based_chart_summary(_full_basis())
+    assert _validate(lines, lines) == lines
+
+
+def test_a_reply_that_reorders_sensor_and_other_points_is_rejected():
+    """`sensor_lines` indexes the baseline; a reordered reply would hide the wrong sentences."""
+    lines, sensor = main._chart_summary_lines(_full_basis())
+    other = next(i for i in range(len(lines)) if i not in sensor)
+    swapped = list(lines)
+    swapped[other], swapped[sensor[0]] = lines[sensor[0]], lines[other]
+    assert _validate(swapped, lines) is None
+
+
+def test_a_reply_that_moves_a_figure_to_another_point_is_rejected():
+    """Allowed numbers, wrong place: the swap the global check let through."""
+    lines = main._rule_based_chart_summary(_full_basis())
+    focus = next(i for i, l in enumerate(lines) if l.startswith("Average focus"))
+    calm = next(i for i, l in enumerate(lines) if l.startswith("Average calm"))
+    moved = list(lines)
+    moved[focus] = lines[focus].replace("63%", "59%", 1)
+    moved[calm] = lines[calm].replace("59%", "63%", 1)
+    assert moved != lines
+    assert _validate(moved, lines) is None
 
 
 def test_a_reply_that_calls_calm_stress_is_rejected():
@@ -954,6 +1039,35 @@ def test_the_basis_turns_stress_into_calm_for_the_average_and_the_trend(monkeypa
     assert "stress" not in basis["averages"] and "stress" not in basis["trend"]
     assert basis["trend"]["calm"]["direction"] == "up"
     assert basis["usual"]["measures"]["calm"]["current"] == 0.75
+
+
+def test_the_trend_and_the_usual_share_one_rollup_read(monkeypatch):
+    from tests.test_access_control import _FakeSupabase
+    fake = _FakeSupabase({"signal_daily_rollup": [
+        {"user_id": "s", "day": main._school_today().isoformat(), "channel": "cognitive",
+         "avg_focus": 0.5, "avg_stress": 0.5, "trusted_sample_count": 100,
+         "score_scale_min": 3, "score_scale_max": 3, "calm_sources": ["sdk"]}]})
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "_reportable_channels",
+                        lambda sid, inc=True: main.ReportChannels(
+                            heart=False, emotion=False, consent_retrieved=True))
+    monkeypatch.setattr(main, "_signal_summary", lambda *a, **k: {
+        **main._EMPTY_SUMMARY, "focus": 0.5, "stress": 0.5, "cognitive_samples": 400})
+    monkeypatch.setattr(main, "_stats_including_open_session",
+                        lambda sid: {"total_questions": 0, "total_correct": 0, "retrieved": True})
+    monkeypatch.setattr(main, "_topic_breakdown_with_state", lambda sid: ([], True))
+
+    basis = main._chart_summary_basis("s", 7, 8, True)
+
+    assert fake.table_calls.count("signal_daily_rollup") == 1
+    assert basis["trend"]["focus"]["weeks_with_data"] == 1, "the trend saw the shared rows"
+    assert basis["usual"]["measures"]["focus"]["status"] == "not_enough_history"
+
+
+def test_lists_join_with_the_conjunction_asked_for():
+    assert main._list_words(["a"]) == "a"
+    assert main._list_words(["a", "b", "c"]) == "a, b and c"
+    assert main._list_words(["a", "b"], "or") == "a or b"
 
 
 def test_the_weekly_summary_states_calm_not_stress(monkeypatch):

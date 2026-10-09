@@ -272,3 +272,24 @@ def test_the_endpoint_checks_the_relationship_before_reading(monkeypatch):
     main.student_signal_trend(STUDENT, None, weeks=4)
 
     assert checked == [("someone-else", STUDENT)]
+
+
+@pytest.mark.parametrize("rollup,state", [
+    ([_heart_day("2026-06-08", {"high": 2})], "measured"),
+    ([_heart_day("2026-06-08", {"calibrating": 6})], "calibrating"),
+    ([_heart_day("2026-06-08", None)], "unusable"),
+    ([_heart_day("2026-06-08", None, sources=("rppg",))], "camera_only"),
+    ([], "none"),
+])
+def test_each_week_says_why_it_has_the_body_arousal_it_has(monkeypatch, rollup, state):
+    monkeypatch.setattr(main, "supabase", _fake(rollup=rollup))
+
+    assert _week(main._signal_trend(STUDENT, weeks=1), "2026-06-08")["body_arousal_state"] == state
+
+
+def test_an_unread_or_declined_trend_week_says_so(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _fake(table_raises=["signal_daily_rollup"]))
+    assert main._signal_trend(STUDENT, weeks=1)["weeks"][0]["body_arousal_state"] == "not_retrieved"
+    monkeypatch.setattr(main, "supabase", _fake())
+    assert main._signal_trend(STUDENT, weeks=1, include_heart=False)["weeks"][0][
+        "body_arousal_state"] == "not_requested"

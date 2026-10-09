@@ -180,11 +180,65 @@ def test_a_period_that_spans_a_scale_change_is_not_compared(monkeypatch):
     assert (focus["status"], focus["reason"]) == ("not_comparable", "mixed_scale")
 
 
-def test_a_period_with_no_known_scale_is_not_compared(monkeypatch):
-    rows = [_cog(d) for d in PRIOR]
+def test_a_period_whose_rolled_days_carry_no_scale_is_not_compared(monkeypatch):
+    rows = [_cog(d) for d in PRIOR] + [_now_cog(scale=None)]
     focus = _baseline(monkeypatch, rows)[0]["measures"]["focus"]
 
     assert (focus["status"], focus["reason"]) == ("not_comparable", "scale_unknown")
+
+
+def test_a_period_with_nothing_rolled_up_yet_is_pending_not_changed(monkeypatch):
+    """An open lesson's scale is not known until it closes: unknown, never "changed"."""
+    rows = [_cog(d) for d in PRIOR] + [_heart(d) for d in PRIOR]
+    measures = _baseline(monkeypatch, rows, {"focus": (0.5, 500),
+                                             "heart_rate_bpm": (75.0, 500)})[0]["measures"]
+
+    for m in ("focus", "heart_rate_bpm"):
+        assert (measures[m]["status"], measures[m]["reason"]) == \
+            ("pending", "period_not_summarised")
+
+
+def test_the_reports_own_heart_sensors_stand_in_for_an_unrolled_period(monkeypatch):
+    """The weekly report knows today's sensor from raw rows, so heart can be compared."""
+    rows = [_heart(d, bpm=70.0) for d in PRIOR]
+    bpm = _baseline(monkeypatch, rows, {"heart_rate_bpm": (80.0, 500),
+                                        "heart_sources": ["muse_optics"]})[0]["measures"][
+        "heart_rate_bpm"]
+
+    assert bpm["status"] == "compared"
+
+
+@pytest.mark.parametrize("unread,channel_measures", [
+    (["cognitive"], ("focus", "calm")), (["heart"], ("heart_rate_bpm", "rmssd_ms"))])
+def test_a_figure_that_failed_to_load_is_not_a_quiet_period(monkeypatch, unread,
+                                                             channel_measures):
+    rows = [_cog(d) for d in PRIOR] + [_now_cog()]
+    current = {"focus": (None, 0), "heart_rate_bpm": (None, 0), "unread": unread}
+    out = _baseline(monkeypatch, rows, current)[0]
+
+    assert out["retrieved"] is True, "the rollup read worked; the period's figure did not"
+    for m in channel_measures:
+        assert (out["measures"][m]["status"], out["measures"][m]["reason"]) == \
+            ("not_retrieved", "current_unread")
+
+
+def test_a_failed_summary_read_marks_its_figures_unread():
+    assert main._usual_current({"retrieved": False})["unread"] == ["cognitive", "heart"]
+    assert main._usual_current({"retrieved": True})["unread"] == []
+
+
+def test_the_usual_carries_body_arousal_with_its_reason(monkeypatch):
+    rows = [_heart("2026-06-09", counts=None)]
+    out = _baseline(monkeypatch, rows, {"heart_rate_bpm": (75.0, 500)})[0]
+
+    assert out["body_arousal"]["state"] == "unusable"
+    assert out["body_arousal"]["high_share"] is None
+
+
+@pytest.mark.parametrize("value,measure,shown", [(0.125, "focus", 13), (72.5, "heart_rate_bpm", 73)])
+def test_a_half_is_rounded_up_as_the_page_rounds_it(value, measure, shown):
+    """`Math.round(12.5)` is 13; Python's `round` gives 12, and the verdict would disagree."""
+    assert main._usual_display(value, measure) == shown
 
 
 def test_no_reading_this_period_is_not_a_comparison(monkeypatch):
@@ -282,6 +336,42 @@ def test_the_weekly_report_carries_the_usual_for_its_own_averages(monkeypatch):
     assert report["usual"]["measures"]["heart_rate_bpm"]["status"] == "not_requested"
 
 
+def _weekly_tables(rows, cog=()):
+    return {"signal_daily_rollup": rows, "profiles": [{"id": STUDENT, "display_name": "Ana"}],
+            "signal_consent": [{"user_id": STUDENT, "eeg_enabled": True}],
+            "cognitive_signals": list(cog), "face_signals": [], "heart_signals": [],
+            "sessions": []}
+
+
+def _weekly(monkeypatch, tables, **kw):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(tables, **kw))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": STUDENT})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    return main.student_weekly_report(STUDENT, None)
+
+
+def test_the_weekly_floor_counts_usable_readings_not_poor_contact_rows(monkeypatch):
+    """100 rows with 10 usable focus readings is too little, as `/signal-summary` counts it."""
+    ts = NOW_UTC.isoformat()
+    cog = [{"user_id": STUDENT, "ts": ts, "focus": 0.6 if i < 10 else None, "stress": None}
+           for i in range(100)]
+    report = _weekly(monkeypatch, _weekly_tables([_cog(d) for d in PRIOR], cog))
+
+    assert report["average_samples"]["focus"] == 10
+    assert report["usual"]["measures"]["focus"]["status"] == "too_little_this_period"
+
+
+def test_a_failed_weekly_eeg_read_is_unread_in_the_usual(monkeypatch):
+    report = _weekly(monkeypatch, _weekly_tables([_cog(d) for d in PRIOR] + [_now_cog()]),
+                     rpc_raises=lambda name, p: RuntimeError("x")
+                     if name == "weekly_signal_days" and p.get("p_channel") == "cognitive"
+                     else None)
+
+    assert report["retrieved"]["cognitive"] is False
+    focus = report["usual"]["measures"]["focus"]
+    assert (focus["status"], focus["reason"]) == ("not_retrieved", "current_unread")
+
+
 def test_the_signal_summary_carries_the_usual_with_calm_inverted(monkeypatch):
     rows = [_cog(d, stress=0.4) for d in PRIOR] + [_now_cog()]
     monkeypatch.setattr(main, "supabase", _fake(rows))
@@ -340,12 +430,17 @@ def test_each_child_is_compared_with_their_own_rows_only(monkeypatch):
     assert out["b"]["measures"]["focus"]["days_used"] == 0
 
 
-def test_children_are_read_in_chunks_that_fit_under_the_row_cap(monkeypatch):
-    kids = [f"k{i}" for i in range(7)]
-    _, fake = _many(monkeypatch, [], kids)
+@pytest.mark.parametrize("heart", [False, True])
+def test_children_are_read_in_chunks_that_fit_under_the_row_cap(monkeypatch, heart):
+    size = main._usual_batch_size(START, END, heart)
+    days = (END - (START - main.timedelta(weeks=main._USUAL_WEEKS))).days + 1
+    assert size * days * (2 if heart else 1) < main._POSTGREST_MAX_ROWS
+    assert (size + 1) * days * (2 if heart else 1) >= main._POSTGREST_MAX_ROWS
+    kids = [f"k{i}" for i in range(size + 1)]
+    _, fake = _many(monkeypatch, [], kids, heart={k: heart for k in kids})
 
     sizes = [len(_filter(q, "user_id")[1]) for q in _rollup_queries(fake)]
-    assert sizes == [6, 1]
+    assert sizes == [size, 1]
 
 
 class _ChunkQuery:
@@ -369,15 +464,17 @@ class _ChunkQuery:
 
 @pytest.mark.parametrize("trouble", ["fail_id", "cap_id"])
 def test_a_failed_or_capped_chunk_marks_only_its_own_children(monkeypatch, trouble):
-    kids = [f"k{i}" for i in range(7)]
+    size = main._usual_batch_size(START, END, False)
+    kids = [f"k{i}" for i in range(size + 1)]
+    last = kids[-1]
     monkeypatch.setattr(main, "_usual_rollup_query",
-                        lambda *a: _ChunkQuery(**{trouble: "k6"}))
+                        lambda *a: _ChunkQuery(**{trouble: last}))
     out = main._personal_baselines_many({k: {"focus": (0.5, 500)} for k in kids},
                                         {k: False for k in kids}, {k: True for k in kids},
                                         START, END)
 
-    assert out["k6"]["retrieved"] is False
-    assert out["k6"]["measures"]["focus"]["status"] == "not_retrieved"
+    assert out[last]["retrieved"] is False
+    assert out[last]["measures"]["focus"]["status"] == "not_retrieved"
     assert out["k0"]["retrieved"] is True
     assert out["k0"]["measures"]["focus"]["status"] == "compared"
 

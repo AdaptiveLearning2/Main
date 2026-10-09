@@ -487,7 +487,8 @@ def test_body_arousal_pools_the_windows_days_and_leaves_calibration_out(monkeypa
 
     assert report["body_arousal"] == {"high_share": 0.25, "moderate_share": 0.25,
                                       "classified_windows": 4, "calibrating_windows": 6,
-                                      "state": "measured"}
+                                      "state": "measured", "pending": False,
+                                      "few_readings": True}
     assert _day(report, "2026-06-09")["body_arousal"] == 1.0
     assert _day(report, "2026-06-10")["body_arousal"] == 0.0, "a measured 0% is a reading"
     assert _day(report, "2026-06-11")["body_arousal"] is None, "no rollup that day: a gap"
@@ -546,3 +547,34 @@ def test_a_declined_heart_channel_has_no_body_arousal_and_no_heart_read(monkeypa
     assert report["body_arousal"]["high_share"] is None
     assert all(d["body_arousal"] is None for d in report["daily"])
     assert ("channel", ("in", ["cognitive"])) in _rollup_query(fake).filters
+
+
+def test_each_day_says_why_it_has_no_body_arousal(monkeypatch, at_three_am_utc):
+    tables = _with_rollup(rollup=[_heart_rollup("2026-06-09", {"high": 40}),
+                                  _heart_rollup("2026-06-10", None, sources=("rppg",))])
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    report = _arousal(monkeypatch, tables)
+
+    states = {d["date"]: d["body_arousal_state"] for d in report["daily"]}
+    assert states["2026-06-09"] == "measured"
+    assert states["2026-06-10"] == "camera_only"
+    assert states["2026-06-11"] == "pending", "today's headband lesson has not closed"
+    assert states["2026-06-08"] == "none"
+
+
+def test_a_measured_week_beside_an_open_lesson_says_that_lesson_is_not_counted(
+        monkeypatch, at_three_am_utc):
+    tables = _with_rollup(rollup=[_heart_rollup("2026-06-09", {"high": 40})])
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    arousal = _arousal(monkeypatch, tables)["body_arousal"]
+
+    assert (arousal["state"], arousal["pending"]) == ("measured", True)
+
+
+def test_a_thin_share_is_flagged(monkeypatch, at_three_am_utc):
+    thin = _arousal(monkeypatch, _with_rollup(rollup=[
+        _heart_rollup("2026-06-09", {"high": main._AROUSAL_MIN_WINDOWS - 1})]))["body_arousal"]
+    full = _arousal(monkeypatch, _with_rollup(rollup=[
+        _heart_rollup("2026-06-09", {"high": main._AROUSAL_MIN_WINDOWS})]))["body_arousal"]
+
+    assert (thin["few_readings"], full["few_readings"]) == (True, False)

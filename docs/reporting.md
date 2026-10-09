@@ -71,11 +71,14 @@ back `weeks * 7` days from today leaves a part-week at each end that looks like 
 **Body arousal is the heart rollup's categories, pooled, and only the rollup has them.** `stress_counts` holds the
 trusted windows per `heart_stress` category; the share is `high ÷ (low + moderate + high)`, pooled over the window's
 counts (a mean of daily shares weights a one-window day like a full one) with `calibrating` left out. It is never
-EEG stress and never combined with it. The rollup is written as a session closes, so an open session's day has no
-categories yet: the weekly report reads the heart rollup row even beside raw rows, and says `pending` when only
-unrolled headband readings exist. Each absence has its own `state` — `calibrating`, `pending`, `unusable` (headband
-rows, none classified), `camera_only` (rPPG gets no category), `none`, `not_requested`, `not_retrieved` — and a
-share of None, never 0.
+EEG stress and never combined with it. **It is not "time above resting":** `high` is a trusted window 10+ bpm above
+the lesson's own opening baseline (`heart_stress`), and the copy says exactly that. The rollup is written as a session
+closes, so an open session's day has no categories yet: the weekly report reads the heart rollup row even beside raw
+rows. `_body_arousal` gives every surface (week, day, report, usual) the same `state` — `measured`, `calibrating`,
+`pending` (only unrolled headband readings), `unusable` (headband rows, none classified), `camera_only` (rPPG gets no
+category), `none`, `not_requested`, `not_retrieved` — with a share of None, never 0, for every state but `measured`;
+`pending: true` beside `measured` says an open lesson is not counted, and `few_readings` flags fewer than
+`_AROUSAL_MIN_WINDOWS` classified windows.
 
 **A declined channel is filtered out of the query, not out of the result**: one `.in_("channel", …)` narrows the
 single query, so a declined channel is never read and then dropped in Python. Assert on the **filter**, not
@@ -94,20 +97,27 @@ day-to-day spread, so a 4000-sample day counts once, like a 60-sample one. It is
 thinner than `_USUAL_DAY_FLOOR`, on a different score scale (focus and calm), a different calm source (calm only) or a
 different heart sensor class (heart measures). The floors and widths are judgement calls, not measurements.
 
-**The verdict compares numbers as the tile prints them**, so 65.4% beside "usual 55–65%" reads as usual and a reader
-can check every verdict against the printed range. It sets a period mean against a range of daily values, so it calls
-fewer periods unusual than a like-for-like comparison would; that is the price of being checkable.
+**The verdict compares numbers as the tile prints them**, rounding halves up as `Math.round` does (Python's `round`
+sends them to even), so 65.4% beside "usual 55–65%" reads as usual and a reader can check every verdict against the
+printed range. It sets a period mean against a range of daily values, so it calls fewer periods unusual than a
+like-for-like comparison would; that is the price of being checkable.
+
+**The period's figure is counted the way it is averaged.** The floor compares the usable readings behind the figure
+(`average_samples` on the weekly report, the summary RPC's counts), never all rows: a poor-contact hour is rows, not
+readings, and the two endpoints must agree on "too little".
 
 **Every non-comparison is its own status**: `not_enough_history` (fewer than 5 days, or fewer than 2 weeks),
-`too_little_this_period`, `not_comparable` (`mixed_scale`, `scale_unknown`, `sensor_changed`), `no_current`,
-`not_requested` (heart declined, and then not queried) and `not_retrieved` (the read failed). An absent `usual` is an
-older payload. It is attached in the handlers, not inside `_weekly_signal_report`, so the report's own query
-assertions still see exactly the reads they did.
+`too_little_this_period`, `pending` (nothing in the period rolled up yet, so its scale or heart sensor is unknown —
+never reported as a change), `not_comparable` (`mixed_scale`, `scale_unknown`, `sensor_changed`), `no_current`,
+`not_requested` (heart declined, and then not queried) and `not_retrieved` — the rollup read failed, or, with reason
+`current_unread`, the period's own figure did (rule 1: not a quiet period). An absent `usual` is an older payload. It is
+attached in the handlers, not inside `_weekly_signal_report`, so the report's own query assertions still see exactly
+the reads they did. The chart summary reads the rollup once for both its trend and its usual (`rollup=`).
 
 `/api/parent/children` stamps `signal_summary.usual` through `_personal_baselines_many`: one read per heart-consent
-group and chunk of `_USUAL_BATCH` (6) children, so a sibling's consent never widens a read and a chunk stays under
-PostgREST's 1000-row cap (63 days × 2 channels × 6 = 756). A chunk that fails, or comes back at the cap and so may be
-cut, is `not_retrieved` for its own children only.
+group and chunk, so a sibling's consent never widens a read. `_usual_batch_size` derives the chunk from the window and
+channel count so a full chunk stays under PostgREST's 1000-row cap; a chunk that fails, or comes back at the cap anyway,
+is `not_retrieved` for its own children only.
 
 ## The teacher analytics aggregate in Postgres, and one of them is a table not a chart
 
@@ -590,10 +600,11 @@ two impossible — the same reason `AccessibleChart` drives its sentence and tab
 (`1 − stress`, trend computed on calm); body arousal is its own sentence with the excitement/effort/movement caveat,
 and the comparison with the child's usual is in words only, so it adds no number. `_validated_chart_summary` rejects a
 reply line that says "stress" where the matching rule-based line does not. `basis.sensor_lines` indexes the sensor
-sentences so "Hide sensor data" can drop exactly those; the reply keeps the baseline's order, so the indexes hold.
+sentences so "Hide sensor data" can drop exactly those, and the validator enforces the order that relies on: each
+reply line may use only its own point's numbers, and is a sensor line exactly when its point is.
 
-**What it does not check is that a number is attached to the right measurement.** A reply that swaps the focus and
-calm figures uses only allowed numbers and passes. That is the residual hallucination risk on this endpoint and it
+**What it still does not check is a number's meaning within one point.** A reply that relabels a figure inside its
+own sentence uses only that sentence's numbers and passes. That is the residual hallucination risk on this endpoint and it
 is not closed; closing it means parsing the reply back into measurements, which is a second implementation of the
 sentences being parsed.
 

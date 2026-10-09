@@ -1918,6 +1918,39 @@ def _sensor_class(sources) -> frozenset:
                      | ({"camera"} if "rppg" in names else set()))
 
 
+# Fewer classified windows than this and a share is a thin reading (a judgement call).
+_AROUSAL_MIN_WINDOWS = 30
+
+
+def _body_arousal(counts: tuple, sensors: frozenset, pending: bool,
+                  include_heart: bool = True, read_ok: bool = True) -> dict:
+    """Body arousal and the reason for its value, the same on every surface.
+
+    `pending`: headband readings from a lesson not yet rolled up, so not counted here.
+    See docs/reporting.md for each `state`.
+    """
+    out = _arousal_share(counts)
+    if not include_heart:
+        state = "not_requested"
+    elif not read_ok:
+        state = "not_retrieved"
+    elif out["classified_windows"]:
+        state = "measured"
+    elif out["calibrating_windows"]:
+        state = "calibrating"
+    elif pending:
+        state = "pending"
+    elif "headband" in sensors:
+        state = "unusable"
+    elif "camera" in sensors:
+        state = "camera_only"
+    else:
+        state = "none"
+    readable = include_heart and read_ok
+    return {**out, "state": state, "pending": bool(pending) and readable,
+            "few_readings": 0 < out["classified_windows"] < _AROUSAL_MIN_WINDOWS}
+
+
 def _scale_range(rollup_rows) -> dict | None:
     """`{"min", "max", "calm_sources"}` over cognitive rollup rows, or None if no row has a scale.
 
@@ -1948,15 +1981,16 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
                   include_emotion: bool = True,
                   consent_retrieved: bool = True,
                   emotion_revoked_at: str | None = None,
-                  heart_revoked_at: str | None = None):
+                  heart_revoked_at: str | None = None,
+                  rollup: tuple[list, bool] | None = None):
     """Week-over-week averages, read from the rollup and nothing else.
 
-    Never the per-sample tables: the expiry job deletes those and keeps the rollup.
-    Weighted by `trusted_sample_count` (stress by `_stress_weight`); `avg_rmssd_ms`
-    is approximate. See docs/reporting.md, "The term trend reads the rollup".
+    Weighted by `trusted_sample_count` (stress by `_stress_weight`); see docs/reporting.md,
+    "The term trend reads the rollup". `rollup` is `(rows, retrieved)` already read over a
+    range covering these weeks, to share one read; without it this reads.
     """
     tz = _school_timezone()
-    school_today = _utc_now().astimezone(tz).date()
+    school_today = _school_today(tz)
     # Whole Monday-anchored weeks, so no part-week reads as a full one.
     first_monday = _week_start(school_today) - timedelta(weeks=weeks - 1)
 
@@ -1969,16 +2003,19 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
 
     rows: list = []
     retrieved = True
-    try:
-        rows = (supabase.table("signal_daily_rollup").select("*")
-                .eq("user_id", student_id)
-                .in_("channel", channels)
-                .gte("day", first_monday.isoformat())
-                .lte("day", school_today.isoformat())
-                .execute().data or [])
-    except Exception as e:                                     # noqa: BLE001
-        print(f"[signal_trend] {student_id}: {e}")
-        retrieved = False
+    if rollup is not None:
+        rows, retrieved = rollup
+    else:
+        try:
+            rows = (supabase.table("signal_daily_rollup").select("*")
+                    .eq("user_id", student_id)
+                    .in_("channel", channels)
+                    .gte("day", first_monday.isoformat())
+                    .lte("day", school_today.isoformat())
+                    .execute().data or [])
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[signal_trend] {student_id}: {e}")
+            retrieved = False
 
     # Every week in range: an empty week is a gap, not a dropped bar.
     buckets: dict[date, dict] = {}
@@ -2050,7 +2087,9 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
     out = []
     for monday in sorted(buckets):
         b = buckets[monday]
-        arousal = _arousal_share(b["arousal"])
+        # Rollup only, so an open lesson is never visible here: `pending` cannot arise.
+        arousal = _body_arousal(b["arousal"], _sensor_class(b["heart_sources"]), False,
+                                include_heart, retrieved)
         out.append({
             "week_start": b["week_start"],
             "score_scale": _scale_range(b["scale_rows"]),
@@ -2059,6 +2098,8 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
             "body_arousal": arousal["high_share"],
             "body_arousal_moderate": arousal["moderate_share"],
             "body_arousal_windows": arousal["classified_windows"],
+            "body_arousal_state": arousal["state"],
+            "body_arousal_few_readings": arousal["few_readings"],
             "cognitive_samples": b["cognitive_samples"],
             "heart_samples": b["heart_samples"],
             "emotion_samples": b["emotion_samples"],
@@ -2091,29 +2132,12 @@ def _weekly_body_arousal(include_heart: bool, rollup_ok: bool, rollup_by: dict,
     counts = (0, 0, 0, 0)
     for r in rolled:
         counts = _add_counts(counts, _arousal_counts(r.get("stress_counts")))
-    out = _arousal_share(counts)
     sensors = _sensor_class(heart_sources) | _sensor_class(
         s for r in rolled for s in (r.get("heart_sources") or ()))
     unrolled_headband = any(
         "headband" in _sensor_class(agg.get("sources")) for day, agg in heart_days.items()
         if (day, "heart") not in rollup_by)
-    if not include_heart:
-        state = "not_requested"
-    elif not rollup_ok:
-        state = "not_retrieved"
-    elif out["classified_windows"]:
-        state = "measured"
-    elif out["calibrating_windows"]:
-        state = "calibrating"
-    elif unrolled_headband:
-        state = "pending"
-    elif "headband" in sensors:
-        state = "unusable"
-    elif "camera" in sensors:
-        state = "camera_only"
-    else:
-        state = "none"
-    return {**out, "state": state}
+    return _body_arousal(counts, sensors, unrolled_headband, include_heart, rollup_ok)
 
 
 def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = True,
@@ -2129,7 +2153,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     channel's read outright; `*_included` then reads "not requested".
     """
     tz = _school_timezone()
-    school_today = _utc_now().astimezone(tz).date()
+    school_today = _school_today(tz)
     since = _window_start(days, tz).isoformat()
 
     def _signal_days(channel: str) -> tuple[dict, dict | None, bool]:
@@ -2258,8 +2282,12 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         face_roll = _rolled("emotion", face_raw, face_ok) if include_emotion else None
         heart_roll = _rolled("heart", heart_raw, heart_ok) if include_heart else None
         # Only the rollup carries heart categories, so this reads it even beside raw rows.
-        day_arousal = _arousal_share(_arousal_counts(
-            (rollup_by.get((day, "heart")) or {}).get("stress_counts") if include_heart else None))
+        heart_rolled = (rollup_by.get((day, "heart")) if include_heart else None) or {}
+        raw_sensors = _sensor_class((heart_raw or {}).get("sources"))
+        day_arousal = _body_arousal(
+            _arousal_counts(heart_rolled.get("stress_counts")),
+            _sensor_class(heart_rolled.get("heart_sources")) | raw_sensors,
+            not heart_rolled and "headband" in raw_sensors, include_heart, rollup_ok)
 
         daily.append({
             "date": day,
@@ -2282,6 +2310,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                          _mean(heart_raw, "rmssd") if heart_whole else None),
             "body_arousal": day_arousal["high_share"],
             "body_arousal_windows": day_arousal["classified_windows"],
+            "body_arousal_state": day_arousal["state"],
+            "body_arousal_few_readings": day_arousal["few_readings"],
             # False = not fully fetched; None = not requested (check `=== false`).
             "cognitive_retrieved": True if cog_roll else cog_whole,
             "face_retrieved": (None if not include_emotion else
@@ -2385,7 +2415,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         bits.append(f"average focus was {_as_pct(avg_focus)}%")
     if avg_stress is not None:
         # Calm: EEG stress is `1 - calm`, and stated as stress a parent reads it as anxiety.
-        bits.append(f"average calm was {_as_pct(1.0 - avg_stress)}%")
+        bits.append(f"average calm was {_as_pct(_calm_of(avg_stress))}%")
     # No attention sentence: `face_signals.attention` has no producer.
     if bits:
         summary = "This week, " + ", ".join(bits) + "."
@@ -2416,12 +2446,6 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                 # A declined EEG channel recorded nothing by decision, not by fault.
                 measured.append(name)
 
-        def _join(items: list[str], conjunction: str) -> str:
-            # "a, b or c" rather than "a or b or c" once there are 3+ items.
-            if len(items) <= 1:
-                return "".join(items)
-            return ", ".join(items[:-1]) + f" {conjunction} " + items[-1]
-
         parts = []
         if "EEG" in recorded:
             # Rows with no average: poor contact nulls the measurement it would have given.
@@ -2429,12 +2453,12 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                          "focus or calm score.")
         others = [name for name in recorded if name != "EEG"]
         if others:
-            parts.append(_as_sentence(f"{_join(others, 'and')} readings were recorded this week"))
+            parts.append(_as_sentence(f"{_list_words(others)} readings were recorded this week"))
         if measured:
-            parts.append(f"No {_join(measured, 'or')} samples were recorded this week.")
+            parts.append(f"No {_list_words(measured, 'or')} samples were recorded this week.")
         if unread:
             parts.append(_as_sentence(
-                f"{_join(unread, 'and')} data could not be loaded."))
+                f"{_list_words(unread)} data could not be loaded."))
         summary = " ".join(parts)
 
     return {
@@ -2489,6 +2513,10 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             "rmssd_ms": _week("rmssd_ms", rmssd_raw),
         },
         "body_arousal": body_arousal,
+        # The usable readings each average above was taken over (raw and rolled-up days).
+        "average_samples": {k: rolled_totals[k][1] + raw[1] for k, raw in (
+            ("focus", focus_raw), ("stress", stress_raw),
+            ("heart_rate_bpm", bpm_raw), ("rmssd_ms", rmssd_raw))},
         # `heart` absent, not null, when the channel was not read.
         "latest": {"cognitive": latest_cognitive, "face": latest_face,
                    **({"heart": latest_heart} if include_heart else {})},
@@ -2505,7 +2533,7 @@ _USUAL_MIN_DAYS = 5
 _USUAL_MIN_WEEKS = 2
 # Fewest samples behind a day (or the current period) before it counts.
 _USUAL_DAY_FLOOR = {"focus": 60, "calm": 20, "heart_rate_bpm": 30, "rmssd_ms": 30,
-                    "body_arousal": 30}
+                    "body_arousal": _AROUSAL_MIN_WINDOWS}
 # The typical range is at least this wide either side of the median, in the measure's unit.
 _USUAL_MIN_HALF_WIDTH = {"focus": 0.03, "calm": 0.03, "heart_rate_bpm": 2.0, "rmssd_ms": 3.0,
                          "body_arousal": 0.03}
@@ -2577,9 +2605,14 @@ def _usual_range(values: list[float], measure: str) -> dict:
             (("median", median), ("p25", p25), ("p75", p75), ("low", low), ("high", high))}
 
 
+def _round_half_up(x: float) -> int:
+    """JavaScript's `Math.round`: halves go up. Python's `round` sends them to even."""
+    return math.floor(x + 0.5)
+
+
 def _usual_display(value: float, measure: str) -> int:
-    """A value as the tile prints it: whole percent for ratios, whole units otherwise."""
-    return round(value * 100) if measure in _USUAL_RATIOS else round(value)
+    """A value as the tile prints it (`Math.round`): whole percent for ratios, whole units otherwise."""
+    return _round_half_up(value * 100 if measure in _USUAL_RATIOS else value)
 
 
 def _usual_verdict(current: float, band: dict, measure: str) -> str:
@@ -2592,16 +2625,25 @@ def _usual_verdict(current: float, band: dict, measure: str) -> str:
     return "about_usual"
 
 
-def _usual_not_comparable(measure: str, scale: dict | None, sensors: frozenset) -> str | None:
-    """Why the current period cannot be set against earlier days, or None if it can."""
+def _usual_blocker(measure: str, scale: dict | None, sensors: frozenset,
+                   rolled_cognitive: bool) -> tuple[str, str] | None:
+    """`(status, reason)` when the period cannot be set against earlier days, else None.
+
+    The period's scale and sensor come from rolled-up days (raw rows carry neither), so a
+    period with none rolled up yet is `pending`: unknown, never "changed".
+    """
     if measure in _USUAL_HEART:
-        return "sensor_changed" if len(sensors) > 1 else None
+        if not sensors:
+            return "pending", "period_not_summarised"
+        return ("not_comparable", "sensor_changed") if len(sensors) > 1 else None
+    if not rolled_cognitive:
+        return "pending", "period_not_summarised"
     if scale is None:
-        return "scale_unknown"
+        return "not_comparable", "scale_unknown"
     if scale["min"] != scale["max"]:
-        return "mixed_scale"
+        return "not_comparable", "mixed_scale"
     if measure == "calm" and len(scale["calm_sources"]) > 1:
-        return "mixed_scale"
+        return "not_comparable", "mixed_scale"
     return None
 
 
@@ -2618,26 +2660,35 @@ def _usual_rollup_query(period_start: date, period_end: date, include_heart: boo
 
 
 def _personal_baseline(student_id: str, period_start: date, period_end: date, current: dict,
-                       include_heart: bool, consent_retrieved: bool = True) -> dict:
+                       include_heart: bool, consent_retrieved: bool = True,
+                       rollup: tuple[list, bool] | None = None) -> dict:
     """Each measure this period against the student's own prior weeks, from the rollup.
 
-    `current` maps a measure to `(value, samples)`; `heart_sources` is the period's sensors.
-    A heart channel the caller may not read is not queried. Never raises.
+    `current`: see `_usual_from_rows`. `rollup` is `(rows, retrieved)` a caller already read
+    over a range covering this one; without it this reads. Never raises.
     """
-    rows, retrieved = [], True
-    try:
-        rows = (_usual_rollup_query(period_start, period_end, include_heart)
-                .eq("user_id", student_id).execute().data or [])
-    except Exception as e:                                     # noqa: BLE001
-        print(f"[personal_baseline] {student_id}: {e}")
-        retrieved = False
+    if rollup is not None:
+        rows, retrieved = rollup
+    else:
+        rows, retrieved = [], True
+        try:
+            rows = (_usual_rollup_query(period_start, period_end, include_heart)
+                    .eq("user_id", student_id).execute().data or [])
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[personal_baseline] {student_id}: {e}")
+            retrieved = False
     return _usual_from_rows(rows, retrieved, period_start, current, include_heart,
                             consent_retrieved)
 
 
-# Children per baseline read: 63 days x 2 channels x 6 = 756 rows, under PostgREST's 1000.
-_USUAL_BATCH = 6
 _POSTGREST_MAX_ROWS = 1000
+
+
+def _usual_batch_size(period_start: date, period_end: date, include_heart: bool) -> int:
+    """Students per baseline read, so a full chunk stays under the row cap and is never cut."""
+    days = (period_end - (period_start - timedelta(weeks=_USUAL_WEEKS))).days + 1
+    rows_per_student = days * (2 if include_heart else 1)
+    return max(1, (_POSTGREST_MAX_ROWS - 1) // rows_per_student)
 
 
 def _personal_baselines_many(currents: dict[str, dict], include_heart: dict[str, bool],
@@ -2653,8 +2704,9 @@ def _personal_baselines_many(currents: dict[str, dict], include_heart: dict[str,
         groups.setdefault(bool(include_heart.get(sid)), []).append(sid)
     out = {}
     for heart, ids in groups.items():
-        for i in range(0, len(ids), _USUAL_BATCH):
-            chunk = ids[i:i + _USUAL_BATCH]
+        size = _usual_batch_size(period_start, period_end, heart)
+        for i in range(0, len(ids), size):
+            chunk = ids[i:i + size]
             rows, retrieved = [], True
             try:
                 rows = (_usual_rollup_query(period_start, period_end, heart)
@@ -2672,24 +2724,32 @@ def _personal_baselines_many(currents: dict[str, dict], include_heart: dict[str,
 
 def _usual_from_rows(rows: list, retrieved: bool, period_start: date, current: dict,
                      include_heart: bool, consent_retrieved: bool) -> dict:
-    """The `usual` payload from one student's rollup rows (a read that failed has none)."""
+    """The `usual` payload from one student's rollup rows (a read that failed has none).
+
+    `current` maps a measure to `(value, samples)`, plus optional `heart_sources`, `unread`
+    (channels whose current figures failed to load) and `arousal_pending`.
+    """
     since = period_start - timedelta(weeks=_USUAL_WEEKS)
     channels = ["cognitive"] + (["heart"] if include_heart else [])
-    rows = [r for r in rows if r.get("channel") in channels]
+    rows = [r for r in rows if r.get("channel") in channels and str(r.get("day")) >= since.isoformat()]
 
     def in_period(r):
         return str(r.get("day")) >= period_start.isoformat()
-    scale = _scale_range([r for r in rows if in_period(r)])
+    period_rows = [r for r in rows if in_period(r)]
+    rolled_heart = [r for r in period_rows if r.get("channel") == "heart"]
+    scale = _scale_range(period_rows)
     sensors = _sensor_class(current.get("heart_sources")) | _sensor_class(
-        s for r in rows if r.get("channel") == "heart" and in_period(r)
-        for s in (r.get("heart_sources") or ()))
+        s for r in rolled_heart for s in (r.get("heart_sources") or ()))
+    rolled_cognitive = any(r.get("channel") == "cognitive" for r in period_rows)
     # Body arousal has no other source than the rollup, so its current value is read here.
     counts = (0, 0, 0, 0)
-    for r in rows:
-        if r.get("channel") == "heart" and in_period(r):
-            counts = _add_counts(counts, _arousal_counts(r.get("stress_counts")))
-    arousal = _arousal_share(counts)
+    for r in rolled_heart:
+        counts = _add_counts(counts, _arousal_counts(r.get("stress_counts")))
+    heart_samples = (current.get("heart_rate_bpm") or (None, 0))[1]
+    pending = current.get("arousal_pending", bool(heart_samples) and not rolled_heart)
+    arousal = _body_arousal(counts, sensors, pending, include_heart, retrieved)
     current = {**current, "body_arousal": (arousal["high_share"], arousal["classified_windows"])}
+    unread = set(current.get("unread") or ())
 
     measures = {}
     for m in _USUAL_MEASURES:
@@ -2697,17 +2757,21 @@ def _usual_from_rows(rows: list, retrieved: bool, period_start: date, current: d
         entry = {"status": None, "verdict": None, "reason": None, "current": None,
                  "median": None, "p25": None, "p75": None, "low": None, "high": None,
                  "days_used": 0, "weeks_used": 0}
-        reason = _usual_not_comparable(m, scale, sensors)
+        channel = "heart" if m in _USUAL_HEART else "cognitive"
+        blocker = _usual_blocker(m, scale, sensors, rolled_cognitive)
         if not retrieved:
             entry["status"] = "not_retrieved"
         elif m in _USUAL_HEART and not include_heart:
             entry["status"] = "not_requested"
+        elif channel in unread and m != "body_arousal":
+            # This period's figure failed to load: not a quiet period (CLAUDE.md rule 1).
+            entry.update(status="not_retrieved", reason="current_unread")
         elif value is None:
             entry["status"] = "no_current"
         elif samples < _USUAL_DAY_FLOOR[m]:
             entry.update(status="too_little_this_period", current=round(value, 4))
-        elif reason:
-            entry.update(status="not_comparable", reason=reason, current=round(value, 4))
+        elif blocker:
+            entry.update(status=blocker[0], reason=blocker[1], current=round(value, 4))
         else:
             points = _usual_points(rows, m, period_start, scale, sensors)
             weeks = {_week_start(d) for d, _ in points}
@@ -2722,25 +2786,30 @@ def _usual_from_rows(rows: list, retrieved: bool, period_start: date, current: d
             "heart_included": include_heart,
             "from": since.isoformat(), "to": (period_start - timedelta(days=1)).isoformat(),
             "max_weeks": _USUAL_WEEKS, "min_days": _USUAL_MIN_DAYS, "min_weeks": _USUAL_MIN_WEEKS,
-            # The period's heart sensors and calibration windows: why body arousal may be absent.
-            "heart_sensors": sorted(sensors) if include_heart else [],
-            "body_arousal_calibrating_windows": counts[3],
+            # The period's body arousal with its reason, as `_body_arousal` gives it everywhere.
+            "body_arousal": arousal,
             "measures": measures}
+
+
+def _school_today(tz=None) -> date:
+    """Today in the school's timezone."""
+    return _utc_now().astimezone(tz or _school_timezone()).date()
 
 
 def _report_period(days: int) -> tuple[date, date]:
     """The first and last school day of a `days`-long report window."""
-    today = _utc_now().astimezone(_school_timezone()).date()
+    today = _school_today()
     return today - timedelta(days=days - 1), today
 
 
 def _usual_current(summary: dict) -> dict:
-    """A signal summary's figures as `_personal_baseline`'s `current`."""
+    """A signal summary's figures as `_personal_baseline`'s `current`; a failed read is `unread`."""
     eeg_n, heart_n = summary.get("cognitive_samples") or 0, summary.get("heart_samples") or 0
     return {"focus": (summary.get("focus"), eeg_n),
             "calm": (_calm_of(summary.get("stress")), eeg_n),
             "heart_rate_bpm": (summary.get("heart_rate_bpm"), heart_n),
-            "rmssd_ms": (summary.get("rmssd_ms"), heart_n)}
+            "rmssd_ms": (summary.get("rmssd_ms"), heart_n),
+            "unread": ["cognitive", "heart"] if summary.get("retrieved") is False else []}
 
 
 def _calm_of(stress) -> float | None:
@@ -4204,14 +4273,18 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
                                    heart_revoked_at=channels.heart_revoked_at,
                                    eeg_enabled=channels.eeg,
                                    eeg_revoked_at=channels.eeg_revoked_at)
-    avg, hl = report["averages"], report["highlights"]
-    eeg_n = report["sample_counts"]["cognitive"]
-    heart_n = sum(d.get("heart_samples") or 0 for d in report["daily"])
+    avg, hl, n = report["averages"], report["highlights"], report["average_samples"]
+    read = report["retrieved"]
     start, end = _report_period(days)
     usual = _personal_baseline(student_id, start, end, {
-        "focus": (avg["focus"], eeg_n), "calm": (_calm_of(avg["stress"]), eeg_n),
-        "heart_rate_bpm": (hl["heart_rate_bpm"], heart_n), "rmssd_ms": (hl["rmssd_ms"], heart_n),
-        "heart_sources": report["heart_sources"]}, channels.heart, channels.consent_retrieved)
+        # Each figure with the usable readings behind it, as `/signal-summary` counts them.
+        "focus": (avg["focus"], n["focus"]), "calm": (_calm_of(avg["stress"]), n["stress"]),
+        "heart_rate_bpm": (hl["heart_rate_bpm"], n["heart_rate_bpm"]),
+        "rmssd_ms": (hl["rmssd_ms"], n["rmssd_ms"]),
+        "heart_sources": report["heart_sources"],
+        "unread": [c for c in ("cognitive", "heart") if read.get(c) is False],
+        "arousal_pending": report["body_arousal"]["pending"]},
+        channels.heart, channels.consent_retrieved)
     return {
         "student_name": p.get("display_name") or p.get("email") or "Student",
         **report,
@@ -4909,6 +4982,23 @@ def _trend_direction(weeks: list[dict], key: str) -> dict:
             "last": round(last, 4), "weeks_with_data": len(points), "mixed_scale": False}
 
 
+def _summary_basis_rollup(student_id: str, weeks: int, start: date, end: date,
+                          channels: "ReportChannels") -> tuple[list, bool]:
+    """One rollup read covering both the term trend's weeks and the usual's 8 prior weeks."""
+    since = min(_week_start(end) - timedelta(weeks=weeks - 1),
+                start - timedelta(weeks=_USUAL_WEEKS))
+    wanted = ["cognitive"] + (["heart"] if channels.heart else []) \
+        + (["emotion"] if channels.emotion else [])
+    try:
+        return (supabase.table("signal_daily_rollup").select("*")
+                .eq("user_id", student_id).in_("channel", wanted)
+                .gte("day", since.isoformat()).lte("day", end.isoformat())
+                .execute().data or []), True
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[chart_summary] rollup for {student_id[:8]}: {e}")
+        return [], False
+
+
 def _chart_summary_basis(student_id: str, days: int, weeks: int,
                          include_face: bool) -> dict:
     """Every figure this endpoint may state, and why a missing one is missing.
@@ -4922,12 +5012,15 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
                               consent_retrieved=channels.consent_retrieved,
                               eeg_enabled=channels.eeg,
                               eeg_revoked_at=channels.eeg_revoked_at)
+    start, end = _report_period(days)
+    rollup = _summary_basis_rollup(student_id, weeks, start, end, channels)
     trend = _signal_trend(student_id, weeks,
                           include_heart=channels.heart,
                           include_emotion=channels.emotion,
                           consent_retrieved=channels.consent_retrieved,
                           emotion_revoked_at=channels.emotion_revoked_at,
-                          heart_revoked_at=channels.heart_revoked_at)
+                          heart_revoked_at=channels.heart_revoked_at,
+                          rollup=rollup)
     stats = _stats_including_open_session(student_id)
     topics, topics_retrieved = _topic_breakdown_with_state(student_id)
     attempted = [t for t in topics if (t.get("attempted_questions") or 0) > 0]
@@ -4945,9 +5038,8 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
     scored = [t for t in attempted if t.get("accuracy") is not None]
     # Calm is EEG stress the right way up; the trend is computed on calm itself.
     calm_weeks = [{**w, "calm": _calm_of(w.get("stress"))} for w in trend.get("weeks") or []]
-    start, end = _report_period(days)
     usual = _personal_baseline(student_id, start, end, _usual_current(summary),
-                               channels.heart, channels.consent_retrieved)
+                               channels.heart, channels.consent_retrieved, rollup=rollup)
     arousal = usual["measures"]["body_arousal"]
     return {
         "days": days,
@@ -5119,8 +5211,19 @@ _USUAL_VERDICT_WORDS = {"about_usual": "about usual", "higher": "higher than usu
                         "lower": "lower than usual"}
 
 
-def _list_words(items: list[str]) -> str:
-    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+def _list_words(items: list[str], conjunction: str = "and") -> str:
+    """"a", "a and b", "a, b and c"."""
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + f" {conjunction} " + items[-1]
+
+
+# Why a measure is `not_comparable`, as the sentence gives it.
+_NOT_COMPARABLE_WORDS = {
+    "mixed_scale": "the headband's scoring changed during this period",
+    "scale_unknown": "this period's scoring was not recorded",
+    "sensor_changed": "this period's heart readings came from more than one sensor",
+}
 
 
 def _usual_sentences(basis: dict) -> list[str]:
@@ -5131,15 +5234,18 @@ def _usual_sentences(basis: dict) -> list[str]:
     if not usual.get("retrieved", True):
         return ["How these figures compare with this student's earlier days could not be read."]
     measures = usual.get("measures") or {}
-    compared, short, changed = [], [], []
+    compared, short, pending = [], [], []
+    changed: dict[str, list[str]] = {}
     for key, name in _USUAL_NAMES.items():
         m = measures.get(key) or {}
         if m.get("status") == "compared":
             compared.append(f"{name} was {_USUAL_VERDICT_WORDS[m['verdict']]}")
         elif m.get("status") == "not_enough_history":
             short.append(name)
+        elif m.get("status") == "pending":
+            pending.append(name)
         elif m.get("status") == "not_comparable":
-            changed.append(name)
+            changed.setdefault(m.get("reason"), []).append(name)
     out = []
     if compared:
         out.append("Compared with this student's own earlier days, "
@@ -5148,32 +5254,48 @@ def _usual_sentences(basis: dict) -> list[str]:
         out.append(_as_sentence(f"{_list_words(short)} {'does' if len(short) == 1 else 'do'} "
                                 "not have enough earlier days yet to say what is usual "
                                 "for this student"))
-    if changed:
-        out.append(_as_sentence(f"{_list_words(changed)} cannot be compared with earlier days, "
-                                "because how the sensor is scored or which sensor was used "
-                                "changed"))
+    if pending:
+        out.append(_as_sentence(f"{_list_words(pending)} will be compared with earlier days "
+                                "once this period's lessons have finished"))
+    for reason, names in changed.items():
+        why = _NOT_COMPARABLE_WORDS.get(reason, "this period was recorded differently")
+        out.append(_as_sentence(f"{_list_words(names)} cannot be compared with earlier days, "
+                                f"because {why}"))
     return out
+
+
+# By `_body_arousal` state; a measured share has its own sentence.
+_BODY_AROUSAL_ABSENT = {
+    "calibrating": ("Body arousal has no reading yet for this period: the headband was still "
+                    "measuring this student's starting heart rate."),
+    "pending": ("Body arousal has no reading yet for this period: it is worked out when a "
+                "lesson with the headband's heart sensor finishes."),
+    "unusable": ("Body arousal has no reading for this period: the headband's heart readings "
+                 "were not steady enough to use."),
+    "camera_only": ("Body arousal is measured only by the headband's heart sensor, not the "
+                    "camera, so there is no reading for this period."),
+    "none": ("Body arousal has no reading for this period, because the headband's heart "
+             "sensor recorded nothing."),
+}
 
 
 def _body_arousal_sentence(basis: dict) -> str | None:
     """Body arousal, or why it has no reading; None when the heart channel is not described."""
-    usual = basis.get("usual") or {}
-    m = (usual.get("measures") or {}).get("body_arousal") or {}
-    if m.get("status") in (None, "not_requested", "not_retrieved"):
-        return None
+    arousal = (basis.get("usual") or {}).get("body_arousal") or {}
+    state = arousal.get("state")
     share = (basis.get("averages") or {}).get("body_arousal")
-    if share is not None:
-        return (f"Body arousal -- the share of lesson time the heart rate was well above this "
-                f"student's resting rate -- was {_pct_int(share)}%. It rises with excitement, "
-                "effort and movement as well as with stress.")
-    if usual.get("body_arousal_calibrating_windows"):
-        return ("Body arousal has no reading yet for this period: the headband was still "
-                "learning this student's resting heart rate.")
-    if usual.get("heart_sensors") == ["camera"]:
-        return ("Body arousal is measured only by the headband's heart sensor, not the "
-                "camera, so there is no reading for this period.")
-    return ("Body arousal has no reading for this period; it is worked out when a lesson "
-            "with the headband's heart sensor finishes.")
+    if state == "measured" and share is not None:
+        # `heart_stress`: `high` is 10+ bpm above the lesson's own opening baseline.
+        out = (f"Body arousal -- the share of the headband's usable heart readings that were "
+               f"at least 10 beats a minute above the rate it measured at the start of each "
+               f"lesson -- was {_pct_int(share)}%. It rises with excitement, effort and "
+               "movement as well as with stress.")
+        if arousal.get("few_readings"):
+            out += " It rests on only a few readings, so treat it as rough."
+        if arousal.get("pending"):
+            out += " Lessons still in progress are not counted yet."
+        return out
+    return _BODY_AROUSAL_ABSENT.get(state)
 
 
 def _chart_summary_lines(basis: dict) -> tuple[list[str], list[int]]:
@@ -5321,6 +5443,7 @@ def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
 
 
 _STRESS_WORD = re.compile(r"\bstress", re.IGNORECASE)
+_SENSOR_WORDS = re.compile(r"\b(focus|calm|heart|arousal)", re.IGNORECASE)
 
 
 def _validated_chart_summary(raw: str, allowed: set[float], expected_lines: int,
@@ -5346,6 +5469,13 @@ def _validated_chart_summary(raw: str, allowed: set[float], expected_lines: int,
     if baseline is not None and any(_STRESS_WORD.search(line) and not _STRESS_WORD.search(base)
                                     for line, base in zip(lines, baseline)):
         print("[chart_summary:llm] rejected: it says stress where the point did not")
+        return None
+    # Each point keeps its own numbers and stays a sensor point or not, so `sensor_lines` holds.
+    if baseline is not None and any(
+            not set(_numerals(line)) <= set(_numerals(base))
+            or bool(_SENSOR_WORDS.search(line)) != bool(_SENSOR_WORDS.search(base))
+            for line, base in zip(lines, baseline)):
+        print("[chart_summary:llm] rejected: a point moved or took another point's figures")
         return None
     # Parsed lines, not raw: the list markers are numerals too.
     for line in lines:
@@ -8525,7 +8655,8 @@ def my_children(request: Request, include_face: bool = True):
     summaries = summaries or {}
     usual_start, usual_end = _report_period(_PARENT_SUMMARY_DAYS)
     usual = _personal_baselines_many(
-        {str(cid): _usual_current(summaries.get(str(cid)) or {}) for cid in child_ids},
+        {str(cid): _usual_current(summaries.get(str(cid)) or {"retrieved": summaries_retrieved})
+         for cid in child_ids},
         {str(cid): ch.heart for cid, ch in channels_by_child.items()},
         {str(cid): ch.consent_retrieved for cid, ch in channels_by_child.items()},
         usual_start, usual_end)

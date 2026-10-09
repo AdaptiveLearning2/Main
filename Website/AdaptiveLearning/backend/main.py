@@ -2386,7 +2386,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     if avg_focus is not None:
         bits.append(f"average focus was {_as_pct(avg_focus)}%")
     if avg_stress is not None:
-        bits.append(f"average stress was {_as_pct(avg_stress)}%")
+        # Calm: EEG stress is `1 - calm`, and stated as stress a parent reads it as anxiety.
+        bits.append(f"average calm was {_as_pct(1.0 - avg_stress)}%")
     # No attention sentence: `face_signals.attention` has no producer.
     if bits:
         summary = "This week, " + ", ".join(bits) + "."
@@ -2427,7 +2428,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         if "EEG" in recorded:
             # Rows with no average: poor contact nulls the measurement it would have given.
             parts.append("EEG readings were recorded this week, but none gave a usable "
-                         "focus or stress score.")
+                         "focus or calm score.")
         others = [name for name in recorded if name != "EEG"]
         if others:
             parts.append(_as_sentence(f"{_join(others, 'and')} readings were recorded this week"))
@@ -2674,6 +2675,9 @@ def _personal_baseline(student_id: str, period_start: date, period_end: date, cu
             "heart_included": include_heart,
             "from": since.isoformat(), "to": (period_start - timedelta(days=1)).isoformat(),
             "max_weeks": _USUAL_WEEKS, "min_days": _USUAL_MIN_DAYS, "min_weeks": _USUAL_MIN_WEEKS,
+            # The period's heart sensors and calibration windows: why body arousal may be absent.
+            "heart_sensors": sorted(sensors) if include_heart else [],
+            "body_arousal_calibrating_windows": counts[3],
             "measures": measures}
 
 
@@ -4831,14 +4835,14 @@ def _trend_direction(weeks: list[dict], key: str) -> dict:
     """Which way one series moved across the weeks that have a reading.
 
     Always a dict: `direction` is None below two weeks or across a score-scale change
-    (`mixed_scale`; for stress, two calm sources too), and `weeks_with_data` tells zero weeks
-    from one. Anchored on the first and last weeks *with* a reading, so null weeks don't hide a trend.
+    (`mixed_scale`; for stress or calm, two calm sources too), and `weeks_with_data` tells zero
+    weeks from one. Anchored on the first and last weeks *with* a reading, so null weeks don't hide a trend.
     """
     readings = [w for w in (weeks or []) if isinstance(w.get(key), (int, float))]
     points = [w[key] for w in readings]
     scales = _combine_ranges(w.get("score_scale") for w in readings)
     mixed = bool(scales) and (scales["min"] != scales["max"]
-                              or (key == "stress" and len(scales["calm_sources"]) > 1))
+                              or (key in ("stress", "calm") and len(scales["calm_sources"]) > 1))
     if len(points) < 2 or mixed:
         return {"direction": None, "first": None, "last": None,
                 "weeks_with_data": len(points), "mixed_scale": mixed}
@@ -4886,6 +4890,16 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
         return info
 
     scored = [t for t in attempted if t.get("accuracy") is not None]
+    # Calm is EEG stress the right way up; the trend is computed on calm itself.
+    calm_weeks = [{**w, "calm": _calm_of(w.get("stress"))} for w in trend.get("weeks") or []]
+    start, end = _report_period(days)
+    usual = _personal_baseline(student_id, start, end, {
+        "focus": (summary["focus"], summary["cognitive_samples"]),
+        "calm": (_calm_of(summary["stress"]), summary["cognitive_samples"]),
+        "heart_rate_bpm": (summary["heart_rate_bpm"], summary["heart_samples"]),
+        "rmssd_ms": (summary["rmssd_ms"], summary["heart_samples"])},
+        channels.heart, channels.consent_retrieved)
+    arousal = usual["measures"]["body_arousal"]
     return {
         "days": days,
         "weeks": weeks,
@@ -4906,15 +4920,18 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
         },
         "averages": {
             "focus": summary["focus"],
-            "stress": summary["stress"],
+            "calm": _calm_of(summary["stress"]),
             # No `engagement`: it is the focus index under another name.
             "heart_rate_bpm": summary["heart_rate_bpm"],
+            "rmssd_ms": summary["rmssd_ms"],
+            "body_arousal": arousal["current"],
         },
-        # Focus and stress only: the delta is in 0..1 ratio units, not bpm.
+        # Focus and calm only: the delta is in 0..1 ratio units, not bpm.
         "trend": {
             "focus": _trend_direction(trend.get("weeks") or [], "focus"),
-            "stress": _trend_direction(trend.get("weeks") or [], "stress"),
+            "calm": _trend_direction(calm_weeks, "calm"),
         },
+        "usual": usual,
         "academic": {
             "sessions": summary["sessions"],
             "total_questions": total,
@@ -4953,8 +4970,8 @@ def _chart_summary_figures(baseline: list[str]) -> set[float]:
     return {n for line in baseline for n in _numerals(line)}
 
 
-# EEG is named by its readings, not the sensor.
-_CHART_SUMMARY_CHANNEL_NAMES = {"eeg": "Focus and stress", "heart": "Heart rate"}
+# EEG is named by its readings, not the sensor. Calm, never "stress": see CLAUDE.md.
+_CHART_SUMMARY_CHANNEL_NAMES = {"eeg": "Focus and calm", "heart": "Heart rate"}
 
 
 def _channel_absence(channel: str, basis: dict) -> str | None:
@@ -5044,6 +5061,74 @@ def _rule_based_chart_summary(basis: dict) -> list[str]:
 
     Every sentence states a computed number or says why there is none.
     """
+    return _chart_summary_lines(basis)[0]
+
+
+_USUAL_NAMES = {"focus": "focus", "calm": "calm", "heart_rate_bpm": "heart rate",
+                "rmssd_ms": "heart-rate variability", "body_arousal": "body arousal"}
+_USUAL_VERDICT_WORDS = {"about_usual": "about usual", "higher": "higher than usual",
+                        "lower": "lower than usual"}
+
+
+def _list_words(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _usual_sentences(basis: dict) -> list[str]:
+    """How each measure compares with the student's own earlier days, in words, no numbers."""
+    usual = basis.get("usual")
+    if not usual:
+        return []
+    if not usual.get("retrieved", True):
+        return ["How these figures compare with this student's earlier days could not be read."]
+    measures = usual.get("measures") or {}
+    compared, short, changed = [], [], []
+    for key, name in _USUAL_NAMES.items():
+        m = measures.get(key) or {}
+        if m.get("status") == "compared":
+            compared.append(f"{name} was {_USUAL_VERDICT_WORDS[m['verdict']]}")
+        elif m.get("status") == "not_enough_history":
+            short.append(name)
+        elif m.get("status") == "not_comparable":
+            changed.append(name)
+    out = []
+    if compared:
+        out.append("Compared with this student's own earlier days, "
+                   + _list_words(compared) + ".")
+    if short:
+        out.append(_as_sentence(f"{_list_words(short)} {'does' if len(short) == 1 else 'do'} "
+                                "not have enough earlier days yet to say what is usual "
+                                "for this student"))
+    if changed:
+        out.append(_as_sentence(f"{_list_words(changed)} cannot be compared with earlier days, "
+                                "because how the sensor is scored or which sensor was used "
+                                "changed"))
+    return out
+
+
+def _body_arousal_sentence(basis: dict) -> str | None:
+    """Body arousal, or why it has no reading; None when the heart channel is not described."""
+    usual = basis.get("usual") or {}
+    m = (usual.get("measures") or {}).get("body_arousal") or {}
+    if m.get("status") in (None, "not_requested", "not_retrieved"):
+        return None
+    share = (basis.get("averages") or {}).get("body_arousal")
+    if share is not None:
+        return (f"Body arousal -- the share of lesson time the heart rate was well above this "
+                f"student's resting rate -- was {_pct_int(share)}%. It rises with excitement, "
+                "effort and movement as well as with stress.")
+    if usual.get("body_arousal_calibrating_windows"):
+        return ("Body arousal has no reading yet for this period: the headband was still "
+                "learning this student's resting heart rate.")
+    if usual.get("heart_sensors") == ["camera"]:
+        return ("Body arousal is measured only by the headband's heart sensor, not the "
+                "camera, so there is no reading for this period.")
+    return ("Body arousal has no reading for this period; it is worked out when a lesson "
+            "with the headband's heart sensor finishes.")
+
+
+def _chart_summary_lines(basis: dict) -> tuple[list[str], list[int]]:
+    """The deterministic sentences, and the indexes of those about sensor readings."""
     averages = basis.get("averages") or {}
     academic = basis.get("academic") or {}
     topics = basis.get("topics") or {}
@@ -5074,8 +5159,9 @@ def _rule_based_chart_summary(basis: dict) -> list[str]:
                    f"{days} {_plural(days, 'day')}, which is the period the "
                    "weekly charts cover.")
 
+    first_sensor_line = len(out)
     for channel, key, label in (("eeg", "focus", "Average focus"),
-                                ("eeg", "stress", "Average stress")):
+                                ("eeg", "calm", "Average calm")):
         absent = _channel_absence(channel, basis)
         value = _pct_int(averages.get(key))
         if absent:
@@ -5114,18 +5200,26 @@ def _rule_based_chart_summary(basis: dict) -> list[str]:
     eeg = (basis.get("channels") or {}).get("eeg") or {}
     if not eeg.get("enabled") and eeg.get("samples") and not _channel_absence("eeg", basis):
         revoked = _local_date_text(eeg.get("revoked_at"))
-        out.append("These focus and stress figures are from before the sensor was turned off"
+        out.append("These focus and calm figures are from before the sensor was turned off"
                    + (f" on {revoked}." if revoked else "."))
 
     heart_absent = _channel_absence("heart", basis)
-    bpm = averages.get("heart_rate_bpm")
+    bpm, rmssd = averages.get("heart_rate_bpm"), averages.get("rmssd_ms")
     if heart_absent:
         out.append(heart_absent)
     elif bpm is None:
         out.append("Heart rate windows were recorded but none passed the quality "
                    "checks, so no average is shown.")
-    else:
+    elif rmssd is None:
         out.append(f"Average heart rate is {round(float(bpm))} bpm.")
+    else:
+        out.append(f"Average heart rate is {round(float(bpm))} bpm, and heart-rate "
+                   f"variability is {round(float(rmssd))} ms.")
+    arousal = None if heart_absent else _body_arousal_sentence(basis)
+    if arousal:
+        out.append(arousal)
+    out.extend(_usual_sentences(basis))
+    sensor_lines = list(range(first_sensor_line, len(out)))
 
     weakest, strongest = topics.get("weakest"), topics.get("strongest")
     if not basis.get("topics_retrieved", True):
@@ -5149,7 +5243,7 @@ def _rule_based_chart_summary(basis: dict) -> list[str]:
         out.append("No topic has been attempted yet, so the topic chart has "
                    "nothing to compare.")
     # Not truncated: bounded by construction, and a slice would drop the topic line.
-    return out
+    return out, sensor_lines
 
 
 def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
@@ -5170,17 +5264,22 @@ def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
         "not draw a conclusion the points do not state. Never say or imply why a "
         "sensor was off or a reading is missing (for example that it broke or "
         "stopped working): keep the points' own words for it.\n"
+        "Calm and body arousal are different measurements from different sensors: never "
+        "combine them, and never call calm \"stress\".\n"
         f"Return exactly {len(baseline)} points as a numbered list, no preamble.\n\n"
         + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(baseline))
     )
 
 
-def _validated_chart_summary(raw: str, allowed: set[float],
-                             expected_lines: int) -> list[str] | None:
+_STRESS_WORD = re.compile(r"\bstress", re.IGNORECASE)
+
+
+def _validated_chart_summary(raw: str, allowed: set[float], expected_lines: int,
+                             baseline: list[str] | None = None) -> list[str] | None:
     """Model output, or None if it fails any check (caller keeps the rules).
 
-    Every numeral must be one we supplied. Residual risk: a reply that swaps
-    two allowed numbers between measurements still passes.
+    Every numeral must be one we supplied, and "stress" only where that point said it.
+    Residual risk: a reply that swaps two allowed numbers between measurements still passes.
     """
     if _CLINICAL_TERMS.search(raw or ""):
         return None
@@ -5193,6 +5292,11 @@ def _validated_chart_summary(raw: str, allowed: set[float],
         return None
     if any(not _CHART_SUMMARY_MIN_CHARS <= len(line) <= _CHART_SUMMARY_MAX_CHARS
            for line in lines):
+        return None
+    # A model relabelling calm as stress is the conflation CLAUDE.md forbids.
+    if baseline is not None and any(_STRESS_WORD.search(line) and not _STRESS_WORD.search(base)
+                                    for line, base in zip(lines, baseline)):
+        print("[chart_summary:llm] rejected: it says stress where the point did not")
         return None
     # Parsed lines, not raw: the list markers are numerals too.
     for line in lines:
@@ -5222,7 +5326,7 @@ def _llm_chart_summary(prompt: str, baseline: list[str],
         print(f"[chart_summary:llm] {e}")
         return None
     return _validated_chart_summary(raw or "", _chart_summary_figures(baseline),
-                                    len(baseline))
+                                    len(baseline), baseline)
 
 
 def _llm_chart_summary_bounded(prompt: str, baseline: list[str]) -> list[str] | None:
@@ -5283,7 +5387,7 @@ def student_chart_summary(student_id: str, request: Request, payload: ChartSumma
     weeks = max(2, min(payload.weeks, _TREND_MAX_WEEKS))
     basis = _chart_summary_basis(student_id, days, weeks, payload.include_face)
 
-    summary = _rule_based_chart_summary(basis)
+    summary, sensor_lines = _chart_summary_lines(basis)
     source = "rule-based"
 
     if _feature_flags()["chart_summary_llm_enabled"]["enabled"]:
@@ -5310,8 +5414,11 @@ def student_chart_summary(student_id: str, request: Request, payload: ChartSumma
             "consent_retrieved": basis["consent_retrieved"],
             "averages": basis["averages"],
             "trend": basis["trend"],
+            "usual": basis.get("usual"),
             "academic": basis["academic"],
             "topics": basis["topics"],
+            # Indexes into `summary` of the sensor sentences, for "Hide sensor data".
+            "sensor_lines": sensor_lines,
         },
     }
 

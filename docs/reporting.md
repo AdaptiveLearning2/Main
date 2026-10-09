@@ -581,8 +581,14 @@ rounded heart rate where the basis holds a fractional one, and a revocation date
 basis field carries. Reading the text the prompt actually sends closes the whole class, and makes drift between the
 two impossible — the same reason `AccessibleChart` drives its sentence and table from one spec.
 
+**The summary says calm, and a reply may say "stress" only where its point did.** The EEG figure is stated as calm
+(`1 − stress`, trend computed on calm); body arousal is its own sentence with the excitement/effort/movement caveat,
+and the comparison with the child's usual is in words only, so it adds no number. `_validated_chart_summary` rejects a
+reply line that says "stress" where the matching rule-based line does not. `basis.sensor_lines` indexes the sensor
+sentences so "Hide sensor data" can drop exactly those; the reply keeps the baseline's order, so the indexes hold.
+
 **What it does not check is that a number is attached to the right measurement.** A reply that swaps the focus and
-stress figures uses only allowed numbers and passes. That is the residual hallucination risk on this endpoint and it
+calm figures uses only allowed numbers and passes. That is the residual hallucination risk on this endpoint and it
 is not closed; closing it means parsing the reply back into measurements, which is a second implementation of the
 sentences being parsed.
 

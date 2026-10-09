@@ -109,32 +109,14 @@ def test_the_claim_stamps_the_reason_with_the_end_on_an_open_session_only(monkey
     assert ("is", "ended_at", "null") in filters and ("eq", "id", "s1") in filters
 
 
-def test_before_the_migration_a_close_still_lands_without_its_reason(monkeypatch, capsys):
-    fake = _Sessions(missing_column=True)
-    monkeypatch.setattr(main, "supabase", fake)
-
-    assert main._claim_session_close("s1", "2026-10-08T10:00:00+00:00", "sweep") is True
-    assert [u[0] for u in fake.updates] == [
-        {"ended_at": "2026-10-08T10:00:00+00:00", "close_reason": "sweep"},
-        {"ended_at": "2026-10-08T10:00:00+00:00"}]
-    assert "20261010000000" in capsys.readouterr().out
-
-
-def test_a_reason_the_column_refuses_is_not_retried_without_it(monkeypatch, capsys):
-    fake = _Sessions(check_violation=True)
-    monkeypatch.setattr(main, "supabase", fake)
-
-    assert main._claim_session_close("s1", "2026-10-08T10:00:00+00:00", "teacher") is False
-    assert len(fake.updates) == 1
-    assert "20261010000000" not in capsys.readouterr().out
-
-
-def test_any_other_failure_is_not_retried_without_the_reason(monkeypatch):
-    fake = _Sessions(fail=True)
+@pytest.mark.parametrize("failure", ["missing_column", "check_violation", "fail"])
+def test_a_failed_claim_is_never_retried_without_the_reason(monkeypatch, failure):
+    """The column is in every database now: no close is ever stamped without why."""
+    fake = _Sessions(**{failure: True})
     monkeypatch.setattr(main, "supabase", fake)
 
     assert main._claim_session_close("s1", "2026-10-08T10:00:00+00:00", "sweep") is False
-    assert len(fake.updates) == 1
+    assert [u[0] for u in fake.updates] == [{"ended_at": "2026-10-08T10:00:00+00:00", "close_reason": "sweep"}]
 
 
 def test_a_discarded_session_is_counted_by_its_reason(monkeypatch):

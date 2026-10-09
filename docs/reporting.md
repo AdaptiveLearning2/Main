@@ -250,7 +250,7 @@ the same helper — which is why the list is by name.
 - `test_every_close_site_says_why_the_session_ended` maps each site to its reason, so a fifth site fails until classified.
 - A null reason means the session closed before the column existed. It is never back-filled.
 - A discarded session's row is gone, reason and all, so it is counted as `session_discarded:<reason>` in the ops counters instead.
-- Until `20261010000000` is applied, `_claim_session_close` retries without the column on that error alone. This is a bridge: remove it once the migration is everywhere.
+- A claim that fails is never retried without the reason: a close is stamped with why, or not at all.
 
 The exhaustiveness tests share `tests/conftest.py:close_sites()` — a closer is a function that calls
 `_close_session(` **or** writes an `"ended_at":` of its own. Both halves matter: the first catches a site drifting

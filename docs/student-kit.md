@@ -97,7 +97,8 @@ Scheduler ends a run at an action that cannot, so the installers go through `cmd
 - **What a computer did** is in `{app}\updates\status.json`, which users can read, beside `update.log`, `apply.log`,
   `rollback.log` and the last self-test's `selftest.json`.
 - **The gate** is `installer/update_gate`, a Worker on the private bucket: `GET`/`HEAD` on the two feeds and on exact
-  Update installer names, one 401 for a missing or wrong key before any route, feeds `no-store`.
+  Update installer names, one 401 for a missing or wrong key before any route, feeds `no-store`. Cloudflare refuses
+  Python's default User-Agent in front of it (403, error 1010), so the updater must keep sending its own.
 
 None of this shows a version that passes its self-test and still fails on a real headband or camera; canary, then a
 gradual rollout, is what catches that.

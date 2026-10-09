@@ -78,14 +78,19 @@ class _Update:
             # PostgREST's answer for a column the schema cache does not have.
             raise RuntimeError("{'code': 'PGRST204', 'message': \"Could not find the 'close_reason' column of "
                                "'sessions' in the schema cache\"}")
+        if self.owner.check_violation and "close_reason" in self.fields:
+            # Postgres's answer for a value the CHECK refuses: it names the column too.
+            raise RuntimeError("{'code': '23514', 'message': 'new row for relation \"sessions\" violates check "
+                               "constraint \"sessions_close_reason_check\"'}")
         if self.owner.fail:
             raise RuntimeError("connection reset")
         return type("R", (), {"data": [{"id": "s1"}] if self.owner.wins else []})()
 
 
 class _Sessions:
-    def __init__(self, wins=True, missing_column=False, fail=False):
+    def __init__(self, wins=True, missing_column=False, fail=False, check_violation=False):
         self.wins, self.missing_column, self.fail = wins, missing_column, fail
+        self.check_violation = check_violation
         self.updates = []
 
     def table(self, name):
@@ -113,6 +118,15 @@ def test_before_the_migration_a_close_still_lands_without_its_reason(monkeypatch
         {"ended_at": "2026-10-08T10:00:00+00:00", "close_reason": "sweep"},
         {"ended_at": "2026-10-08T10:00:00+00:00"}]
     assert "20261010000000" in capsys.readouterr().out
+
+
+def test_a_reason_the_column_refuses_is_not_retried_without_it(monkeypatch, capsys):
+    fake = _Sessions(check_violation=True)
+    monkeypatch.setattr(main, "supabase", fake)
+
+    assert main._claim_session_close("s1", "2026-10-08T10:00:00+00:00", "teacher") is False
+    assert len(fake.updates) == 1
+    assert "20261010000000" not in capsys.readouterr().out
 
 
 def test_any_other_failure_is_not_retried_without_the_reason(monkeypatch):
@@ -264,6 +278,8 @@ def _poller(device, user, page_ago, session="s-a"):
 @pytest.fixture
 def _clock(monkeypatch):
     monkeypatch.setattr(main, "_utc_now", lambda: datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc))
+    # Each test reads names and counters afresh.
+    monkeypatch.setattr(main, "_stations_slow", {"at": None})
 
 
 def test_stations_join_the_pairing_its_poller_and_todays_refusals(monkeypatch, _admin, _clock):
@@ -310,6 +326,53 @@ def test_an_unreadable_pairing_table_is_not_an_empty_one(monkeypatch, _admin, _c
 
     got = main.admin_stations(None)
     assert got["retrieved"] is False
+
+
+def _reads_of(db, table):
+    return sum(1 for t, _f in db.reads if t == table)
+
+
+def test_a_five_second_poll_reads_holders_afresh_and_names_and_counts_at_most_every_30_s(
+        monkeypatch, _admin, _clock):
+    db = _Db(rows={"station_pairings": [_pairing("station1", "u-ada", 10)],
+                   "profiles": [{"id": "u-ada", "display_name": "Ada"}]})
+    monkeypatch.setattr(main, "supabase", db)
+    monkeypatch.setattr(eeg_poller, "snapshot", lambda: [])
+
+    main.admin_stations(None)
+    main.admin_stations(None)
+
+    assert _reads_of(db, "station_pairings") == 2
+    assert _reads_of(db, "profiles") == 1
+    assert _reads_of(db, "ops_counters") == 1
+
+
+def test_a_new_holder_is_named_at_once_not_after_the_cache_expires(monkeypatch, _admin, _clock):
+    db = _Db(rows={"station_pairings": [_pairing("station1", "u-ada", 10)],
+                   "profiles": [{"id": "u-ada", "display_name": "Ada"}, {"id": "u-bo", "display_name": "Bo"}]})
+    monkeypatch.setattr(main, "supabase", db)
+    monkeypatch.setattr(eeg_poller, "snapshot", lambda: [])
+    main.admin_stations(None)
+
+    db.rows["station_pairings"] = [_pairing("station1", "u-ada", 10), _pairing("station2", "u-bo", 1)]
+    got = main.admin_stations(None)
+
+    assert _reads_of(db, "profiles") == 2
+    assert [s["pairing"]["name"] for s in got["stations"]] == ["Ada", "Bo"]
+
+
+def test_a_failed_name_read_is_tried_again_on_the_next_poll(monkeypatch, _admin, _clock):
+    db = _Db(rows={"station_pairings": [_pairing("station1", "u-ada", 10)],
+                   "profiles": [{"id": "u-ada", "display_name": "Ada"}]}, failing={"profiles"})
+    monkeypatch.setattr(main, "supabase", db)
+    monkeypatch.setattr(eeg_poller, "snapshot", lambda: [])
+    assert main.admin_stations(None)["names_retrieved"] is False
+
+    db.failing.clear()
+    got = main.admin_stations(None)
+
+    assert got["names_retrieved"] is True
+    assert got["stations"][0]["pairing"]["name"] == "Ada"
 
 
 def test_the_poller_snapshot_carries_ids_and_state_never_a_reading(monkeypatch):

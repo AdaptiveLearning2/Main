@@ -1139,7 +1139,8 @@ def _claim_session_close(session_id: str, ended_at: str, reason: str) -> bool:
             claimed = claim({"ended_at": ended_at, "close_reason": reason})
         except Exception as e:                                 # noqa: BLE001
             # Bridge until 20261010000000 is applied everywhere: without the column, still close.
-            if "close_reason" not in str(e):
+            # PostgREST's missing-column error only; a CHECK violation also names the column and must fail.
+            if "PGRST204" not in str(e) or "close_reason" not in str(e):
                 raise
             print(f"[session:close] close_reason missing (apply 20261010000000); {session_id} closes without it")
             claimed = claim({"ended_at": ended_at})
@@ -8659,6 +8660,42 @@ def admin_today(request: Request):
 # A page that polled within this long is still watching its station (pull polls every 5 s).
 _PAGE_WATCHING_SEC = 30.0
 
+# Names and today's refusal counts change slowly, so a 5 s Stations poll reuses them this long.
+_STATIONS_SLOW_SEC = 30.0
+_stations_slow: dict = {"at": None}
+
+
+def _stations_slow_reads(ids: list[str]) -> dict:
+    """Holders' names and today's `station_refused` counts, cached `_STATIONS_SLOW_SEC`.
+
+    A new holder or a failed read is never served from the cache.
+    """
+    cached = _stations_slow
+    if (cached["at"] is not None and time.monotonic() - cached["at"] < _STATIONS_SLOW_SEC
+            and set(ids) <= cached["ids"] and cached["names_retrieved"] and cached["refusals_retrieved"]):
+        return cached
+    # Not `_profiles_many`: its placeholder "Student" would name a holder it could not read.
+    names: dict[str, str] = {}
+    names_retrieved = True
+    if ids:
+        try:
+            for p in (supabase.table("profiles").select("id, display_name")
+                      .in_("id", ids).execute().data or []):
+                if p.get("display_name"):
+                    names[p["id"]] = p["display_name"]
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[admin:stations] names: {e}")
+            names_retrieved = False
+    refusals = ops_metrics.read(supabase, ["station_refused"], since=_school_day_start())
+    refused: dict[str, int] = {}
+    for r in refusals["rows"]:
+        refused[r["key"]] = refused.get(r["key"], 0) + r["n"]
+    fresh = {"at": time.monotonic(), "ids": frozenset(ids), "names": names, "names_retrieved": names_retrieved,
+             "refused": refused, "refusals_retrieved": refusals["retrieved"]}
+    _stations_slow.clear()
+    _stations_slow.update(fresh)
+    return fresh
+
 
 @app.get("/api/admin/stations")
 def admin_stations(request: Request):
@@ -8676,25 +8713,11 @@ def admin_stations(request: Request):
         print(f"[admin:stations] {e}")
         pairings, retrieved = [], False
     pollers = eeg_poller.snapshot()
-
-    # Not `_profiles_many`: its placeholder "Student" would name a holder it could not read.
     ids = _unique_ids([p.get("user_id") for p in pairings] + [p["user_id"] for p in pollers])
-    names: dict[str, str] = {}
-    names_retrieved = True
-    if ids:
-        try:
-            for p in (supabase.table("profiles").select("id, display_name")
-                      .in_("id", ids).execute().data or []):
-                if p.get("display_name"):
-                    names[p["id"]] = p["display_name"]
-        except Exception as e:                                 # noqa: BLE001
-            print(f"[admin:stations] names: {e}")
-            names_retrieved = False
-
-    refusals = ops_metrics.read(supabase, ["station_refused"], since=_school_day_start())
-    refused: dict[str, int] = {}
-    for r in refusals["rows"]:
-        refused[r["key"]] = refused.get(r["key"], 0) + r["n"]
+    slow = _stations_slow_reads(ids)
+    names, names_retrieved = slow["names"], slow["names_retrieved"]
+    refused = slow["refused"]
+    refusals = {"retrieved": slow["refusals_retrieved"]}
 
     now = _utc_now()
     by_device: dict[str, dict] = {}

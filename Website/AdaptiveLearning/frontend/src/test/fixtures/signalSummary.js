@@ -20,12 +20,32 @@ export function buildSignalSummary(overrides = {}) {
   }
 }
 
-/** The weekly report -- what `WeeklySignalReport` renders. */
+/** `usual.measures[key]` as `_personal_baseline` sends it; `compared` unless overridden. */
+export function buildUsualMeasure(overrides = {}) {
+  return {
+    status: 'compared', verdict: 'about_usual', reason: null, current: 0.6,
+    median: 0.6, p25: 0.55, p75: 0.65, low: 0.55, high: 0.65, days_used: 12, weeks_used: 4,
+    ...overrides,
+  }
+}
+
+/** The weekly report's `body_arousal`, as `_body_arousal` sends it; `measured` unless overridden. */
+export function buildBodyArousal(overrides = {}) {
+  return {
+    high_share: 0.22, moderate_share: 0.3, classified_windows: 120, calibrating_windows: 6,
+    state: 'measured', pending: false, few_readings: false,
+    ...overrides,
+  }
+}
+
+/** The weekly report -- what `WeeklySignalReport` renders, in `/weekly-report`'s shape. */
 export function buildWeeklyReport(overrides = {}) {
   return {
     days: 7,
-    averages: { focus: 0.7, stress: 0.4, engagement: 0.6, heart_rate: 72, rmssd: 41 },
-    highlights: { dominant_emotion: 'happy' },
+    // Heart figures are highlights, not averages, in the real payload.
+    averages: { focus: 0.7, stress: 0.4, engagement: 0.6 },
+    highlights: { dominant_emotion: 'happy', heart_rate_bpm: 72, rmssd_ms: 41 },
+    body_arousal: buildBodyArousal(),
     sample_counts: { cognitive: WEEK_OF_SAMPLES, face: WEEK_OF_SAMPLES, heart: 1200, sessions: 3 },
     daily: [],
     emotion_distribution: { happy: 0.6, neutral: 0.4 },

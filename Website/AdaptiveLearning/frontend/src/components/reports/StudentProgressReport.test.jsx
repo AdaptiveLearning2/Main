@@ -175,7 +175,8 @@ it('renders the sensor panels by default', async () => {
   // The parent surface passes no filter and gets the whole report.
   renderReport()
 
-  expect(await screen.findByText(/Weekly EEG/)).toBeInTheDocument()
+  expect(await screen.findByRole('heading', { name: 'This week' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Week by week' })).toBeInTheDocument()
 })
 
 it('hides the sensor panels when the caller asks, without changing the request', async () => {
@@ -183,7 +184,7 @@ it('hides the sensor panels when the caller asks, without changing the request',
   renderReport({ showSignals: false })
 
   await waitFor(() => expect(urlsFor('/weekly-report')).toHaveLength(1))
-  expect(screen.queryByText(/Weekly EEG/)).not.toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: 'This week' })).not.toBeInTheDocument()
 })
 
 
@@ -197,8 +198,8 @@ it('a failed trend does not blank the weekly report, or the other way round', as
 
   renderReport()
 
-  expect(await screen.findByText(/term trend could not be loaded/i)).toBeInTheDocument()
-  expect(screen.getByText(/Weekly EEG & Face Report/i)).toBeInTheDocument()
+  expect(await screen.findByText(/week-by-week readings could not be loaded/i)).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'This week' })).toBeInTheDocument()
 })
 
 describe('chart-explaining summary', () => {
@@ -312,4 +313,30 @@ describe('chart-explaining summary', () => {
     await userEvent.click(screen.getByRole('button', { name: /generate summary/i }))
     expect(await screen.findByText('Backend unavailable')).toBeInTheDocument()
   })
+})
+
+it('drops the chart summary\'s sensor sentences under "Hide sensor data"', async () => {
+  // The backend names them (`basis.sensor_lines`); the rest of the read-out stays.
+  apiFetch.mockImplementation(url => (String(url).includes('/chart-summary')
+    ? Promise.resolve({ summary: ['Answered 2 of 4.', 'Average focus is 63%.'], source: 'rule-based',
+                        basis: { sensor_lines: [1] } })
+    : defaultFetch(url)))
+  renderReport({ showSignals: false, showChartSummary: true })
+
+  await userEvent.click(await screen.findByRole('button', { name: /generate summary/i }))
+
+  expect(await screen.findByText('Answered 2 of 4.')).toBeInTheDocument()
+  expect(screen.queryByText(/Average focus/)).not.toBeInTheDocument()
+})
+
+it('keeps every chart-summary sentence when sensor data is shown', async () => {
+  apiFetch.mockImplementation(url => (String(url).includes('/chart-summary')
+    ? Promise.resolve({ summary: ['Answered 2 of 4.', 'Average focus is 63%.'], source: 'rule-based',
+                        basis: { sensor_lines: [1] } })
+    : defaultFetch(url)))
+  renderReport({ showChartSummary: true })
+
+  await userEvent.click(await screen.findByRole('button', { name: /generate summary/i }))
+
+  expect(await screen.findByText(/Average focus/)).toBeInTheDocument()
 })

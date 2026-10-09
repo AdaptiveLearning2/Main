@@ -1000,6 +1000,15 @@ def test_a_reply_that_reorders_sensor_and_other_points_is_rejected():
     assert _validate(swapped, lines) is None
 
 
+def test_a_reply_that_drops_what_a_sensor_point_is_about_is_rejected():
+    """The comparison point has no number, so only its wording keeps it a sensor line."""
+    lines = main._rule_based_chart_summary(_full_basis())
+    usual = next(i for i, l in enumerate(lines) if l.startswith("Compared with"))
+    vague = list(lines)
+    vague[usual] = "Compared with earlier days, things looked much as usual."
+    assert _validate(vague, lines) is None
+
+
 def test_a_reply_that_moves_a_figure_to_another_point_is_rejected():
     """Allowed numbers, wrong place: the swap the global check let through."""
     lines = main._rule_based_chart_summary(_full_basis())

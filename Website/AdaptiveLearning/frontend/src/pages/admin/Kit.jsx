@@ -64,7 +64,9 @@ function Offered({ data, navigate }) {
   if (data.problem) {
     return (
       <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/40">
-        <p className="font-bold text-amber-900 dark:text-amber-200">The download gate is set up wrong.</p>
+        <p className="font-bold text-amber-900 dark:text-amber-200">
+          {data.problem_is === 'publish' ? 'The last publish did not finish.' : 'The download gate is set up wrong.'}
+        </p>
         <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">{data.problem}. Fix it, then reload this page.</p>
       </div>
     )

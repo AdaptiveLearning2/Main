@@ -9084,10 +9084,14 @@ def admin_kit(request: Request):
     try:
         found = _kit_offered()
     except kit_gate.GateError as e:
-        return {"configured": True, "problem": str(e)}
+        return {"configured": True, "problem": str(e), "problem_is": e.kind}
     if found is None:
         return {"configured": True, "published": False}
     return {"configured": True, "published": True, **found}
+
+
+# What the page heads a non-retryable GateError with, by its kind.
+_KIT_PROBLEM = {"setup": "The download gate is set up wrong", "publish": "The last publish did not finish"}
 
 
 class KitLinkRequest(StrictModel):
@@ -9096,18 +9100,19 @@ class KitLinkRequest(StrictModel):
 
 
 @app.post("/api/admin/kit/download-link")
-def admin_kit_download_link(request: Request, payload: KitLinkRequest):
-    """A link to the installer the page showed, for `kit_gate.LINK_TTL_S`. It names no user and is never cached."""
+def admin_kit_download_link(request: Request, payload: KitLinkRequest | None = None):
+    """A link to the installer the page showed (or, naming none, the current one), for `kit_gate.LINK_TTL_S`.
+    It names no user and is never cached."""
     user = _require_admin(request)
     if _KIT_GATE is None:
         raise HTTPException(503, "This server has no kit download gate set up")
     try:
         found = _kit_offered()
     except kit_gate.GateError as e:
-        raise HTTPException(409, f"The download gate is set up wrong: {e}")
+        raise HTTPException(409, f"{_KIT_PROBLEM[e.kind]}: {e}")
     if found is None:
         raise HTTPException(409, "No installer is published any more; reload the page")
-    if found["sha256"] != payload.sha256:
+    if payload is not None and found["sha256"] != payload.sha256:
         raise HTTPException(409, "A different installer was published after this page loaded; reload it")
     url, exp = kit_gate.link(*_KIT_GATE, _utc_now().timestamp(), found["file"])
     print(f"[admin:kit] a download link for {user['id'][:8]}")

@@ -33,11 +33,16 @@ _HTTP = client()
 
 
 class GateError(Exception):
-    """The gate could not be asked, or did not answer as set up. Not `retryable`: asking again cannot help."""
+    """The gate could not be asked, or did not answer as set up. `kind`: "outage" (retry), "setup" (the gate or this
+    server is set up wrong) or "publish" (the last publish did not finish); only an outage is worth a retry."""
 
-    def __init__(self, message: str, retryable: bool) -> None:
+    def __init__(self, message: str, kind: str) -> None:
         super().__init__(message)
-        self.retryable = retryable
+        self.kind = kind
+
+    @property
+    def retryable(self) -> bool:
+        return self.kind == "outage"
 
 
 def settings(environ=os.environ) -> tuple[str, str] | None:
@@ -64,26 +69,30 @@ def _refused(response: httpx.Response) -> GateError:
     status, mark = response.status_code, response.headers.get("X-Kit-Setup")
     if 300 <= status < 400:
         where = urlsplit(response.headers.get("Location", "")).netloc or "elsewhere"
-        return GateError(f"KIT_GATE_URL redirects ({status}, to {where}): set it to the gate's own https address", False)
+        return GateError(f"KIT_GATE_URL redirects ({status}, to {where}): set it to the gate's own https address",
+                         "setup")
     if status == 401:
         return GateError("the gate asked for its download key, so it predates the Setup links: redeploy the Worker",
-                         False)
+                         "setup")
+    if status == 403 and mark == "expired":
+        return GateError("the gate judged a link signed just now out of date: this server's clock and Cloudflare's "
+                         "disagree by minutes", "setup")
     if status == 403 and mark == "refused":
-        return GateError("the gate refused the link: KIT_LINK_SECRET is not the gate's LINK_SECRET", False)
+        return GateError("the gate refused the link: KIT_LINK_SECRET is not the gate's LINK_SECRET", "setup")
     if status == 403:
-        return GateError("something in front of the gate refused the request (403)", False)
+        return GateError("something in front of the gate refused the request (403)", "setup")
     if status == 503 and mark == "no-secret":
-        return GateError("the gate has no LINK_SECRET set", False)
+        return GateError("the gate has no LINK_SECRET set", "setup")
     if status == 404 and mark is None:
-        return GateError("KIT_GATE_URL does not point at the gate: it answered 404", False)
-    return GateError(f"the gate answered {status}", True)
+        return GateError("KIT_GATE_URL does not point at the gate: it answered 404", "setup")
+    return GateError(f"the gate answered {status}", "outage")
 
 
 def _ask(http: httpx.Client | None, method: str, url: str) -> httpx.Response:
     try:
         return (http or _HTTP).request(method, url)
     except httpx.HTTPError as e:
-        raise GateError(f"could not reach the gate: {type(e).__name__}", True) from e
+        raise GateError(f"could not reach the gate: {type(e).__name__}", "outage") from e
 
 
 def _is_time(value: object) -> bool:
@@ -96,7 +105,7 @@ def _is_time(value: object) -> bool:
 
 def _described(response: httpx.Response) -> dict:
     """The installer setup/current.json describes; one describing none is a publish to redo, not an outage."""
-    unreadable = GateError(f"setup/current.json does not describe a Setup installer: {_REPUBLISH}", False)
+    unreadable = GateError(f"setup/current.json does not describe a Setup installer: {_REPUBLISH}", "publish")
     try:
         data = response.json()
         found = {"version": data["version"], "file": data["file"], "sha256": data["sha256"], "size": data["size"],
@@ -124,11 +133,12 @@ def current(gate: str, secret: str, now: float, http: httpx.Client | None = None
     found = _described(meta)
     head = _ask(http, "HEAD", link(gate, secret, now, found["file"])[0])
     if head.status_code == 404 and head.headers.get("X-Kit-Setup") == "missing":
-        raise GateError(f"setup/current.json names {found['file']}, which the bucket does not hold: {_REPUBLISH}", False)
+        raise GateError(f"setup/current.json names {found['file']}, which the bucket does not hold: {_REPUBLISH}",
+                        "publish")
     if head.status_code != 200:
         raise _refused(head)
-    # Only when sent: a HEAD's length is not something every proxy keeps.
+    # Unsent or 0 is not judged: a proxy may drop or zero a HEAD's length, which no republish would change.
     size = head.headers.get("Content-Length")
-    if size is not None and size != str(found["size"]):
-        raise GateError(f"{found['file']} is not the size setup/current.json gives: {_REPUBLISH}", False)
+    if size not in (None, "0") and size != str(found["size"]):
+        raise GateError(f"{found['file']} is not the size setup/current.json gives: {_REPUBLISH}", "publish")
     return found

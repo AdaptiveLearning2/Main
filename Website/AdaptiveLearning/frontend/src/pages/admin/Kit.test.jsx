@@ -56,7 +56,8 @@ describe('the installer on offer', () => {
 
   it('names a gate set up wrong as a fix to make, with no button and no retry', async () => {
     overrideApi(KIT, () => ({
-      configured: true, problem: "the gate refused the link: KIT_LINK_SECRET is not the gate's LINK_SECRET",
+      configured: true, problem_is: 'setup',
+      problem: "the gate refused the link: KIT_LINK_SECRET is not the gate's LINK_SECRET",
     }))
     render(<AdminKit navigate={vi.fn()} />)
     expect(await screen.findByText('The download gate is set up wrong.')).toBeInTheDocument()
@@ -64,6 +65,18 @@ describe('the installer on offer', () => {
       .toBeInTheDocument()
     expect(screen.queryByText(/No installer has been published/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  })
+
+  it('names a half-finished publish as one, not as the gate being set up wrong', async () => {
+    overrideApi(KIT, () => ({
+      configured: true, problem_is: 'publish',
+      problem: 'setup/current.json names AdaptiveLearningSensors-Setup-0.2.1.exe, which the bucket does not hold: '
+        + 'publish it again with -Setup',
+    }))
+    render(<AdminKit navigate={vi.fn()} />)
+    expect(await screen.findByText('The last publish did not finish.')).toBeInTheDocument()
+    expect(screen.queryByText('The download gate is set up wrong.')).not.toBeInTheDocument()
+    expect(screen.getByText(/publish it again with -Setup\. Fix it, then reload this page\./)).toBeInTheDocument()
   })
 
   it('never shows a failed read as nothing published', async () => {

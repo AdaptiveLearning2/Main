@@ -154,10 +154,18 @@ test('a link is honoured until it expires, and never more than fifteen minutes a
   assert.equal((await signed(SETUP, { now: EXP - 1 })).response.status, 200)
   assert.equal((await signed(SETUP, { now: EXP - 900 })).response.status, 200)
   for (const now of [EXP, EXP + 1, EXP - 901]) {
-    const { response, kit } = await signed(SETUP, { now })
+    const { response, kit, text } = await signed(SETUP, { now })
     assert.equal(response.status, 403, String(now))
+    // Apart from "refused", so a backend whose clock is off is not told its secret is wrong.
+    assert.equal(response.headers.get('X-Kit-Setup'), 'expired')
+    assert.match(text, /has expired/)
     assert.deepEqual(kit.asked, [])
   }
+})
+
+test('an expired link is judged before its signature, so a stale forgery learns nothing of the secret', async () => {
+  const { response } = await signed(SETUP, { now: EXP, sig: 'f'.repeat(64) })
+  assert.equal(response.headers.get('X-Kit-Setup'), 'expired')
 })
 
 test('a forged, altered or missing signature gets the one marked 403, and the bucket is never asked', async () => {
@@ -173,7 +181,7 @@ test('a forged, altered or missing signature gets the one marked 403, and the bu
     const { response, kit, text } = await signed(SETUP, c)
     assert.equal(response.status, 403, JSON.stringify(c))
     assert.equal(response.headers.get('X-Kit-Setup'), 'refused')
-    assert.match(text, /has expired or is not valid/)
+    assert.match(text, /is not valid/)
     assert.deepEqual(kit.asked, [], JSON.stringify(c))
   }
 })
@@ -181,9 +189,11 @@ test('a forged, altered or missing signature gets the one marked 403, and the bu
 test('a link signed for one file opens no other', async () => {
   const kit = bucket({ [`setup/${SETUP}`]: 'setup', 'setup/AdaptiveLearningSensors-Setup-0.2.2.exe': 'newer' })
   const sig = await linkSignature(SECRET, `setup:${SETUP}`, EXP)
+  // It opens its own file first: a gate refusing everything would pass the refusal alone.
+  assert.equal((await signed(SETUP, { sig, kit })).response.status, 200)
   const { response } = await signed('AdaptiveLearningSensors-Setup-0.2.2.exe', { sig, kit })
   assert.equal(response.status, 403)
-  assert.deepEqual(kit.asked, [])
+  assert.deepEqual(kit.asked, [`setup/${SETUP}`])
 })
 
 test('the download key is not a way round the signature', async () => {

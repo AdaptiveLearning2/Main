@@ -110,16 +110,19 @@ following a link sends no header.
   `/v1/setup/files/<name>?exp=…&sig=…`: HMAC-SHA256 of `setup:<name>:<exp>` under `KIT_LINK_SECRET`, the gate's
   `LINK_SECRET`, valid 10 minutes. It names no user and is never cached. The page sends the SHA-256 it showed, and a
   link is signed only while that is still the offered installer (409 otherwise), so the bytes always match the page;
-  a later publish cannot change what a link serves. The gate honours a link until `exp`, never one more than 15
+  a later publish cannot change what a link serves. A request naming no hash gets the current installer. The gate honours a link until `exp`, never one more than 15
   minutes ahead, and answers an expired or forged one with one 403 before reading the bucket. The download is a
   navigation, so no CSP `connect-src` is needed.
 - **The details** come from `GET /api/admin/kit`: `/v1/setup/current.json` through a `meta:<exp>` link, then a `HEAD`
-  of the file it names, so "published" means downloadable. States: `configured: false` (settings unset), a `problem`
-  to fix, `published: false`, the installer, or a 503 to retry.
+  of the file it names, so "published" means downloadable (its size is compared when the HEAD carries a nonzero one,
+  since a proxy may drop or zero it). States: `configured: false` (settings unset), a `problem` to fix with
+  `problem_is` `setup` (the gate or this server) or `publish` (the last publish did not finish), `published: false`,
+  the installer, or a 503 to retry.
 - **The gate marks its own refusals** with `X-Kit-Setup`: `none` (nothing published), `missing` (a file not in the
-  bucket), `refused` (the signature) and `no-secret`. The backend turns each, and a redirect, a 401 (a Worker deployed
-  before these routes) or an unmarked 403 or 404 (not the gate), into a `problem` naming the fix, never a retry; only
-  other answers and an unreachable gate are a 503.
+  bucket), `expired` (outside its window, judged before the signature, so it reveals nothing of the secret: on a link
+  the backend just signed, the clocks disagree), `refused` (the signature) and `no-secret`. The backend turns each,
+  and a redirect, a 401 (a Worker deployed before these routes) or an unmarked 403 or 404 (not the gate), into a
+  `problem` naming the fix, never a retry; only other answers and an unreachable gate are a 503.
 - **Publishing.** `publish_kit_update.ps1 -Setup`, only with `-Promote` at 100%: the site offers the version every kit
   is moving to. It uploads `setup/AdaptiveLearningSensors-Setup-x.y.z.exe`, then `setup/current.json`, and never
   replaces an offered installer with other bytes. The signature is computed three times (`worker.mjs`,

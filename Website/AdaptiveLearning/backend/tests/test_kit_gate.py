@@ -117,6 +117,7 @@ def test_nothing_published_is_only_the_gates_own_404():
 @pytest.mark.parametrize("status,headers,names", [
     (401, {}, "redeploy the Worker"),
     (403, {"X-Kit-Setup": "refused"}, "KIT_LINK_SECRET is not the gate's LINK_SECRET"),
+    (403, {"X-Kit-Setup": "expired"}, "this server's clock and Cloudflare's disagree"),
     (403, {}, "in front of the gate"),
     (503, {"X-Kit-Setup": "no-secret"}, "no LINK_SECRET"),
     (302, {"Location": "https://elsewhere.example/v1"}, "redirects (302, to elsewhere.example)"),
@@ -126,20 +127,23 @@ def test_nothing_published_is_only_the_gates_own_404():
 def test_a_gate_set_up_wrong_is_named_and_never_retried(status, headers, names):
     with pytest.raises(kit_gate.GateError, match=names.replace("(", r"\(").replace(")", r"\)")) as e:
         offered(gate(status=status, headers=headers))
-    assert e.value.retryable is False
+    assert (e.value.kind, e.value.retryable) == ("setup", False)
 
 
-def test_a_secret_the_gate_does_not_share_is_named_as_the_cause():
+def test_a_secret_the_gate_does_not_share_is_named_as_the_cause_and_skew_is_not():
     with pytest.raises(kit_gate.GateError, match="KIT_LINK_SECRET") as e:
         kit_gate.current(GATE, "another-secret", NOW.timestamp(), gate())
-    assert e.value.retryable is False
+    assert e.value.kind == "setup"
+    with pytest.raises(kit_gate.GateError, match="clock") as e:
+        offered(gate(status=403, headers={"X-Kit-Setup": "expired"}))
+    assert "KIT_LINK_SECRET" not in str(e.value)
 
 
 @pytest.mark.parametrize("status,headers", [(500, {}), (502, {}), (503, {}), (429, {}), (503, {"X-Kit-Setup": "x"})])
 def test_an_answer_that_may_pass_is_a_failed_read_to_retry(status, headers):
     with pytest.raises(kit_gate.GateError, match=str(status)) as e:
         offered(gate(status=status, headers=headers))
-    assert e.value.retryable is True
+    assert (e.value.kind, e.value.retryable) == ("outage", True)
 
 
 def test_a_redirect_is_not_followed():
@@ -164,14 +168,16 @@ def test_an_unreachable_gate_is_a_failed_read_to_retry():
 def test_details_naming_a_file_the_bucket_lacks_are_a_publish_to_redo():
     with pytest.raises(kit_gate.GateError, match=f"names {SETUP}, which the bucket does not hold") as e:
         offered(gate(files={}))
-    assert e.value.retryable is False
+    assert (e.value.kind, e.value.retryable) == ("publish", False)
 
 
-def test_a_file_of_another_size_is_a_publish_to_redo_and_an_unsent_size_is_not_judged():
+def test_a_file_of_another_size_is_a_publish_to_redo_and_an_unsent_or_zero_size_is_not_judged():
     with pytest.raises(kit_gate.GateError, match="not the size") as e:
         offered(gate(files={SETUP: str(SIZE - 1)}))
-    assert e.value.retryable is False
+    assert (e.value.kind, e.value.retryable) == ("publish", False)
+    # A proxy may drop or zero a HEAD's length; judging it would block every download with no republish to fix it.
     assert offered(gate(files={SETUP: None})) == OFFERED
+    assert offered(gate(files={SETUP: "0"})) == OFFERED
 
 
 def _with(**changes):
@@ -193,7 +199,7 @@ def _with(**changes):
 def test_details_that_do_not_describe_a_setup_installer_are_a_publish_to_redo(body):
     with pytest.raises(kit_gate.GateError, match="does not describe a Setup installer") as e:
         offered(gate(current=body))
-    assert e.value.retryable is False
+    assert (e.value.kind, e.value.retryable) == ("publish", False)
 
 
 # ─── the admin routes ─────────────────────────────────────────────────────
@@ -230,7 +236,13 @@ def test_a_gate_set_up_wrong_is_a_problem_to_fix_not_a_retry(monkeypatch, admin)
     asking(monkeypatch, gate(status=401))
     answer = main.admin_kit(None)
     assert answer["configured"] is True and "redeploy the Worker" in answer["problem"]
-    assert "published" not in answer
+    assert answer["problem_is"] == "setup" and "published" not in answer
+
+
+def test_a_half_finished_publish_is_a_problem_of_its_own_kind(monkeypatch, admin):
+    asking(monkeypatch, gate(files={}))
+    answer = main.admin_kit(None)
+    assert answer["problem_is"] == "publish" and "publish it again with -Setup" in answer["problem"]
 
 
 def test_an_outage_is_a_503_to_retry_never_nothing_published(monkeypatch, admin):
@@ -266,7 +278,7 @@ def test_a_download_link_opens_the_file_the_page_showed_for_ten_minutes_names_no
 @pytest.mark.parametrize("http,sha256,says", [
     (lambda: gate(), "ab" * 32, "A different installer was published"),
     (lambda: gate(current=None), SHA, "No installer is published any more"),
-    (lambda: gate(files={}), SHA, "The download gate is set up wrong: setup/current.json names"),
+    (lambda: gate(files={}), SHA, "The last publish did not finish: setup/current.json names"),
     (lambda: gate(status=401), SHA, "The download gate is set up wrong: the gate asked for its download key"),
 ])
 def test_no_link_is_given_for_an_installer_other_than_the_one_shown(monkeypatch, admin, http, sha256, says):
@@ -274,6 +286,23 @@ def test_no_link_is_given_for_an_installer_other_than_the_one_shown(monkeypatch,
     with pytest.raises(main.HTTPException) as e:
         link_for(sha256)
     assert e.value.status_code == 409 and e.value.detail.startswith(says)
+
+
+def test_a_link_asked_for_naming_no_installer_is_to_the_current_one(monkeypatch, admin):
+    """A caller that sends no hash, such as a page loaded before the hash was sent, still gets a working link."""
+    asking(monkeypatch, gate())
+    body = json.loads(main.admin_kit_download_link(None, None).body)
+    assert body["url"].startswith(f"{GATE}/v1/setup/files/{SETUP}?exp={EXP}&")
+
+
+def test_through_the_app_a_post_with_no_body_gets_a_link_and_a_malformed_hash_a_422(monkeypatch, admin):
+    from fastapi.testclient import TestClient
+    asking(monkeypatch, gate())
+    client = TestClient(main.app)
+    path = "/api/admin/kit/download-link"
+    assert client.post(path).status_code == 200
+    assert client.post(path, json={"sha256": SHA}).status_code == 200
+    assert client.post(path, json={"sha256": SHA.upper()}).status_code == 422
 
 
 def test_a_link_asked_for_during_an_outage_is_a_503_to_retry(monkeypatch, admin):

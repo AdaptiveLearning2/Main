@@ -37,12 +37,14 @@ async function setup(request, env, url, file) {
   if (!secret) return marked(503, 'the gate has no link secret set', 'no-secret')
   const exp = url.searchParams.get('exp') ?? ''
   const now = Math.floor(Date.now() / 1000)
-  const fresh = /^\d{1,12}$/.test(exp) && Number(exp) > now && Number(exp) <= now + LINK_AHEAD_S
   const subject = file ? `setup:${file}` : 'meta'
-  // Expired and forged get one answer, before the bucket is asked.
-  if (!fresh || !sameKey(url.searchParams.get('sig') ?? '', await linkSignature(secret, subject, exp))) {
-    return marked(403, 'this link has expired or is not valid; ask the admin page for a new one', 'refused')
+  const refused = () => marked(403, 'this link is not valid; ask the admin page for a new one', 'refused')
+  if (!/^\d{1,12}$/.test(exp)) return refused()
+  // Judged before the signature, so "expired" says nothing of the secret: only of the clocks, or the link's age.
+  if (Number(exp) <= now || Number(exp) > now + LINK_AHEAD_S) {
+    return marked(403, 'this link has expired; ask the admin page for a new one', 'expired')
   }
+  if (!sameKey(url.searchParams.get('sig') ?? '', await linkSignature(secret, subject, exp))) return refused()
   const head = request.method === 'HEAD'
   if (!file) {
     const current = await env.KIT.get('setup/current.json')

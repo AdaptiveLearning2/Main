@@ -389,18 +389,21 @@ def test_the_weekly_usual_is_unknown_when_open_lessons_could_not_be_checked(monk
 
 
 def _summary_endpoint(monkeypatch, sessions, heart_samples=0, any_rows=True):
-    """`/signal-summary` for a heart-consented student with no rolled heart days."""
+    """`/signal-summary` for a heart-consented student with no rolled heart days.
+
+    `any_rows`: a poor-contact heart row (not in the usable count) exists, none, or None to fail the read.
+    """
     monkeypatch.setattr(main, "supabase", _FakeSupabase({
         "signal_daily_rollup": [_cog(d) for d in PRIOR], "sessions": sessions,
-        # A poor-contact row inside the running lesson: not in the usable count.
-        "heart_signals": [{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "trusted": False}]}))
+        "heart_signals": [{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "trusted": False}]
+        if any_rows else []},
+        table_raises={"heart_signals"} if any_rows is None else None))
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": STUDENT})
     monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
     monkeypatch.setattr(main, "_reportable_channels", lambda *_a: main._channels_from_consent(
         {"retrieved": True, "eeg_enabled": True, "headband_optical_enabled": True}))
     monkeypatch.setattr(main, "_signal_summary", lambda *_a, **_k: {
         **main._EMPTY_SUMMARY, "heart_samples": heart_samples})
-    monkeypatch.setattr(main, "_any_rows_since", lambda table, *_a: any_rows)
     return main.student_signal_summary(STUDENT, None)["usual"]["body_arousal"]
 
 
@@ -438,13 +441,15 @@ def test_a_running_lesson_with_no_heart_rows_is_not_pending_on_the_summary(monke
     assert (arousal["state"], arousal["pending"]) == ("none", False)
 
 
-def _parent_child(monkeypatch, any_rows):
-    """Child `a` has a running lesson; child `b` has none, so only a row check could ask about it."""
-    monkeypatch.setattr(main, "supabase", _FakeSupabase({
+def _parent_children(monkeypatch, kids=("a", "b"), heart_rows=("a",)):
+    """Child `a` has a running lesson; the others none. `heart_rows`: who has a poor-contact row."""
+    fake = _FakeSupabase({
         "parent_child_links": [{"parent_id": "p", "child_id": c, "created_at": "2026-06-01"}
-                               for c in ("a", "b")],
+                               for c in kids],
         "signal_daily_rollup": [], "sessions": [{**_OPEN[0], "user_id": "a"}],
-        "heart_signals": [{"user_id": "a", "ts": NOW_UTC.isoformat(), "trusted": False}]}))
+        "heart_signals": [{"user_id": c, "ts": NOW_UTC.isoformat(), "trusted": False}
+                          for c in heart_rows]})
+    monkeypatch.setattr(main, "supabase", fake)
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "p"})
     channels = main._channels_from_consent(
         {"retrieved": True, "eeg_enabled": True, "headband_optical_enabled": True})
@@ -456,19 +461,25 @@ def _parent_child(monkeypatch, any_rows):
                  "_topic_performance_many"):
         monkeypatch.setattr(main, name, lambda ids: {})
     monkeypatch.setattr(main, "_recent_sessions_many", lambda ids, n: {})
-    monkeypatch.setattr(main, "_any_rows_since", any_rows)
-    return main.my_children(None)[0]
+    children = {c["user_id"]: c["signal_summary"]["usual"]["body_arousal"]
+                for c in main.my_children(None)}
+    return children, fake
 
 
 def test_the_parent_dashboard_sees_an_open_lesson_too(monkeypatch):
-    child = _parent_child(monkeypatch, lambda *_a: True)
-    assert child["signal_summary"]["usual"]["body_arousal"]["state"] == "pending"
+    assert _parent_children(monkeypatch)[0]["a"]["state"] == "pending"
 
 
-def test_the_parent_dashboard_does_not_ask_each_child_for_rows(monkeypatch):
-    asked = []
-    _parent_child(monkeypatch, lambda *a: asked.append(a) or True)
-    assert asked == []
+def test_the_parent_dashboard_agrees_with_the_report_on_unsummarised_rows(monkeypatch):
+    """Poor-contact rows, no lesson running, nothing rolled up: unknown, as the report says."""
+    children, _ = _parent_children(monkeypatch, heart_rows=("a", "b"))
+    assert children["b"]["state"] == "unknown"
+
+
+def test_the_parent_dashboard_checks_rows_in_one_read_however_many_children(monkeypatch):
+    """One batched row check, plus one read per running lesson (child `a`)."""
+    _, fake = _parent_children(monkeypatch, kids=("a", "b", "c", "d", "e"))
+    assert fake.table_calls.count("heart_signals") == 2
 
 
 def test_the_weekly_report_compares_heart_while_todays_lesson_is_open(monkeypatch):

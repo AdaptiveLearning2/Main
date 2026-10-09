@@ -307,3 +307,27 @@ def test_an_unread_or_declined_trend_week_says_so(monkeypatch):
     monkeypatch.setattr(main, "supabase", _fake())
     assert main._signal_trend(STUDENT, weeks=1, include_heart=False)["weeks"][0][
         "body_arousal_state"] == "not_requested"
+
+
+def _trend_endpoint(monkeypatch, sessions, **kw):
+    """`/signal-trend`'s current-week body arousal, with no heart rollup rows at all."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({**_tables(), "sessions": sessions}, **kw))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": STUDENT})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    week = _week(main.student_signal_trend(STUDENT, None, weeks=2), "2026-06-08")
+    return week["body_arousal_state"]
+
+
+def test_the_current_week_says_none_when_no_lesson_is_running(monkeypatch):
+    """The caller checked `sessions`, so an empty current week is a real absence."""
+    assert _trend_endpoint(monkeypatch, []) == "none"
+
+
+def test_the_current_week_stays_unknown_while_a_lesson_runs(monkeypatch):
+    running = [{"id": "o", "user_id": STUDENT, "started_at": NOW_UTC.isoformat(),
+                "ended_at": None}]
+    assert _trend_endpoint(monkeypatch, running) == "unknown"
+
+
+def test_the_current_week_stays_unknown_when_sessions_cannot_be_read(monkeypatch):
+    assert _trend_endpoint(monkeypatch, [], table_raises=["sessions"]) == "unknown"

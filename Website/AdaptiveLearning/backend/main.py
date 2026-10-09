@@ -1998,12 +1998,13 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
                   consent_retrieved: bool = True,
                   emotion_revoked_at: str | None = None,
                   heart_revoked_at: str | None = None,
-                  rollup: tuple[list, bool] | None = None):
+                  rollup: tuple[list, bool] | None = None,
+                  lesson_running: bool | None = None):
     """Week-over-week averages, read from the rollup and nothing else.
 
     Weighted by `trusted_sample_count` (stress by `_stress_weight`); see docs/reporting.md,
-    "The term trend reads the rollup". `rollup` is `(rows, retrieved)` already read over a
-    range covering these weeks, to share one read; without it this reads.
+    "The term trend reads the rollup". `rollup` is `(rows, retrieved)` already read, to share
+    one read. `lesson_running` is the caller's `_open_lessons` answer; None is unchecked.
     """
     tz = _school_timezone()
     school_today = _school_today(tz)
@@ -2103,10 +2104,11 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
     out = []
     for monday in sorted(buckets):
         b = buckets[monday]
-        # Rollup only: an open lesson is invisible, so the current week cannot claim an absence.
+        # Rollup only: this week may hold an uncounted lesson unless the caller saw none running.
         arousal = _body_arousal(b["arousal"], _sensor_class(b["heart_sources"]), False,
                                 include_heart, retrieved,
-                                raw_ok=monday != _week_start(school_today))
+                                raw_ok=monday != _week_start(school_today)
+                                or lesson_running is False)
         out.append({
             "week_start": b["week_start"],
             "score_scale": _scale_range(b["scale_rows"]),
@@ -2865,6 +2867,17 @@ def _open_lessons(student_ids) -> dict[str, str] | None:
     return out
 
 
+def _lesson_running(student_id: str, include_heart: bool) -> bool | None:
+    """Whether a lesson is running for the student (`_open_lessons`); None if unread.
+
+    Asked only when heart is consented: otherwise body arousal is `not_requested` anyway.
+    """
+    if not include_heart:
+        return False
+    starts = _open_lessons([student_id])
+    return None if starts is None else str(student_id) in starts
+
+
 def _lesson_heart(open_starts: dict[str, str]) -> dict[str, bool | None]:
     """Whether each running lesson has any heart row yet (poor contact included); None if unread.
 
@@ -2891,25 +2904,45 @@ def _running_heart_lessons(student_ids) -> dict[str, tuple[bool | None, str | No
             for s in student_ids}
 
 
+def _heart_rows_many(student_ids, days: int) -> dict[str, bool | None]:
+    """Whether any heart row (poor contact included) landed per student in the window, in one read.
+
+    A result at the row cap may be cut, so a student it did not reach is None, not False.
+    """
+    ids = [str(s) for s in student_ids]
+    if not ids:
+        return {}
+    try:
+        rows = supabase.table("heart_signals").select("user_id").in_("user_id", ids) \
+            .gte("ts", _window_start(days).isoformat()).limit(_POSTGREST_MAX_ROWS) \
+            .execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[heart_rows_many] {len(ids)} students: {e}")
+        return {s: None for s in ids}
+    seen = {str(r.get("user_id")) for r in rows}
+    cut = len(rows) >= _POSTGREST_MAX_ROWS
+    return {s: True if s in seen else (None if cut else False) for s in ids}
+
+
 def _lesson_context(summaries: dict[str, dict], heart: dict[str, bool], days: int,
-                    any_rows: dict[str, bool | None] | None = None,
-                    ask_rows: bool = True) -> dict[str, dict]:
+                    any_rows: dict[str, bool | None] | None = None) -> dict[str, dict]:
     """Per student, `lesson_pending` and `heart_rows` for `_usual_from_rows`; None where unread.
 
-    `lesson_pending`: a running lesson with heart rows. A summary counts usable samples only,
-    so with none `ask_rows` asks whether any row landed; `any_rows` passes answers already had.
+    `lesson_pending`: a running lesson with heart rows. A summary counts usable samples only, so
+    for one with none this asks, in one read, whether any row landed; `any_rows` passes answers had.
     """
-    running = _running_heart_lessons([s for s in summaries if heart.get(s)])
+    consented = [s for s in summaries if heart.get(s)]
+    running = _running_heart_lessons(consented)
+    known = dict(any_rows or {})
+    ask = [s for s in consented if not summaries[s].get("heart_samples") and s not in known]
+    known.update(_heart_rows_many(ask, days))
     out = {}
     for sid, summary in summaries.items():
         if not heart.get(sid):
             out[sid] = {"lesson_pending": False, "heart_rows": False}
             continue
-        pending = running[sid][0]
-        rows = bool(summary.get("heart_samples")) or (
-            (any_rows or {}).get(sid) if any_rows and sid in any_rows
-            else _any_rows_since("heart_signals", sid, days) if ask_rows else False)
-        out[sid] = {"lesson_pending": pending, "heart_rows": rows}
+        rows = True if summary.get("heart_samples") else known.get(sid, False)
+        out[sid] = {"lesson_pending": running[sid][0], "heart_rows": rows}
     return out
 
 
@@ -4374,7 +4407,8 @@ def student_signal_trend(student_id: str, request: Request, weeks: int = 8,
                          include_emotion=channels.emotion,
                          consent_retrieved=channels.consent_retrieved,
                          emotion_revoked_at=channels.emotion_revoked_at,
-                         heart_revoked_at=channels.heart_revoked_at)
+                         heart_revoked_at=channels.heart_revoked_at,
+                         lesson_running=_lesson_running(student_id, channels.heart))
 
 
 @app.get("/api/students/{student_id}/weekly-report")
@@ -5144,7 +5178,8 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
                           consent_retrieved=channels.consent_retrieved,
                           emotion_revoked_at=channels.emotion_revoked_at,
                           heart_revoked_at=channels.heart_revoked_at,
-                          rollup=rollup)
+                          rollup=rollup,
+                          lesson_running=_lesson_running(student_id, channels.heart))
     stats = _stats_including_open_session(student_id)
     topics, topics_retrieved = _topic_breakdown_with_state(student_id)
     attempted = [t for t in topics if (t.get("attempted_questions") or 0) > 0]
@@ -8792,10 +8827,10 @@ def my_children(request: Request, include_face: bool = True):
     usual_start, usual_end = _report_period(_PARENT_SUMMARY_DAYS)
     child_summaries = {str(cid): summaries.get(str(cid)) or {"retrieved": summaries_retrieved}
                        for cid in child_ids}
-    # No per-child `any_rows` read: only running lessons are checked, so reads scale with those.
+    # One batched row check for every child, then one read per running lesson.
     context = _lesson_context(child_summaries,
                               {str(cid): ch.heart for cid, ch in channels_by_child.items()},
-                              _PARENT_SUMMARY_DAYS, ask_rows=False)
+                              _PARENT_SUMMARY_DAYS)
     usual = _personal_baselines_many(
         {cid: {**_usual_current(s), **context[cid]} for cid, s in child_summaries.items()},
         {str(cid): ch.heart for cid, ch in channels_by_child.items()},

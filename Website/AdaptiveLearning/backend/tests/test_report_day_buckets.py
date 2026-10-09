@@ -601,6 +601,13 @@ def test_rows_never_summarised_with_no_lesson_open_are_unknown_not_pending(monke
     assert _day(report, "2026-06-11")["body_arousal_state"] == "unknown"
 
 
+def test_a_closed_lesson_is_not_an_open_one(monkeypatch, at_three_am_utc):
+    tables = _with_rollup()
+    tables["heart_signals"] = _heart_raw("muse_optics")
+    tables["sessions"] = [{**_open_session(), "ended_at": NOW_UTC.isoformat()}]
+    assert _arousal(monkeypatch, tables)["body_arousal"]["state"] == "unknown"
+
+
 def test_an_unread_sessions_table_leaves_open_lessons_unknown(monkeypatch, at_three_am_utc):
     tables = _with_rollup()
     tables["heart_signals"] = _heart_raw("muse_optics")

@@ -377,6 +377,17 @@ def test_the_weekly_usual_knows_an_open_lesson_is_not_counted(monkeypatch):
     assert report["usual"]["body_arousal"]["pending"] is True
 
 
+def test_the_weekly_usual_is_unknown_when_open_lessons_could_not_be_checked(monkeypatch):
+    tables = _weekly_tables([])
+    tables["signal_consent"] = [{"user_id": STUDENT, "eeg_enabled": True,
+                                 "headband_optical_enabled": True}]
+    tables["heart_signals"] = [{"user_id": STUDENT, "ts": NOW_UTC.isoformat(),
+                                "source": "muse_optics", "heart_rate_bpm": 75.0, "trusted": True}]
+    report = _weekly(monkeypatch, tables, table_raises={"sessions"})
+
+    assert report["usual"]["body_arousal"]["state"] == "unknown"
+
+
 def _summary_endpoint(monkeypatch, sessions, heart_samples=0, any_rows=True):
     """`/signal-summary` for a heart-consented student with no rolled heart days."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({

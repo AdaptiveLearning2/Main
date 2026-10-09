@@ -297,3 +297,109 @@ def test_the_signal_summary_carries_the_usual_with_calm_inverted(monkeypatch):
 
     assert calm["current"] == 0.75
     assert calm["median"] == pytest.approx(0.6)
+
+
+# ─── many students at once (the parent dashboard) ───────────────────────
+
+def _kid_rows(kid, focus=0.5):
+    return [{**_cog(d, focus=focus), "user_id": kid} for d in PRIOR] + \
+        [{**_now_cog(), "user_id": kid}]
+
+
+def _many(monkeypatch, rows, kids, heart=None, **kw):
+    fake = _fake(rows, **kw)
+    monkeypatch.setattr(main, "supabase", fake)
+    out = main._personal_baselines_many(
+        {k: {"focus": (0.5, 500)} for k in kids},
+        {k: (heart or {}).get(k, False) for k in kids}, {k: True for k in kids}, START, END)
+    return out, fake
+
+
+def _rollup_queries(fake):
+    return [q for name, q in zip(fake.table_calls, fake.queries) if name == "signal_daily_rollup"]
+
+
+def _filter(q, col):
+    return next(v for c, v in q.filters if c == col)
+
+
+def test_a_siblings_heart_consent_never_widens_another_childs_read(monkeypatch):
+    rows = _kid_rows("a") + _kid_rows("b") + [{**_heart(d), "user_id": "b"} for d in PRIOR]
+    out, fake = _many(monkeypatch, rows, ["a", "b"], heart={"a": True, "b": False})
+
+    by_kids = {tuple(_filter(q, "user_id")[1]): _filter(q, "channel")[1]
+               for q in _rollup_queries(fake)}
+    assert by_kids == {("a",): ["cognitive", "heart"], ("b",): ["cognitive"]}
+    assert out["b"]["measures"]["heart_rate_bpm"]["status"] == "not_requested"
+
+
+def test_each_child_is_compared_with_their_own_rows_only(monkeypatch):
+    out, _ = _many(monkeypatch, _kid_rows("a") + [{**_now_cog(), "user_id": "b"}], ["a", "b"])
+
+    assert out["a"]["measures"]["focus"]["status"] == "compared"
+    assert out["b"]["measures"]["focus"]["days_used"] == 0
+
+
+def test_children_are_read_in_chunks_that_fit_under_the_row_cap(monkeypatch):
+    kids = [f"k{i}" for i in range(7)]
+    _, fake = _many(monkeypatch, [], kids)
+
+    sizes = [len(_filter(q, "user_id")[1]) for q in _rollup_queries(fake)]
+    assert sizes == [6, 1]
+
+
+class _ChunkQuery:
+    """The rollup chain, answering per chunk: one id fails, or one chunk is at the cap."""
+
+    def __init__(self, fail_id=None, cap_id=None):
+        self.fail_id, self.cap_id, self.ids = fail_id, cap_id, []
+
+    def in_(self, col, values):
+        self.ids = list(values)
+        return self
+
+    def execute(self):
+        if self.fail_id in self.ids:
+            raise RuntimeError("chunk read failed")
+        rows = [r for k in self.ids for r in _kid_rows(k)]
+        if self.cap_id in self.ids:
+            rows = (rows * 200)[:main._POSTGREST_MAX_ROWS]
+        return type("R", (), {"data": rows})()
+
+
+@pytest.mark.parametrize("trouble", ["fail_id", "cap_id"])
+def test_a_failed_or_capped_chunk_marks_only_its_own_children(monkeypatch, trouble):
+    kids = [f"k{i}" for i in range(7)]
+    monkeypatch.setattr(main, "_usual_rollup_query",
+                        lambda *a: _ChunkQuery(**{trouble: "k6"}))
+    out = main._personal_baselines_many({k: {"focus": (0.5, 500)} for k in kids},
+                                        {k: False for k in kids}, {k: True for k in kids},
+                                        START, END)
+
+    assert out["k6"]["retrieved"] is False
+    assert out["k6"]["measures"]["focus"]["status"] == "not_retrieved"
+    assert out["k0"]["retrieved"] is True
+    assert out["k0"]["measures"]["focus"]["status"] == "compared"
+
+
+def test_the_parent_dashboard_stamps_each_childs_usual(monkeypatch):
+    kids = ["a", "b"]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({
+        "parent_child_links": [{"parent_id": "p", "child_id": k, "created_at": "2026-06-01"}
+                               for k in kids],
+        "signal_daily_rollup": _kid_rows("a", focus=0.4) + _kid_rows("b", focus=0.8)}))
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "p"})
+    channels = main._channels_from_consent({"retrieved": True, "eeg_enabled": True})
+    monkeypatch.setattr(main, "_reportable_channels_many",
+                        lambda ids, *_a: {k: channels for k in ids})
+    monkeypatch.setattr(main, "_signal_summaries", lambda ids, **_k: {
+        k: {**main._EMPTY_SUMMARY, "focus": 0.6, "cognitive_samples": 500} for k in ids})
+    for name in ("_stats_including_open_session_many", "_profiles_many",
+                 "_topic_performance_many"):
+        monkeypatch.setattr(main, name, lambda ids: {})
+    monkeypatch.setattr(main, "_recent_sessions_many", lambda ids, n: {})
+
+    children = {c["user_id"]: c for c in main.my_children(None)}
+
+    assert children["a"]["signal_summary"]["usual"]["measures"]["focus"]["verdict"] == "higher"
+    assert children["b"]["signal_summary"]["usual"]["measures"]["focus"]["verdict"] == "lower"

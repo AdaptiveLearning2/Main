@@ -104,6 +104,11 @@ fewer periods unusual than a like-for-like comparison would; that is the price o
 older payload. It is attached in the handlers, not inside `_weekly_signal_report`, so the report's own query
 assertions still see exactly the reads they did.
 
+`/api/parent/children` stamps `signal_summary.usual` through `_personal_baselines_many`: one read per heart-consent
+group and chunk of `_USUAL_BATCH` (6) children, so a sibling's consent never widens a read and a chunk stays under
+PostgREST's 1000-row cap (63 days × 2 channels × 6 = 756). A chunk that fails, or comes back at the cap and so may be
+cut, is `not_retrieved` for its own children only.
+
 ## The teacher analytics aggregate in Postgres, and one of them is a table not a chart
 
 Five surfaces: a class topic heatmap, class accuracy per school day, a weekday×hour heatmap, a real last-active

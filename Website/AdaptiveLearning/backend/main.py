@@ -1884,8 +1884,6 @@ def _stress_weight(rollup_row: dict) -> int:
     return int(rollup_row.get("trusted_sample_count") or 0)
 
 
-# `heart_stress` categories that are a reading; `calibrating` is a baseline still forming.
-_AROUSAL_CLASSIFIED = ("low", "moderate", "high")
 _HEADBAND_HEART_SOURCES = frozenset({"muse_optics", "muse_ppg"})
 
 
@@ -2607,6 +2605,18 @@ def _usual_not_comparable(measure: str, scale: dict | None, sensors: frozenset) 
     return None
 
 
+def _usual_rollup_query(period_start: date, period_end: date, include_heart: bool):
+    """The baseline's rollup read, before its `user_id` filter; a declined heart channel is not asked for."""
+    since = period_start - timedelta(weeks=_USUAL_WEEKS)
+    channels = ["cognitive"] + (["heart"] if include_heart else [])
+    return (supabase.table("signal_daily_rollup")
+            .select("user_id, day, channel, avg_focus, avg_stress, avg_heart_rate_bpm, "
+                    "avg_rmssd_ms, stress_counts, trusted_sample_count, stress_sample_count, "
+                    "score_scale_min, score_scale_max, calm_sources, heart_sources")
+            .in_("channel", channels)
+            .gte("day", since.isoformat()).lte("day", period_end.isoformat()))
+
+
 def _personal_baseline(student_id: str, period_start: date, period_end: date, current: dict,
                        include_heart: bool, consent_retrieved: bool = True) -> dict:
     """Each measure this period against the student's own prior weeks, from the rollup.
@@ -2614,20 +2624,57 @@ def _personal_baseline(student_id: str, period_start: date, period_end: date, cu
     `current` maps a measure to `(value, samples)`; `heart_sources` is the period's sensors.
     A heart channel the caller may not read is not queried. Never raises.
     """
-    since = period_start - timedelta(weeks=_USUAL_WEEKS)
-    channels = ["cognitive"] + (["heart"] if include_heart else [])
     rows, retrieved = [], True
     try:
-        rows = (supabase.table("signal_daily_rollup")
-                .select("day, channel, avg_focus, avg_stress, avg_heart_rate_bpm, avg_rmssd_ms, "
-                        "stress_counts, trusted_sample_count, stress_sample_count, "
-                        "score_scale_min, score_scale_max, calm_sources, heart_sources")
-                .eq("user_id", student_id).in_("channel", channels)
-                .gte("day", since.isoformat()).lte("day", period_end.isoformat())
-                .execute().data or [])
+        rows = (_usual_rollup_query(period_start, period_end, include_heart)
+                .eq("user_id", student_id).execute().data or [])
     except Exception as e:                                     # noqa: BLE001
         print(f"[personal_baseline] {student_id}: {e}")
         retrieved = False
+    return _usual_from_rows(rows, retrieved, period_start, current, include_heart,
+                            consent_retrieved)
+
+
+# Children per baseline read: 63 days x 2 channels x 6 = 756 rows, under PostgREST's 1000.
+_USUAL_BATCH = 6
+_POSTGREST_MAX_ROWS = 1000
+
+
+def _personal_baselines_many(currents: dict[str, dict], include_heart: dict[str, bool],
+                             consent_retrieved: dict[str, bool], period_start: date,
+                             period_end: date) -> dict[str, dict]:
+    """`_personal_baseline` for many students, one read per consent group and chunk.
+
+    A chunk that fails, or comes back at the row cap (so possibly cut), is `not_retrieved`
+    for its own students only. Never raises.
+    """
+    groups: dict[bool, list[str]] = {}
+    for sid in currents:
+        groups.setdefault(bool(include_heart.get(sid)), []).append(sid)
+    out = {}
+    for heart, ids in groups.items():
+        for i in range(0, len(ids), _USUAL_BATCH):
+            chunk = ids[i:i + _USUAL_BATCH]
+            rows, retrieved = [], True
+            try:
+                rows = (_usual_rollup_query(period_start, period_end, heart)
+                        .in_("user_id", chunk).execute().data or [])
+                retrieved = len(rows) < _POSTGREST_MAX_ROWS
+            except Exception as e:                             # noqa: BLE001
+                print(f"[personal_baselines_many] {len(chunk)} students: {e}")
+                retrieved = False
+            for sid in chunk:
+                mine = [r for r in rows if str(r.get("user_id")) == str(sid)] if retrieved else []
+                out[sid] = _usual_from_rows(mine, retrieved, period_start, currents[sid], heart,
+                                            consent_retrieved.get(sid, True))
+    return out
+
+
+def _usual_from_rows(rows: list, retrieved: bool, period_start: date, current: dict,
+                     include_heart: bool, consent_retrieved: bool) -> dict:
+    """The `usual` payload from one student's rollup rows (a read that failed has none)."""
+    since = period_start - timedelta(weeks=_USUAL_WEEKS)
+    channels = ["cognitive"] + (["heart"] if include_heart else [])
     rows = [r for r in rows if r.get("channel") in channels]
 
     def in_period(r):
@@ -2685,6 +2732,15 @@ def _report_period(days: int) -> tuple[date, date]:
     """The first and last school day of a `days`-long report window."""
     today = _utc_now().astimezone(_school_timezone()).date()
     return today - timedelta(days=days - 1), today
+
+
+def _usual_current(summary: dict) -> dict:
+    """A signal summary's figures as `_personal_baseline`'s `current`."""
+    eeg_n, heart_n = summary.get("cognitive_samples") or 0, summary.get("heart_samples") or 0
+    return {"focus": (summary.get("focus"), eeg_n),
+            "calm": (_calm_of(summary.get("stress")), eeg_n),
+            "heart_rate_bpm": (summary.get("heart_rate_bpm"), heart_n),
+            "rmssd_ms": (summary.get("rmssd_ms"), heart_n)}
 
 
 def _calm_of(stress) -> float | None:
@@ -4183,11 +4239,8 @@ def student_signal_summary(student_id: str, request: Request, days: int = 7, inc
                               eeg_revoked_at=channels.eeg_revoked_at,
                               erased=_erased_fields(channels, _window_start(days)))
     start, end = _report_period(days)
-    eeg_n, heart_n = summary["cognitive_samples"], summary["heart_samples"]
-    summary["usual"] = _personal_baseline(student_id, start, end, {
-        "focus": (summary["focus"], eeg_n), "calm": (_calm_of(summary["stress"]), eeg_n),
-        "heart_rate_bpm": (summary["heart_rate_bpm"], heart_n),
-        "rmssd_ms": (summary["rmssd_ms"], heart_n)}, channels.heart, channels.consent_retrieved)
+    summary["usual"] = _personal_baseline(student_id, start, end, _usual_current(summary),
+                                          channels.heart, channels.consent_retrieved)
     return summary
 
 
@@ -4893,12 +4946,8 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
     # Calm is EEG stress the right way up; the trend is computed on calm itself.
     calm_weeks = [{**w, "calm": _calm_of(w.get("stress"))} for w in trend.get("weeks") or []]
     start, end = _report_period(days)
-    usual = _personal_baseline(student_id, start, end, {
-        "focus": (summary["focus"], summary["cognitive_samples"]),
-        "calm": (_calm_of(summary["stress"]), summary["cognitive_samples"]),
-        "heart_rate_bpm": (summary["heart_rate_bpm"], summary["heart_samples"]),
-        "rmssd_ms": (summary["rmssd_ms"], summary["heart_samples"])},
-        channels.heart, channels.consent_retrieved)
+    usual = _personal_baseline(student_id, start, end, _usual_current(summary),
+                               channels.heart, channels.consent_retrieved)
     arousal = usual["measures"]["body_arousal"]
     return {
         "days": days,
@@ -8474,6 +8523,12 @@ def my_children(request: Request, include_face: bool = True):
     # None is a failed read; {} found nothing. The fallback says which.
     summaries_retrieved = summaries is not None
     summaries = summaries or {}
+    usual_start, usual_end = _report_period(_PARENT_SUMMARY_DAYS)
+    usual = _personal_baselines_many(
+        {str(cid): _usual_current(summaries.get(str(cid)) or {}) for cid in child_ids},
+        {str(cid): ch.heart for cid, ch in channels_by_child.items()},
+        {str(cid): ch.consent_retrieved for cid, ch in channels_by_child.items()},
+        usual_start, usual_end)
     children = []
     kids = [lnk["child_id"] for lnk in (links.data or [])]
     all_stats = _stats_including_open_session_many(kids)
@@ -8512,6 +8567,8 @@ def my_children(request: Request, include_face: bool = True):
                                                 eeg_revoked_at=channels_by_child[cid].eeg_revoked_at,
                                                 erased=_erased_fields(channels_by_child[cid], since)),
         })
+        children[-1]["signal_summary"] = {**children[-1]["signal_summary"],
+                                          "usual": usual.get(str(cid))}
     return children
 
 

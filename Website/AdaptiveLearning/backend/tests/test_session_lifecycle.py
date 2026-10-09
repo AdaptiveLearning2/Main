@@ -115,8 +115,31 @@ def test_a_failed_claim_is_never_retried_without_the_reason(monkeypatch, failure
     fake = _Sessions(**{failure: True})
     monkeypatch.setattr(main, "supabase", fake)
 
-    assert main._claim_session_close("s1", "2026-10-08T10:00:00+00:00", "sweep") is False
+    # None, not False: the session is still open, which is not "another close won".
+    assert main._claim_session_close("s1", "2026-10-08T10:00:00+00:00", "sweep") is None
     assert [u[0] for u in fake.updates] == [{"ended_at": "2026-10-08T10:00:00+00:00", "close_reason": "sweep"}]
+
+
+def test_a_claim_another_close_won_is_false_not_a_failure(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _Sessions(wins=False))
+    assert main._claim_session_close("s1", "2026-10-08T10:00:00+00:00", "finish") is False
+
+
+def test_end_says_a_close_that_did_not_land_failed_rather_than_that_it_was_already_closed(_end, monkeypatch):
+    monkeypatch.setattr(main, "_close_session", lambda *_a, **_k: {"discarded": False, "failed": True})
+
+    with pytest.raises(main.HTTPException) as e:
+        main.end_session("s1", None, main.EndSessionRequest(reason="finish"))
+    assert e.value.status_code == 503
+
+
+def test_a_close_whose_claim_failed_does_nothing_else_and_says_so(monkeypatch):
+    monkeypatch.setattr(main, "_claim_session_close", lambda *_a: None)
+    monkeypatch.setattr(main, "_drop_prefetched",
+                        lambda *_a: pytest.fail("a close that did not land went on to drop the queue"))
+
+    assert main._close_session("u1", {"id": "s1"}, "2026-10-08T10:00:00+00:00") == \
+        {"discarded": False, "failed": True}
 
 
 def test_a_discarded_session_is_counted_by_its_reason(monkeypatch):

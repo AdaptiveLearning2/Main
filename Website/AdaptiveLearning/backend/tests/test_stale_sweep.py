@@ -476,3 +476,14 @@ def test_an_unreadable_activity_closes_nothing(monkeypatch):
     """Leaving a dead session to the sweep costs nothing; closing a live one splits it."""
     closed, stopped = _start(monkeypatch, [_session("s-old", started_min_ago=300)], [], boom=True)
     assert closed == [] and stopped == []
+
+
+def test_a_close_whose_claim_failed_is_counted_failed_not_closed(monkeypatch):
+    s = _session("s-old", started_min_ago=300)
+    monkeypatch.setattr(main, "supabase", _SweepDB([s], []))
+    monkeypatch.setattr(main.eeg_poller, "stop", lambda *a, **k: None)
+    monkeypatch.setattr(main, "_close_session", lambda *_a, **_k: {"discarded": False, "failed": True})
+
+    out = main._sweep_abandoned_sessions()
+
+    assert (out["closed"], out["failed"]) == (0, 1)

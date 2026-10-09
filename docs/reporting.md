@@ -251,6 +251,8 @@ the same helper — which is why the list is by name.
 - A null reason means the session closed before the column existed. It is never back-filled.
 - A discarded session's row is gone, reason and all, so it is counted as `session_discarded:<reason>` in the ops counters instead.
 - A claim that fails is never retried without the reason: a close is stamped with why, or not at all.
+- A failed claim is `None`, not `False` (another close won): `_close_session` returns `failed`, `/end` answers
+  503, and the sweep counts it failed. Reported as "already closed", an unmigrated database would end nothing.
 
 The exhaustiveness tests share `tests/conftest.py:close_sites()` — a closer is a function that calls
 `_close_session(` **or** writes an `"ended_at":` of its own. Both halves matter: the first catches a site drifting

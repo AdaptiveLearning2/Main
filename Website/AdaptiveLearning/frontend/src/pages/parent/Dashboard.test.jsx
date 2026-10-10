@@ -90,7 +90,7 @@ it('does not show a row of N/As for a reading it has no tile for', async () => {
 
   await screen.findByText('Ada')
   await screen.findByText(/no weekly EEG or facial-recognition signal data yet/i)
-  expect(screen.queryByText('Weekly Focus')).not.toBeInTheDocument()
+  expect(screen.queryByRole('group', { name: 'Focus' })).not.toBeInTheDocument()
 })
 
 it('says facial signals were not read when there is nothing else to show', async () => {
@@ -189,9 +189,8 @@ it('says why a weekly focus figure is missing, not a raw N/A', async () => {
   }]))
   renderDashboard()
 
-  expect(await screen.findByText('Weekly Focus')).toBeInTheDocument()
-  expect(statTile('Weekly Focus')).toHaveTextContent(/^Off since/)
-  expect(statTile('Weekly Stress')).toHaveTextContent(/^Off since/)
+  expect(await screen.findByRole('group', { name: 'Focus' })).toHaveTextContent(/Off since/)
+  expect(screen.getByRole('group', { name: 'Calm' })).toHaveTextContent(/Off since/)
   expect(screen.queryByText('N/A')).not.toBeInTheDocument()
 })
 
@@ -204,8 +203,31 @@ it('says the weekly focus was erased, with EEG still on, rather than no sensor',
   }]))
   renderDashboard()
 
-  expect(await screen.findByText('Weekly Focus')).toBeInTheDocument()
-  expect(statTile('Weekly Focus')).toHaveTextContent(/^Erased /)
+  expect(await screen.findByRole('group', { name: 'Focus' })).toHaveTextContent(/Erased /)
+})
+
+it('shows calm the right way up, with how it compares with the child\'s usual', async () => {
+  // withFace's stress 0.4 is calm 60%; "Stress" is never a label here.
+  apiFetch.mockImplementation(() => Promise.resolve([{
+    ...withFace[0],
+    signal_summary: { ...withFace[0].signal_summary, stress: 0.4,
+                      usual: { retrieved: true, measures: {
+                        calm: { status: 'compared', verdict: 'lower', low: 0.62, high: 0.75 } } } },
+  }]))
+  renderDashboard()
+
+  const calm = await screen.findByRole('group', { name: 'Calm' })
+  expect(calm).toHaveTextContent('60%')
+  expect(calm).toHaveTextContent('Lower than usual')
+  expect(calm).toHaveTextContent('Usual 62–75%')
+  expect(screen.getByText(/compared with Ada's usual/i)).toBeInTheDocument()
+  expect(screen.queryByText(/stress/i)).not.toBeInTheDocument()
+})
+
+it('claims no comparison for a summary without `usual`', async () => {
+  renderDashboard()
+  await screen.findByRole('group', { name: 'Calm' })
+  expect(screen.queryByText(/usual/i)).not.toBeInTheDocument()
 })
 
 it('asks for the children without a viewer-side flag', async () => {

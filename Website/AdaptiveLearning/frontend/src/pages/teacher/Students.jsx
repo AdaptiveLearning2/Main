@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { m, AnimatePresence } from 'framer-motion'
-import { Users, Search, ChevronDown, Flame, Smile, Target, TrendingUp, Zap, Heart, Activity } from 'lucide-react'
+import { Users, Search, ChevronDown, Leaf, Smile, Target, TrendingUp, Zap, Heart, Activity, Waves } from 'lucide-react'
 import HideSensorDataToggle from '../../components/common/HideSensorDataToggle'
 import LoadError from '../../components/ui/LoadError'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 import { apiFetch } from '../../lib/api'
-import { offLabel } from '../../lib/signalFormat'
+import { calmRatio, offLabel, pct } from '../../lib/signalFormat'
+import { AROUSAL_REASONS, MEASURES, usualRange, usualWords } from '../../lib/signalGlossary'
 import { stagger } from '../../lib/stagger'
 
 // Matches the weekly report's window.
@@ -29,6 +30,16 @@ const asPct = (value) => {
   if (value === null || value === undefined) return null
   const n = Number(value)
   return Number.isFinite(n) ? `${Math.round(n * 100)}%` : null
+}
+
+// "Higher than usual · Usual 55–65%", or null with no comparison to show.
+const usualLine = (key, entry) =>
+  [usualWords(entry), usualRange(key, entry)].filter(Boolean).join(' · ') || null
+
+// Body arousal's figure, or its state's own words; a summary without `usual` has neither.
+const arousalValue = (arousal) => {
+  if (!arousal) return null
+  return arousal.state === 'measured' ? pct(arousal.high_share) : (AROUSAL_REASONS[arousal.state] ?? null)
 }
 
 const isTextOrNull = (v) => v === null || typeof v === 'string'
@@ -79,7 +90,11 @@ async function getStudentStats(studentId)
     currentStreak: statsRetrieved ? (userStats?.current_streak ?? 0) : null,
     bestStreak: statsRetrieved ? (userStats?.best_streak ?? 0) : null,
     focusScore: asPct(signals.focus),
-    stressLevel: asPct(signals.stress),
+    // EEG stress is `1 - calm`: shown as calm, the right way up.
+    calmLevel: asPct(calmRatio(signals.stress)),
+    // `usual` from `/signal-summary`; absent on an older payload, which then compares nothing.
+    usual: signals.usual?.measures ?? {},
+    bodyArousal: arousalValue(signals.usual?.body_arousal),
     dominantEmotion: signals.dominant_emotion ?? null,
     signalCount: signals.cognitive_samples ?? 0,
     faceSignalCount: signals.face_samples ?? 0,
@@ -320,16 +335,18 @@ export default function Students() {
                               {!hideSensors && (
                                 <>
                                   <MiniStat
-                                    icon={<Flame size={16} />}
-                                    label="Stress Level"
-                                    value={stats.eegFailed ? '—' : (stats.stressLevel ?? stats.eegOff)}
+                                    icon={<Leaf size={16} />}
+                                    label={MEASURES.calm.name}
+                                    value={stats.eegFailed ? '—' : (stats.calmLevel ?? stats.eegOff)}
+                                    verdict={stats.eegFailed ? null : usualLine('calm', stats.usual.calm)}
                                     sub={eegSub(stats.signalCount, stats.eegFailed)}
-                                    color="rose"
+                                    color="teal"
                                   />
                                   <MiniStat
                                     icon={<Target size={16} />}
-                                    label="Focus Score"
+                                    label={MEASURES.focus.name}
                                     value={stats.eegFailed ? '—' : (stats.focusScore ?? stats.eegOff)}
+                                    verdict={stats.eegFailed ? null : usualLine('focus', stats.usual.focus)}
                                     sub={eegSub(stats.signalCount, stats.eegFailed)}
                                     color="emerald"
                                   />
@@ -368,23 +385,40 @@ export default function Students() {
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
                               <MiniStat
                                 icon={<Heart size={16} />}
-                                label="Avg Heart Rate"
+                                label={MEASURES.heart_rate_bpm.name}
                                 value={stats.heartFailed ? '—' : stats.heartIncluded && stats.heartRate !== null
                                   ? `${stats.heartRate} bpm` : stats.heartOff}
+                                verdict={stats.heartFailed || !stats.heartIncluded ? null
+                                  : usualLine('heart_rate_bpm', stats.usual.heart_rate_bpm)}
                                 sub={stats.heartFailed ? SIGNALS_UNAVAILABLE
                                   : stats.heartIncluded ? `${stats.heartSamples} readings`
                                   : stats.consentRetrieved ? 'not recorded' : CONSENT_UNREAD}
                                 color="rose"
                               />
                               <MiniStat
-                                icon={<Activity size={16} />}
-                                label="Avg HRV"
+                                icon={<Waves size={16} />}
+                                label={MEASURES.rmssd_ms.name}
                                 value={stats.heartFailed ? '—' : stats.heartIncluded && stats.rmssd !== null
                                   ? `${stats.rmssd} ms` : stats.heartOff}
+                                verdict={stats.heartFailed || !stats.heartIncluded ? null
+                                  : usualLine('rmssd_ms', stats.usual.rmssd_ms)}
                                 sub={stats.heartFailed ? SIGNALS_UNAVAILABLE
-                                  : stats.heartIncluded ? 'RMSSD, when measurable'
+                                  : stats.heartIncluded ? 'Higher usually means more relaxed'
                                   : stats.consentRetrieved ? 'not recorded' : CONSENT_UNREAD}
                                 color="amber"
+                              />
+                              {/* Separate from calm, and never called stress: heart arousal is its own measure. */}
+                              <MiniStat
+                                icon={<Activity size={16} />}
+                                label={MEASURES.body_arousal.name}
+                                value={stats.heartFailed ? '—' : stats.heartIncluded
+                                  ? (stats.bodyArousal ?? '—') : stats.heartOff}
+                                verdict={stats.heartFailed || !stats.heartIncluded ? null
+                                  : usualLine('body_arousal', stats.usual.body_arousal)}
+                                sub={stats.heartFailed ? SIGNALS_UNAVAILABLE
+                                  : stats.heartIncluded ? 'Share of readings well above the lesson start'
+                                  : stats.consentRetrieved ? 'not recorded' : CONSENT_UNREAD}
+                                color="rose"
                               />
                             </div>
                             )}
@@ -441,22 +475,25 @@ export default function Students() {
   )
 }
 
-function MiniStat({ icon, label, value, sub, color }) {
+function MiniStat({ icon, label, value, verdict = null, sub, color }) {
   const colorMap = {
     indigo: 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300',
     rose:   'bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300',
     emerald:'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300',
+    teal:   'bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300',
     amber:  'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300',
     sky:    'bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300',
     violet: 'bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300',
   }
   return (
-    <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 p-3">
+    <div role="group" aria-label={label}
+         className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 p-3">
       <div className={`w-7 h-7 rounded-lg flex items-center justify-center mb-2 ${colorMap[color]}`}>
         {icon}
       </div>
       <p className="text-lg font-black text-gray-900 dark:text-white leading-none">{value}</p>
       <p className="text-[11px] text-gray-600 mt-1 dark:text-gray-400">{label}</p>
+      {verdict && <p className="text-[11px] font-bold text-gray-900 mt-0.5 dark:text-white">{verdict}</p>}
       {sub && <p className="text-[10px] text-gray-600 mt-0.5 dark:text-gray-400">{sub}</p>}
     </div>
   )

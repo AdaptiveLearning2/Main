@@ -1,8 +1,8 @@
 import { render, screen, cleanup, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { LiveSignalSummary, WeeklySignalReport, SignalTrend, StrategyPanel } from './SignalPanel'
+import { LiveSignalSummary, WeeklySignalReport, SignalTrend, StrategyPanel, ChartSummaryPanel } from './SignalPanel'
 import { pct } from '../../lib/signalFormat'
-import { buildWeeklyReport } from '../../test/fixtures/signalSummary'
+import { buildWeeklyReport, buildBodyArousal, buildUsualMeasure } from '../../test/fixtures/signalSummary'
 
 // Signals cross the wire as 0..1 ratios; unscaled, focus 0.72 prints "1%".
 
@@ -24,23 +24,27 @@ const report = {
 }
 
 // Scopes to the label's wrapper to pin label -> value; excludes the sr-only tables, which share names.
-const VISIBLE = { ignore: 'script, style, .sr-only, .sr-only *' }
-const metric = (label) => within(screen.getByText(label, VISIBLE).parentElement)
+const VISIBLE = { ignore: 'script, style, .sr-only, .sr-only *, [hidden], [hidden] *' }
+// A tile is a labelled group; a highlight box is its label's parent. Either pins label -> value.
+const metric = (label) => within(
+  screen.queryByRole('group', { name: label }) ?? screen.getByText(label, VISIBLE).parentElement)
 
 describe('WeeklySignalReport', () => {
   it('renders each average as a percentage in its own tile', () => {
     render(<WeeklySignalReport report={report} />)
-    // With the scaling bug these read 1%, 0%, 1%.
-    expect(metric('Avg Focus').getByText('72%')).toBeInTheDocument()
-    expect(metric('Avg Stress').getByText('31%')).toBeInTheDocument()
+    // With the scaling bug these read 1%, 0%, 1%. Calm is stress the right way up: 0.31 -> 69%.
+    expect(metric('Focus').getByText('72%')).toBeInTheDocument()
+    expect(metric('Calm').getByText('69%')).toBeInTheDocument()
+    expect(screen.queryByText(/stress/i, VISIBLE)).not.toBeInTheDocument()
     // No Engagement tile: it is the focus index under another name.
     expect(screen.queryByText('Engagement', VISIBLE)).not.toBeInTheDocument()
   })
 
   it('renders each highlight as a percentage in its own tile', () => {
     render(<WeeklySignalReport report={report} />)
-    expect(metric('Highest Stress').getByText('91%')).toBeInTheDocument()
-    expect(metric('Lowest Focus').getByText('12%')).toBeInTheDocument()
+    // The highest stress reading is the lowest calm one: 0.91 -> 9%.
+    expect(metric('Lowest calm reading').getByText('9%')).toBeInTheDocument()
+    expect(metric('Lowest focus reading').getByText('12%')).toBeInTheDocument()
     expect(metric('Dominant Emotion').getByText('neutral')).toBeInTheDocument()
   })
 
@@ -72,8 +76,8 @@ describe('WeeklySignalReport', () => {
     // Rows arrived (120) and none gave a focus: calibrating, not missing.
     const partial = { ...report, averages: { ...report.averages, focus: null } }
     render(<WeeklySignalReport report={partial} />)
-    expect(metric('Avg Focus').getByText('Calibrating')).toBeInTheDocument()
-    expect(metric('Avg Stress').getByText('31%')).toBeInTheDocument()
+    expect(metric('Focus').getByText('Calibrating')).toBeInTheDocument()
+    expect(metric('Calm').getByText('69%')).toBeInTheDocument()
     expect(screen.queryByText('N/A', VISIBLE)).not.toBeInTheDocument()
   })
 
@@ -86,7 +90,7 @@ describe('WeeklySignalReport', () => {
       sample_counts: { ...report.sample_counts, cognitive: 0 },
     }
     render(<WeeklySignalReport report={withdrawn} />)
-    for (const label of ['Avg Focus', 'Avg Stress', 'Highest Stress', 'Lowest Focus']) {
+    for (const label of ['Focus', 'Calm', 'Lowest calm reading', 'Lowest focus reading']) {
       expect(metric(label).getByText(/^Off since/)).toBeInTheDocument()
     }
   })
@@ -101,8 +105,8 @@ describe('WeeklySignalReport', () => {
       sample_counts: { ...report.sample_counts, cognitive: 0 },
     }
     render(<WeeklySignalReport report={failed} />)
-    expect(metric('Avg Focus').getByText('Unavailable')).toBeInTheDocument()
-    expect(metric('Lowest Focus').getByText('Unavailable')).toBeInTheDocument()
+    expect(metric('Focus').getByText('Unavailable')).toBeInTheDocument()
+    expect(metric('Lowest focus reading').getByText('Unavailable')).toBeInTheDocument()
     expect(screen.queryByText('No sensor', VISIBLE)).not.toBeInTheDocument()
   })
 
@@ -118,8 +122,8 @@ describe('WeeklySignalReport', () => {
       sample_counts: { ...report.sample_counts, cognitive: 0 },
     }
     render(<WeeklySignalReport report={failed} />)
-    expect(metric('Avg Focus').getByText(/^Off since/)).toBeInTheDocument()
-    expect(metric('Lowest Focus').getByText(/^Off since/)).toBeInTheDocument()
+    expect(metric('Focus').getByText(/^Off since/)).toBeInTheDocument()
+    expect(metric('Lowest focus reading').getByText(/^Off since/)).toBeInTheDocument()
     expect(screen.queryByText('Unavailable', VISIBLE)).not.toBeInTheDocument()
   })
 
@@ -160,10 +164,12 @@ describe('WeeklySignalReport', () => {
       ...extra,
     })
 
+    // The note sits under the Sessions tile: the signal figures are whole-week aggregates.
+    const sessionsBox = () => screen.getByRole('group', { name: 'Sessions' }).parentElement
+
     it('says the Sessions total is still exact when the count came back', () => {
       render(<WeeklySignalReport report={cut(137, 100)} />)
-      expect(screen.getByText(/Sessions total is still the full count/i)).toBeInTheDocument()
-      expect(screen.getByText(/signal figures are not affected/i)).toBeInTheDocument()
+      expect(within(sessionsBox()).getByText(/this total is still the full count/i)).toBeInTheDocument()
       expect(screen.queryByText(/counts only the sessions read/i)).not.toBeInTheDocument()
       expect(screen.queryByText(OLD_NOTE)).not.toBeInTheDocument()
     })
@@ -171,8 +177,7 @@ describe('WeeklySignalReport', () => {
     it('says the Sessions total counts only the sessions read when no count came back', () => {
       // Without the count the backend reports the rows it read, so the two are equal.
       render(<WeeklySignalReport report={cut(100, 100)} />)
-      expect(screen.getByText(/Sessions total counts only the sessions read/i)).toBeInTheDocument()
-      expect(screen.getByText(/signal figures are not affected/i)).toBeInTheDocument()
+      expect(within(sessionsBox()).getByText(/this total counts only the sessions read/i)).toBeInTheDocument()
       expect(screen.queryByText(/still the full count/i)).not.toBeInTheDocument()
       expect(screen.queryByText(OLD_NOTE)).not.toBeInTheDocument()
     })
@@ -196,17 +201,18 @@ describe('WeeklySignalReport', () => {
 
   it('renders without data', () => {
     render(<WeeklySignalReport report={null} />)
-    expect(screen.getByText(/no weekly signal data available yet/i)).toBeInTheDocument()
+    expect(screen.getByText(/no readings this week yet/i)).toBeInTheDocument()
   })
 
-  it('names the reads that failed rather than showing their defaults as figures', () => {
+  it('names a failed read in the tiles it affects, not elsewhere', () => {
     // A swallowed read leaves N/A and a dash, which alone read as "nothing recorded".
     const broken = {
       ...report,
       retrieved: { cognitive: false, face: true, sessions: true },
     }
     render(<WeeklySignalReport report={broken} />)
-    expect(screen.getByText(/EEG signals.*could not be loaded/i)).toBeInTheDocument()
+    expect(metric('Focus').getByText(/headband readings could not be loaded/i)).toBeInTheDocument()
+    expect(metric('Calm').getByText(/headband readings could not be loaded/i)).toBeInTheDocument()
     expect(screen.queryByText(/session counts/i)).not.toBeInTheDocument()
   })
 
@@ -241,8 +247,8 @@ describe('WeeklySignalReport', () => {
       retrieved: { cognitive: false, face: false, sessions: false },
     }
     render(<WeeklySignalReport report={broken} />)
-    expect(screen.getByText(/weekly signal data could not be loaded/i)).toBeInTheDocument()
-    expect(screen.queryByText(/no weekly signal data available yet/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/this week's readings could not be loaded/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no readings this week yet/i)).not.toBeInTheDocument()
   })
 
   it('stays quiet for a report whose reads all succeeded', () => {
@@ -256,7 +262,7 @@ describe('LiveSignalSummary', () => {
   it('scales the latest reading to percentages', () => {
     render(<LiveSignalSummary report={report} />)
     expect(metric('Focus').getByText('72%')).toBeInTheDocument()
-    expect(metric('Stress').getByText('31%')).toBeInTheDocument()
+    expect(metric('Calm').getByText('69%')).toBeInTheDocument()
     expect(screen.queryByText('Identity Confidence')).not.toBeInTheDocument()
   })
 
@@ -274,7 +280,7 @@ describe('LiveSignalSummary', () => {
       sample_counts: { cognitive: 155 },
     }} />)
     expect(metric('Focus').getByText('Calibrating')).toBeInTheDocument()
-    expect(metric('Stress').getByText('Calibrating')).toBeInTheDocument()
+    expect(metric('Calm').getByText('Calibrating')).toBeInTheDocument()
     expect(screen.queryByText('Engagement', VISIBLE)).not.toBeInTheDocument()
   })
 
@@ -284,7 +290,7 @@ describe('LiveSignalSummary', () => {
       eeg_revoked_at: '2026-08-05T09:00:00Z',
       sample_counts: { cognitive: 0 },
     }} />)
-    for (const tile of ['Focus', 'Stress']) {
+    for (const tile of ['Focus', 'Calm']) {
       expect(metric(tile).getByText((t) => /^Off since /.test(t) && t.includes('Aug')))
         .toBeInTheDocument()
     }
@@ -335,8 +341,8 @@ describe('facial reporting switched off', () => {
 
   it('leaves the EEG metrics untouched', () => {
     render(<WeeklySignalReport report={faceOff} />)
-    expect(metric('Avg Focus').getByText('72%')).toBeInTheDocument()
-    expect(metric('Avg Stress').getByText('31%')).toBeInTheDocument()
+    expect(metric('Focus').getByText('72%')).toBeInTheDocument()
+    expect(metric('Calm').getByText('69%')).toBeInTheDocument()
   })
 
   it('still reports face data when the flag is absent', () => {
@@ -473,27 +479,27 @@ test('heart figures render in absolute units, not as percentages', () => {
   render(<WeeklySignalReport report={heartReport} />)
 
   // Scoped to the tile: the summary sentence legitimately says "72%".
-  const bpmTile = screen.getByText(/Avg Heart Rate/i).closest('div')
-  expect(within(bpmTile).getByText('72 bpm')).toBeInTheDocument()
-  expect(within(bpmTile).queryByText(/%/)).not.toBeInTheDocument()
-
-  const rmssdTile = screen.getByText(/Avg RMSSD/i).closest('div')
-  expect(within(rmssdTile).getByText('42 ms')).toBeInTheDocument()
+  expect(metric('Heart rate').getByText('72 bpm')).toBeInTheDocument()
+  expect(metric('Heart rate').queryByText(/\d%/, VISIBLE)).not.toBeInTheDocument()
+  expect(metric('Heart-rate variability').getByText('42 ms')).toBeInTheDocument()
   expect(screen.queryByText(/7240/)).not.toBeInTheDocument()
+  // One name for one measure: never "RMSSD" or "HRV" on screen.
+  expect(screen.queryByText(/RMSSD|HRV/, VISIBLE)).not.toBeInTheDocument()
 })
 
-test('the heart row is absent entirely when the channel was not read', () => {
+test('the heart tiles are absent entirely when the channel was not read', () => {
   // Rather than a row of N/A, indistinguishable from a headband recording nothing.
   render(<WeeklySignalReport report={{ ...heartReport, heart_included: false }} />)
 
-  expect(screen.queryByText(/Avg Heart Rate/i)).not.toBeInTheDocument()
+  expect(screen.queryByRole('group', { name: 'Heart rate' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('group', { name: 'Body arousal (heart rate)' })).not.toBeInTheDocument()
 })
 
 test('a payload from before the split does not claim the heart channel is off', () => {
   // No heart_included at all: nothing true to say about the channel.
   render(<WeeklySignalReport report={report} />)
 
-  expect(screen.queryByText(/Avg Heart Rate/i)).not.toBeInTheDocument()
+  expect(screen.queryByRole('group', { name: 'Heart rate' })).not.toBeInTheDocument()
 })
 
 test('the sensor behind the readings is named', () => {
@@ -508,9 +514,10 @@ test('samples recorded but all rejected reads as unusable, not absent', () => {
     highlights: { ...heartReport.highlights, heart_rate_bpm: null, rmssd_ms: null },
   }} />)
 
-  expect(screen.getByText(/none met the quality threshold/i)).toBeInTheDocument()
-  expect(metric('Avg Heart Rate').getByText('Calibrating')).toBeInTheDocument()
-  expect(metric('Avg RMSSD').getByText('Calibrating')).toBeInTheDocument()
+  // The note sits in the tile it qualifies.
+  expect(metric('Heart rate').getByText(/none met the quality threshold/i)).toBeInTheDocument()
+  expect(metric('Heart rate').getByText('Calibrating')).toBeInTheDocument()
+  expect(metric('Heart-rate variability').getByText('Calibrating')).toBeInTheDocument()
 })
 
 test('a failed consent read is not rendered as a refusal', () => {
@@ -521,13 +528,17 @@ test('a failed consent read is not rendered as a refusal', () => {
   expect(screen.getByText(/Consent settings could not be read/i)).toBeInTheDocument()
 })
 
-test('a failed heart read is named in the failure sentence', () => {
+test('a failed heart read is named in the heart tile, and is not "No sensor"', () => {
   render(<WeeklySignalReport report={{
     ...heartReport,
+    highlights: { ...heartReport.highlights, heart_rate_bpm: null, rmssd_ms: null },
+    sample_counts: { ...heartReport.sample_counts, heart: 0 },
     retrieved: { cognitive: true, face: true, heart: false, sessions: true },
   }} />)
 
-  expect(screen.getByText(/heart-rate signals.*could not be loaded/i)).toBeInTheDocument()
+  expect(metric('Heart rate').getByText(/heart readings could not be loaded/i)).toBeInTheDocument()
+  expect(metric('Heart rate').getByText('Unavailable')).toBeInTheDocument()
+  expect(metric('Heart rate').queryByText('No sensor')).not.toBeInTheDocument()
 })
 
 test('the emotion mix is rendered as a distribution, not just its argmax', () => {
@@ -551,9 +562,8 @@ test('the live snapshot shows heart in bpm when the channel was read', () => {
               heart: { heart_rate_bpm: 68.2, source: 'muse_optics' } },
   }} />)
 
-  const tile = screen.getByText(/Heart Rate/i).closest('div')
-  expect(within(tile).getByText('68 bpm')).toBeInTheDocument()
-  expect(within(tile).queryByText(/%/)).not.toBeInTheDocument()
+  expect(metric('Heart rate').getByText('68 bpm')).toBeInTheDocument()
+  expect(metric('Heart rate').queryByText(/\d%/, VISIBLE)).not.toBeInTheDocument()
 })
 
 test('the live snapshot omits heart rather than showing an empty tile', () => {
@@ -563,7 +573,7 @@ test('the live snapshot omits heart rather than showing an empty tile', () => {
     latest: { cognitive: { focus: 0.7 }, face: { attention: 0.8 } },
   }} />)
 
-  expect(screen.queryByText(/Heart Rate/i)).not.toBeInTheDocument()
+  expect(screen.queryByRole('group', { name: 'Heart rate' })).not.toBeInTheDocument()
 })
 
 
@@ -615,44 +625,53 @@ describe('per-channel off states', () => {
   it('omits the heart row entirely for a payload that predates the channel', () => {
     const { heart_included, ...preSplit } = base
     render(<WeeklySignalReport report={preSplit} />)
-    expect(screen.queryByText(/Avg Heart Rate/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Heart rate' })).not.toBeInTheDocument()
     expect(screen.queryByText(/^Heart$/)).not.toBeInTheDocument()
   })
 })
 
 // ── the charts, for anyone who cannot see them ──────────────────────────────
 
+// One small chart per unit: percent (focus and calm), heart rate, variability, body arousal.
+const DAILY = /focus and calm day by day/i
+
 describe('chart accessibility', () => {
-  it('gives the trend a name that says what it shows', () => {
+  it('gives each chart a name that says what it shows', () => {
     render(<WeeklySignalReport report={report} />)
-    const chart = screen.getByRole('img', { name: /daily signal trend/i })
+    const chart = screen.getByRole('img', { name: DAILY })
     expect(chart).toHaveAccessibleName(/focus/i)
   })
 
   it('states each series as a range rather than only naming it', () => {
     render(<WeeklySignalReport report={report} />)
-    expect(screen.getByRole('img', { name: /daily signal trend/i }))
+    expect(screen.getByRole('img', { name: DAILY }))
       .toHaveAccessibleName(/Focus 70% to 74%/i)
   })
 
-  it('leaves a series nobody recorded out of the description', () => {
+  it('draws no heart chart at all when heart was not read', () => {
     render(<WeeklySignalReport report={report} />)
-    const name = screen.getByRole('img', { name: /daily signal trend/i })
-      .getAttribute('aria-label')
-    expect(name).not.toMatch(/heart rate/i)
+    expect(screen.queryByRole('img', { name: /heart rate/i })).not.toBeInTheDocument()
+  })
+
+  it('never puts percent and bpm on one chart', () => {
+    // One axis per chart: a dual axis makes two lines' crossings look meaningful.
+    render(<WeeklySignalReport report={{ ...report, heart_included: true,
+      daily: report.daily.map(d => ({ ...d, heart_rate_bpm: 70 })) }} />)
+    expect(screen.getByRole('img', { name: DAILY })).not.toHaveAccessibleName(/bpm/)
+    expect(screen.getByRole('img', { name: /^heart rate day by day/i })).not.toHaveAccessibleName(/%/)
   })
 
   it('keeps the data table out of the role="img" subtree', () => {
     // ARIA prunes roles inside an `img` but jsdom does not, so assert structure.
     render(<WeeklySignalReport report={report} />)
-    const chart = screen.getByRole('img', { name: /daily signal trend/i })
-    const table = screen.getByRole('table', { name: /daily signal trend/i })
+    const chart = screen.getByRole('img', { name: DAILY })
+    const table = screen.getByRole('table', { name: DAILY })
     expect(chart).not.toContainElement(table)
   })
 
   it('carries the days themselves, not just the summary', () => {
     render(<WeeklySignalReport report={report} />)
-    const table = screen.getByRole('table', { name: /daily signal trend/i })
+    const table = screen.getByRole('table', { name: DAILY })
     expect(within(table).getByRole('rowheader', { name: '07-20' })).toBeInTheDocument()
     expect(within(table).getByRole('columnheader', { name: 'Focus' })).toBeInTheDocument()
   })
@@ -667,7 +686,7 @@ describe('chart accessibility', () => {
         { ...report.daily[1], heart_rate_bpm: null },
       ],
     }} />)
-    const table = screen.getByRole('table', { name: /daily signal trend/i })
+    const table = screen.getByRole('table', { name: /^heart rate day by day/i })
     expect(within(table).getAllByText('not recorded').length).toBeGreaterThan(0)
   })
 
@@ -703,21 +722,23 @@ describe('the trend description matches the trend', () => {
   }
 
   const trendName = () =>
-    screen.getByRole('img', { name: /daily signal trend/i }).getAttribute('aria-label')
+    screen.getByRole('img', { name: DAILY }).getAttribute('aria-label')
 
   it('reports percentages as percentages, not as the 0..1 they arrive as', () => {
-    // `chartData` scales only focus and stress; a column without `scale` announces 0..1.
+    // Rows are scaled on the way in; a column without it announces 0..1.
     render(<WeeklySignalReport report={RATIOS} />)
     // Positive matches: an unscaled range can collapse to "1%" and dodge a negative one.
     expect(trendName()).toMatch(/Focus 70% to 74%/)
-    expect(trendName()).toMatch(/Stress 30% to 32%/)
+    // Calm is stress the right way up: 0.3 and 0.32 are 70% and 68%.
+    expect(trendName()).toMatch(/Calm 68% to 70%/)
+    expect(trendName()).not.toMatch(/stress/i)
   })
 
   it('does not describe a series the chart does not draw', () => {
     // `engagement` has no `<Line>` on this chart.
     render(<WeeklySignalReport report={RATIOS} />)
     expect(trendName()).not.toMatch(/engagement/i)
-    expect(screen.getByRole('table', { name: /daily signal trend/i }))
+    expect(screen.getByRole('table', { name: DAILY }))
       .not.toHaveTextContent(/Engagement/i)
   })
 
@@ -725,6 +746,7 @@ describe('the trend description matches the trend', () => {
     // The `<Line>` is conditional on consent, so the description has to be.
     render(<WeeklySignalReport report={{ ...RATIOS, heart_included: false }} />)
     expect(trendName()).not.toMatch(/heart rate/i)
+    expect(screen.queryByRole('img', { name: /heart rate/i })).not.toBeInTheDocument()
   })
 })
 
@@ -744,27 +766,28 @@ const trend = {
 describe('SignalTrend', () => {
   afterEach(cleanup)
 
-  it('scales the ratio series and leaves heart rate in bpm', () => {
+  const WEEKLY = /focus and calm week by week/i
+
+  it('scales the ratio series and leaves heart rate in bpm, each on its own chart', () => {
     // The sr-only table is the only place the units are stated.
     render(<SignalTrend trend={trend} />)
 
-    const table = screen.getByRole('table')
-    expect(within(table).getByText('62%')).toBeInTheDocument()
-    expect(within(table).getByText('74 bpm')).toBeInTheDocument()
+    expect(within(screen.getByRole('table', { name: WEEKLY })).getByText('62%')).toBeInTheDocument()
+    expect(within(screen.getByRole('table', { name: /^heart rate week by week/i }))
+      .getByText('74 bpm')).toBeInTheDocument()
   })
 
   it('counts the weeks that recorded something, not the weeks in range', () => {
-    // Coverage goes in the sentence: a column must name a series the chart draws.
+    // Coverage goes in the caption: a column must name a series the chart draws.
     render(<SignalTrend trend={trend} />)
 
-    expect(screen.getByRole('img', { name: /across 3 weeks, with data recorded on 2 of them/i }))
-      .toBeInTheDocument()
+    expect(screen.getByText(/2 of 3 have readings/i)).toBeInTheDocument()
   })
 
   it('leaves a week with nothing recorded as a gap', () => {
     render(<SignalTrend trend={trend} />)
 
-    const row = screen.getByRole('row', { name: /06-01/ })
+    const row = within(screen.getByRole('table', { name: WEEKLY })).getByRole('row', { name: /06-01/ })
     expect(within(row).getAllByText(/not recorded/i).length).toBeGreaterThan(0)
   })
 
@@ -772,22 +795,40 @@ describe('SignalTrend', () => {
     render(<SignalTrend trend={{ weeks: [], retrieved: false }} />)
 
     expect(screen.getByText(/could not be loaded/i)).toBeInTheDocument()
-    expect(screen.queryByText(/no signal history yet/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/no readings yet/i)).not.toBeInTheDocument()
   })
 
   it('says a genuinely empty history is empty', () => {
     render(<SignalTrend trend={{ weeks: [], retrieved: true }} />)
 
-    expect(screen.getByText(/no signal history yet/i)).toBeInTheDocument()
+    expect(screen.getByText(/no readings yet/i)).toBeInTheDocument()
   })
 
-  it('omits the heart series entirely when the channel is off', () => {
+  it('omits every heart series when the channel is off', () => {
     // Asserted on column and toggle: bare text matches both.
     render(<SignalTrend trend={{ ...trend, heart_included: false }} />)
 
-    expect(screen.queryByRole('columnheader', { name: /heart rate/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('switch', { name: /heart rate/i })).not.toBeInTheDocument()
+    for (const name of [/^heart rate$/i, /variability/i, /body arousal/i]) {
+      expect(screen.queryByRole('columnheader', { name })).not.toBeInTheDocument()
+      expect(screen.queryByRole('switch', { name })).not.toBeInTheDocument()
+    }
     expect(screen.getByRole('columnheader', { name: /focus/i })).toBeInTheDocument()
+  })
+
+  it('plots calm the right way up, from the stress the payload carries', () => {
+    render(<SignalTrend trend={trend} />)
+    // Week 1's stress 0.30 is calm 70%.
+    const row = within(screen.getByRole('table', { name: WEEKLY })).getByRole('row', { name: /05-25/ })
+    expect(within(row).getByText('70%')).toBeInTheDocument()
+  })
+
+  it('plots body arousal as a percentage, and leaves a week without it as a gap', () => {
+    render(<SignalTrend trend={{ ...trend, weeks: trend.weeks.map((w, i) => (
+      { ...w, body_arousal: i === 0 ? 0.25 : null })) }} />)
+    const table = screen.getByRole('table', { name: /^body arousal week by week/i })
+    expect(within(within(table).getByRole('row', { name: /05-25/ })).getByText('25%')).toBeInTheDocument()
+    expect(within(within(table).getByRole('row', { name: /06-08/ })).getByText(/not recorded/i))
+      .toBeInTheDocument()
   })
 })
 
@@ -820,23 +861,23 @@ describe('choosing which measurements a chart draws', () => {
 
   it('drops both the line and its column when a measurement is switched off', async () => {
     render(<SignalTrend trend={trend} />)
-    expect(screen.getByRole('columnheader', { name: /heart rate/i })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /^heart rate$/i })).toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole('switch', { name: /heart rate/i }))
+    await userEvent.click(screen.getByRole('switch', { name: /^heart rate$/i }))
 
-    expect(screen.queryByRole('columnheader', { name: /heart rate/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: /^heart rate$/i })).not.toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: /focus/i })).toBeInTheDocument()
-    expect(screen.getByRole('columnheader', { name: /stress/i })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /^calm$/i })).toBeInTheDocument()
   })
 
   it('says so on the toggle, not only by colour', async () => {
     render(<SignalTrend trend={trend} />)
-    const heart = screen.getByRole('switch', { name: /heart rate/i })
+    const heart = screen.getByRole('switch', { name: /^heart rate$/i })
     expect(heart).toHaveAttribute('aria-checked', 'true')
 
     await userEvent.click(heart)
 
-    expect(screen.getByRole('switch', { name: /heart rate/i }))
+    expect(screen.getByRole('switch', { name: /^heart rate$/i }))
       .toHaveAttribute('aria-checked', 'false')
   })
 
@@ -844,32 +885,32 @@ describe('choosing which measurements a chart draws', () => {
     render(<SignalTrend trend={trend} />)
 
     await userEvent.click(screen.getByRole('switch', { name: /focus/i }))
-    await userEvent.click(screen.getByRole('switch', { name: /heart rate/i }))
+    await userEvent.click(screen.getByRole('switch', { name: /^heart rate$/i }))
 
     expect(screen.queryByRole('columnheader', { name: /focus/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('columnheader', { name: /heart rate/i })).not.toBeInTheDocument()
-    expect(screen.getByRole('columnheader', { name: /stress/i })).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: /^heart rate$/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /^calm$/i })).toBeInTheDocument()
   })
 
   it('puts a measurement back', async () => {
     render(<SignalTrend trend={trend} />)
 
-    await userEvent.click(screen.getByRole('switch', { name: /stress/i }))
-    expect(screen.queryByRole('columnheader', { name: /stress/i })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('switch', { name: /^calm$/i }))
+    expect(screen.queryByRole('columnheader', { name: /^calm$/i })).not.toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole('switch', { name: /stress/i }))
-    expect(screen.getByRole('columnheader', { name: /stress/i })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('switch', { name: /^calm$/i }))
+    expect(screen.getByRole('columnheader', { name: /^calm$/i })).toBeInTheDocument()
   })
 
   it('explains an empty chart and offers a way back, rather than refusing the last click', async () => {
     // A claim about the view, distinct from the claims about the data.
     render(<SignalTrend trend={trend} />)
-    for (const name of [/focus/i, /stress/i, /heart rate/i]) {
+    for (const name of [/focus/i, /^calm$/i, /^heart rate$/i, /variability/i, /body arousal/i]) {
       await userEvent.click(screen.getByRole('switch', { name }))
     }
 
     expect(screen.getByText(/no measurements selected/i)).toBeInTheDocument()
-    expect(screen.queryByText(/no signal history yet/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/no readings yet/i)).not.toBeInTheDocument()
     // The chart is not rendered at all, so no empty table.
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
 
@@ -880,43 +921,43 @@ describe('choosing which measurements a chart draws', () => {
   it('draws a measurement that only becomes available later', () => {
     // The hook stores what is *hidden*, so a series that arrives later is shown.
     const { rerender } = render(<SignalTrend trend={{ ...trend, heart_included: false }} />)
-    expect(screen.queryByRole('columnheader', { name: /heart rate/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: /^heart rate$/i })).not.toBeInTheDocument()
 
     rerender(<SignalTrend trend={trend} />)
 
-    expect(screen.getByRole('columnheader', { name: /heart rate/i })).toBeInTheDocument()
-    expect(screen.getByRole('switch', { name: /heart rate/i })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('columnheader', { name: /^heart rate$/i })).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: /^heart rate$/i })).toHaveAttribute('aria-checked', 'true')
   })
 
   it('keeps a hidden measurement hidden across a re-render', async () => {
     const { rerender } = render(<SignalTrend trend={trend} />)
-    await userEvent.click(screen.getByRole('switch', { name: /stress/i }))
+    await userEvent.click(screen.getByRole('switch', { name: /^calm$/i }))
 
     rerender(<SignalTrend trend={{ ...trend, retrieved: true }} />)
 
-    expect(screen.queryByRole('columnheader', { name: /stress/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: /^calm$/i })).not.toBeInTheDocument()
   })
 
   it('paints each swatch with the colour its own line is stroked with', () => {
     // The swatch is aria-hidden and jsdom has no stylesheet, so only the inline style is checkable.
     render(<SignalTrend trend={trend} />)
 
-    for (const name of [/^focus$/i, /stress/i, /heart rate/i]) {
+    for (const name of [/^focus$/i, /^calm$/i, /^heart rate$/i]) {
       const swatch = screen.getByRole('switch', { name }).querySelector('[aria-hidden="true"]')
       expect(swatch.getAttribute('style')).toMatch(/#[0-9a-f]{6}|rgb\(/i)
       expect(swatch.getAttribute('style')).not.toMatch(/undefined/)
     }
     // The heart line's palette value, shared with SessionReview.
-    expect(screen.getByRole('switch', { name: /heart rate/i })
+    expect(screen.getByRole('switch', { name: /^heart rate$/i })
       .querySelector('[aria-hidden="true"]')).toHaveStyle({ backgroundColor: '#a855f7' })
   })
 
   it('keeps the swatch colour when the measurement is switched off', async () => {
     // Hollow rather than gone: the chip still names its line.
     render(<SignalTrend trend={trend} />)
-    await userEvent.click(screen.getByRole('switch', { name: /heart rate/i }))
+    await userEvent.click(screen.getByRole('switch', { name: /^heart rate$/i }))
 
-    const swatch = screen.getByRole('switch', { name: /heart rate/i })
+    const swatch = screen.getByRole('switch', { name: /^heart rate$/i })
       .querySelector('[aria-hidden="true"]')
     expect(swatch.getAttribute('style')).toContain('a855f7')
     expect(swatch.getAttribute('style')).not.toMatch(/undefined/)
@@ -928,7 +969,7 @@ describe('choosing which measurements a chart draws', () => {
     await userEvent.click(screen.getByRole('switch', { name: /^focus$/i }))
 
     expect(screen.queryByRole('columnheader', { name: /focus/i })).not.toBeInTheDocument()
-    expect(screen.getByRole('columnheader', { name: /stress/i })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /^calm$/i })).toBeInTheDocument()
   })
 })
 
@@ -939,13 +980,144 @@ test('an erased heart channel says it was erased, not that there is no sensor', 
                    heart_erased_at: '2026-10-07T00:40:00Z' }
   render(<WeeklySignalReport report={erased} />)
 
-  const bpmTile = screen.getByText(/Avg Heart Rate/i).closest('div')
-  expect(within(bpmTile).getByText(/^Erased /)).toBeInTheDocument()
+  expect(metric('Heart rate').getByText(/^Erased /)).toBeInTheDocument()
   expect(screen.queryByText('No sensor')).not.toBeInTheDocument()
 })
 
 test('readings recorded after an erasure are shown, not the erasure', () => {
   render(<WeeklySignalReport report={{ ...heartReport, heart_erased_at: '2026-10-01T00:00:00Z' }} />)
-  const bpmTile = screen.getByText(/Avg Heart Rate/i).closest('div')
-  expect(within(bpmTile).getByText('72 bpm')).toBeInTheDocument()
+  expect(metric('Heart rate').getByText('72 bpm')).toBeInTheDocument()
+})
+
+// ── compared with the student's own usual, and body arousal ─────────────────
+
+describe("each tile against the student's usual", () => {
+  it('shows the verdict and the usual range on the tile it belongs to', () => {
+    render(<WeeklySignalReport report={buildWeeklyReport({ usual: { measures: {
+      focus: buildUsualMeasure({ verdict: 'higher' }),
+      calm: buildUsualMeasure({ status: 'not_enough_history', verdict: null, low: null, high: null }),
+    } } })} />)
+    expect(metric('Focus').getByText('Higher than usual')).toBeInTheDocument()
+    expect(metric('Focus').getByText('Usual 55–65%')).toBeInTheDocument()
+    expect(metric('Calm').getByText('Not enough history yet')).toBeInTheDocument()
+    expect(metric('Calm').queryByText(/^Usual/)).not.toBeInTheDocument()
+  })
+
+  it('draws no comparison for a payload without `usual`', () => {
+    render(<WeeklySignalReport report={buildWeeklyReport()} />)
+    expect(screen.queryByText(/than usual|About usual|^Usual/, VISIBLE)).not.toBeInTheDocument()
+  })
+})
+
+describe('body arousal', () => {
+  const ON = { usual: undefined }
+  it('shows a measured share as a percentage', () => {
+    render(<WeeklySignalReport report={buildWeeklyReport(ON)} />)
+    expect(metric('Body arousal (heart rate)').getByText('22%')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['camera_only', 'Headband only'],
+    ['pending', 'Lesson in progress'],
+    ['calibrating', 'Calibrating'],
+    ['unusable', 'Readings too unsteady'],
+    ['none', 'No headband readings'],
+    ['unknown', "Couldn't check"],
+    ['not_retrieved', "Couldn't load"],
+  ])('says why a %s week has no figure, never 0%%', (state, words) => {
+    render(<WeeklySignalReport report={buildWeeklyReport({
+      body_arousal: buildBodyArousal({ state, high_share: null, classified_windows: 0 }) })} />)
+    expect(metric('Body arousal (heart rate)').getByText(words, VISIBLE)).toBeInTheDocument()
+    expect(metric('Body arousal (heart rate)').queryByText('0%')).not.toBeInTheDocument()
+  })
+
+  it('says a thin share is rough, in its own tile', () => {
+    render(<WeeklySignalReport report={buildWeeklyReport({
+      body_arousal: buildBodyArousal({ few_readings: true }) })} />)
+    expect(metric('Body arousal (heart rate)').getByText(/only a few readings/i)).toBeInTheDocument()
+  })
+
+  it('says a running lesson is not counted yet, only when one is', () => {
+    const { unmount } = render(<WeeklySignalReport report={buildWeeklyReport({
+      body_arousal: buildBodyArousal({ pending: true }) })} />)
+    expect(metric('Body arousal (heart rate)').getByText(/still in progress is not counted/i))
+      .toBeInTheDocument()
+    unmount()
+    // `null` is "could not check": not a claim that a lesson is running.
+    render(<WeeklySignalReport report={buildWeeklyReport({
+      body_arousal: buildBodyArousal({ pending: null }) })} />)
+    expect(screen.queryByText(/still in progress/i)).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['pending', 'Lesson in progress'],
+    ['calibrating', 'Calibrating'],
+    ['not_retrieved', "Couldn't load"],
+  ])("names a %s day's reason in the chart table, not 'not recorded'", (state, words) => {
+    render(<WeeklySignalReport report={buildWeeklyReport({ daily: [
+      { date: '2026-07-20', focus: 0.7, stress: 0.3, heart_rate_bpm: 70, body_arousal: 0.2, body_arousal_state: 'measured' },
+      { date: '2026-07-21', focus: 0.7, stress: 0.3, heart_rate_bpm: 70, body_arousal: null, body_arousal_state: state },
+    ] })} />)
+    const table = screen.getByRole('table', { name: /^body arousal/i })
+    expect(within(within(table).getByRole('row', { name: /07-20/ })).getByText('20%')).toBeInTheDocument()
+    expect(within(within(table).getByRole('row', { name: /07-21/ })).getByText(words)).toBeInTheDocument()
+  })
+
+  it('marks a day resting on few readings as rough, in the table and under the chart', () => {
+    const day = (date, few) => ({ date, focus: 0.7, stress: 0.3, heart_rate_bpm: 70, body_arousal: 0.2,
+      body_arousal_state: 'measured', body_arousal_few_readings: few })
+    const { unmount } = render(<WeeklySignalReport report={buildWeeklyReport({
+      daily: [day('2026-07-20', false), day('2026-07-21', true)] })} />)
+    const table = screen.getByRole('table', { name: /^body arousal/i })
+    expect(within(within(table).getByRole('row', { name: /07-20/ })).getByText('20%')).toBeInTheDocument()
+    expect(within(within(table).getByRole('row', { name: /07-21/ })).getByText('20% (few readings)'))
+      .toBeInTheDocument()
+    expect(screen.getByText(/hollow points rest on only a few readings/i)).toBeInTheDocument()
+    unmount()
+    render(<WeeklySignalReport report={buildWeeklyReport({
+      daily: [day('2026-07-20', false), day('2026-07-21', false)] })} />)
+    expect(screen.queryByText(/hollow points/i)).not.toBeInTheDocument()
+  })
+
+  it('marks a rough week in the week-by-week table', () => {
+    render(<SignalTrend trend={{ retrieved: true, heart_included: true, weeks: [
+      { week_start: '2026-06-01', focus: 0.6, stress: 0.3, days_with_data: 3, body_arousal: 0.4,
+        body_arousal_state: 'measured', body_arousal_few_readings: true },
+    ] }} />)
+    const table = screen.getByRole('table', { name: /^body arousal week by week/i })
+    expect(within(table).getByText('40% (few readings)')).toBeInTheDocument()
+    expect(screen.getByText(/hollow points/i)).toBeInTheDocument()
+  })
+
+  it("names a week's reason in the week-by-week table", () => {
+    render(<SignalTrend trend={{ retrieved: true, heart_included: true, weeks: [
+      { week_start: '2026-06-01', focus: 0.6, stress: 0.3, days_with_data: 3, body_arousal: null, body_arousal_state: 'unknown' },
+    ] }} />)
+    const table = screen.getByRole('table', { name: /^body arousal week by week/i })
+    expect(within(table).getByText("Couldn't check")).toBeInTheDocument()
+  })
+
+  it('is never shown beside the EEG calm under one "stress" label', () => {
+    render(<WeeklySignalReport report={buildWeeklyReport()} />)
+    expect(screen.queryByText(/stress/i, VISIBLE)).not.toBeInTheDocument()
+  })
+})
+
+describe('ChartSummaryPanel and "Hide sensor data"', () => {
+  const summary = ['Answered 30 of 40.', 'Average focus is 60%.', 'Average calm is 55%.', 'Topics: ordering.']
+
+  it('drops exactly the sensor sentences when asked, and renumbers the rest', () => {
+    render(<ChartSummaryPanel summary={summary} sensorLines={[1, 2]} hideSensorLines
+                              onGenerate={() => {}} />)
+    expect(screen.queryByText(/Average focus/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Average calm/)).not.toBeInTheDocument()
+    expect(screen.getByText('Topics: ordering.')).toBeInTheDocument()
+    expect(screen.getByText('2')).toBeInTheDocument()
+    expect(screen.queryByText('4')).not.toBeInTheDocument()
+  })
+
+  it('shows every sentence when sensor data is not hidden', () => {
+    render(<ChartSummaryPanel summary={summary} sensorLines={[1, 2]} onGenerate={() => {}} />)
+    expect(screen.getByText(/Average focus/)).toBeInTheDocument()
+  })
 })

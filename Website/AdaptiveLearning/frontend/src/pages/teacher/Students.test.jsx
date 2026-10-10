@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import Students from './Students'
@@ -58,9 +58,9 @@ function setData({ summary = SUMMARY, userStats = USER_STATS, roster = ROSTER, t
 
 const calls = () => apiFetch.mock.calls.map(([path]) => String(path))
 
-// StatCard renders value, label and subtitle in one div.
+// Each tile is a group named by its label, holding the value, verdict and subtitle.
 function tile(label) {
-  return within(screen.getByText(label).closest('div'))
+  return within(screen.getByRole('group', { name: label }))
 }
 
 async function expandAda() {
@@ -113,7 +113,7 @@ it('a failed topic read costs the topics panel only', async () => {
   setData({ topics: apiError(503) })
   render(<Students />)
   await expandAda()
-  await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
+  await waitFor(() => expect(tile('Focus').getByText('70%')).toBeInTheDocument())
   expect(tile('Total Accuracy').getByText('50%')).toBeInTheDocument()
   expect(screen.queryByText('Per-topic accuracy')).not.toBeInTheDocument()
 })
@@ -122,8 +122,8 @@ describe('signal averages', () => {
   it('renders the aggregate as percentages', async () => {
     render(<Students />)
     await expandAda()
-    await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
-    expect(tile('Stress Level').getByText('40%')).toBeInTheDocument()
+    await waitFor(() => expect(tile('Focus').getByText('70%')).toBeInTheDocument())
+    expect(tile('Calm').getByText('60%')).toBeInTheDocument()
     // No Engagement tile: it is the focus index under another name.
     expect(screen.queryByText('Engagement')).not.toBeInTheDocument()
     expect(tile('Dominant Emotion').getByText('happy')).toBeInTheDocument()
@@ -133,7 +133,7 @@ describe('signal averages', () => {
     render(<Students />)
     await expandAda()
     await waitFor(() =>
-      expect(tile('Focus Score').getByText(`${WEEK_OF_SAMPLES} EEG readings · last 7d`)).toBeInTheDocument())
+      expect(tile('Focus').getByText(`${WEEK_OF_SAMPLES} EEG readings · last 7d`)).toBeInTheDocument())
   })
 
   it('asks the aggregate for the window the tiles claim', async () => {
@@ -150,7 +150,7 @@ describe('signal averages', () => {
     setData({ summary: { ...SUMMARY, focus: null, cognitive_samples: 0 } })
     render(<Students />)
     await expandAda()
-    await waitFor(() => expect(tile('Focus Score').getByText('No sensor')).toBeInTheDocument())
+    await waitFor(() => expect(tile('Focus').getByText('No sensor')).toBeInTheDocument())
   })
 
   it('says an erased channel was erased rather than no sensor', async () => {
@@ -158,7 +158,7 @@ describe('signal averages', () => {
                          eeg_erased_at: '2026-10-07T00:40:00Z' } })
     render(<Students />)
     await expandAda()
-    await waitFor(() => expect(tile('Focus Score').getByText(/^Erased /)).toBeInTheDocument())
+    await waitFor(() => expect(tile('Focus').getByText(/^Erased /)).toBeInTheDocument())
   })
 
   it('does not render a missing field as NaN%', async () => {
@@ -166,7 +166,7 @@ describe('signal averages', () => {
     setData({ summary: {} })
     render(<Students />)
     await expandAda()
-    await waitFor(() => expect(tile('Focus Score').getByText('No sensor')).toBeInTheDocument())
+    await waitFor(() => expect(tile('Focus').getByText('No sensor')).toBeInTheDocument())
     expect(screen.queryByText(/NaN/)).not.toBeInTheDocument()
   })
 
@@ -175,7 +175,7 @@ describe('signal averages', () => {
                          eeg_enabled: false, eeg_revoked_at: '2026-09-03T09:00:00Z' } })
     render(<Students />)
     await expandAda()
-    await waitFor(() => expect(tile('Focus Score').getByText(/^Off since/)).toBeInTheDocument())
+    await waitFor(() => expect(tile('Focus').getByText(/^Off since/)).toBeInTheDocument())
   })
 })
 
@@ -185,7 +185,7 @@ describe('a failed read', () => {
     render(<Students />)
     await expandAda()
     await waitFor(() => expect(tile('Total Accuracy').getByText('50%')).toBeInTheDocument())
-    expect(tile('Focus Score').getByText('—')).toBeInTheDocument()
+    expect(tile('Focus').getByText('—')).toBeInTheDocument()
   })
 
   it('leaves the row refetchable rather than stuck loading', async () => {
@@ -199,7 +199,7 @@ describe('a failed read', () => {
     setData()
     await expandAda()   // collapse
     await expandAda()   // and retry
-    await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
+    await waitFor(() => expect(tile('Focus').getByText('70%')).toBeInTheDocument())
     expect(statsCalls().length).toBeGreaterThan(1)
   })
 
@@ -208,7 +208,7 @@ describe('a failed read', () => {
     render(<Students />)
     await expandAda()
 
-    await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
+    await waitFor(() => expect(tile('Focus').getByText('70%')).toBeInTheDocument())
     expect(tile('Total Accuracy').getByText('—')).toBeInTheDocument()
   })
 
@@ -252,7 +252,7 @@ describe('facial recognition switch', () => {
     setData({ summary: new Error('down') })
     render(<Students />)
     await expandAda()
-    for (const label of ['Avg Heart Rate', 'Avg HRV', 'Dominant Emotion']) {
+    for (const label of ['Heart rate', 'Heart-rate variability', 'Dominant Emotion']) {
       await waitFor(() => expect(tile(label).getByText('—')).toBeInTheDocument())
       expect(tile(label).getByText('signal data unavailable')).toBeInTheDocument()
     }
@@ -265,8 +265,8 @@ describe('facial recognition switch', () => {
                          consent_retrieved: false } })
     render(<Students />)
     await expandAda()
-    await waitFor(() => expect(tile('Avg Heart Rate').getByText('Unavailable')).toBeInTheDocument())
-    expect(tile('Avg Heart Rate').getByText("consent couldn't be read")).toBeInTheDocument()
+    await waitFor(() => expect(tile('Heart rate').getByText('Unavailable')).toBeInTheDocument())
+    expect(tile('Heart rate').getByText("consent couldn't be read")).toBeInTheDocument()
   })
 
   it('still says a withdrawn sensor is off when only the aggregate read failed', async () => {
@@ -276,9 +276,9 @@ describe('facial recognition switch', () => {
                          heart_samples: 0, cognitive_samples: 0 } })
     render(<Students />)
     await expandAda()
-    await waitFor(() => expect(tile('Avg Heart Rate').getByText(/^Off since/)).toBeInTheDocument())
-    expect(tile('Avg Heart Rate').queryByText('signal data unavailable')).not.toBeInTheDocument()
-    expect(tile('Focus Score').getByText('—')).toBeInTheDocument()
+    await waitFor(() => expect(tile('Heart rate').getByText(/^Off since/)).toBeInTheDocument())
+    expect(tile('Heart rate').queryByText('signal data unavailable')).not.toBeInTheDocument()
+    expect(tile('Focus').getByText('—')).toBeInTheDocument()
   })
 })
 
@@ -339,7 +339,7 @@ describe('the "nothing recorded" note', () => {
 
     await waitFor(() => expect(screen.getByText(/couldn't be loaded/i)).toBeInTheDocument())
     expect(screen.queryByText(/hasn't completed any sessions yet/i)).not.toBeInTheDocument()
-    expect(tile('Focus Score').getByText(/signal data unavailable/i)).toBeInTheDocument()
+    expect(tile('Focus').getByText(/signal data unavailable/i)).toBeInTheDocument()
   })
 
   it('treats a retrieved summary with nothing in it as a quiet week', async () => {
@@ -362,8 +362,8 @@ describe('the "nothing recorded" note', () => {
     render(<Students />)
     await expandAda()
 
-    await waitFor(() => expect(tile('Focus Score').getByText(/signal data unavailable/i)).toBeInTheDocument())
-    expect(tile('Focus Score').queryByText(/no EEG data/i)).not.toBeInTheDocument()
+    await waitFor(() => expect(tile('Focus').getByText(/signal data unavailable/i)).toBeInTheDocument())
+    expect(tile('Focus').queryByText(/no EEG data/i)).not.toBeInTheDocument()
     // Read from user_stats, so the outage does not reach them.
     expect(tile('Total Accuracy').getByText('50%')).toBeInTheDocument()
   })
@@ -382,17 +382,16 @@ it('actually hides the sensor tiles on screen when the switch is flipped, and le
   render(<Students />)
   await expandAda()
 
-  for (const label of ['Stress Level', 'Focus Score',
-                        'Dominant Emotion', 'Avg Heart Rate', 'Avg HRV',
-                        'Total Accuracy', 'Current Streak']) {
-    expect(screen.getByText(label)).toBeInTheDocument()
+  const SENSOR = ['Calm', 'Focus', 'Dominant Emotion', 'Heart rate', 'Heart-rate variability',
+                  'Body arousal (heart rate)']
+  for (const label of [...SENSOR, 'Total Accuracy', 'Current Streak']) {
+    expect(screen.getByRole('group', { name: label })).toBeInTheDocument()
   }
 
   await userEvent.click(screen.getByRole('switch'))
 
-  for (const label of ['Stress Level', 'Focus Score',
-                        'Dominant Emotion', 'Avg Heart Rate', 'Avg HRV']) {
-    expect(screen.queryByText(label)).not.toBeInTheDocument()
+  for (const label of SENSOR) {
+    expect(screen.queryByRole('group', { name: label })).not.toBeInTheDocument()
   }
   // Not sensor-derived, so unaffected.
   expect(screen.getByText('Total Accuracy')).toBeInTheDocument()
@@ -504,4 +503,43 @@ it('still says No students yet for a roster that read as empty', async () => {
   setData({ roster: [] })
   render(<Students />)
   expect(await screen.findByText('No students yet')).toBeInTheDocument()
+})
+
+describe("against the student's usual", () => {
+  const HEART = { ...SUMMARY, heart_included: true, consent_retrieved: true,
+                  heart_rate_bpm: 74, rmssd_ms: 40, heart_samples: 900 }
+  const usual = (measures, bodyArousal = { state: 'measured', high_share: 0.22 }) => ({
+    ...HEART, usual: { retrieved: true, body_arousal: bodyArousal, measures } })
+
+  it('says how a tile compares, with the range it was compared against', async () => {
+    setData({ summary: usual({ focus: { status: 'compared', verdict: 'higher', low: 0.55, high: 0.65 },
+                               calm: { status: 'not_enough_history', low: null, high: null } }) })
+    render(<Students />)
+    await expandAda()
+    await waitFor(() => expect(tile('Focus').getByText('Higher than usual · Usual 55–65%')).toBeInTheDocument())
+    expect(tile('Calm').getByText('Not enough history yet')).toBeInTheDocument()
+  })
+
+  it('shows body arousal as its own tile, with its state when there is no figure', async () => {
+    setData({ summary: usual({}) })
+    render(<Students />)
+    await expandAda()
+    await waitFor(() => expect(tile('Body arousal (heart rate)').getByText('22%')).toBeInTheDocument())
+    cleanup()
+
+    setData({ summary: usual({}, { state: 'pending', high_share: null }) })
+    render(<Students />)
+    await expandAda()
+    await waitFor(() => expect(tile('Body arousal (heart rate)').getByText('Lesson in progress'))
+      .toBeInTheDocument())
+    expect(tile('Body arousal (heart rate)').queryByText('0%')).not.toBeInTheDocument()
+  })
+
+  it('never says stress, RMSSD or HRV on a tile', async () => {
+    setData({ summary: usual({}) })
+    render(<Students />)
+    await expandAda()
+    await waitFor(() => expect(tile('Calm').getByText('60%')).toBeInTheDocument())
+    expect(screen.queryByText(/stress|RMSSD|HRV/i)).not.toBeInTheDocument()
+  })
 })

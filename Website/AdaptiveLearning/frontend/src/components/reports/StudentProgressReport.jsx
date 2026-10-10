@@ -55,6 +55,8 @@ export default function StudentProgressReport({
   const [chartSummary, setChartSummary]             = useState(null)
   const [chartSummarySource, setChartSummarySource] = useState(null)
   const [chartSummaryRetrieved, setChartSummaryRetrieved] = useState(null)
+  // Indexes of the summary's sensor sentences, which "Hide sensor data" drops.
+  const [chartSummarySensorLines, setChartSummarySensorLines] = useState([])
   const [chartSummaryError, setChartSummaryError]   = useState(null)
   const [chartSummaryLoading, setChartSummaryLoading] = useState(false)
   const beginChartSummaryRequest = useLatestRequest()
@@ -158,6 +160,7 @@ export default function StudentProgressReport({
         if (!isCurrent()) return
         setChartSummary(res.summary || [])
         setChartSummarySource(res.source || null)
+        setChartSummarySensorLines(res.basis?.sensor_lines || [])
         // Undefined where absent; the panel checks `=== false`.
         setChartSummaryRetrieved({
           signals: res.basis?.signals_retrieved,
@@ -171,6 +174,7 @@ export default function StudentProgressReport({
         setChartSummary(null)
         setChartSummarySource(null)
         setChartSummaryRetrieved(null)
+        setChartSummarySensorLines([])
         setChartSummaryError(err.message || 'Could not generate a summary right now.')
       })
       .finally(() => { if (isCurrent()) setChartSummaryLoading(false) })
@@ -231,14 +235,14 @@ export default function StudentProgressReport({
           {/* Only once loaded; a grid of "N/A" would read as no activity. */}
           {showSignals && signalError && (
             <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm text-center">
-              <p className="text-sm text-gray-500 dark:text-gray-400">Couldn&apos;t load the EEG &amp; face report.</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Couldn&apos;t load this week&apos;s readings.</p>
               <p className="text-xs text-gray-600 mt-1 dark:text-gray-400">{signalError}</p>
             </div>
           )}
           {showSignals && signalReport && (
             <div className="space-y-6">
-              <LiveSignalSummary report={signalReport} title="Latest Signal Snapshot" />
-              <WeeklySignalReport report={signalReport} title="Weekly EEG & Face Report" />
+              <LiveSignalSummary report={signalReport} />
+              <WeeklySignalReport report={signalReport} />
             </div>
           )}
 
@@ -254,6 +258,8 @@ export default function StudentProgressReport({
               summary={chartSummary}
               source={chartSummarySource}
               retrieved={chartSummaryRetrieved}
+              sensorLines={chartSummarySensorLines}
+              hideSensorLines={!showSignals}
               loading={chartSummaryLoading}
               error={chartSummaryError}
               onGenerate={generateChartSummary}

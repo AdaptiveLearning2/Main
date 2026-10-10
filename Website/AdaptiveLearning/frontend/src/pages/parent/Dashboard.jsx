@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { m } from 'framer-motion'
-import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Activity, Sparkles, ShieldCheck } from 'lucide-react'
+import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Leaf, Activity, Sparkles, ShieldCheck } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import { usePrefetchWhenIdle } from '../../lib/prefetch'
 import { pages } from '../../routes'
 import ChildWithdrewBanner from '../../components/consent/ChildWithdrewBanner'
-import { pct, valueOrReason, emotionOn as faceIncluded } from '../../lib/signalFormat'
+import { calmPct, pct, emotionOn as faceIncluded } from '../../lib/signalFormat'
+import MeasureTile from '../../components/signals/MeasureTile'
 import { stagger } from '../../lib/stagger'
 
 // Only the fields the tiles below render; keep in step with them.
@@ -137,18 +138,25 @@ export default function ParentDashboard() {
                 )}
 
                 {showSignals ? (
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 p-4 border-t border-gray-50 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/20">
-                    {[
-                      { icon: Brain,    label: 'Weekly Focus',   value: valueOrReason(pct(signals.focus), eeg),  color: 'text-emerald-600' },
-                      { icon: Zap,      label: 'Weekly Stress',  value: valueOrReason(pct(signals.stress), eeg), color: 'text-rose-600' },
-                      { icon: Activity, label: 'AI Sessions',    value: signals.sessions ?? 0,           color: 'text-amber-600' },
-                    ].map(item => (
-                      <div key={item.label} className="rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-4">
-                        <item.icon size={17} className={`${item.color} mb-2`} />
-                        <p className={`text-xl font-black ${item.color}`}>{item.value}</p>
-                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{item.label}</p>
+                  <div className="p-4 border-t border-gray-50 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/20">
+                    {/* Only with `usual`: an older payload compares nothing, so it claims nothing. */}
+                    {signals.usual && (
+                      <p className="mb-3 text-xs text-gray-600 dark:text-gray-400">
+                        This week, compared with {child.name || 'this child'}&apos;s usual.
+                      </p>
+                    )}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <MeasureTile measure="focus" value={pct(signals.focus)} reason={eeg}
+                                   usual={signals.usual?.measures?.focus} icon={Brain} tone="emerald" />
+                      <MeasureTile measure="calm" value={calmPct(signals.stress)} reason={eeg}
+                                   usual={signals.usual?.measures?.calm} icon={Leaf} tone="teal" />
+                      <div role="group" aria-label="Lessons this week"
+                           className="rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-4">
+                        <Activity size={17} className="text-amber-600 mb-2" />
+                        <p className="text-xl font-black text-amber-600">{signals.sessions ?? 0}</p>
+                        <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">Lessons this week</p>
                       </div>
-                    ))}
+                    </div>
                   </div>
                 ) : (
                   <div className="p-4 border-t border-gray-50 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/20">

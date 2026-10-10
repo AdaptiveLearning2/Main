@@ -1,5 +1,7 @@
-import { Activity, Brain, Heart, Radio, Sparkles, Zap } from 'lucide-react'
+import { useId } from 'react'
+import { Activity, Brain, Heart, Leaf, Radio, Sparkles, Waves } from 'lucide-react'
 import ScaleNote from './ScaleNote'
+import MeasureTile from './MeasureTile'
 import { combineScales } from '../../lib/scoreScale'
 import { EMOTION_COLOURS, UNKNOWN_EMOTION_COLOUR } from '../../lib/emotions'
 import {
@@ -9,9 +11,11 @@ import {
 import ChartTooltip from '../charts/ChartTooltip'
 import { sliceSpec } from '../charts/describeSeries'
 import AccessibleChart from '../charts/AccessibleChart'
+import { seriesDot } from '../charts/roughDot'
 import SeriesFilter from '../charts/SeriesFilter'
 import { useSeriesFilter } from '../../hooks/useSeriesFilter'
-import { emotionOn, offLabel, pct, ratio, valueOrReason } from '../../lib/signalFormat'
+import { calmPct, calmRatio, emotionOn, offLabel, pct, ratio, valueOrReason } from '../../lib/signalFormat'
+import { AROUSAL_REASONS, MEASURES } from '../../lib/signalGlossary'
 
 // muse_optics / muse_ppg / rppg are storage values, not display strings.
 const SOURCE_LABELS = {
@@ -29,7 +33,7 @@ function toPct(value) {
   return n === null ? null : n * 100
 }
 
-// Absolute units (bpm); never through `toPct`.
+// Absolute units (bpm, ms); never through `toPct`.
 function unit(value, suffix, digits = 0) {
   const n = ratio(value)
   return n === null ? 'N/A' : `${n.toFixed(digits)}${suffix}`
@@ -69,14 +73,23 @@ function eegReason(report) {
   }
 }
 
-/** The offLabel reason for a shown heart tile: consented, so only samples and an erasure decide. */
+/** The offLabel reason for a shown heart tile: consented, so the read, samples and an erasure decide. */
 function heartReason(report) {
   return {
     on: true,
-    consentRetrieved: report?.consent_retrieved,
+    // A failed heart read is unknown, not "No sensor", as for EEG.
+    consentRetrieved: report?.consent_retrieved === false || report?.retrieved?.heart === false
+      ? false : report?.consent_retrieved,
     samples: report?.sample_counts?.heart,
     erasedAt: report?.heart_erased_at,
   }
+}
+
+/** Body arousal's tile value, or the backend `state`'s own words; never 0% for an absence. */
+function arousalDisplay(arousal) {
+  if (!arousal) return { value: null, reason: 'Not reported' }
+  if (arousal.state === 'measured') return { value: pct(arousal.high_share), reason: "Couldn't load" }
+  return { value: null, reason: AROUSAL_REASONS[arousal.state] ?? "Couldn't check" }
 }
 
 export function MiniMetric({ label, value, icon: Icon = Activity, tone = 'indigo' }) {
@@ -88,7 +101,8 @@ export function MiniMetric({ label, value, icon: Icon = Activity, tone = 'indigo
     sky: 'bg-sky-50 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300',
   }
   return (
-    <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 shadow-sm">
+    <div role="group" aria-label={label}
+         className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 shadow-sm">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">{label}</p>
@@ -102,7 +116,7 @@ export function MiniMetric({ label, value, icon: Icon = Activity, tone = 'indigo
   )
 }
 
-export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
+export function LiveSignalSummary({ report, title = 'Most recent readings' }) {
   const latest = report?.latest || {}
   const cog = latest.cognitive || {}
   const face = latest.face || {}
@@ -116,19 +130,20 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
         <div>
           <h3 className="font-black text-gray-900 dark:text-white">{title}</h3>
           <p className="text-xs text-gray-600 dark:text-gray-400">
-            Most recent EEG{heartShown ? ', heart' : ''} and facial-recognition readings.
+            The latest headband{heartShown ? ', heart' : ''} and camera readings.
           </p>
         </div>
         <Radio size={18} className="text-emerald-500" />
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <MiniMetric label="Focus" value={valueOrReason(pct(cog.focus), eegReason(report))}
-                    icon={Brain} tone="emerald" />
-        <MiniMetric label="Stress" value={valueOrReason(pct(cog.stress), eegReason(report))}
-                    icon={Zap} tone="rose" />
+        <MeasureTile measure="focus" value={pct(cog.focus)} reason={eegReason(report)}
+                     icon={Brain} tone="emerald" />
+        <MeasureTile measure="calm" value={calmPct(cog.stress)} reason={eegReason(report)}
+                     icon={Leaf} tone="teal" />
         {/* No Engagement tile (it is focus) and no attention tile (no producer). */}
         {heartShown && (
-          <MiniMetric label="Heart Rate" value={unit(heart.heart_rate_bpm, ' bpm')} icon={Heart} tone="rose" />
+          <MeasureTile measure="heart_rate_bpm" value={unit(heart.heart_rate_bpm, ' bpm')}
+                       reason={heartReason(report)} icon={Heart} tone="rose" />
         )}
       </div>
       <div className="mt-4 grid gap-3 text-sm">
@@ -143,45 +158,114 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
   )
 }
 
+// One list per series: lines, table columns and toggles all derive from it (docs/frontend.md).
+// Rows are scaled on the way in, so no `scale`. Colours are pinned by test_chart_render.py.
+const SIGNAL_SERIES = [
+  { key: 'focus', label: MEASURES.focus.name, unit: '%', colour: '#6366f1', group: 'pct', name: 'Focus' },
+  // Dashed: focus and calm are close for tritan vision, so the line style also tells them apart.
+  { key: 'calm', label: MEASURES.calm.name, unit: '%', colour: '#0d9488', group: 'pct', name: 'Calm', dash: '6 3' },
+  { key: 'heart_rate_bpm', label: MEASURES.heart_rate_bpm.name, unit: ' bpm', colour: '#a855f7', group: 'bpm', name: 'Heart rate (bpm)' },
+  { key: 'rmssd_ms', label: MEASURES.rmssd_ms.name, unit: ' ms', colour: '#f59e0b', group: 'ms', name: 'Heart-rate variability (ms)' },
+  { key: 'body_arousal', label: MEASURES.body_arousal.name, unit: '%', colour: '#ea580c', group: 'arousal', name: 'Body arousal (%)',
+    missing: r => AROUSAL_REASONS[r.body_arousal_state] ?? null,
+    note: r => (r.body_arousal_few_readings ? 'few readings' : null),
+    rough: r => r.body_arousal_few_readings === true },
+]
+const HEART_KEYS = new Set(['heart_rate_bpm', 'rmssd_ms', 'body_arousal'])
+
+// One small chart per unit: never two y-axes on one chart.
+const CHART_GROUPS = [
+  { id: 'pct', title: 'Focus and calm', unit: '%', domain: [0, 100] },
+  { id: 'bpm', title: 'Heart rate', unit: ' bpm', domain: ['auto', 'auto'] },
+  { id: 'ms', title: 'Heart-rate variability', unit: ' ms', domain: ['auto', 'auto'] },
+  { id: 'arousal', title: 'Body arousal', unit: '%', domain: [0, 100] },
+]
+
+/** A row with its signals scaled for drawing: ratios to percent, stress to calm, nulls kept. */
+function chartRow(row, label) {
+  return {
+    ...row,
+    label,
+    focus: toPct(row.focus),
+    calm: toPct(calmRatio(row.stress)),
+    heart_rate_bpm: ratio(row.heart_rate_bpm),
+    rmssd_ms: ratio(row.rmssd_ms),
+    body_arousal: toPct(row.body_arousal),
+  }
+}
+
+/**
+ * Stacked small charts sharing one x axis and one set of toggles.
+ * A group with no shown series is not mounted, so it leaves no empty axis or column-less table.
+ */
+function SignalCharts({ rows, heartShown, rowLabel, period, filterLabel }) {
+  const syncId = useId()
+  const series = SIGNAL_SERIES.filter(s => heartShown || !HEART_KEYS.has(s.key))
+  const { hidden, toggle, showAll, shownOf } = useSeriesFilter()
+  const shown = shownOf(series)
+  return (
+    <div>
+      <SeriesFilter series={series} hidden={hidden} onToggle={toggle} label={filterLabel} />
+      {shown.length === 0 ? (
+        /* Every series hidden: a claim about the view, not the data. */
+        <div className="h-40 rounded-2xl bg-slate-50 dark:bg-gray-800 p-3 flex flex-col items-center justify-center gap-3">
+          <p className="text-sm text-gray-600 dark:text-gray-400">No measurements selected.</p>
+          <button type="button" onClick={showAll}
+                  className="px-3 py-2.5 min-h-[44px] rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-xs font-bold text-gray-900 dark:text-white hover:bg-slate-50 dark:hover:bg-gray-800 transition">
+            Show all
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {CHART_GROUPS.map(g => {
+            const lines = shown.filter(s => s.group === g.id)
+            if (lines.length === 0) return null
+            return (
+              <div key={g.id} className="rounded-2xl bg-slate-50 dark:bg-gray-800 p-3">
+                <p className="text-xs font-bold text-gray-600 dark:text-gray-400 mb-1">{g.title}</p>
+                <AccessibleChart className="h-40"
+                  headline={`${g.title} ${period} over ${rows.length} ${rowLabel.toLowerCase()}${rows.length === 1 ? '' : 's'}.`}
+                  rows={rows} rowKey="label" rowLabel={rowLabel}
+                  columns={lines.map(({ key, label, unit: u, missing, note }) => ({ key, label, unit: u, missing, note }))}>
+                  <LineChart data={rows} syncId={syncId} margin={{ top: 8, right: 10, left: -12, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                    <XAxis dataKey="label" fontSize={11} tickLine={false} />
+                    <YAxis domain={g.domain} fontSize={11} tickLine={false} unit={g.unit} />
+                    <ChartTooltip />
+                    {lines.length > 1 && <Legend />}
+                    {/* Dots, so a single recorded point is still visible. */}
+                    {lines.map(s => (
+                      <Line key={s.key} type="monotone" dataKey={s.key} stroke={s.colour}
+                            strokeWidth={2} strokeDasharray={s.dash}
+                            dot={seriesDot(s)}
+                            name={s.name} connectNulls={false} />
+                    ))}
+                  </LineChart>
+                </AccessibleChart>
+                {lines.some(s => s.rough && rows.some(s.rough)) && (
+                  <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+                    Hollow points rest on only a few readings, so treat them as rough.
+                  </p>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /**
  * Week-over-week averages from `signal_daily_rollup`, which outlives the raw rows.
  * A failed read is not a quiet term; an empty week is a gap, not a missing bar.
  */
-export function SignalTrend({ trend, title = 'Term Trend' }) {
-  const heartShown = heartOn(trend)
+export function SignalTrend({ trend, title = 'Week by week' }) {
   const weeks = trend?.weeks || []
   const failed = trend?.retrieved === false
-
-  const chartData = weeks.map(w => ({
-    ...w,
-    focus: toPct(w.focus),
-    stress: toPct(w.stress),
-    heart_rate_bpm: ratio(w.heart_rate_bpm),
-    // The Monday, as `MM-DD`.
-    label: w.week_start ? w.week_start.slice(5) : '',
-  }))
-
-  // Lines, columns and toggles all derive from this list. Focus/stress are
-  // scaled above, so no `scale` here.
-  const SERIES = [
-    { key: 'focus',  label: 'Focus',  unit: '%', colour: '#6366f1', axis: 'pct', name: 'Focus' },
-    { key: 'stress', label: 'Stress', unit: '%', colour: '#f43f5e', axis: 'pct', name: 'Stress' },
-    ...(heartShown
-      ? [{ key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm',
-           colour: '#a855f7', axis: 'bpm', name: 'Heart Rate (bpm)' }]
-      : []),
-  ]
-
-  const { hidden, toggle, showAll, shownOf } = useSeriesFilter()
-  const shown = shownOf(SERIES)
-  const COLUMNS = shown.map(({ key, label, unit }) => ({ key, label, unit }))
-  // A line naming an unmounted axis throws, so axes follow what is shown.
-  const axisShown = (axis) => shown.some((x) => x.axis === axis)
-
-  // Coverage goes in the sentence so a thin week stays visibly thin.
+  // The Monday, as `MM-DD`.
+  const rows = weeks.map(w => chartRow(w, w.week_start ? w.week_start.slice(5) : ''))
   const recorded = weeks.filter(w => w.days_with_data > 0).length
-  const headline = `Weekly signal averages across ${weeks.length} week`
-    + `${weeks.length === 1 ? '' : 's'}, with data recorded on ${recorded} of them.`
 
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
@@ -190,74 +274,35 @@ export function SignalTrend({ trend, title = 'Term Trend' }) {
       <div className="mb-4">
         <h3 className="font-black text-gray-900 dark:text-white">{title}</h3>
         <p className="text-xs text-gray-600 dark:text-gray-400">
-          Weekly averages, weighted by how much was recorded each day. Weeks
-          with nothing recorded are left as gaps.
+          Weekly averages, weighted by how much was recorded each day. Weeks with nothing
+          recorded are left as gaps{weeks.length ? `; ${recorded} of ${weeks.length} have readings` : ''}.
         </p>
       </div>
-
-      {/* Outside the height-fixed box so the chips can wrap. */}
-      {!failed && chartData.length > 0 && (
-        <SeriesFilter series={SERIES} hidden={hidden} onToggle={toggle}
-                      label="Measurements shown on the term trend" />
+      {failed || rows.length === 0 ? (
+        <div className="h-40 rounded-2xl bg-slate-50 dark:bg-gray-800 p-3 flex items-center justify-center text-sm text-gray-600 text-center px-4 dark:text-gray-400">
+          {failed ? 'The week-by-week readings could not be loaded.' : 'No readings yet.'}
+        </div>
+      ) : (
+        <SignalCharts rows={rows} heartShown={heartOn(trend)} rowLabel="Week of"
+                      period="week by week" filterLabel="Measurements shown week by week" />
       )}
-      <div className="h-56 rounded-2xl bg-slate-50 dark:bg-gray-800 p-3">
-        {failed || chartData.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-sm text-gray-600 text-center px-4 dark:text-gray-400">
-            {failed
-              ? 'The term trend could not be loaded.'
-              : 'No signal history yet.'}
-          </div>
-        ) : shown.length === 0 ? (
-          /* Every series hidden: a claim about the view, not the data. */
-          <div className="h-full flex flex-col items-center justify-center gap-3">
-            <p className="text-sm text-gray-600 dark:text-gray-400">No measurements selected.</p>
-            <button type="button" onClick={showAll}
-                    className="px-3 py-2.5 min-h-[44px] rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-xs font-bold text-gray-900 dark:text-white hover:bg-slate-50 dark:hover:bg-gray-800 transition">
-              Show all
-            </button>
-          </div>
-        ) : (
-          <AccessibleChart headline={headline} rows={chartData}
-                           rowKey="label" rowLabel="Week of" columns={COLUMNS}>
-            <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
-              <XAxis dataKey="label" fontSize={11} tickLine={false} />
-              {/* Explicit ids on both axes, or every series binds to the second. */}
-              {axisShown('pct') && <YAxis yAxisId="pct" domain={[0, 100]} fontSize={11} tickLine={false} />}
-              {axisShown('bpm') && (
-                <YAxis yAxisId="bpm" orientation="right" domain={['auto', 'auto']}
-                       fontSize={11} tickLine={false} unit=" bpm" />
-              )}
-              <ChartTooltip />
-              {/* Dots, so a single recorded week is still visible. */}
-              {shown.map((x) => (
-                <Line key={x.key} yAxisId={x.axis} type="monotone" dataKey={x.key}
-                      stroke={x.colour} strokeWidth={2} dot={{ r: 3 }} name={x.name}
-                      connectNulls={false} />
-              ))}
-            </LineChart>
-          </AccessibleChart>
-        )}
-      </div>
     </div>
   )
 }
 
+/** A small amber line under the tile it qualifies; amber marks "this figure is not complete". */
+function Caveat({ children }) {
+  return <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">{children}</p>
+}
 
-export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' }) {
+export function WeeklySignalReport({ report, title = 'This week' }) {
   const avg = report?.averages || {}
   const highlights = report?.highlights || {}
   const counts = report?.sample_counts || {}
+  const usual = report?.usual?.measures
   const faceOn = emotionOn(report)
   const heartShown = heartOn(report)
-  // Ratios scaled to percent; heart rate stays in bpm.
-  const chartData = (report?.daily || []).map(d => ({
-    ...d,
-    focus: toPct(d.focus),
-    stress: toPct(d.stress),
-    heart_rate_bpm: ratio(d.heart_rate_bpm),
-    label: d.date ? d.date.slice(5) : '',
-  }))
+  const rows = (report?.daily || []).map(d => chartRow(d, d.date ? d.date.slice(5) : ''))
   // Signal days that could not be read draw as gaps like quiet days, so say so.
   // Not `sessions_retrieved`: per-day session counts are not drawn here.
   const unretrieved = (report?.daily || []).filter(
@@ -278,99 +323,102 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
   const consentFailed = report?.consent_retrieved === false
   // Tells "measured but unusable" from "never measured".
   const heartSamples = counts.heart || 0
+  const arousal = arousalDisplay(report?.body_arousal)
   const emotionSlices = Object.entries(report?.emotion_distribution || {})
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value)
-
-  // Lines, columns and toggles all derive from this list, so a column never
-  // names an undrawn series. Palette pinned equal to SessionReview.jsx by a backend test.
-  const TREND_SERIES = [
-    { key: 'focus',  label: 'Focus',  unit: '%', colour: '#6366f1', axis: 'pct', name: 'Focus' },
-    { key: 'stress', label: 'Stress', unit: '%', colour: '#f43f5e', axis: 'pct', name: 'Stress' },
-    ...(heartShown
-      ? [{ key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm',
-           colour: '#a855f7', axis: 'bpm', name: 'Heart Rate (bpm)' }]
-      : []),
-  ]
-
-  const { hidden, toggle, showAll, shownOf } = useSeriesFilter()
-  const shown = shownOf(TREND_SERIES)
-  const TREND_COLUMNS = shown.map(({ key, label, unit }) => ({ key, label, unit }))
-  const axisShown = (axis) => shown.some((x) => x.axis === axis)
 
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
       <div className="mb-4">
         <h3 className="font-black text-gray-900 dark:text-white">{title}</h3>
-        <p className="text-xs text-gray-600 dark:text-gray-400">Averages are based on the last {report?.days || 7} days of available samples.</p>
+        <p className="text-xs text-gray-600 dark:text-gray-400">
+          Averages over the last {report?.days || 7} days, each compared with this student&apos;s own
+          earlier weeks.
+        </p>
+        {/* Above everything: it changes how every figure below is read. */}
+        {consentFailed && (
+          <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+            Consent settings could not be read, so heart and facial data were left out of this report — that is not a record of what was permitted.
+          </p>
+        )}
         {/* An average can mix both score scales with no visible step. */}
         <ScaleNote scale={avg.score_scale} what="The averages below" />
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
-        <MiniMetric label="Avg Focus" value={valueOrReason(pct(avg.focus), eegReason(report))} icon={Brain} tone="emerald" />
-        <MiniMetric label="Avg Stress" value={valueOrReason(pct(avg.stress), eegReason(report))} icon={Zap} tone="rose" />
-        {/* sessions_recorded: sample_counts.sessions is capped. Dash on a failed read, never 0. */}
-        <MiniMetric
-          label="Sessions"
-          value={sessionsFailed ? '—' : (report?.sessions_recorded ?? counts.sessions ?? 0)}
-          icon={Radio}
-          tone="amber"
-        />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-5">
+        <MeasureTile measure="focus" value={pct(avg.focus)} reason={eegReason(report)}
+                     usual={usual?.focus} icon={Brain} tone="emerald">
+          {cogFailed && <Caveat>Headband readings could not be loaded.</Caveat>}
+        </MeasureTile>
+        <MeasureTile measure="calm" value={calmPct(avg.stress)} reason={eegReason(report)}
+                     usual={usual?.calm} icon={Leaf} tone="teal">
+          {cogFailed && <Caveat>Headband readings could not be loaded.</Caveat>}
+        </MeasureTile>
+        {heartShown && (
+          <>
+            <MeasureTile measure="heart_rate_bpm" value={unit(highlights.heart_rate_bpm, ' bpm')}
+                         reason={heartReason(report)} usual={usual?.heart_rate_bpm}
+                         icon={Heart} tone="rose">
+              {heartSamples > 0 && ratio(highlights.heart_rate_bpm) === null && (
+                <Caveat>Heart readings were recorded but none met the quality threshold.</Caveat>
+              )}
+              {heartFailed && <Caveat>Heart readings could not be loaded.</Caveat>}
+            </MeasureTile>
+            <MeasureTile measure="rmssd_ms" value={unit(highlights.rmssd_ms, ' ms')}
+                         reason={heartReason(report)} usual={usual?.rmssd_ms}
+                         icon={Waves} tone="amber" />
+            <MeasureTile measure="body_arousal" value={arousal.value} reason={arousal.reason}
+                         usual={usual?.body_arousal} icon={Activity} tone="rose">
+              {report?.body_arousal?.few_readings && (
+                <Caveat>Based on only a few readings, so treat it as rough.</Caveat>
+              )}
+              {report?.body_arousal?.pending === true && (
+                <Caveat>A lesson still in progress is not counted yet.</Caveat>
+              )}
+            </MeasureTile>
+          </>
+        )}
+        <div>
+          {/* sessions_recorded: sample_counts.sessions is capped. Dash on a failed read, never 0. */}
+          <MiniMetric label="Sessions"
+                      value={sessionsFailed ? '—' : (report?.sessions_recorded ?? counts.sessions ?? 0)}
+                      icon={Radio} tone="amber" />
+          {sessionsFailed && <Caveat>Session counts could not be loaded.</Caveat>}
+          {/* `truncated` is the sessions read alone; the signal figures are whole-week aggregates. */}
+          {report?.truncated && (
+            <Caveat>
+              {sessionsExact
+                ? 'Sessions reached the retrieval limit; this total is still the full count.'
+                : 'Sessions reached the retrieval limit, so this total counts only the sessions read.'}
+            </Caveat>
+          )}
+        </div>
       </div>
 
-      {chartData.length > 0 && (
-        <SeriesFilter series={TREND_SERIES} hidden={hidden} onToggle={toggle}
-                      label="Measurements shown on the daily trend" />
+      {rows.length === 0 ? (
+        <div className="h-40 rounded-2xl bg-slate-50 dark:bg-gray-800 p-3 flex items-center justify-center text-sm text-gray-600 text-center px-4 dark:text-gray-400">
+          {anyFailed ? "This week's readings could not be loaded." : 'No readings this week yet.'}
+        </div>
+      ) : (
+        <SignalCharts rows={rows} heartShown={heartShown} rowLabel="Day"
+                      period="day by day" filterLabel="Measurements shown day by day" />
       )}
-      <div className="h-56 rounded-2xl bg-slate-50 dark:bg-gray-800 p-3">
-        {chartData.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-sm text-gray-600 text-center px-4 dark:text-gray-400">
-            {anyFailed
-              ? 'Weekly signal data could not be loaded.'
-              : 'No weekly signal data available yet.'}
-          </div>
-        ) : shown.length === 0 ? (
-          /* Every series hidden: a claim about the view, not the data. */
-          <div className="h-full flex flex-col items-center justify-center gap-3">
-            <p className="text-sm text-gray-600 dark:text-gray-400">No measurements selected.</p>
-            <button type="button" onClick={showAll}
-                    className="px-3 py-2.5 min-h-[44px] rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-xs font-bold text-gray-900 dark:text-white hover:bg-slate-50 dark:hover:bg-gray-800 transition">
-              Show all
-            </button>
-          </div>
-        ) : (
-          <AccessibleChart
-            headline={`Daily signal trend over ${chartData.length} day${chartData.length === 1 ? '' : 's'}.`}
-            rows={chartData} rowKey="label" rowLabel="Day"
-            columns={TREND_COLUMNS}>
-            <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
-                <XAxis dataKey="label" fontSize={11} tickLine={false} />
-                {/* Percent left, bpm right. Explicit ids on both, or every series binds to the second. */}
-                {axisShown('pct') && <YAxis yAxisId="pct" domain={[0, 100]} fontSize={11} tickLine={false} />}
-                {axisShown('bpm') && (
-                  <YAxis yAxisId="bpm" orientation="right" domain={['auto', 'auto']}
-                         fontSize={11} tickLine={false} unit=" bpm" />
-                )}
-                <ChartTooltip />
-                {/* Dots, so a single recorded day is still visible. */}
-                {shown.map((x) => (
-                  <Line key={x.key} yAxisId={x.axis} type="monotone" dataKey={x.key}
-                        stroke={x.colour} strokeWidth={2} dot={{ r: 3 }} name={x.name} />
-                ))}
-              </LineChart>
-          </AccessibleChart>
-        )}
-      </div>
+      {/* Its own line: an unread signal day is unrelated to `truncated`. */}
+      {unretrieved > 0 && (
+        <Caveat>
+          {`${unretrieved} ${unretrieved === 1 ? 'day is' : 'days are'} shown as a gap because the data could not be retrieved, not because there was no activity.`}
+        </Caveat>
+      )}
 
       <div className="mt-4 grid md:grid-cols-3 gap-3 text-sm">
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
-          <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Highest Stress</p>
-          <p className="font-bold text-gray-900 dark:text-white">{valueOrReason(pct(highlights.highest_stress), eegReason(report))}</p>
+          <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Lowest calm reading</p>
+          {/* The highest stress reading is the lowest calm one, the right way up. */}
+          <p className="font-bold text-gray-900 dark:text-white">{valueOrReason(calmPct(highlights.highest_stress), eegReason(report))}</p>
         </div>
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
-          <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Lowest Focus</p>
+          <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Lowest focus reading</p>
           <p className="font-bold text-gray-900 dark:text-white">{valueOrReason(pct(highlights.lowest_focus), eegReason(report))}</p>
         </div>
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
@@ -378,6 +426,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
           <p className="font-bold text-gray-900 dark:text-white capitalize">
             {valueOrReason(faceOn && highlights.dominant_emotion, faceReason(report, faceOn))}
           </p>
+          {faceFailed && <Caveat>Facial readings could not be loaded.</Caveat>}
         </div>
       </div>
 
@@ -396,32 +445,14 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         </div>
       )}
       {heartShown && (
-        <div className="mt-3 grid md:grid-cols-3 gap-3 text-sm">
-          <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Avg Heart Rate</p>
-            <p className="font-bold text-gray-900 dark:text-white">
-              {valueOrReason(unit(highlights.heart_rate_bpm, ' bpm'), heartReason(report))}
-            </p>
-          </div>
-          <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Avg RMSSD</p>
-            <p className="font-bold text-gray-900 dark:text-white">
-              {valueOrReason(unit(highlights.rmssd_ms, ' ms'), heartReason(report))}
-            </p>
-          </div>
-          <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Sensor</p>
-            {/* Named: accuracy differs by source, and the camera is unvalidated. */}
-            <p className="font-bold text-gray-900 dark:text-white">
-              {(report?.heart_sources || []).length
-                ? report.heart_sources.map(sourceLabel).join(', ')
-                : offLabel({
-                    on: true,
-                    consentRetrieved: report?.consent_retrieved,
-                    samples: report?.sample_counts?.heart,
-                  })}
-            </p>
-          </div>
+        <div className="mt-3 rounded-xl bg-slate-50 dark:bg-gray-800 p-3 text-sm">
+          <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Heart sensor</p>
+          {/* Named: accuracy differs by source, and the camera is unvalidated. */}
+          <p className="font-bold text-gray-900 dark:text-white">
+            {(report?.heart_sources || []).length
+              ? report.heart_sources.map(sourceLabel).join(', ')
+              : offLabel(heartReason(report))}
+          </p>
         </div>
       )}
 
@@ -449,43 +480,6 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       {report && !faceOn && (
         <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
           Facial recognition data was not included in this report.
-        </p>
-      )}
-      {/* Samples but no average: every reading failed the quality gate. */}
-      {heartShown && heartSamples > 0 && ratio(highlights.heart_rate_bpm) === null && (
-        <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
-          Heart-rate samples were recorded but none met the quality threshold, so no average is shown.
-        </p>
-      )}
-      {consentFailed && (
-        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-          Consent settings could not be read, so heart and facial data were left out of this report — that is not a record of what was permitted.
-        </p>
-      )}
-      {/* Per table: the reads fail independently. */}
-      {anyFailed && (
-        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-          {[
-            cogFailed && 'EEG signals',
-            faceFailed && 'facial recognition signals',
-            heartFailed && 'heart-rate signals',
-            sessionsFailed && 'session counts',
-          ].filter(Boolean).join(', ')} could not be loaded — the figures shown for them are not measurements.
-        </p>
-      )}
-      {/* `truncated` is the sessions read alone; the signal figures are whole-week aggregates. */}
-      {report?.truncated && (
-        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-          {sessionsExact
-            ? 'Sessions in this range reached the retrieval limit; the Sessions total is still the full count.'
-            : 'Sessions in this range reached the retrieval limit, so the Sessions total counts only the sessions read.'}
-          {' The signal figures are not affected by this limit.'}
-        </p>
-      )}
-      {/* Its own line: an unread signal day (a failed rollup read past expiry, say) is unrelated to `truncated`. */}
-      {unretrieved > 0 && (
-        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-          {`${unretrieved} ${unretrieved === 1 ? 'day is' : 'days are'} shown as a gap because the data could not be retrieved, not because there was no activity.`}
         </p>
       )}
     </div>
@@ -560,11 +554,13 @@ export function StrategyPanel({ strategies, source, signalsRetrieved, loading, e
 
 /**
  * Plain sentences describing the charts, from `POST /api/students/{id}/chart-summary`.
- * On demand only (a model call per student otherwise). `retrieved` carries one
- * flag per backing read. `viewerRole` works as on `StrategyPanel`.
+ * On demand only (a model call per student otherwise). `retrieved` carries one flag per
+ * backing read. `viewerRole` works as on `StrategyPanel`. `hideSensorLines` drops the
+ * `sensorLines` indexes ("Hide sensor data"), which the backend keeps in baseline order.
  */
 export function ChartSummaryPanel({ summary, source, retrieved, loading, error, onGenerate,
-                                    viewerRole = 'parent' }) {
+                                    viewerRole = 'parent', sensorLines = [],
+                                    hideSensorLines = false }) {
   const forTeacher = viewerRole === 'teacher'
   // `=== false`, not falsy: absent on older payloads.
   const missing = [
@@ -573,6 +569,8 @@ export function ChartSummaryPanel({ summary, source, retrieved, loading, error, 
     retrieved?.stats === false && 'the practice totals',
     retrieved?.topics === false && 'the topic figures',
   ].filter(Boolean)
+  const lines = (summary || []).map((text, i) => ({ text, i }))
+    .filter(({ i }) => !(hideSensorLines && sensorLines.includes(i)))
 
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
@@ -613,10 +611,10 @@ export function ChartSummaryPanel({ summary, source, retrieved, loading, error, 
             </p>
           )}
           {/* Index key: replaced wholesale, never reordered, text not unique. */}
-          {summary.map((s, i) => (
+          {lines.map(({ text, i }, n) => (
             <div key={i} className="flex gap-3 rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
-              <span className="w-6 h-6 rounded-lg bg-sky-600 text-white flex items-center justify-center text-xs font-black shrink-0">{i + 1}</span>
-              <p className="text-sm text-gray-700 dark:text-gray-200">{s}</p>
+              <span className="w-6 h-6 rounded-lg bg-sky-600 text-white flex items-center justify-center text-xs font-black shrink-0">{n + 1}</span>
+              <p className="text-sm text-gray-700 dark:text-gray-200">{text}</p>
             </div>
           ))}
           {source && <p className="text-[11px] text-gray-600 dark:text-gray-400">Source: {source}</p>}

@@ -190,15 +190,13 @@ def check_server(ctx):
     from src.app.main import app  # noqa: PLC0415
     from src.kit import update  # noqa: PLC0415
 
-    installed = update.installed_version(ctx["app"])
+    installed = update.version_text(update.installed_version(ctx["app"]))
     status, body, warnings = _serve_once(app, "/healthz")
-    kit = body.get("kit")
-    try:  # by value, as the updater reads it (0.2.03 is 0.2.3); a field /healthz gains later is not checked
-        reported = update.parse_version(kit.get("version")) if isinstance(kit, dict) else None
-    except update.FeedError:
-        reported = None
-    require(status == 200 and body.get("status") == "ok" and reported == installed,  # else the admin page sees none
-            f"healthz {status} {body}, not version {update.version_text(installed)}")
+    kit = body.get("kit")  # only status and kit: a field /healthz gains later is not this check's
+    reported = kit.get("version") if isinstance(kit, dict) else None
+    # the text the admin page counts, so a version.txt of 0.2.03 must arrive as 0.2.3
+    require(status == 200 and body.get("status") == "ok" and reported == installed,
+            f"healthz {status} {body}, not version {installed}")
     return {"healthz": status, "warnings": warnings}
 
 

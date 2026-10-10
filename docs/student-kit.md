@@ -28,8 +28,8 @@ read from `kit.json`, which `src/kit/config.py` refuses for exactly the reasons 
   are kept. matplotlib's font list lives in the data folder: PyInstaller gives each process a new temp folder, so
   mediapipe's import rebuilt it at every lesson's first camera frame.
 - **`--self-test`** runs before every installer is built: the models on a real portrait, the sidecar on port 0
-  (its `/healthz` must name, by value, the version the updater reads from `version.txt`, or the admin page would
-  count it as naming none), and
+  (its `/healthz` must name `version.txt`'s version as written below, or the admin page would count it as naming
+  none or as another version), and
   the bridge started, authenticated and required to answer `bridge_mode: libmuse` with its C++ runtime loaded from
   `bridge\` itself. A blank frame cannot tell a working model from one that never detects, and a launch that works
   cannot show where the runtime came from: the bridge inherits the frozen launcher's DLL folder, `_internal\`, ahead of
@@ -126,7 +126,8 @@ following a link sends no header.
   and a redirect, a 401 (a Worker deployed before these routes) or an unmarked 403 or 404 (not the gate), into a
   `problem` naming the fix, never a retry; only other answers and an unreachable gate are a 503.
 - **Kits in use.** The sidecar's `/healthz` carries `kit`: `null` outside one (no frozen exe, no `KIT_APP_DIR`),
-  `{"version": "x.y.z"}` from `version.txt`, or `{"version": null}` when that does not read as a version. The lesson
+  `{"version": "x.y.z"}` from `version.txt`, written as the updater reads it (`0.2.03` as `0.2.3`: the page counts
+  versions by this text), or `{"version": null}` when that does not read as a version. The lesson
   page sends it with its headband start (`docs/reporting.md`, *Session alerts*), and `GET /api/admin/kit-versions`
   (`admin_kit_versions`, `20261014000000`) counts students over 14 days by the newest version their lessons reported,
   with the lessons whose sidecar answered with none apart. Only lessons whose sidecar answered count, keyed on

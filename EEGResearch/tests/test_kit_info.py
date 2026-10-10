@@ -39,6 +39,13 @@ def test_a_kit_run_from_source_reads_its_folders_version(tmp_path):
     assert kit_info.kit(frozen=False, environ={"KIT_APP_DIR": str(tmp_path)}) == {"version": "0.3.10"}
 
 
+@pytest.mark.parametrize("version_txt, reported", [
+    (b"0.2.03", "0.2.3"), (b"00.02.0003\n", "0.2.3"), (b"0010.0.0", "10.0.0"),
+])
+def test_a_version_is_reported_as_the_updater_reads_it_so_the_page_counts_one(tmp_path, version_txt, reported):
+    assert kit_info.kit(frozen=True, executable=_installed(tmp_path, version_txt)) == {"version": reported}
+
+
 def test_a_kit_folder_that_cannot_be_read_still_answers_healthz_and_logs_it_once(monkeypatch, caplog):
     # A path no file system takes: read_text raises ValueError, which kit() does not expect.
     real = kit_info.kit
@@ -92,6 +99,7 @@ def test_the_self_test_passes_a_healthz_that_has_gained_a_field(monkeypatch, tmp
     (200, {"status": "ok", "kit": "0.2.3"}),
     (200, {"status": "ok", "kit": {"version": None}}),
     (200, {"status": "ok", "kit": {"version": "0.2.2"}}),
+    (200, {"status": "ok", "kit": {"version": "0.2.03"}}),  # the page would count it apart from 0.2.3
     (200, {"status": "degraded", "kit": {"version": "0.2.3"}}),
     (503, {"status": "ok", "kit": {"version": "0.2.3"}}),
 ])

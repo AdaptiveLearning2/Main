@@ -28,10 +28,8 @@ export async function recordAnswer({ sessionId, questionId, selectedIndex, corre
 }
 
 /**
- * Push only: tell the backend a headband is streaming for this session (its alerts need it), and which student
- * kit is streaming it, for the admin page. Never throws, and silent: the student can do nothing about a failure.
- * @param {{version: string|null}|null} [kit]  what the sidecar said of its kit (`sidecarKit`); null, when it gave
- *   no answer, sends no body, so the lesson is not counted as naming no version
+ * Push only: tell the backend a headband is streaming for this session (its alerts need it), and what the sidecar
+ * said of its kit (`sidecarKit`; null, no answer, sends no body). Never throws, and silent on a failure.
  * @returns {Promise<boolean>} whether nothing is left to send: recorded, or the session is closed
  */
 export async function markEegStarted(sessionId, kit = null) {

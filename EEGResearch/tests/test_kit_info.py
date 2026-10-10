@@ -74,14 +74,22 @@ def _check_server(monkeypatch, tmp_path, answer=None):
     return selftest.check_server({"settings_ok": True, "app": tmp_path})
 
 
-def test_the_self_test_passes_a_sidecar_reporting_its_kits_own_version(monkeypatch, tmp_path):
-    _installed(tmp_path, b"0.2.3\r\n")
+@pytest.mark.parametrize("version_txt", [b"0.2.3\r\n", b"0.2.03"])  # the updater reads both as 0.2.3
+def test_the_self_test_passes_a_sidecar_reporting_its_kits_own_version(monkeypatch, tmp_path, version_txt):
+    _installed(tmp_path, version_txt)
     assert _check_server(monkeypatch, tmp_path) == {"healthz": 200, "warnings": []}
+
+
+def test_the_self_test_passes_a_healthz_that_has_gained_a_field(monkeypatch, tmp_path):
+    _installed(tmp_path, b"0.2.3")
+    answer = (200, {"status": "ok", "kit": {"version": "0.2.3"}, "later": True}, [])
+    assert _check_server(monkeypatch, tmp_path, answer) == {"healthz": 200, "warnings": []}
 
 
 @pytest.mark.parametrize("status, body", [
     (200, {"status": "ok"}),
     (200, {"status": "ok", "kit": None}),
+    (200, {"status": "ok", "kit": "0.2.3"}),
     (200, {"status": "ok", "kit": {"version": None}}),
     (200, {"status": "ok", "kit": {"version": "0.2.2"}}),
     (200, {"status": "degraded", "kit": {"version": "0.2.3"}}),

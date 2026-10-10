@@ -210,6 +210,20 @@ session was shorter than it was. `sample()` returns the rows alone; "was it samp
 `?? 0`: `sample()` guards a nullish `rows` internally, so deriving the flag *outside* it moved that check away from the
 guard and crashed on a comparison. **Moving a derivation out of a function moves it out of that function's guards.**
 
+## A signal measure is named once, in `lib/signalGlossary.js`
+
+`MEASURES` is the only source of a measure's name, explanation, "higher means" and caveat; tiles, chart series, info
+tips and the Students page read it. **EEG stress is shown as Calm** (`calmPct`, `calmRatio`: `1 - stress`, null stays
+null), and nothing visible says "Stress", "RMSSD" or "HRV" — heart arousal is **Body arousal (heart rate)**, a separate
+measure with its own words for each backend `state` (`AROUSAL_REASONS`), never 0% for an absence. A comparison with
+the student's usual comes only from the backend's `usual`, in `USUAL_WORDS` (never "good" or "bad"); an absent `usual`
+draws nothing. `MeasureTile` is a `role="group"` named by the measure, so tests find a tile by its group, and every
+caveat goes inside the tile it qualifies. `InfoTip` is a click and keyboard disclosure, never hover-only.
+
+**One unit per chart.** The report's trends are stacked small charts (percent, bpm, ms, body-arousal %) sharing one
+`SeriesFilter` and a `syncId`; never two y-axes. Calm is teal-600 and dashed, because focus and calm sit in the
+tritan floor band of the palette validator.
+
 ## A backend poll goes through `usePoll`
 
 `hooks/usePoll.js` never overlaps calls — the next is scheduled when one settles — pauses while the tab is hidden

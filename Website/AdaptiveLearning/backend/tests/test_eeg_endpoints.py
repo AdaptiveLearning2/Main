@@ -5,6 +5,8 @@ import os
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
+from datetime import datetime, timezone  # noqa: E402
+
 import pytest  # noqa: E402
 
 import eeg_client  # noqa: E402
@@ -448,7 +450,7 @@ def test_the_push_report_stamps_only_the_owners_open_session(monkeypatch, owner,
 def _reporting(monkeypatch, owner="user-a", ended_at=None):
     stamped, versions = [], []
     monkeypatch.setattr(main, "_mark_eeg_started", stamped.append)
-    monkeypatch.setattr(main, "_record_kit_version", lambda session, version: versions.append((session, version)))
+    monkeypatch.setattr(main, "_record_kit_report", lambda session, version: versions.append((session, version)))
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
     monkeypatch.setattr(main, "supabase", _SessionsTable(owner, ended_at))
     return stamped, versions
@@ -462,10 +464,11 @@ def test_the_push_report_records_the_kit_version_the_page_sent(monkeypatch):
 
 
 @pytest.mark.parametrize("payload", [None, main.EegStartedReport()], ids=["no body: an older page", "no version"])
-def test_a_report_naming_no_kit_version_still_stamps_and_records_none(monkeypatch, payload):
+def test_a_report_naming_no_kit_version_still_stamps_and_records_the_report_without_one(monkeypatch, payload):
+    # The report itself is recorded: it is what tells this lesson from a pull one that could never name a kit.
     stamped, versions = _reporting(monkeypatch)
     assert main.session_eeg_started("session-1", request=None, payload=payload) == {"ok": True}
-    assert stamped == ["session-1"] and versions == []
+    assert stamped == ["session-1"] and versions == [("session-1", None)]
 
 
 @pytest.mark.parametrize("owner,ended_at,status", [("user-a", "2026-09-26T10:00:00Z", 409), ("user-b", None, 403)],
@@ -483,7 +486,7 @@ def test_a_kit_version_that_is_not_one_is_dropped_and_the_stamp_still_lands(monk
     stamped, versions = _reporting(monkeypatch)
     report = main.EegStartedReport(kit_version=bad)
     assert main.session_eeg_started("session-1", request=None, payload=report) == {"ok": True}
-    assert stamped == ["session-1"] and versions == []
+    assert stamped == ["session-1"] and versions == [("session-1", None)]
 
 
 def test_through_the_app_no_body_a_bad_version_or_a_newer_field_never_loses_the_stamp(monkeypatch):
@@ -496,10 +499,11 @@ def test_through_the_app_no_body_a_bad_version_or_a_newer_field_never_loses_the_
                  {"kit_version": "0.2.4", "a_field_from_a_newer_page": True}):
         assert client.post(path, json=body).status_code == 200, body
     assert stamped == ["session-1"] * 5
-    assert versions == [("session-1", "0.2.3"), ("session-1", "0.2.4")]
+    assert versions == [("session-1", None), ("session-1", "0.2.3"), ("session-1", None), ("session-1", None),
+                        ("session-1", "0.2.4")]
 
 
-def test_the_kit_version_is_written_by_session_id_and_a_failure_never_raises(monkeypatch):
+def test_the_kit_report_is_written_by_session_id_with_the_version_only_when_named_and_never_raises(monkeypatch):
     calls = []
 
     class _Sessions:
@@ -511,14 +515,20 @@ def test_the_kit_version_is_written_by_session_id_and_a_failure_never_raises(mon
             q.execute = lambda: type("R", (), {"data": []})()
             return q
     monkeypatch.setattr(main, "supabase", _Sessions())
-    main._record_kit_version("session-1", "0.2.3")
-    assert calls == ["sessions", {"kit_version": "0.2.3"}, ("eq", "id", "session-1")]
+    monkeypatch.setattr(main, "_utc_now", lambda: datetime(2026, 10, 9, 18, 0, tzinfo=timezone.utc))
+    main._record_kit_report("session-1", "0.2.3")
+    assert calls == ["sessions", {"kit_reported_at": "2026-10-09T18:00:00+00:00", "kit_version": "0.2.3"},
+                     ("eq", "id", "session-1")]
+    # A report naming no kit never writes over the version an earlier report of this lesson named.
+    calls.clear()
+    main._record_kit_report("session-1", None)
+    assert calls == ["sessions", {"kit_reported_at": "2026-10-09T18:00:00+00:00"}, ("eq", "id", "session-1")]
 
     class _Down:
         def table(self, name):
             raise RuntimeError("down")
     monkeypatch.setattr(main, "supabase", _Down())
-    main._record_kit_version("session-1", "0.2.3")
+    main._record_kit_report("session-1", "0.2.3")
 
 
 def test_start_falls_back_to_permissive_when_list_devices_unreachable(monkeypatch):

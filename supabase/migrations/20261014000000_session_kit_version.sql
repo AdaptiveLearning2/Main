@@ -1,16 +1,19 @@
 -- The student kit version a lesson's page reported when its headband started streaming (push), for the admin
 -- Sensors kit page. The client's claim: shown, never used to gate anything. Clients hold no write grant on sessions.
+-- `kit_reported_at`: when that push report arrived, with a version or without one. Only the push report writes it,
+-- so it alone tells a lesson that could have named its kit from a pull one, or one from before this column.
 
 ALTER TABLE "public"."sessions" ADD COLUMN IF NOT EXISTS "kit_version" text;
+ALTER TABLE "public"."sessions" ADD COLUMN IF NOT EXISTS "kit_reported_at" timestamptz;
 
 ALTER TABLE "public"."sessions" DROP CONSTRAINT IF EXISTS "sessions_kit_version_format";
 ALTER TABLE "public"."sessions" ADD CONSTRAINT "sessions_kit_version_format"
     CHECK ("kit_version" IS NULL OR "kit_version" ~ '^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$');
 
 
--- Since `p_since`: students by the newest kit version their push headband lessons reported, and apart from them the
--- push headband lessons that reported none, with how many students had only those. Counts only, never a student.
--- Push only: a pull start (`/api/eeg/start`, which writes `eeg_device_id`) never carries a version to report.
+-- Since `p_since`: students by the newest kit version their lessons reported, and apart from them the lessons whose
+-- report named none, with how many students had only those. Counts only, never a student. Only lessons that made the
+-- push report count: a pull lesson, or one from before it, never had a version to send.
 CREATE OR REPLACE FUNCTION "public"."admin_kit_versions"("p_since" timestamptz)
 RETURNS "jsonb"
 LANGUAGE "sql"
@@ -20,7 +23,7 @@ SET "search_path" TO 'public'
 AS $$
     WITH headband AS (
         SELECT user_id, kit_version, started_at FROM sessions
-         WHERE eeg_started_at IS NOT NULL AND eeg_device_id IS NULL AND started_at >= p_since
+         WHERE kit_reported_at IS NOT NULL AND started_at >= p_since
     ), newest AS (
         SELECT DISTINCT ON (user_id) user_id, kit_version FROM headband
          WHERE kit_version IS NOT NULL

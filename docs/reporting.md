@@ -374,7 +374,8 @@ Under pull `/api/eeg/start` stamps it. Under push the backend sees no start, so 
 the client's claim**: a student can stamp their own sensorless session and earn it a false alert. Accepted, since
 the alert is about that session only and gates nothing. Read at `GET /api/classes/{id}/alerts`, rendered by
 `AlertFeed`. The report also carries `kit_version`, the student kit the sidecar names on `/healthz`, stored on
-`sessions.kit_version` for the admin Sensors kit page: equally a claim, and it gates nothing either. The body never
+`sessions.kit_version` with `kit_reported_at` (that a report arrived, version or not) for the admin Sensors kit page:
+equally a claim, and it gates nothing either. The body never
 422s (`EegStartedReport` is lenient, like the ingest models): a page from before it sends none, and a version the
 handler cannot read is dropped, since a refusal would lose the stamp.
 

@@ -8449,12 +8449,14 @@ class EegStartedReport(BaseModel):
 _KIT_VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}")
 
 
-def _record_kit_version(session_id: str, kit_version: str) -> None:
-    """The kit version on the session, the latest reported. Never raises: it is for the admin page alone."""
+def _record_kit_report(session_id: str, kit_version: str | None) -> None:
+    """That the push report arrived (`kit_reported_at`, which the admin counts key on), and the version it named, if
+    any. Never raises: it is for the admin page alone."""
+    patch = {"kit_reported_at": _utc_now().isoformat(), **({"kit_version": kit_version} if kit_version else {})}
     try:
-        supabase.table("sessions").update({"kit_version": kit_version}).eq("id", session_id).execute()
+        supabase.table("sessions").update(patch).eq("id", session_id).execute()
     except Exception as e:                                     # noqa: BLE001
-        print(f"[eeg] could not record the kit version for {session_id}: {type(e).__name__}")
+        print(f"[eeg] could not record the kit report for {session_id}: {type(e).__name__}")
 
 
 @app.post("/api/sessions/{session_id}/eeg-started")
@@ -8471,10 +8473,10 @@ def session_eeg_started(session_id: str = Path(...), request: Request = None,
         raise HTTPException(409, "This session has ended")
     _mark_eeg_started(session_id)
     version = None if payload is None else payload.kit_version
-    if isinstance(version, str) and _KIT_VERSION.fullmatch(version):
-        _record_kit_version(session_id, version)
-    elif version is not None:
+    if version is not None and not (isinstance(version, str) and _KIT_VERSION.fullmatch(version)):
         print(f"[eeg] dropped a kit version that is not x.y.z for {session_id}")
+        version = None
+    _record_kit_report(session_id, version)
     return {"ok": True}
 
 @app.post("/api/eeg/stop")

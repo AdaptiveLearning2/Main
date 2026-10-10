@@ -130,7 +130,7 @@ Three read-only RPCs (`20261011000000`), each called inline (so `_missing_rpc` s
 - A gate or server set up wrong, or a publish left half done, is a `problem` naming the fix, with `problem_is` (`setup` or `publish`) choosing the page's heading (the link route: 409 with that sentence), not a retry. An outage is a 503 with `Retry-After`, never `published: false`.
 - The link route answers 409 when the offered installer is no longer the one the page showed, or none is.
 
-**`/api/admin/kit-versions`** (`admin_kit_versions(p_since)`, `20261014000000`) counts students over the last 14 days by the newest kit version their push headband lessons reported, and apart from them the push headband lessons that reported none (a pull start never carries a version, so pull lessons are left out).
+**`/api/admin/kit-versions`** (`admin_kit_versions(p_since)`, `20261014000000`) counts students over the last 14 days by the newest kit version their lessons reported, and apart from them the lessons whose report named none. Only lessons that made the push report count (`sessions.kit_reported_at`, written by that report alone), so a pull lesson, or one from before it, is never "no version".
 - Counts only and system-wide, so no floor applies; `retrieved: false` is never "no kits".
 - The version is the lesson page's claim (`docs/reporting.md`, *Session alerts*): shown, never used to decide anything.
 - The link names no user and is sent `no-store`; issuing one prints the admin's id prefix to the server log, nothing to the security log, which records refusals.

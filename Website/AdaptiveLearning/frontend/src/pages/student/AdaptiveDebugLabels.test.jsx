@@ -1,6 +1,6 @@
 /** The debug readout labels the `confidence` key as signal quality, not confidence in the scores. */
 import { it, expect, beforeEach, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 
 // Read at module load in Adaptive.jsx, so it has to be set before the import.
 vi.hoisted(() => { vi.stubEnv('VITE_EEG_DEBUG', 'true') })
@@ -57,13 +57,18 @@ beforeEach(() => {
   })
 })
 
-it('shows the calm score as calm, never as a derived stress', async () => {
+it('shows the calm score once, as calm, and no derived stress beside it', async () => {
   render(<Adaptive />)
-  await screen.findByText(/signal quality score/i, {}, { timeout: 5000 })
-  // `calm_score` 0.3 is calm 30%, not its inverse.
-  const readout = screen.getAllByText(/^calm/i).find(el => /%|—/.test(el.textContent))
-  expect(readout).toHaveTextContent(/^Calm\s*30%$/)
-  expect(screen.queryByText(/stress/i)).not.toBeInTheDocument()
+  // One snapshot: the readout re-renders on every debug poll.
+  await waitFor(() => {
+    // `calm_score` 0.3 is calm 30%; its inverse would be a second name for the same number.
+    const readouts = screen.getAllByText(/^calm\b/i).filter(el => /%|—/.test(el.textContent))
+    expect(readouts).toHaveLength(1)
+    expect(readouts[0]).toHaveTextContent(/^Calm\s*30%$/)
+    expect(screen.getByText(/signal quality score/i)).toBeInTheDocument()
+    expect(screen.queryByText(/stress/i)).not.toBeInTheDocument()
+    expect(screen.queryByText('70%')).not.toBeInTheDocument()
+  }, { timeout: 5000 })
 })
 
 it('calls the quality number a signal quality score, not confidence', async () => {

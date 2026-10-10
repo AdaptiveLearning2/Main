@@ -2233,10 +2233,7 @@ export default function Adaptive() {
                         <p className="text-gray-400 mb-1">Signal quality score <span className="text-white">{untrusted ? '—' : pct(feat.confidence)}</span></p>
                         {bar(untrusted ? null : feat.confidence, 'bg-violet-500')}
                       </div>
-                      <div>
-                        <p className="text-gray-400 mb-1">Calm <span className="text-white">{feat.calm_score != null && !untrusted ? pct(feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score) : '—'}</span></p>
-                        {bar(feat.calm_score != null && !untrusted ? (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score) : null, 'bg-teal-600')}
-                      </div>
+                      {/* No "stress" tile: it is calm inverted, already shown above. */}
                     </div>
 
                     {/* Row 3 — bands */}

@@ -17,9 +17,9 @@
 #
 # To upgrade: bump a pin, rebuild the venv, run `python -m pytest tests/`.
 
-fastapi==0.141.1
-uvicorn[standard]==0.53.0
-python-dotenv==1.2.3
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
+python-dotenv==1.2.4
 supabase==2.31.0
 # Imported directly (`ReturnMethod`), so pinned here too. supabase requires
 # this exact version, so a split fails to install; the `supabase` group in
@@ -30,14 +30,14 @@ postgrest==2.31.0
 httpx==0.28.1
 # Imported directly: main.py widens anyio's default thread limiter at startup.
 # Starlette requires >=3.6.2,<5.
-anyio==4.14.2
+anyio==4.15.1
 requests==2.34.2
-openai==3.19.0
-ollama==0.6.2
+openai==3.26.0
+ollama==0.6.3
 # Both model providers are installed, not one: `LLM_PROVIDER` selects
 # between them at runtime and defaults to ollama, so a deployment can be
 # switched over -- or switched back off a misbehaving model -- without a
 # rebuild. Neither import runs until its branch is taken.
-anthropic==1.8.0
+anthropic==1.11.0
 sympy==1.14.0
-tzdata==2026.4
+tzdata==2026.5

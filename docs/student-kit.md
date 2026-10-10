@@ -27,7 +27,8 @@ read from `kit.json`, which `src/kit/config.py` refuses for exactly the reasons 
   retries every 300 s rather than giving up, since nobody is watching. Each run logs to its own file; the newest ten
   are kept. matplotlib's font list lives in the data folder: PyInstaller gives each process a new temp folder, so
   mediapipe's import rebuilt it at every lesson's first camera frame.
-- **`--self-test`** runs before every installer is built: the models on a real portrait, the sidecar on port 0, and
+- **`--self-test`** runs before every installer is built: the models on a real portrait, the sidecar on port 0
+  (its `/healthz` must name the kit's own `version.txt`, or the admin page would count it as naming none), and
   the bridge started, authenticated and required to answer `bridge_mode: libmuse` with its C++ runtime loaded from
   `bridge\` itself. A blank frame cannot tell a working model from one that never detects, and a launch that works
   cannot show where the runtime came from: the bridge inherits the frozen launcher's DLL folder, `_internal\`, ahead of

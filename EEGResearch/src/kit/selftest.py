@@ -188,9 +188,12 @@ def _serve_once(app, path: str) -> tuple[int, dict, list[str]]:
 def check_server(ctx):
     require(ctx.get("settings_ok"), "the settings check did not pass, so the sidecar's env is not set")
     from src.app.main import app  # noqa: PLC0415
+    from src.kit import update  # noqa: PLC0415
 
+    # the kit must report its own version.txt, or the admin page counts it as naming none
+    want = {"status": "ok", "kit": {"version": update.version_text(update.installed_version(ctx["app"]))}}
     status, body, warnings = _serve_once(app, "/healthz")
-    require(status == 200 and body == {"status": "ok"}, f"healthz {status} {body}")
+    require(status == 200 and body == want, f"healthz {status} {body}, not {want}")
     return {"healthz": status, "warnings": warnings}
 
 

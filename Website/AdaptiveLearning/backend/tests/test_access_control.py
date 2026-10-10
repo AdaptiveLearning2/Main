@@ -2009,7 +2009,7 @@ def test_validated_strategies_rejects_clinical_language(bad):
     "4. Your child seemed stressed during practice this week",
     "4. Stress readings ran high, so take more breaks",
     "Lower stress first:\n",
-])
+], ids=["stressed", "stress-readings", "preamble"])
 def test_validated_strategies_rejects_the_word_stress(bad):
     """Calm is not a stress measure: a reply calling it one is rejected whole, preamble included."""
     raw = f"{bad}\n{_THREE_SAFE}" if bad.endswith(":\n") else f"{_THREE_SAFE}\n{bad}"

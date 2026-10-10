@@ -32,6 +32,7 @@ vi.mock('../../lib/sidecar', () => ({
   devices: vi.fn(async () => []),
   releasePushIfIdle: vi.fn(async () => ({})),
   sidecarDebug: vi.fn(async () => ({})),
+  sidecarKitVersion: vi.fn(async () => null),
 }))
 vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u1', email: 'a@b.c' }, role: 'student', loading: false }),

@@ -35,6 +35,7 @@ vi.mock('../../lib/sidecar', () => ({
   devices: vi.fn(async () => [{ device_id: 'default', kind: 'muse', running: false }]),
   releasePushIfIdle: vi.fn(async () => ({ stopped: true, devices: [] })),
   sidecarDebug: vi.fn(async () => ({})),
+  sidecarKitVersion: vi.fn(async () => null),
 }))
 // The real helper with a spy for the reload jsdom cannot perform.
 const reloadPage = vi.fn()
@@ -382,7 +383,7 @@ it('reports the EEG start once a headband streams into the handed-over session',
   fireEvent.click(screen.getByRole('button', { name: /generate question/i }))
   await screen.findByText('What is 2 + 2?')
 
-  await waitFor(() => expect(markEegStarted).toHaveBeenCalledWith('sess-push'), POLL)
+  await waitFor(() => expect(markEegStarted).toHaveBeenCalledWith('sess-push', null), POLL)
   // A drop and recovery re-runs the effect: the session is still reported only once.
   bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: true,
                        reconnect_attempt: 1, battery_percent: null }

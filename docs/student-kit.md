@@ -127,9 +127,10 @@ following a link sends no header.
   `{"version": "x.y.z"}` from `version.txt`, or `{"version": null}` when that does not read as a version. The lesson
   page sends it with its headband start (`docs/reporting.md`, *Session alerts*), and `GET /api/admin/kit-versions`
   (`admin_kit_versions`, `20261014000000`) counts students over 14 days by the newest version their lessons reported,
-  with the lessons whose report named none apart. Only lessons that made the push report count, keyed on
-  `sessions.kit_reported_at`, which that report alone writes: a pull lesson, or one from before it, never had a version
-  to send. A kit built before this reports none. `/healthz` answers even when the folder cannot be read.
+  with the lessons whose sidecar answered with none apart. Only lessons whose sidecar answered count, keyed on
+  `sessions.kit_reported_at`, which that answer alone writes: a pull lesson, one from before it, or one whose sidecar
+  has not answered yet is never "no version". A kit built before this answers with none. `/healthz` answers even when
+  the folder cannot be read.
 - **Publishing.** `publish_kit_update.ps1 -Setup`, only with `-Promote` at 100%: the site offers the version every kit
   is moving to. It uploads `setup/AdaptiveLearningSensors-Setup-x.y.z.exe`, then `setup/current.json`, and never
   replaces an offered installer with other bytes. The signature is computed three times (`worker.mjs`,

@@ -32,7 +32,7 @@ it('still says the answer could not be saved for any other failure', async () =>
   expect(toast.error).toHaveBeenCalledWith('That answer could not be saved.')
 })
 
-it('reports a push EEG start for the session it names, with no body when the sidecar names no kit', async () => {
+it('reports a push EEG start for the session it names, with no body when the sidecar gave no answer', async () => {
   mockApi({ 'POST /api/sessions/s1/eeg-started': () => ({ ok: true }) })
 
   await expect(markEegStarted('s1')).resolves.toBe(true)
@@ -41,12 +41,16 @@ it('reports a push EEG start for the session it names, with no body when the sid
                                        ['/api/sessions/s1/eeg-started', { method: 'POST' }]])
 })
 
-it('reports the kit version with the start', async () => {
+it('reports what the sidecar said of its kit, a version or none', async () => {
   mockApi({ 'POST /api/sessions/s1/eeg-started': () => ({ ok: true }) })
 
-  await expect(markEegStarted('s1', '0.2.3')).resolves.toBe(true)
-  expect(apiFetch).toHaveBeenCalledWith('/api/sessions/s1/eeg-started',
-                                        { method: 'POST', body: { kit_version: '0.2.3' } })
+  await expect(markEegStarted('s1', { version: '0.2.3' })).resolves.toBe(true)
+  await expect(markEegStarted('s1', { version: null })).resolves.toBe(true)
+  expect(apiFetch.mock.calls).toEqual([
+    ['/api/sessions/s1/eeg-started', { method: 'POST', body: { kit_version: '0.2.3' } }],
+    // An answer naming no version is a fact the admin page counts, unlike no answer at all.
+    ['/api/sessions/s1/eeg-started', { method: 'POST', body: { kit_version: null } }],
+  ])
 })
 
 it('treats a closed session as nothing left to report, so the page does not retry it', async () => {

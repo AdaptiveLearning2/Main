@@ -8472,11 +8472,15 @@ def session_eeg_started(session_id: str = Path(...), request: Request = None,
     if session.get("ended_at"):
         raise HTTPException(409, "This session has ended")
     _mark_eeg_started(session_id)
-    version = None if payload is None else payload.kit_version
+    # The field present is the page saying its sidecar answered (null: it named no version); absent, it could not
+    # ask, and an unreadable value is no answer either. Only an answer is counted, never "no answer" as "no version".
+    answered = payload is not None and "kit_version" in payload.model_fields_set
+    version = payload.kit_version if answered else None
     if version is not None and not (isinstance(version, str) and _KIT_VERSION.fullmatch(version)):
         print(f"[eeg] dropped a kit version that is not x.y.z for {session_id}")
-        version = None
-    _record_kit_report(session_id, version)
+        answered = False
+    if answered:
+        _record_kit_report(session_id, version)
     return {"ok": True}
 
 @app.post("/api/eeg/stop")

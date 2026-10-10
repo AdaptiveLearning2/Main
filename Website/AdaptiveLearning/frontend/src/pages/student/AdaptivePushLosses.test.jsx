@@ -30,7 +30,7 @@ vi.mock('../../lib/sidecar', () => ({
   devices: vi.fn(async () => [{ device_id: 'default', kind: 'muse', running: false }]),
   releasePushIfIdle: vi.fn(async () => ({ stopped: true, devices: [] })),
   sidecarDebug: vi.fn(async () => ({})),
-  sidecarKitVersion: vi.fn(async () => null),
+  sidecarKit: vi.fn(async () => ({ version: null })),
   sidecarState: vi.fn(async () => null),
   debugFaceFrame: vi.fn(async () => null),
 }))

@@ -49,7 +49,7 @@ vi.mock('../../lib/sidecar', () => ({
   museState: vi.fn(async () => ({})), devices: vi.fn(async () => []),
   releasePushIfIdle: vi.fn(async () => ({ stopped: true, devices: [] })),
   sidecarDebug: vi.fn(async () => ({})),
-  sidecarKitVersion: vi.fn(async () => null),
+  sidecarKit: vi.fn(async () => ({ version: null })),
 }))
 vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u1', email: 'a@b.c' }, role: 'student', loading: false }),

@@ -374,10 +374,12 @@ Under pull `/api/eeg/start` stamps it. Under push the backend sees no start, so 
 the client's claim**: a student can stamp their own sensorless session and earn it a false alert. Accepted, since
 the alert is about that session only and gates nothing. Read at `GET /api/classes/{id}/alerts`, rendered by
 `AlertFeed`. The report also carries `kit_version`, the student kit the sidecar names on `/healthz`, stored on
-`sessions.kit_version` with `kit_reported_at` (that a report arrived, version or not) for the admin Sensors kit page:
-equally a claim, and it gates nothing either. The body never
-422s (`EegStartedReport` is lenient, like the ingest models): a page from before it sends none, and a version the
-handler cannot read is dropped, since a refusal would lose the stamp.
+`sessions.kit_version` with `kit_reported_at` (that the sidecar answered, with a version or with none) for the admin
+Sensors kit page: equally a claim, and it gates nothing either. The page sends `kit_version` only once the sidecar has
+answered (`null`: an older kit); a read with no answer is retried on the stamp's backoff (`useEegStartReport`), and
+until then the lesson counts for nothing, never as "no version". The body never 422s (`EegStartedReport` is lenient,
+like the ingest models): a page from before it sends none, and a value the handler cannot read counts for nothing,
+since a refusal would lose the stamp.
 
 **The scope is the feature.** `signal_fusion` produces a `stressed` label that no teacher surface consumes, and
 routing it here was considered and rejected: it is an inference from signals this codebase already treats as weak,

@@ -463,12 +463,20 @@ def test_the_push_report_records_the_kit_version_the_page_sent(monkeypatch):
     assert stamped == ["session-1"] and versions == [("session-1", "0.2.3")]
 
 
-@pytest.mark.parametrize("payload", [None, main.EegStartedReport()], ids=["no body: an older page", "no version"])
-def test_a_report_naming_no_kit_version_still_stamps_and_records_the_report_without_one(monkeypatch, payload):
-    # The report itself is recorded: it is what tells this lesson from a pull one that could never name a kit.
+def test_a_sidecar_answering_with_no_version_is_recorded_as_a_report_without_one(monkeypatch):
+    # An older kit: the report is what tells this lesson from a pull one, or one whose sidecar never answered.
+    stamped, versions = _reporting(monkeypatch)
+    report = main.EegStartedReport(kit_version=None)
+    assert main.session_eeg_started("session-1", request=None, payload=report) == {"ok": True}
+    assert stamped == ["session-1"] and versions == [("session-1", None)]
+
+
+@pytest.mark.parametrize("payload", [None, main.EegStartedReport()], ids=["no body: an older page", "no answer"])
+def test_a_report_whose_page_could_not_ask_the_sidecar_stamps_and_counts_for_nothing(monkeypatch, payload):
+    # A slow or absent sidecar is not "no version": counting it would be a fact nobody established.
     stamped, versions = _reporting(monkeypatch)
     assert main.session_eeg_started("session-1", request=None, payload=payload) == {"ok": True}
-    assert stamped == ["session-1"] and versions == [("session-1", None)]
+    assert stamped == ["session-1"] and versions == []
 
 
 @pytest.mark.parametrize("owner,ended_at,status", [("user-a", "2026-09-26T10:00:00Z", 409), ("user-b", None, 403)],
@@ -486,7 +494,7 @@ def test_a_kit_version_that_is_not_one_is_dropped_and_the_stamp_still_lands(monk
     stamped, versions = _reporting(monkeypatch)
     report = main.EegStartedReport(kit_version=bad)
     assert main.session_eeg_started("session-1", request=None, payload=report) == {"ok": True}
-    assert stamped == ["session-1"] and versions == [("session-1", None)]
+    assert stamped == ["session-1"] and versions == []  # an unreadable claim is no answer, so it counts for nothing
 
 
 def test_through_the_app_no_body_a_bad_version_or_a_newer_field_never_loses_the_stamp(monkeypatch):
@@ -495,12 +503,12 @@ def test_through_the_app_no_body_a_bad_version_or_a_newer_field_never_loses_the_
     stamped, versions = _reporting(monkeypatch)
     client = TestClient(main.app)
     path = "/api/sessions/session-1/eeg-started"
-    for body in (None, {"kit_version": "0.2.3"}, {"kit_version": "0.2"}, {"kit_version": 21},
-                 {"kit_version": "0.2.4", "a_field_from_a_newer_page": True}):
+    for body in (None, {}, {"kit_version": "0.2.3"}, {"kit_version": None}, {"kit_version": "0.2"},
+                 {"kit_version": 21}, {"kit_version": "0.2.4", "a_field_from_a_newer_page": True}):
         assert client.post(path, json=body).status_code == 200, body
-    assert stamped == ["session-1"] * 5
-    assert versions == [("session-1", None), ("session-1", "0.2.3"), ("session-1", None), ("session-1", None),
-                        ("session-1", "0.2.4")]
+    assert stamped == ["session-1"] * 7
+    # Only an answer counts: a version, or an explicit null (an older kit). No body, {}, and unreadable values do not.
+    assert versions == [("session-1", "0.2.3"), ("session-1", None), ("session-1", "0.2.4")]
 
 
 def test_the_kit_report_is_written_by_session_id_with_the_version_only_when_named_and_never_raises(monkeypatch):

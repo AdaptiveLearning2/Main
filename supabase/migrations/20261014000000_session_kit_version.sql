@@ -1,7 +1,7 @@
 -- The student kit version a lesson's page reported when its headband started streaming (push), for the admin
 -- Sensors kit page. The client's claim: shown, never used to gate anything. Clients hold no write grant on sessions.
--- `kit_reported_at`: when that push report arrived, with a version or without one. Only the push report writes it,
--- so it alone tells a lesson that could have named its kit from a pull one, or one from before this column.
+-- `kit_reported_at`: when the push report carried the sidecar's answer, a version or none. Only that answer writes
+-- it, so it alone tells a lesson that named its kit from a pull one, one from before it, or one never answered.
 
 ALTER TABLE "public"."sessions" ADD COLUMN IF NOT EXISTS "kit_version" text;
 ALTER TABLE "public"."sessions" ADD COLUMN IF NOT EXISTS "kit_reported_at" timestamptz;
@@ -12,8 +12,8 @@ ALTER TABLE "public"."sessions" ADD CONSTRAINT "sessions_kit_version_format"
 
 
 -- Since `p_since`: students by the newest kit version their lessons reported, and apart from them the lessons whose
--- report named none, with how many students had only those. Counts only, never a student. Only lessons that made the
--- push report count: a pull lesson, or one from before it, never had a version to send.
+-- sidecar answered with none, with how many students had only those. Counts only, never a student. Only answered
+-- lessons count: a pull lesson, one from before it, or one never answered is not "no version".
 CREATE OR REPLACE FUNCTION "public"."admin_kit_versions"("p_since" timestamptz)
 RETURNS "jsonb"
 LANGUAGE "sql"

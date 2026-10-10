@@ -3,16 +3,19 @@ import { it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 
 vi.mock('../lib/session', () => ({ markEegStarted: vi.fn() }))
-vi.mock('../lib/sidecar', () => ({ sidecarKitVersion: vi.fn() }))
+vi.mock('../lib/sidecar', () => ({ sidecarKit: vi.fn() }))
 
 import { markEegStarted } from '../lib/session'
-import { sidecarKitVersion } from '../lib/sidecar'
+import { sidecarKit } from '../lib/sidecar'
 import useEegStartReport, { EEG_START_RETRY_MS } from './useEegStartReport'
+
+// The sidecar answered and named no version: an older kit.
+const NO_VERSION = { version: null }
 
 beforeEach(() => {
   vi.useFakeTimers()
   vi.mocked(markEegStarted).mockReset()
-  vi.mocked(sidecarKitVersion).mockReset().mockResolvedValue(null)
+  vi.mocked(sidecarKit).mockReset().mockResolvedValue(NO_VERSION)
 })
 afterEach(() => { vi.useRealTimers() })
 
@@ -32,19 +35,33 @@ it('reports once per session while active, and not before', async () => {
   rerender({ active: false, sessionId: 's1' })
   rerender({ active: true, sessionId: 's1' })
   await settle()
-  expect(markEegStarted.mock.calls).toEqual([['s1', null]])
+  expect(markEegStarted.mock.calls).toEqual([['s1', NO_VERSION]])
 
   rerender({ active: true, sessionId: 's2' })
   await settle()
-  expect(markEegStarted.mock.calls).toEqual([['s1', null], ['s2', null]])
+  expect(markEegStarted.mock.calls).toEqual([['s1', NO_VERSION], ['s2', NO_VERSION]])
 })
 
-it('sends the kit version the sidecar names with the report', async () => {
+it('sends what the sidecar said of its kit with the report', async () => {
   markEegStarted.mockResolvedValue(true)
-  sidecarKitVersion.mockResolvedValue('0.2.3')
+  sidecarKit.mockResolvedValue({ version: '0.2.3' })
   mount({ active: true, sessionId: 's1' })
   await settle()
-  expect(markEegStarted.mock.calls).toEqual([['s1', '0.2.3']])
+  expect(markEegStarted.mock.calls).toEqual([['s1', { version: '0.2.3' }]])
+})
+
+it('sends the stamp at once when the kit read gets no answer, and the kit with a later report', async () => {
+  // A slow sidecar is not "no version": the lesson must not be counted until the sidecar has answered.
+  markEegStarted.mockResolvedValue(true)
+  sidecarKit.mockResolvedValueOnce(null).mockResolvedValue({ version: '0.2.3' })
+  mount({ active: true, sessionId: 's1' })
+  await settle()
+  expect(markEegStarted.mock.calls).toEqual([['s1', null]])
+
+  await advance(EEG_START_RETRY_MS[0])
+  expect(markEegStarted.mock.calls).toEqual([['s1', null], ['s1', { version: '0.2.3' }]])
+  await advance(10 * 60_000)
+  expect(markEegStarted).toHaveBeenCalledTimes(2)
 })
 
 it('backs off after a failure, then stops', async () => {

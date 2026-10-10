@@ -30,14 +30,15 @@ export async function recordAnswer({ sessionId, questionId, selectedIndex, corre
 /**
  * Push only: tell the backend a headband is streaming for this session (its alerts need it), and which student
  * kit is streaming it, for the admin page. Never throws, and silent: the student can do nothing about a failure.
- * @param {string|null} [kitVersion]  the kit the sidecar named (`sidecarKitVersion`); none sends no body
+ * @param {{version: string|null}|null} [kit]  what the sidecar said of its kit (`sidecarKit`); null, when it gave
+ *   no answer, sends no body, so the lesson is not counted as naming no version
  * @returns {Promise<boolean>} whether nothing is left to send: recorded, or the session is closed
  */
-export async function markEegStarted(sessionId, kitVersion = null) {
+export async function markEegStarted(sessionId, kit = null) {
   if (!sessionId) return false
   try {
     await apiFetch(`/api/sessions/${sessionId}/eeg-started`,
-                   { method: 'POST', ...(kitVersion ? { body: { kit_version: kitVersion } } : {}) })
+                   { method: 'POST', ...(kit ? { body: { kit_version: kit.version } } : {}) })
     return true
   } catch (e) {
     // 409: the session closed, and its alerts are already decided; a retry can never land.

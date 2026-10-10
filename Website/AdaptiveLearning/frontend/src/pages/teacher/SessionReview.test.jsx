@@ -42,7 +42,7 @@ describe('the two stress figures', () => {
       .toBeInTheDocument())
     expect(screen.queryByText(/stress/i)).not.toBeInTheDocument()
     // Stress 0.25 is calm 75%; no other series reads 75% or 25%.
-    const replay = screen.getByRole('table', { name: /session replay/i })
+    const replay = screen.getByRole('table', { name: /session replay: focus and calm/i })
     expect(within(replay).getByRole('columnheader', { name: 'Calm' })).toBeInTheDocument()
     expect(within(replay).getAllByText('75%').length).toBeGreaterThan(0)
     expect(within(replay).queryByText('25%')).not.toBeInTheDocument()
@@ -442,6 +442,23 @@ describe('choosing which measurements the timeline draws', () => {
       selected_index: 0, correct: true, questions: null,
     }],
   }
+
+  it('draws one chart per unit, never percent beside bpm or ms', async () => {
+    apiFetch.mockResolvedValue(WITH_HEART)
+    renderAt()
+    const pctTable = await screen.findByRole('table', { name: /session replay: focus and calm/i })
+    const bpm = screen.getByRole('table', { name: /session replay: heart rate over/i })
+    const ms = screen.getByRole('table', { name: /session replay: heart-rate variability/i })
+    const headers = t => within(t).getAllByRole('columnheader').map(h => h.textContent).slice(1)
+    expect(headers(pctTable)).toEqual(['Focus', 'Calm'])
+    expect(headers(bpm)).toEqual(['Heart rate'])
+    expect(headers(ms)).toEqual(['Heart-rate variability'])
+
+    // Hiding a chart's only series unmounts that chart, not its neighbours.
+    await userEvent.click(screen.getByRole('switch', { name: /heart-rate variability/i }))
+    expect(screen.queryByRole('table', { name: /session replay: heart-rate variability/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('table', { name: /session replay: heart rate over/i })).toBeInTheDocument()
+  })
 
   it('hides heart-rate variability on its own, leaving heart rate drawn', async () => {
     apiFetch.mockResolvedValue(WITH_HEART)

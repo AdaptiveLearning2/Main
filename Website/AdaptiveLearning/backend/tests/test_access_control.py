@@ -1930,7 +1930,12 @@ def test_the_model_is_told_average_calm_never_average_stress():
     report = {"days": 7, "averages": {"focus": 0.6, "stress": 0.25}, "sample_counts": {"sessions": 3}}
     prompt = main._strategy_prompt(report, [], ["baseline"])
     assert "average calm (headband relaxation reading) 75%" in prompt
-    assert "stress" not in prompt.lower()
+    # "stress" appears only in the instruction never to use it.
+    assert "average stress" not in prompt.lower()
+    assert "Never use the word stress or stressed" in prompt
+    mentions = [line for line in prompt.splitlines() if "stress" in line.lower()]
+    assert all("never use the word stress" in line.lower() or "not a stress measure" in line
+               for line in mentions), mentions
     assert "25%" not in prompt
 
     unread = main._strategy_prompt({"days": 7, "averages": {"focus": 0.6}}, [], ["baseline"])
@@ -1998,6 +2003,18 @@ _THREE_SAFE = (
 ])
 def test_validated_strategies_rejects_clinical_language(bad):
     assert main._validated_strategies(f"{_THREE_SAFE}\n{bad}") is None
+
+
+@pytest.mark.parametrize("bad", [
+    "4. Your child seemed stressed during practice this week",
+    "4. Stress readings ran high, so take more breaks",
+    "Lower stress first:\n",
+])
+def test_validated_strategies_rejects_the_word_stress(bad):
+    """Calm is not a stress measure: a reply calling it one is rejected whole, preamble included."""
+    raw = f"{bad}\n{_THREE_SAFE}" if bad.endswith(":\n") else f"{_THREE_SAFE}\n{bad}"
+    assert main._validated_strategies(raw) is None
+    assert main._validated_strategies(_THREE_SAFE) is not None
 
 
 @pytest.mark.parametrize("ok", [

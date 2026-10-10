@@ -467,8 +467,20 @@ describe('ClassSignalTrend', () => {
       retrieved: true, days: 30,
       series: [day('2026-06-10'), heart('2026-06-10', 72)],
     }} />)
-    const summary = screen.getByRole('img').getAttribute('aria-label')
+    const summary = screen.getByRole('img', { name: /^class heart rate/i }).getAttribute('aria-label')
     expect(summary).toMatch(/Heart rate 72 bpm/)
+  })
+
+  it('draws heart rate on its own chart, never on a second axis beside percent', () => {
+    render(<ClassSignalTrend data={{
+      retrieved: true, days: 30,
+      series: [day('2026-06-10'), heart('2026-06-10', 72)],
+    }} />)
+    const pct = screen.getByRole('table', { name: /^class focus and calm/i })
+    const bpm = screen.getByRole('table', { name: /^class heart rate/i })
+    const headers = t => within(t).getAllByRole('columnheader').map(h => h.textContent).slice(1)
+    expect(headers(pct)).toEqual(['Focus', 'Calm'])
+    expect(headers(bpm)).toEqual(['Heart rate'])
   })
 
   it('folds the channels of one day into one row rather than one row each', () => {
@@ -476,9 +488,11 @@ describe('ClassSignalTrend', () => {
       retrieved: true, days: 30,
       series: [day('2026-06-10'), heart('2026-06-10', 72)],
     }} />)
-    // One day, so both series report a single value rather than a range.
-    const summary = screen.getByRole('img').getAttribute('aria-label')
-    expect(summary).toMatch(/1 day with recordings/)
+    // One day, so both charts report a single value rather than a range.
+    for (const img of screen.getAllByRole('img')) {
+      expect(img.getAttribute('aria-label')).toMatch(/1 day with recordings/)
+    }
+    expect(screen.getAllByRole('img')).toHaveLength(2)
   })
 
   it('hides every series when the teacher has hidden sensor data, not just heart', () => {

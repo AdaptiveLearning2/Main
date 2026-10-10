@@ -220,8 +220,8 @@ the student's usual comes only from the backend's `usual`, in `USUAL_WORDS` (nev
 draws nothing. `MeasureTile` is a `role="group"` named by the measure, so tests find a tile by its group, and every
 caveat goes inside the tile it qualifies. `InfoTip` is a click and keyboard disclosure, never hover-only.
 
-**One unit per chart.** The report's trends are stacked small charts (percent, bpm, ms, body-arousal %) sharing one
-`SeriesFilter` and a `syncId`; never two y-axes. Calm is teal-600 and dashed, because focus and calm sit in the
+**One unit per chart.** The report's trends, Session review's timeline and the class trend are stacked small charts
+(one per unit) sharing one `SeriesFilter` and a `syncId`; never two y-axes. One colour per measure on every page. Calm is teal-600 and dashed, because focus and calm sit in the
 tritan floor band of the palette validator. **Archived SVGs are the one place stress is still drawn**: stored ones
 are never re-rendered, so new ones match them, and Session review says beside the archive what its "stress" line is, by the legend's word rather than its colour.
 

@@ -4880,7 +4880,8 @@ def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> s
         "You are helping a parent support their child's maths practice at home.\n"
         "Use only the weekly summary below. These are classroom learning "
         "indicators, not medical measurements -- do not diagnose, do not name any "
-        "condition, and do not give medical advice.\n"
+        "condition, and do not give medical advice. Never use the word stress or "
+        "stressed: calm is a relaxation reading, not a stress measure.\n"
         f"Return exactly {_STRATEGY_COUNT} short, practical, at-home strategies as "
         "a numbered list. One sentence each, no preamble.\n\n"
         f"Weekly summary (last {report.get('days', 7)} days):\n"
@@ -4918,6 +4919,9 @@ def _validated_strategies(raw: str) -> list[str] | None:
     """
     # The whole raw reply: a clinical term in a preamble rejects it too.
     if _CLINICAL_TERMS.search(raw or ""):
+        return None
+    # Calm is not a stress measure, and the rule-based list never says "stress" (CLAUDE.md).
+    if _STRESS_WORD.search(raw or ""):
         return None
     lines = _parse_strategy_lines(raw)
     if len(lines) < 3:

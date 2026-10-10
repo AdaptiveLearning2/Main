@@ -583,7 +583,8 @@ in one step — several tests started actually attempting the model call, one vi
 limiting pins it off, even where the assertion happened to pass either way.
 
 Model output is untrusted text: parsed, length-bounded, stripped of markdown emphasis and list markers, and run
-through a clinical-term filter, with anything failing validation falling back to the rules. Extend
+through a clinical-term filter and a "stress" filter (calm is not a stress measure, the same `_STRESS_WORD` the
+chart summary uses), with anything failing validation falling back to the rules. Extend
 `_validated_strategies` rather than rendering raw output.
 
 **The panel is on the teacher report as well as the parent one, and the copy is the only thing that differs.** The

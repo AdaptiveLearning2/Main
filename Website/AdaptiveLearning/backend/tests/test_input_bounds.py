@@ -22,6 +22,9 @@ INGEST_MODELS = {
     "FaceSample", "FaceBatch",
     "HeartSample", "HeartBatch",
 }
+# Rides with the push headband-start stamp: a 422 for a field or version this backend cannot read would lose the
+# stamp `signals_missing` needs, so the handler checks the version and drops a bad one.
+STAMP_MODELS = {"EegStartedReport"}
 
 
 def _request_models():
@@ -39,14 +42,14 @@ def test_every_request_model_forbids_what_it_does_not_declare():
         name for name, model in _request_models().items()
         if model.model_config.get("extra") != "forbid"
     )
-    assert lenient == sorted(INGEST_MODELS), (
+    assert lenient == sorted(INGEST_MODELS | STAMP_MODELS), (
         "a model outside the ingest path accepts undeclared fields; inherit "
-        "StrictModel, or add it to INGEST_MODELS with the reason")
+        "StrictModel, or add it to INGEST_MODELS or STAMP_MODELS with the reason")
 
 
 def test_the_exempt_models_are_the_ones_a_sidecar_posts_to():
     """Sidecar version skew under `forbid` would 422 the whole batch."""
-    for name in INGEST_MODELS:
+    for name in INGEST_MODELS | STAMP_MODELS:
         assert name in _request_models(), f"{name} no longer exists"
 
 

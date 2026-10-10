@@ -5,7 +5,6 @@ import os
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
-import pydantic  # noqa: E402
 import pytest  # noqa: E402
 
 import eeg_client  # noqa: E402
@@ -478,20 +477,26 @@ def test_a_refused_report_records_no_kit_version(monkeypatch, owner, ended_at, s
     assert caught.value.status_code == status and versions == []
 
 
-@pytest.mark.parametrize("bad", ["0.2", "v0.2.3", "0.2.3-beta", "0.2.3.0", "12345.0.0", "٠.٢.٣", ""])
-def test_a_kit_version_that_is_not_one_is_refused(bad):
-    with pytest.raises(pydantic.ValidationError):
-        main.EegStartedReport(kit_version=bad)
+@pytest.mark.parametrize("bad", ["0.2", "v0.2.3", "0.2.3-beta", "0.2.3.0", "12345.0.0", "٠.٢.٣", "",
+                                 21, 0.2, True, ["0.2.3"], {"version": "0.2.3"}])
+def test_a_kit_version_that_is_not_one_is_dropped_and_the_stamp_still_lands(monkeypatch, bad):
+    stamped, versions = _reporting(monkeypatch)
+    report = main.EegStartedReport(kit_version=bad)
+    assert main.session_eeg_started("session-1", request=None, payload=report) == {"ok": True}
+    assert stamped == ["session-1"] and versions == []
 
 
-def test_through_the_app_an_older_pages_report_with_no_body_is_still_accepted(monkeypatch):
+def test_through_the_app_no_body_a_bad_version_or_a_newer_field_never_loses_the_stamp(monkeypatch):
+    """A 422 here would drop the headband-start stamp, and the session's missing-signals alert with it."""
     from fastapi.testclient import TestClient
     stamped, versions = _reporting(monkeypatch)
     client = TestClient(main.app)
-    assert client.post("/api/sessions/session-1/eeg-started").status_code == 200
-    assert client.post("/api/sessions/session-1/eeg-started", json={"kit_version": "0.2.3"}).status_code == 200
-    assert client.post("/api/sessions/session-1/eeg-started", json={"kit_version": "0.2"}).status_code == 422
-    assert stamped == ["session-1", "session-1"] and versions == [("session-1", "0.2.3")]
+    path = "/api/sessions/session-1/eeg-started"
+    for body in (None, {"kit_version": "0.2.3"}, {"kit_version": "0.2"}, {"kit_version": 21},
+                 {"kit_version": "0.2.4", "a_field_from_a_newer_page": True}):
+        assert client.post(path, json=body).status_code == 200, body
+    assert stamped == ["session-1"] * 5
+    assert versions == [("session-1", "0.2.3"), ("session-1", "0.2.4")]
 
 
 def test_the_kit_version_is_written_by_session_id_and_a_failure_never_raises(monkeypatch):

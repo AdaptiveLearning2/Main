@@ -706,7 +706,8 @@ already drops an unknown key); `test_input_bounds.py` pins the list of models th
 own schedule, so a field it gained before this backend did is ordinary version skew — and under
 `forbid` that skew 422s the **whole batch**, losing every valid sample travelling with it. The cost of
 staying lenient, a column reading "not measured" for ever, is what
-`test_every_column_the_mapper_writes_can_be_supplied_by_the_endpoint` covers.
+`test_every_column_the_mapper_writes_can_be_supplied_by_the_endpoint` covers. So is `EegStartedReport`,
+for the same reason: its body rides with the headband-start stamp, so its handler checks the version itself.
 
 **Don't add `ge`/`le` to `days` or `weeks`.** All three are clamped in their handlers
 (`max(1, min(payload.days, 30))`), which is this codebase's convention for a caller-supplied range. A

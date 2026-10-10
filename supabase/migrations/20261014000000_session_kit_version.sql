@@ -8,8 +8,9 @@ ALTER TABLE "public"."sessions" ADD CONSTRAINT "sessions_kit_version_format"
     CHECK ("kit_version" IS NULL OR "kit_version" ~ '^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$');
 
 
--- Since `p_since`: students by the newest kit version their headband lessons reported, and apart from them the
--- headband lessons that reported none, with how many students had only those. Counts only, never a student.
+-- Since `p_since`: students by the newest kit version their push headband lessons reported, and apart from them the
+-- push headband lessons that reported none, with how many students had only those. Counts only, never a student.
+-- Push only: a pull start (`/api/eeg/start`, which writes `eeg_device_id`) never carries a version to report.
 CREATE OR REPLACE FUNCTION "public"."admin_kit_versions"("p_since" timestamptz)
 RETURNS "jsonb"
 LANGUAGE "sql"
@@ -19,7 +20,7 @@ SET "search_path" TO 'public'
 AS $$
     WITH headband AS (
         SELECT user_id, kit_version, started_at FROM sessions
-         WHERE eeg_started_at IS NOT NULL AND started_at >= p_since
+         WHERE eeg_started_at IS NOT NULL AND eeg_device_id IS NULL AND started_at >= p_since
     ), newest AS (
         SELECT DISTINCT ON (user_id) user_id, kit_version FROM headband
          WHERE kit_version IS NOT NULL

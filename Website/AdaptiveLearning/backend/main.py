@@ -8439,9 +8439,14 @@ def eeg_start(payload: EegSessionRequest, request: Request):
     return {"ok": True, **out}
 
 
-class EegStartedReport(StrictModel):
-    # The student kit the page's sidecar reported, for the admin page: the client's claim, gating nothing.
-    kit_version: str | None = Field(default=None, pattern=r"^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$", max_length=14)
+class EegStartedReport(BaseModel):
+    # Lenient, like the ingest models: this body rides with the headband-start stamp, and a 422 would lose the
+    # stamp `signals_missing` needs. The kit version is the page's claim, checked by the handler, gating nothing.
+    model_config = ConfigDict(extra="ignore")
+    kit_version: object = None
+
+
+_KIT_VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}")
 
 
 def _record_kit_version(session_id: str, kit_version: str) -> None:
@@ -8465,8 +8470,11 @@ def session_eeg_started(session_id: str = Path(...), request: Request = None,
     if session.get("ended_at"):
         raise HTTPException(409, "This session has ended")
     _mark_eeg_started(session_id)
-    if payload is not None and payload.kit_version is not None:
-        _record_kit_version(session_id, payload.kit_version)
+    version = None if payload is None else payload.kit_version
+    if isinstance(version, str) and _KIT_VERSION.fullmatch(version):
+        _record_kit_version(session_id, version)
+    elif version is not None:
+        print(f"[eeg] dropped a kit version that is not x.y.z for {session_id}")
     return {"ok": True}
 
 @app.post("/api/eeg/stop")

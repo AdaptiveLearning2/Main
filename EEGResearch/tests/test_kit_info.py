@@ -38,6 +38,18 @@ def test_a_kit_run_from_source_reads_its_folders_version(tmp_path):
     assert kit_info.kit(frozen=False, environ={"KIT_APP_DIR": str(tmp_path)}) == {"version": "0.3.10"}
 
 
+def test_a_kit_folder_that_cannot_be_read_still_answers_healthz_and_logs_it_once(monkeypatch, caplog):
+    # A path no file system takes: read_text raises ValueError, which kit() does not expect.
+    real = kit_info.kit
+    monkeypatch.setattr(kit_info, "kit", lambda: real(frozen=False, environ={"KIT_APP_DIR": "C:\\kit\0dir"}))
+    monkeypatch.setattr(kit_info, "_failed_before", False)
+    client = TestClient(app)
+    for _ in range(3):
+        response = client.get("/healthz")
+        assert response.status_code == 200 and response.json() == {"status": "ok", "kit": {"version": None}}
+    assert [r.levelname for r in caplog.records if r.name == "src.app.kit_info"] == ["ERROR"]
+
+
 @pytest.mark.parametrize("version_txt", [
     None, b"", b"0.2", b"0.2.1-beta", b"v0.2.1", b"0.2.1.0", b"12345.0.0",
     "٠.٢.١".encode("utf-8"),  # digits to \d, but not ASCII: the ASCII read refuses them first

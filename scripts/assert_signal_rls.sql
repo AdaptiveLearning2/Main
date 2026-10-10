@@ -2670,16 +2670,18 @@ BEGIN
     INSERT INTO public.profiles (id, email, role)
     SELECT u, u::text || '@kit.test.invalid', 'student' FROM unnest(s) u ON CONFLICT (id) DO NOTHING;
     -- 1 moved from 0.2.1 to 0.2.3, then had a lesson that reported none; 2 is on 0.2.3; 3 reported nothing;
-    -- 4's lessons are one with no headband and one before the window, so 4 is not counted at all.
-    INSERT INTO public.sessions (id, user_id, started_at, eeg_started_at, kit_version) VALUES
-        (gen_random_uuid(), s[1], '2099-03-01T09:00:00Z', '2099-03-01T09:01:00Z', '0.2.1'),
-        (gen_random_uuid(), s[1], '2099-03-02T09:00:00Z', '2099-03-02T09:01:00Z', '0.2.3'),
-        (gen_random_uuid(), s[1], '2099-03-03T09:00:00Z', '2099-03-03T09:01:00Z', NULL),
-        (gen_random_uuid(), s[2], '2099-03-02T09:00:00Z', '2099-03-02T09:01:00Z', '0.2.3'),
-        (gen_random_uuid(), s[3], '2099-03-02T09:00:00Z', '2099-03-02T09:01:00Z', NULL),
-        (gen_random_uuid(), s[3], '2099-03-03T09:00:00Z', '2099-03-03T09:01:00Z', NULL),
-        (gen_random_uuid(), s[4], '2099-03-02T09:00:00Z', NULL, '0.2.9'),
-        (gen_random_uuid(), s[4], '2099-02-01T09:00:00Z', '2099-02-01T09:01:00Z', '0.1.0');
+    -- 4's lessons are one with no headband, one before the window and one under pull (a station written), which
+    -- can never report a version, so 4 is not counted at all.
+    INSERT INTO public.sessions (id, user_id, started_at, eeg_started_at, kit_version, eeg_device_id) VALUES
+        (gen_random_uuid(), s[1], '2099-03-01T09:00:00Z', '2099-03-01T09:01:00Z', '0.2.1', NULL),
+        (gen_random_uuid(), s[1], '2099-03-02T09:00:00Z', '2099-03-02T09:01:00Z', '0.2.3', NULL),
+        (gen_random_uuid(), s[1], '2099-03-03T09:00:00Z', '2099-03-03T09:01:00Z', NULL, NULL),
+        (gen_random_uuid(), s[2], '2099-03-02T09:00:00Z', '2099-03-02T09:01:00Z', '0.2.3', NULL),
+        (gen_random_uuid(), s[3], '2099-03-02T09:00:00Z', '2099-03-02T09:01:00Z', NULL, NULL),
+        (gen_random_uuid(), s[3], '2099-03-03T09:00:00Z', '2099-03-03T09:01:00Z', NULL, NULL),
+        (gen_random_uuid(), s[4], '2099-03-02T09:00:00Z', NULL, '0.2.9', NULL),
+        (gen_random_uuid(), s[4], '2099-02-01T09:00:00Z', '2099-02-01T09:01:00Z', '0.1.0', NULL),
+        (gen_random_uuid(), s[4], '2099-03-04T09:00:00Z', '2099-03-04T09:01:00Z', NULL, 'station-1');
     got := public.admin_kit_versions('2099-03-01T00:00:00Z');
     IF got <> jsonb_build_object('students_by_version', jsonb_build_object('0.2.3', 2),
                                  'lessons_unreported', 3, 'students_unreported', 1) THEN

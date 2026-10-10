@@ -109,7 +109,7 @@ async def request_timing(request: Request, call_next):
 
 @app.get("/healthz")
 def healthz() -> dict[str, object]:
-    return {"status": "ok", "kit": kit_info.kit()}
+    return {"status": "ok", "kit": kit_info.for_healthz()}
 
 
 def _unknown_device(device_id: str) -> HTTPException:

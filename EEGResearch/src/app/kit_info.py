@@ -2,13 +2,28 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import sys
 from collections.abc import Mapping
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
 _VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}")
+_failed_before = False
+
+
+def for_healthz() -> dict | None:
+    """kit(), never raising: the page and the backend read a failed health check as the sidecar being down."""
+    global _failed_before
+    try:
+        return kit()
+    except Exception:  # noqa: BLE001
+        if not _failed_before:  # the page probes every few seconds
+            _failed_before = True
+            logger.exception("the kit version could not be read; /healthz reports none")
+        return {"version": None}
 
 
 def kit(frozen: bool | None = None, executable: str | None = None,

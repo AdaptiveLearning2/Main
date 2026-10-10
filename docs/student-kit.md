@@ -126,8 +126,9 @@ following a link sends no header.
 - **Kits in use.** The sidecar's `/healthz` carries `kit`: `null` outside one (no frozen exe, no `KIT_APP_DIR`),
   `{"version": "x.y.z"}` from `version.txt`, or `{"version": null}` when that does not read as a version. The lesson
   page sends it with its headband start (`docs/reporting.md`, *Session alerts*), and `GET /api/admin/kit-versions`
-  (`admin_kit_versions`, `20261014000000`) counts students over 14 days by the newest version their headband lessons
-  reported, with the lessons that reported none apart. A kit built before this reports none.
+  (`admin_kit_versions`, `20261014000000`) counts students over 14 days by the newest version their push headband
+  lessons reported, with the lessons that reported none apart; a pull start never carries one, so pull lessons are not
+  counted. A kit built before this reports none. `/healthz` answers even when the folder cannot be read.
 - **Publishing.** `publish_kit_update.ps1 -Setup`, only with `-Promote` at 100%: the site offers the version every kit
   is moving to. It uploads `setup/AdaptiveLearningSensors-Setup-x.y.z.exe`, then `setup/current.json`, and never
   replaces an offered installer with other bytes. The signature is computed three times (`worker.mjs`,

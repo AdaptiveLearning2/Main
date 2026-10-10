@@ -1063,6 +1063,32 @@ describe('body arousal', () => {
     expect(within(within(table).getByRole('row', { name: /07-21/ })).getByText(words)).toBeInTheDocument()
   })
 
+  it('marks a day resting on few readings as rough, in the table and under the chart', () => {
+    const day = (date, few) => ({ date, focus: 0.7, stress: 0.3, heart_rate_bpm: 70, body_arousal: 0.2,
+      body_arousal_state: 'measured', body_arousal_few_readings: few })
+    const { unmount } = render(<WeeklySignalReport report={buildWeeklyReport({
+      daily: [day('2026-07-20', false), day('2026-07-21', true)] })} />)
+    const table = screen.getByRole('table', { name: /^body arousal/i })
+    expect(within(within(table).getByRole('row', { name: /07-20/ })).getByText('20%')).toBeInTheDocument()
+    expect(within(within(table).getByRole('row', { name: /07-21/ })).getByText('20% (few readings)'))
+      .toBeInTheDocument()
+    expect(screen.getByText(/hollow points rest on only a few readings/i)).toBeInTheDocument()
+    unmount()
+    render(<WeeklySignalReport report={buildWeeklyReport({
+      daily: [day('2026-07-20', false), day('2026-07-21', false)] })} />)
+    expect(screen.queryByText(/hollow points/i)).not.toBeInTheDocument()
+  })
+
+  it('marks a rough week in the week-by-week table', () => {
+    render(<SignalTrend trend={{ retrieved: true, heart_included: true, weeks: [
+      { week_start: '2026-06-01', focus: 0.6, stress: 0.3, days_with_data: 3, body_arousal: 0.4,
+        body_arousal_state: 'measured', body_arousal_few_readings: true },
+    ] }} />)
+    const table = screen.getByRole('table', { name: /^body arousal week by week/i })
+    expect(within(table).getByText('40% (few readings)')).toBeInTheDocument()
+    expect(screen.getByText(/hollow points/i)).toBeInTheDocument()
+  })
+
   it("names a week's reason in the week-by-week table", () => {
     render(<SignalTrend trend={{ retrieved: true, heart_included: true, weeks: [
       { week_start: '2026-06-01', focus: 0.6, stress: 0.3, days_with_data: 3, body_arousal: null, body_arousal_state: 'unknown' },

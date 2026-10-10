@@ -5,10 +5,15 @@
  */
 import { readValue } from './describeSeries'
 
-/** One cell's text, through `readValue` so it matches the summary sentence; `col.missing(row)` names a gap's reason. */
+/**
+ * One cell's text, through `readValue` so it matches the summary sentence.
+ * `col.missing(row)` names a gap's reason; `col.note(row)` qualifies a value.
+ */
 function cellText(row, col) {
   const v = readValue(row, col)
-  return v === null ? (col.missing?.(row) ?? 'not recorded') : `${Math.round(v)}${col.unit ?? ''}`
+  if (v === null) return col.missing?.(row) ?? 'not recorded'
+  const note = col.note?.(row)
+  return `${Math.round(v)}${col.unit ?? ''}${note ? ` (${note})` : ''}`
 }
 
 export default function ChartDataTable({ caption, rows, rowKey, rowLabel, columns }) {

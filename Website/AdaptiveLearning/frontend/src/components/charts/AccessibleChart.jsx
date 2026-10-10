@@ -17,7 +17,7 @@ function sample(rows, limit) {
  * A Recharts chart with a text alternative: `role="img"` + summary, plus an `sr-only` table
  * that is its sibling, never a child (ARIA prunes an img's descendants; jsdom cannot see that).
  * @param summary   explicit summary for non-series data (`sliceSpec` builds the spec; spread it).
- * @param columns   `[{key, label, unit, scale, missing}]`; drives both the sentence and the table.
+ * @param columns   `[{key, label, unit, scale, missing, note}]`; drives both the sentence and the table.
  */
 export default function AccessibleChart({
   headline, summary, rows, rowKey, rowLabel, columns,

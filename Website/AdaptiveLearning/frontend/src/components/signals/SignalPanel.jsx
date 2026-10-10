@@ -11,6 +11,7 @@ import {
 import ChartTooltip from '../charts/ChartTooltip'
 import { sliceSpec } from '../charts/describeSeries'
 import AccessibleChart from '../charts/AccessibleChart'
+import { roughDot } from '../charts/roughDot'
 import SeriesFilter from '../charts/SeriesFilter'
 import { useSeriesFilter } from '../../hooks/useSeriesFilter'
 import { calmPct, calmRatio, emotionOn, offLabel, pct, ratio, valueOrReason } from '../../lib/signalFormat'
@@ -166,7 +167,9 @@ const SIGNAL_SERIES = [
   { key: 'heart_rate_bpm', label: MEASURES.heart_rate_bpm.name, unit: ' bpm', colour: '#a855f7', group: 'bpm', name: 'Heart rate (bpm)' },
   { key: 'rmssd_ms', label: MEASURES.rmssd_ms.name, unit: ' ms', colour: '#f59e0b', group: 'ms', name: 'Heart-rate variability (ms)' },
   { key: 'body_arousal', label: MEASURES.body_arousal.name, unit: '%', colour: '#ea580c', group: 'arousal', name: 'Body arousal (%)',
-    missing: r => AROUSAL_REASONS[r.body_arousal_state] ?? null },
+    missing: r => AROUSAL_REASONS[r.body_arousal_state] ?? null,
+    note: r => (r.body_arousal_few_readings ? 'few readings' : null),
+    rough: r => r.body_arousal_few_readings === true },
 ]
 const HEART_KEYS = new Set(['heart_rate_bpm', 'rmssd_ms', 'body_arousal'])
 
@@ -223,7 +226,7 @@ function SignalCharts({ rows, heartShown, rowLabel, period, filterLabel }) {
                 <AccessibleChart className="h-40"
                   headline={`${g.title} ${period} over ${rows.length} ${rowLabel.toLowerCase()}${rows.length === 1 ? '' : 's'}.`}
                   rows={rows} rowKey="label" rowLabel={rowLabel}
-                  columns={lines.map(({ key, label, unit: u, missing }) => ({ key, label, unit: u, missing }))}>
+                  columns={lines.map(({ key, label, unit: u, missing, note }) => ({ key, label, unit: u, missing, note }))}>
                   <LineChart data={rows} syncId={syncId} margin={{ top: 8, right: 10, left: -12, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
                     <XAxis dataKey="label" fontSize={11} tickLine={false} />
@@ -233,11 +236,17 @@ function SignalCharts({ rows, heartShown, rowLabel, period, filterLabel }) {
                     {/* Dots, so a single recorded point is still visible. */}
                     {lines.map(s => (
                       <Line key={s.key} type="monotone" dataKey={s.key} stroke={s.colour}
-                            strokeWidth={2} strokeDasharray={s.dash} dot={{ r: 3 }}
+                            strokeWidth={2} strokeDasharray={s.dash}
+                            dot={s.rough ? roughDot(s) : { r: 3 }}
                             name={s.name} connectNulls={false} />
                     ))}
                   </LineChart>
                 </AccessibleChart>
+                {lines.some(s => s.rough && rows.some(s.rough)) && (
+                  <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+                    Hollow points rest on only a few readings, so treat them as rough.
+                  </p>
+                )}
               </div>
             )
           })}

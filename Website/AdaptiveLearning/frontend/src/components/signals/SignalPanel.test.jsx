@@ -1049,6 +1049,28 @@ describe('body arousal', () => {
     expect(screen.queryByText(/still in progress/i)).not.toBeInTheDocument()
   })
 
+  it.each([
+    ['pending', 'Lesson in progress'],
+    ['calibrating', 'Calibrating'],
+    ['not_retrieved', "Couldn't load"],
+  ])("names a %s day's reason in the chart table, not 'not recorded'", (state, words) => {
+    render(<WeeklySignalReport report={buildWeeklyReport({ daily: [
+      { date: '2026-07-20', focus: 0.7, stress: 0.3, heart_rate_bpm: 70, body_arousal: 0.2, body_arousal_state: 'measured' },
+      { date: '2026-07-21', focus: 0.7, stress: 0.3, heart_rate_bpm: 70, body_arousal: null, body_arousal_state: state },
+    ] })} />)
+    const table = screen.getByRole('table', { name: /^body arousal/i })
+    expect(within(within(table).getByRole('row', { name: /07-20/ })).getByText('20%')).toBeInTheDocument()
+    expect(within(within(table).getByRole('row', { name: /07-21/ })).getByText(words)).toBeInTheDocument()
+  })
+
+  it("names a week's reason in the week-by-week table", () => {
+    render(<SignalTrend trend={{ retrieved: true, heart_included: true, weeks: [
+      { week_start: '2026-06-01', focus: 0.6, stress: 0.3, days_with_data: 3, body_arousal: null, body_arousal_state: 'unknown' },
+    ] }} />)
+    const table = screen.getByRole('table', { name: /^body arousal week by week/i })
+    expect(within(table).getByText("Couldn't check")).toBeInTheDocument()
+  })
+
   it('is never shown beside the EEG calm under one "stress" label', () => {
     render(<WeeklySignalReport report={buildWeeklyReport()} />)
     expect(screen.queryByText(/stress/i, VISIBLE)).not.toBeInTheDocument()

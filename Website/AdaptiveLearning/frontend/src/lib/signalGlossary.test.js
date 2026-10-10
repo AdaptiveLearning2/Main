@@ -15,6 +15,9 @@ describe('MEASURES', () => {
   it('defines body arousal as readings above the lesson start, not time above resting', () => {
     expect(MEASURES.body_arousal.what).toMatch(/start of each lesson/)
     expect(MEASURES.body_arousal.what).not.toMatch(/resting|lesson time/)
+    // A share of readings, never of the lesson's time.
+    expect(MEASURES.body_arousal.higher).toMatch(/readings/)
+    expect(MEASURES.body_arousal.higher).not.toMatch(/of the lesson|time/)
   })
 
   it('gives every no-figure arousal state its own words', () => {

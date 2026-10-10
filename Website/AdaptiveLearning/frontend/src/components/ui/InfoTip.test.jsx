@@ -18,6 +18,17 @@ describe('InfoTip', () => {
     expect(button).toHaveAttribute('aria-controls', panel.id)
   })
 
+  // jsdom applies no Tailwind: a `block` class would beat `hidden` in a browser while this passes.
+  it('carries no display class that would show a closed panel', async () => {
+    const user = userEvent.setup()
+    const { button, panel } = setup()
+    expect(panel).toHaveClass('hidden')
+    expect(panel).not.toHaveClass('block')
+    await user.click(button)
+    expect(panel).toHaveClass('block')
+    expect(panel).not.toHaveClass('hidden')
+  })
+
   it('opens on a click and closes on another', async () => {
     const user = userEvent.setup()
     const { button, panel } = setup()

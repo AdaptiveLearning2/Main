@@ -33,7 +33,8 @@ export default function InfoTip({ label, children }) {
       <span
         id={panelId}
         hidden={!open}
-        className="basis-full mt-2 block rounded-lg bg-slate-50 dark:bg-gray-800 p-2 text-xs font-normal normal-case tracking-normal text-gray-600 dark:text-gray-400"
+        // `hidden` alone loses to a display class, so the class follows `open` too.
+        className={`${open ? 'block' : 'hidden'} basis-full mt-2 rounded-lg bg-slate-50 dark:bg-gray-800 p-2 text-xs font-normal normal-case tracking-normal text-gray-600 dark:text-gray-400`}
       >
         {children}
       </span>

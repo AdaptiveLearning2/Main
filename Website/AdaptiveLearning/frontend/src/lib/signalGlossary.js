@@ -34,7 +34,7 @@ export const MEASURES = {
     name: 'Body arousal (heart rate)',
     what: "Share of the headband's usable heart readings at least 10 beats a minute above the "
       + 'rate it measured at the start of each lesson.',
-    higher: "More of the lesson well above its starting heart rate",
+    higher: "More readings well above the lesson's starting heart rate",
     caveat: 'It rises with excitement, effort and movement as well as with stress.',
     unit: '%',
     ratio: true,

@@ -64,6 +64,16 @@ it('sends the stamp at once when the kit read gets no answer, and the kit with a
   expect(markEegStarted).toHaveBeenCalledTimes(2)
 })
 
+it('retries nothing once the session has closed, even with the kit read unanswered', async () => {
+  markEegStarted.mockResolvedValue('closed')
+  sidecarKit.mockResolvedValue(null)
+  mount({ active: true, sessionId: 's1' })
+  await settle()
+  await advance(10 * 60_000)
+  expect(markEegStarted).toHaveBeenCalledTimes(1)
+  expect(sidecarKit).toHaveBeenCalledTimes(1)
+})
+
 it('backs off after a failure, then stops', async () => {
   markEegStarted.mockResolvedValue(false)
   mount({ active: true, sessionId: 's1' })

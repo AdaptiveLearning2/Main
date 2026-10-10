@@ -23,8 +23,10 @@ export default function useEegStartReport(active, sessionId) {
     reported.current = sessionId
     if (failures.current.sessionId !== sessionId) failures.current = { sessionId, count: 0 }
     clearTimeout(timer.current)
-    // A kit read with no answer is retried like a failed report: the stamp is idempotent, and the kit rides a later one.
-    sidecarKit().then(kit => markEegStarted(sessionId, kit).then(ok => ok && kit !== null)).then(done => {
+    // A kit read with no answer is retried like a failed report (the stamp is idempotent, and the kit rides a later
+    // one), unless the session has closed: then nothing can land.
+    sidecarKit().then(kit => markEegStarted(sessionId, kit)
+      .then(sent => sent === 'closed' || (sent && kit !== null))).then(done => {
       if (done || reported.current !== sessionId) return
       reported.current = null
       const wait = EEG_START_RETRY_MS[failures.current.count++]

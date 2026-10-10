@@ -57,7 +57,8 @@ it('treats a closed session as nothing left to report, so the page does not retr
   // The 409 can never become a 200; retrying it spent the page's three attempts on nothing.
   mockApi({ 'POST /api/sessions/s1/eeg-started': () => { throw apiError(409, 'This session has ended') } })
 
-  await expect(markEegStarted('s1')).resolves.toBe(true)
+  // Not `true`: the page must also stop retrying a kit read for it, which a recorded report would not end.
+  await expect(markEegStarted('s1')).resolves.toBe('closed')
   expect(toast.error).not.toHaveBeenCalled()
 })
 

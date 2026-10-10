@@ -213,7 +213,7 @@ guard and crashed on a comparison. **Moving a derivation out of a function moves
 ## A signal measure is named once, in `lib/signalGlossary.js`
 
 `MEASURES` is the only source of a measure's name, explanation, "higher means" and caveat; tiles, chart series, info
-tips and the Students page read it. **EEG stress is shown as Calm** (`calmPct`, `calmRatio`: `1 - stress`, null stays
+tips, the Students page, Live, Session review and the class panels read it. **EEG stress is shown as Calm** (`calmPct`, `calmRatio`: `1 - stress`, null stays
 null), and nothing visible says "Stress", "RMSSD" or "HRV" — heart arousal is **Body arousal (heart rate)**, a separate
 measure with its own words for each backend `state` (`AROUSAL_REASONS`), never 0% for an absence. A comparison with
 the student's usual comes only from the backend's `usual`, in `USUAL_WORDS` (never "good" or "bad"); an absent `usual`
@@ -222,7 +222,8 @@ caveat goes inside the tile it qualifies. `InfoTip` is a click and keyboard disc
 
 **One unit per chart.** The report's trends are stacked small charts (percent, bpm, ms, body-arousal %) sharing one
 `SeriesFilter` and a `syncId`; never two y-axes. Calm is teal-600 and dashed, because focus and calm sit in the
-tritan floor band of the palette validator.
+tritan floor band of the palette validator. **Archived SVGs are the one place stress is still drawn**: stored ones
+are never re-rendered, so new ones match them, and Session review says beside the archive what its red line is.
 
 ## A backend poll goes through `usePoll`
 

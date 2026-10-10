@@ -1518,7 +1518,7 @@ export default function Adaptive() {
     stale: 'Connected, but no readings have been saved recently, so your teacher cannot see them live.',
     elsewhere: 'Connected. Your readings go to the lesson in another tab or window.',
   }[eegState]
-    || `${headbandSamples} samples sent · teacher can see your focus & stress live`
+    || `${headbandSamples} samples sent · teacher can see your focus & calm live`
 
   const activeClass = classes.find(c => c.id === classId)
   // The grade the backend serves: '' is none set anywhere, so its default; undefined is not

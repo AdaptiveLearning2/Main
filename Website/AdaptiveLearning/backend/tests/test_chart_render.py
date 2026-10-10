@@ -174,10 +174,31 @@ def _jsx_line_strokes(path: Path) -> dict:
 
 def test_the_line_palette_matches_the_session_charts():
     """`SessionReview.jsx` is the reference: an archived SVG re-renders the per-session charts."""
-    assert _jsx_line_strokes(_JSX) == cr.SERIES_COLOURS, (
+    app = {k: v for k, v in cr.SERIES_COLOURS.items() if k not in cr.ARCHIVE_ONLY_SERIES}
+    assert _jsx_line_strokes(_JSX) == app, (
         "line colours differ between SessionReview.jsx and chart_render.py. "
         "The archive is a re-render, so nothing else keeps these in step."
     )
+
+
+def test_every_series_the_archive_draws_has_its_own_colour(monkeypatch):
+    """An archive-only series still needs a colour, never the unknown grey."""
+    import chart_archive
+    drawn = set()
+    real = cr.line_svg
+
+    def spy(points, title, *args, **kwargs):
+        drawn.update(points)
+        return real(points, title, *args, **kwargs)
+
+    monkeypatch.setattr(cr, "line_svg", spy)
+    t = "2026-08-10T09:00:00+00:00"
+    chart_archive.build_session_charts(
+        [{"ts": t, "focus": 0.5, "stress": 0.3}], [],
+        [{"ts": t, "heart_rate_bpm": 70.0, "rmssd_ms": 40.0}])
+    assert drawn == {"focus", "stress", "heart_rate_bpm", "rmssd_ms"}
+    assert drawn <= set(cr.SERIES_COLOURS)
+    assert cr.ARCHIVE_ONLY_SERIES <= drawn, "an archive-only series nothing draws is stale"
 
 
 def test_the_two_chart_surfaces_agree_on_shared_series():

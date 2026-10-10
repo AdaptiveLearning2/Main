@@ -64,7 +64,8 @@ it('puts a gap between the readings before and after a failed poll', async () =>
   await waitFor(() => {
     const { data } = mockDrawn.at(-1)
     expect(data.map(p => p.focus)).toEqual([0.6, null, 0.4])
-    expect(data.map(p => p.stress)).toEqual([0.3, null, 0.2])
+    // Drawn as calm: stress 0.3 and 0.2 are calm 0.7 and 0.8.
+    expect(data.map(p => p.calm)).toEqual([0.7, null, 0.8])
   })
   // The gap is not a reading.
   expect(screen.getByRole('img', { name: /last 2 readings/ })).toBeInTheDocument()

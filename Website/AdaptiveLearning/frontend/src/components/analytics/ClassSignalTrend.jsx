@@ -4,6 +4,8 @@ import AccessibleChart from '../charts/AccessibleChart'
 import { asPercent } from '../charts/describeSeries'
 import Panel from './Panel'
 import ScaleNote from '../signals/ScaleNote'
+import { calmRatio } from '../../lib/signalFormat'
+import { MEASURES } from '../../lib/signalGlossary'
 
 /**
  * The class's signal averages per school day. Days with nothing recorded stay
@@ -18,7 +20,8 @@ function foldByDay(series) {
     // Each channel writes only its own metrics.
     if (r.channel === 'cognitive') {
       row.avg_focus = r.avg_focus
-      row.avg_stress = r.avg_stress
+      // EEG stress is `1 - calm`: drawn as calm; null stays null.
+      row.avg_calm = calmRatio(r.avg_stress)
     } else if (r.channel === 'heart') {
       row.avg_heart_rate_bpm = r.avg_heart_rate_bpm
       row.avg_rmssd_ms = r.avg_rmssd_ms
@@ -40,11 +43,11 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
   // Ratios scale to percent; heart rate takes no scale.
   const COLUMNS = [
     ...(hasCognitive ? [
-      { key: 'avg_focus', label: 'Focus', unit: '%', scale: asPercent },
-      { key: 'avg_stress', label: 'Stress', unit: '%', scale: asPercent },
+      { key: 'avg_focus', label: MEASURES.focus.name, unit: '%', scale: asPercent },
+      { key: 'avg_calm', label: MEASURES.calm.name, unit: '%', scale: asPercent },
       // No engagement: it is the focus index.
     ] : []),
-    ...(hasHeart ? [{ key: 'avg_heart_rate_bpm', label: 'Heart rate', unit: ' bpm' }] : []),
+    ...(hasHeart ? [{ key: 'avg_heart_rate_bpm', label: MEASURES.heart_rate_bpm.name, unit: ' bpm' }] : []),
   ]
 
   const days = rows.length
@@ -67,7 +70,7 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
         : 'No signals recorded for this class in this range yet.'}
       className="lg:col-span-2"
     >
-      {/* Score-scale caveat, only beside a drawn focus/stress line. */}
+      {/* Score-scale caveat, only beside a drawn focus/calm line. */}
       {hasCognitive && (
         <ScaleNote scale={data?.score_scale} what="This class's averages" />
       )}
@@ -92,8 +95,8 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
             {hasCognitive && <>
               <Line yAxisId="ratio" type="monotone" dataKey="avg_focus" name="Focus"
                 stroke="#7c3aed" strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
-              <Line yAxisId="ratio" type="monotone" dataKey="avg_stress" name="Stress"
-                stroke="#e11d48" strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
+              <Line yAxisId="ratio" type="monotone" dataKey="avg_calm" name={MEASURES.calm.name}
+                stroke="#0d9488" strokeWidth={2} strokeDasharray="6 3" dot={{ r: 3 }} connectNulls={false} />
             </>}
             {hasHeart && (
               <Line yAxisId="bpm" type="monotone" dataKey="avg_heart_rate_bpm" name="Heart rate"

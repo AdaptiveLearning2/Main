@@ -451,7 +451,7 @@ it('says a poller paused by the admin switch is not saving, and says so no longe
   fireEvent.click(screen.getByRole('button', { name: /^B\s*4$/ }))
   fireEvent.click(screen.getByRole('button', { name: /submit answer/i }))
   await screen.findByText(/1 answered/)
-  await screen.findByText(/teacher can see your focus & stress live/, {}, { timeout: 10000 })
+  await screen.findByText(/teacher can see your focus & calm live/, {}, { timeout: 10000 })
   expect(screen.getByText(/Recording: Headband/)).toBeInTheDocument()
 
   bridge.withheld = true
@@ -459,11 +459,11 @@ it('says a poller paused by the admin switch is not saving, and says so no longe
   expect(notice).toHaveTextContent("Headband (switched off by the school's administrator)")
   expect(notice).toHaveTextContent("Heart sensor (switched off by the school's administrator)")
   expect(screen.getByText(/not being saved, so your teacher cannot see them/)).toBeInTheDocument()
-  expect(screen.queryByText(/teacher can see your focus & stress live/)).toBeNull()
+  expect(screen.queryByText(/teacher can see your focus & calm live/)).toBeNull()
   expect(screen.queryByText(/Recording:/)).toBeNull()
 
   bridge.withheld = false
-  await screen.findByText(/teacher can see your focus & stress live/, {}, { timeout: 10000 })
+  await screen.findByText(/teacher can see your focus & calm live/, {}, { timeout: 10000 })
   expect(screen.queryByText(/Not being saved/)).toBeNull()
 }, 60_000)
 

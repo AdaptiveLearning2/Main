@@ -31,7 +31,8 @@ export function buildTimeline(data) {
       return {
         t,
         focus:      typeof c?.focus      === 'number' ? c.focus      : null,
-        stress:     typeof c?.stress     === 'number' ? c.stress     : null,
+        // EEG stress is `1 - calm`, drawn as calm; a missing reading stays null, never 100%.
+        calm:       typeof c?.stress     === 'number' ? 1 - c.stress : null,
       }
     })
 
@@ -119,7 +120,7 @@ export function buildTimeline(data) {
            emotionSlices, stressSlices, tMin, tMax, ribbon }
 }
 
-const DRAWN_KEYS = ['focus', 'stress', 'heart_rate_bpm', 'rmssd_ms']
+const DRAWN_KEYS = ['focus', 'calm', 'heart_rate_bpm', 'rmssd_ms']
 
 /**
  * At most `maxRows` rows for drawing, in order: per bucket the first row and each series' min

@@ -11,6 +11,8 @@ import { STALE_AFTER_S, eegWeak, formatAge } from '../../lib/signalAge'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
 import usePoll from '../../hooks/usePoll'
+import { calmRatio } from '../../lib/signalFormat'
+import { MEASURES } from '../../lib/signalGlossary'
 
 // The sidecar pushes about every 5 s, so 2 s still shows each reading promptly.
 // POLL_MAX_MS caps the backoff while the endpoint is failing.
@@ -76,7 +78,7 @@ function Gauge({ label, value, color = 'bg-violet-500' }) {
 // One empty history for every student without one, so a memoised card sees the same prop.
 const EMPTY = []
 // Marks a failed poll in a trend. Every line breaks there; bpm by starting a new segment.
-const GAP = { focus: null, stress: null, bpm: null, gap: true }
+const GAP = { focus: null, calm: null, bpm: null, gap: true }
 // Connects nulls, so a rejected heart reading is bridged; an outage is not, being a new segment.
 const BPM_LINE = { yAxisId: 'bpm', type: 'monotone', name: 'bpm', stroke: '#a855f7', strokeWidth: 1.5,
                    dot: false, connectNulls: true, isAnimationActive: false }
@@ -95,10 +97,10 @@ function bpmSegments(history) {
 
 // No `rowKey`, so no table: a rolling window has no meaningful row labels.
 const SPARK_COLUMNS = [
-  { key: 'focus',      label: 'Focus',      unit: '%',    scale: asPercent },
+  { key: 'focus',      label: MEASURES.focus.name,          unit: '%',    scale: asPercent },
   // No `engagement`: it is the focus index under another name.
-  { key: 'stress',     label: 'Stress',     unit: '%',    scale: asPercent },
-  { key: 'bpm',        label: 'Heart rate', unit: ' bpm' },
+  { key: 'calm',       label: MEASURES.calm.name,           unit: '%',    scale: asPercent },
+  { key: 'bpm',        label: MEASURES.heart_rate_bpm.name, unit: ' bpm' },
 ]
 
 // Presence, age and usability on one badge; grey for stale or weak.
@@ -163,8 +165,8 @@ const StudentCard = memo(function StudentCard({ student, history }) {
       </div>
 
       <div className="space-y-3 mb-4">
-        <Gauge label="Focus"      value={cog?.focus}      color="bg-indigo-500" />
-        <Gauge label="Stress"     value={cog?.stress}     color="bg-rose-500" />
+        <Gauge label={MEASURES.focus.name} value={cog?.focus}             color="bg-indigo-500" />
+        <Gauge label={MEASURES.calm.name}  value={calmRatio(cog?.stress)} color="bg-teal-600" />
       </div>
 
       {/* A number, not a gauge: bpm isn't a ratio. */}
@@ -175,7 +177,9 @@ const StudentCard = memo(function StudentCard({ student, history }) {
             {Math.round(heart.heart_rate_bpm)} bpm
           </span>
           {typeof heart.rmssd_ms === 'number' && (
-            <span className="text-xs text-gray-600 dark:text-gray-400">HRV {Math.round(heart.rmssd_ms)} ms</span>
+            <span className="text-xs text-gray-600 dark:text-gray-400">
+              {MEASURES.rmssd_ms.name} {Math.round(heart.rmssd_ms)} ms
+            </span>
           )}
         </div>
       )}
@@ -196,7 +200,7 @@ const StudentCard = memo(function StudentCard({ student, history }) {
             <YAxis yAxisId="ratio" hide domain={[0, 1]} />
             <YAxis yAxisId="bpm" hide domain={['auto', 'auto']} />
             <Line yAxisId="ratio" type="monotone" dataKey="focus"      stroke="#6366f1" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-            <Line yAxisId="ratio" type="monotone" dataKey="stress"     stroke="#f43f5e" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+            <Line yAxisId="ratio" type="monotone" dataKey="calm"       stroke="#0d9488" strokeWidth={1.5} strokeDasharray="6 3" dot={false} isAnimationActive={false} />
             {drawn.segments.map(n => <Line key={n} {...BPM_LINE} dataKey={`bpm_${n}`} />)}
           </LineChart>
       </AccessibleChart>
@@ -299,7 +303,7 @@ export default function Live() {
       // Null, not 0, for a missing or rejected reading: recharts draws a gap.
       const point = {
         focus:      c?.focus ?? null,
-        stress:     c?.stress ?? null,
+        calm:       calmRatio(c?.stress),
         bpm:        typeof h?.heart_rate_bpm === 'number' ? h.heart_rate_bpm : null,
       }
       historyRef.current[r.user_id] = [...arr, point].slice(-60)
@@ -335,7 +339,7 @@ export default function Live() {
           </h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1 text-sm flex items-center gap-2">
             <Activity size={14} className="text-emerald-500 animate-pulse" />
-            Real-time focus, stress and emotion across your class.
+            Real-time focus, calm and emotion across your class.
           </p>
         </div>
 

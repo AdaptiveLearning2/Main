@@ -73,18 +73,18 @@ def build_session_charts(cognitive, face, heart) -> dict:
     # No `engagement`: it is the focus index under another name.
     cog_points = _line_points(cognitive, ("focus", "stress"))
     charts["cognitive_timeline"] = (
-        chart_render.line_svg(cog_points, "Cognitive signals", ratio=True) if cognitive else None
+        chart_render.line_svg(cog_points, "Focus and EEG stress", ratio=True) if cognitive else None
     )
 
     heart_points = _line_points(heart, ("heart_rate_bpm", "rmssd_ms"))
     charts["heart_rate"] = (
-        chart_render.line_svg(heart_points, "Heart rate and HRV") if heart else None
+        chart_render.line_svg(heart_points, "Heart rate and heart-rate variability") if heart else None
     )
 
-    # "Autonomic arousal", never "Stress": cognitive `stress` is `1 - calm`, a different quantity.
+    # Never bare "Stress": cognitive `stress` is `1 - calm`, a different quantity.
     charts["stress_pie"] = (
         chart_render.pie_svg(_counts(heart, "stress_category", default="unknown"),
-                             "Autonomic arousal", chart_render.STRESS_COLOURS)
+                             "Body arousal (heart rate)", chart_render.STRESS_COLOURS)
         if heart else None
     )
 

@@ -450,7 +450,7 @@ def test_the_two_pies_use_the_palettes_they_are_named_for():
     assert chart_render.EMOTION_COLOURS["happy"] in emotion
     assert chart_render.STRESS_COLOURS["low"] in stress
     # Not "Stress": that would invite averaging against cognitive `stress` (1 - calm).
-    assert "Autonomic arousal" in stress
+    assert "Body arousal (heart rate)" in stress
 
 
 def test_untrusted_rows_are_drawn_too():
@@ -1044,7 +1044,7 @@ def test_the_archived_cognitive_chart_does_not_draw_engagement_beside_focus(monk
 
     monkeypatch.setattr(chart_render, "line_svg", spy)
     chart_archive.build_session_charts(COG, FACE, HEART)
-    assert seen["Cognitive signals"] == {"focus", "stress"}
+    assert seen["Focus and EEG stress"] == {"focus", "stress"}
 
 
 def test_the_archived_cognitive_chart_is_on_the_0_to_100_percent_axis():

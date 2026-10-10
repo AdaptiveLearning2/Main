@@ -22,11 +22,11 @@ export function combineScales(rows) {
   }
 }
 
-// A version step moves focus and stress; a calm-source split moves stress only.
+// A version step moves focus and calm; a calm-source split moves calm only. Named as shown: calm.
 export function describeScaleChange(scale) {
   if (!isMixedScale(scale)) return null
   const versionStep = scale.min !== scale.max
   const sourceSplit = sourcesOf(scale).length > 1
-  const affected = versionStep ? 'focus and stress' : 'stress'
+  const affected = versionStep ? 'focus and calm' : 'calm'
   return { affected, versionStep, sourceSplit }
 }

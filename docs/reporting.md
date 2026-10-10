@@ -420,7 +420,8 @@ CHECK makes it near-impossible, and if it happens a visible row is what gets it 
 
 At every session close, `chart_archive.schedule()` renders the session's four charts to standalone SVG
 (`chart_render.py`) and uploads them to the private `session-charts` bucket. With the rollup, these are what is
-left of a school year once `expire_signal_rows` has run.
+left of a school year once `expire_signal_rows` has run. **The cognitive archive draws EEG stress, not calm**, as every
+stored one does (`ARCHIVE_ONLY_SERIES`); the app draws calm, and `test_chart_render.py` holds the two palettes apart.
 
 **Off the request path, and it never raises.** A storage failure must not cost a student their session close — the
 session row, their stats and the rollup are all written by then. So the work goes to a two-worker pool and

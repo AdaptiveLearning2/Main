@@ -18,6 +18,7 @@ import CCSSBadge from '../../components/questions/CCSSBadge'
 import { correctIndex, optionList } from '../../lib/answerKey'
 import { fmtDate } from '../../lib/dates'
 import { buildTimeline, downsample } from '../../lib/timeline'
+import { MEASURES } from '../../lib/signalGlossary'
 
 // About two points per horizontal pixel; an hour at 4 Hz is ~14,000 rows.
 const CHART_MAX_ROWS = 1500
@@ -97,17 +98,17 @@ function SessionReviewBody({ sessionId }) {
   // so a column always names a drawn series. Ratios are 0..1, hence `asPercent`.
   // Heart series are gated on `hasHeart`; no `engagement` (it is the focus index).
   const TIMELINE_SERIES = useMemo(() => [
-    { key: 'focus',  label: 'Focus',      unit: '%', scale: asPercent,
-      colour: '#6366f1', axis: 'ratio', name: 'Focus',      dot: false },
-    // "EEG stress": must never share a label with the heart stress pie.
-    { key: 'stress', label: 'EEG stress', unit: '%', scale: asPercent,
-      colour: '#f43f5e', axis: 'ratio', name: 'EEG stress', dot: false },
+    { key: 'focus',  label: MEASURES.focus.name, unit: '%', scale: asPercent,
+      colour: '#6366f1', axis: 'ratio', name: 'Focus', dot: false },
+    // Dashed, as on the reports: focus and calm are close for tritan vision.
+    { key: 'calm',   label: MEASURES.calm.name,  unit: '%', scale: asPercent,
+      colour: '#0d9488', axis: 'ratio', name: 'Calm',  dot: false, dash: '6 3' },
     ...(hasHeart ? [
       // `dot` on: heart readings are sparse, so an isolated point needs one.
-      { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm',
+      { key: 'heart_rate_bpm', label: MEASURES.heart_rate_bpm.name, unit: ' bpm',
         colour: '#a855f7', axis: 'abs', name: 'Heart rate (bpm)', dot: { r: 2 } },
-      { key: 'rmssd_ms',       label: 'RMSSD',      unit: ' ms',
-        colour: '#f59e0b', axis: 'abs', name: 'RMSSD (ms)',       dot: { r: 2 } },
+      { key: 'rmssd_ms',       label: MEASURES.rmssd_ms.name,       unit: ' ms',
+        colour: '#f59e0b', axis: 'abs', name: 'Heart-rate variability (ms)', dot: { r: 2 } },
     ] : []),
   ], [hasHeart])
   const shownSeries = useMemo(() => shownOf(TIMELINE_SERIES), [shownOf, TIMELINE_SERIES])
@@ -264,10 +265,16 @@ function SessionReviewBody({ sessionId }) {
                   charts as they were when it closed.
                 </p>
                 {isUrl(archivedChart('cognitive_timeline')) && (
-                  <ArchivedChart url={archivedChart('cognitive_timeline')} label="Cognitive timeline" />
+                  <>
+                    <ArchivedChart url={archivedChart('cognitive_timeline')} label="Focus and EEG stress" />
+                    {/* Stored archives draw stress, not calm; they are never re-rendered. */}
+                    <p className="text-[11px] text-gray-600 dark:text-gray-400">
+                      Archived chart: its red line is EEG stress, the inverse of calm.
+                    </p>
+                  </>
                 )}
                 {isUrl(archivedChart('heart_rate')) && (
-                  <ArchivedChart url={archivedChart('heart_rate')} label="Heart rate and HRV" />
+                  <ArchivedChart url={archivedChart('heart_rate')} label="Heart rate and heart-rate variability" />
                 )}
                 {/* Say so when only one chart could be drawn. */}
                 {anyUnavailable(['cognitive_timeline', 'heart_rate']) && (
@@ -318,7 +325,7 @@ function SessionReviewBody({ sessionId }) {
                   fontSize={10}
                   minTickGap={50}
                 />
-                {/* bpm/RMSSD get their own axis; each mounts only while a shown series uses it. */}
+                {/* bpm/ms get their own axis; each mounts only while a shown series uses it. */}
                 {axisShown('ratio') && <YAxis yAxisId="ratio" domain={[0, 1]} fontSize={10} />}
                 {axisShown('abs') && (
                   <YAxis yAxisId="abs" orientation="right" domain={['auto', 'auto']}
@@ -331,7 +338,7 @@ function SessionReviewBody({ sessionId }) {
                 <Legend wrapperStyle={{ fontSize: 12 }} />
                 {shownSeries.map((s) => (
                   <Line key={s.key} yAxisId={s.axis} type="monotone" dataKey={s.key}
-                        name={s.name} stroke={s.colour} dot={s.dot}
+                        name={s.name} stroke={s.colour} dot={s.dot} strokeDasharray={s.dash}
                         connectNulls isAnimationActive={false} />
                 ))}
 
@@ -437,15 +444,15 @@ function SessionReviewBody({ sessionId }) {
           {(stressSlices.length > 0 || isUrl(archivedChart('stress_pie'))
             || archivedChart('stress_pie') === 'unavailable') && (
             <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
-              {/* Not bare "Stress": never share a label with "EEG stress". */}
-              <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">Heart-rate stress</h2>
+              {/* The heart measure's own name: never "stress", which the EEG calm score is stored as. */}
+              <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">{MEASURES.body_arousal.name}</h2>
               {stressSlices.length === 0 ? (
                 isUrl(archivedChart('stress_pie'))
-                  ? <ArchivedChart url={archivedChart('stress_pie')} label="Autonomic arousal" />
+                  ? <ArchivedChart url={archivedChart('stress_pie')} label={MEASURES.body_arousal.name} />
                   : <p className="text-sm text-gray-600 py-6 text-center dark:text-gray-400">{NO_CHART_COPY.unavailable}</p>
               ) : (
               <AccessibleChart className="h-52"
-                {...sliceSpec('Heart-rate stress', stressSlices, 'windows', { rowLabel: 'Band' })}>
+                {...sliceSpec(MEASURES.body_arousal.name, stressSlices, 'windows', { rowLabel: 'Band' })}>
                   <PieChart>
                     <Pie data={stressSlices} dataKey="value" nameKey="name"
                          innerRadius="45%" outerRadius="75%" paddingAngle={2}>

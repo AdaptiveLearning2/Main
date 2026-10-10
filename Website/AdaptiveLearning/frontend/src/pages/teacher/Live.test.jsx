@@ -40,6 +40,22 @@ it('shows how old the newest headband reading is', async () => {
   expect(badge.textContent).not.toMatch(/stale|weak/)
 })
 
+it('shows calm the right way up, and never a "Stress" gauge', async () => {
+  const ts = new Date().toISOString()
+  renderLive([student({ latest_cognitive: { ts, focus: 0.6, engagement: 0.5, stress: 0.3 } })])
+  const label = await screen.findByText('Calm')
+  // Stress 0.3 is calm 70%.
+  expect(label.parentElement).toHaveTextContent('70%')
+  expect(screen.queryByText(/stress/i)).not.toBeInTheDocument()
+})
+
+it('leaves calm blank for a nulled reading, never 100%', async () => {
+  const ts = new Date().toISOString()
+  renderLive([student({ latest_cognitive: { ts, focus: null, engagement: null, stress: null } })])
+  const label = await screen.findByText('Calm')
+  expect(label.parentElement).toHaveTextContent('—')
+})
+
 it('marks a reading past the live window as stale rather than dropping it', async () => {
   // Past the backend's 90s live window, and mid-minute: the shared clock may lag up to 1 s,
   // so an age of exactly 120 s can round to "1m".

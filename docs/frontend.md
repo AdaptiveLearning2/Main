@@ -223,7 +223,7 @@ caveat goes inside the tile it qualifies. `InfoTip` is a click and keyboard disc
 **One unit per chart.** The report's trends are stacked small charts (percent, bpm, ms, body-arousal %) sharing one
 `SeriesFilter` and a `syncId`; never two y-axes. Calm is teal-600 and dashed, because focus and calm sit in the
 tritan floor band of the palette validator. **Archived SVGs are the one place stress is still drawn**: stored ones
-are never re-rendered, so new ones match them, and Session review says beside the archive what its red line is.
+are never re-rendered, so new ones match them, and Session review says beside the archive what its "stress" line is, by the legend's word rather than its colour.
 
 ## A backend poll goes through `usePoll`
 

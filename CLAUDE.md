@@ -152,8 +152,9 @@ across a session.
 So: **never average them, never sum them, and never render both under one "Stress" label.** One is a
 cognitive score with a sign flip; the other is a physiological measurement with a baseline. A tile fed
 by whichever happens to be present would change meaning when a headband disconnects — rule 1 in its
-worst form. On screen they are **Calm** (`1 − stress`) and **Body arousal (heart rate)**, named only in
-`frontend/src/lib/signalGlossary.js`; only the archived SVGs still draw stress.
+worst form. On screen and in report prose they are **Calm** (`1 − stress`) and **Body arousal (heart rate)**,
+named only in `frontend/src/lib/signalGlossary.js`. Two exceptions: archived SVGs still draw stress, and fusion's
+`stressed` label (admin Adaptive page) is a decision reason, not a measure.
 
 ## Fusion is asymmetric on purpose — easing off wins, pushing harder defers
 

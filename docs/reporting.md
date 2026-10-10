@@ -595,8 +595,8 @@ says *"you are helping a parent support their child's maths practice at home"* a
 been asked for something it was not.
 
 On the teacher page it is **behind "Hide sensor data" with the charts**, because the advice *is* sensor data in
-prose — the rule-based list says *"stress indicators ran high this week"*, and the model pass is handed the same
-averages. The whole panel goes rather than its individual lines: the advice mixes topic accuracy with signal
+prose — the rule-based list says *"calm readings ran low this week"*, and the model pass is handed the same
+averages (calm, as the tiles show it, never "stress"). The whole panel goes rather than its individual lines: the advice mixes topic accuracy with signal
 readings and nothing downstream can separate them, and asking the endpoint for a signal-free list would change the
 advice rather than hide it. **Assert on the Generate button's absence, not the heading** — hiding a heading over a
 live button satisfies a heading check and none of the point.

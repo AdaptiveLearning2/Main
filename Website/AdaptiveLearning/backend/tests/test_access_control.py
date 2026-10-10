@@ -1921,6 +1921,20 @@ def test_rule_based_strategies_react_to_elevated_stress():
     calm = main._rule_based_strategies({"averages": {"stress": 0.2, "focus": 0.7}}, [])
     assert any("shorter blocks" in s for s in high)
     assert not any("shorter blocks" in s for s in calm)
+    # Named as the report's tiles name it: calm, never "stress".
+    assert any("calm readings ran low" in s for s in high)
+    assert not any("stress" in s.lower() for s in high + calm)
+
+
+def test_the_model_is_told_average_calm_never_average_stress():
+    report = {"days": 7, "averages": {"focus": 0.6, "stress": 0.25}, "sample_counts": {"sessions": 3}}
+    prompt = main._strategy_prompt(report, [], ["baseline"])
+    assert "average calm (headband relaxation reading) 75%" in prompt
+    assert "stress" not in prompt.lower()
+    assert "25%" not in prompt
+
+    unread = main._strategy_prompt({"days": 7, "averages": {"focus": 0.6}}, [], ["baseline"])
+    assert "average calm (headband relaxation reading) unavailable" in unread
 
 
 def test_no_strategy_is_derived_from_face_attention():
@@ -1944,7 +1958,8 @@ def test_the_model_is_never_told_about_attention():
 
     assert "attention" not in prompt.lower()
     assert "83%" not in prompt, "the attention average reached the model"
-    assert "70%" in prompt and "30%" in prompt
+    # Focus 70%, and stress 0.3 reaches the model as calm 70%.
+    assert "average focus 70%" in prompt and "70%\n" in prompt.split("average calm")[1]
 
 
 def test_strategy_prompt_carries_no_identifying_data():

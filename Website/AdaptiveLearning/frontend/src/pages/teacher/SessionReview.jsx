@@ -269,7 +269,7 @@ function SessionReviewBody({ sessionId }) {
                     <ArchivedChart url={archivedChart('cognitive_timeline')} label="Focus and EEG stress" />
                     {/* Stored archives draw stress, not calm; they are never re-rendered. */}
                     <p className="text-[11px] text-gray-600 dark:text-gray-400">
-                      Archived chart: its red line is EEG stress, the inverse of calm.
+                      Archived chart: the line its legend calls &ldquo;stress&rdquo; is EEG stress, the inverse of calm.
                     </p>
                   </>
                 )}

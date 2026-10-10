@@ -49,12 +49,21 @@ beforeEach(() => {
       muse: { running: true, ingestion: {} },
       snapshot: {
         state: { label: 'neutral' },
-        features: { focus_score: 0.5, calm_score: 0.5, confidence: 0.83,
+        features: { focus_score: 0.5, calm_score: 0.3, confidence: 0.83,
                     signal_quality: 'degraded', quality_basis: 'contact' },
         bands: {},
       },
     }),
   })
+})
+
+it('shows the calm score as calm, never as a derived stress', async () => {
+  render(<Adaptive />)
+  await screen.findByText(/signal quality score/i, {}, { timeout: 5000 })
+  // `calm_score` 0.3 is calm 30%, not its inverse.
+  const readout = screen.getAllByText(/^calm/i).find(el => /%|—/.test(el.textContent))
+  expect(readout).toHaveTextContent(/^Calm\s*30%$/)
+  expect(screen.queryByText(/stress/i)).not.toBeInTheDocument()
 })
 
 it('calls the quality number a signal quality score, not confidence', async () => {

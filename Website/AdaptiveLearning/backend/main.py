@@ -4830,11 +4830,12 @@ def _rule_based_strategies(report: dict, topics: list[dict]) -> list[str]:
             "problem out loud, which shows where their understanding actually stops."
         )
 
+    # Stored stress is `1 - calm`, so stress >= 0.65 is calm <= 35%; named as the page shows it.
     stress = averages.get("stress")
     if stress is not None and float(stress) >= 0.65:
         strategies.append(
             "Break practice into shorter blocks with a two-minute pause between "
-            "them -- stress indicators ran high this week."
+            "them -- calm readings ran low this week."
         )
     else:
         strategies.append(
@@ -4884,7 +4885,8 @@ def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> s
         "a numbered list. One sentence each, no preamble.\n\n"
         f"Weekly summary (last {report.get('days', 7)} days):\n"
         f"- average focus {_pct(averages.get('focus'))}\n"
-        f"- average stress {_pct(averages.get('stress'))}\n"
+        # Calm, as the report shows it: the stored `stress` is `1 - calm`, not a stress measure.
+        f"- average calm (headband relaxation reading) {_pct(_calm_of(averages.get('stress')))}\n"
         # No engagement line: it is the focus index under another name
         # (signal_mapping.py), and restated it reads as a second fact.
         f"- weakest attempted topic: {topic_line}\n"

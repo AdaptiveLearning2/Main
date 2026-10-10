@@ -91,7 +91,10 @@ describe('the archived-chart fallback', () => {
     await waitFor(() =>
       expect(screen.getByAltText('Focus and EEG stress')).toBeInTheDocument())
     // A stored archive still draws stress, so the page says what its red line is.
-    expect(screen.getByText(/its red line is EEG stress, the inverse of calm/)).toBeInTheDocument()
+    // Named by the legend's word, not by colour alone.
+    expect(screen.getByText(/the line its legend calls “stress” is EEG stress, the inverse of calm/))
+      .toBeInTheDocument()
+    expect(screen.queryByText(/red line/)).not.toBeInTheDocument()
     expect(screen.getByAltText('Heart rate and heart-rate variability')).toBeInTheDocument()
     expect(screen.getByAltText('Emotion mix')).toBeInTheDocument()
     // Null means that channel drew nothing.

@@ -1,5 +1,5 @@
 import { render } from '@testing-library/react'
-import { roughDot } from './roughDot'
+import { roughDot, seriesDot } from './roughDot'
 
 const series = { colour: '#ea580c', rough: r => r.few === true }
 
@@ -26,5 +26,15 @@ describe('roughDot', () => {
 
   it('draws nothing for a gap', () => {
     expect(dot({ cy: null, payload: { few: true } })).toBeNull()
+  })
+})
+
+describe('seriesDot', () => {
+  it("fills a series without a rough test, overriding Recharts' white centre", () => {
+    expect(seriesDot({ colour: '#6366f1' })).toEqual({ r: 3, fill: '#6366f1', strokeWidth: 0 })
+  })
+
+  it('hands a series with a rough test the per-point renderer', () => {
+    expect(seriesDot(series)).toBeTypeOf('function')
   })
 })

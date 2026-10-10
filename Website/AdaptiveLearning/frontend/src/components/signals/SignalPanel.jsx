@@ -11,7 +11,7 @@ import {
 import ChartTooltip from '../charts/ChartTooltip'
 import { sliceSpec } from '../charts/describeSeries'
 import AccessibleChart from '../charts/AccessibleChart'
-import { roughDot } from '../charts/roughDot'
+import { seriesDot } from '../charts/roughDot'
 import SeriesFilter from '../charts/SeriesFilter'
 import { useSeriesFilter } from '../../hooks/useSeriesFilter'
 import { calmPct, calmRatio, emotionOn, offLabel, pct, ratio, valueOrReason } from '../../lib/signalFormat'
@@ -237,7 +237,7 @@ function SignalCharts({ rows, heartShown, rowLabel, period, filterLabel }) {
                     {lines.map(s => (
                       <Line key={s.key} type="monotone" dataKey={s.key} stroke={s.colour}
                             strokeWidth={2} strokeDasharray={s.dash}
-                            dot={s.rough ? roughDot(s) : { r: 3 }}
+                            dot={seriesDot(s)}
                             name={s.name} connectNulls={false} />
                     ))}
                   </LineChart>

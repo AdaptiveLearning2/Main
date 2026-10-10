@@ -1,3 +1,8 @@
+/** A series' `dot` prop: filled in its colour, since Recharts' default white centre reads as hollow. */
+export function seriesDot(s) {
+  return s.rough ? roughDot(s) : { r: 3, fill: s.colour, strokeWidth: 0 }
+}
+
 /** A Recharts `dot` renderer for series `s`: hollow, in the chart panel's colour, where `s.rough(row)` holds. */
 export function roughDot(s) {
   return function RoughDot({ cx, cy, payload, index }) {

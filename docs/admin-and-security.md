@@ -129,6 +129,10 @@ Three read-only RPCs (`20261011000000`), each called inline (so `_missing_rpc` s
 - `configured: false` when `KIT_GATE_URL` or `KIT_LINK_SECRET` is unset, a boot `[config]` line beside it; the link route answers 503 then.
 - A gate or server set up wrong, or a publish left half done, is a `problem` naming the fix, with `problem_is` (`setup` or `publish`) choosing the page's heading (the link route: 409 with that sentence), not a retry. An outage is a 503 with `Retry-After`, never `published: false`.
 - The link route answers 409 when the offered installer is no longer the one the page showed, or none is.
+
+**`/api/admin/kit-versions`** (`admin_kit_versions(p_since)`, `20261014000000`) counts students over the last 14 days by the newest kit version their lessons reported, and apart from them the lessons whose sidecar answered with none. Only lessons whose sidecar answered count (`sessions.kit_reported_at`, written by that answer alone), so a pull lesson, one from before it, or one whose sidecar has not answered is never "no version".
+- Counts only and system-wide, so no floor applies; `retrieved: false` is never "no kits".
+- The version is the lesson page's claim (`docs/reporting.md`, *Session alerts*): shown, never used to decide anything.
 - The link names no user and is sent `no-store`; issuing one prints the admin's id prefix to the server log, nothing to the security log, which records refusals.
 
 ## The security log records that something happened, never what was in it

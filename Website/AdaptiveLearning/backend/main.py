@@ -8439,18 +8439,48 @@ def eeg_start(payload: EegSessionRequest, request: Request):
     return {"ok": True, **out}
 
 
+class EegStartedReport(BaseModel):
+    # Lenient, like the ingest models: this body rides with the headband-start stamp, and a 422 would lose the
+    # stamp `signals_missing` needs. The kit version is the page's claim, checked by the handler, gating nothing.
+    model_config = ConfigDict(extra="ignore")
+    kit_version: object = None
+
+
+_KIT_VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}")
+
+
+def _record_kit_report(session_id: str, kit_version: str | None) -> None:
+    """That the push report arrived (`kit_reported_at`, which the admin counts key on), and the version it named, if
+    any. Never raises: it is for the admin page alone."""
+    patch = {"kit_reported_at": _utc_now().isoformat(), **({"kit_version": kit_version} if kit_version else {})}
+    try:
+        supabase.table("sessions").update(patch).eq("id", session_id).execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[eeg] could not record the kit report for {session_id}: {type(e).__name__}")
+
+
 @app.post("/api/sessions/{session_id}/eeg-started")
-def session_eeg_started(session_id: str = Path(...), request: Request = None):
+def session_eeg_started(session_id: str = Path(...), request: Request = None,
+                        payload: EegStartedReport | None = None):
     """Under push, the page reports that the sidecar is streaming a headband for this session.
 
-    Push's counterpart to the stamp `/api/eeg/start` writes, which `signals_missing` needs:
-    the backend never sees a push start. Owner only, idempotent; a closed session is refused.
+    Push's counterpart to the stamp `/api/eeg/start` writes, which `signals_missing` needs: the backend never sees a
+    push start. Owner only, idempotent; a closed session is refused. A page from before the kit version sends no body.
     """
     user = get_user(request)
     session = _session_or_403(session_id, user["id"], "user_id, ended_at")
     if session.get("ended_at"):
         raise HTTPException(409, "This session has ended")
     _mark_eeg_started(session_id)
+    # The field present is the page saying its sidecar answered (null: it named no version); absent, it could not
+    # ask, and an unreadable value is no answer either. Only an answer is counted, never "no answer" as "no version".
+    answered = payload is not None and "kit_version" in payload.model_fields_set
+    version = payload.kit_version if answered else None
+    if version is not None and not (isinstance(version, str) and _KIT_VERSION.fullmatch(version)):
+        print(f"[eeg] dropped a kit version that is not x.y.z for {session_id}")
+        answered = False
+    if answered:
+        _record_kit_report(session_id, version)
     return {"ok": True}
 
 @app.post("/api/eeg/stop")
@@ -9914,6 +9944,25 @@ def admin_kit_download_link(request: Request, payload: KitLinkRequest):
     print(f"[admin:kit] a download link for {user['id'][:8]}")
     return JSONResponse({"url": url, "expires_at": datetime.fromtimestamp(exp, timezone.utc).isoformat()},
                         headers={"Cache-Control": "no-store"})
+
+
+_KIT_VERSION_DAYS = 14
+
+
+@app.get("/api/admin/kit-versions")
+def admin_kit_versions(request: Request):
+    """Students by the newest kit version their headband lessons reported in `_KIT_VERSION_DAYS`. Counts only."""
+    _require_admin(request)
+    versions = None
+    try:
+        versions = _jsonb_as(supabase.rpc("admin_kit_versions", {
+            "p_since": (_utc_now() - timedelta(days=_KIT_VERSION_DAYS)).isoformat(),
+        }).execute().data, dict)
+    except Exception as e:                                     # noqa: BLE001
+        if not _missing_rpc(e, "admin_kit_versions", "20261014000000",
+                            "the Sensors kit page shows no kit versions until then"):
+            print(f"[admin:kit-versions] {e}")
+    return {"retrieved": versions is not None, "days": _KIT_VERSION_DAYS, "versions": versions}
 
 
 if __name__ == "__main__":

@@ -3,10 +3,11 @@ import { Download } from 'lucide-react'
 import LoadError from '../../components/ui/LoadError'
 import useAdminRead from '../../hooks/useAdminRead'
 import { apiFetch } from '../../lib/api'
-import { ReadState, Tile } from './adminUi'
+import { ReadState, Tile, Unread } from './adminUi'
 
 const KIT = '/api/admin/kit'
 const LINK = '/api/admin/kit/download-link'
+const VERSIONS = '/api/admin/kit-versions'
 
 // A navigation, not a fetch: the browser saves the file, and no connect-src is needed for the gate.
 const goTo = url => window.location.assign(url)
@@ -104,9 +105,47 @@ function Offered({ data, navigate }) {
   )
 }
 
+// Newest first, by number: "0.10.0" is after "0.9.0".
+const byVersion = (a, b) => {
+  const [x, y] = [a, b].map(v => v.split('.').map(Number))
+  return y[0] - x[0] || y[1] - x[1] || y[2] - x[2]
+}
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
+
+/** Students by the newest kit their headband lessons reported: the page's claim, so it is shown and gates nothing. */
+function InUse({ data }) {
+  if (!data.retrieved) return <Unread what="Kit versions" />
+  const { students_by_version: byStudents, lessons_unreported: unreported, students_unreported: onlyUnreported } =
+    data.versions
+  const rows = Object.entries(byStudents || {}).sort(([a], [b]) => byVersion(a, b))
+  return (
+    <div className="space-y-2">
+      {rows.length === 0
+        ? <p className="text-sm text-gray-600 dark:text-gray-400">
+            No headband lesson reported a kit version in the last {data.days} days.
+          </p>
+        : (
+          <ul className="text-sm space-y-1">
+            {rows.map(([version, n]) => (
+              <li key={version} className="text-gray-900 dark:text-white">
+                <span className="tabular-nums font-bold">{plural(n, 'student', 'students')}</span> on {version}
+              </li>
+            ))}
+          </ul>
+        )}
+      <p className="text-xs text-gray-600 dark:text-gray-400">
+        Each student counts once, by the newest version their headband lessons reported in the last {data.days} days.
+        {unreported > 0 && ` Also ${plural(unreported, 'headband lesson', 'headband lessons')} reported no version `
+          + `(${plural(onlyUnreported, 'student', 'students')} with no other): an older kit, or a sidecar outside one.`}
+      </p>
+    </div>
+  )
+}
+
 /** The student kit's installer, through a short link the backend signs: the file itself is never public. */
 export default function AdminKit({ navigate = goTo }) {
   const res = useAdminRead(KIT)
+  const versions = useAdminRead(VERSIONS)
   return (
     <div className="p-6 space-y-6 max-w-4xl">
       <header>
@@ -116,6 +155,10 @@ export default function AdminKit({ navigate = goTo }) {
         </p>
       </header>
       <ReadState res={res} what="the kit installer">{data => <Offered data={data} navigate={navigate} />}</ReadState>
+      <section className="space-y-2">
+        <h2 className="text-xs font-black uppercase tracking-wide text-gray-600 dark:text-gray-400">Kits in use</h2>
+        <ReadState res={versions} what="kit versions">{data => <InUse data={data} />}</ReadState>
+      </section>
     </div>
   )
 }

@@ -48,6 +48,7 @@ vi.mock('../../lib/sidecar', () => ({
   ]),
   releasePushIfIdle: vi.fn(async () => ({ stopped: true, devices: [] })),
   sidecarDebug: vi.fn(async () => ({})),
+  sidecarKit: vi.fn(async () => ({ version: null })),
 }))
 vi.mock('../../lib/pageRestore', () => ({ reloadIfRestored: vi.fn() }))
 vi.mock('../../context/AuthContext', () => ({

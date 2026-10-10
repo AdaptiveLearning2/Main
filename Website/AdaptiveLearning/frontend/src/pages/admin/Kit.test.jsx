@@ -17,9 +17,53 @@ const OFFERED = {
 }
 const URL_ = 'https://kit-updates.example.workers.dev/v1/setup/current?exp=1791600000&sig=c1fc44f6'
 
+const VERSIONS = '/api/admin/kit-versions'
+// What GET /api/admin/kit-versions answers (backend/main.py `admin_kit_versions`).
+const IN_USE = {
+  retrieved: true, days: 14,
+  versions: { students_by_version: { '0.2.1': 2, '0.10.0': 1, '0.9.3': 11 }, lessons_unreported: 7, students_unreported: 3 },
+}
+
 beforeEach(() => {
   resetApi()
-  mockApi({ [KIT]: OFFERED, [`POST ${LINK}`]: { url: URL_, expires_at: '2026-10-10T02:40:00+00:00' } })
+  mockApi({
+    [KIT]: OFFERED, [VERSIONS]: IN_USE,
+    [`POST ${LINK}`]: { url: URL_, expires_at: '2026-10-10T02:40:00+00:00' },
+  })
+})
+
+describe('the kits in use', () => {
+  it('counts students by the newest version, newest first by number, and the lessons that named none', async () => {
+    render(<AdminKit navigate={vi.fn()} />)
+    const items = await screen.findAllByRole('listitem')
+    expect(items.map(li => li.textContent)).toEqual(
+      ['1 student on 0.10.0', '11 students on 0.9.3', '2 students on 0.2.1'])
+    expect(screen.getByText(/Also 7 headband lessons reported no version \(3 students with no other\)/))
+      .toBeInTheDocument()
+    expect(apiFetch).toHaveBeenCalledWith(VERSIONS)
+  })
+
+  it('says no lesson reported a version when none did', async () => {
+    overrideApi(VERSIONS, () => ({ ...IN_USE, versions: { students_by_version: {}, lessons_unreported: 0,
+                                                          students_unreported: 0 } }))
+    render(<AdminKit navigate={vi.fn()} />)
+    expect(await screen.findByText(/No headband lesson reported a kit version in the last 14 days/))
+      .toBeInTheDocument()
+    expect(screen.queryByText(/reported no version/)).not.toBeInTheDocument()
+  })
+
+  it('never shows unread versions as no kits', async () => {
+    overrideApi(VERSIONS, () => ({ retrieved: false, days: 14, versions: null }))
+    render(<AdminKit navigate={vi.fn()} />)
+    expect(await screen.findByText('Kit versions could not be read.')).toBeInTheDocument()
+    expect(screen.queryByText(/No headband lesson reported/)).not.toBeInTheDocument()
+  })
+
+  it('names a refused read as a refusal', async () => {
+    overrideApi(VERSIONS, () => { throw apiError(403) })
+    render(<AdminKit navigate={vi.fn()} />)
+    expect(await screen.findByText("You don't have access to kit versions.")).toBeInTheDocument()
+  })
 })
 
 describe('the installer on offer', () => {

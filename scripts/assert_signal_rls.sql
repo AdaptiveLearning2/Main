@@ -2659,5 +2659,59 @@ BEGIN
     END IF;
 END $$;
 
+-- ─── kit versions: the newest per student, the unreported apart, the format CHECK, no client grant ──
+DO $$
+DECLARE
+    s uuid[] := ARRAY[gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), gen_random_uuid()];
+    got jsonb;
+    refused boolean := false;
+BEGIN
+    INSERT INTO auth.users (id, email) SELECT u, u::text || '@kit.test.invalid' FROM unnest(s) u;
+    INSERT INTO public.profiles (id, email, role)
+    SELECT u, u::text || '@kit.test.invalid', 'student' FROM unnest(s) u ON CONFLICT (id) DO NOTHING;
+    -- 1 reported 0.2.1, then 0.2.3, then a lesson whose report named none; 2 reported 0.2.3; 3's reports named none.
+    -- 4 made no report in the window: a pull lesson with a station, a pull lesson whose station was never written
+    -- (or one from before the column), and a report before the window, so 4 is not counted at all.
+    INSERT INTO public.sessions (id, user_id, started_at, eeg_started_at, eeg_device_id, kit_reported_at, kit_version)
+    VALUES
+        (gen_random_uuid(), s[1], '2099-03-01T09:00:00Z', '2099-03-01T09:01:00Z', NULL, '2099-03-01T09:01:00Z', '0.2.1'),
+        (gen_random_uuid(), s[1], '2099-03-02T09:00:00Z', '2099-03-02T09:01:00Z', NULL, '2099-03-02T09:01:00Z', '0.2.3'),
+        (gen_random_uuid(), s[1], '2099-03-03T09:00:00Z', '2099-03-03T09:01:00Z', NULL, '2099-03-03T09:01:00Z', NULL),
+        (gen_random_uuid(), s[2], '2099-03-02T09:00:00Z', '2099-03-02T09:01:00Z', NULL, '2099-03-02T09:01:00Z', '0.2.3'),
+        (gen_random_uuid(), s[3], '2099-03-02T09:00:00Z', '2099-03-02T09:01:00Z', NULL, '2099-03-02T09:01:00Z', NULL),
+        (gen_random_uuid(), s[3], '2099-03-03T09:00:00Z', '2099-03-03T09:01:00Z', NULL, '2099-03-03T09:01:00Z', NULL),
+        (gen_random_uuid(), s[4], '2099-03-04T09:00:00Z', '2099-03-04T09:01:00Z', 'station-1', NULL, NULL),
+        (gen_random_uuid(), s[4], '2099-03-05T09:00:00Z', '2099-03-05T09:01:00Z', NULL, NULL, NULL),
+        (gen_random_uuid(), s[4], '2099-02-01T09:00:00Z', '2099-02-01T09:01:00Z', NULL, '2099-02-01T09:01:00Z', '0.1.0');
+    got := public.admin_kit_versions('2099-03-01T00:00:00Z');
+    IF got <> jsonb_build_object('students_by_version', jsonb_build_object('0.2.3', 2),
+                                 'lessons_unreported', 3, 'students_unreported', 1) THEN
+        RAISE EXCEPTION 'admin_kit_versions returned %', got;
+    END IF;
+    IF public.admin_kit_versions('2099-04-01T00:00:00Z') <> jsonb_build_object(
+           'students_by_version', '{}'::jsonb, 'lessons_unreported', 0, 'students_unreported', 0) THEN
+        RAISE EXCEPTION 'admin_kit_versions over an empty window returned %', public.admin_kit_versions('2099-04-01');
+    END IF;
+
+    BEGIN
+        INSERT INTO public.sessions (id, user_id, started_at, kit_version)
+        VALUES (gen_random_uuid(), s[1], '2099-03-04T09:00:00Z', '0.2.3-beta');
+    EXCEPTION WHEN check_violation THEN
+        refused := true;
+    END;
+    IF NOT refused THEN
+        RAISE EXCEPTION 'a kit_version that is not x.y.z was accepted';
+    END IF;
+
+    IF has_function_privilege('authenticated', 'public.admin_kit_versions(timestamptz)', 'EXECUTE')
+       OR has_function_privilege('anon', 'public.admin_kit_versions(timestamptz)', 'EXECUTE') THEN
+        RAISE EXCEPTION 'a client role can execute admin_kit_versions';
+    END IF;
+    IF has_column_privilege('authenticated', 'public.sessions', 'kit_version', 'UPDATE')
+       OR has_column_privilege('authenticated', 'public.sessions', 'kit_version', 'INSERT') THEN
+        RAISE EXCEPTION 'a client can write sessions.kit_version, which the backend alone records';
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

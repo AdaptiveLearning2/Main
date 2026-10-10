@@ -28,18 +28,19 @@ export async function recordAnswer({ sessionId, questionId, selectedIndex, corre
 }
 
 /**
- * Push only: tell the backend a headband is streaming for this session (its alerts need it).
- * Never throws, and silent: the student can do nothing about a failure, and recording goes on.
- * @returns {Promise<boolean>} whether nothing is left to send: recorded, or the session is closed
+ * Push only: tell the backend a headband is streaming for this session (its alerts need it), and what the sidecar
+ * said of its kit (`sidecarKit`; null, no answer, sends no body). Never throws, and silent on a failure.
+ * @returns {Promise<true|'closed'|false>} true recorded; 'closed', the session ended, so nothing can ever land; false not
  */
-export async function markEegStarted(sessionId) {
+export async function markEegStarted(sessionId, kit = null) {
   if (!sessionId) return false
   try {
-    await apiFetch(`/api/sessions/${sessionId}/eeg-started`, { method: 'POST' })
+    await apiFetch(`/api/sessions/${sessionId}/eeg-started`,
+                   { method: 'POST', ...(kit ? { body: { kit_version: kit.version } } : {}) })
     return true
   } catch (e) {
-    // 409: the session closed, and its alerts are already decided; a retry can never land.
-    if (e?.status === 409) return true
+    // 409: the session closed, and its alerts are already decided; no retry, of the stamp or the kit, can land.
+    if (e?.status === 409) return 'closed'
     console.error('[session] could not report the EEG start', e)
     return false
   }

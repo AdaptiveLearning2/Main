@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from src.app import kit_info
 from src.app.config import get_settings
 from src.app.schemas import Envelope
 from src.app.security import (
@@ -107,8 +108,8 @@ async def request_timing(request: Request, call_next):
 
 
 @app.get("/healthz")
-def healthz() -> dict[str, str]:
-    return {"status": "ok"}
+def healthz() -> dict[str, object]:
+    return {"status": "ok", "kit": kit_info.for_healthz()}
 
 
 def _unknown_device(device_id: str) -> HTTPException:

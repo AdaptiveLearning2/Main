@@ -114,7 +114,7 @@ describe('every LoadError call site is classified', () => {
       'GET /api/admin/security-events -- _require_admin',
     // ReadState, for Engine, Today, Stations and Sensors kit.
     'pages/admin/adminUi.jsx':
-      'GET /api/admin/generation, refusals, today, stations, kit -- _require_admin',
+      'GET /api/admin/generation, refusals, today, stations, kit, kit-versions -- _require_admin',
     'pages/admin/Kit.jsx':
       'POST /api/admin/kit/download-link -- _require_admin',
   }

@@ -45,6 +45,22 @@ async function call(path, { method = 'GET', body = null,
   }
 }
 
+const KIT_VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/
+
+/**
+ * What this machine's sidecar says of its student kit: `{ version }` when it answered (version null outside a kit,
+ * from a kit too old to say, or when it did not read), or null when it gave no answer, which is not the same fact.
+ * For the admin page only, so it never throws.
+ */
+export async function sidecarKit() {
+  try {
+    const version = (await call('/healthz'))?.kit?.version
+    return { version: typeof version === 'string' && KIT_VERSION.test(version) ? version : null }
+  } catch {
+    return null
+  }
+}
+
 /** Whether a sidecar is answering on this machine at all. */
 export async function sidecarAlive() {
   try {

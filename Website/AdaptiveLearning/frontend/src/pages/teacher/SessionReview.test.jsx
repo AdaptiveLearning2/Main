@@ -29,8 +29,8 @@ describe('the two stress figures', () => {
   it('names the heart pie Body arousal and draws the EEG score as calm, never "Stress"', async () => {
     apiFetch.mockResolvedValue({
       cognitive: [
-        { ts: '2026-08-10T09:00:00Z', focus: 0.6, engagement: 0.5, stress: 0.4 },
-        { ts: '2026-08-10T09:01:00Z', focus: 0.6, engagement: 0.5, stress: 0.4 },
+        { ts: '2026-08-10T09:00:00Z', focus: 0.6, engagement: 0.5, stress: 0.25 },
+        { ts: '2026-08-10T09:01:00Z', focus: 0.6, engagement: 0.5, stress: 0.25 },
       ],
       face: [],
       heart: [{ ts: '2026-08-10T09:00:30Z', stress_category: 'low' }],
@@ -41,10 +41,11 @@ describe('the two stress figures', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Body arousal (heart rate)' }))
       .toBeInTheDocument())
     expect(screen.queryByText(/stress/i)).not.toBeInTheDocument()
-    // Stress 0.4 is calm 60%.
+    // Stress 0.25 is calm 75%; no other series reads 75% or 25%.
     const replay = screen.getByRole('table', { name: /session replay/i })
     expect(within(replay).getByRole('columnheader', { name: 'Calm' })).toBeInTheDocument()
-    expect(within(replay).getAllByText('60%').length).toBeGreaterThan(0)
+    expect(within(replay).getAllByText('75%').length).toBeGreaterThan(0)
+    expect(within(replay).queryByText('25%')).not.toBeInTheDocument()
   })
 })
 

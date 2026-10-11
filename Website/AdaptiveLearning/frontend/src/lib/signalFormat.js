@@ -38,16 +38,17 @@ function shortDate(iso) {
 }
 
 /**
- * Tile text for a channel with no value: paused, consent unreadable, revoked, calibrating, erased, or no sensor.
- * `paused` outranks the rest, as the backend's `_not_recording_reason` does.
+ * Tile text for a channel with no value: consent unreadable, revoked, calibrating, erased, paused, or no sensor.
+ * `paused` only replaces "No sensor": it is a state of now, so it never hides a family's own decision,
+ * an erasure or a recorded-but-unusable week.
  */
 export function offLabel({ on, revokedAt, consentRetrieved, samples, erasedAt = null, paused = false }) {
-  if (paused) return CHANNEL_STATE.paused()
   if (consentRetrieved === false) return CHANNEL_STATE.unknown()
   if (!on) return CHANNEL_STATE.revoked(shortDate(revokedAt))
   if (samples > 0) return CHANNEL_STATE.calibrating()
   // Samples since the erasure win above; with none, the empty past is the erasure, not a missing sensor.
-  return erasedAt ? CHANNEL_STATE.erased(shortDate(erasedAt)) : CHANNEL_STATE.noSensor()
+  if (erasedAt) return CHANNEL_STATE.erased(shortDate(erasedAt))
+  return paused ? CHANNEL_STATE.paused() : CHANNEL_STATE.noSensor()
 }
 
 /**

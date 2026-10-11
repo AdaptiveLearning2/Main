@@ -91,9 +91,13 @@ function heartReason(report) {
 }
 
 /** Body arousal's tile value, or the backend `state`'s own words; never 0% for an absence. */
-function arousalDisplay(arousal) {
+function arousalDisplay(arousal, heartPaused = false) {
   if (!arousal) return { value: null, reason: 'Not reported' }
   if (arousal.state === 'measured') return { value: pct(arousal.high_share), reason: "Couldn't load" }
+  // "None" is no readings at all; with heart paused it says so, as the heart tiles beside it do.
+  if (heartPaused && arousal.state === 'none') {
+    return { value: null, reason: offLabel({ on: true, consentRetrieved: true, samples: 0, paused: true }) }
+  }
   return { value: null, reason: AROUSAL_REASONS[arousal.state] ?? "Couldn't check" }
 }
 
@@ -328,7 +332,7 @@ export function WeeklySignalReport({ report, title = 'This week' }) {
   const consentFailed = report?.consent_retrieved === false
   // Tells "measured but unusable" from "never measured".
   const heartSamples = counts.heart || 0
-  const arousal = arousalDisplay(report?.body_arousal)
+  const arousal = arousalDisplay(report?.body_arousal, isPaused(report, 'heart'))
   const emotionSlices = Object.entries(report?.emotion_distribution || {})
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value)

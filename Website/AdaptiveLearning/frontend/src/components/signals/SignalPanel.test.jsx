@@ -111,6 +111,27 @@ describe('WeeklySignalReport', () => {
     expect(screen.queryByText(/^Off since/, VISIBLE)).not.toBeInTheDocument()
   })
 
+  it('keeps Off since, Erased and Calibrating even while the channel is paused', () => {
+    const none = { focus: null, stress: null }
+    const base = { ...report, paused_channels: ['eeg'], averages: { ...report.averages, ...none },
+                   highlights: { ...report.highlights, highest_stress: null, lowest_focus: null } }
+    const { unmount } = render(<WeeklySignalReport report={{
+      ...base, eeg_enabled: false, eeg_revoked_at: '2026-09-03T09:00:00Z',
+      sample_counts: { ...report.sample_counts, cognitive: 0 } }} />)
+    expect(metric('Focus').getByText(/^Off since/)).toBeInTheDocument()
+    unmount()
+
+    const erased = render(<WeeklySignalReport report={{
+      ...base, eeg_enabled: true, eeg_erased_at: '2026-10-07T00:40:00Z',
+      sample_counts: { ...report.sample_counts, cognitive: 0 } }} />)
+    expect(metric('Focus').getByText(/^Erased/)).toBeInTheDocument()
+    erased.unmount()
+
+    render(<WeeklySignalReport report={{ ...base, eeg_enabled: true }} />)
+    expect(metric('Focus').getByText('Calibrating')).toBeInTheDocument()
+    expect(screen.queryByText('Paused by the school', VISIBLE)).not.toBeInTheDocument()
+  })
+
   it('keeps a figure that exists while the notice says nothing new is being taken', () => {
     render(<WeeklySignalReport report={{ ...report, paused_channels: ['eeg'] }} />)
     expect(metric('Calm').getByText('69%')).toBeInTheDocument()
@@ -1056,6 +1077,19 @@ describe('body arousal', () => {
       body_arousal: buildBodyArousal({ state, high_share: null, classified_windows: 0 }) })} />)
     expect(metric('Body arousal (heart rate)').getByText(words, VISIBLE)).toBeInTheDocument()
     expect(metric('Body arousal (heart rate)').queryByText('0%')).not.toBeInTheDocument()
+  })
+
+  it('says Paused by the school on the arousal tile, as the heart tiles do, only when there are no readings', () => {
+    const arousal = state => buildBodyArousal({ state, high_share: null, classified_windows: 0 })
+    const { unmount } = render(<WeeklySignalReport report={buildWeeklyReport({
+      paused_channels: ['heart'], body_arousal: arousal('none') })} />)
+    expect(metric('Body arousal (heart rate)').getByText('Paused by the school', VISIBLE)).toBeInTheDocument()
+    unmount()
+
+    // Readings that did arrive keep their own reason.
+    render(<WeeklySignalReport report={buildWeeklyReport({
+      paused_channels: ['heart'], body_arousal: arousal('unusable') })} />)
+    expect(metric('Body arousal (heart rate)').getByText('Readings too unsteady', VISIBLE)).toBeInTheDocument()
   })
 
   it('says a thin share is rough, in its own tile', () => {

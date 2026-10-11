@@ -102,7 +102,7 @@ export function GenerationSummary() {
         {data => {
           const { ok, failed, served, notServed } = generationTotals(data)
           return (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
               <Tile label="Questions served, 24 h" value={served} />
               <Tile label="Questions not made, 24 h" value={notServed} />
               <Tile label="Model calls ok" value={ok} />
@@ -273,7 +273,8 @@ export default function AdminEngine() {
       <section className="space-y-3">
         <h2 className="text-sm font-black uppercase tracking-wide text-gray-600 dark:text-gray-400">Refused requests</h2>
         <p className="text-xs text-gray-600 dark:text-gray-400">
-          Every 4xx and 5xx answer except 404, by route. A 503 on question generation is a bound working, not an outage.
+          Every 4xx and 5xx answer except 404, by route. A 503 on question generation is a bound working or a
+          question that could not be made; &ldquo;Questions not made&rdquo; above tells them apart.
         </p>
         <Refusals />
       </section>

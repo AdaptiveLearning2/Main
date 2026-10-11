@@ -29,15 +29,15 @@ it('calmRatio keeps null as null', () => {
   expect(calmRatio(0.25)).toBe(0.75)
 })
 
-it('puts a pause by the school above every consent state, since the switch is the cause', () => {
-  const states = [
-    { on: true, consentRetrieved: true, samples: 0 },
-    { on: false, revokedAt: '2026-10-01T00:00:00Z', consentRetrieved: true },
-    { on: true, consentRetrieved: false },
-    { on: true, consentRetrieved: true, samples: 10 },
-  ]
-  for (const s of states) expect(offLabel({ ...s, paused: true })).toBe('Paused by the school')
+it('lets a pause replace only "No sensor", never the family\'s own decision or a recorded week', () => {
+  expect(offLabel({ on: true, consentRetrieved: true, samples: 0, paused: true })).toBe('Paused by the school')
   expect(offLabel({ on: true, consentRetrieved: true, samples: 0 })).toBe('No sensor')
+  expect(offLabel({ on: false, revokedAt: '2026-10-01T00:00:00Z', consentRetrieved: true, paused: true }))
+    .toMatch(/^Off since/)
+  expect(offLabel({ on: true, consentRetrieved: false, paused: true })).toBe('Unavailable')
+  expect(offLabel({ on: true, consentRetrieved: true, samples: 10, paused: true })).toBe('Calibrating')
+  expect(offLabel({ on: true, consentRetrieved: true, samples: 0, erasedAt: '2026-10-07T00:00:00Z', paused: true }))
+    .toMatch(/^Erased/)
 })
 
 it('names only the channels that are paused, and nothing for a missing or unknown list', () => {

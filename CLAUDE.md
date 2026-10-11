@@ -1116,7 +1116,7 @@ branching on the channel flag itself:
 
 | State | Shown | Because |
 | --- | --- | --- |
-| an administrator switched the sensor off | `Paused by the school` | `paused_channels` on the payload, from the admin recording switches; school-wide, outranks consent as `_not_recording_reason` does, and changes no consent |
+| no samples, and an administrator switched the sensor off | `Paused by the school` | `paused_channels`, from the admin recording switches, only for a channel the student has on (heart: both sources off). It replaces "No sensor" alone: a state of now, so it never hides `Off since`, `Erased`, `Unavailable` or `Calibrating`, and changes no consent |
 | consent withdrawn | `Off since <date>` | the date comes from `*_revoked_at` on the payload |
 | consent unreadable | `Unavailable` | "the student turned this off" is a claim a failed read has not earned |
 | read, samples arrived, none usable | `Calibrating` | a rejected window or a baseline still forming |

@@ -80,8 +80,9 @@ the size cap, rather than in a middleware layer of its own.
 call ceiling is `llm_client`'s in-memory window, so the page labels it **"this server process"**; it counts
 Claude calls only, so under Ollama the payload sends `null` and no tile is drawn. **Model calls and questions made are
 counted apart**: a reply the generator rejects is an ok `llm_call`, so "failed" comes from `generation_failed:*`
-(Engine's "Questions not made"). Today's Answers adds graded practice answers (`practice_answers`, `null` if unread). The Engine page's panels keep
-their last counts through a failed poll, with a note, and hand `LoadError` the read's Error (`loadError` from
+(Engine's "Questions not made"). Today's Answers adds graded practice answers (`practice_answers` from the
+`admin_today` RPC, `null` until the migration that adds it is applied), and a student who only practised is active.
+The Engine page's panels keep their last counts through a failed poll, with a note, and hand `LoadError` the read's Error (`loadError` from
 `useAdminResource`) so a 403 or 503 is not reported as an unreachable backend.
 
 ## Today and Stations

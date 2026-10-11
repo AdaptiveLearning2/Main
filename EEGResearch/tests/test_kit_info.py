@@ -1,4 +1,4 @@
-"""`/healthz` says which kit the sidecar runs in: none outside one, its version, or a version that did not read."""
+"""`/healthz` says which kit the sidecar runs in (none, its version, or one that did not read); the self-test holds it."""
 
 import sys
 
@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from src.app import kit_info
 from src.app.main import app
+from src.kit import selftest, update
 
 
 def _installed(tmp_path, version_txt: bytes | None):
@@ -38,6 +39,13 @@ def test_a_kit_run_from_source_reads_its_folders_version(tmp_path):
     assert kit_info.kit(frozen=False, environ={"KIT_APP_DIR": str(tmp_path)}) == {"version": "0.3.10"}
 
 
+@pytest.mark.parametrize("version_txt, reported", [
+    (b"0.2.03", "0.2.3"), (b"00.02.0003\n", "0.2.3"), (b"0010.0.0", "10.0.0"),
+])
+def test_a_version_is_reported_as_the_updater_reads_it_so_the_page_counts_one(tmp_path, version_txt, reported):
+    assert kit_info.kit(frozen=True, executable=_installed(tmp_path, version_txt)) == {"version": reported}
+
+
 def test_a_kit_folder_that_cannot_be_read_still_answers_healthz_and_logs_it_once(monkeypatch, caplog):
     # A path no file system takes: read_text raises ValueError, which kit() does not expect.
     real = kit_info.kit
@@ -57,3 +65,50 @@ def test_a_kit_folder_that_cannot_be_read_still_answers_healthz_and_logs_it_once
 ])
 def test_a_kit_whose_version_does_not_read_says_so_rather_than_guessing(tmp_path, version_txt):
     assert kit_info.kit(frozen=True, executable=_installed(tmp_path, version_txt)) == {"version": None}
+
+
+def _check_server(monkeypatch, tmp_path, answer=None):
+    """The self-test's server check on the kit in tmp_path; answer stands in for /healthz, else the real app's."""
+    def serve(served, path):
+        if answer is not None:
+            return answer
+        response = TestClient(served).get(path)
+        return response.status_code, response.json(), []
+
+    monkeypatch.setattr(selftest, "_serve_once", serve)
+    monkeypatch.setenv("KIT_APP_DIR", str(tmp_path))
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    return selftest.check_server({"settings_ok": True, "app": tmp_path})
+
+
+@pytest.mark.parametrize("version_txt", [b"0.2.3\r\n", b"0.2.03"])  # the updater reads both as 0.2.3
+def test_the_self_test_passes_a_sidecar_reporting_its_kits_own_version(monkeypatch, tmp_path, version_txt):
+    _installed(tmp_path, version_txt)
+    assert _check_server(monkeypatch, tmp_path) == {"healthz": 200, "warnings": []}
+
+
+def test_the_self_test_passes_a_healthz_that_has_gained_a_field(monkeypatch, tmp_path):
+    _installed(tmp_path, b"0.2.3")
+    answer = (200, {"status": "ok", "kit": {"version": "0.2.3"}, "later": True}, [])
+    assert _check_server(monkeypatch, tmp_path, answer) == {"healthz": 200, "warnings": []}
+
+
+@pytest.mark.parametrize("status, body", [
+    (200, {"status": "ok"}),
+    (200, {"status": "ok", "kit": None}),
+    (200, {"status": "ok", "kit": "0.2.3"}),
+    (200, {"status": "ok", "kit": {"version": None}}),
+    (200, {"status": "ok", "kit": {"version": "0.2.2"}}),
+    (200, {"status": "ok", "kit": {"version": "0.2.03"}}),  # the page would count it apart from 0.2.3
+    (200, {"status": "degraded", "kit": {"version": "0.2.3"}}),
+    (503, {"status": "ok", "kit": {"version": "0.2.3"}}),
+])
+def test_the_self_test_fails_a_sidecar_naming_another_kit_or_none(monkeypatch, tmp_path, status, body):
+    _installed(tmp_path, b"0.2.3")
+    with pytest.raises(selftest.CheckFailed):
+        _check_server(monkeypatch, tmp_path, (status, body, []))
+
+
+def test_the_self_test_fails_a_kit_with_no_version_txt(monkeypatch, tmp_path):
+    with pytest.raises(update.FeedError):
+        _check_server(monkeypatch, tmp_path, (200, {"status": "ok", "kit": {"version": None}}, []))

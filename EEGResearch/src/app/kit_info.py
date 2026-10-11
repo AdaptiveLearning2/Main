@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-_VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}")
+_VERSION = re.compile(r"([0-9]{1,4})\.([0-9]{1,4})\.([0-9]{1,4})")
 _failed_before = False
 
 
@@ -43,4 +43,6 @@ def kit(frozen: bool | None = None, executable: str | None = None,
         text = (app / "version.txt").read_text(encoding="ascii").strip()
     except (OSError, UnicodeDecodeError):
         return {"version": None}
-    return {"version": text if _VERSION.fullmatch(text) else None}
+    match = _VERSION.fullmatch(text)
+    # written as kit.update.version_text does: the admin page counts by this text, so 0.2.03 must be 0.2.3
+    return {"version": "%d.%d.%d" % tuple(map(int, match.groups())) if match else None}

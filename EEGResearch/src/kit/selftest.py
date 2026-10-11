@@ -188,9 +188,15 @@ def _serve_once(app, path: str) -> tuple[int, dict, list[str]]:
 def check_server(ctx):
     require(ctx.get("settings_ok"), "the settings check did not pass, so the sidecar's env is not set")
     from src.app.main import app  # noqa: PLC0415
+    from src.kit import update  # noqa: PLC0415
 
+    installed = update.version_text(update.installed_version(ctx["app"]))
     status, body, warnings = _serve_once(app, "/healthz")
-    require(status == 200 and body == {"status": "ok"}, f"healthz {status} {body}")
+    kit = body.get("kit")  # only status and kit: a field /healthz gains later is not this check's
+    reported = kit.get("version") if isinstance(kit, dict) else None
+    # the text the admin page counts, so a version.txt of 0.2.03 must arrive as 0.2.3
+    require(status == 200 and body.get("status") == "ok" and reported == installed,
+            f"healthz {status} {body}, not version {installed}")
     return {"healthz": status, "warnings": warnings}
 
 

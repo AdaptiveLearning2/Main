@@ -71,14 +71,16 @@ the size cap, rather than in a middleware layer of its own.
 | `llm_call` | `<provider>:ok`, `:unavailable:<reason>`, `:error:<Exception>` | `llm_client.generate_text` |
 | `llm_latency_ms` | provider (sum and max; includes waiting for a slot) | same |
 | `llm_tokens` | `<provider>:in` / `:out` | same, from the provider's usage fields |
-| `question` | `served:inline`/`served:queue`, `prefetched`, `prefetch_failed`, `prefetch_discarded` | `generate_question`, `_prefetch_worker` |
+| `question` | `served:inline`/`served:queue`/`served:practice`, `generation_failed:<Exception>`, `generation_fallback`, `prefetched`, `prefetch_failed`, `prefetch_discarded` | `generate_question`, `practice_question`, `_prefetch_worker`, `generate_with_fallback` |
 | `session_discarded` | the `close_reason` the discarded session would have had | `_close_session` |
 | `station_refused` | station id (a device) | `_reserve_and_call`, `eeg_start` |
 
 `/api/admin/generation` and `/api/admin/refusals` read them; `hours` is clamped to a week. The cost is an
 **estimate** from `CLAUDE_PRICE_*_PER_MTOK` (claude-haiku-4-5 list prices by default) and says so. The daily
 call ceiling is `llm_client`'s in-memory window, so the page labels it **"this server process"**; it counts
-Claude calls only, so under Ollama the payload sends `null` and no tile is drawn. The Engine page's panels keep
+Claude calls only, so under Ollama the payload sends `null` and no tile is drawn. **Model calls and questions made are
+counted apart**: a reply the generator rejects is an ok `llm_call`, so "failed" comes from `generation_failed:*`
+(Engine's "Questions not made"). Today's Answers adds graded practice answers (`practice_answers`, `null` if unread). The Engine page's panels keep
 their last counts through a failed poll, with a note, and hand `LoadError` the read's Error (`loadError` from
 `useAdminResource`) so a 403 or 503 is not reported as an unreachable backend.
 

@@ -1111,11 +1111,12 @@ to True and are not a privacy boundary; don't build one on them.
 
 ## A tile never says "no data" for something that was not recorded
 
-`SignalPanel`'s `offLabel` picks between five states, and every tile goes through `valueOrReason` rather than
+`SignalPanel`'s `offLabel` picks between six states, and every tile goes through `valueOrReason` rather than
 branching on the channel flag itself:
 
 | State | Shown | Because |
 | --- | --- | --- |
+| an administrator switched the sensor off | `Paused by the school` | `paused_channels` on the payload, from the admin recording switches; school-wide, outranks consent as `_not_recording_reason` does, and changes no consent |
 | consent withdrawn | `Off since <date>` | the date comes from `*_revoked_at` on the payload |
 | consent unreadable | `Unavailable` | "the student turned this off" is a claim a failed read has not earned |
 | read, samples arrived, none usable | `Calibrating` | a rejected window or a baseline still forming |

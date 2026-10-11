@@ -210,6 +210,12 @@ bank or a cheaper model would change what a child is asked with nothing saying s
 because a ceiling is a decision this deployment made. The prefetch worker is the one place a refusal is *silent*, and
 that is safe because it is invisible by construction: the queue stays short and the next question is generated inline.
 
+**A generator that gives up is not a refusal, so it gets one more topic.** `generate_with_fallback` tries a single
+other topic when a generator raises (any allowed topic on the adaptive path; one of the session's own on practice, since
+the student chose those). A `GenerationUnavailable` is never retried. The fallback question carries `fallback_from`, and
+`question/generation_fallback` counts it. If both fail the answer is a 503 with no `Retry-After` (a retry costs model
+calls), counted as `question/generation_failed:<Exception>`; a 500 is left for "the decider returned nothing".
+
 **An API that cannot be *reached* is a 503, not a 500, and the message names the base URL.** `generate_text` catches
 `anthropic.APIConnectionError` (which `APITimeoutError` subclasses) and re-raises it. Unclassified it was a 500 with a
 200-line traceback, and the student's page said *"make sure the backend is running"* while the backend was running.

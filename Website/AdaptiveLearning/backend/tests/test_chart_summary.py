@@ -202,9 +202,17 @@ def test_other_forms_of_stopped_sending_are_a_cause(text):
 
 @pytest.mark.parametrize("text", [
     "The sensor was turned off, so the app stopped collecting data.",
-    "Recording is paused, so it no longer sends readings."])
-def test_stopped_sending_beside_turned_off_or_paused_is_the_cause_already_stated(text):
+    "Recording is paused, so it no longer sends readings.",
+    "The sensor was turned off on 3 Oct; it no longer sends readings."])
+def test_stopped_sending_after_turned_off_or_paused_is_the_cause_already_stated(text):
     assert not main._names_a_cause(text)
+
+
+@pytest.mark.parametrize("text", [
+    "The headband stopped sending data, so it was switched off.",
+    "It no longer sends readings. The sensor was turned off later."])
+def test_a_stoppage_stated_before_any_turned_off_is_still_a_cause(text):
+    assert main._names_a_cause(text)
 
 
 @pytest.mark.parametrize("text", ["Taylor stopped giving up on fractions after the first week.",

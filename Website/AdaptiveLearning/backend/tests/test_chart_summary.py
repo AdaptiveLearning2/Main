@@ -618,6 +618,23 @@ def test_a_no_figure_point_cannot_gain_a_level_or_comparison():
     assert main._validated_chart_summary(f"1. {good}", set(), 1, [base]) == [good]
 
 
+@pytest.mark.parametrize("line", [
+    "Body arousal cannot be compared with earlier days, so we cannot say whether it was higher or lower than usual.",
+    "Body arousal cannot be compared with earlier days, so higher or lower cannot be told apart this time.",
+], ids=["whether", "x-or-y"])
+def test_a_no_figure_point_may_ask_whether_without_stating_a_level(line):
+    base = ("Body arousal cannot be compared with earlier days, because this period's heart readings "
+            "came from more than one sensor.")
+    assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) == [line]
+
+
+def test_a_hedge_does_not_cover_a_level_stated_before_it():
+    base = ("Body arousal cannot be compared with earlier days, because this period's heart readings "
+            "came from more than one sensor.")
+    line = "Body arousal was raised, though we cannot say whether it was higher than usual."
+    assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) is None
+
+
 def test_only_the_body_arousal_clause_of_a_verdict_is_checked_for_time():
     base = ("Compared with this student's own earlier days, focus was lower than usual "
             "and body arousal was higher than usual.")

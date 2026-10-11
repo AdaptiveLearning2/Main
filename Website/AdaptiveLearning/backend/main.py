@@ -5667,6 +5667,9 @@ _READINGS_WORD = re.compile(r"\breadings?\b", re.IGNORECASE)
 # A level or a comparison: what a "no figure" point must not gain.
 _FIGURE_WORDS = re.compile(r"\d|\b(raised|elevated|high|higher|highest|low|lower|lowest|above|below|rose|risen|"
                            r"fell|dropped|than usual)\b", re.IGNORECASE)
+# Asks rather than states: "whether it was higher…", "higher or lower". Removed before that check.
+_HEDGE = re.compile(r"\bwhether\b.*$|\b(higher|lower|above|below|more|less)\s+or\s+(higher|lower|above|below|more|less)\b",
+                    re.IGNORECASE)
 _TIME_SHARE = re.compile(
     r"\b(how often|often|time spent|spent)\b"
     # An amount put on the lesson itself ("0% of the lesson", "more of the lesson"), not on its readings.
@@ -5697,7 +5700,7 @@ def _misstates_body_arousal(line: str, base: str) -> bool:
         spans = [m.group(0) for m in _AROUSAL_SPAN.finditer(line)] or [line]
         return any(_adds(_TIME_SHARE, s, base) for s in spans)
     if names:
-        return _adds(_FIGURE_WORDS, line, base)
+        return _adds(_FIGURE_WORDS, _HEDGE.sub(" ", line), base)
     # A line bringing body arousal into a point that never mentioned it.
     return "arousal" in line.lower() and "arousal" not in base.lower() and _adds(_TIME_SHARE, line, base)
 

@@ -637,7 +637,8 @@ reply line may use only its own point's numbers, and is a sensor line exactly wh
   beside it passes and "…and stayed up for most of the lesson" after it does not.
 - **no figure** (calibrating, unsteady, not enough history, lesson in progress): no time check, since "often" and "most
   of the lesson" mean other things there, but the line may not gain a level or comparison (`_FIGURE_WORDS`): "was
-  raised" where there is no figure states a measurement that does not exist.
+  raised" where there is no figure states a measurement that does not exist. A hedge ("whether it was higher or
+  lower") asks rather than states, so it is removed before that check (`_HEDGE`); a level stated before it still counts.
 
 A line that brings body arousal into a point that never mentioned it is checked for time phrases too.
 

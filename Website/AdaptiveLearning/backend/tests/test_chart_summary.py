@@ -536,6 +536,192 @@ def test_the_model_path_rejects_a_reply_that_calls_calm_stress(monkeypatch):
     assert main._llm_chart_summary("prompt", lines) is None
 
 
+_AROUSAL_BASE = ("Body arousal -- the share of the headband's usable heart readings that were at least "
+                 "10 beats a minute above the rate it measured at the start of each lesson -- was 0%.")
+
+
+@pytest.mark.parametrize("line", [
+    "Body arousal measures how often the heart rate was at least 10 beats a minute higher, at 0%.",
+    "Body arousal -- the readings were often at least 10 beats a minute above the start -- was 0%.",
+    "Body arousal -- the share of the time the heart rate was 10 beats a minute up -- was 0%.",
+    "Body arousal -- 0% of the lesson spent at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of the lesson was at least 10 beats a minute above the start.",
+    "Body arousal -- 0 percent of the time was at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of each lesson was at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of the session was at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of lesson time was at least 10 beats a minute above the start.",
+    # A possessive followed by a time word is still a share of time.
+    "Body arousal -- 0% of the lesson’s time was at least 10 beats a minute above the start.",
+    "Body arousal -- 0 percent of each lesson's time was at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of the session's length was at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of the lessons' duration was at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of time spent at least 10 beats a minute above the start.",
+    "Body arousal -- 0%, the lesson spent well above 10 beats a minute over the start.",
+    "Body arousal -- 0% of the lesson’s total time was at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of the session's whole length was at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of each lesson's minutes were at least 10 beats a minute above the start.",
+    # "readings" kept, but with a time phrase the point lacks.
+    "Body arousal -- how often the readings were at least 10 beats a minute above the start -- was 0%.",
+    # "readings" kept, but the percentage put on the lesson itself.
+    "Body arousal -- 0% of the lesson was at least 10 beats a minute above the start, going by the heart readings.",
+    # The name dropped: still the body-arousal point, so still checked.
+    "The heart rate was at least 10 beats a minute above the start for 0% of the lesson.",
+], ids=["how-often", "often", "of-the-time", "of-the-lesson", "pct-of-the-lesson", "percent-of-the-time",
+        "of-each-lesson", "of-the-session", "of-lesson-time",
+        "lessons-time", "each-lessons-time", "sessions-length", "plural-lessons-duration",
+        "time-spent", "spent-above", "total-time", "whole-length", "lessons-minutes",
+        "readings-but-how-often", "readings-but-pct-of-the-lesson", "name-dropped"])
+def test_a_reply_describing_body_arousal_as_time_is_rejected(line):
+    """It is a share of readings; a time-share reading is the claim the glossary removed."""
+    assert main._validated_chart_summary(f"1. {line}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) is None
+
+
+def test_a_body_arousal_line_that_drops_the_definition_falls_back():
+    """The stated cost of requiring "readings": a shorter, accurate line is rejected too."""
+    line = "Body arousal this period came to 0%, against a 10 beat a minute line."
+    assert len(line) >= main._CHART_SUMMARY_MIN_CHARS
+    assert main._validated_chart_summary(f"1. {line}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) is None
+    # The same line with the word kept passes, so "readings" is what decides it.
+    kept = "Body arousal this period came to 0% of readings, against a 10 beat a minute line."
+    assert main._validated_chart_summary(f"1. {kept}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) == [kept]
+
+
+def test_the_usual_comparison_cannot_turn_body_arousal_into_time():
+    base = ("Compared with this student's own earlier days, focus was lower than usual "
+            "and body arousal was higher than usual.")
+    bad = ("Compared with their earlier days, focus was lower than usual and body arousal "
+           "took up more of the lesson than usual.")
+    good = ("Next to their own earlier days, focus was lower than usual and body arousal "
+            "was higher than usual.")
+    assert main._validated_chart_summary(f"1. {bad}", set(), 1, [base]) is None
+    assert main._validated_chart_summary(f"1. {good}", set(), 1, [base]) == [good]
+
+
+@pytest.mark.parametrize("base, line", [
+    ("Body arousal does not have enough earlier days yet to say what is usual for this student.",
+     "Body arousal has not been recorded often enough yet to say what is usual for this student."),
+    (main._BODY_AROUSAL_ABSENT["pending"],
+     "Body arousal has no figure yet for this period, since most of the lesson is still under way."),
+], ids=["not-enough-history", "lesson-in-progress"])
+def test_a_point_with_no_body_arousal_figure_may_say_often_or_most_of_the_lesson(base, line):
+    """There the words describe history or a running lesson, not the measure."""
+    assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) == [line]
+
+
+def test_a_no_figure_point_cannot_gain_a_level_or_comparison():
+    """Saying arousal was raised when there is no figure states a measurement that does not exist."""
+    base = main._BODY_AROUSAL_ABSENT["unusable"]
+    bad = ("Body arousal was raised for most of the lesson, but the heart readings were too "
+           "unsteady to give a figure.")
+    good = "Body arousal has no figure for this period: the heart readings were not steady enough to use."
+    assert main._validated_chart_summary(f"1. {bad}", set(), 1, [base]) is None
+    assert main._validated_chart_summary(f"1. {good}", set(), 1, [base]) == [good]
+
+
+@pytest.mark.parametrize("line", [
+    "Body arousal cannot be compared with earlier days, so we cannot say whether it was higher or lower than usual.",
+    "Body arousal cannot be compared with earlier days, so higher or lower cannot be told apart this time.",
+], ids=["whether", "x-or-y"])
+def test_a_no_figure_point_may_ask_whether_without_stating_a_level(line):
+    base = ("Body arousal cannot be compared with earlier days, because this period's heart readings "
+            "came from more than one sensor.")
+    assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) == [line]
+
+
+@pytest.mark.parametrize("line", [
+    "Body arousal was raised, though we cannot say whether it was higher than usual.",
+    "Body arousal cannot be compared, so we cannot say whether it changed, but it was raised this week.",
+    "Body arousal cannot be compared, so we cannot say whether it changed but it was raised this week.",
+    "We cannot say whether body arousal changed against earlier days; it was higher than usual this week.",
+    "We cannot say whether body arousal changed against earlier days. It was higher than usual this week.",
+], ids=["before", "after-but", "after-bare-but", "after-semicolon", "after-full-stop"])
+def test_a_hedge_covers_only_its_own_clause(line):
+    """A level stated before or after the hedge still states a measurement that does not exist."""
+    base = ("Body arousal cannot be compared with earlier days, because this period's heart readings "
+            "came from more than one sensor.")
+    assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) is None
+
+
+def test_only_the_body_arousal_clause_of_a_verdict_is_checked_for_time():
+    base = ("Compared with this student's own earlier days, focus was lower than usual "
+            "and body arousal was higher than usual.")
+    line = "Next to their earlier days, focus often dipped below usual and body arousal was higher than usual."
+    assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) == [line]
+    # Order reversed: the span stops at the next measure's name.
+    after = "Next to their earlier days, body arousal was higher than usual and focus often dipped below usual."
+    assert main._validated_chart_summary(f"1. {after}", set(), 1, [base]) == [after]
+
+
+def test_every_phrase_about_body_arousal_in_a_verdict_is_checked():
+    base = ("Compared with this student's own earlier days, focus was lower than usual "
+            "and body arousal was higher than usual.")
+    line = ("Next to their earlier days, focus was lower than usual and body arousal was higher "
+            "than usual and stayed up for most of the lesson.")
+    assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) is None
+
+
+def test_a_share_of_something_else_is_not_body_arousal():
+    """A later "share of …" sentence must not make every summary fall back for lacking "readings"."""
+    base = "The share of questions answered correctly this week was 75%."
+    line = "Three quarters of this week's questions, 75%, were answered correctly."
+    assert main._validated_chart_summary(f"1. {line}", {75.0}, 1, [base]) == [line]
+
+
+def test_a_line_that_brings_in_body_arousal_is_still_checked():
+    # A sensor point, so the sensor-word check passes it and only this rule decides.
+    base = "Average focus is 58%, and it held steady across the weeks."
+    line = "Average focus is 58%, and body arousal stayed high for most of the lesson."
+    assert main._validated_chart_summary(f"1. {line}", {58.0}, 1, [base]) is None
+    plain = "Average focus is 58%, and it stayed steady across the weeks."
+    assert main._validated_chart_summary(f"1. {plain}", {58.0}, 1, [base]) == [plain]
+
+
+def test_the_time_words_bind_only_body_arousal_lines():
+    base = "Average focus is 58%, and it was steady across the weeks."
+    line = "Focus averaged 58%, and it often held steady across the weeks."
+    assert main._validated_chart_summary(f"1. {line}", {58.0}, 1, [base]) == [line]
+
+
+def test_an_absent_state_rewording_need_not_say_readings():
+    """Those points say why there is no figure; they define nothing, so "readings" is not required."""
+    base = main._BODY_AROUSAL_ABSENT["pending"]
+    line = "Body arousal has no figure yet for this period, since a lesson is still under way."
+    assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) == [line]
+
+
+@pytest.mark.parametrize("line", [
+    "Body arousal, the share of usable heart readings at least 10 beats a minute above "
+    "the lesson's starting rate, was 0%.",
+    # "the lesson" names when the baseline was taken, not a share of time.
+    "Body arousal -- the share of usable heart readings at least 10 beats a minute above the rate "
+    "measured at the start of the lesson -- was 0%.",
+    "Body arousal -- the share of usable heart readings at least 10 beats a minute above the rate "
+    "in the first part of the lesson -- was 0%.",
+    # A possessive names whose readings, not a share of the lesson's time; both apostrophes.
+    "Body arousal -- the share of the lesson's readings at least 10 beats a minute above the start "
+    "-- was 0%.",
+    "Body arousal -- the share of the session’s readings at least 10 beats a minute above the start "
+    "-- was 0%.",
+    "Body arousal -- the share of the lessons’ readings at least 10 beats a minute above the start "
+    "-- was 0%.",
+    # A percentage of the lesson's readings is the measure itself.
+    "Body arousal -- 0% of the lesson's readings were at least 10 beats a minute above the start.",
+    # Words between the possessive and "readings": the rewording closest to the original.
+    "Body arousal -- the share of the lesson’s usable heart readings at least 10 beats a minute above "
+    "the start -- was 0%.",
+    "Body arousal -- 0% of each lesson's heart readings were at least 10 beats a minute above the start.",
+], ids=["lessons-starting-rate", "start-of-the-lesson", "first-part-of-the-lesson",
+        "lessons-readings-straight", "sessions-readings-curly", "plural-lessons-readings",
+        "pct-of-the-lessons-readings", "lessons-usable-heart-readings", "each-lessons-heart-readings"])
+def test_a_faithful_body_arousal_rephrasing_passes(line):
+    assert main._validated_chart_summary(f"1. {line}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) == [line]
+
+
+def test_the_chart_summary_prompt_says_body_arousal_is_not_time():
+    prompt = main._chart_summary_prompt({}, [_AROUSAL_BASE])
+    assert "share of heart readings, not of time" in prompt
+
+
 def test_the_three_reads_behind_one_response_report_separately(endpoint, set_flag):
     """One flag would make a partial summary read as entirely fine or entirely broken."""
     set_flag("chart_summary_llm_enabled", False)

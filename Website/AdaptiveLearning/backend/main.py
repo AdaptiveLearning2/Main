@@ -5651,6 +5651,8 @@ def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
         "stopped working): keep the points' own words for it.\n"
         "Calm and body arousal are different measurements from different sensors: never "
         "combine them, and never call calm \"stress\".\n"
+        "Body arousal is a share of heart readings, not of time: never describe it as how "
+        "often something happened or as a share of the time or of the lesson.\n"
         f"Return exactly {len(baseline)} points as a numbered list, no preamble.\n\n"
         + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(baseline))
     )
@@ -5658,6 +5660,51 @@ def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
 
 _STRESS_WORD = re.compile(r"\bstress", re.IGNORECASE)
 _SENSOR_WORDS = re.compile(r"\b(focus|calm|heart|arousal)", re.IGNORECASE)
+# Body arousal is a share of readings: a rewording of its definition keeps that word, and no
+# body-arousal figure or verdict is restated as time. See docs/reporting.md, "Chart summary".
+_DEFINES_SHARE = re.compile(r"\bshare of\b", re.IGNORECASE)
+_READINGS_WORD = re.compile(r"\breadings?\b", re.IGNORECASE)
+# A level or a comparison: what a "no figure" point must not gain.
+_FIGURE_WORDS = re.compile(r"\d|\b(raised|elevated|high|higher|highest|low|lower|lowest|above|below|rose|risen|"
+                           r"fell|dropped|than usual)\b", re.IGNORECASE)
+# Asks rather than states: "whether it was higher…", "higher or lower". Removed before that check.
+# "whether…" ends at the next , ; . or "but", so a level stated after it is still checked.
+_HEDGE = re.compile(r"\bwhether\b.*?(?=[,;.]|\bbut\b|$)"
+                    r"|\b(higher|lower|above|below|more|less)\s+or\s+(higher|lower|above|below|more|less)\b",
+                    re.IGNORECASE)
+_TIME_SHARE = re.compile(
+    r"\b(how often|often|time spent|spent)\b"
+    # An amount put on the lesson itself ("0% of the lesson", "more of the lesson"), not on its readings.
+    r"|(%|\b(percent|more|less|most|much|fraction|proportion|share))\s+of\s+((the|each|a|their)\s+)?"
+    r"(time|lesson|session)s?\b(?!s?['’]s?\s+(\w+\s+){0,3}readings?\b)",
+    re.IGNORECASE)
+# With "body arousal" named in the point: its figure ("share of") or a verdict on it.
+_AROUSAL_FIGURE = re.compile(r"\bshare of\b|\bbody arousal was\b", re.IGNORECASE)
+# From "arousal" to the next measure's name or the line's end: everything said about it, however joined.
+_AROUSAL_SPAN = re.compile(r"arousal.*?(?=\b(focus|calm|heart rate|heart-rate variability)\b|$)",
+                           re.IGNORECASE | re.DOTALL)
+
+
+def _adds(pattern: re.Pattern, text: str, base: str) -> bool:
+    return bool(pattern.search(text)) and not pattern.search(base)
+
+
+def _misstates_body_arousal(line: str, base: str) -> bool:
+    """A rewording that turns body arousal into time, drops its "readings", or invents a figure.
+
+    Figure point: keeps "readings" and gains no time phrase. Verdict point: from "arousal" to the next
+    measure is checked for time. No-figure point: gains no level or comparison.
+    """
+    names = "body arousal" in base.lower()
+    if names and _DEFINES_SHARE.search(base):
+        return not _READINGS_WORD.search(line) or _adds(_TIME_SHARE, line, base)
+    if names and _AROUSAL_FIGURE.search(base):
+        spans = [m.group(0) for m in _AROUSAL_SPAN.finditer(line)] or [line]
+        return any(_adds(_TIME_SHARE, s, base) for s in spans)
+    if names:
+        return _adds(_FIGURE_WORDS, _HEDGE.sub(" ", line), base)
+    # A line bringing body arousal into a point that never mentioned it.
+    return "arousal" in line.lower() and "arousal" not in base.lower() and _adds(_TIME_SHARE, line, base)
 
 
 def _validated_chart_summary(raw: str, allowed: set[float], expected_lines: int,
@@ -5683,6 +5730,10 @@ def _validated_chart_summary(raw: str, allowed: set[float], expected_lines: int,
     if baseline is not None and any(_STRESS_WORD.search(line) and not _STRESS_WORD.search(base)
                                     for line, base in zip(lines, baseline)):
         print("[chart_summary:llm] rejected: it says stress where the point did not")
+        return None
+    if baseline is not None and any(_misstates_body_arousal(line, base)
+                                    for line, base in zip(lines, baseline)):
+        print("[chart_summary:llm] rejected: it misstates body arousal (time, definition or figure)")
         return None
     # Each point keeps its own numbers and stays a sensor point or not, so `sensor_lines` holds.
     if baseline is not None and any(

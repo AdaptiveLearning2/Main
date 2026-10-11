@@ -7,6 +7,7 @@ import Panel from './Panel'
 import ScaleNote from '../signals/ScaleNote'
 import { calmRatio } from '../../lib/signalFormat'
 import { MEASURES } from '../../lib/signalGlossary'
+import { LINE_LEGEND, lineDash } from '../charts/legendProps'
 
 /**
  * The class's signal averages per school day. Days with nothing recorded stay
@@ -95,11 +96,11 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
                 {/* Raw values on the axis; the column spec scales for the table instead. */}
                 <YAxis domain={c.domain} tick={{ fontSize: 11 }} tickFormatter={c.tick} />
                 <ChartTooltip formatter={(v, name) => [c.tip(v), name]} />
-                {c.series.length > 1 && <Legend wrapperStyle={{ fontSize: 12 }} />}
+                {c.series.length > 1 && <Legend {...LINE_LEGEND} wrapperStyle={{ fontSize: 12 }} />}
                 {/* Filled dots: Recharts' default white centre reads as hollow. */}
                 {c.series.map(s => (
                   <Line key={s.key} type="monotone" dataKey={s.key} name={s.label}
-                    stroke={s.colour} strokeWidth={2} strokeDasharray={s.dash}
+                    stroke={s.colour} strokeWidth={2} {...lineDash(s.dash)}
                     dot={{ r: 3, fill: s.colour, strokeWidth: 0 }} connectNulls={false} />
                 ))}
               </LineChart>

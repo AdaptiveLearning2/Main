@@ -626,6 +626,23 @@ reply line that says "stress" where the matching rule-based line does not. `basi
 sentences so "Hide sensor data" can drop exactly those, and the validator enforces the order that relies on: each
 reply line may use only its own point's numbers, and is a sensor line exactly when its point is.
 
+**Body arousal is a share of readings, and `_misstates_body_arousal` holds a rewording to that**, by the kind of point
+(each one naming "body arousal"):
+- **its figure** ("share of…"): the line keeps "readings" and adds no time phrase (`_TIME_SHARE`: "how often", "often",
+  "time spent", "spent", or an amount put on the lesson itself, "0% of the lesson", "more of the lesson"; "of the
+  lesson's usable heart readings" is fine). Requiring the word rather than listing time phrasings is deliberate: every
+  list missed the next one. The cost is that a line dropping the definition falls back to the rule-based text.
+- **a verdict** ("body arousal was higher than usual"): the text from "arousal" to the next measure's name or the
+  line's end is checked for time phrases (`_AROUSAL_SPAN`), however many "and"s it holds, so "focus often dipped"
+  beside it passes and "…and stayed up for most of the lesson" after it does not.
+- **no figure** (calibrating, unsteady, not enough history, lesson in progress): no time check, since "often" and "most
+  of the lesson" mean other things there, but the line may not gain a level or comparison (`_FIGURE_WORDS`): "was
+  raised" where there is no figure states a measurement that does not exist. A hedge ("whether it was higher or
+  lower") asks rather than states, so its own clause, up to the next comma, semicolon, full stop or "but", is removed
+  before that check (`_HEDGE`); a level stated before or after it still counts.
+
+A line that brings body arousal into a point that never mentioned it is checked for time phrases too.
+
 **What it still does not check is a number's meaning within one point.** A reply that relabels a figure inside its
 own sentence uses only that sentence's numbers and passes. That is the residual hallucination risk on this endpoint and it
 is not closed; closing it means parsing the reply back into measurements, which is a second implementation of the
@@ -664,6 +681,6 @@ named — it is the focus index, and a sentence naming both describes one measur
 channel gets **no trend**: `_CHART_SUMMARY_TREND_MIN_DELTA` is written for the 0..1 ratios focus and stress are
 stored on, and against bpm the same number is a twentieth of a beat.
 
-`ChartSummaryPanel` mounts on both report routes, and on the teacher route is behind *"Hide sensor data"* with the
-charts — a stronger version of the reason the strategies panel is: that list mentions sensor readings in passing,
-where this panel's whole job is to state them.
+`ChartSummaryPanel` mounts on both report routes. On the teacher route *"Hide sensor data"* drops only the
+`sensor_lines` sentences and keeps the accuracy and topic ones, unlike the strategies panel, whose advice cannot be
+split that way.

@@ -19,6 +19,7 @@ import { correctIndex, optionList } from '../../lib/answerKey'
 import { fmtDate } from '../../lib/dates'
 import { buildTimeline, downsample } from '../../lib/timeline'
 import { MEASURES } from '../../lib/signalGlossary'
+import { LINE_LEGEND, legendText, lineDash } from '../../components/charts/legendProps'
 
 // About two points per horizontal pixel; an hour at 4 Hz is ~14,000 rows.
 const CHART_MAX_ROWS = 1500
@@ -248,9 +249,9 @@ function SessionReviewBody({ sessionId }) {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
-          { label: 'Cognitive samples', value: cognitive.length, icon: <Brain size={16} className="text-indigo-500" /> },
+          { label: 'Headband readings', value: cognitive.length, icon: <Brain size={16} className="text-indigo-500" /> },
           // A skipped channel was never read, so its count is a reason, never 0.
-          { label: 'Face samples',      value: faceCount,        icon: <Camera size={16} className="text-pink-500" /> },
+          { label: 'Camera readings',   value: faceCount,        icon: <Camera size={16} className="text-pink-500" /> },
           { label: 'Answers',           value: totalAnswers,     icon: <Activity size={16} className="text-emerald-500" /> },
           { label: 'Accuracy',          value: totalAnswers ? `${acc}%` : '—', icon: <CheckCircle2 size={16} className="text-violet-500" /> },
         ].map(t => (
@@ -263,7 +264,7 @@ function SessionReviewBody({ sessionId }) {
 
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
         <h2 className="font-black text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-          <Brain size={18} className="text-indigo-600" /> Cognitive timeline
+          <Brain size={18} className="text-indigo-600" /> Readings through the lesson
         </h2>
         {heartWithheld && <p className="text-xs text-gray-600 dark:text-gray-400 -mt-2 mb-3">{heartWithheld}</p>}
         {!hasChart ? (
@@ -347,10 +348,10 @@ function SessionReviewBody({ sessionId }) {
                   formatter={(v, n) => [typeof v === 'number' ? g.tip(v) : v, n]}
                 />
                 {/* One line needs no legend: the chart's title names it. */}
-                {TIMELINE_COLUMNS[g.axis].length > 1 && <Legend wrapperStyle={{ fontSize: 12 }} />}
+                {TIMELINE_COLUMNS[g.axis].length > 1 && <Legend {...LINE_LEGEND} wrapperStyle={{ fontSize: 12 }} />}
                 {shownSeries.filter(s => s.axis === g.axis).map((s) => (
                   <Line key={s.key} type="monotone" dataKey={s.key}
-                        name={s.name} stroke={s.colour} dot={s.dot} strokeDasharray={s.dash}
+                        name={s.name} stroke={s.colour} dot={s.dot} {...lineDash(s.dash)}
                         connectNulls isAnimationActive={false} />
                 ))}
 
@@ -448,7 +449,7 @@ function SessionReviewBody({ sessionId }) {
                       ))}
                     </Pie>
                     <ChartTooltip formatter={(v, n) => [`${v} samples`, n]} />
-                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Legend formatter={legendText} wrapperStyle={{ fontSize: 11 }} />
                   </PieChart>
               </AccessibleChart>
               )}
@@ -474,7 +475,7 @@ function SessionReviewBody({ sessionId }) {
                       ))}
                     </Pie>
                     <ChartTooltip formatter={(v, n) => [`${v} windows`, n]} />
-                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Legend formatter={legendText} wrapperStyle={{ fontSize: 11 }} />
                   </PieChart>
               </AccessibleChart>
               )}

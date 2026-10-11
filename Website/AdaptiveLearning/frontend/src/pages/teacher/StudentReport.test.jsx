@@ -114,15 +114,27 @@ it('starts each test showing sensor data, whatever an earlier test switched off'
   expect(screen.getByRole('button', { name: /generate strategies/i })).toBeInTheDocument()
 })
 
-/** The chart summary states sensor readings outright, so it hides with the charts. */
-it('hides the chart summary behind the sensor switch, button included', async () => {
+/** The backend names the sensor sentences, so hiding sensor data keeps the rest of the read-out. */
+it('keeps the chart summary under the sensor switch, dropping only its sensor sentences', async () => {
+  apiFetch.mockImplementation((url) => {
+    const u = String(url)
+    if (u.includes('/chart-summary')) {
+      return Promise.resolve({ summary: ['Answered 2 of 4.', 'Average calm is 48%.'], source: 'rule-based',
+                               basis: { sensor_lines: [1] } })
+    }
+    if (u.includes('/stats/'))        return Promise.resolve({ total_questions: 0, total_correct: 0, current_streak: 0 })
+    if (u.includes('/weekly-report')) return Promise.resolve(null)
+    return Promise.resolve([])
+  })
   renderWithState({ name: 'Ada', classId: 'class-1', className: 'Algebra' })
   await screen.findByText('Recent Sessions')
-  expect(screen.getByRole('button', { name: /generate summary/i })).toBeInTheDocument()
   expect(apiFetch.mock.calls.some(([u]) => String(u).includes('/chart-summary'))).toBe(false)
+  await userEvent.click(screen.getByRole('button', { name: /generate summary/i }))
+  expect(await screen.findByText('Average calm is 48%.')).toBeInTheDocument()
 
   await userEvent.click(screen.getByRole('switch', { name: /hide sensor data/i }))
 
-  expect(screen.queryByRole('button', { name: /generate summary/i })).not.toBeInTheDocument()
-  expect(screen.queryByText(/what these charts show/i)).not.toBeInTheDocument()
+  expect(screen.getByText(/what these charts show/i)).toBeInTheDocument()
+  expect(screen.getByText('Answered 2 of 4.')).toBeInTheDocument()
+  expect(screen.queryByText('Average calm is 48%.')).not.toBeInTheDocument()
 })

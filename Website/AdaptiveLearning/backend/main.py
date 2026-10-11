@@ -9563,13 +9563,6 @@ def admin_today(request: Request):
         if not _missing_rpc(e, "admin_today", "20261010000000",
                             "the admin Today strip reads nothing until then"):
             print(f"[admin:today] {e}")
-    # The RPC's `answers` is adaptive sessions only; practice answers live in their own table.
-    practice_answers = None
-    try:
-        practice_answers = supabase.table("practice_session_answers").select("id", count="exact") \
-            .not_.is_("correct", "null").gte("answered_at", since.isoformat()).limit(1).execute().count
-    except Exception as e:                                     # noqa: BLE001
-        print(f"[admin:today] practice answers: {e}")
     discards = ops_metrics.read(supabase, ["session_discarded"], since=since)
     discarded: dict[str, int] = {}
     for r in discards["rows"]:
@@ -9579,7 +9572,8 @@ def admin_today(request: Request):
         "timezone": _school_timezone_name(),
         "retrieved": isinstance(counts, dict),
         "counts": counts if isinstance(counts, dict) else None,
-        "practice_answers": practice_answers,
+        # `counts.answers` is adaptive only. Null when the RPC predates the key: not a zero.
+        "practice_answers": counts.get("practice_answers") if isinstance(counts, dict) else None,
         "discarded": discarded,
         "discarded_retrieved": discards["retrieved"],
     }

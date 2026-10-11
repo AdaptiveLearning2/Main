@@ -2432,6 +2432,8 @@ DECLARE
     a    uuid := gen_random_uuid();
     b    uuid := gen_random_uuid();
     c    uuid := gen_random_uuid();
+    pusr uuid := gen_random_uuid();
+    psess uuid := gen_random_uuid();
     got  jsonb;
     refused boolean := false;
 BEGIN
@@ -2443,9 +2445,18 @@ BEGIN
         (c, usr, '2099-01-02T11:00:00Z', NULL, NULL);
     INSERT INTO public.session_answers (session_id, user_id, correct, answered_at) VALUES
         (a, usr, true, '2099-01-02T09:05:00Z'), (a, usr, false, '2099-01-02T09:06:00Z');
+    -- A second student who only practised: one graded answer and one flashcard view (correct null).
+    INSERT INTO auth.users (id, email) VALUES (pusr, 'practice-today@test.invalid');
+    INSERT INTO public.practice_sessions (id, user_id, mode, topics, difficulty, started_at)
+        VALUES (psess, pusr, 'test', ARRAY['ordering'], 'easy', '2099-01-02T12:00:00Z');
+    INSERT INTO public.practice_session_answers (practice_session_id, user_id, correct, answered_at) VALUES
+        (psess, pusr, true, '2099-01-02T12:01:00Z'), (psess, pusr, NULL, '2099-01-02T12:02:00Z');
 
     got := public.admin_today('2099-01-02T00:00:00Z');
-    IF (got->>'started')::int <> 3 OR (got->>'answers')::int <> 2 OR (got->>'active_students')::int <> 1
+    IF (got->>'practice_answers')::int <> 1 OR (got->>'active_students')::int <> 2 THEN
+        RAISE EXCEPTION 'admin_today ignored practice: %', got;
+    END IF;
+    IF (got->>'started')::int <> 3 OR (got->>'answers')::int <> 2 OR (got->>'active_students')::int <> 2
        OR got->'ended_by_reason' <> '{"finish": 1, "unrecorded": 1}'::jsonb
        OR (got->>'open_now')::int < 1 THEN
         RAISE EXCEPTION 'admin_today returned %', got;

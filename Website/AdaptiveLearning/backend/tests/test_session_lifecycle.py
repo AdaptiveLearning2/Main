@@ -224,14 +224,12 @@ class _Query:
         self.owner.reads.append((self.table_name, self.filters))
         if self.table_name in self.owner.failing:
             raise RuntimeError(f"{self.table_name} down")
-        return type("R", (), {"data": self.owner.rows.get(self.table_name, []),
-                              "count": self.owner.counts.get(self.table_name)})()
+        return type("R", (), {"data": self.owner.rows.get(self.table_name, [])})()
 
 
 class _Db:
-    def __init__(self, today=None, rpc_error=False, rows=None, failing=(), counts=None):
+    def __init__(self, today=None, rpc_error=False, rows=None, failing=()):
         self.today, self.rpc_error = today, rpc_error
-        self.counts = counts or {}
         self.rows, self.failing = rows or {}, set(failing)
         self.calls, self.reads = [], []
 
@@ -267,27 +265,20 @@ def test_today_adds_the_discards_the_counters_hold(monkeypatch, _admin):
     assert main.admin_today(None)["discarded"] == {"page_closed": 2}
 
 
-def test_today_counts_graded_practice_answers_from_the_same_midnight(monkeypatch, _admin):
-    db = _Db(today=TODAY, counts={"practice_session_answers": 12})
-    monkeypatch.setattr(main, "supabase", db)
-    monkeypatch.setattr(main, "_school_timezone", lambda: ZoneInfo("America/Chicago"))
-    monkeypatch.setattr(main, "_utc_now", lambda: datetime(2026, 10, 8, 3, 0, tzinfo=timezone.utc))
+def test_today_passes_the_rpcs_practice_answers_through(monkeypatch, _admin):
+    monkeypatch.setattr(main, "supabase", _Db(today={**TODAY, "practice_answers": 12}))
 
     got = main.admin_today(None)
 
-    assert got["practice_answers"] == 12
-    [(_, filters)] = [r for r in db.reads if r[0] == "practice_session_answers"]
-    # A flashcard view has `correct` null and is not an answer.
-    assert ("not_",) in filters and ("is_", "correct", "null") in filters
-    assert ("gte", "answered_at", "2026-10-07T05:00:00+00:00") in filters
+    assert got["practice_answers"] == 12 and got["counts"]["answers"] == 37
 
 
-def test_a_failed_practice_answer_read_is_none_not_zero(monkeypatch, _admin):
-    monkeypatch.setattr(main, "supabase", _Db(today=TODAY, failing=["practice_session_answers"]))
+def test_a_function_that_predates_practice_answers_gives_none_not_zero(monkeypatch, _admin):
+    monkeypatch.setattr(main, "supabase", _Db(today=TODAY))
+    assert main.admin_today(None)["practice_answers"] is None
 
-    got = main.admin_today(None)
-
-    assert got["retrieved"] is True and got["practice_answers"] is None
+    monkeypatch.setattr(main, "supabase", _Db(rpc_error=True))
+    assert main.admin_today(None)["practice_answers"] is None
 
 
 def test_a_failed_today_read_is_not_a_quiet_day(monkeypatch, _admin):

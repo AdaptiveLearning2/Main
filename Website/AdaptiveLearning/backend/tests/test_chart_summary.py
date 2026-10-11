@@ -221,6 +221,12 @@ def test_a_stoppage_stated_before_any_turned_off_is_still_a_cause(text):
     ("The headband was turned off on 3 October, and the heart sensor stopped sending data.", True),
     ("The headband was turned off on 3 October, so the camera no longer sends readings.", True),
     ("The headband was turned off on 3 October, so the headband no longer sends readings.", False),
+    # A sensor named earlier in the point is not the one turned off.
+    ("Focus, calm and the camera figures are from before the headband was turned off on 3 October, "
+     "and the camera stopped sending data.", True),
+    ("The headband was turned off on 3 October, and the PPG stopped sending data.", True),
+    ("The headband was turned off on 3 October, and the rPPG no longer sends readings.", True),
+    ("The headband was turned off on 3 October, and the optics stopped sending data.", True),
     ("Readings are from before the sensor was turned off; it no longer sends readings.", False),
 ])
 def test_turned_off_excuses_only_a_stoppage_about_the_same_sensor(text, cause):

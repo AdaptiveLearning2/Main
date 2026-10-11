@@ -4778,17 +4778,19 @@ _STOPPED_SENDING = re.compile(
     r"(?:\s+us|\s+the\s+(?:app|system))?\s+(?:any\s+|more\s+|new\s+)?(?:data|readings?|figures|signals?)\b",
     re.IGNORECASE)
 _OFF_STATED = re.compile(r"\b(?:turned|switched)\s+off\b|\bpaused\b", re.IGNORECASE)
-_SENSOR_NAME = re.compile(r"\b(headband|headset|muse|eeg|camera|webcam|heart|pulse|optical)\b", re.IGNORECASE)
+_SENSOR_NAME = re.compile(r"\b(headband|headset|muse|eeg|camera|webcam|heart|pulse|optical|optics|r?ppg)\b",
+                          re.IGNORECASE)
 
 
 def _stoppage_excused(line: str, m: re.Match) -> bool:
-    """A "turned off" earlier in this point, with no sensor named after it that the point had not named before it."""
+    """A "turned off" earlier in this point, and no sensor named after it but the one just before it (what was off)."""
     offs = list(_OFF_STATED.finditer(line, 0, m.start()))
     if not offs:
         return False
-    before = {n.lower() for n in _SENSOR_NAME.findall(line, 0, offs[-1].start())}
+    named = _SENSOR_NAME.findall(line, 0, offs[-1].start())
+    turned_off = {named[-1].lower()} if named else set()
     between = {n.lower() for n in _SENSOR_NAME.findall(line, offs[-1].end(), m.start())}
-    return between <= before
+    return between <= turned_off
 
 
 def _names_a_cause(text: str) -> bool:

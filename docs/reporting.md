@@ -624,7 +624,9 @@ two impossible — the same reason `AccessibleChart` drives its sentence and tab
 and the comparison with the child's usual is in words only, so it adds no number. `_validated_chart_summary` rejects a
 reply line that says "stress" where the matching rule-based line does not. `basis.sensor_lines` indexes the sensor
 sentences so "Hide sensor data" can drop exactly those, and the validator enforces the order that relies on: each
-reply line may use only its own point's numbers, and is a sensor line exactly when its point is.
+reply line may use only its own point's numbers, and is a sensor line exactly when its point is. A reply that
+describes body arousal with time words ("how often", "of the time") where its point did not is rejected too
+(`_TIME_SHARE`): it is a share of readings.
 
 **What it still does not check is a number's meaning within one point.** A reply that relabels a figure inside its
 own sentence uses only that sentence's numbers and passes. That is the residual hallucination risk on this endpoint and it
@@ -664,6 +666,6 @@ named — it is the focus index, and a sentence naming both describes one measur
 channel gets **no trend**: `_CHART_SUMMARY_TREND_MIN_DELTA` is written for the 0..1 ratios focus and stress are
 stored on, and against bpm the same number is a twentieth of a beat.
 
-`ChartSummaryPanel` mounts on both report routes, and on the teacher route is behind *"Hide sensor data"* with the
-charts — a stronger version of the reason the strategies panel is: that list mentions sensor readings in passing,
-where this panel's whole job is to state them.
+`ChartSummaryPanel` mounts on both report routes. On the teacher route *"Hide sensor data"* drops only the
+`sensor_lines` sentences and keeps the accuracy and topic ones, unlike the strategies panel, whose advice cannot be
+split that way.

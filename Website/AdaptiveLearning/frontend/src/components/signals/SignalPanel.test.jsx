@@ -1097,6 +1097,30 @@ describe('body arousal', () => {
     expect(within(table).getByText("Couldn't check")).toBeInTheDocument()
   })
 
+  it('reads a day with no heart readings as "not recorded", like the rest of its row', () => {
+    render(<WeeklySignalReport report={buildWeeklyReport({ daily: [
+      { date: '2026-07-20', focus: 0.7, stress: 0.3, heart_rate_bpm: 70, body_arousal: 0.2, body_arousal_state: 'measured' },
+      { date: '2026-07-21', focus: null, stress: null, heart_rate_bpm: null, body_arousal: null, body_arousal_state: 'none' },
+    ] })} />)
+    const row = within(screen.getByRole('table', { name: /^body arousal/i })).getByRole('row', { name: /07-21/ })
+    expect(within(row).getByText('not recorded')).toBeInTheDocument()
+    expect(within(row).queryByText('No headband readings')).not.toBeInTheDocument()
+  })
+
+  it('counts weeks and days in words, never "week ofs"', () => {
+    const weeks = [
+      { week_start: '2026-06-01', focus: 0.6, stress: 0.3, days_with_data: 3 },
+      { week_start: '2026-06-08', focus: 0.62, stress: 0.3, days_with_data: 3 },
+    ]
+    render(<SignalTrend trend={{ retrieved: true, weeks }} />)
+    expect(screen.getByRole('img', { name: /^focus and calm week by week over 2 weeks\./i })).toBeInTheDocument()
+    cleanup()
+    render(<WeeklySignalReport report={buildWeeklyReport({ daily: [
+      { date: '2026-07-20', focus: 0.7, stress: 0.3 }, { date: '2026-07-21', focus: 0.7, stress: 0.3 },
+    ] })} />)
+    expect(screen.getByRole('img', { name: /^focus and calm day by day over 2 days\./i })).toBeInTheDocument()
+  })
+
   it('is never shown beside the EEG calm under one "stress" label', () => {
     render(<WeeklySignalReport report={buildWeeklyReport()} />)
     expect(screen.queryByText(/stress/i, VISIBLE)).not.toBeInTheDocument()

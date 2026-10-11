@@ -41,6 +41,9 @@ describe('the two stress figures', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Body arousal (heart rate)' }))
       .toBeInTheDocument())
     expect(screen.queryByText(/stress/i)).not.toBeInTheDocument()
+    // Plain words for the section, not "cognitive".
+    expect(screen.getByRole('heading', { name: 'Readings through the lesson' })).toBeInTheDocument()
+    expect(screen.queryByText(/cognitive/i)).not.toBeInTheDocument()
     // Stress 0.25 is calm 75%; no other series reads 75% or 25%.
     const replay = screen.getByRole('table', { name: /session replay: focus and calm/i })
     expect(within(replay).getByRole('columnheader', { name: 'Calm' })).toBeInTheDocument()
@@ -589,7 +592,7 @@ describe('a withdrawn channel', () => {
         channels: { face_included: false, heart_included: true, consent_retrieved: retrieved },
       })
       renderAt()
-      const tile = (await screen.findByText('Face samples')).parentElement.parentElement
+      const tile = (await screen.findByText('Camera readings')).parentElement.parentElement
       expect(within(tile).getByText(shown)).toBeInTheDocument()
       expect(within(tile).queryByText('0')).not.toBeInTheDocument()
     })

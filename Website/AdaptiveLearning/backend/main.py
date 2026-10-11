@@ -5651,6 +5651,8 @@ def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
         "stopped working): keep the points' own words for it.\n"
         "Calm and body arousal are different measurements from different sensors: never "
         "combine them, and never call calm \"stress\".\n"
+        "Body arousal is a share of heart readings, not of time: never describe it as how "
+        "often something happened or as a share of the time or of the lesson.\n"
         f"Return exactly {len(baseline)} points as a numbered list, no preamble.\n\n"
         + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(baseline))
     )
@@ -5658,6 +5660,8 @@ def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
 
 _STRESS_WORD = re.compile(r"\bstress", re.IGNORECASE)
 _SENSOR_WORDS = re.compile(r"\b(focus|calm|heart|arousal)", re.IGNORECASE)
+# Body arousal counts readings; time words turn it back into the time-share it is not.
+_TIME_SHARE = re.compile(r"\b(how often|often|of the (time|lesson)|time spent|spent)\b", re.IGNORECASE)
 
 
 def _validated_chart_summary(raw: str, allowed: set[float], expected_lines: int,
@@ -5683,6 +5687,11 @@ def _validated_chart_summary(raw: str, allowed: set[float], expected_lines: int,
     if baseline is not None and any(_STRESS_WORD.search(line) and not _STRESS_WORD.search(base)
                                     for line, base in zip(lines, baseline)):
         print("[chart_summary:llm] rejected: it says stress where the point did not")
+        return None
+    if baseline is not None and any(
+            "arousal" in line.lower() and _TIME_SHARE.search(line) and not _TIME_SHARE.search(base)
+            for line, base in zip(lines, baseline)):
+        print("[chart_summary:llm] rejected: it describes body arousal as a share of time")
         return None
     # Each point keeps its own numbers and stays a sensor point or not, so `sensor_lines` holds.
     if baseline is not None and any(

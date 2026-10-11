@@ -34,8 +34,8 @@ export default function StudentReport() {
       // Hidden with the charts: the advice is sensor data in prose, and its
       // lines can't be separated from topic accuracy.
       showStrategies={!hideSensors}
-      // Hidden with the charts: this panel states the sensor numbers outright.
-      showChartSummary={!hideSensors}
+      // Always shown: "Hide sensor data" drops only its sensor sentences (`showSignals`).
+      showChartSummary
       viewerRole="teacher"
     />
     </>

@@ -536,6 +536,31 @@ def test_the_model_path_rejects_a_reply_that_calls_calm_stress(monkeypatch):
     assert main._llm_chart_summary("prompt", lines) is None
 
 
+_AROUSAL_BASE = ("Body arousal -- the share of the headband's usable heart readings that were at least "
+                 "10 beats a minute above the rate it measured at the start of each lesson -- was 0%.")
+
+
+@pytest.mark.parametrize("line", [
+    "Body arousal measures how often the heart rate was at least 10 beats a minute higher, at 0%.",
+    "Body arousal -- the share of the time the heart rate was 10 beats a minute up -- was 0%.",
+    "Body arousal -- 0% of the lesson spent at least 10 beats a minute above the start.",
+], ids=["how-often", "of-the-time", "of-the-lesson"])
+def test_a_reply_describing_body_arousal_as_time_is_rejected(line):
+    """It is a share of readings; a time-share reading is the claim the glossary removed."""
+    assert main._validated_chart_summary(f"1. {line}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) is None
+
+
+def test_a_faithful_body_arousal_rephrasing_passes():
+    line = ("Body arousal, the share of usable heart readings at least 10 beats a minute above "
+            "the lesson's starting rate, was 0%.")
+    assert main._validated_chart_summary(f"1. {line}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) == [line]
+
+
+def test_the_chart_summary_prompt_says_body_arousal_is_not_time():
+    prompt = main._chart_summary_prompt({}, [_AROUSAL_BASE])
+    assert "share of heart readings, not of time" in prompt
+
+
 def test_the_three_reads_behind_one_response_report_separately(endpoint, set_flag):
     """One flag would make a partial summary read as entirely fine or entirely broken."""
     set_flag("chart_summary_llm_enabled", False)

@@ -12,6 +12,7 @@ import ChartTooltip from '../charts/ChartTooltip'
 import { sliceSpec } from '../charts/describeSeries'
 import AccessibleChart from '../charts/AccessibleChart'
 import { seriesDot } from '../charts/roughDot'
+import { LINE_LEGEND, legendText } from '../charts/legendProps'
 import SeriesFilter from '../charts/SeriesFilter'
 import { useSeriesFilter } from '../../hooks/useSeriesFilter'
 import { calmPct, calmRatio, emotionOn, offLabel, pct, ratio, valueOrReason } from '../../lib/signalFormat'
@@ -167,7 +168,8 @@ const SIGNAL_SERIES = [
   { key: 'heart_rate_bpm', label: MEASURES.heart_rate_bpm.name, unit: ' bpm', colour: '#a855f7', group: 'bpm', name: 'Heart rate (bpm)' },
   { key: 'rmssd_ms', label: MEASURES.rmssd_ms.name, unit: ' ms', colour: '#f59e0b', group: 'ms', name: 'Heart-rate variability (ms)' },
   { key: 'body_arousal', label: MEASURES.body_arousal.name, unit: '%', colour: '#ea580c', group: 'arousal', name: 'Body arousal (%)',
-    missing: r => AROUSAL_REASONS[r.body_arousal_state] ?? null,
+    // `none` (no heart rows) is the row's other cells' "not recorded"; the rest are reasons of their own.
+    missing: r => (r.body_arousal_state === 'none' ? null : AROUSAL_REASONS[r.body_arousal_state] ?? null),
     note: r => (r.body_arousal_few_readings ? 'few readings' : null),
     rough: r => r.body_arousal_few_readings === true },
 ]
@@ -198,7 +200,7 @@ function chartRow(row, label) {
  * Stacked small charts sharing one x axis and one set of toggles.
  * A group with no shown series is not mounted, so it leaves no empty axis or column-less table.
  */
-function SignalCharts({ rows, heartShown, rowLabel, period, filterLabel }) {
+function SignalCharts({ rows, heartShown, rowLabel, rowNoun, period, filterLabel }) {
   const syncId = useId()
   const series = SIGNAL_SERIES.filter(s => heartShown || !HEART_KEYS.has(s.key))
   const { hidden, toggle, showAll, shownOf } = useSeriesFilter()
@@ -224,7 +226,7 @@ function SignalCharts({ rows, heartShown, rowLabel, period, filterLabel }) {
               <div key={g.id} className="rounded-2xl bg-slate-50 dark:bg-gray-800 p-3">
                 <p className="text-xs font-bold text-gray-600 dark:text-gray-400 mb-1">{g.title}</p>
                 <AccessibleChart className="h-40"
-                  headline={`${g.title} ${period} over ${rows.length} ${rowLabel.toLowerCase()}${rows.length === 1 ? '' : 's'}.`}
+                  headline={`${g.title} ${period} over ${rows.length} ${rowNoun}${rows.length === 1 ? '' : 's'}.`}
                   rows={rows} rowKey="label" rowLabel={rowLabel}
                   columns={lines.map(({ key, label, unit: u, missing, note }) => ({ key, label, unit: u, missing, note }))}>
                   <LineChart data={rows} syncId={syncId} margin={{ top: 8, right: 10, left: -12, bottom: 0 }}>
@@ -232,7 +234,7 @@ function SignalCharts({ rows, heartShown, rowLabel, period, filterLabel }) {
                     <XAxis dataKey="label" fontSize={11} tickLine={false} />
                     <YAxis domain={g.domain} fontSize={11} tickLine={false} unit={g.unit} />
                     <ChartTooltip />
-                    {lines.length > 1 && <Legend />}
+                    {lines.length > 1 && <Legend {...LINE_LEGEND} />}
                     {/* Dots, so a single recorded point is still visible. */}
                     {lines.map(s => (
                       <Line key={s.key} type="monotone" dataKey={s.key} stroke={s.colour}
@@ -283,7 +285,7 @@ export function SignalTrend({ trend, title = 'Week by week' }) {
           {failed ? 'The week-by-week readings could not be loaded.' : 'No readings yet.'}
         </div>
       ) : (
-        <SignalCharts rows={rows} heartShown={heartOn(trend)} rowLabel="Week of"
+        <SignalCharts rows={rows} heartShown={heartOn(trend)} rowLabel="Week of" rowNoun="week"
                       period="week by week" filterLabel="Measurements shown week by week" />
       )}
     </div>
@@ -401,7 +403,7 @@ export function WeeklySignalReport({ report, title = 'This week' }) {
           {anyFailed ? "This week's readings could not be loaded." : 'No readings this week yet.'}
         </div>
       ) : (
-        <SignalCharts rows={rows} heartShown={heartShown} rowLabel="Day"
+        <SignalCharts rows={rows} heartShown={heartShown} rowLabel="Day" rowNoun="day"
                       period="day by day" filterLabel="Measurements shown day by day" />
       )}
       {/* Its own line: an unread signal day is unrelated to `truncated`. */}
@@ -470,7 +472,7 @@ export function WeeklySignalReport({ report, title = 'This week' }) {
                     ))}
                   </Pie>
                   <ChartTooltip formatter={(v, n) => [`${v} samples`, n]} />
-                  <Legend />
+                  <Legend formatter={legendText} />
                 </PieChart>
           </AccessibleChart>
         </div>

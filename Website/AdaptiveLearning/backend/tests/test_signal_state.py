@@ -44,6 +44,7 @@ def test_a_revoked_channel_is_never_queried(monkeypatch):
     fake = _install(
         monkeypatch,
         {"eeg_enabled": True, "headband_optical_enabled": False,
+         "headband_optical_revoked_at": "2026-10-09T12:00:00+00:00",
          "camera_enabled": False, "user_id": USER},
         eeg=EEG_CALM, heart=HEART_HIGH,
     )
@@ -53,6 +54,45 @@ def test_a_revoked_channel_is_never_queried(monkeypatch):
     assert "heart_signals" not in fake.table_calls, "read a revoked channel"
     assert "face_signals" not in fake.table_calls, "read a revoked channel"
     assert state.channels["heart"] == "heart revoked"
+
+
+def test_a_channel_nobody_turned_on_is_not_called_revoked(monkeypatch):
+    """No `*_revoked_at` means the student never consented, which is not a withdrawal."""
+    fake = _install(
+        monkeypatch,
+        {"eeg_enabled": True, "headband_optical_enabled": False,
+         "headband_optical_revoked_at": "2026-10-09T12:00:00+00:00",
+         "camera_enabled": False, "camera_revoked_at": None, "user_id": USER},
+        eeg=EEG_CALM,
+    )
+    state = decider.get_session_signal_state(SESSION, USER)
+
+    assert state.channels["face"] == "face not consented"
+    assert state.channels["heart"] == "heart revoked"
+    assert "face_signals" not in fake.table_calls
+
+
+def test_a_withdrawn_camera_still_reads_revoked_and_a_missing_row_reads_not_consented(monkeypatch):
+    _install(monkeypatch,
+             {"eeg_enabled": True, "headband_optical_enabled": True, "camera_enabled": False,
+              "camera_revoked_at": "2026-10-09T12:00:00+00:00", "user_id": USER}, eeg=EEG_CALM)
+    assert decider.get_session_signal_state(SESSION, USER).channels["face"] == "face revoked"
+
+    _install(monkeypatch, None, eeg=EEG_CALM)
+    channels = decider.get_session_signal_state(SESSION, USER).channels
+    assert (channels["eeg"], channels["heart"], channels["face"]) == (
+        "eeg not consented", "heart not consented", "face not consented")
+
+
+def test_an_unreadable_consent_row_keeps_every_channel_closed_and_claims_no_new_cause(monkeypatch):
+    class _Down:
+        def table(self, _name):
+            raise RuntimeError("consent down")
+    monkeypatch.setattr(decider, "supabase", _Down())
+
+    channels = decider.get_session_signal_state(SESSION, USER).channels
+
+    assert channels == {"eeg": "eeg revoked", "heart": "heart revoked", "face": "face revoked"}
 
 
 def test_a_revoked_heart_channel_cannot_change_the_difficulty(monkeypatch):

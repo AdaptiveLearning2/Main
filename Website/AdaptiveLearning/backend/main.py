@@ -5664,12 +5664,20 @@ _SENSOR_WORDS = re.compile(r"\b(focus|calm|heart|arousal)", re.IGNORECASE)
 # body-arousal line says how often or time spent. Absent-state points define nothing, so need no "readings".
 _DEFINES_SHARE = re.compile(r"\bshare of\b", re.IGNORECASE)
 _READINGS_WORD = re.compile(r"\breadings?\b", re.IGNORECASE)
-_TIME_SHARE = re.compile(r"\b(how often|often|time spent|spent)\b", re.IGNORECASE)
+_TIME_SHARE = re.compile(
+    r"\b(how often|often|time spent|spent)\b"
+    # An amount put on the lesson itself ("0% of the lesson", "more of the lesson"), not on its readings.
+    r"|(%|\b(percent|more|less|most|much|fraction|proportion|share))\s+of\s+((the|each|a|their)\s+)?"
+    r"(time|lesson|session)s?\b(?!s?['’]s?\s+readings?\b)",
+    re.IGNORECASE)
 
 
 def _arousal_reworded_as_time(line: str, base: str) -> bool:
-    """A body-arousal line that drops its definition's "readings", or adds a time phrase its point lacked."""
-    if "arousal" not in line.lower():
+    """A body-arousal line that drops its definition's "readings", or adds a time phrase its point lacked.
+
+    A body-arousal line is one where either side names it: a rewording may drop the name.
+    """
+    if "arousal" not in line.lower() and "arousal" not in base.lower():
         return False
     return (bool(_DEFINES_SHARE.search(base)) and not _READINGS_WORD.search(line)) \
         or (bool(_TIME_SHARE.search(line)) and not _TIME_SHARE.search(base))

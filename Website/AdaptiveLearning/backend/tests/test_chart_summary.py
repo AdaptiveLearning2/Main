@@ -562,11 +562,15 @@ _AROUSAL_BASE = ("Body arousal -- the share of the headband's usable heart readi
     "Body arousal -- 0% of each lesson's minutes were at least 10 beats a minute above the start.",
     # "readings" kept, but with a time phrase the point lacks.
     "Body arousal -- how often the readings were at least 10 beats a minute above the start -- was 0%.",
+    # "readings" kept, but the percentage put on the lesson itself.
+    "Body arousal -- 0% of the lesson was at least 10 beats a minute above the start, going by the heart readings.",
+    # The name dropped: still the body-arousal point, so still checked.
+    "The heart rate was at least 10 beats a minute above the start for 0% of the lesson.",
 ], ids=["how-often", "often", "of-the-time", "of-the-lesson", "pct-of-the-lesson", "percent-of-the-time",
         "of-each-lesson", "of-the-session", "of-lesson-time",
         "lessons-time", "each-lessons-time", "sessions-length", "plural-lessons-duration",
         "time-spent", "spent-above", "total-time", "whole-length", "lessons-minutes",
-        "readings-but-how-often"])
+        "readings-but-how-often", "readings-but-pct-of-the-lesson", "name-dropped"])
 def test_a_reply_describing_body_arousal_as_time_is_rejected(line):
     """It is a share of readings; a time-share reading is the claim the glossary removed."""
     assert main._validated_chart_summary(f"1. {line}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) is None
@@ -580,6 +584,17 @@ def test_a_body_arousal_line_that_drops_the_definition_falls_back():
     # The same line with the word kept passes, so "readings" is what decides it.
     kept = "Body arousal this period came to 0% of readings, against a 10 beat a minute line."
     assert main._validated_chart_summary(f"1. {kept}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) == [kept]
+
+
+def test_the_usual_comparison_cannot_turn_body_arousal_into_time():
+    base = ("Compared with this student's own earlier days, focus was lower than usual "
+            "and body arousal was higher than usual.")
+    bad = ("Compared with their earlier days, focus was lower than usual and body arousal "
+           "took up more of the lesson than usual.")
+    good = ("Next to their own earlier days, focus was lower than usual and body arousal "
+            "was higher than usual.")
+    assert main._validated_chart_summary(f"1. {bad}", set(), 1, [base]) is None
+    assert main._validated_chart_summary(f"1. {good}", set(), 1, [base]) == [good]
 
 
 def test_the_time_words_bind_only_body_arousal_lines():
@@ -613,8 +628,11 @@ def test_an_absent_state_rewording_need_not_say_readings():
     "-- was 0%.",
     "Body arousal -- the share of the lessons’ readings at least 10 beats a minute above the start "
     "-- was 0%.",
+    # A percentage of the lesson's readings is the measure itself.
+    "Body arousal -- 0% of the lesson's readings were at least 10 beats a minute above the start.",
 ], ids=["lessons-starting-rate", "start-of-the-lesson", "first-part-of-the-lesson",
-        "lessons-readings-straight", "sessions-readings-curly", "plural-lessons-readings"])
+        "lessons-readings-straight", "sessions-readings-curly", "plural-lessons-readings",
+        "pct-of-the-lessons-readings"])
 def test_a_faithful_body_arousal_rephrasing_passes(line):
     assert main._validated_chart_summary(f"1. {line}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) == [line]
 

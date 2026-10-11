@@ -626,7 +626,9 @@ reply line that says "stress" where the matching rule-based line does not. `basi
 sentences so "Hide sensor data" can drop exactly those, and the validator enforces the order that relies on: each
 reply line may use only its own point's numbers, and is a sensor line exactly when its point is. Body arousal is a
 share of readings, so a rewording of its defining point must keep "readings", and no body-arousal line may add
-"how often", "often", "time spent" or "spent" (`_arousal_reworded_as_time`). Requiring the word, rather than listing
+"how often", "often", "time spent", "spent", or an amount put on the lesson itself ("0% of the lesson", "more of
+the lesson"; "of the lesson's readings" is fine) (`_arousal_reworded_as_time`). A line counts as body arousal when
+either it or its point names it, since a rewording may drop the name. Requiring the word, rather than listing
 time phrasings, is deliberate: every list missed the next phrasing. The cost is that a line dropping the definition
 falls back to the rule-based text.
 

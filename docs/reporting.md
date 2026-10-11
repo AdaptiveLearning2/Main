@@ -622,7 +622,7 @@ two impossible — the same reason `AccessibleChart` drives its sentence and tab
 **A withdrawn sensor is "turned off", never "stopped giving data".** The rule-based line says the figures are from before
 the sensor was turned off; a model that rewords it to a stoppage reads as a fault. `_STOPPED_SENDING` rejects
 "stopped / no longer giving, sending or providing data" unless turned off, switched off or paused comes *before* it in
-the same point with no other sensor named in between (order, not sentence bounds, which "3 Oct." and `;` blur; never
+the same point with no sensor named in between but the one turned off (order, not sentence bounds, which "3 Oct." and `;` blur; never
 another point, which may be about another sensor), and a rejected reply falls back to the rules.
 
 **The summary says calm, and a reply may say "stress" only where its point did.** The EEG figure is stated as calm

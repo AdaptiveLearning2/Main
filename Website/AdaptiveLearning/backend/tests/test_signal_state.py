@@ -84,15 +84,18 @@ def test_a_withdrawn_camera_still_reads_revoked_and_a_missing_row_reads_not_cons
         "eeg not consented", "heart not consented", "face not consented")
 
 
-def test_an_unreadable_consent_row_keeps_every_channel_closed_and_claims_no_new_cause(monkeypatch):
+def test_an_unreadable_consent_row_keeps_every_channel_closed_and_claims_neither_cause(monkeypatch):
+    """Not "revoked" (a withdrawal) and not "not consented" (nobody was asked): the read failed."""
     class _Down:
         def table(self, _name):
             raise RuntimeError("consent down")
     monkeypatch.setattr(decider, "supabase", _Down())
 
-    channels = decider.get_session_signal_state(SESSION, USER).channels
+    state = decider.get_session_signal_state(SESSION, USER)
 
-    assert channels == {"eeg": "eeg revoked", "heart": "heart revoked", "face": "face revoked"}
+    assert state.channels == {"eeg": "eeg consent unreadable", "heart": "heart consent unreadable",
+                              "face": "face consent unreadable"}
+    assert state.label == "no_eeg"
 
 
 def test_a_revoked_heart_channel_cannot_change_the_difficulty(monkeypatch):

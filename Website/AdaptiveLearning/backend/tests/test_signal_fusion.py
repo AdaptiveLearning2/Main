@@ -52,6 +52,15 @@ def test_a_channel_nobody_turned_on_is_off_like_a_revoked_one_but_says_so():
     assert eeg_channel(0.8, 0.7, 0.9, never_consented=True).label == "focused"
 
 
+def test_an_unreadable_consent_outranks_both_other_reasons_and_still_says_nothing():
+    off = [eeg_channel(0.8, 0.7, 0.9, revoked=True, never_consented=True, unreadable=True),
+           heart_channel("high", True, "muse_optics", revoked=True, unreadable=True),
+           face_channel("sad", 0.9, revoked=True, unreadable=True)]
+    assert [c.reason for c in off] == ["eeg consent unreadable", "heart consent unreadable",
+                                       "face consent unreadable"]
+    assert {c.cause for c in off} == {"consent_unreadable"} and {c.label for c in off} == {None}
+
+
 def test_a_calibrating_heart_channel_is_not_a_calm_one():
     """A baseline still forming is a temporary absence, not "no reading"."""
     ch = heart_channel("calibrating", True, "rppg")

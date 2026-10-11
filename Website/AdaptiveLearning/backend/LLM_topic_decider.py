@@ -219,11 +219,11 @@ def _consent_flags(user_id):
     """Which signal channels the student permits. Fails closed: a read error revokes all.
 
     `withdrawn` marks an off channel someone turned off (a `*_revoked_at` stamp); off without it was
-    never on. A failed read says nothing, so it keeps the closed answer and calls every channel withdrawn.
+    never on. A failed read sets `unreadable`: every channel closed, and no claim either way.
     Reads the table directly because main imports this module (circular otherwise).
     """
-    closed = {"eeg": False, "heart": [], "face": False,
-              "withdrawn": {"eeg": True, "heart": True, "face": True}}
+    closed = {"eeg": False, "heart": [], "face": False, "unreadable": False,
+              "withdrawn": {"eeg": False, "heart": False, "face": False}}
     if not user_id:
         return closed
     try:
@@ -237,7 +237,7 @@ def _consent_flags(user_id):
         ).data or []
         if not rows:
             # No row means the same as a row of falses: nobody was ever asked.
-            return {**closed, "withdrawn": {"eeg": False, "heart": False, "face": False}}
+            return closed
         r = rows[0]
         # Permitted heart sources, not a bool: a declined camera must exclude rppg rows.
         heart_sources = []
@@ -249,6 +249,7 @@ def _consent_flags(user_id):
             "eeg":   bool(r.get("eeg_enabled")),
             "heart": heart_sources,
             "face":  bool(r.get("camera_enabled")),
+            "unreadable": False,
             "withdrawn": {
                 "eeg":   not r.get("eeg_enabled") and r.get("eeg_revoked_at") is not None,
                 "heart": not heart_sources and (r.get("headband_optical_revoked_at") is not None
@@ -258,7 +259,7 @@ def _consent_flags(user_id):
         }
     except Exception as e:
         print(f"[signal_consent] {e}")
-        return closed
+        return {**closed, "unreadable": True}
 
 
 def _stamp(row):
@@ -339,7 +340,8 @@ def get_session_signal_state(session_id, user_id=None):
     eeg = signal_fusion.eeg_channel(focus, calm, confidence,
                                     revoked=not consent["eeg"],
                                     calm_source=calm_source,
-                                    never_consented=not consent["withdrawn"]["eeg"])
+                                    never_consented=not consent["withdrawn"]["eeg"],
+                                    unreadable=consent["unreadable"])
 
     heart_rows = _latest("heart_signals", "ts, stress_category, trusted, source, heart_rate_bpm",
                          session_id, HEART_READ_ROWS,
@@ -355,6 +357,7 @@ def get_session_signal_state(session_id, user_id=None):
         newest_face.get("emotion_trusted"),
         revoked=not consent["face"],
         never_consented=not consent["withdrawn"]["face"],
+        unreadable=consent["unreadable"],
     )
 
     # Aged against the session's newest reading on any channel, never the server clock: every
@@ -377,6 +380,7 @@ def get_session_signal_state(session_id, user_id=None):
         revoked=not consent["heart"],
         bpm=newest_heart.get("heart_rate_bpm"),
         never_consented=not consent["withdrawn"]["heart"],
+        unreadable=consent["unreadable"],
     )
 
     return signal_fusion.fuse(

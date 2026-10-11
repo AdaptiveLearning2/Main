@@ -4700,8 +4700,6 @@ _IDEA_SUBJECTS = frozenset({"idea", "ideas", "lesson", "lessons", "concept", "co
 # Not "fail": "could not be read" is honestly rephrased as "failed to load".
 _CAUSE_TERMS = re.compile(
     r"\b(stopped working|stops working|"
-    r"(?:stopped|stops|ceased|no longer) (?:giving|sending|providing|supplying|reporting|collecting)"
-    r"(?: us| the (?:app|system))? (?:any |more |new )?(?:data|readings?|figures|signals?)|"
     r"broke|broken|faulty|fault|malfunction\w*|defect\w*|glitch\w*|disconnect\w*|lost (?:the )?connection|"
     r"ran out of (?:battery|power|charge)|out of battery|(?:low|dead|flat) battery|"
     r"battery (?:died|ran (?:out|low|flat)|was (?:dead|flat|low|empty))|"
@@ -4759,9 +4757,19 @@ def _subject_names_a_cause(subject: str, bare: bool) -> bool:
     return subject in _THING_SUBJECTS if bare else subject not in _PERSON_SUBJECTS | _IDEA_SUBJECTS
 
 
+# "Stopped giving us data" reads as a fault. Allowed in a sentence that also says it was turned off or paused.
+_STOPPED_SENDING = re.compile(
+    r"\b(?:stopped|stops|ceased|no\s+longer)\s+(?:giv|send|provid|suppl|report|collect)\w*"
+    r"(?:\s+us|\s+the\s+(?:app|system))?\s+(?:any\s+|more\s+|new\s+)?(?:data|readings?|figures|signals?)\b",
+    re.IGNORECASE)
+_OFF_STATED = re.compile(r"\b(?:turned|switched)\s+off\b|\bpaused\b", re.IGNORECASE)
+
+
 def _names_a_cause(text: str) -> bool:
     """Whether a summary says why a reading is missing (broken, disconnected, a sensor not working)."""
     if _CAUSE_TERMS.search(text):
+        return True
+    if any(_STOPPED_SENDING.search(s) and not _OFF_STATED.search(s) for s in _SENTENCE_END.split(text)):
         return True
     if any(_subject_names_a_cause(*_subject_of(text, m)) for m in _FAILURE_PHRASE.finditer(text)):
         return True

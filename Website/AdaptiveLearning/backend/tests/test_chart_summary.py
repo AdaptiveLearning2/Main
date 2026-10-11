@@ -193,6 +193,20 @@ def test_the_eeg_withdrawal_line_must_keep_turned_off_and_a_rewording_falls_back
     assert main._validated_chart_summary(reworded, allowed, len(lines)) is None
 
 
+@pytest.mark.parametrize("text", [
+    "The sensor no longer sends data.", "The headband no longer provides readings.",
+    "It no longer gives us any signals.", "Heart rate stopped reporting data last week."])
+def test_other_forms_of_stopped_sending_are_a_cause(text):
+    assert main._names_a_cause(text)
+
+
+@pytest.mark.parametrize("text", [
+    "The sensor was turned off, so the app stopped collecting data.",
+    "Recording is paused, so it no longer sends readings."])
+def test_stopped_sending_beside_turned_off_or_paused_is_the_cause_already_stated(text):
+    assert not main._names_a_cause(text)
+
+
 @pytest.mark.parametrize("text", ["Taylor stopped giving up on fractions after the first week.",
                                   "Focus was steady and the student stopped giving wrong answers."])
 def test_stopped_giving_about_effort_is_not_a_cause(text):

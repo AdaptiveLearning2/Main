@@ -547,9 +547,13 @@ _AROUSAL_BASE = ("Body arousal -- the share of the headband's usable heart readi
     "Body arousal -- 0% of the lesson spent at least 10 beats a minute above the start.",
     "Body arousal -- 0% of the lesson was at least 10 beats a minute above the start.",
     "Body arousal -- 0 percent of the time was at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of each lesson was at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of the session was at least 10 beats a minute above the start.",
+    "Body arousal -- 0% of lesson time was at least 10 beats a minute above the start.",
     "Body arousal -- 0% of time spent at least 10 beats a minute above the start.",
     "Body arousal -- 0%, the lesson spent well above 10 beats a minute over the start.",
 ], ids=["how-often", "often", "of-the-time", "of-the-lesson", "pct-of-the-lesson", "percent-of-the-time",
+        "of-each-lesson", "of-the-session", "of-lesson-time",
         "time-spent", "spent-above"])
 def test_a_reply_describing_body_arousal_as_time_is_rejected(line):
     """It is a share of readings; a time-share reading is the claim the glossary removed."""
@@ -562,7 +566,9 @@ def test_a_reply_describing_body_arousal_as_time_is_rejected(line):
     # "the lesson" names when the baseline was taken, not a share of time.
     "Body arousal -- the share of usable heart readings at least 10 beats a minute above the rate "
     "measured at the start of the lesson -- was 0%.",
-], ids=["lessons-starting-rate", "start-of-the-lesson"])
+    "Body arousal -- the share of usable heart readings at least 10 beats a minute above the rate "
+    "in the first part of the lesson -- was 0%.",
+], ids=["lessons-starting-rate", "start-of-the-lesson", "first-part-of-the-lesson"])
 def test_a_faithful_body_arousal_rephrasing_passes(line):
     assert main._validated_chart_summary(f"1. {line}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) == [line]
 

@@ -5668,16 +5668,21 @@ _TIME_SHARE = re.compile(
     r"\b(how often|often|time spent|spent)\b"
     # An amount put on the lesson itself ("0% of the lesson", "more of the lesson"), not on its readings.
     r"|(%|\b(percent|more|less|most|much|fraction|proportion|share))\s+of\s+((the|each|a|their)\s+)?"
-    r"(time|lesson|session)s?\b(?!s?['’]s?\s+readings?\b)",
+    r"(time|lesson|session)s?\b(?!s?['’]s?\s+(\w+\s+){0,3}readings?\b)",
     re.IGNORECASE)
+# Points that state a body-arousal figure or verdict; the "no figure yet" ones may say "often"
+# or "most of the lesson" in their own sense.
+_AROUSAL_FIGURE = re.compile(r"\bshare of\b|\bbody arousal was\b", re.IGNORECASE)
 
 
 def _arousal_reworded_as_time(line: str, base: str) -> bool:
     """A body-arousal line that drops its definition's "readings", or adds a time phrase its point lacked.
 
-    A body-arousal line is one where either side names it: a rewording may drop the name.
+    Checked where the point states a figure or verdict (a rewording may drop the name), or where the
+    line names body arousal and its point did not mention it at all.
     """
-    if "arousal" not in line.lower() and "arousal" not in base.lower():
+    if not (_AROUSAL_FIGURE.search(base)
+            or ("arousal" in line.lower() and "arousal" not in base.lower())):
         return False
     return (bool(_DEFINES_SHARE.search(base)) and not _READINGS_WORD.search(line)) \
         or (bool(_TIME_SHARE.search(line)) and not _TIME_SHARE.search(base))

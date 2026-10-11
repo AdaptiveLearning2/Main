@@ -627,8 +627,9 @@ sentences so "Hide sensor data" can drop exactly those, and the validator enforc
 reply line may use only its own point's numbers, and is a sensor line exactly when its point is. Body arousal is a
 share of readings, so a rewording of its defining point must keep "readings", and no body-arousal line may add
 "how often", "often", "time spent", "spent", or an amount put on the lesson itself ("0% of the lesson", "more of
-the lesson"; "of the lesson's readings" is fine) (`_arousal_reworded_as_time`). A line counts as body arousal when
-either it or its point names it, since a rewording may drop the name. Requiring the word, rather than listing
+the lesson"; "of the lesson's readings" is fine) (`_arousal_reworded_as_time`). This binds points that state a body-arousal
+figure or verdict (`_AROUSAL_FIGURE`), whatever the rewording names, and a line that brings body arousal into a point
+that never mentioned it; the "no figure yet" points use "often" and "most of the lesson" in their own sense. Requiring the word, rather than listing
 time phrasings, is deliberate: every list missed the next phrasing. The cost is that a line dropping the definition
 falls back to the rule-based text.
 

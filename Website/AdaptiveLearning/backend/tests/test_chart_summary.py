@@ -597,6 +597,23 @@ def test_the_usual_comparison_cannot_turn_body_arousal_into_time():
     assert main._validated_chart_summary(f"1. {good}", set(), 1, [base]) == [good]
 
 
+@pytest.mark.parametrize("base, line", [
+    ("Body arousal does not have enough earlier days yet to say what is usual for this student.",
+     "Body arousal has not been recorded often enough yet to say what is usual for this student."),
+    (main._BODY_AROUSAL_ABSENT["pending"],
+     "Body arousal has no figure yet for this period, since most of the lesson is still under way."),
+], ids=["not-enough-history", "lesson-in-progress"])
+def test_a_point_with_no_body_arousal_figure_may_say_often_or_most_of_the_lesson(base, line):
+    """There the words describe history or a running lesson, not the measure."""
+    assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) == [line]
+
+
+def test_a_line_that_brings_in_body_arousal_is_still_checked():
+    base = "One session was recorded in the last 7 days."
+    line = "One session was recorded in the last 7 days, and body arousal was high most of the lesson."
+    assert main._validated_chart_summary(f"1. {line}", {1.0, 7.0}, 1, [base]) is None
+
+
 def test_the_time_words_bind_only_body_arousal_lines():
     base = "Average focus is 58%, and it was steady across the weeks."
     line = "Focus averaged 58%, and it often held steady across the weeks."
@@ -608,9 +625,6 @@ def test_an_absent_state_rewording_need_not_say_readings():
     base = main._BODY_AROUSAL_ABSENT["pending"]
     line = "Body arousal has no figure yet for this period, since a lesson is still under way."
     assert main._validated_chart_summary(f"1. {line}", set(), 1, [base]) == [line]
-    # The time phrases are still refused there.
-    spent = "Body arousal has no figure yet, as time spent in the open lesson is not counted."
-    assert main._validated_chart_summary(f"1. {spent}", set(), 1, [base]) is None
 
 
 @pytest.mark.parametrize("line", [
@@ -630,9 +644,13 @@ def test_an_absent_state_rewording_need_not_say_readings():
     "-- was 0%.",
     # A percentage of the lesson's readings is the measure itself.
     "Body arousal -- 0% of the lesson's readings were at least 10 beats a minute above the start.",
+    # Words between the possessive and "readings": the rewording closest to the original.
+    "Body arousal -- the share of the lesson’s usable heart readings at least 10 beats a minute above "
+    "the start -- was 0%.",
+    "Body arousal -- 0% of each lesson's heart readings were at least 10 beats a minute above the start.",
 ], ids=["lessons-starting-rate", "start-of-the-lesson", "first-part-of-the-lesson",
         "lessons-readings-straight", "sessions-readings-curly", "plural-lessons-readings",
-        "pct-of-the-lessons-readings"])
+        "pct-of-the-lessons-readings", "lessons-usable-heart-readings", "each-lessons-heart-readings"])
 def test_a_faithful_body_arousal_rephrasing_passes(line):
     assert main._validated_chart_summary(f"1. {line}", {0.0, 10.0}, 1, [_AROUSAL_BASE]) == [line]
 

@@ -265,6 +265,22 @@ def test_today_adds_the_discards_the_counters_hold(monkeypatch, _admin):
     assert main.admin_today(None)["discarded"] == {"page_closed": 2}
 
 
+def test_today_passes_the_rpcs_practice_answers_through(monkeypatch, _admin):
+    monkeypatch.setattr(main, "supabase", _Db(today={**TODAY, "practice_answers": 12}))
+
+    got = main.admin_today(None)
+
+    assert got["practice_answers"] == 12 and got["counts"]["answers"] == 37
+
+
+def test_a_function_that_predates_practice_answers_gives_none_not_zero(monkeypatch, _admin):
+    monkeypatch.setattr(main, "supabase", _Db(today=TODAY))
+    assert main.admin_today(None)["practice_answers"] is None
+
+    monkeypatch.setattr(main, "supabase", _Db(rpc_error=True))
+    assert main.admin_today(None)["practice_answers"] is None
+
+
 def test_a_failed_today_read_is_not_a_quiet_day(monkeypatch, _admin):
     monkeypatch.setattr(main, "supabase", _Db(rpc_error=True))
 

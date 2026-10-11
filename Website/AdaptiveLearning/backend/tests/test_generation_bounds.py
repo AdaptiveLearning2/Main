@@ -307,6 +307,48 @@ def test_a_generation_that_genuinely_failed_is_still_a_500(monkeypatch):
     assert exc.value.status_code == 500
 
 
+def test_a_generator_that_raised_is_counted_as_a_question_not_made(monkeypatch):
+    """Engine's failure count: the model call may have been ok, the question still never arrived."""
+    import ops_metrics
+
+    def _gave_up(*_a, **_k):
+        raise ValueError("Failed to generate valid JSON after retries")
+
+    with pytest.raises(HTTPException) as exc:
+        _generate(monkeypatch, decider=_gave_up)
+    # Both the generator and its fallback gave up: a retryable 503, with no Retry-After (a retry is costly).
+    assert exc.value.status_code == 503 and not exc.value.headers
+    with pytest.raises(HTTPException) as exc:
+        _generate(monkeypatch, decider=lambda *_a, **_k: None)
+    assert exc.value.status_code == 500
+
+    assert ops_metrics.pending() == {("question", "generation_failed:ValueError"): 1,
+                                     ("question", "generation_failed:NoQuestion"): 1}
+
+
+def test_a_provider_failure_stays_a_500_and_is_counted(monkeypatch):
+    """A revoked key must not read as "try again"."""
+    import ops_metrics
+
+    def _bad_key(*_a, **_k):
+        raise RuntimeError("401 invalid x-api-key")
+
+    with pytest.raises(RuntimeError):
+        _generate(monkeypatch, decider=_bad_key)
+    assert ops_metrics.pending() == {("question", "generation_failed:RuntimeError"): 1}
+
+
+def test_a_served_question_is_counted_and_a_ceiling_refusal_is_not_a_failure(monkeypatch):
+    import ops_metrics
+
+    _generate(monkeypatch, decider=lambda *_a, **_k: {"question_text": "2+2"})
+    with pytest.raises(HTTPException):
+        _generate(monkeypatch, decider=lambda *_a, **_k: (_ for _ in ()).throw(
+            llm_client.GenerationUnavailable("ceiling")))
+
+    assert ops_metrics.pending() == {("question", "served:inline"): 1}
+
+
 def test_the_rate_limited_student_gets_a_429_with_a_retry_after(monkeypatch):
     tighten(monkeypatch, main._GENERATION_LIMITER, limit=1)
     called = []
@@ -603,12 +645,12 @@ def test_a_refused_claim_refunds_nothing(budget_db):
 def test_a_decider_that_raises_is_logged_with_its_cause_and_still_fails(monkeypatch, capsys):
     """Before, the app logged nothing: only uvicorn's traceback, if anyone kept that window."""
     def _crash(*_a, **_k):
-        raise ValueError("no solver for this topic")
+        raise RuntimeError("no solver for this topic")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(RuntimeError):
         _generate(monkeypatch, decider=_crash)
     log = capsys.readouterr().out
-    assert "[generate] failed for kid" in log and "ValueError: no solver for this topic" in log, log
+    assert "[generate] failed for kid" in log and "RuntimeError: no solver for this topic" in log, log
 
 
 def test_a_decider_that_returns_nothing_is_logged(monkeypatch, capsys):

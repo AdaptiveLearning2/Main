@@ -1553,6 +1553,25 @@ _RECORDING_SWITCHES = {"record_eeg": "recording_eeg_enabled",
                        "record_headband_optical": "recording_heart_enabled",
                        "record_camera": "recording_camera_enabled"}
 _SWITCHED_OFF = "recording is switched off by an administrator"
+
+
+def _paused_channels(eeg: bool, heart: bool, emotion: bool, heart_sensors: tuple | None) -> list[str]:
+    """Report channels an administrator has switched off, among those the student has on.
+
+    The flags say which channels a report may name: a channel off for consent has nothing to pause.
+    Heart is paused when every consented heart sensor is (`ReportChannels.heart_sensors`); None
+    (not passed down) claims nothing. Unreadable flags answer their defaults (all on), so no claim.
+    """
+    flags = _feature_flags()
+    off = {k: not flags[f"recording_{k}_enabled"]["enabled"] for k in ("eeg", "heart", "camera")}
+    by_sensor = {"headband_optical": off["heart"], "camera": off["camera"]}
+    sensors = tuple(heart_sensors or ())
+    paused = {"eeg": eeg and off["eeg"],
+              "heart": heart and bool(sensors) and all(by_sensor.get(s, False) for s in sensors),
+              "emotion": emotion and off["camera"]}
+    return [ch for ch, is_paused in paused.items() if is_paused]
+
+
 # A zeroed tick, as a headband off the head sends: nothing refused it.
 _NO_USABLE_EEG = "no usable reading; check the headband is on"
 
@@ -1741,7 +1760,8 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                     heart_revoked_at: str | None = None,
                     eeg_enabled: bool = True,
                     eeg_revoked_at: str | None = None,
-                    erased: dict | None = None) -> dict:
+                    erased: dict | None = None,
+                    heart_sensors: tuple | None = None) -> dict:
     """Just the headline averages, aggregated in Postgres; a declined channel is never read.
 
     Carries `dominant_emotion`, which `_signal_summaries` does not.
@@ -1764,7 +1784,7 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                              heart_revoked_at=heart_revoked_at,
                              eeg_enabled=eeg_enabled,
                              eeg_revoked_at=eeg_revoked_at,
-                             erased=erased)
+                             erased=erased, heart_sensors=heart_sensors)
     summary["score_scale"] = _scale_ranges_many([student_id], days).get(str(student_id))
     # Not in `_shape_summary`: the batch RPC has no such field.
     summary["dominant_emotion"] = (row or {}).get("dominant_emotion") if include_emotion else None
@@ -1789,7 +1809,8 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
                    heart_revoked_at: str | None = None,
                    eeg_enabled: bool = True,
                    eeg_revoked_at: str | None = None,
-                   erased: dict | None = None) -> dict:
+                   erased: dict | None = None,
+                   heart_sensors: tuple | None = None) -> dict:
     """The summary payload.
 
     `retrieved: False` means the aggregate read failed, as distinct from nothing
@@ -1802,7 +1823,9 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
                 "retrieved": retrieved, "consent_retrieved": consent_retrieved,
                 "emotion_revoked_at": emotion_revoked_at,
                 "heart_revoked_at": heart_revoked_at,
-                "eeg_enabled": eeg_enabled, "eeg_revoked_at": eeg_revoked_at, **erased}
+                "eeg_enabled": eeg_enabled, "eeg_revoked_at": eeg_revoked_at,
+                "paused_channels": _paused_channels(eeg_enabled, include_heart, include_emotion, heart_sensors),
+                **erased}
     return {
         "focus": row.get("focus"),
         "stress": row.get("stress"),
@@ -1831,6 +1854,7 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
         # Consent, not an inclusion flag: the cognitive channel is always read.
         "eeg_enabled": eeg_enabled,
         "eeg_revoked_at": eeg_revoked_at,
+        "paused_channels": _paused_channels(eeg_enabled, include_heart, include_emotion, heart_sensors),
         **erased,
     }
 
@@ -1872,7 +1896,8 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
             heart_revoked_at=ch.heart_revoked_at if ch else None,
             eeg_enabled=ch.eeg if ch else True,
             eeg_revoked_at=ch.eeg_revoked_at if ch else None,
-            erased=_erased_fields(ch, since) if ch else _NO_ERASURES)
+            erased=_erased_fields(ch, since) if ch else _NO_ERASURES,
+            heart_sensors=ch.heart_sensors if ch else None)
         out[str(sid)]["score_scale"] = scales.get(str(sid))
     return out
 
@@ -2184,7 +2209,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                           emotion_revoked_at: str | None = None,
                           heart_revoked_at: str | None = None,
                           eeg_enabled: bool = True,
-                          eeg_revoked_at: str | None = None):
+                          eeg_revoked_at: str | None = None,
+                          heart_sensors: tuple | None = None):
     """Averages, highlights and per-day buckets of a student's recent signals.
 
     Callers must already have authorised the viewer. A false flag skips that
@@ -2526,6 +2552,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         # EEG is always read, so no `eeg_included`; the tiles need these to say "Off since".
         "eeg_enabled": eeg_enabled,
         "eeg_revoked_at": eeg_revoked_at,
+        "paused_channels": _paused_channels(eeg_enabled, include_heart, include_emotion, heart_sensors),
         "emotion_distribution": (dict(sorted(emotion_counts.items(),
                                              key=lambda kv: (-kv[1], kv[0])))
                                  if include_emotion else None),
@@ -3171,6 +3198,11 @@ def _claim_generation_slot(user_id: str) -> bool:
                for limiter in (_GENERATION_LIMITER, _PREFETCH_DAILY_LIMITER))
 
 
+def _count_generation_failure(reason: str) -> None:
+    """Engine's failure count: a question that never reached the student, whatever the model call said."""
+    ops_metrics.bump("question", f"generation_failed:{reason}")
+
+
 def _admit_generation(user_id: str, generating: bool = True):
     """Count one served question and return its refund, or record the refusal and raise 429.
 
@@ -3610,12 +3642,18 @@ def generate_question(
                     print(f"[generate] refused for {user_id[:8]}: {e}")
                     raise HTTPException(503, "Question generation is temporarily unavailable.")
                 except Exception as e:
-                    # Re-raised as the 500 it always was; logged so the failure has a cause on record.
+                    # Logged so the failure has a cause on record.
                     print(f"[generate] failed for {user_id[:8]} at {effective_grade!r}, bias {manual_bias}: "
                           f"{type(e).__name__}: {e}")
+                    _count_generation_failure(type(e).__name__)
+                    # 503 only when the generator and its fallback both rejected their own output;
+                    # anything else (a key, a crash) stays the 500 it was.
+                    if isinstance(e, ValueError):
+                        raise HTTPException(503, "Couldn't make a question just now. Try again.") from e
                     raise
             if not question:
                 print(f"[generate] the decider returned no question for {user_id[:8]} at {effective_grade!r}")
+                _count_generation_failure("NoQuestion")
                 raise HTTPException(500, "Failed to generate question")
         except Exception:
             # No question reached the student, so it does not count against their day.
@@ -3937,12 +3975,23 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
                     headers={"Retry-After": "5"},
                 )
             try:
-                question = LLM_topic_decider.question_generation(
-                    topic, session["difficulty"], user["id"], session.get("grade_level"))
+                # The student chose these topics: the second try stays inside them.
+                others = [t for t in session["topics"] if t != topic]
+                question = LLM_topic_decider.generate_with_fallback(
+                    topic, session["difficulty"], user["id"], session.get("grade_level"),
+                    [random.choice(others)] if others else [topic])
             except llm_client.GenerationUnavailable as e:
                 print(f"[practice] generation refused for {user['id'][:8]}: {e}")
                 raise HTTPException(503, "Question generation is temporarily unavailable.")
+            except Exception as e:
+                print(f"[practice] generation failed for {user['id'][:8]} on {topic!r}: "
+                      f"{type(e).__name__}: {e}")
+                _count_generation_failure(type(e).__name__)
+                if isinstance(e, ValueError):
+                    raise HTTPException(503, "Couldn't make a question just now. Try again.") from e
+                raise
         if not question:
+            _count_generation_failure("NoQuestion")
             raise HTTPException(500, "Failed to generate question")
     except Exception:
         # As /api/generate-question: a question that never arrived is not charged.
@@ -3952,6 +4001,7 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
     # Same deduplicating storage as the live path, so identical questions share one row.
     LLM_topic_decider._attach_stored_id(question, session["difficulty"])
     question["difficulty"] = session["difficulty"]
+    ops_metrics.bump("question", "served:practice")
     return question
 
 
@@ -4461,7 +4511,8 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
                                    emotion_revoked_at=channels.emotion_revoked_at,
                                    heart_revoked_at=channels.heart_revoked_at,
                                    eeg_enabled=channels.eeg,
-                                   eeg_revoked_at=channels.eeg_revoked_at)
+                                   eeg_revoked_at=channels.eeg_revoked_at,
+                                   heart_sensors=channels.heart_sensors)
     avg, hl, n = report["averages"], report["highlights"], report["average_samples"]
     read = report["retrieved"]
     start, end = _report_period(days)
@@ -4499,7 +4550,8 @@ def student_signal_summary(student_id: str, request: Request, days: int = 7, inc
                               heart_revoked_at=channels.heart_revoked_at,
                               eeg_enabled=channels.eeg,
                               eeg_revoked_at=channels.eeg_revoked_at,
-                              erased=_erased_fields(channels, _window_start(days)))
+                              erased=_erased_fields(channels, _window_start(days)),
+                              heart_sensors=channels.heart_sensors)
     start, end = _report_period(days)
     context = _lesson_context({student_id: summary}, {student_id: channels.heart}, days)
     summary["usual"] = _personal_baseline(
@@ -4719,9 +4771,35 @@ def _subject_names_a_cause(subject: str, bare: bool) -> bool:
     return subject in _THING_SUBJECTS if bare else subject not in _PERSON_SUBJECTS | _IDEA_SUBJECTS
 
 
+# "Stopped giving us data" reads as a fault, unless "turned off" or "paused" came before it in the same point:
+# then it is the consequence of a stated cause. Order, not sentence bounds, so "3 Oct." and ";" cannot split it.
+_STOPPED_SENDING = re.compile(
+    r"\b(?:stopped|stops|ceased|no\s+longer)\s+(?:giv|send|provid|suppl|report|collect)\w*"
+    r"(?:\s+us|\s+the\s+(?:app|system))?\s+(?:any\s+|more\s+|new\s+)?(?:data|readings?|figures|signals?)\b",
+    re.IGNORECASE)
+_OFF_STATED = re.compile(r"\b(?:turned|switched)\s+off\b|\bpaused\b", re.IGNORECASE)
+_SENSOR_NAME = re.compile(r"\b(headband|headset|muse|eeg|camera|webcam|heart|pulse|optical|optics|r?ppg)\b",
+                          re.IGNORECASE)
+
+
+def _stoppage_excused(line: str, m: re.Match) -> bool:
+    """A "turned off" earlier in this point, and no sensor named after it but the one just before it (what was off)."""
+    offs = list(_OFF_STATED.finditer(line, 0, m.start()))
+    if not offs:
+        return False
+    named = _SENSOR_NAME.findall(line, 0, offs[-1].start())
+    turned_off = {named[-1].lower()} if named else set()
+    between = {n.lower() for n in _SENSOR_NAME.findall(line, offs[-1].end(), m.start())}
+    return between <= turned_off
+
+
 def _names_a_cause(text: str) -> bool:
     """Whether a summary says why a reading is missing (broken, disconnected, a sensor not working)."""
     if _CAUSE_TERMS.search(text):
+        return True
+    # Per line, since a reply's points are lines: one point's "turned off" must not excuse another sensor's stoppage.
+    if any(not _stoppage_excused(line, m)
+           for line in text.splitlines() for m in _STOPPED_SENDING.finditer(line)):
         return True
     if any(_subject_names_a_cause(*_subject_of(text, m)) for m in _FAILURE_PHRASE.finditer(text)):
         return True
@@ -4792,7 +4870,8 @@ def _strategy_basis(student_id: str, days: int, include_face: bool) -> dict:
                               include_emotion=channels.emotion,
                               consent_retrieved=channels.consent_retrieved,
                               eeg_enabled=channels.eeg,
-                              eeg_revoked_at=channels.eeg_revoked_at)
+                              eeg_revoked_at=channels.eeg_revoked_at,
+                              heart_sensors=channels.heart_sensors)
     return {
         "days": days,
         "face_included": summary["face_included"],
@@ -5208,7 +5287,8 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
                               include_emotion=channels.emotion,
                               consent_retrieved=channels.consent_retrieved,
                               eeg_enabled=channels.eeg,
-                              eeg_revoked_at=channels.eeg_revoked_at)
+                              eeg_revoked_at=channels.eeg_revoked_at,
+                              heart_sensors=channels.heart_sensors)
     start, end = _report_period(days)
     rollup = _summary_basis_rollup(student_id, weeks, start, end, channels)
     # One sessions read for the trend and the usual, so they cannot disagree about a lesson.
@@ -5647,8 +5727,8 @@ def _chart_summary_prompt(basis: dict, baseline: list[str]) -> str:
         "Do not add any number, percentage or figure that is not already in "
         "these points, do not move a number from one point to another, and do "
         "not draw a conclusion the points do not state. Never say or imply why a "
-        "sensor was off or a reading is missing (for example that it broke or "
-        "stopped working): keep the points' own words for it.\n"
+        "sensor was off or a reading is missing (for example that it broke, "
+        "stopped working or stopped giving data): keep the points' own words for it.\n"
         "Calm and body arousal are different measurements from different sensors: never "
         "combine them, and never call calm \"stress\".\n"
         f"Return exactly {len(baseline)} points as a numbered list, no preamble.\n\n"
@@ -8945,7 +9025,8 @@ def my_children(request: Request, include_face: bool = True):
                                                 heart_revoked_at=channels_by_child[cid].heart_revoked_at,
                                                 eeg_enabled=channels_by_child[cid].eeg,
                                                 eeg_revoked_at=channels_by_child[cid].eeg_revoked_at,
-                                                erased=_erased_fields(channels_by_child[cid], since)),
+                                                erased=_erased_fields(channels_by_child[cid], since),
+                                                heart_sensors=channels_by_child[cid].heart_sensors),
         })
         children[-1]["signal_summary"] = {**children[-1]["signal_summary"],
                                           "usual": usual.get(str(cid))}
@@ -9518,6 +9599,8 @@ def admin_today(request: Request):
         "timezone": _school_timezone_name(),
         "retrieved": isinstance(counts, dict),
         "counts": counts if isinstance(counts, dict) else None,
+        # `counts.answers` is adaptive only. Null when the RPC predates the key: not a zero.
+        "practice_answers": counts.get("practice_answers") if isinstance(counts, dict) else None,
         "discarded": discarded,
         "discarded_retrieved": discards["retrieved"],
     }

@@ -11,6 +11,22 @@ const CHANNEL_STATE = {
   // A parent erased its past; consent may be on, so this is not "No sensor".
   erased: on => (on ? `Erased ${on}` : 'Erased'),
   noSensor: () => 'No sensor',
+  // An administrator switched the channel off school-wide; nobody's consent changed.
+  paused: () => 'Paused by the school',
+}
+
+const PAUSED_NAMES = { eeg: 'focus and calm', heart: 'heart rate', emotion: 'facial expression' }
+
+/** One sentence for a report that names channels an administrator has switched off, or null. */
+export function pausedNotice(paused) {
+  const names = (Array.isArray(paused) ? paused : []).map(c => PAUSED_NAMES[c]).filter(Boolean)
+  if (names.length === 0) return null
+  return `Recording of ${names.join(', ')} is paused by the school, so no new readings are being taken.`
+}
+
+/** Whether `channel` ('eeg' | 'heart' | 'emotion') is in a payload's `paused_channels`. */
+export function isPaused(report, channel) {
+  return Array.isArray(report?.paused_channels) && report.paused_channels.includes(channel)
 }
 
 // Short date, or null (never "Invalid Date") when there is none.
@@ -21,13 +37,18 @@ function shortDate(iso) {
     { day: 'numeric', month: 'short' })
 }
 
-/** Tile text for a channel with no value: consent unreadable, revoked, calibrating, erased, or no sensor. */
-export function offLabel({ on, revokedAt, consentRetrieved, samples, erasedAt = null }) {
+/**
+ * Tile text for a channel with no value: consent unreadable, revoked, calibrating, erased, paused, or no sensor.
+ * `paused` only replaces "No sensor": it is a state of now, so it never hides a family's own decision,
+ * an erasure or a recorded-but-unusable week.
+ */
+export function offLabel({ on, revokedAt, consentRetrieved, samples, erasedAt = null, paused = false }) {
   if (consentRetrieved === false) return CHANNEL_STATE.unknown()
   if (!on) return CHANNEL_STATE.revoked(shortDate(revokedAt))
   if (samples > 0) return CHANNEL_STATE.calibrating()
   // Samples since the erasure win above; with none, the empty past is the erasure, not a missing sensor.
-  return erasedAt ? CHANNEL_STATE.erased(shortDate(erasedAt)) : CHANNEL_STATE.noSensor()
+  if (erasedAt) return CHANNEL_STATE.erased(shortDate(erasedAt))
+  return paused ? CHANNEL_STATE.paused() : CHANNEL_STATE.noSensor()
 }
 
 /**

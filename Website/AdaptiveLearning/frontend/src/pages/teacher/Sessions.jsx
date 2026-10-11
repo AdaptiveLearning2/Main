@@ -120,7 +120,11 @@ export default function Sessions() {
               placeholder="Filter by student name..."
               className="px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm dark:text-white w-48"
             />
-            <select value={classId} onChange={e => { setClassId(e.target.value); setLoading(true) }}
+            <select value={classId} onChange={e => {
+                // The same class re-picked loads nothing: raising `loading` would never be cleared.
+                if (e.target.value === classId) return
+                setClassId(e.target.value); setLoading(true)
+              }}
               className="px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm dark:text-white">
               {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>

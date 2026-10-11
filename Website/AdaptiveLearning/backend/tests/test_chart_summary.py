@@ -160,7 +160,8 @@ def test_a_clinical_term_anywhere_in_the_reply_rejects_it():
                                    "disconnected", "wasn't working", "wasn’t working", "didn't work",
                                    "is not working", "didn't work at all", "doesn't work",
                                    "hasn't been working", "sensor not working", "lost connection",
-                                   "had technical problems"])
+                                   "had technical problems", "stopped giving us data",
+                                   "stopped sending readings", "no longer providing data"])
 def test_a_reply_that_names_a_cause_for_a_turned_off_sensor_is_rejected(cause):
     """The run's wording: a withdrawal read as "before the sensor stopped working"."""
     basis = _basis()
@@ -174,6 +175,88 @@ def test_a_reply_that_names_a_cause_for_a_turned_off_sensor_is_rejected(cause):
     caused = faithful.replace("turned off on 3 August", f"{cause} on 3 August")
     assert caused != faithful
     assert main._validated_chart_summary(caused, allowed, len(lines)) is None
+
+
+def test_the_eeg_withdrawal_line_must_keep_turned_off_and_a_rewording_falls_back_to_the_rules():
+    """The run's reply: "from before the sensor stopped giving us data on 9 October"."""
+    basis = _basis()
+    basis["channels"]["eeg"] = {"enabled": False, "samples": 12,
+                                "revoked_at": "2026-10-09T16:00:00+00:00"}
+    lines = main._rule_based_chart_summary(basis)
+    assert any("from before the sensor was turned off on 9 October" in line for line in lines)
+    allowed = main._chart_summary_figures(lines)
+    faithful = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(lines))
+    assert main._validated_chart_summary(faithful, allowed, len(lines)) is not None
+    reworded = faithful.replace("the sensor was turned off on 9 October",
+                                "the sensor stopped giving us data on 9 October")
+    assert reworded != faithful
+    assert main._validated_chart_summary(reworded, allowed, len(lines)) is None
+
+
+@pytest.mark.parametrize("text", [
+    "The sensor no longer sends data.", "The headband no longer provides readings.",
+    "It no longer gives us any signals.", "Heart rate stopped reporting data last week."])
+def test_other_forms_of_stopped_sending_are_a_cause(text):
+    assert main._names_a_cause(text)
+
+
+@pytest.mark.parametrize("text", [
+    "The sensor was turned off, so the app stopped collecting data.",
+    "Recording is paused, so it no longer sends readings.",
+    "The sensor was turned off on 3 Oct; it no longer sends readings.",
+    "It was turned off on 3 Oct. and since then it no longer sends readings.",
+    "The sensor was turned off on 3 October. It no longer sends readings."])
+def test_stopped_sending_after_turned_off_or_paused_is_the_cause_already_stated(text):
+    assert not main._names_a_cause(text)
+
+
+@pytest.mark.parametrize("text", [
+    "The headband stopped sending data, so it was switched off.",
+    "It no longer sends readings. The sensor was turned off later."])
+def test_a_stoppage_stated_before_any_turned_off_is_still_a_cause(text):
+    assert main._names_a_cause(text)
+
+
+@pytest.mark.parametrize("text,cause", [
+    ("The headband was turned off on 3 October, and the heart sensor stopped sending data.", True),
+    ("The headband was turned off on 3 October, so the camera no longer sends readings.", True),
+    ("The headband was turned off on 3 October, so the headband no longer sends readings.", False),
+    # A sensor named earlier in the point is not the one turned off.
+    ("Focus, calm and the camera figures are from before the headband was turned off on 3 October, "
+     "and the camera stopped sending data.", True),
+    ("The headband was turned off on 3 October, and the PPG stopped sending data.", True),
+    ("The headband was turned off on 3 October, and the rPPG no longer sends readings.", True),
+    ("The headband was turned off on 3 October, and the optics stopped sending data.", True),
+    ("Readings are from before the sensor was turned off; it no longer sends readings.", False),
+])
+def test_turned_off_excuses_only_a_stoppage_about_the_same_sensor(text, cause):
+    assert main._names_a_cause(text) is cause
+
+
+def test_one_points_turned_off_does_not_excuse_another_points_stoppage():
+    """Every withdrawn-headband student gets point 1, so it must not let a heart fault through."""
+    basis = _basis()
+    basis["channels"]["eeg"] = {"enabled": False, "samples": 12,
+                                "revoked_at": "2026-10-03T16:00:00+00:00"}
+    lines = main._rule_based_chart_summary(basis)
+    assert any("turned off on 3 October" in line for line in lines)
+    heart = next(i for i, line in enumerate(lines) if "heart rate" in line.lower())
+    allowed = main._chart_summary_figures(lines)
+    faulty = list(lines)
+    faulty[heart] = faulty[heart].rstrip(".") + ", and the heart sensor stopped sending data this week."
+    reply = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(faulty))
+    faithful = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(lines))
+    assert main._validated_chart_summary(faithful, allowed, len(lines)) is not None
+
+    assert main._names_a_cause(f"1. Readings are from before the sensor was turned off on 3 October.\n"
+                               f"2. The heart sensor stopped sending data this week.")
+    assert main._validated_chart_summary(reply, allowed, len(lines)) is None
+
+
+@pytest.mark.parametrize("text", ["Taylor stopped giving up on fractions after the first week.",
+                                  "Focus was steady and the student stopped giving wrong answers."])
+def test_stopped_giving_about_effort_is_not_a_cause(text):
+    assert not main._names_a_cause(text)
 
 
 def test_a_reply_saying_a_read_failed_is_still_accepted():

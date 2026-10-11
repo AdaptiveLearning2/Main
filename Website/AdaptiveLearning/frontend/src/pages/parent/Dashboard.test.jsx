@@ -194,6 +194,21 @@ it('says why a weekly focus figure is missing, not a raw N/A', async () => {
   expect(screen.queryByText('N/A')).not.toBeInTheDocument()
 })
 
+it('says Paused by the school, not No sensor, when an administrator switched EEG off', async () => {
+  apiFetch.mockImplementation(() => Promise.resolve([{
+    ...withFace[0],
+    signal_summary: { ...withFace[0].signal_summary, focus: null, stress: null,
+                      cognitive_samples: 0, eeg_enabled: true, consent_retrieved: true,
+                      paused_channels: ['eeg'] },
+  }]))
+  renderDashboard()
+
+  expect(await screen.findByRole('group', { name: 'Focus' })).toHaveTextContent('Paused by the school')
+  expect(screen.getByRole('group', { name: 'Calm' })).toHaveTextContent('Paused by the school')
+  expect(screen.getByText(/focus and calm is paused by the school/i)).toBeInTheDocument()
+  expect(screen.queryByText(/No sensor/)).not.toBeInTheDocument()
+})
+
 it('says the weekly focus was erased, with EEG still on, rather than no sensor', async () => {
   apiFetch.mockImplementation(() => Promise.resolve([{
     ...withFace[0],

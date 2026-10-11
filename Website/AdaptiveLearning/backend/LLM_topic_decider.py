@@ -3,6 +3,7 @@ from supabase_client import get_client
 from postgrest.types import ReturnMethod
 from dotenv import load_dotenv
 import llm_client
+import ops_metrics
 from llm_json import extract_json
 import json
 import random
@@ -217,21 +218,26 @@ def get_session_performance(session_id, limit=SESSION_PERFORMANCE_WINDOW):
 def _consent_flags(user_id):
     """Which signal channels the student permits. Fails closed: a read error revokes all.
 
+    `withdrawn` marks an off channel someone turned off (a `*_revoked_at` stamp); off without it was
+    never on. A failed read sets `unreadable`: every channel closed, and no claim either way.
     Reads the table directly because main imports this module (circular otherwise).
     """
+    closed = {"eeg": False, "heart": [], "face": False, "unreadable": False,
+              "withdrawn": {"eeg": False, "heart": False, "face": False}}
     if not user_id:
-        return {"eeg": False, "heart": [], "face": False}
+        return closed
     try:
         rows = (
             supabase.table("signal_consent")
-            .select("eeg_enabled, headband_optical_enabled, camera_enabled")
+            .select("eeg_enabled, headband_optical_enabled, camera_enabled, "
+                    "eeg_revoked_at, headband_optical_revoked_at, camera_revoked_at")
             .eq("user_id", user_id)
             .limit(1)
             .execute()
         ).data or []
         if not rows:
-            # No row means the same as a row of falses.
-            return {"eeg": False, "heart": [], "face": False}
+            # No row means the same as a row of falses: nobody was ever asked.
+            return closed
         r = rows[0]
         # Permitted heart sources, not a bool: a declined camera must exclude rppg rows.
         heart_sources = []
@@ -243,10 +249,17 @@ def _consent_flags(user_id):
             "eeg":   bool(r.get("eeg_enabled")),
             "heart": heart_sources,
             "face":  bool(r.get("camera_enabled")),
+            "unreadable": False,
+            "withdrawn": {
+                "eeg":   not r.get("eeg_enabled") and r.get("eeg_revoked_at") is not None,
+                "heart": not heart_sources and (r.get("headband_optical_revoked_at") is not None
+                                                or r.get("camera_revoked_at") is not None),
+                "face":  not r.get("camera_enabled") and r.get("camera_revoked_at") is not None,
+            },
         }
     except Exception as e:
         print(f"[signal_consent] {e}")
-        return {"eeg": False, "heart": [], "face": False}
+        return {**closed, "unreadable": True}
 
 
 def _stamp(row):
@@ -326,7 +339,9 @@ def get_session_signal_state(session_id, user_id=None):
 
     eeg = signal_fusion.eeg_channel(focus, calm, confidence,
                                     revoked=not consent["eeg"],
-                                    calm_source=calm_source)
+                                    calm_source=calm_source,
+                                    never_consented=not consent["withdrawn"]["eeg"],
+                                    unreadable=consent["unreadable"])
 
     heart_rows = _latest("heart_signals", "ts, stress_category, trusted, source, heart_rate_bpm",
                          session_id, HEART_READ_ROWS,
@@ -341,6 +356,8 @@ def get_session_signal_state(session_id, user_id=None):
         newest_face.get("emotion_confidence"),
         newest_face.get("emotion_trusted"),
         revoked=not consent["face"],
+        never_consented=not consent["withdrawn"]["face"],
+        unreadable=consent["unreadable"],
     )
 
     # Aged against the session's newest reading on any channel, never the server clock: every
@@ -362,6 +379,8 @@ def get_session_signal_state(session_id, user_id=None):
         newest_heart.get("source"),
         revoked=not consent["heart"],
         bpm=newest_heart.get("heart_rate_bpm"),
+        never_consented=not consent["withdrawn"]["heart"],
+        unreadable=consent["unreadable"],
     )
 
     return signal_fusion.fuse(
@@ -710,6 +729,26 @@ def question_generation(topic, difficulty, user_id, grade):
             raise ValueError(f"no generator wired for topic {topic!r}")
     return response
 
+
+def generate_with_fallback(topic, difficulty, user_id, grade, alternatives):
+    """`question_generation`, then one try at the first of `alternatives` if the generator gives up.
+
+    Only a generator rejecting its own output (`ValueError`) is retried: a ceiling, timeout or bad key
+    would just fail again, slower. A question made from another topic carries `fallback_from`.
+    """
+    try:
+        return question_generation(topic, difficulty, user_id, grade)
+    except ValueError as e:
+        if not alternatives:
+            raise
+        print(f"[generate] {topic!r} failed ({type(e).__name__}: {e}); trying {alternatives[0]!r}")
+        ops_metrics.bump("question", "generation_fallback")
+    question = question_generation(alternatives[0], difficulty, user_id, grade)
+    if alternatives[0] != topic:
+        question["fallback_from"] = topic
+    return question
+
+
 def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=None, manual_bias=0):
     # `grade` is caller text headed for the prompt; canonicalise it as question_generation does.
     grade = grade_levels.grade_for_prompt(grade)
@@ -827,7 +866,9 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
     if effective_bias:
         difficulty = _shift_difficulty(difficulty, effective_bias)
 
-    question = question_generation(topic, difficulty, user_id, grade)
+    others = [t for t in _allowed_topics(grade) if t != topic]
+    question = generate_with_fallback(
+        topic, difficulty, user_id, grade, [random.choice(others)] if others else [topic])
     print(question)
 
     _attach_stored_id(question, difficulty)

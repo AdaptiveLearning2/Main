@@ -7,7 +7,7 @@ import { useAuth } from '../../context/AuthContext'
 import { usePrefetchWhenIdle } from '../../lib/prefetch'
 import { pages } from '../../routes'
 import ChildWithdrewBanner from '../../components/consent/ChildWithdrewBanner'
-import { calmPct, pct, emotionOn as faceIncluded } from '../../lib/signalFormat'
+import { calmPct, isPaused, pausedNotice, pct, emotionOn as faceIncluded } from '../../lib/signalFormat'
 import MeasureTile from '../../components/signals/MeasureTile'
 import { stagger } from '../../lib/stagger'
 
@@ -89,7 +89,9 @@ export default function ParentDashboard() {
             // The EEG channel's reason for a missing figure, from the fields the summary carries.
             const eeg = { on: signals.eeg_enabled !== false, revokedAt: signals.eeg_revoked_at,
                           consentRetrieved: signals.consent_retrieved,
-                          samples: signals.cognitive_samples, erasedAt: signals.eeg_erased_at }
+                          samples: signals.cognitive_samples, erasedAt: signals.eeg_erased_at,
+                          paused: isPaused(signals, 'eeg') }
+            const paused = pausedNotice(signals.paused_channels)
             const retrieved = signalsRetrieved(signals)
             const showSignals = retrieved && hasSignalSummary(signals)
             const initial = (child.name || child.email || '?')[0].toUpperCase()
@@ -137,6 +139,11 @@ export default function ParentDashboard() {
                   </p>
                 )}
 
+                {paused && (
+                  <p className="px-5 py-3 border-t border-gray-50 dark:border-gray-800 text-xs text-amber-700 dark:text-amber-400">
+                    {paused}
+                  </p>
+                )}
                 {showSignals ? (
                   <div className="p-4 border-t border-gray-50 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/20">
                     {/* Only with `usual`: an older payload compares nothing, so it claims nothing. */}

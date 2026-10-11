@@ -72,7 +72,7 @@ export default function PracticeTest({ session, onFinish, onRestart, questionCou
   }, [fetchQuestion])
 
   // Once per session id, not per effect run: StrictMode double-mounts, and
-  // each `/question` is two billed model calls.
+  // each `/question` is two billed model calls, four if the generator falls back.
   const autoLoadedFor = useRef(null)
   useEffect(() => {
     if (autoLoadedFor.current === session.id) return

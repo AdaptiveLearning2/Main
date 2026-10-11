@@ -43,6 +43,17 @@ class ChannelState:
     cause: str | None = None
 
 
+def _off(name: str, never_consented: bool, source: str | None = None,
+         unreadable: bool = False) -> ChannelState:
+    """A channel with no consent: "revoked" says a withdrawal, "not consented" says nobody was asked,
+    "consent unreadable" says the read failed and nothing is claimed either way."""
+    if unreadable:
+        return ChannelState(None, f"{name} consent unreadable", source, cause="consent_unreadable")
+    if never_consented:
+        return ChannelState(None, f"{name} not consented", source, cause="not_consented")
+    return ChannelState(None, f"{name} revoked", source, cause="revoked")
+
+
 @dataclass(frozen=True)
 class FusedState:
     """The answer, and enough of its provenance to explain a decision.
@@ -72,12 +83,14 @@ def eeg_channel(
     *,
     revoked: bool = False,
     calm_source: str = "sdk",
+    never_consented: bool = False,
+    unreadable: bool = False,
 ) -> ChannelState:
     """The EEG channel's label.
 
     `calm_source` picks the stressed line; an unknown source takes the SDK line."""
     if revoked:
-        return ChannelState(None, "eeg revoked", cause="revoked")
+        return _off("eeg", never_consented, unreadable=unreadable)
     if focus is None or confidence is None:
         return ChannelState(None, "no eeg samples", cause="no_samples")
     stressed_line = EEG_STRESSED_CALM_MAX_BY_SOURCE.get(calm_source, EEG_STRESSED_CALM_MAX)
@@ -103,6 +116,8 @@ def heart_channel(
     *,
     revoked: bool = False,
     bpm: float | None = None,
+    never_consented: bool = False,
+    unreadable: bool = False,
 ) -> ChannelState:
     """The heart channel's label, source-agnostic (optics, PPG or camera rPPG).
 
@@ -110,7 +125,7 @@ def heart_channel(
     `bpm` only names the absence: a rate with no category is a missing classifier, not no data.
     """
     if revoked:
-        return ChannelState(None, "heart revoked", source, cause="revoked")
+        return _off("heart", never_consented, source, unreadable)
     if stress_category is None:
         if bpm is not None:
             # Camera rPPG, or a sidecar predating the headband's classifier: no opinion.
@@ -136,6 +151,8 @@ def face_channel(
     emotion_trusted: bool | None = None,
     *,
     revoked: bool = False,
+    never_consented: bool = False,
+    unreadable: bool = False,
 ) -> ChannelState:
     """The facial channel, which is only ever allowed to withhold.
 
@@ -143,7 +160,7 @@ def face_channel(
     into the ease-off branch by matching on a label name.
     """
     if revoked:
-        return ChannelState(None, "face revoked", cause="revoked")
+        return _off("face", never_consented, unreadable=unreadable)
     if not emotion:
         return ChannelState(None, "no face samples", cause="no_samples")
     if emotion_trusted is False:

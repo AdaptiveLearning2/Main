@@ -12,6 +12,7 @@ export function buildToday(over = {}) {
       started: 12, open_now: 3, answers: 214, active_students: 9,
       ended_by_reason: { finish: 5, page_closed: 2, sweep: 1, unrecorded: 1 },
     },
+    practice_answers: 36,
     discarded: { page_closed: 2 },
     discarded_retrieved: true,
     ...over,

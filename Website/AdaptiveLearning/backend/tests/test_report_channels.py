@@ -653,9 +653,30 @@ def test_a_switched_off_channel_is_named_in_both_report_payloads(monkeypatch, sw
     _switch_off(monkeypatch, *switches)
 
     # Consent is on throughout: the switch is not a consent change.
-    assert main._shape_summary({"focus": 0.5})["paused_channels"] == channels
-    weekly = main._weekly_signal_report(STUDENT)
+    both = ("headband_optical", "camera")
+    assert main._shape_summary({"focus": 0.5}, heart_sensors=both)["paused_channels"] == channels
+    weekly = main._weekly_signal_report(STUDENT, heart_sensors=both)
     assert weekly["paused_channels"] == channels and weekly["eeg_enabled"] is True
+
+
+def test_heart_sensors_not_passed_down_claim_no_heart_pause(monkeypatch):
+    """No silent fallback to a rule about sensors the student may not use."""
+    _switch_off(monkeypatch, "heart", "camera")
+    assert main._shape_summary({"focus": 0.5})["paused_channels"] == ["emotion"]
+    with pytest.raises(TypeError):
+        main._paused_channels(True, True, True)
+
+
+def test_every_report_builder_call_in_main_passes_heart_sensors():
+    """A new caller that leaves it out would silently claim no heart pause: fail here instead."""
+    import ast
+    import pathlib
+    tree = ast.parse(pathlib.Path(main.__file__).read_text(encoding="utf-8"))
+    builders = {"_shape_summary", "_signal_summary", "_weekly_signal_report"}
+    missing = [n.lineno for n in ast.walk(tree)
+               if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in builders
+               and "heart_sensors" not in {k.arg for k in n.keywords}]
+    assert missing == [], f"main.py lines {missing} call a report builder without heart_sensors"
 
 
 def test_a_channel_the_student_has_off_is_not_called_paused(monkeypatch):
@@ -663,10 +684,11 @@ def test_a_channel_the_student_has_off_is_not_called_paused(monkeypatch):
     _switch_off(monkeypatch, "eeg", "heart", "camera")
 
     got = main._shape_summary({"focus": 0.5}, include_heart=False, include_emotion=False,
-                              eeg_enabled=False)
+                              eeg_enabled=False, heart_sensors=())
 
     assert got["paused_channels"] == []
-    assert main._shape_summary({"focus": 0.5}, include_heart=False)["paused_channels"] == ["eeg", "emotion"]
+    assert main._shape_summary({"focus": 0.5}, include_heart=False,
+                               heart_sensors=())["paused_channels"] == ["eeg", "emotion"]
 
 
 def test_unreadable_flags_pause_nothing(monkeypatch):
@@ -678,7 +700,7 @@ def test_unreadable_flags_pause_nothing(monkeypatch):
     monkeypatch.setattr(main, "_feature_flags", _REAL_FEATURE_FLAGS)
     main._feature_flags_cache_clear()
 
-    assert main._paused_channels() == []
+    assert main._paused_channels(True, True, True, ("headband_optical", "camera")) == []
 
 
 @pytest.mark.parametrize("sensors,switches,paused", [
@@ -691,7 +713,7 @@ def test_unreadable_flags_pause_nothing(monkeypatch):
 ])
 def test_heart_is_paused_when_every_sensor_the_student_uses_is(monkeypatch, sensors, switches, paused):
     _switch_off(monkeypatch, *switches)
-    assert ("heart" in main._paused_channels(heart_sensors=sensors)) is paused
+    assert ("heart" in main._paused_channels(True, True, True, sensors)) is paused
 
 
 def test_the_weekly_endpoint_pauses_a_headband_only_students_heart(monkeypatch):

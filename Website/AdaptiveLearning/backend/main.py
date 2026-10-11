@@ -1555,18 +1555,17 @@ _RECORDING_SWITCHES = {"record_eeg": "recording_eeg_enabled",
 _SWITCHED_OFF = "recording is switched off by an administrator"
 
 
-def _paused_channels(eeg: bool = True, heart: bool = True, emotion: bool = True,
-                     heart_sensors: tuple | None = None) -> list[str]:
+def _paused_channels(eeg: bool, heart: bool, emotion: bool, heart_sensors: tuple | None) -> list[str]:
     """Report channels an administrator has switched off, among those the student has on.
 
     The flags say which channels a report may name: a channel off for consent has nothing to pause.
-    Heart is paused when every consented heart sensor is (`ReportChannels.heart_sensors`); unknown,
-    both must be. Unreadable flags answer their defaults (all on), so no claim is made.
+    Heart is paused when every consented heart sensor is (`ReportChannels.heart_sensors`); None
+    (not passed down) claims nothing. Unreadable flags answer their defaults (all on), so no claim.
     """
     flags = _feature_flags()
     off = {k: not flags[f"recording_{k}_enabled"]["enabled"] for k in ("eeg", "heart", "camera")}
     by_sensor = {"headband_optical": off["heart"], "camera": off["camera"]}
-    sensors = tuple(heart_sensors) if heart_sensors is not None else tuple(by_sensor)
+    sensors = tuple(heart_sensors or ())
     paused = {"eeg": eeg and off["eeg"],
               "heart": heart and bool(sensors) and all(by_sensor.get(s, False) for s in sensors),
               "emotion": emotion and off["camera"]}
@@ -4859,7 +4858,8 @@ def _strategy_basis(student_id: str, days: int, include_face: bool) -> dict:
                               include_emotion=channels.emotion,
                               consent_retrieved=channels.consent_retrieved,
                               eeg_enabled=channels.eeg,
-                              eeg_revoked_at=channels.eeg_revoked_at)
+                              eeg_revoked_at=channels.eeg_revoked_at,
+                              heart_sensors=channels.heart_sensors)
     return {
         "days": days,
         "face_included": summary["face_included"],
@@ -5275,7 +5275,8 @@ def _chart_summary_basis(student_id: str, days: int, weeks: int,
                               include_emotion=channels.emotion,
                               consent_retrieved=channels.consent_retrieved,
                               eeg_enabled=channels.eeg,
-                              eeg_revoked_at=channels.eeg_revoked_at)
+                              eeg_revoked_at=channels.eeg_revoked_at,
+                              heart_sensors=channels.heart_sensors)
     start, end = _report_period(days)
     rollup = _summary_basis_rollup(student_id, weeks, start, end, channels)
     # One sessions read for the trend and the usual, so they cannot disagree about a lesson.
